@@ -34,12 +34,11 @@ jobs:
         run: |
           make setup guest
 
-          # Save entire guest target directory for cibuildwheel container
-          # (cibuildwheel uses tar which respects .gitignore, excluding target/)
-          # We need the full cache (not just binary) for cargo incremental compilation
+          # Cache only the final binary (11MB), not entire target dir (2.3GB)
+          # Guest is not rebuilt in container (SKIP_GUEST_BUILD=1), so no incremental compilation needed
           GUEST_TARGET=$(scripts/util.sh --target)
-          mkdir -p .cache
-          cp -a "target/$GUEST_TARGET" ".cache/$GUEST_TARGET"
+          mkdir -p ".cache/$GUEST_TARGET/release"
+          cp "target/$GUEST_TARGET/release/boxlite-guest" ".cache/$GUEST_TARGET/release/"
 
           # Clean up to save disk space
           rm -rf target ~/.rustup ~/.cargo

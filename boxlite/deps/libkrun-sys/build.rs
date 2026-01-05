@@ -1,19 +1,32 @@
 use std::collections::HashMap;
 use std::env;
-#[cfg(target_os = "macos")]
 use std::fs;
-#[cfg(target_os = "macos")]
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-// libkrunfw prebuilt tarball configuration (contains kernel.c) - macOS only
-#[cfg(target_os = "macos")]
-const LIBKRUNFW_VERSION: &str = "4.10.0";
-#[cfg(target_os = "macos")]
-const LIBKRUNFW_PREBUILT_URL: &str = "https://github.com/containers/libkrunfw/releases/download/v4.10.0/libkrunfw-4.10.0-prebuilt-aarch64.tar.gz";
-#[cfg(target_os = "macos")]
-const LIBKRUNFW_SHA256: &str = "6732e0424ce90fa246a4a75bb5f3357a883546dbca095fee07a7d587e82d94b0";
+// libkrunfw release configuration (v5.1.0)
+// Source: https://github.com/boxlite-ai/libkrunfw (fork with prebuilt releases)
+
+// macOS: Download prebuilt kernel.c, compile locally to .dylib
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+const LIBKRUNFW_PREBUILT_URL: &str =
+    "https://github.com/boxlite-ai/libkrunfw/releases/download/v5.1.0/libkrunfw-prebuilt-aarch64.tgz";
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+const LIBKRUNFW_SHA256: &str = "2b2801d2e414140d8d0a30d7e30a011077b7586eabbbecdca42aea804b59de8b";
+
+// Linux: Download pre-compiled .so directly (no build needed)
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const LIBKRUNFW_SO_URL: &str =
+    "https://github.com/boxlite-ai/libkrunfw/releases/download/v5.1.0/libkrunfw-x86_64.tgz";
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const LIBKRUNFW_SHA256: &str = "faca64a3581ce281498b8ae7eccc6bd0da99b167984f9ee39c47754531d4b37d";
+
+#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+const LIBKRUNFW_SO_URL: &str =
+    "https://github.com/boxlite-ai/libkrunfw/releases/download/v5.1.0/libkrunfw-aarch64.tgz";
+#[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+const LIBKRUNFW_SHA256: &str = "e254bc3fb07b32e26a258d9958967b2f22eb6c3136cfedf358c332308b6d35ea";
 
 // Cross-compilation patch for building init binary on macOS (vendored locally)
 #[cfg(target_os = "macos")]
@@ -279,7 +292,6 @@ fn fix_linux_libs(src_dir: &Path, lib_prefix: &str) -> Result<(), String> {
 }
 
 /// Downloads a file from URL to the specified path.
-#[cfg(target_os = "macos")]
 fn download_file(url: &str, dest: &Path) -> io::Result<()> {
     println!("cargo:warning=Downloading {}...", url);
 
@@ -298,14 +310,18 @@ fn download_file(url: &str, dest: &Path) -> io::Result<()> {
 }
 
 /// Verifies SHA256 checksum of a file.
-#[cfg(target_os = "macos")]
 fn verify_sha256(file: &Path, expected: &str) -> io::Result<()> {
-    let output = Command::new("shasum")
-        .args(["-a", "256", file.to_str().unwrap()])
-        .output()?;
+    // Use sha256sum on Linux, shasum on macOS
+    let (cmd, args): (&str, Vec<&str>) = if cfg!(target_os = "linux") {
+        ("sha256sum", vec![file.to_str().unwrap()])
+    } else {
+        ("shasum", vec!["-a", "256", file.to_str().unwrap()])
+    };
+
+    let output = Command::new(cmd).args(&args).output()?;
 
     if !output.status.success() {
-        return Err(io::Error::other("shasum failed"));
+        return Err(io::Error::other(format!("{} failed", cmd)));
     }
 
     let actual = String::from_utf8_lossy(&output.stdout)
@@ -326,7 +342,6 @@ fn verify_sha256(file: &Path, expected: &str) -> io::Result<()> {
 }
 
 /// Extracts a tarball to the specified directory.
-#[cfg(target_os = "macos")]
 fn extract_tarball(tarball: &Path, dest: &Path) -> io::Result<()> {
     fs::create_dir_all(dest)?;
 
@@ -346,13 +361,14 @@ fn extract_tarball(tarball: &Path, dest: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// Downloads and extracts the prebuilt libkrunfw tarball.
-/// Returns the path to the extracted source directory.
+/// Downloads and extracts the prebuilt libkrunfw tarball (macOS).
+/// Returns the path to the extracted source directory containing kernel.c.
 #[cfg(target_os = "macos")]
 fn download_libkrunfw_prebuilt(out_dir: &Path) -> PathBuf {
     let tarball_path = out_dir.join("libkrunfw-prebuilt.tar.gz");
     let extract_dir = out_dir.join("libkrunfw-src");
-    let src_dir = extract_dir.join(format!("libkrunfw-{}", LIBKRUNFW_VERSION));
+    // boxlite-ai/libkrunfw prebuilt tarball extracts to "libkrunfw/" directory
+    let src_dir = extract_dir.join("libkrunfw");
 
     // Check if already extracted
     if src_dir.join("kernel.c").exists() {
@@ -378,6 +394,43 @@ fn download_libkrunfw_prebuilt(out_dir: &Path) -> PathBuf {
 
     println!("cargo:warning=Extracted libkrunfw to {}", src_dir.display());
     src_dir
+}
+
+/// Downloads pre-compiled libkrunfw .so files (Linux).
+/// Extracts directly to the install directory - no build step needed.
+#[cfg(target_os = "linux")]
+fn download_libkrunfw_so(install_dir: &Path) {
+    let lib_dir = install_dir.join(LIB_DIR);
+
+    // Check if already extracted
+    if has_library(&lib_dir, "libkrunfw") {
+        println!("cargo:warning=Using cached libkrunfw.so");
+        return;
+    }
+
+    // Create install directory first (required before download)
+    fs::create_dir_all(install_dir)
+        .unwrap_or_else(|e| panic!("Failed to create install dir: {}", e));
+
+    let tarball_path = install_dir.join("libkrunfw.tgz");
+
+    // Download if not cached
+    if !tarball_path.exists() {
+        download_file(LIBKRUNFW_SO_URL, &tarball_path)
+            .unwrap_or_else(|e| panic!("Failed to download libkrunfw: {}", e));
+
+        verify_sha256(&tarball_path, LIBKRUNFW_SHA256)
+            .unwrap_or_else(|e| panic!("Failed to verify libkrunfw checksum: {}", e));
+    }
+
+    // Extract (tarball contains lib64/ directory)
+    extract_tarball(&tarball_path, install_dir)
+        .unwrap_or_else(|e| panic!("Failed to extract libkrunfw: {}", e));
+
+    println!(
+        "cargo:warning=Extracted libkrunfw.so to {}",
+        lib_dir.display()
+    );
 }
 
 /// Builds libkrunfw from the prebuilt source.
@@ -578,7 +631,9 @@ fn build() {
     configure_linking(&libkrun_lib, &libkrunfw_lib);
 }
 
-/// Linux: Build libkrun and libkrunfw from source
+/// Linux: Build libkrun (libkrunfw is downloaded pre-compiled)
+/// By default, downloads pre-compiled libkrunfw.so to avoid ~20min kernel build.
+/// Set BOXLITE_BUILD_LIBKRUNFW=1 to build libkrunfw from source.
 #[cfg(target_os = "linux")]
 fn build() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
@@ -595,23 +650,36 @@ fn build() {
         return;
     }
 
-    println!("cargo:warning=Building libkrun-sys for Linux (from source)");
+    // Check if user wants to build libkrunfw from source (slow, ~20 min)
+    let build_from_source = env::var("BOXLITE_BUILD_LIBKRUNFW").is_ok();
 
-    // Verify vendored sources exist (Linux builds both from source)
-    verify_vendored_sources(&manifest_dir, true);
+    if build_from_source {
+        println!(
+            "cargo:warning=Building libkrun-sys for Linux (from source, BOXLITE_BUILD_LIBKRUNFW=1)"
+        );
+        // Verify vendored sources exist
+        verify_vendored_sources(&manifest_dir, true);
 
-    let libkrunfw_src = manifest_dir.join("vendor/libkrunfw");
+        let libkrunfw_src = manifest_dir.join("vendor/libkrunfw");
+
+        // Build libkrunfw from source (~20 min kernel build)
+        build_with_make(
+            &libkrunfw_src,
+            &libkrunfw_install,
+            "libkrunfw",
+            HashMap::new(),
+        );
+    } else {
+        println!("cargo:warning=Building libkrun-sys for Linux (using pre-compiled .so)");
+        // Verify only libkrun vendored source exists (libkrunfw is downloaded)
+        verify_vendored_sources(&manifest_dir, false);
+
+        // Download pre-compiled libkrunfw.so directly (no build needed)
+        download_libkrunfw_so(&libkrunfw_install);
+    }
+
+    // Build libkrun from vendored source (always)
     let libkrun_src = manifest_dir.join("vendor/libkrun");
-
-    // Build libkrunfw first (libkrun depends on it)
-    build_with_make(
-        &libkrunfw_src,
-        &libkrunfw_install,
-        "libkrunfw",
-        HashMap::new(),
-    );
-
-    // Build libkrun with shared build environment
     build_with_make(
         &libkrun_src,
         &libkrun_install,
