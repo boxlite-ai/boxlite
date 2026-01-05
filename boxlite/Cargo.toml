@@ -6,6 +6,7 @@ authors.workspace = true
 license.workspace = true
 description = "Library-only sandbox runtime for Boxlite"
 links = "boxlite"
+default-run = "boxlite"
 
 [lib]
 name = "boxlite"
@@ -15,6 +16,7 @@ crate-type = ["rlib"]
 [[bin]]
 name = "boxlite-shim"
 path = "src/bin/shim.rs"
+
 
 [features]
 default = ["gvproxy-backend"]
@@ -53,7 +55,7 @@ rayon = "1.10"
 rusqlite = { version = "0.32", features = ["bundled"] }
 parking_lot = "0.12"
 inventory = "0.3"
-clap = { version = "4.5", features = ["derive"] }
+clap = { version = "4.5", features = ["derive", "env"] }
 oci-client = { version = "0.15", default-features = false, features = ["rustls-tls"] }
 oci-spec = "0.8.3"
 tar = "0.4"
