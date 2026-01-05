@@ -1,28 +1,28 @@
 diff --git a/Makefile b/Makefile
-index 0e47e19..f2649f3 100644
+index 1234567..abcdefg 100644
 --- a/Makefile
 +++ b/Makefile
-@@ -69,6 +69,9 @@ ifeq ($(TIMESYNC),1)
+@@ -72,6 +72,9 @@ ifeq ($(TIMESYNC),1)
  endif
- 
+
  OS = $(shell uname -s)
 +ARCH = $(shell uname -m)
 +DEBIAN_DIST ?= bookworm
 +ROOTFS_DIR = linux-sysroot
- 
+
  KRUN_BINARY_Linux = libkrun$(VARIANT).so.$(FULL_VERSION)
  KRUN_SONAME_Linux = libkrun$(VARIANT).so.$(ABI_VERSION)
-@@ -90,17 +93,60 @@ ifeq ($(PREFIX),)
+@@ -94,17 +97,60 @@ ifeq ($(PREFIX),)
      PREFIX := /usr/local
  endif
- 
--.PHONY: install clean test $(LIBRARY_RELEASE_$(OS)) $(LIBRARY_DEBUG_$(OS)) libkrun.pc
-+.PHONY: install clean test $(LIBRARY_RELEASE_$(OS)) $(LIBRARY_DEBUG_$(OS)) libkrun.pc clean-sysroot clean-all
- 
+
+-.PHONY: install clean test test-prefix $(LIBRARY_RELEASE_$(OS)) $(LIBRARY_DEBUG_$(OS)) libkrun.pc
++.PHONY: install clean test test-prefix $(LIBRARY_RELEASE_$(OS)) $(LIBRARY_DEBUG_$(OS)) libkrun.pc clean-sysroot clean-all
+
  all: $(LIBRARY_RELEASE_$(OS)) libkrun.pc
- 
+
  debug: $(LIBRARY_DEBUG_$(OS)) libkrun.pc
- 
+
 +ifeq ($(OS),Darwin)
 +ifeq ($(SYSROOT_LINUX),)
 +SYSROOT_LINUX = $(ROOTFS_DIR)
@@ -74,15 +74,16 @@ index 0e47e19..f2649f3 100644
 +
 +clean-sysroot:
 +	rm -rf $(ROOTFS_DIR)
- 
+
  $(LIBRARY_RELEASE_$(OS)): $(INIT_BINARY)
  	cargo build --release $(FEATURE_FLAGS)
-@@ -157,6 +203,8 @@ clean:
+@@ -159,6 +205,8 @@ clean:
+ 	rm -f $(INIT_BINARY)
+ 	cargo clean
  	rm -rf test-prefix
  	cd tests; cargo clean
- 
+
 +clean-all: clean clean-sysroot
 +
- test: $(LIBRARY_RELEASE_$(OS))
+ test-prefix/lib64/libkrun.pc: $(LIBRARY_RELEASE_$(OS))
  	mkdir -p test-prefix
- 	PREFIX="$$(realpath test-prefix)" make install

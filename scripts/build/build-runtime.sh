@@ -162,11 +162,25 @@ build_guest() {
     echo ""
     print_section "Building boxlite-guest binary..."
 
-    # Always build to ensure freshness (Cargo handles incremental compilation)
-    bash "$SCRIPT_BUILD_DIR/build-guest.sh" --profile "$PROFILE"
-
     source "$SCRIPT_DIR/util.sh"
     local guest_path="$PROJECT_ROOT/target/$GUEST_TARGET/$PROFILE/boxlite-guest"
+
+    # Skip build if SKIP_GUEST_BUILD=1 and binary exists
+    # Used in CI when guest is pre-built on Ubuntu host
+    if [ "${SKIP_GUEST_BUILD:-0}" = "1" ]; then
+        if [ -f "$guest_path" ] && [ -x "$guest_path" ]; then
+            GUEST_BINARY="$guest_path"
+            print_success "Using pre-built: $guest_path (SKIP_GUEST_BUILD=1)"
+            return 0
+        else
+            print_error "SKIP_GUEST_BUILD=1 but guest binary not found at $guest_path"
+            exit 1
+        fi
+    fi
+
+    # Build guest binary
+    bash "$SCRIPT_BUILD_DIR/build-guest.sh" --profile "$PROFILE"
+
     if [ -f "$guest_path" ]; then
         GUEST_BINARY="$guest_path"
         print_success "Built: $guest_path"
