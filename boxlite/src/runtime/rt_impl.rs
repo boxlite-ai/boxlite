@@ -615,6 +615,13 @@ impl RuntimeImpl {
         // This ensures a clean slate for lock allocation during recovery.
         self.lock_manager.clear_all_locks()?;
 
+        // Phase 0: Scan filesystem for orphaned directories (no DB record)
+        // These can occur when:
+        // - Box creation succeeded but DB persist failed
+        // - Process crashed after directory creation but before DB insert
+        // - Old boxes from before persistence was implemented
+        self.cleanup_orphaned_directories()?;
+
         let persisted = self.box_manager.all_boxes(true)?;
 
         // Phase 1: Clean up boxes that shouldn't persist
@@ -751,6 +758,83 @@ impl RuntimeImpl {
         }
 
         tracing::info!("Box recovery complete");
+        Ok(())
+    }
+
+    /// Scan filesystem for orphaned box directories and remove them.
+    ///
+    /// Orphaned directories are those that exist in ~/.boxlite/boxes/
+    /// but have no corresponding record in the database. This can occur when:
+    /// - Box creation succeeded but database persist failed
+    /// - Process crashed after directory creation but before DB insert
+    /// - Old boxes from before persistence was implemented
+    fn cleanup_orphaned_directories(&self) -> BoxliteResult<()> {
+        use std::collections::HashSet;
+
+        let boxes_dir = self.layout.boxes_dir();
+        if !boxes_dir.exists() {
+            return Ok(());
+        }
+
+        // Scan filesystem for box directories
+        let fs_box_ids: HashSet<String> = match std::fs::read_dir(&boxes_dir) {
+            Ok(entries) => entries
+                .filter_map(|entry| entry.ok())
+                .filter(|entry| entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false))
+                .filter_map(|entry| entry.file_name().to_str().map(String::from))
+                .collect(),
+            Err(e) => {
+                tracing::warn!(
+                    path = %boxes_dir.display(),
+                    error = %e,
+                    "Failed to scan boxes directory for orphans"
+                );
+                return Ok(()); // Non-fatal, continue with recovery
+            }
+        };
+
+        if fs_box_ids.is_empty() {
+            return Ok(());
+        }
+
+        // Load all box IDs from database
+        let db_box_ids: HashSet<String> = self
+            .box_manager
+            .all_boxes(false)?
+            .into_iter()
+            .map(|(cfg, _)| cfg.id.to_string())
+            .collect();
+
+        // Find orphaned directories (exist on filesystem but not in DB)
+        let orphaned: Vec<_> = fs_box_ids.difference(&db_box_ids).collect();
+
+        if orphaned.is_empty() {
+            return Ok(());
+        }
+
+        tracing::info!(
+            count = orphaned.len(),
+            "Found orphaned box directories (no DB record)"
+        );
+
+        for orphan_id in orphaned {
+            let orphan_dir = boxes_dir.join(orphan_id);
+            tracing::warn!(
+                box_id = %orphan_id,
+                path = %orphan_dir.display(),
+                "Removing orphaned box directory (no database record)"
+            );
+
+            if let Err(e) = std::fs::remove_dir_all(&orphan_dir) {
+                tracing::error!(
+                    box_id = %orphan_id,
+                    path = %orphan_dir.display(),
+                    error = %e,
+                    "Failed to remove orphaned box directory"
+                );
+            }
+        }
+
         Ok(())
     }
 

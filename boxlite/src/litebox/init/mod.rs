@@ -171,8 +171,9 @@ impl BoxBuilder {
     /// Build and initialize LiveState.
     ///
     /// Executes all initialization stages with automatic cleanup on failure.
-    /// Returns LiveState which will be set in BoxImpl.
-    pub(crate) async fn build(self) -> BoxliteResult<LiveState> {
+    /// Returns (LiveState, CleanupGuard) - caller must disarm guard after all
+    /// operations succeed (including DB persist).
+    pub(crate) async fn build(self) -> BoxliteResult<(LiveState, types::CleanupGuard)> {
         use std::time::Instant;
 
         let total_start = Instant::now();
@@ -190,10 +191,8 @@ impl BoxBuilder {
         let ctx = InitPipelineContext::new(config, runtime.clone(), reuse_rootfs, skip_guest_wait);
         let ctx = Arc::new(Mutex::new(ctx));
 
-        if status != BoxStatus::Starting {
-            let mut ctx_guard = ctx.lock().await;
-            ctx_guard.guard.disarm();
-        }
+        // Note: Guard stays armed until caller disarms it after DB persist succeeds.
+        // This ensures cleanup happens even if operations after build() fail.
 
         let plan = get_execution_plan(status);
         let pipeline = PipelineBuilder::from_plan(plan);
@@ -211,7 +210,8 @@ impl BoxBuilder {
 
         metrics.log_init_stages();
 
-        ctx.guard.disarm();
+        // Note: Guard is NOT disarmed here. Caller is responsible for disarming
+        // after all operations succeed (including DB persist).
 
         // Get guest_session from GuestConnectTask
         let guest_session = ctx
@@ -241,8 +241,15 @@ impl BoxBuilder {
         #[cfg(target_os = "linux")]
         let bind_mount = ctx.bind_mount.take();
 
+        // Take the guard out of context, replacing with a disarmed placeholder.
+        // The caller is responsible for disarming the returned guard after all
+        // operations succeed (including DB persist).
+        let mut placeholder = types::CleanupGuard::new(ctx.runtime.clone(), ctx.config.id.clone());
+        placeholder.disarm();
+        let guard = std::mem::replace(&mut ctx.guard, placeholder);
+
         // Build LiveState
-        Ok(LiveState::new(
+        let live_state = LiveState::new(
             handler,
             guest_session,
             metrics,
@@ -250,6 +257,8 @@ impl BoxBuilder {
             guest_disk,
             #[cfg(target_os = "linux")]
             bind_mount,
-        ))
+        );
+
+        Ok((live_state, guard))
     }
 }

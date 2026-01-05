@@ -330,12 +330,15 @@ impl BoxImpl {
         let _guard = LockGuard::new(&*locker);
 
         // Build the box (lock is held)
+        // The returned cleanup_guard stays armed until we disarm it after all
+        // operations succeed. If any operation fails, the guard's Drop will
+        // cleanup the VM process and directory.
         let builder = BoxBuilder::new(Arc::clone(&self.runtime), self.config.clone(), state)?;
-        let live_state = match builder.build().await {
-            Ok(live_state) => live_state,
+        let (live_state, mut cleanup_guard) = match builder.build().await {
+            Ok(result) => result,
             Err(e) => {
-                // Build failed - free the lock only if newly allocated
-                // (unlock happens automatically when _guard drops)
+                // Build failed - cleanup_guard was already dropped inside build()
+                // Free the lock only if newly allocated
                 if is_new_box {
                     let lock_id = locker.id();
                     if let Err(free_err) = self.runtime.lock_manager.free(lock_id) {
@@ -351,6 +354,8 @@ impl BoxImpl {
         };
 
         // Build succeeded - persist to DB for new boxes (lock still held)
+        // Note: cleanup_guard is still armed! If add_box fails, it will cleanup
+        // the running VM and directory automatically via Drop.
         if is_new_box {
             let lock_id = locker.id();
 
@@ -359,8 +364,8 @@ impl BoxImpl {
             state.set_lock_id(lock_id);
 
             if let Err(e) = self.runtime.box_manager.add_box(&self.config, &state) {
-                // Failed to persist - free the lock
-                // (unlock happens automatically when _guard drops)
+                // Failed to persist - cleanup_guard stays armed and will cleanup
+                // VM process and directory when dropped
                 drop(state);
                 if let Err(free_err) = self.runtime.lock_manager.free(lock_id) {
                     tracing::error!(
@@ -369,6 +374,7 @@ impl BoxImpl {
                         "Failed to free lock after DB persist error"
                     );
                 }
+                // cleanup_guard will be dropped here and perform cleanup
                 return Err(e);
             }
 
@@ -378,6 +384,9 @@ impl BoxImpl {
                 "Persisted new box to database"
             );
         }
+
+        // All operations succeeded - disarm the cleanup guard
+        cleanup_guard.disarm();
 
         // Lock is automatically released when _guard drops
         Ok(live_state)
