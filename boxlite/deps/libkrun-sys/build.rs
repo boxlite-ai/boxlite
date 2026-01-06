@@ -28,10 +28,6 @@ const LIBKRUNFW_SO_URL: &str =
 #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
 const LIBKRUNFW_SHA256: &str = "e254bc3fb07b32e26a258d9958967b2f22eb6c3136cfedf358c332308b6d35ea";
 
-// Cross-compilation patch for building init binary on macOS (vendored locally)
-#[cfg(target_os = "macos")]
-const LIBKRUN_PATCH_FILE: &str = "patches/macos-cross-compile.patch";
-
 // libkrun build features (NET=1 BLK=1 enables network and block device support)
 const LIBKRUN_BUILD_FEATURES: &[(&str, &str)] = &[("NET", "1"), ("BLK", "1")];
 
@@ -439,58 +435,6 @@ fn build_libkrunfw_macos(src_dir: &Path, install_dir: &Path) {
     build_with_make(src_dir, install_dir, "libkrunfw", HashMap::new());
 }
 
-/// Applies the cross-compilation patch to libkrun from vendored patch file.
-/// Copy from https://github.com/slp/homebrew-krun
-#[cfg(target_os = "macos")]
-fn apply_libkrun_patch(src_dir: &Path, manifest_dir: &Path) {
-    let patch_path = manifest_dir.join(LIBKRUN_PATCH_FILE);
-    let patch_marker = src_dir.join(".patch_applied");
-
-    // Skip if patch already applied
-    if patch_marker.exists() {
-        println!("cargo:warning=Cross-compile patch already applied");
-        return;
-    }
-
-    // Verify patch file exists
-    if !patch_path.exists() {
-        panic!(
-            "Cross-compilation patch not found at {}",
-            patch_path.display()
-        );
-    }
-
-    // Apply patch with git apply (works better than patch for git-style diffs)
-    println!("cargo:warning=Applying cross-compilation patch...");
-    let status = Command::new("git")
-        .args(["apply", "--check", patch_path.to_str().unwrap()])
-        .current_dir(src_dir)
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .status();
-
-    // Check if patch can be applied (might already be partially applied)
-    if status.is_ok() && status.unwrap().success() {
-        let status = Command::new("git")
-            .args(["apply", patch_path.to_str().unwrap()])
-            .current_dir(src_dir)
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
-            .status()
-            .expect("Failed to apply patch");
-
-        if !status.success() {
-            panic!("Failed to apply cross-compilation patch");
-        }
-        println!("cargo:warning=Cross-compilation patch applied successfully");
-    } else {
-        println!("cargo:warning=Patch already applied or not needed");
-    }
-
-    // Create marker file
-    fs::write(&patch_marker, "applied").ok();
-}
-
 /// Sets LIBCLANG_PATH for bindgen if not already set.
 /// This is needed when llvm is installed via brew but not linked (keg-only).
 #[cfg(target_os = "macos")]
@@ -523,19 +467,12 @@ fn setup_libclang_path() {
 
 /// Builds libkrun from vendored source with cross-compilation support.
 #[cfg(target_os = "macos")]
-fn build_libkrun_macos(
-    src_dir: &Path,
-    install_dir: &Path,
-    libkrunfw_install: &Path,
-    manifest_dir: &Path,
-) {
+fn build_libkrun_macos(src_dir: &Path, install_dir: &Path, libkrunfw_install: &Path) {
     // Setup LIBCLANG_PATH for bindgen if needed
     setup_libclang_path();
 
-    // Apply cross-compilation patch from vendored patch file
-    apply_libkrun_patch(src_dir, manifest_dir);
-
     // Build with common helper using shared build environment
+    // Note: Cross-compilation support is now built into upstream libkrun
     build_with_make(
         src_dir,
         install_dir,
@@ -612,13 +549,8 @@ fn build() {
     // 2. Build libkrunfw
     build_libkrunfw_macos(&libkrunfw_src, &libkrunfw_install);
 
-    // 3. Build libkrun from vendored source (with cross-compile patch)
-    build_libkrun_macos(
-        &libkrun_src,
-        &libkrun_install,
-        &libkrunfw_install,
-        &manifest_dir,
-    );
+    // 3. Build libkrun from vendored source
+    build_libkrun_macos(&libkrun_src, &libkrun_install, &libkrunfw_install);
 
     // 4. Fix install names for @rpath
     fix_macos_libs(&libkrunfw_lib, "libkrunfw")

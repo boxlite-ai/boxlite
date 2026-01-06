@@ -1,6 +1,6 @@
 [submodule "boxlite/deps/libkrun-sys/vendor/libkrun"]
 	path = boxlite/deps/libkrun-sys/vendor/libkrun
-	url = https://github.com/boxlite-labs/libkrun.git
+	url = https://github.com/boxlite-ai/libkrun.git
 [submodule "boxlite/deps/libkrun-sys/vendor/libkrunfw"]
 	path = boxlite/deps/libkrun-sys/vendor/libkrunfw
 	url = https://github.com/boxlite-labs/libkrunfw.git
