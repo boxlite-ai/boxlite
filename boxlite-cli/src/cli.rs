@@ -1,5 +1,35 @@
+//! CLI definition and argument parsing for boxlite-cli.
+//!
+//! This module contains all CLI-related code including the main CLI structure,
+//! subcommands, and flag definitions.
+
 use boxlite::BoxOptions;
-use clap::Args;
+use clap::{Args, Parser, Subcommand};
+
+// ============================================================================
+// CLI Definition
+// ============================================================================
+
+#[derive(Parser, Debug)]
+#[command(
+    name = "boxlite",
+    author,
+    version,
+    about = "BoxLite Container Runtime CLI"
+)]
+pub struct Cli {
+    #[command(flatten)]
+    pub global: GlobalFlags,
+
+    #[command(subcommand)]
+    pub command: Commands,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum Commands {
+    /// Create and run a new container from an image
+    Run(crate::commands::run::RunArgs),
+}
 
 // ============================================================================
 // GLOBAL FLAGS
@@ -112,10 +142,13 @@ impl ManagementFlags {
     }
 }
 
+// ============================================================================
+// Tests
+// ============================================================================
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use boxlite::BoxOptions;
 
     #[test]
     fn test_process_flags_env_parsing() {

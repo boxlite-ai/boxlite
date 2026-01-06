@@ -1,0 +1,35 @@
+[package]
+name = "boxlite-cli"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Command-line interface for BoxLite container runtime"
+
+[[bin]]
+name = "boxlite"
+path = "src/main.rs"
+
+[dependencies]
+# Core library
+boxlite = { path = "../boxlite" }
+
+# CLI framework
+clap = { version = "4.5", features = ["derive", "env"] }
+
+# Async runtime
+tokio = { version = "1.37", features = ["rt", "rt-multi-thread", "macros", "signal"] }
+
+# I/O and streaming
+futures = "0.3"
+
+# Terminal handling
+term_size = "0.3"
+nix = { version = "0.30.1", features = ["term"] }
+
+# Error handling
+anyhow = "1.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }

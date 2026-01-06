@@ -1,4 +1,4 @@
-use crate::cli::flags::{ManagementFlags, ProcessFlags, ResourceFlags};
+use crate::cli::{ManagementFlags, ProcessFlags, ResourceFlags};
 use boxlite::BoxCommand;
 use boxlite::{BoxOptions, BoxliteRuntime, RootfsSpec};
 use clap::Args;
@@ -58,11 +58,8 @@ pub async fn execute(args: RunArgs) -> anyhow::Result<()> {
     let status = result.wait().await?;
     println!("Box finished with exit code: {}", status.exit_code);
 
-    // Cleanup
-    if args.management.rm {
-        println!("Auto-removing box...");
-        rt.remove(litebox.id().as_str(), true).await?;
-    }
+    // Note: auto_remove is handled automatically by the runtime when the box stops.
+    // No need to manually call rt.remove() here.
 
     Ok(())
 }
