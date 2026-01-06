@@ -120,6 +120,7 @@ impl BoxCommand {
 /// # Ok(())
 /// # }
 /// ```
+#[derive(Clone)]
 pub struct Execution {
     id: ExecutionId,
     inner: std::sync::Arc<tokio::sync::Mutex<ExecutionInner>>,
