@@ -40,7 +40,6 @@ impl PipelineTask<InitCtx> for VmmSpawnTask {
             container_image_config,
             container_disk_path,
             guest_disk_path,
-            home_dir,
             container_id,
             runtime,
         ) = {
@@ -66,7 +65,6 @@ impl PipelineTask<InitCtx> for VmmSpawnTask {
                 container_image_config,
                 container_disk_path,
                 guest_disk_path,
-                ctx.config.box_home.clone(),
                 ctx.config.container.id.clone(),
                 ctx.runtime.clone(),
             )
@@ -74,12 +72,12 @@ impl PipelineTask<InitCtx> for VmmSpawnTask {
 
         // Build config and get outputs
         let (instance_spec, volume_mgr, rootfs_init, container_mounts) = build_config(
+            &box_id,
             &options,
             &layout,
             &container_image_config,
             &container_disk_path,
             guest_disk_path.as_deref(),
-            &home_dir,
             &container_id,
             &runtime,
         )
@@ -118,12 +116,12 @@ impl PipelineTask<InitCtx> for VmmSpawnTask {
 /// Build VMM config from prepared rootfs outputs.
 #[allow(clippy::too_many_arguments)]
 async fn build_config(
+    box_id: &BoxID,
     options: &BoxOptions,
     layout: &BoxFilesystemLayout,
     container_image_config: &ContainerImageConfig,
     container_disk_path: &Path,
     guest_disk_path: Option<&Path>,
-    home_dir: &Path,
     container_id: &ContainerID,
     runtime: &SharedRuntimeImpl,
 ) -> BoxliteResult<(
@@ -204,6 +202,10 @@ async fn build_config(
     // Network configuration
     let network_config = build_network_config(container_image_config, options);
 
+    // Use runtime home for logs (not box_home)
+    let runtime_home = runtime.layout.home_dir();
+    let logs_dir = runtime.layout.logs_dir();
+
     // Assemble VMM instance spec
     let instance_spec = InstanceSpec {
         cpus: options.cpus,
@@ -216,8 +218,8 @@ async fn build_config(
         guest_rootfs,
         network_config,
         network_backend_endpoint: None,
-        home_dir: home_dir.to_path_buf(),
-        console_output: None,
+        home_dir: runtime_home.to_path_buf(),
+        console_output: Some(logs_dir.join(format!("{}-console.log", box_id))),
         detach: options.detach,
         parent_pid: std::process::id(),
     };

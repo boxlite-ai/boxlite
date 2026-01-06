@@ -128,7 +128,7 @@ export class SimpleBox {
     if (options.runtime) {
       this._runtime = options.runtime;
     } else {
-      this._runtime = JsBoxlite.default();
+      this._runtime = JsBoxlite.withDefaultConfig();
     }
 
     // Convert options to BoxOptions format
@@ -253,14 +253,14 @@ export class SimpleBox {
     let stderr;
 
     try {
-      stdout = execution.stdout();
+      stdout = await execution.stdout();
     } catch (err) {
       // Stream not available (expected for some commands)
       stdout = null;
     }
 
     try {
-      stderr = execution.stderr();
+      stderr = await execution.stderr();
     } catch (err) {
       // Stream not available (expected for some commands)
       stderr = null;
