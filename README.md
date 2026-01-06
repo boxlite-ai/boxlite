@@ -5,45 +5,106 @@
 [![PyPI](https://img.shields.io/pypi/v/boxlite.svg)](https://pypi.org/project/boxlite/)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-## Overview
+**Embedded** micro-VM runtime for **AI agents** running OCI containers with
+hardware-level isolation — **no daemon required**.
 
-BoxLite is an embeddable virtual machine runtime for secure, isolated execution environments.
-Following the SQLite philosophy of "small, fast, reliable", BoxLite lets you run containers inside
-lightweight VMs with hardware-level isolation—no daemon required.
 
-### The Problem
+## What is BoxLite?
 
-AI agents are most powerful when they have freedom—freedom to write code, install packages, modify
-files, access the network, and explore solutions creatively. But that freedom on your host system is
-dangerous. And if you're hosting AI agents for customers, you need isolation that scales—without
-managing VM infrastructure.
+BoxLite lets you spin up **lightweight VMs** ("Boxes") and run **OCI containers inside them**. It's
+designed for use-cases like **AI agent sandboxes** and **multi-tenant code execution**, where Docker
+alone isn't enough and full VM infrastructure is too heavy.
 
-Today's options force you to choose:
+**Why BoxLite**
 
-| Approach              | Trade-off                                      |
-|-----------------------|------------------------------------------------|
-| **Restrict the AI**   | Safer, but cripples capability                 |
-| **Trust the AI**      | Full power, but one mistake away from disaster |
-| **Docker containers** | Partial isolation—shares host kernel           |
-| **Traditional VMs**   | Heavy, slow, complex to orchestrate            |
-| **Cloud sandboxes**   | Latency, cost, vendor lock-in                  |
+- **Hardware isolation**: each Box has its own kernel (not just namespaces).
+- **Embeddable**: link a library; no root; no background service to manage.
+- **OCI compatible**: use Docker/OCI images (`python:slim`, `node:alpine`, `alpine:latest`).
+- **Async-first**: run many boxes concurrently; stream stdout/stderr.
 
-### BoxLite's Approach
+## Python Quick Start
 
-BoxLite gives AI agents a **complete playground**—a full Linux environment where they can do
-*anything*—while guaranteeing nothing escapes to your host. It combines the **security of VMs** with
-the **simplicity of containers**:
+### Install
 
-- **Full Freedom Inside** — Install packages, write files, run servers, use the network
-- **Hardware Isolation** — Each Box is a separate VM with its own kernel, not just namespaces
-- **Batteries Included** — VM, networking, OCI images, storage—all integrated, nothing to configure
-- **Embeddable** — No daemon, no root, just a library in your application
-- **OCI Compatible** — Use any Docker/OCI image (`python:slim`, `node:alpine`, etc.)
-- **Cross-Platform** — macOS (Apple Silicon) and Linux (x86_64, ARM64)
+```bash
+pip install boxlite
+```
 
-**The AI explores freely. Your system stays safe.**
+Requires Python 3.10+.
 
-### Architecture
+### Run
+
+```python
+import asyncio
+import boxlite
+
+
+async def main():
+    async with boxlite.SimpleBox(image="python:slim") as box:
+        result = await box.exec("python", "-c", "print('Hello from BoxLite!')")
+        print(result.stdout)
+
+
+asyncio.run(main())
+```
+
+## Rust Quick Start
+
+### Install
+
+```toml
+[dependencies]
+boxlite = { git = "https://github.com/boxlite-labs/boxlite" }
+```
+
+### Run
+
+```rust
+use boxlite::{BoxCommand, BoxOptions, BoxliteRuntime, RootfsSpec};
+use futures::StreamExt;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let runtime = BoxliteRuntime::default_runtime();
+    let options = BoxOptions {
+        rootfs: RootfsSpec::Image("alpine:latest".into()),
+        ..Default::default()
+    };
+
+    let (_, litebox) = runtime.create(options)?;
+    let mut execution = litebox
+        .exec(BoxCommand::new("echo").arg("Hello from BoxLite!"))
+        .await?;
+
+    let mut stdout = execution.stdout().unwrap();
+    while let Some(line) = stdout.next().await {
+        println!("{}", line);
+    }
+
+    Ok(())
+}
+```
+
+## Next steps
+
+- Run more real-world scenarios in [Examples](./examples/)
+- Learn how images, disks, networking, and isolation work in [Architecture](./docs/architecture/)
+
+## Features
+
+- **Compute**: CPU/memory limits, async-first API, streaming stdout/stderr, metrics
+- **Storage**: volume mounts (ro/rw), persistent disks (QCOW2), copy-on-write
+- **Networking**: outbound internet, port forwarding (TCP/UDP), network metrics
+- **Images**: OCI pull + caching, custom rootfs support
+- **SDKs**: Python available; Node.js / Go coming soon
+
+## Architecture
+
+High-level overview of how BoxLite embeds a runtime and runs OCI containers inside micro-VMs.
+For details, see [Architecture](./docs/architecture/).
+
+<details>
+<summary>Show diagram</summary>
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -64,137 +125,13 @@ the **simplicity of containers**:
                       (KVM / Hypervisor.framework)
 ```
 
-### Use Cases
-
-- **AI Agent Sandbox** — A full computer for your AI to explore, experiment, and build—safely
-  isolated from your system
-- **AI Agent Hosting** — Serverless multi-tenant runtime—spin up isolated environments on demand for
-  each customer's AI
-- **Regulated Environments** — Hardware-level isolation for compliance where container breakout is
-  unacceptable
-- **Local Development** — Consistent Linux environments on macOS and Linux—no Docker Desktop
-  required
-
-## Features
-
-### Compute
-
-- **Resource Control** — Configure CPUs, memory limits per box
-- **Environment Control** — Custom env vars, working directory
-- **Async-First API** — Non-blocking operations, run multiple boxes concurrently
-- **Streaming I/O** — Real-time stdout/stderr as execution happens
-- **Metrics** — CPU, memory, execution statistics per box
-
-### Storage
-
-- **Volume Mounts** — Mount host directories into the box (read-only or read-write)
-- **Persistent Disks** — QCOW2 disk images that survive box restarts
-- **Copy-on-Write** — Efficient snapshots with shared base images
-
-### Networking
-
-- **Full Internet Access** — Outbound connections, DNS resolution
-- **Port Forwarding** — Map host ports to guest ports (TCP/UDP)
-- **Network Metrics** — Bytes sent/received, connection stats
-
-### Images
-
-- **OCI Compatible** — Pull from Docker Hub, GHCR, ECR, or any registry
-- **Layer Caching** — Pull once, start fast
-- **Custom Rootfs** — Use pre-built rootfs instead of pulling images
-
-### SDKs
-
-| Language | Status      |
-|----------|-------------|
-| Python   | Available   |
-| Node.js  | Coming soon |
-| Go       | Coming soon |
-
-## Installation
-
-### System Requirements
-
-| Platform | Architecture  | Requirements                        |
-|----------|---------------|-------------------------------------|
-| macOS    | Apple Silicon | macOS 12+                           |
-| Linux    | x86_64, ARM64 | KVM enabled (`/dev/kvm` accessible) |
-
-### Rust
-
-```toml
-[dependencies]
-boxlite = { git = "https://github.com/boxlite-labs/boxlite" }
-```
-
-### Python
-
-```bash
-pip install boxlite
-```
-
-Requires Python 3.10+.
-
-### Node.js
-
-Coming soon.
-
-### Go
-
-Coming soon.
-
-## Quick Start
-
-### Rust
-
-```rust
-use boxlite::{BoxliteRuntime, BoxOptions, BoxCommand, RootfsSpec};
-use futures::StreamExt;
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let runtime = BoxliteRuntime::default_runtime();
-
-    let options = BoxOptions {
-        rootfs: RootfsSpec::Image("alpine:latest".into()),
-        ..Default::default()
-    };
-    let (_, litebox) = runtime.create(options)?;
-
-    // Execute command
-    let mut execution = litebox.exec(BoxCommand::new("echo").arg("Hello from BoxLite!")).await?;
-
-    // Stream stdout
-    let mut stdout = execution.stdout().unwrap();
-    while let Some(line) = stdout.next().await {
-        println!("{}", line);
-    }
-
-    Ok(())
-}
-```
-
-### Python
-
-```python
-import asyncio
-import boxlite
-
-
-async def main():
-    async with boxlite.SimpleBox(image="python:slim") as box:
-        result = await box.exec("python", "-c", "print('Hello from BoxLite!')")
-        print(result.stdout)
-
-
-asyncio.run(main())
-```
+</details>
 
 ## Documentation
 
-- [API Reference](https://boxlite-labs.github.io/website/) — Coming soon
+- API Reference — Coming soon
 - [Examples](./examples/) — Sample code for common use cases
-- [Architecture](./docs/architecture.md) — How BoxLite works under the hood
+- [Architecture](./docs/architecture/) — How BoxLite works under the hood
 
 ## Supported Platforms
 
@@ -205,6 +142,14 @@ asyncio.run(main())
 | Linux    | ARM64                 | ✅ Supported     |
 | macOS    | Intel (x86_64)        | ❌ Not supported |
 | Windows  | —                     | ❌ Not supported |
+
+## System Requirements
+
+| Platform | Requirements                        |
+|----------|-------------------------------------|
+| macOS    | Apple Silicon, macOS 12+            |
+| Linux    | KVM enabled (`/dev/kvm` accessible) |
+| Python   | 3.10+                               |
 
 ## Getting Help
 
