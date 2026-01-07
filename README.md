@@ -12,7 +12,7 @@ hardware-level isolation — **no daemon required**.
 ## What is BoxLite?
 
 BoxLite lets you spin up **lightweight VMs** ("Boxes") and run **OCI containers inside them**. It's
-designed for use-cases like **AI agent sandboxes** and **multi-tenant code execution**, where Docker
+designed for use cases like **AI agent sandboxes** and **multi-tenant code execution**, where Docker
 alone isn't enough and full VM infrastructure is too heavy.
 
 **Why BoxLite**
