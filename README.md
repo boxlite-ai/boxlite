@@ -1,7 +1,7 @@
 # BoxLite
 
-[![Build](https://github.com/boxlite-labs/boxlite/actions/workflows/build-wheels.yml/badge.svg)](https://github.com/boxlite-labs/boxlite/actions/workflows/build-wheels.yml)
-[![Lint](https://github.com/boxlite-labs/boxlite/actions/workflows/lint.yml/badge.svg)](https://github.com/boxlite-labs/boxlite/actions/workflows/lint.yml)
+[![Build](https://github.com/boxlite-ai/boxlite/actions/workflows/build-wheels.yml/badge.svg)](https://github.com/boxlite-ai/boxlite/actions/workflows/build-wheels.yml)
+[![Lint](https://github.com/boxlite-ai/boxlite/actions/workflows/lint.yml/badge.svg)](https://github.com/boxlite-ai/boxlite/actions/workflows/lint.yml)
 [![PyPI](https://img.shields.io/pypi/v/boxlite.svg)](https://pypi.org/project/boxlite/)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
@@ -54,7 +54,7 @@ asyncio.run(main())
 
 ```toml
 [dependencies]
-boxlite = { git = "https://github.com/boxlite-labs/boxlite" }
+boxlite = { git = "https://github.com/boxlite-ai/boxlite" }
 ```
 
 ### Run
@@ -153,8 +153,8 @@ For details, see [Architecture](./docs/architecture/).
 
 ## Getting Help
 
-- [GitHub Issues](https://github.com/boxlite-labs/boxlite/issues) — Bug reports and feature requests
-- [Discussions](https://github.com/boxlite-labs/boxlite/discussions) — Questions and community
+- [GitHub Issues](https://github.com/boxlite-ai/boxlite/issues) — Bug reports and feature requests
+- [Discussions](https://github.com/boxlite-ai/boxlite/discussions) — Questions and community
   support
 
 ## Contributing
