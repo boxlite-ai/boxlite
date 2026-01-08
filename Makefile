@@ -27,7 +27,8 @@ help:
 	@echo "    make guest          - Build the guest binary (cross-compile for VM)"
 	@echo ""
 	@echo "  Testing:"
-	@echo "    make test           - Run all Rust tests"
+	@echo "    make test           - Run Rust tests (Core library)"
+	@echo "    make test:cli       - Run CLI integration tests (prepares runtime first)"
 	@echo ""
 	@echo "  Local Development:"
 	@echo "    make dev:python     - Build and install Python SDK locally (debug mode)"
@@ -160,7 +161,12 @@ dev\:node: runtime-debug
 # Run Rust tests (excludes guest and doctests)
 test:
 	@echo "🧪 Running Rust tests..."
-	@cargo test --workspace --exclude boxlite-guest --lib --tests
+	@cargo test --workspace --exclude boxlite-guest --exclude boxlite-cli --lib --tests
+
+# Run CLI integration tests (requires runtime environment)
+test\:cli: runtime-debug
+	@echo "🧪 Running CLI integration tests..."
+	@cargo test -p boxlite-cli --tests --no-fail-fast
 
 # Format all Rust code
 fmt:
