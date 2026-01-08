@@ -17,7 +17,7 @@ type RlimitResource = libc::__rlimit_resource_t;
 type RlimitResource = libc::c_int;
 
 /// Get current value of a resource limit.
-#[allow(dead_code)]
+#[allow(dead_code, clippy::unnecessary_cast)]
 pub fn get_rlimit(resource: RlimitResource) -> Result<(u64, u64), io::Error> {
     let mut rlim = libc::rlimit {
         rlim_cur: 0,

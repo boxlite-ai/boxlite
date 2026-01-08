@@ -1,7 +1,7 @@
 //! Subprocess spawning for boxlite-shim binary.
 
 use std::{
-    path::{Path, PathBuf},
+    path::Path,
     process::{Child, Stdio},
 };
 
@@ -24,7 +24,7 @@ use libkrun_sys::krun_create_ctx;
 /// * `Ok(Child)` - Successfully spawned subprocess
 /// * `Err(...)` - Failed to spawn subprocess
 pub(crate) fn spawn_subprocess(
-    binary_path: &PathBuf,
+    binary_path: &Path,
     engine_type: VmmKind,
     config_json: &str,
     home_dir: &Path,
@@ -45,8 +45,10 @@ pub(crate) fn spawn_subprocess(
     let box_dir = layout.boxes_dir().join(box_id);
 
     // Create Jailer with security options
-    let mut security = SecurityOptions::default();
-    security.volumes = volumes.to_vec();
+    let security = SecurityOptions {
+        volumes: volumes.to_vec(),
+        ..Default::default()
+    };
 
     let jailer = Jailer::new(box_id, &box_dir).with_security(security);
 

@@ -171,6 +171,7 @@ fn apply_limits(cgroup_path: &Path, config: &CgroupConfig) -> Result<(), JailerE
 /// Add a process to a cgroup.
 ///
 /// Call this after spawning the process.
+#[allow(dead_code)]
 pub fn add_process(box_id: &str, pid: u32) -> Result<(), JailerError> {
     let cgroup_path = cgroup_path(box_id);
     let procs_file = cgroup_path.join("cgroup.procs");

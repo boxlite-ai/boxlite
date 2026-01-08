@@ -319,12 +319,11 @@ impl Jailer {
         unsafe {
             cmd.pre_exec(move || {
                 // 1. Close inherited file descriptors
-                common::fd::close_inherited_fds_raw()
-                    .map_err(|e| std::io::Error::from_raw_os_error(e))?;
+                common::fd::close_inherited_fds_raw().map_err(std::io::Error::from_raw_os_error)?;
 
                 // 2. Apply resource limits (rlimits)
                 common::rlimit::apply_limits_raw(&resource_limits)
-                    .map_err(|e| std::io::Error::from_raw_os_error(e))?;
+                    .map_err(std::io::Error::from_raw_os_error)?;
 
                 // 3. Add self to cgroup (Linux only)
                 #[cfg(target_os = "linux")]

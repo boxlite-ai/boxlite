@@ -63,11 +63,11 @@ mod tests {
     #[test]
     fn test_apply_isolation_returns_error() {
         use crate::jailer::config::SecurityOptions;
-        use crate::runtime::layout::FilesystemLayout;
+        use crate::runtime::layout::{FilesystemLayout, FsLayoutConfig};
         use std::path::PathBuf;
 
         let security = SecurityOptions::default();
-        let layout = FilesystemLayout::new(PathBuf::from("/tmp/test"));
+        let layout = FilesystemLayout::new(PathBuf::from("/tmp/test"), FsLayoutConfig::default());
 
         let result = apply_isolation(&security, "test-box", &layout);
         assert!(result.is_err());
