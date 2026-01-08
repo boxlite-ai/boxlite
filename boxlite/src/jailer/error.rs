@@ -41,6 +41,10 @@ pub enum JailerError {
     #[error("jailer not supported on this platform")]
     UnsupportedPlatform,
 
+    /// Cgroup operation failed.
+    #[error("cgroup: {0}")]
+    Cgroup(String),
+
     /// Generic IO error (catch-all).
     #[error("io: {0}")]
     Io(#[from] io::Error),

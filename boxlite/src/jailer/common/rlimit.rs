@@ -9,9 +9,16 @@
 use crate::jailer::config::ResourceLimits;
 use std::io;
 
+/// Resource type alias for cross-platform compatibility.
+/// On Linux glibc, RLIMIT_* are u32; on macOS they're i32.
+#[cfg(target_os = "linux")]
+type RlimitResource = libc::__rlimit_resource_t;
+#[cfg(not(target_os = "linux"))]
+type RlimitResource = libc::c_int;
+
 /// Get current value of a resource limit.
 #[allow(dead_code)]
-pub fn get_rlimit(resource: libc::c_int) -> Result<(u64, u64), io::Error> {
+pub fn get_rlimit(resource: RlimitResource) -> Result<(u64, u64), io::Error> {
     let mut rlim = libc::rlimit {
         rlim_cur: 0,
         rlim_max: 0,
@@ -73,7 +80,7 @@ pub fn apply_limits_raw(limits: &ResourceLimits) -> Result<(), i32> {
 
 /// Set a specific resource limit - async-signal-safe version.
 #[inline]
-fn set_rlimit_raw(resource: libc::c_int, limit: u64) -> Result<(), i32> {
+fn set_rlimit_raw(resource: RlimitResource, limit: u64) -> Result<(), i32> {
     let rlim = libc::rlimit {
         rlim_cur: limit as libc::rlim_t,
         rlim_max: limit as libc::rlim_t,

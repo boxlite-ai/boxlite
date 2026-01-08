@@ -27,7 +27,6 @@ use super::common;
 use super::config::ResourceLimits;
 use super::error::JailerError;
 use std::fs;
-use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 /// Base path for cgroup v2 filesystem.
@@ -266,8 +265,7 @@ pub fn add_self_to_cgroup_raw(cgroup_procs_path: &std::ffi::CStr) -> Result<(), 
     // Format PID as string (async-signal-safe: stack buffer, no allocation)
     let mut pid_buf = [0u8; 16];
     let pid_len = {
-        let mut cursor = std::io::Cursor::new(&mut pid_buf[..]);
-        // write! might allocate in some cases, use manual formatting
+        // Manual formatting to avoid write! which might allocate
         let mut n = pid as u32;
         let mut len = 0;
         let mut temp = [0u8; 16];
