@@ -34,6 +34,7 @@ pub fn is_available() -> bool {
 }
 
 /// Get the bwrap version string.
+#[allow(dead_code)]
 pub fn version() -> Option<String> {
     Command::new("bwrap")
         .arg("--version")
@@ -45,6 +46,7 @@ pub fn version() -> Option<String> {
 
 /// Builder for constructing bwrap command arguments.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct BwrapCommand {
     args: Vec<String>,
     env_vars: Vec<(String, String)>,

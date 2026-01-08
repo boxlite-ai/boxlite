@@ -214,7 +214,7 @@ mod tests {
         assert!(matches!(jailer_err, JailerError::Isolation(_)));
 
         // SystemError -> JailerError
-        let sys_err = SystemError::CloseFds(io::Error::new(io::ErrorKind::Other, "test"));
+        let sys_err = SystemError::CloseFds(io::Error::other("test"));
         let jailer_err: JailerError = sys_err.into();
         assert!(matches!(jailer_err, JailerError::System(_)));
 

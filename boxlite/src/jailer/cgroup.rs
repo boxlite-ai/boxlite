@@ -190,6 +190,7 @@ pub fn add_process(box_id: &str, pid: u32) -> Result<(), JailerError> {
 /// Remove a cgroup.
 ///
 /// The cgroup must be empty (no processes) before removal.
+#[allow(dead_code)]
 pub fn remove_cgroup(box_id: &str) -> Result<(), JailerError> {
     let cgroup_path = cgroup_path(box_id);
 
