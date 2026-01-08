@@ -19,6 +19,9 @@
 //! - FD cleanup (inside shim, bwrap leaks some FDs)
 //! - rlimits (inside shim)
 
+// Allow dead_code on non-Linux platforms where bwrap is not available
+#![allow(dead_code)]
+
 use super::config::SecurityOptions;
 use crate::runtime::layout::FilesystemLayout;
 use std::path::Path;

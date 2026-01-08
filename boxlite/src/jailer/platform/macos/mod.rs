@@ -224,6 +224,7 @@ pub fn is_sandbox_available() -> bool {
 ///
 /// This can be useful for debugging sandbox issues. The generated profile
 /// can be inspected to see exactly what paths are allowed.
+#[allow(dead_code)]
 pub fn write_sandbox_profile(
     path: &Path,
     security: &SecurityOptions,
@@ -520,8 +521,10 @@ mod tests {
 
     #[test]
     fn test_build_policy_includes_network_when_enabled() {
-        let mut security = SecurityOptions::default();
-        security.network_enabled = true;
+        let security = SecurityOptions {
+            network_enabled: true,
+            ..Default::default()
+        };
         let box_dir = PathBuf::from("/tmp/test/boxes/test-box");
         let binary_path = PathBuf::from("/usr/local/bin/boxlite-shim");
 
@@ -532,8 +535,10 @@ mod tests {
 
     #[test]
     fn test_build_policy_excludes_network_when_disabled() {
-        let mut security = SecurityOptions::default();
-        security.network_enabled = false;
+        let security = SecurityOptions {
+            network_enabled: false,
+            ..Default::default()
+        };
         let box_dir = PathBuf::from("/tmp/test/boxes/test-box");
         let binary_path = PathBuf::from("/usr/local/bin/boxlite-shim");
 
