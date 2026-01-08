@@ -1,0 +1,48 @@
+; ============================================================================
+; BoxLite macOS Seatbelt Base Policy
+; ============================================================================
+;
+; This policy uses allow-default with explicit denials for dangerous operations.
+; The Hypervisor.framework requires many permissions that are difficult to
+; enumerate individually. The VM itself provides hardware-level isolation.
+;
+; Derived from:
+;   - OpenAI Codex (Apache 2.0): https://github.com/openai/codex
+;   - https://source.chromium.org/chromium/chromium/src/+/main:sandbox/policy/mac/
+;
+; Security Model:
+;   The primary security boundary is the hardware VM isolation (Hypervisor.framework).
+;   This sandbox provides defense-in-depth for the shim process, blocking:
+;   - Access to user data directories (except explicitly allowed volumes)
+;   - Modification of system files
+;   - Network connections (unless explicitly enabled)
+;
+; TODO: Investigate switching to (deny default) whitelist approach
+;   Currently using (allow default) because Hypervisor.framework requires
+;   undocumented Mach services and IOKit permissions that can't be enumerated.
+;   When Apple documents HV.framework's sandbox requirements, revisit this.
+;   See: https://developer.apple.com/forums/thread/668496
+;
+; ============================================================================
+
+(version 1)
+
+; ============================================================================
+; BASE: ALLOW DEFAULT
+; ============================================================================
+; Hypervisor.framework requires many undocumented permissions.
+; We allow by default and explicitly deny dangerous operations.
+(allow default)
+
+; Note: Specific path restrictions are added dynamically by macos.rs
+; based on user volumes and box shared directory.
+
+; ============================================================================
+; END OF BASE POLICY
+; ============================================================================
+; File read/write policies are added dynamically by macos.rs based on:
+;   - User volumes (BoxOptions.volumes)
+;   - Box shared directory ({box_dir}/shared/)
+;
+; Network policy is added separately if security.network_enabled = true.
+; ============================================================================

@@ -223,9 +223,30 @@ impl VmmController for ShimController {
         tracing::debug!(binary = %self.binary_path.display(), "Box runner binary");
         tracing::trace!(config = %config_json, "Box configuration");
 
+        // Convert fs_shares to VolumeSpec for macOS sandbox path restrictions
+        // The sandbox will ONLY allow reading/writing paths in this list
+        use crate::runtime::options::VolumeSpec;
+        let volumes: Vec<VolumeSpec> = config
+            .fs_shares
+            .shares()
+            .iter()
+            .map(|share| VolumeSpec {
+                host_path: share.host_path.to_string_lossy().to_string(),
+                guest_path: share.tag.clone(), // Use tag as guest_path for logging
+                read_only: share.read_only,
+            })
+            .collect();
+
         // Measure subprocess spawn time
         let shim_spawn_start = Instant::now();
-        let child = spawn_subprocess(&self.binary_path, self.engine_type, &config_json)?;
+        let child = spawn_subprocess(
+            &self.binary_path,
+            self.engine_type,
+            &config_json,
+            &config.home_dir,
+            self.box_id.as_str(),
+            &volumes,
+        )?;
         // spawn_duration: time to create Box subprocess
         let shim_spawn_duration = shim_spawn_start.elapsed();
 

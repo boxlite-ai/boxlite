@@ -1137,3 +1137,18 @@ async def run_tasks_concurrently(tasks):
 
     return await asyncio.gather(*[run_task(t) for t in tasks])
 ```
+
+## Platform-Specific Guides
+
+### macOS Sandbox Debugging
+
+For debugging macOS Seatbelt sandbox issues during development, see:
+
+**[macOS Sandbox Debugging Guide](./macos-sandbox-debugging.md)**
+
+Covers:
+- Real-time sandbox denial monitoring
+- Log analysis commands
+- SBPL policy syntax
+- Common denial patterns and fixes
+- Iterative debugging workflow

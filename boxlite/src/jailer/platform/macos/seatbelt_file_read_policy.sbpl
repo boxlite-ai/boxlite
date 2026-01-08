@@ -1,0 +1,51 @@
+; ============================================================================
+; BoxLite macOS Seatbelt File Read Policy
+; ============================================================================
+;
+; Static system paths required for any process to execute on macOS.
+; These are the MINIMUM paths needed for dynamic linking and execution.
+;
+; User volumes are added dynamically by macos.rs at runtime.
+;
+; Why these paths are needed:
+;   - /usr/lib: libSystem.B.dylib and other system libraries
+;   - /System/Library: System frameworks (Hypervisor.framework, etc.)
+;   - /Library/Frameworks: Additional frameworks
+;   - /private/var/db/dyld: dyld shared cache (required for dynamic linking)
+;   - /dev/*: Device files for I/O and randomness
+;
+; To debug sandbox violations:
+;   log show --predicate 'subsystem == "com.apple.sandbox"' --last 5m
+;
+; ============================================================================
+
+(allow file-read*
+    ; === Root and /var directory metadata ===
+    ; libkrun/virtio-fs needs to stat "/" and "/var" for path canonicalization.
+    ; /var is a symlink to /private/var on macOS, stat needed for resolution.
+    (literal "/")
+    (literal "/var")
+
+    ; === System Libraries (required for dynamic linking) ===
+    ; Without these, sandbox-exec itself cannot start the shim
+    (subpath "/usr/lib")
+    (subpath "/System/Library")
+    (subpath "/Library/Frameworks")
+
+    ; === dyld Shared Cache ===
+    ; Required for dynamic linking on macOS
+    (subpath "/private/var/db/dyld")
+
+    ; === Device Files ===
+    ; /dev/null: Standard I/O discard
+    ; /dev/urandom, /dev/random: Cryptographic randomness
+    (literal "/dev/null")
+    (literal "/dev/urandom")
+    (literal "/dev/random")
+)
+
+; ============================================================================
+; END OF STATIC FILE READ POLICY
+; ============================================================================
+; User volumes are added dynamically by macos.rs
+; ============================================================================

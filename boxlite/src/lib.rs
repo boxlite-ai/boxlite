@@ -8,6 +8,7 @@ use tracing_subscriber::EnvFilter;
 // Global guard for tracing-appender to keep the writer thread alive
 static LOG_GUARD: OnceLock<tracing_appender::non_blocking::WorkerGuard> = OnceLock::new();
 
+pub mod jailer;
 pub mod litebox;
 pub mod lock;
 pub mod metrics;
