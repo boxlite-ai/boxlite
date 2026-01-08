@@ -39,8 +39,7 @@ fn test_rm_stopped_box() {
 #[ignore = "Relies on cross-process running state that is not reliably persisted yet"]
 fn test_rm_running_box_needs_force() {
     let mut ctx = common::boxlite();
-    ctx.cmd
-        .args(["run", "-d", "alpine:latest", "sleep", "100"]);
+    ctx.cmd.args(["run", "-d", "alpine:latest", "sleep", "100"]);
     let output = ctx.cmd.assert().success().get_output().clone();
     let id = String::from_utf8_lossy(&output.stdout).trim().to_string();
 

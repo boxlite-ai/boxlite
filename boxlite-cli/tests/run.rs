@@ -317,8 +317,7 @@ fn test_run_interactive_pipe() {
 #[test]
 fn test_run_detach() {
     let mut ctx = common::boxlite();
-    ctx.cmd
-        .args(["run", "-d", "alpine:latest", "sleep", "300"]);
+    ctx.cmd.args(["run", "-d", "alpine:latest", "sleep", "300"]);
     let output = ctx.cmd.assert().success().get_output().clone();
     let stdout = String::from_utf8_lossy(&output.stdout);
     let box_id = stdout.trim();
