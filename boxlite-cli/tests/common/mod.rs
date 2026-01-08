@@ -50,7 +50,7 @@ pub fn boxlite() -> TestContext {
 
         for image in TEST_IMAGES {
             let result = std::process::Command::new(bin_path)
-                .args(&["--home", home.to_str().unwrap(), "pull", image])
+                .args(["--home", home.to_str().unwrap(), "pull", image])
                 .output();
 
             match result {

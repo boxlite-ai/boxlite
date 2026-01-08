@@ -164,12 +164,12 @@ impl BoxRunner {
             }));
         }
 
-        if self.args.process.interactive {
-            if let Some(stdin_tx) = execution.stdin() {
-                cancellation_tasks.push(tokio::spawn(async move {
-                    stream_stdin(stdin_tx).await;
-                }));
-            }
+        if self.args.process.interactive
+            && let Some(stdin_tx) = execution.stdin()
+        {
+            cancellation_tasks.push(tokio::spawn(async move {
+                stream_stdin(stdin_tx).await;
+            }));
         }
 
         (completion_tasks, cancellation_tasks)
@@ -257,10 +257,8 @@ async fn handle_signals_and_resize(exec: boxlite::Execution, tty: bool) {
     };
 
     // Initial resize if TTY
-    if tty {
-        if let Some((w, h)) = term_size::dimensions() {
-            let _ = exec.resize_tty(h as u32, w as u32).await;
-        }
+    if tty && let Some((w, h)) = term_size::dimensions() {
+        let _ = exec.resize_tty(h as u32, w as u32).await;
     }
 
     loop {

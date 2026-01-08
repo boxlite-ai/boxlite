@@ -86,15 +86,13 @@ impl ProcessFlags {
         for env_str in &self.env {
             if let Some((k, v)) = env_str.split_once('=') {
                 opts.env.push((k.to_string(), v.to_string()));
+            } else if let Some(val) = lookup(env_str) {
+                opts.env.push((env_str.to_string(), val));
             } else {
-                if let Some(val) = lookup(env_str) {
-                    opts.env.push((env_str.to_string(), val));
-                } else {
-                    tracing::warn!(
-                        "Environment variable '{}' not found on host, skipping",
-                        env_str
-                    );
-                }
+                tracing::warn!(
+                    "Environment variable '{}' not found on host, skipping",
+                    env_str
+                );
             }
         }
         Ok(())

@@ -10,7 +10,7 @@ mod common;
 fn test_run_exit_code_success() {
     let mut ctx = common::boxlite();
     ctx.cmd
-        .args(&["run", "--rm", "alpine:latest", "sh", "-c", "exit 0"]);
+        .args(["run", "--rm", "alpine:latest", "sh", "-c", "exit 0"]);
     ctx.cmd.assert().success();
 }
 
@@ -18,7 +18,7 @@ fn test_run_exit_code_success() {
 fn test_run_exit_code_custom() {
     let mut ctx = common::boxlite();
     ctx.cmd
-        .args(&["run", "--rm", "alpine:latest", "sh", "-c", "exit 42"]);
+        .args(["run", "--rm", "alpine:latest", "sh", "-c", "exit 42"]);
     ctx.cmd.assert().code(42);
 }
 
@@ -26,7 +26,7 @@ fn test_run_exit_code_custom() {
 fn test_run_exit_code_125() {
     let mut ctx = common::boxlite();
     ctx.cmd
-        .args(&["run", "--rm", "alpine:latest", "sh", "-c", "exit 125"]);
+        .args(["run", "--rm", "alpine:latest", "sh", "-c", "exit 125"]);
     ctx.cmd.assert().code(125);
 }
 
@@ -38,7 +38,7 @@ fn test_run_exit_code_125() {
 fn test_run_command_not_found() {
     let mut ctx = common::boxlite();
     ctx.cmd
-        .args(&["run", "--rm", "alpine:latest", "nonexistent_command"]);
+        .args(["run", "--rm", "alpine:latest", "nonexistent_command"]);
     ctx.cmd.assert()
         .failure() // Currently exits with 1, should be 127？
         .stderr(
@@ -51,7 +51,7 @@ fn test_run_command_not_found() {
 #[test]
 fn test_run_invalid_executable() {
     let mut ctx = common::boxlite();
-    ctx.cmd.args(&["run", "--rm", "alpine:latest", "/etc"]);
+    ctx.cmd.args(["run", "--rm", "alpine:latest", "/etc"]);
     ctx.cmd.assert()
         .failure() // Currently exits with 1, should be 126
         .stderr(
@@ -70,7 +70,7 @@ fn test_run_invalid_executable() {
 #[test]
 fn test_run_single_env_var() {
     let mut ctx = common::boxlite();
-    ctx.cmd.args(&[
+    ctx.cmd.args([
         "run",
         "--rm",
         "-e",
@@ -86,7 +86,7 @@ fn test_run_single_env_var() {
 #[test]
 fn test_run_multiple_env_vars() {
     let mut ctx = common::boxlite();
-    ctx.cmd.args(&[
+    ctx.cmd.args([
         "run",
         "--rm",
         "-e",
@@ -105,7 +105,7 @@ fn test_run_multiple_env_vars() {
 fn test_run_env_var_from_host() {
     let mut ctx = common::boxlite();
     ctx.cmd.env("BOXLITE_TEST_VAR", "from_host");
-    ctx.cmd.args(&[
+    ctx.cmd.args([
         "run",
         "--rm",
         "-e",
@@ -121,7 +121,7 @@ fn test_run_env_var_from_host() {
 #[test]
 fn test_run_env_var_empty_value() {
     let mut ctx = common::boxlite();
-    ctx.cmd.args(&[
+    ctx.cmd.args([
         "run",
         "--rm",
         "-e",
@@ -142,7 +142,7 @@ fn test_run_env_var_empty_value() {
 #[test]
 fn test_run_working_dir_default() {
     let mut ctx = common::boxlite();
-    ctx.cmd.args(&["run", "--rm", "alpine:latest", "pwd"]);
+    ctx.cmd.args(["run", "--rm", "alpine:latest", "pwd"]);
     ctx.cmd.assert().success().stdout("/\n");
 }
 
@@ -150,7 +150,7 @@ fn test_run_working_dir_default() {
 fn test_run_working_dir_custom() {
     let mut ctx = common::boxlite();
     ctx.cmd
-        .args(&["run", "--rm", "-w", "/tmp", "alpine:latest", "pwd"]);
+        .args(["run", "--rm", "-w", "/tmp", "alpine:latest", "pwd"]);
     ctx.cmd.assert().success().stdout("/tmp\n");
 }
 
@@ -158,7 +158,7 @@ fn test_run_working_dir_custom() {
 fn test_run_working_dir_absolute_path() {
     let mut ctx = common::boxlite();
     ctx.cmd
-        .args(&["run", "--rm", "-w", "/etc", "alpine:latest", "pwd"]);
+        .args(["run", "--rm", "-w", "/etc", "alpine:latest", "pwd"]);
     ctx.cmd.assert().success().stdout("/etc\n");
 }
 
@@ -170,7 +170,7 @@ fn test_run_working_dir_absolute_path() {
 fn test_run_stdout_capture() {
     let mut ctx = common::boxlite();
     ctx.cmd
-        .args(&["run", "--rm", "alpine:latest", "echo", "hello boxlite"]);
+        .args(["run", "--rm", "alpine:latest", "echo", "hello boxlite"]);
     ctx.cmd.assert().success().stdout("hello boxlite\n");
 }
 
@@ -178,7 +178,7 @@ fn test_run_stdout_capture() {
 fn test_run_stderr_capture() {
     let mut ctx = common::boxlite();
     ctx.cmd
-        .args(&["run", "--rm", "alpine:latest", "sh", "-c", "echo error >&2"]);
+        .args(["run", "--rm", "alpine:latest", "sh", "-c", "echo error >&2"]);
     ctx.cmd
         .assert()
         .success()
@@ -188,7 +188,7 @@ fn test_run_stderr_capture() {
 #[test]
 fn test_run_stdout_stderr_separate() {
     let mut ctx = common::boxlite();
-    ctx.cmd.args(&[
+    ctx.cmd.args([
         "run",
         "--rm",
         "alpine:latest",
@@ -206,7 +206,7 @@ fn test_run_stdout_stderr_separate() {
 #[test]
 fn test_run_multiline_output() {
     let mut ctx = common::boxlite();
-    ctx.cmd.args(&[
+    ctx.cmd.args([
         "run",
         "--rm",
         "alpine:latest",
@@ -224,7 +224,7 @@ fn test_run_multiline_output() {
 #[test]
 fn test_run_with_name() {
     let mut ctx = common::boxlite();
-    ctx.cmd.args(&[
+    ctx.cmd.args([
         "run",
         "--rm",
         "--name",
@@ -244,7 +244,7 @@ fn test_run_with_name() {
 #[test]
 fn test_run_cpus_limit() {
     let mut ctx = common::boxlite();
-    ctx.cmd.args(&[
+    ctx.cmd.args([
         "run",
         "--rm",
         "--cpus",
@@ -260,7 +260,7 @@ fn test_run_cpus_limit() {
 #[test]
 fn test_run_memory_limit() {
     let mut ctx = common::boxlite();
-    ctx.cmd.args(&[
+    ctx.cmd.args([
         "run",
         "--rm",
         "--memory",
@@ -279,7 +279,7 @@ fn test_run_memory_limit() {
 #[test]
 fn test_run_combined_resource_limits() {
     let mut ctx = common::boxlite();
-    ctx.cmd.args(&[
+    ctx.cmd.args([
         "run",
         "--rm",
         "--cpus",
@@ -305,7 +305,7 @@ fn test_run_combined_resource_limits() {
 fn test_run_interactive_pipe() {
     // e.g. echo "hello" | boxlite run -i ... cat
     let mut ctx = common::boxlite();
-    ctx.cmd.args(&["run", "--rm", "-i", "alpine:latest", "cat"]);
+    ctx.cmd.args(["run", "--rm", "-i", "alpine:latest", "cat"]);
     //simulate pipe
     ctx.cmd.write_stdin("hello from boxlite pipe\n");
     ctx.cmd
@@ -318,7 +318,7 @@ fn test_run_interactive_pipe() {
 fn test_run_detach() {
     let mut ctx = common::boxlite();
     ctx.cmd
-        .args(&["run", "-d", "alpine:latest", "sleep", "300"]);
+        .args(["run", "-d", "alpine:latest", "sleep", "300"]);
     let output = ctx.cmd.assert().success().get_output().clone();
     let stdout = String::from_utf8_lossy(&output.stdout);
     let box_id = stdout.trim();
@@ -328,7 +328,7 @@ fn test_run_detach() {
 
     // Cleanup: Detached boxes must be manually removed since they don't support --rm
     let mut rm_cmd = ctx.new_cmd();
-    rm_cmd.args(&["rm", "--force", box_id]);
+    rm_cmd.args(["rm", "--force", box_id]);
     rm_cmd.assert().success();
 }
 
@@ -337,7 +337,7 @@ fn test_run_rm_cleanup() {
     let mut ctx = common::boxlite();
     let name = "test-auto-remove-boxlite";
 
-    ctx.cmd.args(&[
+    ctx.cmd.args([
         "run",
         "--rm",
         "--name",
@@ -352,7 +352,7 @@ fn test_run_rm_cleanup() {
     // run another container with the SAME name
     let mut cmd2 = ctx.new_cmd();
 
-    cmd2.args(&[
+    cmd2.args([
         "run",
         "--rm",
         "--name",
@@ -373,7 +373,7 @@ fn test_run_basic_command_with_timeout() {
     let mut ctx = common::boxlite();
     ctx.cmd.timeout(std::time::Duration::from_secs(30));
     ctx.cmd
-        .args(&["run", "--rm", "alpine:latest", "echo", "hello boxlite"]);
+        .args(["run", "--rm", "alpine:latest", "echo", "hello boxlite"]);
     ctx.cmd.assert().success().stdout("hello boxlite\n");
 }
 
@@ -382,7 +382,7 @@ fn test_run_invalid_command_no_hang() {
     let mut ctx = common::boxlite();
     ctx.cmd.timeout(std::time::Duration::from_secs(5));
     ctx.cmd
-        .args(&["run", "--rm", "alpine:latest", "invalidcommand"]);
+        .args(["run", "--rm", "alpine:latest", "invalidcommand"]);
     ctx.cmd.assert().failure();
 }
 
@@ -393,7 +393,7 @@ fn test_run_invalid_command_no_hang() {
 #[test]
 fn test_run_python_simple_print() {
     let mut ctx = common::boxlite();
-    ctx.cmd.args(&[
+    ctx.cmd.args([
         "run",
         "--rm",
         "python:alpine",
@@ -408,7 +408,7 @@ fn test_run_python_simple_print() {
 #[test]
 fn test_run_python_json_processing() {
     let mut ctx = common::boxlite();
-    ctx.cmd.args(&[
+    ctx.cmd.args([
         "run",
         "--rm",
         "python:alpine",
@@ -431,7 +431,7 @@ fn test_run_python_json_processing() {
 #[test]
 fn test_run_python_computation() {
     let mut ctx = common::boxlite();
-    ctx.cmd.args(&[
+    ctx.cmd.args([
         "run",
         "--rm",
         "python:alpine",
@@ -450,7 +450,7 @@ fn test_run_python_computation() {
 #[test]
 fn test_run_python_with_env_vars() {
     let mut ctx = common::boxlite();
-    ctx.cmd.args(&[
+    ctx.cmd.args([
         "run",
         "--rm",
         "-e",
@@ -475,7 +475,7 @@ fn test_run_python_with_env_vars() {
 #[test]
 fn test_run_python_multi_step_pipeline() {
     let mut ctx = common::boxlite();
-    ctx.cmd.args(&[
+    ctx.cmd.args([
         "run",
         "--rm",
         "python:alpine",
@@ -496,7 +496,7 @@ fn test_run_python_multi_step_pipeline() {
 #[test]
 fn test_run_python_list_comprehension() {
     let mut ctx = common::boxlite();
-    ctx.cmd.args(&[
+    ctx.cmd.args([
         "run",
         "--rm",
         "python:alpine",
@@ -513,7 +513,7 @@ fn test_run_python_list_comprehension() {
 #[test]
 fn test_run_python_error_handling() {
     let mut ctx = common::boxlite();
-    ctx.cmd.args(&[
+    ctx.cmd.args([
         "run",
         "--rm",
         "python:alpine",
@@ -527,7 +527,7 @@ fn test_run_python_error_handling() {
 #[test]
 fn test_run_python_import_stdlib() {
     let mut ctx = common::boxlite();
-    ctx.cmd.args(&[
+    ctx.cmd.args([
         "run",
         "--rm",
         "python:alpine",
@@ -561,7 +561,7 @@ fn test_run_signal_sigterm() {
     let child = std::process::Command::new(bin_path)
         .arg("--home")
         .arg(ctx.home)
-        .args(&[
+        .args([
             "run",
             "--rm",
             "alpine:latest",
@@ -613,7 +613,7 @@ fn test_run_signal_sighup() {
     let child = std::process::Command::new(bin_path)
         .arg("--home")
         .arg(ctx.home)
-        .args(&[
+        .args([
             "run",
             "--rm",
             "alpine:latest",
@@ -660,7 +660,7 @@ fn test_run_binary_output() {
     // Expected bytes: [0xFF, 0xFE, 0x00, 0x11]
     let expected_bytes = vec![0xff, 0xfe, 0x00, 0x11];
 
-    ctx.cmd.args(&[
+    ctx.cmd.args([
         "run",
         "--rm",
         "alpine:latest",
@@ -687,7 +687,7 @@ fn test_run_invalid_image() {
     let mut ctx = common::boxlite();
     ctx.cmd.timeout(std::time::Duration::from_secs(10));
     ctx.cmd
-        .args(&["run", "nonexistent-image:latest", "echo", "hi"]);
+        .args(["run", "nonexistent-image:latest", "echo", "hi"]);
     ctx.cmd.assert().failure().stderr(
         predicate::str::contains("failed to pull")
             .or(predicate::str::contains("not found"))
@@ -698,7 +698,7 @@ fn test_run_invalid_image() {
 #[test]
 fn test_run_tty_error_in_pipe() {
     let mut ctx = common::boxlite();
-    ctx.cmd.args(&["run", "--tty", "alpine:latest"]);
+    ctx.cmd.args(["run", "--tty", "alpine:latest"]);
     // Simulate non-TTY input by writing to stdin
     ctx.cmd.write_stdin("ls\n");
     ctx.cmd
