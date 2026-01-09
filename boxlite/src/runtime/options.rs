@@ -23,14 +23,14 @@ pub struct SecurityOptions {
     /// - Linux: seccomp, namespaces, chroot, privilege drop
     /// - macOS: sandbox-exec profile
     ///
-    /// Default: true on Linux, true on macOS (sandbox-exec only)
+    /// Default: false (use `SecurityOptions::standard()` or `maximum()` to enable)
     #[serde(default = "default_jailer_enabled")]
     pub jailer_enabled: bool,
 
     /// Enable seccomp syscall filtering (Linux only).
     ///
     /// When true, applies a whitelist of allowed syscalls.
-    /// Default: true on Linux, ignored on macOS
+    /// Default: false (use `SecurityOptions::standard()` or `maximum()` to enable)
     #[serde(default = "default_seccomp_enabled")]
     pub seccomp_enabled: bool,
 
@@ -143,11 +143,11 @@ pub struct ResourceLimits {
 // Default value functions for SecurityOptions
 
 fn default_jailer_enabled() -> bool {
-    cfg!(any(target_os = "linux", target_os = "macos"))
+    false
 }
 
 fn default_seccomp_enabled() -> bool {
-    cfg!(target_os = "linux")
+    false
 }
 
 fn default_chroot_base() -> PathBuf {
@@ -220,8 +220,13 @@ impl SecurityOptions {
     /// Standard mode: recommended for most use cases.
     ///
     /// Provides good security without being overly restrictive.
+    /// Enables jailer on Linux/macOS, seccomp on Linux.
     pub fn standard() -> Self {
-        Self::default()
+        Self {
+            jailer_enabled: cfg!(any(target_os = "linux", target_os = "macos")),
+            seccomp_enabled: cfg!(target_os = "linux"),
+            ..Default::default()
+        }
     }
 
     /// Maximum mode: all isolation features enabled.

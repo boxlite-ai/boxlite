@@ -155,8 +155,10 @@ mod tests {
     fn test_apply_isolation_with_seccomp_disabled() {
         use crate::runtime::layout::FsLayoutConfig;
 
-        let mut security = SecurityOptions::default();
-        security.seccomp_enabled = false; // Disable seccomp
+        let security = SecurityOptions {
+            seccomp_enabled: false,
+            ..Default::default()
+        };
 
         let layout = FilesystemLayout::new(PathBuf::from("/tmp/test"), FsLayoutConfig::default());
 
