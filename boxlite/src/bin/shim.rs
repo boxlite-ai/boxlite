@@ -260,7 +260,7 @@ const GRACEFUL_SHUTDOWN_TIMEOUT_SECS: u64 = 5;
 /// Start a watchdog thread that monitors the parent process.
 ///
 /// If the parent process exits (clean exit or crash), this triggers shutdown:
-/// 1. First attempts graceful shutdown via SIGTERM
+/// 1. Immediately sends SIGTERM for graceful shutdown
 /// 2. Waits for timeout
 /// 3. Force kills via SIGKILL if still running
 ///
@@ -279,7 +279,6 @@ fn start_parent_watchdog(parent_pid: u32) {
                 );
 
                 // Step 1: Try graceful shutdown via SIGTERM
-                tracing::info!("Sending SIGTERM for graceful shutdown");
                 unsafe {
                     libc::kill(self_pid as i32, libc::SIGTERM);
                 }

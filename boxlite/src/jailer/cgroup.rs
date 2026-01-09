@@ -9,10 +9,17 @@
 //! - Fair resource sharing between boxes
 //! - Enforced by kernel, can't be bypassed from userspace
 //!
+//! ## Rootless Support
+//!
+//! This module supports both root and rootless operation:
+//! - **Root**: Creates cgroups in `/sys/fs/cgroup/boxlite/`
+//! - **Rootless**: Creates cgroups in the user's systemd service scope:
+//!   `/sys/fs/cgroup/user.slice/user-{uid}.slice/user@{uid}.service/boxlite/`
+//!
 //! ## Cgroup v2 Structure
 //!
 //! ```text
-//! /sys/fs/cgroup/
+//! {cgroup_base}/              # /sys/fs/cgroup (root) or user service path (rootless)
 //! └── boxlite/
 //!     └── {box_id}/
 //!         ├── cpu.max           # CPU limit
@@ -34,6 +41,58 @@ const CGROUP_ROOT: &str = "/sys/fs/cgroup";
 
 /// BoxLite cgroup name.
 const BOXLITE_CGROUP: &str = "boxlite";
+
+// ============================================================================
+// Rootless Cgroup Support
+// ============================================================================
+
+/// Check if the current process is running as root.
+#[cfg(target_os = "linux")]
+fn is_root() -> bool {
+    unsafe { libc::getuid() == 0 }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn is_root() -> bool {
+    false
+}
+
+/// Get the user's systemd cgroup base path for rootless operation.
+///
+/// On systemd systems, users can create cgroups under their user service:
+/// `/sys/fs/cgroup/user.slice/user-{uid}.slice/user@{uid}.service/`
+#[cfg(target_os = "linux")]
+fn get_user_cgroup_base() -> Option<PathBuf> {
+    let uid = unsafe { libc::getuid() };
+    let path = PathBuf::from(format!(
+        "/sys/fs/cgroup/user.slice/user-{}.slice/user@{}.service",
+        uid, uid
+    ));
+    if path.exists() {
+        Some(path)
+    } else {
+        // Fallback: try to find any writable cgroup path from /proc/self/cgroup
+        None
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn get_user_cgroup_base() -> Option<PathBuf> {
+    None
+}
+
+/// Get the cgroup base path for the current user.
+///
+/// - Root: returns `/sys/fs/cgroup`
+/// - Non-root (systemd): returns `/sys/fs/cgroup/user.slice/user-{uid}.slice/user@{uid}.service`
+/// - Non-root (no systemd): falls back to `/sys/fs/cgroup` (will likely fail)
+fn get_cgroup_base() -> PathBuf {
+    if is_root() {
+        PathBuf::from(CGROUP_ROOT)
+    } else {
+        get_user_cgroup_base().unwrap_or_else(|| PathBuf::from(CGROUP_ROOT))
+    }
+}
 
 /// Configuration for cgroup resource limits.
 #[derive(Debug, Clone, Default)]
@@ -71,8 +130,12 @@ pub fn is_cgroup_v2_available() -> bool {
 }
 
 /// Get the path to a box's cgroup directory.
+///
+/// The base path depends on whether running as root or regular user:
+/// - Root: `/sys/fs/cgroup/boxlite/{box_id}`
+/// - User: `/sys/fs/cgroup/user.slice/user-{uid}.slice/user@{uid}.service/boxlite/{box_id}`
 pub fn cgroup_path(box_id: &str) -> PathBuf {
-    Path::new(CGROUP_ROOT).join(BOXLITE_CGROUP).join(box_id)
+    get_cgroup_base().join(BOXLITE_CGROUP).join(box_id)
 }
 
 /// Setup cgroup for a box.
@@ -85,8 +148,15 @@ pub fn setup_cgroup(box_id: &str, config: &CgroupConfig) -> Result<PathBuf, Jail
         return Err(JailerError::Cgroup("Cgroup v2 not available".to_string()));
     }
 
-    let boxlite_cgroup = Path::new(CGROUP_ROOT).join(BOXLITE_CGROUP);
+    let cgroup_base = get_cgroup_base();
+    let boxlite_cgroup = cgroup_base.join(BOXLITE_CGROUP);
     let box_cgroup = boxlite_cgroup.join(box_id);
+
+    tracing::debug!(
+        cgroup_base = %cgroup_base.display(),
+        is_root = is_root(),
+        "Using cgroup base path"
+    );
 
     // Create boxlite parent cgroup if needed
     if !boxlite_cgroup.exists() {
@@ -333,7 +403,12 @@ mod tests {
     #[test]
     fn test_cgroup_path() {
         let path = cgroup_path("test-box-123");
-        assert_eq!(path, PathBuf::from("/sys/fs/cgroup/boxlite/test-box-123"));
+        // Path depends on whether running as root or regular user
+        let expected_base = get_cgroup_base();
+        let expected = expected_base.join("boxlite").join("test-box-123");
+        assert_eq!(path, expected);
+        // Verify the path ends with the expected suffix
+        assert!(path.ends_with("boxlite/test-box-123"));
     }
 
     #[test]

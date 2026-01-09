@@ -67,10 +67,13 @@ impl BwrapCommand {
     /// Add default namespace isolation (all namespaces except network).
     ///
     /// We keep network namespace shared because gvproxy needs host networking.
+    ///
+    /// Note: Mount namespace is implicitly unshared when using bind mounts.
+    /// bwrap does not have an explicit --unshare-mount option.
     pub fn with_default_namespaces(mut self) -> Self {
         // Isolate these namespaces
+        // Note: Mount namespace is implicitly unshared when bind mounts are used
         self.args.push("--unshare-user".to_string());
-        self.args.push("--unshare-mount".to_string());
         self.args.push("--unshare-pid".to_string());
         self.args.push("--unshare-ipc".to_string());
         self.args.push("--unshare-uts".to_string());
@@ -209,6 +212,29 @@ impl Default for BwrapCommand {
 /// Build a bwrap command for sandboxing boxlite-shim.
 ///
 /// This sets up the standard isolation environment for the shim process.
+///
+/// ## Mount Strategy
+///
+/// The sandbox mounts:
+/// - System directories (`/usr`, `/lib`, `/lib64`, `/bin`, `/sbin`) - read-only
+/// - Device nodes (`/dev/kvm`, `/dev/net/tun`) - for KVM and networking
+/// - BoxLite home directory (`~/.boxlite`) - read-write for runtime data
+/// - Shim binary directory - read-only for the binary and bundled libraries
+///
+/// ## Environment Variables
+///
+/// After `--clearenv`, we explicitly set:
+/// - `PATH` - minimal path for system binaries
+/// - `HOME` - set to `/root` (sandbox is isolated)
+/// - `LD_LIBRARY_PATH` - **critical** for bundled libraries (libkrun, libgvproxy)
+/// - `RUST_LOG` - preserved if set (for debugging)
+///
+/// ## Known Issues / TODOs
+///
+/// TODO(security): Consider using `--unshare-net` with explicit network setup
+///                 instead of sharing the host network namespace.
+/// TODO(security): Add seccomp filter via `--seccomp` fd once filter passing is implemented.
+/// TODO(cleanup): The shim directory mount could be more restrictive (specific files only).
 pub fn build_shim_command(
     shim_path: &Path,
     shim_args: &[String],
@@ -220,7 +246,9 @@ pub fn build_shim_command(
         .with_die_with_parent()
         .with_new_session();
 
-    // Mount system directories read-only
+    // =========================================================================
+    // Mount system directories (read-only)
+    // =========================================================================
     bwrap = bwrap
         .ro_bind_if_exists("/usr", "/usr")
         .ro_bind_if_exists("/lib", "/lib")
@@ -228,22 +256,56 @@ pub fn build_shim_command(
         .ro_bind_if_exists("/bin", "/bin")
         .ro_bind_if_exists("/sbin", "/sbin");
 
-    // Mount /dev with access to KVM
+    // =========================================================================
+    // Mount devices
+    // =========================================================================
+    // Mount /dev with basic devices, plus specific access to KVM and TUN
     bwrap = bwrap
         .with_dev()
         .dev_bind_if_exists("/dev/kvm", "/dev/kvm")
         .dev_bind_if_exists("/dev/net/tun", "/dev/net/tun");
 
-    // Mount /proc
+    // Mount /proc for process info
     bwrap = bwrap.with_proc();
 
-    // Mount /tmp as tmpfs
+    // Mount /tmp as tmpfs (isolated scratch space)
     bwrap = bwrap.tmpfs("/tmp");
 
-    // Mount boxlite home directory (read-write for data)
+    // =========================================================================
+    // Mount application directories
+    // =========================================================================
+
+    // Mount boxlite home directory (read-write for runtime data)
+    // This contains: boxes/, images/, db/, logs/, etc.
     bwrap = bwrap.bind(layout.home_dir(), layout.home_dir());
 
+    // Mount the shim binary's directory (read-only)
+    // This is CRITICAL: the shim binary and its bundled libraries (libkrun.so,
+    // libgvproxy.so, libkrunfw.so) are in this directory. Without this mount,
+    // the shim cannot be executed inside the sandbox.
+    //
+    // The shim_path might be:
+    // - Development: /path/to/boxlite/sdks/python/boxlite/runtime/boxlite-shim
+    // - Installed: /usr/lib/boxlite/boxlite-shim (already covered by /usr mount)
+    if let Some(shim_dir) = shim_path.parent() {
+        // Only mount if not already covered by system mounts
+        let shim_dir_str = shim_dir.to_string_lossy();
+        if !shim_dir_str.starts_with("/usr")
+            && !shim_dir_str.starts_with("/lib")
+            && !shim_dir_str.starts_with("/bin")
+        {
+            bwrap = bwrap.ro_bind(shim_dir, shim_dir);
+            tracing::debug!(
+                shim_dir = %shim_dir.display(),
+                "Mounted shim directory in sandbox"
+            );
+        }
+    }
+
+    // =========================================================================
     // Environment sanitization
+    // =========================================================================
+    // Clear all inherited environment variables for security
     bwrap = bwrap.with_clearenv();
 
     // Set minimal required environment variables
@@ -251,7 +313,32 @@ pub fn build_shim_command(
         .setenv("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
         .setenv("HOME", "/root");
 
-    // Preserve RUST_LOG if set
+    // =========================================================================
+    // Preserve LD_LIBRARY_PATH for bundled libraries
+    // =========================================================================
+    // CRITICAL: The shim binary dynamically links against bundled libraries:
+    // - libkrun.so (KVM-based VM runtime)
+    // - libgvproxy.so (networking)
+    // - libkrunfw.so (firmware)
+    //
+    // These are in the same directory as the shim binary. Without LD_LIBRARY_PATH,
+    // the dynamic linker cannot find them and the shim will fail to start.
+    //
+    // Note: We get LD_LIBRARY_PATH from the parent process (set by util::find_binary_with_libpath)
+    if let Ok(ld_library_path) = std::env::var("LD_LIBRARY_PATH") {
+        bwrap = bwrap.setenv("LD_LIBRARY_PATH", ld_library_path);
+        tracing::debug!("Preserved LD_LIBRARY_PATH in sandbox");
+    } else if let Some(shim_dir) = shim_path.parent() {
+        // Fallback: if LD_LIBRARY_PATH not set, use the shim's directory
+        // This handles cases where the shim is invoked directly
+        bwrap = bwrap.setenv("LD_LIBRARY_PATH", shim_dir.to_string_lossy().to_string());
+        tracing::debug!(
+            shim_dir = %shim_dir.display(),
+            "Set LD_LIBRARY_PATH to shim directory (fallback)"
+        );
+    }
+
+    // Preserve RUST_LOG for debugging
     if let Ok(rust_log) = std::env::var("RUST_LOG") {
         bwrap = bwrap.setenv("RUST_LOG", rust_log);
     }
@@ -292,9 +379,10 @@ mod tests {
         let args = bwrap.args();
 
         assert!(args.contains(&"--unshare-user".to_string()));
-        assert!(args.contains(&"--unshare-mount".to_string()));
+        assert!(args.contains(&"--unshare-pid".to_string()));
         assert!(args.contains(&"--die-with-parent".to_string()));
         assert!(args.contains(&"--clearenv".to_string()));
+        // Note: Mount namespace is implicitly unshared via bind mounts, no --unshare-mount
         // Should NOT contain --unshare-net (we keep network for gvproxy)
         assert!(!args.contains(&"--unshare-net".to_string()));
     }

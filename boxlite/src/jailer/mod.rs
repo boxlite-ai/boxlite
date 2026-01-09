@@ -72,14 +72,130 @@ pub use config::{ResourceLimits, SecurityOptions};
 pub use error::{ConfigError, IsolationError, JailerError, SystemError};
 pub use platform::{PlatformIsolation, SpawnIsolation};
 
+#[cfg(target_os = "linux")]
+use boxlite_shared::errors::BoxliteError;
 use boxlite_shared::errors::BoxliteResult;
 
 // ============================================================================
-// Jailer Struct
+// Shim Copy Utilities (Firecracker pattern)
 // ============================================================================
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+/// Copy shim binary and bundled libraries to box directory for jail isolation.
+///
+/// This follows Firecracker's approach: copy (not hard-link) binaries into the
+/// jail directory to ensure complete memory isolation between boxes.
+///
+/// Returns the path to the copied shim binary.
+#[cfg(target_os = "linux")]
+fn copy_shim_to_box(shim_path: &Path, box_dir: &Path) -> BoxliteResult<PathBuf> {
+    let bin_dir = box_dir.join("bin");
+    std::fs::create_dir_all(&bin_dir).map_err(|e| {
+        BoxliteError::Storage(format!(
+            "Failed to create bin directory {}: {}",
+            bin_dir.display(),
+            e
+        ))
+    })?;
+
+    // Copy shim binary
+    let shim_name = shim_path.file_name().unwrap_or_default();
+    let dest_shim = bin_dir.join(shim_name);
+
+    // Only copy if not already present or source is newer
+    let should_copy = if dest_shim.exists() {
+        let src_meta = std::fs::metadata(shim_path).ok();
+        let dst_meta = std::fs::metadata(&dest_shim).ok();
+        match (src_meta, dst_meta) {
+            (Some(src), Some(dst)) => {
+                src.modified().ok() > dst.modified().ok() || src.len() != dst.len()
+            }
+            _ => true,
+        }
+    } else {
+        true
+    };
+
+    if should_copy {
+        std::fs::copy(shim_path, &dest_shim).map_err(|e| {
+            BoxliteError::Storage(format!(
+                "Failed to copy shim {} to {}: {}",
+                shim_path.display(),
+                dest_shim.display(),
+                e
+            ))
+        })?;
+        tracing::debug!(
+            src = %shim_path.display(),
+            dst = %dest_shim.display(),
+            "Copied shim binary to box directory"
+        );
+    }
+
+    // Copy bundled libraries from shim's directory
+    if let Some(shim_dir) = shim_path.parent() {
+        copy_bundled_libraries(shim_dir, &bin_dir)?;
+    }
+
+    Ok(dest_shim)
+}
+
+/// Copy bundled libraries (libkrun, libkrunfw, libgvproxy) to destination.
+#[cfg(target_os = "linux")]
+fn copy_bundled_libraries(src_dir: &Path, dest_dir: &Path) -> BoxliteResult<()> {
+    let lib_patterns = ["libkrun.so", "libkrunfw.so", "libgvproxy.so"];
+
+    if let Ok(entries) = std::fs::read_dir(src_dir) {
+        for entry in entries.filter_map(|e| e.ok()) {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+
+            // Check if this file matches any of our library patterns
+            if lib_patterns.iter().any(|p| name_str.starts_with(p)) {
+                let src_path = entry.path();
+                let dest_path = dest_dir.join(&name);
+
+                // Only copy if not already present or source is newer
+                let should_copy = if dest_path.exists() {
+                    let src_meta = std::fs::metadata(&src_path).ok();
+                    let dst_meta = std::fs::metadata(&dest_path).ok();
+                    match (src_meta, dst_meta) {
+                        (Some(src), Some(dst)) => {
+                            src.modified().ok() > dst.modified().ok() || src.len() != dst.len()
+                        }
+                        _ => true,
+                    }
+                } else {
+                    true
+                };
+
+                if should_copy {
+                    std::fs::copy(&src_path, &dest_path).map_err(|e| {
+                        BoxliteError::Storage(format!(
+                            "Failed to copy library {} to {}: {}",
+                            src_path.display(),
+                            dest_path.display(),
+                            e
+                        ))
+                    })?;
+                    tracing::debug!(
+                        lib = %name_str,
+                        dst = %dest_path.display(),
+                        "Copied bundled library to box directory"
+                    );
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+// ============================================================================
+// Jailer Struct
+// ============================================================================
 
 /// Jailer provides process isolation for boxlite-shim.
 ///
@@ -263,26 +379,115 @@ impl Jailer {
 
     #[cfg(target_os = "linux")]
     fn build_bwrap_command(&self, binary: &Path, args: &[String]) -> Command {
-        bwrap::BwrapCommand::new()
+        // =====================================================================
+        // Firecracker pattern: Copy shim binary and libraries to box directory
+        // =====================================================================
+        // This ensures:
+        // 1. No external bind mounts needed (works with root user)
+        // 2. Complete memory isolation between boxes (no shared .text section)
+        // 3. Each box has its own copy of the shim and libraries
+
+        let (shim_binary, bin_dir) = match copy_shim_to_box(binary, &self.box_dir) {
+            Ok(copied_shim) => {
+                let bin_dir = copied_shim.parent().unwrap_or(&self.box_dir).to_path_buf();
+                tracing::info!(
+                    original = %binary.display(),
+                    copied = %copied_shim.display(),
+                    "Using copied shim binary (Firecracker pattern)"
+                );
+                (copied_shim, bin_dir)
+            }
+            Err(e) => {
+                // Fallback to original binary if copy fails
+                tracing::warn!(
+                    error = %e,
+                    "Failed to copy shim to box directory, using original"
+                );
+                let bin_dir = binary.parent().unwrap_or(binary).to_path_buf();
+                (binary.to_path_buf(), bin_dir)
+            }
+        };
+
+        let mut bwrap = bwrap::BwrapCommand::new()
             .with_default_namespaces()
             .with_die_with_parent()
             .with_new_session()
+            // TODO(security): Eliminate /usr, /lib, /bin, /sbin bind mounts by statically
+            // linking boxlite-shim with musl. This requires:
+            // 1. Build libkrun with musl (CC=musl-gcc)
+            // 2. Build libgvproxy with musl (CGO_ENABLED=1 CC=musl-gcc)
+            // 3. Build boxlite-shim with --target x86_64-unknown-linux-musl
+            // 4. Remove these ro_bind_if_exists calls below
+            // System directories (read-only) - needed until static linking is implemented
             .ro_bind_if_exists("/usr", "/usr")
             .ro_bind_if_exists("/lib", "/lib")
             .ro_bind_if_exists("/lib64", "/lib64")
             .ro_bind_if_exists("/bin", "/bin")
             .ro_bind_if_exists("/sbin", "/sbin")
+            // Devices
             .with_dev()
             .dev_bind_if_exists("/dev/kvm", "/dev/kvm")
             .dev_bind_if_exists("/dev/net/tun", "/dev/net/tun")
             .with_proc()
-            .tmpfs("/tmp")
-            .bind(&self.box_dir, &self.box_dir)
+            .tmpfs("/tmp");
+
+        // Mount minimal directories for security isolation
+        // Only this box's directory and required runtime directories are accessible
+
+        // 1. Mount this box's directory (read-write)
+        //    Contains: bin/, sockets/, shared/, disk.qcow2, guest-rootfs.qcow2
+        //    The shim binary and libraries are now INSIDE this directory
+        bwrap = bwrap.bind(&self.box_dir, &self.box_dir);
+        tracing::debug!(box_dir = %self.box_dir.display(), "bwrap: mounted box directory");
+
+        // Get boxlite home directory for other mounts
+        if let Some(boxes_dir) = self.box_dir.parent()
+            && let Some(home_dir) = boxes_dir.parent()
+        {
+            // 2. Mount logs directory (read-write for shim logging + console output)
+            let logs_dir = home_dir.join("logs");
+            if logs_dir.exists() {
+                bwrap = bwrap.bind(&logs_dir, &logs_dir);
+                tracing::debug!(logs_dir = %logs_dir.display(), "bwrap: mounted logs directory");
+            }
+
+            // 3. Mount tmp directory (read-write for rootfs preparation)
+            //    Contains: temporary rootfs mounts during box creation
+            let tmp_dir = home_dir.join("tmp");
+            if tmp_dir.exists() {
+                bwrap = bwrap.bind(&tmp_dir, &tmp_dir);
+                tracing::debug!(tmp_dir = %tmp_dir.display(), "bwrap: mounted tmp directory");
+            }
+
+            // 4. Mount images directory (read-only for extracted OCI layers)
+            //    Contains: extracted layer data used for rootfs
+            let images_dir = home_dir.join("images");
+            if images_dir.exists() {
+                bwrap = bwrap.ro_bind(&images_dir, &images_dir);
+                tracing::debug!(images_dir = %images_dir.display(), "bwrap: mounted images directory (ro)");
+            }
+        }
+
+        // NOTE: No external shim directory bind mount needed!
+        // The shim and libraries are now copied into box_dir/bin/
+
+        // Environment sanitization
+        bwrap = bwrap
             .with_clearenv()
             .setenv("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
-            .setenv("HOME", "/root")
-            .chdir("/")
-            .build(binary, args)
+            .setenv("HOME", "/root");
+
+        // Set LD_LIBRARY_PATH to the copied libraries directory
+        // This is inside box_dir, so no external bind mount needed
+        bwrap = bwrap.setenv("LD_LIBRARY_PATH", bin_dir.to_string_lossy().to_string());
+        tracing::debug!(ld_library_path = %bin_dir.display(), "Set LD_LIBRARY_PATH to copied libs directory");
+
+        // Preserve RUST_LOG for debugging
+        if let Ok(rust_log) = std::env::var("RUST_LOG") {
+            bwrap = bwrap.setenv("RUST_LOG", rust_log);
+        }
+
+        bwrap.chdir("/").build(&shim_binary, args)
     }
 
     #[cfg(target_os = "macos")]

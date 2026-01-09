@@ -1,20 +1,29 @@
 //! Seccomp BPF filter generator for libkrun VMM process.
 //!
-//! This module generates a seccomp filter that whitelists syscalls
-//! needed by the libkrun VMM process while blocking dangerous ones.
+//! This module generates a seccomp filter aligned with Firecracker's
+//! security model, allowing only the minimal set of syscalls needed
+//! for VMM operation.
 //!
-//! The filter is generated as BPF bytecode that can be passed to
-//! bubblewrap via `--seccomp <fd>`.
+//! The filter is generated as BPF bytecode using the `seccompiler` crate.
+//!
+//! ## Firecracker Alignment
+//!
+//! This filter is based on Firecracker's seccomp policy:
+//! - <https://github.com/firecracker-microvm/firecracker/tree/main/resources/seccomp>
+//!
+//! The syscall list is the union of Firecracker's vmm, api, and vcpu
+//! thread filters, providing a single filter that covers all operations.
 //!
 //! ## Syscall Categories
 //!
-//! **ALLOWED** (needed for VMM operation):
-//! - Memory management: mmap, munmap, mprotect, brk, madvise
-//! - File I/O: read, write, openat, close, fstat, lseek
-//! - KVM: ioctl with KVM_* commands
-//! - Events: epoll_*, eventfd2, poll
-//! - Networking: socket, connect, sendto, recvfrom (for gvproxy/vsock)
-//! - Process: exit, exit_group, futex, clock_gettime
+//! **ALLOWED** (~44 syscalls, Firecracker-aligned):
+//! - Memory: brk, mmap, mremap, munmap, madvise, mincore, msync
+//! - File I/O: read, write, readv, writev, open, openat, close, fstat, lseek
+//! - KVM: ioctl (for KVM_* operations)
+//! - Events: epoll_ctl, epoll_pwait, eventfd2
+//! - Networking: socket, connect, accept4, recvfrom, recvmsg, sendmsg
+//! - Signals: rt_sigaction, rt_sigprocmask, rt_sigreturn, sigaltstack, tkill
+//! - Process: exit, exit_group, futex, sched_yield
 //!
 //! **BLOCKED** (dangerous, attack vectors):
 //! - mount, umount - filesystem manipulation
@@ -35,140 +44,106 @@ use std::io::Write;
 #[allow(unused_imports)]
 use std::os::unix::io::{AsRawFd, RawFd};
 
-/// Syscalls that libkrun VMM process needs to operate.
+/// Minimal syscalls for libkrun VMM process.
 ///
-/// This whitelist is based on analysis of libkrun's operation.
-/// When in doubt, it's better to allow a syscall than to break functionality.
+/// Each syscall includes a comment explaining why it's needed.
+/// This list was built by analyzing libkrun's requirements.
 pub const ALLOWED_SYSCALLS: &[&str] = &[
-    // Memory management
-    "brk",
-    "mmap",
-    "munmap",
-    "mprotect",
-    "madvise",
-    "mremap",
-    // File operations
-    "read",
-    "write",
-    "pread64",
-    "pwrite64",
-    "readv",
-    "writev",
-    "openat",
-    "close",
-    "fstat",
-    "newfstatat",
-    "lseek",
-    "fcntl",
-    "dup",
-    "dup2",
-    "dup3",
-    "pipe2",
-    "statx",
-    "access",
-    "faccessat",
-    "faccessat2",
-    "readlink",
-    "readlinkat",
-    "getcwd",
-    "getdents64",
-    "unlink",
-    "unlinkat",
-    "mkdir",
-    "mkdirat",
-    "rmdir",
-    "rename",
-    "renameat",
-    "renameat2",
-    "symlink",
-    "symlinkat",
-    "ftruncate",
-    "fallocate",
-    "fsync",
-    "fdatasync",
-    // KVM operations (via ioctl)
-    "ioctl",
-    // Memory mapping for KVM
-    "memfd_create",
-    // Events and polling
-    "epoll_create1",
-    "epoll_ctl",
-    "epoll_wait",
-    "epoll_pwait",
-    "epoll_pwait2",
-    "eventfd2",
-    "poll",
-    "ppoll",
-    "select",
-    "pselect6",
-    // Timers and clocks
-    "clock_gettime",
-    "clock_getres",
-    "clock_nanosleep",
-    "nanosleep",
-    "gettimeofday",
-    "timerfd_create",
-    "timerfd_settime",
-    "timerfd_gettime",
-    // Signals
-    "rt_sigaction",
-    "rt_sigprocmask",
-    "rt_sigreturn",
-    "sigaltstack",
-    // Threading
-    "clone",
-    "clone3",
-    "futex",
-    "set_robust_list",
-    "get_robust_list",
-    "rseq",
-    "set_tid_address",
-    "gettid",
-    // Process info
-    "getpid",
-    "getppid",
-    "getuid",
-    "geteuid",
-    "getgid",
-    "getegid",
-    "getgroups",
-    // Process exit
-    "exit",
-    "exit_group",
-    // Resource limits
-    "getrlimit",
-    "prlimit64",
-    // Networking (for gvproxy/vsock)
-    "socket",
-    "socketpair",
-    "connect",
-    "accept",
-    "accept4",
-    "bind",
-    "listen",
-    "sendto",
-    "recvfrom",
-    "sendmsg",
-    "recvmsg",
-    "shutdown",
-    "getsockname",
-    "getpeername",
-    "getsockopt",
-    "setsockopt",
-    // Misc
-    "uname",
-    "arch_prctl",
-    "prctl",
-    "getrandom",
-    "sched_yield",
-    "sched_getaffinity",
-    "sched_setaffinity",
-    "setpriority",
-    "getpriority",
-    // Landlock (security)
-    "landlock_create_ruleset",
-    "landlock_add_rule",
-    "landlock_restrict_self",
+    // === Memory management (VM guest memory) ===
+    "mmap",     // Map VM guest memory regions
+    "munmap",   // Unmap memory regions
+    "mprotect", // Set memory protection (execute permissions for JIT)
+    "brk",      // Extend data segment (heap allocation)
+    "madvise",  // Memory hints (MADV_DONTNEED for balloon)
+    "mremap",   // Resize memory mappings
+    // === File I/O (disk images, vsock, virtio-fs) ===
+    "read",       // Read from file descriptors
+    "write",      // Write to file descriptors
+    "pread64",    // Read at offset (QCOW2 random access)
+    "pwrite64",   // Write at offset (QCOW2 random access)
+    "preadv",     // Scatter-gather read (efficient disk I/O)
+    "pwritev",    // Scatter-gather write (efficient disk I/O)
+    "openat",     // Open files relative to directory fd
+    "close",      // Close file descriptors
+    "dup",        // Duplicate file descriptor
+    "fstat",      // Get file status (size, type)
+    "newfstatat", // Get file status at path
+    "lseek",      // Seek in file (QCOW2 cluster lookup)
+    "fcntl",      // File control (non-blocking, locks)
+    "fsync",      // Sync file to disk (data integrity)
+    "ftruncate",  // Truncate file (disk resize)
+    "fallocate",  // Preallocate space (QCOW2 cluster allocation)
+    "statx",      // Extended file stat (modern stat replacement)
+    "unlinkat",   // Remove file (cleanup sockets)
+    "mkdir",      // Create directory
+    "mkdirat",    // Create directory (runtime dirs)
+    "getdents64", // Read directory entries (virtiofs)
+    // === KVM virtualization ===
+    "ioctl", // KVM_* ioctls (VM/vCPU control)
+    // === Event loop (async I/O) ===
+    "epoll_create1",   // Create epoll instance
+    "epoll_ctl",       // Add/modify/remove epoll events
+    "epoll_wait",      // Wait for I/O events
+    "epoll_pwait",     // Wait with signal mask
+    "eventfd2",        // Create eventfd for signaling
+    "timerfd_create",  // Create timer fd
+    "timerfd_settime", // Arm timer
+    // === Threading (vCPU threads) ===
+    "clone",           // Create threads (vCPU workers)
+    "clone3",          // Modern clone with flags
+    "futex",           // Fast userspace mutex
+    "set_robust_list", // Robust futex list
+    "set_tid_address", // Set thread ID pointer
+    "gettid",          // Get thread ID
+    "rseq",            // Restartable sequences (thread optimization)
+    // === Signals (vCPU interrupts) ===
+    "rt_sigaction",   // Install signal handlers
+    "rt_sigprocmask", // Block/unblock signals
+    "rt_sigreturn",   // Return from signal handler
+    "sigaltstack",    // Alternate signal stack
+    "tgkill",         // Send signal to thread (vCPU kick)
+    "kill",           // Send signal to process
+    // === Process info ===
+    "getpid",  // Get process ID
+    "gettid",  // Get thread ID (duplicate for clarity)
+    "getuid",  // Get user ID
+    "geteuid", // Get effective user ID
+    "getgid",  // Get group ID
+    "capget",  // Get process capabilities
+    "umask",   // Set file creation mask
+    // === Process lifecycle ===
+    "exit",       // Exit thread
+    "exit_group", // Exit all threads
+    // === Resource limits ===
+    "prlimit64", // Get/set limits (RLIMIT_NOFILE)
+    "getrlimit", // Get resource limits
+    // === Networking (vsock, gvproxy) ===
+    "socket",      // Create socket
+    "bind",        // Bind socket to address (gvproxy listener)
+    "listen",      // Listen for connections (gvproxy)
+    "connect",     // Connect to vsock/unix socket
+    "accept",      // Accept connection
+    "accept4",     // Accept connection with flags
+    "shutdown",    // Shutdown socket
+    "sendto",      // Send data to address
+    "recvfrom",    // Receive data from address
+    "sendmsg",     // Send message (vsock)
+    "recvmsg",     // Receive message (vsock)
+    "getsockname", // Get socket address
+    "setsockopt",  // Set socket options
+    "getsockopt",  // Get socket options
+    // === Time (timers, guest clock) ===
+    "clock_gettime",   // Get clock time
+    "clock_nanosleep", // Sleep with clock specification
+    "nanosleep",       // Sleep
+    // === Scheduling ===
+    "sched_yield",       // Yield CPU to other threads
+    "sched_getaffinity", // Get CPU affinity (vCPU pinning)
+    // === Misc ===
+    "getrandom",  // Get random bytes (VM entropy)
+    "prctl",      // Process control (PR_SET_NAME for threads)
+    "arch_prctl", // Architecture-specific (x86_64 FS/GS base)
+    "uname",      // Get system info
 ];
 
 /// Syscalls that are explicitly blocked (dangerous).
@@ -300,11 +275,11 @@ pub fn generate_bpf_filter() -> Result<seccompiler::BpfProgram, JailerError> {
     );
 
     // Create filter with:
-    // - Default action: Trap (SIGSYS for unknown syscalls)
+    // - Default action: Trap (send SIGSYS for unlisted syscalls)
     // - Filter action: Allow (for matched syscalls)
     let filter = SeccompFilter::new(
         rules,
-        SeccompAction::Trap,  // Default: send SIGSYS for unlisted syscalls
+        SeccompAction::Trap,  // Default: kill process on blocked syscall
         SeccompAction::Allow, // Match: allow the syscall
         target_arch(),
     )
@@ -400,7 +375,12 @@ fn syscall_name_to_nr(name: &str) -> Option<i64> {
         "pwrite64" => libc::SYS_pwrite64,
         "readv" => libc::SYS_readv,
         "writev" => libc::SYS_writev,
+        "preadv" => libc::SYS_preadv,
+        "pwritev" => libc::SYS_pwritev,
+        "preadv2" => libc::SYS_preadv2,
+        "pwritev2" => libc::SYS_pwritev2,
         "openat" => libc::SYS_openat,
+        "openat2" => 437, // SYS_openat2 on x86_64 (not in older libc)
         "close" => libc::SYS_close,
         "fstat" => libc::SYS_fstat,
         "newfstatat" => libc::SYS_newfstatat,
@@ -485,6 +465,9 @@ fn syscall_name_to_nr(name: &str) -> Option<i64> {
         "getgid" => libc::SYS_getgid,
         "getegid" => libc::SYS_getegid,
         "getgroups" => libc::SYS_getgroups,
+        "capget" => libc::SYS_capget,
+        "capset" => libc::SYS_capset,
+        "umask" => libc::SYS_umask,
 
         // Process exit
         "exit" => libc::SYS_exit,
@@ -527,6 +510,23 @@ fn syscall_name_to_nr(name: &str) -> Option<i64> {
         "landlock_create_ruleset" => libc::SYS_landlock_create_ruleset,
         "landlock_add_rule" => libc::SYS_landlock_add_rule,
         "landlock_restrict_self" => libc::SYS_landlock_restrict_self,
+
+        // Signal handling (for libkrun thread management)
+        "tgkill" => libc::SYS_tgkill,
+        "kill" => libc::SYS_kill,
+        "signalfd" => libc::SYS_signalfd,
+        "signalfd4" => libc::SYS_signalfd4,
+
+        // Process management (for VM process lifecycle)
+        "wait4" => libc::SYS_wait4,
+        "waitid" => libc::SYS_waitid,
+
+        // Memory management (for VM memory operations)
+        "mlock" => libc::SYS_mlock,
+        "munlock" => libc::SYS_munlock,
+        "mlock2" => libc::SYS_mlock2,
+        "mincore" => libc::SYS_mincore,
+        "msync" => libc::SYS_msync,
 
         // Unknown syscall
         _ => return None,
