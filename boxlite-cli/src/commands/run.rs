@@ -126,16 +126,7 @@ impl BoxRunner {
         Vec<tokio::task::JoinHandle<()>>,
     ) {
         let mut completion_tasks = Vec::new(); // stdout, stderr
-        let mut cancellation_tasks = Vec::new(); // signals, stdin
-
-        // Signal Forwarding & Resize (if TTY)
-        {
-            let exec = execution.clone();
-            let tty = self.args.process.tty;
-            cancellation_tasks.push(tokio::spawn(async move {
-                handle_signals_and_resize(exec, tty).await;
-            }));
-        }
+        let mut cancellation_tasks = Vec::new(); // stdin only (signals now handled in main loop)
 
         // IO Streaming
         if let Some(mut stdout) = execution.stdout() {
@@ -205,10 +196,25 @@ impl BoxRunner {
         completion_tasks: Vec<tokio::task::JoinHandle<()>>,
         cancellation_tasks: Vec<tokio::task::JoinHandle<()>>,
     ) -> anyhow::Result<boxlite::ExecResult> {
-        // for box exit
+        // created in main task context for reliable delivery
+        let mut sig_int = signal(SignalKind::interrupt()).unwrap();
+        let mut sig_term = signal(SignalKind::terminate()).unwrap();
+        let mut sig_hup = signal(SignalKind::hangup()).unwrap();
+        let mut sig_winch = if self.args.process.tty {
+            Some(signal(SignalKind::window_change()).unwrap())
+        } else {
+            None
+        };
+
+        if self.args.process.tty {
+            if let Some((w, h)) = term_size::dimensions() {
+                let _ = execution.resize_tty(h as u32, w as u32).await;
+            }
+        }
+
+        let signal_exec = execution.clone();
         let exit_fut = execution.wait();
 
-        // for stdout/stderr completion
         let io_fut = async {
             for handle in completion_tasks {
                 let _ = handle.await;
@@ -218,69 +224,53 @@ impl BoxRunner {
         tokio::pin!(exit_fut);
         tokio::pin!(io_fut);
 
-        // Wait for either box exit or IO completion
-        select! {
-            status = &mut exit_fut => {
-                // Box exited first. Stop sending signals/stdin immediately to avoid EPIPE errors
-                for task in cancellation_tasks {
-                    task.abort();
+        let mut io_done = false;
+        let mut exit_status: Option<boxlite::ExecResult> = None;
+
+        // Handles IO, signals, and exit
+        loop {
+            select! {
+                status = &mut exit_fut, if exit_status.is_none() => {
+                    exit_status = Some(status?);
+                    // Stop stdin forwarding to avoid EPIPE
+                    for task in &cancellation_tasks {
+                        task.abort();
+                    }
+                    if io_done {
+                        return Ok(exit_status.unwrap());
+                    }
                 }
-                // CRITICAL: Wait for output buffers to drain before returning.
-                // Without this, we may lose trailing stdout/stderr that's still in transit.
-                io_fut.await;
-                Ok(status?)
-            }
-            _ = &mut io_fut => {
-                // IO streams closed (EOF). Wait for the process to actually exit.
-                let status = exit_fut.await?;
 
-                // Cleanup signal handlers
-                for task in cancellation_tasks {
-                    task.abort();
+                _ = &mut io_fut, if !io_done => {
+                    io_done = true;
+                    //  exit already happened
+                    if let Some(status) = exit_status {
+                        return Ok(status);
+                    }
                 }
-                Ok(status)
-            }
-        }
-    }
-}
 
-// Helper Functions
-async fn handle_signals_and_resize(exec: boxlite::Execution, tty: bool) {
-    let mut sig_int = signal(SignalKind::interrupt()).unwrap();
-    let mut sig_term = signal(SignalKind::terminate()).unwrap();
-    let mut sig_hup = signal(SignalKind::hangup()).unwrap();
-
-    let mut sig_winch = if tty {
-        Some(signal(SignalKind::window_change()).unwrap())
-    } else {
-        None
-    };
-
-    // Initial resize if TTY
-    if tty && let Some((w, h)) = term_size::dimensions() {
-        let _ = exec.resize_tty(h as u32, w as u32).await;
-    }
-
-    loop {
-        tokio::select! {
-            _ = sig_int.recv() => {
-                let _ = exec.signal(Signal::SIGINT as i32).await;
-            }
-            _ = sig_term.recv() => {
-                let _ = exec.signal(Signal::SIGTERM as i32).await;
-            }
-            _ = sig_hup.recv() => {
-                let _ = exec.signal(Signal::SIGHUP as i32).await;
-            }
-            Some(_) = async {
-                match sig_winch.as_mut() {
-                    Some(s) => s.recv().await,
-                    // If TTY is disabled (sig_winch is None), this sleeps forever.
-                    None => std::future::pending().await,
+                _ = sig_int.recv() => {
+                    let _ = signal_exec.signal(Signal::SIGINT as i32).await;
                 }
-            } => {
-                if let Some((w, h)) = term_size::dimensions() {
-                    let _ = exec.resize_tty(h as u32, w as u32).await;
+
+                _ = sig_term.recv() => {
+                    let _ = signal_exec.signal(Signal::SIGTERM as i32).await;
+                }
+
+                _ = sig_hup.recv() => {
+                    let _ = signal_exec.signal(Signal::SIGHUP as i32).await;
+                }
+
+                // TTY resize
+                Some(_) = async {
+                    match sig_winch.as_mut() {
+                        Some(s) => s.recv().await,
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    if let Some((w, h)) = term_size::dimensions() {
+                        let _ = signal_exec.resize_tty(h as u32, w as u32).await;
+                    }
                 }
             }
         }

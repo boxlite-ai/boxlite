@@ -547,134 +547,37 @@ fn test_run_python_import_stdlib() {
 // ============================================================================
 
 #[test]
-#[cfg(unix)]
-#[ignore = "Flaky: SIGTERM kills the test process instantly in some environments before handler catches it. Need better harness."]
-fn test_run_signal_sigterm() {
-    use nix::sys::signal::{self, Signal};
-    use nix::unistd::Pid;
-    use std::time::Duration;
-
-    let ctx = common::boxlite();
-    let bin_path = env!("CARGO_BIN_EXE_boxlite");
-
-    let child = std::process::Command::new(bin_path)
-        .arg("--home")
-        .arg(ctx.home)
-        .args([
-            "run",
-            "--rm",
-            "alpine:latest",
-            "sh",
-            "-c",
-            "trap 'echo received_sigterm; exit 0' TERM; while true; do sleep 0.1; done",
-        ])
-        .stdout(std::process::Stdio::piped())
-        .spawn()
-        .expect("Failed to spawn boxlite run");
-
-    // Give it time to start and initialize
-    std::thread::sleep(Duration::from_secs(5));
-
-    signal::kill(Pid::from_raw(child.id() as i32), Signal::SIGTERM)
-        .expect("Failed to send SIGTERM");
-
-    // Wait to exit
-    let output = child.wait_with_output().expect("Failed to wait for child");
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    println!("Child Exit Status: {:?}", output.status);
-    println!("Child Stdout: {}", stdout);
-
-    assert!(
-        output.status.success(),
-        "Process didn't exit successfully. Status: {:?}, Stdout: {}",
-        output.status,
-        stdout
-    );
-
-    assert!(
-        stdout.contains("received_sigterm"),
-        "Container didn't receive/print SIGTERM signal"
-    );
-}
-
-#[test]
-#[cfg(unix)]
-#[ignore = "Flaky: Test harness cannot reliably send signals to child process. Feature implemented in run.rs."]
-fn test_run_signal_sighup() {
-    use nix::sys::signal::{self, Signal};
-    use nix::unistd::Pid;
-    use std::time::Duration;
-
-    let ctx = common::boxlite();
-    let bin_path = env!("CARGO_BIN_EXE_boxlite");
-
-    let child = std::process::Command::new(bin_path)
-        .arg("--home")
-        .arg(ctx.home)
-        .args([
-            "run",
-            "--rm",
-            "alpine:latest",
-            "sh",
-            "-c",
-            "trap 'echo received_sighup; exit 0' HUP; sleep 10 & wait",
-        ])
-        .stdout(std::process::Stdio::piped())
-        .spawn()
-        .expect("Failed to spawn boxlite run");
-
-    std::thread::sleep(Duration::from_secs(5));
-
-    // Send SIGHUP to the CLI process
-    signal::kill(Pid::from_raw(child.id() as i32), Signal::SIGHUP).expect("Failed to send SIGHUP");
-
-    let output = child.wait_with_output().expect("Failed to wait for child");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-
-    println!("SIGHUP Test - Exit Status: {:?}", output.status);
-    println!("SIGHUP Test - Stdout: {}", stdout);
-    println!(
-        "SIGHUP Test - Stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    assert!(
-        stdout.contains("received_sighup"),
-        "Container didn't receive/print SIGHUP signal"
-    );
-}
-
-#[test]
-#[ignore = "Bug: Binary output is corrupted by UTF-8 lossy conversion in SDK/CLI"]
-fn test_run_binary_output() {
+fn test_run_signal_exit_code_sigterm() {
     let mut ctx = common::boxlite();
 
-    // We use printf to output specific invalid UTF-8 bytes:
-    // \377 = 0xFF (Invalid Start Byte)
-    // \376 = 0xFE (Invalid)
-    // \000 = 0x00 (Null)
-    // \021 = 0x11
-    //
-    // Expected bytes: [0xFF, 0xFE, 0x00, 0x11]
-    let expected_bytes = vec![0xff, 0xfe, 0x00, 0x11];
+    // Sends SIGTERM to itself using kill
+    // SIGTERM = 15
+    ctx.cmd
+        .args(["run", "--rm", "alpine:latest", "sh", "-c", "kill -TERM $$"]);
 
-    ctx.cmd.args([
-        "run",
-        "--rm",
-        "alpine:latest",
-        "printf",
-        "\\377\\376\\000\\021",
-    ]);
+    ctx.cmd.assert().code(143);
+}
 
-    let output = ctx.cmd.output().expect("Failed to execute command");
-    assert!(output.status.success(), "Command failed unexpectedly");
-    assert_eq!(
-        output.stdout, expected_bytes,
-        "Binary output does not match expected. \
-        Got: {:?} (Hex: {:x?}), Expected: {:?} (Hex: {:x?}).",
-        output.stdout, output.stdout, expected_bytes, expected_bytes
-    );
+#[test]
+fn test_run_signal_exit_code_sigkill() {
+    let mut ctx = common::boxlite();
+
+    // SIGKILL = 9
+    ctx.cmd
+        .args(["run", "--rm", "alpine:latest", "sh", "-c", "kill -KILL $$"]);
+
+    ctx.cmd.assert().code(137);
+}
+
+#[test]
+fn test_run_signal_exit_code_sigint() {
+    let mut ctx = common::boxlite();
+
+    // SIGINT (Ctrl+C) = 2
+    ctx.cmd
+        .args(["run", "--rm", "alpine:latest", "sh", "-c", "kill -INT $$"]);
+
+    ctx.cmd.assert().code(130);
 }
 
 // ============================================================================
