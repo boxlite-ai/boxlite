@@ -206,10 +206,8 @@ impl BoxRunner {
             None
         };
 
-        if self.args.process.tty {
-            if let Some((w, h)) = term_size::dimensions() {
-                let _ = execution.resize_tty(h as u32, w as u32).await;
-            }
+        if let Some((w, h)) = self.args.process.tty.then(term_size::dimensions).flatten() {
+            let _ = execution.resize_tty(h as u32, w as u32).await;
         }
 
         let signal_exec = execution.clone();
