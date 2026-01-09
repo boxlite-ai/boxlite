@@ -259,6 +259,239 @@ impl SecurityOptions {
     pub fn is_full_isolation_available() -> bool {
         cfg!(target_os = "linux")
     }
+
+    /// Create a builder for customizing security options.
+    ///
+    /// Starts with default (development) settings.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use boxlite::runtime::options::SecurityOptions;
+    ///
+    /// let security = SecurityOptions::builder()
+    ///     .jailer_enabled(true)
+    ///     .max_open_files(1024)
+    ///     .build();
+    /// ```
+    pub fn builder() -> SecurityOptionsBuilder {
+        SecurityOptionsBuilder::new()
+    }
+}
+
+// ============================================================================
+// Security Options Builder (C-BUILDER: Non-consuming builder pattern)
+// ============================================================================
+
+/// Builder for customizing [`SecurityOptions`].
+///
+/// Provides a fluent API for configuring security isolation options.
+/// Uses non-consuming methods per Rust API guidelines (C-BUILDER).
+///
+/// # Example
+///
+/// ```
+/// use boxlite::runtime::options::SecurityOptionsBuilder;
+///
+/// let security = SecurityOptionsBuilder::standard()
+///     .max_open_files(2048)
+///     .max_file_size_bytes(1024 * 1024 * 512) // 512 MiB
+///     .build();
+/// ```
+#[derive(Debug, Clone)]
+pub struct SecurityOptionsBuilder {
+    inner: SecurityOptions,
+}
+
+impl Default for SecurityOptionsBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SecurityOptionsBuilder {
+    /// Create a builder starting from default options.
+    pub fn new() -> Self {
+        Self {
+            inner: SecurityOptions::default(),
+        }
+    }
+
+    /// Create a builder starting from development settings.
+    ///
+    /// Minimal isolation for debugging.
+    pub fn development() -> Self {
+        Self {
+            inner: SecurityOptions::development(),
+        }
+    }
+
+    /// Create a builder starting from standard settings.
+    ///
+    /// Recommended for most use cases.
+    pub fn standard() -> Self {
+        Self {
+            inner: SecurityOptions::standard(),
+        }
+    }
+
+    /// Create a builder starting from maximum security settings.
+    ///
+    /// All isolation features enabled.
+    pub fn maximum() -> Self {
+        Self {
+            inner: SecurityOptions::maximum(),
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Core isolation settings
+    // ─────────────────────────────────────────────────────────────────────
+
+    /// Enable or disable jailer isolation.
+    pub fn jailer_enabled(&mut self, enabled: bool) -> &mut Self {
+        self.inner.jailer_enabled = enabled;
+        self
+    }
+
+    /// Enable or disable seccomp syscall filtering (Linux only).
+    pub fn seccomp_enabled(&mut self, enabled: bool) -> &mut Self {
+        self.inner.seccomp_enabled = enabled;
+        self
+    }
+
+    /// Set UID to drop to after setup (Linux only).
+    pub fn uid(&mut self, uid: u32) -> &mut Self {
+        self.inner.uid = Some(uid);
+        self
+    }
+
+    /// Set GID to drop to after setup (Linux only).
+    pub fn gid(&mut self, gid: u32) -> &mut Self {
+        self.inner.gid = Some(gid);
+        self
+    }
+
+    /// Enable or disable new PID namespace (Linux only).
+    pub fn new_pid_ns(&mut self, enabled: bool) -> &mut Self {
+        self.inner.new_pid_ns = enabled;
+        self
+    }
+
+    /// Enable or disable new network namespace (Linux only).
+    pub fn new_net_ns(&mut self, enabled: bool) -> &mut Self {
+        self.inner.new_net_ns = enabled;
+        self
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Filesystem isolation
+    // ─────────────────────────────────────────────────────────────────────
+
+    /// Set base directory for chroot jails (Linux only).
+    pub fn chroot_base(&mut self, path: impl Into<PathBuf>) -> &mut Self {
+        self.inner.chroot_base = path.into();
+        self
+    }
+
+    /// Enable or disable chroot isolation (Linux only).
+    pub fn chroot_enabled(&mut self, enabled: bool) -> &mut Self {
+        self.inner.chroot_enabled = enabled;
+        self
+    }
+
+    /// Enable or disable closing inherited file descriptors.
+    pub fn close_fds(&mut self, enabled: bool) -> &mut Self {
+        self.inner.close_fds = enabled;
+        self
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Environment settings
+    // ─────────────────────────────────────────────────────────────────────
+
+    /// Enable or disable environment variable sanitization.
+    pub fn sanitize_env(&mut self, enabled: bool) -> &mut Self {
+        self.inner.sanitize_env = enabled;
+        self
+    }
+
+    /// Set environment variables to preserve when sanitizing.
+    pub fn env_allowlist(&mut self, vars: Vec<String>) -> &mut Self {
+        self.inner.env_allowlist = vars;
+        self
+    }
+
+    /// Add an environment variable to the allowlist.
+    pub fn allow_env(&mut self, var: impl Into<String>) -> &mut Self {
+        self.inner.env_allowlist.push(var.into());
+        self
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Resource limits (type-safe setters)
+    // ─────────────────────────────────────────────────────────────────────
+
+    /// Set all resource limits at once.
+    pub fn resource_limits(&mut self, limits: ResourceLimits) -> &mut Self {
+        self.inner.resource_limits = limits;
+        self
+    }
+
+    /// Set maximum number of open file descriptors.
+    pub fn max_open_files(&mut self, limit: u64) -> &mut Self {
+        self.inner.resource_limits.max_open_files = Some(limit);
+        self
+    }
+
+    /// Set maximum file size in bytes.
+    pub fn max_file_size_bytes(&mut self, bytes: u64) -> &mut Self {
+        self.inner.resource_limits.max_file_size = Some(bytes);
+        self
+    }
+
+    /// Set maximum number of processes.
+    pub fn max_processes(&mut self, limit: u64) -> &mut Self {
+        self.inner.resource_limits.max_processes = Some(limit);
+        self
+    }
+
+    /// Set maximum virtual memory in bytes.
+    pub fn max_memory_bytes(&mut self, bytes: u64) -> &mut Self {
+        self.inner.resource_limits.max_memory = Some(bytes);
+        self
+    }
+
+    /// Set maximum CPU time in seconds.
+    pub fn max_cpu_time_seconds(&mut self, seconds: u64) -> &mut Self {
+        self.inner.resource_limits.max_cpu_time = Some(seconds);
+        self
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // macOS-specific settings
+    // ─────────────────────────────────────────────────────────────────────
+
+    /// Set custom sandbox profile path (macOS only).
+    pub fn sandbox_profile(&mut self, path: impl Into<PathBuf>) -> &mut Self {
+        self.inner.sandbox_profile = Some(path.into());
+        self
+    }
+
+    /// Enable or disable network access in sandbox (macOS only).
+    pub fn network_enabled(&mut self, enabled: bool) -> &mut Self {
+        self.inner.network_enabled = enabled;
+        self
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Build
+    // ─────────────────────────────────────────────────────────────────────
+
+    /// Build the configured [`SecurityOptions`].
+    pub fn build(&self) -> SecurityOptions {
+        self.inner.clone()
+    }
 }
 
 // ============================================================================
@@ -566,5 +799,104 @@ mod tests {
             ..Default::default()
         };
         assert!(opts3.sanitize().is_ok());
+    }
+
+    // ========================================================================
+    // SecurityOptionsBuilder tests
+    // ========================================================================
+
+    #[test]
+    fn test_security_builder_new() {
+        let opts = SecurityOptionsBuilder::new().build();
+        // Default should match SecurityOptions::default()
+        assert!(!opts.jailer_enabled);
+        assert!(!opts.seccomp_enabled);
+    }
+
+    #[test]
+    fn test_security_builder_presets() {
+        let dev = SecurityOptionsBuilder::development().build();
+        assert!(!dev.jailer_enabled);
+        assert!(!dev.close_fds);
+
+        let std = SecurityOptionsBuilder::standard().build();
+        assert!(std.jailer_enabled || !cfg!(any(target_os = "linux", target_os = "macos")));
+
+        let max = SecurityOptionsBuilder::maximum().build();
+        assert!(max.jailer_enabled);
+        assert!(max.close_fds);
+        assert!(max.sanitize_env);
+    }
+
+    #[test]
+    fn test_security_builder_chaining() {
+        let opts = SecurityOptionsBuilder::standard()
+            .jailer_enabled(true)
+            .seccomp_enabled(false)
+            .max_open_files(2048)
+            .max_processes(50)
+            .build();
+
+        assert!(opts.jailer_enabled);
+        assert!(!opts.seccomp_enabled);
+        assert_eq!(opts.resource_limits.max_open_files, Some(2048));
+        assert_eq!(opts.resource_limits.max_processes, Some(50));
+    }
+
+    #[test]
+    fn test_security_builder_resource_limits() {
+        let opts = SecurityOptionsBuilder::new()
+            .max_open_files(1024)
+            .max_file_size_bytes(1024 * 1024)
+            .max_processes(100)
+            .max_memory_bytes(512 * 1024 * 1024)
+            .max_cpu_time_seconds(300)
+            .build();
+
+        assert_eq!(opts.resource_limits.max_open_files, Some(1024));
+        assert_eq!(opts.resource_limits.max_file_size, Some(1024 * 1024));
+        assert_eq!(opts.resource_limits.max_processes, Some(100));
+        assert_eq!(opts.resource_limits.max_memory, Some(512 * 1024 * 1024));
+        assert_eq!(opts.resource_limits.max_cpu_time, Some(300));
+    }
+
+    #[test]
+    fn test_security_builder_env_allowlist() {
+        let opts = SecurityOptionsBuilder::new()
+            .env_allowlist(vec!["FOO".to_string()])
+            .allow_env("BAR")
+            .allow_env("BAZ")
+            .build();
+
+        assert_eq!(opts.env_allowlist.len(), 3);
+        assert!(opts.env_allowlist.contains(&"FOO".to_string()));
+        assert!(opts.env_allowlist.contains(&"BAR".to_string()));
+        assert!(opts.env_allowlist.contains(&"BAZ".to_string()));
+    }
+
+    #[test]
+    fn test_security_builder_via_security_options() {
+        // Test the convenience method on SecurityOptions
+        let opts = SecurityOptions::builder().jailer_enabled(true).build();
+
+        assert!(opts.jailer_enabled);
+    }
+
+    #[test]
+    fn test_security_builder_non_consuming() {
+        // Verify builder can be reused (non-consuming pattern)
+        let mut builder = SecurityOptionsBuilder::standard();
+        builder.max_open_files(1024);
+
+        let opts1 = builder.build();
+        let opts2 = builder.max_processes(50).build();
+
+        // Both should have max_open_files
+        assert_eq!(opts1.resource_limits.max_open_files, Some(1024));
+        assert_eq!(opts2.resource_limits.max_open_files, Some(1024));
+
+        // Only opts2 should have max_processes
+        assert!(opts1.resource_limits.max_processes.is_none());
+        assert_eq!(opts2.resource_limits.max_processes, Some(50));
     }
 }

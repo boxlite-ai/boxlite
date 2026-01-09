@@ -313,6 +313,12 @@ pub fn generate_bpf_filter() -> Result<Vec<u8>, JailerError> {
 /// Once applied, the filter cannot be removed. The process will be
 /// restricted to the syscalls allowed by the filter.
 ///
+/// # Errors
+///
+/// Returns [`JailerError::Isolation`] with [`IsolationError::Seccomp`] if:
+/// - The seccomp filter fails to apply (kernel rejection, invalid BPF program)
+/// - The process doesn't have permission to apply seccomp filters
+///
 /// # Safety
 ///
 /// This permanently restricts the process. Ensure all required syscalls

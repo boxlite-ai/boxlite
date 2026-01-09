@@ -64,13 +64,17 @@ impl BwrapCommand {
         }
     }
 
+    // ─────────────────────────────────────────────────────────────────────
+    // Namespace isolation (C-BUILDER: Non-consuming pattern)
+    // ─────────────────────────────────────────────────────────────────────
+
     /// Add default namespace isolation (all namespaces except network).
     ///
     /// We keep network namespace shared because gvproxy needs host networking.
     ///
     /// Note: Mount namespace is implicitly unshared when using bind mounts.
     /// bwrap does not have an explicit --unshare-mount option.
-    pub fn with_default_namespaces(mut self) -> Self {
+    pub fn with_default_namespaces(&mut self) -> &mut Self {
         // Isolate these namespaces
         // Note: Mount namespace is implicitly unshared when bind mounts are used
         self.args.push("--unshare-user".to_string());
@@ -83,19 +87,23 @@ impl BwrapCommand {
     }
 
     /// Enable die-with-parent behavior (shim dies when parent dies).
-    pub fn with_die_with_parent(mut self) -> Self {
+    pub fn with_die_with_parent(&mut self) -> &mut Self {
         self.args.push("--die-with-parent".to_string());
         self
     }
 
     /// Add a new session to prevent terminal injection attacks.
-    pub fn with_new_session(mut self) -> Self {
+    pub fn with_new_session(&mut self) -> &mut Self {
         self.args.push("--new-session".to_string());
         self
     }
 
+    // ─────────────────────────────────────────────────────────────────────
+    // Bind mounts
+    // ─────────────────────────────────────────────────────────────────────
+
     /// Add read-only bind mount.
-    pub fn ro_bind(mut self, src: impl AsRef<Path>, dest: impl AsRef<Path>) -> Self {
+    pub fn ro_bind(&mut self, src: impl AsRef<Path>, dest: impl AsRef<Path>) -> &mut Self {
         self.args.push("--ro-bind".to_string());
         self.args.push(src.as_ref().to_string_lossy().to_string());
         self.args.push(dest.as_ref().to_string_lossy().to_string());
@@ -103,16 +111,21 @@ impl BwrapCommand {
     }
 
     /// Add read-only bind mount if source exists.
-    pub fn ro_bind_if_exists(self, src: impl AsRef<Path>, dest: impl AsRef<Path>) -> Self {
+    pub fn ro_bind_if_exists(
+        &mut self,
+        src: impl AsRef<Path>,
+        dest: impl AsRef<Path>,
+    ) -> &mut Self {
         if src.as_ref().exists() {
-            self.ro_bind(src, dest)
-        } else {
-            self
+            self.args.push("--ro-bind".to_string());
+            self.args.push(src.as_ref().to_string_lossy().to_string());
+            self.args.push(dest.as_ref().to_string_lossy().to_string());
         }
+        self
     }
 
     /// Add read-write bind mount.
-    pub fn bind(mut self, src: impl AsRef<Path>, dest: impl AsRef<Path>) -> Self {
+    pub fn bind(&mut self, src: impl AsRef<Path>, dest: impl AsRef<Path>) -> &mut Self {
         self.args.push("--bind".to_string());
         self.args.push(src.as_ref().to_string_lossy().to_string());
         self.args.push(dest.as_ref().to_string_lossy().to_string());
@@ -120,7 +133,7 @@ impl BwrapCommand {
     }
 
     /// Add device bind mount (for /dev/kvm, etc).
-    pub fn dev_bind(mut self, src: impl AsRef<Path>, dest: impl AsRef<Path>) -> Self {
+    pub fn dev_bind(&mut self, src: impl AsRef<Path>, dest: impl AsRef<Path>) -> &mut Self {
         self.args.push("--dev-bind".to_string());
         self.args.push(src.as_ref().to_string_lossy().to_string());
         self.args.push(dest.as_ref().to_string_lossy().to_string());
@@ -128,67 +141,88 @@ impl BwrapCommand {
     }
 
     /// Add device bind mount if source exists.
-    pub fn dev_bind_if_exists(self, src: impl AsRef<Path>, dest: impl AsRef<Path>) -> Self {
+    pub fn dev_bind_if_exists(
+        &mut self,
+        src: impl AsRef<Path>,
+        dest: impl AsRef<Path>,
+    ) -> &mut Self {
         if src.as_ref().exists() {
-            self.dev_bind(src, dest)
-        } else {
-            self
+            self.args.push("--dev-bind".to_string());
+            self.args.push(src.as_ref().to_string_lossy().to_string());
+            self.args.push(dest.as_ref().to_string_lossy().to_string());
         }
+        self
     }
 
+    // ─────────────────────────────────────────────────────────────────────
+    // Special mounts
+    // ─────────────────────────────────────────────────────────────────────
+
     /// Mount /dev with default devices.
-    pub fn with_dev(mut self) -> Self {
+    pub fn with_dev(&mut self) -> &mut Self {
         self.args.push("--dev".to_string());
         self.args.push("/dev".to_string());
         self
     }
 
     /// Mount /proc.
-    pub fn with_proc(mut self) -> Self {
+    pub fn with_proc(&mut self) -> &mut Self {
         self.args.push("--proc".to_string());
         self.args.push("/proc".to_string());
         self
     }
 
     /// Mount tmpfs at path.
-    pub fn tmpfs(mut self, path: impl AsRef<Path>) -> Self {
+    pub fn tmpfs(&mut self, path: impl AsRef<Path>) -> &mut Self {
         self.args.push("--tmpfs".to_string());
         self.args.push(path.as_ref().to_string_lossy().to_string());
         self
     }
 
+    // ─────────────────────────────────────────────────────────────────────
+    // Environment settings
+    // ─────────────────────────────────────────────────────────────────────
+
     /// Clear all environment variables.
-    pub fn with_clearenv(mut self) -> Self {
+    pub fn with_clearenv(&mut self) -> &mut Self {
         self.args.push("--clearenv".to_string());
         self
     }
 
     /// Set an environment variable.
-    pub fn setenv(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+    pub fn setenv(&mut self, key: impl Into<String>, value: impl Into<String>) -> &mut Self {
         self.args.push("--setenv".to_string());
         self.args.push(key.into());
         self.args.push(value.into());
         self
     }
 
+    // ─────────────────────────────────────────────────────────────────────
+    // Security settings
+    // ─────────────────────────────────────────────────────────────────────
+
     /// Add seccomp filter from file descriptor.
     ///
     /// The filter should be passed via fd 3 using process_stdio.
-    pub fn with_seccomp_fd(mut self, fd: i32) -> Self {
+    pub fn with_seccomp_fd(&mut self, fd: i32) -> &mut Self {
         self.args.push("--seccomp".to_string());
         self.args.push(fd.to_string());
         self
     }
 
     /// Set the working directory inside the sandbox.
-    pub fn chdir(mut self, path: impl AsRef<Path>) -> Self {
+    pub fn chdir(&mut self, path: impl AsRef<Path>) -> &mut Self {
         self.args.push("--chdir".to_string());
         self.args.push(path.as_ref().to_string_lossy().to_string());
         self
     }
 
+    // ─────────────────────────────────────────────────────────────────────
+    // Build
+    // ─────────────────────────────────────────────────────────────────────
+
     /// Build the command with the specified executable and arguments.
-    pub fn build(self, executable: impl AsRef<Path>, args: &[String]) -> Command {
+    pub fn build(&self, executable: impl AsRef<Path>, args: &[String]) -> Command {
         let mut cmd = Command::new("bwrap");
         cmd.args(&self.args);
         cmd.arg("--");
@@ -198,7 +232,7 @@ impl BwrapCommand {
     }
 
     /// Get the arguments as a vector (for testing/debugging).
-    pub fn args(&self) -> &[String] {
+    pub fn get_args(&self) -> &[String] {
         &self.args
     }
 }
@@ -241,7 +275,12 @@ pub fn build_shim_command(
     layout: &FilesystemLayout,
     _security: &SecurityOptions,
 ) -> Command {
-    let mut bwrap = BwrapCommand::new()
+    let mut bwrap = BwrapCommand::new();
+
+    // =========================================================================
+    // Namespace and session isolation
+    // =========================================================================
+    bwrap
         .with_default_namespaces()
         .with_die_with_parent()
         .with_new_session();
@@ -249,7 +288,7 @@ pub fn build_shim_command(
     // =========================================================================
     // Mount system directories (read-only)
     // =========================================================================
-    bwrap = bwrap
+    bwrap
         .ro_bind_if_exists("/usr", "/usr")
         .ro_bind_if_exists("/lib", "/lib")
         .ro_bind_if_exists("/lib64", "/lib64")
@@ -260,16 +299,16 @@ pub fn build_shim_command(
     // Mount devices
     // =========================================================================
     // Mount /dev with basic devices, plus specific access to KVM and TUN
-    bwrap = bwrap
+    bwrap
         .with_dev()
         .dev_bind_if_exists("/dev/kvm", "/dev/kvm")
         .dev_bind_if_exists("/dev/net/tun", "/dev/net/tun");
 
     // Mount /proc for process info
-    bwrap = bwrap.with_proc();
+    bwrap.with_proc();
 
     // Mount /tmp as tmpfs (isolated scratch space)
-    bwrap = bwrap.tmpfs("/tmp");
+    bwrap.tmpfs("/tmp");
 
     // =========================================================================
     // Mount application directories
@@ -277,7 +316,7 @@ pub fn build_shim_command(
 
     // Mount boxlite home directory (read-write for runtime data)
     // This contains: boxes/, images/, db/, logs/, etc.
-    bwrap = bwrap.bind(layout.home_dir(), layout.home_dir());
+    bwrap.bind(layout.home_dir(), layout.home_dir());
 
     // Mount the shim binary's directory (read-only)
     // This is CRITICAL: the shim binary and its bundled libraries (libkrun.so,
@@ -294,7 +333,7 @@ pub fn build_shim_command(
             && !shim_dir_str.starts_with("/lib")
             && !shim_dir_str.starts_with("/bin")
         {
-            bwrap = bwrap.ro_bind(shim_dir, shim_dir);
+            bwrap.ro_bind(shim_dir, shim_dir);
             tracing::debug!(
                 shim_dir = %shim_dir.display(),
                 "Mounted shim directory in sandbox"
@@ -306,10 +345,10 @@ pub fn build_shim_command(
     // Environment sanitization
     // =========================================================================
     // Clear all inherited environment variables for security
-    bwrap = bwrap.with_clearenv();
+    bwrap.with_clearenv();
 
     // Set minimal required environment variables
-    bwrap = bwrap
+    bwrap
         .setenv("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
         .setenv("HOME", "/root");
 
@@ -326,12 +365,12 @@ pub fn build_shim_command(
     //
     // Note: We get LD_LIBRARY_PATH from the parent process (set by util::find_binary_with_libpath)
     if let Ok(ld_library_path) = std::env::var("LD_LIBRARY_PATH") {
-        bwrap = bwrap.setenv("LD_LIBRARY_PATH", ld_library_path);
+        bwrap.setenv("LD_LIBRARY_PATH", ld_library_path);
         tracing::debug!("Preserved LD_LIBRARY_PATH in sandbox");
     } else if let Some(shim_dir) = shim_path.parent() {
         // Fallback: if LD_LIBRARY_PATH not set, use the shim's directory
         // This handles cases where the shim is invoked directly
-        bwrap = bwrap.setenv("LD_LIBRARY_PATH", shim_dir.to_string_lossy().to_string());
+        bwrap.setenv("LD_LIBRARY_PATH", shim_dir.to_string_lossy().to_string());
         tracing::debug!(
             shim_dir = %shim_dir.display(),
             "Set LD_LIBRARY_PATH to shim directory (fallback)"
@@ -340,11 +379,11 @@ pub fn build_shim_command(
 
     // Preserve RUST_LOG for debugging
     if let Ok(rust_log) = std::env::var("RUST_LOG") {
-        bwrap = bwrap.setenv("RUST_LOG", rust_log);
+        bwrap.setenv("RUST_LOG", rust_log);
     }
 
     // Set working directory
-    bwrap = bwrap.chdir("/");
+    bwrap.chdir("/");
 
     // Build the final command
     bwrap.build(shim_path, shim_args)
@@ -366,7 +405,8 @@ mod tests {
 
     #[test]
     fn test_bwrap_command_builder() {
-        let bwrap = BwrapCommand::new()
+        let mut bwrap = BwrapCommand::new();
+        bwrap
             .with_default_namespaces()
             .with_die_with_parent()
             .ro_bind("/usr", "/usr")
@@ -376,7 +416,7 @@ mod tests {
             .with_clearenv()
             .setenv("PATH", "/usr/bin:/bin");
 
-        let args = bwrap.args();
+        let args = bwrap.get_args();
 
         assert!(args.contains(&"--unshare-user".to_string()));
         assert!(args.contains(&"--unshare-pid".to_string()));
@@ -389,7 +429,8 @@ mod tests {
 
     #[test]
     fn test_build_command() {
-        let bwrap = BwrapCommand::new()
+        let mut bwrap = BwrapCommand::new();
+        bwrap
             .with_default_namespaces()
             .with_clearenv()
             .setenv("FOO", "bar");
@@ -401,5 +442,35 @@ mod tests {
 
         // Verify command is bwrap
         assert_eq!(cmd.get_program(), "bwrap");
+    }
+
+    #[test]
+    fn test_bwrap_non_consuming_pattern() {
+        // Verify builder can be reused (non-consuming pattern)
+        let mut bwrap = BwrapCommand::new();
+        bwrap.with_default_namespaces();
+
+        // Can continue adding to the same builder
+        bwrap.ro_bind("/usr", "/usr");
+        bwrap.with_clearenv();
+
+        let args = bwrap.get_args();
+        assert!(args.contains(&"--unshare-user".to_string()));
+        assert!(args.contains(&"--ro-bind".to_string()));
+        assert!(args.contains(&"--clearenv".to_string()));
+    }
+
+    #[test]
+    fn test_bwrap_conditional_mount() {
+        let mut bwrap = BwrapCommand::new();
+
+        // Conditional binding doesn't require reassignment
+        bwrap.ro_bind_if_exists("/nonexistent", "/nonexistent");
+        bwrap.dev_bind_if_exists("/nonexistent_dev", "/nonexistent_dev");
+
+        let args = bwrap.get_args();
+        // Non-existent paths should not be added
+        assert!(!args.contains(&"/nonexistent".to_string()));
+        assert!(!args.contains(&"/nonexistent_dev".to_string()));
     }
 }

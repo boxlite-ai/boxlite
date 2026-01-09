@@ -142,6 +142,14 @@ pub fn cgroup_path(box_id: &str) -> PathBuf {
 ///
 /// Creates the cgroup directory and configures resource limits.
 /// Must be called BEFORE spawning the process.
+///
+/// # Errors
+///
+/// Returns [`JailerError::Cgroup`] if:
+/// - Cgroup v2 is not available on the system
+/// - Failed to create the boxlite parent cgroup directory
+/// - Failed to create the box-specific cgroup directory
+/// - Failed to write resource limit configuration files
 pub fn setup_cgroup(box_id: &str, config: &CgroupConfig) -> Result<PathBuf, JailerError> {
     if !is_cgroup_v2_available() {
         tracing::warn!("Cgroup v2 not available, skipping cgroup setup");

@@ -16,6 +16,180 @@ use boxlite_shared::Transport;
 pub use crate::litebox::{BoxState, BoxStatus};
 
 // ============================================================================
+// RESOURCE LIMIT TYPES (C-NEWTYPE: Semantic newtypes for distinct concepts)
+// ============================================================================
+
+/// Byte size for memory and file size limits.
+///
+/// Using a dedicated type prevents mixing bytes with counts or other units.
+/// Provides convenient constructors for common size notations.
+///
+/// # Example
+///
+/// ```
+/// use boxlite::runtime::types::Bytes;
+///
+/// let size = Bytes::from_mib(512);
+/// assert_eq!(size.as_bytes(), 512 * 1024 * 1024);
+///
+/// // From raw bytes
+/// let exact = Bytes::from_bytes(1_000_000);
+/// assert_eq!(exact.as_bytes(), 1_000_000);
+/// ```
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
+#[serde(transparent)]
+pub struct Bytes(pub u64);
+
+impl Bytes {
+    /// Create from raw byte count.
+    #[inline]
+    pub const fn from_bytes(bytes: u64) -> Self {
+        Self(bytes)
+    }
+
+    /// Create from kibibytes (1 KiB = 1024 bytes).
+    #[inline]
+    pub const fn from_kib(kib: u64) -> Self {
+        Self(kib * 1024)
+    }
+
+    /// Create from mebibytes (1 MiB = 1024² bytes).
+    #[inline]
+    pub const fn from_mib(mib: u64) -> Self {
+        Self(mib * 1024 * 1024)
+    }
+
+    /// Create from gibibytes (1 GiB = 1024³ bytes).
+    #[inline]
+    pub const fn from_gib(gib: u64) -> Self {
+        Self(gib * 1024 * 1024 * 1024)
+    }
+
+    /// Get the raw byte count.
+    #[inline]
+    pub const fn as_bytes(&self) -> u64 {
+        self.0
+    }
+
+    /// Get size in kibibytes (truncating).
+    #[inline]
+    pub const fn as_kib(&self) -> u64 {
+        self.0 / 1024
+    }
+
+    /// Get size in mebibytes (truncating).
+    #[inline]
+    pub const fn as_mib(&self) -> u64 {
+        self.0 / (1024 * 1024)
+    }
+}
+
+impl From<u64> for Bytes {
+    fn from(bytes: u64) -> Self {
+        Self(bytes)
+    }
+}
+
+impl From<Bytes> for u64 {
+    fn from(b: Bytes) -> Self {
+        b.0
+    }
+}
+
+impl fmt::Display for Bytes {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.0 >= 1024 * 1024 * 1024 && self.0.is_multiple_of(1024 * 1024 * 1024) {
+            write!(f, "{} GiB", self.0 / (1024 * 1024 * 1024))
+        } else if self.0 >= 1024 * 1024 && self.0.is_multiple_of(1024 * 1024) {
+            write!(f, "{} MiB", self.0 / (1024 * 1024))
+        } else if self.0 >= 1024 && self.0.is_multiple_of(1024) {
+            write!(f, "{} KiB", self.0 / 1024)
+        } else {
+            write!(f, "{} bytes", self.0)
+        }
+    }
+}
+
+/// Duration in seconds for CPU time limits.
+///
+/// Using a dedicated type prevents mixing seconds with milliseconds or counts.
+///
+/// # Example
+///
+/// ```
+/// use boxlite::runtime::types::Seconds;
+///
+/// let timeout = Seconds::from_minutes(5);
+/// assert_eq!(timeout.as_seconds(), 300);
+///
+/// let short = Seconds::from_seconds(30);
+/// assert_eq!(short.as_seconds(), 30);
+/// ```
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
+#[serde(transparent)]
+pub struct Seconds(pub u64);
+
+impl Seconds {
+    /// Create from raw seconds.
+    #[inline]
+    pub const fn from_seconds(s: u64) -> Self {
+        Self(s)
+    }
+
+    /// Create from minutes.
+    #[inline]
+    pub const fn from_minutes(m: u64) -> Self {
+        Self(m * 60)
+    }
+
+    /// Create from hours.
+    #[inline]
+    pub const fn from_hours(h: u64) -> Self {
+        Self(h * 60 * 60)
+    }
+
+    /// Get the raw seconds count.
+    #[inline]
+    pub const fn as_seconds(&self) -> u64 {
+        self.0
+    }
+
+    /// Get duration in minutes (truncating).
+    #[inline]
+    pub const fn as_minutes(&self) -> u64 {
+        self.0 / 60
+    }
+}
+
+impl From<u64> for Seconds {
+    fn from(s: u64) -> Self {
+        Self(s)
+    }
+}
+
+impl From<Seconds> for u64 {
+    fn from(s: Seconds) -> Self {
+        s.0
+    }
+}
+
+impl fmt::Display for Seconds {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.0 >= 3600 && self.0.is_multiple_of(3600) {
+            write!(f, "{} hours", self.0 / 3600)
+        } else if self.0 >= 60 && self.0.is_multiple_of(60) {
+            write!(f, "{} minutes", self.0 / 60)
+        } else {
+            write!(f, "{} seconds", self.0)
+        }
+    }
+}
+
+// ============================================================================
 // BOX ID
 // ============================================================================
 
@@ -456,5 +630,111 @@ mod tests {
         let debug = format!("{:?}", id);
         assert!(debug.contains(id.short()));
         assert!(debug.starts_with("ContainerID("));
+    }
+
+    // ========================================================================
+    // Bytes tests
+    // ========================================================================
+
+    #[test]
+    fn test_bytes_constructors() {
+        assert_eq!(Bytes::from_bytes(1000).as_bytes(), 1000);
+        assert_eq!(Bytes::from_kib(1).as_bytes(), 1024);
+        assert_eq!(Bytes::from_mib(1).as_bytes(), 1024 * 1024);
+        assert_eq!(Bytes::from_gib(1).as_bytes(), 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_bytes_conversions() {
+        let size = Bytes::from_mib(512);
+        assert_eq!(size.as_kib(), 512 * 1024);
+        assert_eq!(size.as_mib(), 512);
+
+        // Truncating division
+        let odd_size = Bytes::from_bytes(1500);
+        assert_eq!(odd_size.as_kib(), 1); // 1500 / 1024 = 1
+    }
+
+    #[test]
+    fn test_bytes_from_u64() {
+        let b: Bytes = 1024u64.into();
+        assert_eq!(b.as_bytes(), 1024);
+
+        let raw: u64 = Bytes::from_mib(1).into();
+        assert_eq!(raw, 1024 * 1024);
+    }
+
+    #[test]
+    fn test_bytes_display() {
+        assert_eq!(format!("{}", Bytes::from_gib(2)), "2 GiB");
+        assert_eq!(format!("{}", Bytes::from_mib(512)), "512 MiB");
+        assert_eq!(format!("{}", Bytes::from_kib(64)), "64 KiB");
+        assert_eq!(format!("{}", Bytes::from_bytes(500)), "500 bytes");
+
+        // Non-even values show in smaller unit
+        assert_eq!(format!("{}", Bytes::from_bytes(1500)), "1500 bytes");
+    }
+
+    #[test]
+    fn test_bytes_ordering() {
+        assert!(Bytes::from_mib(1) < Bytes::from_mib(2));
+        assert!(Bytes::from_gib(1) > Bytes::from_mib(512));
+    }
+
+    #[test]
+    fn test_bytes_default() {
+        assert_eq!(Bytes::default().as_bytes(), 0);
+    }
+
+    // ========================================================================
+    // Seconds tests
+    // ========================================================================
+
+    #[test]
+    fn test_seconds_constructors() {
+        assert_eq!(Seconds::from_seconds(30).as_seconds(), 30);
+        assert_eq!(Seconds::from_minutes(5).as_seconds(), 300);
+        assert_eq!(Seconds::from_hours(1).as_seconds(), 3600);
+    }
+
+    #[test]
+    fn test_seconds_conversions() {
+        let duration = Seconds::from_hours(2);
+        assert_eq!(duration.as_minutes(), 120);
+        assert_eq!(duration.as_seconds(), 7200);
+
+        // Truncating division
+        let odd_duration = Seconds::from_seconds(90);
+        assert_eq!(odd_duration.as_minutes(), 1); // 90 / 60 = 1
+    }
+
+    #[test]
+    fn test_seconds_from_u64() {
+        let s: Seconds = 300u64.into();
+        assert_eq!(s.as_seconds(), 300);
+
+        let raw: u64 = Seconds::from_minutes(5).into();
+        assert_eq!(raw, 300);
+    }
+
+    #[test]
+    fn test_seconds_display() {
+        assert_eq!(format!("{}", Seconds::from_hours(2)), "2 hours");
+        assert_eq!(format!("{}", Seconds::from_minutes(30)), "30 minutes");
+        assert_eq!(format!("{}", Seconds::from_seconds(45)), "45 seconds");
+
+        // Non-even values show in seconds
+        assert_eq!(format!("{}", Seconds::from_seconds(90)), "90 seconds");
+    }
+
+    #[test]
+    fn test_seconds_ordering() {
+        assert!(Seconds::from_seconds(30) < Seconds::from_minutes(1));
+        assert!(Seconds::from_hours(1) > Seconds::from_minutes(30));
+    }
+
+    #[test]
+    fn test_seconds_default() {
+        assert_eq!(Seconds::default().as_seconds(), 0);
     }
 }
