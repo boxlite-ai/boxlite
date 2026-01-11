@@ -31,7 +31,7 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: "wheels-${{ runner.os }}"
+          shared-key: "wheels-v2"
           cache-on-failure: true
 
       # Build guest on host BEFORE cibuildwheel container because:

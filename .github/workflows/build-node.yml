@@ -52,7 +52,7 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: "node-sdk-${{ runner.os }}"
+          shared-key: "node-v2"
           cache-on-failure: true
 
       - name: Build Node.js package

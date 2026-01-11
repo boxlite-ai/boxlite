@@ -62,7 +62,7 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: "runtime-${{ runner.os }}"
+          shared-key: "runtime-v2"
           cache-on-failure: true
 
       # Install platform dependencies
