@@ -1,8 +1,7 @@
 # Build and test BoxLite core runtime.
 #
-# This workflow provides fast feedback on Rust changes:
-# - Runs cargo build and test on 2 platforms
-# - Triggers on push/PR to core Rust code
+# This workflow builds the Rust runtime and populates the shared cache.
+# Runs only on main branch to keep cache clean.
 #
 # Note: SDK workflows (build-wheels, build-node) are self-contained
 # and trigger independently on release.
@@ -10,16 +9,6 @@ name: Build Runtime
 
 on:
   push:
-    branches: [main, develop]
-    paths:
-      - 'boxlite/**'
-      - 'boxlite-shared/**'
-      - 'guest/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - '.github/workflows/build-runtime.yml'
-      - '.github/workflows/config.yml'
-  pull_request:
     branches: [main]
     paths:
       - 'boxlite/**'
