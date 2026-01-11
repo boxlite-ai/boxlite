@@ -67,31 +67,10 @@ jobs:
           shared-key: "node-sdk-${{ runner.os }}"
           cache-on-failure: true
 
-      # Build guest on host BEFORE main build (Linux only)
-      # manylinux doesn't have musl packages, Ubuntu host does
-      - name: Build guest binary (Linux only)
-        if: runner.os == 'Linux'
-        run: |
-          make setup guest
-
-          # Free disk space for subsequent builds
-          GUEST_TARGET=$(scripts/util.sh --target)
-          GUEST_BIN="target/$GUEST_TARGET/release/boxlite-guest"
-
-          # Preserve guest binary, remove build artifacts to save space
-          cp "$GUEST_BIN" ./boxlite-guest.tmp
-          rm -rf target ~/.rustup ~/.cargo
-          mkdir -p "$(dirname "$GUEST_BIN")"
-          mv ./boxlite-guest.tmp "$GUEST_BIN"
-
       - name: Build Node.js package
         run: |
           make setup
-          if [ "${{ runner.os }}" = "Linux" ]; then
-            KEEP_GUEST_BIN=1 make dist:node
-          else
-            make dist:node
-          fi
+          make dist:node
 
       - name: Upload native binary
         uses: actions/upload-artifact@v4

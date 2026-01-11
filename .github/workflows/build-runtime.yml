@@ -69,15 +69,5 @@ jobs:
       - name: Install platform dependencies
         run: make setup
 
-      # Build guest on host BEFORE main build because:
-      # - manylinux (AlmaLinux/RHEL) doesn't have musl packages in repos
-      # - Building musl-cross-make from source takes ~15 minutes
-      # - Ubuntu host has musl-tools via apt (~30 seconds)
-      - name: Build guest binary (Linux only)
-        if: runner.os == 'Linux'
-        run: make guest
-
-      # Build runtime
       - name: Build BoxLite runtime
-        run: |
-          make runtime
+        run: make runtime
