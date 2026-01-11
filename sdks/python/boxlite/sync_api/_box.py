@@ -71,6 +71,18 @@ class SyncBox:
         """Get box information (synchronous, no I/O)."""
         return self._box.info()
 
+    def start(self) -> None:
+        """
+        Start the box (initialize VM).
+
+        For Configured boxes: initializes VM for the first time.
+        For Stopped boxes: restarts the VM.
+
+        This is idempotent - calling start() on a Running box is a no-op.
+        Also called implicitly by exec() if the box is not running.
+        """
+        self._sync(self._box.start())
+
     def exec(
         self,
         cmd: str,

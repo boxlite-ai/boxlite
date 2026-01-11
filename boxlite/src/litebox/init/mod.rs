@@ -58,7 +58,8 @@ use types::InitPipelineContext;
 /// Get execution plan based on BoxStatus.
 fn get_execution_plan(status: BoxStatus) -> ExecutionPlan<InitCtx> {
     let stages: Vec<Stage<BoxedTask<InitCtx>>> = match status {
-        BoxStatus::Starting => vec![
+        BoxStatus::Configured => vec![
+            // First start: Full pipeline
             // Phase 1: Setup filesystem layout first
             Stage::sequential(vec![Box::new(FilesystemTask)]),
             // Phase 2: Prepare rootfs (now has access to layout for disk paths)

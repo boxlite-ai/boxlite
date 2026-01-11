@@ -109,7 +109,7 @@ class TestBoxManagement:
         info = runtime.get_info(box.id)
         assert info is not None
         assert info.id == box.id
-        assert info.state in {"starting", "running"}
+        assert info.state.status in {"configured", "running"}
         assert info.image == "python:3.11"
         assert info.cpus == 4
         assert info.memory_mib == 1024
@@ -126,8 +126,8 @@ class TestBoxManagement:
         boxes = [runtime.create_box() for _ in range(2)]
         running = runtime.list()
         ids = {box.id for box in boxes}
-        # Boxes may be in starting or running state
-        active_ids = {info.id for info in running if info.state in {"starting", "running"}}
+        # Boxes may be in configured or running state
+        active_ids = {info.id for info in running if info.state.status in {"configured", "running"}}
         assert ids.issubset(active_ids)
 
     def test_list_boxes_sorted_by_creation(self, runtime):
@@ -148,7 +148,7 @@ class TestBoxManagement:
         info = runtime.get_info(box.id)
         assert info is not None
         assert info.id == box.id
-        assert info.state in {"starting", "running"}
+        assert info.state.status in {"configured", "running"}
 
     def test_get_box_info_nonexistent(self, runtime):
         assert runtime.get_info("nonexistent-id-12345678901") is None
@@ -158,11 +158,11 @@ class TestBoxManagement:
         opts = boxlite.BoxOptions(image="alpine:latest", auto_remove=False)
         box = runtime._runtime.create(opts)
         runtime._boxes.append(box)
-        assert runtime.get_info(box.id).state in {"starting", "running"}
+        assert runtime.get_info(box.id).state.status in {"configured", "running"}
         box.stop()
         state_after_shutdown = runtime.get_info(box.id)
         assert state_after_shutdown is not None
-        assert state_after_shutdown.state == "stopped"
+        assert state_after_shutdown.state.status == "stopped"
         runtime.remove(box.id)
         runtime.forget(box)
         assert runtime.get_info(box.id) is None
@@ -179,6 +179,8 @@ class TestBoxManagement:
 
     def test_cannot_remove_running_box(self, runtime):
         box = runtime.create_box()
+        # Ensure box is running by executing a command
+        box.exec("true")
         with pytest.raises(RuntimeError):
             runtime.remove(box.id)
 
@@ -199,9 +201,9 @@ class TestBoxManagement:
         box = runtime.create_box()
         info = runtime.get_info(box.id)
         assert isinstance(info.id, str)
-        assert isinstance(info.state, str)
+        assert isinstance(info.state.status, str)
         assert isinstance(info.created_at, str)
-        assert info.pid is None or isinstance(info.pid, int)
+        assert info.state.pid is None or isinstance(info.state.pid, int)
         assert isinstance(info.image, str)
         assert isinstance(info.cpus, int)
         assert isinstance(info.memory_mib, int)
@@ -222,20 +224,20 @@ class TestBoxInfoObject:
         info = runtime.get_info(box.id)
         data = {
             "id": info.id,
-            "state": info.state,
+            "state": info.state.status,
             "created_at": info.created_at,
-            "pid": info.pid,
+            "pid": info.state.pid,
             "image": info.image,
             "cpus": info.cpus,
             "memory_mib": info.memory_mib,
         }
         assert data["id"] == box.id
-        assert data["state"] in {"starting", "running"}  # May be starting initially
+        assert data["state"] in {"configured", "running"}  # May be configured initially
 
     def test_box_info_state_values(self, runtime):
         box = runtime.create_box()
         info = runtime.get_info(box.id)
-        assert info.state in {"starting", "running", "stopped", "failed"}
+        assert info.state.status in {"configured", "running", "stopped", "failed"}
 
 
 if __name__ == "__main__":

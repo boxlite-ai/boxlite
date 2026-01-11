@@ -23,12 +23,13 @@ async def test_stop_and_restart():
     restarted_box = None
 
     try:
-        # Create and start a box
+        # Create and start a box (auto_remove=False to allow restart after stop)
         print("Creating box...")
-        box = runtime.create(boxlite.BoxOptions(
+        box = await runtime.create(boxlite.BoxOptions(
             image="alpine:latest",
             cpus=2,
-            memory_mib=512
+            memory_mib=512,
+            auto_remove=False
         ))
         box_id = box.id
         print(f"  Box created: {box_id}")
@@ -58,7 +59,7 @@ async def test_stop_and_restart():
         print("  Box stopped (rootfs preserved)")
 
         # Get box info after stop
-        info = runtime.get_info(box_id)
+        info = await runtime.get_info(box_id)
         if info:
             print(f"Box state after stop: {info.state}")
 
@@ -67,7 +68,7 @@ async def test_stop_and_restart():
 
         # Restart the box by getting a new handle and executing
         print("\nRestarting box (reuses existing rootfs)...")
-        restarted_box = runtime.get(box_id)
+        restarted_box = await runtime.get(box_id)
         if restarted_box is None:
             print("  Failed to get box handle")
             return
@@ -138,9 +139,12 @@ async def test_reattach_to_running():
     box_id = None
 
     try:
-        # Create and start a box
+        # Create and start a box (auto_remove=False for explicit cleanup control)
         print("Creating box...")
-        box = runtime.create(boxlite.BoxOptions(image="alpine:latest"))
+        box = await runtime.create(boxlite.BoxOptions(
+            image="alpine:latest",
+            auto_remove=False
+        ))
         box_id = box.id
         print(f"  Box created: {box_id}")
 
@@ -159,7 +163,7 @@ async def test_reattach_to_running():
 
         # Get another handle to the same running box
         print("\nGetting second handle to same box...")
-        box2 = runtime.get(box_id)
+        box2 = await runtime.get(box_id)
         if box2 is None:
             print("  Failed to get second handle")
             return
@@ -209,7 +213,10 @@ async def test_lifecycle_combinations():
     # Test: Create -> Stop -> Restart -> Stop -> Remove
     print("\n--- Combination: Stop -> Restart -> Stop -> Remove ---")
 
-    box = runtime.create(boxlite.BoxOptions(image="alpine:latest"))
+    box = await runtime.create(boxlite.BoxOptions(
+        image="alpine:latest",
+        auto_remove=False  # Need to preserve box for restart
+    ))
     box_id = box.id
     print(f"Created box: {box_id}")
 
@@ -223,12 +230,12 @@ async def test_lifecycle_combinations():
     print("  Stopped")
 
     # Get info
-    info = runtime.get_info(box_id)
+    info = await runtime.get_info(box_id)
     if info:
         print(f"  State after stop: {info.state}")
 
     # Restart via get + exec
-    box = runtime.get(box_id)
+    box = await runtime.get(box_id)
     execution = await box.exec("echo", ["Restart 1"])
     await execution.wait()
     print("  Restarted (1)")
@@ -238,7 +245,7 @@ async def test_lifecycle_combinations():
     print("  Stopped again")
 
     # Restart again
-    box = runtime.get(box_id)
+    box = await runtime.get(box_id)
     execution = await box.exec("echo", ["Restart 2"])
     await execution.wait()
     print("  Restarted (2)")
@@ -257,8 +264,11 @@ async def test_force_remove():
 
     runtime = boxlite.Boxlite.default()
 
-    # Create box
-    box = runtime.create(boxlite.BoxOptions(image="alpine:latest"))
+    # Create box (auto_remove=False for explicit control)
+    box = await runtime.create(boxlite.BoxOptions(
+        image="alpine:latest",
+        auto_remove=False
+    ))
     box_id = box.id
     print(f"Created box: {box_id}")
 
@@ -266,7 +276,7 @@ async def test_force_remove():
     execution = await box.exec("echo", ["Running"])
     await execution.wait()
 
-    info = runtime.get_info(box_id)
+    info = await runtime.get_info(box_id)
     print(f"Box state: {info.state}")
 
     # Try normal remove (should fail)
@@ -283,7 +293,7 @@ async def test_force_remove():
     print("  Force remove succeeded")
 
     # Verify box is gone
-    info = runtime.get_info(box_id)
+    info = await runtime.get_info(box_id)
     if info is None:
         print("  Box is completely removed")
     else:
@@ -308,7 +318,7 @@ async def test_error_cases():
 
     # Test getting non-existent box
     print("\n--- Error Case 2: Get non-existent box ---")
-    result = runtime.get("non-existent-id")
+    result = await runtime.get("non-existent-id")
     if result is None:
         print("  Expected: Box not found (returned None)")
     else:

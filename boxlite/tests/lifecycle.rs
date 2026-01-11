@@ -33,10 +33,10 @@ impl TestContext {
 // RUNTIME INITIALIZATION TESTS
 // ============================================================================
 
-#[test]
-fn runtime_initialization_creates_empty_list() {
+#[tokio::test]
+async fn runtime_initialization_creates_empty_list() {
     let ctx = TestContext::new();
-    assert!(ctx.runtime.list_info().unwrap().is_empty());
+    assert!(ctx.runtime.list_info().await.unwrap().is_empty());
 }
 
 // ============================================================================
@@ -56,6 +56,7 @@ async fn create_generates_unique_ulid_ids() {
             },
             None,
         )
+        .await
         .unwrap();
     let box2 = ctx
         .runtime
@@ -67,6 +68,7 @@ async fn create_generates_unique_ulid_ids() {
             },
             None,
         )
+        .await
         .unwrap();
 
     // IDs should be unique
@@ -94,10 +96,10 @@ async fn create_stores_custom_options() {
     };
 
     let ctx = TestContext::new();
-    let handle = ctx.runtime.create(options, None).unwrap();
+    let handle = ctx.runtime.create(options, None).await.unwrap();
     let box_id = handle.id().clone();
 
-    let info = ctx.runtime.get_info(box_id.as_str()).unwrap().unwrap();
+    let info = ctx.runtime.get_info(box_id.as_str()).await.unwrap().unwrap();
 
     // Verify metadata was stored correctly
     assert_eq!(info.cpus, 4);
@@ -118,7 +120,7 @@ async fn list_info_returns_all_boxes() {
     let ctx = TestContext::new();
 
     // Initially empty
-    assert_eq!(ctx.runtime.list_info().unwrap().len(), 0);
+    assert_eq!(ctx.runtime.list_info().await.unwrap().len(), 0);
 
     // Create two boxes
     let box1 = ctx
@@ -131,6 +133,7 @@ async fn list_info_returns_all_boxes() {
             },
             None,
         )
+        .await
         .unwrap();
     let box2 = ctx
         .runtime
@@ -142,10 +145,10 @@ async fn list_info_returns_all_boxes() {
             },
             None,
         )
-        .unwrap();
+        .await.unwrap();
 
     // List should show both boxes
-    let boxes = ctx.runtime.list_info().unwrap();
+    let boxes = ctx.runtime.list_info().await.unwrap();
     assert_eq!(boxes.len(), 2);
 
     let ids: Vec<&str> = boxes.iter().map(|b| b.id.as_str()).collect();
@@ -174,7 +177,7 @@ async fn list_info_sorted_by_creation_time_newest_first() {
             },
             None,
         )
-        .unwrap();
+        .await.unwrap();
     tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
     let box2 = ctx
         .runtime
@@ -186,7 +189,7 @@ async fn list_info_sorted_by_creation_time_newest_first() {
             },
             None,
         )
-        .unwrap();
+        .await.unwrap();
     tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
     let box3 = ctx
         .runtime
@@ -198,10 +201,10 @@ async fn list_info_sorted_by_creation_time_newest_first() {
             },
             None,
         )
-        .unwrap();
+        .await.unwrap();
 
     // List should be sorted newest first
-    let boxes = ctx.runtime.list_info().unwrap();
+    let boxes = ctx.runtime.list_info().await.unwrap();
     assert_eq!(boxes.len(), 3);
     assert_eq!(boxes[0].id, *box3.id()); // Newest
     assert_eq!(boxes[1].id, *box2.id());
@@ -235,15 +238,17 @@ async fn get_info_returns_box_metadata() {
             },
             None,
         )
+        .await
         .unwrap();
     let box_id = handle.id().clone();
 
-    // Get info from runtime
-    let info = ctx.runtime.get_info(box_id.as_str()).unwrap().unwrap();
+    // Get info from runtime - box is Configured after create() but not yet started
+    let info = ctx.runtime.get_info(box_id.as_str()).await.unwrap().unwrap();
     assert_eq!(info.id, box_id);
-    assert!(
-        info.status == BoxStatus::Starting || info.status == BoxStatus::Running,
-        "Expected Starting or Running, got {:?}",
+    assert_eq!(
+        info.status,
+        BoxStatus::Configured,
+        "Expected Configured after create(), got {:?}",
         info.status
     );
 
@@ -254,7 +259,7 @@ async fn get_info_returns_box_metadata() {
 #[tokio::test]
 async fn get_info_returns_none_for_nonexistent() {
     let ctx = TestContext::new();
-    let missing = ctx.runtime.get_info("nonexistent-id").unwrap();
+    let missing = ctx.runtime.get_info("nonexistent-id").await.unwrap();
     assert!(missing.is_none());
 }
 
@@ -270,10 +275,11 @@ async fn exists_returns_true_for_existing_box() {
             },
             None,
         )
+        .await
         .unwrap();
     let box_id = handle.id().clone();
 
-    assert!(ctx.runtime.exists(box_id.as_str()).unwrap());
+    assert!(ctx.runtime.exists(box_id.as_str()).await.unwrap());
 
     // Cleanup
     ctx.runtime.remove(box_id.as_str(), true).await.unwrap();
@@ -282,7 +288,7 @@ async fn exists_returns_true_for_existing_box() {
 #[tokio::test]
 async fn exists_returns_false_for_nonexistent() {
     let ctx = TestContext::new();
-    assert!(!ctx.runtime.exists("nonexistent-id").unwrap());
+    assert!(!ctx.runtime.exists("nonexistent-id").await.unwrap());
 }
 
 // ============================================================================
@@ -316,6 +322,7 @@ async fn remove_stopped_box_succeeds() {
             },
             None,
         )
+        .await
         .unwrap();
     let box_id = handle.id().clone();
 
@@ -326,7 +333,7 @@ async fn remove_stopped_box_succeeds() {
     ctx.runtime.remove(box_id.as_str(), false).await.unwrap();
 
     // Box should no longer exist
-    assert!(!ctx.runtime.exists(box_id.as_str()).unwrap());
+    assert!(!ctx.runtime.exists(box_id.as_str()).await.unwrap());
 }
 
 #[tokio::test]
@@ -341,11 +348,12 @@ async fn remove_active_without_force_fails() {
             },
             None,
         )
+        .await
         .unwrap();
     let box_id = handle.id().clone();
 
     // Box is in Starting state (active)
-    let info = ctx.runtime.get_info(box_id.as_str()).unwrap().unwrap();
+    let info = ctx.runtime.get_info(box_id.as_str()).await.unwrap().unwrap();
     assert!(info.status.is_active());
 
     // Remove without force should fail
@@ -359,7 +367,7 @@ async fn remove_active_without_force_fails() {
     );
 
     // Box should still exist
-    assert!(ctx.runtime.exists(box_id.as_str()).unwrap());
+    assert!(ctx.runtime.exists(box_id.as_str()).await.unwrap());
 
     // Cleanup with force
     ctx.runtime.remove(box_id.as_str(), true).await.unwrap();
@@ -377,18 +385,19 @@ async fn remove_active_with_force_stops_and_removes() {
             },
             None,
         )
+        .await
         .unwrap();
     let box_id = handle.id().clone();
 
     // Box is in Starting state (active)
-    let info = ctx.runtime.get_info(box_id.as_str()).unwrap().unwrap();
+    let info = ctx.runtime.get_info(box_id.as_str()).await.unwrap().unwrap();
     assert!(info.status.is_active());
 
     // Force remove should succeed
     ctx.runtime.remove(box_id.as_str(), true).await.unwrap();
 
     // Box should no longer exist
-    assert!(!ctx.runtime.exists(box_id.as_str()).unwrap());
+    assert!(!ctx.runtime.exists(box_id.as_str()).await.unwrap());
 }
 
 #[tokio::test]
@@ -403,17 +412,18 @@ async fn remove_deletes_box_from_database() {
             },
             None,
         )
+        .await
         .unwrap();
     let box_id = handle.id().clone();
 
     // Verify box exists before removal
-    assert!(ctx.runtime.exists(box_id.as_str()).unwrap());
+    assert!(ctx.runtime.exists(box_id.as_str()).await.unwrap());
 
     // Force remove
     ctx.runtime.remove(box_id.as_str(), true).await.unwrap();
 
     // Box should no longer exist in database
-    assert!(!ctx.runtime.exists(box_id.as_str()).unwrap());
+    assert!(!ctx.runtime.exists(box_id.as_str()).await.unwrap());
 }
 
 // ============================================================================
@@ -433,6 +443,7 @@ async fn stop_marks_box_as_stopped() {
             },
             None,
         )
+        .await
         .unwrap();
     let box_id = handle.id().clone();
 
@@ -440,7 +451,7 @@ async fn stop_marks_box_as_stopped() {
     handle.stop().await.unwrap();
 
     // Status should be Stopped
-    let info = ctx.runtime.get_info(box_id.as_str()).unwrap().unwrap();
+    let info = ctx.runtime.get_info(box_id.as_str()).await.unwrap().unwrap();
     assert_eq!(info.status, BoxStatus::Stopped);
 
     // Cleanup
@@ -463,17 +474,19 @@ async fn litebox_info_returns_correct_metadata() {
             },
             None,
         )
+        .await
         .unwrap();
     let box_id = handle.id().clone();
 
-    // Get info from runtime (handle.info() requires VM initialization)
+    // Get info from runtime - box is Configured after create() but not yet started
     let info = ctx
         .runtime
         .get_info(box_id.as_str())
+        .await
         .unwrap()
         .expect("info should be available");
     assert_eq!(info.id, box_id);
-    assert_eq!(info.status, BoxStatus::Starting);
+    assert_eq!(info.status, BoxStatus::Configured);
     assert_eq!(info.cpus, 2); // Default value
     assert_eq!(info.memory_mib, 512); // Default value
 
@@ -499,6 +512,7 @@ async fn multiple_runtimes_are_isolated() {
             },
             None,
         )
+        .await
         .unwrap();
     let box2 = ctx2
         .runtime
@@ -509,14 +523,14 @@ async fn multiple_runtimes_are_isolated() {
             },
             None,
         )
-        .unwrap();
+        .await.unwrap();
 
     // Each runtime should only see its own box
-    assert_eq!(ctx1.runtime.list_info().unwrap().len(), 1);
-    assert_eq!(ctx2.runtime.list_info().unwrap().len(), 1);
+    assert_eq!(ctx1.runtime.list_info().await.unwrap().len(), 1);
+    assert_eq!(ctx2.runtime.list_info().await.unwrap().len(), 1);
 
-    assert_eq!(ctx1.runtime.list_info().unwrap()[0].id, *box1.id());
-    assert_eq!(ctx2.runtime.list_info().unwrap()[0].id, *box2.id());
+    assert_eq!(ctx1.runtime.list_info().await.unwrap()[0].id, *box1.id());
+    assert_eq!(ctx2.runtime.list_info().await.unwrap()[0].id, *box2.id());
 
     // Cleanup
     ctx1.runtime.remove(box1.id().as_str(), true).await.unwrap();
@@ -549,11 +563,11 @@ async fn boxes_persist_across_runtime_restart() {
                 },
                 None,
             )
-            .unwrap();
+            .await.unwrap();
         box_id = litebox.id().clone();
 
         // Box should be in database
-        let boxes = runtime.list_info().unwrap();
+        let boxes = runtime.list_info().await.unwrap();
         assert_eq!(boxes.len(), 1);
 
         // Stop the box before "restart"
@@ -566,7 +580,7 @@ async fn boxes_persist_across_runtime_restart() {
         let runtime = BoxliteRuntime::new(options).expect("Failed to create runtime");
 
         // Box should be recovered from database
-        let boxes = runtime.list_info().unwrap();
+        let boxes = runtime.list_info().await.unwrap();
         assert_eq!(boxes.len(), 1);
 
         // Status should be Stopped
@@ -604,7 +618,7 @@ async fn multiple_boxes_persist_and_recover_without_lock_errors() {
                 },
                 None,
             )
-            .unwrap();
+            .await.unwrap();
         let litebox2 = runtime
             .create(
                 BoxOptions {
@@ -614,7 +628,7 @@ async fn multiple_boxes_persist_and_recover_without_lock_errors() {
                 },
                 None,
             )
-            .unwrap();
+            .await.unwrap();
         let litebox3 = runtime
             .create(
                 BoxOptions {
@@ -624,7 +638,7 @@ async fn multiple_boxes_persist_and_recover_without_lock_errors() {
                 },
                 None,
             )
-            .unwrap();
+            .await.unwrap();
 
         box_ids = vec![
             litebox1.id().clone(),
@@ -647,7 +661,7 @@ async fn multiple_boxes_persist_and_recover_without_lock_errors() {
         let runtime = BoxliteRuntime::new(options).expect("Failed to create runtime after restart");
 
         // All boxes should be recovered from database
-        let boxes = runtime.list_info().unwrap();
+        let boxes = runtime.list_info().await.unwrap();
         assert_eq!(boxes.len(), 3, "All boxes should be recovered");
 
         // Verify all box IDs are present
@@ -702,18 +716,19 @@ async fn auto_remove_true_removes_box_on_stop() {
             },
             None,
         )
+        .await
         .unwrap();
     let box_id = handle.id().clone();
 
     // Box should exist before stop
-    assert!(ctx.runtime.exists(box_id.as_str()).unwrap());
+    assert!(ctx.runtime.exists(box_id.as_str()).await.unwrap());
 
     // Stop should auto-remove
     handle.stop().await.unwrap();
 
     // Box should no longer exist
     assert!(
-        !ctx.runtime.exists(box_id.as_str()).unwrap(),
+        !ctx.runtime.exists(box_id.as_str()).await.unwrap(),
         "Box should be auto-removed when auto_remove=true"
     );
 }
@@ -731,6 +746,7 @@ async fn auto_remove_false_preserves_box_on_stop() {
             },
             None,
         )
+        .await
         .unwrap();
     let box_id = handle.id().clone();
 
@@ -739,12 +755,12 @@ async fn auto_remove_false_preserves_box_on_stop() {
 
     // Box should still exist
     assert!(
-        ctx.runtime.exists(box_id.as_str()).unwrap(),
+        ctx.runtime.exists(box_id.as_str()).await.unwrap(),
         "Box should be preserved when auto_remove=false"
     );
 
     // Status should be Stopped
-    let info = ctx.runtime.get_info(box_id.as_str()).unwrap().unwrap();
+    let info = ctx.runtime.get_info(box_id.as_str()).await.unwrap().unwrap();
     assert_eq!(info.status, BoxStatus::Stopped);
 
     // Cleanup manually
@@ -780,13 +796,14 @@ async fn detach_option_is_stored_in_box_config() {
             },
             None,
         )
+        .await
         .unwrap();
     let box_id = handle.id().clone();
 
     // Note: detach is not exposed in BoxInfo, it's an internal option
     // that affects the shim subprocess behavior. We just verify the box
     // was created successfully with the option.
-    assert!(ctx.runtime.exists(box_id.as_str()).unwrap());
+    assert!(ctx.runtime.exists(box_id.as_str()).await.unwrap());
 
     // Cleanup
     ctx.runtime.remove(box_id.as_str(), true).await.unwrap();
@@ -822,7 +839,7 @@ async fn recovery_removes_auto_remove_true_boxes() {
                 },
                 None,
             )
-            .unwrap();
+            .await.unwrap();
 
         // Create auto_remove=false box (should persist)
         let persistent_box = runtime
@@ -834,18 +851,18 @@ async fn recovery_removes_auto_remove_true_boxes() {
                 },
                 None,
             )
-            .unwrap();
+            .await.unwrap();
         persistent_box_id = persistent_box.id().clone();
 
         // Both boxes should exist before shutdown
-        assert!(runtime.exists(auto_remove_box.id().as_str()).unwrap());
-        assert!(runtime.exists(persistent_box_id.as_str()).unwrap());
+        assert!(runtime.exists(auto_remove_box.id().as_str()).await.unwrap());
+        assert!(runtime.exists(persistent_box_id.as_str()).await.unwrap());
 
         // Stop the persistent box normally (it stays in DB)
         persistent_box.stop().await.unwrap();
 
         // Verify both exist in DB (auto_remove box is still Starting)
-        assert_eq!(runtime.list_info().unwrap().len(), 2);
+        assert_eq!(runtime.list_info().await.unwrap().len(), 2);
 
         // Drop runtime without stopping auto_remove_box - simulates crash
         // The box will remain in database but should be cleaned on recovery
@@ -858,7 +875,7 @@ async fn recovery_removes_auto_remove_true_boxes() {
 
         // auto_remove=true box should be removed during recovery
         // auto_remove=false box should be recovered
-        let boxes = runtime.list_info().unwrap();
+        let boxes = runtime.list_info().await.unwrap();
         assert_eq!(
             boxes.len(),
             1,
@@ -903,7 +920,7 @@ async fn recovery_removes_orphaned_stopped_boxes_without_directory() {
                 },
                 None,
             )
-            .unwrap();
+            .await.unwrap();
         box_id = litebox.id().clone();
         box_home = home_dir.join("boxes").join(box_id.as_str());
 
@@ -911,7 +928,7 @@ async fn recovery_removes_orphaned_stopped_boxes_without_directory() {
         litebox.stop().await.unwrap();
 
         // Box should be persisted
-        assert!(runtime.exists(box_id.as_str()).unwrap());
+        assert!(runtime.exists(box_id.as_str()).await.unwrap());
     }
 
     // Delete the box's directory (simulating it was never created or manually deleted)
@@ -926,7 +943,7 @@ async fn recovery_removes_orphaned_stopped_boxes_without_directory() {
 
         // Stopped box without directory should be KEPT (it might never have been started)
         // Recovery only removes active (Starting/Running) boxes that are missing directories
-        let boxes = runtime.list_info().unwrap();
+        let boxes = runtime.list_info().await.unwrap();
         assert_eq!(
             boxes.len(),
             1,

@@ -166,10 +166,13 @@ impl BoxliteRuntime {
 
     /// Create a box handle.
     ///
-    /// Returns immediately with a LiteBox handle. Heavy initialization (image pulling,
-    /// Box startup) is deferred until the first API call on the handle.
-    pub fn create(&self, options: BoxOptions, name: Option<String>) -> BoxliteResult<LiteBox> {
-        self.rt_impl.create(options, name)
+    /// Allocates a lock, persists the box to database with `Configured` status,
+    /// and returns a LiteBox handle. The VM is not started until `start()` or
+    /// `exec()` is called.
+    ///
+    /// The box is immediately visible in `list_info()` after creation.
+    pub async fn create(&self, options: BoxOptions, name: Option<String>) -> BoxliteResult<LiteBox> {
+        self.rt_impl.create(options, name).await
     }
 
     /// Get a handle to an existing box by ID or name.
@@ -177,28 +180,28 @@ impl BoxliteRuntime {
     /// The `id_or_name` parameter can be either:
     /// - A box ID (ULID format, 26 characters)
     /// - A user-defined box name
-    pub fn get(&self, id_or_name: &str) -> BoxliteResult<Option<LiteBox>> {
-        self.rt_impl.get(id_or_name)
+    pub async fn get(&self, id_or_name: &str) -> BoxliteResult<Option<LiteBox>> {
+        self.rt_impl.get(id_or_name).await
     }
 
     /// Get information about a specific box by ID or name (without creating a handle).
-    pub fn get_info(&self, id_or_name: &str) -> BoxliteResult<Option<BoxInfo>> {
-        self.rt_impl.get_info(id_or_name)
+    pub async fn get_info(&self, id_or_name: &str) -> BoxliteResult<Option<BoxInfo>> {
+        self.rt_impl.get_info(id_or_name).await
     }
 
     /// List all boxes, sorted by creation time (newest first).
-    pub fn list_info(&self) -> BoxliteResult<Vec<BoxInfo>> {
-        self.rt_impl.list_info()
+    pub async fn list_info(&self) -> BoxliteResult<Vec<BoxInfo>> {
+        self.rt_impl.list_info().await
     }
 
     /// Check if a box with the given ID or name exists.
-    pub fn exists(&self, id_or_name: &str) -> BoxliteResult<bool> {
-        self.rt_impl.exists(id_or_name)
+    pub async fn exists(&self, id_or_name: &str) -> BoxliteResult<bool> {
+        self.rt_impl.exists(id_or_name).await
     }
 
     /// Get runtime-wide metrics.
-    pub fn metrics(&self) -> RuntimeMetrics {
-        self.rt_impl.metrics()
+    pub async fn metrics(&self) -> RuntimeMetrics {
+        self.rt_impl.metrics().await
     }
 
     /// Remove a box completely by ID or name.

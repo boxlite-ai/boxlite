@@ -194,10 +194,11 @@ impl RuntimeImpl {
 
     /// Create a box handle.
     ///
-    /// Returns immediately with a LiteBox handle. The box is not persisted to database
-    /// until first use (lazy initialization). Lock allocation and DB persistence happen
-    /// in `init_live_state()` when the box is actually started.
-    pub fn create(
+    /// Allocates lock, persists to database with Configured status, and returns
+    /// a LiteBox handle. The VM is not started until start() or exec() is called.
+    ///
+    /// This method is async for API consistency with other runtime methods.
+    pub async fn create(
         self: &Arc<Self>,
         options: BoxOptions,
         name: Option<String>,
@@ -212,8 +213,31 @@ impl RuntimeImpl {
             )));
         }
 
-        // Initialize box variables with defaults (no lock, not persisted yet)
-        let (config, state) = self.init_box_variables(&options, name);
+        // Initialize box variables with defaults
+        let (config, mut state) = self.init_box_variables(&options, name);
+
+        // Allocate lock for this box
+        let lock_id = self.lock_manager.allocate()?;
+        state.set_lock_id(lock_id);
+
+        // Persist to database immediately (status = Configured)
+        if let Err(e) = self.box_manager.add_box(&config, &state) {
+            // Clean up the allocated lock on failure
+            if let Err(free_err) = self.lock_manager.free(lock_id) {
+                tracing::error!(
+                    lock_id = %lock_id,
+                    error = %free_err,
+                    "Failed to free lock after DB persist error"
+                );
+            }
+            return Err(e);
+        }
+
+        tracing::debug!(
+            box_id = %config.id,
+            lock_id = %lock_id,
+            "Created box with Configured status"
+        );
 
         // Create LiteBox handle with shared BoxImpl
         // This also checks in-memory cache for duplicate names
@@ -229,7 +253,6 @@ impl RuntimeImpl {
             .boxes_created
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-        // DB persistence and lock allocation happen on first use (init_live_state)
         Ok(LiteBox::new(box_impl))
     }
 
@@ -240,7 +263,7 @@ impl RuntimeImpl {
     ///
     /// If another handle to the same box exists, they share the same BoxImpl
     /// (and thus the same LiveState if initialized).
-    pub fn get(self: &Arc<Self>, id_or_name: &str) -> BoxliteResult<Option<LiteBox>> {
+    pub async fn get(self: &Arc<Self>, id_or_name: &str) -> BoxliteResult<Option<LiteBox>> {
         tracing::trace!(id_or_name = %id_or_name, "RuntimeInnerImpl::get called");
 
         // Check in-memory cache first (for boxes created but not yet persisted)
@@ -265,8 +288,16 @@ impl RuntimeImpl {
             }
         }
 
-        // Fall back to DB lookup (for persisted boxes)
-        if let Some((config, state)) = self.box_manager.lookup_box(id_or_name)? {
+        // Fall back to DB lookup (for persisted boxes) - run on blocking thread pool
+        let this = Arc::clone(self);
+        let id_or_name_owned = id_or_name.to_string();
+        let db_result = tokio::task::spawn_blocking(move || {
+            this.box_manager.lookup_box(&id_or_name_owned)
+        })
+        .await
+        .map_err(|e| BoxliteError::Internal(format!("spawn_blocking failed: {}", e)))??;
+
+        if let Some((config, state)) = db_result {
             tracing::trace!(
                 box_id = %config.id,
                 name = ?config.name,
@@ -295,7 +326,7 @@ impl RuntimeImpl {
     /// Get information about a specific box by ID or name (without creating a handle).
     ///
     /// Checks in-memory cache first (for boxes not yet persisted), then database.
-    pub fn get_info(&self, id_or_name: &str) -> BoxliteResult<Option<BoxInfo>> {
+    pub async fn get_info(self: &Arc<Self>, id_or_name: &str) -> BoxliteResult<Option<BoxInfo>> {
         // Check in-memory cache first (for boxes created but not yet persisted)
         {
             let sync = self.sync_state.read().unwrap();
@@ -316,8 +347,16 @@ impl RuntimeImpl {
             }
         }
 
-        // Fall back to DB lookup
-        if let Some((config, state)) = self.box_manager.lookup_box(id_or_name)? {
+        // Fall back to DB lookup - run on blocking thread pool
+        let this = Arc::clone(self);
+        let id_or_name_owned = id_or_name.to_string();
+        let db_result = tokio::task::spawn_blocking(move || {
+            this.box_manager.lookup_box(&id_or_name_owned)
+        })
+        .await
+        .map_err(|e| BoxliteError::Internal(format!("spawn_blocking failed: {}", e)))??;
+
+        if let Some((config, state)) = db_result {
             return Ok(Some(BoxInfo::new(&config, &state)));
         }
         Ok(None)
@@ -327,11 +366,15 @@ impl RuntimeImpl {
     ///
     /// Includes both persisted boxes (from database) and in-memory boxes
     /// (created but not yet persisted).
-    pub fn list_info(&self) -> BoxliteResult<Vec<BoxInfo>> {
+    pub async fn list_info(self: &Arc<Self>) -> BoxliteResult<Vec<BoxInfo>> {
         use std::collections::HashSet;
 
-        // Get boxes from database
-        let db_boxes = self.box_manager.all_boxes(true)?;
+        // Get boxes from database - run on blocking thread pool
+        let this = Arc::clone(self);
+        let db_boxes = tokio::task::spawn_blocking(move || this.box_manager.all_boxes(true))
+            .await
+            .map_err(|e| BoxliteError::Internal(format!("spawn_blocking failed: {}", e)))??;
+
         let mut seen_ids: HashSet<BoxID> = db_boxes.iter().map(|(c, _)| c.id.clone()).collect();
         let mut infos: Vec<_> = db_boxes
             .into_iter()
@@ -359,7 +402,7 @@ impl RuntimeImpl {
     /// Check if a box with the given ID or name exists.
     ///
     /// Checks in-memory cache first (for boxes not yet persisted), then database.
-    pub fn exists(&self, id_or_name: &str) -> BoxliteResult<bool> {
+    pub async fn exists(self: &Arc<Self>, id_or_name: &str) -> BoxliteResult<bool> {
         // Check in-memory cache first
         {
             let sync = self.sync_state.read().unwrap();
@@ -380,8 +423,16 @@ impl RuntimeImpl {
             }
         }
 
-        // Fall back to DB lookup
-        Ok(self.box_manager.lookup_box_id(id_or_name)?.is_some())
+        // Fall back to DB lookup - run on blocking thread pool
+        let this = Arc::clone(self);
+        let id_or_name_owned = id_or_name.to_string();
+        let db_result = tokio::task::spawn_blocking(move || {
+            this.box_manager.lookup_box_id(&id_or_name_owned)
+        })
+        .await
+        .map_err(|e| BoxliteError::Internal(format!("spawn_blocking failed: {}", e)))??;
+
+        Ok(db_result.is_some())
     }
 
     // ========================================================================
@@ -389,7 +440,7 @@ impl RuntimeImpl {
     // ========================================================================
 
     /// Get runtime-wide metrics.
-    pub fn metrics(&self) -> RuntimeMetrics {
+    pub async fn metrics(&self) -> RuntimeMetrics {
         RuntimeMetrics::new(self.runtime_metrics.clone())
     }
 
@@ -559,8 +610,8 @@ impl RuntimeImpl {
 
     /// Initialize box variables with defaults.
     ///
-    /// Creates config and state for a new box. Lock allocation and DB persistence
-    /// are deferred to `init_live_state()`.
+    /// Creates config and state for a new box. State starts with Configured status.
+    /// Lock allocation and DB persistence happen in create() immediately after this.
     fn init_box_variables(
         &self,
         options: &BoxOptions,
@@ -598,7 +649,7 @@ impl RuntimeImpl {
             ready_socket_path,
         };
 
-        // Create initial state (status = Starting, no lock_id yet)
+        // Create initial state (status = Configured)
         let state = BoxState::new();
 
         (config, state)
@@ -626,11 +677,12 @@ impl RuntimeImpl {
 
         // Phase 1: Clean up boxes that shouldn't persist
         // - auto_remove=true boxes: these are ephemeral and shouldn't survive restarts
-        // - Orphaned active boxes: was Running/Starting but directory is missing (crashed mid-operation)
+        // - Orphaned active boxes: was Running but directory is missing (crashed mid-operation)
         //
-        // Note: We don't remove Stopped boxes without directories because:
-        // - Boxes created but never started have no directory (this is valid)
-        // - Only active boxes (Running/Starting) should have a directory
+        // Note: We don't remove Configured or Stopped boxes without directories because:
+        // - Configured boxes: created but never started, no directory yet (this is valid)
+        // - Stopped boxes: might not have a directory if never started
+        // - Only Running boxes must have a directory
         let mut boxes_to_remove = Vec::new();
         for (config, state) in &persisted {
             let should_remove = if config.options.auto_remove {
@@ -742,10 +794,11 @@ impl RuntimeImpl {
                 }
             } else {
                 // No PID - box was stopped gracefully or never started
-                if state.status == BoxStatus::Running || state.status == BoxStatus::Starting {
+                // Note: Configured boxes won't have a PID (this is expected)
+                if state.status == BoxStatus::Running {
                     state.set_status(BoxStatus::Stopped);
                     tracing::warn!(
-                        "Box {} was Running/Starting but had no PID, marked as Stopped",
+                        "Box {} was Running but had no PID, marked as Stopped",
                         box_id
                     );
                 }

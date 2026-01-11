@@ -267,7 +267,7 @@ class SyncBoxlite:
         self._require_started()
         from ._box import SyncBox
 
-        native_box = self._boxlite.create(options, name=name)
+        native_box = self._sync(self._boxlite.create(options, name=name))
         return SyncBox(self, native_box)
 
     def get(self, id_or_name: str) -> Optional["SyncBox"]:
@@ -283,7 +283,7 @@ class SyncBoxlite:
         self._require_started()
         from ._box import SyncBox
 
-        native_box = self._boxlite.get(id_or_name)
+        native_box = self._sync(self._boxlite.get(id_or_name))
         if native_box is None:
             return None
         return SyncBox(self, native_box)
@@ -295,7 +295,8 @@ class SyncBoxlite:
         Returns:
             List of BoxInfo for all boxes.
         """
-        return self._boxlite.list_info()
+        self._require_started()
+        return self._sync(self._boxlite.list_info())
 
     def get_info(self, id_or_name: str) -> Optional["BoxInfo"]:
         """
@@ -307,7 +308,8 @@ class SyncBoxlite:
         Returns:
             BoxInfo if found, None otherwise.
         """
-        return self._boxlite.get_info(id_or_name)
+        self._require_started()
+        return self._sync(self._boxlite.get_info(id_or_name))
 
     def metrics(self) -> "RuntimeMetrics":
         """
@@ -316,7 +318,8 @@ class SyncBoxlite:
         Returns:
             RuntimeMetrics with aggregate statistics.
         """
-        return self._boxlite.metrics()
+        self._require_started()
+        return self._sync(self._boxlite.metrics())
 
     def remove(self, id_or_name: str, force: bool = False) -> None:
         """

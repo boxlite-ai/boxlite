@@ -5,15 +5,17 @@ List Boxes Example - Display all boxes and their status
 Demonstrates how to list and inspect all boxes in the runtime.
 """
 
+import asyncio
+
 import boxlite
 
 
-def main():
+async def main():
     """List all boxes with their information."""
     runtime = boxlite.Boxlite.default()
 
     # Get all boxes
-    boxes = runtime.list_info()
+    boxes = await runtime.list_info()
 
     if not boxes:
         print("No boxes found.")
@@ -38,4 +40,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

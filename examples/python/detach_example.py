@@ -31,7 +31,7 @@ async def demo_auto_remove_true():
 
     # Create box with default auto_remove=True
     print("1. Creating box with auto_remove=True (default)...")
-    box = runtime.create(boxlite.BoxOptions(
+    box = await runtime.create(boxlite.BoxOptions(
         image="alpine:latest",
         auto_remove=True,  # This is the default, shown explicitly for clarity
     ))
@@ -44,7 +44,7 @@ async def demo_auto_remove_true():
     print(f"   Output: {result.stdout()}")
 
     # Check box exists before stop
-    info = runtime.get_info(box_id)
+    info = await runtime.get_info(box_id)
     print(f"\n3. Box exists before stop: {info is not None}")
 
     # Stop the box - this will automatically remove it
@@ -53,7 +53,7 @@ async def demo_auto_remove_true():
     print("   Box stopped")
 
     # Check box no longer exists
-    info = runtime.get_info(box_id)
+    info = await runtime.get_info(box_id)
     print(f"\n5. Box exists after stop: {info is not None}")
     if info is None:
         print("   Box was automatically removed!")
@@ -77,7 +77,7 @@ async def demo_auto_remove_false():
 
     # Create box with auto_remove=False
     print("1. Creating box with auto_remove=False...")
-    box = runtime.create(boxlite.BoxOptions(
+    box = await runtime.create(boxlite.BoxOptions(
         image="alpine:latest",
         auto_remove=False,  # Preserve box after stop
     ))
@@ -95,14 +95,14 @@ async def demo_auto_remove_false():
     print("   Box stopped")
 
     # Check box still exists
-    info = runtime.get_info(box_id)
+    info = await runtime.get_info(box_id)
     print(f"\n4. Box exists after stop: {info is not None}")
     if info:
         print(f"   Box state: {info.state}")
 
     # Restart by getting handle and executing
     print("\n5. Restarting box (get handle + exec)...")
-    restarted_box = runtime.get(box_id)
+    restarted_box = await runtime.get(box_id)
     if restarted_box:
         result = await restarted_box.exec("echo", ["Restarted!"])
         print(f"   Output: {result.stdout()}")
@@ -134,7 +134,7 @@ async def demo_detach_false():
 
     # Create box with default detach=False
     print("1. Creating box with detach=False (default)...")
-    box = runtime.create(boxlite.BoxOptions(
+    box = await runtime.create(boxlite.BoxOptions(
         image="alpine:latest",
         detach=False,  # This is the default
         auto_remove=True,
@@ -173,7 +173,7 @@ async def demo_detach_true():
 
     # Create box with detach=True
     print("1. Creating box with detach=True...")
-    box = runtime.create(boxlite.BoxOptions(
+    box = await runtime.create(boxlite.BoxOptions(
         image="alpine:latest",
         detach=True,  # Run independently
         auto_remove=False,  # Keep around for demo
@@ -190,7 +190,7 @@ async def demo_detach_true():
 
     # Show how to reattach
     print("\n3. Simulating reattach (getting new handle)...")
-    new_handle = runtime.get(box_id)
+    new_handle = await runtime.get(box_id)
     if new_handle:
         result = await new_handle.exec("echo", ["Via new handle!"])
         print(f"   Output: {result.stdout()}")
@@ -216,7 +216,7 @@ async def demo_combined_options():
     # Use case: Ephemeral sandbox for one-off tasks
     print("1. Ephemeral sandbox (auto_remove=True, detach=False):")
     print("   Use case: One-off code execution, testing")
-    box1 = runtime.create(boxlite.BoxOptions(
+    box1 = await runtime.create(boxlite.BoxOptions(
         image="alpine:latest",
         auto_remove=True,
         detach=False,
@@ -230,7 +230,7 @@ async def demo_combined_options():
     # Use case: Development/debugging - restart box with same state
     print("2. Development sandbox (auto_remove=False, detach=False):")
     print("   Use case: Iterative development, debugging")
-    box2 = runtime.create(boxlite.BoxOptions(
+    box2 = await runtime.create(boxlite.BoxOptions(
         image="alpine:latest",
         auto_remove=False,
         detach=False,
@@ -239,7 +239,7 @@ async def demo_combined_options():
     await box2.exec("touch", ["/tmp/dev-file"])
     await box2.stop()
     # Can restart and continue development
-    box2_restarted = runtime.get(box2_id)
+    box2_restarted = await runtime.get(box2_id)
     result = await box2_restarted.exec("ls", ["/tmp/dev-file"])
     print(f"   File persisted: '/tmp/dev-file' in {result.stdout()}")
     await box2_restarted.stop()
@@ -250,7 +250,7 @@ async def demo_combined_options():
     # Use case: Long-running service that survives parent exit
     print("3. Background service (auto_remove=False, detach=True):")
     print("   Use case: Long-running services, daemons")
-    box3 = runtime.create(boxlite.BoxOptions(
+    box3 = await runtime.create(boxlite.BoxOptions(
         image="alpine:latest",
         auto_remove=False,
         detach=True,

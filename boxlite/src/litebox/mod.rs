@@ -60,6 +60,17 @@ impl LiteBox {
         self.inner.info()
     }
 
+    /// Start the box (initialize VM).
+    ///
+    /// For Configured boxes: initializes VM for the first time.
+    /// For Stopped boxes: restarts the VM.
+    ///
+    /// This is idempotent - calling start() on a Running box is a no-op.
+    /// Also called implicitly by exec() if the box is not running.
+    pub async fn start(&self) -> BoxliteResult<()> {
+        self.inner.start().await
+    }
+
     pub async fn exec(&self, command: BoxCommand) -> BoxliteResult<Execution> {
         self.inner.exec(command).await
     }

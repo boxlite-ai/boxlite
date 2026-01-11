@@ -56,9 +56,12 @@ class SimpleBox:
             name: Optional name for the box (must be unique)
             auto_remove: Remove box when stopped (default: True)
             **kwargs: Additional configuration options
+
+        Note: The box is not actually created until entering the async context manager.
+        Use `async with SimpleBox(...) as box:` to create and start the box.
         """
         try:
-            from .boxlite import Boxlite
+            from .boxlite import Boxlite, BoxOptions
         except ImportError as e:
             raise ImportError(
                 f"BoxLite native extension not found: {e}. "
@@ -71,16 +74,8 @@ class SimpleBox:
         else:
             self._runtime = runtime
 
-        # Create box using subclass-defined options
-        try:
-            from .boxlite import BoxOptions
-        except ImportError as e:
-            raise ImportError(
-                f"BoxLite native extension not found: {e}. "
-                "Please install with: pip install boxlite"
-            )
-
-        box_opts = BoxOptions(
+        # Store box options for deferred creation in __aenter__
+        self._box_options = BoxOptions(
             image=image,
             cpus=cpus,
             memory_mib=memory_mib,
@@ -88,12 +83,36 @@ class SimpleBox:
             **kwargs
         )
         self._name = name
-        self._box = self._runtime.create(box_opts, name=name)
+        self._box = None
+        self._started = False
 
     async def __aenter__(self):
-        """Async context manager entry - delegates to Box.__aenter__."""
+        """Async context manager entry - creates and starts the box.
+
+        This method is idempotent - calling it multiple times is safe.
+        All initialization logic lives here; start() is just an alias.
+        """
+        if self._started:
+            return self
+        self._box = await self._runtime.create(self._box_options, name=self._name)
         await self._box.__aenter__()
+        self._started = True
         return self
+
+    async def start(self):
+        """
+        Explicitly create and start the box.
+
+        Alternative to using context manager. Allows::
+
+            box = SimpleBox(image="alpine:latest")
+            await box.start()
+            await box.exec("echo", "hello")
+
+        Returns:
+            self for method chaining
+        """
+        return await self.__aenter__()
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """Async context manager exit - delegates to Box.__aexit__ (returns awaitable)."""
@@ -102,10 +121,20 @@ class SimpleBox:
     @property
     def id(self) -> str:
         """Get the box ID."""
+        if not self._started:
+            raise RuntimeError(
+                "Box not started. Use 'async with SimpleBox(...) as box:' "
+                "or call 'await box.start()' first."
+            )
         return self._box.id
 
     def info(self):
         """Get box information."""
+        if not self._started:
+            raise RuntimeError(
+                "Box not started. Use 'async with SimpleBox(...) as box:' "
+                "or call 'await box.start()' first."
+            )
         return self._box.info()
 
     async def exec(
@@ -138,6 +167,11 @@ class SimpleBox:
                 result = await box.exec('env', env={'FOO': 'bar'})
                 print(result.stdout)
         """
+        if not self._started:
+            raise RuntimeError(
+                "Box not started. Use 'async with SimpleBox(...) as box:' "
+                "or call 'await box.start()' first."
+            )
 
         arg_list = list(args) if args else None
         # Convert env dict to list of tuples if provided
@@ -210,4 +244,9 @@ class SimpleBox:
 
         Note: Usually not needed as context manager handles cleanup.
         """
+        if not self._started:
+            raise RuntimeError(
+                "Box not started. Use 'async with SimpleBox(...) as box:' "
+                "or call 'await box.start()' first."
+            )
         self._box.shutdown()

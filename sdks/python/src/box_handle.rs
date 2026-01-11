@@ -62,6 +62,22 @@ impl PyBox {
         })
     }
 
+    /// Start the box (initialize VM).
+    ///
+    /// For Configured boxes: initializes VM for the first time.
+    /// For Stopped boxes: restarts the VM.
+    ///
+    /// This is idempotent - calling start() on a Running box is a no-op.
+    /// Also called implicitly by exec() if the box is not running.
+    fn start<'a>(&self, py: Python<'a>) -> PyResult<Bound<'a, PyAny>> {
+        let handle = Arc::clone(&self.handle);
+
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            handle.start().await.map_err(map_err)?;
+            Ok(())
+        })
+    }
+
     /// Stop the box (preserves state for restart).
     fn stop<'a>(&self, py: Python<'a>) -> PyResult<Bound<'a, PyAny>> {
         let handle = Arc::clone(&self.handle);
@@ -81,10 +97,15 @@ impl PyBox {
         })
     }
 
+    /// Enter async context manager - auto-starts the box (Testcontainers pattern).
     fn __aenter__<'a>(slf: PyRefMut<'_, Self>, py: Python<'a>) -> PyResult<Bound<'a, PyAny>> {
         let handle = Arc::clone(&slf.handle);
 
-        pyo3_async_runtimes::tokio::future_into_py(py, async move { Ok(PyBox { handle }) })
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            // Auto-start on context entry
+            handle.start().await.map_err(map_err)?;
+            Ok(PyBox { handle })
+        })
     }
 
     #[allow(unsafe_op_in_unsafe_fn)]

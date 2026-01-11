@@ -89,15 +89,16 @@ impl JsBoxlite {
     ///
     /// # Example
     /// ```javascript
-    /// const box = runtime.create({
+    /// const box = await runtime.create({
     ///   image: 'python:slim',
     ///   memoryMib: 512,
     ///   cpus: 2
     /// }, 'my-python-box');
     /// ```
     #[napi]
-    pub fn create(&self, options: JsBoxOptions, name: Option<String>) -> Result<JsBox> {
-        let handle = self.runtime.create(options.into(), name).map_err(map_err)?;
+    pub async fn create(&self, options: JsBoxOptions, name: Option<String>) -> Result<JsBox> {
+        let runtime = Arc::clone(&self.runtime);
+        let handle = runtime.create(options.into(), name).await.map_err(map_err)?;
 
         Ok(JsBox {
             handle: Arc::new(handle),
@@ -113,14 +114,15 @@ impl JsBoxlite {
     ///
     /// # Example
     /// ```javascript
-    /// const boxes = runtime.listInfo();
+    /// const boxes = await runtime.listInfo();
     /// boxes.forEach(box => {
     ///   console.log(`${box.id}: ${box.status}`);
     /// });
     /// ```
     #[napi]
-    pub fn list_info(&self) -> Result<Vec<JsBoxInfo>> {
-        let infos = self.runtime.list_info().map_err(map_err)?;
+    pub async fn list_info(&self) -> Result<Vec<JsBoxInfo>> {
+        let runtime = Arc::clone(&self.runtime);
+        let infos = runtime.list_info().await.map_err(map_err)?;
 
         Ok(infos.into_iter().map(JsBoxInfo::from).collect())
     }
@@ -135,16 +137,17 @@ impl JsBoxlite {
     ///
     /// # Example
     /// ```javascript
-    /// const info = runtime.getInfo('my-python-box');
+    /// const info = await runtime.getInfo('my-python-box');
     /// if (info) {
     ///   console.log(`Status: ${info.status}`);
     /// }
     /// ```
     #[napi]
-    pub fn get_info(&self, id_or_name: String) -> Result<Option<JsBoxInfo>> {
-        Ok(self
-            .runtime
+    pub async fn get_info(&self, id_or_name: String) -> Result<Option<JsBoxInfo>> {
+        let runtime = Arc::clone(&self.runtime);
+        Ok(runtime
             .get_info(&id_or_name)
+            .await
             .map_err(map_err)?
             .map(JsBoxInfo::from))
     }
@@ -162,16 +165,17 @@ impl JsBoxlite {
     ///
     /// # Example
     /// ```javascript
-    /// const box = runtime.get('my-python-box');
+    /// const box = await runtime.get('my-python-box');
     /// if (box) {
     ///   await box.exec('python', ['--version']);
     /// }
     /// ```
     #[napi]
-    pub fn get(&self, id_or_name: String) -> Result<Option<JsBox>> {
+    pub async fn get(&self, id_or_name: String) -> Result<Option<JsBox>> {
         tracing::trace!("JsBoxlite.get() called with id_or_name={}", id_or_name);
 
-        let result = self.runtime.get(&id_or_name).map_err(map_err)?;
+        let runtime = Arc::clone(&self.runtime);
+        let result = runtime.get(&id_or_name).await.map_err(map_err)?;
 
         tracing::trace!("Rust get() returned: is_some={}", result.is_some());
 
@@ -195,13 +199,14 @@ impl JsBoxlite {
     ///
     /// # Example
     /// ```javascript
-    /// const metrics = runtime.metrics();
+    /// const metrics = await runtime.metrics();
     /// console.log(`Boxes created: ${metrics.boxesCreatedTotal}`);
     /// console.log(`Running: ${metrics.numRunningBoxes}`);
     /// ```
     #[napi]
-    pub fn metrics(&self) -> JsRuntimeMetrics {
-        JsRuntimeMetrics::from(self.runtime.metrics())
+    pub async fn metrics(&self) -> JsRuntimeMetrics {
+        let runtime = Arc::clone(&self.runtime);
+        JsRuntimeMetrics::from(runtime.metrics().await)
     }
 
     /// Remove a box by ID or name.

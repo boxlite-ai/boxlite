@@ -31,7 +31,7 @@ impl PyBoxStateInfo {
 fn status_to_string(status: BoxStatus) -> String {
     match status {
         BoxStatus::Unknown => "unknown",
-        BoxStatus::Starting => "starting",
+        BoxStatus::Configured => "configured",
         BoxStatus::Running => "running",
         BoxStatus::Stopping => "stopping",
         BoxStatus::Stopped => "stopped",

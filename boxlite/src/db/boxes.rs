@@ -402,7 +402,7 @@ mod tests {
 
         let loaded = store.load_state(config.id.as_str()).unwrap();
         assert!(loaded.is_some());
-        assert_eq!(loaded.unwrap().status, BoxStatus::Starting);
+        assert_eq!(loaded.unwrap().status, BoxStatus::Configured);
     }
 
     #[test]

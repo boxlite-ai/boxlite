@@ -33,7 +33,7 @@ pub async fn execute(args: RunArgs) -> anyhow::Result<()> {
     let rt = BoxliteRuntime::default_runtime();
     println!("Creating box from image '{}'...", args.image);
 
-    let litebox = rt.create(options, args.management.name.clone())?;
+    let litebox = rt.create(options, args.management.name.clone()).await?;
     println!("Box created: {}", litebox.id());
 
     // Prepare Command

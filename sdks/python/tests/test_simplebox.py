@@ -37,7 +37,8 @@ class TestSimpleBoxBasic:
             info = box.info()
             assert info is not None
             assert info.id == box.id
-            assert info.state in {"starting", "running"}
+            # info.state is a BoxStateInfo object with status, pid, running fields
+            assert info.state.status in {"configured", "running"}
 
 
 class TestSimpleBoxExec:

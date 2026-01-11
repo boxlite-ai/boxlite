@@ -86,8 +86,8 @@ int main() {
     printf("✅ Execution completed!\n");
 
     // Cleanup
-    if (boxlite_shutdown_box(box, &error) != 0) {
-        fprintf(stderr, "Warning: Failed to shutdown box: %s\n", error);
+    if (boxlite_stop_box(box, &error) != 0) {
+        fprintf(stderr, "Warning: Failed to stop box: %s\n", error);
         boxlite_free_string(error);
     }
 

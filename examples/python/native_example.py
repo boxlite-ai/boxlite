@@ -25,7 +25,7 @@ async def example_default_runtime():
     print(f"✓ Default runtime: {runtime}")
 
     # Create a box
-    box = runtime.create(boxlite.BoxOptions(image="alpine:latest"))
+    box = await runtime.create(boxlite.BoxOptions(image="alpine:latest"))
     print(f"✓ Box created: {box.id}")
 
     # Execute command
@@ -64,7 +64,7 @@ async def example_custom_runtime():
         volumes=[("/host/data", "/guest/data", False)],
         ports=[(8080, 80)],
     )
-    box = runtime.create(box_opts)
+    box = await runtime.create(box_opts)
     print(f"✓ Box created with limits: {box.id}")
 
     # Get box info
@@ -87,7 +87,7 @@ async def example_streaming_execution():
     print("\n\n=== Example 3: Streaming Execution ===")
 
     runtime = boxlite.Boxlite.default()
-    box = runtime.create(boxlite.BoxOptions(image="alpine:latest"))
+    box = await runtime.create(boxlite.BoxOptions(image="alpine:latest"))
     print(f"✓ Box created: {box.id}")
 
     # Execute command that produces both stdout and stderr
@@ -123,7 +123,7 @@ async def example_environment_variables():
     print("\n\n=== Example 4: Environment Variables ===")
 
     runtime = boxlite.Boxlite.default()
-    box = runtime.create(boxlite.BoxOptions(
+    box = await runtime.create(boxlite.BoxOptions(
         image="alpine:latest",
         env=[("USER", "alice"), ("PROJECT", "boxlite")]
     ))
@@ -152,7 +152,7 @@ async def example_box_metrics():
     print("\n\n=== Example 5: Box Metrics ===")
 
     runtime = boxlite.Boxlite.default()
-    box = runtime.create(boxlite.BoxOptions(image="alpine:latest"))
+    box = await runtime.create(boxlite.BoxOptions(image="alpine:latest"))
     print(f"✓ Box created: {box.id}")
 
     # Execute some commands
@@ -197,7 +197,7 @@ async def example_runtime_metrics():
     # Create and run multiple boxes
     boxes = []
     for i in range(2):
-        box = runtime.create(boxlite.BoxOptions(image="alpine:latest"))
+        box = await runtime.create(boxlite.BoxOptions(image="alpine:latest"))
         boxes.append(box)
         print(f"✓ Box {i + 1} created: {box.id}")
 
@@ -232,7 +232,7 @@ async def example_list_and_info():
     # Create multiple boxes
     boxes = []
     for i in range(3):
-        box = runtime.create(boxlite.BoxOptions(
+        box = await runtime.create(boxlite.BoxOptions(
             image="alpine:latest",
             name=f"test-box-{i}"
         ))
@@ -266,7 +266,7 @@ async def example_execution_kill():
     print("\n\n=== Example 8: Kill Execution ===")
 
     runtime = boxlite.Boxlite.default()
-    box = runtime.create(
+    box = await runtime.create(
         boxlite.BoxOptions(image="alpine:latest", env=[("RUST_LOG", "boxlite=trace,box=trace")]))
     print(f"✓ Box created: {box.id}")
 
@@ -297,7 +297,7 @@ async def example_context_manager():
     runtime = boxlite.Boxlite.default()
 
     # Box automatically shuts down when exiting context
-    async with runtime.create(boxlite.BoxOptions(image="alpine:latest")) as box:
+    async with await runtime.create(boxlite.BoxOptions(image="alpine:latest")) as box:
         print(f"✓ Box created in context: {box.id}")
 
         execution = await box.exec("echo", ["Hello from context manager"])
@@ -319,7 +319,7 @@ async def example_working_directory():
 
     runtime = boxlite.Boxlite.default()
 
-    box = runtime.create(boxlite.BoxOptions(
+    box = await runtime.create(boxlite.BoxOptions(
         image="alpine:latest",
         working_dir="/tmp",
         ports=[(8080, 80)]  # host:container

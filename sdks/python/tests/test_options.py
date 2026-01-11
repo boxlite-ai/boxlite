@@ -90,7 +90,7 @@ class TestAutoRemoveBehavior:
         # Box should still exist
         info = runtime.get_info(box_id)
         assert info is not None
-        assert info.state == "stopped"
+        assert info.state.status == "stopped"
 
         # Cleanup
         runtime.remove(box_id)
@@ -179,7 +179,7 @@ class TestCombinedOptions:
         # Box still exists
         info = runtime.get_info(box_id)
         assert info is not None
-        assert info.state == "stopped"
+        assert info.state.status == "stopped"
 
         # Can get new handle
         box2 = runtime.get(box_id)

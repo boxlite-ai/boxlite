@@ -253,7 +253,7 @@ mod tests {
 
         let (retrieved_config, retrieved_state) = manager.box_by_id(&config.id).unwrap().unwrap();
         assert_eq!(retrieved_config.id, config.id);
-        assert_eq!(retrieved_state.status, BoxStatus::Starting);
+        assert_eq!(retrieved_state.status, BoxStatus::Configured);
     }
 
     #[test]

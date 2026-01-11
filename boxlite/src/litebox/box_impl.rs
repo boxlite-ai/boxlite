@@ -139,12 +139,50 @@ impl BoxImpl {
     // OPERATIONS (require LiveState)
     // ========================================================================
 
+    /// Start the box (initialize VM).
+    ///
+    /// For Configured boxes: full pipeline (filesystem, rootfs, spawn, connect, init)
+    /// For Stopped boxes: restart pipeline (reuse rootfs, spawn, connect, init)
+    ///
+    /// This is idempotent - calling start() on a Running box is a no-op.
+    pub(crate) async fn start(&self) -> BoxliteResult<()> {
+        // Check if already shutdown
+        if self.is_shutdown.load(Ordering::SeqCst) {
+            return Err(BoxliteError::InvalidState(
+                "Handle invalidated after stop(). Use runtime.get() to get a new handle.".into(),
+            ));
+        }
+
+        // Check current status
+        let status = self.state.read().status;
+
+        // Idempotent: already running
+        if status == BoxStatus::Running {
+            return Ok(());
+        }
+
+        // Check if startable
+        if !status.can_start() {
+            return Err(BoxliteError::InvalidState(format!(
+                "Cannot start box in {} state",
+                status
+            )));
+        }
+
+        // Trigger lazy initialization (this does the actual work)
+        let _ = self.live_state().await?;
+
+        Ok(())
+    }
+
     pub(crate) async fn exec(&self, command: BoxCommand) -> BoxliteResult<Execution> {
         use boxlite_shared::constants::executor as executor_const;
 
         // Check if box is stopped before proceeding
         if self.is_shutdown.load(Ordering::SeqCst) {
-            return Err(BoxliteError::InvalidState("Box is stopped".into()));
+            return Err(BoxliteError::InvalidState(
+                "Handle invalidated after stop(). Use runtime.get() to get a new handle.".into(),
+            ));
         }
 
         let live = self.live_state().await?;
@@ -204,7 +242,9 @@ impl BoxImpl {
     pub(crate) async fn metrics(&self) -> BoxliteResult<BoxMetrics> {
         // Check if box is stopped before proceeding
         if self.is_shutdown.load(Ordering::SeqCst) {
-            return Err(BoxliteError::InvalidState("Box is stopped".into()));
+            return Err(BoxliteError::InvalidState(
+                "Handle invalidated after stop(). Use runtime.get() to get a new handle.".into(),
+            ));
         }
 
         let live = self.live_state().await?;
@@ -284,48 +324,35 @@ impl BoxImpl {
     /// Initialize LiveState via BoxBuilder.
     ///
     /// BoxBuilder handles all status types with different execution plans:
-    /// - Starting: full pipeline (filesystem, rootfs, spawn, connect, init)
+    /// - Configured: full pipeline (filesystem, rootfs, spawn, connect, init)
     /// - Stopped: restart pipeline (reuse rootfs, spawn, connect, init)
     /// - Running: attach pipeline (attach, connect)
     ///
-    /// For Starting (new boxes), this also allocates a lock and persists to database
-    /// after successful build.
+    /// Note: Lock is allocated in create(), not here. DB persistence also
+    /// happens in create().
     async fn init_live_state(&self) -> BoxliteResult<LiveState> {
         use super::BoxBuilder;
         use std::sync::Arc;
 
         let state = self.state.read().clone();
-        let is_new_box = state.status == BoxStatus::Starting;
+        let is_first_start = state.status == BoxStatus::Configured;
 
-        // Acquire lock before build
-        // - New boxes: allocate new lock
-        // - Existing boxes: retrieve existing lock
-        let locker = if is_new_box {
-            let lock_id = self.runtime.lock_manager.allocate()?;
-            let locker = self.runtime.lock_manager.retrieve(lock_id)?;
-            tracing::debug!(
-                box_id = %self.config.id,
-                lock_id = %lock_id,
-                "Allocated and acquired lock for new box"
-            );
-            locker
-        } else if let Some(lock_id) = state.lock_id {
-            let locker = self.runtime.lock_manager.retrieve(lock_id)?;
-            tracing::debug!(
-                box_id = %self.config.id,
-                lock_id = %lock_id,
-                "Acquired lock for existing box"
-            );
-            locker
-        } else {
-            // Existing box without lock_id - should never happen in normal operation
-            return Err(BoxliteError::Internal(format!(
+        // Retrieve the lock (allocated in create())
+        let lock_id = state.lock_id.ok_or_else(|| {
+            BoxliteError::Internal(format!(
                 "box {} is missing lock_id (status: {:?})",
                 self.config.id, state.status
-            )));
-        };
+            ))
+        })?;
+        let locker = self.runtime.lock_manager.retrieve(lock_id)?;
+        tracing::debug!(
+            box_id = %self.config.id,
+            lock_id = %lock_id,
+            "Acquired lock for box (first_start={})",
+            is_first_start
+        );
 
-        // Hold the lock for the duration of build and persist operations.
+        // Hold the lock for the duration of build operations.
         // LockGuard acquires lock on creation and releases on drop.
         let _guard = LockGuard::new(&*locker);
 
@@ -334,59 +361,25 @@ impl BoxImpl {
         // operations succeed. If any operation fails, the guard's Drop will
         // cleanup the VM process and directory.
         let builder = BoxBuilder::new(Arc::clone(&self.runtime), self.config.clone(), state)?;
-        let (live_state, mut cleanup_guard) = match builder.build().await {
-            Ok(result) => result,
-            Err(e) => {
-                // Build failed - cleanup_guard was already dropped inside build()
-                // Free the lock only if newly allocated
-                if is_new_box {
-                    let lock_id = locker.id();
-                    if let Err(free_err) = self.runtime.lock_manager.free(lock_id) {
-                        tracing::error!(
-                            lock_id = %lock_id,
-                            error = %free_err,
-                            "Failed to free lock after build error"
-                        );
-                    }
-                }
-                return Err(e);
-            }
-        };
+        let (live_state, mut cleanup_guard) = builder.build().await?;
 
-        // Build succeeded - persist to DB for new boxes (lock still held)
-        // Note: cleanup_guard is still armed! If add_box fails, it will cleanup
-        // the running VM and directory automatically via Drop.
-        if is_new_box {
-            let lock_id = locker.id();
-
-            // Hold the state lock while updating lock_id and persisting to DB
+        // Build succeeded - update status in DB
+        // Note: Box was already persisted in create() with Configured status.
+        // Now we update to Running status.
+        {
             let mut state = self.state.write();
-            state.set_lock_id(lock_id);
-
-            if let Err(e) = self.runtime.box_manager.add_box(&self.config, &state) {
-                // Failed to persist - cleanup_guard stays armed and will cleanup
-                // VM process and directory when dropped
-                drop(state);
-                if let Err(free_err) = self.runtime.lock_manager.free(lock_id) {
-                    tracing::error!(
-                        lock_id = %lock_id,
-                        error = %free_err,
-                        "Failed to free lock after DB persist error"
-                    );
-                }
-                // cleanup_guard will be dropped here and perform cleanup
-                return Err(e);
-            }
-
-            tracing::debug!(
-                box_id = %self.config.id,
-                lock_id = %lock_id,
-                "Persisted new box to database"
-            );
+            state.set_status(BoxStatus::Running);
+            self.runtime.box_manager.save_box(&self.config.id, &state)?;
         }
 
         // All operations succeeded - disarm the cleanup guard
         cleanup_guard.disarm();
+
+        tracing::info!(
+            box_id = %self.config.id,
+            "Box started successfully (first_start={})",
+            is_first_start
+        );
 
         // Lock is automatically released when _guard drops
         Ok(live_state)

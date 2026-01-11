@@ -103,11 +103,15 @@ export interface SimpleBoxOptions {
  */
 export class SimpleBox {
   protected _runtime: Boxlite;
-  protected _box: Box;
+  protected _box: Box | null = null;
+  protected _boxPromise: Promise<Box> | null = null;
   protected _name?: string;
+  protected _boxOpts: BoxOptions;
 
   /**
    * Create a new SimpleBox.
+   *
+   * The box is created lazily on first use (first exec() call).
    *
    * @param options - Box configuration options
    *
@@ -131,8 +135,8 @@ export class SimpleBox {
       this._runtime = JsBoxlite.withDefaultConfig();
     }
 
-    // Convert options to BoxOptions format
-    const boxOpts: BoxOptions = {
+    // Convert options to BoxOptions format (stored for lazy creation)
+    this._boxOpts = {
       image: options.image,
       cpus: options.cpus,
       memoryMib: options.memoryMib,
@@ -147,14 +151,44 @@ export class SimpleBox {
     };
 
     this._name = options.name;
-    this._box = this._runtime.create(boxOpts, options.name);
+  }
+
+  /**
+   * Ensure the box is created (lazy initialization).
+   * @internal
+   */
+  protected async _ensureBox(): Promise<Box> {
+    if (this._box) {
+      return this._box;
+    }
+
+    // Avoid race condition with concurrent calls
+    if (!this._boxPromise) {
+      this._boxPromise = this._runtime.create(this._boxOpts, this._name);
+    }
+
+    this._box = await this._boxPromise;
+    return this._box;
   }
 
   /**
    * Get the box ID (ULID format).
+   *
+   * Note: Throws if called before the box is created (e.g., before first exec()).
    */
   get id(): string {
+    if (!this._box) {
+      throw new Error('Box not yet created. Call exec() first or use getId() async method.');
+    }
     return this._box.id;
+  }
+
+  /**
+   * Get the box ID asynchronously, creating the box if needed.
+   */
+  async getId(): Promise<string> {
+    const box = await this._ensureBox();
+    return box.id;
   }
 
   /**
@@ -166,9 +200,22 @@ export class SimpleBox {
 
   /**
    * Get box metadata.
+   *
+   * Note: Throws if called before the box is created.
    */
   info() {
+    if (!this._box) {
+      throw new Error('Box not yet created. Call exec() first.');
+    }
     return this._box.info();
+  }
+
+  /**
+   * Get box metadata asynchronously, creating the box if needed.
+   */
+  async getInfo() {
+    const box = await this._ensureBox();
+    return box.info();
   }
 
   /**
@@ -241,8 +288,9 @@ export class SimpleBox {
       ? Object.entries(env).map(([k, v]) => [k, v] as [string, string])
       : undefined;
 
-    // Execute via Rust (returns Execution)
-    const execution: Execution = await this._box.exec(cmd, args, envArray, false);
+    // Ensure box is created, then execute via Rust (returns Execution)
+    const box = await this._ensureBox();
+    const execution: Execution = await box.exec(cmd, args, envArray, false);
 
     // Collect stdout and stderr
     const stdoutLines: string[] = [];
@@ -308,6 +356,8 @@ export class SimpleBox {
    * Sends a graceful shutdown signal to the VM. If `autoRemove` is true
    * (default), the box files will be deleted after stopping.
    *
+   * Does nothing if the box was never created.
+   *
    * @example
    * ```typescript
    * await box.stop();
@@ -315,6 +365,10 @@ export class SimpleBox {
    * ```
    */
   async stop(): Promise<void> {
+    if (!this._box) {
+      // Box was never created, nothing to stop
+      return;
+    }
     await this._box.stop();
   }
 

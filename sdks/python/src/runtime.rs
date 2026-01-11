@@ -39,28 +39,41 @@ impl PyBoxlite {
     }
 
     #[pyo3(signature = (options, name=None))]
-    fn create(&self, options: PyBoxOptions, name: Option<String>) -> PyResult<PyBox> {
-        let handle = self.runtime.create(options.into(), name).map_err(map_err)?;
-
-        Ok(PyBox {
-            handle: Arc::new(handle),
+    fn create<'py>(
+        &self,
+        py: Python<'py>,
+        options: PyBoxOptions,
+        name: Option<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let runtime = Arc::clone(&self.runtime);
+        let opts = options.into();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let handle = runtime.create(opts, name).await.map_err(map_err)?;
+            Ok(PyBox {
+                handle: Arc::new(handle),
+            })
         })
     }
 
     #[pyo3(signature = (_state=None))]
-    fn list_info(&self, _state: Option<String>) -> PyResult<Vec<PyBoxInfo>> {
-        let infos = self.runtime.list_info().map_err(map_err)?;
-
-        Ok(infos.into_iter().map(PyBoxInfo::from).collect())
+    fn list_info<'py>(&self, py: Python<'py>, _state: Option<String>) -> PyResult<Bound<'py, PyAny>> {
+        let runtime = Arc::clone(&self.runtime);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let infos = runtime.list_info().await.map_err(map_err)?;
+            Ok(infos.into_iter().map(PyBoxInfo::from).collect::<Vec<_>>())
+        })
     }
 
     /// Get information about a specific box by ID or name.
-    fn get_info(&self, id_or_name: String) -> PyResult<Option<PyBoxInfo>> {
-        Ok(self
-            .runtime
-            .get_info(&id_or_name)
-            .map_err(map_err)?
-            .map(PyBoxInfo::from))
+    fn get_info<'py>(&self, py: Python<'py>, id_or_name: String) -> PyResult<Bound<'py, PyAny>> {
+        let runtime = Arc::clone(&self.runtime);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            Ok(runtime
+                .get_info(&id_or_name)
+                .await
+                .map_err(map_err)?
+                .map(PyBoxInfo::from))
+        })
     }
 
     /// Get a box handle by ID or name (for reattach or restart).
@@ -70,27 +83,32 @@ impl PyBoxlite {
     ///
     /// Returns:
     ///     Box handle if found, None otherwise
-    fn get(&self, id_or_name: String) -> PyResult<Option<PyBox>> {
-        tracing::trace!("Python get() called with id_or_name={}", id_or_name);
+    fn get<'py>(&self, py: Python<'py>, id_or_name: String) -> PyResult<Bound<'py, PyAny>> {
+        let runtime = Arc::clone(&self.runtime);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            tracing::trace!("Python get() called with id_or_name={}", id_or_name);
 
-        let result = self.runtime.get(&id_or_name).map_err(map_err)?;
+            let result = runtime.get(&id_or_name).await.map_err(map_err)?;
 
-        tracing::trace!("Rust get() returned: is_some={}", result.is_some());
+            tracing::trace!("Rust get() returned: is_some={}", result.is_some());
 
-        let py_box = result.map(|handle| {
-            tracing::trace!("Wrapping LiteBox in PyBox for id_or_name={}", id_or_name);
-            PyBox {
-                handle: Arc::new(handle),
-            }
-        });
+            let py_box = result.map(|handle| {
+                tracing::trace!("Wrapping LiteBox in PyBox for id_or_name={}", id_or_name);
+                PyBox {
+                    handle: Arc::new(handle),
+                }
+            });
 
-        tracing::trace!("Returning PyBox to Python: is_some={}", py_box.is_some());
-        Ok(py_box)
+            tracing::trace!("Returning PyBox to Python: is_some={}", py_box.is_some());
+            Ok(py_box)
+        })
     }
 
-    fn metrics(&self) -> PyResult<PyRuntimeMetrics> {
-        let metrics = self.runtime.metrics();
-        Ok(PyRuntimeMetrics::from(metrics))
+    fn metrics<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let runtime = Arc::clone(&self.runtime);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            Ok(PyRuntimeMetrics::from(runtime.metrics().await))
+        })
     }
 
     /// Remove a box by ID or name.

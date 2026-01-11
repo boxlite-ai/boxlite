@@ -25,7 +25,7 @@ async def _subprocess_start_box():
     # Use Options() to create a droppable runtime
     runtime = boxlite.Boxlite(boxlite.Options())
 
-    box = runtime.create(boxlite.BoxOptions(image="alpine:latest"))
+    box = await runtime.create(boxlite.BoxOptions(image="alpine:latest"))
     box_id = box.id
 
     # Execute command to ensure it's fully initialized
@@ -45,7 +45,7 @@ async def _subprocess_start_and_stop_box():
     # Use Options() to create a droppable runtime
     runtime = boxlite.Boxlite(boxlite.Options())
 
-    box = runtime.create(boxlite.BoxOptions(image="alpine:latest"))
+    box = await runtime.create(boxlite.BoxOptions(image="alpine:latest"))
     box_id = box.id
 
     # Execute command to ensure it's fully initialized
@@ -107,7 +107,7 @@ async def test_cross_process_reattach():
         runtime = boxlite.Boxlite(boxlite.Options())
 
         # Verify box is still running
-        info = runtime.get_info(box_id)
+        info = await runtime.get_info(box_id)
         if info is None:
             print(f"  Error: Box not found")
             return
@@ -115,7 +115,7 @@ async def test_cross_process_reattach():
 
         # Now attach from this process
         print("\nAttaching to running box from this process...")
-        box = runtime.get(box_id)
+        box = await runtime.get(box_id)
         if box is None:
             print("  Failed to get box handle")
             return
@@ -201,7 +201,7 @@ async def test_cross_process_restart():
         runtime = boxlite.Boxlite(boxlite.Options())
 
         # Verify box is stopped
-        info = runtime.get_info(box_id)
+        info = await runtime.get_info(box_id)
         if info is None:
             print(f"  Error: Box not found")
             return
@@ -209,7 +209,7 @@ async def test_cross_process_restart():
 
         # Now restart from this process
         print("\nRestarting stopped box from this process...")
-        box = runtime.get(box_id)
+        box = await runtime.get(box_id)
         if box is None:
             print("  Failed to get box handle")
             return

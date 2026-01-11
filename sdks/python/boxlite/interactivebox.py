@@ -12,19 +12,21 @@ import termios
 import tty
 from typing import Optional, TYPE_CHECKING
 
+from .simplebox import SimpleBox
+
 if TYPE_CHECKING:
-    from .runtime import Boxlite
+    from .boxlite import Boxlite
 
 # Configure logger
 logger = logging.getLogger("boxlite.interactivebox")
 
 
-class InteractiveBox:
+class InteractiveBox(SimpleBox):
     """
     Interactive box with automatic PTY and terminal forwarding.
 
     When used as a context manager, automatically:
-    1. Auto-detects terminal size (like Docker)
+    1. Auto-detects terminal size (for PTY)
     2. Starts a shell with PTY
     3. Sets local terminal to cbreak mode
     4. Forwards stdin/stdout bidirectionally
@@ -67,41 +69,23 @@ class InteractiveBox:
             auto_remove: Remove box when stopped (default: True)
             **kwargs: Additional configuration options (working_dir, env)
         """
-        try:
-            from .boxlite import Boxlite, BoxOptions
-        except ImportError as e:
-            raise ImportError(
-                f"BoxLite native extension not found: {e}. "
-                "Please install with: pip install boxlite"
-            )
-
-        # Use provided runtime or get default
-        if runtime is None:
-            self._runtime = Boxlite.default()
-        else:
-            self._runtime = runtime
-
-        # Create box options
-        box_opts = BoxOptions(
+        # Initialize base class (handles runtime, BoxOptions, _box, _started)
+        super().__init__(
             image=image,
-            cpus=cpus,
             memory_mib=memory_mib,
+            cpus=cpus,
+            runtime=runtime,
+            name=name,
             auto_remove=auto_remove,
             **kwargs
         )
 
-        # Create box directly (no SimpleBox wrapper)
-        self._box = self._runtime.create(box_opts, name=name)
-
-        # Store interactive config
+        # InteractiveBox-specific config
         self._shell = shell
         self._env = kwargs.get('env', [])
 
         # Determine TTY mode: None = auto-detect, True = force, False = disable
-        if tty is None:
-            self._tty = sys.stdin.isatty()
-        else:
-            self._tty = tty
+        self._tty = sys.stdin.isatty() if tty is None else tty
 
         # Interactive state
         self._old_tty_settings = None
@@ -112,15 +96,15 @@ class InteractiveBox:
         self._stderr = None
         self._exited = None  # Event to signal process exit
 
-    @property
-    def id(self) -> str:
-        """Get the box ID."""
-        return self._box.id
+    # id property inherited from SimpleBox
 
     async def __aenter__(self):
         """Start box and enter interactive TTY session."""
-        # Start box directly
-        await self._box.__aenter__()
+        if self._started:
+            return self
+
+        # Create and start box (via parent)
+        await super().__aenter__()
 
         # Start shell with PTY
         self._execution = await self._start_interactive_shell()
@@ -176,8 +160,8 @@ class InteractiveBox:
                 # Ignore other exceptions during cleanup
                 logger.error(f"Caught exception on exit: {e}")
 
-        # Shutdown box directly
-        return await self._box.__aexit__(exc_type, exc_val, exc_tb)
+        # Shutdown box (via parent)
+        return await super().__aexit__(exc_type, exc_val, exc_tb)
 
     async def wait(self):
         await self._execution.wait()
