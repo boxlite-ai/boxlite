@@ -281,6 +281,18 @@ class SyncBoxlite:
         """
         return self._boxlite.list_info()
 
+    def get_info(self, id_or_name: str) -> Optional["BoxInfo"]:
+        """
+        Get info for a box by ID or name.
+
+        Args:
+            id_or_name: Box ID or name to look up.
+
+        Returns:
+            BoxInfo if found, None otherwise.
+        """
+        return self._boxlite.get_info(id_or_name)
+
     def metrics(self) -> "RuntimeMetrics":
         """
         Get runtime metrics.

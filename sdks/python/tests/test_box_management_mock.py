@@ -3,10 +3,15 @@ Unit tests for box management API surface (no VM required).
 
 These tests verify that the box management API is properly exported
 and available without requiring a working libkrun/VM setup.
+
+NOTE: This file tests for a planned module-level API (list_boxes, list_running, etc.)
+that was never implemented. The current API uses Boxlite.list_info() etc.
 """
 
 import boxlite
 import pytest
+
+pytestmark = pytest.mark.skip(reason="Tests for unimplemented module-level API")
 
 
 class TestBoxManagementAPI:

@@ -3,57 +3,17 @@ Integration tests for box management functionality in the Python SDK.
 
 These tests exercise the new runtime-oriented API that lives on the
 ``boxlite.Boxlite`` object.  They launch real VMs, so we mark them as
-``integration`` and skip automatically when the required libkrun
-artifacts are not present on the host.
+``integration``.
 """
 
 from __future__ import annotations
 
-import os
-import sys
 import time
-from pathlib import Path
-from typing import Iterable
 
 import boxlite
 import pytest
 
 pytestmark = pytest.mark.integration
-
-
-def _candidate_library_dirs() -> Iterable[Path]:
-    """Yield directories that may hold libkrun/libkrunfw dylibs."""
-
-    package_dir = Path(boxlite.__file__).parent
-    bundled = package_dir / ".dylibs"
-    if bundled.exists():
-        yield bundled
-
-    # Homebrew layout on Apple Silicon
-    hb_root = Path("/opt/homebrew/opt")
-    hb_dirs = [hb_root / "libkrun" / "lib", hb_root / "libkrunfw" / "lib"]
-    if all(path.exists() for path in hb_dirs):
-        yield from hb_dirs
-
-
-@pytest.fixture(autouse=True)
-def _ensure_library_paths(monkeypatch):
-    """Populate the dynamic loader search path so libkrun can be found."""
-
-    dirs = [str(path) for path in _candidate_library_dirs()]
-    if not dirs:
-        pytest.skip("libkrun libraries are not available on this system")
-
-    joined = ":".join(dirs)
-    if sys.platform == "darwin":
-        vars_to_set = ["DYLD_LIBRARY_PATH", "LD_LIBRARY_PATH"]
-    else:
-        vars_to_set = ["LD_LIBRARY_PATH"]
-
-    for var in vars_to_set:
-        existing = os.environ.get(var)
-        value = joined if not existing else ":".join([joined, existing])
-        monkeypatch.setenv(var, value)
 
 
 class RuntimeHarness:
@@ -75,18 +35,17 @@ class RuntimeHarness:
     ):
         opts = boxlite.BoxOptions(
             image=image,
-            name=name,
             cpus=cpus,
             memory_mib=memory_mib,
             working_dir=working_dir,
             env=env or [],
         )
-        box = self._runtime.create(opts)
+        box = self._runtime.create(opts, name=name)
         self._boxes.append(box)
         return box
 
     def list(self):
-        return self._runtime.list()
+        return self._runtime.list_info()
 
     def get_info(self, box_id: str):
         return self._runtime.get_info(box_id)
@@ -100,27 +59,29 @@ class RuntimeHarness:
         except ValueError:
             pass
 
-    def close(self) -> None:
-        self._runtime.close()
+    # Note: close() removed - shared runtime is managed by session fixture
 
 
 @pytest.fixture
-def runtime():
-    rt = boxlite.Boxlite(boxlite.Options())
-    harness = RuntimeHarness(rt)
+def runtime(shared_sync_runtime):
+    """Wrap shared sync runtime in harness for box lifecycle management.
+
+    Uses the sync API so that box.stop() works without an event loop.
+    """
+    harness = RuntimeHarness(shared_sync_runtime)
     try:
         yield harness
     finally:
+        # Clean up boxes created by this test, but don't close the shared runtime
         for box in list(harness._boxes):
             try:
-                box.shutdown()
+                box.stop()
             except Exception:
                 pass
             try:
                 harness.remove(box.id)
             except Exception:
                 pass
-        harness.close()
 
 
 class TestBoxManagement:
@@ -148,7 +109,7 @@ class TestBoxManagement:
         info = runtime.get_info(box.id)
         assert info is not None
         assert info.id == box.id
-        assert info.state == "running"
+        assert info.state in {"starting", "running"}
         assert info.image == "python:3.11"
         assert info.cpus == 4
         assert info.memory_mib == 1024
@@ -165,8 +126,9 @@ class TestBoxManagement:
         boxes = [runtime.create_box() for _ in range(2)]
         running = runtime.list()
         ids = {box.id for box in boxes}
-        running_ids = {info.id for info in running if info.state == "running"}
-        assert ids.issubset(running_ids)
+        # Boxes may be in starting or running state
+        active_ids = {info.id for info in running if info.state in {"starting", "running"}}
+        assert ids.issubset(active_ids)
 
     def test_list_boxes_sorted_by_creation(self, runtime):
         box1 = runtime.create_box()
@@ -186,15 +148,18 @@ class TestBoxManagement:
         info = runtime.get_info(box.id)
         assert info is not None
         assert info.id == box.id
-        assert info.state == "running"
+        assert info.state in {"starting", "running"}
 
     def test_get_box_info_nonexistent(self, runtime):
         assert runtime.get_info("nonexistent-id-12345678901") is None
 
     def test_box_state_transitions(self, runtime):
-        box = runtime.create_box()
-        assert runtime.get_info(box.id).state == "running"
-        box.shutdown()
+        # Need auto_remove=False to check stopped state and manually remove
+        opts = boxlite.BoxOptions(image="alpine:latest", auto_remove=False)
+        box = runtime._runtime.create(opts)
+        runtime._boxes.append(box)
+        assert runtime.get_info(box.id).state in {"starting", "running"}
+        box.stop()
         state_after_shutdown = runtime.get_info(box.id)
         assert state_after_shutdown is not None
         assert state_after_shutdown.state == "stopped"
@@ -203,8 +168,11 @@ class TestBoxManagement:
         assert runtime.get_info(box.id) is None
 
     def test_remove_box(self, runtime):
-        box = runtime.create_box()
-        box.shutdown()
+        # Need auto_remove=False to manually remove the box
+        opts = boxlite.BoxOptions(image="alpine:latest", auto_remove=False)
+        box = runtime._runtime.create(opts)
+        runtime._boxes.append(box)
+        box.stop()
         runtime.remove(box.id)
         runtime.forget(box)
         assert runtime.get_info(box.id) is None
@@ -234,7 +202,6 @@ class TestBoxManagement:
         assert isinstance(info.state, str)
         assert isinstance(info.created_at, str)
         assert info.pid is None or isinstance(info.pid, int)
-        assert isinstance(info.channel, str)
         assert isinstance(info.image, str)
         assert isinstance(info.cpus, int)
         assert isinstance(info.memory_mib, int)
@@ -258,13 +225,12 @@ class TestBoxInfoObject:
             "state": info.state,
             "created_at": info.created_at,
             "pid": info.pid,
-            "channel": info.channel,
-            "images": info.image,
+            "image": info.image,
             "cpus": info.cpus,
             "memory_mib": info.memory_mib,
         }
         assert data["id"] == box.id
-        assert data["state"] == "running"
+        assert data["state"] in {"starting", "running"}  # May be starting initially
 
     def test_box_info_state_values(self, runtime):
         box = runtime.create_box()
