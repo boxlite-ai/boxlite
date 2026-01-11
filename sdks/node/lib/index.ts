@@ -5,7 +5,7 @@
  *
  * @example
  * ```typescript
- * import { SimpleBox } from '@boxlite/boxlite';
+ * import { SimpleBox } from '@boxlite-ai/boxlite';
  *
  * const box = new SimpleBox({ image: 'alpine:latest' });
  * try {

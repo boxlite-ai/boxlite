@@ -22,7 +22,7 @@ let _nativeModule: any = null;
 export function getNativeModule(): any {
   if (_nativeModule === null) {
     try {
-      _nativeModule = loadBinding(join(__dirname, '..'), 'boxlite', '@boxlite/boxlite');
+      _nativeModule = loadBinding(join(__dirname, '..'), 'boxlite', '@boxlite-ai/boxlite');
     } catch (err) {
       throw new Error(
         `BoxLite native extension not found: ${err}. ` +

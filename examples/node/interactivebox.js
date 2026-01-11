@@ -7,7 +7,7 @@
  * - Real-time I/O
  */
 
-const { InteractiveBox } = require('@boxlite/boxlite');
+const { InteractiveBox } = require('@boxlite-ai/boxlite');
 
 async function main() {
   console.log('=== InteractiveBox Example ===\n');
