@@ -23,6 +23,17 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
 
+      - name: Set up Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: ${{ needs.config.outputs.rust-toolchain }}
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "wheels-${{ runner.os }}"
+          cache-on-failure: true
+
       # Build guest on host BEFORE cibuildwheel container because:
       # - manylinux (AlmaLinux/RHEL) doesn't have musl packages in repos
       # - Building musl-cross-make from source takes ~15 minutes
