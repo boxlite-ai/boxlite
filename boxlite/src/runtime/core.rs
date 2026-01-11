@@ -171,7 +171,11 @@ impl BoxliteRuntime {
     /// `exec()` is called.
     ///
     /// The box is immediately visible in `list_info()` after creation.
-    pub async fn create(&self, options: BoxOptions, name: Option<String>) -> BoxliteResult<LiteBox> {
+    pub async fn create(
+        &self,
+        options: BoxOptions,
+        name: Option<String>,
+    ) -> BoxliteResult<LiteBox> {
         self.rt_impl.create(options, name).await
     }
 

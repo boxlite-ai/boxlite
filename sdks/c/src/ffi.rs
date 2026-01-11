@@ -200,7 +200,9 @@ pub unsafe extern "C" fn boxlite_create_box(
 
     // Create box (no name support in C API yet)
     // create() is async, so we block on the tokio runtime
-    let result = runtime_ref.tokio_rt.block_on(runtime_ref.runtime.create(options, None));
+    let result = runtime_ref
+        .tokio_rt
+        .block_on(runtime_ref.runtime.create(options, None));
 
     match result {
         Ok(handle) => {

@@ -291,11 +291,10 @@ impl RuntimeImpl {
         // Fall back to DB lookup (for persisted boxes) - run on blocking thread pool
         let this = Arc::clone(self);
         let id_or_name_owned = id_or_name.to_string();
-        let db_result = tokio::task::spawn_blocking(move || {
-            this.box_manager.lookup_box(&id_or_name_owned)
-        })
-        .await
-        .map_err(|e| BoxliteError::Internal(format!("spawn_blocking failed: {}", e)))??;
+        let db_result =
+            tokio::task::spawn_blocking(move || this.box_manager.lookup_box(&id_or_name_owned))
+                .await
+                .map_err(|e| BoxliteError::Internal(format!("spawn_blocking failed: {}", e)))??;
 
         if let Some((config, state)) = db_result {
             tracing::trace!(
@@ -350,11 +349,10 @@ impl RuntimeImpl {
         // Fall back to DB lookup - run on blocking thread pool
         let this = Arc::clone(self);
         let id_or_name_owned = id_or_name.to_string();
-        let db_result = tokio::task::spawn_blocking(move || {
-            this.box_manager.lookup_box(&id_or_name_owned)
-        })
-        .await
-        .map_err(|e| BoxliteError::Internal(format!("spawn_blocking failed: {}", e)))??;
+        let db_result =
+            tokio::task::spawn_blocking(move || this.box_manager.lookup_box(&id_or_name_owned))
+                .await
+                .map_err(|e| BoxliteError::Internal(format!("spawn_blocking failed: {}", e)))??;
 
         if let Some((config, state)) = db_result {
             return Ok(Some(BoxInfo::new(&config, &state)));
@@ -426,11 +424,10 @@ impl RuntimeImpl {
         // Fall back to DB lookup - run on blocking thread pool
         let this = Arc::clone(self);
         let id_or_name_owned = id_or_name.to_string();
-        let db_result = tokio::task::spawn_blocking(move || {
-            this.box_manager.lookup_box_id(&id_or_name_owned)
-        })
-        .await
-        .map_err(|e| BoxliteError::Internal(format!("spawn_blocking failed: {}", e)))??;
+        let db_result =
+            tokio::task::spawn_blocking(move || this.box_manager.lookup_box_id(&id_or_name_owned))
+                .await
+                .map_err(|e| BoxliteError::Internal(format!("spawn_blocking failed: {}", e)))??;
 
         Ok(db_result.is_some())
     }

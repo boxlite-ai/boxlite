@@ -99,7 +99,12 @@ async fn create_stores_custom_options() {
     let handle = ctx.runtime.create(options, None).await.unwrap();
     let box_id = handle.id().clone();
 
-    let info = ctx.runtime.get_info(box_id.as_str()).await.unwrap().unwrap();
+    let info = ctx
+        .runtime
+        .get_info(box_id.as_str())
+        .await
+        .unwrap()
+        .unwrap();
 
     // Verify metadata was stored correctly
     assert_eq!(info.cpus, 4);
@@ -145,7 +150,8 @@ async fn list_info_returns_all_boxes() {
             },
             None,
         )
-        .await.unwrap();
+        .await
+        .unwrap();
 
     // List should show both boxes
     let boxes = ctx.runtime.list_info().await.unwrap();
@@ -177,7 +183,8 @@ async fn list_info_sorted_by_creation_time_newest_first() {
             },
             None,
         )
-        .await.unwrap();
+        .await
+        .unwrap();
     tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
     let box2 = ctx
         .runtime
@@ -189,7 +196,8 @@ async fn list_info_sorted_by_creation_time_newest_first() {
             },
             None,
         )
-        .await.unwrap();
+        .await
+        .unwrap();
     tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
     let box3 = ctx
         .runtime
@@ -201,7 +209,8 @@ async fn list_info_sorted_by_creation_time_newest_first() {
             },
             None,
         )
-        .await.unwrap();
+        .await
+        .unwrap();
 
     // List should be sorted newest first
     let boxes = ctx.runtime.list_info().await.unwrap();
@@ -243,7 +252,12 @@ async fn get_info_returns_box_metadata() {
     let box_id = handle.id().clone();
 
     // Get info from runtime - box is Configured after create() but not yet started
-    let info = ctx.runtime.get_info(box_id.as_str()).await.unwrap().unwrap();
+    let info = ctx
+        .runtime
+        .get_info(box_id.as_str())
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(info.id, box_id);
     assert_eq!(
         info.status,
@@ -353,7 +367,12 @@ async fn remove_active_without_force_fails() {
     let box_id = handle.id().clone();
 
     // Box is in Starting state (active)
-    let info = ctx.runtime.get_info(box_id.as_str()).await.unwrap().unwrap();
+    let info = ctx
+        .runtime
+        .get_info(box_id.as_str())
+        .await
+        .unwrap()
+        .unwrap();
     assert!(info.status.is_active());
 
     // Remove without force should fail
@@ -390,7 +409,12 @@ async fn remove_active_with_force_stops_and_removes() {
     let box_id = handle.id().clone();
 
     // Box is in Starting state (active)
-    let info = ctx.runtime.get_info(box_id.as_str()).await.unwrap().unwrap();
+    let info = ctx
+        .runtime
+        .get_info(box_id.as_str())
+        .await
+        .unwrap()
+        .unwrap();
     assert!(info.status.is_active());
 
     // Force remove should succeed
@@ -451,7 +475,12 @@ async fn stop_marks_box_as_stopped() {
     handle.stop().await.unwrap();
 
     // Status should be Stopped
-    let info = ctx.runtime.get_info(box_id.as_str()).await.unwrap().unwrap();
+    let info = ctx
+        .runtime
+        .get_info(box_id.as_str())
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(info.status, BoxStatus::Stopped);
 
     // Cleanup
@@ -523,7 +552,8 @@ async fn multiple_runtimes_are_isolated() {
             },
             None,
         )
-        .await.unwrap();
+        .await
+        .unwrap();
 
     // Each runtime should only see its own box
     assert_eq!(ctx1.runtime.list_info().await.unwrap().len(), 1);
@@ -563,7 +593,8 @@ async fn boxes_persist_across_runtime_restart() {
                 },
                 None,
             )
-            .await.unwrap();
+            .await
+            .unwrap();
         box_id = litebox.id().clone();
 
         // Box should be in database
@@ -618,7 +649,8 @@ async fn multiple_boxes_persist_and_recover_without_lock_errors() {
                 },
                 None,
             )
-            .await.unwrap();
+            .await
+            .unwrap();
         let litebox2 = runtime
             .create(
                 BoxOptions {
@@ -628,7 +660,8 @@ async fn multiple_boxes_persist_and_recover_without_lock_errors() {
                 },
                 None,
             )
-            .await.unwrap();
+            .await
+            .unwrap();
         let litebox3 = runtime
             .create(
                 BoxOptions {
@@ -638,7 +671,8 @@ async fn multiple_boxes_persist_and_recover_without_lock_errors() {
                 },
                 None,
             )
-            .await.unwrap();
+            .await
+            .unwrap();
 
         box_ids = vec![
             litebox1.id().clone(),
@@ -760,7 +794,12 @@ async fn auto_remove_false_preserves_box_on_stop() {
     );
 
     // Status should be Stopped
-    let info = ctx.runtime.get_info(box_id.as_str()).await.unwrap().unwrap();
+    let info = ctx
+        .runtime
+        .get_info(box_id.as_str())
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(info.status, BoxStatus::Stopped);
 
     // Cleanup manually
@@ -839,7 +878,8 @@ async fn recovery_removes_auto_remove_true_boxes() {
                 },
                 None,
             )
-            .await.unwrap();
+            .await
+            .unwrap();
 
         // Create auto_remove=false box (should persist)
         let persistent_box = runtime
@@ -851,7 +891,8 @@ async fn recovery_removes_auto_remove_true_boxes() {
                 },
                 None,
             )
-            .await.unwrap();
+            .await
+            .unwrap();
         persistent_box_id = persistent_box.id().clone();
 
         // Both boxes should exist before shutdown
@@ -920,7 +961,8 @@ async fn recovery_removes_orphaned_stopped_boxes_without_directory() {
                 },
                 None,
             )
-            .await.unwrap();
+            .await
+            .unwrap();
         box_id = litebox.id().clone();
         box_home = home_dir.join("boxes").join(box_id.as_str());
 

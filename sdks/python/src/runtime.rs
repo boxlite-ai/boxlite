@@ -56,7 +56,11 @@ impl PyBoxlite {
     }
 
     #[pyo3(signature = (_state=None))]
-    fn list_info<'py>(&self, py: Python<'py>, _state: Option<String>) -> PyResult<Bound<'py, PyAny>> {
+    fn list_info<'py>(
+        &self,
+        py: Python<'py>,
+        _state: Option<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
         let runtime = Arc::clone(&self.runtime);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let infos = runtime.list_info().await.map_err(map_err)?;
