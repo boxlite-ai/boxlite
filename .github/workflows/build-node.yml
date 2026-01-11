@@ -52,8 +52,8 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: "node-v2"
-          cache-on-failure: true
+          shared-key: "boxlite"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build Node.js package
         run: |

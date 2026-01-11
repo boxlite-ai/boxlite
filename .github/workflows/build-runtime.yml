@@ -62,8 +62,8 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: "runtime-v2"
-          cache-on-failure: true
+          shared-key: "boxlite"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # Install platform dependencies
       - name: Install platform dependencies

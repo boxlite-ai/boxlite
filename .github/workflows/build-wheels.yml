@@ -31,8 +31,8 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: "wheels-v2"
-          cache-on-failure: true
+          shared-key: "boxlite"
+          save-if: false  # Workflow deletes cache after guest build
 
       # Build guest on host BEFORE cibuildwheel container because:
       # - manylinux (AlmaLinux/RHEL) doesn't have musl packages in repos
