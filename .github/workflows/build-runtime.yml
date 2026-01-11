@@ -1,39 +1,35 @@
-# Build BoxLite core runtime to verify the build works.
+# Build and test BoxLite core runtime.
 #
-# This workflow:
-# - Builds on 2 platforms (ubuntu-latest, macos-15)
-# - Triggers SDK workflows via workflow_run when core code changes
-# - Uses simple matrix (no cross-compilation)
+# This workflow provides fast feedback on Rust changes:
+# - Runs cargo build and test on 2 platforms
+# - Triggers on push/PR to core Rust code
 #
-# Note: SDK workflows build their own runtime (cibuildwheel for Python, make for Node.js)
-# This workflow exists to verify core builds and trigger downstream SDK builds.
+# Note: SDK workflows (build-wheels, build-node) are self-contained
+# and trigger independently on release.
 name: Build Runtime
 
 on:
-  # DISABLED: Uncomment to re-enable automatic triggers
-  # push:
-  #   branches: [ main, develop ]
-  #   paths:
-  #     - 'boxlite/**'
-  #     - 'boxlite-shared/**'
-  #     - 'guest/**'
-  #     - 'Cargo.toml'
-  #     - 'Cargo.lock'
-  #     - '.github/workflows/build-runtime.yml'
-  #     - '.github/workflows/config.yml'
-  # pull_request:
-  #   branches: [ main ]
-  #   paths:
-  #     - 'boxlite/**'
-  #     - 'boxlite-shared/**'
-  #     - 'guest/**'
-  #     - 'Cargo.toml'
-  #     - 'Cargo.lock'
-  #     - '.github/workflows/build-runtime.yml'
-  #     - '.github/workflows/config.yml'
-  # release:
-  #   types: [ published ]
-  workflow_dispatch:  # Keep manual trigger for testing
+  push:
+    branches: [main, develop]
+    paths:
+      - 'boxlite/**'
+      - 'boxlite-shared/**'
+      - 'guest/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/build-runtime.yml'
+      - '.github/workflows/config.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'boxlite/**'
+      - 'boxlite-shared/**'
+      - 'guest/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/build-runtime.yml'
+      - '.github/workflows/config.yml'
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always

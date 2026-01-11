@@ -1,5 +1,5 @@
 {
-  "name": "@boxlite/boxlite",
+  "name": "@boxlite-ai/boxlite",
   "version": "0.1.0",
   "description": "BoxLite - Embeddable micro-VM runtime for secure, isolated code execution",
   "main": "dist/index.js",
@@ -21,10 +21,10 @@
     "vitest": "^2.0.0"
   },
   "optionalDependencies": {
-    "@boxlite/boxlite-darwin-arm64": "0.1.0",
-    "@boxlite/boxlite-darwin-x64": "0.1.0",
-    "@boxlite/boxlite-linux-x64": "0.1.0",
-    "@boxlite/boxlite-linux-arm64": "0.1.0"
+    "@boxlite-ai/boxlite-darwin-arm64": "0.1.0",
+    "@boxlite-ai/boxlite-darwin-x64": "0.1.0",
+    "@boxlite-ai/boxlite-linux-x64-gnu": "0.1.0",
+    "@boxlite-ai/boxlite-linux-arm64-gnu": "0.1.0"
   },
   "keywords": [
     "boxlite",
@@ -41,11 +41,11 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/boxlite-labs/boxlite.git",
+    "url": "https://github.com/boxlite-ai/boxlite.git",
     "directory": "sdks/node"
   },
   "bugs": {
-    "url": "https://github.com/boxlite-labs/boxlite/issues"
+    "url": "https://github.com/boxlite-ai/boxlite/issues"
   },
   "engines": {
     "node": ">=18.0.0"
