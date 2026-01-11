@@ -13,6 +13,9 @@ on:
       build-targets:
         description: 'JSON array of OS targets for builds and testing'
         value: ${{ jobs.config.outputs.build-targets }}
+      node-targets:
+        description: 'JSON array of Node.js build targets with os/target pairs'
+        value: ${{ jobs.config.outputs.node-targets }}
 
       # === Version Configuration ===
       python-versions:
@@ -41,6 +44,7 @@ jobs:
       # === Platform/Matrix Configuration ===
       # Note: Using macos-15 for libkrun bottle compatibility (arm64_tahoe)
       build-targets: '["ubuntu-latest", "macos-15"]'
+      node-targets: '[{"os":"macos-15","target":"darwin-arm64"},{"os":"macos-13","target":"darwin-x64"},{"os":"ubuntu-latest","target":"linux-x64-gnu"},{"os":"ubuntu-24.04-arm","target":"linux-arm64-gnu"}]'
 
       # === Version Configuration ===
       python-versions: '["3.10", "3.11", "3.12", "3.13"]'

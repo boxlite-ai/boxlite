@@ -32,19 +32,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: macos-15
-            target: darwin-arm64
-            node_file: index.darwin-arm64.node
-          - os: macos-13
-            target: darwin-x64
-            node_file: index.darwin-x64.node
-          - os: ubuntu-latest
-            target: linux-x64-gnu
-            node_file: index.linux-x64-gnu.node
-          - os: ubuntu-24.04-arm
-            target: linux-arm64-gnu
-            node_file: index.linux-arm64-gnu.node
+        include: ${{ fromJson(needs.config.outputs.node-targets) }}
 
     steps:
       - uses: actions/checkout@v4
@@ -76,7 +64,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: bindings-${{ matrix.target }}
-          path: sdks/node/${{ matrix.node_file }}
+          path: sdks/node/index.${{ matrix.target }}.node
           if-no-files-found: error
           retention-days: ${{ needs.config.outputs.artifact-retention-days }}
 
