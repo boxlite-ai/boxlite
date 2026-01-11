@@ -10,8 +10,6 @@ use std::collections::HashMap;
 use std::fmt;
 use std::hash::Hash;
 
-use boxlite_shared::Transport;
-
 // Re-export status types from litebox module
 pub use crate::litebox::{BoxState, BoxStatus};
 
@@ -408,9 +406,6 @@ pub struct BoxInfo {
     /// Process ID of the VMM subprocess (None if not running).
     pub pid: Option<u32>,
 
-    /// Transport mechanism for guest communication.
-    pub transport: Transport,
-
     /// Image reference or rootfs path.
     pub image: String,
 
@@ -436,7 +431,6 @@ impl BoxInfo {
             created_at: config.created_at,
             last_updated: state.last_updated,
             pid: state.pid,
-            transport: config.transport.clone(),
             image: match &config.options.rootfs {
                 RootfsSpec::Image(r) => r.clone(),
                 RootfsSpec::RootfsPath(p) => format!("rootfs:{}", p),
@@ -462,6 +456,37 @@ impl PartialEq for BoxInfo {
 }
 
 // ============================================================================
+// BOX STATE INFO (Docker-like State object)
+// ============================================================================
+
+/// Runtime state information (like Docker's State object).
+///
+/// Contains dynamic state that changes during the box lifecycle.
+/// This is separate from BoxInfo which includes static configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BoxStateInfo {
+    /// Current lifecycle status.
+    pub status: BoxStatus,
+
+    /// Whether the box is currently running.
+    pub running: bool,
+
+    /// Process ID of the VMM subprocess (None if not running).
+    pub pid: Option<u32>,
+}
+
+impl BoxStateInfo {
+    /// Create BoxStateInfo from internal BoxState.
+    pub fn new(state: &BoxState) -> Self {
+        Self {
+            status: state.status,
+            running: state.status.is_running(),
+            pid: state.pid,
+        }
+    }
+}
+
+// ============================================================================
 // BOX CONFIG (Podman-style separation)
 // ============================================================================
 
@@ -473,6 +498,7 @@ mod tests {
     use super::*;
     use crate::litebox::config::{BoxConfig, ContainerRuntimeConfig};
     use crate::runtime::options::{BoxOptions, RootfsSpec};
+    use boxlite_shared::Transport;
     use std::path::PathBuf;
 
     #[test]
@@ -562,7 +588,6 @@ mod tests {
         assert_eq!(info.status, state.status);
         assert_eq!(info.created_at, config.created_at);
         assert_eq!(info.pid, state.pid);
-        assert_eq!(info.transport, config.transport);
         assert_eq!(info.image, "python:3.11");
         assert_eq!(info.cpus, 4);
         assert_eq!(info.memory_mib, 1024);

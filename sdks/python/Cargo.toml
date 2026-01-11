@@ -20,3 +20,4 @@ pyo3-async-runtimes = { version = "0.27", features = ["tokio-runtime"] }
 tokio = { version = "1.37", features = ["sync"] }
 futures = "0.3.31"
 tracing = "0.1.44"
+serde_json = "1.0"

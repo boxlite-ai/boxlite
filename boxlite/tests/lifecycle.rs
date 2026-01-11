@@ -3,7 +3,6 @@
 use boxlite::BoxliteRuntime;
 use boxlite::runtime::options::{BoxOptions, BoxliteOptions, RootfsSpec};
 use boxlite::runtime::types::{BoxID, BoxStatus};
-use boxlite_shared::Transport;
 use tempfile::TempDir;
 
 // ============================================================================
@@ -104,14 +103,6 @@ async fn create_stores_custom_options() {
     assert_eq!(info.cpus, 4);
     assert_eq!(info.memory_mib, 1024);
     assert!(info.created_at.timestamp() > 0);
-
-    // Verify transport is Unix socket
-    match info.transport {
-        Transport::Unix { socket_path } => {
-            assert!(!socket_path.as_os_str().is_empty());
-        }
-        _ => panic!("Expected Unix transport"),
-    }
 
     // Cleanup
     handle.stop().await.unwrap();

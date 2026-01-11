@@ -19,6 +19,7 @@ try:
         ExecStdout,
         ExecStderr,
         BoxInfo,
+        BoxStateInfo,
         RuntimeMetrics,
         BoxMetrics,
     )
@@ -33,6 +34,7 @@ try:
         "ExecStdout",
         "ExecStderr",
         "BoxInfo",
+        "BoxStateInfo",
         "RuntimeMetrics",
         "BoxMetrics",
     ]

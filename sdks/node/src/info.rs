@@ -25,9 +25,6 @@ pub struct JsBoxInfo {
 
     /// Process ID of the VMM subprocess (None if not running)
     pub pid: Option<u32>,
-
-    /// Transport mechanism for guest communication
-    pub transport: String,
 }
 
 impl From<BoxInfo> for JsBoxInfo {
@@ -39,7 +36,6 @@ impl From<BoxInfo> for JsBoxInfo {
             created_at: info.created_at.to_rfc3339(),
             last_updated: info.last_updated.to_rfc3339(),
             pid: info.pid,
-            transport: info.transport.to_string(),
         }
     }
 }

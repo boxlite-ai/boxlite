@@ -10,7 +10,7 @@ mod util;
 
 use crate::box_handle::PyBox;
 use crate::exec::{PyExecStderr, PyExecStdin, PyExecStdout, PyExecution};
-use crate::info::PyBoxInfo;
+use crate::info::{PyBoxInfo, PyBoxStateInfo};
 use crate::metrics::{PyBoxMetrics, PyRuntimeMetrics};
 use crate::options::{PyBoxOptions, PyOptions, PySecurityOptions};
 use crate::runtime::PyBoxlite;
@@ -28,6 +28,7 @@ fn boxlite_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyExecStdout>()?;
     m.add_class::<PyExecStderr>()?;
     m.add_class::<PyBoxInfo>()?;
+    m.add_class::<PyBoxStateInfo>()?;
     m.add_class::<PyRuntimeMetrics>()?;
     m.add_class::<PyBoxMetrics>()?;
 

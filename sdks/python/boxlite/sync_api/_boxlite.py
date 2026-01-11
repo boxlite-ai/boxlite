@@ -65,6 +65,7 @@ class SyncBoxlite:
         self._dispatcher_fiber: greenlet = None
         self._own_loop = False
         self._sync_helper = None
+        self._started = False
 
     def __enter__(self) -> "SyncBoxlite":
         """
@@ -117,6 +118,7 @@ class SyncBoxlite:
         self._dispatcher_fiber.switch()
         # Control returns here after dispatcher calls on_ready()
 
+        self._started = True
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
@@ -125,6 +127,8 @@ class SyncBoxlite:
 
         This stops the dispatcher fiber and closes the event loop if we own it.
         """
+        self._started = False
+
         # Signal the event loop to stop, then switch to let it finish cleanly
         self._loop.call_soon(self._loop.stop)
         self._dispatcher_fiber.switch()
@@ -220,11 +224,21 @@ class SyncBoxlite:
         instance._dispatcher_fiber = None
         instance._own_loop = False
         instance._sync_helper = None
+        instance._started = False
 
         return instance
 
+    def _require_started(self) -> None:
+        """Raise RuntimeError if runtime not started."""
+        if not self._started:
+            raise RuntimeError(
+                "SyncBoxlite not started. Use 'with SyncBoxlite(...) as runtime:' "
+                "or call 'SyncBoxlite.start()' first."
+            )
+
     def _sync(self, coro):
         """Run async operation synchronously."""
+        self._require_started()
         return self._sync_helper._sync(coro)
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -250,6 +264,7 @@ class SyncBoxlite:
             with SyncBoxlite.default() as runtime:
                 box = runtime.create(BoxOptions(image="alpine:latest"))
         """
+        self._require_started()
         from ._box import SyncBox
 
         native_box = self._boxlite.create(options, name=name)
@@ -265,6 +280,7 @@ class SyncBoxlite:
         Returns:
             SyncBox if found, None otherwise.
         """
+        self._require_started()
         from ._box import SyncBox
 
         native_box = self._boxlite.get(id_or_name)
