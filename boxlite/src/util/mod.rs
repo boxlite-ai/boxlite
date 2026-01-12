@@ -1,4 +1,7 @@
+mod binary_finder;
 pub mod process;
+
+pub use binary_finder::{RuntimeBinaryFinder, find_binary};
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -17,7 +20,7 @@ unsafe extern "C" {
     fn dladdr(addr: *const libc::c_void, info: *mut libc::Dl_info) -> libc::c_int;
 }
 
-struct LibraryLoadPath;
+pub(super) struct LibraryLoadPath;
 
 impl LibraryLoadPath {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -113,48 +116,6 @@ pub fn configure_library_env(cmd: &mut Command, addr: *const libc::c_void) {
             }
         }
     }
-}
-
-/// Find the Box runner binary in common locations.
-///
-/// # Arguments
-/// * `binary_name` - Name of the binary to find (e.g., "boxlite-shim")
-///
-/// # Returns
-/// * `Ok(PathBuf)` - Path to the found binary
-/// * `Err(...)` - Binary not found in any expected location
-pub fn find_binary(binary_name: &str) -> BoxliteResult<PathBuf> {
-    let mut candidates = Vec::new();
-
-    if let Some(runner_dir) = LibraryLoadPath::get(None) {
-        let boxlite_runtime_path = runner_dir.parent().map(|p| p.join("runtime"));
-        candidates.push(boxlite_runtime_path.unwrap().join(binary_name));
-    }
-
-    if let Ok(boxlite_runtime_dir) = std::env::var("BOXLITE_RUNTIME_DIR") {
-        candidates.push(PathBuf::from(boxlite_runtime_dir).join(binary_name));
-    }
-
-    // Try all candidates
-    for candidate in &candidates {
-        tracing::debug!("Finding binary {:?} in path: {:?}", binary_name, candidate);
-        if candidate.exists() {
-            tracing::debug!(binary = %candidate.display(), "Found binary");
-            return Ok(candidate.clone());
-        }
-    }
-
-    // Not found - return error with all searched locations
-    let locations = candidates
-        .iter()
-        .map(|p| format!("  - {}", p.display()))
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    Err(BoxliteError::Storage(format!(
-        "Binary '{}' not found.\nSearched locations:\n{}",
-        binary_name, locations
-    )))
 }
 
 pub fn register_to_tracing(non_blocking: NonBlocking, env_filter: EnvFilter) {
