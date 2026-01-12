@@ -10,11 +10,23 @@ fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let project_root = manifest_dir.parent().unwrap();
 
-    // Find runtime directory
-    let runtime_src = find_runtime_dir(project_root);
+    // Rerun triggers
+    println!("cargo:rerun-if-env-changed=BOXLITE_RUNTIME_DIR");
+    println!(
+        "cargo:rerun-if-changed={}",
+        project_root.join("target/boxlite-runtime").display()
+    );
+
+    // Find runtime directory (may be None for clippy/check)
+    let Some(runtime_src) = find_runtime_dir(project_root) else {
+        return;
+    };
 
     // Get destination
-    let home = dirs::home_dir().expect("Could not determine home directory");
+    let Some(home) = dirs::home_dir() else {
+        println!("cargo:warning=Could not determine home directory");
+        return;
+    };
     let dest = home.join(".local/share/boxlite");
 
     // Set rpath
@@ -22,37 +34,32 @@ fn main() {
 
     // Copy runtime to destination
     if let Err(e) = copy_dir_all(&runtime_src, &dest) {
-        panic!("Failed to copy runtime to {}: {}", dest.display(), e);
+        println!("cargo:warning=Failed to copy runtime: {}", e);
+        return;
     }
 
     // Bake runtime path into binary
     println!("cargo:rustc-env=BOXLITE_RUNTIME_DIR={}", dest.display());
-
-    // Rerun triggers
-    println!("cargo:rerun-if-changed={}", runtime_src.display());
-    println!("cargo:rerun-if-env-changed=BOXLITE_RUNTIME_DIR");
 }
 
-fn find_runtime_dir(project_root: &Path) -> PathBuf {
+fn find_runtime_dir(project_root: &Path) -> Option<PathBuf> {
     // Check BOXLITE_RUNTIME_DIR env var first
     if let Ok(dir) = env::var("BOXLITE_RUNTIME_DIR") {
         let path = PathBuf::from(&dir);
         if path.exists() {
-            return path;
+            return Some(path);
         }
     }
 
     // Check default location
     let runtime_dir = project_root.join("target/boxlite-runtime");
     if runtime_dir.exists() {
-        return runtime_dir;
+        return Some(runtime_dir);
     }
 
-    panic!(
-        "Runtime directory not found at {}\n\
-         Run: ./scripts/build/build-runtime.sh",
-        runtime_dir.display()
-    );
+    // Warn instead of panic - allows clippy/check to work without runtime
+    println!("cargo:warning=Runtime not found. Run: ./scripts/build/build-runtime.sh");
+    None
 }
 
 fn set_rpath(dest: &Path) {
