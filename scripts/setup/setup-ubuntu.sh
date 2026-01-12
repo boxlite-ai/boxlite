@@ -106,6 +106,31 @@ install_system_deps() {
     echo ""
 }
 
+# Install Node.js
+install_nodejs() {
+    if [ "${SKIP_INSTALL_NODEJS:-}" = "1" ]; then
+        print_step "Skipping Node.js (SKIP_INSTALL_NODEJS=1)"
+        echo ""
+        return 0
+    fi
+
+    print_section "📦 Installing Node.js..."
+
+    local packages=(nodejs npm)
+
+    for pkg in "${packages[@]}"; do
+        print_step "Checking for $pkg... "
+        if apt_installed "$pkg"; then
+            print_success "Already installed"
+        else
+            echo -e "${YELLOW}Installing...${NC}"
+            $SUDO apt-get install -y -qq "$pkg"
+            print_success "$pkg installed"
+        fi
+    done
+    echo ""
+}
+
 # Install linuxdeploy
 install_linuxdeploy() {
     print_section "📦 Installing linuxdeploy..."
@@ -140,6 +165,8 @@ main() {
     update_apt
 
     install_system_deps
+
+    install_nodejs
 
     install_linuxdeploy
 

@@ -176,6 +176,21 @@ setup_go() {
     echo ""
 }
 
+# Setup Node.js
+install_nodejs() {
+    if [ "${SKIP_INSTALL_NODEJS:-}" = "1" ]; then
+        print_step "Skipping Node.js (SKIP_INSTALL_NODEJS=1)"
+        echo ""
+        return 0
+    fi
+    if ! check_nodejs; then
+        echo -e "${YELLOW}Installing...${NC}"
+        brew install node
+        print_success "Node.js installed"
+    fi
+    echo ""
+}
+
 # Main installation flow
 main() {
     print_header "BoxLite Development Setup for macOS"
@@ -211,6 +226,8 @@ main() {
     setup_python
 
     setup_go
+
+    install_nodejs
 
     print_header "Setup Complete"
     echo ""

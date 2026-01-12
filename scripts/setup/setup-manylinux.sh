@@ -166,6 +166,34 @@ install_protoc() {
     echo ""
 }
 
+# Install Node.js from nodejs.org (not available in manylinux repos)
+install_nodejs() {
+    if [ "${SKIP_INSTALL_NODEJS:-}" = "1" ]; then
+        print_step "Skipping Node.js (SKIP_INSTALL_NODEJS=1)"
+        echo ""
+        return 0
+    fi
+
+    print_section "📦 Installing Node.js..."
+
+    local NODE_VERSION="20.18.0"
+    local ARCH=$(uname -m)
+
+    print_step "Checking for Node.js... "
+    if command -v node &>/dev/null; then
+        local version=$(node --version)
+        print_success "Found ($version)"
+        echo ""
+        return 0
+    fi
+
+    echo -e "${YELLOW}Downloading Node.js $NODE_VERSION...${NC}"
+    curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${ARCH}.tar.xz" \
+        | tar -xJ -C /usr/local --strip-components=1
+    print_success "Node.js $NODE_VERSION installed"
+    echo ""
+}
+
 # Main installation flow
 main() {
     print_header "BoxLite Development Setup for manylinux"
@@ -182,6 +210,8 @@ main() {
     install_python_deps
 
     install_protoc
+
+    install_nodejs
 
     init_submodules
 

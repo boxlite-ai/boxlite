@@ -5,6 +5,9 @@ on:
     types: [ published ]
   workflow_dispatch:  # Allow manual triggering
 
+env:
+  SKIP_INSTALL_NODEJS: '1'
+
 jobs:
   # Load shared configuration
   config:

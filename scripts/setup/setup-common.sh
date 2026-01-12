@@ -113,6 +113,19 @@ check_go() {
     fi
 }
 
+# Check Node.js installation
+check_nodejs() {
+    print_step "Checking for Node.js... "
+    if command_exists node; then
+        local node_version=$(node --version)
+        print_success "Found ($node_version)"
+        return 0
+    else
+        print_error "Not found"
+        return 1
+    fi
+}
+
 # Check if musl toolchain is available (fail fast)
 require_musl() {
     local os=$(detect_os)
