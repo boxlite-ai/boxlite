@@ -60,6 +60,13 @@ command_exists() {
     command -v "$1" &> /dev/null
 }
 
+# Ensure cargo is in PATH (sources cargo env if available)
+ensure_cargo() {
+    if [ -f "$HOME/.cargo/env" ]; then
+        source "$HOME/.cargo/env"
+    fi
+}
+
 # Detect OS
 detect_os() {
     if [[ "$OSTYPE" == "darwin"* ]]; then

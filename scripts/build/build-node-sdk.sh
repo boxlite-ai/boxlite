@@ -28,6 +28,7 @@ SCRIPT_BUILD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_DIR="$(cd "$SCRIPT_BUILD_DIR/.." && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/common.sh"
+ensure_cargo
 
 # SDK directories
 NODE_SDK_DIR="$PROJECT_ROOT/sdks/node"
