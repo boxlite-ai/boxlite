@@ -1,6 +1,6 @@
 [project]
 name = "boxlite"
-version = "0.5.0"
+version = "0.5.1"
 description = "Python bindings for Boxlite runtime"
 readme = "README.md"
 requires-python = ">=3.10"

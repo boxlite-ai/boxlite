@@ -1,6 +1,6 @@
 {
   "name": "@boxlite-ai/boxlite",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "BoxLite - Embeddable micro-VM runtime for secure, isolated code execution",
   "type": "module",
   "main": "dist/index.js",
