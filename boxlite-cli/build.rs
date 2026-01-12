@@ -53,7 +53,9 @@ fn main() {
         }
     } else {
         println!("cargo:warning=Runtime directory not found");
-        println!("cargo:warning=Set BOXLITE_RUNTIME_DIR or run ./scripts/build/build-runtime.sh first");
+        println!(
+            "cargo:warning=Set BOXLITE_RUNTIME_DIR or run ./scripts/build/build-runtime.sh first"
+        );
     }
 }
 
@@ -80,7 +82,10 @@ fn find_runtime_dir() -> Option<PathBuf> {
         if path.exists() {
             return Some(path);
         }
-        println!("cargo:warning=BOXLITE_RUNTIME_DIR set but not found: {}", dir);
+        println!(
+            "cargo:warning=BOXLITE_RUNTIME_DIR set but not found: {}",
+            dir
+        );
     }
 
     // 2. Default location relative to project root
@@ -93,11 +98,7 @@ fn find_runtime_dir() -> Option<PathBuf> {
         project_root.join("target/debug/boxlite-runtime"),
     ];
 
-    for candidate in candidates {
-        if candidate.exists() && candidate.join("boxlite-shim").exists() {
-            return Some(candidate);
-        }
-    }
-
-    None
+    candidates
+        .into_iter()
+        .find(|candidate| candidate.exists() && candidate.join("boxlite-shim").exists())
 }
