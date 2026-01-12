@@ -1,4 +1,4 @@
-.PHONY: help clean setup package dev\:python dev\:node dist dist\:python dist\:node test fmt fmt-check guest runtime runtime-debug cli
+.PHONY: help clean setup package dev\:python dev\:node dist dist\:python dist\:node test test\:rust test\:python test\:node test\:cli fmt fmt-check guest runtime runtime-debug cli
 
 # Ensure cargo is in PATH (source ~/.cargo/env if it exists and cargo is not found)
 SHELL := /bin/bash
@@ -27,7 +27,10 @@ help:
 	@echo "    make guest          - Build the guest binary (cross-compile for VM)"
 	@echo ""
 	@echo "  Testing:"
-	@echo "    make test           - Run Rust tests (Core library)"
+	@echo "    make test           - Run all unit tests (Rust + Python + Node.js)"
+	@echo "    make test:rust      - Run Rust unit tests"
+	@echo "    make test:python    - Run Python SDK unit tests"
+	@echo "    make test:node      - Run Node.js SDK unit tests"
 	@echo "    make test:cli       - Run CLI integration tests (prepares runtime first)"
 	@echo ""
 	@echo "  Local Development:"
@@ -158,10 +161,28 @@ dev\:c: runtime
 dev\:node: runtime-debug
 	@bash $(SCRIPT_DIR)/build/build-node-sdk.sh --profile debug
 
-# Run Rust tests (excludes guest and doctests)
+# Run all unit tests (excludes integration tests that require VMs)
 test:
-	@echo "🧪 Running Rust tests..."
-	@cargo test --workspace --exclude boxlite-guest --exclude boxlite-cli --lib --tests -- --test-threads=1
+	@$(MAKE) test:rust
+	@$(MAKE) test:python
+	@$(MAKE) test:node
+	@echo "✅ All tests passed"
+
+# Run Rust unit tests (single-threaded, without gvproxy to avoid Go runtime issues)
+test\:rust:
+	@echo "🧪 Running Rust unit tests..."
+	@cargo test -p boxlite --no-default-features --lib -- --test-threads=1
+	@cargo test -p boxlite-shared --lib -- --test-threads=1
+
+# Run Python SDK unit tests (excludes integration tests)
+test\:python:
+	@echo "🧪 Running Python SDK unit tests..."
+	@cd sdks/python && python -m pytest tests/ -v -m "not integration"
+
+# Run Node.js SDK unit tests
+test\:node:
+	@echo "🧪 Running Node.js SDK unit tests..."
+	@cd sdks/node && npm test
 
 # Run CLI integration tests (requires runtime environment)
 test\:cli: runtime-debug
