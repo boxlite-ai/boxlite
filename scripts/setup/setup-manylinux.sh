@@ -179,6 +179,16 @@ install_nodejs() {
     local NODE_VERSION="20.18.0"
     local ARCH=$(uname -m)
 
+    # Map architecture names to Node.js naming convention
+    case "$ARCH" in
+        x86_64)  NODE_ARCH="x64" ;;
+        aarch64) NODE_ARCH="arm64" ;;
+        *)
+            print_error "Unsupported architecture: $ARCH"
+            return 1
+            ;;
+    esac
+
     print_step "Checking for Node.js... "
     if command -v node &>/dev/null; then
         local version=$(node --version)
@@ -188,7 +198,7 @@ install_nodejs() {
     fi
 
     echo -e "${YELLOW}Downloading Node.js $NODE_VERSION...${NC}"
-    curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${ARCH}.tar.xz" \
+    curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz" \
         | tar -xJ -C /usr/local --strip-components=1
     print_success "Node.js $NODE_VERSION installed"
     echo ""
