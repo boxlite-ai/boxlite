@@ -24,7 +24,7 @@ jobs:
   config:
     uses: ./.github/workflows/config.yml
 
-  # Rust unit tests
+  # Rust unit tests (boxlite-shared only - boxlite requires native libs not available in CI)
   rust:
     name: Rust Tests (${{ matrix.platform.target }})
     needs: config
@@ -37,23 +37,11 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
-        with:
-          submodules: recursive
 
       - name: Install Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: ${{ needs.config.outputs.rust-toolchain }}
-
-      - name: Install system dependencies (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y musl-tools protobuf-compiler
-
-      - name: Install system dependencies (macOS)
-        if: runner.os == 'macOS'
-        run: brew install protobuf
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
@@ -61,12 +49,8 @@ jobs:
           shared-key: boxlite-test
 
       - name: Run Rust unit tests
-        env:
-          BOXLITE_DEPS_STUB: "1"
-        # Single-threaded, without gvproxy to avoid Go runtime cleanup issues
-        run: |
-          cargo test -p boxlite --no-default-features --lib -- --test-threads=1
-          cargo test -p boxlite-shared --lib -- --test-threads=1
+        # Only test boxlite-shared - boxlite requires libkrun/libgvproxy not available in CI
+        run: cargo test -p boxlite-shared --lib
 
   # Python SDK unit tests
   python:
@@ -116,12 +100,10 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
-          cache: npm
-          cache-dependency-path: sdks/node/package-lock.json
 
       - name: Install dependencies
         working-directory: sdks/node
-        run: npm ci
+        run: npm install
 
       - name: Run Node.js unit tests
         working-directory: sdks/node
