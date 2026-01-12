@@ -85,6 +85,8 @@ jobs:
       - name: Build Node.js package
         run: |
           make setup
+          # Source cargo env (Linux reinstalls Rust after cleanup, PATH needs update)
+          [ -f "$HOME/.cargo/env" ] && source "$HOME/.cargo/env"
           if [ "${{ runner.os }}" = "Linux" ]; then
             KEEP_GUEST_BIN=1 make dist:node
           else
