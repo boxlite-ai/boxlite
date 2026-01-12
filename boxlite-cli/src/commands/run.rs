@@ -105,7 +105,10 @@ impl BoxRunner {
 
         options.rootfs = RootfsSpec::Image(self.args.image.clone());
 
-        let litebox = self.rt.create(options, self.args.management.name.clone())?;
+        let litebox = self
+            .rt
+            .create(options, self.args.management.name.clone())
+            .await?;
 
         Ok(litebox)
     }

@@ -10,12 +10,7 @@ use clap::{Args, Parser, Subcommand};
 // ============================================================================
 
 #[derive(Parser, Debug)]
-#[command(
-    name = "boxlite",
-    author,
-    version,
-    about = "BoxLite Container Runtime CLI"
-)]
+#[command(name = "boxlite", author, version, about = "BoxLite CLI")]
 pub struct Cli {
     #[command(flatten)]
     pub global: GlobalFlags,
@@ -25,6 +20,7 @@ pub struct Cli {
 }
 
 #[derive(Subcommand, Debug)]
+#[non_exhaustive]
 pub enum Commands {
     Run(crate::commands::run::RunArgs),
 
