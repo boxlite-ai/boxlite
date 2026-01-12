@@ -1,4 +1,4 @@
-.PHONY: help clean setup package dev\:python dev\:node dist dist\:python dist\:node test fmt fmt-check guest runtime runtime-debug
+.PHONY: help clean setup package dev\:python dev\:node dist dist\:python dist\:node test fmt fmt-check guest runtime runtime-debug cli
 
 # Ensure cargo is in PATH (source ~/.cargo/env if it exists and cargo is not found)
 SHELL := /bin/bash
@@ -23,6 +23,7 @@ help:
 	@echo "    make fmt-check      - Check Rust formatting without modifying files"
 	@echo ""
 	@echo "  Build:"
+	@echo "    make cli            - Build the CLI (boxlite command)"
 	@echo "    make guest          - Build the guest binary (cross-compile for VM)"
 	@echo ""
 	@echo "  Testing:"
@@ -82,6 +83,11 @@ runtime:
 
 runtime-debug:
 	@bash $(SCRIPT_DIR)/build/build-runtime.sh --profile debug
+
+cli: runtime-debug
+	@echo "🔨 Building boxlite CLI..."
+	@cargo build -p boxlite-cli
+	@echo "✅ CLI built: ./target/debug/boxlite"
 
 dist\:python:
 	@if [ ! -d .venv ]; then \
