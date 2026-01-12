@@ -34,8 +34,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Use simple 2-platform matrix (same as SDK workflows)
-        os: ${{ fromJson(needs.config.outputs.build-targets) }}
+        include: ${{ fromJson(needs.config.outputs.platforms) }}
 
     steps:
       - uses: actions/checkout@v4

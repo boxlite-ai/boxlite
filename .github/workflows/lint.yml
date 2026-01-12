@@ -34,7 +34,7 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        os: ${{ fromJson(needs.config.outputs.build-targets) }}
+        include: ${{ fromJson(needs.config.outputs.platforms) }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v5

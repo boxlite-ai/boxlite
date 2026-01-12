@@ -32,7 +32,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJson(needs.config.outputs.node-targets) }}
+        include: ${{ fromJson(needs.config.outputs.platforms) }}
 
     steps:
       - uses: actions/checkout@v4
@@ -55,136 +55,91 @@ jobs:
           shared-key: "boxlite"
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: Build Node.js package
+      # Build guest on host BEFORE manylinux container because:
+      # - manylinux (AlmaLinux/RHEL) doesn't have musl packages in repos
+      # - Building musl-cross-make from source takes ~15 minutes
+      # - Ubuntu host has musl-tools via apt (~30 seconds)
+      # - Guest is static musl binary, doesn't need manylinux glibc compatibility
+      # - Shim/libkrun must be built IN container (needs glibc 2.28 for manylinux)
+      - name: Build guest binary (Linux only)
+        if: runner.os == 'Linux'
+        run: |
+          make setup guest
+
+          # Cache only the final binary (11MB), not entire target dir (2.3GB)
+          # Guest is not rebuilt in container (SKIP_GUEST_BUILD=1), so no incremental compilation needed
+          GUEST_TARGET=$(scripts/util.sh --target)
+          mkdir -p ".cache/$GUEST_TARGET/release"
+          cp "target/$GUEST_TARGET/release/boxlite-guest" ".cache/$GUEST_TARGET/release/"
+
+          # Clean up to save disk space
+          rm -rf target ~/.rustup ~/.cargo
+
+      - name: Build Node.js package (Linux)
+        if: runner.os == 'Linux'
+        uses: addnab/docker-run-action@v3
+        with:
+          image: quay.io/pypa/manylinux_2_28_${{ contains(matrix.target, 'arm64') && 'aarch64' || 'x86_64' }}
+          options: -v ${{ github.workspace }}:/work -w /work
+          run: |
+            set -ex
+
+            # Restore pre-built guest target directory
+            GUEST_TARGET=$(scripts/util.sh --target)
+            if [ -d ".cache/$GUEST_TARGET" ]; then
+              echo "Restoring guest from .cache/$GUEST_TARGET"
+              mkdir -p target
+              cp -a ".cache/$GUEST_TARGET" "target/$GUEST_TARGET"
+            fi
+
+            # Build with SKIP_GUEST_BUILD=1 to use pre-built guest
+            export SKIP_GUEST_BUILD=1
+            make setup runtime
+            bash scripts/build/build-node-sdk.sh --profile release
+
+      - name: Build Node.js package (macOS)
+        if: runner.os == 'macOS'
         run: |
           make setup
           make dist:node
 
-      - name: Get version
-        id: version
-        run: |
-          if [ "${{ github.event_name }}" = "release" ]; then
-            VERSION="${{ github.event.release.tag_name }}"
-            VERSION="${VERSION#v}"
-          else
-            VERSION=$(node -p "require('./sdks/node/package.json').version")
-          fi
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-
-      - name: Create platform package
-        run: |
-          mkdir -p package
-          cp "sdks/node/index.${{ matrix.target }}.node" package/
-
-          # Build libc field only for Linux
-          LIBC_LINE=""
-          if [ -n "${{ matrix.npm_libc }}" ]; then
-            LIBC_LINE='"libc": ["${{ matrix.npm_libc }}"],'
-          fi
-
-          cat > package/package.json << EOF
-          {
-            "name": "@boxlite-ai/boxlite-${{ matrix.target }}",
-            "version": "${{ steps.version.outputs.version }}",
-            "os": ["${{ matrix.npm_os }}"],
-            "cpu": ["${{ matrix.npm_cpu }}"],
-            $LIBC_LINE
-            "main": "index.${{ matrix.target }}.node",
-            "files": ["index.${{ matrix.target }}.node"],
-            "license": "Apache-2.0"
-          }
-          EOF
-
-          echo "=== Platform package ==="
-          cat package/package.json
-
-      - name: Upload platform package
+      - name: Upload packages
         uses: actions/upload-artifact@v4
         with:
-          name: package-${{ matrix.target }}
-          path: package/
-          if-no-files-found: error
-          retention-days: ${{ needs.config.outputs.artifact-retention-days }}
-
-      # Upload main package only once (from darwin-arm64 build)
-      - name: Create main package
-        if: matrix.target == 'darwin-arm64'
-        run: |
-          mkdir -p main-package
-          cp -r sdks/node/dist main-package/
-          cp sdks/node/index.js main-package/
-          cp sdks/node/index.d.ts main-package/
-
-          # Update package.json with version and optionalDependencies
-          VERSION="${{ steps.version.outputs.version }}"
-          node -e "
-            const pkg = require('./sdks/node/package.json');
-            pkg.version = '$VERSION';
-            pkg.optionalDependencies = {
-              '@boxlite-ai/boxlite-darwin-arm64': '$VERSION',
-              '@boxlite-ai/boxlite-darwin-x64': '$VERSION',
-              '@boxlite-ai/boxlite-linux-x64-gnu': '$VERSION',
-              '@boxlite-ai/boxlite-linux-arm64-gnu': '$VERSION'
-            };
-            require('fs').writeFileSync('./main-package/package.json', JSON.stringify(pkg, null, 2));
-          "
-
-          echo "=== Main package ==="
-          cat main-package/package.json
-
-      - name: Upload main package
-        if: matrix.target == 'darwin-arm64'
-        uses: actions/upload-artifact@v4
-        with:
-          name: package-main
-          path: main-package/
+          name: packages-${{ matrix.target }}
+          path: sdks/node/packages/*.tgz
           if-no-files-found: error
           retention-days: ${{ needs.config.outputs.artifact-retention-days }}
 
   test:
-    name: Test (${{ matrix.target }} / Node ${{ matrix.node-version }})
+    name: Test (${{ matrix.platform.target }} / Node ${{ matrix.node-version }})
     needs: [config, build]
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.platform.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-15, macos-13, ubuntu-latest, ubuntu-24.04-arm]
+        platform: ${{ fromJson(needs.config.outputs.platforms) }}
         node-version: ${{ fromJson(needs.config.outputs.node-versions) }}
-        include:
-          - os: macos-15
-            target: darwin-arm64
-          - os: macos-13
-            target: darwin-x64
-          - os: ubuntu-latest
-            target: linux-x64-gnu
-          - os: ubuntu-24.04-arm
-            target: linux-arm64-gnu
 
     steps:
-      - uses: actions/checkout@v4
-
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
 
-      - name: Download main package
+      - name: Download packages
         uses: actions/download-artifact@v4
         with:
-          name: package-main
-          path: sdks/node
-
-      - name: Download platform package
-        uses: actions/download-artifact@v4
-        with:
-          name: package-${{ matrix.target }}
-          path: sdks/node
+          name: packages-${{ matrix.platform.target }}
+          path: packages
 
       - name: Test package
         run: |
-          cd sdks/node
-          npm install --ignore-scripts
-          node -e "const boxlite = require('./dist'); console.log('BoxLite Node.js SDK loaded successfully')"
+          cd packages
+          # Install platform package first, then main package
+          npm install boxlite-ai-boxlite-${{ matrix.platform.target }}-*.tgz
+          npm install boxlite-ai-boxlite-[0-9]*.tgz
+          node -e "const boxlite = require('@boxlite-ai/boxlite'); console.log('BoxLite Node.js SDK loaded successfully')"
 
   publish:
     name: Publish to npm
@@ -205,16 +160,17 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: packages
-          pattern: package-*
+          pattern: packages-*
+          merge-multiple: true
 
       - name: List packages
-        run: find packages -type f | head -50
+        run: ls -la packages/
 
       - name: Publish platform packages
         run: |
-          for target in darwin-arm64 darwin-x64 linux-x64-gnu linux-arm64-gnu; do
+          for target in darwin-arm64 linux-x64-gnu; do
             echo "Publishing @boxlite-ai/boxlite-$target..."
-            (cd "packages/package-$target" && npm publish --provenance --access public)
+            npm publish packages/boxlite-ai-boxlite-$target-*.tgz --provenance --access public
           done
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -224,8 +180,7 @@ jobs:
 
       - name: Publish main package
         run: |
-          cd packages/package-main
-          npm publish --provenance --access public
+          npm publish packages/boxlite-ai-boxlite-[0-9]*.tgz --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
@@ -242,23 +197,11 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: packages
-          pattern: package-*
-
-      - name: Create archives
-        run: |
-          cd packages
-          tar -czvf boxlite-node.tar.gz package-main/
-          for target in darwin-arm64 darwin-x64 linux-x64-gnu linux-arm64-gnu; do
-            tar -czvf "boxlite-node-$target.tar.gz" "package-$target/"
-          done
+          pattern: packages-*
+          merge-multiple: true
 
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            packages/boxlite-node.tar.gz
-            packages/boxlite-node-darwin-arm64.tar.gz
-            packages/boxlite-node-darwin-x64.tar.gz
-            packages/boxlite-node-linux-x64-gnu.tar.gz
-            packages/boxlite-node-linux-arm64-gnu.tar.gz
+          files: packages/*.tgz
           fail_on_unmatched_files: true

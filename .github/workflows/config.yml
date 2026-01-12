@@ -10,12 +10,9 @@ on:
   workflow_call:
     outputs:
       # === Platform/Matrix Configuration ===
-      build-targets:
-        description: 'JSON array of OS targets for builds and testing'
-        value: ${{ jobs.config.outputs.build-targets }}
-      node-targets:
-        description: 'JSON array of Node.js build targets with os/target pairs'
-        value: ${{ jobs.config.outputs.node-targets }}
+      platforms:
+        description: 'JSON array of platform configurations (os and target)'
+        value: ${{ jobs.config.outputs.platforms }}
 
       # === Version Configuration ===
       python-versions:
@@ -43,8 +40,7 @@ jobs:
     outputs:
       # === Platform/Matrix Configuration ===
       # Note: Using macos-15 for libkrun bottle compatibility (arm64_tahoe)
-      build-targets: '["ubuntu-latest", "macos-15"]'
-      node-targets: '[{"os":"macos-15","target":"darwin-arm64","npm_os":"darwin","npm_cpu":"arm64"},{"os":"macos-13","target":"darwin-x64","npm_os":"darwin","npm_cpu":"x64"},{"os":"ubuntu-latest","target":"linux-x64-gnu","npm_os":"linux","npm_cpu":"x64","npm_libc":"glibc"},{"os":"ubuntu-24.04-arm","target":"linux-arm64-gnu","npm_os":"linux","npm_cpu":"arm64","npm_libc":"glibc"}]'
+      platforms: '[{"os":"macos-15","target":"darwin-arm64"},{"os":"ubuntu-latest","target":"linux-x64-gnu"}]'
 
       # === Version Configuration ===
       python-versions: '["3.10", "3.11", "3.12", "3.13"]'

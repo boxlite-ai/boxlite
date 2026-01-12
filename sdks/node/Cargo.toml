@@ -1,11 +1,10 @@
 [package]
 name = "boxlite-node"
-version = "0.1.0"
-edition = "2021"
-authors = ["Dorian Zheng <dorian@boxlite.dev>"]
-license = "Apache-2.0"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
 description = "Node.js bindings for BoxLite - embeddable VM runtime for secure code execution"
-repository = "https://github.com/boxlite-labs/boxlite"
 
 [lib]
 crate-type = ["cdylib"]

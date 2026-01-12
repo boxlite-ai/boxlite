@@ -17,7 +17,7 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        os: ${{ fromJson(needs.config.outputs.build-targets) }}
+        include: ${{ fromJson(needs.config.outputs.platforms) }}
 
     steps:
       - name: Checkout code
@@ -69,13 +69,13 @@ jobs:
           retention-days: 7
 
   test_wheels:
-    name: Test wheel on ${{ matrix.os }} / Python ${{ matrix.python-version }}
+    name: Test wheel on ${{ matrix.platform.os }} / Python ${{ matrix.python-version }}
     needs: [ config, build_wheels ]
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.platform.os }}
     strategy:
       fail-fast: true
       matrix:
-        os: ${{ fromJson(needs.config.outputs.build-targets) }}
+        platform: ${{ fromJson(needs.config.outputs.platforms) }}
         python-version: ${{ fromJson(needs.config.outputs.python-versions) }}
 
     steps:

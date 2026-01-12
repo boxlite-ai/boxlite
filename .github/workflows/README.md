@@ -13,17 +13,15 @@ This directory contains GitHub Actions workflows for building and publishing Box
         ┌───────────────────────┼───────────────────────┐
         ↓                       ↓                       ↓
 ┌───────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│build-runtime  │     │build-python-sdk │     │build-node-sdk   │
+│build-runtime  │     │build-wheels     │     │build-node       │
 │               │     │                 │     │                 │
 │ Triggers:     │     │ Triggers:       │     │ Triggers:       │
-│ - core/*      │────→│ - sdks/python/* │     │ - sdks/node/*   │
-│ - Cargo.*     │     │ - workflow_run  │     │ - workflow_run  │
-│               │     │   (after runtime│     │   (after runtime│
-│ Saves to:     │     │    completes)   │     │    completes)   │
-│ actions/cache │     │                 │     │                 │
-└───────────────┘     │ Restores from:  │     │ Restores from:  │
-                      │ actions/cache   │     │ actions/cache   │
-                      └─────────────────┘     └─────────────────┘
+│ - boxlite/*   │────→│ - release       │     │ - release       │
+│ - Cargo.*     │     │ - manual        │     │ - manual        │
+│               │     │                 │     │                 │
+│ Saves to:     │     │ Restores from:  │     │ Restores from:  │
+│ actions/cache │     │ actions/cache   │     │ actions/cache   │
+└───────────────┘     └─────────────────┘     └─────────────────┘
 ```
 
 ## Key Design: Cache-Based Separation
@@ -34,7 +32,7 @@ Instead of artifacts (which only work within a single workflow), we use **`actio
 # build-runtime.yml saves:
 key: boxlite-runtime-{platform}-{hash of core files}
 
-# build-python-sdk.yml / build-node-sdk.yml restore:
+# build-wheels.yml / build-node.yml restore:
 key: boxlite-runtime-{platform}-{hash of core files}
 restore-keys: boxlite-runtime-{platform}-  # fallback to latest
 ```
@@ -51,19 +49,19 @@ restore-keys: boxlite-runtime-{platform}-  # fallback to latest
 Shared configuration loaded by all workflows.
 
 **Outputs:**
-- `build-targets` - OS targets for testing (`["ubuntu-latest", "macos-15"]`)
+- `platforms` - Platform configurations with os and target (`[{"os":"macos-15","target":"darwin-arm64"},{"os":"ubuntu-latest","target":"linux-x64-gnu"}]`)
 - `python-versions` - Python versions (`["3.10", "3.11", "3.12", "3.13"]`)
 - `node-versions` - Node.js versions (`["18", "20", "22"]`)
-- `sdk-platforms` - Full platform matrix with cross-compilation config
+- `node-build-version` - Node.js version for building (`"20"`)
+- `rust-toolchain` - Rust toolchain version (`"stable"`)
+- `artifact-retention-days` - Days to keep artifacts (`7`)
 
 ### `build-runtime.yml`
 
 Builds BoxLite runtime and saves to cache.
 
 **Triggers:**
-- Push to `main`/`develop` with changes in `boxlite/**`, `Cargo.*`, etc.
-- Pull requests with core changes
-- Releases
+- Push to `main` with changes in `boxlite/**`, `Cargo.*`, etc.
 - Manual dispatch
 
 **What it builds:**
@@ -72,50 +70,59 @@ Builds BoxLite runtime and saves to cache.
 - `libkrun`, `libkrunfw`, `libgvproxy` - Hypervisor libraries
 - `debugfs`, `mke2fs` - Filesystem tools
 
-### `build-python-sdk.yml`
+### `build-wheels.yml`
 
 Builds, tests, and publishes Python SDK.
 
 **Triggers:**
-- Push/PR with changes in `sdks/python/**`
-- `workflow_run` after `Build Runtime` completes (automatic rebuild when core changes)
 - Releases
 - Manual dispatch
 
 **Jobs:**
-1. `build` - Builds Python wheels using cibuildwheel
-2. `test` - Tests import on Python 3.10-3.13
+1. `build_wheels` - Builds Python wheels using cibuildwheel
+2. `test_wheels` - Tests import on Python 3.10-3.13
 3. `publish` - Publishes to PyPI (on release)
-4. `upload-to-release` - Uploads wheels to GitHub Release
+4. `upload_to_release` - Uploads wheels to GitHub Release
 
-### `build-node-sdk.yml`
+### `build-node.yml`
 
 Builds, tests, and publishes Node.js SDK.
 
 **Triggers:**
-- Push/PR with changes in `sdks/node/**`
-- `workflow_run` after `Build Runtime` completes
 - Releases
 - Manual dispatch
 
+**Package structure:**
+- `@boxlite-ai/boxlite` - Main package with TypeScript wrappers
+- `@boxlite-ai/boxlite-darwin-arm64` - macOS ARM64 native binary
+- `@boxlite-ai/boxlite-linux-x64-gnu` - Linux x64 glibc native binary
+
 **Jobs:**
-1. `build` - Builds Node.js addon with napi-rs
+1. `build` - Builds Node.js addon with napi-rs, outputs tarballs
 2. `test` - Tests import on Node 18, 20, 22
 3. `publish` - Publishes to npm (on release)
-4. `upload-to-release` - Uploads tarball to GitHub Release
+4. `upload-to-release` - Uploads tarballs to GitHub Release
 
-### `build-wheels.yml` (Legacy)
+### `lint.yml`
 
-Original Python-only workflow. Kept for reference.
+Runs code quality checks.
+
+**Triggers:**
+- Push to `main`
+- Pull requests
+
+**Jobs:**
+1. `rustfmt` - Check Rust formatting
+2. `clippy` - Run Clippy linter on all platforms
 
 ## Trigger Behavior
 
-| Change | build-runtime | build-python-sdk | build-node-sdk |
-|--------|---------------|------------------|----------------|
-| `boxlite/**` | ✅ Runs | ✅ Runs (via workflow_run) | ✅ Runs (via workflow_run) |
-| `sdks/python/**` | ❌ Skips | ✅ Runs | ❌ Skips |
-| `sdks/node/**` | ❌ Skips | ❌ Skips | ✅ Runs |
-| Release published | ✅ Runs | ✅ Runs | ✅ Runs |
+| Change | build-runtime | build-wheels | build-node |
+|--------|---------------|--------------|------------|
+| `boxlite/**` | ✅ Runs | ❌ Skips | ❌ Skips |
+| `sdks/python/**` | ❌ Skips | ❌ Skips | ❌ Skips |
+| `sdks/node/**` | ❌ Skips | ❌ Skips | ❌ Skips |
+| Release published | ❌ Skips | ✅ Runs | ✅ Runs |
 
 ## Cache Strategy
 
@@ -131,14 +138,23 @@ key: boxlite-runtime-{platform}-{hashFiles('boxlite/**', 'Cargo.lock', ...)}
 ### Rust Dependencies Cache (Swatinem/rust-cache)
 
 ```yaml
-shared-key: "runtime-{target}"    # For build-runtime
-shared-key: "python-sdk-{target}" # For build-python-sdk
-shared-key: "node-sdk-{target}"   # For build-node-sdk
+shared-key: "boxlite"  # Shared across all workflows
 ```
 
 - Caches `~/.cargo` and `./target` directories
 - Shared across workflow runs
 - Invalidates on Cargo.lock changes
+
+## Platform Matrix
+
+Currently supporting 2 platforms:
+
+| Platform | OS Runner | Target |
+|----------|-----------|--------|
+| macOS ARM64 | `macos-15` | `darwin-arm64` |
+| Linux x64 | `ubuntu-latest` | `linux-x64-gnu` |
+
+Additional platforms (darwin-x64, linux-arm64-gnu) can be added to `config.yml` when needed.
 
 ## Time Savings
 
@@ -180,20 +196,18 @@ make dev:node
 - Caches expire after 7 days of non-use
 - Branch-based cache isolation may apply
 
-**workflow_run not triggering:**
-- Only triggers on `completed` (not `success`)
-- Check that base workflow is on watched branches
-- `check-trigger` job skips if runtime failed
-
 **Runtime binaries missing:**
 - Fallback build runs automatically on cache miss
 - Check logs for "Runtime cache miss - building runtime"
 - Verify submodules initialized
 
+**Node.js package install fails:**
+- Platform package must be installed before main package
+- Check that tarballs were uploaded correctly
+
 ## References
 
 - [GitHub Actions Cache](https://github.com/actions/cache)
 - [Swatinem/rust-cache](https://github.com/Swatinem/rust-cache)
-- [workflow_run trigger](https://docs.github.com/en/actions/using-workflows/events-that-trigger-workflows#workflow_run)
 - [cibuildwheel](https://cibuildwheel.readthedocs.io/)
 - [napi-rs](https://napi.rs/)

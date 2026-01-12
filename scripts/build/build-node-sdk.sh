@@ -34,6 +34,27 @@ NODE_SDK_DIR="$PROJECT_ROOT/sdks/node"
 RUNTIME_DIR="$PROJECT_ROOT/target/boxlite-runtime"
 OUTPUT_DIR="$NODE_SDK_DIR/packages"
 
+# Get main package version from package.json
+get_main_version() {
+    node -p "require('$NODE_SDK_DIR/package.json').version"
+}
+
+# Generate package.json from template
+# Args: template output version [platform os cpu node_file libc_line]
+generate_package_json() {
+    local template="$1"
+    local output="$2"
+    local version="$3"
+
+    sed -e "s/{{VERSION}}/$version/g" \
+        -e "s/{{PLATFORM}}/${4:-}/g" \
+        -e "s/{{OS}}/${5:-}/g" \
+        -e "s/{{CPU}}/${6:-}/g" \
+        -e "s/{{NODE_FILE}}/${7:-}/g" \
+        -e "s|{{LIBC_LINE}}|${8:-}|g" \
+        "$template" > "$output"
+}
+
 # Print help message
 print_help() {
     cat <<EOF
@@ -129,19 +150,28 @@ install_dependencies() {
     print_success "Dependencies installed"
 }
 
-# Build native addon with napi-rs
-build_native_addon() {
-    print_section "Building native addon with napi-rs..."
+# Build platform-specific package with native addon
+build_platform_package() {
+    print_section "Building platform package..."
 
+    local pkg_dir="$NODE_SDK_DIR/npm/$PLATFORM"
+    PLATFORM_PKG_DIR="$pkg_dir"
+    local pkg_version
+    pkg_version=$(get_main_version)
+
+    # Create package directory
+    mkdir -p "$pkg_dir"
+
+    # Build native addon with napi-rs
+    # Note: Must run in NODE_SDK_DIR where Cargo.toml and napi.config.json are located
+    print_step "Building native addon... "
     cd "$NODE_SDK_DIR"
 
-    # Use --use-napi-cross on Linux for glibc 2.17 compatibility
+    # Note: We don't use --use-napi-cross on Linux because:
+    # 1. libkrun is built natively for the host glibc (e.g., 2.35 on ubuntu-latest)
+    # 2. napi-cross targets glibc 2.17, which is ABI-incompatible with host libkrun
+    # 3. The resulting binary requires glibc 2.28+ (manylinux container)
     local napi_flags="--platform"
-    if [ "$OS" = "linux" ]; then
-        napi_flags="$napi_flags --use-napi-cross"
-        print_info "Using napi-cross for glibc 2.17 compatibility"
-    fi
-
     if [ "$PROFILE" = "release" ]; then
         npx napi build $napi_flags --release
     else
@@ -153,40 +183,32 @@ build_native_addon() {
         print_error "Native module not found: $NODE_FILE"
         exit 1
     fi
+    echo "✓"
 
-    print_success "Native addon built: $NODE_FILE"
-}
+    # Move native module to package directory
+    print_step "Moving native module... "
+    mv "$NODE_SDK_DIR/$NODE_FILE" "$pkg_dir/"
+    echo "✓"
 
-# Build TypeScript
-build_typescript() {
-    print_section "Building TypeScript..."
-
-    cd "$NODE_SDK_DIR"
-    npm run build
-
-    print_success "TypeScript compiled"
-}
-
-# Add rpath to native module
-setup_rpath() {
-    print_section "Setting up rpath..."
-
-    local native_module="$NODE_SDK_DIR/$NODE_FILE"
-
+    # Fix dylib paths for distribution
+    print_step "Fixing dylib paths... "
+    local native_module="$pkg_dir/$NODE_FILE"
     if [ "$OS" = "macos" ]; then
+        # Fix LC_ID_DYLIB: change absolute build path to relative @loader_path
+        install_name_tool -id "@loader_path/$NODE_FILE" "$native_module"
+        # Add rpath for runtime dependencies (libkrun, libgvproxy)
         install_name_tool -add_rpath @loader_path/runtime "$native_module" 2>/dev/null || true
     else
+        # Linux: set rpath for runtime dependencies (soname is already correct)
         patchelf --set-rpath '$ORIGIN/runtime' "$native_module" 2>/dev/null || true
     fi
+    echo "✓"
 
-    print_success "Rpath configured"
-}
-
-# Create platform-specific package
-create_platform_package() {
-    print_section "Creating platform package..."
-
-    local pkg_dir="$NODE_SDK_DIR/npm/$PLATFORM"
+    # Copy runtime
+    print_step "Copying runtime... "
+    rm -rf "$pkg_dir/runtime"
+    cp -a "$RUNTIME_DIR" "$pkg_dir/runtime"
+    echo "✓"
 
     # Determine OS and CPU for package.json
     local pkg_os pkg_cpu
@@ -202,49 +224,36 @@ create_platform_package() {
         pkg_cpu="x64"
     fi
 
-    # Create package directory
-    mkdir -p "$pkg_dir"
+    # Determine libc for Linux (glibc vs musl)
+    local pkg_libc=""
+    if [[ "$PLATFORM" == linux-*-gnu ]]; then
+        pkg_libc="glibc"
+    elif [[ "$PLATFORM" == linux-*-musl ]]; then
+        pkg_libc="musl"
+    fi
 
-    # Copy native module
-    print_step "Copying native module... "
-    cp "$NODE_SDK_DIR/$NODE_FILE" "$pkg_dir/"
+    # Generate platform package.json from template
+    print_step "Generating platform package.json... "
+    local libc_line=""
+    if [ -n "$pkg_libc" ]; then
+        libc_line='"libc": ["'"$pkg_libc"'"],'
+    fi
+    generate_package_json "$NODE_SDK_DIR/platform-package.template.json" "$pkg_dir/package.json" \
+        "$pkg_version" "$PLATFORM" "$pkg_os" "$pkg_cpu" "$NODE_FILE" "$libc_line"
     echo "✓"
 
-    # Copy runtime
-    print_step "Copying runtime... "
-    rm -rf "$pkg_dir/runtime"
-    cp -a "$RUNTIME_DIR" "$pkg_dir/runtime"
-    echo "✓"
-
-    # Generate package.json
-    print_step "Generating package.json... "
-    cat > "$pkg_dir/package.json" << EOF
-{
-  "name": "@boxlite-ai/boxlite-$PLATFORM",
-  "version": "0.1.0",
-  "os": ["$pkg_os"],
-  "cpu": ["$pkg_cpu"],
-  "main": "$NODE_FILE",
-  "files": [
-    "$NODE_FILE",
-    "runtime"
-  ],
-  "description": "BoxLite native bindings for $PLATFORM",
-  "license": "Apache-2.0",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/anthropics/boxlite.git",
-    "directory": "sdks/node"
-  },
-  "engines": {
-    "node": ">=18.0.0"
-  }
+    print_success "Platform package built: @boxlite-ai/boxlite-$PLATFORM v$pkg_version"
 }
-EOF
-    echo "✓"
 
-    PLATFORM_PKG_DIR="$pkg_dir"
-    print_success "Platform package created: @boxlite-ai/boxlite-$PLATFORM"
+# Build TypeScript
+build_typescript() {
+    print_section "Building TypeScript..."
+
+    cd "$NODE_SDK_DIR"
+    # runs tsc (TypeScript compiler) based on tsconfig.json
+    npm run build
+
+    print_success "TypeScript compiled"
 }
 
 # Create tarballs
@@ -271,6 +280,9 @@ create_tarballs() {
 
 # Show build summary
 show_summary() {
+    local pkg_version
+    pkg_version=$(get_main_version)
+
     echo ""
     print_section "Build Summary"
     echo "Output directory: $OUTPUT_DIR"
@@ -281,8 +293,8 @@ show_summary() {
     done
     echo ""
     echo "Install locally:"
-    echo "  npm install $OUTPUT_DIR/boxlite-ai-boxlite-$PLATFORM-0.1.0.tgz"
-    echo "  npm install $OUTPUT_DIR/boxlite-ai-boxlite-0.1.0.tgz"
+    echo "  npm install $OUTPUT_DIR/boxlite-ai-boxlite-$PLATFORM-$pkg_version.tgz"
+    echo "  npm install $OUTPUT_DIR/boxlite-ai-boxlite-$pkg_version.tgz"
     echo ""
     echo "Publish to npm:"
     echo "  cd $PLATFORM_PKG_DIR && npm publish --access public"
@@ -299,10 +311,8 @@ main() {
 
     detect_platform
     install_dependencies
-    build_native_addon
+    build_platform_package
     build_typescript
-    setup_rpath
-    create_platform_package
     create_tarballs
     show_summary
 
