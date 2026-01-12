@@ -8,11 +8,11 @@ use cli::Cli;
 async fn main() -> anyhow::Result<()> {
     // Set default BOXLITE_RUNTIME_DIR from compile-time value if not already set
     // SAFETY: Called early in main before spawning threads
-    if std::env::var("BOXLITE_RUNTIME_DIR").is_err() {
-        if let Some(runtime_dir) = option_env!("BOXLITE_RUNTIME_DIR") {
-            unsafe {
-                std::env::set_var("BOXLITE_RUNTIME_DIR", runtime_dir);
-            }
+    if std::env::var("BOXLITE_RUNTIME_DIR").is_err()
+        && let Some(runtime_dir) = option_env!("BOXLITE_RUNTIME_DIR")
+    {
+        unsafe {
+            std::env::set_var("BOXLITE_RUNTIME_DIR", runtime_dir);
         }
     }
 
