@@ -13,12 +13,14 @@ fn test_runtime_prevents_concurrent_access() {
     // Create first runtime
     let config1 = BoxliteOptions {
         home_dir: temp_dir.path().to_path_buf(),
+        image_registries: vec![],
     };
     let runtime1 = BoxliteRuntime::new(config1).unwrap();
 
     // Try to create second runtime (should fail)
     let config2 = BoxliteOptions {
         home_dir: temp_dir.path().to_path_buf(),
+        image_registries: vec![],
     };
     let result = BoxliteRuntime::new(config2);
     assert!(result.is_err());
@@ -33,6 +35,7 @@ fn test_runtime_prevents_concurrent_access() {
     // Now should be able to create another
     let config3 = BoxliteOptions {
         home_dir: temp_dir.path().to_path_buf(),
+        image_registries: vec![],
     };
     let _runtime2 = BoxliteRuntime::new(config3).unwrap();
 }
@@ -45,6 +48,7 @@ fn test_runtime_lock_released_on_drop() {
     {
         let config = BoxliteOptions {
             home_dir: temp_dir.path().to_path_buf(),
+            image_registries: vec![],
         };
         let _runtime = BoxliteRuntime::new(config).unwrap();
     } // Lock released here
@@ -52,6 +56,7 @@ fn test_runtime_lock_released_on_drop() {
     // Should be able to create new runtime
     let config2 = BoxliteOptions {
         home_dir: temp_dir.path().to_path_buf(),
+        image_registries: vec![],
     };
     let _runtime2 = BoxliteRuntime::new(config2).unwrap();
 }
@@ -64,6 +69,7 @@ fn test_runtime_lock_across_threads() {
     // Acquire lock in main thread
     let config1 = BoxliteOptions {
         home_dir: dir_path.clone(),
+        image_registries: vec![],
     };
     let _runtime1 = BoxliteRuntime::new(config1).unwrap();
 
@@ -72,6 +78,7 @@ fn test_runtime_lock_across_threads() {
     let handle = thread::spawn(move || {
         let config = BoxliteOptions {
             home_dir: dir_clone,
+            image_registries: vec![],
         };
         BoxliteRuntime::new(config)
     });
@@ -88,12 +95,14 @@ fn test_different_home_dirs_independent() {
     // Create runtime in first directory
     let config1 = BoxliteOptions {
         home_dir: temp_dir1.path().to_path_buf(),
+        image_registries: vec![],
     };
     let _runtime1 = BoxliteRuntime::new(config1).unwrap();
 
     // Should be able to create runtime in second directory
     let config2 = BoxliteOptions {
         home_dir: temp_dir2.path().to_path_buf(),
+        image_registries: vec![],
     };
     let _runtime2 = BoxliteRuntime::new(config2).unwrap();
 
@@ -108,6 +117,7 @@ fn test_lock_file_created() {
 
     let config = BoxliteOptions {
         home_dir: temp_dir.path().to_path_buf(),
+        image_registries: vec![],
     };
     let _runtime = BoxliteRuntime::new(config).unwrap();
 
@@ -122,6 +132,7 @@ fn test_lock_survives_short_operations() {
 
     let config1 = BoxliteOptions {
         home_dir: temp_dir.path().to_path_buf(),
+        image_registries: vec![],
     };
     let runtime = BoxliteRuntime::new(config1).unwrap();
 
@@ -131,6 +142,7 @@ fn test_lock_survives_short_operations() {
     // Lock should still be held
     let config2 = BoxliteOptions {
         home_dir: temp_dir.path().to_path_buf(),
+        image_registries: vec![],
     };
     let result = BoxliteRuntime::new(config2);
     assert!(result.is_err());

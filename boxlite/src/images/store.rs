@@ -77,6 +77,9 @@ pub struct ImageStore {
     client: oci_client::Client,
     /// Mutable state protected by RwLock
     inner: RwLock<ImageStoreInner>,
+    /// Registries to search for unqualified image references.
+    /// Tried in order; first successful pull wins.
+    registries: Vec<String>,
 }
 
 impl std::fmt::Debug for ImageStore {
@@ -87,11 +90,17 @@ impl std::fmt::Debug for ImageStore {
 
 impl ImageStore {
     /// Create a new image store for the given images' directory.
-    pub fn new(images_dir: PathBuf, db: Database) -> BoxliteResult<Self> {
+    ///
+    /// # Arguments
+    /// * `images_dir` - Directory for image cache
+    /// * `db` - Database for image index
+    /// * `registries` - Registries to search for unqualified images (tried in order)
+    pub fn new(images_dir: PathBuf, db: Database, registries: Vec<String>) -> BoxliteResult<Self> {
         let inner = ImageStoreInner::new(images_dir, db)?;
         Ok(Self {
             client: oci_client::Client::new(Default::default()),
             inner: RwLock::new(inner),
+            registries,
         })
     }
 
@@ -102,25 +111,89 @@ impl ImageStore {
     /// Pull an image from registry (or return cached manifest).
     ///
     /// This method:
-    /// 1. Checks local cache first (quick read lock)
-    /// 2. If not cached, downloads from registry (releases lock during I/O)
-    /// 3. Updates index after successful download (quick write lock)
+    /// 1. Parses and resolves image reference using configured registries
+    /// 2. Checks local cache for each candidate (quick read lock)
+    /// 3. If not cached, downloads from registry (releases lock during I/O)
+    /// 4. Tries each registry candidate in order until one succeeds
     ///
     /// Thread-safe: Multiple concurrent pulls of the same image will only
     /// download once; others will get the cached result.
     pub async fn pull(&self, image_ref: &str) -> BoxliteResult<ImageManifest> {
-        // Fast path: check cache with read lock
-        {
-            let inner = self.inner.read().await;
-            if let Some(manifest) = self.try_load_cached(&inner, image_ref)? {
-                tracing::info!("Using cached image: {}", image_ref);
-                return Ok(manifest);
-            }
-        } // Read lock released
+        use super::ReferenceIter;
 
-        // Slow path: pull from registry
-        tracing::info!("Pulling image from registry: {}", image_ref);
-        self.pull_from_registry(image_ref).await
+        tracing::debug!(
+            image_ref = %image_ref,
+            registries = ?self.registries,
+            "Starting image pull with registry fallback"
+        );
+
+        // Parse image reference and create iterator over registry candidates
+        let candidates = ReferenceIter::new(image_ref, &self.registries)
+            .map_err(|e| BoxliteError::Storage(format!("invalid image reference: {e}")))?;
+
+        let mut errors: Vec<(String, BoxliteError)> = Vec::new();
+
+        for reference in candidates {
+            let ref_str = reference.whole();
+
+            // Fast path: check cache with read lock
+            {
+                let inner = self.inner.read().await;
+                if let Some(manifest) = self.try_load_cached(&inner, &ref_str)? {
+                    tracing::info!("Using cached image: {}", ref_str);
+                    return Ok(manifest);
+                }
+            } // Read lock released
+
+            // Slow path: pull from registry
+            tracing::info!("Pulling image from registry: {}", ref_str);
+            match self.pull_from_registry(&reference).await {
+                Ok(manifest) => {
+                    if !errors.is_empty() {
+                        tracing::info!(
+                            original = %image_ref,
+                            resolved = %ref_str,
+                            "Successfully pulled image after {} attempts",
+                            errors.len() + 1
+                        );
+                    }
+                    return Ok(manifest);
+                }
+                Err(e) => {
+                    tracing::debug!(
+                        reference = %ref_str,
+                        error = %e,
+                        "Failed to pull image candidate, trying next"
+                    );
+                    errors.push((ref_str, e));
+                }
+            }
+        }
+
+        // All candidates failed - format comprehensive error message
+        if errors.is_empty() {
+            Err(BoxliteError::Storage(format!(
+                "No registries configured for image: {}",
+                image_ref
+            )))
+        } else {
+            let details: Vec<String> = errors
+                .iter()
+                .map(|(registry, err)| format!("  - {}: {}", registry, err))
+                .collect();
+
+            Err(BoxliteError::Storage(format!(
+                "Failed to pull image '{}' after trying {} {}:\n{}",
+                image_ref,
+                errors.len(),
+                if errors.len() == 1 {
+                    "registry"
+                } else {
+                    "registries"
+                },
+                details.join("\n")
+            )))
+        }
     }
 
     /// Load config JSON for an image.
@@ -354,18 +427,15 @@ impl ImageStore {
     // INTERNAL: Registry Operations (releases lock during I/O)
     // ========================================================================
 
-    /// Pull image from registry with fine-grained locking.
+    /// Pull image from registry using a typed Reference.
     ///
+    /// This method handles the actual network I/O - manifest pull, layer download, etc.
     /// Lock is released during network I/O to allow other operations.
-    async fn pull_from_registry(&self, image_ref: &str) -> BoxliteResult<ImageManifest> {
-        let reference: Reference = image_ref
-            .parse()
-            .map_err(|e| BoxliteError::Storage(format!("invalid image reference: {e}")))?;
-
+    async fn pull_from_registry(&self, reference: &Reference) -> BoxliteResult<ImageManifest> {
         // Step 1: Pull manifest (no lock needed - uses self.client)
         let (manifest, manifest_digest_str) = self
             .client
-            .pull_manifest(&reference, &RegistryAuth::Anonymous)
+            .pull_manifest(reference, &RegistryAuth::Anonymous)
             .await
             .map_err(|e| BoxliteError::Storage(format!("failed to pull manifest: {e}")))?;
 
@@ -379,19 +449,20 @@ impl ImageStore {
 
         // Step 3: Extract image manifest (may pull platform-specific manifest for multi-platform images)
         let image_manifest = self
-            .extract_image_manifest(&reference, &manifest, manifest_digest_str)
+            .extract_image_manifest(reference, &manifest, manifest_digest_str)
             .await?;
 
         // Step 4: Download layers (no lock during download, atomic file writes)
-        self.download_layers(&reference, &image_manifest.layers)
+        self.download_layers(reference, &image_manifest.layers)
             .await?;
 
         // Step 5: Download config (no lock during download)
-        self.download_config(&reference, &image_manifest.config_digest)
+        self.download_config(reference, &image_manifest.config_digest)
             .await?;
 
-        // Step 6: Update index (quick write lock)
-        self.update_index(image_ref, &image_manifest).await?;
+        // Step 6: Update index using reference.whole() as the cache key
+        self.update_index(&reference.whole(), &image_manifest)
+            .await?;
 
         Ok(image_manifest)
     }

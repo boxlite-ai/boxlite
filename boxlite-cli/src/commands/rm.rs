@@ -15,6 +15,7 @@ pub async fn execute(args: RmArgs, global: &crate::cli::GlobalFlags) -> anyhow::
     let options = if let Some(home) = &global.home {
         boxlite::BoxliteOptions {
             home_dir: home.clone(),
+            image_registries: vec![],
         }
     } else {
         boxlite::BoxliteOptions::default()

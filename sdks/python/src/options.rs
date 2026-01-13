@@ -14,18 +14,28 @@ use pyo3::types::{PyAnyMethods, PyDict, PyTuple};
 pub(crate) struct PyOptions {
     #[pyo3(get, set)]
     pub(crate) home_dir: Option<String>,
+    /// Registries to search for unqualified image references.
+    /// Tried in order; first successful pull wins.
+    #[pyo3(get, set)]
+    pub(crate) image_registries: Vec<String>,
 }
 
 #[pymethods]
 impl PyOptions {
     #[new]
-    #[pyo3(signature = (home_dir=None))]
-    fn new(home_dir: Option<String>) -> Self {
-        Self { home_dir }
+    #[pyo3(signature = (home_dir=None, image_registries=vec![]))]
+    fn new(home_dir: Option<String>, image_registries: Vec<String>) -> Self {
+        Self {
+            home_dir,
+            image_registries,
+        }
     }
 
     fn __repr__(&self) -> String {
-        format!("Options(home_dir={:?})", self.home_dir)
+        format!(
+            "Options(home_dir={:?}, image_registries={:?})",
+            self.home_dir, self.image_registries
+        )
     }
 }
 
@@ -36,6 +46,8 @@ impl From<PyOptions> for BoxliteOptions {
         if let Some(home_dir) = py_opts.home_dir {
             config.home_dir = PathBuf::from(home_dir);
         }
+
+        config.image_registries = py_opts.image_registries;
 
         config
     }

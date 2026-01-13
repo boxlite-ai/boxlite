@@ -141,13 +141,16 @@ impl RuntimeImpl {
             ))
         })?;
 
-        let image_manager = ImageManager::new(layout.images_dir(), db.clone()).map_err(|e| {
-            BoxliteError::Storage(format!(
-                "Failed to initialize image manager at {}: {}",
-                layout.images_dir().display(),
-                e
-            ))
-        })?;
+        let image_manager =
+            ImageManager::new(layout.images_dir(), db.clone(), options.image_registries).map_err(
+                |e| {
+                    BoxliteError::Storage(format!(
+                        "Failed to initialize image manager at {}: {}",
+                        layout.images_dir().display(),
+                        e
+                    ))
+                },
+            )?;
 
         let box_store = BoxStore::new(db);
 

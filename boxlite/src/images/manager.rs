@@ -80,8 +80,13 @@ impl std::fmt::Debug for ImageManager {
 
 impl ImageManager {
     /// Create a new image manager for the given images directory.
-    pub fn new(images_dir: PathBuf, db: Database) -> BoxliteResult<Self> {
-        let store = Arc::new(ImageStore::new(images_dir, db)?);
+    ///
+    /// # Arguments
+    /// * `images_dir` - Directory for image cache
+    /// * `db` - Database for image index
+    /// * `registries` - Registries to search for unqualified images (tried in order)
+    pub fn new(images_dir: PathBuf, db: Database, registries: Vec<String>) -> BoxliteResult<Self> {
+        let store = Arc::new(ImageStore::new(images_dir, db, registries)?);
         Ok(Self { store })
     }
 

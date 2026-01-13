@@ -81,6 +81,9 @@ pub extern "C" fn boxlite_version() -> *const c_char {
 /// # Arguments
 /// * `home_dir` - Path to BoxLite home directory (stores images, rootfs, etc.)
 ///                If NULL, uses default: ~/.boxlite
+/// * `registries_json` - JSON array of registries to search for unqualified images,
+///                       e.g. `["ghcr.io", "quay.io"]`. If NULL, uses default (docker.io).
+///                       Registries are tried in order; first successful pull wins.
 /// * `out_error` - Output parameter for error message (caller must free with boxlite_free_string)
 ///
 /// # Returns
@@ -89,7 +92,8 @@ pub extern "C" fn boxlite_version() -> *const c_char {
 /// # Example
 /// ```c
 /// char *error = NULL;
-/// BoxliteRuntime *runtime = boxlite_runtime_new("/tmp/boxlite", &error);
+/// const char *registries = "[\"ghcr.io\", \"docker.io\"]";
+/// BoxliteRuntime *runtime = boxlite_runtime_new("/tmp/boxlite", registries, &error);
 /// if (!runtime) {
 ///     fprintf(stderr, "Error: %s\n", error);
 ///     boxlite_free_string(error);
@@ -99,6 +103,7 @@ pub extern "C" fn boxlite_version() -> *const c_char {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_runtime_new(
     home_dir: *const c_char,
+    registries_json: *const c_char,
     out_error: *mut *mut c_char,
 ) -> *mut CBoxliteRuntime {
     // Create tokio runtime
@@ -120,6 +125,30 @@ pub unsafe extern "C" fn boxlite_runtime_new(
     if !home_dir.is_null() {
         match c_str_to_string(home_dir) {
             Ok(path) => options.home_dir = path.into(),
+            Err(e) => {
+                if !out_error.is_null() {
+                    *out_error = error_to_c_string(e);
+                }
+                return ptr::null_mut();
+            }
+        }
+    }
+
+    // Parse image registries (JSON array)
+    if !registries_json.is_null() {
+        match c_str_to_string(registries_json) {
+            Ok(json_str) => match serde_json::from_str::<Vec<String>>(&json_str) {
+                Ok(registries) => options.image_registries = registries,
+                Err(e) => {
+                    if !out_error.is_null() {
+                        *out_error = error_to_c_string(BoxliteError::Internal(format!(
+                            "Invalid registries JSON: {}",
+                            e
+                        )));
+                    }
+                    return ptr::null_mut();
+                }
+            },
             Err(e) => {
                 if !out_error.is_null() {
                     *out_error = error_to_c_string(e);

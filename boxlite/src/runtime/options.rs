@@ -503,6 +503,28 @@ impl SecurityOptionsBuilder {
 #[derive(Clone, Debug)]
 pub struct BoxliteOptions {
     pub home_dir: PathBuf,
+    /// Registries to search for unqualified image references.
+    ///
+    /// When pulling an image without a registry prefix (e.g., `"alpine"`),
+    /// these registries are tried in order until one succeeds.
+    ///
+    /// - Empty list (default): Uses docker.io as the implicit default
+    /// - Non-empty list: Tries each registry in order, first success wins
+    /// - Fully qualified refs (e.g., `"quay.io/foo"`) bypass this list
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// BoxliteOptions {
+    ///     image_registries: vec![
+    ///         "ghcr.io/myorg".to_string(),
+    ///         "docker.io".to_string(),
+    ///     ],
+    ///     ..Default::default()
+    /// }
+    /// // "alpine" → tries ghcr.io/myorg/alpine, then docker.io/alpine
+    /// ```
+    pub image_registries: Vec<String>,
 }
 
 impl Default for BoxliteOptions {
@@ -515,7 +537,10 @@ impl Default for BoxliteOptions {
                 path
             });
 
-        Self { home_dir }
+        Self {
+            home_dir,
+            image_registries: Vec::new(),
+        }
     }
 }
 

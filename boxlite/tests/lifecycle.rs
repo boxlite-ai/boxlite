@@ -20,6 +20,7 @@ impl TestContext {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let options = BoxliteOptions {
             home_dir: temp_dir.path().to_path_buf(),
+            image_registries: vec![],
         };
         let runtime = BoxliteRuntime::new(options).expect("Failed to create runtime");
         Self {
@@ -582,6 +583,7 @@ async fn boxes_persist_across_runtime_restart() {
     {
         let options = BoxliteOptions {
             home_dir: home_dir.clone(),
+            image_registries: vec![],
         };
         let runtime = BoxliteRuntime::new(options).expect("Failed to create runtime");
         let litebox = runtime
@@ -607,7 +609,10 @@ async fn boxes_persist_across_runtime_restart() {
 
     // Create new runtime with same home directory (simulates restart)
     {
-        let options = BoxliteOptions { home_dir };
+        let options = BoxliteOptions {
+            home_dir,
+            image_registries: vec![],
+        };
         let runtime = BoxliteRuntime::new(options).expect("Failed to create runtime");
 
         // Box should be recovered from database
@@ -636,6 +641,7 @@ async fn multiple_boxes_persist_and_recover_without_lock_errors() {
     {
         let options = BoxliteOptions {
             home_dir: home_dir.clone(),
+            image_registries: vec![],
         };
         let runtime = BoxliteRuntime::new(options).expect("Failed to create runtime");
 
@@ -691,7 +697,10 @@ async fn multiple_boxes_persist_and_recover_without_lock_errors() {
     // Create new runtime with same home directory (simulates restart)
     // This should successfully recover all boxes without lock allocation errors
     {
-        let options = BoxliteOptions { home_dir };
+        let options = BoxliteOptions {
+            home_dir,
+            image_registries: vec![],
+        };
         let runtime = BoxliteRuntime::new(options).expect("Failed to create runtime after restart");
 
         // All boxes should be recovered from database
@@ -865,6 +874,7 @@ async fn recovery_removes_auto_remove_true_boxes() {
     {
         let options = BoxliteOptions {
             home_dir: home_dir.clone(),
+            image_registries: vec![],
         };
         let runtime = BoxliteRuntime::new(options).expect("Failed to create runtime");
 
@@ -911,7 +921,10 @@ async fn recovery_removes_auto_remove_true_boxes() {
 
     // Create new runtime with same home directory (simulates restart)
     {
-        let options = BoxliteOptions { home_dir };
+        let options = BoxliteOptions {
+            home_dir,
+            image_registries: vec![],
+        };
         let runtime = BoxliteRuntime::new(options).expect("Failed to create runtime after restart");
 
         // auto_remove=true box should be removed during recovery
@@ -949,6 +962,7 @@ async fn recovery_removes_orphaned_stopped_boxes_without_directory() {
     {
         let options = BoxliteOptions {
             home_dir: home_dir.clone(),
+            image_registries: vec![],
         };
         let runtime = BoxliteRuntime::new(options).expect("Failed to create runtime");
 
@@ -980,7 +994,10 @@ async fn recovery_removes_orphaned_stopped_boxes_without_directory() {
 
     // Create new runtime with same home directory (simulates restart)
     {
-        let options = BoxliteOptions { home_dir };
+        let options = BoxliteOptions {
+            home_dir,
+            image_registries: vec![],
+        };
         let runtime = BoxliteRuntime::new(options).expect("Failed to create runtime after restart");
 
         // Stopped box without directory should be KEPT (it might never have been started)

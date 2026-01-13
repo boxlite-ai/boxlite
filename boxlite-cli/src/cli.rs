@@ -79,6 +79,7 @@ impl GlobalFlags {
         let options = if let Some(home) = &self.home {
             BoxliteOptions {
                 home_dir: home.clone(),
+                image_registries: vec![],
             }
         } else {
             BoxliteOptions::default()

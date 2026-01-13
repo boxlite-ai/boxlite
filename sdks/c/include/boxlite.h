@@ -36,6 +36,9 @@ const char *boxlite_version(void);
  * # Arguments
  * * `home_dir` - Path to BoxLite home directory (stores images, rootfs, etc.)
  *                If NULL, uses default: ~/.boxlite
+ * * `registries_json` - JSON array of registries to search for unqualified images,
+ *                       e.g. `["ghcr.io", "quay.io"]`. If NULL, uses default (docker.io).
+ *                       Registries are tried in order; first successful pull wins.
  * * `out_error` - Output parameter for error message (caller must free with boxlite_free_string)
  *
  * # Returns
@@ -44,7 +47,8 @@ const char *boxlite_version(void);
  * # Example
  * ```c
  * char *error = NULL;
- * BoxliteRuntime *runtime = boxlite_runtime_new("/tmp/boxlite", &error);
+ * const char *registries = "[\"ghcr.io\", \"docker.io\"]";
+ * BoxliteRuntime *runtime = boxlite_runtime_new("/tmp/boxlite", registries, &error);
  * if (!runtime) {
  *     fprintf(stderr, "Error: %s\n", error);
  *     boxlite_free_string(error);
@@ -52,7 +56,9 @@ const char *boxlite_version(void);
  * }
  * ```
  */
-struct CBoxliteRuntime *boxlite_runtime_new(const char *home_dir, char **out_error);
+struct CBoxliteRuntime *boxlite_runtime_new(const char *home_dir,
+                                            const char *registries_json,
+                                            char **out_error);
 
 /**
  * Create a new box with the given options (JSON)

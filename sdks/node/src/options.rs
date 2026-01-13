@@ -14,6 +14,10 @@ use napi_derive::napi;
 pub struct JsOptions {
     /// Home directory for BoxLite data (defaults to ~/.boxlite)
     pub home_dir: Option<String>,
+    /// Registries to search for unqualified image references.
+    /// Tried in order; first successful pull wins.
+    /// Example: ["ghcr.io", "quay.io", "docker.io"]
+    pub image_registries: Option<Vec<String>>,
 }
 
 impl From<JsOptions> for BoxliteOptions {
@@ -22,6 +26,10 @@ impl From<JsOptions> for BoxliteOptions {
 
         if let Some(home_dir) = js_opts.home_dir {
             config.home_dir = PathBuf::from(home_dir);
+        }
+
+        if let Some(registries) = js_opts.image_registries {
+            config.image_registries = registries;
         }
 
         config
