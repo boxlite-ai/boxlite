@@ -3,16 +3,62 @@ name: Lint and Format
 on:
   push:
     branches: [ main ]
+    paths:
+      - '**/*.rs'
+      - '**/*.py'
+      - '**/*.ts'
+      - '**/Cargo.toml'
+      - 'Cargo.lock'
+      - 'sdks/python/**'
+      - 'sdks/node/**'
+      - '.github/workflows/lint.yml'
+      - '.github/workflows/config.yml'
   pull_request:
     branches: [ main ]
+    paths:
+      - '**/*.rs'
+      - '**/*.py'
+      - '**/*.ts'
+      - '**/Cargo.toml'
+      - 'Cargo.lock'
+      - 'sdks/python/**'
+      - 'sdks/node/**'
+      - '.github/workflows/lint.yml'
+      - '.github/workflows/config.yml'
 
 jobs:
   # Load shared configuration
   config:
     uses: ./.github/workflows/config.yml
 
+  # Detect which files changed to conditionally run linters
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+      python: ${{ steps.filter.outputs.python }}
+      node: ${{ steps.filter.outputs.node }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            rust:
+              - '**/*.rs'
+              - '**/Cargo.toml'
+              - 'Cargo.lock'
+            python:
+              - 'sdks/python/**/*.py'
+            node:
+              - 'sdks/node/**/*.ts'
+
   rustfmt:
     name: Check Rust formatting
+    needs: changes
+    if: ${{ needs.changes.outputs.rust == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -29,7 +75,8 @@ jobs:
 
   clippy:
     name: Run Clippy on ${{ matrix.os }}
-    needs: config
+    needs: [config, changes]
+    if: ${{ needs.changes.outputs.rust == 'true' }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: true
@@ -66,3 +113,50 @@ jobs:
         env:
           BOXLITE_DEPS_STUB: "1"
         run: cargo clippy --workspace --all-targets --all-features --exclude boxlite-guest -- -D warnings
+
+  python:
+    name: Python Lint
+    needs: changes
+    if: ${{ needs.changes.outputs.python == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install ruff
+        run: pip install ruff
+
+      - name: Run ruff check
+        working-directory: sdks/python
+        run: ruff check .
+
+      - name: Run ruff format check
+        working-directory: sdks/python
+        run: ruff format --check .
+
+  node:
+    name: Node.js Lint
+    needs: changes
+    if: ${{ needs.changes.outputs.node == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        working-directory: sdks/node
+        run: npm install
+
+      - name: Type check
+        working-directory: sdks/node
+        run: npx tsc --noEmit

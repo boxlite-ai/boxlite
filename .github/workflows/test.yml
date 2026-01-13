@@ -13,8 +13,26 @@ name: Test
 on:
   push:
     branches: [main]
+    paths:
+      - 'boxlite/**'
+      - 'boxlite-shared/**'
+      - 'guest/**'
+      - 'sdks/**'
+      - '**/Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/test.yml'
+      - '.github/workflows/config.yml'
   pull_request:
     branches: [main]
+    paths:
+      - 'boxlite/**'
+      - 'boxlite-shared/**'
+      - 'guest/**'
+      - 'sdks/**'
+      - '**/Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/test.yml'
+      - '.github/workflows/config.yml'
 
 env:
   CARGO_TERM_COLOR: always
@@ -24,10 +42,37 @@ jobs:
   config:
     uses: ./.github/workflows/config.yml
 
+  # Detect which files changed to conditionally run tests
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+      python: ${{ steps.filter.outputs.python }}
+      node: ${{ steps.filter.outputs.node }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            rust:
+              - 'boxlite/**'
+              - 'boxlite-shared/**'
+              - 'guest/**'
+              - '**/Cargo.toml'
+              - 'Cargo.lock'
+            python:
+              - 'sdks/python/**'
+            node:
+              - 'sdks/node/**'
+
   # Rust unit tests (boxlite-shared only - boxlite requires native libs not available in CI)
   rust:
     name: Rust Tests (${{ matrix.platform.target }})
-    needs: config
+    needs: [config, changes]
+    if: ${{ needs.changes.outputs.rust == 'true' }}
     runs-on: ${{ matrix.platform.os }}
     strategy:
       fail-fast: false
@@ -63,7 +108,8 @@ jobs:
   # Python SDK unit tests
   python:
     name: Python Tests (${{ matrix.platform.target }} / Python ${{ matrix.python-version }})
-    needs: config
+    needs: [config, changes]
+    if: ${{ needs.changes.outputs.python == 'true' }}
     runs-on: ${{ matrix.platform.os }}
     strategy:
       fail-fast: false
@@ -92,7 +138,8 @@ jobs:
   # Node.js SDK unit tests
   node:
     name: Node.js Tests (${{ matrix.platform.target }} / Node ${{ matrix.node-version }})
-    needs: config
+    needs: [config, changes]
+    if: ${{ needs.changes.outputs.node == 'true' }}
     runs-on: ${{ matrix.platform.os }}
     strategy:
       fail-fast: false
