@@ -4,12 +4,9 @@
  * Provides automatic PTY-based interactive sessions, similar to `docker exec -it`.
  */
 
-import { SimpleBoxOptions } from './simplebox.js';
-import { getJsBoxlite } from './native.js';
+import { SimpleBox, SimpleBoxOptions } from './simplebox.js';
 
 // Import types from native module (will be available after build)
-type Boxlite = any;
-type Box = any;
 type Execution = any;
 
 /**
@@ -62,11 +59,10 @@ export interface InteractiveBoxOptions extends SimpleBoxOptions {
  * // Automatically stopped when leaving scope
  * ```
  */
-export class InteractiveBox {
-  protected _runtime: Boxlite;
-  protected _box: Box;
+export class InteractiveBox extends SimpleBox {
+  // InteractiveBox-specific state (inherited: _runtime, _box, _boxOpts from SimpleBox)
   protected _shell: string;
-  protected _env?: Record<string, string>;
+  protected _interactiveEnv?: Record<string, string>;
   protected _tty: boolean;
   protected _execution?: Execution;
   protected _stdin?: any;
@@ -92,36 +88,21 @@ export class InteractiveBox {
    * ```
    */
   constructor(options: InteractiveBoxOptions) {
-    const JsBoxlite = getJsBoxlite();
+    // Extract InteractiveBox-specific options before passing to parent
+    const { shell = '/bin/sh', tty, ...baseOptions } = options;
 
-    // Use provided runtime or get global default
-    if (options.runtime) {
-      this._runtime = options.runtime;
-    } else {
-      this._runtime = JsBoxlite.default();
-    }
+    // Call parent constructor (handles runtime, lazy box creation)
+    super(baseOptions);
 
-    // Create box directly (no SimpleBox wrapper)
-    const { shell = '/bin/sh', tty, env, ...boxOptions } = options;
-
-    this._box = this._runtime.create(boxOptions, options.name);
+    // InteractiveBox-specific initialization
     this._shell = shell;
-    this._env = env;
+    this._interactiveEnv = options.env;
 
     // Determine TTY mode: undefined = auto-detect, true = force, false = disable
-    if (tty === undefined) {
-      this._tty = process.stdin.isTTY ?? false;
-    } else {
-      this._tty = tty;
-    }
+    this._tty = tty === undefined ? (process.stdin.isTTY ?? false) : tty;
   }
 
-  /**
-   * Get the box ID (ULID format).
-   */
-  get id(): string {
-    return this._box.id;
-  }
+  // id getter inherited from SimpleBox
 
   /**
    * Start the interactive shell session.
@@ -137,29 +118,32 @@ export class InteractiveBox {
    * ```
    */
   async start(): Promise<void> {
+    // Ensure box is created (inherited from SimpleBox)
+    const box = await this._ensureBox();
+
     // Convert env to array format if provided
-    const envArray = this._env
-      ? Object.entries(this._env).map(([k, v]) => [k, v] as [string, string])
+    const envArray = this._interactiveEnv
+      ? Object.entries(this._interactiveEnv).map(([k, v]) => [k, v] as [string, string])
       : undefined;
 
-    // Start shell with PTY
-    this._execution = await this._box.exec(this._shell, [], envArray, true);
+    // Start shell with PTY (box.exec runs command inside container, not on host)
+    this._execution = await box.exec(this._shell, [], envArray, true);
 
-    // Get streams
+    // Get streams (these are async in Rust, must await)
     try {
-      this._stdin = this._execution.stdin();
+      this._stdin = await this._execution.stdin();
     } catch (err) {
       // stdin not available
     }
 
     try {
-      this._stdout = this._execution.stdout();
+      this._stdout = await this._execution.stdout();
     } catch (err) {
       // stdout not available
     }
 
     try {
-      this._stderr = this._execution.stderr();
+      this._stderr = await this._execution.stderr();
     } catch (err) {
       // stderr not available
     }
@@ -205,7 +189,7 @@ export class InteractiveBox {
    * ```
    */
   async stop(): Promise<void> {
-    // Restore terminal settings
+    // 1. Restore terminal settings (InteractiveBox-specific cleanup)
     if (this._tty && process.stdin.isTTY) {
       try {
         process.stdin.setRawMode(false);
@@ -215,18 +199,21 @@ export class InteractiveBox {
       }
     }
 
-    // Wait for I/O tasks to complete (with timeout)
-    try {
-      await Promise.race([
-        Promise.all(this._ioTasks),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 3000))
-      ]);
-    } catch (err) {
-      // Timeout or error - continue with shutdown
+    // 2. Wait for I/O tasks to complete (with timeout)
+    if (this._ioTasks.length > 0) {
+      try {
+        await Promise.race([
+          Promise.all(this._ioTasks),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 3000))
+        ]);
+      } catch (err) {
+        // Timeout or error - continue with shutdown
+      }
+      this._ioTasks = [];  // Clear tasks
     }
 
-    // Stop the box
-    await this._box.stop();
+    // 3. Call parent's stop() to shut down the box
+    await super.stop();
   }
 
   /**
