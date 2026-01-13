@@ -174,7 +174,7 @@ jobs:
         run: |
           for target in darwin-arm64 linux-x64-gnu; do
             echo "Publishing @boxlite-ai/boxlite-$target..."
-            npm publish packages/boxlite-ai-boxlite-$target-*.tgz --provenance --access public
+            npm publish ./packages/boxlite-ai-boxlite-$target-*.tgz --provenance --access public
           done
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -184,7 +184,7 @@ jobs:
 
       - name: Publish main package
         run: |
-          npm publish packages/boxlite-ai-boxlite-[0-9]*.tgz --provenance --access public
+          npm publish ./packages/boxlite-ai-boxlite-[0-9]*.tgz --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
