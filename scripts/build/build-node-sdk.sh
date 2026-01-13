@@ -257,6 +257,30 @@ build_typescript() {
     print_success "TypeScript compiled"
 }
 
+# Update optionalDependencies versions to match main package version
+# This ensures npm can install the correct platform-specific packages
+update_optional_dependencies() {
+    print_section "Updating optionalDependencies versions..."
+
+    local pkg_version
+    pkg_version=$(get_main_version)
+    local pkg_json="$NODE_SDK_DIR/package.json"
+
+    # Use node to update JSON (preserves formatting better than sed/jq)
+    node -e "
+        const fs = require('fs');
+        const pkg = JSON.parse(fs.readFileSync('$pkg_json', 'utf8'));
+        if (pkg.optionalDependencies) {
+            for (const dep of Object.keys(pkg.optionalDependencies)) {
+                pkg.optionalDependencies[dep] = '$pkg_version';
+            }
+        }
+        fs.writeFileSync('$pkg_json', JSON.stringify(pkg, null, 2) + '\n');
+    "
+
+    print_success "optionalDependencies updated to v$pkg_version"
+}
+
 # Create tarballs
 create_tarballs() {
     print_section "Creating tarballs..."
@@ -314,6 +338,7 @@ main() {
     install_dependencies
     build_platform_package
     build_typescript
+    update_optional_dependencies
     create_tarballs
     show_summary
 
