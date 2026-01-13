@@ -157,7 +157,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
           registry-url: 'https://registry.npmjs.org'
 
       - name: Download all packages
@@ -176,8 +176,6 @@ jobs:
             echo "Publishing @boxlite-ai/boxlite-$target..."
             npm publish ./packages/boxlite-ai-boxlite-$target-*.tgz --provenance --access public
           done
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Wait for npm registry sync
         run: sleep 30
@@ -185,8 +183,6 @@ jobs:
       - name: Publish main package
         run: |
           npm publish ./packages/boxlite-ai-boxlite-[0-9]*.tgz --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   upload-to-release:
     name: Upload to GitHub Release
