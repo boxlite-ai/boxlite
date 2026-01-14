@@ -2,48 +2,54 @@
 
 Complete reference for BoxLite APIs, configuration, and error handling.
 
-## API Reference
+## SDK API References
+
+Complete API documentation for each SDK:
+
+| SDK | Documentation | Description |
+|-----|---------------|-------------|
+| **Python** | [Python API Reference](python/README.md) | Async/sync API, box types, metrics |
+| **Node.js** | [Node.js API Reference](nodejs/README.md) | TypeScript definitions, box types, CDP endpoints |
+| **Rust** | [Rust API Reference](rust/README.md) | Core runtime, stream APIs, security options |
+| **C** | [C API Reference](c/README.md) | FFI bindings, JSON API, callback streaming |
+
+---
+
+## Quick Reference
 
 ### Python API
 
-For complete Python API documentation, see **[Python SDK README](../../sdks/python/README.md)**.
+For complete Python API documentation, see **[Python API Reference](python/README.md)**.
 
-**Quick Reference:**
+**Key Classes:**
 
-| Class/Function | Description |
-|----------------|-------------|
-| `boxlite.Boxlite` | Main runtime for creating and managing boxes |
-| `boxlite.BoxOptions` | Configuration options for creating a box |
-| `boxlite.Box` | Handle to a running or stopped box |
-| `boxlite.Execution` | Represents a running command execution |
-| `boxlite.SimpleBox` | Context manager for basic execution |
-| `boxlite.CodeBox` | Specialized box for Python code execution |
-| `boxlite.BrowserBox` | Box configured for browser automation |
-| `boxlite.ComputerBox` | Box with desktop automation capabilities |
-| `boxlite.InteractiveBox` | Box for interactive shell sessions |
-
-See [Python SDK Reference](../../sdks/python/README.md#core-api-reference) for detailed API documentation.
+| Class | Description |
+|-------|-------------|
+| `Boxlite` | Main runtime for creating and managing boxes |
+| `Box` | Handle to a running or stopped box |
+| `SimpleBox` | Context manager for basic execution |
+| `CodeBox` | Specialized box for Python code execution |
+| `BrowserBox` | Box configured for browser automation |
+| `ComputerBox` | Box with desktop automation capabilities |
+| `InteractiveBox` | Box for interactive shell sessions |
 
 ### Node.js API
 
-For complete Node.js API documentation, see **[Node.js SDK README](../../sdks/node/README.md)**.
+For complete Node.js API documentation, see **[Node.js API Reference](nodejs/README.md)**.
 
-**Quick Reference:**
+**Key Classes:**
 
-| Class/Function | Description |
-|----------------|-------------|
+| Class | Description |
+|-------|-------------|
 | `SimpleBox` | Basic container for command execution |
 | `CodeBox` | Python code execution sandbox |
 | `BrowserBox` | Browser automation with CDP endpoint |
-| `ComputerBox` | Desktop automation (14 functions) |
+| `ComputerBox` | Desktop automation (14 methods) |
 | `InteractiveBox` | PTY terminal sessions |
-| `ExecError` | Command execution failure |
-| `TimeoutError` | Operation timeout |
-| `ParseError` | Output parsing failure |
-
-See [Node.js SDK Reference](../../sdks/node/README.md#api-reference) for detailed API documentation.
 
 ### Rust API
+
+For complete Rust API documentation, see **[Rust API Reference](rust/README.md)**.
 
 **Core Types:**
 
@@ -53,70 +59,24 @@ use boxlite::{
     BoxOptions,       // Box configuration
     LiteBox,          // Box handle
     BoxCommand,       // Command builder
-    RootfsSpec,       // Rootfs specification (Image or Directory)
-    NetworkSpec,      // Network configuration
+    RootfsSpec,       // Rootfs specification
     VolumeSpec,       // Volume mount specification
     PortSpec,         // Port forwarding specification
 };
 ```
 
-**Runtime Creation:**
+### C API
 
-```rust
-// Default runtime (~/.boxlite)
-let runtime = BoxliteRuntime::default_runtime();
+For complete C API documentation, see **[C API Reference](c/README.md)**.
 
-// Custom runtime
-let runtime = BoxliteRuntime::new(RuntimeOptions {
-    home_dir: Some("/custom/path".into()),
-    ..Default::default()
-})?;
-```
+**Functions:**
 
-**Box Creation:**
-
-```rust
-let options = BoxOptions {
-    rootfs: RootfsSpec::Image("alpine:latest".into()),
-    cpus: Some(2),
-    memory_mib: Some(1024),
-    working_dir: Some("/app".into()),
-    env: vec![("KEY".into(), "value".into())],
-    volumes: vec![VolumeSpec {
-        host_path: "/host/data".into(),
-        guest_path: "/mnt/data".into(),
-        read_only: true,
-    }],
-    ports: vec![PortSpec {
-        host_port: 8080,
-        guest_port: 80,
-        protocol: Protocol::Tcp,
-    }],
-    ..Default::default()
-};
-
-let (box_id, litebox) = runtime.create(options)?;
-```
-
-**Command Execution:**
-
-```rust
-use futures::StreamExt;
-
-// Execute command
-let mut execution = litebox
-    .exec(BoxCommand::new("echo").arg("Hello"))
-    .await?;
-
-// Stream stdout
-let mut stdout = execution.stdout().unwrap();
-while let Some(line) = stdout.next().await {
-    println!("{}", line);
-}
-
-// Wait for exit
-let exit_code = execution.wait().await?;
-```
+| Function | Description |
+|----------|-------------|
+| `boxlite_runtime_new` | Create runtime instance |
+| `boxlite_create_box` | Create a new box |
+| `boxlite_execute` | Run command with streaming |
+| `boxlite_stop_box` | Stop and free box |
 
 ## Configuration Reference
 
