@@ -8,6 +8,7 @@
 //! 1. **Close inherited FDs** - Prevents information leakage
 //! 2. **Apply rlimits** - Resource limits (max files, memory, CPU time, etc.)
 //! 3. **Add to cgroup** - Linux only, for cgroup resource limits
+//! 4. **Write PID file** - Single source of truth for process tracking
 //!
 //! # Safety
 //!
@@ -26,13 +27,14 @@ use std::process::Command;
 /// Add pre-execution hook for process isolation (async-signal-safe).
 ///
 /// Runs after fork() but before the new program starts in the child process.
-/// Applies: FD cleanup, rlimits, cgroup membership (Linux).
+/// Applies: FD cleanup, rlimits, cgroup membership (Linux), PID file writing.
 ///
 /// # Arguments
 ///
 /// * `cmd` - The Command to add the hook to
 /// * `resource_limits` - Resource limits to apply
 /// * `cgroup_procs_path` - Path to cgroup.procs file (Linux only, pre-computed)
+/// * `pid_file_path` - Path to PID file (pre-computed CString for async-signal-safety)
 ///
 /// # Safety
 ///
@@ -40,7 +42,8 @@ use std::process::Command;
 /// only uses async-signal-safe operations:
 /// - `close()` / `close_range()` syscalls
 /// - `setrlimit()` syscall
-/// - `open()` / `write()` / `close()` syscalls (for cgroup)
+/// - `open()` / `write()` / `close()` syscalls (for cgroup and PID file)
+/// - `getpid()` syscall
 ///
 /// **Do NOT add any of the following to the hook:**
 /// - Logging (tracing, println, eprintln)
@@ -57,7 +60,7 @@ use std::process::Command;
 /// let mut cmd = Command::new("/path/to/binary");
 /// let limits = ResourceLimits::default();
 ///
-/// add_hook(&mut cmd, limits, None);
+/// add_hook(&mut cmd, limits, None, None);
 ///
 /// cmd.spawn()?;
 /// ```
@@ -65,6 +68,7 @@ pub fn add_pre_exec_hook(
     cmd: &mut Command,
     resource_limits: ResourceLimits,
     #[allow(unused_variables)] cgroup_procs_path: Option<std::ffi::CString>,
+    pid_file_path: Option<std::ffi::CString>,
 ) {
     use std::os::unix::process::CommandExt;
 
@@ -89,6 +93,12 @@ pub fn add_pre_exec_hook(
                 let _ = crate::jailer::cgroup::add_self_to_cgroup_raw(path);
             }
 
+            // 4. Write PID file (single source of truth for process tracking)
+            // This must happen after fork() - child has its own PID now
+            if let Some(ref path) = pid_file_path {
+                common::pid::write_pid_file_raw(path).map_err(std::io::Error::from_raw_os_error)?;
+            }
+
             Ok(())
         });
     }
@@ -104,7 +114,7 @@ mod tests {
         let mut cmd = Command::new("/bin/echo");
         let limits = ResourceLimits::default();
 
-        add_pre_exec_hook(&mut cmd, limits, None);
+        add_pre_exec_hook(&mut cmd, limits, None, None);
 
         // We can't actually test the hook without forking
         // Integration tests should verify the actual behavior
@@ -119,6 +129,17 @@ mod tests {
         let limits = ResourceLimits::default();
         let cgroup_path = CString::new("/sys/fs/cgroup/boxlite/test/cgroup.procs").ok();
 
-        add_pre_exec_hook(&mut cmd, limits, cgroup_path);
+        add_pre_exec_hook(&mut cmd, limits, cgroup_path, None);
+    }
+
+    #[test]
+    fn test_add_hook_with_pid_file() {
+        use std::ffi::CString;
+
+        let mut cmd = Command::new("/bin/echo");
+        let limits = ResourceLimits::default();
+        let pid_file = CString::new("/tmp/test.pid").ok();
+
+        add_pre_exec_hook(&mut cmd, limits, None, pid_file);
     }
 }

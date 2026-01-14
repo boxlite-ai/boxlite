@@ -281,6 +281,24 @@ impl BoxImpl {
             }
         }
 
+        // Clean up PID file (single source of truth)
+        let pid_file = self
+            .runtime
+            .layout
+            .boxes_dir()
+            .join(self.config.id.as_str())
+            .join("shim.pid");
+        if pid_file.exists()
+            && let Err(e) = std::fs::remove_file(&pid_file)
+        {
+            tracing::warn!(
+                box_id = %self.config.id,
+                path = %pid_file.display(),
+                error = %e,
+                "Failed to remove PID file"
+            );
+        }
+
         // Check if box was persisted
         let was_persisted = self.state.read().lock_id.is_some();
 
@@ -332,6 +350,7 @@ impl BoxImpl {
     /// happens in create().
     async fn init_live_state(&self) -> BoxliteResult<LiveState> {
         use super::BoxBuilder;
+        use crate::util::read_pid_file;
         use std::sync::Arc;
 
         let state = self.state.read().clone();
@@ -363,13 +382,36 @@ impl BoxImpl {
         let builder = BoxBuilder::new(Arc::clone(&self.runtime), self.config.clone(), state)?;
         let (live_state, mut cleanup_guard) = builder.build().await?;
 
-        // Build succeeded - update status in DB
-        // Note: Box was already persisted in create() with Configured status.
-        // Now we update to Running status.
+        // Read PID from file (single source of truth) and update state.
+        //
+        // The PID file is written by pre_exec hook immediately after fork().
+        // This is crash-safe: if we reach this point, the shim is running
+        // and the PID file exists.
+        //
+        // For reattach (status=Running), the PID file was written during
+        // the original spawn and is still valid.
         {
+            let pid_file = self
+                .runtime
+                .layout
+                .boxes_dir()
+                .join(self.config.id.as_str())
+                .join("shim.pid");
+
+            let pid = read_pid_file(&pid_file)?;
+
             let mut state = self.state.write();
+            state.set_pid(Some(pid));
             state.set_status(BoxStatus::Running);
+
+            // Save to DB (cache for queries and recovery)
             self.runtime.box_manager.save_box(&self.config.id, &state)?;
+
+            tracing::debug!(
+                box_id = %self.config.id,
+                pid = pid,
+                "Read PID from file and saved to DB"
+            );
         }
 
         // All operations succeeded - disarm the cleanup guard

@@ -12,8 +12,7 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, fmt};
 
-// Re-export process utilities
-pub use process::{is_process_alive, is_same_process, kill_process};
+pub use process::{is_process_alive, is_same_process, kill_process, read_pid_file};
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 unsafe extern "C" {

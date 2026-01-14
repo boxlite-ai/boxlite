@@ -25,7 +25,8 @@ async def _subprocess_start_box():
     # Use Options() to create a droppable runtime
     runtime = boxlite.Boxlite(boxlite.Options())
 
-    box = await runtime.create(boxlite.BoxOptions(image="alpine:latest"))
+    box = await runtime.create(
+        boxlite.BoxOptions(image="alpine:latest", detach=True, auto_remove=False))
     box_id = box.id
 
     # Execute command to ensure it's fully initialized
@@ -45,7 +46,8 @@ async def _subprocess_start_and_stop_box():
     # Use Options() to create a droppable runtime
     runtime = boxlite.Boxlite(boxlite.Options())
 
-    box = await runtime.create(boxlite.BoxOptions(image="alpine:latest"))
+    box = await runtime.create(
+        boxlite.BoxOptions(image="alpine:latest", detach=True, auto_remove=False))
     box_id = box.id
 
     # Execute command to ensure it's fully initialized

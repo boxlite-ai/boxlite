@@ -774,32 +774,55 @@ impl RuntimeImpl {
                 }
             }
 
-            // Validate PID if present
-            if let Some(pid) = state.pid {
-                if is_process_alive(pid) && is_same_process(pid, box_id.as_str()) {
-                    // Process is alive and it's our boxlite-shim - box stays Running
-                    if state.status == BoxStatus::Running {
-                        tracing::info!("Recovered box {} as Running (PID {})", box_id, pid);
+            // Check PID file (single source of truth for running processes)
+            let pid_file = self
+                .layout
+                .boxes_dir()
+                .join(box_id.as_str())
+                .join("shim.pid");
+
+            if pid_file.exists() {
+                match crate::util::read_pid_file(&pid_file) {
+                    Ok(pid) => {
+                        if is_process_alive(pid) && is_same_process(pid, box_id.as_str()) {
+                            // Process is alive and it's our boxlite-shim - box stays Running
+                            state.set_pid(Some(pid));
+                            state.set_status(BoxStatus::Running);
+                            tracing::info!(
+                                box_id = %box_id,
+                                pid = pid,
+                                "Recovered running box from PID file"
+                            );
+                        } else {
+                            // Process died or PID was reused - clean up and mark as Stopped
+                            let _ = std::fs::remove_file(&pid_file);
+                            state.mark_stop();
+                            tracing::warn!(
+                                box_id = %box_id,
+                                pid = pid,
+                                "Box process dead, cleaned up stale PID file"
+                            );
+                        }
                     }
-                } else {
-                    // Process died or PID was reused - mark as Stopped
-                    if state.status.is_active() {
-                        state.mark_crashed();
+                    Err(e) => {
+                        // Can't read PID file - clean up and mark as Stopped
+                        let _ = std::fs::remove_file(&pid_file);
+                        state.mark_stop();
                         tracing::warn!(
-                            "Box {} marked as Stopped (PID {} not found or different process)",
-                            box_id,
-                            pid
+                            box_id = %box_id,
+                            error = %e,
+                            "Failed to read PID file, marking as Stopped"
                         );
                     }
                 }
             } else {
-                // No PID - box was stopped gracefully or never started
-                // Note: Configured boxes won't have a PID (this is expected)
+                // No PID file - box was stopped gracefully or never started
+                // Note: Configured boxes won't have a PID file (this is expected)
                 if state.status == BoxStatus::Running {
                     state.set_status(BoxStatus::Stopped);
                     tracing::warn!(
-                        "Box {} was Running but had no PID, marked as Stopped",
-                        box_id
+                        box_id = %box_id,
+                        "Box was Running but no PID file found, marked as Stopped"
                     );
                 }
             }
@@ -968,6 +991,7 @@ impl RuntimeImpl {
     ///
     /// Use this when you need atomicity across multiple operations on
     /// box_manager or image_manager.
+    #[allow(unused)]
     pub(crate) fn acquire_write(
         &self,
     ) -> BoxliteResult<std::sync::RwLockWriteGuard<'_, SynchronizedState>> {

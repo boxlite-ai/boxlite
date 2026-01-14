@@ -229,7 +229,7 @@ impl BoxState {
     /// In our simplified state model, crashed VMs become Stopped
     /// since the rootfs is preserved and can be restarted.
     /// PID is cleared since the process is no longer alive.
-    pub fn mark_crashed(&mut self) {
+    pub fn mark_stop(&mut self) {
         self.status = BoxStatus::Stopped;
         self.pid = None;
         self.last_updated = Utc::now();

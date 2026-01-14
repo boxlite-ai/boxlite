@@ -14,7 +14,7 @@ use crate::runtime::guest_rootfs::{GuestRootfs, Strategy};
 use crate::runtime::layout::BoxFilesystemLayout;
 use crate::runtime::options::BoxOptions;
 use crate::runtime::rt_impl::SharedRuntimeImpl;
-use crate::runtime::types::{BoxID, BoxStatus, ContainerID};
+use crate::runtime::types::{BoxID, ContainerID};
 use crate::util::find_binary;
 use crate::vmm::controller::{ShimController, VmmController, VmmHandler};
 use crate::vmm::{Entrypoint, InstanceSpec, VmmKind};
@@ -88,17 +88,6 @@ impl PipelineTask<InitCtx> for VmmSpawnTask {
         let handler = spawn_vm(&box_id, &instance_spec, &options)
             .await
             .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
-
-        // Update PID and status in database
-        let pid = handler.pid();
-        {
-            let _guard_lock = runtime.acquire_write();
-            if let Ok(mut state) = runtime.box_manager.update_box(&box_id) {
-                state.set_pid(Some(pid));
-                state.set_status(BoxStatus::Running);
-                let _ = runtime.box_manager.save_box(&box_id, &state);
-            }
-        }
 
         let mut ctx = ctx.lock().await;
         ctx.guard.set_handler(handler);

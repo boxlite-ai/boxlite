@@ -1,5 +1,34 @@
 //! Process validation utilities for PID checking and verification.
 
+use boxlite_shared::errors::{BoxliteError, BoxliteResult};
+use std::path::Path;
+
+/// Read PID from file.
+///
+/// Reads the PID file written by the shim process in pre_exec.
+/// The file contains a PID as a decimal string, optionally with a trailing newline.
+///
+/// # Arguments
+/// * `path` - Path to the PID file
+///
+/// # Returns
+/// * `Ok(pid)` - The PID read from the file
+/// * `Err` - If the file cannot be read or parsed
+pub fn read_pid_file(path: &Path) -> BoxliteResult<u32> {
+    let content = std::fs::read_to_string(path).map_err(|e| {
+        BoxliteError::Storage(format!("Failed to read PID file {}: {}", path.display(), e))
+    })?;
+
+    content.trim().parse::<u32>().map_err(|e| {
+        BoxliteError::Storage(format!(
+            "Invalid PID in file {}: '{}' - {}",
+            path.display(),
+            content.trim(),
+            e
+        ))
+    })
+}
+
 /// Kill a process with SIGKILL.
 ///
 /// # Returns
@@ -128,5 +157,51 @@ mod tests {
         // Invalid PID should return false
         assert!(!is_same_process(0, "test123"));
         assert!(!is_same_process(u32::MAX, "test123"));
+    }
+
+    #[test]
+    fn test_read_pid_file_valid() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        // Create a temp file with a valid PID
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "12345").unwrap();
+
+        let pid = read_pid_file(file.path()).expect("Should parse valid PID");
+        assert_eq!(pid, 12345);
+    }
+
+    #[test]
+    fn test_read_pid_file_no_newline() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        // PID without trailing newline should also work
+        let mut file = NamedTempFile::new().unwrap();
+        write!(file, "67890").unwrap();
+
+        let pid = read_pid_file(file.path()).expect("Should parse PID without newline");
+        assert_eq!(pid, 67890);
+    }
+
+    #[test]
+    fn test_read_pid_file_invalid() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        // Invalid content should return error
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "not-a-pid").unwrap();
+
+        let result = read_pid_file(file.path());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_read_pid_file_missing() {
+        // Non-existent file should return error
+        let result = read_pid_file(Path::new("/nonexistent/path/to/pid.file"));
+        assert!(result.is_err());
     }
 }

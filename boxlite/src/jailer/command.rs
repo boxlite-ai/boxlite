@@ -129,8 +129,9 @@ impl Jailer {
 
         let resource_limits = self.security.resource_limits.clone();
         let cgroup_procs_path = cgroup::build_cgroup_procs_path(&self.box_id);
+        let pid_file_path = self.build_pid_file_path();
 
-        pre_exec::add_pre_exec_hook(&mut cmd, resource_limits, cgroup_procs_path);
+        pre_exec::add_pre_exec_hook(&mut cmd, resource_limits, cgroup_procs_path, pid_file_path);
         cmd
     }
 
@@ -293,7 +294,8 @@ impl Jailer {
         };
 
         let resource_limits = self.security.resource_limits.clone();
-        pre_exec::add_pre_exec_hook(&mut cmd, resource_limits, None);
+        let pid_file_path = self.build_pid_file_path();
+        pre_exec::add_pre_exec_hook(&mut cmd, resource_limits, None, pid_file_path);
         cmd
     }
 
@@ -308,7 +310,21 @@ impl Jailer {
         cmd.args(args);
 
         let resource_limits = self.security.resource_limits.clone();
-        pre_exec::add_pre_exec_hook(&mut cmd, resource_limits, None);
+        let pid_file_path = self.build_pid_file_path();
+        pre_exec::add_pre_exec_hook(&mut cmd, resource_limits, None, pid_file_path);
         cmd
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Helper methods
+    // ─────────────────────────────────────────────────────────────────────
+
+    /// Build the PID file path as a CString for use in pre_exec hook.
+    ///
+    /// Returns the path to `{box_dir}/shim.pid` as a CString, ready for
+    /// async-signal-safe operations in the pre_exec context.
+    fn build_pid_file_path(&self) -> Option<std::ffi::CString> {
+        let pid_file = self.box_dir.join("shim.pid");
+        std::ffi::CString::new(pid_file.to_string_lossy().as_bytes()).ok()
     }
 }

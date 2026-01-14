@@ -332,6 +332,15 @@ impl BoxFilesystemLayout {
         self.box_dir.join("console.log")
     }
 
+    /// PID file path: ~/.boxlite/boxes/{box_id}/shim.pid
+    ///
+    /// Written by the shim process in pre_exec (after fork, before exec).
+    /// This is the single source of truth for the shim process PID.
+    /// Database PID is a cache that can be reconstructed from this file.
+    pub fn pid_file_path(&self) -> PathBuf {
+        self.box_dir.join("shim.pid")
+    }
+
     // ========================================================================
     // PREPARATION AND CLEANUP
     // ========================================================================
