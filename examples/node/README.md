@@ -146,6 +146,6 @@ Interactive terminal sessions:
 
 ## Next Steps
 
-- See [../README.md](../README.md) for full API documentation
+- See [Node.js SDK README](../../sdks/node/README.md) for full API documentation
 - Check [../../docs/](../../docs/) for architecture details
 - Join our community for support

@@ -48,6 +48,34 @@ async def main():
 asyncio.run(main())
 ```
 
+## Node.js Quick Start
+
+### Install
+
+```bash
+npm install @boxlite-ai/boxlite
+```
+
+Requires Node.js 18+.
+
+### Run
+
+```javascript
+import { SimpleBox } from '@boxlite-ai/boxlite';
+
+async function main() {
+  const box = new SimpleBox({ image: 'python:slim' });
+  try {
+    const result = await box.exec('python', '-c', "print('Hello from BoxLite!')");
+    console.log(result.stdout);
+  } finally {
+    await box.stop();
+  }
+}
+
+main();
+```
+
 ## Rust Quick Start
 
 ### Install
@@ -96,7 +124,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 - **Storage**: volume mounts (ro/rw), persistent disks (QCOW2), copy-on-write
 - **Networking**: outbound internet, port forwarding (TCP/UDP), network metrics
 - **Images**: OCI pull + caching, custom rootfs support
-- **SDKs**: Python available; Node.js / Go coming soon
+- **SDKs**: Python (stable), Node.js (v0.1.5); Go coming soon
 
 ## Architecture
 

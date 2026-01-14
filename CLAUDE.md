@@ -33,7 +33,7 @@ This document provides project context for AI-assisted development with Claude C
 **SDKs:**
 - Python (PyO3, stable v0.4.4)
 - C (FFI, early stage)
-- Node.js (napi-rs, work in progress)
+- Node.js (napi-rs, v0.1.5)
 
 **For complete tech stack details, see:**
 - [docs/architecture/README.md](./docs/architecture/README.md#tech-stack) - Detailed component breakdown
@@ -48,7 +48,7 @@ guest/                # Guest agent (runs inside VM)
 sdks/
   python/             # Python SDK (PyO3, v0.4.4)
   c/                  # C SDK (FFI)
-  node/               # Node.js SDK (WIP)
+  node/               # Node.js SDK (v0.1.5)
 examples/python/      # 9 comprehensive Python examples
 docs/                 # Documentation
 scripts/              # Build and setup scripts

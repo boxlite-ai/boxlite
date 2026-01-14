@@ -24,6 +24,25 @@ For complete Python API documentation, see **[Python SDK README](../../sdks/pyth
 
 See [Python SDK Reference](../../sdks/python/README.md#core-api-reference) for detailed API documentation.
 
+### Node.js API
+
+For complete Node.js API documentation, see **[Node.js SDK README](../../sdks/node/README.md)**.
+
+**Quick Reference:**
+
+| Class/Function | Description |
+|----------------|-------------|
+| `SimpleBox` | Basic container for command execution |
+| `CodeBox` | Python code execution sandbox |
+| `BrowserBox` | Browser automation with CDP endpoint |
+| `ComputerBox` | Desktop automation (14 functions) |
+| `InteractiveBox` | PTY terminal sessions |
+| `ExecError` | Command execution failure |
+| `TimeoutError` | Operation timeout |
+| `ParseError` | Output parsing failure |
+
+See [Node.js SDK Reference](../../sdks/node/README.md#api-reference) for detailed API documentation.
+
 ### Rust API
 
 **Core Types:**
