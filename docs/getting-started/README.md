@@ -8,15 +8,15 @@ Get up and running with BoxLite in 5 minutes.
 
 BoxLite requires a platform with hardware virtualization support:
 
-| Platform | Architecture  | Requirements                        |
-|----------|---------------|-------------------------------------|
-| macOS    | Apple Silicon | macOS 12+ (Monterey or later)       |
-| Linux    | x86_64        | KVM enabled (`/dev/kvm` accessible) |
-| Linux    | ARM64         | KVM enabled (`/dev/kvm` accessible) |
+| Platform       | Architecture  | Requirements                        |
+|----------------|---------------|-------------------------------------|
+| macOS          | Apple Silicon | macOS 12+ (Monterey or later)       |
+| Linux          | x86_64        | KVM enabled (`/dev/kvm` accessible) |
+| Linux          | ARM64         | KVM enabled (`/dev/kvm` accessible) |
+| Windows (WSL2) | x86_64        | WSL2 with KVM support               |
 
 **Not Supported:**
 - macOS Intel (x86_64) - Hypervisor.framework stability issues
-- Windows - Use WSL2 with Linux requirements
 
 ### Verify Virtualization Support
 
@@ -45,6 +45,31 @@ sudo modprobe kvm_amd    # For AMD CPUs
 # Add user to kvm group (may require logout/login)
 sudo usermod -aG kvm $USER
 ```
+
+**Windows (WSL2):**
+```bash
+# Verify you're running WSL2 (should show "2")
+wsl.exe -l -v
+
+# Check if KVM is available
+ls -l /dev/kvm
+
+# Add user to kvm group
+sudo usermod -aG kvm $USER
+
+# Apply the new group membership (pick one):
+newgrp kvm
+# OR restart WSL from Windows PowerShell:
+# wsl.exe --shutdown
+
+# Verify group membership
+id -nG | tr ' ' '\n' | grep -x kvm
+
+# Verify KVM access
+python3 -c "open('/dev/kvm','rb').close(); print('kvm ok')"
+```
+
+**Note:** If you see "Timeout waiting for guest ready (30s)" errors, it's likely a KVM permission issue. Ensure your user is in the `kvm` group and restart WSL with `wsl.exe --shutdown`.
 
 ### No Daemon Required
 

@@ -163,21 +163,22 @@ For details, see [Architecture](./docs/architecture/).
 
 ## Supported Platforms
 
-| Platform | Architecture          | Status          |
-|----------|-----------------------|-----------------|
-| macOS    | Apple Silicon (ARM64) | ✅ Supported     |
-| Linux    | x86_64                | ✅ Supported     |
-| Linux    | ARM64                 | ✅ Supported     |
-| macOS    | Intel (x86_64)        | ❌ Not supported |
-| Windows  | —                     | ❌ Not supported |
+| Platform       | Architecture          | Status           |
+|----------------|-----------------------|------------------|
+| macOS          | Apple Silicon (ARM64) | ✅ Supported     |
+| Linux          | x86_64                | ✅ Supported     |
+| Linux          | ARM64                 | ✅ Supported     |
+| Windows (WSL2) | x86_64                | ✅ Supported     |
+| macOS          | Intel (x86_64)        | ❌ Not supported |
 
 ## System Requirements
 
-| Platform | Requirements                        |
-|----------|-------------------------------------|
-| macOS    | Apple Silicon, macOS 12+            |
-| Linux    | KVM enabled (`/dev/kvm` accessible) |
-| Python   | 3.10+                               |
+| Platform       | Requirements                                   |
+|----------------|------------------------------------------------|
+| macOS          | Apple Silicon, macOS 12+                       |
+| Linux          | KVM enabled (`/dev/kvm` accessible)            |
+| Windows (WSL2) | WSL2 with KVM support, user in `kvm` group     |
+| Python         | 3.10+                                          |
 
 ## Getting Help
 

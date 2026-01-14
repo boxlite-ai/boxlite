@@ -129,8 +129,8 @@ make dist:python    # Build portable Python wheel
 ### Critical for AI Assistants
 
 **Platform support:**
-- ✅ macOS ARM64 (Apple Silicon), Linux x86_64/ARM64
-- ❌ macOS Intel, Windows (not supported)
+- ✅ macOS ARM64 (Apple Silicon), Linux x86_64/ARM64, Windows (via WSL2)
+- ❌ macOS Intel (not supported)
 
 **Before building:**
 - ⚠️ **MUST** run `git submodule update --init --recursive` (vendored dependencies)

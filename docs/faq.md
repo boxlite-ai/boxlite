@@ -47,15 +47,34 @@ sudo usermod -aG kvm $USER
 
 ### Can I use BoxLite on Windows?
 
-**No**, BoxLite is not supported on Windows.
+**Yes**, through WSL2 (Windows Subsystem for Linux).
 
-**Alternatives:**
-- Use WSL2 (Windows Subsystem for Linux) with Ubuntu
-- Deploy to a Linux VM or cloud instance
-- Consider cloud-based sandboxing solutions for Windows
+**Requirements:**
+- Windows 10 version 2004+ or Windows 11
+- WSL2 with a Linux distribution (Ubuntu recommended)
+- KVM support enabled in WSL2
 
-**Why not Windows?**
-BoxLite requires KVM (Linux) or Hypervisor.framework (macOS), neither of which are available on Windows.
+**Setup:**
+```bash
+# Inside WSL2, add your user to the kvm group
+sudo usermod -aG kvm $USER
+
+# Apply the new group membership (pick one):
+newgrp kvm
+# OR restart WSL from Windows PowerShell:
+# wsl.exe --shutdown
+
+# Verify KVM access
+python3 -c "open('/dev/kvm','rb').close(); print('kvm ok')"
+```
+
+**Common Issue:** If you see "Timeout waiting for guest ready (30s)" errors, your shell cannot open `/dev/kvm`. This happens when:
+- `/dev/kvm` is owned by `root:kvm` with mode `660`
+- Your user is not in the `kvm` group
+
+Run `sudo usermod -aG kvm $USER` and restart WSL with `wsl.exe --shutdown`.
+
+**Note:** Native Windows (without WSL2) is not supported. BoxLite requires KVM (Linux) or Hypervisor.framework (macOS).
 
 ### What Python versions are supported?
 
