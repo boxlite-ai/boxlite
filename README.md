@@ -124,7 +124,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 - **Storage**: volume mounts (ro/rw), persistent disks (QCOW2), copy-on-write
 - **Networking**: outbound internet, port forwarding (TCP/UDP), network metrics
 - **Images**: OCI pull + caching, custom rootfs support
-- **SDKs**: Python (stable), Node.js (v0.1.5); Go coming soon
+- **SDKs**: Python (stable), Node.js (v0.1.6); Go coming soon
 
 ## Architecture
 

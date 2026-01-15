@@ -2,7 +2,7 @@
 
 Complete API reference for the BoxLite Python SDK.
 
-**Version:** 0.5.2
+**Version:** 0.5.3
 **Python:** 3.10+
 **Platforms:** macOS (Apple Silicon), Linux (x86_64, ARM64)
 
