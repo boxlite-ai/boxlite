@@ -22,10 +22,5 @@
     "url": "https://github.com/boxlite-labs/boxlite/issues"
   },
   "homepage": "https://github.com/boxlite-labs/boxlite#readme",
-  "dependencies": {
-    "@boxlite/core": "file:sdks/node/boxlite-core-0.1.0.tgz",
-    "@boxlite/darwin-arm64": "file:sdks/node/boxlite-darwin-arm64-0.1.0.tgz",
-    "boxlite": "file:sdks/node/boxlite-0.1.0.tgz",
-    "boxlite-darwin-arm64": "file:sdks/node/boxlite-darwin-arm64-0.1.0.tgz"
-  }
+  "dependencies": {}
 }
