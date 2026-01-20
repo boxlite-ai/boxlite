@@ -99,7 +99,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ..Default::default()
     };
 
-    let (_, litebox) = runtime.create(options)?;
+    let litebox = runtime.create(options, None).await?;
     let mut execution = litebox
         .exec(BoxCommand::new("echo").arg("Hello from BoxLite!"))
         .await?;
