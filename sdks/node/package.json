@@ -1,6 +1,6 @@
 {
   "name": "@boxlite-ai/boxlite",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "BoxLite - Embeddable micro-VM runtime for secure, isolated code execution",
   "type": "module",
   "main": "dist/index.js",
@@ -22,8 +22,8 @@
     "vitest": "^2.0.0"
   },
   "optionalDependencies": {
-    "@boxlite-ai/boxlite-darwin-arm64": "0.2.0",
-    "@boxlite-ai/boxlite-linux-x64-gnu": "0.2.0"
+    "@boxlite-ai/boxlite-darwin-arm64": "0.2.1",
+    "@boxlite-ai/boxlite-linux-x64-gnu": "0.2.1"
   },
   "keywords": [
     "boxlite",
