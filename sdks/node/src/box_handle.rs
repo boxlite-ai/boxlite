@@ -124,6 +124,23 @@ impl JsBox {
         })
     }
 
+    /// Start or restart a stopped box.
+    ///
+    /// Boots the VM for a box that was previously stopped or is in
+    /// configured state. The box's rootfs and configuration are preserved.
+    ///
+    /// # Example
+    /// ```javascript
+    /// // Restart a stopped box
+    /// const box = await runtime.get('box-id');
+    /// await box.start();
+    /// console.log('Box started');
+    /// ```
+    #[napi]
+    pub async fn start(&self) -> Result<()> {
+        self.handle.start().await.map_err(map_err)
+    }
+
     /// Stop the box (preserves state for restart).
     ///
     /// Sends a graceful shutdown signal to the VM. The box's rootfs and
