@@ -89,7 +89,34 @@ impl GuestService for GuestServer {
         &self,
         _request: Request<ShutdownRequest>,
     ) -> Result<Response<ShutdownResponse>, Status> {
-        info!("Received shutdown request");
+        info!("Received shutdown request - graceful shutdown starting");
+
+        // Step 1: Gracefully shutdown all running executions
+        const EXEC_SHUTDOWN_TIMEOUT_MS: u64 = 1000;
+        info!("Stopping running executions...");
+        self.registry.shutdown_all(EXEC_SHUTDOWN_TIMEOUT_MS).await;
+
+        // Step 2: Gracefully shutdown all containers
+        const CONTAINER_SHUTDOWN_TIMEOUT_MS: u64 = 2000;
+        info!("Stopping containers...");
+        let containers = self.containers.lock().await;
+        for (container_id, container_arc) in containers.iter() {
+            info!(container_id = %container_id, "Shutting down container");
+            let container = container_arc.lock().await;
+            if let Err(e) = container.shutdown(CONTAINER_SHUTDOWN_TIMEOUT_MS) {
+                error!(container_id = %container_id, error = %e, "Failed to shutdown container");
+            }
+        }
+        drop(containers);
+
+        // Step 3: Sync all filesystems to ensure data is flushed to disk.
+        // This is critical for COW disks to be in consistent state on restart.
+        info!("Syncing filesystems...");
+        unsafe {
+            nix::libc::sync();
+        }
+
+        info!("Graceful shutdown complete");
         Ok(Response::new(ShutdownResponse {}))
     }
 }

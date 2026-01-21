@@ -264,24 +264,41 @@ impl ExecResult {
 
 /// Standard input stream (write-only).
 pub struct ExecStdin {
-    sender: mpsc::UnboundedSender<Vec<u8>>,
+    sender: Option<mpsc::UnboundedSender<Vec<u8>>>,
 }
 
 impl ExecStdin {
     pub(crate) fn new(sender: mpsc::UnboundedSender<Vec<u8>>) -> Self {
-        Self { sender }
+        Self {
+            sender: Some(sender),
+        }
     }
 
     /// Write data to stdin.
     pub async fn write(&mut self, data: &[u8]) -> BoxliteResult<()> {
-        self.sender
-            .send(data.to_vec())
-            .map_err(|_| boxlite_shared::BoxliteError::Internal("stdin channel closed".to_string()))
+        match &self.sender {
+            Some(sender) => sender.send(data.to_vec()).map_err(|_| {
+                boxlite_shared::BoxliteError::Internal("stdin channel closed".to_string())
+            }),
+            None => Err(boxlite_shared::BoxliteError::Internal(
+                "stdin already closed".to_string(),
+            )),
+        }
     }
 
     /// Write all data to stdin.
     pub async fn write_all(&mut self, data: &[u8]) -> BoxliteResult<()> {
         self.write(data).await
+    }
+
+    /// Close stdin stream, signaling EOF to the process.
+    pub fn close(&mut self) {
+        self.sender = None;
+    }
+
+    /// Check if stdin is closed.
+    pub fn is_closed(&self) -> bool {
+        self.sender.is_none()
     }
 }
 

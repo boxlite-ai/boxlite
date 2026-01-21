@@ -64,11 +64,10 @@ def example_custom_runtime():
         info = box.info()
         print(f"✓ Box info:")
         print(f"  ID: {info.id}")
-        print(f"  State: {info.state}")
+        print(f"  State: {info.state.status}")
         print(f"  Image: {info.image}")
         print(f"  CPUs: {info.cpus}")
         print(f"  Memory: {info.memory_mib} MiB")
-        print(f"  Transport: {info.transport}")
         print(f"  Created: {info.created_at}")
 
         box.stop()

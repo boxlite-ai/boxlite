@@ -74,17 +74,85 @@ impl VmmHandlerTrait for ShimHandler {
     }
 
     fn stop(&mut self) -> BoxliteResult<()> {
-        // Kill process - prefer Child::kill() if we have the handle
+        // Graceful shutdown: SIGTERM first, wait, then SIGKILL if needed.
+        // This gives libkrun time to flush its virtio-blk buffers to disk,
+        // preventing qcow2 corruption.
+        const GRACEFUL_SHUTDOWN_TIMEOUT_MS: u64 = 2000;
+
         if let Some(mut process) = self.process.take() {
-            let _ = process.kill();
-            let _ = process.wait(); // Reap zombie process
-        } else {
-            // Attached mode: kill using libc::kill since we don't have a Child handle
+            // Step 1: Send SIGTERM for graceful shutdown
+            let pid = process.id();
             unsafe {
-                libc::kill(self.pid as i32, libc::SIGKILL);
+                libc::kill(pid as i32, libc::SIGTERM);
+            }
+
+            // Step 2: Wait with timeout for process to exit
+            let start = std::time::Instant::now();
+            loop {
+                match process.try_wait() {
+                    Ok(Some(_)) => {
+                        // Process exited gracefully
+                        return Ok(());
+                    }
+                    Ok(None) => {
+                        // Still running, check timeout
+                        if start.elapsed().as_millis() > GRACEFUL_SHUTDOWN_TIMEOUT_MS as u128 {
+                            // Timeout - force kill
+                            let _ = process.kill();
+                            let _ = process.wait();
+                            return Ok(());
+                        }
+                        // Brief sleep before checking again
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                    }
+                    Err(_) => {
+                        // Error checking status - try to kill anyway
+                        let _ = process.kill();
+                        let _ = process.wait();
+                        return Ok(());
+                    }
+                }
+            }
+        } else {
+            // Attached mode: use SIGTERM then SIGKILL with polling
+            // We don't have a Child handle, so we use waitpid/kill directly
+            unsafe {
+                libc::kill(self.pid as i32, libc::SIGTERM);
+            }
+
+            // Poll for exit with timeout
+            let start = std::time::Instant::now();
+            loop {
+                let mut status: i32 = 0;
+                let result = unsafe { libc::waitpid(self.pid as i32, &mut status, libc::WNOHANG) };
+
+                if result > 0 {
+                    // Process exited gracefully (we reaped it)
+                    return Ok(());
+                }
+                if result < 0 {
+                    // Error - process may not be our child (common in attached mode)
+                    // Fall back to checking if process still exists
+                    let exists = unsafe { libc::kill(self.pid as i32, 0) } == 0;
+                    if !exists {
+                        return Ok(()); // Already dead
+                    }
+                }
+                // result == 0 means still running
+
+                if start.elapsed().as_millis() > GRACEFUL_SHUTDOWN_TIMEOUT_MS as u128 {
+                    // Timeout - force kill
+                    unsafe {
+                        libc::kill(self.pid as i32, libc::SIGKILL);
+                    }
+                    return Ok(());
+                }
+
+                std::thread::sleep(std::time::Duration::from_millis(50));
             }
         }
 
+        #[allow(unreachable_code)]
         Ok(())
     }
 

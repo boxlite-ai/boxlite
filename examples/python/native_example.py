@@ -58,7 +58,6 @@ async def example_custom_runtime():
     # Create box with resource limits
     box_opts = boxlite.BoxOptions(
         image="alpine:latest",
-        name="test-box",
         cpus=2,
         memory_mib=512,
         volumes=[("/host/data", "/guest/data", False)],
@@ -71,11 +70,10 @@ async def example_custom_runtime():
     info = box.info()
     print(f"✓ Box info:")
     print(f"  ID: {info.id}")
-    print(f"  State: {info.state}")
+    print(f"  State: {info.state.status}")
     print(f"  Image: {info.image}")
     print(f"  CPUs: {info.cpus}")
     print(f"  Memory: {info.memory_mib} MiB")
-    print(f"  Transport: {info.transport}")
     print(f"  Created: {info.created_at}")
 
     await box.stop()
@@ -209,7 +207,7 @@ async def example_runtime_metrics():
         await execution.wait()
 
     # Get runtime metrics
-    metrics = runtime.metrics()
+    metrics = await runtime.metrics()
     print(f"\n✓ Runtime metrics:")
     print(f"  Total boxes created: {metrics.boxes_created_total}")
     print(f"  Failed boxes: {metrics.boxes_failed_total}")
@@ -234,31 +232,32 @@ async def example_list_and_info():
     for i in range(3):
         box = await runtime.create(boxlite.BoxOptions(
             image="alpine:latest",
-            name=f"test-box-{i}"
         ))
         boxes.append(box)
         print(f"✓ Box {i + 1} created: {box.id}")
 
     # List all boxes
-    all_boxes = runtime.list()
+    all_boxes = await runtime.list_info()
     print(f"\n✓ Total boxes: {len(all_boxes)}")
     for info in all_boxes[-3:]:  # Show last 3
-        print(f"  - {info.id}: {info.state} ({info.image})")
+        print(f"  - {info.id}: {info.state.status} ({info.image})")
 
     # Get specific box info
     if boxes:
         info = boxes[0].info()
         print(f"\n✓ Box info for {boxes[0].id}:")
-        print(f"  State: {info.state}")
+        print(f"  State: {info.state.status}")
         print(f"  Image: {info.image}")
         print(f"  CPUs: {info.cpus}")
         print(f"  Memory: {info.memory_mib} MiB")
 
     # Cleanup - shutdown and remove
     for box in boxes:
-        await box.stop()
-        await runtime.remove(box.id, force=False)
-        print(f"✓ Removed box: {box.id}")
+        try:
+            await runtime.remove(box.id, force=True)
+            print(f"✓ Removed box: {box.id}")
+        except Exception as e:
+            print(f"  Note: Box {box.id} already cleaned up")
 
 
 async def example_execution_kill():
