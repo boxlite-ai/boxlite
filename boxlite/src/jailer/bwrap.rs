@@ -286,8 +286,9 @@ impl BwrapCommand {
     /// Panics if called when `is_available()` returns false. Always check
     /// availability before calling this method.
     pub fn build(&self, executable: impl AsRef<Path>, args: &[String]) -> Command {
-        let bwrap_path = get_bwrap_path()
-            .expect("BwrapCommand::build() called but bwrap is not available. Check is_available() first.");
+        let bwrap_path = get_bwrap_path().expect(
+            "BwrapCommand::build() called but bwrap is not available. Check is_available() first.",
+        );
 
         let mut cmd = Command::new(bwrap_path);
         cmd.args(&self.args);
