@@ -539,8 +539,7 @@ pub unsafe extern "C" fn boxlite_list_info(
 
     match result {
         Ok(boxes) => {
-            let json_array: Vec<serde_json::Value> =
-                boxes.iter().map(box_info_to_json).collect();
+            let json_array: Vec<serde_json::Value> = boxes.iter().map(box_info_to_json).collect();
             write_json_output(serde_json::Value::Array(json_array), out_json)
         }
         Err(e) => {
@@ -596,10 +595,8 @@ pub unsafe extern "C" fn boxlite_get_info(
         Ok(Some(info)) => write_json_output(box_info_to_json(&info), out_json),
         Ok(None) => {
             if !out_error.is_null() {
-                *out_error = error_to_c_string(BoxliteError::NotFound(format!(
-                    "Box not found: {}",
-                    id_str
-                )));
+                *out_error =
+                    error_to_c_string(BoxliteError::NotFound(format!("Box not found: {}", id_str)));
             }
             -1
         }
@@ -661,10 +658,8 @@ pub unsafe extern "C" fn boxlite_get(
         }
         Ok(None) => {
             if !out_error.is_null() {
-                *out_error = error_to_c_string(BoxliteError::NotFound(format!(
-                    "Box not found: {}",
-                    id_str
-                )));
+                *out_error =
+                    error_to_c_string(BoxliteError::NotFound(format!("Box not found: {}", id_str)));
             }
             ptr::null_mut()
         }
@@ -752,9 +747,7 @@ pub unsafe extern "C" fn boxlite_runtime_metrics(
 
     let runtime_ref = &*runtime;
 
-    let metrics = runtime_ref
-        .tokio_rt
-        .block_on(runtime_ref.runtime.metrics());
+    let metrics = runtime_ref.tokio_rt.block_on(runtime_ref.runtime.metrics());
 
     let json = serde_json::json!({
         "boxes_created_total": metrics.boxes_created_total(),
@@ -817,9 +810,7 @@ pub unsafe extern "C" fn boxlite_box_metrics(
 
     let handle_ref = &*handle;
 
-    let result = handle_ref
-        .tokio_rt
-        .block_on(handle_ref.handle.metrics());
+    let result = handle_ref.tokio_rt.block_on(handle_ref.handle.metrics());
 
     match result {
         Ok(metrics) => {
@@ -870,9 +861,7 @@ pub unsafe extern "C" fn boxlite_start_box(
 
     let handle_ref = &*handle;
 
-    let result = handle_ref
-        .tokio_rt
-        .block_on(handle_ref.handle.start());
+    let result = handle_ref.tokio_rt.block_on(handle_ref.handle.start());
 
     match result {
         Ok(_) => 0,
