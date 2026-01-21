@@ -27,7 +27,6 @@ fn main() {
     {
         println!("cargo:warning=bubblewrap-sys: skipping build (not Linux)");
         println!("cargo:bwrap_BOXLITE_DEP=/nonexistent");
-        return;
     }
 
     #[cfg(target_os = "linux")]
