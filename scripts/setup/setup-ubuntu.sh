@@ -89,6 +89,11 @@ install_system_deps() {
         libelf-dev         # ELF library (kernel objtool)
         python3-pyelftools # ELF parsing (bin2cbundle.py)
 
+        # bubblewrap build dependencies (jailer sandbox)
+        meson              # Meson build system
+        ninja-build        # Ninja build backend
+        libcap-dev         # Linux capabilities library
+
         # gRPC/protobuf (boxlite-shared)
         protobuf-compiler  # protoc compiler
     )

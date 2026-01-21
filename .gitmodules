@@ -7,3 +7,6 @@
 [submodule "boxlite/deps/e2fsprogs-sys/vendor/e2fsprogs"]
 	path = boxlite/deps/e2fsprogs-sys/vendor/e2fsprogs
 	url = https://github.com/tytso/e2fsprogs.git
+[submodule "boxlite/deps/bubblewrap-sys/vendor/bubblewrap"]
+	path = boxlite/deps/bubblewrap-sys/vendor/bubblewrap
+	url = https://github.com/containers/bubblewrap.git

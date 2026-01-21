@@ -1,0 +1,11 @@
+[package]
+name = "bubblewrap-sys"
+version = "0.1.0"
+edition = "2021"
+authors = ["BoxLite Contributors"]
+description = "Builds and bundles bwrap from bubblewrap"
+license = "Apache-2.0"
+links = "bubblewrap"
+
+[build-dependencies]
+num_cpus = "1.16"

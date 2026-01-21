@@ -77,6 +77,10 @@ install_system_deps() {
         # libgvproxy (Go network backend)
         golang
 
+        # bubblewrap build dependencies (jailer sandbox)
+        ninja-build        # Ninja build backend
+        libcap-devel       # Linux capabilities library
+
         # Python
         python3
         python3-pip
@@ -115,6 +119,16 @@ install_python_deps() {
         echo -e "${YELLOW}Installing...${NC}"
         pip3 install -q pyelftools
         print_success "pyelftools installed"
+    fi
+
+    # Meson build system (for bubblewrap)
+    print_step "Checking for meson... "
+    if command -v meson &>/dev/null; then
+        print_success "Already installed"
+    else
+        echo -e "${YELLOW}Installing via pip...${NC}"
+        pip3 install -q meson
+        print_success "meson installed"
     fi
     echo ""
 }

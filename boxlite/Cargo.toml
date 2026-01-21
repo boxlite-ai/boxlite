@@ -72,6 +72,7 @@ hex = "0.4.3"
 
 # Linux-specific dependencies for bind mount support
 [target.'cfg(target_os = "linux")'.dependencies]
+bubblewrap-sys = { path = "deps/bubblewrap-sys" }  # Bundled bwrap for sandbox isolation
 caps = "0.5"
 fuse-backend-rs = { version = "0.12", features = ["fusedev"] }
 seccompiler = "0.4"  # Generate seccomp BPF filters for jailer
