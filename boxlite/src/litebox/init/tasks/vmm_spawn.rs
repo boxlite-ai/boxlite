@@ -42,6 +42,7 @@ impl PipelineTask<InitCtx> for VmmSpawnTask {
             guest_disk_path,
             container_id,
             runtime,
+            reuse_rootfs,
         ) = {
             let ctx = ctx.lock().await;
             let layout = ctx
@@ -67,6 +68,7 @@ impl PipelineTask<InitCtx> for VmmSpawnTask {
                 guest_disk_path,
                 ctx.config.container.id.clone(),
                 ctx.runtime.clone(),
+                ctx.reuse_rootfs,
             )
         };
 
@@ -80,6 +82,7 @@ impl PipelineTask<InitCtx> for VmmSpawnTask {
             guest_disk_path.as_deref(),
             &container_id,
             &runtime,
+            reuse_rootfs,
         )
         .await
         .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
@@ -113,6 +116,7 @@ async fn build_config(
     guest_disk_path: Option<&Path>,
     container_id: &ContainerID,
     runtime: &SharedRuntimeImpl,
+    reuse_rootfs: bool,
 ) -> BoxliteResult<(
     InstanceSpec,
     GuestVolumeManager,
@@ -140,22 +144,24 @@ async fn build_config(
     // 2. COW disk: QCOW2 overlay with copy-on-write semantics
     //    - Inherits formatted ext4 from base (need_format=false)
     //    - May have larger virtual size if disk_size_gb specified
-    // 3. Guest mount: If disk was resized, expand ext4 to fill space (need_resize=true)
-    let need_resize = options.disk_size_gb.is_some();
+    // 3. Guest mount: Only resize on fresh start, not restart
+    //    - Fresh start with custom size: resize2fs expands filesystem
+    //    - Restart: filesystem already at correct size, skip resize
+    let need_resize = options.disk_size_gb.is_some() && !reuse_rootfs;
     let rootfs_device = volume_mgr.add_block_device(
         container_disk_path,
         DiskFormat::Qcow2,
         false,
         None,
         false,       // need_format: COW child inherits formatted base
-        need_resize, // need_resize: expand ext4 if virtual size > base size
+        need_resize, // need_resize: only on fresh start with custom disk size
     );
 
     // Update rootfs_init with actual device path and resize flag
     let rootfs_init = crate::portal::interfaces::ContainerRootfsInitConfig::DiskImage {
         device: rootfs_device,
         need_format: false, // COW child uses pre-formatted base
-        need_resize,        // Expand ext4 if disk_size_gb was specified
+        need_resize,        // Only on fresh start with custom disk size
     };
 
     // Add user volumes via ContainerVolumeManager

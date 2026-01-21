@@ -10,6 +10,7 @@ use super::{kill, start};
 use crate::layout::GuestLayout;
 use boxlite_shared::errors::BoxliteResult;
 use libcontainer::container::Container as LibContainer;
+use libcontainer::signal::Signal;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -48,6 +49,8 @@ pub struct Container {
     /// Dropping this closes pipes → init gets EOF → init exits.
     #[allow(dead_code)]
     stdio: ContainerStdio,
+    /// Flag to track if shutdown() was called (prevents double-kill in Drop).
+    is_shutdown: std::sync::atomic::AtomicBool,
 }
 
 impl Container {
@@ -132,6 +135,7 @@ impl Container {
             bundle_path,
             env: env_map,
             stdio,
+            is_shutdown: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -291,6 +295,59 @@ impl Container {
         }
     }
 
+    /// Gracefully shutdown the container.
+    ///
+    /// Sends SIGTERM first, waits for exit with timeout, then SIGKILL if needed.
+    /// Sets the `shutdown_called` flag to prevent double-kill in Drop.
+    ///
+    /// # Arguments
+    ///
+    /// - `timeout_ms`: Maximum time to wait for graceful exit before SIGKILL
+    ///
+    /// # Returns
+    ///
+    /// Ok(()) on successful shutdown, or if container was already stopped.
+    pub fn shutdown(&self, timeout_ms: u64) -> BoxliteResult<()> {
+        self.is_shutdown
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+
+        let container_state_path = self.container_state_path();
+        let mut container = match LibContainer::load(container_state_path) {
+            Ok(c) => c,
+            Err(_) => {
+                tracing::debug!(container_id = %self.id, "Container already gone, nothing to shutdown");
+                return Ok(());
+            }
+        };
+
+        if !container.can_kill() {
+            tracing::debug!(container_id = %self.id, "Container cannot be killed, skipping shutdown");
+            return Ok(());
+        }
+
+        // Step 1: Send SIGTERM
+        tracing::info!(container_id = %self.id, "Sending SIGTERM to container");
+        let sigterm = Signal::try_from(15).expect("SIGTERM (15) is a valid signal");
+        let _ = container.kill(sigterm, true);
+
+        // Step 2: Wait for graceful exit with timeout
+        let start = std::time::Instant::now();
+        while start.elapsed().as_millis() < timeout_ms as u128 {
+            if !self.is_running() {
+                tracing::info!(container_id = %self.id, "Container exited gracefully");
+                return Ok(());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+
+        // Step 3: SIGKILL if still running
+        tracing::warn!(container_id = %self.id, "Container didn't exit gracefully, sending SIGKILL");
+        let sigkill = Signal::try_from(9).expect("SIGKILL (9) is a valid signal");
+        let _ = container.kill(sigkill, true);
+
+        Ok(())
+    }
+
     fn container_state_path(&self) -> PathBuf {
         self.state_root.join(&self.id)
     }
@@ -307,7 +364,13 @@ impl Drop for Container {
         let container_state_path = self.container_state_path();
 
         if let Ok(mut container) = LibContainer::load(container_state_path) {
-            kill::kill_container(&mut container);
+            // Skip kill if already shutdown gracefully
+            if self.is_shutdown.load(std::sync::atomic::Ordering::SeqCst) {
+                tracing::debug!(container_id = %self.id, "Container already shutdown, skipping kill");
+            } else {
+                // Fallback: SIGKILL if shutdown() wasn't called
+                kill::kill_container(&mut container);
+            }
             kill::delete_container(&mut container);
         }
 

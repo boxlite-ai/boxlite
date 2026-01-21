@@ -355,20 +355,36 @@ impl Qcow2Helper {
         // Backing file goes right after the header (at offset 512)
         let backing_offset: u64 = 512;
 
-        // L1 table calculation
-        let l1_entries = virtual_size.div_ceil(cluster_size) as u32;
+        // L1 table calculation - correctly size L1 table for large disks
+        // L2 covers cluster_size/8 clusters per L2 table (each L2 entry is 8 bytes)
+        // L1 entries = ceil(virtual_size / bytes_per_l2) where bytes_per_l2 = (cluster_size/8) * cluster_size
+        let l2_entries_per_table = cluster_size / 8; // entries per L2 table
+        let bytes_per_l2 = l2_entries_per_table * cluster_size; // bytes covered by one L2 table
+        let l1_entries = virtual_size.div_ceil(bytes_per_l2) as u32;
         let l1_size = l1_entries;
         let l1_offset = cluster_size;
 
-        // Refcount table in cluster 2
-        let refcount_offset = cluster_size * 2;
+        // Calculate how many clusters the L1 table needs
+        let l1_bytes = (l1_entries as u64) * 8; // each L1 entry is 8 bytes
+        let l1_clusters = l1_bytes.div_ceil(cluster_size);
+
+        // Place refcount table after L1 table (not at fixed cluster 2!)
+        let refcount_table_cluster = 1 + l1_clusters; // cluster after L1
+        let refcount_offset = cluster_size * refcount_table_cluster;
         let refcount_clusters = 1u32;
+
+        // Refcount block is one cluster after refcount table
+        let refcount_block_cluster = refcount_table_cluster + 1;
+        let refcount_block_offset = cluster_size * refcount_block_cluster;
+
+        // Total clusters needed: header(1) + L1(l1_clusters) + refcount_table(1) + refcount_block(1)
+        let total_clusters = 1 + l1_clusters + 2;
 
         // Header extension starts at offset 104
         let header_extension_offset = 104usize;
 
-        // Allocate buffer for header + L1 + refcount table + refcount block
-        let mut header = vec![0u8; cluster_size as usize * 4];
+        // Allocate buffer for all structures
+        let mut header = vec![0u8; (cluster_size as usize) * (total_clusters as usize)];
 
         // Write qcow2 v3 header
         // Magic (QFI\xfb)
@@ -432,18 +448,17 @@ impl Qcow2Helper {
         // L1 table at cluster 1 - all zeros means all reads go to backing file
         // (already zero-initialized)
 
-        // Refcount table at cluster 2 - need to mark used clusters
-        let refcount_block_offset = cluster_size * 3;
-
-        // Refcount table entry points to refcount block
+        // Refcount table - first entry points to refcount block
         let rt_offset = refcount_offset as usize;
         header[rt_offset..rt_offset + 8].copy_from_slice(&refcount_block_offset.to_be_bytes());
 
-        // Refcount block: mark clusters 0-3 as used (refcount = 1)
+        // Refcount block: mark all used clusters as used (refcount = 1)
+        // Used clusters: 0 (header), 1..1+l1_clusters (L1 table), refcount_table, refcount_block
         let rb_offset = refcount_block_offset as usize;
-        for i in 0..4 {
+        for i in 0..total_clusters {
             // 16-bit refcounts (refcount_order = 4 means 2^4 = 16 bits)
-            header[rb_offset + i * 2..rb_offset + i * 2 + 2].copy_from_slice(&1u16.to_be_bytes());
+            let offset = rb_offset + (i as usize) * 2;
+            header[offset..offset + 2].copy_from_slice(&1u16.to_be_bytes());
         }
 
         // Write to file
@@ -463,6 +478,17 @@ impl Qcow2Helper {
         file.write_all(&header).map_err(|e| {
             BoxliteError::Storage(format!(
                 "Failed to write COW child header to {}: {}",
+                child_path.display(),
+                e
+            ))
+        })?;
+
+        // Sync to disk to ensure header is durable before returning.
+        // Without this, the header may stay in page cache and be lost if the
+        // process exits before the kernel flushes it (causing EINVAL on restart).
+        file.sync_all().map_err(|e| {
+            BoxliteError::Storage(format!(
+                "Failed to sync COW child disk {}: {}",
                 child_path.display(),
                 e
             ))

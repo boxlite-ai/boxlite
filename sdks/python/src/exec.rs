@@ -53,6 +53,27 @@ impl PyExecStdin {
         })
     }
 
+    /// Close stdin stream, signaling EOF to the process.
+    fn close<'a>(&self, py: Python<'a>) -> PyResult<Bound<'a, PyAny>> {
+        let stream = Arc::clone(&self.stream);
+
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let mut guard = stream.lock().await;
+            guard.close();
+            Ok(())
+        })
+    }
+
+    /// Check if stdin is closed.
+    fn is_closed<'a>(&self, py: Python<'a>) -> PyResult<Bound<'a, PyAny>> {
+        let stream = Arc::clone(&self.stream);
+
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let guard = stream.lock().await;
+            Ok(guard.is_closed())
+        })
+    }
+
     fn __repr__(&self) -> String {
         "ExecStdin(...)".to_string()
     }
