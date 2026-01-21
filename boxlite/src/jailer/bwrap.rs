@@ -51,11 +51,11 @@ fn get_bwrap_path() -> Option<&'static PathBuf> {
     BWRAP_PATH
         .get_or_init(|| {
             // 1. Try system bwrap first (allows user override)
-            if let Ok(output) = Command::new("bwrap").arg("--version").output() {
-                if output.status.success() {
-                    tracing::debug!("Using system bwrap from PATH");
-                    return Some(PathBuf::from("bwrap"));
-                }
+            if let Ok(output) = Command::new("bwrap").arg("--version").output()
+                && output.status.success()
+            {
+                tracing::debug!("Using system bwrap from PATH");
+                return Some(PathBuf::from("bwrap"));
             }
 
             // 2. Try bundled bwrap (from bubblewrap-sys)
