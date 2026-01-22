@@ -9,6 +9,7 @@
     "codebox": "node codebox.js",
     "browserbox": "node browserbox.js",
     "computerbox": "node computerbox.js",
-    "interactivebox": "node interactivebox.js"
+    "interactivebox": "node interactivebox.js",
+    "claude": "node claude_in_boxlite.js"
   }
 }
