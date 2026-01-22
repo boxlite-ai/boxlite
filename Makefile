@@ -124,9 +124,9 @@ dist\:c: runtime
 		exit 1; \
 	fi
 
-# Build Node.js distribution packages
+# Build Node.js distribution packages (local use)
 dist\:node: runtime
-	@bash $(SCRIPT_DIR)/build/build-node-sdk.sh --profile release
+	@cd sdks/node && npm install --silent && npm run build:native -- --release && npm run build && npm run prepublish && npm run bundle:runtime && npm run pack:all
 
 
 # Build wheel locally with maturin + platform-specific repair tool
@@ -159,7 +159,8 @@ dev\:c: runtime
 
 # Build Node.js SDK locally with napi-rs (debug mode)
 dev\:node: runtime-debug
-	@bash $(SCRIPT_DIR)/build/build-node-sdk.sh --profile debug
+	@cd sdks/node && npm install --silent && npm run build:native && npm run build
+	@ln -sfn ../../../target/boxlite-runtime sdks/node/native/runtime
 
 # Run all unit tests (excludes integration tests that require VMs)
 test:

@@ -98,19 +98,33 @@ jobs:
             # Build with SKIP_GUEST_BUILD=1 to use pre-built guest
             export SKIP_GUEST_BUILD=1
             make setup runtime
-            bash scripts/build/build-node-sdk.sh --profile release
+
+            # Build Node.js artifacts (no pack - CI uploads raw artifacts)
+            cd sdks/node
+            npm install --silent
+            npm run build:native -- --release
+            npm run prepublish
+            npm run bundle:runtime
 
       - name: Build Node.js package (macOS)
         if: runner.os == 'macOS'
         run: |
-          make setup
-          make dist:node
+          make setup runtime
 
-      - name: Upload packages
+          # Build Node.js artifacts (no pack - CI uploads raw artifacts)
+          cd sdks/node
+          npm install --silent
+          npm run build:native -- --release
+          npm run prepublish
+          npm run bundle:runtime
+
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: packages-${{ matrix.target }}
-          path: sdks/node/packages/*.tgz
+          name: artifacts-${{ matrix.target }}
+          path: |
+            sdks/node/native/*.node
+            sdks/node/npm/
           if-no-files-found: error
           retention-days: ${{ needs.config.outputs.artifact-retention-days }}
 
@@ -125,24 +139,27 @@ jobs:
         node-version: ${{ fromJson(needs.config.outputs.node-versions) }}
 
     steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
 
-      - name: Download packages
+      - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
-          name: packages-${{ matrix.platform.target }}
-          path: packages
+          name: artifacts-${{ matrix.platform.target }}
+          path: sdks/node
 
       - name: Test package
         run: |
-          cd packages
-          # Install platform package first, then main package
-          npm install boxlite-ai-boxlite-${{ matrix.platform.target }}-*.tgz
-          npm install boxlite-ai-boxlite-[0-9]*.tgz
-          node -e "import('@boxlite-ai/boxlite').then(() => console.log('BoxLite Node.js SDK loaded successfully'))"
+          cd sdks/node
+          npm install
+          npm run build
+          node -e "import('./dist/index.js').then(m => console.log('BoxLite loaded:', Object.keys(m)))"
 
   publish:
     name: Publish to npm
@@ -154,54 +171,37 @@ jobs:
       contents: read
 
     steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
 
-      - name: Download all packages
+      - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          path: packages
-          pattern: packages-*
+          path: sdks/node
+          pattern: artifacts-*
           merge-multiple: true
 
-      - name: List packages
-        run: ls -la packages/
-
-      - name: Publish platform packages
+      - name: List artifacts
         run: |
-          for target in darwin-arm64 linux-x64-gnu; do
-            echo "Publishing @boxlite-ai/boxlite-$target..."
-            npm publish ./packages/boxlite-ai-boxlite-$target-*.tgz --provenance --access public
-          done
+          ls -la sdks/node/native/
+          ls -la sdks/node/npm/
 
-      - name: Wait for npm registry sync
-        run: sleep 30
+      - name: Install dependencies
+        run: cd sdks/node && npm install
 
-      - name: Publish main package
+      - name: Build TypeScript
+        run: cd sdks/node && npm run build
+
+      - name: Publish (napi prepublish handles optionalDependencies)
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          npm publish ./packages/boxlite-ai-boxlite-[0-9]*.tgz --provenance --access public
-
-  upload-to-release:
-    name: Upload to GitHub Release
-    needs: [ config, build, test ]
-    if: github.event_name == 'release' && github.event.action == 'published'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
-    steps:
-      - name: Download all packages
-        uses: actions/download-artifact@v4
-        with:
-          path: packages
-          pattern: packages-*
-          merge-multiple: true
-
-      - name: Upload to release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: packages/*.tgz
-          fail_on_unmatched_files: true
+          cd sdks/node
+          npm publish --provenance --access public

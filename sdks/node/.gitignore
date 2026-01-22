@@ -8,6 +8,8 @@ yarn.lock
 
 # Build outputs
 dist/
+native/
+boxlite.js
 *.node
 target/
 index.node
@@ -22,6 +24,7 @@ runtime/
 *.so
 
 # npm package tarballs
+packages/
 *.tgz
 
 # TypeScript
