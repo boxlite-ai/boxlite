@@ -196,6 +196,14 @@ impl ImageStore {
         }
     }
 
+    /// List all cached images.
+    ///
+    /// Returns a vector of (reference, CachedImage) tuples ordered by cache time (Newest first).
+    pub async fn list(&self) -> BoxliteResult<Vec<(String, CachedImage)>> {
+        let inner = self.inner.read().await;
+        inner.index.list_all()
+    }
+
     /// Load config JSON for an image.
     ///
     /// Returns the raw JSON string. Use `serde_json::from_str()` to parse.

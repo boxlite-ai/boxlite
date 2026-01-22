@@ -234,6 +234,19 @@ impl BoxliteRuntime {
     pub async fn pull_image(&self, image_ref: &str) -> BoxliteResult<crate::images::ImageObject> {
         self.rt_impl.image_manager.pull(image_ref).await
     }
+
+    /// List all cached images.
+    ///
+    /// Returns a list of images available in the local content store.
+    /// The returned `ImageInfo` objects contain metadata suitable for listing (display),
+    /// such as reference, ID, creation time, and size.
+    ///
+    /// # Returns
+    ///
+    /// Returns a vector of `ImageInfo` structs containing metadata for all cached images.
+    pub async fn list_images(&self) -> BoxliteResult<Vec<crate::runtime::types::ImageInfo>> {
+        self.rt_impl.image_manager.list().await
+    }
 }
 
 // ============================================================================

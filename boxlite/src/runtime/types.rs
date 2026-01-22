@@ -487,6 +487,35 @@ impl BoxStateInfo {
 }
 
 // ============================================================================
+// IMAGE INFO
+// ============================================================================
+
+/// Public metadata about a cached image.
+///
+/// Designed to provide all necessary information  without exposing internal storage details
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageInfo {
+    /// Full image reference (e.g., "docker.io/library/alpine:latest")
+    pub reference: String,
+
+    /// Parsed repository name (e.g. "docker.io/library/alpine")
+    pub repository: String,
+
+    /// Parsed image tag (e.g. "latest")
+    pub tag: String,
+
+    /// Image ID (Manifest Digest)
+    pub id: String,
+
+    /// When this image was pulled/cached locally.
+    /// Note: This is NOT the image build time (which requires reading config blob).
+    pub cached_at: DateTime<Utc>,
+
+    /// Image size in bytes (if available)
+    pub size: Option<Bytes>,
+}
+
+// ============================================================================
 // BOX CONFIG (Podman-style separation)
 // ============================================================================
 

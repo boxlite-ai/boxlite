@@ -130,6 +130,57 @@ impl ImageIndexStore {
     pub fn is_empty(&self) -> BoxliteResult<bool> {
         Ok(self.len()? == 0)
     }
+
+    /// List all cached images.
+    pub fn list_all(&self) -> BoxliteResult<Vec<(String, CachedImage)>> {
+        let conn = self.db.conn();
+        let mut stmt = db_err!(conn.prepare(
+            r#"
+            SELECT reference, manifest_digest, config_digest, layers, cached_at, complete 
+            FROM image_index 
+            ORDER BY cached_at DESC
+            "#
+        ))?;
+
+        let rows = db_err!(stmt.query_map([], |row| {
+            let reference: String = row.get(0)?;
+            let manifest_digest: String = row.get(1)?;
+            let config_digest: String = row.get(2)?;
+            let layers_json: String = row.get(3)?;
+            let cached_at: String = row.get(4)?;
+            let complete: i32 = row.get(5)?;
+            Ok((
+                reference,
+                manifest_digest,
+                config_digest,
+                layers_json,
+                cached_at,
+                complete,
+            ))
+        }))?;
+
+        let mut result = Vec::new();
+        for row in rows {
+            let (reference, manifest_digest, config_digest, layers_json, cached_at, complete) =
+                db_err!(row)?;
+            let layers: Vec<String> = serde_json::from_str(&layers_json).map_err(|e| {
+                BoxliteError::Database(format!("Failed to deserialize layers: {}", e))
+            })?;
+
+            result.push((
+                reference,
+                CachedImage {
+                    manifest_digest,
+                    config_digest,
+                    layers,
+                    cached_at,
+                    complete: complete != 0,
+                },
+            ));
+        }
+
+        Ok(result)
+    }
 }
 
 #[cfg(test)]
@@ -246,5 +297,53 @@ mod tests {
         store.upsert("python:alpine", &image).unwrap();
         assert!(!store.is_empty().unwrap());
         assert_eq!(store.len().unwrap(), 1);
+    }
+
+    #[test]
+    fn test_list_all_empty() {
+        let (store, _dir) = create_test_db();
+        let images = store.list_all().unwrap();
+        assert_eq!(images.len(), 0);
+    }
+
+    #[test]
+    fn test_list_all_multiple_ordered() {
+        let (store, _dir) = create_test_db();
+
+        let image1 = CachedImage {
+            manifest_digest: "sha256:abc123".to_string(),
+            config_digest: "sha256:config123".to_string(),
+            layers: vec!["sha256:layer1".to_string()],
+            cached_at: "2026-01-21T10:00:00Z".to_string(),
+            complete: true,
+        };
+
+        let image2 = CachedImage {
+            manifest_digest: "sha256:def456".to_string(),
+            config_digest: "sha256:config456".to_string(),
+            layers: vec!["sha256:layer2".to_string()],
+            cached_at: "2026-01-21T14:00:00Z".to_string(),
+            complete: true,
+        };
+
+        let image3 = CachedImage {
+            manifest_digest: "sha256:ghi789".to_string(),
+            config_digest: "sha256:config789".to_string(),
+            layers: vec!["sha256:layer3".to_string()],
+            cached_at: "2026-01-21T08:00:00Z".to_string(),
+            complete: true,
+        };
+
+        store.upsert("alpine:latest", &image1).unwrap();
+        store.upsert("python:alpine", &image2).unwrap();
+        store.upsert("nginx:latest", &image3).unwrap();
+
+        let images = store.list_all().unwrap();
+        assert_eq!(images.len(), 3);
+
+        // Newest first
+        assert_eq!(images[0].0, "python:alpine"); // 14:00
+        assert_eq!(images[1].0, "alpine:latest"); // 10:00
+        assert_eq!(images[2].0, "nginx:latest"); // 08:00
     }
 }
