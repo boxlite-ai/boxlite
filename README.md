@@ -24,6 +24,9 @@ alone isn't enough and full VM infrastructure is too heavy.
 
 ## Python Quick Start
 
+<details>
+<summary>View guide</summary>
+
 ### Install
 
 ```bash
@@ -48,7 +51,13 @@ async def main():
 asyncio.run(main())
 ```
 
+</details>
+
+
 ## Node.js Quick Start
+
+<details>
+<summary>View guide</summary>
 
 ### Install
 
@@ -76,7 +85,13 @@ async function main() {
 main();
 ```
 
+</details>
+
+
 ## Rust Quick Start
+
+<details>
+<summary>View guide</summary>
 
 ### Install
 
@@ -112,6 +127,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
+
+</details>
+
 
 ## Next steps
 
