@@ -126,7 +126,7 @@ dist\:c: runtime
 
 # Build Node.js distribution packages (local use)
 dist\:node: runtime
-	@cd sdks/node && npm install --silent && npm run build:native -- --release && npm run build && npm run prepublish && npm run bundle:runtime && npm run pack:all
+	@cd sdks/node && npm install --silent && npm run build:native -- --release && npm run build && npm run artifacts && npm run bundle:runtime && npm run pack:all
 
 
 # Build wheel locally with maturin + platform-specific repair tool

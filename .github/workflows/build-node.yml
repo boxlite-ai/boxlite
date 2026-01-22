@@ -103,7 +103,7 @@ jobs:
             cd sdks/node
             npm install --silent
             npm run build:native -- --release
-            npm run prepublish
+            npm run artifacts
             npm run bundle:runtime
 
       - name: Build Node.js package (macOS)
@@ -115,7 +115,7 @@ jobs:
           cd sdks/node
           npm install --silent
           npm run build:native -- --release
-          npm run prepublish
+          npm run artifacts
           npm run bundle:runtime
 
       - name: Upload artifacts
@@ -157,7 +157,7 @@ jobs:
       - name: Test package
         run: |
           cd sdks/node
-          npm install
+          npm install --ignore-scripts
           npm run build
           node -e "import('./dist/index.js').then(m => console.log('BoxLite loaded:', Object.keys(m)))"
 
@@ -194,7 +194,7 @@ jobs:
           ls -la sdks/node/npm/
 
       - name: Install dependencies
-        run: cd sdks/node && npm install
+        run: cd sdks/node && npm install --ignore-scripts
 
       - name: Build TypeScript
         run: cd sdks/node && npm run build
