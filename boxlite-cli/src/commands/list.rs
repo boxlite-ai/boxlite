@@ -1,7 +1,9 @@
 use crate::cli::GlobalFlags;
+use crate::formatter::{self, OutputFormat};
 use boxlite::BoxInfo;
 use clap::Args;
-use comfy_table::{Attribute, Cell, Table, presets};
+use serde::Serialize;
+use tabled::Tabled;
 
 /// List boxes
 #[derive(Args, Debug)]
@@ -13,55 +15,80 @@ pub struct ListArgs {
     /// Only show IDs
     #[arg(short, long)]
     pub quiet: bool,
+
+    /// Output format (table, json, yaml)
+    #[arg(long, default_value = "table")]
+    pub format: String,
+}
+
+#[derive(Tabled, Serialize)]
+struct BoxPresenter {
+    #[tabled(rename = "CONTAINER ID")]
+    #[serde(rename = "ID")]
+    id: String,
+
+    #[tabled(rename = "IMAGE")]
+    #[serde(rename = "Image")]
+    image: String,
+
+    #[tabled(rename = "STATUS")]
+    #[serde(rename = "Status")]
+    status: String,
+
+    #[tabled(rename = "CREATED")]
+    #[serde(rename = "CreatedAt")]
+    created: String,
+
+    #[tabled(rename = "NAMES")]
+    #[serde(rename = "Names")]
+    names: String,
+}
+
+impl From<BoxInfo> for BoxPresenter {
+    fn from(info: BoxInfo) -> Self {
+        Self {
+            id: info.id.to_string(),
+            image: info.image,
+            status: format!("{:?}", info.status),
+            created: formatter::format_time(&info.created_at),
+            names: info.name.unwrap_or_default(),
+        }
+    }
 }
 
 pub async fn execute(args: ListArgs, global: &GlobalFlags) -> anyhow::Result<()> {
     let rt = global.create_runtime()?;
     let boxes = rt.list_info().await?;
 
+    let boxes: Vec<BoxInfo> = boxes
+        .into_iter()
+        .filter(|info| args.all || info.status.is_active())
+        .collect();
+
     if args.quiet {
         for info in boxes {
-            if !args.all && !info.status.is_active() {
-                continue;
-            }
             println!("{}", info.id);
         }
         return Ok(());
     }
 
-    print_info(boxes, args.all);
+    let presenters: Vec<BoxPresenter> = boxes.into_iter().map(BoxPresenter::from).collect();
+    let format = OutputFormat::from_str(&args.format)?;
+    formatter::print_output(
+        &mut std::io::stdout().lock(),
+        &presenters,
+        format,
+        |writer, data| {
+            print_boxes(writer, data)?;
+            Ok(())
+        },
+    )?;
 
     Ok(())
 }
 
-fn print_info(boxes: Vec<BoxInfo>, all: bool) {
-    let mut table = Table::new();
-    table
-        .load_preset(presets::UTF8_NO_BORDERS)
-        .set_content_arrangement(comfy_table::ContentArrangement::Dynamic);
-    table.set_header(vec![
-        Cell::new("ID").add_attribute(Attribute::Bold),
-        Cell::new("IMAGE").add_attribute(Attribute::Bold),
-        Cell::new("STATUS").add_attribute(Attribute::Bold),
-        Cell::new("CREATED").add_attribute(Attribute::Bold),
-        Cell::new("NAMES").add_attribute(Attribute::Bold),
-    ]);
-
-    for info in boxes {
-        if !all && !info.status.is_active() {
-            continue;
-        }
-
-        let created = info.created_at.format("%Y-%m-%d %H:%M:%S").to_string();
-
-        table.add_row(vec![
-            info.id.to_string(),
-            info.image.clone(),
-            format!("{:?}", info.status),
-            created,
-            info.name.clone().unwrap_or_else(|| "".to_string()),
-        ]);
-    }
-
-    println!("{table}");
+fn print_boxes(writer: &mut dyn std::io::Write, boxes: &[BoxPresenter]) -> anyhow::Result<()> {
+    let table = formatter::create_table(boxes).to_string();
+    writeln!(writer, "{}", table)?;
+    Ok(())
 }

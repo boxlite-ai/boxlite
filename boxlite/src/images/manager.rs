@@ -121,7 +121,10 @@ impl ImageManager {
             // If parsing fails, default to UNIX_EPOCH to signal error
             let cached_at = DateTime::parse_from_rfc3339(&cached.cached_at)
                 .map(|dt| dt.with_timezone(&Utc))
-                .unwrap_or_else(|_| DateTime::<Utc>::from(std::time::SystemTime::UNIX_EPOCH));
+                .unwrap_or_else(|e| {
+                    tracing::warn!("Invalid cached_at timestamp: {}, using epoch", e);
+                    DateTime::<Utc>::from(std::time::SystemTime::UNIX_EPOCH)
+                });
 
             let (repository, tag) = match Reference::from_str(&reference) {
                 Ok(r) => (

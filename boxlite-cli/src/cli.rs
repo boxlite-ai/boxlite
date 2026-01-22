@@ -69,6 +69,9 @@ pub enum Commands {
 
     /// Pull an image from a registry
     Pull(crate::commands::pull::PullArgs),
+
+    /// List images
+    Images(crate::commands::images::ImagesArgs),
 }
 
 // ============================================================================

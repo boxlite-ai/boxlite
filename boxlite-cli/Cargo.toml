@@ -21,9 +21,15 @@ anyhow = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 
+# Serialization (aligned with core boxlite)
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+
 # Runtime extraction
 dirs = "6.0"
-comfy-table = "7.2.1"
+tabled = "0.17"
+chrono = "0.4.43"
 
 [build-dependencies]
 dirs = "6.0"
