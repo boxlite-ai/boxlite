@@ -203,11 +203,9 @@ impl BoxImpl {
         };
 
         // Set working directory from BoxOptions if not set in command
-        let command = if command.working_dir.is_none() && self.config.options.working_dir.is_some()
-        {
-            command.working_dir(self.config.options.working_dir.as_ref().unwrap())
-        } else {
-            command
+        let command = match (&command.working_dir, &self.config.options.working_dir) {
+            (None, Some(dir)) => command.working_dir(dir),
+            _ => command,
         };
 
         let mut exec_interface = live.guest_session.execution().await?;
