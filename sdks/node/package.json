@@ -29,7 +29,7 @@
     "build:native": "mkdir -p native && napi build --platform --js boxlite.js --esm --output-dir native",
     "artifacts": "napi create-npm-dirs --npm-dir npm && napi artifacts --output-dir native --npm-dir npm && node -e \"const{readdirSync,rmSync}=require('fs');readdirSync('npm').forEach(p=>{if(!readdirSync('npm/'+p).some(f=>f.endsWith('.node')))rmSync('npm/'+p,{recursive:true})})\"",
     "bundle:runtime": "node -e \"const{cpSync,readdirSync,readFileSync,writeFileSync}=require('fs');readdirSync('npm').forEach(p=>{cpSync('../../target/boxlite-runtime','npm/'+p+'/runtime',{recursive:true});const f='npm/'+p+'/package.json',pkg=JSON.parse(readFileSync(f));pkg.files.includes('runtime')||pkg.files.push('runtime');writeFileSync(f,JSON.stringify(pkg,null,2)+'\\n')})\"",
-    "prepack": "napi prepublish -p npm --skip-optional-publish",
+    "prepack": "napi prepublish -p npm --skip-optional-publish --tag-style npm",
     "pack:all": "mkdir -p packages && npm pack --pack-destination packages && npm pack --workspaces --pack-destination packages",
     "test": "vitest run",
     "test:watch": "vitest"
