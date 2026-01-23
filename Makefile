@@ -32,6 +32,7 @@ help:
 	@echo "    make test:python    - Run Python SDK unit tests"
 	@echo "    make test:node      - Run Node.js SDK unit tests"
 	@echo "    make test:cli       - Run CLI integration tests (prepares runtime first)"
+	@echo "    make test:integration - Run Rust integration tests (requires VM environment)"
 	@echo ""
 	@echo "  Local Development:"
 	@echo "    make dev:python     - Build and install Python SDK locally (debug mode)"
@@ -188,6 +189,12 @@ test\:node:
 test\:cli: runtime-debug
 	@echo "🧪 Running CLI integration tests..."
 	@cargo test -p boxlite-cli --tests --no-fail-fast -- --test-threads=1
+
+# Run Rust integration tests (requires VM environment)
+test\:integration: runtime-debug
+	@echo "🧪 Running Rust integration tests (requires VM)..."
+	@BOXLITE_RUNTIME_DIR=$(PROJECT_ROOT)/target/boxlite-runtime \
+		cargo test -p boxlite --test '*' --no-fail-fast -- --test-threads=1 --nocapture
 
 # Format all Rust code
 fmt:

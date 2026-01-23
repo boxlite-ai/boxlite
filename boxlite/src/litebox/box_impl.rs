@@ -5,10 +5,11 @@
 // ============================================================================
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 
 use parking_lot::RwLock;
 use tokio::sync::OnceCell;
+use tokio_util::sync::CancellationToken;
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
@@ -94,7 +95,9 @@ pub(crate) struct BoxImpl {
     pub(crate) config: BoxConfig,
     pub(crate) state: RwLock<BoxState>,
     pub(crate) runtime: SharedRuntimeImpl,
-    is_shutdown: AtomicBool,
+    /// Cancellation token for this box (child of runtime's token).
+    /// When cancelled (via stop() or runtime shutdown), all operations abort gracefully.
+    pub(crate) shutdown_token: CancellationToken,
 
     // --- Lazily initialized ---
     live: OnceCell<LiveState>,
@@ -108,12 +111,23 @@ impl BoxImpl {
     /// Create BoxImpl with config and state (LiveState not initialized yet).
     ///
     /// LiveState will be lazily initialized when operations requiring it are called.
-    pub(crate) fn new(config: BoxConfig, state: BoxState, runtime: SharedRuntimeImpl) -> Self {
+    ///
+    /// # Arguments
+    /// * `config` - Box configuration
+    /// * `state` - Initial box state
+    /// * `runtime` - Shared runtime reference
+    /// * `shutdown_token` - Child token from runtime for coordinated shutdown
+    pub(crate) fn new(
+        config: BoxConfig,
+        state: BoxState,
+        runtime: SharedRuntimeImpl,
+        shutdown_token: CancellationToken,
+    ) -> Self {
         Self {
             config,
             state: RwLock::new(state),
             runtime,
-            is_shutdown: AtomicBool::new(false),
+            shutdown_token,
             live: OnceCell::new(),
         }
     }
@@ -146,9 +160,9 @@ impl BoxImpl {
     ///
     /// This is idempotent - calling start() on a Running box is a no-op.
     pub(crate) async fn start(&self) -> BoxliteResult<()> {
-        // Check if already shutdown
-        if self.is_shutdown.load(Ordering::SeqCst) {
-            return Err(BoxliteError::InvalidState(
+        // Check if already shutdown (via stop() or runtime shutdown)
+        if self.shutdown_token.is_cancelled() {
+            return Err(BoxliteError::Stopped(
                 "Handle invalidated after stop(). Use runtime.get() to get a new handle.".into(),
             ));
         }
@@ -178,9 +192,9 @@ impl BoxImpl {
     pub(crate) async fn exec(&self, command: BoxCommand) -> BoxliteResult<Execution> {
         use boxlite_shared::constants::executor as executor_const;
 
-        // Check if box is stopped before proceeding
-        if self.is_shutdown.load(Ordering::SeqCst) {
-            return Err(BoxliteError::InvalidState(
+        // Check if box is stopped before proceeding (via stop() or runtime shutdown)
+        if self.shutdown_token.is_cancelled() {
+            return Err(BoxliteError::Stopped(
                 "Handle invalidated after stop(). Use runtime.get() to get a new handle.".into(),
             ));
         }
@@ -211,7 +225,7 @@ impl BoxImpl {
         };
 
         let mut exec_interface = live.guest_session.execution().await?;
-        let result = exec_interface.exec(command).await;
+        let result = exec_interface.exec(command, self.shutdown_token.clone()).await;
 
         // Instrument metrics
         live.metrics.increment_commands_executed();
@@ -240,9 +254,9 @@ impl BoxImpl {
     }
 
     pub(crate) async fn metrics(&self) -> BoxliteResult<BoxMetrics> {
-        // Check if box is stopped before proceeding
-        if self.is_shutdown.load(Ordering::SeqCst) {
-            return Err(BoxliteError::InvalidState(
+        // Check if box is stopped before proceeding (via stop() or runtime shutdown)
+        if self.shutdown_token.is_cancelled() {
+            return Err(BoxliteError::Stopped(
                 "Handle invalidated after stop(). Use runtime.get() to get a new handle.".into(),
             ));
         }
@@ -266,7 +280,8 @@ impl BoxImpl {
     }
 
     pub(crate) async fn stop(&self) -> BoxliteResult<()> {
-        self.is_shutdown.store(true, Ordering::SeqCst);
+        // Cancel the token - signals all in-flight operations to abort
+        self.shutdown_token.cancel();
 
         // Only try to stop VM if LiveState exists
         if let Some(live) = self.live.get() {

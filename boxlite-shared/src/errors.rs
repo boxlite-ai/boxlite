@@ -66,6 +66,10 @@ pub enum BoxliteError {
     /// Invalid argument provided.
     #[error("invalid argument: {0}")]
     InvalidArgument(String),
+
+    /// Resource (box or runtime) has been stopped/shutdown.
+    #[error("stopped: {0}")]
+    Stopped(String),
 }
 
 // Implement From for common error types to enable `?` operator

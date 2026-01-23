@@ -6,6 +6,7 @@ use crate::litebox::LiteBox;
 use crate::metrics::RuntimeMetrics;
 use crate::runtime::options::{BoxOptions, BoxliteOptions};
 use crate::runtime::rt_impl::{RuntimeImpl, SharedRuntimeImpl};
+use crate::runtime::signal_handler::install_signal_handler;
 use crate::runtime::types::BoxInfo;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 // ============================================================================
@@ -77,11 +78,18 @@ impl BoxliteRuntime {
         Self::new(BoxliteOptions::default())
     }
 
-    /// Get or initialize the default global runtime.
+    /// Get or initialize the default global runtime with automatic signal handling.
     ///
     /// This runtime uses `BoxliteOptions::default()` for configuration.
     /// The runtime is created lazily on first access and reused for all
     /// subsequent calls.
+    ///
+    /// **Signal Handling**: On first call, this also installs SIGTERM and SIGINT
+    /// handlers that will gracefully shutdown all boxes before exiting. This is
+    /// the recommended way to use BoxLite for simple applications.
+    ///
+    /// For applications that need custom signal handling, use `BoxliteRuntime::new()`
+    /// instead and call `shutdown()` manually in your signal handler.
     ///
     /// # Panics
     ///
@@ -94,13 +102,24 @@ impl BoxliteRuntime {
     /// use boxlite::runtime::BoxliteRuntime;
     ///
     /// let runtime = BoxliteRuntime::default_runtime();
+    /// // SIGTERM/SIGINT will automatically trigger graceful shutdown
     /// // All subsequent calls return the same runtime
     /// let same_runtime = BoxliteRuntime::default_runtime();
     /// ```
     pub fn default_runtime() -> &'static Self {
-        DEFAULT_RUNTIME.get_or_init(|| {
+        let rt = DEFAULT_RUNTIME.get_or_init(|| {
             Self::with_defaults().expect("Failed to initialize default BoxliteRuntime")
-        })
+        });
+
+        // Install signal handler for graceful shutdown.
+        // Thread-based: works from any context (sync or async, with or without Tokio).
+        // When signal is received, the shutdown callback stops all boxes gracefully.
+        let rt_impl = rt.rt_impl.clone();
+        install_signal_handler(move || async move {
+            let _ = rt_impl.shutdown(None).await;
+        });
+
+        rt
     }
 
     /// Try to get the default runtime if it's been initialized.
@@ -211,6 +230,50 @@ impl BoxliteRuntime {
     /// Remove a box completely by ID or name.
     pub async fn remove(&self, id_or_name: &str, force: bool) -> BoxliteResult<()> {
         self.rt_impl.remove(id_or_name, force)
+    }
+
+    // ========================================================================
+    // SHUTDOWN OPERATIONS
+    // ========================================================================
+
+    /// Gracefully shutdown all boxes in this runtime.
+    ///
+    /// This method stops all running boxes, waiting up to `timeout` seconds
+    /// for each box to stop gracefully before force-killing it.
+    ///
+    /// After calling this method, the runtime is permanently shut down and
+    /// will return errors for any new operations (like `create()`).
+    ///
+    /// # Arguments
+    ///
+    /// * `timeout` - Seconds to wait before force-killing each box:
+    ///   - `None` - Use default timeout (10 seconds)
+    ///   - `Some(n)` where n > 0 - Wait n seconds
+    ///   - `Some(-1)` - Wait indefinitely (no timeout)
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use boxlite::runtime::BoxliteRuntime;
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     let runtime = BoxliteRuntime::new(Default::default())?;
+    ///
+    ///     // ... create and use boxes ...
+    ///
+    ///     // On signal or shutdown request:
+    ///     runtime.shutdown(None).await?; // Default 10s timeout
+    ///     // or
+    ///     runtime.shutdown(Some(30)).await?; // 30s timeout
+    ///     // or
+    ///     runtime.shutdown(Some(-1)).await?; // Wait forever
+    ///
+    ///     Ok(())
+    /// }
+    /// ```
+    pub async fn shutdown(&self, timeout: Option<i32>) -> BoxliteResult<()> {
+        self.rt_impl.shutdown(timeout).await
     }
 
     // ========================================================================

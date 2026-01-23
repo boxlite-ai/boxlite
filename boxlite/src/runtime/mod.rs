@@ -3,6 +3,7 @@ pub(crate) mod guest_rootfs;
 pub mod layout;
 pub(crate) mod lock;
 pub mod options;
+pub(crate) mod signal_handler;
 pub mod types;
 
 mod core;
