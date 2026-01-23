@@ -152,6 +152,11 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
 
+      # Remove npm/* from git checkout to avoid platform mismatch
+      # (git contains all platforms, but we only want the one from artifacts)
+      - name: Clean npm workspaces
+        run: rm -rf sdks/node/npm
+
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
