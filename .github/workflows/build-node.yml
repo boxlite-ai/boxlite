@@ -142,7 +142,7 @@ jobs:
       # GitHub Actions upload-artifact uses ZIP which doesn't preserve permissions.
       # See: https://github.com/actions/upload-artifact/issues/38
       - name: Create artifact tarball
-        run: tar -cvf artifacts.tar -C sdks/node native/boxlite.js npm/
+        run: tar -cvf sdks/node/artifacts.tar -C sdks/node native/boxlite.js npm/
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
