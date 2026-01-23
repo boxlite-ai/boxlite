@@ -331,6 +331,24 @@ class SyncBoxlite:
         """
         self._sync(self._boxlite.remove(id_or_name, force))
 
+    def shutdown(self, timeout: Optional[int] = None) -> None:
+        """
+        Gracefully shutdown all boxes in this runtime.
+
+        This method stops all running boxes, waiting up to `timeout` seconds
+        for each box to stop gracefully before force-killing it.
+
+        After calling this method, the runtime is permanently shut down and
+        will return errors for any new operations (like `create()`).
+
+        Args:
+            timeout: Seconds to wait before force-killing each box:
+                - None (default) - Use default timeout (10 seconds)
+                - Positive integer - Wait that many seconds
+                - -1 - Wait indefinitely (no timeout)
+        """
+        self._sync(self._boxlite.shutdown(timeout))
+
     # ─────────────────────────────────────────────────────────────────────────
     # Properties for internal use by SyncBox/SyncExecution
     # ─────────────────────────────────────────────────────────────────────────

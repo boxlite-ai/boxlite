@@ -212,6 +212,28 @@ int boxlite_remove(struct CBoxliteRuntime *runtime,
 int boxlite_runtime_metrics(struct CBoxliteRuntime *runtime, char **out_json, char **out_error);
 
 /**
+ * Gracefully shutdown all boxes in this runtime.
+ *
+ * This method stops all running boxes, waiting up to `timeout` seconds
+ * for each box to stop gracefully before force-killing it.
+ *
+ * After calling this method, the runtime is permanently shut down and
+ * will return errors for any new operations (like `create()`).
+ *
+ * # Arguments
+ * * `runtime` - BoxLite runtime instance
+ * * `timeout` - Seconds to wait before force-killing each box:
+ *   - 0 - Use default timeout (10 seconds)
+ *   - Positive integer - Wait that many seconds
+ *   - -1 - Wait indefinitely (no timeout)
+ * * `out_error` - Output parameter for error message
+ *
+ * # Returns
+ * 0 on success, -1 on failure
+ */
+int boxlite_runtime_shutdown(struct CBoxliteRuntime *runtime, int timeout, char **out_error);
+
+/**
  * Get box info from handle as JSON
  *
  * # Arguments

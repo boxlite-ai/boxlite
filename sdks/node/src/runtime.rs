@@ -242,4 +242,35 @@ impl JsBoxlite {
     pub fn close(&self) -> Result<()> {
         Ok(())
     }
+
+    /// Gracefully shutdown all boxes in this runtime.
+    ///
+    /// This method stops all running boxes, waiting up to `timeout` seconds
+    /// for each box to stop gracefully before force-killing it.
+    ///
+    /// After calling this method, the runtime is permanently shut down and
+    /// will return errors for any new operations (like `create()`).
+    ///
+    /// # Arguments
+    /// * `timeout` - Seconds to wait before force-killing each box:
+    ///   - `null/undefined` - Use default timeout (10 seconds)
+    ///   - Positive number - Wait that many seconds
+    ///   - `-1` - Wait indefinitely (no timeout)
+    ///
+    /// # Example
+    /// ```javascript
+    /// // Default 10s timeout
+    /// await runtime.shutdown();
+    ///
+    /// // Custom 30s timeout
+    /// await runtime.shutdown(30);
+    ///
+    /// // Wait indefinitely
+    /// await runtime.shutdown(-1);
+    /// ```
+    #[napi]
+    pub async fn shutdown(&self, timeout: Option<i32>) -> Result<()> {
+        let runtime = Arc::clone(&self.runtime);
+        runtime.shutdown(timeout).await.map_err(map_err)
+    }
 }

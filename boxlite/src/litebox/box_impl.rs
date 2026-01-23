@@ -280,6 +280,13 @@ impl BoxImpl {
     }
 
     pub(crate) async fn stop(&self) -> BoxliteResult<()> {
+        // Early exit if already stopped (idempotent, prevents double-counting)
+        // Note: We check status, not shutdown_token, because the token may be cancelled
+        // by runtime.shutdown() before stop() is called on each box.
+        if self.state.read().status == BoxStatus::Stopped {
+            return Ok(());
+        }
+
         // Cancel the token - signals all in-flight operations to abort
         self.shutdown_token.cancel();
 
@@ -337,6 +344,12 @@ impl BoxImpl {
             .invalidate_box_impl(self.id(), self.config.name.as_deref());
 
         tracing::info!("Stopped box {}", self.id());
+
+        // Increment runtime-wide stopped counter
+        self.runtime
+            .runtime_metrics
+            .boxes_stopped
+            .fetch_add(1, Ordering::Relaxed);
 
         if self.config.options.auto_remove {
             self.runtime.remove_box(self.id(), false)?;

@@ -13,6 +13,8 @@ pub struct RuntimeMetricsStorage {
     pub(crate) boxes_created: Arc<AtomicU64>,
     /// Total boxes that failed to start
     pub(crate) boxes_failed: Arc<AtomicU64>,
+    /// Total boxes stopped (explicitly or via shutdown)
+    pub(crate) boxes_stopped: Arc<AtomicU64>,
     /// Total commands executed across all boxes
     pub(crate) total_commands: Arc<AtomicU64>,
     /// Total command execution errors across all boxes
@@ -57,16 +59,22 @@ impl RuntimeMetrics {
         self.storage.boxes_failed.load(Ordering::Relaxed)
     }
 
+    /// Total number of boxes that have been stopped.
+    ///
+    /// Incremented when `LiteBox::stop()` completes successfully.
+    /// Never decreases (monotonic counter).
+    pub fn boxes_stopped_total(&self) -> u64 {
+        self.storage.boxes_stopped.load(Ordering::Relaxed)
+    }
+
     /// Number of currently running boxes.
     ///
     /// Calculated as: boxes_created - boxes_stopped - boxes_failed
-    /// Note: This requires tracking boxes_stopped (TODO in Phase 2).
-    ///
-    /// Current implementation returns 0 (placeholder).
     pub fn num_running_boxes(&self) -> u64 {
-        // TODO: Need to track boxes_stopped counter
-        // For now, return 0 as placeholder
-        0
+        let created = self.boxes_created_total();
+        let stopped = self.boxes_stopped_total();
+        let failed = self.boxes_failed_total();
+        created.saturating_sub(stopped).saturating_sub(failed)
     }
 
     /// Total commands executed across all boxes.
@@ -83,5 +91,65 @@ impl RuntimeMetrics {
     /// Never decreases (monotonic counter).
     pub fn total_exec_errors(&self) -> u64 {
         self.storage.total_exec_errors.load(Ordering::Relaxed)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_num_running_boxes_calculation() {
+        let storage = RuntimeMetricsStorage::new();
+        let metrics = RuntimeMetrics::new(storage.clone());
+
+        // Initially all counters are 0
+        assert_eq!(metrics.num_running_boxes(), 0);
+
+        // Create 5 boxes
+        for _ in 0..5 {
+            storage.boxes_created.fetch_add(1, Ordering::Relaxed);
+        }
+        assert_eq!(metrics.num_running_boxes(), 5);
+
+        // Stop 2 boxes
+        storage.boxes_stopped.fetch_add(1, Ordering::Relaxed);
+        storage.boxes_stopped.fetch_add(1, Ordering::Relaxed);
+        assert_eq!(metrics.num_running_boxes(), 3);
+
+        // 1 box fails to start
+        storage.boxes_created.fetch_add(1, Ordering::Relaxed);
+        storage.boxes_failed.fetch_add(1, Ordering::Relaxed);
+        assert_eq!(metrics.num_running_boxes(), 3);
+
+        // Stop remaining boxes
+        for _ in 0..3 {
+            storage.boxes_stopped.fetch_add(1, Ordering::Relaxed);
+        }
+        assert_eq!(metrics.num_running_boxes(), 0);
+    }
+
+    #[test]
+    fn test_num_running_boxes_saturating_sub() {
+        let storage = RuntimeMetricsStorage::new();
+        let metrics = RuntimeMetrics::new(storage.clone());
+
+        // Edge case: more stopped than created (shouldn't happen, but test safety)
+        storage.boxes_created.fetch_add(1, Ordering::Relaxed);
+        storage.boxes_stopped.fetch_add(5, Ordering::Relaxed);
+
+        // Should saturate to 0, not underflow
+        assert_eq!(metrics.num_running_boxes(), 0);
+    }
+
+    #[test]
+    fn test_boxes_stopped_total() {
+        let storage = RuntimeMetricsStorage::new();
+        let metrics = RuntimeMetrics::new(storage.clone());
+
+        assert_eq!(metrics.boxes_stopped_total(), 0);
+
+        storage.boxes_stopped.fetch_add(3, Ordering::Relaxed);
+        assert_eq!(metrics.boxes_stopped_total(), 3);
     }
 }

@@ -759,6 +759,57 @@ pub unsafe extern "C" fn boxlite_runtime_metrics(
     write_json_output(json, out_json)
 }
 
+/// Gracefully shutdown all boxes in this runtime.
+///
+/// This method stops all running boxes, waiting up to `timeout` seconds
+/// for each box to stop gracefully before force-killing it.
+///
+/// After calling this method, the runtime is permanently shut down and
+/// will return errors for any new operations (like `create()`).
+///
+/// # Arguments
+/// * `runtime` - BoxLite runtime instance
+/// * `timeout` - Seconds to wait before force-killing each box:
+///   - 0 - Use default timeout (10 seconds)
+///   - Positive integer - Wait that many seconds
+///   - -1 - Wait indefinitely (no timeout)
+/// * `out_error` - Output parameter for error message
+///
+/// # Returns
+/// 0 on success, -1 on failure
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_runtime_shutdown(
+    runtime: *mut CBoxliteRuntime,
+    timeout: c_int,
+    out_error: *mut *mut c_char,
+) -> c_int {
+    if runtime.is_null() {
+        if !out_error.is_null() {
+            *out_error = error_to_c_string(BoxliteError::Internal("runtime is null".to_string()));
+        }
+        return -1;
+    }
+
+    let runtime_ref = &*runtime;
+
+    // C API: 0 = default (maps to Rust None), positive = timeout, -1 = infinite
+    let timeout_opt = if timeout == 0 { None } else { Some(timeout) };
+
+    let result = runtime_ref
+        .tokio_rt
+        .block_on(runtime_ref.runtime.shutdown(timeout_opt));
+
+    match result {
+        Ok(()) => 0,
+        Err(e) => {
+            if !out_error.is_null() {
+                *out_error = error_to_c_string(e);
+            }
+            -1
+        }
+    }
+}
+
 /// Get box info from handle as JSON
 ///
 /// # Arguments
