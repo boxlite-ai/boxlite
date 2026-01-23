@@ -15,7 +15,7 @@ import boxlite
 
 # Try to import sync API - skip if greenlet not installed
 try:
-    from boxlite import SyncBoxlite, SyncBox
+    from boxlite import SyncBoxlite
     SYNC_AVAILABLE = True
 except ImportError:
     SYNC_AVAILABLE = False

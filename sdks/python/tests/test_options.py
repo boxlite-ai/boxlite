@@ -38,22 +38,22 @@ class TestBoxOptionsDefaults:
     def test_explicit_auto_remove_true(self):
         """Test setting auto_remove=True explicitly."""
         opts = boxlite.BoxOptions(image="alpine:latest", auto_remove=True)
-        assert opts.auto_remove == True
+        assert opts.auto_remove is True
 
     def test_explicit_auto_remove_false(self):
         """Test setting auto_remove=False explicitly."""
         opts = boxlite.BoxOptions(image="alpine:latest", auto_remove=False)
-        assert opts.auto_remove == False
+        assert opts.auto_remove is False
 
     def test_explicit_detach_true(self):
         """Test setting detach=True explicitly."""
         opts = boxlite.BoxOptions(image="alpine:latest", detach=True)
-        assert opts.detach == True
+        assert opts.detach is True
 
     def test_explicit_detach_false(self):
         """Test setting detach=False explicitly."""
         opts = boxlite.BoxOptions(image="alpine:latest", detach=False)
-        assert opts.detach == False
+        assert opts.detach is False
 
 
 class TestAutoRemoveBehavior:

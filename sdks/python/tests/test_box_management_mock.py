@@ -73,18 +73,6 @@ class TestBoxInfoStructure:
         # BoxInfo should be a class/type
         assert BoxInfo is not None
 
-        # Expected attributes (verified from Rust implementation)
-        expected_attrs = [
-            'id',
-            'state',
-            'created_at',
-            'pid',
-            'port',
-            'images',
-            'cpus',
-            'memory_mib',
-        ]
-
         # We can't instantiate it directly (it's created by Rust),
         # but we can verify it exists in the module
         assert hasattr(boxlite, 'BoxInfo')

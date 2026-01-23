@@ -8,7 +8,7 @@ controlled from outside using standard tools like Puppeteer or Playwright.
 from dataclasses import dataclass
 from typing import Optional, TYPE_CHECKING
 
-from .simplebox import SimpleBox, StreamType
+from .simplebox import SimpleBox
 
 if TYPE_CHECKING:
     from .boxlite import Boxlite

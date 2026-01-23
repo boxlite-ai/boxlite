@@ -9,8 +9,6 @@ from __future__ import annotations
 
 import pytest
 
-import boxlite
-
 # Try to import sync API - skip if greenlet not installed
 try:
     from boxlite import SyncSimpleBox

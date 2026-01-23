@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, List, Optional
 from greenlet import greenlet
 
 if TYPE_CHECKING:
+    from ._box import SyncBox
     from ..boxlite import Boxlite, BoxOptions, BoxInfo, RuntimeMetrics, Options
 
 __all__ = ["SyncBoxlite"]

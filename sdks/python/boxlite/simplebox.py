@@ -6,9 +6,12 @@ Provides common functionality for all specialized boxes (CodeBox, BrowserBox, et
 
 import logging
 from enum import IntEnum
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 from .exec import ExecResult
+
+if TYPE_CHECKING:
+    from .boxlite import Boxlite
 
 logger = logging.getLogger("boxlite.simplebox")
 

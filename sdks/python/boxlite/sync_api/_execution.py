@@ -4,7 +4,7 @@ SyncExecution - Synchronous wrapper for Execution.
 Mirrors the native Execution API exactly, but with synchronous methods.
 """
 
-from typing import TYPE_CHECKING, Optional, Iterator
+from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
     from ._boxlite import SyncBoxlite

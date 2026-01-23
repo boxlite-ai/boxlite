@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, List, Optional, Tuple
 
 if TYPE_CHECKING:
     from ._boxlite import SyncBoxlite
+    from ._execution import SyncExecution
     from ..boxlite import Box, BoxInfo, BoxMetrics
 
 __all__ = ["SyncBox"]

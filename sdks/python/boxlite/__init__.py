@@ -4,9 +4,7 @@ BoxLite - Lightweight, secure containerization for any environment.
 Following SQLite philosophy: "BoxLite" for branding, "boxlite" for code APIs.
 """
 
-import os
 import warnings
-from pathlib import Path
 
 # Import core Rust API
 try:
@@ -42,12 +40,12 @@ except ImportError as e:
     warnings.warn(f"BoxLite native extension not available: {e}", ImportWarning)
     __all__ = []
 
-# Import Python convenience wrappers
+# Import Python convenience wrappers (re-exported via __all__)
 try:
-    from .simplebox import SimpleBox
-    from .exec import ExecResult
-    from .codebox import CodeBox
-    from .errors import BoxliteError, ExecError, TimeoutError, ParseError
+    from .simplebox import SimpleBox  # noqa: F401
+    from .exec import ExecResult  # noqa: F401
+    from .codebox import CodeBox  # noqa: F401
+    from .errors import BoxliteError, ExecError, TimeoutError, ParseError  # noqa: F401
 
     __all__.extend([
         # Python convenience wrappers
@@ -63,32 +61,32 @@ try:
 except ImportError:
     pass
 
-# Specialized containers
+# Specialized containers (re-exported via __all__)
 try:
-    from .browserbox import BrowserBox, BrowserBoxOptions
+    from .browserbox import BrowserBox, BrowserBoxOptions  # noqa: F401
 
     __all__.extend(["BrowserBox", "BrowserBoxOptions"])
 except ImportError:
     pass
 
 try:
-    from .computerbox import ComputerBox
+    from .computerbox import ComputerBox  # noqa: F401
 
     __all__.extend(["ComputerBox"])
 except ImportError:
     pass
 
 try:
-    from .interactivebox import InteractiveBox
+    from .interactivebox import InteractiveBox  # noqa: F401
 
     __all__.extend(["InteractiveBox"])
 except ImportError:
     pass
 
-# Sync API (greenlet-based synchronous wrappers)
+# Sync API (greenlet-based synchronous wrappers, re-exported via __all__)
 # Requires greenlet: pip install boxlite[sync]
 try:
-    from .sync_api import (
+    from .sync_api import (  # noqa: F401
         SyncBoxlite,
         SyncBox,
         SyncExecution,

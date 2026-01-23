@@ -8,7 +8,7 @@ execute async operations using greenlet fiber switching.
 import asyncio
 import inspect
 import traceback
-from typing import Any, Awaitable, Coroutine, Generator, TypeVar, Union
+from typing import Any, Awaitable, Coroutine, TypeVar, Union
 
 from greenlet import greenlet
 
