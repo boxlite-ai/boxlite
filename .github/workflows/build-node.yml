@@ -25,6 +25,22 @@ jobs:
   config:
     uses: ./.github/workflows/config.yml
 
+  # ============================================================================
+  # BUILD
+  # ============================================================================
+  # Builds native Node.js bindings for each platform using napi-rs.
+  #
+  # Platform-specific considerations:
+  # - Linux: Uses manylinux_2_28 container for glibc compatibility
+  #   - Guest binary built on host first (Ubuntu has musl-tools, manylinux doesn't)
+  #   - Shim/libkrun built in container (needs glibc 2.28)
+  # - macOS: Builds directly on runner (ARM64 only)
+  #
+  # Outputs artifacts containing:
+  # - native/boxlite.js (JS loader)
+  # - npm/<platform>/boxlite.<platform>.node (native binary)
+  # - npm/<platform>/runtime/* (boxlite-shim, boxlite-guest, libkrun, etc.)
+  # ============================================================================
   build:
     name: Build (${{ matrix.target }})
     needs: config
@@ -132,6 +148,16 @@ jobs:
           if-no-files-found: error
           retention-days: ${{ needs.config.outputs.artifact-retention-days }}
 
+  # ============================================================================
+  # TEST
+  # ============================================================================
+  # Tests the built packages on each platform with multiple Node.js versions.
+  #
+  # Key steps:
+  # - Removes npm/* from git checkout (contains all platforms)
+  # - Downloads only the matching platform's artifacts
+  # - Verifies the package can be loaded and exports are accessible
+  # ============================================================================
   test:
     name: Test (${{ matrix.platform.target }} / Node ${{ matrix.node-version }})
     needs: [ config, build ]
@@ -170,13 +196,25 @@ jobs:
           npm run build
           node -e "import('./dist/index.js').then(m => console.log('BoxLite loaded:', Object.keys(m)))"
 
+  # ============================================================================
+  # PUBLISH TO NPM
+  # ============================================================================
+  # Publishes all packages to npm registry using OIDC Trusted Publishing.
+  #
+  # Key considerations:
+  # - Runs on ubuntu-latest but publishes pre-built platform-specific binaries
+  # - Uses --workspaces=false during install to avoid EBADPLATFORM errors
+  #   (platform packages like darwin-arm64 have "os": ["darwin"] which fails on Linux)
+  # - Must publish platform packages BEFORE main package (dependency order)
+  # - Uses npm provenance for supply chain security
+  # ============================================================================
   publish:
     name: Publish to npm
     needs: [ config, build, test ]
     if: github.event_name == 'release' && github.event.action == 'published'
     runs-on: ubuntu-latest
     permissions:
-      id-token: write
+      id-token: write   # Required for npm OIDC Trusted Publishing
       contents: read
 
     steps:
@@ -190,6 +228,8 @@ jobs:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
 
+      # Download pre-built artifacts from all platforms (darwin-arm64, linux-x64-gnu)
+      # merge-multiple: true combines artifacts from different matrix jobs into one directory
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -202,46 +242,87 @@ jobs:
           ls -la sdks/node/native/
           ls -la sdks/node/npm/
 
+      # --workspaces=false: Skip linking workspace packages to avoid EBADPLATFORM error
+      # Platform packages (npm/darwin-arm64, npm/linux-x64-gnu) have OS restrictions
+      # that would fail on this ubuntu runner. We only need to install root dependencies.
       - name: Install dependencies
-        run: cd sdks/node && npm install --ignore-scripts
+        run: cd sdks/node && npm install --ignore-scripts --workspaces=false
 
       - name: Build TypeScript
         run: cd sdks/node && npm run build
 
-      # npm Trusted Publishing (OIDC) - no NPM_TOKEN needed
-      # Requires Trusted Publisher configured on npmjs.com for this repo
-      - name: Publish (napi prepublish handles optionalDependencies)
-        run: |
-          cd sdks/node
-          npm publish --provenance --access public
+      # -------------------------------------------------------------------------
+      # NPM PUBLISH (Trusted Publishing via OIDC - no NPM_TOKEN needed)
+      # -------------------------------------------------------------------------
+      # IMPORTANT: Publish order matters!
+      # 1. Platform packages first: @boxlite-ai/boxlite-darwin-arm64, etc.
+      # 2. Main package last: @boxlite-ai/boxlite
+      #
+      # The main package has optionalDependencies pointing to platform packages.
+      # If we publish main first, npm install will fail because the platform
+      # packages don't exist yet on the registry.
+      # -------------------------------------------------------------------------
+      - name: Publish platform packages (workspaces)
+        run: cd sdks/node && npm publish --provenance --access public --workspaces
 
+      - name: Publish main package
+        run: cd sdks/node && npm publish --provenance --access public
+
+  # ============================================================================
+  # UPLOAD TO GITHUB RELEASE
+  # ============================================================================
+  # Creates npm-compatible tarballs and uploads them to the GitHub Release.
+  #
+  # This provides an alternative installation method:
+  #   npm install https://github.com/boxlite-ai/boxlite/releases/download/v0.1.5/boxlite-ai-boxlite-0.1.5.tgz
+  #
+  # Uses `npm run pack:all` which:
+  # - Creates properly versioned .tgz files (e.g., boxlite-ai-boxlite-0.1.5.tgz)
+  # - Includes all platform packages and the main package
+  # - Produces npm-installable tarballs (unlike raw tar.gz of directories)
+  # ============================================================================
   upload-to-release:
     name: Upload to GitHub Release
     needs: [ config, build, test ]
     if: github.event_name == 'release' && github.event.action == 'published'
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: write   # Required to upload assets to GitHub Release
 
     steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      # Download pre-built artifacts from all platforms
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          path: artifacts
+          path: sdks/node
           pattern: artifacts-*
           merge-multiple: true
 
-      - name: Create tarballs for release
+      # --workspaces=false: Skip linking workspace packages to avoid EBADPLATFORM error
+      # (same reason as publish job - platform packages have OS restrictions)
+      - name: Install dependencies
+        run: cd sdks/node && npm install --ignore-scripts --workspaces=false
+
+      # pack:all creates versioned .tgz files for all packages:
+      # - boxlite-ai-boxlite-X.Y.Z.tgz (main package)
+      # - boxlite-ai-boxlite-darwin-arm64-X.Y.Z.tgz
+      # - boxlite-ai-boxlite-linux-x64-gnu-X.Y.Z.tgz
+      - name: Build and pack packages
         run: |
-          cd artifacts
-          for dir in npm/*/; do
-            name=$(basename "$dir")
-            tar -czf "${name}.tar.gz" -C npm "$name"
-          done
-          ls -la *.tar.gz
+          cd sdks/node
+          npm run build
+          npm run pack:all
+          ls -la packages/
 
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/*.tar.gz
+          files: sdks/node/packages/*.tgz
           fail_on_unmatched_files: true
