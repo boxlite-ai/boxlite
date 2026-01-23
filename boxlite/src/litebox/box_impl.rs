@@ -225,7 +225,9 @@ impl BoxImpl {
         };
 
         let mut exec_interface = live.guest_session.execution().await?;
-        let result = exec_interface.exec(command, self.shutdown_token.clone()).await;
+        let result = exec_interface
+            .exec(command, self.shutdown_token.clone())
+            .await;
 
         // Instrument metrics
         live.metrics.increment_commands_executed();

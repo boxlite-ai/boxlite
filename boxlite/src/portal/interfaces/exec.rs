@@ -585,7 +585,10 @@ mod tests {
         assert!(result.is_ok(), "Task should complete after cancellation");
 
         let iterations = result.unwrap().unwrap();
-        assert!(iterations > 0, "Should have processed some iterations before cancel");
+        assert!(
+            iterations > 0,
+            "Should have processed some iterations before cancel"
+        );
         println!("Processed {} iterations before cancellation", iterations);
     }
 

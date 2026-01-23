@@ -3,9 +3,9 @@
 //! These tests document current behavior and verify assumptions about
 //! how wait(), streams, and shutdown interact.
 
-use boxlite::runtime::options::{BoxOptions, BoxliteOptions, RootfsSpec};
 use boxlite::BoxCommand;
 use boxlite::BoxliteRuntime;
+use boxlite::runtime::options::{BoxOptions, BoxliteOptions, RootfsSpec};
 use boxlite_shared::BoxliteError;
 use std::time::Duration;
 use tempfile::TempDir;
@@ -774,11 +774,7 @@ async fn test_all_waits_return_on_stop() {
                             id, elapsed, run_result
                         );
                         // All waits should return within reasonable time after stop
-                        assert!(
-                            elapsed < Duration::from_secs(6),
-                            "wait{} took too long",
-                            id
-                        );
+                        assert!(elapsed < Duration::from_secs(6), "wait{} took too long", id);
                     }
                     Err(e) => {
                         println!("Task {} panicked: {:?}", all_returned, e);
