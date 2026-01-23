@@ -99,6 +99,10 @@ jobs:
             export SKIP_GUEST_BUILD=1
             make setup runtime
 
+            # Add cargo to PATH for npm commands (matches Makefile pattern)
+            # (make installs cargo to ~/.cargo/bin but npm subprocesses don't inherit PATH)
+            export PATH="$HOME/.cargo/bin:$PATH"
+
             # Build Node.js artifacts (no pack - CI uploads raw artifacts)
             cd sdks/node
             npm install --silent
@@ -199,9 +203,40 @@ jobs:
       - name: Build TypeScript
         run: cd sdks/node && npm run build
 
+      # npm Trusted Publishing (OIDC) - no NPM_TOKEN needed
+      # Requires Trusted Publisher configured on npmjs.com for this repo
       - name: Publish (napi prepublish handles optionalDependencies)
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           cd sdks/node
           npm publish --provenance --access public
+
+  upload-to-release:
+    name: Upload to GitHub Release
+    needs: [ config, build, test ]
+    if: github.event_name == 'release' && github.event.action == 'published'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: artifacts-*
+          merge-multiple: true
+
+      - name: Create tarballs for release
+        run: |
+          cd artifacts
+          for dir in npm/*/; do
+            name=$(basename "$dir")
+            tar -czf "${name}.tar.gz" -C npm "$name"
+          done
+          ls -la *.tar.gz
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*.tar.gz
+          fail_on_unmatched_files: true

@@ -32,8 +32,7 @@
     "prepublishOnly": "napi prepublish -p npm",
     "pack:all": "mkdir -p packages && npm pack --pack-destination packages && npm pack --workspaces --pack-destination packages",
     "test": "vitest run",
-    "test:watch": "vitest",
-    "version": "napi version --npm-dir ./npm"
+    "test:watch": "vitest"
   },
   "devDependencies": {
     "@napi-rs/cli": "^3.0.0-alpha.62",
