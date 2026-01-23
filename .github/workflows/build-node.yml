@@ -203,8 +203,9 @@ jobs:
   #
   # Key considerations:
   # - Runs on ubuntu-latest but publishes pre-built platform-specific binaries
-  # - Uses --workspaces=false during install to avoid EBADPLATFORM errors
-  #   (platform packages like darwin-arm64 have "os": ["darwin"] which fails on Linux)
+  # - Install dependencies BEFORE downloading artifacts to avoid EBADPLATFORM
+  #   (if npm/* directories exist during install, npm validates platform restrictions
+  #   even with --workspaces=false, causing errors for darwin-arm64 on Linux)
   # - Must publish platform packages BEFORE main package (dependency order)
   # - Uses npm provenance for supply chain security
   # ============================================================================
@@ -228,6 +229,15 @@ jobs:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
 
+      # Install BEFORE downloading artifacts to avoid EBADPLATFORM error.
+      # If npm/* directories exist, npm validates platform restrictions even
+      # with --workspaces=false, causing errors for darwin-arm64 on Linux.
+      - name: Install dependencies
+        run: cd sdks/node && npm install --ignore-scripts
+
+      - name: Build TypeScript
+        run: cd sdks/node && npm run build
+
       # Download pre-built artifacts from all platforms (darwin-arm64, linux-x64-gnu)
       # merge-multiple: true combines artifacts from different matrix jobs into one directory
       - name: Download all artifacts
@@ -241,15 +251,6 @@ jobs:
         run: |
           ls -la sdks/node/native/
           ls -la sdks/node/npm/
-
-      # --workspaces=false: Skip linking workspace packages to avoid EBADPLATFORM error
-      # Platform packages (npm/darwin-arm64, npm/linux-x64-gnu) have OS restrictions
-      # that would fail on this ubuntu runner. We only need to install root dependencies.
-      - name: Install dependencies
-        run: cd sdks/node && npm install --ignore-scripts --workspaces=false
-
-      - name: Build TypeScript
-        run: cd sdks/node && npm run build
 
       # -------------------------------------------------------------------------
       # NPM PUBLISH (Trusted Publishing via OIDC - no NPM_TOKEN needed)
@@ -297,6 +298,11 @@ jobs:
         with:
           node-version: '24'
 
+      # Install BEFORE downloading artifacts to avoid EBADPLATFORM error.
+      # (same reason as publish job - npm validates platform restrictions if npm/* exists)
+      - name: Install dependencies
+        run: cd sdks/node && npm install --ignore-scripts
+
       # Download pre-built artifacts from all platforms
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -304,11 +310,6 @@ jobs:
           path: sdks/node
           pattern: artifacts-*
           merge-multiple: true
-
-      # --workspaces=false: Skip linking workspace packages to avoid EBADPLATFORM error
-      # (same reason as publish job - platform packages have OS restrictions)
-      - name: Install dependencies
-        run: cd sdks/node && npm install --ignore-scripts --workspaces=false
 
       # pack:all creates versioned .tgz files for all packages:
       # - boxlite-ai-boxlite-X.Y.Z.tgz (main package)
