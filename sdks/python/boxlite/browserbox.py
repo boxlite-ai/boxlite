@@ -30,6 +30,7 @@ class BrowserBoxOptions:
         >>> async with BrowserBox(opts) as browser:
         ...     print(browser.endpoint())
     """
+
     browser: str = "chromium"  # chromium, firefox, or webkit
     memory: int = 2048  # Memory in MiB
     cpu: int = 2  # Number of CPU cores
@@ -60,9 +61,12 @@ class BrowserBox(SimpleBox):
     # CDP port for each browser type
     _PORTS = {"chromium": 9222, "firefox": 9223, "webkit": 9224}
 
-    def __init__(self, options: Optional[BrowserBoxOptions] = None,
-                 runtime: Optional['Boxlite'] = None,
-                 **kwargs):
+    def __init__(
+        self,
+        options: Optional[BrowserBoxOptions] = None,
+        runtime: Optional["Boxlite"] = None,
+        **kwargs,
+    ):
         """
         Create and auto-start a browser.
 
@@ -82,7 +86,7 @@ class BrowserBox(SimpleBox):
             memory_mib=opts.memory,
             cpus=opts.cpu,
             runtime=runtime,
-            **kwargs
+            **kwargs,
         )
 
     async def __aenter__(self):

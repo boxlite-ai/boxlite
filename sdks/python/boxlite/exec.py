@@ -7,7 +7,7 @@ Provides Docker-like API for executing commands in boxes.
 from dataclasses import dataclass
 
 __all__ = [
-    'ExecResult',
+    "ExecResult",
 ]
 
 
@@ -21,6 +21,7 @@ class ExecResult:
         stdout: Standard output as string
         stderr: Standard error as string
     """
+
     exit_code: int
     stdout: str
     stderr: str

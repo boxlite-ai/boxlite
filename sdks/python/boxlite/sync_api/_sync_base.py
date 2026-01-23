@@ -95,9 +95,7 @@ class SyncBase:
 
         # 3. Attach debug info for better stack traces
         setattr(task, "__boxlite_stack__", inspect.stack(0))
-        setattr(
-            task, "__boxlite_stack_trace__", traceback.extract_stack(limit=10)
-        )
+        setattr(task, "__boxlite_stack_trace__", traceback.extract_stack(limit=10))
 
         # 4. When task completes, switch back to us
         task.add_done_callback(lambda _: g_self.switch())

@@ -41,16 +41,16 @@ class InteractiveBox(SimpleBox):
     """
 
     def __init__(
-            self,
-            image: str,
-            shell: str = "/bin/sh",
-            tty: Optional[bool] = None,
-            memory_mib: Optional[int] = None,
-            cpus: Optional[int] = None,
-            runtime: Optional['Boxlite'] = None,
-            name: Optional[str] = None,
-            auto_remove: bool = True,
-            **kwargs
+        self,
+        image: str,
+        shell: str = "/bin/sh",
+        tty: Optional[bool] = None,
+        memory_mib: Optional[int] = None,
+        cpus: Optional[int] = None,
+        runtime: Optional["Boxlite"] = None,
+        name: Optional[str] = None,
+        auto_remove: bool = True,
+        **kwargs,
     ):
         """
         Create interactive box.
@@ -77,12 +77,12 @@ class InteractiveBox(SimpleBox):
             runtime=runtime,
             name=name,
             auto_remove=auto_remove,
-            **kwargs
+            **kwargs,
         )
 
         # InteractiveBox-specific config
         self._shell = shell
-        self._env = kwargs.get('env', [])
+        self._env = kwargs.get("env", [])
 
         # Determine TTY mode: None = auto-detect, True = force, False = disable
         self._tty = sys.stdin.isatty() if tty is None else tty
@@ -129,7 +129,7 @@ class InteractiveBox(SimpleBox):
                 self._forward_output(),
                 self._forward_stderr(),
                 self._wait_for_exit(),
-                return_exceptions=True
+                return_exceptions=True,
             )
         else:
             # No I/O forwarding, just wait for execution
@@ -141,13 +141,15 @@ class InteractiveBox(SimpleBox):
         # Restore terminal settings
         if self._old_tty_settings is not None:
             try:
-                termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, self._old_tty_settings)
+                termios.tcsetattr(
+                    sys.stdin.fileno(), termios.TCSADRAIN, self._old_tty_settings
+                )
             except Exception as e:
                 logger.error(f"Caught exception on TTY settings: {e}")
 
         """Exit interactive session and restore terminal."""
         # Wait for I/O task to complete (or cancel if needed)
-        if hasattr(self, '_io_task') and self._io_task is not None:
+        if hasattr(self, "_io_task") and self._io_task is not None:
             try:
                 # Give it a moment to finish naturally
                 await asyncio.wait_for(self._io_task, timeout=3)
@@ -190,12 +192,16 @@ class InteractiveBox(SimpleBox):
             while not self._exited.is_set():
                 # Read from stdin with timeout to check exit event
                 try:
-                    read_task = loop.run_in_executor(None, os.read, sys.stdin.fileno(), 1024)
+                    read_task = loop.run_in_executor(
+                        None, os.read, sys.stdin.fileno(), 1024
+                    )
                     # Wait for either stdin data or exit event
                     done, pending = await asyncio.wait(
-                        [asyncio.ensure_future(read_task),
-                         asyncio.ensure_future(self._exited.wait())],
-                        return_when=asyncio.FIRST_COMPLETED
+                        [
+                            asyncio.ensure_future(read_task),
+                            asyncio.ensure_future(self._exited.wait()),
+                        ],
+                        return_when=asyncio.FIRST_COMPLETED,
                     )
 
                     # Cancel pending tasks
@@ -237,7 +243,7 @@ class InteractiveBox(SimpleBox):
                 if isinstance(chunk, bytes):
                     sys.stdout.buffer.write(chunk)
                 else:
-                    sys.stdout.buffer.write(chunk.encode('utf-8', errors='replace'))
+                    sys.stdout.buffer.write(chunk.encode("utf-8", errors="replace"))
                 sys.stdout.buffer.flush()
 
             logger.info("\nOutput forwarding ended.")
@@ -259,7 +265,7 @@ class InteractiveBox(SimpleBox):
                 if isinstance(chunk, bytes):
                     sys.stderr.buffer.write(chunk)
                 else:
-                    sys.stderr.buffer.write(chunk.encode('utf-8', errors='replace'))
+                    sys.stderr.buffer.write(chunk.encode("utf-8", errors="replace"))
                 sys.stderr.buffer.flush()
 
             logger.info("\nStderr forwarding ended.")

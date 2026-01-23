@@ -19,34 +19,34 @@ class TestBoxManagementAPI:
 
     def test_list_boxes_function_exists(self):
         """Test that list_boxes function is available."""
-        assert hasattr(boxlite, 'list_boxes')
+        assert hasattr(boxlite, "list_boxes")
         assert callable(boxlite.list_boxes)
 
     def test_list_running_function_exists(self):
         """Test that list_running function is available."""
-        assert hasattr(boxlite, 'list_running')
+        assert hasattr(boxlite, "list_running")
         assert callable(boxlite.list_running)
 
     def test_get_box_info_function_exists(self):
         """Test that get_box_info function is available."""
-        assert hasattr(boxlite, 'get_box_info')
+        assert hasattr(boxlite, "get_box_info")
         assert callable(boxlite.get_box_info)
 
     def test_remove_box_function_exists(self):
         """Test that remove_box function is available."""
-        assert hasattr(boxlite, 'remove_box')
+        assert hasattr(boxlite, "remove_box")
         assert callable(boxlite.remove_box)
 
     def test_convenience_aliases_exist(self):
         """Test that convenience aliases are available."""
-        assert hasattr(boxlite, 'list')
-        assert hasattr(boxlite, 'ls')
+        assert hasattr(boxlite, "list")
+        assert hasattr(boxlite, "ls")
         assert callable(boxlite.list)
         assert callable(boxlite.ls)
 
     def test_box_info_class_exists(self):
         """Test that BoxInfo class is exposed."""
-        assert hasattr(boxlite, 'BoxInfo')
+        assert hasattr(boxlite, "BoxInfo")
 
     def test_list_boxes_callable(self):
         """Test that list_boxes is callable and returns a list."""
@@ -75,7 +75,7 @@ class TestBoxInfoStructure:
 
         # We can't instantiate it directly (it's created by Rust),
         # but we can verify it exists in the module
-        assert hasattr(boxlite, 'BoxInfo')
+        assert hasattr(boxlite, "BoxInfo")
 
 
 class TestModuleStructure:
@@ -84,18 +84,18 @@ class TestModuleStructure:
     def test_all_management_functions_exported(self):
         """Test that all management functions are in __all__."""
         # Get what's actually exported
-        if hasattr(boxlite, '__all__'):
+        if hasattr(boxlite, "__all__"):
             exported = boxlite.__all__
 
             # Check for key exports
-            assert 'Box' in exported or hasattr(boxlite, 'Box')
-            assert 'BoxInfo' in exported or hasattr(boxlite, 'BoxInfo')
-            assert 'list_boxes' in exported or hasattr(boxlite, 'list_boxes')
-            assert 'list_running' in exported or hasattr(boxlite, 'list_running')
+            assert "Box" in exported or hasattr(boxlite, "Box")
+            assert "BoxInfo" in exported or hasattr(boxlite, "BoxInfo")
+            assert "list_boxes" in exported or hasattr(boxlite, "list_boxes")
+            assert "list_running" in exported or hasattr(boxlite, "list_running")
 
     def test_version_exists(self):
         """Test that module has a version."""
-        assert hasattr(boxlite, '__version__')
+        assert hasattr(boxlite, "__version__")
         assert isinstance(boxlite.__version__, str)
 
 

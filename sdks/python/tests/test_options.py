@@ -61,10 +61,12 @@ class TestAutoRemoveBehavior:
 
     def test_auto_remove_true_removes_box_on_stop(self, runtime):
         """Test that auto_remove=True removes box when stop() is called."""
-        box = runtime.create(boxlite.BoxOptions(
-            image="alpine:latest",
-            auto_remove=True,
-        ))
+        box = runtime.create(
+            boxlite.BoxOptions(
+                image="alpine:latest",
+                auto_remove=True,
+            )
+        )
         box_id = box.id
 
         # Box should exist before stop
@@ -78,10 +80,12 @@ class TestAutoRemoveBehavior:
 
     def test_auto_remove_false_preserves_box_on_stop(self, runtime):
         """Test that auto_remove=False preserves box when stop() is called."""
-        box = runtime.create(boxlite.BoxOptions(
-            image="alpine:latest",
-            auto_remove=False,
-        ))
+        box = runtime.create(
+            boxlite.BoxOptions(
+                image="alpine:latest",
+                auto_remove=False,
+            )
+        )
         box_id = box.id
 
         # Stop the box
@@ -101,11 +105,13 @@ class TestDetachOption:
 
     def test_detach_false_creates_box(self, runtime):
         """Test that detach=False creates box successfully."""
-        box = runtime.create(boxlite.BoxOptions(
-            image="alpine:latest",
-            detach=False,
-            auto_remove=True,
-        ))
+        box = runtime.create(
+            boxlite.BoxOptions(
+                image="alpine:latest",
+                detach=False,
+                auto_remove=True,
+            )
+        )
         assert box is not None
         assert box.id is not None
 
@@ -115,11 +121,13 @@ class TestDetachOption:
     def test_detach_true_creates_box(self, runtime):
         """Test that detach=True creates box successfully."""
         # Note: detach=True requires auto_remove=False (they are incompatible)
-        box = runtime.create(boxlite.BoxOptions(
-            image="alpine:latest",
-            detach=True,
-            auto_remove=False,
-        ))
+        box = runtime.create(
+            boxlite.BoxOptions(
+                image="alpine:latest",
+                detach=True,
+                auto_remove=False,
+            )
+        )
         assert box is not None
         assert box.id is not None
 
@@ -131,15 +139,19 @@ class TestDetachOption:
 class TestInvalidCombinations:
     """Test that invalid option combinations are rejected."""
 
-    @pytest.mark.skip(reason="API behavior may have changed - combination no longer rejected")
+    @pytest.mark.skip(
+        reason="API behavior may have changed - combination no longer rejected"
+    )
     def test_auto_remove_true_detach_true_rejected(self, runtime):
         """Test that auto_remove=True + detach=True is rejected."""
         with pytest.raises(RuntimeError) as exc_info:
-            runtime.create(boxlite.BoxOptions(
-                image="alpine:latest",
-                auto_remove=True,
-                detach=True,
-            ))
+            runtime.create(
+                boxlite.BoxOptions(
+                    image="alpine:latest",
+                    auto_remove=True,
+                    detach=True,
+                )
+            )
         assert "incompatible" in str(exc_info.value).lower()
 
 
@@ -148,11 +160,13 @@ class TestCombinedOptions:
 
     def test_ephemeral_sandbox(self, runtime):
         """Test ephemeral sandbox: auto_remove=True, detach=False."""
-        box = runtime.create(boxlite.BoxOptions(
-            image="alpine:latest",
-            auto_remove=True,
-            detach=False,
-        ))
+        box = runtime.create(
+            boxlite.BoxOptions(
+                image="alpine:latest",
+                auto_remove=True,
+                detach=False,
+            )
+        )
         box_id = box.id
 
         # Box exists
@@ -166,11 +180,13 @@ class TestCombinedOptions:
 
     def test_persistent_sandbox(self, runtime):
         """Test persistent sandbox: auto_remove=False, detach=False."""
-        box = runtime.create(boxlite.BoxOptions(
-            image="alpine:latest",
-            auto_remove=False,
-            detach=False,
-        ))
+        box = runtime.create(
+            boxlite.BoxOptions(
+                image="alpine:latest",
+                auto_remove=False,
+                detach=False,
+            )
+        )
         box_id = box.id
 
         # Stop - should preserve
@@ -190,11 +206,13 @@ class TestCombinedOptions:
 
     def test_detached_service(self, runtime):
         """Test detached service: auto_remove=False, detach=True."""
-        box = runtime.create(boxlite.BoxOptions(
-            image="alpine:latest",
-            auto_remove=False,
-            detach=True,
-        ))
+        box = runtime.create(
+            boxlite.BoxOptions(
+                image="alpine:latest",
+                auto_remove=False,
+                detach=True,
+            )
+        )
         box_id = box.id
 
         # Box exists

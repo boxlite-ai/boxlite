@@ -24,14 +24,14 @@ class RuntimeHarness:
         self._boxes = []
 
     def create_box(
-            self,
-            *,
-            image: str = "alpine:latest",
-            name: str | None = None,
-            cpus: int | None = None,
-            memory_mib: int | None = None,
-            working_dir: str | None = None,
-            env: list[tuple[str, str]] | None = None,
+        self,
+        *,
+        image: str = "alpine:latest",
+        name: str | None = None,
+        cpus: int | None = None,
+        memory_mib: int | None = None,
+        working_dir: str | None = None,
+        env: list[tuple[str, str]] | None = None,
     ):
         opts = boxlite.BoxOptions(
             image=image,
@@ -127,7 +127,11 @@ class TestBoxManagement:
         running = runtime.list()
         ids = {box.id for box in boxes}
         # Boxes may be in configured or running state
-        active_ids = {info.id for info in running if info.state.status in {"configured", "running"}}
+        active_ids = {
+            info.id
+            for info in running
+            if info.state.status in {"configured", "running"}
+        }
         assert ids.issubset(active_ids)
 
     def test_list_boxes_sorted_by_creation(self, runtime):
@@ -137,7 +141,9 @@ class TestBoxManagement:
         time.sleep(0.01)
         box3 = runtime.create_box()
 
-        our_infos = [info for info in runtime.list() if info.id in {box1.id, box2.id, box3.id}]
+        our_infos = [
+            info for info in runtime.list() if info.id in {box1.id, box2.id, box3.id}
+        ]
         assert len(our_infos) == 3
         assert our_infos[0].id == box3.id
         assert our_infos[1].id == box2.id

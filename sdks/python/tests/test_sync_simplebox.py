@@ -12,6 +12,7 @@ import pytest
 # Try to import sync API - skip if greenlet not installed
 try:
     from boxlite import SyncSimpleBox
+
     SYNC_AVAILABLE = True
 except ImportError:
     SYNC_AVAILABLE = False
@@ -54,10 +55,7 @@ class TestSyncSimpleBox:
     def test_exec_stdout_stderr(self, shared_sync_runtime):
         """Captures both stdout and stderr."""
         with SyncSimpleBox(image="alpine:latest", runtime=shared_sync_runtime) as box:
-            result = box.exec(
-                "sh", "-c",
-                "echo stdout && echo stderr >&2"
-            )
+            result = box.exec("sh", "-c", "echo stdout && echo stderr >&2")
             assert "stdout" in result.stdout
             assert "stderr" in result.stderr
 
@@ -69,7 +67,9 @@ class TestSyncSimpleBox:
 
     def test_info(self, shared_sync_runtime):
         """Can get box info."""
-        with SyncSimpleBox(image="alpine:latest", cpus=2, runtime=shared_sync_runtime) as box:
+        with SyncSimpleBox(
+            image="alpine:latest", cpus=2, runtime=shared_sync_runtime
+        ) as box:
             info = box.info()
             assert info.id == box.id
             assert info.cpus == 2
@@ -84,7 +84,9 @@ class TestSyncSimpleBox:
 
     def test_custom_working_dir(self, shared_sync_runtime):
         """Can set custom working directory."""
-        with SyncSimpleBox(image="alpine:latest", working_dir="/tmp", runtime=shared_sync_runtime) as box:
+        with SyncSimpleBox(
+            image="alpine:latest", working_dir="/tmp", runtime=shared_sync_runtime
+        ) as box:
             result = box.exec("pwd")
             assert result.stdout.strip() == "/tmp"
 
@@ -93,7 +95,7 @@ class TestSyncSimpleBox:
         with SyncSimpleBox(
             image="alpine:latest",
             env=[("MY_VAR", "my_value")],
-            runtime=shared_sync_runtime
+            runtime=shared_sync_runtime,
         ) as box:
             result = box.exec("env")
             assert "MY_VAR=my_value" in result.stdout

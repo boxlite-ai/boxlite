@@ -25,12 +25,12 @@ class CodeBox(SimpleBox):
     """
 
     def __init__(
-            self,
-            image: str = "python:slim",
-            memory_mib: Optional[int] = None,
-            cpus: Optional[int] = None,
-            runtime: Optional['Boxlite'] = None,
-            **kwargs
+        self,
+        image: str = "python:slim",
+        memory_mib: Optional[int] = None,
+        cpus: Optional[int] = None,
+        runtime: Optional["Boxlite"] = None,
+        **kwargs,
     ):
         """
         Create a new CodeBox.
@@ -80,7 +80,7 @@ class CodeBox(SimpleBox):
         Returns:
             Execution output as a string
         """
-        with open(script_path, 'r') as f:
+        with open(script_path, "r") as f:
             code = f.read()
         return await self.run(code)
 

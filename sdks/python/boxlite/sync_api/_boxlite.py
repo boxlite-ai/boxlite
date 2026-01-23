@@ -60,6 +60,7 @@ class SyncBoxlite:
                      Use SyncBoxlite.default() for default runtime.
         """
         from ..boxlite import Boxlite
+
         self._boxlite = Boxlite(options)
 
         self._loop: asyncio.AbstractEventLoop = None
@@ -106,6 +107,7 @@ class SyncBoxlite:
         self._dispatcher_fiber = greenlet(greenlet_main)
 
         from ._sync_base import SyncBase
+
         self._sync_helper = SyncBase(self._boxlite, self._loop, self._dispatcher_fiber)
 
         # 5. Start dispatcher fiber
@@ -198,6 +200,7 @@ class SyncBoxlite:
                 ...
         """
         from ..boxlite import Boxlite
+
         Boxlite.init_default(options)
 
     @staticmethod
@@ -219,6 +222,7 @@ class SyncBoxlite:
         instance = object.__new__(SyncBoxlite)
 
         from ..boxlite import Boxlite
+
         instance._boxlite = Boxlite.default()
 
         instance._loop = None
@@ -247,9 +251,9 @@ class SyncBoxlite:
     # ─────────────────────────────────────────────────────────────────────────
 
     def create(
-            self,
-            options: "BoxOptions",
-            name: Optional[str] = None,
+        self,
+        options: "BoxOptions",
+        name: Optional[str] = None,
     ) -> "SyncBox":
         """
         Create a new box.

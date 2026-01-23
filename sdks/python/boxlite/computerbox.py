@@ -48,8 +48,8 @@ class ComputerBox(SimpleBox):
         memory: int = const.COMPUTERBOX_MEMORY_MIB,
         gui_http_port: int = const.COMPUTERBOX_GUI_HTTP_PORT,
         gui_https_port: int = const.COMPUTERBOX_GUI_HTTPS_PORT,
-        runtime: Optional['Boxlite'] = None,
-        **kwargs
+        runtime: Optional["Boxlite"] = None,
+        **kwargs,
     ):
         """
         Create and auto-start a desktop environment.
@@ -62,7 +62,7 @@ class ComputerBox(SimpleBox):
             runtime: Optional runtime instance (uses global default if None)
             **kwargs: Additional configuration options (volumes, etc.)
         """
-        user_env = kwargs.pop('env', [])
+        user_env = kwargs.pop("env", [])
         default_env = [
             ("DISPLAY", const.COMPUTERBOX_DISPLAY_NUMBER),
             ("DISPLAY_SIZEW", str(const.COMPUTERBOX_DISPLAY_WIDTH)),
@@ -72,10 +72,10 @@ class ComputerBox(SimpleBox):
             ("SELKIES_UI_SHOW_SIDEBAR", "false"),
         ]
 
-        user_ports = kwargs.pop('ports', [])
+        user_ports = kwargs.pop("ports", [])
         default_ports = [
             (gui_http_port, const.COMPUTERBOX_GUI_HTTP_PORT),
-            (gui_https_port, const.COMPUTERBOX_GUI_HTTPS_PORT)
+            (gui_https_port, const.COMPUTERBOX_GUI_HTTPS_PORT),
         ]
 
         super().__init__(
@@ -85,7 +85,7 @@ class ComputerBox(SimpleBox):
             runtime=runtime,
             env=default_env + list(user_env),
             ports=default_ports + list(user_ports),
-            **kwargs
+            **kwargs,
         )
 
     async def wait_until_ready(self, timeout: int = const.DESKTOP_READY_TIMEOUT):
@@ -100,22 +100,30 @@ class ComputerBox(SimpleBox):
         """
         logger.info("Waiting for desktop to become ready...")
         import time
+
         start_time = time.time()
 
         while True:
             elapsed = time.time() - start_time
             if elapsed > timeout:
-                raise TimeoutError(f"Desktop did not become ready within {timeout} seconds")
+                raise TimeoutError(
+                    f"Desktop did not become ready within {timeout} seconds"
+                )
 
             try:
                 exec_result = await self.exec("xwininfo", "-tree", "-root")
-                expected_size = f'{const.COMPUTERBOX_DISPLAY_WIDTH}x{const.COMPUTERBOX_DISPLAY_HEIGHT}'
+                expected_size = f"{const.COMPUTERBOX_DISPLAY_WIDTH}x{const.COMPUTERBOX_DISPLAY_HEIGHT}"
 
-                if 'xfdesktop' in exec_result.stdout and expected_size in exec_result.stdout:
+                if (
+                    "xfdesktop" in exec_result.stdout
+                    and expected_size in exec_result.stdout
+                ):
                     logger.info(f"Desktop ready after {elapsed:.1f} seconds")
                     return
 
-                logger.debug(f"Desktop not ready yet (waited {elapsed:.1f}s), retrying...")
+                logger.debug(
+                    f"Desktop not ready yet (waited {elapsed:.1f}s), retrying..."
+                )
                 await asyncio.sleep(const.DESKTOP_READY_RETRY_DELAY)
 
             except (ExecError, ConnectionError, OSError, asyncio.TimeoutError) as e:
@@ -134,7 +142,7 @@ class ComputerBox(SimpleBox):
         """
         logger.info("Taking screenshot...")
 
-        python_code = '''
+        python_code = """
 from PIL import ImageGrab
 import io
 import base64
@@ -142,7 +150,7 @@ img = ImageGrab.grab()
 buffer = io.BytesIO()
 img.save(buffer, format="PNG")
 print(base64.b64encode(buffer.getvalue()).decode("utf-8"))
-'''
+"""
         exec_result = await self.exec("python3", "-c", python_code)
 
         if exec_result.exit_code != 0:
@@ -152,14 +160,16 @@ print(base64.b64encode(buffer.getvalue()).decode("utf-8"))
             "data": exec_result.stdout.strip(),
             "width": const.COMPUTERBOX_DISPLAY_WIDTH,
             "height": const.COMPUTERBOX_DISPLAY_HEIGHT,
-            "format": "png"
+            "format": "png",
         }
 
     async def mouse_move(self, x: int, y: int):
         """Move mouse cursor to absolute coordinates."""
         exec_result = await self.exec("xdotool", "mousemove", str(x), str(y))
         if exec_result.exit_code != 0:
-            raise ExecError(f"mouse_move({x}, {y})", exec_result.exit_code, exec_result.stderr)
+            raise ExecError(
+                f"mouse_move({x}, {y})", exec_result.exit_code, exec_result.stderr
+            )
 
     async def left_click(self):
         """Click left mouse button at current position."""
@@ -181,13 +191,17 @@ print(base64.b64encode(buffer.getvalue()).decode("utf-8"))
 
     async def double_click(self):
         """Double-click left mouse button at current position."""
-        exec_result = await self.exec("xdotool", "click", "--repeat", "2", "--delay", "100", "1")
+        exec_result = await self.exec(
+            "xdotool", "click", "--repeat", "2", "--delay", "100", "1"
+        )
         if exec_result.exit_code != 0:
             raise ExecError("double_click()", exec_result.exit_code, exec_result.stderr)
 
     async def triple_click(self):
         """Triple-click left mouse button at current position."""
-        exec_result = await self.exec("xdotool", "click", "--repeat", "3", "--delay", "100", "1")
+        exec_result = await self.exec(
+            "xdotool", "click", "--repeat", "3", "--delay", "100", "1"
+        )
         if exec_result.exit_code != 0:
             raise ExecError("triple_click()", exec_result.exit_code, exec_result.stderr)
 
@@ -195,28 +209,40 @@ print(base64.b64encode(buffer.getvalue()).decode("utf-8"))
         """Drag mouse from start position to end position with left button held."""
         exec_result = await self.exec(
             "xdotool",
-            "mousemove", str(start_x), str(start_y),
-            "mousedown", "1",
-            "sleep", "0.1",
-            "mousemove", str(end_x), str(end_y),
-            "sleep", "0.1",
-            "mouseup", "1"
+            "mousemove",
+            str(start_x),
+            str(start_y),
+            "mousedown",
+            "1",
+            "sleep",
+            "0.1",
+            "mousemove",
+            str(end_x),
+            str(end_y),
+            "sleep",
+            "0.1",
+            "mouseup",
+            "1",
         )
         if exec_result.exit_code != 0:
-            raise ExecError("left_click_drag()", exec_result.exit_code, exec_result.stderr)
+            raise ExecError(
+                "left_click_drag()", exec_result.exit_code, exec_result.stderr
+            )
 
     async def cursor_position(self) -> Tuple[int, int]:
         """Get the current mouse cursor position. Returns (x, y) tuple."""
         exec_result = await self.exec("xdotool", "getmouselocation", "--shell")
         if exec_result.exit_code != 0:
-            raise ExecError("cursor_position()", exec_result.exit_code, exec_result.stderr)
+            raise ExecError(
+                "cursor_position()", exec_result.exit_code, exec_result.stderr
+            )
 
         x, y = None, None
-        for line in exec_result.stdout.split('\n'):
+        for line in exec_result.stdout.split("\n"):
             line = line.strip()
-            if line.startswith('X='):
+            if line.startswith("X="):
                 x = int(line[2:])
-            elif line.startswith('Y='):
+            elif line.startswith("Y="):
                 y = int(line[2:])
 
         if x is not None and y is not None:
@@ -250,7 +276,14 @@ print(base64.b64encode(buffer.getvalue()).decode("utf-8"))
             raise ValueError(f"Invalid scroll direction: {direction}")
 
         exec_result = await self.exec(
-            "xdotool", "mousemove", str(x), str(y), "click", "--repeat", str(amount), button
+            "xdotool",
+            "mousemove",
+            str(x),
+            str(y),
+            "click",
+            "--repeat",
+            str(amount),
+            button,
         )
         if exec_result.exit_code != 0:
             raise ExecError("scroll()", exec_result.exit_code, exec_result.stderr)
@@ -259,7 +292,9 @@ print(base64.b64encode(buffer.getvalue()).decode("utf-8"))
         """Get the screen resolution. Returns (width, height) tuple."""
         exec_result = await self.exec("xdotool", "getdisplaygeometry")
         if exec_result.exit_code != 0:
-            raise ExecError("get_screen_size()", exec_result.exit_code, exec_result.stderr)
+            raise ExecError(
+                "get_screen_size()", exec_result.exit_code, exec_result.stderr
+            )
 
         parts = exec_result.stdout.strip().split()
         if len(parts) == 2:

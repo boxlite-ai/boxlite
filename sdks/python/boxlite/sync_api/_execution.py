@@ -31,6 +31,7 @@ class SyncExecStdout:
         self._async_iter = None
 
         from ._sync_base import SyncBase
+
         self._sync_helper = SyncBase(async_stdout, ctx.loop, ctx.dispatcher_fiber)
 
     def _sync(self, coro):
@@ -75,6 +76,7 @@ class SyncExecStderr:
         self._async_iter = None
 
         from ._sync_base import SyncBase
+
         self._sync_helper = SyncBase(async_stderr, ctx.loop, ctx.dispatcher_fiber)
 
     def _sync(self, coro):

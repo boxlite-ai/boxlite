@@ -16,6 +16,7 @@ import boxlite
 # Try to import sync API - skip if greenlet not installed
 try:
     from boxlite import SyncBoxlite
+
     SYNC_AVAILABLE = True
 except ImportError:
     SYNC_AVAILABLE = False
@@ -29,6 +30,7 @@ pytestmark = [
 # =============================================================================
 # SyncBoxlite Tests
 # =============================================================================
+
 
 class TestSyncBoxliteRuntime:
     """Tests for SyncBoxlite runtime."""
@@ -50,6 +52,7 @@ class TestSyncBoxliteRuntime:
 # SyncBox Tests
 # =============================================================================
 
+
 class TestSyncBox:
     """Tests for SyncBox class."""
 
@@ -63,11 +66,13 @@ class TestSyncBox:
 
     def test_box_info(self, shared_sync_runtime):
         """Can get box info."""
-        box = shared_sync_runtime.create(boxlite.BoxOptions(
-            image="alpine:latest",
-            cpus=2,
-            memory_mib=256,
-        ))
+        box = shared_sync_runtime.create(
+            boxlite.BoxOptions(
+                image="alpine:latest",
+                cpus=2,
+                memory_mib=256,
+            )
+        )
         info = box.info()
         assert info.id == box.id
         assert info.image == "alpine:latest"
@@ -91,11 +96,7 @@ class TestSyncBox:
     def test_box_exec_with_env(self, shared_sync_runtime):
         """Can run command with environment variables."""
         box = shared_sync_runtime.create(boxlite.BoxOptions(image="alpine:latest"))
-        execution = box.exec(
-            "sh",
-            ["-c", "echo $MY_VAR"],
-            [("MY_VAR", "test_value")]
-        )
+        execution = box.exec("sh", ["-c", "echo $MY_VAR"], [("MY_VAR", "test_value")])
 
         stdout_lines = list(execution.stdout())
         assert any("test_value" in line for line in stdout_lines)
@@ -158,6 +159,7 @@ class TestSyncBox:
 # SyncExecution Tests
 # =============================================================================
 
+
 class TestSyncExecution:
     """Tests for SyncExecution class."""
 
@@ -202,6 +204,7 @@ class TestSyncExecution:
 # =============================================================================
 # Runtime Methods Tests
 # =============================================================================
+
 
 class TestSyncBoxliteRuntimeMethods:
     """Tests for SyncBoxlite runtime methods."""
@@ -253,6 +256,7 @@ class TestSyncBoxliteRuntimeMethods:
 # Edge Cases and Error Handling
 # =============================================================================
 
+
 class TestSyncAPIEdgeCases:
     """Tests for edge cases and error handling."""
 
@@ -273,8 +277,7 @@ class TestSyncAPIEdgeCases:
         """Can create box with custom name."""
         name = f"test-box-{int(time.time())}"
         box = shared_sync_runtime.create(
-            boxlite.BoxOptions(image="alpine:latest"),
-            name=name
+            boxlite.BoxOptions(image="alpine:latest"), name=name
         )
 
         # Should be retrievable by name

@@ -36,7 +36,9 @@ class TestCodeBoxBasic:
     @pytest.mark.asyncio
     async def test_custom_image(self, shared_runtime):
         """Test CodeBox with custom Python image."""
-        async with boxlite.CodeBox(image="python:3.11-slim", runtime=shared_runtime) as box:
+        async with boxlite.CodeBox(
+            image="python:3.11-slim", runtime=shared_runtime
+        ) as box:
             info = box.info()
             assert "python" in info.image.lower()
 
@@ -141,9 +143,7 @@ class TestCodeBoxRunScript:
         """Test running a Python script file."""
         async with boxlite.CodeBox(runtime=shared_runtime) as box:
             # Create a temporary script file
-            with tempfile.NamedTemporaryFile(
-                mode='w', suffix='.py', delete=False
-            ) as f:
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
                 f.write("print('Hello from script!')\n")
                 script_path = f.name
 
@@ -157,9 +157,7 @@ class TestCodeBoxRunScript:
     async def test_run_script_with_imports(self, shared_runtime):
         """Test running a script with imports."""
         async with boxlite.CodeBox(runtime=shared_runtime) as box:
-            with tempfile.NamedTemporaryFile(
-                mode='w', suffix='.py', delete=False
-            ) as f:
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
                 f.write("import sys\nprint(sys.version_info.major)\n")
                 script_path = f.name
 
@@ -180,7 +178,10 @@ class TestCodeBoxInstallPackage:
         async with boxlite.CodeBox(runtime=shared_runtime) as box:
             result = await box.install_package("six")
             # pip output should indicate success
-            assert "Successfully installed" in result or "already satisfied" in result.lower()
+            assert (
+                "Successfully installed" in result
+                or "already satisfied" in result.lower()
+            )
 
     @pytest.mark.asyncio
     @pytest.mark.slow
@@ -198,7 +199,10 @@ class TestCodeBoxInstallPackage:
         async with boxlite.CodeBox(runtime=shared_runtime) as box:
             result = await box.install_packages("six", "packaging")
             # Should install both packages
-            assert "Successfully installed" in result or "already satisfied" in result.lower()
+            assert (
+                "Successfully installed" in result
+                or "already satisfied" in result.lower()
+            )
 
 
 class TestCodeBoxIsolation:
@@ -266,11 +270,12 @@ class TestCodeBoxExports:
 
     def test_codebox_in_module(self):
         """Test that CodeBox is exported from boxlite."""
-        assert hasattr(boxlite, 'CodeBox')
+        assert hasattr(boxlite, "CodeBox")
 
     def test_codebox_from_codebox_module(self):
         """Test that CodeBox can be imported from codebox module."""
         from boxlite.codebox import CodeBox
+
         assert CodeBox is boxlite.CodeBox
 
 

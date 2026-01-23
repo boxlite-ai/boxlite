@@ -12,6 +12,7 @@ import pytest
 # Try to import sync API - skip if greenlet not installed
 try:
     from boxlite import SyncCodeBox
+
     SYNC_AVAILABLE = True
 except ImportError:
     SYNC_AVAILABLE = False
@@ -81,7 +82,10 @@ print(round(math.pi, 2))
         """Can install a package."""
         with SyncCodeBox(runtime=shared_sync_runtime) as box:
             result = box.install_package("six")
-            assert "Successfully installed" in result or "already satisfied" in result.lower()
+            assert (
+                "Successfully installed" in result
+                or "already satisfied" in result.lower()
+            )
 
     @pytest.mark.slow
     def test_install_and_use(self, shared_sync_runtime):

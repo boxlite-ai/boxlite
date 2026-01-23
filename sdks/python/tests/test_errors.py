@@ -143,10 +143,10 @@ class TestErrorExports:
         """Test that errors are exported from boxlite module."""
         import boxlite
 
-        assert hasattr(boxlite, 'BoxliteError')
-        assert hasattr(boxlite, 'ExecError')
-        assert hasattr(boxlite, 'TimeoutError')
-        assert hasattr(boxlite, 'ParseError')
+        assert hasattr(boxlite, "BoxliteError")
+        assert hasattr(boxlite, "ExecError")
+        assert hasattr(boxlite, "TimeoutError")
+        assert hasattr(boxlite, "ParseError")
 
     def test_errors_from_errors_module(self):
         """Test that errors can be imported from errors module."""

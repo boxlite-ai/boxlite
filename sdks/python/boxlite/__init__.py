@@ -47,17 +47,19 @@ try:
     from .codebox import CodeBox  # noqa: F401
     from .errors import BoxliteError, ExecError, TimeoutError, ParseError  # noqa: F401
 
-    __all__.extend([
-        # Python convenience wrappers
-        "SimpleBox",
-        "CodeBox",
-        "ExecResult",
-        # Error types
-        "BoxliteError",
-        "ExecError",
-        "TimeoutError",
-        "ParseError",
-    ])
+    __all__.extend(
+        [
+            # Python convenience wrappers
+            "SimpleBox",
+            "CodeBox",
+            "ExecResult",
+            # Error types
+            "BoxliteError",
+            "ExecError",
+            "TimeoutError",
+            "ParseError",
+        ]
+    )
 except ImportError:
     pass
 
@@ -96,15 +98,17 @@ try:
         SyncCodeBox,
     )
 
-    __all__.extend([
-        "SyncBoxlite",
-        "SyncBox",
-        "SyncExecution",
-        "SyncExecStdout",
-        "SyncExecStderr",
-        "SyncSimpleBox",
-        "SyncCodeBox",
-    ])
+    __all__.extend(
+        [
+            "SyncBoxlite",
+            "SyncBox",
+            "SyncExecution",
+            "SyncExecStdout",
+            "SyncExecStderr",
+            "SyncSimpleBox",
+            "SyncCodeBox",
+        ]
+    )
 except ImportError:
     # greenlet not installed - sync API not available
     pass
@@ -112,6 +116,7 @@ except ImportError:
 # Get version from package metadata
 try:
     from importlib.metadata import version, PackageNotFoundError
+
     __version__ = version("boxlite")
 except PackageNotFoundError:
     # Package not installed (e.g., development mode)

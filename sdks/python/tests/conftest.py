@@ -29,6 +29,7 @@ def shared_runtime():
 # For sync API tests - only available if greenlet is installed
 try:
     from boxlite import SyncBoxlite
+
     SYNC_AVAILABLE = True
 except ImportError:
     SYNC_AVAILABLE = False

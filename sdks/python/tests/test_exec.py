@@ -19,9 +19,9 @@ class TestExecResultStructure:
     def test_has_required_fields(self):
         """Test that ExecResult has all required fields."""
         result = ExecResult(exit_code=0, stdout="output", stderr="error")
-        assert hasattr(result, 'exit_code')
-        assert hasattr(result, 'stdout')
-        assert hasattr(result, 'stderr')
+        assert hasattr(result, "exit_code")
+        assert hasattr(result, "stdout")
+        assert hasattr(result, "stderr")
 
     def test_field_types(self):
         """Test that ExecResult fields have correct types."""
@@ -51,9 +51,7 @@ class TestExecResultCreation:
     def test_create_mixed_output(self):
         """Test creating result with both stdout and stderr."""
         result = ExecResult(
-            exit_code=0,
-            stdout="Normal output\n",
-            stderr="Warning: something\n"
+            exit_code=0, stdout="Normal output\n", stderr="Warning: something\n"
         )
         assert result.exit_code == 0
         assert "Normal output" in result.stdout
@@ -68,7 +66,7 @@ class TestExecResultCreation:
         """Test creating result with multiline output."""
         stdout = "line1\nline2\nline3\n"
         result = ExecResult(exit_code=0, stdout=stdout, stderr="")
-        assert result.stdout.count('\n') == 3
+        assert result.stdout.count("\n") == 3
 
 
 class TestExecResultEquality:
@@ -125,9 +123,7 @@ class TestExecResultUsage:
     def test_combine_output(self):
         """Test combining stdout and stderr."""
         result = ExecResult(
-            exit_code=0,
-            stdout="standard output\n",
-            stderr="error output\n"
+            exit_code=0, stdout="standard output\n", stderr="error output\n"
         )
         combined = result.stdout + result.stderr
         assert "standard output" in combined
@@ -141,11 +137,7 @@ class TestExecResultUsage:
 
     def test_unicode_output(self):
         """Test result with unicode characters."""
-        result = ExecResult(
-            exit_code=0,
-            stdout="Hello, 世界! 🎉\n",
-            stderr=""
-        )
+        result = ExecResult(exit_code=0, stdout="Hello, 世界! 🎉\n", stderr="")
         assert "世界" in result.stdout
         assert "🎉" in result.stdout
 
@@ -156,12 +148,14 @@ class TestExecResultExports:
     def test_in_boxlite_module(self):
         """Test that ExecResult is exported from boxlite."""
         import boxlite
-        assert hasattr(boxlite, 'ExecResult')
+
+        assert hasattr(boxlite, "ExecResult")
         assert boxlite.ExecResult is ExecResult
 
     def test_from_exec_module(self):
         """Test that ExecResult can be imported from exec module."""
         from boxlite.exec import ExecResult as ER
+
         assert ER is ExecResult
 
 
