@@ -4,6 +4,9 @@
   "private": true,
   "description": "Example scripts for BoxLite Node.js SDK",
   "type": "module",
+  "dependencies": {
+    "@boxlite-ai/boxlite": "file:../../sdks/node"
+  },
   "scripts": {
     "simplebox": "node simplebox.js",
     "codebox": "node codebox.js",

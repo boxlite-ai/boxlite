@@ -162,6 +162,9 @@ dev\:c: runtime
 dev\:node: runtime-debug
 	@cd sdks/node && npm install --silent && npm run build:native && npm run build
 	@ln -sfn ../../../target/boxlite-runtime sdks/node/native/runtime
+	@echo "📦 Linking SDK to examples..."
+	@cd examples/node && npm install --silent
+	@echo "✅ Node.js SDK built and linked to examples"
 
 # Run all unit tests (excludes integration tests that require VMs)
 test:
