@@ -9,7 +9,7 @@ fn test_list_empty_or_header() {
         .arg("list")
         .assert()
         .success()
-        .stdout(predicate::str::contains("CONTAINER ID"))
+        .stdout(predicate::str::contains("ID"))
         .stdout(predicate::str::contains("IMAGE"))
         .stdout(predicate::str::contains("STATUS"))
         .stdout(predicate::str::contains("CREATED"))

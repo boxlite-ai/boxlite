@@ -23,7 +23,7 @@ pub struct ListArgs {
 
 #[derive(Tabled, Serialize)]
 struct BoxPresenter {
-    #[tabled(rename = "CONTAINER ID")]
+    #[tabled(rename = "ID")]
     #[serde(rename = "ID")]
     id: String,
 
