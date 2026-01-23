@@ -67,7 +67,7 @@ class TestShutdown:
 class TestShutdownSync:
     """Test runtime shutdown with sync API."""
 
-    def test_shutdown_sync_default(self, shared_sync_runtime):
+    def test_shutdown_sync_default(self):
         """Shutdown via sync API with default timeout."""
         # Create a separate runtime for this test since shutdown is permanent
         with boxlite.SyncBoxlite.default() as runtime:
