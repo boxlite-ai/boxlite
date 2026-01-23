@@ -142,13 +142,13 @@ jobs:
       # GitHub Actions upload-artifact uses ZIP which doesn't preserve permissions.
       # See: https://github.com/actions/upload-artifact/issues/38
       - name: Create artifact tarball
-        run: tar -cvf sdks/node/artifacts.tar -C sdks/node native/boxlite.js npm/
+        run: tar -cvf sdks/node/artifacts-${{ matrix.target }}.tar -C sdks/node native/boxlite.js npm/
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: artifacts-${{ matrix.target }}
-          path: sdks/node/artifacts.tar
+          path: sdks/node/artifacts-${{ matrix.target }}.tar
           if-no-files-found: error
           retention-days: ${{ needs.config.outputs.artifact-retention-days }}
 
@@ -195,7 +195,7 @@ jobs:
 
       # Extract tar to restore file permissions (see build job comment)
       - name: Extract artifacts
-        run: tar -xvf sdks/node/artifacts.tar -C sdks/node
+        run: tar -xvf sdks/node/artifacts-${{ matrix.platform.target }}.tar -C sdks/node
 
       - name: Test package
         run: |
