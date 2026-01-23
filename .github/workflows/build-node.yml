@@ -138,13 +138,17 @@ jobs:
           npm run artifacts
           npm run bundle:runtime
 
+      # Create tar archive to preserve Unix file permissions (especially execute bits).
+      # GitHub Actions upload-artifact uses ZIP which doesn't preserve permissions.
+      # See: https://github.com/actions/upload-artifact/issues/38
+      - name: Create artifact tarball
+        run: tar -cvf artifacts.tar -C sdks/node native/boxlite.js npm/
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: artifacts-${{ matrix.target }}
-          path: |
-            sdks/node/native/boxlite.js
-            sdks/node/npm/
+          path: sdks/node/artifacts.tar
           if-no-files-found: error
           retention-days: ${{ needs.config.outputs.artifact-retention-days }}
 
@@ -188,6 +192,10 @@ jobs:
         with:
           name: artifacts-${{ matrix.platform.target }}
           path: sdks/node
+
+      # Extract tar to restore file permissions (see build job comment)
+      - name: Extract artifacts
+        run: tar -xvf sdks/node/artifacts.tar -C sdks/node
 
       - name: Test package
         run: |
@@ -243,14 +251,24 @@ jobs:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          path: sdks/node
+          path: sdks/node/artifacts
           pattern: artifacts-*
           merge-multiple: true
+
+      # Extract all tar archives to restore file permissions
+      - name: Extract artifacts
+        run: |
+          cd sdks/node
+          for tarball in artifacts/*.tar; do
+            echo "Extracting $tarball..."
+            tar -xvf "$tarball"
+          done
 
       - name: List artifacts
         run: |
           ls -la sdks/node/native/
           ls -la sdks/node/npm/
+          ls -la sdks/node/npm/*/runtime/ || true
 
       # -------------------------------------------------------------------------
       # NPM PUBLISH (Trusted Publishing via OIDC - no NPM_TOKEN needed)
@@ -303,13 +321,23 @@ jobs:
       - name: Install dependencies
         run: cd sdks/node && npm install --ignore-scripts
 
-      # Download pre-built artifacts from all platforms
+      # Download pre-built artifacts from all platforms (darwin-arm64, linux-x64-gnu)
+      # merge-multiple: true combines artifacts from different matrix jobs into one directory
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          path: sdks/node
+          path: sdks/node/artifacts
           pattern: artifacts-*
           merge-multiple: true
+
+      # Extract all tar archives to restore file permissions
+      - name: Extract artifacts
+        run: |
+          cd sdks/node
+          for tarball in artifacts/*.tar; do
+            echo "Extracting $tarball..."
+            tar -xvf "$tarball"
+          done
 
       # pack:all creates versioned .tgz files for all packages:
       # - boxlite-ai-boxlite-X.Y.Z.tgz (main package)
