@@ -127,7 +127,7 @@ jobs:
         with:
           name: artifacts-${{ matrix.target }}
           path: |
-            sdks/node/native/*.node
+            sdks/node/native/boxlite.js
             sdks/node/npm/
           if-no-files-found: error
           retention-days: ${{ needs.config.outputs.artifact-retention-days }}
