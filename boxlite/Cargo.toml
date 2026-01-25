@@ -85,6 +85,7 @@ pkg-config = "0.3"
 regex = "1"
 
 [target.'cfg(target_os = "linux")'.build-dependencies]
-seccompiler = "0.4"  # Compile JSON filters to BPF at build time
+seccompiler = { version = "0.4", features = ["json"] }  # Compile JSON filters to BPF at build time
+bincode = "2.0"  # Serialize compiled BPF filters
 
 [dev-dependencies]
