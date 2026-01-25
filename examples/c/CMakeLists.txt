@@ -32,17 +32,30 @@ endif()
 include_directories(${BOXLITE_INCLUDE_DIR})
 
 # Example executables
-add_executable(execute execute.c)
-target_link_libraries(execute ${BOXLITE_LIB})
+set(EXAMPLE_TARGETS
+    execute
+    shutdown
+    simple_api_demo
+    01_lifecycle
+    02_list_boxes
+    03_streaming_output
+    04_error_handling
+    05_metrics
+)
 
-# Set RPATH so the executable can find the dylib
+foreach(TARGET ${EXAMPLE_TARGETS})
+    add_executable(${TARGET} ${TARGET}.c)
+    target_link_libraries(${TARGET} ${BOXLITE_LIB})
+endforeach()
+
+# Set RPATH so the executables can find the dylib
 if(APPLE)
-    set_target_properties(execute PROPERTIES
+    set_target_properties(${EXAMPLE_TARGETS} PROPERTIES
         BUILD_RPATH "${BOXLITE_LIB_DIR}"
         INSTALL_RPATH "@executable_path/../lib"
     )
 elseif(UNIX)
-    set_target_properties(execute PROPERTIES
+    set_target_properties(${EXAMPLE_TARGETS} PROPERTIES
         BUILD_RPATH "${BOXLITE_LIB_DIR}"
         INSTALL_RPATH "$ORIGIN/../lib"
     )

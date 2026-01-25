@@ -16,25 +16,30 @@ void output_callback(const char* text, int is_stderr, void* user_data) {
 }
 
 int main() {
-    char* error = NULL;
+    CBoxliteRuntime* runtime = NULL;
+    CBoxHandle* box = NULL;
+    CBoxliteError error = {0};
+    BoxliteErrorCode code;
 
     printf("🚀 BoxLite C API Example\n");
     printf("Version: %s\n\n", boxlite_version());
 
     // Create runtime with default home directory
-    CBoxliteRuntime* runtime = boxlite_runtime_new(NULL, &error);
-    if (!runtime) {
-        fprintf(stderr, "Failed to create runtime: %s\n", error);
-        boxlite_free_string(error);
+    code = boxlite_runtime_new(NULL, NULL, &runtime, &error);
+    if (code != Ok) {
+        fprintf(stderr, "Failed to create runtime (code %d): %s\n",
+                error.code, error.message ? error.message : "unknown");
+        boxlite_error_free(&error);
         return 1;
     }
 
     // Create a box with Alpine Linux
-    const char* options_json = "{\"rootfs\":{\"Image\":\"alpine:3.19\"}}";
-    CBoxHandle* box = boxlite_create_box(runtime, options_json, &error);
-    if (!box) {
-        fprintf(stderr, "Failed to create box: %s\n", error);
-        boxlite_free_string(error);
+    const char* options_json = "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],\"network\":\"Isolated\",\"ports\":[]}";
+    code = boxlite_create_box(runtime, options_json, &box, &error);
+    if (code != Ok) {
+        fprintf(stderr, "Failed to create box (code %d): %s\n",
+                error.code, error.message ? error.message : "unknown");
+        boxlite_error_free(&error);
         boxlite_runtime_free(runtime);
         return 1;
     }
@@ -45,13 +50,14 @@ int main() {
     printf("Command 1: ls -alrt /\n");
     printf("---\n");
     const char* args1 = "[\"-alrt\", \"/\"]";
-    int exit_code = boxlite_execute(box, "/bin/ls", args1, output_callback, NULL, &error);
-    if (exit_code != 0) {
+    int exit_code = 0;
+    error = (CBoxliteError){0};
+    code = boxlite_execute(box, "/bin/ls", args1, output_callback, NULL, &exit_code, &error);
+    if (code != Ok) {
+        fprintf(stderr, "Execute failed (code %d): %s\n", error.code, error.message);
+        boxlite_error_free(&error);
+    } else if (exit_code != 0) {
         fprintf(stderr, "Command failed with exit code %d\n", exit_code);
-        if (error) {
-            fprintf(stderr, "Error: %s\n", error);
-            boxlite_free_string(error);
-        }
     }
     printf("\n");
 
@@ -59,13 +65,14 @@ int main() {
     printf("Command 2: ip addr\n");
     printf("---\n");
     const char* args2 = "[\"addr\"]";
-    exit_code = boxlite_execute(box, "ip", args2, output_callback, NULL, &error);
-    if (exit_code != 0) {
+    exit_code = 0;
+    error = (CBoxliteError){0};
+    code = boxlite_execute(box, "ip", args2, output_callback, NULL, &exit_code, &error);
+    if (code != Ok) {
+        fprintf(stderr, "Execute failed (code %d): %s\n", error.code, error.message);
+        boxlite_error_free(&error);
+    } else if (exit_code != 0) {
         fprintf(stderr, "Command failed with exit code %d\n", exit_code);
-        if (error) {
-            fprintf(stderr, "Error: %s\n", error);
-            boxlite_free_string(error);
-        }
     }
     printf("\n");
 
@@ -73,22 +80,26 @@ int main() {
     printf("Command 3: env\n");
     printf("---\n");
     const char* args3 = "[]";
-    exit_code = boxlite_execute(box, "/usr/bin/env", args3, output_callback, NULL, &error);
-    if (exit_code != 0) {
+    exit_code = 0;
+    error = (CBoxliteError){0};
+    code = boxlite_execute(box, "/usr/bin/env", args3, output_callback, NULL, &exit_code, &error);
+    if (code != Ok) {
+        fprintf(stderr, "Execute failed (code %d): %s\n", error.code, error.message);
+        boxlite_error_free(&error);
+    } else if (exit_code != 0) {
         fprintf(stderr, "Command failed with exit code %d\n", exit_code);
-        if (error) {
-            fprintf(stderr, "Error: %s\n", error);
-            boxlite_free_string(error);
-        }
     }
     printf("\n");
 
     printf("✅ Execution completed!\n");
 
     // Cleanup
-    if (boxlite_stop_box(box, &error) != 0) {
-        fprintf(stderr, "Warning: Failed to stop box: %s\n", error);
-        boxlite_free_string(error);
+    error = (CBoxliteError){0};
+    code = boxlite_stop_box(box, &error);
+    if (code != Ok) {
+        fprintf(stderr, "Warning: Failed to stop box (code %d): %s\n",
+                error.code, error.message ? error.message : "unknown");
+        boxlite_error_free(&error);
     }
 
     boxlite_runtime_free(runtime);
