@@ -220,7 +220,6 @@ fn box_info_to_json(info: &BoxInfo) -> serde_json::Value {
     })
 }
 
-
 /// Get BoxLite version string
 ///
 /// # Returns
@@ -1170,14 +1169,16 @@ pub unsafe extern "C" fn boxlite_simple_new(
         }
     };
 
-    let mut options = BoxOptions::default();
-    options.rootfs = RootfsSpec::Image(image_str);
-    if cpus > 0 {
-        options.cpus = Some(cpus as u8);
-    }
-    if memory_mib > 0 {
-        options.memory_mib = Some(memory_mib as u32);
-    }
+    let options = BoxOptions {
+        rootfs: RootfsSpec::Image(image_str),
+        cpus: if cpus > 0 { Some(cpus as u8) } else { None },
+        memory_mib: if memory_mib > 0 {
+            Some(memory_mib as u32)
+        } else {
+            None
+        },
+        ..Default::default()
+    };
 
     let result = tokio_rt.block_on(async {
         let handle = runtime.create(options, None).await?;
@@ -1363,7 +1364,7 @@ pub unsafe extern "C" fn boxlite_simple_free(simple_box: *mut CBoxliteSimple) {
         if let Some(box_id) = simple.box_id.take() {
             let _ = simple
                 .tokio_rt
-                .block_on(simple.runtime.remove(&box_id.to_string(), true));
+                .block_on(simple.runtime.remove(box_id.as_ref(), true));
         }
 
         drop(simple);
@@ -1486,13 +1487,7 @@ mod tests {
     fn test_null_pointer_validation() {
         unsafe {
             let mut error = CBoxliteError::default();
-            let code = boxlite_simple_new(
-                ptr::null(),
-                0,
-                0,
-                ptr::null_mut(),
-                &mut error as *mut _,
-            );
+            let code = boxlite_simple_new(ptr::null(), 0, 0, ptr::null_mut(), &mut error as *mut _);
             assert_eq!(code, BoxliteErrorCode::InvalidArgument);
             assert!(!error.message.is_null());
             boxlite_error_free(&mut error as *mut _);
