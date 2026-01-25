@@ -52,7 +52,13 @@ cargo test
 
 ### Code Style
 
-- Follow Rust standard formatting (`cargo fmt`)
+Follow the [Rust Style Guide](./docs/development/rust-style.md) which includes:
+- [Microsoft Rust Guidelines](https://microsoft.github.io/rust-guidelines)
+- BoxLite-specific patterns (async-first, centralized errors, thread-safe types)
+
+**Quick reference:**
+- `cargo fmt` for formatting (enforced in CI)
+- `cargo clippy` for linting
 - Keep functions focused (single responsibility)
 - Add tests for new functionality
 - Update documentation as needed

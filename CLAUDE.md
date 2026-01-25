@@ -91,12 +91,17 @@ make dist:python    # Build portable Python wheel
 
 ## Code Style
 
-**Rust:**
-- `cargo fmt` for formatting (enforced in CI)
-- `cargo clippy` for linting
+**Rust:** Follow [docs/development/rust-style.md](./docs/development/rust-style.md) which includes:
+- [Microsoft Rust Guidelines](https://microsoft.github.io/rust-guidelines) - external reference
+- `cargo fmt` for formatting, `cargo clippy` for linting (enforced in CI)
 - Async-first (Tokio runtime)
 - Error handling via centralized `BoxliteError` enum
 - `Send + Sync` for public types
+
+Key guidelines to internalize:
+- **M-PANIC-IS-STOP**: Panics terminate, don't use for error handling
+- **M-CONCISE-NAMES**: Avoid "Service", "Manager", "Factory" in type names
+- **M-UNSAFE**: Minimize and document all unsafe blocks
 
 **Python:**
 - Async/await for all I/O
@@ -104,7 +109,7 @@ make dist:python    # Build portable Python wheel
 - Type hints encouraged
 
 **For complete code style guidelines, see:**
-- [CONTRIBUTING.md](./CONTRIBUTING.md#code-style) - Detailed style guidelines
+- [docs/development/rust-style.md](./docs/development/rust-style.md) - Rust style guide with Microsoft guidelines
 - [boxlite-shared/src/errors.rs](./boxlite-shared/src/errors.rs) - Error handling patterns
 
 ## Workflows
