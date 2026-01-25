@@ -82,6 +82,7 @@ Unlike Docker, BoxLite doesn't require a daemon process. It's an embeddable libr
 | **[Python](./quickstart-python.md)** | Stable (v0.4.4) | AI agents, scripting, rapid prototyping |
 | **[Node.js](./quickstart-nodejs.md)** | v0.1.6 | Web services, TypeScript projects |
 | **[Rust](./quickstart-rust.md)** | Native | Performance-critical, embedded systems |
+| **[C](./quickstart-c.md)** | v0.2.0 | C/C++ applications, system integration |
 | Go | Coming soon | — |
 
 ## Next Steps
