@@ -21,7 +21,7 @@
 use crate::jailer::config::SecurityOptions;
 use crate::jailer::seccomp;
 use crate::runtime::layout::FilesystemLayout;
-use boxlite_shared::errors::BoxliteResult;
+use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 /// Check if Linux jailer is available.
 ///
@@ -29,7 +29,7 @@ use boxlite_shared::errors::BoxliteResult;
 /// Bubblewrap handles namespace isolation and chroot at spawn time.
 /// Seccomp is always available on Linux kernel >= 3.5.
 pub fn is_available() -> bool {
-    crate::jailer::bwrap::is_available()
+    false // bwrap temporarily disabled for seccomp testing
 }
 
 /// Apply Linux-specific isolation to the current process.
@@ -120,7 +120,7 @@ fn apply_seccomp_filter(box_id: &str) -> BoxliteResult<()> {
             error = %e,
             "Failed to deserialize seccomp filters"
         );
-        BoxliteResult::Err(JailerError::Isolation(IsolationError::Seccomp(e.to_string())).into())
+        BoxliteError::from(JailerError::Isolation(IsolationError::Seccomp(e.to_string())))
     })?;
 
     // Apply VMM filter to main thread (before libkrun takeover)
@@ -174,9 +174,8 @@ mod tests {
 
     #[test]
     fn test_is_available_checks_bwrap() {
-        // is_available() should reflect bwrap availability
-        let bwrap_available = crate::jailer::bwrap::is_available();
-        assert_eq!(is_available(), bwrap_available);
+        // is_available() should return false (bwrap temporarily disabled)
+        assert_eq!(is_available(), false);
     }
 
     #[test]

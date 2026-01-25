@@ -249,7 +249,9 @@ fn compile_seccomp_filters() {
     }
 
     // Serialize converted map to binary using bincode
-    let serialized = bincode::encode_to_vec(&converted_map, bincode::config::standard())
+    // IMPORTANT: Use the same configuration as runtime deserialization (seccomp.rs)
+    let bincode_config = bincode::config::standard().with_fixed_int_encoding();
+    let serialized = bincode::encode_to_vec(&converted_map, bincode_config)
         .unwrap_or_else(|e| panic!("Failed to serialize BPF filters: {}", e));
 
     // Write to output file

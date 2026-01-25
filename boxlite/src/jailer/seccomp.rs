@@ -89,7 +89,7 @@ pub fn deserialize_binary<R: Read>(mut reader: R) -> Result<BpfThreadMap, Deseri
 /// Filter installation errors.
 #[derive(Debug, thiserror::Error, displaydoc::Display)]
 pub enum InstallationError {
-    /// Filter length exceeds the maximum size of {BPF_MAX_LEN} instructions
+    /// Filter length exceeds the maximum size of 4096 instructions
     FilterTooLarge,
     /// `prctl` syscall failed with error code: {0}
     Prctl(std::io::Error),
@@ -191,7 +191,7 @@ mod tests {
         let bpf_prog = vec![0; 2];
         let mut filter_map: HashMap<String, BpfProgram> = HashMap::new();
         filter_map.insert("VcpU".to_string(), bpf_prog.clone());
-        let bytes = bincode::serde::encode_to_vec(&filter_map, BINCODE_CONFIG).unwrap();
+        let bytes = bincode::encode_to_vec(&filter_map, BINCODE_CONFIG).unwrap();
 
         let mut expected_res = BpfThreadMap::new();
         expected_res.insert("vcpu".to_string(), Arc::new(bpf_prog));
@@ -201,7 +201,7 @@ mod tests {
         let bpf_prog = vec![0; DESERIALIZATION_BYTES_LIMIT + 1];
         let mut filter_map: HashMap<String, BpfProgram> = HashMap::new();
         filter_map.insert("VcpU".to_string(), bpf_prog.clone());
-        let bytes = bincode::serde::encode_to_vec(&filter_map, BINCODE_CONFIG).unwrap();
+        let bytes = bincode::encode_to_vec(&filter_map, BINCODE_CONFIG).unwrap();
         assert!(matches!(
             deserialize_binary(&bytes[..]).unwrap_err(),
             bincode::error::DecodeError::LimitExceeded
