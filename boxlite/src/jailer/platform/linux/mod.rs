@@ -91,50 +91,78 @@ pub fn apply_isolation(
 
 /// Apply seccomp BPF filter to the current process.
 ///
-/// Generates and applies a BPF filter that:
-/// - Allows syscalls needed for VMM operation (107 syscalls)
-/// - Traps (SIGSYS) for all other syscalls
+/// Loads pre-compiled BPF filters from embedded binary and applies
+/// the VMM filter to the main thread (before libkrun takeover).
+///
+/// ## Filter Application
+///
+/// - **VMM filter**: Applied to main thread (this thread)
+/// - **vCPU filter**: Compiled but not applied (requires libkrun hooks)
+///
+/// The vCPU filter is compiled and embedded in the binary but not yet
+/// applied because libkrun creates vCPU threads internally. vCPU threads
+/// currently inherit the vmm filter (still secure, less restrictive).
 ///
 /// Once applied, the filter cannot be removed.
 fn apply_seccomp_filter(box_id: &str) -> BoxliteResult<()> {
+    use crate::jailer::error::{IsolationError, JailerError};
+
     tracing::debug!(
         box_id = %box_id,
-        filter_description = %seccomp::describe_filter(),
-        "Generating seccomp BPF filter"
+        "Loading pre-compiled seccomp filters"
     );
 
-    // Generate BPF bytecode from syscall allowlist
-    let bpf = seccomp::generate_bpf_filter().map_err(|e| {
+    // Load compiled filters from embedded binary
+    let filter_bytes = include_bytes!(concat!(env!("OUT_DIR"), "/seccomp_filter.bpf"));
+    let filters = seccomp::deserialize_binary(&filter_bytes[..]).map_err(|e| {
         tracing::error!(
             box_id = %box_id,
             error = %e,
-            "Failed to generate seccomp BPF filter"
+            "Failed to deserialize seccomp filters"
         );
-        e
+        BoxliteResult::Err(JailerError::Isolation(IsolationError::Seccomp(e.to_string())).into())
+    })?;
+
+    // Apply VMM filter to main thread (before libkrun takeover)
+    let vmm_filter = filters.get("vmm").ok_or_else(|| {
+        tracing::error!(
+            box_id = %box_id,
+            "VMM filter not found in compiled filters"
+        );
+        JailerError::Isolation(IsolationError::Seccomp("Missing vmm filter".to_string()))
     })?;
 
     tracing::debug!(
         box_id = %box_id,
-        bpf_instructions = bpf.len(),
-        "Seccomp BPF filter generated, applying to process"
+        bpf_instructions = vmm_filter.len(),
+        "Applying VMM seccomp filter to main thread"
     );
 
-    // Apply filter to current process
-    seccomp::apply_filter(&bpf).map_err(|e| {
+    seccomp::apply_filter(vmm_filter).map_err(|e| {
         tracing::error!(
             box_id = %box_id,
             error = %e,
-            "Failed to apply seccomp filter"
+            "Failed to apply VMM seccomp filter"
         );
-        e
+        JailerError::Isolation(IsolationError::Seccomp(e.to_string()))
     })?;
 
     tracing::info!(
         box_id = %box_id,
-        allowed_syscalls = seccomp::ALLOWED_SYSCALLS.len(),
-        blocked_syscalls = seccomp::BLOCKED_SYSCALLS.len(),
-        "Seccomp filter applied successfully"
+        vmm_filter_instructions = vmm_filter.len(),
+        "Seccomp VMM filter applied to main thread"
     );
+
+    // NOTE: vCPU filter is compiled but not applied yet
+    // Requires libkrun thread creation hooks (future enhancement)
+    // vCPU threads currently inherit vmm filter (still secure, less restrictive)
+    if let Some(vcpu_filter) = filters.get("vcpu") {
+        tracing::debug!(
+            box_id = %box_id,
+            vcpu_filter_instructions = vcpu_filter.len(),
+            "vCPU filter compiled but not applied (requires libkrun hooks)"
+        );
+    }
 
     Ok(())
 }

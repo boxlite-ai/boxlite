@@ -78,9 +78,13 @@ bubblewrap-sys = { path = "deps/bubblewrap-sys" }  # Bundled bwrap for sandbox i
 caps = "0.5"
 fuse-backend-rs = { version = "0.12", features = ["fusedev"] }
 seccompiler = "0.4"  # Generate seccomp BPF filters for jailer
+bincode = "2.0"     # Deserialize compiled BPF filters
 
 [build-dependencies]
 pkg-config = "0.3"
 regex = "1"
+
+[target.'cfg(target_os = "linux")'.build-dependencies]
+seccompiler = "0.4"  # Compile JSON filters to BPF at build time
 
 [dev-dependencies]

@@ -182,6 +182,93 @@ fn bundle_boxlite_deps(runtime_dir: &Path) -> Vec<(String, PathBuf)> {
     collected
 }
 
+/// Compiles seccomp JSON filters to BPF bytecode at build time.
+///
+/// This function:
+/// 1. Determines the appropriate JSON filter based on target architecture
+/// 2. Compiles the JSON to BPF bytecode using seccompiler
+/// 3. Saves the binary filter to OUT_DIR/seccomp_filter.bpf
+///
+/// The compiled filter is embedded in the binary and deserialized at runtime,
+/// providing zero-overhead syscall filtering.
+#[cfg(target_os = "linux")]
+fn compile_seccomp_filters() {
+    use std::collections::HashMap;
+    use std::convert::TryInto;
+    use std::fs;
+    use std::io::Cursor;
+
+    let target = env::var("TARGET").expect("Missing TARGET env var");
+    let target_arch = env::var("CARGO_CFG_TARGET_ARCH").expect("Missing target arch");
+    let out_dir = env::var("OUT_DIR").expect("Missing OUT_DIR");
+
+    // Determine JSON path based on target
+    let json_path = format!("resources/seccomp/{}.json", target);
+    let json_path = if Path::new(&json_path).exists() {
+        json_path
+    } else {
+        println!(
+            "cargo:warning=No seccomp filter for {}, using unimplemented.json",
+            target
+        );
+        "resources/seccomp/unimplemented.json".to_string()
+    };
+
+    // Compile JSON to BPF bytecode using seccompiler 0.5.0 API
+    let bpf_path = format!("{}/seccomp_filter.bpf", out_dir);
+
+    println!("cargo:warning=Compiling seccomp filter: {} -> {}", json_path, bpf_path);
+
+    // Read JSON file
+    let json_content = fs::read(&json_path)
+        .unwrap_or_else(|e| panic!("Failed to read seccomp JSON {}: {}", json_path, e));
+
+    // Convert target_arch string to TargetArch enum
+    let arch: seccompiler::TargetArch = target_arch.as_str().try_into()
+        .unwrap_or_else(|e| panic!("Unsupported target architecture {}: {:?}", target_arch, e));
+
+    // Compile JSON to BpfMap using Cursor to satisfy Read trait
+    let reader = Cursor::new(json_content);
+    let bpf_map = seccompiler::compile_from_json(reader, arch)
+        .unwrap_or_else(|e| panic!("Failed to compile seccomp filters from {}: {}", json_path, e));
+
+    // Convert BpfMap (HashMap<String, Vec<sock_filter>>) to our format (HashMap<String, Vec<u64>>)
+    // sock_filter is a C struct that is 8 bytes (u64) per instruction
+    let mut converted_map: HashMap<String, Vec<u64>> = HashMap::new();
+    for (thread_name, filter) in bpf_map {
+        let instructions: Vec<u64> = filter
+            .iter()
+            .map(|instr| {
+                // Convert sock_filter to u64
+                // sock_filter is #[repr(C)] with fields: code(u16), jt(u8), jf(u8), k(u32)
+                // Layout: [code:2][jt:1][jf:1][k:4] = 8 bytes total
+                unsafe { std::mem::transmute_copy(instr) }
+            })
+            .collect();
+        converted_map.insert(thread_name, instructions);
+    }
+
+    // Serialize converted map to binary using bincode
+    let serialized = bincode::encode_to_vec(&converted_map, bincode::config::standard())
+        .unwrap_or_else(|e| panic!("Failed to serialize BPF filters: {}", e));
+
+    // Write to output file
+    fs::write(&bpf_path, serialized)
+        .unwrap_or_else(|e| panic!("Failed to write BPF filter to {}: {}", bpf_path, e));
+
+    println!("cargo:warning=Successfully compiled seccomp filter ({} bytes)", fs::metadata(&bpf_path).unwrap().len());
+
+    // Rerun if JSON changes
+    println!("cargo:rerun-if-changed={}", json_path);
+    println!("cargo:rerun-if-changed=resources/seccomp/");
+}
+
+#[cfg(not(target_os = "linux"))]
+fn compile_seccomp_filters() {
+    // No-op on non-Linux platforms
+    println!("cargo:warning=Seccomp compilation skipped (not Linux)");
+}
+
 /// Collects all FFI dependencies into a single runtime directory.
 /// This directory can be used by downstream crates (e.g., Python SDK) to
 /// bundle all required libraries and binaries together.
@@ -227,4 +314,7 @@ fn main() {
     println!("cargo:rustc-link-arg=-Wl,-rpath,@loader_path");
     #[cfg(target_os = "linux")]
     println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN");
+
+    // Compile seccomp filters at build time
+    compile_seccomp_filters();
 }
