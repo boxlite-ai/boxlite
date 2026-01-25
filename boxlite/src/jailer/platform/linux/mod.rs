@@ -29,7 +29,7 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 /// Bubblewrap handles namespace isolation and chroot at spawn time.
 /// Seccomp is always available on Linux kernel >= 3.5.
 pub fn is_available() -> bool {
-    false // bwrap temporarily disabled for seccomp testing
+    crate::jailer::bwrap::is_available()
 }
 
 /// Apply Linux-specific isolation to the current process.
@@ -174,8 +174,9 @@ mod tests {
 
     #[test]
     fn test_is_available_checks_bwrap() {
-        // is_available() should return false (bwrap temporarily disabled)
-        assert_eq!(is_available(), false);
+        // is_available() should reflect bwrap availability
+        let bwrap_available = crate::jailer::bwrap::is_available();
+        assert_eq!(is_available(), bwrap_available);
     }
 
     #[test]
