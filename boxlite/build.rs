@@ -289,6 +289,10 @@ fn compile_seccomp_filters() {
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 
+    // Compile seccomp filters at build time (even in stub mode)
+    // This is fast and required for include_bytes!() to work
+    compile_seccomp_filters();
+
     // Check for stub mode (for CI linting without building dependencies)
     // Set BOXLITE_DEPS_STUB=1 to skip all native dependency builds
     if env::var("BOXLITE_DEPS_STUB").is_ok() {
@@ -328,7 +332,4 @@ fn main() {
     println!("cargo:rustc-link-arg=-Wl,-rpath,@loader_path");
     #[cfg(target_os = "linux")]
     println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN");
-
-    // Compile seccomp filters at build time
-    compile_seccomp_filters();
 }
