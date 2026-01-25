@@ -10,48 +10,62 @@ can be embedded directly into applications without requiring a daemon or externa
 > isolation while presenting a simple, container-like interface.
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        Host Application                         │
-│  ┌───────────────────────────────────────────────────────────┐  │
-│  │                    BoxliteRuntime                         │  │
-│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────┐   │  │
-│  │  │ BoxManager  │  │ImageManager │  │ RuntimeMetrics  │   │  │
-│  │  └─────────────┘  └─────────────┘  └─────────────────┘   │  │
-│  └───────────────────────────────────────────────────────────┘  │
-│                              │                                   │
-│                              ▼                                   │
-│  ┌───────────────────────────────────────────────────────────┐  │
-│  │                        LiteBox                            │  │
-│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────┐   │  │
-│  │  │  Lifecycle  │  │    Exec     │  │    Metrics      │   │  │
-│  │  └─────────────┘  └─────────────┘  └─────────────────┘   │  │
-│  └───────────────────────────────────────────────────────────┘  │
-│                              │                                   │
-│                              ▼                                   │
-│  ┌───────────────────────────────────────────────────────────┐  │
-│  │                   ShimController                          │  │
-│  │           (Subprocess isolation for Box process)          │  │
-│  └───────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────┐
+│                        Host Application                            │
+│  ┌──────────────────────────────────────────────────────────────┐  │
+│  │                    BoxliteRuntime                            │  │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────┐      │  │
+│  │  │ BoxManager  │  │ImageManager │  │ RuntimeMetrics  │      │  │
+│  │  └─────────────┘  └─────────────┘  └─────────────────┘      │  │
+│  └──────────────────────────────────────────────────────────────┘  │
+│                              │                                      │
+│                              ▼                                      │
+│  ┌──────────────────────────────────────────────────────────────┐  │
+│  │                        LiteBox                               │  │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────┐      │  │
+│  │  │  Lifecycle  │  │    Exec     │  │    Metrics      │      │  │
+│  │  └─────────────┘  └─────────────┘  └─────────────────┘      │  │
+│  └──────────────────────────────────────────────────────────────┘  │
+│                              │                                      │
+│                              ▼                                      │
+│  ┌──────────────────────────────────────────────────────────────┐  │
+│  │                   ShimController                             │  │
+│  │        (Spawns shim with jailer isolation)                   │  │
+│  └──────────────────────────────────────────────────────────────┘  │
+└────────────────────────────────────────────────────────────────────┘
                                │
-                    Unix Socket / Vsock
+                     Spawns subprocess
                                │
                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                          Box (Guest)                            │
-│  ┌───────────────────────────────────────────────────────────┐  │
-│  │                     Guest Agent                           │  │
-│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────┐   │  │
-│  │  │   Guest     │  │  Container  │  │   Execution     │   │  │
-│  │  │   Service   │  │   Service   │  │    Service      │   │  │
-│  │  └─────────────┘  └─────────────┘  └─────────────────┘   │  │
-│  └───────────────────────────────────────────────────────────┘  │
-│                              │                                   │
-│                              ▼                                   │
-│  ┌───────────────────────────────────────────────────────────┐  │
-│  │                   OCI Container Runtime                   │  │
-│  └───────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────┐
+│                      JAILER BOUNDARY (OS Sandbox)                  │
+│  ╔══════════════════════════════════════════════════════════════╗  │
+│  ║                      Shim Process (boxlite-shim)             ║  │
+│  ║  - Seccomp filtering (Linux)                                 ║  │
+│  ║  - Namespace isolation (Linux)                               ║  │
+│  ║  - sandbox-exec (macOS)                                      ║  │
+│  ║  - Resource limits (cgroups/rlimits)                         ║  │
+│  ╚══════════════════════════════════════════════════════════════╝  │
+│                              │                                      │
+│                   Unix Socket / Vsock                               │
+│                              │                                      │
+│                              ▼                                      │
+│  ┌──────────────────────────────────────────────────────────────┐  │
+│  │                     Box (Guest VM)                           │  │
+│  │  ┌────────────────────────────────────────────────────────┐  │  │
+│  │  │                  Guest Agent                           │  │  │
+│  │  │  ┌──────────┐  ┌──────────┐  ┌──────────────────┐     │  │  │
+│  │  │  │  Guest   │  │Container │  │   Execution      │     │  │  │
+│  │  │  │  Service │  │  Service │  │    Service       │     │  │  │
+│  │  │  └──────────┘  └──────────┘  └──────────────────┘     │  │  │
+│  │  └────────────────────────────────────────────────────────┘  │  │
+│  │                              │                                │  │
+│  │                              ▼                                │  │
+│  │  ┌────────────────────────────────────────────────────────┐  │  │
+│  │  │               OCI Container Runtime                    │  │  │
+│  │  └────────────────────────────────────────────────────────┘  │  │
+│  └──────────────────────────────────────────────────────────────┘  │
+└────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Core Components
@@ -108,13 +122,82 @@ image pulling, Box startup) is deferred until first use.
 Universal subprocess-based Box controller. Spawns `boxlite-shim` binary in a subprocess to isolate
 Box process takeover from the host application.
 
-**Source:** `boxlite/src/bin/shim.rs`
+**Source:** `boxlite/src/vmm/controller/shim.rs`, `boxlite/src/bin/shim.rs`
 
 **Why subprocess isolation:**
 
 - libkrun performs process takeover (`krun_start_enter` never returns)
 - Subprocess ensures host application continues running
 - Clean process tree management
+- Enables jailer to sandbox the shim process
+
+### Jailer (Security Isolation)
+
+Defense-in-depth security layer that sandboxes the shim process, inspired by Firecracker's jailer.
+Provides OS-level isolation on top of hardware virtualization.
+
+**Source:** `boxlite/src/jailer/`
+
+**Key responsibilities:**
+
+- OS-level process isolation for shim
+- Syscall filtering and sandboxing
+- Resource limit enforcement
+- Environment sanitization
+
+**Security layers:**
+
+**Linux:**
+- Namespace isolation (mount, PID, network)
+- Chroot/pivot_root for filesystem isolation
+- Seccomp BPF for syscall filtering
+- Privilege dropping (unprivileged user)
+- cgroups v2 for resource limits
+
+**macOS:**
+- sandbox-exec (Seatbelt) for kernel-enforced sandboxing
+- rlimits for resource constraints
+
+**Architecture:**
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                              HOST OS                                │
+│  ┌───────────────────────────────────────────────────────────────┐  │
+│  │                      JAILER BOUNDARY                          │  │
+│  │  ┌─────────────────────────────────────────────────────────┐  │  │
+│  │  │                  SHIM PROCESS (sandboxed)               │  │  │
+│  │  │  ┌───────────────────────────────────────────────────┐  │  │  │
+│  │  │  │              VM (libkrun/KVM)                     │  │  │  │
+│  │  │  │  ┌─────────────────────────────────────────────┐  │  │  │  │
+│  │  │  │  │            GUEST (untrusted)                │  │  │  │  │
+│  │  │  │  └─────────────────────────────────────────────┘  │  │  │  │
+│  │  │  └───────────────────────────────────────────────────┘  │  │  │
+│  │  └─────────────────────────────────────────────────────────┘  │  │
+│  └───────────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+**Configuration:**
+
+```rust
+use boxlite::SecurityOptions;
+
+// Maximum security (recommended for untrusted workloads)
+let security = SecurityOptions::maximum();
+
+// Custom configuration
+let security = SecurityOptions {
+    jailer_enabled: true,
+    seccomp_enabled: true,  // Linux only
+    chroot_enabled: true,   // Linux only
+    close_fds: true,
+    sanitize_env: true,
+    resource_limits: Some(ResourceLimits::default()),
+};
+```
+
+**For complete threat model and security design, see:** `boxlite/src/jailer/THREAT_MODEL.md`
 
 ### Portal (Host-Guest Communication)
 

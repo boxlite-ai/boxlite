@@ -58,6 +58,7 @@ scripts/              # Build and setup scripts
 - `runtime/` - BoxliteRuntime, main entry point
 - `litebox/` - LiteBox handle, command execution
 - `vmm/` - VM manager (libkrun, shim controller)
+- `jailer/` - Security isolation (seccomp, sandbox-exec, namespaces)
 - `portal/` - Host-guest gRPC communication
 - `images/` - OCI image management
 - `net/`, `volumes/`, `disk/` - Networking, storage, disks
@@ -138,6 +139,7 @@ make dist:python    # Build portable Python wheel
 
 **Architecture quirks:**
 - **Shim process**: boxlite-shim isolates boxes (libkrun does process takeover)
+- **Jailer**: OS-level sandbox (seccomp/sandbox-exec) wraps shim for defense-in-depth
 - **gRPC communication**: Host-guest communication via vsock (not TCP)
 - **~/.boxlite directory**: All runtime data stored here (images, boxes, db)
 

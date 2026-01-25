@@ -142,6 +142,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 - **Storage**: volume mounts (ro/rw), persistent disks (QCOW2), copy-on-write
 - **Networking**: outbound internet, port forwarding (TCP/UDP), network metrics
 - **Images**: OCI pull + caching, custom rootfs support
+- **Security**: hardware isolation (KVM/HVF), OS sandboxing (seccomp/sandbox-exec), resource limits
 - **SDKs**: Python (stable), Node.js (v0.1.6); Go coming soon
 
 ## Architecture
@@ -153,23 +154,33 @@ For details, see [Architecture](./docs/architecture/).
 <summary>Show diagram</summary>
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  Your Application                                           │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │  BoxLite Runtime (embedded library)                  │   │
-│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐   │   │
-│  │  │   Box A     │  │   Box B     │  │   Box C     │   │   │
-│  │  │  (micro-VM) │  │  (micro-VM) │  │  (micro-VM) │   │   │
-│  │  │ ┌─────────┐ │  │ ┌─────────┐ │  │ ┌─────────┐ │   │   │
-│  │  │ │Container│ │  │ │Container│ │  │ │Container│ │   │   │
-│  │  │ └─────────┘ │  │ └─────────┘ │  │ └─────────┘ │   │   │
-│  │  └─────────────┘  └─────────────┘  └─────────────┘   │   │
-│  └──────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│  Your Application                                            │
+│  ┌───────────────────────────────────────────────────────┐   │
+│  │  BoxLite Runtime (embedded library)                   │   │
+│  │                                                        │   │
+│  │  ╔════════════════════════════════════════════════╗   │   │
+│  │  ║ Jailer (OS-level sandbox)                      ║   │   │
+│  │  ║  ┌──────────┐  ┌──────────┐  ┌──────────┐      ║   │   │
+│  │  ║  │  Box A   │  │  Box B   │  │  Box C   │      ║   │   │
+│  │  ║  │ (VM+Shim)│  │ (VM+Shim)│  │ (VM+Shim)│      ║   │   │
+│  │  ║  │┌────────┐│  │┌────────┐│  │┌────────┐│      ║   │   │
+│  │  ║  ││Container││  ││Container││  ││Container││      ║   │   │
+│  │  ║  │└────────┘│  │└────────┘│  │└────────┘│      ║   │   │
+│  │  ║  └──────────┘  └──────────┘  └──────────┘      ║   │   │
+│  │  ╚════════════════════════════════════════════════╝   │   │
+│  └───────────────────────────────────────────────────────┘   │
+└──────────────────────────────────────────────────────────────┘
                               │
-                    Hardware Virtualization
-                      (KVM / Hypervisor.framework)
+              Hardware Virtualization + OS Sandboxing
+             (KVM/Hypervisor.framework + seccomp/sandbox-exec)
 ```
+
+**Security Layers:**
+- Hardware isolation (KVM/Hypervisor.framework)
+- OS-level sandboxing (seccomp on Linux, sandbox-exec on macOS)
+- Resource limits (cgroups, rlimits)
+- Environment sanitization
 
 </details>
 
