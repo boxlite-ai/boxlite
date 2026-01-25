@@ -79,6 +79,7 @@ caps = "0.5"
 fuse-backend-rs = { version = "0.12", features = ["fusedev"] }
 seccompiler = "0.4"  # Generate seccomp BPF filters for jailer
 bincode = "2.0"     # Deserialize compiled BPF filters
+displaydoc = "0.2"  # Display derive macro for error types
 
 [build-dependencies]
 pkg-config = "0.3"
