@@ -120,7 +120,9 @@ fn apply_seccomp_filter(box_id: &str) -> BoxliteResult<()> {
             error = %e,
             "Failed to deserialize seccomp filters"
         );
-        BoxliteError::from(JailerError::Isolation(IsolationError::Seccomp(e.to_string())))
+        BoxliteError::from(JailerError::Isolation(IsolationError::Seccomp(
+            e.to_string(),
+        )))
     })?;
 
     // Apply VMM filter to main thread (before libkrun takeover)

@@ -217,20 +217,29 @@ fn compile_seccomp_filters() {
     // Compile JSON to BPF bytecode using seccompiler 0.5.0 API
     let bpf_path = format!("{}/seccomp_filter.bpf", out_dir);
 
-    println!("cargo:warning=Compiling seccomp filter: {} -> {}", json_path, bpf_path);
+    println!(
+        "cargo:warning=Compiling seccomp filter: {} -> {}",
+        json_path, bpf_path
+    );
 
     // Read JSON file
     let json_content = fs::read(&json_path)
         .unwrap_or_else(|e| panic!("Failed to read seccomp JSON {}: {}", json_path, e));
 
     // Convert target_arch string to TargetArch enum
-    let arch: seccompiler::TargetArch = target_arch.as_str().try_into()
+    let arch: seccompiler::TargetArch = target_arch
+        .as_str()
+        .try_into()
         .unwrap_or_else(|e| panic!("Unsupported target architecture {}: {:?}", target_arch, e));
 
     // Compile JSON to BpfMap using Cursor to satisfy Read trait
     let reader = Cursor::new(json_content);
-    let bpf_map = seccompiler::compile_from_json(reader, arch)
-        .unwrap_or_else(|e| panic!("Failed to compile seccomp filters from {}: {}", json_path, e));
+    let bpf_map = seccompiler::compile_from_json(reader, arch).unwrap_or_else(|e| {
+        panic!(
+            "Failed to compile seccomp filters from {}: {}",
+            json_path, e
+        )
+    });
 
     // Convert BpfMap (HashMap<String, Vec<sock_filter>>) to our format (HashMap<String, Vec<u64>>)
     // sock_filter is a C struct that is 8 bytes (u64) per instruction
@@ -258,7 +267,10 @@ fn compile_seccomp_filters() {
     fs::write(&bpf_path, serialized)
         .unwrap_or_else(|e| panic!("Failed to write BPF filter to {}: {}", bpf_path, e));
 
-    println!("cargo:warning=Successfully compiled seccomp filter ({} bytes)", fs::metadata(&bpf_path).unwrap().len());
+    println!(
+        "cargo:warning=Successfully compiled seccomp filter ({} bytes)",
+        fs::metadata(&bpf_path).unwrap().len()
+    );
 
     // Rerun if JSON changes
     println!("cargo:rerun-if-changed={}", json_path);
