@@ -73,6 +73,10 @@ pub enum BoxliteErrorCode {
     Portal = 15,
     /// RPC error
     Rpc = 16,
+    /// Image is in use by a box
+    ImageInUse = 17,
+    /// Image has multiple tags and needs force to remove by ID
+    ImageMultipleTags = 18,
 }
 
 /// Extended error information for C API.
@@ -143,6 +147,8 @@ fn error_to_code(err: &BoxliteError) -> BoxliteErrorCode {
         BoxliteError::Portal(_) => BoxliteErrorCode::Portal,
         BoxliteError::Rpc(_) | BoxliteError::RpcTransport(_) => BoxliteErrorCode::Rpc,
         BoxliteError::MetadataError(_) => BoxliteErrorCode::Internal,
+        BoxliteError::ImageInUse { .. } => BoxliteErrorCode::ImageInUse,
+        BoxliteError::ImageMultipleTags { .. } => BoxliteErrorCode::ImageMultipleTags,
     }
 }
 

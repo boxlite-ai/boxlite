@@ -83,6 +83,14 @@ typedef enum BoxliteErrorCode {
    * RPC error
    */
   Rpc = 16,
+  /**
+   * Image is in use by a box
+   */
+  ImageInUse = 17,
+  /**
+   * Image has multiple tags and needs force to remove by ID
+   */
+  ImageMultipleTags = 18,
 } BoxliteErrorCode;
 
 /**
