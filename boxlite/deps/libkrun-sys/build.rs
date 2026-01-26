@@ -73,6 +73,8 @@ fn main() {
     // Rebuild if vendored sources change
     println!("cargo:rerun-if-changed=vendor/libkrun");
     println!("cargo:rerun-if-changed=vendor/libkrunfw");
+    #[cfg(target_os = "macos")]
+    println!("cargo:rerun-if-env-changed=BOXLITE_LIBKRUN_CC_LINUX");
 
     // Check for stub mode (for CI linting without building)
     // Set BOXLITE_DEPS_STUB=1 to skip building and emit stub link directives
@@ -646,15 +648,19 @@ fn resolve_cc_linux_make_arg() -> Result<(String, HashMap<String, String>), Stri
         path_dirs.push(lld_dir);
     }
 
+    let path_override = prepend_path_dirs(&path_dirs);
+
     // Ensure ld.lld is available (either already in PATH or via brew lld).
-    if Command::new("ld.lld")
+    let mut ld_lld_cmd = Command::new("ld.lld");
+    ld_lld_cmd
         .arg("--version")
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_err()
-        && !path_dirs.iter().any(|d| d.join("ld.lld").exists())
-    {
+        .stderr(Stdio::null());
+    if let Some(ref path) = path_override {
+        ld_lld_cmd.env("PATH", path);
+    }
+
+    if !ld_lld_cmd.status().is_ok_and(|s| s.success()) {
         return Err(
             "Missing `ld.lld` (LLVM linker). Install it with `make setup` (or `brew install lld`)."
                 .to_string(),
@@ -686,7 +692,7 @@ fn resolve_cc_linux_make_arg() -> Result<(String, HashMap<String, String>), Stri
     );
 
     let mut env_overrides = HashMap::new();
-    if let Some(path) = prepend_path_dirs(&path_dirs) {
+    if let Some(path) = path_override {
         env_overrides.insert("PATH".to_string(), path);
     }
 
