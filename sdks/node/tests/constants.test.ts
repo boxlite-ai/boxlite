@@ -30,7 +30,7 @@ describe('ComputerBox Constants', () => {
   test('COMPUTERBOX_IMAGE is a valid container image', () => {
     // Format: [registry/]repo/image:tag (registry is optional)
     expect(COMPUTERBOX_IMAGE).toMatch(/^([\w.-]+\/)?[\w.-]+\/[\w.-]+:[\w.-]+$/);
-    expect(COMPUTERBOX_IMAGE).toContain('computerbox');
+    expect(COMPUTERBOX_IMAGE).toContain('webtop');
   });
 
   test('COMPUTERBOX_CPUS is a positive integer', () => {
