@@ -89,6 +89,13 @@ try:
 except ImportError:
     pass
 
+try:
+    from .skillbox import SkillBox  # noqa: F401
+
+    __all__.extend(["SkillBox"])
+except ImportError:
+    pass
+
 # Multi-box orchestration (guest-initiated messaging)
 try:
     from .orchestration import BoxRuntime, ManagedBox, BoxGroup  # noqa: F401
@@ -108,6 +115,7 @@ try:
         SyncExecStderr,
         SyncSimpleBox,
         SyncCodeBox,
+        SyncSkillBox,
     )
 
     __all__.extend(
@@ -119,6 +127,7 @@ try:
             "SyncExecStderr",
             "SyncSimpleBox",
             "SyncCodeBox",
+            "SyncSkillBox",
         ]
     )
 except ImportError:

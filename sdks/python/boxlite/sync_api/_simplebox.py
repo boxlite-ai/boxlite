@@ -97,7 +97,11 @@ class SyncSimpleBox:
         self._created: Optional[bool] = None
 
     def __enter__(self) -> "SyncSimpleBox":
-        """Enter context - starts runtime if owned, then starts the box."""
+        """Enter context - starts runtime if owned, then creates or reuses box.
+
+        When a name is provided, attempts to get an existing box first.
+        This enables persistence across sessions with auto_remove=False.
+        """
         # Start runtime if we own it
         if self._owns_runtime:
             self._runtime.start()

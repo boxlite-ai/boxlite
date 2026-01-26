@@ -47,6 +47,7 @@ from ._box import SyncBox
 from ._execution import SyncExecution, SyncExecStdout, SyncExecStderr
 from ._simplebox import SyncSimpleBox
 from ._codebox import SyncCodeBox
+from ._skillbox import SyncSkillBox
 
 __all__ = [
     # Entry point
@@ -62,4 +63,5 @@ __all__ = [
     # Convenience wrappers
     "SyncSimpleBox",
     "SyncCodeBox",
+    "SyncSkillBox",
 ]
