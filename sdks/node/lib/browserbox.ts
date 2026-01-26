@@ -5,19 +5,22 @@
  * controlled from outside using standard tools like Puppeteer or Playwright.
  */
 
-import { SimpleBox, type SimpleBoxOptions } from './simplebox.js';
-import { TimeoutError } from './errors.js';
-import * as constants from './constants.js';
+import { SimpleBox, type SimpleBoxOptions } from "./simplebox.js";
+import { TimeoutError } from "./errors.js";
+import * as constants from "./constants.js";
 
 /**
  * Browser type supported by BrowserBox.
  */
-export type BrowserType = 'chromium' | 'firefox' | 'webkit';
+export type BrowserType = "chromium" | "firefox" | "webkit";
 
 /**
  * Options for creating a BrowserBox.
  */
-export interface BrowserBoxOptions extends Omit<SimpleBoxOptions, 'image' | 'cpus' | 'memoryMib'> {
+export interface BrowserBoxOptions extends Omit<
+  SimpleBoxOptions,
+  "image" | "cpus" | "memoryMib"
+> {
   /** Browser type (default: 'chromium') */
   browser?: BrowserType;
 
@@ -26,6 +29,9 @@ export interface BrowserBoxOptions extends Omit<SimpleBoxOptions, 'image' | 'cpu
 
   /** Number of CPU cores (default: 2) */
   cpus?: number;
+
+  /** Host port for CDP connection (default: same as guest port for browser type) */
+  cdpPort?: number;
 }
 
 /**
@@ -66,7 +72,8 @@ export interface BrowserBoxOptions extends Omit<SimpleBoxOptions, 'image' | 'cpu
  * ```
  */
 export class BrowserBox extends SimpleBox {
-  private static readonly DEFAULT_IMAGE = 'mcr.microsoft.com/playwright:v1.47.2-jammy';
+  private static readonly DEFAULT_IMAGE =
+    "mcr.microsoft.com/playwright:v1.47.2-jammy";
 
   private static readonly PORTS: Record<BrowserType, number> = {
     chromium: constants.BROWSERBOX_PORT_CHROMIUM,
@@ -75,7 +82,8 @@ export class BrowserBox extends SimpleBox {
   };
 
   private readonly _browser: BrowserType;
-  private readonly _port: number;
+  private readonly _guestPort: number;
+  private readonly _hostPort: number;
 
   /**
    * Create a new BrowserBox.
@@ -93,21 +101,34 @@ export class BrowserBox extends SimpleBox {
    */
   constructor(options: BrowserBoxOptions = {}) {
     const {
-      browser = 'chromium',
+      browser = "chromium",
       memoryMib = 2048,
       cpus = 2,
+      cdpPort,
+      ports: userPorts = [],
       ...restOptions
     } = options;
+
+    // Guest port: where browser listens inside VM (fixed per browser type)
+    const guestPort =
+      BrowserBox.PORTS[browser] || constants.BROWSERBOX_PORT_CHROMIUM;
+    // Host port: what host connects to (user-configurable)
+    const hostPort = cdpPort ?? guestPort;
+
+    // Add CDP port forwarding
+    const defaultPorts = [{ hostPort, guestPort }];
 
     super({
       ...restOptions,
       image: BrowserBox.DEFAULT_IMAGE,
       memoryMib,
       cpus,
+      ports: [...defaultPorts, ...userPorts],
     });
 
     this._browser = browser;
-    this._port = BrowserBox.PORTS[browser] || 9222;
+    this._guestPort = guestPort;
+    this._hostPort = hostPort;
   }
 
   /**
@@ -134,31 +155,32 @@ export class BrowserBox extends SimpleBox {
     let cmd: string;
     let processPattern: string;
 
-    if (this._browser === 'chromium') {
-      const binary = '/ms-playwright/chromium-*/chrome-linux/chrome';
+    // Browser listens on guest port inside the VM
+    if (this._browser === "chromium") {
+      const binary = "/ms-playwright/chromium-*/chrome-linux/chrome";
       cmd =
         `${binary} --headless --no-sandbox --disable-dev-shm-usage ` +
         `--disable-gpu --remote-debugging-address=0.0.0.0 ` +
-        `--remote-debugging-port=${this._port} ` +
+        `--remote-debugging-port=${this._guestPort} ` +
         `> /tmp/browser.log 2>&1 &`;
-      processPattern = 'chrome';
-    } else if (this._browser === 'firefox') {
-      const binary = '/ms-playwright/firefox-*/firefox/firefox';
+      processPattern = "chrome";
+    } else if (this._browser === "firefox") {
+      const binary = "/ms-playwright/firefox-*/firefox/firefox";
       cmd =
         `${binary} --headless ` +
-        `--remote-debugging-port=${this._port} ` +
+        `--remote-debugging-port=${this._guestPort} ` +
         `> /tmp/browser.log 2>&1 &`;
-      processPattern = 'firefox';
+      processPattern = "firefox";
     } else {
       // webkit
       cmd =
         `playwright run-server --browser webkit ` +
-        `--port ${this._port} > /tmp/browser.log 2>&1 &`;
-      processPattern = 'playwright';
+        `--port ${this._guestPort} > /tmp/browser.log 2>&1 &`;
+      processPattern = "playwright";
     }
 
     // Start browser in background
-    await this.exec('sh', '-c', `nohup ${cmd}`);
+    await this.exec("sh", "-c", `nohup ${cmd}`);
 
     // Wait for browser to be ready
     await this.waitForBrowser(processPattern, timeout);
@@ -171,26 +193,31 @@ export class BrowserBox extends SimpleBox {
    * @param timeout - Maximum wait time in seconds
    * @throws {TimeoutError} If browser doesn't start within timeout
    */
-  private async waitForBrowser(processPattern: string, timeout: number): Promise<void> {
+  private async waitForBrowser(
+    processPattern: string,
+    timeout: number,
+  ): Promise<void> {
     const startTime = Date.now();
     const pollInterval = 0.5;
 
     while (true) {
       const elapsed = (Date.now() - startTime) / 1000;
       if (elapsed > timeout) {
-        throw new TimeoutError(`Browser '${this._browser}' did not start within ${timeout} seconds`);
+        throw new TimeoutError(
+          `Browser '${this._browser}' did not start within ${timeout} seconds`,
+        );
       }
 
       // Check if browser process is running
-      const result = await this.exec('pgrep', '-f', processPattern);
+      const result = await this.exec("pgrep", "-f", processPattern);
       if (result.exitCode === 0 && result.stdout.trim()) {
         // Browser process found, give it a moment to initialize
-        await new Promise(resolve => setTimeout(resolve, 500));
+        await new Promise((resolve) => setTimeout(resolve, 500));
         return;
       }
 
       // Wait before retrying
-      await new Promise(resolve => setTimeout(resolve, pollInterval * 1000));
+      await new Promise((resolve) => setTimeout(resolve, pollInterval * 1000));
     }
   }
 
@@ -223,7 +250,7 @@ export class BrowserBox extends SimpleBox {
    * ```
    */
   endpoint(): string {
-    return `http://localhost:${this._port}`;
+    return `http://localhost:${this._hostPort}`;
   }
 
   /**

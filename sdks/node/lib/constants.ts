@@ -5,7 +5,7 @@
  */
 
 // ComputerBox (Desktop Automation) defaults
-export const COMPUTERBOX_IMAGE = 'ghcr.io/boxlite-labs/computerbox:latest';
+export const COMPUTERBOX_IMAGE = 'lscr.io/linuxserver/webtop:ubuntu-xfce';
 export const COMPUTERBOX_CPUS = 2;
 export const COMPUTERBOX_MEMORY_MIB = 2048;
 export const COMPUTERBOX_DISPLAY_NUMBER = ':1';

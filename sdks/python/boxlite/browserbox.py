@@ -8,6 +8,7 @@ controlled from outside using standard tools like Puppeteer or Playwright.
 from dataclasses import dataclass
 from typing import Optional, TYPE_CHECKING
 
+from . import constants as const
 from .simplebox import SimpleBox
 
 if TYPE_CHECKING:
@@ -34,6 +35,7 @@ class BrowserBoxOptions:
     browser: str = "chromium"  # chromium, firefox, or webkit
     memory: int = 2048  # Memory in MiB
     cpu: int = 2  # Number of CPU cores
+    cdp_port: Optional[int] = None  # Host port for CDP (uses default if None)
 
 
 class BrowserBox(SimpleBox):
@@ -59,7 +61,11 @@ class BrowserBox(SimpleBox):
     _DEFAULT_IMAGE = "mcr.microsoft.com/playwright:v1.47.2-jammy"
 
     # CDP port for each browser type
-    _PORTS = {"chromium": 9222, "firefox": 9223, "webkit": 9224}
+    _GUEST_PORTS = {
+        "chromium": const.BROWSERBOX_PORT_CHROMIUM,
+        "firefox": const.BROWSERBOX_PORT_FIREFOX,
+        "webkit": const.BROWSERBOX_PORT_WEBKIT,
+    }
 
     def __init__(
         self,
@@ -73,19 +79,29 @@ class BrowserBox(SimpleBox):
         Args:
             options: Browser configuration (uses defaults if None)
             runtime: Optional runtime instance (uses global default if None)
-            **kwargs: Additional configuration options (volumes, env, etc.)
+            **kwargs: Additional configuration options (volumes, env, ports, etc.)
         """
         opts = options or BrowserBoxOptions()
 
         self._browser = opts.browser
-        self._port = self._PORTS.get(opts.browser, 9222)
+        # Guest port: where browser listens inside VM (fixed per browser type)
+        self._guest_port = self._GUEST_PORTS.get(
+            opts.browser, const.BROWSERBOX_PORT_CHROMIUM
+        )
+        # Host port: what host connects to (user-configurable)
+        self._host_port = opts.cdp_port or self._guest_port
 
-        # Initialize base box
+        # Extract user ports and add CDP port forwarding
+        user_ports = kwargs.pop("ports", [])
+        default_ports = [(self._host_port, self._guest_port)]
+
+        # Initialize base box with port forwarding
         super().__init__(
             image=self._DEFAULT_IMAGE,
             memory_mib=opts.memory,
             cpus=opts.cpu,
             runtime=runtime,
+            ports=default_ports + list(user_ports),
             **kwargs,
         )
 
@@ -97,25 +113,26 @@ class BrowserBox(SimpleBox):
 
     async def _start_browser(self):
         """Internal: Start browser with remote debugging."""
+        # Browser listens on guest port inside the VM
         if self._browser == "chromium":
             binary = "/ms-playwright/chromium-*/chrome-linux/chrome"
             cmd = (
                 f"{binary} --headless --no-sandbox --disable-dev-shm-usage "
                 f"--disable-gpu --remote-debugging-address=0.0.0.0 "
-                f"--remote-debugging-port={self._port} "
+                f"--remote-debugging-port={self._guest_port} "
                 f"> /tmp/browser.log 2>&1 &"
             )
         elif self._browser == "firefox":
             binary = "/ms-playwright/firefox-*/firefox/firefox"
             cmd = (
                 f"{binary} --headless "
-                f"--remote-debugging-port={self._port} "
+                f"--remote-debugging-port={self._guest_port} "
                 f"> /tmp/browser.log 2>&1 &"
             )
         else:  # webkit
             cmd = (
                 f"playwright run-server --browser webkit "
-                f"--port {self._port} > /tmp/browser.log 2>&1 &"
+                f"--port {self._guest_port} > /tmp/browser.log 2>&1 &"
             )
 
         # Start browser in background
@@ -139,4 +156,4 @@ class BrowserBox(SimpleBox):
             ...     # Use with Playwright:
             ...     # chromium.connect_over_cdp(url)
         """
-        return f"http://localhost:{self._port}"
+        return f"http://localhost:{self._host_port}"
