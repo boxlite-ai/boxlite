@@ -121,6 +121,25 @@ impl ImageStorage {
             .join(format!("{}.json", filename))
     }
 
+    /// Delete manifest from disk.
+    ///
+    /// **Mutability**: Atomic - deletes file.
+    pub async fn delete_manifest(&self, digest: &str) -> BoxliteResult<()> {
+        let manifest_path = self.manifest_path(digest);
+        match tokio::fs::remove_file(&manifest_path).await {
+            Ok(_) => {
+                tracing::debug!(manifest = %digest, "Deleted manifest");
+                Ok(())
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(BoxliteError::Storage(format!(
+                "Failed to delete manifest {}: {}",
+                manifest_path.display(),
+                e
+            ))),
+        }
+    }
+
     // ========================================================================
     // LAYER OPERATIONS [mixed mutability]
     // ========================================================================
@@ -297,13 +316,48 @@ impl ImageStorage {
                 e
             ))
         })?;
-
         Ok(StagedDownload::new(
             staged_path,
             self.layer_tarball_path(digest),
             expected_hash,
             file,
         ))
+    }
+
+    /// Delete layer from disk (tarball + extracted).
+    ///
+    /// **Mutability**: Atomic - deletes files/directories.
+    pub async fn delete_layer(&self, digest: &str) -> BoxliteResult<()> {
+        // 1. Delete tarball
+        let tarball_path = self.layer_tarball_path(digest);
+        match tokio::fs::remove_file(&tarball_path).await {
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(BoxliteError::Storage(format!(
+                    "Failed to delete layer tarball {}: {}",
+                    tarball_path.display(),
+                    e
+                )));
+            }
+        }
+
+        // 2. Delete extracted directory
+        let extracted_path = self.layer_extracted_path(digest);
+        match tokio::fs::remove_dir_all(&extracted_path).await {
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(BoxliteError::Storage(format!(
+                    "Failed to delete extracted layer {}: {}",
+                    extracted_path.display(),
+                    e
+                )));
+            }
+        }
+
+        tracing::debug!(layer = %digest, "Deleted layer");
+        Ok(())
     }
 
     // ========================================================================
@@ -397,13 +451,32 @@ impl ImageStorage {
                 e
             ))
         })?;
-
         Ok(StagedDownload::new(
             staged_path,
             config_path,
             expected_hash,
             file,
         ))
+    }
+
+    /// Delete config from disk.
+    ///
+    /// **Mutability**: Atomic - deletes file.
+    /// Safe for concurrent access.
+    pub async fn delete_config(&self, digest: &str) -> BoxliteResult<()> {
+        let config_path = self.config_path(digest);
+        match tokio::fs::remove_file(&config_path).await {
+            Ok(_) => {
+                tracing::debug!(config = %digest, "Deleted config");
+                Ok(())
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(BoxliteError::Storage(format!(
+                "Failed to delete config {}: {}",
+                config_path.display(),
+                e
+            ))),
+        }
     }
 
     // ========================================================================
@@ -729,5 +802,62 @@ mod tests {
         // Create second layer
         std::fs::write(store.layer_tarball_path(&layer2), b"data2").unwrap();
         assert!(store.verify_blobs_exist(&[layer1, layer2]));
+    }
+
+    #[tokio::test]
+    async fn test_delete_manifest() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let store = ImageStorage::new(temp_dir.path().to_path_buf()).unwrap();
+        let digest = "sha256:abc123";
+
+        let path = store.manifest_path(digest);
+        std::fs::write(&path, "{}").unwrap();
+        assert!(path.exists());
+
+        store.delete_manifest(digest).await.unwrap();
+        assert!(!path.exists());
+
+        // idempotency check
+        store.delete_manifest(digest).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_delete_config() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let store = ImageStorage::new(temp_dir.path().to_path_buf()).unwrap();
+        let digest = "sha256:config1";
+
+        let path = store.config_path(digest);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "{}").unwrap();
+        assert!(path.exists());
+
+        store.delete_config(digest).await.unwrap();
+        assert!(!path.exists());
+    }
+
+    #[tokio::test]
+    async fn test_delete_layer() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let store = ImageStorage::new(temp_dir.path().to_path_buf()).unwrap();
+        let digest = "sha256:layer1";
+
+        let tarball_path = store.layer_tarball_path(digest);
+        let extracted_path = store.layer_extracted_path(digest);
+
+        std::fs::write(&tarball_path, b"tarball").unwrap();
+        std::fs::create_dir_all(&extracted_path).unwrap();
+        std::fs::write(extracted_path.join("file.txt"), b"content").unwrap();
+
+        assert!(tarball_path.exists());
+        assert!(extracted_path.exists());
+
+        store.delete_layer(digest).await.unwrap();
+
+        assert!(!tarball_path.exists());
+        assert!(!extracted_path.exists());
+
+        // idempotency check
+        store.delete_layer(digest).await.unwrap();
     }
 }

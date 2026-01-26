@@ -29,7 +29,7 @@ mod volumes;
 pub use litebox::LiteBox;
 pub use runtime::BoxliteRuntime;
 
-use boxlite_shared::errors::{BoxliteError, BoxliteResult};
+pub use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 pub use litebox::{
     BoxCommand, CopyOptions, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execution, ExecutionId,
 };

@@ -515,6 +515,65 @@ pub struct ImageInfo {
     pub size: Option<Bytes>,
 }
 
+/// A specific action taken during image removal.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ImageRemovalItem {
+    /// A reference (tag) was removed from the index.
+    Untagged(String),
+    /// The physical image data (manifest) was deleted.
+    Deleted(String),
+}
+
+/// Summary of all actions taken during an image removal operation.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct ImageRemovalReport {
+    /// List of actions performed (ordered).
+    pub items: Vec<ImageRemovalItem>,
+}
+
+impl fmt::Display for ImageRemovalItem {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Untagged(tag) => write!(f, "untagged: {}", tag),
+            Self::Deleted(id) => write!(f, "deleted: {}", id),
+        }
+    }
+}
+
+impl ImageRemovalReport {
+    /// Create an empty report.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Add an untagged item.
+    pub fn untagged(&mut self, reference: String) {
+        self.items.push(ImageRemovalItem::Untagged(reference));
+    }
+
+    /// Add a deleted item.
+    pub fn deleted(&mut self, id: String) {
+        self.items.push(ImageRemovalItem::Deleted(id));
+    }
+
+    /// Check if the report contains any actions.
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+}
+
+impl fmt::Display for ImageRemovalReport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (i, item) in self.items.iter().enumerate() {
+            if i > 0 {
+                writeln!(f)?;
+            }
+            write!(f, "{}", item)?;
+        }
+        Ok(())
+    }
+}
+
 // ============================================================================
 // BOX CONFIG (Podman-style separation)
 // ============================================================================

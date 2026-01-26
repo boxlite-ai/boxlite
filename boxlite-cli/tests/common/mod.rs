@@ -12,11 +12,16 @@ const TEST_IMAGES: &[&str] = &["alpine:latest", "python:alpine"];
 static TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 static SHARED_HOME: OnceLock<PathBuf> = OnceLock::new();
 
+pub enum TestGuard {
+    Shared(MutexGuard<'static, ()>),
+    Isolated,
+}
+
 pub struct TestContext {
     pub cmd: Command,
-    pub home: &'static PathBuf,
-    // Hold the lock until the test is done
-    pub _guard: MutexGuard<'static, ()>,
+    pub home: PathBuf,
+    pub _guard: TestGuard,
+    pub _temp_dir: Option<tempfile::TempDir>,
 }
 
 impl TestContext {
@@ -25,7 +30,7 @@ impl TestContext {
         let bin_path = env!("CARGO_BIN_EXE_boxlite");
         let mut cmd = Command::new(bin_path);
         cmd.timeout(Duration::from_secs(60));
-        cmd.arg("--home").arg(self.home);
+        cmd.arg("--home").arg(&self.home);
         cmd
     }
 
@@ -93,7 +98,27 @@ pub fn boxlite() -> TestContext {
 
     TestContext {
         cmd,
+        home: home.clone(),
+        _guard: TestGuard::Shared(guard),
+        _temp_dir: None,
+    }
+}
+
+/// Create an isolated test context with its own temporary home directory.
+/// No pre-pulling is performed.  For destructive tests.
+pub fn boxlite_isolated() -> TestContext {
+    let temp_dir = tempfile::TempDir::new().expect("Failed to create temp directory");
+    let home = temp_dir.path().to_path_buf();
+
+    let bin_path: &str = env!("CARGO_BIN_EXE_boxlite");
+    let mut cmd = Command::new(bin_path);
+    cmd.timeout(Duration::from_secs(120));
+    cmd.arg("--home").arg(&home);
+
+    TestContext {
+        cmd,
         home,
-        _guard: guard,
+        _guard: TestGuard::Isolated,
+        _temp_dir: Some(temp_dir),
     }
 }

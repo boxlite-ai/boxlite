@@ -75,6 +75,9 @@ pub enum Commands {
 
     /// Copy files/folders between host and box
     Cp(crate::commands::cp::CpArgs),
+
+    /// Remove one or more images
+    Rmi(crate::commands::rmi::RmiArgs),
 }
 
 // ============================================================================

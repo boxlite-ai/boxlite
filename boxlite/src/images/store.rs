@@ -13,19 +13,51 @@
 //! - `layer_tarball()` - Get layer tarball path
 //! - `layer_extracted()` - Get extracted layer path (extracts if needed)
 
-use crate::db::{CachedImage, Database, ImageIndexStore};
+use super::ReferenceIter;
+use crate::db::{BoxStore, CachedImage, Database, ImageIndexStore};
 use crate::images::manager::{ImageManifest, LayerInfo};
 use crate::images::storage::ImageStorage;
-use boxlite_shared::{BoxliteError, BoxliteResult};
+use crate::runtime::options::RootfsSpec;
+use crate::runtime::types::ImageRemovalReport;
+use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use oci_client::Reference;
 use oci_client::manifest::{
     ImageIndexEntry, OciDescriptor, OciImageIndex, OciImageManifest as ClientOciImageManifest,
 };
 use oci_client::secrets::RegistryAuth;
 use oci_spec::image::MediaType;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+
+// ============================================================================
+// IMAGE REMOVAL HELPER TYPES
+// ============================================================================
+
+/// Snapshot of all assets and dependencies for an image targeted for removal.
+struct ImageRemovalContext {
+    /// All tags currently pointing to this image digest.
+    identities: HashSet<String>,
+    /// All unique layers used by *other* images (must be preserved).
+    layer_whitelist: HashSet<String>,
+    /// The physical layers belonging to the target image.
+    target_layers: Vec<String>,
+    /// The configuration digest of the target image.
+    config_digest: String,
+}
+
+/// A concrete roadmap of what actions to take during removal.
+struct RemovalPlan {
+    /// Tags to remove from the SQLite index.
+    tags_to_remove: Vec<String>,
+    /// If Some, the physical manifest file to delete.
+    manifest_to_delete: Option<String>,
+    /// If Some, the physical config file to delete.
+    config_to_delete: Option<String>,
+    /// The specific physical layer files to delete (sharing-safe).
+    layers_to_delete: Vec<String>,
+}
 
 // ============================================================================
 // INNER STATE (no locking awareness)
@@ -80,6 +112,8 @@ pub struct ImageStore {
     client: oci_client::Client,
     /// Mutable state protected by RwLock
     inner: RwLock<ImageStoreInner>,
+    /// Database handle for index and box lookups
+    db: Database,
     /// Registries to search for unqualified image references.
     /// Tried in order; first successful pull wins.
     registries: Vec<String>,
@@ -99,10 +133,11 @@ impl ImageStore {
     /// * `db` - Database for image index
     /// * `registries` - Registries to search for unqualified images (tried in order)
     pub fn new(images_dir: PathBuf, db: Database, registries: Vec<String>) -> BoxliteResult<Self> {
-        let inner = ImageStoreInner::new(images_dir, db)?;
+        let inner = ImageStoreInner::new(images_dir, db.clone())?;
         Ok(Self {
             client: oci_client::Client::new(Default::default()),
             inner: RwLock::new(inner),
+            db,
             registries,
         })
     }
@@ -145,8 +180,6 @@ impl ImageStore {
     /// Thread-safe: Multiple concurrent pulls of the same image will only
     /// download once; others will get the cached result.
     pub async fn pull(&self, image_ref: &str) -> BoxliteResult<ImageManifest> {
-        use super::ReferenceIter;
-
         tracing::debug!(
             image_ref = %image_ref,
             registries = ?self.registries,
@@ -922,6 +955,360 @@ impl ImageStore {
 
         Ok((config_digest_str, layers))
     }
+
+    /// Import OCI image blobs (config and layers) from local directory.
+    async fn import_oci_blobs(
+        &self,
+        image_dir: &std::path::Path,
+        config_digest: &str,
+        layers: &[LayerInfo],
+    ) -> BoxliteResult<()> {
+        let config_blob_path = image_dir
+            .join("blobs")
+            .join(config_digest.replace(':', "/"));
+        self.import_config_to_storage(&config_blob_path, config_digest)
+            .await?;
+
+        for layer in layers {
+            let layer_blob_path = image_dir.join("blobs").join(layer.digest.replace(':', "/"));
+            self.import_blob_to_storage(&layer_blob_path, &layer.digest)
+                .await?;
+        }
+
+        Ok(())
+    }
+
+    /// Import a blob into storage from a local path.
+    async fn import_blob_to_storage(
+        &self,
+        src_path: &std::path::Path,
+        digest: &str,
+    ) -> BoxliteResult<()> {
+        if !src_path.exists() {
+            return Err(BoxliteError::Storage(format!(
+                "Blob not found: {}",
+                src_path.display()
+            )));
+        }
+
+        let dest_path = {
+            let inner = self.inner.read().await;
+            inner.storage.layer_tarball_path(digest)
+        };
+
+        if dest_path.exists() {
+            tracing::debug!("Blob already exists: {}", digest);
+            return Ok(());
+        }
+
+        if std::fs::hard_link(src_path, &dest_path).is_err() {
+            tracing::debug!(
+                "Hard link failed for {}, copying to {}",
+                src_path.display(),
+                dest_path.display()
+            );
+            std::fs::copy(src_path, &dest_path).map_err(|e| {
+                BoxliteError::Storage(format!(
+                    "Failed to copy blob from {} to {}: {}",
+                    src_path.display(),
+                    dest_path.display(),
+                    e
+                ))
+            })?;
+        }
+
+        tracing::debug!("Imported blob: {} -> {}", digest, dest_path.display());
+        Ok(())
+    }
+
+    /// Import a config blob into storage from a local path.
+    async fn import_config_to_storage(
+        &self,
+        src_path: &std::path::Path,
+        digest: &str,
+    ) -> BoxliteResult<()> {
+        if !src_path.exists() {
+            return Err(BoxliteError::Storage(format!(
+                "Config blob not found: {}",
+                src_path.display()
+            )));
+        }
+
+        let dest_path = {
+            let inner = self.inner.read().await;
+            inner.storage.config_path(digest)
+        };
+
+        if dest_path.exists() {
+            tracing::debug!("Config blob already exists: {}", digest);
+            return Ok(());
+        }
+
+        // Ensure parent directory exists
+        if let Some(parent) = dest_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                BoxliteError::Storage(format!(
+                    "Failed to create config directory {}: {}",
+                    parent.display(),
+                    e
+                ))
+            })?;
+        }
+
+        if std::fs::hard_link(src_path, &dest_path).is_err() {
+            tracing::debug!(
+                "Hard link failed for config {}, copying to {}",
+                src_path.display(),
+                dest_path.display()
+            );
+            std::fs::copy(src_path, &dest_path).map_err(|e| {
+                BoxliteError::Storage(format!(
+                    "Failed to copy config from {} to {}: {}",
+                    src_path.display(),
+                    dest_path.display(),
+                    e
+                ))
+            })?;
+        }
+
+        tracing::debug!("Imported config: {} -> {}", digest, dest_path.display());
+        Ok(())
+    }
+
+    /// Remove an image (or tag) from the store.
+    pub async fn remove(&self, input: &str, force: bool) -> BoxliteResult<ImageRemovalReport> {
+        // Resolve and snapshot current assets
+        let (target_digest, maybe_tag) = self.resolve_image_ref(input).await?;
+        let context = self.get_removal_context(&target_digest).await?;
+
+        // Safety checks
+        if !force {
+            // Check for box occupancy
+            self.check_box_occupancy(&target_digest).await?;
+
+            // Prevent deleting by ID if multiple tags exist
+            if maybe_tag.is_none() && context.identities.len() > 1 {
+                return Err(BoxliteError::ImageMultipleTags {
+                    id: target_digest,
+                    tags: context.identities.into_iter().collect(),
+                });
+            }
+        }
+
+        // execute the removal plan
+        let plan = self.create_removal_plan(&target_digest, maybe_tag, context);
+        self.execute_removal_plan(plan).await
+    }
+
+    /// Snapshot image index to gather all information needed for removal.
+    async fn get_removal_context(&self, target_digest: &str) -> BoxliteResult<ImageRemovalContext> {
+        // All tags/references pointing to this image ID (used for reporting and scope logic)
+        let mut identities = HashSet::new();
+        // Layers used by OTHER images that must be preserved (protect shared base layers)
+        let mut layer_whitelist = HashSet::new();
+        // Every physical layer belonging to the target image we're evaluating
+        let mut target_layers = Vec::new();
+        // Digest of the image configuration blob (physical asset)
+        let mut config_digest = String::new();
+
+        let inner = self.inner.read().await;
+        for (tag, cached) in inner.index.list_all()? {
+            if cached.manifest_digest == target_digest {
+                identities.insert(tag);
+                if target_layers.is_empty() {
+                    target_layers = cached.layers.clone();
+                    config_digest = cached.config_digest.clone();
+                }
+            } else {
+                for layer in &cached.layers {
+                    layer_whitelist.insert(layer.clone());
+                }
+            }
+        }
+
+        if target_layers.is_empty() {
+            return Err(BoxliteError::NotFound(format!(
+                "image {} not found in index",
+                target_digest
+            )));
+        }
+
+        Ok(ImageRemovalContext {
+            identities,
+            layer_whitelist,
+            target_layers,
+            config_digest,
+        })
+    }
+
+    /// Create a physical removal plan based on user intent and current assets.
+    fn create_removal_plan(
+        &self,
+        target_digest: &str,
+        maybe_tag: Option<String>,
+        ctx: ImageRemovalContext,
+    ) -> RemovalPlan {
+        // if we should perform a full physical removal:
+        // 1. User specified by ID (maybe_tag is None)
+        // 2. This is the last tag pointing to this image
+        let is_full_removal = maybe_tag.is_none() || ctx.identities.len() <= 1;
+
+        let (tags_to_remove, manifest_to_delete, config_to_delete, layers_to_delete) =
+            if is_full_removal {
+                // Collect all identities to wipe from index
+                let tags = ctx.identities.into_iter().collect();
+
+                // Only delete layers that are NOT in the whitelist
+                let layers = ctx
+                    .target_layers
+                    .into_iter()
+                    .filter(|l| !ctx.layer_whitelist.contains(l))
+                    .collect();
+
+                (
+                    tags,
+                    Some(target_digest.to_string()),
+                    Some(ctx.config_digest),
+                    layers,
+                )
+            } else {
+                // Just untag the specific requested reference
+                let tags = vec![maybe_tag.expect("tag must exist if not full removal")];
+                (tags, None, None, vec![])
+            };
+
+        RemovalPlan {
+            tags_to_remove,
+            manifest_to_delete,
+            config_to_delete,
+            layers_to_delete,
+        }
+    }
+
+    /// Check if any boxes are currently basing on the target image.
+    async fn check_box_occupancy(&self, target_digest: &str) -> BoxliteResult<()> {
+        let box_store = BoxStore::new(self.db.clone());
+        let all_boxes = box_store.list_all()?;
+
+        for (config, _state) in all_boxes {
+            if let RootfsSpec::Image(ref image_str) = config.options.rootfs {
+                // 1. Check if it's a direct digest match
+                // 2. Otherwise, resolve the reference to a digest and compare
+                let is_match = if image_str == target_digest {
+                    true
+                } else {
+                    match self.resolve_image_ref(image_str).await {
+                        Ok((digest, _)) => digest == target_digest,
+                        Err(e) => {
+                            // Log warning but don't fail - box might have invalid image ref
+                            tracing::warn!(
+                                image_ref = %image_str,
+                                box_id = %config.id,
+                                error = %e,
+                                "Failed to resolve image reference for box"
+                            );
+                            false
+                        }
+                    }
+                };
+
+                if is_match {
+                    return Err(BoxliteError::ImageInUse {
+                        id: target_digest.to_string(),
+                        box_id: config.id.to_string(),
+                        box_name: config.name.clone().unwrap_or_else(|| "unnamed".to_string()),
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Perform the actual removal of tags and physical data from the store.
+    async fn execute_removal_plan(&self, plan: RemovalPlan) -> BoxliteResult<ImageRemovalReport> {
+        let mut report = ImageRemovalReport::new();
+        let inner = self.inner.write().await;
+
+        for tag in plan.tags_to_remove {
+            inner.index.remove(&tag)?;
+            report.untagged(tag);
+        }
+
+        if let Some(m) = plan.manifest_to_delete {
+            inner.storage.delete_manifest(&m).await?;
+            report.deleted(m);
+        }
+
+        if let Some(c) = plan.config_to_delete.filter(|c| !c.is_empty()) {
+            inner.storage.delete_config(&c).await?;
+        }
+
+        for l in plan.layers_to_delete {
+            inner.storage.delete_layer(&l).await?;
+        }
+
+        Ok(report)
+    }
+
+    /// Resolve a fuzzy image reference (tag or digest) to a concrete local target.
+    /// Returns (manifest_digest, Option<original_tag_if_resolved_by_tag>)
+    async fn resolve_image_ref(&self, input: &str) -> BoxliteResult<(String, Option<String>)> {
+        let inner = self.inner.read().await;
+
+        if input.starts_with("sha256:") {
+            if inner.storage.has_manifest(input) {
+                return Ok((input.to_string(), None));
+            }
+
+            // Also check if it's a configuration digest (Docker-style Image ID)
+            // We scan the index for a matching config_digest
+            if let Ok(images) = inner.index.list_all() {
+                for (_, cached) in images {
+                    if cached.config_digest == input {
+                        tracing::debug!(
+                            config_digest = %input,
+                            manifest = %cached.manifest_digest,
+                            "Resolved config digest to manifest"
+                        );
+                        return Ok((cached.manifest_digest, None));
+                    }
+                }
+            }
+        }
+
+        // Try to load as a tag
+        if let Some(cached) = inner.index.get(input)? {
+            return Ok((cached.manifest_digest, Some(input.to_string())));
+        }
+
+        // Special case: if input is a partial digest, we don't support it (yet)
+        // But we can check if it's a full manifest digest without prefix
+        let full_sha = if input.starts_with("sha256:") {
+            input.to_string()
+        } else {
+            format!("sha256:{}", input)
+        };
+
+        if inner.storage.has_manifest(&full_sha) {
+            return Ok((full_sha, None));
+        }
+
+        // Fallback: try resolving via qualified references
+        let candidates = ReferenceIter::new(input, &self.registries)
+            .map_err(|e| BoxliteError::Storage(format!("invalid image reference: {e}")))?;
+
+        for reference in candidates {
+            let ref_str = reference.whole();
+            if let Some(cached) = inner.index.get(&ref_str)? {
+                return Ok((cached.manifest_digest, Some(ref_str)));
+            }
+        }
+
+        Err(BoxliteError::NotFound(format!(
+            "no local image matches reference: {}",
+            input
+        )))
+    }
 }
 
 // ============================================================================
@@ -933,12 +1320,16 @@ impl ImageStore {
 /// Used by `ImageManager` and `ImageObject` to share the same store.
 pub type SharedImageStore = Arc<ImageStore>;
 
+
 // ============================================================================
 // TESTS
 // ============================================================================
 
 #[cfg(test)]
 mod tests {
+    use crate::runtime::types::ImageRemovalItem;
+    use tempfile::TempDir;
+
     use super::*;
     use crate::db::Database;
     use std::path::Path;
@@ -1163,5 +1554,332 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("index.json"));
+
+    async fn setup_test_store() -> (ImageStore, TempDir) {
+
+        let dir = TempDir::new().unwrap();
+        let images_dir = dir.path().join("images");
+        let db_path = dir.path().join("test.db");
+        let db = Database::open(&db_path).unwrap();
+        let store = ImageStore::new(images_dir, db, vec!["docker.io".to_string()]).unwrap();
+        (store, dir)
+    }
+
+    #[tokio::test]
+    async fn test_remove_shared_layers_protection() {
+        let (store, _tmp) = setup_test_store().await;
+
+        let layer_shared = "sha256:shared_layer_blob";
+        let layer_a_unique = "sha256:a_unique_layer_blob";
+        let layer_b_unique = "sha256:b_unique_layer_blob";
+
+        // Image A (Tag: alice)
+        let img_a = CachedImage {
+            manifest_digest: "sha256:manifest_a".to_string(),
+            config_digest: "sha256:config_a".to_string(),
+            layers: vec![layer_a_unique.to_string(), layer_shared.to_string()],
+            cached_at: "2024-01-01T00:00:00Z".to_string(),
+            complete: true,
+        };
+
+        // Image B (Tag: bob)
+        let img_b = CachedImage {
+            manifest_digest: "sha256:manifest_b".to_string(),
+            config_digest: "sha256:config_b".to_string(),
+            layers: vec![layer_b_unique.to_string(), layer_shared.to_string()],
+            cached_at: "2024-01-01T00:00:01Z".to_string(),
+            complete: true,
+        };
+
+        {
+            let inner = store.inner.read().await;
+            inner
+                .index
+                .upsert("docker.io/library/alice:latest", &img_a)
+                .unwrap();
+            inner
+                .index
+                .upsert("docker.io/library/bob:latest", &img_b)
+                .unwrap();
+
+            // physical marker files
+            let storage = &inner.storage;
+            std::fs::create_dir_all(storage.manifest_path("sha256:manifest_a").parent().unwrap())
+                .unwrap();
+            std::fs::write(storage.manifest_path("sha256:manifest_a"), "manifest a").unwrap();
+            std::fs::write(storage.manifest_path("sha256:manifest_b"), "manifest b").unwrap();
+            std::fs::write(storage.config_path("sha256:config_a"), "config a").unwrap();
+
+            std::fs::write(storage.layer_tarball_path(layer_a_unique), "layer a").unwrap();
+            std::fs::write(storage.layer_tarball_path(layer_b_unique), "layer b").unwrap();
+            std::fs::write(storage.layer_tarball_path(layer_shared), "shared layer").unwrap();
+        }
+
+        // This should delete manifest_a, config_a, and layer_a_unique.
+        // It MUST NOT delete layer_shared because Image B (bob) depends on it.
+        store
+            .remove("alice", false)
+            .await
+            .expect("removal should succeed");
+
+        let inner = store.inner.read().await;
+        let storage = &inner.storage;
+
+        // Alice's assets should be gone
+        assert!(
+            inner
+                .index
+                .get("docker.io/library/alice:latest")
+                .unwrap()
+                .is_none()
+        );
+        assert!(!storage.manifest_path("sha256:manifest_a").exists());
+        assert!(!storage.config_path("sha256:config_a").exists());
+        assert!(!storage.layer_tarball_path(layer_a_unique).exists());
+
+        // Bob's assets must remain
+        assert!(
+            inner
+                .index
+                .get("docker.io/library/bob:latest")
+                .unwrap()
+                .is_some()
+        );
+        assert!(storage.manifest_path("sha256:manifest_b").exists());
+        assert!(storage.layer_tarball_path(layer_b_unique).exists());
+
+        // Shared layer must still exist
+        assert!(
+            storage.layer_tarball_path(layer_shared).exists(),
+            "Shared layer was incorrectly deleted!"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_remove_image_occupancy_check() {
+        let (store, _tmp) = setup_test_store().await;
+
+        let manifest_digest =
+            "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let img = CachedImage {
+            manifest_digest: manifest_digest.to_string(),
+            config_digest:
+                "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+                    .to_string(),
+            layers: vec![
+                "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+                    .to_string(),
+            ],
+            cached_at: "2024-01-01T00:00:00Z".to_string(),
+            complete: true,
+        };
+
+        {
+            let inner = store.inner.read().await;
+            inner
+                .index
+                .upsert("docker.io/library/busybox:latest", &img)
+                .unwrap();
+
+            // physical marker files
+            let storage = &inner.storage;
+            std::fs::create_dir_all(storage.manifest_path(manifest_digest).parent().unwrap())
+                .unwrap();
+            std::fs::write(storage.manifest_path(manifest_digest), "manifest content").unwrap();
+        }
+
+        // using the tag "busybox" (resolves to busybox:latest)
+        let box_store = BoxStore::new(store.db.clone());
+        let box_id = crate::runtime::types::BoxID::new();
+        let config = crate::litebox::config::BoxConfig {
+            id: box_id.clone(),
+            name: Some("test-box".to_string()),
+            created_at: chrono::Utc::now(),
+            container: crate::litebox::config::ContainerRuntimeConfig {
+                id: crate::runtime::types::ContainerID::new(),
+            },
+            options: crate::runtime::options::BoxOptions {
+                rootfs: crate::runtime::options::RootfsSpec::Image("busybox".to_string()),
+                ..Default::default()
+            },
+            engine_kind: crate::vmm::VmmKind::Libkrun,
+            transport: boxlite_shared::Transport::unix(std::path::PathBuf::from("/tmp/test.sock")),
+            box_home: std::path::PathBuf::from("/tmp/box"),
+            ready_socket_path: std::path::PathBuf::from("/tmp/ready"),
+        };
+        box_store
+            .save(&config, &crate::runtime::types::BoxState::new())
+            .unwrap();
+
+        // Direct call
+        let result = store.check_box_occupancy(manifest_digest).await;
+        assert!(
+            result.is_err(),
+            "Occupancy check should fail because image is used by box"
+        );
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("is used by box"));
+        assert!(err.contains("test-box"));
+
+        // Removal without force
+        let result = store.remove(manifest_digest, false).await;
+        assert!(
+            result.is_err(),
+            "Removal should fail because image is used by box"
+        );
+        assert!(result.unwrap_err().to_string().contains("is used by box"));
+    }
+
+    #[tokio::test]
+    async fn test_remove_ghost_image_fails() {
+        let (store, _tmp) = setup_test_store().await;
+
+        let manifest_digest = "sha256:ghost_manifest";
+
+        {
+            // Only create physical file, NO index entry
+            let inner = store.inner.read().await;
+            let storage = &inner.storage;
+            std::fs::create_dir_all(storage.manifest_path(manifest_digest).parent().unwrap())
+                .unwrap();
+            std::fs::write(storage.manifest_path(manifest_digest), "manifest content").unwrap();
+        }
+
+        let result = store.remove(manifest_digest, false).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("not found in index"));
+    }
+
+    #[tokio::test]
+    async fn test_remove_by_id_multiple_tags() {
+        let (store, _tmp) = setup_test_store().await;
+
+        let manifest_digest = "sha256:multi_tag_manifest";
+        let img = CachedImage {
+            manifest_digest: manifest_digest.to_string(),
+            config_digest: "sha256:config".to_string(),
+            layers: vec!["sha256:layer".to_string()],
+            cached_at: "2024-01-01T00:00:00Z".to_string(),
+            complete: true,
+        };
+
+        {
+            let inner = store.inner.read().await;
+            // Use fully qualified names to match ReferenceIter behavior
+            inner
+                .index
+                .upsert("docker.io/library/image:v1", &img)
+                .unwrap();
+            inner
+                .index
+                .upsert("docker.io/library/image:v2", &img)
+                .unwrap();
+
+            // Must have physical manifest file for resolve_image_ref to succeed by ID
+            let storage = &inner.storage;
+            std::fs::create_dir_all(storage.manifest_path(manifest_digest).parent().unwrap())
+                .unwrap();
+            std::fs::write(storage.manifest_path(manifest_digest), "manifest").unwrap();
+        }
+
+        // Remove by ID without force
+        let result = store.remove(manifest_digest, false).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("multiple tags"));
+
+        // 2. Remove by ID WITH force should SUCCEED and wipe all
+        let report = store.remove(manifest_digest, true).await.unwrap();
+
+        // Match Docker behavior: when deleted by ID, all tags are untagged, then ID is deleted
+        assert!(report.items.contains(&ImageRemovalItem::Untagged(
+            "docker.io/library/image:v1".to_string()
+        )));
+        assert!(report.items.contains(&ImageRemovalItem::Untagged(
+            "docker.io/library/image:v2".to_string()
+        )));
+        assert!(
+            report
+                .items
+                .contains(&ImageRemovalItem::Deleted(manifest_digest.to_string()))
+        );
+
+        let inner = store.inner.read().await;
+        assert!(
+            inner
+                .index
+                .get("docker.io/library/image:v1")
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            inner
+                .index
+                .get("docker.io/library/image:v2")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_remove_tag_preserves_others_even_with_force() {
+        let (store, _tmp) = setup_test_store().await;
+
+        let manifest_digest = "sha256:preserving_manifest";
+        let img = CachedImage {
+            manifest_digest: manifest_digest.to_string(),
+            config_digest: "sha256:config".to_string(),
+            layers: vec!["sha256:layer".to_string()],
+            cached_at: "2024-01-01T00:00:00Z".to_string(),
+            complete: true,
+        };
+
+        {
+            let inner = store.inner.read().await;
+            inner
+                .index
+                .upsert("docker.io/library/image:v1", &img)
+                .unwrap();
+            inner
+                .index
+                .upsert("docker.io/library/image:v2", &img)
+                .unwrap();
+
+            // Physical files
+            let storage = &inner.storage;
+            std::fs::create_dir_all(storage.manifest_path(manifest_digest).parent().unwrap())
+                .unwrap();
+            std::fs::write(storage.manifest_path(manifest_digest), "manifest").unwrap();
+        }
+
+        // Remove v1 with force. v2 should REMAIN even though force was used.
+        // In the old implementation, force would have wiped everything.
+        // We use "image:v1" which resolve_image_ref will expand to "docker.io/library/image:v1"
+        let report = store.remove("image:v1", true).await.unwrap();
+
+        assert_eq!(report.items.len(), 1);
+        assert_eq!(
+            report.items[0],
+            ImageRemovalItem::Untagged("docker.io/library/image:v1".to_string())
+        );
+
+        let inner = store.inner.read().await;
+        assert!(
+            inner
+                .index
+                .get("docker.io/library/image:v1")
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            inner
+                .index
+                .get("docker.io/library/image:v2")
+                .unwrap()
+                .is_some()
+        );
+
+        // Physical file should still exist because v2 is still there
+        assert!(inner.storage.manifest_path(manifest_digest).exists());
     }
 }

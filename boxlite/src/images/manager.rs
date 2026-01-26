@@ -188,4 +188,22 @@ impl ImageManager {
 
         Ok(ImageObject::new(reference, manifest, blob_source))
     }
+
+    /// Remove an OCI image from the store.
+    ///
+    /// Depending on the reference provided:
+    /// - If a tag is provided, it untags the image.
+    /// - If a digest is provided, or the last tag is removed, it performs physical removal of data.
+    ///
+    /// # Arguments
+    ///
+    /// * `image_ref` - Image reference (tag or digest)
+    /// * `force` - If true, remove even if used by boxes (stops boxes if needed) or multiple tags.
+    pub async fn remove(
+        &self,
+        image_ref: &str,
+        force: bool,
+    ) -> BoxliteResult<crate::runtime::types::ImageRemovalReport> {
+        self.store.remove(image_ref, force).await
+    }
 }

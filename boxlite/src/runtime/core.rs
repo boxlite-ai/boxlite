@@ -310,6 +310,20 @@ impl BoxliteRuntime {
     pub async fn list_images(&self) -> BoxliteResult<Vec<crate::runtime::types::ImageInfo>> {
         self.rt_impl.image_manager.list().await
     }
+
+    /// Remove an OCI image from the local store.
+    ///
+    /// # Arguments
+    ///
+    /// * `image_ref` - Image reference (tag or digest)
+    /// * `force` - If true, remove even if used by boxes.
+    pub async fn remove_image(
+        &self,
+        image_ref: &str,
+        force: bool,
+    ) -> BoxliteResult<crate::runtime::types::ImageRemovalReport> {
+        self.rt_impl.image_manager.remove(image_ref, force).await
+    }
 }
 
 // ============================================================================

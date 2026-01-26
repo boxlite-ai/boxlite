@@ -70,6 +70,18 @@ pub enum BoxliteError {
     /// Resource (box or runtime) has been stopped/shutdown.
     #[error("stopped: {0}")]
     Stopped(String),
+
+    /// Image is in use by one or more boxes.
+    #[error("image {id} is used by box {box_id} ({box_name})")]
+    ImageInUse {
+        id: String,
+        box_id: String,
+        box_name: String,
+    },
+
+    /// Image has multiple tags and cannot be deleted by ID without force.
+    #[error("image {id} has multiple tags: {tags:?}")]
+    ImageMultipleTags { id: String, tags: Vec<String> },
 }
 
 // Implement From for common error types to enable `?` operator
