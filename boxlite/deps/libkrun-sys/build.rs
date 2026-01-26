@@ -55,8 +55,10 @@ fn verify_vendored_sources(manifest_dir: &Path, require_libkrunfw: bool) {
     let libkrun_src = manifest_dir.join("vendor/libkrun");
     let libkrunfw_src = manifest_dir.join("vendor/libkrunfw");
 
-    let missing_libkrun = !libkrun_src.exists();
-    let missing_libkrunfw = require_libkrunfw && !libkrunfw_src.exists();
+    // Submodule directories can exist but be empty if `git submodule update` wasn't run.
+    // Check for a marker file (Makefile) instead of just the directory.
+    let missing_libkrun = !libkrun_src.join("Makefile").exists();
+    let missing_libkrunfw = require_libkrunfw && !libkrunfw_src.join("Makefile").exists();
 
     if missing_libkrun || missing_libkrunfw {
         eprintln!("ERROR: Vendored sources not found");
@@ -157,6 +159,18 @@ fn build_with_make(
     lib_name: &str,
     extra_env: HashMap<String, String>,
 ) {
+    build_with_make_args(source_dir, install_dir, lib_name, extra_env, &[]);
+}
+
+/// Builds a library using Make with additional Make arguments.
+#[allow(unused)]
+fn build_with_make_args(
+    source_dir: &Path,
+    install_dir: &Path,
+    lib_name: &str,
+    extra_env: HashMap<String, String>,
+    extra_make_args: &[String],
+) {
     println!("cargo:warning=Building {} from source...", lib_name);
 
     std::fs::create_dir_all(install_dir)
@@ -164,10 +178,12 @@ fn build_with_make(
 
     // Build
     let mut make_cmd = make_command(source_dir, install_dir, &extra_env);
+    make_cmd.args(extra_make_args);
     run_command(&mut make_cmd, &format!("make {}", lib_name));
 
     // Install
     let mut install_cmd = make_command(source_dir, install_dir, &extra_env);
+    install_cmd.args(extra_make_args);
     install_cmd.arg("install");
     run_command(&mut install_cmd, &format!("make install {}", lib_name));
 }
@@ -453,6 +469,15 @@ fn setup_libclang_path() {
         return;
     }
 
+    // Try common Homebrew locations (useful when `brew` itself can't be executed).
+    for prefix in ["/opt/homebrew/opt/llvm", "/usr/local/opt/llvm"] {
+        let lib_path = Path::new(prefix).join("lib");
+        if lib_path.join("libclang.dylib").exists() {
+            env::set_var("LIBCLANG_PATH", &lib_path);
+            return;
+        }
+    }
+
     // Try to find brew's llvm
     if let Ok(output) = Command::new("brew").args(["--prefix", "llvm"]).output() {
         if output.status.success() {
@@ -465,19 +490,227 @@ fn setup_libclang_path() {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn brew_prefix(formula: &str) -> Option<PathBuf> {
+    let output = Command::new("brew")
+        .args(["--prefix", formula])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let prefix = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if prefix.is_empty() {
+        return None;
+    }
+
+    Some(PathBuf::from(prefix))
+}
+
+#[cfg(target_os = "macos")]
+fn find_non_apple_clang_in_path() -> Option<PathBuf> {
+    let version = Command::new("clang").arg("--version").output().ok()?;
+    if !version.status.success() {
+        return None;
+    }
+
+    let version_stdout = String::from_utf8_lossy(&version.stdout);
+    if version_stdout.starts_with("Apple clang") {
+        return None;
+    }
+
+    let output = Command::new("which").arg("clang").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if path.is_empty() {
+        return None;
+    }
+
+    let path = PathBuf::from(path);
+    path.exists().then_some(path)
+}
+
+#[cfg(target_os = "macos")]
+fn find_llvm_clang() -> Option<PathBuf> {
+    // If the user has already put a non-Apple clang first in PATH, prefer that.
+    if let Some(clang) = find_non_apple_clang_in_path() {
+        return Some(clang);
+    }
+
+    // If llvm-config is available, use it.
+    if let Ok(output) = Command::new("llvm-config").arg("--bindir").output() {
+        if output.status.success() {
+            let bindir = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !bindir.is_empty() {
+                let clang = PathBuf::from(bindir).join("clang");
+                if clang.exists() {
+                    return Some(clang);
+                }
+            }
+        }
+    }
+
+    // Common Homebrew locations (useful when `brew` itself can't be executed).
+    for prefix in ["/opt/homebrew/opt/llvm", "/usr/local/opt/llvm"] {
+        let clang = Path::new(prefix).join("bin/clang");
+        if clang.exists() {
+            return Some(clang);
+        }
+    }
+
+    // Homebrew llvm is keg-only; locate it via brew.
+    brew_prefix("llvm")
+        .map(|prefix| prefix.join("bin/clang"))
+        .filter(|clang| clang.exists())
+}
+
+#[cfg(target_os = "macos")]
+fn lld_bin_dir() -> Option<PathBuf> {
+    // If ld.lld is already in PATH, we're good.
+    if Command::new("ld.lld")
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+    {
+        return None;
+    }
+
+    // Common Homebrew locations (useful when `brew` itself can't be executed).
+    for prefix in ["/opt/homebrew/opt/lld", "/usr/local/opt/lld"] {
+        let ld_lld = Path::new(prefix).join("bin/ld.lld");
+        if ld_lld.exists() {
+            return ld_lld.parent().map(Path::to_path_buf);
+        }
+    }
+
+    // Otherwise, try locating via Homebrew.
+    let ld_lld = brew_prefix("lld")
+        .map(|prefix| prefix.join("bin/ld.lld"))
+        .filter(|path| path.exists())?;
+
+    ld_lld.parent().map(Path::to_path_buf)
+}
+
+#[cfg(target_os = "macos")]
+fn prepend_path_dirs(path_dirs: &[PathBuf]) -> Option<String> {
+    if path_dirs.is_empty() {
+        return None;
+    }
+
+    let existing = env::var("PATH").unwrap_or_default();
+    let mut merged = String::new();
+    for dir in path_dirs {
+        if merged.is_empty() {
+            merged.push_str(&dir.to_string_lossy());
+        } else {
+            merged.push(':');
+            merged.push_str(&dir.to_string_lossy());
+        }
+    }
+
+    if existing.is_empty() {
+        return Some(merged);
+    }
+
+    merged.push(':');
+    merged.push_str(&existing);
+    Some(merged)
+}
+
+#[cfg(target_os = "macos")]
+fn resolve_cc_linux_make_arg() -> Result<(String, HashMap<String, String>), String> {
+    if let Ok(cc_linux) = env::var("BOXLITE_LIBKRUN_CC_LINUX") {
+        let cc_linux = cc_linux.trim().to_string();
+        if cc_linux.is_empty() {
+            return Err("BOXLITE_LIBKRUN_CC_LINUX is set but empty".to_string());
+        }
+        return Ok((format!("CC_LINUX={}", cc_linux), HashMap::new()));
+    }
+
+    let clang = find_llvm_clang().ok_or_else(|| {
+        "libkrun cross-compilation on macOS requires LLVM clang + lld. Run `make setup` (or `brew install llvm lld`) and retry."
+            .to_string()
+    })?;
+
+    let mut path_dirs = Vec::new();
+    if let Some(dir) = clang.parent() {
+        path_dirs.push(dir.to_path_buf());
+    }
+    if let Some(lld_dir) = lld_bin_dir() {
+        path_dirs.push(lld_dir);
+    }
+
+    // Ensure ld.lld is available (either already in PATH or via brew lld).
+    if Command::new("ld.lld")
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_err()
+        && !path_dirs.iter().any(|d| d.join("ld.lld").exists())
+    {
+        return Err(
+            "Missing `ld.lld` (LLVM linker). Install it with `make setup` (or `brew install lld`)."
+                .to_string(),
+        );
+    }
+
+    println!(
+        "cargo:warning=Using LLVM clang for libkrun init cross-compile: {}",
+        clang.display()
+    );
+
+    let linux_target_triple = match env::var("CARGO_CFG_TARGET_ARCH")
+        .unwrap_or_else(|_| "$(ARCH)".to_string())
+        .as_str()
+    {
+        // libkrun's sysroot is extracted from Debian arm64 packages, which use the GNU triplet
+        // `aarch64-linux-gnu` for libgcc/crt objects. Using `arm64-linux-gnu` can prevent clang
+        // from finding those files inside the sysroot.
+        "arm64" | "aarch64" => "aarch64-linux-gnu".to_string(),
+        "x86_64" => "x86_64-linux-gnu".to_string(),
+        arch => format!("{arch}-linux-gnu"),
+    };
+
+    // vendor/libkrun hardcodes `/usr/bin/clang` for CC_LINUX on macOS; override it.
+    let cc_linux = format!(
+        "{} -target {} -fuse-ld=lld -Wl,-strip-debug --sysroot $(SYSROOT_LINUX) -Wno-c23-extensions",
+        clang.display(),
+        linux_target_triple
+    );
+
+    let mut env_overrides = HashMap::new();
+    if let Some(path) = prepend_path_dirs(&path_dirs) {
+        env_overrides.insert("PATH".to_string(), path);
+    }
+
+    Ok((format!("CC_LINUX={}", cc_linux), env_overrides))
+}
+
 /// Builds libkrun from vendored source with cross-compilation support.
 #[cfg(target_os = "macos")]
 fn build_libkrun_macos(src_dir: &Path, install_dir: &Path, libkrunfw_install: &Path) {
     // Setup LIBCLANG_PATH for bindgen if needed
     setup_libclang_path();
 
-    // Build with common helper using shared build environment
-    // Note: Cross-compilation support is now built into upstream libkrun
-    build_with_make(
+    let (cc_linux_make_arg, env_overrides) =
+        resolve_cc_linux_make_arg().unwrap_or_else(|e| panic!("{}", e));
+
+    let mut extra_env = libkrun_build_env(libkrunfw_install);
+    extra_env.extend(env_overrides);
+
+    build_with_make_args(
         src_dir,
         install_dir,
         "libkrun",
-        libkrun_build_env(libkrunfw_install),
+        extra_env,
+        &[cc_linux_make_arg],
     );
 }
 
