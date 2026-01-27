@@ -19,15 +19,12 @@ export const DESKTOP_READY_TIMEOUT = 60; // seconds
 export const DESKTOP_READY_RETRY_DELAY = 2; // seconds
 
 // BrowserBox defaults
-export const BROWSERBOX_IMAGE_CHROMIUM = 'browserless/chrome:latest';
-export const BROWSERBOX_IMAGE_FIREFOX = 'browserless/firefox:latest';
-export const BROWSERBOX_IMAGE_WEBKIT = 'browserless/webkit:latest';
-
-// Browser CDP ports
-export const BROWSERBOX_PORT_CHROMIUM = 9222;
-export const BROWSERBOX_PORT_FIREFOX = 9223;
-export const BROWSERBOX_PORT_WEBKIT = 9224;
+// Playwright Server port - single port for all browser types (chromium, firefox, webkit)
+export const BROWSERBOX_PORT = 3000;
 
 // Default resource limits
 export const DEFAULT_CPUS = 1;
 export const DEFAULT_MEMORY_MIB = 512;
+
+// Network constants (must match boxlite/src/net/constants.rs)
+export const GUEST_IP = '192.168.127.2';

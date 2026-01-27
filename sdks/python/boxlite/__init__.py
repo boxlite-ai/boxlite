@@ -85,6 +85,14 @@ try:
 except ImportError:
     pass
 
+# Multi-box orchestration (guest-initiated messaging)
+try:
+    from .orchestration import BoxRuntime, ManagedBox, BoxGroup  # noqa: F401
+
+    __all__.extend(["BoxRuntime", "ManagedBox", "BoxGroup"])
+except ImportError:
+    pass
+
 # Sync API (greenlet-based synchronous wrappers, re-exported via __all__)
 # Requires greenlet: pip install boxlite[sync]
 try:

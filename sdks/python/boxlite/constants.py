@@ -20,10 +20,11 @@ COMPUTERBOX_DISPLAY_HEIGHT = 768
 COMPUTERBOX_GUI_HTTP_PORT = 3000
 COMPUTERBOX_GUI_HTTPS_PORT = 3001
 
-# BrowserBox CDP ports
-BROWSERBOX_PORT_CHROMIUM = 9222
-BROWSERBOX_PORT_FIREFOX = 9223
-BROWSERBOX_PORT_WEBKIT = 9224
+# BrowserBox - Playwright Server port (single port for all browsers)
+BROWSERBOX_PORT = 3000
+
+# Network constants (must match boxlite/src/net/constants.rs)
+GUEST_IP = "192.168.127.2"
 
 # Timeouts (seconds)
 DESKTOP_READY_TIMEOUT = 60

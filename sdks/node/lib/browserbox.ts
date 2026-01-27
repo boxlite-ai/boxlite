@@ -15,6 +15,9 @@ import * as constants from "./constants.js";
  */
 export type BrowserType = "chromium" | "firefox" | "webkit";
 
+/** Default CDP port for Puppeteer connections */
+const CDP_PORT = 9222;
+
 /**
  * Options for creating a BrowserBox.
  */
@@ -31,8 +34,11 @@ export interface BrowserBoxOptions extends Omit<
   /** Number of CPU cores (default: 2) */
   cpus?: number;
 
-  /** Host port for WebSocket connection (default: 3000) */
+  /** Host port for Playwright Server WebSocket connection (default: 3000) */
   port?: number;
+
+  /** Host port for CDP/Puppeteer connection (default: 9222) */
+  cdpPort?: number;
 }
 
 /**
@@ -85,7 +91,10 @@ export class BrowserBox extends SimpleBox {
   private readonly _browser: BrowserType;
   private readonly _guestPort: number;
   private readonly _hostPort: number;
-  private _started: boolean = false;
+  private readonly _cdpGuestPort: number;
+  private readonly _cdpHostPort: number;
+  private _playwrightStarted: boolean = false;
+  private _cdpStarted: boolean = false;
 
   /**
    * Create a new BrowserBox.
@@ -107,17 +116,24 @@ export class BrowserBox extends SimpleBox {
       memoryMib = 2048,
       cpus = 2,
       port,
+      cdpPort,
       ports: userPorts = [],
       ...restOptions
     } = options;
 
-    // Guest port is fixed (internal implementation)
+    // Playwright Server ports
     const guestPort = BrowserBox.DEFAULT_PORT;
-    // Host port is user-configurable
     const hostPort = port ?? guestPort;
 
-    // Add port forwarding
-    const defaultPorts = [{ hostPort, guestPort }];
+    // CDP ports for Puppeteer
+    const cdpGuestPort = CDP_PORT;
+    const cdpHostPort = cdpPort ?? cdpGuestPort;
+
+    // Add port forwarding for both Playwright Server and CDP
+    const defaultPorts = [
+      { hostPort, guestPort },           // Playwright Server
+      { hostPort: cdpHostPort, guestPort: cdpGuestPort },  // CDP for Puppeteer
+    ];
 
     super({
       ...restOptions,
@@ -130,6 +146,8 @@ export class BrowserBox extends SimpleBox {
     this._browser = browser;
     this._guestPort = guestPort;
     this._hostPort = hostPort;
+    this._cdpGuestPort = cdpGuestPort;
+    this._cdpHostPort = cdpHostPort;
   }
 
   /**
@@ -140,45 +158,30 @@ export class BrowserBox extends SimpleBox {
    *
    * @param timeout - Maximum time to wait for server to start in seconds (default: 60)
    * @throws {TimeoutError} If server doesn't start within timeout
-   *
-   * @example
-   * ```typescript
-   * const box = new BrowserBox({ browser: 'firefox' });
-   * await box.start();
-   * console.log(`Connect to: ${await box.wsEndpoint()}`);
-   * ```
    */
   async start(timeout: number = 60): Promise<void> {
-    // Start Playwright Server (works for ALL browsers)
-    // The server binds to 0.0.0.0, eliminating the need for TCP proxy
-    // Note: Browser type is specified by the client when connecting, not the server
-    const cmd =
-      `npx -y playwright@${BrowserBox.PLAYWRIGHT_VERSION} run-server ` +
-      `--port ${this._guestPort} ` +
-      `--host 0.0.0.0 ` +
-      `> /tmp/playwright.log 2>&1 &`;
-
-    await this.exec("sh", "-c", `nohup ${cmd}`);
-    await this._waitForServer(timeout);
-    this._started = true;
+    await this._startPlaywrightServer(timeout);
   }
 
-  /**
-   * Wait for Playwright Server to be ready.
-   *
-   * Polls the server endpoint until it responds.
-   *
-   * @param timeout - Maximum wait time in seconds
-   * @throws {TimeoutError} If server doesn't become ready within timeout
-   */
-  private async _waitForServer(timeout: number): Promise<void> {
+  /** Start Playwright Server (works for ALL browsers). */
+  private async _startPlaywrightServer(timeout: number = 60): Promise<void> {
+    const startCmd =
+      `npx -y playwright@${BrowserBox.PLAYWRIGHT_VERSION} run-server ` +
+      `--port ${this._guestPort} --host 0.0.0.0 > /tmp/playwright.log 2>&1 &`;
+
+    await this.exec("sh", "-c", `nohup ${startCmd}`);
+    await this._waitForPlaywrightServer(timeout);
+    this._playwrightStarted = true;
+  }
+
+  /** Wait for Playwright Server to be ready. */
+  private async _waitForPlaywrightServer(timeout: number): Promise<void> {
     const startTime = Date.now();
     const pollInterval = 500;
 
     while (true) {
       const elapsed = (Date.now() - startTime) / 1000;
       if (elapsed > timeout) {
-        // Try to get log output for debugging
         let logContent = "";
         try {
           const logResult = await this.exec("sh", "-c", "cat /tmp/playwright.log 2>/dev/null || echo 'No log'");
@@ -186,33 +189,74 @@ export class BrowserBox extends SimpleBox {
         } catch {
           // Ignore errors reading log
         }
-
         throw new TimeoutError(
-          `Playwright Server (${this._browser}) did not start within ${timeout}s. ` +
-          `Log: ${logContent.slice(0, 500)}`
+          `Playwright Server (${this._browser}) did not start within ${timeout}s. Log: ${logContent.slice(0, 500)}`
         );
       }
 
-      // Check if server is responding on the external interface
       const checkCmd = `curl -sf http://${constants.GUEST_IP}:${this._guestPort}/json > /dev/null 2>&1 && echo ready || echo notready`;
       const result = await this.exec("sh", "-c", checkCmd);
-
-      if (result.stdout.trim() === "ready") {
-        return;
-      }
+      if (result.stdout.trim() === "ready") return;
 
       await new Promise((resolve) => setTimeout(resolve, pollInterval));
     }
   }
 
-  /**
-   * Ensure the server is started, starting it if needed.
-   *
-   * @param timeout - Timeout for start operation
-   */
-  private async _ensureStarted(timeout?: number): Promise<void> {
-    if (!this._started) {
-      await this.start(timeout);
+  /** Start browser with CDP remote debugging (for Puppeteer). Only works with chromium. */
+  private async _startCdpBrowser(timeout: number = 60): Promise<void> {
+    if (this._browser !== "chromium") {
+      throw new BoxliteError(
+        `CDP endpoint only works with chromium, not ${this._browser}. Use wsEndpoint() with Playwright for firefox/webkit.`
+      );
+    }
+
+    const startCmd =
+      `chromium --headless --no-sandbox --disable-gpu ` +
+      `--remote-debugging-address=0.0.0.0 --remote-debugging-port=${this._cdpGuestPort} ` +
+      `> /tmp/chromium-cdp.log 2>&1 &`;
+
+    await this.exec("sh", "-c", `nohup ${startCmd}`);
+    await this._waitForCdpServer(timeout);
+    this._cdpStarted = true;
+  }
+
+  /** Wait for CDP server to be ready. */
+  private async _waitForCdpServer(timeout: number): Promise<void> {
+    const startTime = Date.now();
+    const pollInterval = 500;
+
+    while (true) {
+      const elapsed = (Date.now() - startTime) / 1000;
+      if (elapsed > timeout) {
+        let logContent = "";
+        try {
+          const logResult = await this.exec("sh", "-c", "cat /tmp/chromium-cdp.log 2>/dev/null || echo 'No log'");
+          logContent = logResult.stdout.trim();
+        } catch {
+          // Ignore errors reading log
+        }
+        throw new TimeoutError(`CDP browser did not start within ${timeout}s. Log: ${logContent.slice(0, 500)}`);
+      }
+
+      const checkCmd = `curl -sf http://${constants.GUEST_IP}:${this._cdpGuestPort}/json/version > /dev/null 2>&1 && echo ready || echo notready`;
+      const result = await this.exec("sh", "-c", checkCmd);
+      if (result.stdout.trim() === "ready") return;
+
+      await new Promise((resolve) => setTimeout(resolve, pollInterval));
+    }
+  }
+
+  /** Ensure Playwright server is started. */
+  private async _ensurePlaywrightStarted(timeout?: number): Promise<void> {
+    if (!this._playwrightStarted) {
+      await this._startPlaywrightServer(timeout ?? 60);
+    }
+  }
+
+  /** Ensure CDP browser is started. */
+  private async _ensureCdpStarted(timeout?: number): Promise<void> {
+    if (!this._cdpStarted) {
+      await this._startCdpBrowser(timeout ?? 60);
     }
   }
 
@@ -233,8 +277,49 @@ export class BrowserBox extends SimpleBox {
    * ```
    */
   async wsEndpoint(timeout?: number): Promise<string> {
-    await this._ensureStarted(timeout);
+    await this._ensurePlaywrightStarted(timeout);
     return `ws://localhost:${this._hostPort}/`;
+  }
+
+  /**
+   * Get the CDP WebSocket endpoint for Puppeteer connect().
+   *
+   * Only works with chromium browser. For firefox/webkit, use wsEndpoint()
+   * with Playwright instead.
+   *
+   * @param timeout - Optional timeout to wait for browser to start
+   * @returns CDP WebSocket endpoint URL (e.g., 'ws://localhost:9222/devtools/browser/...')
+   * @throws {BoxliteError} If browser type is not chromium
+   *
+   * @example
+   * ```typescript
+   * const box = new BrowserBox({ browser: 'chromium' });
+   * const cdpEndpoint = await box.cdpEndpoint();
+   * const browser = await puppeteer.connect({ browserWSEndpoint: cdpEndpoint });
+   * ```
+   */
+  async cdpEndpoint(timeout?: number): Promise<string> {
+    await this._ensureCdpStarted(timeout);
+
+    // Fetch the WebSocket URL from CDP endpoint
+    const result = await this.exec(
+      "sh", "-c",
+      `curl -sf http://${constants.GUEST_IP}:${this._cdpGuestPort}/json/version`
+    );
+    const versionInfo = JSON.parse(result.stdout);
+    let wsUrl = versionInfo.webSocketDebuggerUrl || "";
+
+    // Replace guest IP/port with localhost and host port
+    wsUrl = wsUrl.replace(
+      `ws://${constants.GUEST_IP}:${this._cdpGuestPort}`,
+      `ws://localhost:${this._cdpHostPort}`
+    );
+    wsUrl = wsUrl.replace(
+      `ws://0.0.0.0:${this._cdpGuestPort}`,
+      `ws://localhost:${this._cdpHostPort}`
+    );
+
+    return wsUrl;
   }
 
   /**

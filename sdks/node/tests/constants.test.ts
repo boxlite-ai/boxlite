@@ -16,12 +16,8 @@ import {
   COMPUTERBOX_GUI_HTTPS_PORT,
   DESKTOP_READY_TIMEOUT,
   DESKTOP_READY_RETRY_DELAY,
-  BROWSERBOX_IMAGE_CHROMIUM,
-  BROWSERBOX_IMAGE_FIREFOX,
-  BROWSERBOX_IMAGE_WEBKIT,
-  BROWSERBOX_PORT_CHROMIUM,
-  BROWSERBOX_PORT_FIREFOX,
-  BROWSERBOX_PORT_WEBKIT,
+  BROWSERBOX_PORT,
+  GUEST_IP,
   DEFAULT_CPUS,
   DEFAULT_MEMORY_MIB,
 } from '../lib/constants.js';
@@ -75,31 +71,21 @@ describe('Desktop Readiness Constants', () => {
 });
 
 describe('BrowserBox Constants', () => {
-  test('browser images are valid container images', () => {
-    const imagePattern = /^[\w.-]+\/[\w.-]+:[\w.-]+$/;
-    expect(BROWSERBOX_IMAGE_CHROMIUM).toMatch(imagePattern);
-    expect(BROWSERBOX_IMAGE_FIREFOX).toMatch(imagePattern);
-    expect(BROWSERBOX_IMAGE_WEBKIT).toMatch(imagePattern);
+  test('BROWSERBOX_PORT is a valid port number', () => {
+    expect(BROWSERBOX_PORT).toBeGreaterThan(0);
+    expect(BROWSERBOX_PORT).toBeLessThanOrEqual(65535);
   });
 
-  test('browser ports are valid and distinct', () => {
-    const ports = [
-      BROWSERBOX_PORT_CHROMIUM,
-      BROWSERBOX_PORT_FIREFOX,
-      BROWSERBOX_PORT_WEBKIT,
-    ];
-
-    for (const port of ports) {
-      expect(port).toBeGreaterThan(0);
-      expect(port).toBeLessThanOrEqual(65535);
-    }
-
-    const uniquePorts = new Set(ports);
-    expect(uniquePorts.size).toBe(ports.length);
+  test('BROWSERBOX_PORT is the Playwright Server default port', () => {
+    expect(BROWSERBOX_PORT).toBe(3000);
   });
 
-  test('chromium port is the standard CDP port', () => {
-    expect(BROWSERBOX_PORT_CHROMIUM).toBe(9222);
+  test('GUEST_IP is a valid IP address', () => {
+    expect(GUEST_IP).toMatch(/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/);
+  });
+
+  test('GUEST_IP matches expected value', () => {
+    expect(GUEST_IP).toBe('192.168.127.2');
   });
 });
 

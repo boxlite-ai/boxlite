@@ -120,15 +120,18 @@ impl From<JsVolumeSpec> for VolumeSpec {
 #[derive(Clone, Debug)]
 pub struct JsPortSpec {
     /// Port on host (None = auto-assign)
+    #[napi(js_name = "hostPort")]
     pub host_port: Option<u16>,
 
     /// Port inside container
+    #[napi(js_name = "guestPort")]
     pub guest_port: u16,
 
     /// Protocol ("tcp" or "udp", default: "tcp")
     pub protocol: Option<String>,
 
     /// Bind IP address (default: 0.0.0.0)
+    #[napi(js_name = "hostIp")]
     pub host_ip: Option<String>,
 }
 

@@ -5,12 +5,15 @@
   "description": "Example scripts for BoxLite Node.js SDK",
   "type": "module",
   "dependencies": {
-    "@boxlite-ai/boxlite": "file:../../sdks/node"
+    "@boxlite-ai/boxlite": "file:../../sdks/node",
+    "playwright-core": "1.58.0",
+    "puppeteer-core": "^24.36.0"
   },
   "scripts": {
     "simplebox": "node simplebox.js",
     "codebox": "node codebox.js",
     "browserbox": "node browserbox.js",
+    "browserbox-puppeteer": "node browserbox_puppeteer.js",
     "computerbox": "node computerbox.js",
     "interactivebox": "node interactivebox.js",
     "claude": "node claude_in_boxlite.js"

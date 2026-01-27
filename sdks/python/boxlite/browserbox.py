@@ -20,6 +20,10 @@ if TYPE_CHECKING:
 __all__ = ["BrowserBox", "BrowserBoxOptions"]
 
 
+# Default CDP port for Puppeteer connections
+_CDP_PORT = 9222
+
+
 @dataclass
 class BrowserBoxOptions:
     """
@@ -39,7 +43,8 @@ class BrowserBoxOptions:
     browser: str = "chromium"  # chromium, firefox, or webkit
     memory: int = 2048  # Memory in MiB
     cpu: int = 2  # Number of CPU cores
-    port: Optional[int] = None  # Host port for WebSocket (default: 3000)
+    port: Optional[int] = None  # Host port for Playwright Server (default: 3000)
+    cdp_port: Optional[int] = None  # Host port for CDP/Puppeteer (default: 9222)
 
 
 class BrowserBox(SimpleBox):
@@ -96,12 +101,21 @@ class BrowserBox(SimpleBox):
         self._guest_port = self._DEFAULT_PORT
         # Host port: what host connects to (user-configurable)
         self._host_port = opts.port or self._guest_port
-        # Track if server has been started
-        self._started = False
+
+        # CDP port for Puppeteer (only works with chromium)
+        self._cdp_guest_port = _CDP_PORT
+        self._cdp_host_port = opts.cdp_port or self._cdp_guest_port
+
+        # Track server states
+        self._playwright_started = False
+        self._cdp_started = False
 
         # Extract user ports and add port forwarding
         user_ports = kwargs.pop("ports", [])
-        default_ports = [(self._host_port, self._guest_port)]
+        default_ports = [
+            (self._host_port, self._guest_port),  # Playwright Server
+            (self._cdp_host_port, self._cdp_guest_port),  # CDP for Puppeteer
+        ]
 
         # Initialize base box with port forwarding
         super().__init__(
@@ -119,7 +133,7 @@ class BrowserBox(SimpleBox):
         # Don't auto-start browser here - let ws_endpoint() handle it
         return self
 
-    async def _start_browser(self, timeout: int = 60):
+    async def _start_playwright_server(self, timeout: int = 60):
         """
         Start Playwright Server (works for all browser types).
 
@@ -138,10 +152,10 @@ class BrowserBox(SimpleBox):
             f"> /tmp/playwright.log 2>&1 &"
         )
         await self.run("sh", "-c", f"nohup {cmd}")
-        await self._wait_for_server(timeout)
-        self._started = True
+        await self._wait_for_playwright_server(timeout)
+        self._playwright_started = True
 
-    async def _wait_for_server(self, timeout: int):
+    async def _wait_for_playwright_server(self, timeout: int):
         """
         Poll until Playwright Server is ready.
 
@@ -180,6 +194,75 @@ class BrowserBox(SimpleBox):
             f"Log: {log_content[:500]}"
         )
 
+    async def _start_cdp_browser(self, timeout: int = 60):
+        """
+        Start browser with CDP remote debugging (for Puppeteer).
+
+        Only works with chromium. Firefox and WebKit don't support CDP.
+
+        Args:
+            timeout: Maximum time to wait for browser to start in seconds
+
+        Raises:
+            ValueError: If browser type is not chromium
+            TimeoutError: If browser doesn't start within timeout
+        """
+        if self._browser != "chromium":
+            raise ValueError(
+                f"CDP endpoint only works with chromium, not {self._browser}. "
+                "Use ws_endpoint() with Playwright for firefox/webkit."
+            )
+
+        # Start chromium with remote debugging enabled
+        cmd = (
+            f"chromium --headless --no-sandbox --disable-gpu "
+            f"--remote-debugging-address=0.0.0.0 "
+            f"--remote-debugging-port={self._cdp_guest_port} "
+            f"> /tmp/chromium-cdp.log 2>&1 &"
+        )
+        await self.run("sh", "-c", f"nohup {cmd}")
+        await self._wait_for_cdp_server(timeout)
+        self._cdp_started = True
+
+    async def _wait_for_cdp_server(self, timeout: int):
+        """
+        Poll until CDP server is ready and get the WebSocket URL.
+
+        Args:
+            timeout: Maximum wait time in seconds
+
+        Raises:
+            TimeoutError: If server doesn't become ready within timeout
+        """
+        start = time.time()
+        poll_interval = 0.5
+
+        while time.time() - start < timeout:
+            # Check if CDP server is responding
+            check = (
+                f"curl -sf http://{const.GUEST_IP}:{self._cdp_guest_port}/json/version "
+                f"> /dev/null 2>&1 && echo ready || echo notready"
+            )
+            result = await self.run("sh", "-c", check)
+            if result.stdout.strip() == "ready":
+                return
+            await asyncio.sleep(poll_interval)
+
+        # Try to get log output for debugging
+        log_content = ""
+        try:
+            log_result = await self.run(
+                "sh", "-c", "cat /tmp/chromium-cdp.log 2>/dev/null || echo 'No log'"
+            )
+            log_content = log_result.stdout.strip()
+        except Exception:
+            pass
+
+        raise TimeoutError(
+            f"CDP browser did not start within {timeout}s. "
+            f"Log: {log_content[:500]}"
+        )
+
     async def ws_endpoint(self, timeout: int = 60) -> str:
         """
         Get the WebSocket endpoint for Playwright connect().
@@ -200,9 +283,57 @@ class BrowserBox(SimpleBox):
             ...     # Use with Playwright:
             ...     # browser = await chromium.connect(ws)
         """
-        if not self._started:
-            await self._start_browser(timeout)
+        if not self._playwright_started:
+            await self._start_playwright_server(timeout)
         return f"ws://localhost:{self._host_port}/"
+
+    async def cdp_endpoint(self, timeout: int = 60) -> str:
+        """
+        Get the CDP WebSocket endpoint for Puppeteer connect().
+
+        Only works with chromium browser. For firefox/webkit, use ws_endpoint()
+        with Playwright instead.
+
+        Args:
+            timeout: Maximum time to wait for browser to start (if needed)
+
+        Returns:
+            CDP WebSocket endpoint URL (e.g., 'ws://localhost:9222/devtools/browser/...')
+
+        Raises:
+            ValueError: If browser type is not chromium
+
+        Example:
+            >>> async with BrowserBox() as browser:
+            ...     cdp = await browser.cdp_endpoint()
+            ...     # Use with Puppeteer:
+            ...     # browser = await puppeteer.connect(browserWSEndpoint=cdp)
+        """
+        if not self._cdp_started:
+            await self._start_cdp_browser(timeout)
+
+        # Fetch the WebSocket URL from CDP endpoint
+        import json
+
+        result = await self.run(
+            "sh", "-c",
+            f"curl -sf http://{const.GUEST_IP}:{self._cdp_guest_port}/json/version"
+        )
+        version_info = json.loads(result.stdout)
+        ws_url = version_info.get("webSocketDebuggerUrl", "")
+
+        # Replace guest IP with localhost and guest port with host port
+        ws_url = ws_url.replace(
+            f"ws://{const.GUEST_IP}:{self._cdp_guest_port}",
+            f"ws://localhost:{self._cdp_host_port}"
+        )
+        # Also handle 0.0.0.0 binding
+        ws_url = ws_url.replace(
+            f"ws://0.0.0.0:{self._cdp_guest_port}",
+            f"ws://localhost:{self._cdp_host_port}"
+        )
+
+        return ws_url
 
     async def connect(self, timeout: int = 60) -> Any:
         """
