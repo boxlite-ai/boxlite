@@ -29,7 +29,7 @@ async def example_basic_navigation():
     print("\n=== Example 1: Basic Navigation ===")
 
     async with boxlite.BrowserBox() as browser:
-        ws_endpoint = await browser.cdp_endpoint()
+        ws_endpoint = await browser.endpoint()
         print(f"✓ BrowserBox ready: {ws_endpoint}")
 
         if not HAS_PYPPETEER:
@@ -60,7 +60,7 @@ async def example_screenshot():
     print("\n=== Example 2: Screenshots ===")
 
     async with boxlite.BrowserBox() as browser:
-        ws_endpoint = await browser.cdp_endpoint()
+        ws_endpoint = await browser.endpoint()
 
         if not HAS_PYPPETEER:
             print("  (skipping - pyppeteer not installed)")
@@ -89,7 +89,7 @@ async def example_form_interaction():
     print("\n=== Example 3: Form Interaction ===")
 
     async with boxlite.BrowserBox() as browser:
-        ws_endpoint = await browser.cdp_endpoint()
+        ws_endpoint = await browser.endpoint()
 
         if not HAS_PYPPETEER:
             print("  (skipping - pyppeteer not installed)")
@@ -129,7 +129,7 @@ async def example_web_scraping():
     print("\n=== Example 4: Web Scraping ===")
 
     async with boxlite.BrowserBox() as browser:
-        ws_endpoint = await browser.cdp_endpoint()
+        ws_endpoint = await browser.endpoint()
 
         if not HAS_PYPPETEER:
             print("  (skipping - pyppeteer not installed)")
@@ -173,7 +173,7 @@ async def main():
     print("✓ All examples completed!")
     print("\nKey APIs:")
     print("  • BrowserBox() - Create isolated browser sandbox")
-    print("  • await cdp_endpoint() - Get CDP WebSocket URL for Puppeteer")
+    print("  • await endpoint() - Get WebSocket URL for Puppeteer")
     print("  • pyppeteer.connect(browserWSEndpoint=url) - Connect & automate")
 
 

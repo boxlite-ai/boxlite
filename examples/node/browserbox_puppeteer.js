@@ -18,6 +18,7 @@ async function main() {
   console.log('=== BrowserBox + Puppeteer Example ===\n');
 
   await exampleBasicNavigation();
+  await exampleFirefoxNavigation();
   await exampleScreenshot();
   await exampleFormInteraction();
   await exampleWebScraping();
@@ -25,7 +26,7 @@ async function main() {
   console.log('\n=== All examples completed! ===');
   console.log('\nKey APIs:');
   console.log('  • new BrowserBox() - Create isolated browser sandbox');
-  console.log('  • await box.cdpEndpoint() - Get CDP WebSocket URL for Puppeteer');
+  console.log('  • await box.endpoint() - Get WebSocket URL for Puppeteer (chromium/firefox)');
   console.log('  • puppeteer.connect({ browserWSEndpoint }) - Connect & automate');
 }
 
@@ -37,7 +38,7 @@ async function exampleBasicNavigation() {
 
   const box = new BrowserBox({ browser: 'chromium' });
   try {
-    const wsEndpoint = await box.cdpEndpoint();
+    const wsEndpoint = await box.endpoint();
     console.log(`BrowserBox ready: ${wsEndpoint}`);
 
     // Connect with Puppeteer
@@ -66,14 +67,54 @@ async function exampleBasicNavigation() {
 }
 
 /**
- * Example 2: Take screenshots
+ * Example 2: Firefox with WebDriver BiDi
+ *
+ * Note: Firefox headless has a limitation where browsingContext.create with
+ * type='tab' hangs. Instead, use the existing page that Firefox opens on startup.
+ */
+async function exampleFirefoxNavigation() {
+  console.log('\n--- Example 2: Firefox (WebDriver BiDi) ---\n');
+
+  const box = new BrowserBox({ browser: 'firefox' });
+  try {
+    const wsEndpoint = await box.endpoint();
+    console.log(`Firefox BrowserBox ready: ${wsEndpoint}`);
+
+    // Connect with Puppeteer using WebDriver BiDi protocol
+    const browser = await puppeteer.connect({
+      browserWSEndpoint: wsEndpoint,
+      protocol: 'webDriverBiDi',
+      protocolTimeout: 60000
+    });
+
+    // Firefox headless: use existing page instead of newPage()
+    // (newPage() triggers browsingContext.create with type='tab' which hangs)
+    const pages = await browser.pages();
+    const page = pages[0];
+
+    // Navigate to example.com
+    console.log('Navigating to example.com with Firefox...');
+    await page.goto('https://example.com');
+
+    // Extract page title
+    const title = await page.title();
+    console.log(`✓ Page title: ${title}`);
+
+    await browser.close();
+  } finally {
+    await box.stop();
+  }
+}
+
+/**
+ * Example 3: Take screenshots (Chromium)
  */
 async function exampleScreenshot() {
-  console.log('\n--- Example 2: Screenshots ---\n');
+  console.log('\n--- Example 3: Screenshots ---\n');
 
   const box = new BrowserBox({ browser: 'chromium' });
   try {
-    const wsEndpoint = await box.cdpEndpoint();
+    const wsEndpoint = await box.endpoint();
 
     const browser = await puppeteer.connect({ browserWSEndpoint: wsEndpoint });
     const page = await browser.newPage();
@@ -97,21 +138,37 @@ async function exampleScreenshot() {
 }
 
 /**
- * Example 3: Interact with forms
+ * Helper: Navigate with retry for transient network errors
+ */
+async function gotoWithRetry(page, url, options = {}, retries = 3) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000, ...options });
+      return;
+    } catch (err) {
+      if (i === retries - 1) throw err;
+      console.log(`  Retry ${i + 1}/${retries} after error: ${err.message.split('\n')[0]}`);
+      await new Promise(r => setTimeout(r, 1000));
+    }
+  }
+}
+
+/**
+ * Example 4: Interact with forms
  */
 async function exampleFormInteraction() {
-  console.log('\n--- Example 3: Form Interaction ---\n');
+  console.log('\n--- Example 4: Form Interaction ---\n');
 
   const box = new BrowserBox({ browser: 'chromium' });
   try {
-    const wsEndpoint = await box.cdpEndpoint();
+    const wsEndpoint = await box.endpoint();
 
     const browser = await puppeteer.connect({ browserWSEndpoint: wsEndpoint });
     const page = await browser.newPage();
 
     // Use a demo form site
     console.log('Navigating to httpbin.org/forms/post...');
-    await page.goto('https://httpbin.org/forms/post');
+    await gotoWithRetry(page, 'https://httpbin.org/forms/post');
 
     // Fill form fields
     await page.type('input[name="custname"]', 'John Doe');
@@ -139,21 +196,21 @@ async function exampleFormInteraction() {
 }
 
 /**
- * Example 4: Extract structured data from a page
+ * Example 5: Extract structured data from a page
  */
 async function exampleWebScraping() {
-  console.log('\n--- Example 4: Web Scraping ---\n');
+  console.log('\n--- Example 5: Web Scraping ---\n');
 
   const box = new BrowserBox({ browser: 'chromium' });
   try {
-    const wsEndpoint = await box.cdpEndpoint();
+    const wsEndpoint = await box.endpoint();
 
     const browser = await puppeteer.connect({ browserWSEndpoint: wsEndpoint });
     const page = await browser.newPage();
 
     // Scrape Hacker News titles
     console.log('Scraping Hacker News front page...');
-    await page.goto('https://news.ycombinator.com');
+    await gotoWithRetry(page, 'https://news.ycombinator.com');
 
     // Extract story titles (first 5) using page.evaluate
     const titles = await page.evaluate(() => {

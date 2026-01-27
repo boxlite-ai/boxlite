@@ -55,8 +55,8 @@ export interface BrowserBoxOptions extends Omit<
  *
  * const box = new BrowserBox({ browser: 'chromium' });
  * try {
- *   const wsEndpoint = await box.wsEndpoint();
- *   const browser = await chromium.connect(wsEndpoint);
+ *   const ws = await box.playwrightEndpoint();
+ *   const browser = await chromium.connect(ws);
  *
  *   const page = await browser.newPage();
  *   await page.goto('https://example.com');
@@ -73,8 +73,8 @@ export interface BrowserBoxOptions extends Omit<
  * ```typescript
  * // WebKit works!
  * const box = new BrowserBox({ browser: 'webkit' });
- * const wsEndpoint = await box.wsEndpoint();
- * const browser = await webkit.connect(wsEndpoint);
+ * const ws = await box.playwrightEndpoint();
+ * const browser = await webkit.connect(ws);
  * ```
  */
 export class BrowserBox extends SimpleBox {
@@ -92,7 +92,6 @@ export class BrowserBox extends SimpleBox {
   private readonly _guestPort: number;
   private readonly _hostPort: number;
   private readonly _cdpGuestPort: number;
-  private readonly _cdpHostPort: number;
   private _playwrightStarted: boolean = false;
   private _cdpStarted: boolean = false;
 
@@ -147,7 +146,6 @@ export class BrowserBox extends SimpleBox {
     this._guestPort = guestPort;
     this._hostPort = hostPort;
     this._cdpGuestPort = cdpGuestPort;
-    this._cdpHostPort = cdpHostPort;
   }
 
   /**
@@ -202,22 +200,163 @@ export class BrowserBox extends SimpleBox {
     }
   }
 
-  /** Start browser with CDP remote debugging (for Puppeteer). Only works with chromium. */
+  /** Start browser with remote debugging for Puppeteer (CDP for Chromium, WebDriver BiDi for Firefox). */
   private async _startCdpBrowser(timeout: number = 60): Promise<void> {
-    if (this._browser !== "chromium") {
+    if (this._browser === "webkit") {
       throw new BoxliteError(
-        `CDP endpoint only works with chromium, not ${this._browser}. Use wsEndpoint() with Playwright for firefox/webkit.`
+        "Puppeteer does not support WebKit. Use playwrightEndpoint() with Playwright for webkit."
+      );
+    }
+
+    // endpoint() and Playwright cannot be used simultaneously (they share port 3000 for forwarding)
+    if (this._playwrightStarted) {
+      throw new BoxliteError(
+        "Cannot use endpoint() when Playwright Server is already running. " +
+        "Create a separate BrowserBox instance for Puppeteer usage."
+      );
+    }
+
+    if (this._browser === "chromium") {
+      await this._startChromiumCdp(timeout);
+    } else if (this._browser === "firefox") {
+      await this._startFirefoxBiDi(timeout);
+    }
+
+    // Start Python TCP forwarder to route traffic through port 3000 (which has working port forwarding)
+    await this._startCdpForwarder();
+
+    this._cdpStarted = true;
+  }
+
+  /** Start Chromium with CDP remote debugging. */
+  private async _startChromiumCdp(timeout: number): Promise<void> {
+    // Find chromium binary in Playwright's installation directory
+    const findChrome = `CHROME=$(find /ms-playwright -name chrome -type f 2>/dev/null | grep chrome-linux | head -1) && echo $CHROME`;
+    const findResult = await this.exec("sh", "-c", findChrome);
+    const chromePath = findResult.stdout.trim();
+
+    if (!chromePath) {
+      throw new BoxliteError(
+        "Could not find chromium binary in Playwright image. Make sure you're using the Playwright Docker image."
       );
     }
 
     const startCmd =
-      `chromium --headless --no-sandbox --disable-gpu ` +
+      `${chromePath} --headless --no-sandbox --disable-gpu --disable-dev-shm-usage ` +
+      `--disable-software-rasterizer --no-first-run --disable-extensions ` +
+      `--user-data-dir=/tmp/chromium-data ` +
       `--remote-debugging-address=0.0.0.0 --remote-debugging-port=${this._cdpGuestPort} ` +
+      `--remote-allow-origins=* ` +
       `> /tmp/chromium-cdp.log 2>&1 &`;
 
     await this.exec("sh", "-c", `nohup ${startCmd}`);
     await this._waitForCdpServer(timeout);
-    this._cdpStarted = true;
+  }
+
+  /** Start Firefox with WebDriver BiDi remote debugging. */
+  private async _startFirefoxBiDi(timeout: number): Promise<void> {
+    // Find firefox binary in Playwright's installation directory
+    const findFirefox = `FF=$(find /ms-playwright -name firefox -type f 2>/dev/null | head -1) && echo $FF`;
+    const findResult = await this.exec("sh", "-c", findFirefox);
+    const firefoxPath = findResult.stdout.trim();
+
+    if (!firefoxPath) {
+      throw new BoxliteError(
+        "Could not find firefox binary in Playwright image. Make sure you're using the Playwright Docker image."
+      );
+    }
+
+    // Firefox uses --remote-debugging-port for WebDriver BiDi
+    const startCmd =
+      `${firefoxPath} --headless --no-remote ` +
+      `--profile /tmp/firefox-profile ` +
+      `--remote-debugging-port ${this._cdpGuestPort} ` +
+      `> /tmp/firefox-bidi.log 2>&1 &`;
+
+    // Create profile directory
+    await this.exec("sh", "-c", "mkdir -p /tmp/firefox-profile");
+    await this.exec("sh", "-c", `nohup ${startCmd}`);
+    await this._waitForBiDiServer(timeout);
+  }
+
+  /** Wait for Firefox WebDriver BiDi server to be ready. */
+  private async _waitForBiDiServer(timeout: number): Promise<void> {
+    const startTime = Date.now();
+    const pollInterval = 500;
+
+    while (true) {
+      const elapsed = (Date.now() - startTime) / 1000;
+      if (elapsed > timeout) {
+        let logContent = "";
+        try {
+          const logResult = await this.exec("sh", "-c", "cat /tmp/firefox-bidi.log 2>/dev/null || echo 'No log'");
+          logContent = logResult.stdout.trim();
+        } catch {
+          // Ignore errors
+        }
+        throw new TimeoutError(
+          `Firefox WebDriver BiDi did not start within ${timeout}s.\nLog: ${logContent.slice(0, 500)}`
+        );
+      }
+
+      // Check log for "WebDriver BiDi listening" message
+      const checkCmd = `grep -q "WebDriver BiDi listening" /tmp/firefox-bidi.log 2>/dev/null && echo ready || echo notready`;
+      const result = await this.exec("sh", "-c", checkCmd);
+      if (result.stdout.trim() === "ready") return;
+
+      await new Promise((resolve) => setTimeout(resolve, pollInterval));
+    }
+  }
+
+  /** Start Python TCP forwarder to route traffic through the working port 3000. */
+  private async _startCdpForwarder(): Promise<void> {
+    // Python script that forwards TCP connections and rewrites Host header for Firefox
+    const cdpPort = this._cdpGuestPort;
+    const fwdPort = this._guestPort;
+    const script = [
+      "import socket, threading, re",
+      "def fwd(s,d,rewrite=False):",
+      "    try:",
+      "        first=True",
+      "        while True:",
+      "            x=s.recv(65536)",
+      "            if not x: break",
+      "            if first and rewrite:",
+      `                x=re.sub(rb'Host: [^\\r\\n]+',b'Host: 127.0.0.1:${cdpPort}',x)`,
+      "                first=False",
+      "            d.sendall(x)",
+      "    except: pass",
+      "    s.close(); d.close()",
+      "def handle(c):",
+      "    try:",
+      "        srv=socket.socket()",
+      `        srv.connect(('127.0.0.1',${cdpPort}))`,
+      "        threading.Thread(target=fwd,args=(c,srv,True)).start()",
+      "        threading.Thread(target=fwd,args=(srv,c,False)).start()",
+      "    except: c.close()",
+      "l=socket.socket()",
+      "l.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)",
+      `l.bind(('0.0.0.0',${fwdPort}))`,
+      "l.listen(10)",
+      "while True:",
+      "    c,_=l.accept()",
+      "    threading.Thread(target=handle,args=(c,)).start()",
+    ].join("\n");
+
+    await this.exec("sh", "-c", `printf '%s' '${script.replace(/'/g, "'\\''")}' > /tmp/cdp_fwd.py`);
+    await this.exec("sh", "-c", "nohup python3 /tmp/cdp_fwd.py >/dev/null 2>&1 &");
+
+    // Wait for forwarder to be ready by testing connection
+    const startTime = Date.now();
+    while (Date.now() - startTime < 10000) {
+      // Test forwarder by attempting a TCP connection using Python
+      const checkCmd = `python3 -c "import socket; s=socket.socket(); s.settimeout(1); s.connect(('127.0.0.1',${this._guestPort})); s.close(); print('ready')" 2>/dev/null || echo notready`;
+      const check = await this.exec("sh", "-c", checkCmd);
+      if (check.stdout.trim() === "ready") {
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
   }
 
   /** Wait for CDP server to be ready. */
@@ -229,16 +368,28 @@ export class BrowserBox extends SimpleBox {
       const elapsed = (Date.now() - startTime) / 1000;
       if (elapsed > timeout) {
         let logContent = "";
+        let processInfo = "";
+        let portInfo = "";
         try {
           const logResult = await this.exec("sh", "-c", "cat /tmp/chromium-cdp.log 2>/dev/null || echo 'No log'");
           logContent = logResult.stdout.trim();
+          const psResult = await this.exec("sh", "-c", "ps aux | grep -i chrom | head -5");
+          processInfo = psResult.stdout.trim();
+          const netResult = await this.exec("sh", "-c", `netstat -tlnp 2>/dev/null | grep ${this._cdpGuestPort} || ss -tlnp 2>/dev/null | grep ${this._cdpGuestPort} || echo 'Port not bound'`);
+          portInfo = netResult.stdout.trim();
         } catch {
-          // Ignore errors reading log
+          // Ignore errors
         }
-        throw new TimeoutError(`CDP browser did not start within ${timeout}s. Log: ${logContent.slice(0, 500)}`);
+        throw new TimeoutError(
+          `CDP browser did not start within ${timeout}s.\n` +
+          `Log: ${logContent.slice(0, 500)}\n` +
+          `Processes: ${processInfo}\n` +
+          `Port ${this._cdpGuestPort}: ${portInfo}`
+        );
       }
 
-      const checkCmd = `curl -sf http://${constants.GUEST_IP}:${this._cdpGuestPort}/json/version > /dev/null 2>&1 && echo ready || echo notready`;
+      // Try both localhost and GUEST_IP since chromium binds to 0.0.0.0
+      const checkCmd = `(curl -sf http://localhost:${this._cdpGuestPort}/json/version > /dev/null 2>&1 || curl -sf http://${constants.GUEST_IP}:${this._cdpGuestPort}/json/version > /dev/null 2>&1) && echo ready || echo notready`;
       const result = await this.exec("sh", "-c", checkCmd);
       if (result.stdout.trim() === "ready") return;
 
@@ -263,7 +414,7 @@ export class BrowserBox extends SimpleBox {
   /**
    * Get the WebSocket endpoint for Playwright connect().
    *
-   * This is the primary method to get the connection URL.
+   * This is the primary method for Playwright connections.
    * The returned URL can be used with Playwright's `connect()` method.
    *
    * @param timeout - Optional timeout to wait for server to start (starts automatically if not started)
@@ -272,54 +423,102 @@ export class BrowserBox extends SimpleBox {
    * @example
    * ```typescript
    * const box = new BrowserBox({ browser: 'chromium' });
-   * const wsEndpoint = await box.wsEndpoint();
-   * const browser = await chromium.connect(wsEndpoint);
+   * const ws = await box.playwrightEndpoint();
+   * const browser = await chromium.connect(ws);
    * ```
    */
-  async wsEndpoint(timeout?: number): Promise<string> {
+  async playwrightEndpoint(timeout?: number): Promise<string> {
     await this._ensurePlaywrightStarted(timeout);
     return `ws://localhost:${this._hostPort}/`;
   }
 
   /**
-   * Get the CDP WebSocket endpoint for Puppeteer connect().
+   * @deprecated Use playwrightEndpoint() instead.
+   */
+  async wsEndpoint(timeout?: number): Promise<string> {
+    return this.playwrightEndpoint(timeout);
+  }
+
+  /**
+   * Get the WebSocket endpoint for CDP/BiDi connections.
    *
-   * Only works with chromium browser. For firefox/webkit, use wsEndpoint()
-   * with Playwright instead.
+   * This is the generic endpoint that works with Puppeteer, Selenium, or any
+   * other CDP/BiDi client. Works with chromium (CDP) and firefox (WebDriver BiDi).
+   * WebKit is not supported - use playwrightEndpoint() with Playwright instead.
    *
    * @param timeout - Optional timeout to wait for browser to start
-   * @returns CDP WebSocket endpoint URL (e.g., 'ws://localhost:9222/devtools/browser/...')
-   * @throws {BoxliteError} If browser type is not chromium
+   * @returns WebSocket endpoint URL
+   * @throws {BoxliteError} If browser type is webkit
    *
    * @example
    * ```typescript
+   * // Chromium (CDP)
    * const box = new BrowserBox({ browser: 'chromium' });
-   * const cdpEndpoint = await box.cdpEndpoint();
-   * const browser = await puppeteer.connect({ browserWSEndpoint: cdpEndpoint });
+   * const wsEndpoint = await box.endpoint();
+   * const browser = await puppeteer.connect({ browserWSEndpoint: wsEndpoint });
+   *
+   * // Firefox (WebDriver BiDi)
+   * const box = new BrowserBox({ browser: 'firefox' });
+   * const wsEndpoint = await box.endpoint();
+   * const browser = await puppeteer.connect({
+   *   browserWSEndpoint: wsEndpoint,
+   *   protocol: 'webDriverBiDi'
+   * });
+   * // Note: Firefox headless has a limitation where newPage() hangs.
+   * // Use browser.pages()[0] instead of browser.newPage().
+   * const page = (await browser.pages())[0];
    * ```
    */
-  async cdpEndpoint(timeout?: number): Promise<string> {
+  async endpoint(timeout?: number): Promise<string> {
     await this._ensureCdpStarted(timeout);
 
-    // Fetch the WebSocket URL from CDP endpoint
+    if (this._browser === "firefox") {
+      // Firefox WebDriver BiDi requires /session path for WebSocket upgrade
+      // See: https://github.com/puppeteer/puppeteer/issues/13057
+      return `ws://localhost:${this._hostPort}/session`;
+    }
+
+    // Chromium: Fetch the WebSocket URL from CDP endpoint
     const result = await this.exec(
       "sh", "-c",
-      `curl -sf http://${constants.GUEST_IP}:${this._cdpGuestPort}/json/version`
+      `curl -sf http://localhost:${this._cdpGuestPort}/json/version`
     );
+
+    if (!result.stdout.trim()) {
+      throw new BoxliteError("CDP endpoint returned empty response");
+    }
+
     const versionInfo = JSON.parse(result.stdout);
     let wsUrl = versionInfo.webSocketDebuggerUrl || "";
 
-    // Replace guest IP/port with localhost and host port
-    wsUrl = wsUrl.replace(
-      `ws://${constants.GUEST_IP}:${this._cdpGuestPort}`,
-      `ws://localhost:${this._cdpHostPort}`
-    );
-    wsUrl = wsUrl.replace(
-      `ws://0.0.0.0:${this._cdpGuestPort}`,
-      `ws://localhost:${this._cdpHostPort}`
-    );
+    if (!wsUrl) {
+      throw new BoxliteError("CDP endpoint did not return webSocketDebuggerUrl");
+    }
+
+    // Replace the internal address with localhost:hostPort
+    // Traffic is routed through port 3000 via the Python forwarder
+    wsUrl = wsUrl.replace(/ws:\/\/[^:]+:\d+/, `ws://localhost:${this._hostPort}`);
 
     return wsUrl;
+  }
+
+  /**
+   * @deprecated Use endpoint() instead.
+   */
+  async puppeteerEndpoint(timeout?: number): Promise<string> {
+    return this.endpoint(timeout);
+  }
+
+  /**
+   * @deprecated Use endpoint() instead. This method only works with chromium.
+   */
+  async cdpEndpoint(timeout?: number): Promise<string> {
+    if (this._browser !== "chromium") {
+      throw new BoxliteError(
+        `cdpEndpoint() only works with chromium. For ${this._browser}, use endpoint() instead.`
+      );
+    }
+    return this.endpoint(timeout);
   }
 
   /**
@@ -340,7 +539,7 @@ export class BrowserBox extends SimpleBox {
    * ```
    */
   async connect(options?: { timeout?: number }): Promise<unknown> {
-    const ws = await this.wsEndpoint(options?.timeout);
+    const ws = await this.playwrightEndpoint(options?.timeout);
 
     // Dynamic import to avoid requiring playwright-core as a dependency
     const playwright = await import("playwright-core");
