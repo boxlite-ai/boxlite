@@ -1,12 +1,15 @@
 """
-BrowserBox - Secure browser with remote debugging.
+BrowserBox - Secure browser with Playwright Server.
 
 Provides a minimal, elegant API for running isolated browsers that can be
-controlled from outside using standard tools like Puppeteer or Playwright.
+controlled from outside using Playwright. Supports all browser types:
+chromium, firefox, and webkit.
 """
 
+import asyncio
+import time
 from dataclasses import dataclass
-from typing import Optional, TYPE_CHECKING
+from typing import Optional, TYPE_CHECKING, Any
 
 from . import constants as const
 from .simplebox import SimpleBox
@@ -29,43 +32,48 @@ class BrowserBoxOptions:
         ...     cpu=2
         ... )
         >>> async with BrowserBox(opts) as browser:
-        ...     print(browser.endpoint())
+        ...     endpoint = await browser.ws_endpoint()
+        ...     print(endpoint)
     """
 
     browser: str = "chromium"  # chromium, firefox, or webkit
     memory: int = 2048  # Memory in MiB
     cpu: int = 2  # Number of CPU cores
-    cdp_port: Optional[int] = None  # Host port for CDP (uses default if None)
+    port: Optional[int] = None  # Host port for WebSocket (default: 3000)
 
 
 class BrowserBox(SimpleBox):
     """
-    Secure browser environment with remote debugging.
+    Secure browser environment with Playwright Server.
 
-    Auto-starts a browser with Chrome DevTools Protocol enabled.
-    Connect from outside using Puppeteer, Playwright, Selenium, or DevTools.
+    Auto-starts a browser with Playwright Server enabled for remote control.
+    Connect from outside using Playwright's `connect()` method.
 
     Usage:
         >>> async with BrowserBox() as browser:
-        ...     print(f"Connect to: {browser.endpoint()}")
-        ...     # Use Puppeteer/Playwright from your host to connect
+        ...     ws = await browser.ws_endpoint()
+        ...     print(f"Connect to: {ws}")
+        ...     # Use Playwright from your host to connect
         ...     await asyncio.sleep(60)
 
-    Example with custom options:
-        >>> opts = BrowserBoxOptions(browser="firefox", memory=4096)
-        >>> async with BrowserBox(opts) as browser:
-        ...     endpoint = browser.endpoint()
+    Example with Playwright:
+        >>> from playwright.async_api import async_playwright
+        >>> async with BrowserBox() as browser:
+        ...     ws = await browser.ws_endpoint()
+        ...     async with async_playwright() as p:
+        ...         b = await p.chromium.connect(ws)
+        ...         page = await b.new_page()
+        ...         await page.goto("https://example.com")
     """
 
-    # Default Playwright images (with retry logic now!)
-    _DEFAULT_IMAGE = "mcr.microsoft.com/playwright:v1.47.2-jammy"
+    # Playwright Docker image with all browsers pre-installed
+    _DEFAULT_IMAGE = "mcr.microsoft.com/playwright:v1.58.0-jammy"
 
-    # CDP port for each browser type
-    _GUEST_PORTS = {
-        "chromium": const.BROWSERBOX_PORT_CHROMIUM,
-        "firefox": const.BROWSERBOX_PORT_FIREFOX,
-        "webkit": const.BROWSERBOX_PORT_WEBKIT,
-    }
+    # Playwright version - must match the Docker image
+    _PLAYWRIGHT_VERSION = "1.58.0"
+
+    # Default port for Playwright Server (single port for all browsers)
+    _DEFAULT_PORT = const.BROWSERBOX_PORT
 
     def __init__(
         self,
@@ -74,7 +82,7 @@ class BrowserBox(SimpleBox):
         **kwargs,
     ):
         """
-        Create and auto-start a browser.
+        Create a BrowserBox instance.
 
         Args:
             options: Browser configuration (uses defaults if None)
@@ -84,14 +92,14 @@ class BrowserBox(SimpleBox):
         opts = options or BrowserBoxOptions()
 
         self._browser = opts.browser
-        # Guest port: where browser listens inside VM (fixed per browser type)
-        self._guest_port = self._GUEST_PORTS.get(
-            opts.browser, const.BROWSERBOX_PORT_CHROMIUM
-        )
+        # Guest port: where Playwright Server listens inside VM (fixed)
+        self._guest_port = self._DEFAULT_PORT
         # Host port: what host connects to (user-configurable)
-        self._host_port = opts.cdp_port or self._guest_port
+        self._host_port = opts.port or self._guest_port
+        # Track if server has been started
+        self._started = False
 
-        # Extract user ports and add CDP port forwarding
+        # Extract user ports and add port forwarding
         user_ports = kwargs.pop("ports", [])
         default_ports = [(self._host_port, self._guest_port)]
 
@@ -106,54 +114,135 @@ class BrowserBox(SimpleBox):
         )
 
     async def __aenter__(self):
-        """Start browser automatically on context enter."""
+        """Start the box but don't auto-start browser (lazy start via ws_endpoint)."""
         await super().__aenter__()
-        await self._start_browser()
+        # Don't auto-start browser here - let ws_endpoint() handle it
         return self
 
-    async def _start_browser(self):
-        """Internal: Start browser with remote debugging."""
-        # Browser listens on guest port inside the VM
-        if self._browser == "chromium":
-            binary = "/ms-playwright/chromium-*/chrome-linux/chrome"
-            cmd = (
-                f"{binary} --headless --no-sandbox --disable-dev-shm-usage "
-                f"--disable-gpu --remote-debugging-address=0.0.0.0 "
-                f"--remote-debugging-port={self._guest_port} "
-                f"> /tmp/browser.log 2>&1 &"
-            )
-        elif self._browser == "firefox":
-            binary = "/ms-playwright/firefox-*/firefox/firefox"
-            cmd = (
-                f"{binary} --headless "
-                f"--remote-debugging-port={self._guest_port} "
-                f"> /tmp/browser.log 2>&1 &"
-            )
-        else:  # webkit
-            cmd = (
-                f"playwright run-server --browser webkit "
-                f"--port {self._guest_port} > /tmp/browser.log 2>&1 &"
-            )
-
-        # Start browser in background
-        await self.exec("sh", "-c", f"nohup {cmd}")
-
-        # Wait for browser to be ready
-        await self.exec("sleep", "3")
-
-    def endpoint(self) -> str:
+    async def _start_browser(self, timeout: int = 60):
         """
-        Get the connection endpoint for remote debugging.
+        Start Playwright Server (works for all browser types).
+
+        The server binds to 0.0.0.0, so no proxy is needed.
+        Browser type is specified by the client when connecting, not the server.
+
+        Args:
+            timeout: Maximum time to wait for server to start in seconds
+
+        Raises:
+            TimeoutError: If server doesn't start within timeout
+        """
+        cmd = (
+            f"npx -y playwright@{self._PLAYWRIGHT_VERSION} run-server "
+            f"--port {self._guest_port} --host 0.0.0.0 "
+            f"> /tmp/playwright.log 2>&1 &"
+        )
+        await self.run("sh", "-c", f"nohup {cmd}")
+        await self._wait_for_server(timeout)
+        self._started = True
+
+    async def _wait_for_server(self, timeout: int):
+        """
+        Poll until Playwright Server is ready.
+
+        Args:
+            timeout: Maximum wait time in seconds
+
+        Raises:
+            TimeoutError: If server doesn't become ready within timeout
+        """
+        start = time.time()
+        poll_interval = 0.5
+
+        while time.time() - start < timeout:
+            # Check if server is responding on the external interface
+            check = (
+                f"curl -sf http://{const.GUEST_IP}:{self._guest_port}/json "
+                f"> /dev/null 2>&1 && echo ready || echo notready"
+            )
+            result = await self.run("sh", "-c", check)
+            if result.stdout.strip() == "ready":
+                return
+            await asyncio.sleep(poll_interval)
+
+        # Try to get log output for debugging
+        log_content = ""
+        try:
+            log_result = await self.run(
+                "sh", "-c", "cat /tmp/playwright.log 2>/dev/null || echo 'No log'"
+            )
+            log_content = log_result.stdout.strip()
+        except Exception:
+            pass
+
+        raise TimeoutError(
+            f"Playwright Server ({self._browser}) did not start within {timeout}s. "
+            f"Log: {log_content[:500]}"
+        )
+
+    async def ws_endpoint(self, timeout: int = 60) -> str:
+        """
+        Get the WebSocket endpoint for Playwright connect().
+
+        This is the primary method to get the connection URL.
+        The returned URL can be used with Playwright's `connect()` method.
+        Auto-starts the Playwright Server if not already started.
+
+        Args:
+            timeout: Maximum time to wait for server to start (if needed)
 
         Returns:
-            HTTP endpoint URL for Chrome DevTools Protocol
+            WebSocket endpoint URL (e.g., 'ws://localhost:3000/')
 
         Example:
             >>> async with BrowserBox() as browser:
-            ...     url = browser.endpoint()
-            ...     # Use with Puppeteer:
-            ...     # puppeteer.connect({ browserURL: url })
+            ...     ws = await browser.ws_endpoint()
             ...     # Use with Playwright:
-            ...     # chromium.connect_over_cdp(url)
+            ...     # browser = await chromium.connect(ws)
         """
-        return f"http://localhost:{self._host_port}"
+        if not self._started:
+            await self._start_browser(timeout)
+        return f"ws://localhost:{self._host_port}/"
+
+    async def connect(self, timeout: int = 60) -> Any:
+        """
+        Connect to the browser using Playwright.
+
+        Convenience method that returns a connected Playwright Browser instance.
+        Requires playwright to be installed.
+
+        Args:
+            timeout: Maximum time to wait for server to start
+
+        Returns:
+            Connected Playwright Browser instance
+
+        Example:
+            >>> async with BrowserBox(BrowserBoxOptions(browser="webkit")) as box:
+            ...     browser = await box.connect()
+            ...     page = await browser.new_page()
+            ...     await page.goto("https://example.com")
+        """
+        ws = await self.ws_endpoint(timeout)
+
+        # Dynamic import to avoid requiring playwright as a dependency
+        try:
+            from playwright.async_api import async_playwright
+        except ImportError:
+            raise ImportError(
+                "playwright is required for connect(). "
+                "Install with: pip install playwright"
+            )
+
+        pw = await async_playwright().start()
+        browser_type = getattr(pw, self._browser, None)
+
+        if browser_type is None:
+            raise ValueError(f"Unknown browser type: {self._browser}")
+
+        return await browser_type.connect(ws)
+
+    @property
+    def browser(self) -> str:
+        """Get the browser type ('chromium', 'firefox', or 'webkit')."""
+        return self._browser

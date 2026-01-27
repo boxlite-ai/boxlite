@@ -1,12 +1,13 @@
 /**
- * BrowserBox - Secure browser with remote debugging.
+ * BrowserBox - Secure browser with Playwright Server.
  *
  * Provides a minimal, elegant API for running isolated browsers that can be
- * controlled from outside using standard tools like Puppeteer or Playwright.
+ * controlled from outside using Playwright. Supports all browser types:
+ * chromium, firefox, and webkit.
  */
 
 import { SimpleBox, type SimpleBoxOptions } from "./simplebox.js";
-import { TimeoutError } from "./errors.js";
+import { BoxliteError, TimeoutError } from "./errors.js";
 import * as constants from "./constants.js";
 
 /**
@@ -30,60 +31,61 @@ export interface BrowserBoxOptions extends Omit<
   /** Number of CPU cores (default: 2) */
   cpus?: number;
 
-  /** Host port for CDP connection (default: same as guest port for browser type) */
-  cdpPort?: number;
+  /** Host port for WebSocket connection (default: 3000) */
+  port?: number;
 }
 
 /**
- * Secure browser environment with remote debugging.
+ * Secure browser environment with Playwright Server.
  *
- * Auto-starts a browser with Chrome DevTools Protocol enabled.
- * Connect from outside using Puppeteer, Playwright, Selenium, or DevTools.
+ * Auto-starts a browser with Playwright Server enabled for remote control.
+ * Connect from outside using Playwright's `connect()` method.
  *
  * ## Usage
  *
  * ```typescript
- * const browser = new BrowserBox();
+ * import { BrowserBox } from '@boxlite-ai/boxlite';
+ * import { chromium } from 'playwright-core';
+ *
+ * const box = new BrowserBox({ browser: 'chromium' });
  * try {
- *   await browser.start();  // Manually start browser
- *   console.log(`Connect to: ${browser.endpoint()}`);
- *   // Use Puppeteer/Playwright from your host to connect
- *   await new Promise(resolve => setTimeout(resolve, 60000));
+ *   const wsEndpoint = await box.wsEndpoint();
+ *   const browser = await chromium.connect(wsEndpoint);
+ *
+ *   const page = await browser.newPage();
+ *   await page.goto('https://example.com');
+ *   console.log(await page.title());
+ *
+ *   await browser.close();
  * } finally {
- *   await browser.stop();
+ *   await box.stop();
  * }
  * ```
  *
- * ## Example with custom options
+ * ## All browsers supported
  *
  * ```typescript
- * const browser = new BrowserBox({
- *   browser: 'firefox',
- *   memoryMib: 4096,
- *   cpus: 4
- * });
- * try {
- *   await browser.start();
- *   const endpoint = browser.endpoint();
- *   // Connect using Playwright or Puppeteer
- * } finally {
- *   await browser.stop();
- * }
+ * // WebKit works!
+ * const box = new BrowserBox({ browser: 'webkit' });
+ * const wsEndpoint = await box.wsEndpoint();
+ * const browser = await webkit.connect(wsEndpoint);
  * ```
  */
 export class BrowserBox extends SimpleBox {
+  /** Playwright Docker image with all browsers pre-installed */
   private static readonly DEFAULT_IMAGE =
-    "mcr.microsoft.com/playwright:v1.47.2-jammy";
+    "mcr.microsoft.com/playwright:v1.58.0-jammy";
 
-  private static readonly PORTS: Record<BrowserType, number> = {
-    chromium: constants.BROWSERBOX_PORT_CHROMIUM,
-    firefox: constants.BROWSERBOX_PORT_FIREFOX,
-    webkit: constants.BROWSERBOX_PORT_WEBKIT,
-  };
+  /** Playwright version - must match the Docker image */
+  private static readonly PLAYWRIGHT_VERSION = "1.58.0";
+
+  /** Default port for Playwright Server */
+  private static readonly DEFAULT_PORT = constants.BROWSERBOX_PORT;
 
   private readonly _browser: BrowserType;
   private readonly _guestPort: number;
   private readonly _hostPort: number;
+  private _started: boolean = false;
 
   /**
    * Create a new BrowserBox.
@@ -93,7 +95,7 @@ export class BrowserBox extends SimpleBox {
    * @example
    * ```typescript
    * const browser = new BrowserBox({
-   *   browser: 'chromium',
+   *   browser: 'webkit',  // All browsers work!
    *   memoryMib: 2048,
    *   cpus: 2
    * });
@@ -104,18 +106,17 @@ export class BrowserBox extends SimpleBox {
       browser = "chromium",
       memoryMib = 2048,
       cpus = 2,
-      cdpPort,
+      port,
       ports: userPorts = [],
       ...restOptions
     } = options;
 
-    // Guest port: where browser listens inside VM (fixed per browser type)
-    const guestPort =
-      BrowserBox.PORTS[browser] || constants.BROWSERBOX_PORT_CHROMIUM;
-    // Host port: what host connects to (user-configurable)
-    const hostPort = cdpPort ?? guestPort;
+    // Guest port is fixed (internal implementation)
+    const guestPort = BrowserBox.DEFAULT_PORT;
+    // Host port is user-configurable
+    const hostPort = port ?? guestPort;
 
-    // Add CDP port forwarding
+    // Add port forwarding
     const defaultPorts = [{ hostPort, guestPort }];
 
     super({
@@ -132,133 +133,149 @@ export class BrowserBox extends SimpleBox {
   }
 
   /**
-   * Start the browser with remote debugging enabled.
+   * Start the Playwright Server with the configured browser.
    *
-   * Call this method after creating the BrowserBox to start the browser process.
-   * Waits for the browser to be ready before returning.
+   * The Playwright Server binds to 0.0.0.0, so no proxy is needed.
+   * It handles all browser types natively.
    *
-   * @param timeout - Maximum time to wait for browser to start in seconds (default: 30)
-   * @throws {TimeoutError} If browser doesn't start within timeout
+   * @param timeout - Maximum time to wait for server to start in seconds (default: 60)
+   * @throws {TimeoutError} If server doesn't start within timeout
    *
    * @example
    * ```typescript
-   * const browser = new BrowserBox();
-   * try {
-   *   await browser.start();
-   *   console.log(`Connect to: ${browser.endpoint()}`);
-   * } finally {
-   *   await browser.stop();
-   * }
+   * const box = new BrowserBox({ browser: 'firefox' });
+   * await box.start();
+   * console.log(`Connect to: ${await box.wsEndpoint()}`);
    * ```
    */
-  async start(timeout: number = 30): Promise<void> {
-    let cmd: string;
-    let processPattern: string;
+  async start(timeout: number = 60): Promise<void> {
+    // Start Playwright Server (works for ALL browsers)
+    // The server binds to 0.0.0.0, eliminating the need for TCP proxy
+    // Note: Browser type is specified by the client when connecting, not the server
+    const cmd =
+      `npx -y playwright@${BrowserBox.PLAYWRIGHT_VERSION} run-server ` +
+      `--port ${this._guestPort} ` +
+      `--host 0.0.0.0 ` +
+      `> /tmp/playwright.log 2>&1 &`;
 
-    // Browser listens on guest port inside the VM
-    if (this._browser === "chromium") {
-      const binary = "/ms-playwright/chromium-*/chrome-linux/chrome";
-      cmd =
-        `${binary} --headless --no-sandbox --disable-dev-shm-usage ` +
-        `--disable-gpu --remote-debugging-address=0.0.0.0 ` +
-        `--remote-debugging-port=${this._guestPort} ` +
-        `> /tmp/browser.log 2>&1 &`;
-      processPattern = "chrome";
-    } else if (this._browser === "firefox") {
-      const binary = "/ms-playwright/firefox-*/firefox/firefox";
-      cmd =
-        `${binary} --headless ` +
-        `--remote-debugging-port=${this._guestPort} ` +
-        `> /tmp/browser.log 2>&1 &`;
-      processPattern = "firefox";
-    } else {
-      // webkit
-      cmd =
-        `playwright run-server --browser webkit ` +
-        `--port ${this._guestPort} > /tmp/browser.log 2>&1 &`;
-      processPattern = "playwright";
-    }
-
-    // Start browser in background
     await this.exec("sh", "-c", `nohup ${cmd}`);
-
-    // Wait for browser to be ready
-    await this.waitForBrowser(processPattern, timeout);
+    await this._waitForServer(timeout);
+    this._started = true;
   }
 
   /**
-   * Wait for the browser process to be running.
+   * Wait for Playwright Server to be ready.
    *
-   * @param processPattern - Pattern to match browser process name
+   * Polls the server endpoint until it responds.
+   *
    * @param timeout - Maximum wait time in seconds
-   * @throws {TimeoutError} If browser doesn't start within timeout
+   * @throws {TimeoutError} If server doesn't become ready within timeout
    */
-  private async waitForBrowser(
-    processPattern: string,
-    timeout: number,
-  ): Promise<void> {
+  private async _waitForServer(timeout: number): Promise<void> {
     const startTime = Date.now();
-    const pollInterval = 0.5;
+    const pollInterval = 500;
 
     while (true) {
       const elapsed = (Date.now() - startTime) / 1000;
       if (elapsed > timeout) {
+        // Try to get log output for debugging
+        let logContent = "";
+        try {
+          const logResult = await this.exec("sh", "-c", "cat /tmp/playwright.log 2>/dev/null || echo 'No log'");
+          logContent = logResult.stdout.trim();
+        } catch {
+          // Ignore errors reading log
+        }
+
         throw new TimeoutError(
-          `Browser '${this._browser}' did not start within ${timeout} seconds`,
+          `Playwright Server (${this._browser}) did not start within ${timeout}s. ` +
+          `Log: ${logContent.slice(0, 500)}`
         );
       }
 
-      // Check if browser process is running
-      const result = await this.exec("pgrep", "-f", processPattern);
-      if (result.exitCode === 0 && result.stdout.trim()) {
-        // Browser process found, give it a moment to initialize
-        await new Promise((resolve) => setTimeout(resolve, 500));
+      // Check if server is responding on the external interface
+      const checkCmd = `curl -sf http://${constants.GUEST_IP}:${this._guestPort}/json > /dev/null 2>&1 && echo ready || echo notready`;
+      const result = await this.exec("sh", "-c", checkCmd);
+
+      if (result.stdout.trim() === "ready") {
         return;
       }
 
-      // Wait before retrying
-      await new Promise((resolve) => setTimeout(resolve, pollInterval * 1000));
+      await new Promise((resolve) => setTimeout(resolve, pollInterval));
     }
   }
 
   /**
-   * Get the connection endpoint for remote debugging.
+   * Ensure the server is started, starting it if needed.
    *
-   * Returns the HTTP endpoint URL for Chrome DevTools Protocol.
-   * Use this with Puppeteer, Playwright, or Selenium to connect to the browser.
-   *
-   * @returns HTTP endpoint URL (e.g., 'http://localhost:9222')
-   *
-   * @example
-   * ```typescript
-   * const browser = new BrowserBox();
-   * try {
-   *   await browser.start();
-   *   const url = browser.endpoint();
-   *
-   *   // Use with Puppeteer:
-   *   // const browserWSEndpoint = await fetch(`${url}/json/version`)
-   *   //   .then(r => r.json())
-   *   //   .then(d => d.webSocketDebuggerUrl);
-   *   // const browser = await puppeteer.connect({ browserWSEndpoint });
-   *
-   *   // Use with Playwright:
-   *   // const browser = await chromium.connectOverCDP(url);
-   * } finally {
-   *   await browser.stop();
-   * }
-   * ```
+   * @param timeout - Timeout for start operation
    */
-  endpoint(): string {
-    return `http://localhost:${this._hostPort}`;
+  private async _ensureStarted(timeout?: number): Promise<void> {
+    if (!this._started) {
+      await this.start(timeout);
+    }
   }
 
   /**
-   * Override async disposal to start browser automatically.
+   * Get the WebSocket endpoint for Playwright connect().
    *
-   * @internal
+   * This is the primary method to get the connection URL.
+   * The returned URL can be used with Playwright's `connect()` method.
+   *
+   * @param timeout - Optional timeout to wait for server to start (starts automatically if not started)
+   * @returns WebSocket endpoint URL (e.g., 'ws://localhost:3000/')
+   *
+   * @example
+   * ```typescript
+   * const box = new BrowserBox({ browser: 'chromium' });
+   * const wsEndpoint = await box.wsEndpoint();
+   * const browser = await chromium.connect(wsEndpoint);
+   * ```
    */
-  async [Symbol.asyncDispose](): Promise<void> {
-    await super[Symbol.asyncDispose]();
+  async wsEndpoint(timeout?: number): Promise<string> {
+    await this._ensureStarted(timeout);
+    return `ws://localhost:${this._hostPort}/`;
+  }
+
+  /**
+   * Connect to the browser using Playwright.
+   *
+   * Convenience method that returns a connected Playwright Browser instance.
+   * Requires playwright-core to be installed.
+   *
+   * @param options - Connection options
+   * @returns Connected Playwright Browser instance
+   *
+   * @example
+   * ```typescript
+   * const box = new BrowserBox({ browser: 'webkit' });
+   * const browser = await box.connect();
+   * const page = await browser.newPage();
+   * await page.goto('https://example.com');
+   * ```
+   */
+  async connect(options?: { timeout?: number }): Promise<unknown> {
+    const ws = await this.wsEndpoint(options?.timeout);
+
+    // Dynamic import to avoid requiring playwright-core as a dependency
+    const playwright = await import("playwright-core");
+    const browserType = playwright[this._browser as keyof typeof playwright] as
+      | { connect: (url: string) => Promise<unknown> }
+      | undefined;
+
+    if (!browserType?.connect) {
+      throw new BoxliteError(`Unknown browser type: ${this._browser}`);
+    }
+
+    return browserType.connect(ws);
+  }
+
+  /**
+   * Get the browser type.
+   *
+   * @returns The browser type ('chromium', 'firefox', or 'webkit')
+   */
+  get browser(): BrowserType {
+    return this._browser;
   }
 }

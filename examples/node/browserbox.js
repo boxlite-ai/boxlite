@@ -1,84 +1,131 @@
 /**
- * BrowserBox Example - Browser automation
+ * BrowserBox Example - Browser automation with Playwright Server
  *
  * Demonstrates:
- * - Starting a browser with remote debugging
- * - Getting the CDP endpoint
- * - Connecting with Puppeteer (optional)
+ * - Starting browsers with Playwright Server (chromium, firefox, webkit)
+ * - Connection methods: wsEndpoint(), connect()
+ * - Multi-browser support
  */
 
 import { BrowserBox } from '@boxlite-ai/boxlite';
+import { chromium, firefox, webkit } from 'playwright-core';
+
+const browserTypes = { chromium, firefox, webkit };
 
 async function main() {
-  console.log('=== BrowserBox Example ===\n');
+  console.log('=== BrowserBox Example (Playwright Server) ===\n');
 
-  console.log('1. Creating BrowserBox with Chromium...');
-  const browser = new BrowserBox({
-    browser: 'chromium',
-    memoryMib: 2048,
-    cpus: 2
-  });
+  // Demo 1: All connection methods
+  console.log('1. Connection Methods Demo...\n');
+  await connectionMethodsDemo();
 
-  try {
-    console.log('2. Starting browser...');
-    await browser.start();
-    console.log('   ✓ Browser started!\n');
+  // Demo 2: All browsers work
+  console.log('\n2. Multi-Browser Demo (all browsers)...\n');
+  await multiBrowserDemo();
+}
 
-    console.log('3. Getting CDP endpoint...');
-    const endpoint = browser.endpoint();
-    console.log(`   Endpoint: ${endpoint}\n`);
-
-    console.log('4. You can now connect to the browser using:');
-    console.log('   - Puppeteer:');
-    console.log('     ```javascript');
-    console.log(`     const browser = await puppeteer.connect({ browserURL: '${endpoint}' });`);
-    console.log('     ```');
-    console.log('   - Playwright:');
-    console.log('     ```javascript');
-    console.log(`     const browser = await chromium.connectOverCDP('${endpoint}');`);
-    console.log('     ```\n');
-
-    console.log('5. Example: Connecting with Puppeteer (if installed)...');
+/**
+ * Demonstrates both connection methods:
+ * - wsEndpoint() + playwright.connect() - recommended for explicit control
+ * - connect() - convenience one-liner
+ */
+async function connectionMethodsDemo() {
+  // Method 1: wsEndpoint() + explicit Playwright connect (RECOMMENDED)
+  console.log('   Method 1: wsEndpoint() + playwright.connect()');
+  console.log('   (Recommended - gives you explicit control)\n');
+  {
+    const box = new BrowserBox({ browser: 'chromium' });
     try {
-      const puppeteer = await import('puppeteer-core').then(m => m.default);
+      // Get WebSocket endpoint
+      const wsEndpoint = await box.wsEndpoint();
+      console.log(`   wsEndpoint: ${wsEndpoint}`);
 
-      console.log('   Connecting to browser...');
-      const browserInstance = await puppeteer.connect({ browserURL: endpoint });
-
-      console.log('   Opening new page...');
-      const page = await browserInstance.newPage();
-
-      console.log('   Navigating to example.com...');
+      // Connect using Playwright directly
+      const browser = await chromium.connect(wsEndpoint);
+      const page = await browser.newPage();
       await page.goto('https://example.com');
-
-      console.log('   Getting page title...');
-      const title = await page.title();
-      console.log(`   Page title: ${title}\n`);
-
-      console.log('   Taking screenshot...');
-      await page.screenshot({ path: '/tmp/browserbox-screenshot.png' });
-      console.log('   Screenshot saved to: /tmp/browserbox-screenshot.png\n');
-
-      console.log('   Closing page...');
-      await page.close();
-
-      console.log('   ✅ Puppeteer example completed!');
-    } catch (err) {
-      console.log('   ⚠️  Puppeteer not found or connection failed');
-      console.log(`   Error: ${err.message}`);
-      console.log('   Install with: npm install puppeteer-core\n');
+      console.log(`   Page title: ${await page.title()}`);
+      await browser.close();
+    } finally {
+      await box.stop();
     }
+  }
 
-    console.log('\nBrowser is still running. Press Ctrl+C to exit...');
+  // Method 2: connect() - convenience one-liner
+  console.log('\n   Method 2: connect() convenience method');
+  console.log('   (One-liner - auto-selects browser type)\n');
+  {
+    const box = new BrowserBox({ browser: 'chromium' });
+    try {
+      // One-liner: starts box and returns connected browser
+      const browser = await box.connect();
+      const page = await browser.newPage();
+      await page.goto('https://example.com');
+      console.log(`   Page title: ${await page.title()}`);
+      await browser.close();
+    } finally {
+      await box.stop();
+    }
+  }
 
-    // Keep running for manual interaction
-    await new Promise(resolve => {
-      process.on('SIGINT', resolve);
+  console.log('\n   Both connection methods work!\n');
+}
+
+/**
+ * Multi-browser demo - tests all browsers with results tracking
+ */
+async function multiBrowserDemo() {
+  const browsers = ['chromium', 'firefox', 'webkit'];
+  const results = [];
+
+  for (const browserName of browsers) {
+    console.log(`   Testing ${browserName}...`);
+
+    const box = new BrowserBox({
+      browser: browserName,
+      memoryMib: 2048,
+      cpus: 2,
+      // Use different ports for parallel testing
+      port: 3000 + browsers.indexOf(browserName)
     });
-  } finally {
-    console.log('\n6. Cleaning up...');
-    await browser.stop();
-    console.log('   Browser stopped and removed.');
+
+    try {
+      const wsEndpoint = await box.wsEndpoint();
+      console.log(`   Endpoint: ${wsEndpoint}`);
+
+      // Connect using the matching browser type from Playwright
+      const playwright = browserTypes[browserName];
+      const browser = await playwright.connect(wsEndpoint);
+
+      const page = await browser.newPage();
+      await page.goto('https://example.com');
+      const title = await page.title();
+
+      console.log(`   Title: ${title}`);
+      await browser.close();
+
+      results.push({ browser: browserName, status: 'PASSED', title });
+      console.log(`   ${browserName}: PASSED\n`);
+    } catch (error) {
+      results.push({ browser: browserName, status: 'FAILED', error: error.message });
+      console.log(`   ${browserName}: FAILED - ${error.message}\n`);
+    } finally {
+      await box.stop();
+    }
+  }
+
+  // Summary
+  console.log('   === SUMMARY ===');
+  for (const r of results) {
+    console.log(`   ${r.browser}: ${r.status}${r.title ? ` (${r.title})` : ''}`);
+  }
+
+  const failed = results.filter(r => r.status === 'FAILED');
+  if (failed.length > 0) {
+    console.log(`\n   ${failed.length} browser(s) failed`);
+    process.exit(1);
+  } else {
+    console.log('\n   All browsers PASSED!\n');
   }
 }
 
