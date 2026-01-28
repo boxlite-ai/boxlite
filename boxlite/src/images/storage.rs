@@ -452,7 +452,8 @@ impl ImageStorage {
         bundle_path: &std::path::Path,
         manifest_digest: &str,
     ) -> PathBuf {
-        self.layout.local_bundle_cache_dir(bundle_path, manifest_digest)
+        self.layout
+            .local_bundle_cache_dir(bundle_path, manifest_digest)
     }
 
     /// Find existing disk image for an image digest, checking all known formats.

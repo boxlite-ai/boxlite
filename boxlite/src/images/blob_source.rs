@@ -14,7 +14,6 @@
 
 use std::path::{Path, PathBuf};
 
-
 use crate::disk::{Disk, DiskFormat};
 use crate::images::archive::extract_layer_tarball_streaming;
 use crate::images::storage::ImageStorage;
@@ -796,7 +795,9 @@ mod tests {
         let source_v1 = LocalBundleBlobSource::new(bundle_dir.clone(), cache_dir_v1.clone());
 
         // Extract layers for v1
-        let extracted_v1 = source_v1.extract_layers(&[layer_digest_v1.clone()]).unwrap();
+        let extracted_v1 = source_v1
+            .extract_layers(&[layer_digest_v1.clone()])
+            .unwrap();
         assert!(extracted_v1[0].exists());
 
         // Verify v1 cache location
@@ -810,7 +811,9 @@ mod tests {
         let source_v2 = LocalBundleBlobSource::new(bundle_dir.clone(), cache_dir_v2.clone());
 
         // Extract layers for v2 (same layer digest for this test, but different cache)
-        let extracted_v2 = source_v2.extract_layers(&[layer_digest_v1.clone()]).unwrap();
+        let extracted_v2 = source_v2
+            .extract_layers(&[layer_digest_v1.clone()])
+            .unwrap();
         assert!(extracted_v2[0].exists());
 
         // CRITICAL: v2 should use NEW cache location, not v1's stale cache

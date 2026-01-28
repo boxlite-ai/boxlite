@@ -417,7 +417,10 @@ impl ImageFilesystemLayout {
         // Hash the bundle path for location identity
         let path_str = bundle_path.to_string_lossy();
         let path_hash = Sha256::digest(path_str.as_bytes());
-        let path_short = format!("{:x}", path_hash).chars().take(8).collect::<String>();
+        let path_short = format!("{:x}", path_hash)
+            .chars()
+            .take(8)
+            .collect::<String>();
 
         // Extract short manifest digest for content identity
         let manifest_short = manifest_digest
@@ -493,17 +496,18 @@ mod tests {
     fn test_local_bundle_cache_dir_format() {
         let layout = ImageFilesystemLayout::new(PathBuf::from("/images"));
 
-        let cache_dir = layout.local_bundle_cache_dir(
-            Path::new("/my/bundle"),
-            "sha256:abc123def456789",
-        );
+        let cache_dir =
+            layout.local_bundle_cache_dir(Path::new("/my/bundle"), "sha256:abc123def456789");
 
         // Should be under /images/local/
         assert!(cache_dir.starts_with("/images/local/"));
 
         // Format: {path_hash}-{manifest_short}
         let dir_name = cache_dir.file_name().unwrap().to_str().unwrap();
-        assert!(dir_name.contains('-'), "should have format path_hash-manifest_short");
+        assert!(
+            dir_name.contains('-'),
+            "should have format path_hash-manifest_short"
+        );
 
         // Path hash is 8 chars, manifest short is 8 chars
         let parts: Vec<&str> = dir_name.split('-').collect();
@@ -549,8 +553,14 @@ mod tests {
         let parts_v1: Vec<&str> = name_v1.split('-').collect();
         let parts_v2: Vec<&str> = name_v2.split('-').collect();
 
-        assert_eq!(parts_v1[0], parts_v2[0], "Same path should have same path hash");
-        assert_ne!(parts_v1[1], parts_v2[1], "Different manifest should have different hash");
+        assert_eq!(
+            parts_v1[0], parts_v2[0],
+            "Same path should have same path hash"
+        );
+        assert_ne!(
+            parts_v1[1], parts_v2[1],
+            "Different manifest should have different hash"
+        );
     }
 
     #[test]
@@ -558,16 +568,13 @@ mod tests {
         // Verify idempotency: same inputs = same cache dir
         let layout = ImageFilesystemLayout::new(PathBuf::from("/images"));
 
-        let cache1 = layout.local_bundle_cache_dir(
-            Path::new("/my/bundle"),
-            "sha256:abc123",
-        );
-        let cache2 = layout.local_bundle_cache_dir(
-            Path::new("/my/bundle"),
-            "sha256:abc123",
-        );
+        let cache1 = layout.local_bundle_cache_dir(Path::new("/my/bundle"), "sha256:abc123");
+        let cache2 = layout.local_bundle_cache_dir(Path::new("/my/bundle"), "sha256:abc123");
 
-        assert_eq!(cache1, cache2, "Same path + manifest should give same cache dir");
+        assert_eq!(
+            cache1, cache2,
+            "Same path + manifest should give same cache dir"
+        );
     }
 
     #[test]
