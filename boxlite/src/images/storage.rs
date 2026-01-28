@@ -320,6 +320,7 @@ impl ImageStorage {
     /// Load config blob from disk.
     ///
     /// **Mutability**: Immutable - reads file only, no state changes.
+    #[allow(dead_code)]
     pub fn load_config(&self, digest: &str) -> BoxliteResult<String> {
         let config_path = self.config_path(digest);
 

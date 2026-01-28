@@ -7,13 +7,14 @@
 //! Architecture:
 //! - `ImageManager` holds `Arc<ImageStore>` (thread-safe store)
 //! - `ImageStore` handles all locking internally
-//! - `ImageObject` also holds `Arc<ImageStore>` for layer access
+//! - `ImageObject` uses `BlobSource` for blob access
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 
+use super::blob_source::{BlobSource, LocalBundleBlobSource, StoreBlobSource};
 use super::object::ImageObject;
 use crate::db::Database;
 use crate::images::store::{ImageStore, SharedImageStore};
@@ -54,14 +55,14 @@ pub(super) struct LayerInfo {
 ///
 /// # Example
 ///
-/// ```no_run
+/// ```ignore
 /// use boxlite::images::ImageManager;
 /// use boxlite::db::Database;
 /// use std::path::PathBuf;
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// let db = Database::open(&PathBuf::from("/tmp/boxlite.db"))?;
-/// let manager = ImageManager::new(PathBuf::from("/tmp/images"), db)?;
+/// let manager = ImageManager::new(PathBuf::from("/tmp/images"), db, vec![])?;
 ///
 /// // Pull an image
 /// let image = manager.pull("python:alpine").await?;
@@ -104,11 +105,13 @@ impl ImageManager {
     /// concurrent pulls of the same image will only download once.
     pub async fn pull(&self, image_ref: &str) -> BoxliteResult<ImageObject> {
         let manifest = self.store.pull(image_ref).await?;
+        let storage = self.store.storage().await;
+        let blob_source = BlobSource::Store(StoreBlobSource::new(storage));
 
         Ok(ImageObject::new(
             image_ref.to_string(),
             manifest,
-            Arc::clone(&self.store),
+            blob_source,
         ))
     }
 
@@ -153,7 +156,7 @@ impl ImageManager {
     /// Load an OCI/Docker image from a local directory.
     ///
     /// Reads image manifest from `manifest.json` and returns an `ImageObject`.
-    /// Layers and configs are imported into the image store using hard links.
+    /// Blobs are read directly from the bundle (not copied to the store).
     ///
     /// Expected structure:
     ///   ```text
@@ -173,12 +176,13 @@ impl ImageManager {
         path: std::path::PathBuf,
         reference: String,
     ) -> BoxliteResult<ImageObject> {
-        let manifest = self.store.load_from_local(path).await?;
+        let manifest = self.store.load_from_local(path.clone()).await?;
 
-        Ok(ImageObject::new(
-            reference,
-            manifest,
-            Arc::clone(&self.store),
-        ))
+        // Get images_dir from storage for cache location
+        let storage = self.store.storage().await;
+        let images_dir = storage.images_dir().to_path_buf();
+        let blob_source = BlobSource::LocalBundle(LocalBundleBlobSource::new(path, images_dir));
+
+        Ok(ImageObject::new(reference, manifest, blob_source))
     }
 }

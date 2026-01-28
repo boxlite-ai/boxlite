@@ -6,8 +6,8 @@
 
 use std::path::PathBuf;
 
+use super::blob_source::BlobSource;
 use super::manager::ImageManifest;
-use crate::images::store::SharedImageStore;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 // ============================================================================
@@ -22,9 +22,9 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 /// - Layer file paths
 /// - Inspection operations
 ///
-/// Created by `ImageManager::pull()`.
+/// Created by `ImageManager::pull()` or `ImageManager::load_from_local()`.
 ///
-/// Thread Safety: Holds `Arc<ImageStore>` which handles locking internally.
+/// Thread Safety: `BlobSource` variants handle their own caching strategies.
 #[derive(Clone)]
 pub struct ImageObject {
     /// Image reference (e.g., "python:alpine")
@@ -33,17 +33,17 @@ pub struct ImageObject {
     /// Manifest with layer information
     manifest: ImageManifest,
 
-    /// Shared reference to store for layer/config access
-    store: SharedImageStore,
+    /// Source of blobs with source-specific caching
+    blob_source: BlobSource,
 }
 
 impl ImageObject {
     /// Create new ImageObject (internal use only)
-    pub(super) fn new(reference: String, manifest: ImageManifest, store: SharedImageStore) -> Self {
+    pub(super) fn new(reference: String, manifest: ImageManifest, blob_source: BlobSource) -> Self {
         Self {
             reference,
             manifest,
-            store,
+            blob_source,
         }
     }
 
@@ -91,7 +91,14 @@ impl ImageObject {
     /// Use `ContainerConfig::from_oci_config()` if you need extracted container
     /// runtime configuration (entrypoint, env, workdir).
     pub async fn load_config(&self) -> BoxliteResult<oci_spec::image::ImageConfiguration> {
-        let config_json = self.store.config(&self.manifest.config_digest).await?;
+        let config_path = self.blob_source.config_path(&self.manifest.config_digest);
+        let config_json = std::fs::read_to_string(&config_path).map_err(|e| {
+            BoxliteError::Storage(format!(
+                "Failed to read config from {}: {}",
+                config_path.display(),
+                e
+            ))
+        })?;
 
         serde_json::from_str(&config_json)
             .map_err(|e| BoxliteError::Storage(format!("Failed to parse image config: {}", e)))
@@ -105,7 +112,7 @@ impl ImageObject {
     ///
     /// Layers are indexed from 0 (base layer) to N-1 (top layer).
     #[allow(dead_code)]
-    pub async fn layer_tarball(&self, layer_index: usize) -> BoxliteResult<PathBuf> {
+    pub fn layer_tarball(&self, layer_index: usize) -> BoxliteResult<PathBuf> {
         let layer = self.manifest.layers.get(layer_index).ok_or_else(|| {
             BoxliteError::Storage(format!(
                 "Layer index {} out of bounds (total layers: {})",
@@ -114,16 +121,16 @@ impl ImageObject {
             ))
         })?;
 
-        Ok(self.store.layer_tarball(&layer.digest).await)
+        Ok(self.blob_source.layer_tarball_path(&layer.digest))
     }
 
     /// Get paths to all layer tarballs (ordered bottom to top)
-    pub async fn layer_tarballs(&self) -> Vec<PathBuf> {
-        let mut paths = Vec::with_capacity(self.manifest.layers.len());
-        for layer in &self.manifest.layers {
-            paths.push(self.store.layer_tarball(&layer.digest).await);
-        }
-        paths
+    pub fn layer_tarballs(&self) -> Vec<PathBuf> {
+        self.manifest
+            .layers
+            .iter()
+            .map(|layer| self.blob_source.layer_tarball_path(&layer.digest))
+            .collect()
     }
 
     /// Get paths to extracted layer directories (with caching)
@@ -155,7 +162,7 @@ impl ImageObject {
             .map(|l| l.digest.clone())
             .collect();
 
-        self.store.layer_extracted(digests).await
+        self.blob_source.extract_layers(&digests).await
     }
 
     /// Compute a stable digest for this image based on its layers.
@@ -176,9 +183,9 @@ impl ImageObject {
     ///
     /// Returns a persistent Disk if the cached disk image exists, None otherwise.
     /// Does not create a new disk image - use for cache lookups only.
-    pub async fn disk_image(&self) -> Option<crate::disk::Disk> {
+    pub fn disk_image(&self) -> Option<crate::disk::Disk> {
         let image_digest = self.compute_image_digest();
-        self.store.disk_image(&image_digest).await
+        self.blob_source.disk_image(&image_digest)
     }
 
     /// Install a disk as the cached disk image for this image.
@@ -190,7 +197,9 @@ impl ImageObject {
         disk: crate::disk::Disk,
     ) -> boxlite_shared::BoxliteResult<crate::disk::Disk> {
         let image_digest = self.compute_image_digest();
-        self.store.install_disk_image(&image_digest, disk).await
+        self.blob_source
+            .install_disk_image(&image_digest, disk)
+            .await
     }
 
     // ========================================================================

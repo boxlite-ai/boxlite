@@ -1,4 +1,5 @@
 mod archive;
+mod blob_source;
 mod config;
 mod manager;
 mod object;

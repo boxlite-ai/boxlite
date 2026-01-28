@@ -37,12 +37,13 @@ use tokio::sync::RwLock;
 /// by `ImageStore` which provides thread-safe access.
 struct ImageStoreInner {
     index: ImageIndexStore,
-    storage: ImageStorage,
+    /// Storage is Arc-wrapped so it can be shared with BlobSource
+    storage: Arc<ImageStorage>,
 }
 
 impl ImageStoreInner {
     fn new(images_dir: PathBuf, db: Database) -> BoxliteResult<Self> {
-        let storage = ImageStorage::new(images_dir)?;
+        let storage = Arc::new(ImageStorage::new(images_dir)?);
         let index = ImageIndexStore::new(db);
         Ok(Self { index, storage })
     }
@@ -60,8 +61,7 @@ impl ImageStoreInner {
 /// # Thread Safety
 ///
 /// - `pull()`: Releases lock during network I/O for better concurrency
-/// - `config()`, `layer_tarball()`: Quick read operations
-/// - `layer_extracted()`: May do I/O but uses atomic file operations
+/// - `storage()`: Returns shared storage for creating `BlobSource`
 ///
 /// # Example
 ///
@@ -71,9 +71,9 @@ impl ImageStoreInner {
 /// // Pull image (thread-safe, releases lock during download)
 /// let manifest = store.pull("python:alpine").await?;
 ///
-/// // Access layer data
-/// let tarball = store.layer_tarball(&manifest.layers[0].digest);
-/// let extracted = store.layer_extracted(&manifest.layers[0].digest)?;
+/// // Create BlobSource for accessing layers
+/// let storage = store.storage().await;
+/// let blob_source = BlobSource::Store(StoreBlobSource::new(storage));
 /// ```
 pub struct ImageStore {
     /// OCI registry client (immutable, outside lock)
@@ -105,6 +105,13 @@ impl ImageStore {
             inner: RwLock::new(inner),
             registries,
         })
+    }
+
+    /// Get shared reference to image storage for BlobSource creation.
+    ///
+    /// This allows creating `StoreBlobSource` that can outlive the lock.
+    pub async fn storage(&self) -> Arc<ImageStorage> {
+        Arc::clone(&self.inner.read().await.storage)
     }
 
     // ========================================================================
@@ -273,9 +280,8 @@ impl ImageStore {
             &format!("image manifest {}", manifest_digest),
         )?;
 
-        // 6. Import blobs (config and layers) into storage
-        self.import_oci_blobs(&path, &config_digest_str, &layers)
-            .await?;
+        // Note: Blobs are NOT imported to storage. LocalBundleBlobSource reads
+        // directly from the bundle path, avoiding duplication.
 
         tracing::info!(
             "Loaded local OCI image: config={}, {} layers, manifest={}",
@@ -384,150 +390,6 @@ impl ImageStore {
                 media_type
             ))),
         }
-    }
-
-    /// Load config JSON for an image.
-    ///
-    /// Returns the raw JSON string. Use `serde_json::from_str()` to parse.
-    pub async fn config(&self, config_digest: &str) -> BoxliteResult<String> {
-        let inner = self.inner.read().await;
-        inner.storage.load_config(config_digest)
-    }
-
-    /// Get path to layer tarball.
-    ///
-    /// Returns the path where the layer tarball is stored. The layer must
-    /// have been downloaded via `pull()` first.
-    pub async fn layer_tarball(&self, digest: &str) -> PathBuf {
-        let inner = self.inner.read().await;
-        inner.storage.layer_tarball_path(digest)
-    }
-
-    /// Get paths to extracted layer directories.
-    ///
-    /// Extracts layers if not already cached. Uses rayon for parallel extraction
-    /// and atomic file operations so concurrent calls are safe.
-    ///
-    /// # Arguments
-    /// * `digests` - Layer digests to extract (ordered bottom to top)
-    ///
-    /// # Returns
-    /// Vector of paths to extracted layer directories (same order as input)
-    pub async fn layer_extracted(&self, digests: Vec<String>) -> BoxliteResult<Vec<PathBuf>> {
-        use rayon::prelude::*;
-
-        // Get all paths with read lock
-        let layer_info: Vec<(String, PathBuf, PathBuf)> = {
-            let inner = self.inner.read().await;
-            digests
-                .iter()
-                .map(|digest| {
-                    (
-                        digest.clone(),
-                        inner.storage.layer_tarball_path(digest),
-                        inner.storage.layer_extracted_path(digest),
-                    )
-                })
-                .collect()
-        }; // Lock released
-
-        // Extract layers in parallel using rayon (sync operations)
-        // extract_layer uses atomic file operations so concurrent calls are safe
-        let inner = self.inner.read().await;
-        layer_info
-            .into_par_iter()
-            .map(|(digest, tarball_path, extracted_path)| {
-                // Check if already extracted
-                if extracted_path.exists() {
-                    tracing::debug!("Using cached extracted layer: {}", digest);
-                    return Ok(extracted_path);
-                }
-
-                // Extract layer (atomic - safe for concurrent access)
-                tracing::debug!("Extracting layer: {}", digest);
-                inner
-                    .storage
-                    .extract_layer(digest.as_str(), &tarball_path)?;
-                Ok(extracted_path)
-            })
-            .collect()
-    }
-
-    /// Get existing disk image for an image digest if available.
-    ///
-    /// Returns a persistent Disk if the cached disk image exists, None otherwise.
-    /// The returned Disk is persistent (won't be deleted on drop).
-    pub async fn disk_image(&self, image_digest: &str) -> Option<crate::disk::Disk> {
-        let inner = self.inner.read().await;
-        if let Some((path, format)) = inner.storage.find_disk_image(image_digest) {
-            Some(crate::disk::Disk::new(path, format, true))
-        } else {
-            None
-        }
-    }
-
-    /// Install a disk as the cached disk image for an image digest.
-    ///
-    /// Atomically moves the source disk to the image store path.
-    /// The source disk is consumed and a new persistent Disk is returned.
-    /// The target path extension is determined by the disk's format.
-    ///
-    /// # Arguments
-    /// * `image_digest` - Stable digest identifying the image
-    /// * `disk` - Source disk to install (will be moved, not copied)
-    ///
-    /// # Returns
-    /// New persistent Disk at the installed location
-    pub async fn install_disk_image(
-        &self,
-        image_digest: &str,
-        disk: crate::disk::Disk,
-    ) -> BoxliteResult<crate::disk::Disk> {
-        let inner = self.inner.read().await;
-        let disk_format = disk.format();
-        let target_path = inner.storage.disk_image_path(image_digest, disk_format);
-
-        // Ensure parent directory exists
-        if let Some(parent) = target_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                BoxliteError::Storage(format!(
-                    "Failed to create disk image directory {}: {}",
-                    parent.display(),
-                    e
-                ))
-            })?;
-        }
-
-        // If target already exists, just return it (idempotent)
-        if target_path.exists() {
-            tracing::debug!("Disk image already installed: {}", target_path.display());
-            // Leak the source disk to prevent cleanup (it may have been the same file)
-            let _ = disk.leak();
-            return Ok(crate::disk::Disk::new(target_path, disk_format, true));
-        }
-
-        let source_path = disk.path().to_path_buf();
-
-        // Atomic rename (move) - works if on same filesystem
-        std::fs::rename(&source_path, &target_path).map_err(|e| {
-            BoxliteError::Storage(format!(
-                "Failed to install disk image from {} to {}: {}",
-                source_path.display(),
-                target_path.display(),
-                e
-            ))
-        })?;
-
-        // Leak the source disk to prevent Drop from trying to delete the old path
-        let _ = disk.leak();
-
-        tracing::info!(
-            "Installed disk image: {} -> {}",
-            source_path.display(),
-            target_path.display()
-        );
-
-        Ok(crate::disk::Disk::new(target_path, disk_format, true))
     }
 
     // ========================================================================
@@ -1044,125 +906,6 @@ impl ImageStore {
 
         Ok((config_digest_str, layers))
     }
-
-    /// Import OCI image blobs (config and layers) from local directory.
-    async fn import_oci_blobs(
-        &self,
-        image_dir: &std::path::Path,
-        config_digest: &str,
-        layers: &[LayerInfo],
-    ) -> BoxliteResult<()> {
-        let config_blob_path = image_dir
-            .join("blobs")
-            .join(config_digest.replace(':', "/"));
-        self.import_config_to_storage(&config_blob_path, config_digest)
-            .await?;
-
-        for layer in layers {
-            let layer_blob_path = image_dir.join("blobs").join(layer.digest.replace(':', "/"));
-            self.import_blob_to_storage(&layer_blob_path, &layer.digest)
-                .await?;
-        }
-
-        Ok(())
-    }
-
-    /// Import a blob into storage from a local path.
-    async fn import_blob_to_storage(
-        &self,
-        src_path: &std::path::Path,
-        digest: &str,
-    ) -> BoxliteResult<()> {
-        if !src_path.exists() {
-            return Err(BoxliteError::Storage(format!(
-                "Blob not found: {}",
-                src_path.display()
-            )));
-        }
-
-        let dest_path = {
-            let inner = self.inner.read().await;
-            inner.storage.layer_tarball_path(digest)
-        };
-
-        if dest_path.exists() {
-            tracing::debug!("Blob already exists: {}", digest);
-            return Ok(());
-        }
-
-        if std::fs::hard_link(src_path, &dest_path).is_err() {
-            tracing::debug!(
-                "Hard link failed for {}, copying to {}",
-                src_path.display(),
-                dest_path.display()
-            );
-            std::fs::copy(src_path, &dest_path).map_err(|e| {
-                BoxliteError::Storage(format!(
-                    "Failed to copy blob from {} to {}: {}",
-                    src_path.display(),
-                    dest_path.display(),
-                    e
-                ))
-            })?;
-        }
-
-        tracing::debug!("Imported blob: {} -> {}", digest, dest_path.display());
-        Ok(())
-    }
-
-    /// Import a config blob into storage from a local path.
-    async fn import_config_to_storage(
-        &self,
-        src_path: &std::path::Path,
-        digest: &str,
-    ) -> BoxliteResult<()> {
-        if !src_path.exists() {
-            return Err(BoxliteError::Storage(format!(
-                "Config blob not found: {}",
-                src_path.display()
-            )));
-        }
-
-        let dest_path = {
-            let inner = self.inner.read().await;
-            inner.storage.config_path(digest)
-        };
-
-        if dest_path.exists() {
-            tracing::debug!("Config blob already exists: {}", digest);
-            return Ok(());
-        }
-
-        // Ensure parent directory exists
-        if let Some(parent) = dest_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                BoxliteError::Storage(format!(
-                    "Failed to create config directory {}: {}",
-                    parent.display(),
-                    e
-                ))
-            })?;
-        }
-
-        if std::fs::hard_link(src_path, &dest_path).is_err() {
-            tracing::debug!(
-                "Hard link failed for config {}, copying to {}",
-                src_path.display(),
-                dest_path.display()
-            );
-            std::fs::copy(src_path, &dest_path).map_err(|e| {
-                BoxliteError::Storage(format!(
-                    "Failed to copy config from {} to {}: {}",
-                    src_path.display(),
-                    dest_path.display(),
-                    e
-                ))
-            })?;
-        }
-
-        tracing::debug!("Imported config: {} -> {}", digest, dest_path.display());
-        Ok(())
-    }
 }
 
 // ============================================================================
@@ -1173,3 +916,236 @@ impl ImageStore {
 ///
 /// Used by `ImageManager` and `ImageObject` to share the same store.
 pub type SharedImageStore = Arc<ImageStore>;
+
+// ============================================================================
+// TESTS
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::Database;
+    use std::path::Path;
+
+    /// Helper to create a minimal OCI bundle for testing
+    fn create_test_oci_bundle(bundle_dir: &Path) -> String {
+        use sha2::Digest;
+
+        // Create OCI layout
+        std::fs::create_dir_all(bundle_dir.join("blobs/sha256")).unwrap();
+
+        let oci_layout = r#"{"imageLayoutVersion": "1.0.0"}"#;
+        std::fs::write(bundle_dir.join("oci-layout"), oci_layout).unwrap();
+
+        // Create a minimal layer tarball with a single file
+        let layer_content = create_minimal_tarball();
+        let layer_digest = format!(
+            "sha256:{}",
+            sha2::Sha256::digest(&layer_content)
+                .iter()
+                .map(|b| format!("{:02x}", b))
+                .collect::<String>()
+        );
+        let layer_path = bundle_dir.join("blobs/sha256").join(&layer_digest[7..]);
+        std::fs::write(&layer_path, &layer_content).unwrap();
+
+        // Create config
+        let config = r#"{
+            "architecture": "amd64",
+            "os": "linux",
+            "config": {
+                "Env": ["PATH=/usr/local/bin:/usr/bin:/bin"],
+                "WorkingDir": "/"
+            },
+            "rootfs": {
+                "type": "layers",
+                "diff_ids": []
+            }
+        }"#;
+        let config_bytes = config.as_bytes();
+        let config_digest = format!(
+            "sha256:{}",
+            sha2::Sha256::digest(config_bytes)
+                .iter()
+                .map(|b| format!("{:02x}", b))
+                .collect::<String>()
+        );
+        let config_path = bundle_dir.join("blobs/sha256").join(&config_digest[7..]);
+        std::fs::write(&config_path, config_bytes).unwrap();
+
+        // Create manifest
+        let manifest = format!(
+            r#"{{
+            "schemaVersion": 2,
+            "mediaType": "application/vnd.oci.image.manifest.v1+json",
+            "config": {{
+                "mediaType": "application/vnd.oci.image.config.v1+json",
+                "digest": "{}",
+                "size": {}
+            }},
+            "layers": [
+                {{
+                    "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+                    "digest": "{}",
+                    "size": {}
+                }}
+            ]
+        }}"#,
+            config_digest,
+            config_bytes.len(),
+            layer_digest,
+            layer_content.len()
+        );
+        let manifest_bytes = manifest.as_bytes();
+        let manifest_digest = format!(
+            "sha256:{}",
+            sha2::Sha256::digest(manifest_bytes)
+                .iter()
+                .map(|b| format!("{:02x}", b))
+                .collect::<String>()
+        );
+        let manifest_path = bundle_dir.join("blobs/sha256").join(&manifest_digest[7..]);
+        std::fs::write(&manifest_path, manifest_bytes).unwrap();
+
+        // Create index.json
+        let index = format!(
+            r#"{{
+            "schemaVersion": 2,
+            "manifests": [
+                {{
+                    "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                    "digest": "{}",
+                    "size": {}
+                }}
+            ]
+        }}"#,
+            manifest_digest,
+            manifest_bytes.len()
+        );
+        std::fs::write(bundle_dir.join("index.json"), index).unwrap();
+
+        layer_digest
+    }
+
+    /// Create a minimal tar archive with a single file
+    fn create_minimal_tarball() -> Vec<u8> {
+        let mut builder = tar::Builder::new(Vec::new());
+
+        // Add a simple file
+        let content = b"Hello from test layer!";
+        let mut header = tar::Header::new_gnu();
+        header.set_path("test.txt").unwrap();
+        header.set_size(content.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        builder.append(&header, &content[..]).unwrap();
+
+        builder.into_inner().unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_load_from_local_basic() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let bundle_dir = temp_dir.path().join("bundle");
+        let images_dir = temp_dir.path().join("images");
+        let db_path = temp_dir.path().join("test.db");
+
+        // Create test bundle
+        let layer_digest = create_test_oci_bundle(&bundle_dir);
+
+        // Create store
+        let db = Database::open(&db_path).unwrap();
+        let store = ImageStore::new(images_dir.clone(), db, vec![]).unwrap();
+
+        // Load from local
+        let manifest = store.load_from_local(bundle_dir.clone()).await.unwrap();
+
+        // Verify manifest
+        assert_eq!(manifest.layers.len(), 1);
+        assert_eq!(manifest.layers[0].digest, layer_digest);
+        assert!(!manifest.config_digest.is_empty());
+        assert!(!manifest.manifest_digest.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_load_from_local_no_blob_import() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let bundle_dir = temp_dir.path().join("bundle");
+        let images_dir = temp_dir.path().join("images");
+        let db_path = temp_dir.path().join("test.db");
+
+        // Create test bundle
+        let layer_digest = create_test_oci_bundle(&bundle_dir);
+
+        // Create store
+        let db = Database::open(&db_path).unwrap();
+        let store = ImageStore::new(images_dir.clone(), db, vec![]).unwrap();
+
+        // Load from local
+        let _manifest = store.load_from_local(bundle_dir.clone()).await.unwrap();
+
+        // Verify blobs were NOT imported to storage
+        // (This is the key behavior change - LocalBundleBlobSource reads from bundle)
+        let layer_path = images_dir
+            .join("layers")
+            .join(format!("{}.tar.gz", layer_digest.replace(':', "-")));
+        assert!(
+            !layer_path.exists(),
+            "Layer should NOT be imported to storage"
+        );
+
+        // The original bundle should still have the layer
+        let bundle_layer_path = bundle_dir
+            .join("blobs")
+            .join(layer_digest.replace(':', "/"));
+        assert!(bundle_layer_path.exists(), "Bundle should still have layer");
+    }
+
+    #[tokio::test]
+    async fn test_load_from_local_missing_oci_layout() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let bundle_dir = temp_dir.path().join("bundle");
+        let images_dir = temp_dir.path().join("images");
+        let db_path = temp_dir.path().join("test.db");
+
+        // Create incomplete bundle (missing oci-layout)
+        std::fs::create_dir_all(&bundle_dir).unwrap();
+        std::fs::write(bundle_dir.join("index.json"), "{}").unwrap();
+
+        // Create store
+        let db = Database::open(&db_path).unwrap();
+        let store = ImageStore::new(images_dir.clone(), db, vec![]).unwrap();
+
+        // Load should fail
+        let result = store.load_from_local(bundle_dir).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("oci-layout"));
+    }
+
+    #[tokio::test]
+    async fn test_load_from_local_missing_index() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let bundle_dir = temp_dir.path().join("bundle");
+        let images_dir = temp_dir.path().join("images");
+        let db_path = temp_dir.path().join("test.db");
+
+        // Create incomplete bundle (missing index.json)
+        std::fs::create_dir_all(&bundle_dir).unwrap();
+        std::fs::write(
+            bundle_dir.join("oci-layout"),
+            r#"{"imageLayoutVersion": "1.0.0"}"#,
+        )
+        .unwrap();
+
+        // Create store
+        let db = Database::open(&db_path).unwrap();
+        let store = ImageStore::new(images_dir.clone(), db, vec![]).unwrap();
+
+        // Load should fail
+        let result = store.load_from_local(bundle_dir).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("index.json"));
+    }
+}

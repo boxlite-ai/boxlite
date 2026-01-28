@@ -171,7 +171,7 @@ impl RootfsBuilder {
             ))
         })?;
 
-        let layer_tarballs = image.layer_tarballs().await;
+        let layer_tarballs = image.layer_tarballs();
         if layer_tarballs.is_empty() {
             return Err(BoxliteError::Storage(
                 "Cannot prepare rootfs with no layers".into(),

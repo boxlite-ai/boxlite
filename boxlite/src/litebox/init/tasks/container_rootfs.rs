@@ -276,7 +276,7 @@ async fn prepare_disk_rootfs(
     image: &crate::images::ImageObject,
 ) -> BoxliteResult<ContainerRootfsPrepResult> {
     // Check if we already have a cached disk image for this image
-    if let Some(disk) = image.disk_image().await {
+    if let Some(disk) = image.disk_image() {
         let disk_path = disk.path().to_path_buf();
         let disk_size = std::fs::metadata(&disk_path)
             .map(|m| m.len())

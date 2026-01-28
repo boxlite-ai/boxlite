@@ -166,7 +166,7 @@ async fn prepare_guest_rootfs(
     env: Vec<(String, String)>,
 ) -> BoxliteResult<GuestRootfs> {
     // Check if we already have a cached disk image
-    if let Some(disk) = base_image.disk_image().await {
+    if let Some(disk) = base_image.disk_image() {
         // Verify guest binary is not newer than cached disk
         if is_cache_valid(disk.path())? {
             let disk_path = disk.path().to_path_buf();
@@ -250,6 +250,7 @@ async fn prepare_guest_rootfs(
     );
 
     // Install disk image to cache
+    // TODO(@DorianZheng) Shouldn't inject disk image here, consider use local bundle blob source instead.
     let installed_disk = base_image.install_disk_image(temp_disk).await?;
     let final_path = installed_disk.path().to_path_buf();
 
