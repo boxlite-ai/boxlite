@@ -14,6 +14,25 @@
 import { BrowserBox } from '@boxlite-ai/boxlite';
 import puppeteer from 'puppeteer-core';
 
+/**
+ * Helper: Navigate with retry for transient network errors
+ *
+ * VM network may not be fully stable when the browser first connects.
+ * Retrying navigation handles race conditions during VM startup.
+ */
+async function gotoWithRetry(page, url, options = {}, retries = 3) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000, ...options });
+      return;
+    } catch (err) {
+      if (i === retries - 1) throw err;
+      console.log(`  Retry ${i + 1}/${retries} after error: ${err.message.split('\n')[0]}`);
+      await new Promise(r => setTimeout(r, 1000));
+    }
+  }
+}
+
 async function main() {
   console.log('=== BrowserBox + Puppeteer Example ===\n');
 
@@ -45,9 +64,9 @@ async function exampleBasicNavigation() {
     const browser = await puppeteer.connect({ browserWSEndpoint: wsEndpoint });
     const page = await browser.newPage();
 
-    // Navigate to example.com
+    // Navigate to example.com (with retry for transient network errors)
     console.log('Navigating to example.com...');
-    await page.goto('https://example.com');
+    await gotoWithRetry(page, 'https://example.com');
 
     // Extract page title
     const title = await page.title();
@@ -92,9 +111,9 @@ async function exampleFirefoxNavigation() {
     const pages = await browser.pages();
     const page = pages[0];
 
-    // Navigate to example.com
+    // Navigate to example.com (with retry for transient network errors)
     console.log('Navigating to example.com with Firefox...');
-    await page.goto('https://example.com');
+    await gotoWithRetry(page, 'https://example.com');
 
     // Extract page title
     const title = await page.title();
@@ -122,8 +141,8 @@ async function exampleScreenshot() {
     // Set viewport size
     await page.setViewport({ width: 1280, height: 720 });
 
-    // Navigate and screenshot
-    await page.goto('https://example.com');
+    // Navigate and screenshot (with retry for transient network errors)
+    await gotoWithRetry(page, 'https://example.com');
     await page.screenshot({ path: '/tmp/puppeteer_screenshot.png' });
     console.log('✓ Screenshot saved: /tmp/puppeteer_screenshot.png');
 
@@ -134,22 +153,6 @@ async function exampleScreenshot() {
     await browser.close();
   } finally {
     await box.stop();
-  }
-}
-
-/**
- * Helper: Navigate with retry for transient network errors
- */
-async function gotoWithRetry(page, url, options = {}, retries = 3) {
-  for (let i = 0; i < retries; i++) {
-    try {
-      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000, ...options });
-      return;
-    } catch (err) {
-      if (i === retries - 1) throw err;
-      console.log(`  Retry ${i + 1}/${retries} after error: ${err.message.split('\n')[0]}`);
-      await new Promise(r => setTimeout(r, 1000));
-    }
   }
 }
 

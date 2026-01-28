@@ -4,6 +4,26 @@ BrowserBox - Secure browser with Playwright Server.
 Provides a minimal, elegant API for running isolated browsers that can be
 controlled from outside using Playwright. Supports all browser types:
 chromium, firefox, and webkit.
+
+Connection Modes
+----------------
+BrowserBox provides two ways to connect:
+
+1. **Playwright Server Mode** (``playwright_endpoint()``):
+   - Starts ``playwright run-server`` on port 3000
+   - Works with ALL browsers (chromium, firefox, webkit)
+   - Clients connect via WebSocket to control the browser
+   - Recommended for most use cases
+
+2. **Direct CDP/BiDi Mode** (``endpoint()``):
+   - Starts browser directly with remote debugging
+   - Chromium: Uses Chrome DevTools Protocol (CDP) on port 9222
+   - Firefox: Uses WebDriver BiDi protocol on port 9222
+   - WebKit: NOT SUPPORTED (Puppeteer limitation)
+   - Traffic routed through port 3000 via TCP forwarder
+     (workaround for VM port forwarding limitations)
+
+These modes are MUTUALLY EXCLUSIVE - use one or the other per instance.
 """
 
 import asyncio
@@ -20,8 +40,38 @@ if TYPE_CHECKING:
 __all__ = ["BrowserBox", "BrowserBoxOptions"]
 
 
-# Default CDP port for Puppeteer connections
+# =============================================================================
+# Constants
+# =============================================================================
+
+# Default CDP port for remote debugging (Chromium CDP / Firefox BiDi)
 _CDP_PORT = 9222
+
+# Polling interval for service readiness checks (seconds)
+_POLL_INTERVAL = 0.5
+
+# Log file paths inside the VM
+_PLAYWRIGHT_LOG = "/tmp/playwright.log"
+_CHROMIUM_CDP_LOG = "/tmp/chromium-cdp.log"
+_FIREFOX_BIDI_LOG = "/tmp/firefox-bidi.log"
+
+# Playwright installation path in Docker image
+_PLAYWRIGHT_INSTALL_PATH = "/ms-playwright"
+
+# Browser data directories
+_CHROMIUM_DATA_DIR = "/tmp/chromium-data"
+_FIREFOX_PROFILE_DIR = "/tmp/firefox-profile"
+
+# Timeout for CDP forwarder startup (seconds)
+_CDP_FORWARDER_TIMEOUT = 10
+
+# TCP buffer size for forwarder
+_TCP_BUFFER_SIZE = 65536
+
+
+# =============================================================================
+# Types
+# =============================================================================
 
 
 @dataclass
@@ -133,6 +183,60 @@ class BrowserBox(SimpleBox):
         # Don't auto-start browser here - let playwright_endpoint() handle it
         return self
 
+    # =========================================================================
+    # Private: Generic Polling Helper
+    # =========================================================================
+
+    async def _poll_until_ready(
+        self,
+        check_cmd: str,
+        service_name: str,
+        log_path: str,
+        timeout: int,
+    ) -> None:
+        """
+        Poll until a check command returns "ready" or timeout expires.
+
+        This is the core polling pattern used by all service startup methods.
+        The check command should output "ready" when the service is available,
+        or any other string (typically "notready") otherwise.
+
+        Args:
+            check_cmd: Shell command that outputs "ready" when service is available
+            service_name: Human-readable name for error messages
+            log_path: Path to log file for debugging on failure
+            timeout: Maximum wait time in seconds
+
+        Raises:
+            TimeoutError: If service doesn't become ready within timeout
+        """
+        start = time.time()
+
+        while time.time() - start < timeout:
+            result = await self.exec("sh", "-c", check_cmd)
+            if result.stdout.strip() == "ready":
+                return
+            await asyncio.sleep(_POLL_INTERVAL)
+
+        # Fetch log content for debugging
+        log_content = ""
+        try:
+            log_result = await self.exec(
+                "sh", "-c", f"cat {log_path} 2>/dev/null || echo 'No log'"
+            )
+            log_content = log_result.stdout.strip()
+        except Exception:
+            pass
+
+        raise TimeoutError(
+            f"{service_name} did not start within {timeout}s. "
+            f"Log: {log_content[:500]}"
+        )
+
+    # =========================================================================
+    # Private: Playwright Server
+    # =========================================================================
+
     async def _start_playwright_server(self, timeout: int = 60):
         """
         Start Playwright Server (works for all browser types).
@@ -149,57 +253,34 @@ class BrowserBox(SimpleBox):
         cmd = (
             f"npx -y playwright@{self._PLAYWRIGHT_VERSION} run-server "
             f"--port {self._guest_port} --host 0.0.0.0 "
-            f"> /tmp/playwright.log 2>&1 &"
+            f"> {_PLAYWRIGHT_LOG} 2>&1 &"
         )
-        await self.run("sh", "-c", f"nohup {cmd}")
-        await self._wait_for_playwright_server(timeout)
+        await self.exec("sh", "-c", f"nohup {cmd}")
+
+        # Check if server responds to /json endpoint (Playwright's health check)
+        check_cmd = (
+            f"curl -sf http://{const.GUEST_IP}:{self._guest_port}/json "
+            f"> /dev/null 2>&1 && echo ready || echo notready"
+        )
+        await self._poll_until_ready(
+            check_cmd,
+            f"Playwright Server ({self._browser})",
+            _PLAYWRIGHT_LOG,
+            timeout,
+        )
         self._playwright_started = True
 
-    async def _wait_for_playwright_server(self, timeout: int):
-        """
-        Poll until Playwright Server is ready.
-
-        Args:
-            timeout: Maximum wait time in seconds
-
-        Raises:
-            TimeoutError: If server doesn't become ready within timeout
-        """
-        start = time.time()
-        poll_interval = 0.5
-
-        while time.time() - start < timeout:
-            # Check if server is responding on the external interface
-            check = (
-                f"curl -sf http://{const.GUEST_IP}:{self._guest_port}/json "
-                f"> /dev/null 2>&1 && echo ready || echo notready"
-            )
-            result = await self.run("sh", "-c", check)
-            if result.stdout.strip() == "ready":
-                return
-            await asyncio.sleep(poll_interval)
-
-        # Try to get log output for debugging
-        log_content = ""
-        try:
-            log_result = await self.run(
-                "sh", "-c", "cat /tmp/playwright.log 2>/dev/null || echo 'No log'"
-            )
-            log_content = log_result.stdout.strip()
-        except Exception:
-            pass
-
-        raise TimeoutError(
-            f"Playwright Server ({self._browser}) did not start within {timeout}s. "
-            f"Log: {log_content[:500]}"
-        )
+    # =========================================================================
+    # Private: CDP/BiDi Browser (for Puppeteer)
+    # =========================================================================
 
     async def _start_puppeteer_browser(self, timeout: int = 60):
         """
-        Start browser with remote debugging (for Puppeteer).
+        Start browser with remote debugging for Puppeteer.
 
-        Works with chromium (CDP) and firefox (WebDriver BiDi).
-        WebKit is not supported by Puppeteer.
+        Chromium uses Chrome DevTools Protocol (CDP).
+        Firefox uses WebDriver BiDi protocol.
+        WebKit is NOT supported by Puppeteer.
 
         Args:
             timeout: Maximum time to wait for browser to start in seconds
@@ -215,7 +296,8 @@ class BrowserBox(SimpleBox):
                 "Use playwright_endpoint() with Playwright for webkit."
             )
 
-        # endpoint() and Playwright cannot be used simultaneously (they share port 3000)
+        # Playwright Server and CDP browser cannot run simultaneously because
+        # both need port 3000 for the host-accessible endpoint.
         if self._playwright_started:
             raise RuntimeError(
                 "Cannot use endpoint() when Playwright Server is already running. "
@@ -227,19 +309,21 @@ class BrowserBox(SimpleBox):
         elif self._browser == "firefox":
             await self._start_firefox_bidi(timeout)
 
-        # Start Python TCP forwarder to route traffic through port 3000
+        # Port 3000 is the only port with reliable VM port forwarding.
+        # CDP runs on 9222 internally, but we route it through 3000 externally.
         await self._start_cdp_forwarder()
 
         self._cdp_started = True
 
     async def _start_chromium_cdp(self, timeout: int):
         """Start Chromium with CDP remote debugging."""
-        # Find chromium binary in Playwright's installation directory
+        # Playwright Docker images install browsers under /ms-playwright/.
+        # The exact path varies by version, so we search dynamically.
         find_chrome = (
-            "CHROME=$(find /ms-playwright -name chrome -type f 2>/dev/null | "
+            f"CHROME=$(find {_PLAYWRIGHT_INSTALL_PATH} -name chrome -type f 2>/dev/null | "
             "grep chrome-linux | head -1) && echo $CHROME"
         )
-        result = await self.run("sh", "-c", find_chrome)
+        result = await self.exec("sh", "-c", find_chrome)
         chrome_path = result.stdout.strip()
 
         if not chrome_path:
@@ -253,22 +337,30 @@ class BrowserBox(SimpleBox):
             f"{chrome_path} --headless --no-sandbox --disable-gpu "
             f"--disable-dev-shm-usage --disable-software-rasterizer "
             f"--no-first-run --disable-extensions "
-            f"--user-data-dir=/tmp/chromium-data "
+            f"--user-data-dir={_CHROMIUM_DATA_DIR} "
             f"--remote-debugging-address=0.0.0.0 "
             f"--remote-debugging-port={self._cdp_guest_port} "
             f"--remote-allow-origins=* "
-            f"> /tmp/chromium-cdp.log 2>&1 &"
+            f"> {_CHROMIUM_CDP_LOG} 2>&1 &"
         )
-        await self.run("sh", "-c", f"nohup {cmd}")
-        await self._wait_for_cdp_server(timeout)
+        await self.exec("sh", "-c", f"nohup {cmd}")
+
+        # Check CDP /json/version endpoint (standard health check)
+        check_cmd = (
+            f"curl -sf http://{const.GUEST_IP}:{self._cdp_guest_port}/json/version "
+            f"> /dev/null 2>&1 && echo ready || echo notready"
+        )
+        await self._poll_until_ready(
+            check_cmd, "CDP browser", _CHROMIUM_CDP_LOG, timeout
+        )
 
     async def _start_firefox_bidi(self, timeout: int):
         """Start Firefox with WebDriver BiDi remote debugging."""
-        # Find firefox binary in Playwright's installation directory
+        # Playwright Docker images install browsers under /ms-playwright/.
         find_firefox = (
-            "FF=$(find /ms-playwright -name firefox -type f 2>/dev/null | head -1) && echo $FF"
+            f"FF=$(find {_PLAYWRIGHT_INSTALL_PATH} -name firefox -type f 2>/dev/null | head -1) && echo $FF"
         )
-        result = await self.run("sh", "-c", find_firefox)
+        result = await self.exec("sh", "-c", find_firefox)
         firefox_path = result.stdout.strip()
 
         if not firefox_path:
@@ -278,138 +370,125 @@ class BrowserBox(SimpleBox):
             )
 
         # Create profile directory
-        await self.run("sh", "-c", "mkdir -p /tmp/firefox-profile")
+        await self.exec("sh", "-c", f"mkdir -p {_FIREFOX_PROFILE_DIR}")
 
         # Firefox uses --remote-debugging-port for WebDriver BiDi
         cmd = (
             f"{firefox_path} --headless --no-remote "
-            f"--profile /tmp/firefox-profile "
+            f"--profile {_FIREFOX_PROFILE_DIR} "
             f"--remote-debugging-port {self._cdp_guest_port} "
-            f"> /tmp/firefox-bidi.log 2>&1 &"
+            f"> {_FIREFOX_BIDI_LOG} 2>&1 &"
         )
-        await self.run("sh", "-c", f"nohup {cmd}")
-        await self._wait_for_bidi_server(timeout)
+        await self.exec("sh", "-c", f"nohup {cmd}")
 
-    async def _wait_for_bidi_server(self, timeout: int):
-        """Wait for Firefox WebDriver BiDi server to be ready."""
-        start = time.time()
-        poll_interval = 0.5
-
-        while time.time() - start < timeout:
-            # Check log for "WebDriver BiDi listening" message
-            check = (
-                'grep -q "WebDriver BiDi listening" /tmp/firefox-bidi.log 2>/dev/null '
-                "&& echo ready || echo notready"
-            )
-            result = await self.run("sh", "-c", check)
-            if result.stdout.strip() == "ready":
-                return
-            await asyncio.sleep(poll_interval)
-
-        # Try to get log output for debugging
-        log_content = ""
-        try:
-            log_result = await self.run(
-                "sh", "-c", "cat /tmp/firefox-bidi.log 2>/dev/null || echo 'No log'"
-            )
-            log_content = log_result.stdout.strip()
-        except Exception:
-            pass
-
-        raise TimeoutError(
-            f"Firefox WebDriver BiDi did not start within {timeout}s. "
-            f"Log: {log_content[:500]}"
+        # Firefox logs "WebDriver BiDi listening" when ready
+        check_cmd = (
+            f'grep -q "WebDriver BiDi listening" {_FIREFOX_BIDI_LOG} 2>/dev/null '
+            "&& echo ready || echo notready"
         )
+        await self._poll_until_ready(
+            check_cmd, "Firefox WebDriver BiDi", _FIREFOX_BIDI_LOG, timeout
+        )
+
+    # =========================================================================
+    # Private: TCP Forwarder
+    # =========================================================================
 
     async def _start_cdp_forwarder(self):
-        """Start Python TCP forwarder to route traffic through port 3000."""
-        # Python script that forwards TCP connections and rewrites Host header for Firefox
-        cdp_port = self._cdp_guest_port
-        fwd_port = self._guest_port
-        script = f"""import socket, threading, re
-def fwd(s,d,rewrite=False):
-    try:
-        first=True
-        while True:
-            x=s.recv(65536)
-            if not x: break
-            if first and rewrite:
-                x=re.sub(rb'Host: [^\\r\\n]+',b'Host: 127.0.0.1:{cdp_port}',x)
-                first=False
-            d.sendall(x)
-    except: pass
-    s.close(); d.close()
-def handle(c):
-    try:
-        srv=socket.socket()
-        srv.connect(('127.0.0.1',{cdp_port}))
-        threading.Thread(target=fwd,args=(c,srv,True)).start()
-        threading.Thread(target=fwd,args=(srv,c,False)).start()
-    except: c.close()
-l=socket.socket()
-l.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
-l.bind(('0.0.0.0',{fwd_port}))
-l.listen(10)
-while True:
-    c,_=l.accept()
-    threading.Thread(target=handle,args=(c,)).start()
-"""
-        # Write script and start forwarder
-        await self.run("sh", "-c", f"cat > /tmp/cdp_fwd.py << 'ENDPY'\n{script}\nENDPY")
-        await self.run("sh", "-c", "nohup python3 /tmp/cdp_fwd.py >/dev/null 2>&1 &")
+        """
+        Start TCP forwarder to route CDP traffic through port 3000.
 
-        # Wait for forwarder to be ready by testing TCP connection
+        Why this is needed:
+        - VM port forwarding only works reliably on port 3000
+        - CDP/BiDi runs on port 9222 internally
+        - This forwarder bridges port 3000 → 9222 inside the VM
+
+        The forwarder also rewrites the HTTP Host header because Firefox
+        WebDriver BiDi validates that the Host header matches its listening address.
+        """
+        cdp_port = self._cdp_guest_port
+        forwarder_port = self._guest_port
+
+        # Python TCP forwarder script with clear variable names
+        script = f'''"""TCP forwarder: routes traffic from port {forwarder_port} to {cdp_port}.
+
+Required because VM port forwarding only works reliably on port 3000.
+Rewrites HTTP Host header so Firefox WebDriver BiDi accepts connections.
+"""
+import socket
+import threading
+import re
+
+def forward_data(source, destination, rewrite_host=False):
+    """Forward data between sockets, optionally rewriting Host header."""
+    try:
+        is_first_chunk = True
+        while True:
+            data = source.recv({_TCP_BUFFER_SIZE})
+            if not data:
+                break
+            # Firefox BiDi requires Host header to match its listening address
+            if is_first_chunk and rewrite_host:
+                data = re.sub(
+                    rb'Host: [^\\r\\n]+',
+                    b'Host: 127.0.0.1:{cdp_port}',
+                    data
+                )
+                is_first_chunk = False
+            destination.sendall(data)
+    except Exception:
+        pass  # Connection closed
+    finally:
+        source.close()
+        destination.close()
+
+def handle_connection(client_socket):
+    """Handle incoming connection by forwarding to CDP server."""
+    try:
+        server_socket = socket.socket()
+        server_socket.connect(('127.0.0.1', {cdp_port}))
+        # Bidirectional forwarding
+        threading.Thread(
+            target=forward_data,
+            args=(client_socket, server_socket, True)
+        ).start()
+        threading.Thread(
+            target=forward_data,
+            args=(server_socket, client_socket, False)
+        ).start()
+    except Exception:
+        client_socket.close()
+
+# Start listening
+listener = socket.socket()
+listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+listener.bind(('0.0.0.0', {forwarder_port}))
+listener.listen(10)
+
+while True:
+    client, _ = listener.accept()
+    threading.Thread(target=handle_connection, args=(client,)).start()
+'''
+        # Write script using heredoc to handle special characters safely
+        await self.exec("sh", "-c", f"cat > /tmp/cdp_fwd.py << 'ENDSCRIPT'\n{script}\nENDSCRIPT")
+        await self.exec("sh", "-c", "nohup python3 /tmp/cdp_fwd.py >/dev/null 2>&1 &")
+
+        # Wait for forwarder to accept connections
         start_time = time.time()
-        while time.time() - start_time < 10:
-            # Test forwarder by attempting a TCP connection using Python
-            check = await self.run(
+        while time.time() - start_time < _CDP_FORWARDER_TIMEOUT:
+            check = await self.exec(
                 "sh", "-c",
                 f"python3 -c \"import socket; s=socket.socket(); s.settimeout(1); "
-                f"s.connect(('127.0.0.1',{self._guest_port})); s.close(); print('ready')\" "
+                f"s.connect(('127.0.0.1',{forwarder_port})); s.close(); print('ready')\" "
                 f"2>/dev/null || echo notready"
             )
             if check.stdout.strip() == "ready":
                 return
             await asyncio.sleep(0.2)
 
-    async def _wait_for_cdp_server(self, timeout: int):
-        """
-        Poll until CDP server is ready and get the WebSocket URL.
-
-        Args:
-            timeout: Maximum wait time in seconds
-
-        Raises:
-            TimeoutError: If server doesn't become ready within timeout
-        """
-        start = time.time()
-        poll_interval = 0.5
-
-        while time.time() - start < timeout:
-            # Check if CDP server is responding
-            check = (
-                f"curl -sf http://{const.GUEST_IP}:{self._cdp_guest_port}/json/version "
-                f"> /dev/null 2>&1 && echo ready || echo notready"
-            )
-            result = await self.run("sh", "-c", check)
-            if result.stdout.strip() == "ready":
-                return
-            await asyncio.sleep(poll_interval)
-
-        # Try to get log output for debugging
-        log_content = ""
-        try:
-            log_result = await self.run(
-                "sh", "-c", "cat /tmp/chromium-cdp.log 2>/dev/null || echo 'No log'"
-            )
-            log_content = log_result.stdout.strip()
-        except Exception:
-            pass
-
-        raise TimeoutError(
-            f"CDP browser did not start within {timeout}s. "
-            f"Log: {log_content[:500]}"
-        )
+    # =========================================================================
+    # Public API: Endpoints
+    # =========================================================================
 
     async def playwright_endpoint(self, timeout: int = 60) -> str:
         """
@@ -435,15 +514,6 @@ while True:
             await self._start_playwright_server(timeout)
         return f"ws://localhost:{self._host_port}/"
 
-    async def ws_endpoint(self, timeout: int = 60) -> str:
-        """
-        Get the WebSocket endpoint for Playwright connect().
-
-        .. deprecated::
-            Use :meth:`playwright_endpoint` instead.
-        """
-        return await self.playwright_endpoint(timeout)
-
     async def endpoint(self, timeout: int = 60) -> str:
         """
         Get the WebSocket endpoint for CDP/BiDi connections.
@@ -451,6 +521,8 @@ while True:
         This is the generic endpoint that works with Puppeteer, Selenium, or any
         other CDP/BiDi client. Works with chromium (CDP) and firefox (WebDriver BiDi).
         WebKit is not supported - use playwright_endpoint() with Playwright instead.
+
+        Auto-starts the browser with remote debugging if not already running.
 
         Args:
             timeout: Maximum time to wait for browser to start (if needed)
@@ -481,58 +553,26 @@ while True:
             await self._start_puppeteer_browser(timeout)
 
         if self._browser == "firefox":
-            # Firefox WebDriver BiDi requires /session path for WebSocket upgrade
+            # Firefox WebDriver BiDi requires /session path for WebSocket upgrade.
             # See: https://github.com/puppeteer/puppeteer/issues/13057
             return f"ws://localhost:{self._host_port}/session"
 
-        # Chromium: Fetch the WebSocket URL from CDP endpoint
+        # Chromium: Fetch the WebSocket URL from CDP /json/version endpoint
         import json
 
-        result = await self.run(
+        result = await self.exec(
             "sh", "-c",
             f"curl -sf http://{const.GUEST_IP}:{self._cdp_guest_port}/json/version"
         )
         version_info = json.loads(result.stdout)
         ws_url = version_info.get("webSocketDebuggerUrl", "")
 
-        # Replace internal address with localhost:host_port
-        # CDP traffic is routed through port 3000 via the Python forwarder
+        # Replace internal address with localhost:host_port.
+        # CDP traffic is routed through port 3000 via the TCP forwarder.
         import re
         ws_url = re.sub(r"ws://[^:]+:\d+", f"ws://localhost:{self._host_port}", ws_url)
 
         return ws_url
-
-    async def puppeteer_endpoint(self, timeout: int = 60) -> str:
-        """
-        Get the WebSocket endpoint for Puppeteer connect().
-
-        .. deprecated::
-            Use :meth:`endpoint` instead.
-        """
-        return await self.endpoint(timeout)
-
-    async def cdp_endpoint(self, timeout: int = 60) -> str:
-        """
-        Get the CDP WebSocket endpoint for Puppeteer connect().
-
-        .. deprecated::
-            Use :meth:`endpoint` instead. This method only works with chromium.
-
-        Args:
-            timeout: Maximum time to wait for browser to start (if needed)
-
-        Returns:
-            CDP WebSocket endpoint URL
-
-        Raises:
-            ValueError: If browser type is not chromium
-        """
-        if self._browser != "chromium":
-            raise ValueError(
-                f"cdp_endpoint() only works with chromium. "
-                f"For {self._browser}, use endpoint() instead."
-            )
-        return await self.endpoint(timeout)
 
     async def connect(self, timeout: int = 60) -> Any:
         """
