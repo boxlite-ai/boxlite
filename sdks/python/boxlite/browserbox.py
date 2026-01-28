@@ -229,8 +229,7 @@ class BrowserBox(SimpleBox):
             pass
 
         raise TimeoutError(
-            f"{service_name} did not start within {timeout}s. "
-            f"Log: {log_content[:500]}"
+            f"{service_name} did not start within {timeout}s. Log: {log_content[:500]}"
         )
 
     # =========================================================================
@@ -360,9 +359,7 @@ class BrowserBox(SimpleBox):
     async def _start_firefox_bidi(self, timeout: int):
         """Start Firefox with WebDriver BiDi remote debugging."""
         # Playwright Docker images install browsers under /ms-playwright/.
-        find_firefox = (
-            f"FF=$(find {_PLAYWRIGHT_INSTALL_PATH} -name firefox -type f 2>/dev/null | head -1) && echo $FF"
-        )
+        find_firefox = f"FF=$(find {_PLAYWRIGHT_INSTALL_PATH} -name firefox -type f 2>/dev/null | head -1) && echo $FF"
         result = await self.exec("sh", "-c", find_firefox)
         firefox_path = result.stdout.strip()
 
@@ -473,17 +470,20 @@ while True:
     threading.Thread(target=handle_connection, args=(client,)).start()
 '''
         # Write script using heredoc to handle special characters safely
-        await self.exec("sh", "-c", f"cat > /tmp/cdp_fwd.py << 'ENDSCRIPT'\n{script}\nENDSCRIPT")
+        await self.exec(
+            "sh", "-c", f"cat > /tmp/cdp_fwd.py << 'ENDSCRIPT'\n{script}\nENDSCRIPT"
+        )
         await self.exec("sh", "-c", "nohup python3 /tmp/cdp_fwd.py >/dev/null 2>&1 &")
 
         # Wait for forwarder to accept connections
         start_time = time.time()
         while time.time() - start_time < _CDP_FORWARDER_TIMEOUT:
             check = await self.exec(
-                "sh", "-c",
-                f"python3 -c \"import socket; s=socket.socket(); s.settimeout(1); "
+                "sh",
+                "-c",
+                f'python3 -c "import socket; s=socket.socket(); s.settimeout(1); '
                 f"s.connect(('127.0.0.1',{forwarder_port})); s.close(); print('ready')\" "
-                f"2>/dev/null || echo notready"
+                f"2>/dev/null || echo notready",
             )
             if check.stdout.strip() == "ready":
                 return
@@ -565,8 +565,7 @@ while True:
         import json
 
         result = await self.exec(
-            "sh", "-c",
-            f"curl -sf http://localhost:{self._cdp_guest_port}/json/version"
+            "sh", "-c", f"curl -sf http://localhost:{self._cdp_guest_port}/json/version"
         )
         version_info = json.loads(result.stdout)
         ws_url = version_info.get("webSocketDebuggerUrl", "")
@@ -574,6 +573,7 @@ while True:
         # Replace internal address with localhost:host_port.
         # CDP traffic is routed through port 3000 via the TCP forwarder.
         import re
+
         ws_url = re.sub(r"ws://[^:]+:\d+", f"ws://localhost:{self._host_port}", ws_url)
 
         return ws_url
