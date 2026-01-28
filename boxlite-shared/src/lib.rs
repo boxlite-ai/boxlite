@@ -29,5 +29,9 @@ pub use generated::guest_server::{Guest, GuestServer};
 pub use generated::execution_client::ExecutionClient;
 pub use generated::execution_server::{Execution, ExecutionServer};
 
+// Files service
+pub use generated::files_client::FilesClient;
+pub use generated::files_server::{Files, FilesServer};
+
 // All generated types
 pub use generated::*;

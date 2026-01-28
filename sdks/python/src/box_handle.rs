@@ -97,6 +97,50 @@ impl PyBox {
         })
     }
 
+    /// Copy from host into the box container rootfs.
+    #[pyo3(signature = (host_path, container_dest, copy_options=None))]
+    fn copy_in<'a>(
+        &self,
+        py: Python<'a>,
+        host_path: String,
+        container_dest: String,
+        copy_options: Option<crate::options::PyCopyOptions>,
+    ) -> PyResult<Bound<'a, PyAny>> {
+        let handle = Arc::clone(&self.handle);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let opts: boxlite::CopyOptions =
+                copy_options.map_or_else(boxlite::CopyOptions::default, Into::into);
+
+            handle
+                .copy_into(std::path::Path::new(&host_path), &container_dest, opts)
+                .await
+                .map_err(map_err)?;
+            Ok(())
+        })
+    }
+
+    /// Copy from box container rootfs to host.
+    #[pyo3(signature = (container_src, host_dest, copy_options=None))]
+    fn copy_out<'a>(
+        &self,
+        py: Python<'a>,
+        container_src: String,
+        host_dest: String,
+        copy_options: Option<crate::options::PyCopyOptions>,
+    ) -> PyResult<Bound<'a, PyAny>> {
+        let handle = Arc::clone(&self.handle);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let opts: boxlite::CopyOptions =
+                copy_options.map_or_else(boxlite::CopyOptions::default, Into::into);
+
+            handle
+                .copy_out(&container_src, std::path::Path::new(&host_dest), opts)
+                .await
+                .map_err(map_err)?;
+            Ok(())
+        })
+    }
+
     /// Enter async context manager - auto-starts the box (Testcontainers pattern).
     fn __aenter__<'a>(slf: PyRefMut<'_, Self>, py: Python<'a>) -> PyResult<Bound<'a, PyAny>> {
         let handle = Arc::clone(&slf.handle);

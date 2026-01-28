@@ -254,3 +254,91 @@ class SimpleBox:
                 "or call 'await box.start()' first."
             )
         self._box.shutdown()
+
+    async def copy_in(
+        self,
+        host_path: str,
+        container_dest: str,
+        *,
+        overwrite: bool = True,
+        follow_symlinks: bool = False,
+        include_parent: bool = True,
+    ) -> None:
+        """
+        Copy files/directories from host into the container.
+
+        Args:
+            host_path: Path on the host filesystem (file or directory)
+            container_dest: Destination path inside the container
+            overwrite: If True, overwrite existing files (default: True)
+            follow_symlinks: If True, follow symlinks when copying (default: False)
+            include_parent: If True, include parent directory in archive (default: True)
+
+        Examples:
+            Copy a single file::
+
+                await box.copy_in("/local/config.json", "/app/config.json")
+
+            Copy a directory::
+
+                await box.copy_in("/local/data/", "/app/data/")
+        """
+        if not self._started:
+            raise RuntimeError(
+                "Box not started. Use 'async with SimpleBox(...) as box:' "
+                "or call 'await box.start()' first."
+            )
+
+        from .boxlite import CopyOptions
+
+        opts = CopyOptions(
+            recursive=True,
+            overwrite=overwrite,
+            follow_symlinks=follow_symlinks,
+            include_parent=include_parent,
+        )
+        await self._box.copy_in(host_path, container_dest, opts)
+
+    async def copy_out(
+        self,
+        container_src: str,
+        host_dest: str,
+        *,
+        overwrite: bool = True,
+        follow_symlinks: bool = False,
+        include_parent: bool = True,
+    ) -> None:
+        """
+        Copy files/directories from container to host.
+
+        Args:
+            container_src: Source path inside the container (file or directory)
+            host_dest: Destination path on the host filesystem
+            overwrite: If True, overwrite existing files (default: True)
+            follow_symlinks: If True, follow symlinks when copying (default: False)
+            include_parent: If True, include parent directory in archive (default: True)
+
+        Examples:
+            Copy a single file::
+
+                await box.copy_out("/app/output.log", "/local/output.log")
+
+            Copy a directory::
+
+                await box.copy_out("/app/results/", "/local/results/")
+        """
+        if not self._started:
+            raise RuntimeError(
+                "Box not started. Use 'async with SimpleBox(...) as box:' "
+                "or call 'await box.start()' first."
+            )
+
+        from .boxlite import CopyOptions
+
+        opts = CopyOptions(
+            recursive=True,
+            overwrite=overwrite,
+            follow_symlinks=follow_symlinks,
+            include_parent=include_parent,
+        )
+        await self._box.copy_out(container_src, host_dest, opts)

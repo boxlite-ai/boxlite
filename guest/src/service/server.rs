@@ -77,7 +77,8 @@ impl GuestServer {
         let server_builder = Server::builder()
             .add_service(boxlite_shared::ContainerServer::from_arc(server.clone()))
             .add_service(boxlite_shared::GuestServer::from_arc(server.clone()))
-            .add_service(boxlite_shared::ExecutionServer::from_arc(server.clone()));
+            .add_service(boxlite_shared::ExecutionServer::from_arc(server.clone()))
+            .add_service(boxlite_shared::FilesServer::from_arc(server.clone()));
 
         match transport {
             Transport::Vsock { port } => {

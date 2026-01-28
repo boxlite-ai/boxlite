@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use parking_lot::RwLock;
+use tar;
 use tokio::sync::OnceCell;
 use tokio_util::sync::CancellationToken;
 
@@ -19,6 +20,7 @@ use super::state::BoxState;
 use crate::disk::Disk;
 #[cfg(target_os = "linux")]
 use crate::fs::BindMountHandle;
+use crate::litebox::copy::CopyOptions;
 use crate::lock::LockGuard;
 use crate::metrics::{BoxMetrics, BoxMetricsStorage};
 use crate::portal::GuestSession;
@@ -359,6 +361,101 @@ impl BoxImpl {
     }
 
     // ========================================================================
+    // FILE COPY
+    // ========================================================================
+
+    pub(crate) async fn copy_into(
+        &self,
+        host_src: &std::path::Path,
+        container_dst: &str,
+        opts: CopyOptions,
+    ) -> BoxliteResult<()> {
+        // Check if box is stopped before proceeding
+        if self.shutdown_token.is_cancelled() {
+            return Err(BoxliteError::Stopped(
+                "Handle invalidated after stop(). Use runtime.get() to get a new handle.".into(),
+            ));
+        }
+
+        // Ensure box is running
+        let live = self.live_state().await?;
+
+        if host_src.is_dir() {
+            opts.validate_for_dir()?;
+        }
+
+        if container_dst.is_empty() {
+            return Err(BoxliteError::Config(
+                "destination path cannot be empty".into(),
+            ));
+        }
+
+        let temp_tar = self
+            .runtime
+            .layout
+            .temp_dir()
+            .join(format!("cp-in-{}.tar", self.config.id.as_str()));
+
+        build_tar_from_host(host_src, &temp_tar, &opts)?;
+
+        let mut files_iface = live.guest_session.files().await?;
+        files_iface
+            .upload_tar(
+                &temp_tar,
+                container_dst,
+                Some(self.container_id()),
+                true,
+                opts.overwrite,
+            )
+            .await?;
+
+        let _ = tokio::fs::remove_file(&temp_tar).await;
+        Ok(())
+    }
+
+    pub(crate) async fn copy_out(
+        &self,
+        container_src: &str,
+        host_dst: &std::path::Path,
+        opts: CopyOptions,
+    ) -> BoxliteResult<()> {
+        // Check if box is stopped before proceeding
+        if self.shutdown_token.is_cancelled() {
+            return Err(BoxliteError::Stopped(
+                "Handle invalidated after stop(). Use runtime.get() to get a new handle.".into(),
+            ));
+        }
+
+        // Ensure box is running
+        let live = self.live_state().await?;
+
+        if container_src.is_empty() {
+            return Err(BoxliteError::Config("source path cannot be empty".into()));
+        }
+
+        let temp_tar = self
+            .runtime
+            .layout
+            .temp_dir()
+            .join(format!("cp-out-{}.tar", self.config.id.as_str()));
+
+        let mut files_iface = live.guest_session.files().await?;
+        files_iface
+            .download_tar(
+                container_src,
+                Some(self.container_id()),
+                opts.include_parent,
+                opts.follow_symlinks,
+                &temp_tar,
+            )
+            .await?;
+
+        extract_tar_to_host(&temp_tar, host_dst, opts.overwrite)?;
+        let _ = tokio::fs::remove_file(&temp_tar).await;
+        Ok(())
+    }
+
+    // ========================================================================
     // LIVE STATE INITIALIZATION (internal)
     // ========================================================================
 
@@ -453,5 +550,115 @@ impl BoxImpl {
 
         // Lock is automatically released when _guard drops
         Ok(live_state)
+    }
+}
+
+fn build_tar_from_host(
+    src: &std::path::Path,
+    tar_path: &std::path::Path,
+    opts: &CopyOptions,
+) -> BoxliteResult<()> {
+    let src = src.to_path_buf();
+    let tar_path = tar_path.to_path_buf();
+    let follow = opts.follow_symlinks;
+    let include_parent = opts.include_parent;
+
+    tokio::task::block_in_place(|| {
+        let tar_file = std::fs::File::create(&tar_path).map_err(|e| {
+            BoxliteError::Storage(format!(
+                "failed to create tar {}: {}",
+                tar_path.display(),
+                e
+            ))
+        })?;
+        let mut builder = tar::Builder::new(tar_file);
+        builder.follow_symlinks(follow);
+
+        if src.is_dir() {
+            let base = if include_parent {
+                src.file_name()
+                    .map(|s| s.to_owned())
+                    .unwrap_or_else(|| std::ffi::OsStr::new("root").to_owned())
+            } else {
+                std::ffi::OsStr::new(".").to_owned()
+            };
+            builder
+                .append_dir_all(base, &src)
+                .map_err(|e| BoxliteError::Storage(format!("failed to archive dir: {}", e)))?;
+        } else {
+            let name = src
+                .file_name()
+                .ok_or_else(|| BoxliteError::Config("source file has no name".into()))?;
+            builder
+                .append_path_with_name(&src, name)
+                .map_err(|e| BoxliteError::Storage(format!("failed to archive file: {}", e)))?;
+        }
+
+        builder
+            .finish()
+            .map_err(|e| BoxliteError::Storage(format!("failed to finish tar: {}", e)))
+    })
+}
+
+fn extract_tar_to_host(
+    tar_path: &std::path::Path,
+    dest: &std::path::Path,
+    overwrite: bool,
+) -> BoxliteResult<()> {
+    // Basic overwrite check
+    if dest.exists() && !overwrite {
+        return Err(BoxliteError::Storage(format!(
+            "destination {} exists and overwrite=false",
+            dest.display()
+        )));
+    }
+
+    tokio::task::block_in_place(|| {
+        let tar_file = std::fs::File::open(tar_path).map_err(|e| {
+            BoxliteError::Storage(format!("failed to open tar {}: {}", tar_path.display(), e))
+        })?;
+        let mut archive = tar::Archive::new(tar_file);
+        archive
+            .unpack(dest)
+            .map_err(|e| BoxliteError::Storage(format!("failed to extract archive: {}", e)))
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn tar_roundtrip_file() {
+        // Multi-threaded runtime required for block_in_place
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+
+        rt.block_on(async {
+            let tmp = TempDir::new().unwrap();
+            let src_dir = tmp.path().join("src");
+            std::fs::create_dir(&src_dir).unwrap();
+            let file = src_dir.join("hello.txt");
+            std::fs::write(&file, b"hello").unwrap();
+
+            let tar_path = tmp.path().join("out.tar");
+            let opts = CopyOptions {
+                include_parent: true,
+                ..CopyOptions::default()
+            };
+            build_tar_from_host(&src_dir, &tar_path, &opts).unwrap();
+
+            let dest_dir = tmp.path().join("dest");
+            std::fs::create_dir(&dest_dir).unwrap();
+            extract_tar_to_host(&tar_path, &dest_dir, true).unwrap();
+
+            let extracted = dest_dir.join("src").join("hello.txt");
+            let data = std::fs::read_to_string(extracted).unwrap();
+            assert_eq!(data, "hello");
+        });
     }
 }

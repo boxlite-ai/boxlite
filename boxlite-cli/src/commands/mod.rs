@@ -1,3 +1,4 @@
+pub mod cp;
 pub mod create;
 pub mod images;
 pub mod list;

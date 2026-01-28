@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use boxlite::CopyOptions;
 use boxlite::runtime::constants::images;
 use boxlite::runtime::options::{
     BoxOptions, BoxliteOptions, NetworkSpec, PortProtocol, PortSpec, ResourceLimits, RootfsSpec,
@@ -50,6 +51,55 @@ impl From<PyOptions> for BoxliteOptions {
         config.image_registries = py_opts.image_registries;
 
         config
+    }
+}
+
+// ============================================================================
+// Copy Options
+// ============================================================================
+
+#[pyclass(name = "CopyOptions")]
+#[derive(Clone, Debug)]
+pub struct PyCopyOptions {
+    #[pyo3(get, set)]
+    pub recursive: bool,
+    #[pyo3(get, set)]
+    pub overwrite: bool,
+    #[pyo3(get, set)]
+    pub follow_symlinks: bool,
+    #[pyo3(get, set)]
+    pub include_parent: bool,
+}
+
+#[pymethods]
+impl PyCopyOptions {
+    #[new]
+    #[pyo3(
+        signature = (
+            recursive = true,
+            overwrite = true,
+            follow_symlinks = false,
+            include_parent = true
+        )
+    )]
+    fn new(recursive: bool, overwrite: bool, follow_symlinks: bool, include_parent: bool) -> Self {
+        Self {
+            recursive,
+            overwrite,
+            follow_symlinks,
+            include_parent,
+        }
+    }
+}
+
+impl From<PyCopyOptions> for CopyOptions {
+    fn from(opt: PyCopyOptions) -> Self {
+        Self {
+            recursive: opt.recursive,
+            overwrite: opt.overwrite,
+            follow_symlinks: opt.follow_symlinks,
+            include_parent: opt.include_parent,
+        }
     }
 }
 

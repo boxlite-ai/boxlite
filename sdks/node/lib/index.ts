@@ -22,7 +22,10 @@
 import { getNativeModule, getJsBoxlite } from './native.js';
 
 // Re-export native bindings
+const nativeModule = getNativeModule();
 export const JsBoxlite = getJsBoxlite();
+export const CopyOptions = nativeModule.JsCopyOptions;
+export type CopyOptions = InstanceType<typeof nativeModule.JsCopyOptions>;
 
 // Export native module loader for advanced use cases
 export { getNativeModule, getJsBoxlite };

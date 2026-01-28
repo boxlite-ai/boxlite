@@ -72,6 +72,9 @@ pub enum Commands {
 
     /// List images
     Images(crate::commands::images::ImagesArgs),
+
+    /// Copy files/folders between host and box
+    Cp(crate::commands::cp::CpArgs),
 }
 
 // ============================================================================

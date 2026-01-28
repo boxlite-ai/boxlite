@@ -412,6 +412,7 @@ dependencies = [
  "rtnetlink",
  "serde",
  "serde_json",
+ "tar",
  "tokio",
  "tokio-stream",
  "tokio-vsock",

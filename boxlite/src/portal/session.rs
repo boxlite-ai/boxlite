@@ -3,6 +3,7 @@
 //! Thin facade over service interfaces.
 
 use crate::portal::connection::Connection;
+use crate::portal::interfaces::FilesInterface;
 use crate::portal::interfaces::{ContainerInterface, ExecutionInterface, GuestInterface};
 use boxlite_shared::{BoxliteResult, Transport};
 
@@ -38,6 +39,12 @@ impl GuestSession {
     pub async fn guest(&self) -> BoxliteResult<GuestInterface> {
         let channel = self.connection.channel().await?;
         Ok(GuestInterface::new(channel))
+    }
+
+    /// Get files interface.
+    pub async fn files(&self) -> BoxliteResult<FilesInterface> {
+        let channel = self.connection.channel().await?;
+        Ok(FilesInterface::new(channel))
     }
 }
 

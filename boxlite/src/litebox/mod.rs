@@ -4,11 +4,13 @@
 
 pub(crate) mod box_impl;
 pub(crate) mod config;
+pub mod copy;
 mod exec;
 mod init;
 mod manager;
 mod state;
 
+pub use copy::CopyOptions;
 pub use exec::{BoxCommand, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execution, ExecutionId};
 pub(crate) use manager::BoxManager;
 pub use state::{BoxState, BoxStatus};
@@ -20,6 +22,7 @@ use crate::metrics::BoxMetrics;
 use crate::{BoxID, BoxInfo};
 use boxlite_shared::errors::BoxliteResult;
 pub use config::BoxConfig;
+use std::path::Path;
 
 /// LiteBox - Handle to a box.
 ///
@@ -81,6 +84,30 @@ impl LiteBox {
 
     pub async fn stop(&self) -> BoxliteResult<()> {
         self.inner.stop().await
+    }
+
+    /// Copy files/directories from host into the container rootfs.
+    pub async fn copy_into(
+        &self,
+        host_src: impl AsRef<Path>,
+        container_dst: impl AsRef<str>,
+        opts: copy::CopyOptions,
+    ) -> BoxliteResult<()> {
+        self.inner
+            .copy_into(host_src.as_ref(), container_dst.as_ref(), opts)
+            .await
+    }
+
+    /// Copy files/directories from container rootfs to host.
+    pub async fn copy_out(
+        &self,
+        container_src: impl AsRef<str>,
+        host_dst: impl AsRef<Path>,
+        opts: copy::CopyOptions,
+    ) -> BoxliteResult<()> {
+        self.inner
+            .copy_out(container_src.as_ref(), host_dst.as_ref(), opts)
+            .await
     }
 }
 

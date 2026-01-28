@@ -43,6 +43,7 @@ async fn main() {
         cli::Commands::Restart(args) => commands::restart::execute(args, &cli.global).await,
         cli::Commands::Pull(args) => commands::pull::execute(args, &cli.global).await,
         cli::Commands::Images(args) => commands::images::execute(args, &cli.global).await,
+        cli::Commands::Cp(args) => commands::cp::execute(args, &cli.global).await,
     };
 
     if let Err(error) = result {

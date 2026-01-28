@@ -47,6 +47,15 @@ service Execution {
   rpc ResizeTty(ResizeTtyRequest) returns (ResizeTtyResponse);
 }
 
+// File transfer between host and container rootfs
+service Files {
+  // Upload a tar archive and extract it into the container rootfs at dest_path
+  rpc Upload(stream UploadChunk) returns (UploadResponse);
+
+  // Download a path from the container rootfs as a tar archive
+  rpc Download(DownloadRequest) returns (stream DownloadChunk);
+}
+
 // ============================================================================
 // Guest Service Messages
 // ============================================================================
@@ -312,4 +321,51 @@ message ResizeTtyRequest {
 message ResizeTtyResponse {
   bool success = 1;
   optional string error = 2;
+}
+
+// ============================================================================
+// Files Service Messages
+// ============================================================================
+
+// Upload request stream
+//
+// The first chunk MUST include dest_path. Subsequent chunks MAY omit dest_path
+// to reduce overhead. Data should contain raw TAR bytes that will be extracted
+// under the target path (relative to container rootfs).
+message UploadChunk {
+  // Destination path inside container rootfs (e.g., "/app")
+  string dest_path = 1;
+  // Optional explicit container_id; if empty the server will pick the sole container
+  string container_id = 2;
+  // Raw tar archive bytes
+  bytes data = 3;
+  // If true, create parent directories as needed (default: true)
+  bool mkdir_parents = 4;
+  // If true, overwrite existing files (default: true)
+  bool overwrite = 5;
+}
+
+message UploadResponse {
+  bool success = 1;
+  optional string error = 2;
+}
+
+// Download request
+//
+// The server will stream a tar archive containing the requested path.
+message DownloadRequest {
+  // Source path inside container rootfs (file or directory)
+  string src_path = 1;
+  // Optional explicit container_id; if empty the server will pick the sole container
+  string container_id = 2;
+  // If true, include parent directory entry in archive (docker cp semantics)
+  bool include_parent = 3;
+  // If true, follow symlinks when archiving
+  bool follow_symlinks = 4;
+}
+
+// Download response stream
+message DownloadChunk {
+  // Raw tar archive bytes
+  bytes data = 1;
 }

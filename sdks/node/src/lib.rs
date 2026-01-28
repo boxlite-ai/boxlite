@@ -6,6 +6,7 @@
 //! applications to create and manage isolated VM-based containers.
 
 mod box_handle;
+mod copy;
 mod exec;
 mod info;
 mod metrics;
@@ -15,8 +16,9 @@ mod util;
 
 // Re-export all public types
 pub use box_handle::JsBox;
+pub use copy::JsCopyOptions;
 pub use exec::{JsExecResult, JsExecStderr, JsExecStdin, JsExecStdout, JsExecution};
 pub use info::JsBoxInfo;
 pub use metrics::{JsBoxMetrics, JsRuntimeMetrics};
 pub use options::{JsBoxOptions, JsEnvVar, JsOptions, JsPortSpec, JsVolumeSpec};
-pub use runtime::JsBoxlite;
+pub use runtime::JsBoxlite; // re-export for dist bundling

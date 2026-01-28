@@ -31,7 +31,7 @@ pub use runtime::BoxliteRuntime;
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 pub use litebox::{
-    BoxCommand, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execution, ExecutionId,
+    BoxCommand, CopyOptions, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execution, ExecutionId,
 };
 pub use metrics::{BoxMetrics, RuntimeMetrics};
 use runtime::layout::FilesystemLayout;
