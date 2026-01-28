@@ -178,10 +178,13 @@ impl ImageManager {
     ) -> BoxliteResult<ImageObject> {
         let manifest = self.store.load_from_local(path.clone()).await?;
 
-        // Get images_dir from storage for cache location
-        let storage = self.store.storage().await;
-        let images_dir = storage.images_dir().to_path_buf();
-        let blob_source = BlobSource::LocalBundle(LocalBundleBlobSource::new(path, images_dir));
+        // Let store compute cache dir (layout owns directory structure decisions)
+        // Cache dir includes manifest digest for automatic invalidation when bundle changes
+        let cache_dir = self
+            .store
+            .local_bundle_cache_dir(&path, &manifest.manifest_digest)
+            .await;
+        let blob_source = BlobSource::LocalBundle(LocalBundleBlobSource::new(path, cache_dir));
 
         Ok(ImageObject::new(reference, manifest, blob_source))
     }

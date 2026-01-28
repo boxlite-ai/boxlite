@@ -444,6 +444,17 @@ impl ImageStorage {
             .join(format!("{}.{}", filename, format.as_str()))
     }
 
+    /// Compute cache directory for a local OCI bundle.
+    ///
+    /// Delegates to `ImageFilesystemLayout::local_bundle_cache_dir`.
+    pub fn local_bundle_cache_dir(
+        &self,
+        bundle_path: &std::path::Path,
+        manifest_digest: &str,
+    ) -> PathBuf {
+        self.layout.local_bundle_cache_dir(bundle_path, manifest_digest)
+    }
+
     /// Find existing disk image for an image digest, checking all known formats.
     ///
     /// Returns the path and format if a cached disk image exists.

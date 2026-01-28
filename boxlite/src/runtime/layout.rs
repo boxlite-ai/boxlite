@@ -402,6 +402,34 @@ impl ImageFilesystemLayout {
         Self { images_dir }
     }
 
+    /// Local bundle cache directory: `~/.boxlite/images/local/{path_hash}-{manifest_short}`
+    ///
+    /// Computes isolated cache dir for a local OCI bundle. Each bundle gets a unique
+    /// namespace based on both its path AND manifest digest, ensuring cache invalidation
+    /// when bundle content changes.
+    ///
+    /// # Arguments
+    /// * `bundle_path` - Path to the OCI bundle directory
+    /// * `manifest_digest` - Manifest digest (e.g., "sha256:abc123...")
+    pub fn local_bundle_cache_dir(&self, bundle_path: &Path, manifest_digest: &str) -> PathBuf {
+        use sha2::{Digest, Sha256};
+
+        // Hash the bundle path for location identity
+        let path_str = bundle_path.to_string_lossy();
+        let path_hash = Sha256::digest(path_str.as_bytes());
+        let path_short = format!("{:x}", path_hash).chars().take(8).collect::<String>();
+
+        // Extract short manifest digest for content identity
+        let manifest_short = manifest_digest
+            .strip_prefix("sha256:")
+            .unwrap_or(manifest_digest);
+        let manifest_short = &manifest_short[..8.min(manifest_short.len())];
+
+        self.images_dir
+            .join("local")
+            .join(format!("{}-{}", path_short, manifest_short))
+    }
+
     /// Root directory: ~/.boxlite/images
     pub fn root(&self) -> &Path {
         &self.images_dir
@@ -450,5 +478,110 @@ impl ImageFilesystemLayout {
             .map_err(|e| BoxliteError::Storage(format!("failed to create configs dir: {e}")))?;
 
         Ok(())
+    }
+}
+
+// ============================================================================
+// TESTS
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_local_bundle_cache_dir_format() {
+        let layout = ImageFilesystemLayout::new(PathBuf::from("/images"));
+
+        let cache_dir = layout.local_bundle_cache_dir(
+            Path::new("/my/bundle"),
+            "sha256:abc123def456789",
+        );
+
+        // Should be under /images/local/
+        assert!(cache_dir.starts_with("/images/local/"));
+
+        // Format: {path_hash}-{manifest_short}
+        let dir_name = cache_dir.file_name().unwrap().to_str().unwrap();
+        assert!(dir_name.contains('-'), "should have format path_hash-manifest_short");
+
+        // Path hash is 8 chars, manifest short is 8 chars
+        let parts: Vec<&str> = dir_name.split('-').collect();
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0].len(), 8, "path hash should be 8 chars");
+        assert_eq!(parts[1].len(), 8, "manifest short should be 8 chars");
+    }
+
+    #[test]
+    fn test_local_bundle_cache_invalidation_on_content_change() {
+        // This test verifies that when bundle content changes (same path,
+        // different manifest), a NEW cache directory is used.
+        let layout = ImageFilesystemLayout::new(PathBuf::from("/images"));
+        let bundle_path = Path::new("/my/bundle");
+
+        // Original bundle version (realistic hex digest)
+        let cache_v1 = layout.local_bundle_cache_dir(
+            bundle_path,
+            "sha256:a1b2c3d4e5f6789012345678901234567890abcd",
+        );
+
+        // Bundle content changed - new manifest digest
+        let cache_v2 = layout.local_bundle_cache_dir(
+            bundle_path,
+            "sha256:f9e8d7c6b5a4321098765432109876543210fedc",
+        );
+
+        // CRITICAL: Different manifest = different cache dir
+        // This ensures stale cache is never used after content change
+        assert_ne!(
+            cache_v1, cache_v2,
+            "Same path but different manifest should use DIFFERENT cache dirs"
+        );
+
+        // Both should be under the same parent (local/)
+        assert_eq!(cache_v1.parent(), cache_v2.parent());
+
+        // Verify the cache dir names differ in the manifest portion
+        let name_v1 = cache_v1.file_name().unwrap().to_str().unwrap();
+        let name_v2 = cache_v2.file_name().unwrap().to_str().unwrap();
+
+        // Same path hash (first part), different manifest (second part)
+        let parts_v1: Vec<&str> = name_v1.split('-').collect();
+        let parts_v2: Vec<&str> = name_v2.split('-').collect();
+
+        assert_eq!(parts_v1[0], parts_v2[0], "Same path should have same path hash");
+        assert_ne!(parts_v1[1], parts_v2[1], "Different manifest should have different hash");
+    }
+
+    #[test]
+    fn test_local_bundle_cache_same_content_same_cache() {
+        // Verify idempotency: same inputs = same cache dir
+        let layout = ImageFilesystemLayout::new(PathBuf::from("/images"));
+
+        let cache1 = layout.local_bundle_cache_dir(
+            Path::new("/my/bundle"),
+            "sha256:abc123",
+        );
+        let cache2 = layout.local_bundle_cache_dir(
+            Path::new("/my/bundle"),
+            "sha256:abc123",
+        );
+
+        assert_eq!(cache1, cache2, "Same path + manifest should give same cache dir");
+    }
+
+    #[test]
+    fn test_local_bundle_different_paths_different_caches() {
+        // Different bundle paths should have different caches even with same manifest
+        let layout = ImageFilesystemLayout::new(PathBuf::from("/images"));
+        let manifest = "sha256:same_manifest";
+
+        let cache1 = layout.local_bundle_cache_dir(Path::new("/bundle1"), manifest);
+        let cache2 = layout.local_bundle_cache_dir(Path::new("/bundle2"), manifest);
+
+        assert_ne!(
+            cache1, cache2,
+            "Different paths should have different cache dirs"
+        );
     }
 }

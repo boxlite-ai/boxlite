@@ -14,7 +14,6 @@
 
 use std::path::{Path, PathBuf};
 
-use sha2::{Digest, Sha256};
 
 use crate::disk::{Disk, DiskFormat};
 use crate::images::archive::extract_layer_tarball_streaming;
@@ -249,11 +248,8 @@ impl LocalBundleBlobSource {
     ///
     /// # Arguments
     /// * `bundle_path` - Path to the OCI bundle directory
-    /// * `images_dir` - Path to the images directory (e.g., `~/.boxlite/images/`)
-    pub fn new(bundle_path: PathBuf, images_dir: PathBuf) -> Self {
-        // Create namespaced cache dir based on bundle path hash
-        let path_hash = sha256_short(&bundle_path.to_string_lossy());
-        let cache_dir = images_dir.join("local").join(&path_hash);
+    /// * `cache_dir` - Pre-computed cache directory from `ImageFilesystemLayout::local_bundle_cache_dir`
+    pub fn new(bundle_path: PathBuf, cache_dir: PathBuf) -> Self {
         Self {
             bundle_path,
             cache_dir,
@@ -437,18 +433,6 @@ impl LocalBundleBlobSource {
 }
 
 // ============================================================================
-// UTILITIES
-// ============================================================================
-
-/// Compute short SHA256 hash (first 8 characters) for cache namespacing.
-fn sha256_short(input: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(input.as_bytes());
-    let result = hasher.finalize();
-    format!("{:x}", result)[..8].to_string()
-}
-
-// ============================================================================
 // TESTS
 // ============================================================================
 
@@ -457,24 +441,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_sha256_short() {
-        let hash1 = sha256_short("/path/to/bundle1");
-        let hash2 = sha256_short("/path/to/bundle2");
-
-        assert_eq!(hash1.len(), 8);
-        assert_eq!(hash2.len(), 8);
-        assert_ne!(hash1, hash2);
-
-        // Same input should produce same hash
-        let hash1_again = sha256_short("/path/to/bundle1");
-        assert_eq!(hash1, hash1_again);
-    }
-
-    #[test]
     fn test_local_bundle_layer_path() {
+        // cache_dir is now passed directly (computed by ImageFilesystemLayout)
         let source = LocalBundleBlobSource::new(
             PathBuf::from("/my/bundle"),
-            PathBuf::from("/home/user/.boxlite/images"),
+            PathBuf::from("/images/local/abc12345-def67890"),
         );
 
         let path = source.layer_tarball_path("sha256:abc123def456");
@@ -485,7 +456,7 @@ mod tests {
     fn test_local_bundle_config_path() {
         let source = LocalBundleBlobSource::new(
             PathBuf::from("/my/bundle"),
-            PathBuf::from("/home/user/.boxlite/images"),
+            PathBuf::from("/images/local/abc12345-def67890"),
         );
 
         let path = source.config_path("sha256:config789");
@@ -493,38 +464,43 @@ mod tests {
     }
 
     #[test]
-    fn test_local_bundle_cache_isolation() {
-        let source1 =
-            LocalBundleBlobSource::new(PathBuf::from("/bundle1"), PathBuf::from("/images"));
-        let source2 =
-            LocalBundleBlobSource::new(PathBuf::from("/bundle2"), PathBuf::from("/images"));
+    fn test_local_bundle_cache_dir_used() {
+        // Different cache_dirs result in different extracted paths
+        let source1 = LocalBundleBlobSource::new(
+            PathBuf::from("/bundle"),
+            PathBuf::from("/images/local/path1-manifest1"),
+        );
+        let source2 = LocalBundleBlobSource::new(
+            PathBuf::from("/bundle"),
+            PathBuf::from("/images/local/path1-manifest2"),
+        );
 
-        // Different bundles should have different cache dirs
+        // Different cache dirs (different manifest digests)
         assert_ne!(source1.cache_dir, source2.cache_dir);
-
-        // Both should be under /images/local/
-        assert!(source1.cache_dir.starts_with("/images/local/"));
-        assert!(source2.cache_dir.starts_with("/images/local/"));
     }
 
     #[test]
     fn test_local_bundle_extracted_path() {
-        let source =
-            LocalBundleBlobSource::new(PathBuf::from("/my/bundle"), PathBuf::from("/images"));
+        let source = LocalBundleBlobSource::new(
+            PathBuf::from("/my/bundle"),
+            PathBuf::from("/images/local/abc12345-def67890"),
+        );
 
         let path = source.extracted_path("sha256:layer123");
-        assert!(path.starts_with("/images/local/"));
+        assert!(path.starts_with("/images/local/abc12345-def67890"));
         assert!(path.to_string_lossy().contains("extracted"));
         assert!(path.to_string_lossy().contains("sha256-layer123"));
     }
 
     #[test]
     fn test_local_bundle_disk_image_path() {
-        let source =
-            LocalBundleBlobSource::new(PathBuf::from("/my/bundle"), PathBuf::from("/images"));
+        let source = LocalBundleBlobSource::new(
+            PathBuf::from("/my/bundle"),
+            PathBuf::from("/images/local/abc12345-def67890"),
+        );
 
         let path = source.disk_image_path("sha256:image123", crate::disk::DiskFormat::Ext4);
-        assert!(path.starts_with("/images/local/"));
+        assert!(path.starts_with("/images/local/abc12345-def67890"));
         assert!(path.to_string_lossy().contains("disk-images"));
         assert!(path.to_string_lossy().ends_with(".ext4"));
     }
@@ -541,11 +517,12 @@ mod tests {
         );
         let store_source = BlobSource::Store(StoreBlobSource::new(storage));
 
-        // Create LocalBundleBlobSource
+        // Create LocalBundleBlobSource with explicit cache_dir
         let bundle_dir = temp_dir.path().join("bundle");
         std::fs::create_dir_all(&bundle_dir).unwrap();
+        let cache_dir = images_dir.join("local").join("test-cache");
         let local_source =
-            BlobSource::LocalBundle(LocalBundleBlobSource::new(bundle_dir.clone(), images_dir));
+            BlobSource::LocalBundle(LocalBundleBlobSource::new(bundle_dir.clone(), cache_dir));
 
         // Test layer_tarball_path returns different paths for different sources
         let store_path = store_source.layer_tarball_path("sha256:abc123");
@@ -561,6 +538,7 @@ mod tests {
     /// Helper to create a minimal OCI bundle for testing
     mod test_fixtures {
         use super::*;
+        use sha2::{Digest, Sha256};
 
         /// Create a minimal OCI bundle with a single layer
         pub fn create_test_oci_bundle(bundle_dir: &Path) -> (String, String) {
@@ -574,7 +552,7 @@ mod tests {
             let layer_content = create_minimal_tarball();
             let layer_digest = format!(
                 "sha256:{}",
-                sha2::Sha256::digest(&layer_content)
+                Sha256::digest(&layer_content)
                     .iter()
                     .map(|b| format!("{:02x}", b))
                     .collect::<String>()
@@ -598,7 +576,7 @@ mod tests {
             let config_bytes = config.as_bytes();
             let config_digest = format!(
                 "sha256:{}",
-                sha2::Sha256::digest(config_bytes)
+                Sha256::digest(config_bytes)
                     .iter()
                     .map(|b| format!("{:02x}", b))
                     .collect::<String>()
@@ -632,7 +610,7 @@ mod tests {
             let manifest_bytes = manifest.as_bytes();
             let manifest_digest = format!(
                 "sha256:{}",
-                sha2::Sha256::digest(manifest_bytes)
+                Sha256::digest(manifest_bytes)
                     .iter()
                     .map(|b| format!("{:02x}", b))
                     .collect::<String>()
@@ -681,12 +659,11 @@ mod tests {
     fn test_local_bundle_load_config() {
         let temp_dir = tempfile::tempdir().unwrap();
         let bundle_dir = temp_dir.path().join("bundle");
-        let images_dir = temp_dir.path().join("images");
-        std::fs::create_dir_all(&images_dir).unwrap();
+        let cache_dir = temp_dir.path().join("cache/local/test-cache");
 
         let (_layer_digest, config_digest) = test_fixtures::create_test_oci_bundle(&bundle_dir);
 
-        let source = LocalBundleBlobSource::new(bundle_dir, images_dir);
+        let source = LocalBundleBlobSource::new(bundle_dir, cache_dir);
 
         // Test loading config
         let config_json = std::fs::read_to_string(source.config_path(&config_digest)).unwrap();
@@ -698,12 +675,11 @@ mod tests {
     fn test_local_bundle_extract_layers() {
         let temp_dir = tempfile::tempdir().unwrap();
         let bundle_dir = temp_dir.path().join("bundle");
-        let images_dir = temp_dir.path().join("images");
-        std::fs::create_dir_all(&images_dir).unwrap();
+        let cache_dir = temp_dir.path().join("images/local/test-cache");
 
         let (layer_digest, _config_digest) = test_fixtures::create_test_oci_bundle(&bundle_dir);
 
-        let source = LocalBundleBlobSource::new(bundle_dir.clone(), images_dir.clone());
+        let source = LocalBundleBlobSource::new(bundle_dir.clone(), cache_dir.clone());
 
         // Extract layers
         let digests = vec![layer_digest.clone()];
@@ -718,8 +694,8 @@ mod tests {
         let content = std::fs::read_to_string(&test_file).unwrap();
         assert_eq!(content, "Hello from test layer!");
 
-        // Verify cache isolation (under local/{hash}/)
-        assert!(extracted[0].to_string_lossy().contains("local/"));
+        // Verify cache is under provided cache_dir
+        assert!(extracted[0].starts_with(&cache_dir));
         assert!(extracted[0].to_string_lossy().contains("extracted"));
     }
 
@@ -727,12 +703,11 @@ mod tests {
     fn test_local_bundle_extract_layers_cached() {
         let temp_dir = tempfile::tempdir().unwrap();
         let bundle_dir = temp_dir.path().join("bundle");
-        let images_dir = temp_dir.path().join("images");
-        std::fs::create_dir_all(&images_dir).unwrap();
+        let cache_dir = temp_dir.path().join("images/local/test-cache");
 
         let (layer_digest, _config_digest) = test_fixtures::create_test_oci_bundle(&bundle_dir);
 
-        let source = LocalBundleBlobSource::new(bundle_dir.clone(), images_dir.clone());
+        let source = LocalBundleBlobSource::new(bundle_dir.clone(), cache_dir);
 
         // Extract layers twice
         let digests = vec![layer_digest.clone()];
@@ -748,6 +723,7 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let images_dir = temp_dir.path().join("images");
         let bundle_dir = temp_dir.path().join("bundle");
+        let local_cache_dir = images_dir.join("local/test-cache");
 
         // Create storage for store source
         let storage = std::sync::Arc::new(
@@ -759,7 +735,7 @@ mod tests {
 
         // Create both sources
         let _store_source = StoreBlobSource::new(storage.clone());
-        let local_source = LocalBundleBlobSource::new(bundle_dir.clone(), images_dir.clone());
+        let local_source = LocalBundleBlobSource::new(bundle_dir.clone(), local_cache_dir);
 
         // Get extracted paths for same digest
         let store_extracted = storage.layer_extracted_path(&layer_digest);
@@ -778,7 +754,7 @@ mod tests {
     }
 
     #[test]
-    fn test_different_bundles_have_different_caches() {
+    fn test_different_cache_dirs_are_isolated() {
         let temp_dir = tempfile::tempdir().unwrap();
         let images_dir = temp_dir.path().join("images");
         let bundle1_dir = temp_dir.path().join("bundle1");
@@ -790,22 +766,64 @@ mod tests {
         test_fixtures::create_test_oci_bundle(&bundle1_dir);
         test_fixtures::create_test_oci_bundle(&bundle2_dir);
 
-        let source1 = LocalBundleBlobSource::new(bundle1_dir, images_dir.clone());
-        let source2 = LocalBundleBlobSource::new(bundle2_dir, images_dir);
+        // Different cache dirs (as would be computed by ImageFilesystemLayout)
+        let cache_dir1 = images_dir.join("local/path1hash-manifest1");
+        let cache_dir2 = images_dir.join("local/path2hash-manifest2");
+
+        let source1 = LocalBundleBlobSource::new(bundle1_dir, cache_dir1.clone());
+        let source2 = LocalBundleBlobSource::new(bundle2_dir, cache_dir2.clone());
 
         // Should have different cache directories
         assert_ne!(source1.cache_dir, source2.cache_dir);
+        assert_eq!(source1.cache_dir, cache_dir1);
+        assert_eq!(source2.cache_dir, cache_dir2);
+    }
 
-        // Both should be under images/local/
-        assert!(
-            source1
-                .cache_dir
-                .starts_with(temp_dir.path().join("images/local"))
+    #[test]
+    fn test_same_bundle_content_change_uses_new_cache() {
+        // Simulates: user modifies a local bundle, rebuilds it
+        // The bundle path stays the same, but manifest digest changes
+        // BoxLite should use a NEW cache, not stale data
+        let temp_dir = tempfile::tempdir().unwrap();
+        let bundle_dir = temp_dir.path().join("bundle");
+        let images_dir = temp_dir.path().join("images");
+
+        // Create initial bundle (v1)
+        let (layer_digest_v1, _) = test_fixtures::create_test_oci_bundle(&bundle_dir);
+
+        // Cache dir for v1 (path_hash + manifest_digest_v1)
+        let cache_dir_v1 = images_dir.join("local/bundlehash-manifestv1");
+        let source_v1 = LocalBundleBlobSource::new(bundle_dir.clone(), cache_dir_v1.clone());
+
+        // Extract layers for v1
+        let extracted_v1 = source_v1.extract_layers(&[layer_digest_v1.clone()]).unwrap();
+        assert!(extracted_v1[0].exists());
+
+        // Verify v1 cache location
+        assert!(extracted_v1[0].starts_with(&cache_dir_v1));
+
+        // --- User rebuilds bundle (content change) ---
+        // Same bundle path, but different manifest = different cache_dir
+
+        // Cache dir for v2 (same path_hash + NEW manifest_digest_v2)
+        let cache_dir_v2 = images_dir.join("local/bundlehash-manifestv2");
+        let source_v2 = LocalBundleBlobSource::new(bundle_dir.clone(), cache_dir_v2.clone());
+
+        // Extract layers for v2 (same layer digest for this test, but different cache)
+        let extracted_v2 = source_v2.extract_layers(&[layer_digest_v1.clone()]).unwrap();
+        assert!(extracted_v2[0].exists());
+
+        // CRITICAL: v2 should use NEW cache location, not v1's stale cache
+        assert_ne!(
+            extracted_v1[0], extracted_v2[0],
+            "Changed content (different manifest) should use NEW cache, not stale v1 cache"
         );
-        assert!(
-            source2
-                .cache_dir
-                .starts_with(temp_dir.path().join("images/local"))
-        );
+
+        // Verify v2 cache is under v2's cache_dir
+        assert!(extracted_v2[0].starts_with(&cache_dir_v2));
+
+        // Both caches exist independently
+        assert!(extracted_v1[0].exists(), "v1 cache should still exist");
+        assert!(extracted_v2[0].exists(), "v2 cache should exist separately");
     }
 }

@@ -114,6 +114,22 @@ impl ImageStore {
         Arc::clone(&self.inner.read().await.storage)
     }
 
+    /// Compute cache directory for a local OCI bundle.
+    ///
+    /// Returns an isolated cache path based on bundle path and manifest digest.
+    /// This ensures cache invalidation when bundle content changes.
+    pub async fn local_bundle_cache_dir(
+        &self,
+        bundle_path: &std::path::Path,
+        manifest_digest: &str,
+    ) -> PathBuf {
+        self.inner
+            .read()
+            .await
+            .storage
+            .local_bundle_cache_dir(bundle_path, manifest_digest)
+    }
+
     // ========================================================================
     // PUBLIC API
     // ========================================================================
