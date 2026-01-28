@@ -796,7 +796,7 @@ mod tests {
 
         // Extract layers for v1
         let extracted_v1 = source_v1
-            .extract_layers(&[layer_digest_v1.clone()])
+            .extract_layers(std::slice::from_ref(&layer_digest_v1))
             .unwrap();
         assert!(extracted_v1[0].exists());
 
@@ -812,7 +812,7 @@ mod tests {
 
         // Extract layers for v2 (same layer digest for this test, but different cache)
         let extracted_v2 = source_v2
-            .extract_layers(&[layer_digest_v1.clone()])
+            .extract_layers(std::slice::from_ref(&layer_digest_v1))
             .unwrap();
         assert!(extracted_v2[0].exists());
 
