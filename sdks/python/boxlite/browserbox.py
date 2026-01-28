@@ -346,9 +346,12 @@ class BrowserBox(SimpleBox):
         await self.exec("sh", "-c", f"nohup {cmd}")
 
         # Check CDP /json/version endpoint (standard health check)
+        # Try both localhost AND GUEST_IP - Chrome's --remote-debugging-address=0.0.0.0
+        # is deprecated and Chrome always binds to localhost (127.0.0.1)
         check_cmd = (
-            f"curl -sf http://{const.GUEST_IP}:{self._cdp_guest_port}/json/version "
-            f"> /dev/null 2>&1 && echo ready || echo notready"
+            f"(curl -sf http://localhost:{self._cdp_guest_port}/json/version > /dev/null 2>&1 || "
+            f"curl -sf http://{const.GUEST_IP}:{self._cdp_guest_port}/json/version > /dev/null 2>&1) "
+            f"&& echo ready || echo notready"
         )
         await self._poll_until_ready(
             check_cmd, "CDP browser", _CHROMIUM_CDP_LOG, timeout
@@ -558,11 +561,12 @@ while True:
             return f"ws://localhost:{self._host_port}/session"
 
         # Chromium: Fetch the WebSocket URL from CDP /json/version endpoint
+        # Use localhost because Chrome binds to 127.0.0.1 (--remote-debugging-address=0.0.0.0 is deprecated)
         import json
 
         result = await self.exec(
             "sh", "-c",
-            f"curl -sf http://{const.GUEST_IP}:{self._cdp_guest_port}/json/version"
+            f"curl -sf http://localhost:{self._cdp_guest_port}/json/version"
         )
         version_info = json.loads(result.stdout)
         ws_url = version_info.get("webSocketDebuggerUrl", "")
