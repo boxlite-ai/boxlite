@@ -32,10 +32,12 @@ pub async fn execute(args: CpArgs, global: &GlobalFlags) -> Result<()> {
 
     let direction = parse_direction(&args.src, &args.dst)?;
 
-    let mut opts = CopyOptions::default();
-    opts.follow_symlinks = args.follow_symlinks;
-    opts.overwrite = !args.no_overwrite;
-    opts.include_parent = args.include_parent;
+    let opts = CopyOptions {
+        follow_symlinks: args.follow_symlinks,
+        overwrite: !args.no_overwrite,
+        include_parent: args.include_parent,
+        ..Default::default()
+    };
 
     match direction {
         Direction::HostToBox {
