@@ -126,7 +126,7 @@ impl Files for GuestServer {
         })
         .await
         .map_err(|e| Status::internal(format!("task join error: {}", e)))?
-        .map_err(|e| Status::internal(e))?;
+        .map_err(Status::internal)?;
 
         let _ = tokio::fs::remove_file(&temp_path).await;
 
@@ -156,7 +156,7 @@ impl Files for GuestServer {
         let container_id = self
             .resolve_container_id(req.container_id.as_str())
             .await
-            .map_err(|e| Status::failed_precondition(e))?;
+            .map_err(Status::failed_precondition)?;
 
         let src_path = self.container_rootfs(&container_id, &req.src_path)?;
         if !src_path.exists() {
@@ -164,10 +164,8 @@ impl Files for GuestServer {
         }
 
         // Build tar into temp file
-        let temp_path = std::env::temp_dir().join(format!(
-            "boxlite-download-{}.tar",
-            uuid::Uuid::new_v4().to_string()
-        ));
+        let temp_path =
+            std::env::temp_dir().join(format!("boxlite-download-{}.tar", uuid::Uuid::new_v4()));
 
         let include_parent = req.include_parent;
         let follow_symlinks = req.follow_symlinks;
@@ -203,7 +201,7 @@ impl Files for GuestServer {
         })
         .await
         .map_err(|e| Status::internal(format!("task join error: {}", e)))?
-        .map_err(|e| Status::internal(e))?;
+        .map_err(Status::internal)?;
 
         // Stream file contents
         let (tx, rx) = mpsc::channel::<Result<DownloadChunk, Status>>(4);
@@ -274,6 +272,7 @@ impl GuestServer {
         Err("container_id required when multiple containers present".into())
     }
 
+    #[allow(clippy::result_large_err)]
     fn container_rootfs(&self, container_id: &str, path: &str) -> Result<PathBuf, Status> {
         let guest_layout = self.layout.shared().container(container_id);
         let rootfs = guest_layout.rootfs_dir();
