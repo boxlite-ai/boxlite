@@ -534,8 +534,8 @@ pub struct ImageRemovalReport {
 impl fmt::Display for ImageRemovalItem {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Untagged(tag) => write!(f, "untagged: {}", tag),
-            Self::Deleted(id) => write!(f, "deleted: {}", id),
+            Self::Untagged(tag) => write!(f, "Untagged: {}", tag),
+            Self::Deleted(id) => write!(f, "Deleted: {}", id),
         }
     }
 }

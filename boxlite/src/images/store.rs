@@ -98,7 +98,7 @@ impl ImageStoreInner {
 /// # Example
 ///
 /// ```ignore
-/// let store = Arc::new(ImageStore::new(images_dir)?);
+/// let store = Arc::new(ImageStore::new(images_dir, db, Vec::new())?);
 ///
 /// // Pull image (thread-safe, releases lock during download)
 /// let manifest = store.pull("python:alpine").await?;
@@ -1320,7 +1320,6 @@ impl ImageStore {
 /// Used by `ImageManager` and `ImageObject` to share the same store.
 pub type SharedImageStore = Arc<ImageStore>;
 
-
 // ============================================================================
 // TESTS
 // ============================================================================
@@ -1554,9 +1553,9 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("index.json"));
+    }
 
     async fn setup_test_store() -> (ImageStore, TempDir) {
-
         let dir = TempDir::new().unwrap();
         let images_dir = dir.path().join("images");
         let db_path = dir.path().join("test.db");
