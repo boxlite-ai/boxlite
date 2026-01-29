@@ -363,7 +363,6 @@ name = "boxlite-c"
 version = "0.5.8"
 dependencies = [
  "boxlite",
- "boxlite-shared",
  "cbindgen",
  "futures",
  "serde_json",
