@@ -21,12 +21,12 @@ use std::sync::Arc;
 
 use tokio::runtime::Runtime as TokioRuntime;
 
-use boxlite::litebox::LiteBox;
-use boxlite::runtime::options::{BoxOptions, BoxliteOptions, RootfsSpec};
-use boxlite::runtime::types::{BoxInfo, BoxStatus};
-use boxlite::runtime::BoxliteRuntime;
 use boxlite::BoxID;
 use boxlite::BoxliteError;
+use boxlite::litebox::LiteBox;
+use boxlite::runtime::BoxliteRuntime;
+use boxlite::runtime::options::{BoxOptions, BoxliteOptions, RootfsSpec};
+use boxlite::runtime::types::{BoxInfo, BoxStatus};
 
 // ============================================================================
 // Error Code Enum - Maps to BoxliteError variants
