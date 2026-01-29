@@ -45,7 +45,28 @@ impl Jailer {
     pub fn setup_pre_spawn(&self) -> boxlite_shared::errors::BoxliteResult<()> {
         #[cfg(target_os = "linux")]
         {
-            use crate::jailer::cgroup::{CgroupConfig, setup_cgroup};
+            use crate::jailer::{
+                bwrap,
+                cgroup::{CgroupConfig, setup_cgroup},
+            };
+            use boxlite_shared::errors::BoxliteError;
+
+            // Preflight: verify bwrap can create user namespaces before proceeding.
+            // Catches AppArmor restrictions and missing kernel support early.
+            if self.security.jailer_enabled
+                && bwrap::is_available()
+                && let Err(reason) = bwrap::check_userns_available()
+            {
+                return Err(BoxliteError::Config(format!(
+                    "Sandbox preflight failed: bwrap cannot create user namespaces.\n\
+                     {reason}\n\n\
+                     This usually means unprivileged user namespaces are restricted \
+                     on this system.\n\n\
+                     To fix, see: https://boxlite.dev/docs/faq#sandbox-userns\n\n\
+                     To skip the sandbox (development only):\n  \
+                       SecurityOptions {{ jailer_enabled: false, .. }}"
+                )));
+            }
 
             let cgroup_config = CgroupConfig::from(&self.security.resource_limits);
 
@@ -410,5 +431,19 @@ mod tests {
 
         // Development preset → jailer_enabled=false → direct command
         assert_eq!(cmd.get_program(), binary);
+    }
+
+    /// When jailer is disabled, setup_pre_spawn should skip the userns preflight
+    /// and always succeed.
+    #[test]
+    fn test_setup_pre_spawn_jailer_disabled_skips_userns_check() {
+        let security = SecurityOptions {
+            jailer_enabled: false,
+            ..SecurityOptions::default()
+        };
+        let jailer = Jailer::new("test-box", "/tmp/test-box").with_security(security);
+
+        // Should always succeed — no preflight when jailer is disabled
+        assert!(jailer.setup_pre_spawn().is_ok());
     }
 }

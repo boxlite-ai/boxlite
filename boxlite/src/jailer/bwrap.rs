@@ -91,6 +91,37 @@ pub fn is_available() -> bool {
     get_bwrap_path().is_some()
 }
 
+/// Check if bwrap can create user namespaces.
+///
+/// Runs `bwrap --unshare-user -- true` as a preflight check.
+/// This catches AppArmor restrictions and missing kernel support
+/// before the actual shim spawn.
+///
+/// Returns `Ok(())` if user namespaces work, or `Err` with diagnostic info.
+pub fn check_userns_available() -> Result<(), String> {
+    let bwrap_path = match get_bwrap_path() {
+        Some(p) => p,
+        None => return Err("bwrap binary not found".to_string()),
+    };
+
+    let output = Command::new(bwrap_path)
+        .args(["--unshare-user", "--", "true"])
+        .output();
+
+    match output {
+        Ok(o) if o.status.success() => Ok(()),
+        Ok(o) => {
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            Err(format!(
+                "bwrap --unshare-user failed (exit {}): {}",
+                o.status.code().unwrap_or(-1),
+                stderr.trim()
+            ))
+        }
+        Err(e) => Err(format!("failed to run bwrap: {}", e)),
+    }
+}
+
 /// Get the bwrap version string.
 #[allow(dead_code)]
 pub fn version() -> Option<String> {
@@ -550,5 +581,21 @@ mod tests {
         // Non-existent paths should not be added
         assert!(!args.contains(&"/nonexistent".to_string()));
         assert!(!args.contains(&"/nonexistent_dev".to_string()));
+    }
+
+    /// Verify check_userns_available() returns a well-formed result.
+    /// On CI/dev machines this will either succeed or fail with a clear message.
+    #[test]
+    fn test_check_userns_available() {
+        let result = check_userns_available();
+        match result {
+            Ok(()) => {
+                // bwrap user namespaces are available — nothing else to verify
+            }
+            Err(e) => {
+                // Should contain diagnostic info (exit code + stderr)
+                assert!(!e.is_empty(), "Error message should not be empty");
+            }
+        }
     }
 }
