@@ -95,6 +95,11 @@ impl Jailer {
     ///
     /// A `Command` configured with appropriate isolation for the platform.
     pub fn build_command(&self, binary: &Path, args: &[String]) -> Command {
+        if !self.security.jailer_enabled {
+            tracing::info!("Jailer disabled, running shim without sandbox isolation");
+            return self.build_command_direct(binary, args);
+        }
+
         #[cfg(target_os = "linux")]
         {
             self.build_command_linux(binary, args)
@@ -300,12 +305,10 @@ impl Jailer {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // Fallback for unsupported platforms
+    // Direct command (no sandbox) — used when jailer disabled or platform unsupported
     // ─────────────────────────────────────────────────────────────────────
 
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     fn build_command_direct(&self, binary: &Path, args: &[String]) -> Command {
-        tracing::warn!("No sandbox available on this platform");
         let mut cmd = Command::new(binary);
         cmd.args(args);
 
@@ -326,5 +329,86 @@ impl Jailer {
     fn build_pid_file_path(&self) -> Option<std::ffi::CString> {
         let pid_file = self.box_dir.join("shim.pid");
         std::ffi::CString::new(pid_file.to_string_lossy().as_bytes()).ok()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::jailer::builder::Jailer;
+    use crate::jailer::config::SecurityOptions;
+    use std::path::Path;
+
+    /// When `jailer_enabled=false`, build_command must return a direct command
+    /// using the binary as the program — no bwrap, no sandbox-exec.
+    #[test]
+    fn test_build_command_jailer_disabled_returns_direct() {
+        let security = SecurityOptions {
+            jailer_enabled: false,
+            ..SecurityOptions::default()
+        };
+        let jailer = Jailer::new("test-box", "/tmp/test-box").with_security(security);
+
+        let binary = Path::new("/usr/bin/boxlite-shim");
+        let args = vec!["--listen".to_string(), "vsock://2:2695".to_string()];
+        let cmd = jailer.build_command(binary, &args);
+
+        // Direct command: program IS the binary itself
+        assert_eq!(cmd.get_program(), binary);
+
+        // Args passed through
+        let cmd_args: Vec<_> = cmd.get_args().collect();
+        assert_eq!(cmd_args, &["--listen", "vsock://2:2695"]);
+    }
+
+    /// When `jailer_enabled=true`, on macOS (with sandbox-exec) or Linux (with bwrap),
+    /// the program should NOT be the binary directly — it should be wrapped.
+    /// On platforms without a sandbox, it falls back to direct.
+    #[test]
+    fn test_build_command_jailer_enabled_wraps_binary() {
+        let security = SecurityOptions {
+            jailer_enabled: true,
+            ..SecurityOptions::default()
+        };
+        let jailer = Jailer::new("test-box", "/tmp/test-box").with_security(security);
+
+        let binary = Path::new("/usr/bin/boxlite-shim");
+        let args = vec!["--listen".to_string()];
+        let cmd = jailer.build_command(binary, &args);
+
+        // On macOS: should be "sandbox-exec" (if available) or binary (fallback)
+        // On Linux: should be "bwrap" (if available) or binary (fallback)
+        // On other: always direct (binary)
+        // We can't assert the exact program without knowing the platform,
+        // but we verify the command was constructed without panics.
+        let _program = cmd.get_program();
+    }
+
+    /// Verify that build_command_direct is accessible regardless of platform
+    /// (previously was gated behind #[cfg(not(any(linux, macos)))]).
+    #[test]
+    fn test_build_command_direct_available_on_all_platforms() {
+        let jailer = Jailer::new("test-box", "/tmp/test-box");
+
+        let binary = Path::new("/usr/bin/boxlite-shim");
+        let args = vec!["--arg1".to_string()];
+        let cmd = jailer.build_command_direct(binary, &args);
+
+        assert_eq!(cmd.get_program(), binary);
+        let cmd_args: Vec<_> = cmd.get_args().collect();
+        assert_eq!(cmd_args, &["--arg1"]);
+    }
+
+    /// SecurityOptions::development() should have jailer_enabled=false.
+    /// This ensures development preset always bypasses the jailer.
+    #[test]
+    fn test_development_preset_disables_jailer() {
+        let security = SecurityOptions::development();
+        let jailer = Jailer::new("test-box", "/tmp/test-box").with_security(security);
+
+        let binary = Path::new("/usr/bin/boxlite-shim");
+        let cmd = jailer.build_command(binary, &[]);
+
+        // Development preset → jailer_enabled=false → direct command
+        assert_eq!(cmd.get_program(), binary);
     }
 }

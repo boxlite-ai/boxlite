@@ -149,6 +149,11 @@ impl CleanupGuard {
         self.handler.take()
     }
 
+    /// Get the PID of the VM subprocess, if a handler is registered.
+    pub fn handler_pid(&self) -> Option<u32> {
+        self.handler.as_ref().map(|h| h.pid())
+    }
+
     /// Disarm the guard (call on success).
     ///
     /// After disarming, Drop will not perform cleanup.

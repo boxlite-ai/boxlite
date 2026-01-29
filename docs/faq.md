@@ -462,6 +462,106 @@ RUST_LOG=debug python script.py
    sudo usermod -aG kvm $USER
    ```
 
+### Ubuntu 24.04: "Timeout waiting for guest ready" / Box only starts with sudo
+
+**Symptom:** Box creation fails with "Timeout waiting for guest ready (30s)"
+or "VM subprocess exited before guest became ready" on Ubuntu 24.04.
+Works with `sudo` or on Ubuntu 25.04+.
+
+**Root Cause:** Ubuntu 24.04 restricts unprivileged user namespaces via
+AppArmor (`kernel.apparmor_restrict_unprivileged_userns=1`) but does not
+ship the `bwrap-userns-restrict` profile that Ubuntu 25.04+ includes.
+bwrap (bubblewrap) needs user namespaces for sandbox isolation.
+
+**Diagnosis:**
+
+```bash
+# Check for AppArmor denials
+dmesg | grep apparmor
+# Look for: apparmor="DENIED" ... comm="bwrap" capability=8
+
+# Check if bwrap profile exists
+aa-status | grep bwrap
+# Should show "bwrap-userns-restrict" if profile is installed
+```
+
+**Fix (Option A — targeted, recommended):**
+
+Install the bwrap AppArmor profile that Ubuntu 25.04+ ships. Create the file
+`/etc/apparmor.d/bwrap-userns-restrict` with the following content, then reload:
+
+```bash
+sudo tee /etc/apparmor.d/bwrap-userns-restrict << 'PROFILE'
+abi <abi/4.0>,
+
+include <tunables/global>
+
+profile bwrap /usr/bin/bwrap flags=(attach_disconnected,mediate_deleted) {
+  allow capability,
+  allow file rwlkm /{**,},
+  allow network,
+  allow unix,
+  allow ptrace,
+  allow signal,
+  allow mqueue,
+  allow io_uring,
+  allow userns,
+  allow mount,
+  allow umount,
+  allow pivot_root,
+  allow dbus,
+  allow pix /** -> &bwrap//&unpriv_bwrap,
+  include if exists <local/bwrap-userns-restrict>
+}
+
+profile unpriv_bwrap flags=(attach_disconnected,mediate_deleted) {
+  allow file rwlkm /{**,},
+  allow network,
+  allow unix,
+  allow ptrace,
+  allow signal,
+  allow mqueue,
+  allow io_uring,
+  allow userns,
+  allow mount,
+  allow umount,
+  allow pivot_root,
+  allow dbus,
+  allow pix /** -> &unpriv_bwrap,
+  audit deny capability,
+  include if exists <local/unpriv_bwrap>
+}
+PROFILE
+
+sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
+```
+
+**Fix (Option B — quick, less secure):**
+
+Disable the restriction globally:
+
+```bash
+sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+# To persist across reboots:
+echo "kernel.apparmor_restrict_unprivileged_userns=0" | \
+  sudo tee /etc/sysctl.d/99-boxlite-userns.conf
+```
+
+**Fix (Option C — disable jailer):**
+
+If you don't need sandbox isolation (e.g., development environment),
+disable the jailer:
+
+```python
+from boxlite.boxlite import SecurityOptions
+
+boxlite.BoxOptions(
+    security=SecurityOptions(jailer_enabled=False),
+    # ... other options
+)
+```
+
 ### "Command hangs" or "Execution timeout"
 
 **Causes:**
