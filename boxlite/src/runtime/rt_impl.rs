@@ -227,6 +227,34 @@ impl RuntimeImpl {
         options: BoxOptions,
         name: Option<String>,
     ) -> BoxliteResult<LiteBox> {
+        let (litebox, _created) = self.create_inner(options, name, false).await?;
+        Ok(litebox)
+    }
+
+    /// Get an existing box by name, or create a new one if it doesn't exist.
+    ///
+    /// Returns `(LiteBox, true)` if a new box was created, or `(LiteBox, false)`
+    /// if an existing box with the given name was found. When an existing box is
+    /// returned, the provided `options` are ignored (no config drift validation).
+    pub async fn get_or_create(
+        self: &Arc<Self>,
+        options: BoxOptions,
+        name: Option<String>,
+    ) -> BoxliteResult<(LiteBox, bool)> {
+        self.create_inner(options, name, true).await
+    }
+
+    /// Inner create logic shared by `create()` and `get_or_create()`.
+    ///
+    /// When `reuse_existing` is false, returns an error if a box with the same
+    /// name already exists (standard create behavior). When true, returns the
+    /// existing box with `created=false`.
+    async fn create_inner(
+        self: &Arc<Self>,
+        options: BoxOptions,
+        name: Option<String>,
+        reuse_existing: bool,
+    ) -> BoxliteResult<(LiteBox, bool)> {
         // Check if runtime has been shut down
         if self.shutdown_token.is_cancelled() {
             return Err(BoxliteError::Stopped(
@@ -234,18 +262,24 @@ impl RuntimeImpl {
             ));
         }
 
-        // Check DB for existing name
+        // Check DB for existing name — use lookup_box to get full (config, state)
+        // so we can build the LiteBox directly without a second lookup
         if let Some(ref name) = name
-            && self.box_manager.lookup_box_id(name)?.is_some()
+            && let Some((config, state)) = self.box_manager.lookup_box(name)?
         {
-            return Err(BoxliteError::InvalidArgument(format!(
-                "box with name '{}' already exists",
-                name
-            )));
+            if reuse_existing {
+                let (box_impl, _) = self.get_or_create_box_impl(config, state);
+                return Ok((LiteBox::new(box_impl), false));
+            } else {
+                return Err(BoxliteError::InvalidArgument(format!(
+                    "box with name '{}' already exists",
+                    name
+                )));
+            }
         }
 
         // Initialize box variables with defaults
-        let (config, mut state) = self.init_box_variables(&options, name);
+        let (config, mut state) = self.init_box_variables(&options, name.clone());
 
         // Allocate lock for this box
         let lock_id = self.lock_manager.allocate()?;
@@ -261,6 +295,23 @@ impl RuntimeImpl {
                     "Failed to free lock after DB persist error"
                 );
             }
+
+            // TOCTOU race recovery: lookup_box (line ~268) and add_box are
+            // separate non-atomic operations. Between them, another concurrent
+            // caller can complete the full create path and persist first:
+            //
+            //   Task A: lookup("w") → None     Task B: lookup("w") → None
+            //   Task A: add_box() → Ok         Task B: add_box() → Err (duplicate)
+            //
+            // When reuse_existing=true, recover by re-reading the winner's box.
+            if reuse_existing
+                && let Some(ref name) = name
+                && let Some((config, state)) = self.box_manager.lookup_box(name)?
+            {
+                let (box_impl, _) = self.get_or_create_box_impl(config, state);
+                return Ok((LiteBox::new(box_impl), false));
+            }
+
             return Err(e);
         }
 
@@ -284,7 +335,7 @@ impl RuntimeImpl {
             .boxes_created
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-        Ok(LiteBox::new(box_impl))
+        Ok((LiteBox::new(box_impl), true))
     }
 
     /// Get a handle to an existing box by ID or name.

@@ -108,6 +108,30 @@ impl PyBoxlite {
         })
     }
 
+    /// Get an existing box by name, or create a new one if it doesn't exist.
+    ///
+    /// Returns:
+    ///     Tuple of (Box, bool) where bool is True if newly created, False if existing
+    #[pyo3(signature = (options, name=None))]
+    fn get_or_create<'py>(
+        &self,
+        py: Python<'py>,
+        options: PyBoxOptions,
+        name: Option<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let runtime = Arc::clone(&self.runtime);
+        let opts = options.into();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let (handle, created) = runtime.get_or_create(opts, name).await.map_err(map_err)?;
+            Ok((
+                PyBox {
+                    handle: Arc::new(handle),
+                },
+                created,
+            ))
+        })
+    }
+
     fn metrics<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let runtime = Arc::clone(&self.runtime);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {

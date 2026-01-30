@@ -39,6 +39,9 @@ export interface SimpleBoxOptions {
   /** Remove box when stopped (default: true) */
   autoRemove?: boolean;
 
+  /** If true, reuse an existing box with the same name instead of failing (default: false) */
+  reuseExisting?: boolean;
+
   /** Run box in detached mode (survives parent process exit, default: false) */
   detach?: boolean;
 
@@ -107,6 +110,8 @@ export class SimpleBox {
   protected _boxPromise: Promise<Box> | null = null;
   protected _name?: string;
   protected _boxOpts: BoxOptions;
+  protected _reuseExisting: boolean;
+  protected _created: boolean | null = null;
 
   /**
    * Create a new SimpleBox.
@@ -151,6 +156,7 @@ export class SimpleBox {
     };
 
     this._name = options.name;
+    this._reuseExisting = options.reuseExisting ?? false;
   }
 
   /**
@@ -164,7 +170,16 @@ export class SimpleBox {
 
     // Avoid race condition with concurrent calls
     if (!this._boxPromise) {
-      this._boxPromise = this._runtime.create(this._boxOpts, this._name);
+      this._boxPromise = (async () => {
+        if (this._reuseExisting) {
+          const result = await this._runtime.getOrCreate(this._boxOpts, this._name);
+          this._created = result.created;
+          return result.box;
+        } else {
+          this._created = true;
+          return this._runtime.create(this._boxOpts, this._name);
+        }
+      })();
     }
 
     this._box = await this._boxPromise;
@@ -196,6 +211,15 @@ export class SimpleBox {
    */
   get name(): string | undefined {
     return this._name;
+  }
+
+  /**
+   * Whether this box was newly created (true) or an existing box was reused (false).
+   *
+   * Returns null if the box hasn't been created yet.
+   */
+  get created(): boolean | null {
+    return this._created;
   }
 
   /**

@@ -99,3 +99,59 @@ class TestSyncSimpleBox:
         ) as box:
             result = box.exec("env")
             assert "MY_VAR=my_value" in result.stdout
+
+
+class TestSyncSimpleBoxReuseExisting:
+    """Tests for SyncSimpleBox reuse_existing flag."""
+
+    def test_reuse_existing_creates_new_box(self, shared_sync_runtime):
+        """With reuse_existing=True and a unique name, a new box is created."""
+        with SyncSimpleBox(
+            image="alpine:latest",
+            name="sync-reuse-new-test",
+            reuse_existing=True,
+            runtime=shared_sync_runtime,
+        ) as box:
+            assert box.created is True
+            assert box.id is not None
+
+    def test_reuse_existing_reuses_box(self, shared_sync_runtime):
+        """With reuse_existing=True and an existing name, the box is reused."""
+        name = "sync-reuse-existing-test"
+        with SyncSimpleBox(
+            image="alpine:latest",
+            name=name,
+            reuse_existing=True,
+            runtime=shared_sync_runtime,
+        ) as box1:
+            box1_id = box1.id
+            assert box1.created is True
+
+            with SyncSimpleBox(
+                image="alpine:latest",
+                name=name,
+                reuse_existing=True,
+                runtime=shared_sync_runtime,
+            ) as box2:
+                assert box2.created is False
+                assert box2.id == box1_id
+
+    def test_default_fails_on_duplicate_name(self, shared_sync_runtime):
+        """Without reuse_existing, duplicate names raise an error."""
+        import pytest
+
+        name = "sync-no-reuse-test"
+        with SyncSimpleBox(
+            image="alpine:latest",
+            name=name,
+            runtime=shared_sync_runtime,
+        ) as box1:
+            assert box1.created is True
+
+            with pytest.raises(Exception):
+                with SyncSimpleBox(
+                    image="alpine:latest",
+                    name=name,
+                    runtime=shared_sync_runtime,
+                ) as _box2:
+                    pass

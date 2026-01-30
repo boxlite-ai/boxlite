@@ -198,6 +198,19 @@ impl BoxliteRuntime {
         self.rt_impl.create(options, name).await
     }
 
+    /// Get an existing box by name, or create a new one if it doesn't exist.
+    ///
+    /// Returns `(LiteBox, true)` if a new box was created, or `(LiteBox, false)`
+    /// if an existing box with the given name was found. When an existing box is
+    /// returned, the provided `options` are ignored (no config drift validation).
+    pub async fn get_or_create(
+        &self,
+        options: BoxOptions,
+        name: Option<String>,
+    ) -> BoxliteResult<(LiteBox, bool)> {
+        self.rt_impl.get_or_create(options, name).await
+    }
+
     /// Get a handle to an existing box by ID or name.
     ///
     /// The `id_or_name` parameter can be either:

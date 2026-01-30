@@ -27,6 +27,7 @@ mod rootfs;
 mod volumes;
 
 pub use litebox::LiteBox;
+pub use portal::GuestSession;
 pub use runtime::BoxliteRuntime;
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};

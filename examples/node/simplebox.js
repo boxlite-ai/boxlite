@@ -40,8 +40,27 @@ async function main() {
     console.log(`   Info: ${JSON.stringify(info, null, 2)}\n`);
 
     console.log('✅ All commands completed successfully!');
+
+    console.log('\n5. Reuse existing box by name...');
+    const box2 = new SimpleBox({ image: 'alpine:latest', name: 'reuse-demo', reuseExisting: true });
+    try {
+      const r1 = await box2.exec('echo', 'first open');
+      console.log(`   Created: ${box2.created}`);
+      console.log(`   Output: ${r1.stdout.trim()}`);
+
+      // Second open reuses the same box
+      const box3 = new SimpleBox({ image: 'alpine:latest', name: 'reuse-demo', reuseExisting: true });
+      try {
+        const r2 = await box3.exec('echo', 'second open');
+        console.log(`   Reused (created=${box3.created}): ${r2.stdout.trim()}`);
+      } finally {
+        await box3.stop();
+      }
+    } finally {
+      await box2.stop();
+    }
   } finally {
-    console.log('\n5. Cleaning up...');
+    console.log('\n6. Cleaning up...');
     await box.stop();
     console.log('   Box stopped and removed.');
   }

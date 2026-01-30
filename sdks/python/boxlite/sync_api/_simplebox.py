@@ -44,6 +44,7 @@ class SyncSimpleBox:
         runtime: Optional["SyncBoxlite"] = None,
         name: Optional[str] = None,
         auto_remove: bool = True,
+        reuse_existing: bool = False,
         **kwargs,
     ):
         """
@@ -56,6 +57,8 @@ class SyncSimpleBox:
             runtime: Optional SyncBoxlite runtime. If None, creates default runtime.
             name: Optional unique name for the box
             auto_remove: Remove box when stopped (default: True)
+            reuse_existing: If True and a box with the given name already exists,
+                reuse it instead of raising an error (default: False)
             **kwargs: Additional BoxOptions parameters
         """
         from ._boxlite import SyncBoxlite
@@ -81,7 +84,9 @@ class SyncSimpleBox:
 
         # Store for lazy creation in __enter__
         self._name = name
+        self._reuse_existing = reuse_existing
         self._box: Optional["SyncBox"] = None
+        self._created: Optional[bool] = None
 
     def __enter__(self) -> "SyncSimpleBox":
         """Enter context - starts runtime if owned, then starts the box."""
@@ -89,8 +94,14 @@ class SyncSimpleBox:
         if self._owns_runtime:
             self._runtime.start()
 
-        # Create box via runtime - returns SyncBox!
-        self._box = self._runtime.create(self._box_opts, name=self._name)
+        # Create or reuse box via runtime
+        if self._reuse_existing:
+            self._box, self._created = self._runtime.get_or_create(
+                self._box_opts, name=self._name
+            )
+        else:
+            self._box = self._runtime.create(self._box_opts, name=self._name)
+            self._created = True
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
@@ -112,6 +123,14 @@ class SyncSimpleBox:
     def name(self) -> Optional[str]:
         """Get the box name (if set)."""
         return self._box.name
+
+    @property
+    def created(self) -> Optional[bool]:
+        """Whether this box was newly created (True) or an existing box was reused (False).
+
+        Returns None if the box hasn't been started yet.
+        """
+        return self._created
 
     def info(self):
         """Get box information."""

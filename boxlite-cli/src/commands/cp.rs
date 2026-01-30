@@ -46,11 +46,18 @@ pub async fn execute(args: CpArgs, global: &GlobalFlags) -> Result<()> {
             box_path,
         } => {
             let handle = require_box(&rt, &box_name).await?;
-            handle.start().await?;
+            let was_running = handle.info().status == boxlite::BoxStatus::Running;
+            if !was_running {
+                handle.start().await?;
+            }
             handle
                 .copy_into(&host, &box_path, opts)
                 .await
-                .map_err(anyhow::Error::from)
+                .map_err(anyhow::Error::from)?;
+            if !was_running {
+                handle.stop().await?;
+            }
+            Ok(())
         }
         Direction::BoxToHost {
             box_name,
@@ -58,11 +65,18 @@ pub async fn execute(args: CpArgs, global: &GlobalFlags) -> Result<()> {
             host,
         } => {
             let handle = require_box(&rt, &box_name).await?;
-            handle.start().await?;
+            let was_running = handle.info().status == boxlite::BoxStatus::Running;
+            if !was_running {
+                handle.start().await?;
+            }
             handle
                 .copy_out(&box_path, &host, opts)
                 .await
-                .map_err(anyhow::Error::from)
+                .map_err(anyhow::Error::from)?;
+            if !was_running {
+                handle.stop().await?;
+            }
+            Ok(())
         }
     }
 }

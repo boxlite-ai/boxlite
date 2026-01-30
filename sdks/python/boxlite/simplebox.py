@@ -47,6 +47,7 @@ class SimpleBox:
         runtime: Optional["Boxlite"] = None,
         name: Optional[str] = None,
         auto_remove: bool = True,
+        reuse_existing: bool = False,
         **kwargs,
     ):
         """
@@ -59,6 +60,8 @@ class SimpleBox:
             runtime: Optional runtime instance (uses global default if None)
             name: Optional name for the box (must be unique)
             auto_remove: Remove box when stopped (default: True)
+            reuse_existing: If True and a box with the given name already exists,
+                reuse it instead of raising an error (default: False)
             **kwargs: Additional configuration options
 
         Note: The box is not actually created until entering the async context manager.
@@ -87,8 +90,10 @@ class SimpleBox:
             **kwargs,
         )
         self._name = name
+        self._reuse_existing = reuse_existing
         self._box = None
         self._started = False
+        self._created: Optional[bool] = None
 
     async def __aenter__(self):
         """Async context manager entry - creates and starts the box.
@@ -98,7 +103,13 @@ class SimpleBox:
         """
         if self._started:
             return self
-        self._box = await self._runtime.create(self._box_options, name=self._name)
+        if self._reuse_existing:
+            self._box, self._created = await self._runtime.get_or_create(
+                self._box_options, name=self._name
+            )
+        else:
+            self._box = await self._runtime.create(self._box_options, name=self._name)
+            self._created = True
         await self._box.__aenter__()
         self._started = True
         return self
@@ -140,6 +151,14 @@ class SimpleBox:
                 "or call 'await box.start()' first."
             )
         return self._box.info()
+
+    @property
+    def created(self) -> Optional[bool]:
+        """Whether this box was newly created (True) or an existing box was reused (False).
+
+        Returns None if the box hasn't been started yet.
+        """
+        return self._created
 
     async def exec(
         self,

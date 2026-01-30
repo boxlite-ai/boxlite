@@ -108,6 +108,41 @@ impl JsBoxlite {
         })
     }
 
+    /// Get an existing box by name, or create a new one if it doesn't exist.
+    ///
+    /// Returns an object with `box` (the box handle) and `created` (true if
+    /// newly created, false if an existing box was found).
+    ///
+    /// When an existing box is returned, the provided options are ignored.
+    ///
+    /// # Arguments
+    /// * `options` - Box configuration (used only if creating a new box)
+    /// * `name` - Name to look up or assign to the new box
+    ///
+    /// # Example
+    /// ```javascript
+    /// const result = await runtime.getOrCreate({ image: 'python:slim' }, 'my-worker');
+    /// console.log(`Created: ${result.created}`);
+    /// const box = result.box;
+    /// ```
+    #[napi]
+    pub async fn get_or_create(
+        &self,
+        options: JsBoxOptions,
+        name: Option<String>,
+    ) -> Result<JsGetOrCreateResult> {
+        let runtime = Arc::clone(&self.runtime);
+        let (handle, created) = runtime
+            .get_or_create(options.into(), name)
+            .await
+            .map_err(map_err)?;
+
+        Ok(JsGetOrCreateResult {
+            inner_handle: Arc::new(handle),
+            inner_created: created,
+        })
+    }
+
     /// List all boxes managed by this runtime.
     ///
     /// Returns metadata for all boxes, including stopped and failed boxes.
@@ -272,5 +307,29 @@ impl JsBoxlite {
     pub async fn shutdown(&self, timeout: Option<i32>) -> Result<()> {
         let runtime = Arc::clone(&self.runtime);
         runtime.shutdown(timeout).await.map_err(map_err)
+    }
+}
+
+/// Result of a `getOrCreate` operation.
+#[napi]
+pub struct JsGetOrCreateResult {
+    inner_handle: Arc<boxlite::LiteBox>,
+    inner_created: bool,
+}
+
+#[napi]
+impl JsGetOrCreateResult {
+    /// Whether the box was newly created (true) or already existed (false).
+    #[napi(getter)]
+    pub fn created(&self) -> bool {
+        self.inner_created
+    }
+
+    /// The box handle.
+    #[napi(getter, js_name = "box")]
+    pub fn get_box(&self) -> JsBox {
+        JsBox {
+            handle: Arc::clone(&self.inner_handle),
+        }
     }
 }

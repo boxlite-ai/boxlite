@@ -275,6 +275,29 @@ class SyncBoxlite:
         native_box = self._sync(self._boxlite.create(options, name=name))
         return SyncBox(self, native_box)
 
+    def get_or_create(
+        self,
+        options: "BoxOptions",
+        name: Optional[str] = None,
+    ) -> tuple["SyncBox", bool]:
+        """
+        Get an existing box by name, or create a new one.
+
+        Args:
+            options: BoxOptions specifying image, resources, etc.
+            name: Optional name to look up or assign. If None, always creates.
+
+        Returns:
+            Tuple of (SyncBox, created) where created is True if newly created.
+        """
+        self._require_started()
+        from ._box import SyncBox
+
+        native_box, created = self._sync(
+            self._boxlite.get_or_create(options, name=name)
+        )
+        return SyncBox(self, native_box), created
+
     def get(self, id_or_name: str) -> Optional["SyncBox"]:
         """
         Get an existing box by ID or name.

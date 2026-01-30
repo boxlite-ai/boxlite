@@ -204,9 +204,10 @@ fn main() -> BoxliteResult<()> {
         tracing::debug!("Leaked gvproxy instance for VM lifetime");
     }
 
-    // Save detach/parent_pid before config is moved into engine.create()
+    // Save detach/parent_pid/transport before config is moved into engine.create()
     let detach = config.detach;
     let parent_pid = config.parent_pid;
+    let transport = config.transport.clone();
 
     // Initialize engine options with defaults
     let options = VmmConfig::default();
@@ -231,7 +232,7 @@ fn main() -> BoxliteResult<()> {
     // Start parent watchdog if detach=false
     // Watchdog monitors parent process and exits gracefully when parent dies
     if !detach {
-        start_parent_watchdog(parent_pid);
+        start_parent_watchdog(parent_pid, transport);
         tracing::info!(
             parent_pid = parent_pid,
             "Parent watchdog started (detach=false)"
@@ -257,15 +258,22 @@ fn main() -> BoxliteResult<()> {
 /// Timeout for graceful shutdown before force kill (in seconds).
 const GRACEFUL_SHUTDOWN_TIMEOUT_SECS: u64 = 5;
 
+/// Timeout for guest RPC shutdown (filesystem sync) in seconds.
+const GUEST_SHUTDOWN_TIMEOUT_SECS: u64 = 3;
+
 /// Start a watchdog thread that monitors the parent process.
 ///
 /// If the parent process exits (clean exit or crash), this triggers shutdown:
-/// 1. Immediately sends SIGTERM for graceful shutdown
-/// 2. Waits for timeout
-/// 3. Force kills via SIGKILL if still running
+/// 1. Calls Guest.Shutdown() RPC to flush filesystems (sync)
+/// 2. Sends SIGTERM for graceful shutdown
+/// 3. Waits for timeout
+/// 4. Force kills via SIGKILL if still running
+///
+/// Step 1 is critical: without it, qcow2 COW disk buffers may not be flushed,
+/// leading to ext4 filesystem corruption on the next restart.
 ///
 /// This ensures orphan boxes don't accumulate when `detach=false`.
-fn start_parent_watchdog(parent_pid: u32) {
+fn start_parent_watchdog(parent_pid: u32, transport: boxlite_shared::Transport) {
     thread::spawn(move || {
         let self_pid = std::process::id();
 
@@ -278,15 +286,55 @@ fn start_parent_watchdog(parent_pid: u32) {
                     "Parent process exited, initiating graceful shutdown"
                 );
 
-                // Step 1: Try graceful shutdown via SIGTERM
+                // Step 1: Gracefully shut down guest (sync filesystems)
+                match tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
+                    Ok(rt) => {
+                        let session = boxlite::GuestSession::new(transport);
+                        let result = rt.block_on(async {
+                            tokio::time::timeout(
+                                Duration::from_secs(GUEST_SHUTDOWN_TIMEOUT_SECS),
+                                async {
+                                    match session.guest().await {
+                                        Ok(mut guest) => {
+                                            let _ = guest.shutdown().await;
+                                        }
+                                        Err(e) => {
+                                            tracing::debug!(
+                                                "Could not connect to guest for shutdown: {e}"
+                                            );
+                                        }
+                                    }
+                                },
+                            )
+                            .await
+                        });
+                        match result {
+                            Ok(()) => {
+                                tracing::info!("Guest shutdown completed (filesystems synced)")
+                            }
+                            Err(_) => tracing::warn!(
+                                timeout_secs = GUEST_SHUTDOWN_TIMEOUT_SECS,
+                                "Guest shutdown timed out"
+                            ),
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to build tokio runtime for guest shutdown: {e}");
+                    }
+                }
+
+                // Step 2: SIGTERM for graceful process shutdown
                 unsafe {
                     libc::kill(self_pid as i32, libc::SIGTERM);
                 }
 
-                // Step 2: Wait for graceful shutdown timeout
+                // Step 3: Wait for graceful shutdown timeout
                 thread::sleep(Duration::from_secs(GRACEFUL_SHUTDOWN_TIMEOUT_SECS));
 
-                // Step 3: If still running, force kill
+                // Step 4: If still running, force kill
                 tracing::warn!(
                     timeout_secs = GRACEFUL_SHUTDOWN_TIMEOUT_SECS,
                     "Graceful shutdown timed out, forcing exit with SIGKILL"

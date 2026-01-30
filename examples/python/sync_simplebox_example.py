@@ -131,9 +131,37 @@ def example_error_handling():
             print(f"Command failed with exit code: {result.exit_code}")
 
 
+def example_reuse_existing():
+    """Example 6: Reuse existing box by name."""
+    print("\n\n=== Example 6: Reuse Existing Box ===")
+
+    from boxlite.sync_api import SyncBoxlite
+
+    name = "sync-reuse-demo"
+
+    # Nested SyncSimpleBox instances must share a single runtime,
+    # because the sync API runs one greenlet event loop that cannot
+    # be duplicated.
+    with SyncBoxlite.default() as runtime:
+        with boxlite.SyncSimpleBox(
+            image="python:alpine", name=name, reuse_existing=True, runtime=runtime
+        ) as box1:
+            print(f"First open:  id={box1.id}, created={box1.created}")
+            box1.exec("sh", "-c", "echo 'hello' > /tmp/marker")
+
+            with boxlite.SyncSimpleBox(
+                image="python:alpine", name=name, reuse_existing=True, runtime=runtime
+            ) as box2:
+                print(f"Second open: id={box2.id}, created={box2.created}")
+                result = box2.exec("cat", "/tmp/marker")
+                print(f"Marker file from reused box: {result.stdout.strip()}")
+
+    print("Reuse existing avoids duplicate-name errors and shares state.")
+
+
 def example_pipeline():
-    """Example 6: Real-world data processing pipeline."""
-    print("\n\n=== Example 6: Data Processing Pipeline ===")
+    """Example 7: Real-world data processing pipeline."""
+    print("\n\n=== Example 7: Data Processing Pipeline ===")
 
     with boxlite.SyncSimpleBox(image="python:alpine") as box:
         print(f"Running data pipeline in: {box.id}")
@@ -173,6 +201,7 @@ def main():
     example_environment()
     example_working_directory()
     example_error_handling()
+    example_reuse_existing()
     example_pipeline()
 
     print("\n" + "=" * 60)

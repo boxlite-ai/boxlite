@@ -130,9 +130,33 @@ async def example_error_handling():
             print(f"Command failed with exit code: {result.exit_code}")
 
 
+async def example_reuse_existing():
+    """Example 6: Reuse existing box by name."""
+    print("\n\n=== Example 6: Reuse Existing Box ===")
+
+    name = "reuse-demo"
+
+    # First call creates a new box
+    async with boxlite.SimpleBox(
+        image="python:alpine", name=name, reuse_existing=True
+    ) as box1:
+        print(f"First open:  id={box1.id}, created={box1.created}")
+        await box1.exec("sh", "-c", "echo 'hello' > /tmp/marker")
+
+        # Second call with same name reuses the existing box
+        async with boxlite.SimpleBox(
+            image="python:alpine", name=name, reuse_existing=True
+        ) as box2:
+            print(f"Second open: id={box2.id}, created={box2.created}")
+            result = await box2.exec("cat", "/tmp/marker")
+            print(f"Marker file from reused box: {result.stdout.strip()}")
+
+    print("Reuse existing avoids duplicate-name errors and shares state.")
+
+
 async def example_pipeline():
-    """Example 6: Real-world data processing pipeline."""
-    print("\n\n=== Example 6: Data Processing Pipeline ===")
+    """Example 7: Real-world data processing pipeline."""
+    print("\n\n=== Example 7: Data Processing Pipeline ===")
 
     async with boxlite.SimpleBox(image="python:alpine") as box:
         print(f"✓ Running data pipeline in: {box.id}")
@@ -172,6 +196,7 @@ async def main():
     await example_environment()
     await example_working_directory()
     await example_error_handling()
+    await example_reuse_existing()
     await example_pipeline()
 
     print("\n" + "=" * 60)
