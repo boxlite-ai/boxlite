@@ -1,5 +1,6 @@
 pub mod cp;
 pub mod create;
+pub mod exec;
 pub mod images;
 pub mod list;
 pub mod pull;

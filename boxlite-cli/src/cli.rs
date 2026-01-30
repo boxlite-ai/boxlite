@@ -48,7 +48,8 @@ pub struct Cli {
 #[non_exhaustive]
 pub enum Commands {
     Run(crate::commands::run::RunArgs),
-
+    /// Execute a command in a running box
+    Exec(crate::commands::exec::ExecArgs),
     /// Create a new box
     Create(crate::commands::create::CreateArgs),
 
@@ -148,7 +149,6 @@ impl ProcessFlags {
     }
 
     /// Validate process flags
-    #[allow(dead_code)]
     pub fn validate(&self, detach: bool) -> anyhow::Result<()> {
         // Check TTY mode only in non-detach mode
         if !detach && self.tty && !std::io::stdin().is_terminal() {
@@ -159,7 +159,6 @@ impl ProcessFlags {
     }
 
     /// Configures a BoxCommand with process flags (env, workdir, tty)
-    #[allow(dead_code)]
     pub fn configure_command(&self, mut cmd: BoxCommand) -> BoxCommand {
         for env_str in &self.env {
             if let Some((k, v)) = env_str.split_once('=') {
