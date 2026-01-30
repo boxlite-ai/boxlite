@@ -121,6 +121,25 @@ impl JsExecStdin {
     pub async fn write_string(&self, text: String) -> Result<()> {
         self.write(text.into_bytes().into()).await
     }
+
+    /// Close stdin stream, signaling EOF to the process.
+    ///
+    /// After closing, the process will receive EOF on its stdin.
+    /// This is necessary for commands like `tar xf -` that read
+    /// until EOF before processing.
+    ///
+    /// # Example
+    /// ```javascript
+    /// const stdin = await execution.stdin();
+    /// await stdin.write(Buffer.from(data));
+    /// await stdin.close();
+    /// ```
+    #[napi]
+    pub async fn close(&self) -> Result<()> {
+        let mut guard = self.stream.lock().await;
+        guard.close();
+        Ok(())
+    }
 }
 
 /// Execution handle for a running command.

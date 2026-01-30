@@ -16,6 +16,7 @@
     "browserbox-puppeteer": "node browserbox_puppeteer.js",
     "computerbox": "node computerbox.js",
     "interactivebox": "node interactivebox.js",
-    "claude": "node claude_in_boxlite.js"
+    "claude": "node claude_in_boxlite.js",
+    "cp-tmpfs-workaround": "node cp_tmpfs_workaround.js"
   }
 }

@@ -98,6 +98,12 @@ impl PyBox {
     }
 
     /// Copy from host into the box container rootfs.
+    ///
+    /// **Note:** Destinations under tmpfs mounts (e.g. `/tmp`, `/dev/shm`) will
+    /// silently fail — files land behind the mount and are invisible to the
+    /// container. Same limitation as `docker cp`. Workaround: pipe tar via
+    /// stdin through the box's command execution API.
+    /// See: <https://github.com/moby/moby/issues/22020>
     #[pyo3(signature = (host_path, container_dest, copy_options=None))]
     fn copy_in<'a>(
         &self,

@@ -180,6 +180,12 @@ impl JsBox {
     }
 
     /// Copy files from host into the box's container rootfs.
+    ///
+    /// **Note:** Destinations under tmpfs mounts (e.g. `/tmp`, `/dev/shm`) will
+    /// silently fail — files land behind the mount and are invisible to the
+    /// container. Same limitation as `docker cp`. Workaround: pipe tar via
+    /// stdin through the box's command execution API.
+    /// See: <https://github.com/moby/moby/issues/22020>
     #[napi(js_name = "copyIn")]
     pub async fn copy_in(
         &self,

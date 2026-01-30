@@ -364,6 +364,14 @@ impl BoxImpl {
     // FILE COPY
     // ========================================================================
 
+    // NOTE(copy_in): copy_in cannot write to tmpfs-mounted destinations (e.g. /tmp, /dev/shm).
+    //
+    // Extraction happens on the rootfs layer, but tmpfs mounts inside the container
+    // hide those files. This is the same limitation as `docker cp`.
+    // See: https://github.com/moby/moby/issues/22020
+    //
+    // Workaround: use exec() to pipe tar into the container:
+    //   exec(["tar", "xf", "-", "-C", "/tmp"]) + stream tar bytes via stdin
     pub(crate) async fn copy_into(
         &self,
         host_src: &std::path::Path,

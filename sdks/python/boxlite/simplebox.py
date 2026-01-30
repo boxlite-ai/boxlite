@@ -293,6 +293,22 @@ class SimpleBox:
             follow_symlinks: If True, follow symlinks when copying (default: False)
             include_parent: If True, include parent directory in archive (default: True)
 
+        Note:
+            copy_in extracts files into the container rootfs layer. Destinations
+            that are tmpfs mounts inside the guest (e.g. /tmp, /dev/shm) will
+            silently fail — files land behind the mount and are invisible to
+            running processes. This is the same limitation as ``docker cp``
+            (see https://github.com/moby/moby/issues/22020).
+
+            Workaround: use the low-level exec API to pipe a tar archive
+            into the container (like ``docker exec -i CONTAINER tar xf -``)::
+
+                execution = await box._box.exec("tar", args=["xf", "-", "-C", "/tmp"])
+                stdin = execution.stdin()
+                await stdin.send_input(tar_bytes)
+                await stdin.close()
+                result = await execution.wait()
+
         Examples:
             Copy a single file::
 
