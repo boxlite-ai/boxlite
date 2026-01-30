@@ -9,13 +9,8 @@ pub struct CreateArgs {
     #[arg(index = 1)]
     pub image: String,
 
-    /// Assign a name to the box
-    #[arg(long)]
-    pub name: Option<String>,
-
-    /// Automatically remove the box when it exits
-    #[arg(long)]
-    pub rm: bool,
+    #[command(flatten)]
+    pub management: crate::cli::ManagementFlags,
 
     /// Set environment variables
     #[arg(short = 'e', long = "env")]
@@ -33,7 +28,7 @@ pub async fn execute(args: CreateArgs, global: &GlobalFlags) -> anyhow::Result<(
     let rt = global.create_runtime()?;
     let box_options = args.to_box_options();
 
-    let litebox = rt.create(box_options, args.name).await?;
+    let litebox = rt.create(box_options, args.management.name.clone()).await?;
     println!("{}", litebox.id());
 
     Ok(())
@@ -43,7 +38,7 @@ impl CreateArgs {
     fn to_box_options(&self) -> BoxOptions {
         let mut options = BoxOptions::default();
         self.resource.apply_to(&mut options);
-        options.auto_remove = self.rm;
+        self.management.apply_to(&mut options);
         options.working_dir = self.workdir.clone();
         crate::cli::apply_env_vars(&self.env, &mut options);
         options.rootfs = RootfsSpec::Image(self.image.clone());

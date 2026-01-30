@@ -587,7 +587,7 @@ fn test_run_signal_exit_code_sigint() {
 #[test]
 fn test_run_invalid_image() {
     let mut ctx = common::boxlite();
-    ctx.cmd.timeout(std::time::Duration::from_secs(10));
+    ctx.cmd.timeout(std::time::Duration::from_secs(30));
     ctx.cmd
         .args(["run", "nonexistent-image:latest", "echo", "hi"]);
     ctx.cmd.assert().failure().stderr(

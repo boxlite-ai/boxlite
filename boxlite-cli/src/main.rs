@@ -1,6 +1,8 @@
 mod cli;
 mod commands;
 mod formatter;
+pub mod terminal;
+pub mod util;
 
 use std::process;
 
@@ -8,10 +10,9 @@ use clap::Parser;
 use cli::Cli;
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
-#[tokio::main]
-async fn main() {
+fn main() {
     // Set default BOXLITE_RUNTIME_DIR from compile-time value if not already set
-    // SAFETY: Called early in main before spawning threads
+    // This MUST be done before starting tokio runtime and spawning threads
     if std::env::var("BOXLITE_RUNTIME_DIR").is_err()
         && let Some(runtime_dir) = option_env!("BOXLITE_RUNTIME_DIR")
     {
@@ -20,6 +21,16 @@ async fn main() {
         }
     }
 
+    // Start tokio runtime manually to ensure environment is set up safely
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("Failed to build tokio runtime");
+
+    let _ = rt.block_on(run_cli());
+}
+
+async fn run_cli() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     // Initialize tracing based on --debug flag
@@ -50,4 +61,6 @@ async fn main() {
         eprintln!("Error: {}", error);
         process::exit(1);
     }
+
+    Ok(())
 }

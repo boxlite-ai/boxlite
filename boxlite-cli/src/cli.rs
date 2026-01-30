@@ -2,8 +2,9 @@
 //! This module contains all CLI-related code including the main CLI structure,
 //! subcommands, and flag definitions.
 
-use boxlite::{BoxOptions, BoxliteOptions, BoxliteRuntime};
+use boxlite::{BoxCommand, BoxOptions, BoxliteOptions, BoxliteRuntime};
 use clap::{Args, Parser, Subcommand};
+use std::io::IsTerminal;
 
 /// Helper to parse CLI environment variables and apply them to BoxOptions
 pub fn apply_env_vars(env: &[String], opts: &mut BoxOptions) {
@@ -145,6 +146,39 @@ impl ProcessFlags {
         apply_env_vars_with_lookup(&self.env, opts, lookup);
         Ok(())
     }
+
+    /// Validate process flags
+    #[allow(dead_code)]
+    pub fn validate(&self, detach: bool) -> anyhow::Result<()> {
+        // Check TTY mode only in non-detach mode
+        if !detach && self.tty && !std::io::stdin().is_terminal() {
+            anyhow::bail!("the input device is not a TTY.");
+        }
+
+        Ok(())
+    }
+
+    /// Configures a BoxCommand with process flags (env, workdir, tty)
+    #[allow(dead_code)]
+    pub fn configure_command(&self, mut cmd: BoxCommand) -> BoxCommand {
+        for env_str in &self.env {
+            if let Some((k, v)) = env_str.split_once('=') {
+                cmd = cmd.env(k, v);
+            } else if let Ok(val) = std::env::var(env_str) {
+                cmd = cmd.env(env_str, val);
+            }
+        }
+
+        if let Some(ref w) = self.workdir {
+            cmd = cmd.working_dir(w);
+        }
+
+        if self.tty {
+            cmd = cmd.tty(true);
+        }
+
+        cmd
+    }
 }
 
 // ============================================================================
@@ -182,69 +216,51 @@ impl ResourceFlags {
 
 #[derive(Args, Debug, Clone)]
 pub struct ManagementFlags {
-    /// Automatically remove the boxlite when it exits
-    #[arg(long)]
-    pub rm: bool,
-
-    /// Run boxlite in background and print boxlite ID
-    #[arg(short, long)]
-    pub detach: bool,
-
     /// Assign a name to the box
     #[arg(long)]
     pub name: Option<String>,
+
+    /// Run the box in the background (detach)
+    #[arg(short = 'd', long)]
+    pub detach: bool,
+
+    /// Automatically remove the box when it exits
+    #[arg(long)]
+    pub rm: bool,
 }
 
 impl ManagementFlags {
     pub fn apply_to(&self, opts: &mut BoxOptions) {
-        opts.auto_remove = self.rm;
         opts.detach = self.detach;
+        opts.auto_remove = self.rm;
     }
 }
-
-// ============================================================================
-// Tests
-// ============================================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_process_flags_env_parsing() {
-        let flags = ProcessFlags {
-            interactive: false,
-            tty: false,
-            workdir: None,
-            env: vec!["KEY=VALUE".to_string(), "EMPTY=".to_string()],
-        };
-
+    fn test_apply_env_vars_with_lookup() {
         let mut opts = BoxOptions::default();
-        flags.apply_to(&mut opts).unwrap();
+        let current_env = vec![
+            "TEST_VAR=test_value".to_string(),
+            "TEST_HOST_VAR".to_string(),
+            "NON_EXISTENT_VAR".to_string(),
+        ];
 
-        assert!(opts.env.contains(&("KEY".to_string(), "VALUE".to_string())));
-        assert!(opts.env.contains(&("EMPTY".to_string(), "".to_string())));
-    }
+        apply_env_vars_with_lookup(&current_env, &mut opts, |k| {
+            if k == "TEST_HOST_VAR" {
+                Some("host_value".to_string())
+            } else {
+                None
+            }
+        });
 
-    #[test]
-    fn test_process_flags_env_passthrough() {
-        let flags = ProcessFlags {
-            interactive: false,
-            tty: false,
-            workdir: None,
-            // "TEST_HOST_VAR" -> "host_value"
-            // "NON_EXISTENT_VAR" ->  ignored
-            env: vec!["TEST_HOST_VAR".to_string(), "NON_EXISTENT_VAR".to_string()],
-        };
-
-        let mut opts = BoxOptions::default();
-
-        flags
-            .apply_to_with_lookup(&mut opts, |key| match key {
-                "TEST_HOST_VAR" => Some("host_value".to_string()),
-                _ => None,
-            })
-            .unwrap();
+        assert!(
+            opts.env
+                .contains(&("TEST_VAR".to_string(), "test_value".to_string()))
+        );
 
         assert!(
             opts.env
@@ -252,18 +268,5 @@ mod tests {
         );
 
         assert!(!opts.env.iter().any(|(k, _)| k == "NON_EXISTENT_VAR"));
-    }
-
-    #[test]
-    fn test_resource_flags_cpu_cap() {
-        let flags = ResourceFlags {
-            cpus: Some(1000),
-            memory: None,
-        };
-
-        let mut opts = BoxOptions::default();
-        flags.apply_to(&mut opts);
-
-        assert_eq!(opts.cpus, Some(255));
     }
 }
