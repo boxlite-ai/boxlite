@@ -346,7 +346,10 @@ impl ExecProtocol {
                         error = %e,
                         "Wait failed"
                     );
-                    let _ = result_tx.send(ExecResult { exit_code: -1, error_message: None });
+                    let _ = result_tx.send(ExecResult {
+                        exit_code: -1,
+                        error_message: None,
+                    });
                 }
             }
         });

@@ -25,7 +25,17 @@ impl PipelineTask<InitCtx> for ContainerRootfsTask {
         let task_name = self.name();
         let box_id = task_start(&ctx, task_name).await;
 
-        let (rootfs_spec, env, runtime, layout, reuse_rootfs, disk_size_gb, entrypoint_override, cmd_override, user_override) = {
+        let (
+            rootfs_spec,
+            env,
+            runtime,
+            layout,
+            reuse_rootfs,
+            disk_size_gb,
+            entrypoint_override,
+            cmd_override,
+            user_override,
+        ) = {
             let ctx = ctx.lock().await;
             let layout = ctx
                 .layout
@@ -124,7 +134,12 @@ async fn run_container_rootfs(
         if !env.is_empty() {
             container_image_config.merge_env(env.to_vec());
         }
-        apply_user_overrides(&mut container_image_config, entrypoint_override, cmd_override, user_override);
+        apply_user_overrides(
+            &mut container_image_config,
+            entrypoint_override,
+            cmd_override,
+            user_override,
+        );
 
         return Ok((container_image_config, disk));
     }
@@ -166,7 +181,12 @@ async fn run_container_rootfs(
     if !env.is_empty() {
         container_image_config.merge_env(env.to_vec());
     }
-    apply_user_overrides(&mut container_image_config, entrypoint_override, cmd_override, user_override);
+    apply_user_overrides(
+        &mut container_image_config,
+        entrypoint_override,
+        cmd_override,
+        user_override,
+    );
 
     let disk = create_cow_disk(&rootfs_result, layout, disk_size_gb)?;
 

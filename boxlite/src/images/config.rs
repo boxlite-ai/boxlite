@@ -298,7 +298,11 @@ mod tests {
     fn test_final_cmd_multiple_cmd_args() {
         let config = ContainerImageConfig {
             entrypoint: vec!["python".to_string()],
-            cmd: vec!["-m".to_string(), "http.server".to_string(), "8080".to_string()],
+            cmd: vec![
+                "-m".to_string(),
+                "http.server".to_string(),
+                "8080".to_string(),
+            ],
             ..Default::default()
         };
 
@@ -371,10 +375,7 @@ mod tests {
 
         config.merge_env(vec![("MMM".to_string(), "middle".to_string())]);
 
-        assert_eq!(
-            config.env,
-            vec!["AAA=first", "MMM=middle", "ZZZ=last"]
-        );
+        assert_eq!(config.env, vec!["AAA=first", "MMM=middle", "ZZZ=last"]);
     }
 
     // ========================================================================

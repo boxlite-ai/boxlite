@@ -966,7 +966,10 @@ mod tests {
         let json = serde_json::to_string(&opts).unwrap();
         let opts2: BoxOptions = serde_json::from_str(&json).unwrap();
 
-        assert_eq!(opts2.cmd, Some(vec!["--flag".to_string(), "value".to_string()]));
+        assert_eq!(
+            opts2.cmd,
+            Some(vec!["--flag".to_string(), "value".to_string()])
+        );
         assert_eq!(opts2.user, Some("1000:1000".to_string()));
     }
 
@@ -980,8 +983,14 @@ mod tests {
             "ports": []
         }"#;
         let opts: BoxOptions = serde_json::from_str(json).unwrap();
-        assert!(opts.cmd.is_none(), "cmd should default to None when missing from JSON");
-        assert!(opts.user.is_none(), "user should default to None when missing from JSON");
+        assert!(
+            opts.cmd.is_none(),
+            "cmd should default to None when missing from JSON"
+        );
+        assert!(
+            opts.user.is_none(),
+            "user should default to None when missing from JSON"
+        );
     }
 
     #[test]
@@ -1031,7 +1040,10 @@ mod tests {
             "ports": []
         }"#;
         let opts: BoxOptions = serde_json::from_str(json).unwrap();
-        assert!(opts.entrypoint.is_none(), "entrypoint should default to None when missing from JSON");
+        assert!(
+            opts.entrypoint.is_none(),
+            "entrypoint should default to None when missing from JSON"
+        );
     }
 
     #[test]

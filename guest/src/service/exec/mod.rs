@@ -299,8 +299,7 @@ async fn spawn_execution(
     let started_at_ms = now_ms();
 
     // Step 1: Spawn process using executor selected by BOXLITE_EXECUTOR env var
-    let (child, container_ref) =
-        spawn_with_executor(server, &req, &execution_id).await?;
+    let (child, container_ref) = spawn_with_executor(server, &req, &execution_id).await?;
 
     let pid = child.pid().as_raw() as u32;
 

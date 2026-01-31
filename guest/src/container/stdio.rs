@@ -141,42 +141,42 @@ impl ContainerStdio {
 
 /// Read all available data from an fd using non-blocking I/O.
 fn drain_fd(fd: Option<OwnedFd>) -> String {
-        const MAX_CAPTURE: usize = 4096;
+    const MAX_CAPTURE: usize = 4096;
 
-        let Some(fd) = fd else {
-            return String::new();
-        };
+    let Some(fd) = fd else {
+        return String::new();
+    };
 
-        // Set non-blocking so read returns immediately when no more data
-        let raw_fd = fd.as_raw_fd();
-        let flags = nix::fcntl::fcntl(raw_fd, nix::fcntl::FcntlArg::F_GETFL);
-        if let Ok(flags) = flags {
-            let mut new_flags = nix::fcntl::OFlag::from_bits_truncate(flags);
-            new_flags.insert(nix::fcntl::OFlag::O_NONBLOCK);
-            let _ = nix::fcntl::fcntl(raw_fd, nix::fcntl::FcntlArg::F_SETFL(new_flags));
-        }
+    // Set non-blocking so read returns immediately when no more data
+    let raw_fd = fd.as_raw_fd();
+    let flags = nix::fcntl::fcntl(raw_fd, nix::fcntl::FcntlArg::F_GETFL);
+    if let Ok(flags) = flags {
+        let mut new_flags = nix::fcntl::OFlag::from_bits_truncate(flags);
+        new_flags.insert(nix::fcntl::OFlag::O_NONBLOCK);
+        let _ = nix::fcntl::fcntl(raw_fd, nix::fcntl::FcntlArg::F_SETFL(new_flags));
+    }
 
-        let mut file = std::fs::File::from(fd);
-        let mut buf = vec![0u8; MAX_CAPTURE];
-        let mut total = 0;
+    let mut file = std::fs::File::from(fd);
+    let mut buf = vec![0u8; MAX_CAPTURE];
+    let mut total = 0;
 
-        // Read in a loop to drain the pipe buffer
-        loop {
-            match file.read(&mut buf[total..]) {
-                Ok(0) => break, // EOF
-                Ok(n) => {
-                    total += n;
-                    if total >= MAX_CAPTURE {
-                        break;
-                    }
+    // Read in a loop to drain the pipe buffer
+    loop {
+        match file.read(&mut buf[total..]) {
+            Ok(0) => break, // EOF
+            Ok(n) => {
+                total += n;
+                if total >= MAX_CAPTURE {
+                    break;
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
-                Err(_) => break,
             }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+            Err(_) => break,
         }
+    }
 
-        buf.truncate(total);
-        String::from_utf8_lossy(&buf).into_owned()
+    buf.truncate(total);
+    String::from_utf8_lossy(&buf).into_owned()
 }
 
 #[cfg(test)]
