@@ -81,6 +81,7 @@ impl PipelineTask<InitCtx> for ContainerRootfsTask {
 }
 
 /// Pull image and prepare rootfs, then create or reuse COW disk.
+#[allow(clippy::too_many_arguments)]
 async fn run_container_rootfs(
     rootfs_spec: &RootfsSpec,
     env: &[(String, String)],

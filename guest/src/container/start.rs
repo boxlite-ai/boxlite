@@ -87,6 +87,7 @@ pub(crate) fn create_container_etc_files(
 }
 
 /// Create OCI bundle (config.json + rootfs reference)
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn create_oci_bundle(
     container_id: &str,
     rootfs: &Path,

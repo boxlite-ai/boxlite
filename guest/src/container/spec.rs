@@ -39,6 +39,7 @@ pub struct UserMount {
 /// Since we're inside a VM with single-tenant isolation, cgroup resource limits
 /// provide minimal benefit. See comments in build_default_namespaces() and
 /// build_standard_mounts() to re-enable if needed.
+#[allow(clippy::too_many_arguments)]
 pub fn create_oci_spec(
     container_id: &str,
     rootfs: &str,
