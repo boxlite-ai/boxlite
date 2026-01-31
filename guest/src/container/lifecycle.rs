@@ -46,6 +46,8 @@ pub struct Container {
     state_root: PathBuf,
     bundle_path: PathBuf,
     env: HashMap<String, String>,
+    /// User string from OCI spec (e.g., "1000:1000"), propagated to exec commands.
+    user: String,
     /// Stdio pipes that keep init process alive.
     /// Dropping this closes pipes → init gets EOF → init exits.
     #[allow(dead_code)]
@@ -137,6 +139,7 @@ impl Container {
             state_root,
             bundle_path,
             env: env_map,
+            user: user.to_string(),
             stdio,
             is_shutdown: std::sync::atomic::AtomicBool::new(false),
         })
@@ -218,7 +221,12 @@ impl Container {
     /// # }
     /// ```
     pub fn cmd(&self) -> ContainerCommand {
-        ContainerCommand::new(self.id.clone(), self.state_root.clone(), self.env.clone())
+        ContainerCommand::new(
+            self.id.clone(),
+            self.state_root.clone(),
+            self.env.clone(),
+            self.user.clone(),
+        )
     }
 
     /// Drain init process stdout and stderr.

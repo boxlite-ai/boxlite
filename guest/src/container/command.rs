@@ -35,12 +35,12 @@ use std::path::PathBuf;
 /// # }
 /// ```
 pub struct ContainerCommand {
-    // Container context (provided by Container::exec())
+    // Container context (provided by Container::cmd())
     id: String,
 
     state_root: PathBuf,
 
-    /// Program to execute (set via cmd())
+    /// Program to run (set via program())
     program: Option<String>,
 
     /// Command arguments (not including program)
@@ -48,6 +48,9 @@ pub struct ContainerCommand {
 
     /// Environment variable overrides
     env: HashMap<String, String>,
+
+    /// User string from container spec (e.g., "1000:1000")
+    user: String,
 
     /// Working directory (None = use default "/")
     cwd: Option<String>,
@@ -64,11 +67,17 @@ impl ContainerCommand {
     ///
     /// This is public within the crate for use by Container::exec().
     /// Users should call `container.exec()` instead.
-    pub(super) fn new(id: String, state_root: PathBuf, env: HashMap<String, String>) -> Self {
+    pub(super) fn new(
+        id: String,
+        state_root: PathBuf,
+        env: HashMap<String, String>,
+        user: String,
+    ) -> Self {
         Self {
             program: None,
             args: Vec::new(),
             env,
+            user,
             cwd: None,
             console_socket: None,
             pty_config: None,
@@ -344,6 +353,9 @@ impl ContainerCommand {
             );
         }
 
+        // Parse user string (e.g., "1000:1000") into uid/gid for tenant exec
+        let (uid, gid) = parse_user_for_exec(&self.user);
+
         let pid = builder
             .as_tenant()
             .with_capabilities(capability_names())
@@ -352,6 +364,8 @@ impl ContainerCommand {
             .with_cwd(self.cwd.clone().or(Some("/".parse().unwrap())))
             .with_env(self.env.clone())
             .with_container_args(container_args.clone())
+            .with_user(uid)
+            .with_group(gid)
             .build()
             .map_err(|e| {
                 tracing::error!(
@@ -388,6 +402,27 @@ impl ContainerCommand {
         );
 
         Ok(pid)
+    }
+}
+
+/// Parse user string into (uid, gid) for exec.
+///
+/// Returns `(Some(uid), Some(gid))` for valid user strings,
+/// or `(None, None)` for empty/invalid strings (defaults to container's init user).
+fn parse_user_for_exec(user: &str) -> (Option<u32>, Option<u32>) {
+    if user.is_empty() {
+        return (None, None);
+    }
+
+    if let Some((uid_str, gid_str)) = user.split_once(':') {
+        let uid = uid_str.parse::<u32>().ok();
+        let gid = gid_str.parse::<u32>().ok();
+        (uid, gid)
+    } else if let Ok(uid) = user.parse::<u32>() {
+        (Some(uid), None)
+    } else {
+        // Non-numeric username — can't resolve without /etc/passwd
+        (None, None)
     }
 }
 

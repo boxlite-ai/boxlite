@@ -27,29 +27,31 @@ def setup_logging():
 
 
 async def example_cmd_override():
-    """Example 1: Override CMD to pass custom arguments.
+    """Example 1: Override ENTRYPOINT and CMD.
 
     OCI images have two directives:
-    - ENTRYPOINT: The executable (preserved)
-    - CMD: Default arguments (overridable)
+    - ENTRYPOINT: The executable
+    - CMD: Default arguments
 
     Final command = ENTRYPOINT + CMD
 
-    For example, `python:alpine` has ENTRYPOINT=["python3"].
-    Setting cmd=["-c", "print('hello')"] produces: python3 -c "print('hello')"
+    Note: `python:alpine` uses CMD (not ENTRYPOINT) for its default command.
+    To pass arguments like `-c`, we set entrypoint=["python3"] explicitly
+    so that cmd args are appended to it.
     """
     print("\n=== Example 1: CMD Override ===")
 
     async with boxlite.SimpleBox(
         image="python:alpine",
+        entrypoint=["python3"],
         cmd=["-c", "import sys; print(f'Python {sys.version}')"],
     ) as box:
         print(f"Container started: {box.id}")
 
         # The CMD is used by the init process (entrypoint + cmd).
         # We can still run additional commands:
-        result = await box.run("python3 -c \"print('Hello from run')\"")
-        print(f"Run output: {result.stdout.strip()}")
+        result = await box.exec("python3", "-c", "print('Hello from exec')")
+        print(f"Exec output: {result.stdout.strip()}")
         print(f"Exit code: {result.exit_code}")
 
 
@@ -68,11 +70,11 @@ async def example_user_override():
         print(f"Container started: {box.id}")
 
         # Verify the user inside the container
-        result = await box.run("id")
+        result = await box.exec("id")
         print(f"Container user: {result.stdout.strip()}")
 
         # Verify uid specifically
-        result = await box.run("id -u")
+        result = await box.exec("id", "-u")
         uid = result.stdout.strip()
         print(f"UID: {uid}")
         assert uid == "1000", f"Expected UID 1000, got {uid}"
@@ -87,14 +89,15 @@ async def example_combined():
 
     async with boxlite.SimpleBox(
         image="python:alpine",
+        entrypoint=["python3"],
         cmd=["-c", "import os; print(f'uid={os.getuid()}, gid={os.getgid()}')"],
         user="1000:1000",
     ) as box:
         print(f"Container started: {box.id}")
 
         # Run a command to verify both overrides
-        result = await box.run(
-            "python3 -c \"import os; print(f'Running as uid={os.getuid()}')\""
+        result = await box.exec(
+            "python3", "-c", "import os; print(f'Running as uid={os.getuid()}')"
         )
         print(f"Output: {result.stdout.strip()}")
 
