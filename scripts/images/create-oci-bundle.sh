@@ -17,7 +17,7 @@
 #   - skopeo
 #   - python3
 #
-# Docker fallback (single-arch host only) is used if skopeo is unavailable.
+# Docker fallback (host arch only) requires Docker >= 25.0.0 (OCI layout support).
 
 set -euo pipefail
 
@@ -30,6 +30,52 @@ source "$SCRIPT_DIR/common.sh"
 IMAGE="alpine:latest"
 OUTPUT_DIR="./test-oci-bundle"
 PLATFORMS_INPUT="linux/amd64,linux/arm64"
+
+version_gte() {
+    # Returns 0 if $1 >= $2 (portable, no sort -V needed)
+    local IFS=.
+    local -a a=($1) b=($2)
+    for ((i = 0; i < ${#b[@]}; i++)); do
+        local ai="${a[i]:-0}" bi="${b[i]:-0}"
+        if ((ai > bi)); then return 0; fi
+        if ((ai < bi)); then return 1; fi
+    done
+    return 0
+}
+
+docker_supports_oci_save() {
+    # Docker Engine 25.0.0 added OCI-compliant tarball output for `docker save`.
+    local ver
+    ver=$(docker version --format '{{.Server.Version}}' 2>/dev/null || docker version --format '{{.Client.Version}}' 2>/dev/null || true)
+    if [[ -z "$ver" ]]; then
+        return 1
+    fi
+    version_gte "$ver" "25.0.0"
+}
+
+image_exists_locally() {
+    command_exists docker && docker image inspect "$1" &>/dev/null
+}
+
+normalize_image_ref() {
+    # Append :latest if no tag or digest is present.
+    # Handles: "alpine" -> "alpine:latest", "alpine:3.20" unchanged, "img@sha256:..." unchanged
+    local ref="$1"
+    if [[ "$ref" != *@* && "$ref" != *:* ]]; then
+        echo "${ref}:latest"
+    else
+        echo "$ref"
+    fi
+}
+
+ensure_image_pulled() {
+    if image_exists_locally "$1"; then
+        print_info "Image found locally: $1"
+    else
+        print_info "Pulling image: $1"
+        docker pull "$1"
+    fi
+}
 
 parse_args() {
     while [[ $# -gt 0 ]]; do
@@ -60,6 +106,7 @@ abs_path() {
 print_header "Create OCI Bundle"
 
 parse_args "$@"
+IMAGE="$(normalize_image_ref "$IMAGE")"
 OUTPUT_DIR="$(abs_path "$OUTPUT_DIR")"
 
 print_info "Image:      $IMAGE"
@@ -147,59 +194,55 @@ print(f"New inner index digest: sha256:{new_child_digest}")
 PY
 }
 
-build_with_skopeo() {
-    print_section "Using skopeo (multi-arch)"
-    require_command "skopeo" "Install skopeo for multi-arch bundles"
-    require_command "python3" "Needed for pruning platforms"
+docker_host_uri() {
+    # Resolve the Docker socket URI for tools (like skopeo) that don't use docker contexts.
+    if [[ -n "${DOCKER_HOST:-}" ]]; then
+        echo "$DOCKER_HOST"
+        return
+    fi
+    docker context inspect --format '{{.Endpoints.docker.Host}}' 2>/dev/null
+}
 
-    skopeo copy --multi-arch=all "docker://$IMAGE" "oci:$OUTPUT_DIR:latest"
-    prune_with_python
+build_with_skopeo() {
+    print_section "Using skopeo"
+    require_command "skopeo" "Install skopeo for multi-arch bundles"
+
+    if image_exists_locally "$IMAGE"; then
+        print_info "Copying from local Docker daemon (host arch only)"
+        local dhost
+        dhost=$(docker_host_uri) || true
+        skopeo copy ${dhost:+--src-daemon-host "$dhost"} "docker-daemon:$IMAGE" "oci:$OUTPUT_DIR:latest"
+    else
+        print_info "Copying from registry (multi-arch)"
+        require_command "python3" "Needed for pruning platforms"
+        skopeo copy --multi-arch=all "docker://$IMAGE" "oci:$OUTPUT_DIR:latest"
+        prune_with_python
+    fi
     print_success "OCI bundle created at: $OUTPUT_DIR"
 }
 
 build_with_docker() {
-    print_section "Using docker fallback (single-arch host only)"
+    print_section "Using docker (host arch only)"
     require_command "docker" "Install Docker or skopeo"
 
-    docker pull "$IMAGE"
+    ensure_image_pulled "$IMAGE"
+
     local temp_dir
     temp_dir=$(mktemp -d)
-    trap "rm -rf $temp_dir" EXIT
+    trap "rm -rf '$temp_dir'" EXIT
 
-    local cid
-    cid=$(docker create "$IMAGE")
-    docker export "$cid" > "$temp_dir/rootfs.tar"
-    docker rm "$cid" >/dev/null
+    if ! docker save --platform "$PLATFORMS_INPUT" "$IMAGE" -o "$temp_dir/image.tar" 2>/dev/null; then
+        print_warning "docker save --platform failed; retrying without platform filter (host arch only)"
+        docker save "$IMAGE" -o "$temp_dir/image.tar"
+    fi
 
-    mkdir -p "$OUTPUT_DIR/blobs/sha256"
+    mkdir -p "$OUTPUT_DIR"
+    tar -xf "$temp_dir/image.tar" -C "$OUTPUT_DIR"
 
-    local layer_digest layer_size
-    layer_digest=$(sha256sum "$temp_dir/rootfs.tar" | cut -d' ' -f1)
-    mv "$temp_dir/rootfs.tar" "$OUTPUT_DIR/blobs/sha256/$layer_digest"
-    layer_size=$(stat -f%z "$OUTPUT_DIR/blobs/sha256/$layer_digest" 2>/dev/null || stat --printf="%s" "$OUTPUT_DIR/blobs/sha256/$layer_digest")
-
-    local host_arch
-    host_arch=$(uname -m)
-    case "$host_arch" in
-        x86_64) ARCH=amd64 ;;
-        aarch64|arm64) ARCH=arm64 ;;
-        *) ARCH=$host_arch ;;
-    esac
-
-    local config_json config_digest config_size
-    config_json='{"architecture":"'"$ARCH"'","os":"linux","config":{"Env":["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"],"WorkingDir":"/"},"rootfs":{"type":"layers","diff_ids":["sha256:'"$layer_digest"'"]}}'
-    config_digest=$(echo -n "$config_json" | sha256sum | cut -d' ' -f1)
-    echo -n "$config_json" > "$OUTPUT_DIR/blobs/sha256/$config_digest"
-    config_size=${#config_json}
-
-    local manifest_json manifest_digest manifest_size
-    manifest_json='{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"mediaType":"application/vnd.oci.image.config.v1+json","digest":"sha256:'"$config_digest"'","size":'"$config_size"'},"layers":[{"mediaType":"application/vnd.oci.image.layer.v1.tar","digest":"sha256:'"$layer_digest"'","size":'"$layer_size"'}]}'
-    manifest_digest=$(echo -n "$manifest_json" | sha256sum | cut -d' ' -f1)
-    echo -n "$manifest_json" > "$OUTPUT_DIR/blobs/sha256/$manifest_digest"
-    manifest_size=${#manifest_json}
-
-    echo '{"schemaVersion":2,"manifests":[{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"sha256:'"$manifest_digest"'","size":'"$manifest_size"',"platform":{"architecture":"'"$ARCH"'","os":"linux"}}]}' > "$OUTPUT_DIR/index.json"
-    echo '{"imageLayoutVersion":"1.0.0"}' > "$OUTPUT_DIR/oci-layout"
+    if [[ ! -f "$OUTPUT_DIR/oci-layout" ]]; then
+        print_error "docker save did not produce an OCI layout (missing oci-layout file)"
+        exit 1
+    fi
 
     print_warning "Multi-arch pruning not available without skopeo; bundle contains host arch only."
     print_success "OCI bundle created at: $OUTPUT_DIR"
@@ -208,40 +251,15 @@ build_with_docker() {
 main() {
     prepare_output
 
-    if command_exists skopeo; then
+    if command_exists docker && docker_supports_oci_save; then
+        build_with_docker
+    elif command_exists skopeo; then
         build_with_skopeo
     else
-        build_with_docker
-    fi
-
-    package_bundle
-}
-
-package_bundle() {
-    local archive="${OUTPUT_DIR%/}.tar.zst"
-
-    print_section "Packaging bundle"
-    rm -f "$archive" "${OUTPUT_DIR%/}.tar.gz" 2>/dev/null || true
-
-    if command_exists zstd; then
-        print_info "Using zstd (fast + high ratio)"
-        if command_exists gtar; then
-            gtar -C "$(dirname "$OUTPUT_DIR")" \
-                -I "zstd -T0 -19" \
-                -cf "$archive" \
-                "$(basename "$OUTPUT_DIR")"
-        else
-            (cd "$(dirname "$OUTPUT_DIR")" && \
-                tar -cf - "$(basename "$OUTPUT_DIR")" | zstd -T0 -19 -o "$archive")
-        fi
-        print_success "Archive created: $archive"
-    elif command_exists gzip; then
-        print_warning "zstd not found, falling back to gzip"
-        archive="${OUTPUT_DIR%/}.tar.gz"
-        tar -C "$(dirname "$OUTPUT_DIR")" -zcf "$archive" "$(basename "$OUTPUT_DIR")"
-        print_success "Archive created: $archive"
-    else
-        print_warning "No compressor (zstd/gzip) found; skipping archive"
+        print_error "No supported tool found to create OCI bundles."
+        print_info "Option 1: Install Docker >= 25.0.0 (docker save with OCI layout)"
+        print_info "Option 2: Install skopeo (multi-arch support)"
+        exit 1
     fi
 }
 
