@@ -28,31 +28,41 @@ impl ContainerExecutor {
     pub fn new(container: Arc<Mutex<Container>>) -> Self {
         Self { container }
     }
+
+    /// Get a clone of the container reference for status checking.
+    pub fn container_ref(&self) -> Arc<Mutex<Container>> {
+        self.container.clone()
+    }
 }
 
 #[async_trait]
 impl Executor for ContainerExecutor {
     async fn spawn(&self, req: &ExecRequest) -> BoxliteResult<ExecHandle> {
-        let container = self.container.lock().await;
+        // Build the command while holding the lock
+        let cmd = {
+            let container = self.container.lock().await;
 
-        let mut cmd = container
-            .cmd()
-            .program(&req.program)
-            .args(&req.args)
-            .envs(req.env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+            let mut cmd = container
+                .cmd()
+                .program(&req.program)
+                .args(&req.args)
+                .envs(req.env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
 
-        if !req.workdir.is_empty() {
-            cmd = cmd.current_dir(&req.workdir);
-        }
+            if !req.workdir.is_empty() {
+                cmd = cmd.current_dir(&req.workdir);
+            }
 
-        if let Some(tty) = &req.tty {
-            cmd = cmd.with_pty(PtyConfig {
-                rows: tty.rows as u16,
-                cols: tty.cols as u16,
-                x_pixels: tty.x_pixels as u16,
-                y_pixels: tty.y_pixels as u16,
-            });
-        }
+            if let Some(tty) = &req.tty {
+                cmd = cmd.with_pty(PtyConfig {
+                    rows: tty.rows as u16,
+                    cols: tty.cols as u16,
+                    x_pixels: tty.x_pixels as u16,
+                    y_pixels: tty.y_pixels as u16,
+                });
+            }
+
+            cmd
+        }; // Release container lock before spawn
 
         cmd.spawn().await
     }

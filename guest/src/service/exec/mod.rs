@@ -23,6 +23,9 @@ pub(in crate::service) mod registry;
 mod state;
 mod timeout;
 
+// Re-export trait so container module can implement it
+pub(crate) use state::InitHealthCheck;
+
 use crate::service::exec::executor::{ContainerExecutor, GuestExecutor};
 use crate::service::server::GuestServer;
 use boxlite_shared::{
@@ -34,7 +37,7 @@ use futures::stream::Stream;
 use std::pin::Pin;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status, Streaming};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 #[tonic::async_trait]
 impl Execution for GuestServer {
@@ -142,22 +145,38 @@ impl Execution for GuestServer {
         // Wait for process to exit
         let exit_status = state.wait_process().await?;
 
-        let (exit_code, signal) = match exit_status {
+        let (exit_code, signal, error_message) = match exit_status {
             ExitStatus::Code(code) => {
                 debug!(
                     execution_id = %exec_id,
                     exit_code = code,
                     "Process exited with code"
                 );
-                (code, 0)
+                (code, 0, String::new())
             }
             ExitStatus::Signal(sig) => {
+                let mut error_msg = String::new();
+                // When a process gets SIGKILL, check if container init died.
+                // PID namespace teardown sends SIGKILL to all processes when init exits.
+                if sig == nix::sys::signal::Signal::SIGKILL {
+                    if let Some(diagnosis) = state.check_container_death().await {
+                        warn!(
+                            execution_id = %exec_id,
+                            signal = sig as i32,
+                            diagnosis = %diagnosis,
+                            "Process killed by container init death (PID namespace teardown). \
+                             The container's init process exited, causing all exec'd processes \
+                             to receive SIGKILL."
+                        );
+                        error_msg = diagnosis;
+                    }
+                }
                 debug!(
                     execution_id = %exec_id,
                     signal = sig as i32,
                     "Process exited due to signal"
                 );
-                (0, sig as i32)
+                (0, sig as i32, error_msg)
             }
         };
 
@@ -166,6 +185,7 @@ impl Execution for GuestServer {
             signal,
             timed_out: false,
             duration_ms: 0,
+            error_message,
         }))
     }
 
@@ -279,12 +299,20 @@ async fn spawn_execution(
     let started_at_ms = now_ms();
 
     // Step 1: Spawn process using executor selected by BOXLITE_EXECUTOR env var
-    let child = spawn_with_executor(server, &req, &execution_id).await?;
+    let (child, container_ref) =
+        spawn_with_executor(server, &req, &execution_id).await?;
 
     let pid = child.pid().as_raw() as u32;
 
     // Step 2: Create execution state and register
-    let state = state::ExecutionState::new(child);
+    // If running inside a container, pass the init health checker for death detection
+    let state = match container_ref {
+        Some(container) => {
+            let health: std::sync::Arc<tokio::sync::Mutex<dyn InitHealthCheck>> = container;
+            state::ExecutionState::new_with_init_health(child, health)
+        }
+        None => state::ExecutionState::new(child),
+    };
     server
         .registry
         .register(execution_id.clone(), state.clone())
@@ -341,6 +369,9 @@ fn now_ms() -> u64 {
 
 /// Spawn process with executor selected by BOXLITE_EXECUTOR env var.
 ///
+/// Returns (ExecHandle, Option<container_ref>) — the container ref is provided
+/// when running inside a container, enabling init-death detection.
+///
 /// Syntax:
 /// - No env var or empty: use guest executor
 /// - "guest": run directly on guest VM
@@ -349,7 +380,13 @@ async fn spawn_with_executor(
     server: &GuestServer,
     req: &ExecRequest,
     execution_id: &str,
-) -> Result<exec_handle::ExecHandle, ExecResponse> {
+) -> Result<
+    (
+        exec_handle::ExecHandle,
+        Option<std::sync::Arc<tokio::sync::Mutex<crate::container::Container>>>,
+    ),
+    ExecResponse,
+> {
     use executor::Executor;
 
     let executor_value = req.env.get(executor_const::ENV_VAR).map(|s| s.as_str());
@@ -358,10 +395,11 @@ async fn spawn_with_executor(
         Some(executor_const::GUEST) | None | Some("") => {
             // Guest executor (explicit or default)
             debug!(execution_id = %execution_id, "Using GuestExecutor");
-            GuestExecutor
+            let handle = GuestExecutor
                 .spawn(req)
                 .await
-                .map_err(|e| spawn_error(execution_id, e.to_string()))
+                .map_err(|e| spawn_error(execution_id, e.to_string()))?;
+            Ok((handle, None))
         }
         Some(s) if s.starts_with(executor_const::CONTAINER_KEY) => {
             // Container executor: parse "container=<id>"
@@ -391,10 +429,30 @@ async fn spawn_with_executor(
                 })?
             };
             let executor = ContainerExecutor::new(container_arc);
-            executor
-                .spawn(req)
-                .await
-                .map_err(|e| spawn_error(execution_id, e.to_string()))
+            let container_ref = executor.container_ref();
+            let handle = match executor.spawn(req).await {
+                Ok(h) => h,
+                Err(e) => {
+                    // Check if container init died — provide actionable diagnostics
+                    let mut container = container_ref.lock().await;
+                    if !container.is_running() {
+                        let (init_stdout, init_stderr) = container.drain_init_output();
+                        let mut msg = format!(
+                            "Container init process exited — cannot exec. Original error: {}",
+                            e
+                        );
+                        if !init_stdout.is_empty() {
+                            msg.push_str(&format!(". Init stdout: {}", init_stdout.trim()));
+                        }
+                        if !init_stderr.is_empty() {
+                            msg.push_str(&format!(". Init stderr: {}", init_stderr.trim()));
+                        }
+                        return Err(spawn_error(execution_id, msg));
+                    }
+                    return Err(spawn_error(execution_id, e.to_string()));
+                }
+            };
+            Ok((handle, Some(container_ref)))
         }
         Some(unknown) => {
             // Unknown executor value

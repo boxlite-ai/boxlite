@@ -100,9 +100,10 @@ impl ContainerInterface {
         mounts: Vec<ContainerMount>,
     ) -> BoxliteResult<String> {
         let proto_config = ProtoContainerConfig {
-            entrypoint: image_config.cmd.clone(),
+            entrypoint: image_config.final_cmd(),
             env: image_config.env.clone(),
             workdir: image_config.working_dir.clone(),
+            user: image_config.user.clone(),
         };
 
         // Convert ContainerMount to proto BindMount
@@ -119,7 +120,9 @@ impl ContainerInterface {
         tracing::debug!(container_id = %container_id, "Sending ContainerInit request");
         tracing::trace!(
             container_id = %container_id,
-            entrypoint = ?image_config.cmd,
+            entrypoint = ?image_config.entrypoint,
+            cmd = ?image_config.cmd,
+            user = %image_config.user,
             workdir = %image_config.working_dir,
             env_count = image_config.env.len(),
             rootfs = ?rootfs,

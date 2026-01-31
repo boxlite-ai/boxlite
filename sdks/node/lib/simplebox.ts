@@ -64,6 +64,38 @@ export interface SimpleBoxOptions {
     guestPort: number;
     protocol?: string;
   }>;
+
+  /**
+   * Override image ENTRYPOINT directive.
+   *
+   * When set, completely replaces the image's ENTRYPOINT.
+   * Use with `cmd` to build the full command:
+   *   Final execution = entrypoint + cmd
+   *
+   * Example: For `docker:dind`, bypass the failing entrypoint script:
+   *   `entrypoint: ["dockerd"]`, `cmd: ["--iptables=false"]`
+   */
+  entrypoint?: string[];
+
+  /**
+   * Override image CMD directive.
+   *
+   * The image ENTRYPOINT is preserved; these args replace the image's CMD.
+   * Final execution = image_entrypoint + cmd.
+   *
+   * Example: For `docker:dind` (ENTRYPOINT=["dockerd-entrypoint.sh"]),
+   * setting `cmd: ["--iptables=false"]` produces:
+   * `["dockerd-entrypoint.sh", "--iptables=false"]`
+   */
+  cmd?: string[];
+
+  /**
+   * Override container user (UID/GID).
+   *
+   * Format: "uid", "uid:gid", or "username".
+   * If not set, uses the image's USER directive (defaults to root "0:0").
+   */
+  user?: string;
 }
 
 /**
@@ -153,6 +185,9 @@ export class SimpleBox {
         : undefined,
       volumes: options.volumes,
       ports: options.ports,
+      entrypoint: options.entrypoint,
+      cmd: options.cmd,
+      user: options.user,
     };
 
     this._name = options.name;

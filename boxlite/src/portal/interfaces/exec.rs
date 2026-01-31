@@ -201,7 +201,15 @@ impl ExecProtocol {
         } else {
             resp.exit_code
         };
-        ExecResult { exit_code: code }
+        let error_message = if resp.error_message.is_empty() {
+            None
+        } else {
+            Some(resp.error_message)
+        };
+        ExecResult {
+            exit_code: code,
+            error_message,
+        }
     }
 
     fn spawn_attach(
@@ -321,7 +329,7 @@ impl ExecProtocol {
                     tracing::debug!(execution_id = %execution_id, "Wait cancelled during shutdown");
                     // Send a special result indicating cancellation
                     // Using exit code -1 to indicate abnormal termination
-                    let _ = result_tx.send(ExecResult { exit_code: -1 });
+                    let _ = result_tx.send(ExecResult { exit_code: -1, error_message: None });
                     return;
                 }
                 result = client.wait(request) => result,
@@ -338,7 +346,7 @@ impl ExecProtocol {
                         error = %e,
                         "Wait failed"
                     );
-                    let _ = result_tx.send(ExecResult { exit_code: -1 });
+                    let _ = result_tx.send(ExecResult { exit_code: -1, error_message: None });
                 }
             }
         });
@@ -526,7 +534,7 @@ mod tests {
             tokio::select! {
                 biased;
                 _ = token_clone.cancelled() => {
-                    let _ = result_tx.send(ExecResult { exit_code: -1 });
+                    let _ = result_tx.send(ExecResult { exit_code: -1, error_message: None });
                 }
                 _ = tokio::time::sleep(Duration::from_secs(3600)) => {
                     // Would normally wait for gRPC response

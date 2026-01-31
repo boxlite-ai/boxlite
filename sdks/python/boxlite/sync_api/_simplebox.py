@@ -188,6 +188,7 @@ class SyncSimpleBox:
             exit_code=result.exit_code,
             stdout="".join(stdout_lines),
             stderr="".join(stderr_lines),
+            error_message=result.error_message,
         )
 
     def stop(self) -> None:

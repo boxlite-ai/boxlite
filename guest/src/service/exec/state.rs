@@ -7,6 +7,20 @@ use tokio::task::JoinHandle;
 use tonic::Status;
 use tracing::info;
 
+/// Abstraction for checking container init health.
+///
+/// Decouples ExecutionState (state layer) from the Container type (container module),
+/// following Dependency Inversion: the exec module defines the interface it needs,
+/// and the container module implements it.
+pub(crate) trait InitHealthCheck: Send + Sync {
+    /// Check if the init process is still running.
+    fn is_running(&self) -> bool;
+
+    /// Diagnose why init exited. Includes status, PID, init stdout/stderr.
+    /// May only return full output once (drains init pipes).
+    fn diagnose_exit(&mut self) -> String;
+}
+
 /// Inner state that requires synchronization.
 struct Inner {
     /// The process handle (owns pid, pty_controller, stdin, stdout, stderr)
@@ -16,6 +30,9 @@ struct Inner {
     /// Timeout flag
     #[allow(dead_code)] // Will be used for timeout handling
     timed_out: bool,
+    /// Optional init health checker for the container this exec runs in.
+    /// Used to detect container init death when exec gets SIGKILL.
+    init_health: Option<Arc<Mutex<dyn InitHealthCheck>>>,
 }
 
 /// Execution state.
@@ -34,11 +51,45 @@ impl ExecutionState {
             handle: Some(handle),
             output_tasks: Vec::new(),
             timed_out: false,
+            init_health: None,
         };
 
         Self {
             inner: Arc::new(Mutex::new(inner)),
         }
+    }
+
+    /// Create execution state with an init health checker.
+    ///
+    /// Enables detection of container init death when the exec'd process
+    /// receives SIGKILL (PID namespace teardown).
+    pub(super) fn new_with_init_health(
+        handle: ExecHandle,
+        init_health: Arc<Mutex<dyn InitHealthCheck>>,
+    ) -> Self {
+        let inner = Inner {
+            handle: Some(handle),
+            output_tasks: Vec::new(),
+            timed_out: false,
+            init_health: Some(init_health),
+        };
+
+        Self {
+            inner: Arc::new(Mutex::new(inner)),
+        }
+    }
+
+    /// Check if the container init process died.
+    ///
+    /// Returns `Some(diagnosis)` if init is dead, `None` if alive or no health checker.
+    pub(super) async fn check_container_death(&self) -> Option<String> {
+        let inner = self.inner.lock().await;
+        let health = inner.init_health.as_ref()?;
+        let mut health = health.lock().await;
+        if health.is_running() {
+            return None;
+        }
+        Some(health.diagnose_exit())
     }
 
     /// Get PID for execution.

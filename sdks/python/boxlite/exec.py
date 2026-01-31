@@ -20,8 +20,11 @@ class ExecResult:
         exit_code: Exit code from the command (negative if terminated by signal)
         stdout: Standard output as string
         stderr: Standard error as string
+        error_message: Diagnostic message when process died unexpectedly
+            (e.g., container init death). None if normal exit.
     """
 
     exit_code: int
     stdout: str
     stderr: str
+    error_message: str | None = None

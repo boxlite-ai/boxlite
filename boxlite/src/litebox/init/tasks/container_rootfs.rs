@@ -25,7 +25,7 @@ impl PipelineTask<InitCtx> for ContainerRootfsTask {
         let task_name = self.name();
         let box_id = task_start(&ctx, task_name).await;
 
-        let (rootfs_spec, env, runtime, layout, reuse_rootfs, disk_size_gb) = {
+        let (rootfs_spec, env, runtime, layout, reuse_rootfs, disk_size_gb, entrypoint_override, cmd_override, user_override) = {
             let ctx = ctx.lock().await;
             let layout = ctx
                 .layout
@@ -38,6 +38,9 @@ impl PipelineTask<InitCtx> for ContainerRootfsTask {
                 layout,
                 ctx.reuse_rootfs,
                 ctx.config.options.disk_size_gb,
+                ctx.config.options.entrypoint.clone(),
+                ctx.config.options.cmd.clone(),
+                ctx.config.options.user.clone(),
             )
         };
 
@@ -48,6 +51,9 @@ impl PipelineTask<InitCtx> for ContainerRootfsTask {
             &layout,
             reuse_rootfs,
             disk_size_gb,
+            entrypoint_override.as_deref(),
+            cmd_override.as_deref(),
+            user_override.as_deref(),
         )
         .await
         .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
@@ -72,6 +78,9 @@ async fn run_container_rootfs(
     layout: &BoxFilesystemLayout,
     reuse_rootfs: bool,
     disk_size_gb: Option<u64>,
+    entrypoint_override: Option<&[String]>,
+    cmd_override: Option<&[String]>,
+    user_override: Option<&str>,
 ) -> BoxliteResult<(ContainerImageConfig, Disk)> {
     let disk_path = layout.disk_path();
 
@@ -115,6 +124,7 @@ async fn run_container_rootfs(
         if !env.is_empty() {
             container_image_config.merge_env(env.to_vec());
         }
+        apply_user_overrides(&mut container_image_config, entrypoint_override, cmd_override, user_override);
 
         return Ok((container_image_config, disk));
     }
@@ -156,6 +166,7 @@ async fn run_container_rootfs(
     if !env.is_empty() {
         container_image_config.merge_env(env.to_vec());
     }
+    apply_user_overrides(&mut container_image_config, entrypoint_override, cmd_override, user_override);
 
     let disk = create_cow_disk(&rootfs_result, layout, disk_size_gb)?;
 
@@ -217,6 +228,24 @@ fn create_cow_disk(
         ContainerRootfsPrepResult::Merged(_) => {
             Err(BoxliteError::Internal("Merged mode not supported".into()))
         }
+    }
+}
+
+/// Apply user overrides to container image config (entrypoint, CMD, and user).
+fn apply_user_overrides(
+    config: &mut ContainerImageConfig,
+    entrypoint_override: Option<&[String]>,
+    cmd_override: Option<&[String]>,
+    user_override: Option<&str>,
+) {
+    if let Some(ep) = entrypoint_override {
+        config.entrypoint = ep.to_vec();
+    }
+    if let Some(cmd) = cmd_override {
+        config.cmd = cmd.to_vec();
+    }
+    if let Some(user) = user_override {
+        config.user = user.to_string();
     }
 }
 

@@ -18,6 +18,9 @@ const ERR_STDERR_UNAVAILABLE: &str = "stderr stream not available";
 pub struct JsExecResult {
     /// Process exit code (0 = success, non-zero = error)
     pub exit_code: i32,
+    /// Diagnostic error message when process died unexpectedly.
+    /// Undefined if the process exited normally.
+    pub error_message: Option<String>,
 }
 
 /// Stdout stream for reading command output.
@@ -254,6 +257,7 @@ impl JsExecution {
         let exec_result = guard.wait().await.map_err(map_err)?;
         Ok(JsExecResult {
             exit_code: exec_result.exit_code,
+            error_message: exec_result.error_message,
         })
     }
 

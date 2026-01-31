@@ -318,6 +318,19 @@ pub(crate) struct PyBoxOptions {
     pub(crate) auto_remove: Option<bool>,
     #[pyo3(get, set)]
     pub(crate) detach: Option<bool>,
+    /// Override the image's ENTRYPOINT directive.
+    /// When set, completely replaces the image's ENTRYPOINT.
+    /// Example: `entrypoint=["dockerd"]` with `docker:dind`
+    #[pyo3(get, set)]
+    pub(crate) entrypoint: Option<Vec<String>>,
+    /// Override the image's CMD. ENTRYPOINT is preserved.
+    /// Example: `cmd=["--iptables=false"]` with `docker:dind`
+    #[pyo3(get, set)]
+    pub(crate) cmd: Option<Vec<String>>,
+    /// Override container user (e.g., "1000", "1000:1000").
+    /// If None, uses the image's USER directive (defaults to root).
+    #[pyo3(get, set)]
+    pub(crate) user: Option<String>,
     /// Security isolation options for the box.
     #[pyo3(get, set)]
     pub(crate) security: Option<PySecurityOptions>,
@@ -339,6 +352,9 @@ impl PyBoxOptions {
         ports=vec![],
         auto_remove=None,
         detach=None,
+        entrypoint=None,
+        cmd=None,
+        user=None,
         security=None,
     ))]
     #[allow(clippy::too_many_arguments)]
@@ -355,6 +371,9 @@ impl PyBoxOptions {
         ports: Vec<PyPortSpec>,
         auto_remove: Option<bool>,
         detach: Option<bool>,
+        entrypoint: Option<Vec<String>>,
+        cmd: Option<Vec<String>>,
+        user: Option<String>,
         security: Option<PySecurityOptions>,
     ) -> Self {
         Self {
@@ -370,6 +389,9 @@ impl PyBoxOptions {
             ports,
             auto_remove,
             detach,
+            entrypoint,
+            cmd,
+            user,
             security,
         }
     }
@@ -421,9 +443,14 @@ impl From<PyBoxOptions> for BoxOptions {
             volumes,
             network,
             ports,
+            entrypoint: py_opts.entrypoint,
+            cmd: py_opts.cmd,
+            user: py_opts.user,
             ..Default::default()
         };
 
+        // These fields have non-None defaults (auto_remove=true, detach=false),
+        // so None means "keep default" rather than "set to None".
         if let Some(auto_remove) = py_opts.auto_remove {
             opts.auto_remove = auto_remove;
         }

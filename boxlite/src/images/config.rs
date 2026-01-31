@@ -5,14 +5,27 @@ use serde::{Deserialize, Serialize};
 /// Container image configuration extracted from OCI images.
 ///
 /// This struct contains the configuration baked into the container image,
-/// including entrypoint, environment variables, working directory, and
-/// exposed ports.
+/// including entrypoint, command, user, environment variables, working
+/// directory, and exposed ports.
+///
+/// Follows OCI/Docker semantics:
+/// - `entrypoint` is the executable (OCI ENTRYPOINT)
+/// - `cmd` provides default arguments (OCI CMD), overridable by users
+/// - Final execution = entrypoint + cmd
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContainerImageConfig {
-    /// Entrypoint command (e.g., ["/bin/python", "-u", "app.py"])
+    /// Executable from OCI ENTRYPOINT directive (e.g., ["/bin/sh", "-c"])
+    pub entrypoint: Vec<String>,
+
+    /// Default arguments from OCI CMD directive (e.g., ["echo", "hello"])
     ///
-    /// This combines the images's ENTRYPOINT and CMD directives.
+    /// Users can override this via BoxOptions.cmd while preserving entrypoint.
     pub cmd: Vec<String>,
+
+    /// User/group to run the container process as (e.g., "0:0", "1000", "nginx")
+    ///
+    /// From OCI USER directive. Defaults to "0:0" (root).
+    pub user: String,
 
     /// Exposed ports from the images (e.g., ["8080/tcp", "443/tcp"])
     ///
@@ -32,6 +45,15 @@ impl ContainerImageConfig {
     #[allow(dead_code)]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Combined entrypoint + cmd for execution.
+    ///
+    /// This is what gets sent to the guest as the process args.
+    pub fn final_cmd(&self) -> Vec<String> {
+        let mut result = self.entrypoint.clone();
+        result.extend(self.cmd.iter().cloned());
+        result
     }
 
     /// Parse port number and protocol from exposed port string
@@ -111,8 +133,7 @@ impl ContainerImageConfig {
     /// Convert OCI ImageConfiguration to ContainerImageConfig
     ///
     /// Extracts container runtime configuration from OCI images config,
-    /// including entrypoint (combined ENTRYPOINT + CMD), environment variables,
-    /// working directory, and exposed ports.
+    /// storing ENTRYPOINT and CMD separately for proper override support.
     ///
     /// # Arguments
     /// * `image_config` - OCI ImageConfiguration from images config.json
@@ -128,14 +149,26 @@ impl ContainerImageConfig {
             BoxliteError::Storage("Config object missing from images config".into())
         })?;
 
-        // Build entrypoint: combine Entrypoint + Cmd
-        let mut entrypoint = Vec::new();
-        if let Some(ep) = config.entrypoint().as_ref() {
-            entrypoint.extend(ep.iter().cloned());
-        }
-        if let Some(cmd) = config.cmd().as_ref() {
-            entrypoint.extend(cmd.iter().cloned());
-        }
+        // Extract ENTRYPOINT and CMD separately (OCI semantics)
+        let entrypoint = config
+            .entrypoint()
+            .as_ref()
+            .map(|ep| ep.to_vec())
+            .unwrap_or_default();
+
+        let cmd = config
+            .cmd()
+            .as_ref()
+            .map(|c| c.to_vec())
+            .unwrap_or_default();
+
+        // Extract user
+        let user = config
+            .user()
+            .as_ref()
+            .filter(|u| !u.is_empty())
+            .map(|u| u.to_string())
+            .unwrap_or_else(|| "0:0".to_string());
 
         // Extract environment variables
         let env = config.env().clone().unwrap_or_default();
@@ -151,7 +184,9 @@ impl ContainerImageConfig {
         let exposed_ports = config.exposed_ports().clone().unwrap_or_default();
 
         Ok(ContainerImageConfig {
-            cmd: entrypoint,
+            entrypoint,
+            cmd,
+            user,
             env,
             working_dir: workdir,
             exposed_ports,
@@ -162,7 +197,9 @@ impl ContainerImageConfig {
 impl Default for ContainerImageConfig {
     fn default() -> Self {
         Self {
-            cmd: vec!["/bin/sh".to_string()],
+            entrypoint: vec!["/bin/sh".to_string()],
+            cmd: Vec::new(),
+            user: "0:0".to_string(),
             env: vec![
                 "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin".to_string(),
             ],
@@ -196,14 +233,12 @@ mod tests {
     #[test]
     fn test_tcp_ports() {
         let config = ContainerImageConfig {
-            cmd: vec![],
-            env: vec![],
-            working_dir: "/".to_string(),
             exposed_ports: vec![
                 "8080/tcp".to_string(),
                 "443/tcp".to_string(),
                 "53/udp".to_string(),
             ],
+            ..Default::default()
         };
 
         assert_eq!(config.tcp_ports(), vec![8080, 443]);
@@ -212,16 +247,149 @@ mod tests {
     #[test]
     fn test_udp_ports() {
         let config = ContainerImageConfig {
-            cmd: vec![],
-            env: vec![],
-            working_dir: "/".to_string(),
             exposed_ports: vec![
                 "8080/tcp".to_string(),
                 "53/udp".to_string(),
                 "123/udp".to_string(),
             ],
+            ..Default::default()
         };
 
         assert_eq!(config.udp_ports(), vec![53, 123]);
+    }
+
+    #[test]
+    fn test_final_cmd() {
+        let config = ContainerImageConfig {
+            entrypoint: vec!["dockerd-entrypoint.sh".to_string()],
+            cmd: vec!["--iptables=false".to_string()],
+            ..Default::default()
+        };
+
+        assert_eq!(
+            config.final_cmd(),
+            vec!["dockerd-entrypoint.sh", "--iptables=false"]
+        );
+    }
+
+    #[test]
+    fn test_final_cmd_empty_cmd() {
+        let config = ContainerImageConfig {
+            entrypoint: vec!["/bin/sh".to_string()],
+            cmd: vec![],
+            ..Default::default()
+        };
+
+        assert_eq!(config.final_cmd(), vec!["/bin/sh"]);
+    }
+
+    #[test]
+    fn test_final_cmd_empty_entrypoint() {
+        let config = ContainerImageConfig {
+            entrypoint: vec![],
+            cmd: vec!["echo".to_string(), "hello".to_string()],
+            ..Default::default()
+        };
+
+        assert_eq!(config.final_cmd(), vec!["echo", "hello"]);
+    }
+
+    #[test]
+    fn test_final_cmd_multiple_cmd_args() {
+        let config = ContainerImageConfig {
+            entrypoint: vec!["python".to_string()],
+            cmd: vec!["-m".to_string(), "http.server".to_string(), "8080".to_string()],
+            ..Default::default()
+        };
+
+        assert_eq!(
+            config.final_cmd(),
+            vec!["python", "-m", "http.server", "8080"]
+        );
+    }
+
+    #[test]
+    fn test_final_cmd_both_empty() {
+        let config = ContainerImageConfig {
+            entrypoint: vec![],
+            cmd: vec![],
+            ..Default::default()
+        };
+
+        assert!(config.final_cmd().is_empty());
+    }
+
+    // ========================================================================
+    // merge_env tests
+    // ========================================================================
+
+    #[test]
+    fn test_merge_env_user_overrides_image() {
+        let mut config = ContainerImageConfig {
+            env: vec!["PATH=/usr/bin".to_string(), "HOME=/root".to_string()],
+            ..Default::default()
+        };
+
+        config.merge_env(vec![("HOME".to_string(), "/home/user".to_string())]);
+
+        assert!(config.env.contains(&"HOME=/home/user".to_string()));
+        assert!(!config.env.contains(&"HOME=/root".to_string()));
+        assert!(config.env.contains(&"PATH=/usr/bin".to_string()));
+    }
+
+    #[test]
+    fn test_merge_env_adds_new_vars() {
+        let mut config = ContainerImageConfig {
+            env: vec!["PATH=/usr/bin".to_string()],
+            ..Default::default()
+        };
+
+        config.merge_env(vec![("FOO".to_string(), "bar".to_string())]);
+
+        assert!(config.env.contains(&"FOO=bar".to_string()));
+        assert!(config.env.contains(&"PATH=/usr/bin".to_string()));
+    }
+
+    #[test]
+    fn test_merge_env_empty_user_env() {
+        let mut config = ContainerImageConfig {
+            env: vec!["PATH=/usr/bin".to_string()],
+            ..Default::default()
+        };
+
+        config.merge_env(vec![]);
+
+        assert_eq!(config.env, vec!["PATH=/usr/bin"]);
+    }
+
+    #[test]
+    fn test_merge_env_result_is_sorted() {
+        let mut config = ContainerImageConfig {
+            env: vec!["ZZZ=last".to_string(), "AAA=first".to_string()],
+            ..Default::default()
+        };
+
+        config.merge_env(vec![("MMM".to_string(), "middle".to_string())]);
+
+        assert_eq!(
+            config.env,
+            vec!["AAA=first", "MMM=middle", "ZZZ=last"]
+        );
+    }
+
+    // ========================================================================
+    // Default config tests
+    // ========================================================================
+
+    #[test]
+    fn test_default_config_values() {
+        let config = ContainerImageConfig::default();
+
+        assert_eq!(config.entrypoint, vec!["/bin/sh"]);
+        assert!(config.cmd.is_empty());
+        assert_eq!(config.user, "0:0");
+        assert_eq!(config.working_dir, "/");
+        assert!(config.exposed_ports.is_empty());
+        assert!(!config.env.is_empty()); // Has default PATH
     }
 }

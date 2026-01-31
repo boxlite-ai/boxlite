@@ -8,6 +8,7 @@ use super::spec::UserMount;
 use super::stdio::ContainerStdio;
 use super::{kill, start};
 use crate::layout::GuestLayout;
+use crate::service::exec::InitHealthCheck;
 use boxlite_shared::errors::BoxliteResult;
 use libcontainer::container::Container as LibContainer;
 use libcontainer::signal::Signal;
@@ -85,6 +86,7 @@ impl Container {
         entrypoint: Vec<String>,
         env: Vec<String>,
         workdir: impl AsRef<Path>,
+        user: &str,
         user_mounts: Vec<UserMount>,
     ) -> BoxliteResult<Self> {
         let rootfs = rootfs.as_ref();
@@ -117,6 +119,7 @@ impl Container {
             &entrypoint,
             &env,
             workdir,
+            user,
             &layout.containers_dir(),
             &user_mounts,
         )?;
@@ -218,6 +221,18 @@ impl Container {
         ContainerCommand::new(self.id.clone(), self.state_root.clone(), self.env.clone())
     }
 
+    /// Drain init process stdout and stderr.
+    ///
+    /// Reads all available data from the init process pipes using non-blocking I/O.
+    /// Can only be called once — subsequent calls return empty strings.
+    ///
+    /// # Returns
+    ///
+    /// `(stdout, stderr)` — captured output from the init process.
+    pub fn drain_init_output(&mut self) -> (String, String) {
+        self.stdio.drain_output()
+    }
+
     /// Diagnose why container is not running
     ///
     /// Provides detailed information for debugging container startup failures.
@@ -238,11 +253,14 @@ impl Container {
     /// }
     /// # }
     /// ```
-    pub fn diagnose_exit(&self) -> String {
+    pub fn diagnose_exit(&mut self) -> String {
         let container_state_path = self.container_state_path();
 
+        // Drain init process output before building diagnostics
+        let (init_stdout, init_stderr) = self.drain_init_output();
+
         // Try to load container state from libcontainer
-        match LibContainer::load(container_state_path.clone()) {
+        let mut result = match LibContainer::load(container_state_path.clone()) {
             Ok(libcontainer) => {
                 let status = libcontainer.status();
                 let pid = libcontainer.pid();
@@ -292,7 +310,17 @@ impl Container {
                     e
                 )
             }
+        };
+
+        // Append captured init output if any
+        if !init_stdout.is_empty() {
+            result.push_str(&format!(", Init stdout: {}", init_stdout.trim()));
         }
+        if !init_stderr.is_empty() {
+            result.push_str(&format!(", Init stderr: {}", init_stderr.trim()));
+        }
+
+        result
     }
 
     /// Gracefully shutdown the container.
@@ -350,6 +378,20 @@ impl Container {
 
     fn container_state_path(&self) -> PathBuf {
         self.state_root.join(&self.id)
+    }
+}
+
+// ====================
+// Init Health Check
+// ====================
+
+impl InitHealthCheck for Container {
+    fn is_running(&self) -> bool {
+        self.is_running()
+    }
+
+    fn diagnose_exit(&mut self) -> String {
+        self.diagnose_exit()
     }
 }
 

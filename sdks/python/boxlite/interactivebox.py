@@ -95,6 +95,7 @@ class InteractiveBox(SimpleBox):
         self._stdout = None
         self._stderr = None
         self._exited = None  # Event to signal process exit
+        self._error_message = None  # Diagnostic from unexpected process death
 
     # id property inherited from SimpleBox
 
@@ -162,11 +163,17 @@ class InteractiveBox(SimpleBox):
                 # Ignore other exceptions during cleanup
                 logger.error(f"Caught exception on exit: {e}")
 
+        # Print diagnostic after terminal is restored (clean output guaranteed)
+        if self._error_message:
+            print(f"\n{self._error_message}", file=sys.stderr)
+
         # Shutdown box (via parent)
         return await super().__aexit__(exc_type, exc_val, exc_tb)
 
     async def wait(self):
-        await self._execution.wait()
+        result = await self._execution.wait()
+        if result.error_message:
+            self._error_message = result.error_message
 
     async def _start_interactive_shell(self):
         """Start shell with PTY (internal)."""
@@ -278,7 +285,9 @@ class InteractiveBox(SimpleBox):
     async def _wait_for_exit(self):
         """Wait for the shell to exit (internal)."""
         try:
-            await self._execution.wait()
+            result = await self._execution.wait()
+            if result.error_message:
+                self._error_message = result.error_message
         except Exception:
             pass  # Ignore errors, cleanup will happen in __aexit__
         finally:

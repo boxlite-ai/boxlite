@@ -34,7 +34,8 @@
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use nix::unistd::pipe;
-use std::os::unix::io::OwnedFd;
+use std::io::Read;
+use std::os::unix::io::{AsRawFd, OwnedFd};
 
 /// Stdio configuration for container init process.
 ///
@@ -55,13 +56,11 @@ pub struct ContainerStdio {
     #[allow(dead_code)]
     stdin_tx: OwnedFd,
 
-    /// Read-end of stdout pipe (for optional log capture)
-    #[allow(dead_code)]
-    stdout_rx: OwnedFd,
+    /// Read-end of stdout pipe (taken by drain_output for log capture)
+    stdout_rx: Option<OwnedFd>,
 
-    /// Read-end of stderr pipe (for optional log capture)
-    #[allow(dead_code)]
-    stderr_rx: OwnedFd,
+    /// Read-end of stderr pipe (taken by drain_output for log capture)
+    stderr_rx: Option<OwnedFd>,
 }
 
 /// File descriptors to pass to container init process.
@@ -110,8 +109,8 @@ impl ContainerStdio {
         // nix::unistd::pipe() returns OwnedFd directly
         let container_stdio = Self {
             stdin_tx,
-            stdout_rx,
-            stderr_rx,
+            stdout_rx: Some(stdout_rx),
+            stderr_rx: Some(stderr_rx),
         };
 
         let init_fds = InitStdioFds {
@@ -124,11 +123,66 @@ impl ContainerStdio {
 
         Ok((container_stdio, init_fds))
     }
+
+    /// Drain all available output from init process stdout and stderr.
+    ///
+    /// Takes ownership of the pipe read-ends and reads with non-blocking I/O.
+    /// Can only be called once — subsequent calls return empty strings.
+    ///
+    /// # Returns
+    ///
+    /// `(stdout, stderr)` — captured output, truncated to 4 KiB each.
+    pub fn drain_output(&mut self) -> (String, String) {
+        let stdout = drain_fd(self.stdout_rx.take());
+        let stderr = drain_fd(self.stderr_rx.take());
+        (stdout, stderr)
+    }
+}
+
+/// Read all available data from an fd using non-blocking I/O.
+fn drain_fd(fd: Option<OwnedFd>) -> String {
+        const MAX_CAPTURE: usize = 4096;
+
+        let Some(fd) = fd else {
+            return String::new();
+        };
+
+        // Set non-blocking so read returns immediately when no more data
+        let raw_fd = fd.as_raw_fd();
+        let flags = nix::fcntl::fcntl(raw_fd, nix::fcntl::FcntlArg::F_GETFL);
+        if let Ok(flags) = flags {
+            let mut new_flags = nix::fcntl::OFlag::from_bits_truncate(flags);
+            new_flags.insert(nix::fcntl::OFlag::O_NONBLOCK);
+            let _ = nix::fcntl::fcntl(raw_fd, nix::fcntl::FcntlArg::F_SETFL(new_flags));
+        }
+
+        let mut file = std::fs::File::from(fd);
+        let mut buf = vec![0u8; MAX_CAPTURE];
+        let mut total = 0;
+
+        // Read in a loop to drain the pipe buffer
+        loop {
+            match file.read(&mut buf[total..]) {
+                Ok(0) => break, // EOF
+                Ok(n) => {
+                    total += n;
+                    if total >= MAX_CAPTURE {
+                        break;
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(_) => break,
+            }
+        }
+
+        buf.truncate(total);
+        String::from_utf8_lossy(&buf).into_owned()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
     use std::os::unix::io::AsRawFd;
 
     #[test]
@@ -140,8 +194,8 @@ mod tests {
 
         // Verify all FDs are valid (positive integers)
         assert!(stdio.stdin_tx.as_raw_fd() >= 0);
-        assert!(stdio.stdout_rx.as_raw_fd() >= 0);
-        assert!(stdio.stderr_rx.as_raw_fd() >= 0);
+        assert!(stdio.stdout_rx.as_ref().unwrap().as_raw_fd() >= 0);
+        assert!(stdio.stderr_rx.as_ref().unwrap().as_raw_fd() >= 0);
         assert!(init_fds.stdin.as_raw_fd() >= 0);
         assert!(init_fds.stdout.as_raw_fd() >= 0);
         assert!(init_fds.stderr.as_raw_fd() >= 0);
@@ -149,8 +203,8 @@ mod tests {
         // Verify all FDs are unique
         let fds = [
             stdio.stdin_tx.as_raw_fd(),
-            stdio.stdout_rx.as_raw_fd(),
-            stdio.stderr_rx.as_raw_fd(),
+            stdio.stdout_rx.as_ref().unwrap().as_raw_fd(),
+            stdio.stderr_rx.as_ref().unwrap().as_raw_fd(),
             init_fds.stdin.as_raw_fd(),
             init_fds.stdout.as_raw_fd(),
             init_fds.stderr.as_raw_fd(),
@@ -160,5 +214,40 @@ mod tests {
                 assert_ne!(fds[i], fds[j], "FDs should be unique");
             }
         }
+    }
+
+    #[test]
+    fn test_drain_output_captures_data() {
+        let (mut stdio, init_fds) = ContainerStdio::new().unwrap();
+
+        // Write to the init side of pipes (simulating init process output)
+        let mut stdout_writer = std::fs::File::from(init_fds.stdout);
+        let mut stderr_writer = std::fs::File::from(init_fds.stderr);
+        stdout_writer.write_all(b"hello stdout").unwrap();
+        stderr_writer.write_all(b"hello stderr").unwrap();
+        drop(stdout_writer);
+        drop(stderr_writer);
+
+        let (stdout, stderr) = stdio.drain_output();
+        assert_eq!(stdout, "hello stdout");
+        assert_eq!(stderr, "hello stderr");
+    }
+
+    #[test]
+    fn test_drain_output_returns_empty_on_second_call() {
+        let (mut stdio, init_fds) = ContainerStdio::new().unwrap();
+
+        let mut stdout_writer = std::fs::File::from(init_fds.stdout);
+        stdout_writer.write_all(b"data").unwrap();
+        drop(stdout_writer);
+        drop(init_fds.stderr);
+
+        let (stdout, _) = stdio.drain_output();
+        assert_eq!(stdout, "data");
+
+        // Second call returns empty (fds already taken)
+        let (stdout2, stderr2) = stdio.drain_output();
+        assert_eq!(stdout2, "");
+        assert_eq!(stderr2, "");
     }
 }

@@ -601,6 +601,35 @@ pub struct BoxOptions {
     /// `SecurityOptions::standard()`, `SecurityOptions::maximum()`.
     #[serde(default)]
     pub security: SecurityOptions,
+
+    /// Override the image's ENTRYPOINT directive.
+    ///
+    /// When set, completely replaces the image's ENTRYPOINT.
+    /// Use with `cmd` to build the full command:
+    ///   Final execution = entrypoint + cmd
+    ///
+    /// Example: For `docker:dind`, bypass the failing entrypoint script:
+    ///   `entrypoint = vec!["dockerd"]`, `cmd = vec!["--iptables=false"]`
+    #[serde(default)]
+    pub entrypoint: Option<Vec<String>>,
+
+    /// Override the image's CMD directive.
+    ///
+    /// The image ENTRYPOINT is preserved; these args replace the image's CMD.
+    /// Final execution = image_entrypoint + cmd.
+    ///
+    /// Example: For `docker:dind` (ENTRYPOINT=["dockerd-entrypoint.sh"]),
+    /// setting `cmd = vec!["--iptables=false"]` produces:
+    /// `["dockerd-entrypoint.sh", "--iptables=false"]`
+    #[serde(default)]
+    pub cmd: Option<Vec<String>>,
+
+    /// Override container user (UID/GID).
+    ///
+    /// Format: `"uid"`, `"uid:gid"`, or `"username"`.
+    /// If None, uses the image's USER directive (defaults to root "0:0").
+    #[serde(default)]
+    pub user: Option<String>,
 }
 
 fn default_auto_remove() -> bool {
@@ -627,6 +656,9 @@ impl Default for BoxOptions {
             auto_remove: default_auto_remove(),
             detach: default_detach(),
             security: SecurityOptions::default(),
+            entrypoint: None,
+            cmd: None,
+            user: None,
         }
     }
 }
@@ -905,6 +937,117 @@ mod tests {
         let opts = SecurityOptions::builder().jailer_enabled(true).build();
 
         assert!(opts.jailer_enabled);
+    }
+
+    // ========================================================================
+    // cmd/user option tests
+    // ========================================================================
+
+    #[test]
+    fn test_box_options_cmd_default_is_none() {
+        let opts = BoxOptions::default();
+        assert!(opts.cmd.is_none());
+    }
+
+    #[test]
+    fn test_box_options_user_default_is_none() {
+        let opts = BoxOptions::default();
+        assert!(opts.user.is_none());
+    }
+
+    #[test]
+    fn test_box_options_cmd_serde_roundtrip() {
+        let opts = BoxOptions {
+            cmd: Some(vec!["--flag".to_string(), "value".to_string()]),
+            user: Some("1000:1000".to_string()),
+            ..Default::default()
+        };
+
+        let json = serde_json::to_string(&opts).unwrap();
+        let opts2: BoxOptions = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(opts2.cmd, Some(vec!["--flag".to_string(), "value".to_string()]));
+        assert_eq!(opts2.user, Some("1000:1000".to_string()));
+    }
+
+    #[test]
+    fn test_box_options_cmd_serde_missing_defaults_to_none() {
+        let json = r#"{
+            "rootfs": {"Image": "alpine:latest"},
+            "env": [],
+            "volumes": [],
+            "network": "Isolated",
+            "ports": []
+        }"#;
+        let opts: BoxOptions = serde_json::from_str(json).unwrap();
+        assert!(opts.cmd.is_none(), "cmd should default to None when missing from JSON");
+        assert!(opts.user.is_none(), "user should default to None when missing from JSON");
+    }
+
+    #[test]
+    fn test_box_options_cmd_explicit_in_json() {
+        let json = r#"{
+            "rootfs": {"Image": "docker:dind"},
+            "env": [],
+            "volumes": [],
+            "network": "Isolated",
+            "ports": [],
+            "cmd": ["--iptables=false"],
+            "user": "1000:1000"
+        }"#;
+        let opts: BoxOptions = serde_json::from_str(json).unwrap();
+        assert_eq!(opts.cmd, Some(vec!["--iptables=false".to_string()]));
+        assert_eq!(opts.user, Some("1000:1000".to_string()));
+    }
+
+    #[test]
+    fn test_box_options_entrypoint_default_is_none() {
+        let opts = BoxOptions::default();
+        assert!(opts.entrypoint.is_none());
+    }
+
+    #[test]
+    fn test_box_options_entrypoint_serde_roundtrip() {
+        let opts = BoxOptions {
+            entrypoint: Some(vec!["dockerd".to_string()]),
+            cmd: Some(vec!["--iptables=false".to_string()]),
+            ..Default::default()
+        };
+
+        let json = serde_json::to_string(&opts).unwrap();
+        let opts2: BoxOptions = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(opts2.entrypoint, Some(vec!["dockerd".to_string()]));
+        assert_eq!(opts2.cmd, Some(vec!["--iptables=false".to_string()]));
+    }
+
+    #[test]
+    fn test_box_options_entrypoint_missing_defaults_to_none() {
+        let json = r#"{
+            "rootfs": {"Image": "alpine:latest"},
+            "env": [],
+            "volumes": [],
+            "network": "Isolated",
+            "ports": []
+        }"#;
+        let opts: BoxOptions = serde_json::from_str(json).unwrap();
+        assert!(opts.entrypoint.is_none(), "entrypoint should default to None when missing from JSON");
+    }
+
+    #[test]
+    fn test_box_options_entrypoint_explicit_in_json() {
+        let json = r#"{
+            "rootfs": {"Image": "docker:dind"},
+            "env": [],
+            "volumes": [],
+            "network": "Isolated",
+            "ports": [],
+            "entrypoint": ["dockerd"],
+            "cmd": ["--iptables=false"]
+        }"#;
+        let opts: BoxOptions = serde_json::from_str(json).unwrap();
+        assert_eq!(opts.entrypoint, Some(vec!["dockerd".to_string()]));
+        assert_eq!(opts.cmd, Some(vec!["--iptables=false".to_string()]));
     }
 
     #[test]

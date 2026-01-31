@@ -250,16 +250,23 @@ class SimpleBox:
         stdout = "".join(stdout_lines)
         stderr = "".join(stderr_lines)
 
+        error_message = None
         try:
             exec_result = await execution.wait()
             exit_code = exec_result.exit_code
+            error_message = exec_result.error_message
         except Exception as e:
             logger.error(f"failed to wait execution: {e}")
             exit_code = -1
 
         logger.debug(f"exec finish, exit_code: {exit_code}")
 
-        return ExecResult(exit_code=exit_code, stdout=stdout, stderr=stderr)
+        return ExecResult(
+            exit_code=exit_code,
+            stdout=stdout,
+            stderr=stderr,
+            error_message=error_message,
+        )
 
     def shutdown(self):
         """

@@ -31,7 +31,7 @@ pub struct UserMount {
 /// - Default capabilities (matching runc defaults)
 /// - Standard namespaces (pid, ipc, uts, mount)
 /// - UID/GID mappings for user namespace
-/// - Root user (uid=0, gid=0)
+/// - Configurable user (parsed from OCI user string, defaults to root)
 /// - Resource limits (rlimits)
 /// - No new privileges disabled (allows sudo)
 ///
@@ -45,6 +45,7 @@ pub fn create_oci_spec(
     entrypoint: &[String],
     env: &[String],
     workdir: &str,
+    user: &str,
     bundle_path: &Path,
     user_mounts: &[UserMount],
 ) -> BoxliteResult<Spec> {
@@ -83,7 +84,7 @@ pub fn create_oci_spec(
         );
     }
 
-    let process = build_process_spec(entrypoint, env, workdir, caps)?;
+    let process = build_process_spec(entrypoint, env, workdir, user, caps)?;
     let root = build_root_spec(rootfs)?;
     let linux = build_linux_spec(container_id, namespaces)?;
 
@@ -96,6 +97,48 @@ pub fn create_oci_spec(
         .linux(linux)
         .build()
         .map_err(|e| BoxliteError::Internal(format!("Failed to build OCI spec: {}", e)))
+}
+
+// ====================
+// User Parsing
+// ====================
+
+/// Parse OCI user string into (uid, gid).
+///
+/// Supports formats:
+/// - `"uid"` → (uid, 0)
+/// - `"uid:gid"` → (uid, gid)
+///
+/// Non-numeric usernames (e.g., "nginx") are not resolved here;
+/// username-to-uid resolution requires reading /etc/passwd inside the rootfs.
+fn parse_user_string(user: &str) -> BoxliteResult<(u32, u32)> {
+    if user.is_empty() {
+        return Ok((0, 0));
+    }
+
+    if let Some((uid_str, gid_str)) = user.split_once(':') {
+        let uid = uid_str.parse::<u32>().map_err(|_| {
+            BoxliteError::Internal(format!(
+                "Non-numeric UID '{}' in user '{}'. Use numeric UID:GID format (e.g., '1000:1000')",
+                uid_str, user
+            ))
+        })?;
+        let gid = gid_str.parse::<u32>().map_err(|_| {
+            BoxliteError::Internal(format!(
+                "Non-numeric GID '{}' in user '{}'. Use numeric UID:GID format (e.g., '1000:1000')",
+                gid_str, user
+            ))
+        })?;
+        Ok((uid, gid))
+    } else {
+        let uid = user.parse::<u32>().map_err(|_| {
+            BoxliteError::Internal(format!(
+                "Non-numeric user '{}'. Use numeric UID or UID:GID format (e.g., '1000' or '1000:1000')",
+                user
+            ))
+        })?;
+        Ok((uid, 0))
+    }
 }
 
 // ====================
@@ -148,11 +191,13 @@ fn build_process_spec(
     entrypoint: &[String],
     env: &[String],
     workdir: &str,
+    user_str: &str,
     caps: oci_spec::runtime::LinuxCapabilities,
 ) -> BoxliteResult<oci_spec::runtime::Process> {
+    let (uid, gid) = parse_user_string(user_str)?;
     let user = UserBuilder::default()
-        .uid(0u32)
-        .gid(0u32)
+        .uid(uid)
+        .gid(gid)
         .build()
         .map_err(|e| BoxliteError::Internal(format!("Failed to build user spec: {}", e)))?;
 
@@ -412,4 +457,47 @@ fn build_standard_mounts(bundle_path: &Path) -> BoxliteResult<Vec<Mount>> {
     );
 
     Ok(mounts)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_user_empty_defaults_to_root() {
+        assert_eq!(parse_user_string("").unwrap(), (0, 0));
+    }
+
+    #[test]
+    fn test_parse_user_uid_only() {
+        assert_eq!(parse_user_string("1000").unwrap(), (1000, 0));
+    }
+
+    #[test]
+    fn test_parse_user_uid_gid() {
+        assert_eq!(parse_user_string("1000:1000").unwrap(), (1000, 1000));
+    }
+
+    #[test]
+    fn test_parse_user_root_explicit() {
+        assert_eq!(parse_user_string("0:0").unwrap(), (0, 0));
+    }
+
+    #[test]
+    fn test_parse_user_non_numeric_name_errors() {
+        let err = parse_user_string("nginx").unwrap_err().to_string();
+        assert!(err.contains("Non-numeric user 'nginx'"), "got: {}", err);
+    }
+
+    #[test]
+    fn test_parse_user_non_numeric_gid_errors() {
+        let err = parse_user_string("1000:nginx").unwrap_err().to_string();
+        assert!(err.contains("Non-numeric GID 'nginx'"), "got: {}", err);
+    }
+
+    #[test]
+    fn test_parse_user_non_numeric_uid_in_pair_errors() {
+        let err = parse_user_string("abc:123").unwrap_err().to_string();
+        assert!(err.contains("Non-numeric UID 'abc'"), "got: {}", err);
+    }
 }

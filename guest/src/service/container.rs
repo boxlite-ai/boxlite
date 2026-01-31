@@ -230,13 +230,14 @@ impl ContainerService for GuestServer {
             config.entrypoint,
             config.env,
             &config.workdir,
+            &config.user,
             user_mounts,
         ) {
-            Ok(container) => {
+            Ok(mut container) => {
                 debug!(container_id = %container_id, "Container started, checking if init process is running");
                 // Verify container init process is running
                 if !container.is_running() {
-                    // Gather diagnostic information
+                    // Gather diagnostic information (includes init stdout/stderr)
                     let diagnostics = container.diagnose_exit();
 
                     error!(

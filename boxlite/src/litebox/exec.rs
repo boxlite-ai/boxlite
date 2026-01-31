@@ -249,6 +249,10 @@ impl Execution {
 pub struct ExecResult {
     /// Exit code (0 = success). If terminated by signal, code is negative signal number.
     pub exit_code: i32,
+    /// Diagnostic message when process died unexpectedly
+    /// (e.g., container init death causing PID namespace teardown).
+    /// None if the process exited normally.
+    pub error_message: Option<String>,
 }
 
 impl ExecResult {
