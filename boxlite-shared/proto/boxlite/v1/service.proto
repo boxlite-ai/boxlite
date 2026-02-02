@@ -221,7 +221,7 @@ message ContainerConfig {
   // Working directory (e.g., "/app")
   string workdir = 3;
 
-  // User/group to run as (e.g., "0:0", "1000", "1000:1000", "nginx")
+  // Username or UID (format: <name|uid>[:<group|gid>]).
   string user = 4;
 }
 

@@ -91,9 +91,7 @@ pub struct JsBoxOptions {
     /// Final execution = image_entrypoint + cmd.
     pub cmd: Option<Vec<String>>,
 
-    /// Override container user (UID/GID).
-    ///
-    /// Format: "uid", "uid:gid", or "username".
+    /// Username or UID (format: <name|uid>[:<group|gid>]).
     /// If None, uses the image's USER directive (defaults to root).
     pub user: Option<String>,
 }

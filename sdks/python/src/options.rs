@@ -327,7 +327,7 @@ pub(crate) struct PyBoxOptions {
     /// Example: `cmd=["--iptables=false"]` with `docker:dind`
     #[pyo3(get, set)]
     pub(crate) cmd: Option<Vec<String>>,
-    /// Override container user (e.g., "1000", "1000:1000").
+    /// Username or UID (format: <name|uid>[:<group|gid>]).
     /// If None, uses the image's USER directive (defaults to root).
     #[pyo3(get, set)]
     pub(crate) user: Option<String>,

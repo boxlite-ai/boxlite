@@ -58,8 +58,10 @@ async def example_cmd_override():
 async def example_user_override():
     """Example 2: Run as non-root user.
 
-    By default, containers run as root (uid=0). Setting user="1000:1000"
-    changes the container user to uid 1000, gid 1000.
+    By default, containers run as root (uid=0). The user option accepts
+    username or UID (format: <name|uid>[:<group|gid>]).
+
+    Setting user="1000:1000" changes the container user to uid 1000, gid 1000.
     """
     print("\n=== Example 2: User Override ===")
 
@@ -80,12 +82,58 @@ async def example_user_override():
         assert uid == "1000", f"Expected UID 1000, got {uid}"
 
 
+async def example_username_resolution():
+    """Example 3: Resolve username from /etc/passwd.
+
+    Non-numeric usernames are resolved from the container's /etc/passwd.
+    Alpine has 'nobody' (uid=65534, gid=65534) in its /etc/passwd.
+    """
+    print("\n=== Example 3: Username Resolution ===")
+
+    async with boxlite.SimpleBox(
+        image="alpine:latest",
+        user="nobody",
+    ) as box:
+        print(f"Container started: {box.id}")
+
+        result = await box.exec("id")
+        print(f"Container user: {result.stdout.strip()}")
+
+        result = await box.exec("id", "-u")
+        uid = result.stdout.strip()
+        print(f"UID: {uid}")
+        assert uid == "65534", f"Expected UID 65534 (nobody), got {uid}"
+
+
+async def example_user_group_resolution():
+    """Example 4: Resolve user:group from /etc/passwd and /etc/group.
+
+    Username or UID (format: <name|uid>[:<group|gid>]).
+    Supports all combinations: name:group, name:gid, uid:group, uid:gid.
+    """
+    print("\n=== Example 4: User:Group Resolution ===")
+
+    async with boxlite.SimpleBox(
+        image="alpine:latest",
+        user="nobody:nobody",
+    ) as box:
+        print(f"Container started: {box.id}")
+
+        result = await box.exec("id")
+        print(f"Container user: {result.stdout.strip()}")
+
+        result = await box.exec("id", "-g")
+        gid = result.stdout.strip()
+        print(f"GID: {gid}")
+        assert gid == "65534", f"Expected GID 65534 (nobody), got {gid}"
+
+
 async def example_combined():
-    """Example 3: Combine CMD and user overrides.
+    """Example 5: Combine CMD and user overrides.
 
     A production-like setup: run as non-root with custom arguments.
     """
-    print("\n=== Example 3: Combined CMD + User ===")
+    print("\n=== Example 5: Combined CMD + User ===")
 
     async with boxlite.SimpleBox(
         image="python:alpine",
@@ -95,7 +143,6 @@ async def example_combined():
     ) as box:
         print(f"Container started: {box.id}")
 
-        # Run a command to verify both overrides
         result = await box.exec(
             "python3", "-c", "import os; print(f'Running as uid={os.getuid()}')"
         )
@@ -109,6 +156,8 @@ async def main():
 
     await example_cmd_override()
     await example_user_override()
+    await example_username_resolution()
+    await example_user_group_resolution()
     await example_combined()
 
     print("\nAll examples completed successfully!")

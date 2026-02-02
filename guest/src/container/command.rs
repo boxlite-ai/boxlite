@@ -49,8 +49,8 @@ pub struct ContainerCommand {
     /// Environment variable overrides
     env: HashMap<String, String>,
 
-    /// User string from container spec (e.g., "1000:1000")
-    user: String,
+    /// Resolved (uid, gid) from container init, propagated to exec processes.
+    user: (u32, u32),
 
     /// Working directory (None = use default "/")
     cwd: Option<String>,
@@ -71,7 +71,7 @@ impl ContainerCommand {
         id: String,
         state_root: PathBuf,
         env: HashMap<String, String>,
-        user: String,
+        user: (u32, u32),
     ) -> Self {
         Self {
             program: None,
@@ -353,8 +353,7 @@ impl ContainerCommand {
             );
         }
 
-        // Parse user string (e.g., "1000:1000") into uid/gid for tenant exec
-        let (uid, gid) = parse_user_for_exec(&self.user);
+        let (uid, gid) = self.user;
 
         let pid = builder
             .as_tenant()
@@ -364,8 +363,8 @@ impl ContainerCommand {
             .with_cwd(self.cwd.clone().or(Some("/".parse().unwrap())))
             .with_env(self.env.clone())
             .with_container_args(container_args.clone())
-            .with_user(uid)
-            .with_group(gid)
+            .with_user(Some(uid))
+            .with_group(Some(gid))
             .build()
             .map_err(|e| {
                 tracing::error!(
@@ -402,27 +401,6 @@ impl ContainerCommand {
         );
 
         Ok(pid)
-    }
-}
-
-/// Parse user string into (uid, gid) for exec.
-///
-/// Returns `(Some(uid), Some(gid))` for valid user strings,
-/// or `(None, None)` for empty/invalid strings (defaults to container's init user).
-fn parse_user_for_exec(user: &str) -> (Option<u32>, Option<u32>) {
-    if user.is_empty() {
-        return (None, None);
-    }
-
-    if let Some((uid_str, gid_str)) = user.split_once(':') {
-        let uid = uid_str.parse::<u32>().ok();
-        let gid = gid_str.parse::<u32>().ok();
-        (uid, gid)
-    } else if let Ok(uid) = user.parse::<u32>() {
-        (Some(uid), None)
-    } else {
-        // Non-numeric username — can't resolve without /etc/passwd
-        (None, None)
     }
 }
 

@@ -256,7 +256,9 @@ pub fn apply_oci_layer<R: Read>(reader: R, dest: &Path) -> BoxliteResult<u64> {
                 fs::set_permissions(&full_path, Permissions::from_mode(mode)).map_err(|e| {
                     BoxliteError::Storage(format!(
                         "Failed to set permissions {:o} on {}: {}",
-                        mode, full_path.display(), e
+                        mode,
+                        full_path.display(),
+                        e
                     ))
                 })?;
             }
@@ -274,7 +276,9 @@ pub fn apply_oci_layer<R: Read>(reader: R, dest: &Path) -> BoxliteResult<u64> {
         fs::set_permissions(&dir.path, Permissions::from_mode(dir.mode)).map_err(|e| {
             BoxliteError::Storage(format!(
                 "Failed to set deferred dir permissions {:o} on {}: {}",
-                dir.mode, dir.path.display(), e
+                dir.mode,
+                dir.path.display(),
+                e
             ))
         })?;
         apply_times(&dir.path, EntryType::Directory, dir.atime, dir.mtime)?;

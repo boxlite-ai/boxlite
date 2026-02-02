@@ -6,10 +6,10 @@
 use super::command::ContainerCommand;
 use super::spec::UserMount;
 use super::stdio::ContainerStdio;
-use super::{kill, start};
+use super::{kill, spec, start};
 use crate::layout::GuestLayout;
 use crate::service::exec::InitHealthCheck;
-use boxlite_shared::errors::BoxliteResult;
+use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use libcontainer::container::Container as LibContainer;
 use libcontainer::signal::Signal;
 use std::collections::HashMap;
@@ -46,8 +46,8 @@ pub struct Container {
     state_root: PathBuf,
     bundle_path: PathBuf,
     env: HashMap<String, String>,
-    /// User string from OCI spec (e.g., "1000:1000"), propagated to exec commands.
-    user: String,
+    /// Resolved (uid, gid) from image USER directive, propagated to exec commands.
+    user: (u32, u32),
     /// Stdio pipes that keep init process alive.
     /// Dropping this closes pipes → init gets EOF → init exits.
     #[allow(dead_code)]
@@ -113,6 +113,13 @@ impl Container {
         // State at /run/boxlite/containers/{cid}/state/
         let state_root = layout.container_state_dir(container_id);
 
+        // Resolve user string to numeric (uid, gid) once — used for both
+        // init process OCI spec and all subsequent exec commands.
+        let rootfs_str = rootfs
+            .to_str()
+            .ok_or_else(|| BoxliteError::Internal("Invalid rootfs path".to_string()))?;
+        let (uid, gid) = spec::resolve_user(rootfs_str, user)?;
+
         // Create OCI bundle at /run/boxlite/containers/{cid}/
         // create_oci_bundle creates bundle_root/{cid}/, so pass containers_dir
         let bundle_path = start::create_oci_bundle(
@@ -121,7 +128,8 @@ impl Container {
             &entrypoint,
             &env,
             workdir,
-            user,
+            uid,
+            gid,
             &layout.containers_dir(),
             &user_mounts,
         )?;
@@ -139,7 +147,7 @@ impl Container {
             state_root,
             bundle_path,
             env: env_map,
-            user: user.to_string(),
+            user: (uid, gid),
             stdio,
             is_shutdown: std::sync::atomic::AtomicBool::new(false),
         })
@@ -225,7 +233,7 @@ impl Container {
             self.id.clone(),
             self.state_root.clone(),
             self.env.clone(),
-            self.user.clone(),
+            self.user,
         )
     }
 

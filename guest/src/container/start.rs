@@ -94,7 +94,8 @@ pub(crate) fn create_oci_bundle(
     entrypoint: &[String],
     env: &[String],
     workdir: &Path,
-    user: &str,
+    uid: u32,
+    gid: u32,
     bundle_root: &Path,
     user_mounts: &[spec::UserMount],
 ) -> BoxliteResult<PathBuf> {
@@ -122,7 +123,8 @@ pub(crate) fn create_oci_bundle(
         workdir
             .to_str()
             .ok_or_else(|| BoxliteError::Internal("Invalid workdir path".to_string()))?,
-        user,
+        uid,
+        gid,
         &bundle_path,
         user_mounts,
     )?;

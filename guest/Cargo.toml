@@ -36,3 +36,6 @@ libcontainer = { version = "0.5.6", default-features = false, features = ["v2"] 
 oci-spec = "0.6"
 rtnetlink = "0.14"
 futures = "0.3"
+
+[dev-dependencies]
+tempfile = "3"
