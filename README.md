@@ -1,12 +1,12 @@
-# BoxLite
+# BoxLite [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/bCmaK4Ce)
 
 [![Build](https://github.com/boxlite-ai/boxlite/actions/workflows/build-wheels.yml/badge.svg)](https://github.com/boxlite-ai/boxlite/actions/workflows/build-wheels.yml)
 [![Lint](https://github.com/boxlite-ai/boxlite/actions/workflows/lint.yml/badge.svg)](https://github.com/boxlite-ai/boxlite/actions/workflows/lint.yml)
 [![PyPI](https://img.shields.io/pypi/v/boxlite.svg)](https://pypi.org/project/boxlite/)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-**Embedded** micro-VM runtime for **AI agents** running OCI containers with
-hardware-level isolation — **no daemon required**.
+**Embedded, lightweight** micro-VM runtime for **AI agents** running OCI containers with
+hardware-level isolation — built for **high concurrency**, **no daemon required**.
 
 
 ## What is BoxLite?
@@ -17,10 +17,11 @@ alone isn't enough and full VM infrastructure is too heavy.
 
 **Why BoxLite**
 
+- **Lightweight**: small footprint, fast-starting Boxes, minimal operational overhead.
+- **High concurrency**: async-first API designed to run many Boxes in parallel; stream stdout/stderr.
 - **Hardware isolation**: each Box has its own kernel (not just namespaces).
 - **Embeddable**: link a library; no root; no background service to manage.
 - **OCI compatible**: use Docker/OCI images (`python:slim`, `node:alpine`, `alpine:latest`).
-- **Async-first**: run many boxes concurrently; stream stdout/stderr.
 
 ## Python Quick Start
 
@@ -212,8 +213,7 @@ For details, see [Architecture](./docs/architecture/).
 ## Getting Help
 
 - [GitHub Issues](https://github.com/boxlite-ai/boxlite/issues) — Bug reports and feature requests
-- [Discussions](https://github.com/boxlite-ai/boxlite/discussions) — Questions and community
-  support
+- [Discord](https://discord.gg/bCmaK4Ce) — Questions and community support
 
 ## Contributing
 
