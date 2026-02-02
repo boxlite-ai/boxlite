@@ -24,6 +24,9 @@ export interface SimpleBoxOptions {
   /** Container image to use (e.g., 'python:slim', 'alpine:latest') */
   image?: string;
 
+  /** Path to local OCI layout directory (overrides image if provided) */
+  rootfsPath?: string;
+
   /** Memory limit in MiB */
   memoryMib?: number;
 
@@ -175,6 +178,7 @@ export class SimpleBox {
     // Convert options to BoxOptions format (stored for lazy creation)
     this._boxOpts = {
       image: options.image,
+      rootfsPath: options.rootfsPath,
       cpus: options.cpus,
       memoryMib: options.memoryMib,
       autoRemove: options.autoRemove ?? true,

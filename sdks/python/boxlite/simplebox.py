@@ -41,7 +41,8 @@ class SimpleBox:
 
     def __init__(
         self,
-        image: str,
+        image: Optional[str] = None,
+        rootfs_path: Optional[str] = None,
         memory_mib: Optional[int] = None,
         cpus: Optional[int] = None,
         runtime: Optional["Boxlite"] = None,
@@ -54,7 +55,8 @@ class SimpleBox:
         Create a specialized box.
 
         Args:
-            image: Container images to use
+            image: Container image to use (e.g., "python:3.12-slim")
+            rootfs_path: Path to local OCI layout directory (overrides image if provided)
             memory_mib: Memory limit in MiB
             cpus: Number of CPU cores
             runtime: Optional runtime instance (uses global default if None)
@@ -66,7 +68,12 @@ class SimpleBox:
 
         Note: The box is not actually created until entering the async context manager.
         Use `async with SimpleBox(...) as box:` to create and start the box.
+
+        Either `image` or `rootfs_path` must be provided.
         """
+        if not image and not rootfs_path:
+            raise ValueError("Either 'image' or 'rootfs_path' must be provided")
+
         try:
             from .boxlite import Boxlite, BoxOptions
         except ImportError as e:
@@ -84,6 +91,7 @@ class SimpleBox:
         # Store box options for deferred creation in __aenter__
         self._box_options = BoxOptions(
             image=image,
+            rootfs_path=rootfs_path,
             cpus=cpus,
             memory_mib=memory_mib,
             auto_remove=auto_remove,

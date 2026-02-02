@@ -38,7 +38,8 @@ class SyncSimpleBox:
 
     def __init__(
         self,
-        image: str,
+        image: Optional[str] = None,
+        rootfs_path: Optional[str] = None,
         memory_mib: Optional[int] = None,
         cpus: Optional[int] = None,
         runtime: Optional["SyncBoxlite"] = None,
@@ -52,6 +53,7 @@ class SyncSimpleBox:
 
         Args:
             image: Container image to use (e.g., "python:slim", "ubuntu:latest")
+            rootfs_path: Path to local OCI layout directory (overrides image if provided)
             memory_mib: Memory limit in MiB (default: system default)
             cpus: Number of CPU cores (default: system default)
             runtime: Optional SyncBoxlite runtime. If None, creates default runtime.
@@ -60,7 +62,12 @@ class SyncSimpleBox:
             reuse_existing: If True and a box with the given name already exists,
                 reuse it instead of raising an error (default: False)
             **kwargs: Additional BoxOptions parameters
+
+        Either `image` or `rootfs_path` must be provided.
         """
+        if not image and not rootfs_path:
+            raise ValueError("Either 'image' or 'rootfs_path' must be provided")
+
         from ._boxlite import SyncBoxlite
         from ..boxlite import BoxOptions
 
@@ -76,6 +83,7 @@ class SyncSimpleBox:
         # Create box options
         self._box_opts = BoxOptions(
             image=image,
+            rootfs_path=rootfs_path,
             cpus=cpus,
             memory_mib=memory_mib,
             auto_remove=auto_remove,
