@@ -72,6 +72,13 @@ pub fn extract_layer_tarball_streaming(tarball_path: &Path, dest: &Path) -> Boxl
     apply_oci_layer(reader, dest)
 }
 
+struct DirMeta {
+    path: PathBuf,
+    mode: u32,
+    atime: u64,
+    mtime: u64,
+}
+
 /// Apply an OCI layer tar stream into `dest`, handling whiteouts inline.
 pub fn apply_oci_layer<R: Read>(reader: R, dest: &Path) -> BoxliteResult<u64> {
     fs::create_dir_all(dest).map_err(|e| {
@@ -86,7 +93,7 @@ pub fn apply_oci_layer<R: Read>(reader: R, dest: &Path) -> BoxliteResult<u64> {
     let mut archive = Archive::new(reader);
     let mut unpacked_paths = HashSet::new();
     let mut total_size = 0u64;
-    let mut pending_dir_times: Vec<(PathBuf, u64, u64)> = Vec::new();
+    let mut deferred_dirs: Vec<DirMeta> = Vec::new();
 
     for entry_result in archive
         .entries()
@@ -162,7 +169,7 @@ pub fn apply_oci_layer<R: Read>(reader: R, dest: &Path) -> BoxliteResult<u64> {
         let xattrs = read_xattrs(&mut entry)?;
 
         match entry_type {
-            EntryType::Directory => create_dir(&full_path, mode)?,
+            EntryType::Directory => create_dir(&full_path)?,
             EntryType::Regular | EntryType::GNUSparse => {
                 create_regular_file(&mut entry, &full_path, mode)?
             }
@@ -237,30 +244,40 @@ pub fn apply_oci_layer<R: Read>(reader: R, dest: &Path) -> BoxliteResult<u64> {
 
         apply_xattrs(&full_path, &xattrs, entry_type, is_root)?;
 
-        // Permissions: symlinks ignore chmod
-        if entry_type != EntryType::Symlink {
-            let perms = Permissions::from_mode(mode);
-            fs::set_permissions(&full_path, perms).map_err(|e| {
-                BoxliteError::Storage(format!(
-                    "Failed to set permissions {:o} on {}: {}",
-                    mode,
-                    full_path.display(),
-                    e
-                ))
-            })?;
-        }
-
         if entry_type == EntryType::Directory {
-            pending_dir_times.push((full_path.clone(), atime, mtime));
+            deferred_dirs.push(DirMeta {
+                path: full_path.clone(),
+                mode,
+                atime,
+                mtime,
+            });
         } else {
+            if entry_type != EntryType::Symlink {
+                fs::set_permissions(&full_path, Permissions::from_mode(mode)).map_err(|e| {
+                    BoxliteError::Storage(format!(
+                        "Failed to set permissions {:o} on {}: {}",
+                        mode, full_path.display(), e
+                    ))
+                })?;
+            }
             apply_times(&full_path, entry_type, atime, mtime)?;
         }
 
         unpacked_paths.insert(full_path);
     }
 
-    for (path, atime, mtime) in pending_dir_times {
-        apply_times(&path, EntryType::Directory, atime, mtime)?;
+    // Finalize directory metadata deepest-first. Reverse path order ensures
+    // /a/b/c gets chmod'd before /a/b — a restrictive parent won't block
+    // chmod on children.
+    deferred_dirs.sort_unstable_by(|a, b| b.path.cmp(&a.path));
+    for dir in &deferred_dirs {
+        fs::set_permissions(&dir.path, Permissions::from_mode(dir.mode)).map_err(|e| {
+            BoxliteError::Storage(format!(
+                "Failed to set deferred dir permissions {:o} on {}: {}",
+                dir.mode, dir.path.display(), e
+            ))
+        })?;
+        apply_times(&dir.path, EntryType::Directory, dir.atime, dir.mtime)?;
     }
 
     Ok(total_size)
@@ -418,20 +435,12 @@ fn read_xattrs<R: Read>(entry: &mut Entry<R>) -> BoxliteResult<Vec<(String, Vec<
     Ok(xattrs)
 }
 
-fn create_dir(path: &Path, mode: u32) -> BoxliteResult<()> {
+fn create_dir(path: &Path) -> BoxliteResult<()> {
     if !path.exists() {
         fs::create_dir(path).map_err(|e| {
             BoxliteError::Storage(format!("Failed to create dir {}: {}", path.display(), e))
         })?;
     }
-    fs::set_permissions(path, Permissions::from_mode(mode)).map_err(|e| {
-        BoxliteError::Storage(format!(
-            "Failed to set dir permissions {:o} on {}: {}",
-            mode,
-            path.display(),
-            e
-        ))
-    })?;
     Ok(())
 }
 
