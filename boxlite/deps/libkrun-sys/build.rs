@@ -685,9 +685,15 @@ fn resolve_cc_linux_make_arg() -> Result<(String, HashMap<String, String>), Stri
     };
 
     // vendor/libkrun hardcodes `/usr/bin/clang` for CC_LINUX on macOS; override it.
+    // Shell-escape the clang path so that spaces or special characters do not break the Make command.
+    let clang_escaped = {
+        let s = clang.to_string_lossy();
+        // Use single-quote shell escaping: each ' becomes '\'' and the whole string is wrapped in single quotes.
+        format!("'{}'", s.replace('\'', "'\\''"))
+    };
     let cc_linux = format!(
         "{} -target {} -fuse-ld=lld -Wl,-strip-debug --sysroot $(SYSROOT_LINUX) -Wno-c23-extensions",
-        clang.display(),
+        clang_escaped,
         linux_target_triple
     );
 
