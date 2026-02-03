@@ -1,7 +1,8 @@
 // Output formatting utilities for CLI commands.
-// Provides unified formatting for different output formats (table, JSON, YAML).
+// Provides unified formatting for different output formats (table, JSON, YAML, Go template).
 
 use anyhow::{Result, anyhow};
+use gtmpl::Value;
 use serde::Serialize;
 use tabled::{Table, Tabled, settings::Style};
 
@@ -41,6 +42,43 @@ pub fn format_json<T: Serialize>(data: &T) -> Result<String> {
 /// Format data as YAML string.
 pub fn format_yaml<T: Serialize>(data: &T) -> Result<String> {
     serde_yaml::to_string(data).map_err(|e| anyhow!("YAML serialization failed: {}", e))
+}
+
+/// Render a Go-style template (e.g. `{{.State}}`, `{{.State.Status}}`) with the given context via gtmpl.
+/// The context must be a structure gtmpl can traverse (e.g. `HashMap<String, Value>` converted to `Value`).
+pub fn format_gtmpl(context: impl Into<Value>, template_str: &str) -> Result<String> {
+    gtmpl::template(template_str, context).map_err(|e| anyhow!("Template error: {}", e))
+}
+
+/// Convert a `serde_json::Value` to `gtmpl::Value` recursively.
+/// Allows building gtmpl template context from any `Serialize` struct via `serde_json::to_value`.
+pub fn value_from_serde_json(v: &serde_json::Value) -> Value {
+    use serde_json::Value as JsonValue;
+    match v {
+        JsonValue::Object(m) => {
+            let map: std::collections::HashMap<String, Value> = m
+                .iter()
+                .map(|(k, v)| (k.clone(), value_from_serde_json(v)))
+                .collect();
+            Value::from(map)
+        }
+        JsonValue::Array(arr) => {
+            let vec: Vec<Value> = arr.iter().map(value_from_serde_json).collect();
+            Value::from(vec)
+        }
+        JsonValue::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Value::from(i)
+            } else if let Some(f) = n.as_f64() {
+                Value::from(f)
+            } else {
+                Value::from(0_i64)
+            }
+        }
+        JsonValue::Bool(b) => Value::from(*b),
+        JsonValue::String(s) => Value::from(s.as_str()),
+        JsonValue::Null => Value::from(""),
+    }
 }
 
 /// Print data in the specified format to the provided writer.
@@ -261,5 +299,68 @@ mod tests {
         let output = String::from_utf8(buffer).unwrap();
         assert!(output.contains("writer_test"));
         assert!(output.contains("123"));
+    }
+
+    fn render_gtmpl(json: &serde_json::Value, template: &str) -> String {
+        let ctx = value_from_serde_json(json);
+        format_gtmpl(ctx, template).unwrap()
+    }
+
+    #[test]
+    fn test_value_from_serde_json_string() {
+        let json = serde_json::json!({"s": "hello"});
+        assert_eq!(render_gtmpl(&json, "{{.s}}"), "hello");
+    }
+
+    #[test]
+    fn test_value_from_serde_json_number_int() {
+        let json = serde_json::json!({"n": 42});
+        assert_eq!(render_gtmpl(&json, "{{.n}}"), "42");
+    }
+
+    #[test]
+    fn test_value_from_serde_json_number_float() {
+        let json = serde_json::json!({"f": 1.5});
+        let out = render_gtmpl(&json, "{{.f}}");
+        assert!(
+            out.starts_with("1.5") || out == "1.5",
+            "expected 1.5, got {}",
+            out
+        );
+    }
+
+    #[test]
+    fn test_value_from_serde_json_bool() {
+        let json = serde_json::json!({"b": true});
+        assert_eq!(render_gtmpl(&json, "{{.b}}"), "true");
+    }
+
+    #[test]
+    fn test_value_from_serde_json_null() {
+        let json = serde_json::json!({"n": null});
+        assert_eq!(render_gtmpl(&json, "{{.n}}"), "");
+    }
+
+    #[test]
+    fn test_value_from_serde_json_object() {
+        let json = serde_json::json!({"id": "abc", "cpus": 2});
+        assert_eq!(render_gtmpl(&json, "{{.id}}"), "abc");
+        assert_eq!(render_gtmpl(&json, "{{.cpus}}"), "2");
+    }
+
+    #[test]
+    fn test_value_from_serde_json_nested_object() {
+        let json = serde_json::json!({"state": {"status": "running", "pid": 12345}});
+        assert_eq!(render_gtmpl(&json, "{{.state.status}}"), "running");
+        assert_eq!(render_gtmpl(&json, "{{.state.pid}}"), "12345");
+    }
+
+    #[test]
+    fn test_value_from_serde_json_array() {
+        let json = serde_json::json!([10, 20, 30]);
+        // gtmpl index: (index slice index)
+        assert_eq!(render_gtmpl(&json, "{{index . 0}}"), "10");
+        assert_eq!(render_gtmpl(&json, "{{index . 1}}"), "20");
+        assert_eq!(render_gtmpl(&json, "{{index . 2}}"), "30");
     }
 }

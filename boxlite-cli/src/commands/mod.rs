@@ -2,6 +2,7 @@ pub mod cp;
 pub mod create;
 pub mod exec;
 pub mod images;
+pub mod inspect;
 pub mod list;
 pub mod pull;
 pub mod restart;

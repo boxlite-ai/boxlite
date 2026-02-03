@@ -65,6 +65,7 @@ async fn run_cli(cli: Cli) -> anyhow::Result<()> {
         cli::Commands::Restart(args) => commands::restart::execute(args, &global).await,
         cli::Commands::Pull(args) => commands::pull::execute(args, &global).await,
         cli::Commands::Images(args) => commands::images::execute(args, &global).await,
+        cli::Commands::Inspect(args) => commands::inspect::execute(args, &global).await,
         cli::Commands::Cp(args) => commands::cp::execute(args, &global).await,
         // Handled in main() before tokio; never reaches run_cli
         cli::Commands::Completion(_) => {

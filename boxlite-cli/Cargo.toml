@@ -33,6 +33,7 @@ tabled = "0.17"
 chrono = "0.4.43"
 comfy-table = "7.2.1"
 
+gtmpl = "0.7"
 [build-dependencies]
 dirs = "6.0"
 

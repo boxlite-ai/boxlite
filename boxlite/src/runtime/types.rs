@@ -484,6 +484,19 @@ impl BoxStateInfo {
             pid: state.pid,
         }
     }
+
+    /// Create BoxStateInfo from public BoxInfo.
+    ///
+    /// Allows callers (e.g. CLI) to build a State view for templates or output
+    /// without access to internal BoxState. The result is equivalent to
+    /// `BoxStateInfo::new(state)` when the same box is represented as BoxInfo.
+    pub fn from_box_info(info: &BoxInfo) -> Self {
+        Self {
+            status: info.status,
+            running: info.status.is_running(),
+            pid: info.pid,
+        }
+    }
 }
 
 // ============================================================================
