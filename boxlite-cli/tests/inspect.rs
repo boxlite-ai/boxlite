@@ -164,6 +164,38 @@ fn test_inspect_format_template_state() {
     ctx.cleanup_box(name);
 }
 
+/// {{json .State}} outputs JSON (Podman/Docker aligned).
+#[test]
+fn test_inspect_format_template_json_state() {
+    let mut ctx = common::boxlite();
+    let name = "inspect-format-json-state";
+    let _ = ctx
+        .cmd
+        .args(["create", "--name", name, "alpine:latest"])
+        .output();
+
+    let output = ctx
+        .new_cmd()
+        .args(["inspect", "--format", "{{json .State}}", name])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap().trim().to_string();
+    let v: serde_json::Value =
+        serde_json::from_str(&stdout).expect("{{json .State}} should produce valid JSON");
+    let obj = v.as_object().expect("should be object");
+    assert!(obj.contains_key("Status"));
+    assert!(obj.contains_key("Running"));
+    assert!(obj.contains_key("Pid"));
+
+    ctx.cleanup_box(name);
+}
+
 /// Invalid format (e.g. xml, foo)
 #[test]
 fn test_inspect_format_invalid() {

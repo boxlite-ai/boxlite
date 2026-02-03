@@ -2,7 +2,9 @@
 // Provides unified formatting for different output formats (table, JSON, YAML, Go template).
 
 use anyhow::{Result, anyhow};
+use gtmpl::{Context, Template};
 use gtmpl::Value;
+use gtmpl_value::{FuncError, Value as GtmplValue};
 use serde::Serialize;
 use tabled::{Table, Tabled, settings::Style};
 
@@ -44,10 +46,30 @@ pub fn format_yaml<T: Serialize>(data: &T) -> Result<String> {
     serde_yaml::to_string(data).map_err(|e| anyhow!("YAML serialization failed: {}", e))
 }
 
-/// Render a Go-style template (e.g. `{{.State}}`, `{{.State.Status}}`) with the given context via gtmpl.
-/// The context must be a structure gtmpl can traverse (e.g. `HashMap<String, Value>` converted to `Value`).
-pub fn format_gtmpl(context: impl Into<Value>, template_str: &str) -> Result<String> {
-    gtmpl::template(template_str, context).map_err(|e| anyhow!("Template error: {}", e))
+/// Parsed Go-style template with "json" function (parse once, render many).
+pub struct GtmplWithJson {
+    tmpl: Template,
+}
+
+impl GtmplWithJson {
+    /// Parse template string once. Use `render` for each context.
+    pub fn parse(template_str: &str) -> Result<Self> {
+        let json_func: gtmpl::Func = |args: &[Value]| -> std::result::Result<Value, FuncError> {
+            let v = args.first().ok_or_else(|| FuncError::ExactlyXArgs("json".into(), 1))?;
+            let j = value_to_serde_json(v);
+            let s = serde_json::to_string(&j).map_err(|e| FuncError::Generic(e.to_string()))?;
+            Ok(Value::from(s))
+        };
+        let mut tmpl = Template::default();
+        tmpl.add_func("json", json_func);
+        tmpl.parse(template_str).map_err(|e| anyhow!("Template parse error: {}", e))?;
+        Ok(Self { tmpl })
+    }
+
+    pub fn render(&self, context: impl Into<Value>) -> Result<String> {
+        let ctx = Context::from(context);
+        self.tmpl.render(&ctx).map_err(|e| anyhow!("Template error: {}", e))
+    }
 }
 
 /// Convert a `serde_json::Value` to `gtmpl::Value` recursively.
@@ -78,6 +100,59 @@ pub fn value_from_serde_json(v: &serde_json::Value) -> Value {
         JsonValue::Bool(b) => Value::from(*b),
         JsonValue::String(s) => Value::from(s.as_str()),
         JsonValue::Null => Value::from(""),
+    }
+}
+
+/// Convert gtmpl::Value to serde_json::Value (for json template function).
+fn value_to_serde_json(v: &GtmplValue) -> serde_json::Value {
+    use serde_json::Value as JsonValue;
+    match v {
+        GtmplValue::Object(m) | GtmplValue::Map(m) => {
+            let obj: serde_json::Map<String, serde_json::Value> = m
+                .iter()
+                .map(|(k, val)| (k.clone(), value_to_serde_json(val)))
+                .collect();
+            JsonValue::Object(obj)
+        }
+        GtmplValue::Array(arr) => {
+            JsonValue::Array(arr.iter().map(value_to_serde_json).collect())
+        }
+        GtmplValue::String(s) => JsonValue::String(s.clone()),
+        GtmplValue::Bool(b) => JsonValue::Bool(*b),
+        GtmplValue::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                JsonValue::Number(serde_json::Number::from(i))
+            } else if let Some(u) = n.as_u64() {
+                JsonValue::Number(serde_json::Number::from(u))
+            } else if let Some(f) = n.as_f64() {
+                JsonValue::Number(serde_json::Number::from_f64(f).unwrap_or(serde_json::Number::from(0)))
+            } else {
+                JsonValue::Null
+            }
+        }
+        GtmplValue::Nil | GtmplValue::NoValue | GtmplValue::Function(_) => JsonValue::Null,
+    }
+}
+
+/// Format a JSON value in Go struct style: {Key1:value1 Key2:value2} (Podman/Docker aligned).
+pub fn format_go_style_value(v: &serde_json::Value) -> String {
+    use serde_json::Value as JsonValue;
+    match v {
+        JsonValue::Object(m) => {
+            let parts: Vec<String> = m
+                .iter()
+                .map(|(k, val)| format!("{}:{}", k, format_go_style_value(val)))
+                .collect();
+            format!("{{{}}}", parts.join(" "))
+        }
+        JsonValue::Array(arr) => {
+            let parts: Vec<String> = arr.iter().map(format_go_style_value).collect();
+            format!("[{}]", parts.join(" "))
+        }
+        JsonValue::String(s) => s.to_string(),
+        JsonValue::Number(n) => n.to_string(),
+        JsonValue::Bool(b) => b.to_string(),
+        JsonValue::Null => String::new(),
     }
 }
 
@@ -303,7 +378,7 @@ mod tests {
 
     fn render_gtmpl(json: &serde_json::Value, template: &str) -> String {
         let ctx = value_from_serde_json(json);
-        format_gtmpl(ctx, template).unwrap()
+        GtmplWithJson::parse(template).unwrap().render(ctx).unwrap()
     }
 
     #[test]

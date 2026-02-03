@@ -1,7 +1,7 @@
 //! Inspect a box by ID or name; output JSON, YAML, or Go-style template.
 
 use crate::cli::GlobalFlags;
-use crate::formatter::{self, OutputFormat};
+use crate::formatter::{self, OutputFormat, value_from_serde_json, GtmplWithJson};
 use boxlite::{BoxInfo, BoxStateInfo};
 use clap::Args;
 use serde::Serialize;
@@ -105,15 +105,32 @@ pub async fn execute(args: InspectArgs, global: &GlobalFlags) -> anyhow::Result<
     Ok(())
 }
 
-/// Build gtmpl context from presenter (same PascalCase shape as JSON/YAML).
-fn presenter_to_gtmpl_value(presenter: &InspectPresenter) -> anyhow::Result<gtmpl::Value> {
-    let json = serde_json::to_value(presenter)
-        .map_err(|e| anyhow::anyhow!("inspect context serialization: {}", e))?;
-    Ok(formatter::value_from_serde_json(&json))
+fn looks_like_template(s: &str) -> bool {
+    s.contains("{{") && s.contains("}}")
 }
 
-fn looks_like_template(s: &str) -> bool {
-    s.contains("{{")
+/// If the template is a single path like {{.State}} or {{.State.Status}}, return that path.
+fn parse_single_path_template(s: &str) -> Option<String> {
+    let t = s.trim();
+    let inner = t.strip_prefix("{{")?.trim().strip_suffix("}}")?.trim();
+    let path = inner.strip_prefix('.')?.trim();
+    if path.is_empty() || path.contains("{{") || path.contains("}}") {
+        return None;
+    }
+    if path.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_') {
+        Some(path.to_string())
+    } else {
+        None
+    }
+}
+
+/// Get a reference to the value at dot-separated path in a JSON value.
+fn json_value_at_path<'a>(root: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value> {
+    let mut current = root;
+    for segment in path.split('.') {
+        current = current.get(segment)?;
+    }
+    Some(current)
 }
 
 /// Normalize template format: .ID → .Id, .ImageID → .Image
@@ -167,9 +184,27 @@ fn write_inspect_output<W: std::io::Write>(
         Err(format_err) => {
             if looks_like_template(format_str) {
                 let format = normalize_inspect_format(format_str);
+                let gtmpl = GtmplWithJson::parse(&format)
+                    .map_err(|e| anyhow::anyhow!("template: {}", e))?;
                 for p in presenters {
-                    let ctx = presenter_to_gtmpl_value(p)?;
-                    let out = formatter::format_gtmpl(ctx, &format)?;
+                    let json_val = serde_json::to_value(p)
+                        .map_err(|e| anyhow::anyhow!("inspect serialization: {}", e))?;
+                    let out = if let Some(path) = parse_single_path_template(&format) {
+                        if let Some(v) = json_value_at_path(&json_val, &path) {
+                            if v.is_object() {
+                                formatter::format_go_style_value(v)
+                            } else {
+                                let ctx = value_from_serde_json(&json_val);
+                                gtmpl.render(ctx)?
+                            }
+                        } else {
+                            let ctx = value_from_serde_json(&json_val);
+                            gtmpl.render(ctx)?
+                        }
+                    } else {
+                        let ctx = value_from_serde_json(&json_val);
+                        gtmpl.render(ctx)?
+                    };
                     writeln!(writer, "{}", out)?;
                 }
             } else {
