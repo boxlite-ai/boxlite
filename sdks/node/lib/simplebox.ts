@@ -33,6 +33,9 @@ export interface SimpleBoxOptions {
   /** Number of CPU cores */
   cpus?: number;
 
+  /** Disk size in GB for container rootfs (sparse, grows as needed) */
+  diskSizeGb?: number;
+
   /** Optional runtime instance (uses global default if not provided) */
   runtime?: Boxlite;
 
@@ -181,6 +184,7 @@ export class SimpleBox {
       rootfsPath: options.rootfsPath,
       cpus: options.cpus,
       memoryMib: options.memoryMib,
+      diskSizeGb: options.diskSizeGb,
       autoRemove: options.autoRemove ?? true,
       detach: options.detach ?? false,
       workingDir: options.workingDir,

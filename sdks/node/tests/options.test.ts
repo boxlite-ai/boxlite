@@ -82,4 +82,39 @@ describe('SimpleBoxOptions', () => {
     expect(opts.memoryMib).toBe(1024);
     expect(opts.cpus).toBe(2);
   });
+
+  test('diskSizeGb defaults to undefined', () => {
+    const opts: SimpleBoxOptions = {};
+    expect(opts.diskSizeGb).toBeUndefined();
+  });
+
+  test('accepts diskSizeGb number', () => {
+    const opts: SimpleBoxOptions = {
+      image: 'python:slim',
+      diskSizeGb: 10,
+    };
+    expect(opts.diskSizeGb).toBe(10);
+  });
+
+  test('accepts fractional diskSizeGb', () => {
+    const opts: SimpleBoxOptions = {
+      image: 'alpine:latest',
+      diskSizeGb: 5.5,
+    };
+    expect(opts.diskSizeGb).toBe(5.5);
+  });
+
+  test('diskSizeGb can be combined with other options', () => {
+    const opts: SimpleBoxOptions = {
+      image: 'python:slim',
+      memoryMib: 1024,
+      cpus: 2,
+      diskSizeGb: 20,
+      env: { FOO: 'bar' },
+    };
+
+    expect(opts.diskSizeGb).toBe(20);
+    expect(opts.memoryMib).toBe(1024);
+    expect(opts.cpus).toBe(2);
+  });
 });
