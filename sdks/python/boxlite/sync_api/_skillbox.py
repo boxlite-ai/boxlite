@@ -8,8 +8,12 @@ API mirrors async SkillBox exactly.
 import json
 import logging
 import os
+import time
 from typing import TYPE_CHECKING, Optional
 
+from .. import constants as const
+from ..errors import TimeoutError
+from ..skillbox import _find_available_port
 from ._simplebox import SyncSimpleBox
 
 if TYPE_CHECKING:
@@ -28,11 +32,15 @@ class SyncSkillBox(SyncSimpleBox):
     Built on top of SyncSimpleBox with Claude-specific convenience methods.
     API mirrors async SkillBox exactly.
 
+    SyncSkillBox includes a desktop GUI accessible via noVNC, allowing you to
+    visually monitor Claude's work in real-time through a web browser.
+
     SyncSkillBox defaults to `auto_remove=True` for automatic cleanup after use,
     and has a default name for easy identification.
 
     Usage (standalone - recommended):
         with SyncSkillBox(skills=["anthropics/skills"]) as box:
+            print(f"Watch Claude at https://localhost:{box.gui_https_port}")
             result = box.call("What skills do you have?")
             print(result)
 
@@ -41,6 +49,10 @@ class SyncSkillBox(SyncSimpleBox):
             with SyncSkillBox(skills=["anthropics/skills"], runtime=runtime) as box:
                 result = box.call("Hello!")
                 print(result)
+
+    Attributes:
+        gui_http_port: Local port for noVNC HTTP access
+        gui_https_port: Local port for noVNC HTTPS access
     """
 
     def __init__(
@@ -48,9 +60,12 @@ class SyncSkillBox(SyncSimpleBox):
         skills: list[str] | None = None,
         oauth_token: str | None = None,
         name: str = "skill-box",
-        image: str = "node:20-alpine",
-        memory_mib: int = 2048,
-        disk_size_gb: int = 5,
+        image: str = const.SKILLBOX_IMAGE,
+        rootfs_path: str | None = None,
+        memory_mib: int = const.SKILLBOX_MEMORY_MIB,
+        disk_size_gb: int = const.SKILLBOX_DISK_SIZE_GB,
+        gui_http_port: int = 0,
+        gui_https_port: int = 0,
         auto_remove: bool = True,
         runtime: Optional["SyncBoxlite"] = None,
         **kwargs,
@@ -62,9 +77,12 @@ class SyncSkillBox(SyncSimpleBox):
             skills: Skills to install on first call (e.g., ["anthropics/skills"])
             oauth_token: Claude OAuth token. Uses CLAUDE_CODE_OAUTH_TOKEN env if not provided.
             name: Box name for persistence/reuse (default: "skill-box")
-            image: Node.js container image (default: "node:20-alpine")
-            memory_mib: Memory allocation in MiB (default: 2048)
-            disk_size_gb: Disk size in GB (default: 5)
+            image: Container image (default: boxlite-skillbox with noVNC + AI CLIs)
+            rootfs_path: Path to local OCI layout directory (overrides image if provided)
+            memory_mib: Memory allocation in MiB (default: 4096)
+            disk_size_gb: Disk size in GB (default: 10)
+            gui_http_port: Local port for noVNC HTTP access (default: 0 for random)
+            gui_https_port: Local port for noVNC HTTPS access (default: 0 for random)
             auto_remove: Remove box when stopped (default: True for cleanup)
             runtime: Optional SyncBoxlite runtime. If None, creates default runtime.
             **kwargs: Additional BoxOptions parameters
@@ -72,8 +90,39 @@ class SyncSkillBox(SyncSimpleBox):
         self._skills = skills or []
         self._oauth_token = oauth_token or os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "")
 
+        # Auto-allocate ports if 0 is passed (random available port)
+        self.gui_http_port = gui_http_port if gui_http_port != 0 else _find_available_port()
+        self.gui_https_port = gui_https_port if gui_https_port != 0 else _find_available_port()
+        # Ensure ports don't collide
+        if self.gui_http_port == self.gui_https_port:
+            self.gui_https_port = _find_available_port()
+
+        # Merge user ports with noVNC default ports
+        user_ports = kwargs.pop("ports", [])
+        default_ports = [
+            (self.gui_http_port, const.SKILLBOX_GUI_HTTP_PORT),  # noVNC HTTP
+            (self.gui_https_port, const.SKILLBOX_GUI_HTTPS_PORT),  # noVNC HTTPS
+        ]
+
+        # Store env for command calls (SyncSimpleBox requires explicit env parameter per call)
+        # Container's PATH already includes /config/.local/bin (set in Dockerfile)
+        self._skillbox_env = {
+            "DISPLAY": ":1",
+        }
+
+        # Container env: Only set display config and oauth token
+        # DO NOT set HOME or PATH here - it breaks webtop's abc user setup
+        # Those are set in _skillbox_env for command calls only
+
+        # Build image args - use rootfs_path if provided, otherwise use image
+        image_kwargs = {}
+        if rootfs_path:
+            image_kwargs["rootfs_path"] = rootfs_path
+        else:
+            image_kwargs["image"] = image
+
         super().__init__(
-            image=image,
+            **image_kwargs,
             memory_mib=memory_mib,
             name=name,
             auto_remove=auto_remove,
@@ -81,8 +130,15 @@ class SyncSkillBox(SyncSimpleBox):
             disk_size_gb=disk_size_gb,
             env=[
                 ("CLAUDE_CODE_OAUTH_TOKEN", self._oauth_token),
-                ("HOME", "/root"),
+                ("DISPLAY", ":1"),  # X11 display for computer_use tools
+                # Selkies/noVNC display configuration
+                ("DISPLAY_SIZEW", str(const.COMPUTERBOX_DISPLAY_WIDTH)),
+                ("DISPLAY_SIZEH", str(const.COMPUTERBOX_DISPLAY_HEIGHT)),
+                ("SELKIES_MANUAL_WIDTH", str(const.COMPUTERBOX_DISPLAY_WIDTH)),
+                ("SELKIES_MANUAL_HEIGHT", str(const.COMPUTERBOX_DISPLAY_HEIGHT)),
+                ("SELKIES_UI_SHOW_SIDEBAR", "false"),
             ],
+            ports=default_ports + list(user_ports),
             **kwargs,
         )
 
@@ -106,6 +162,55 @@ class SyncSkillBox(SyncSimpleBox):
         """Exit context - clean up Claude process and box (if auto_remove=True)."""
         self._stop_claude()
         return super().__exit__(exc_type, exc_val, exc_tb)
+
+    def wait_until_ready(self, timeout: int = const.DESKTOP_READY_TIMEOUT):
+        """
+        Wait until the desktop environment is fully loaded and ready.
+
+        Call this method after entering the context to ensure the noVNC
+        desktop is accessible before using computer_use tools.
+
+        Args:
+            timeout: Maximum time to wait in seconds (default: 60)
+
+        Raises:
+            TimeoutError: If desktop doesn't become ready within timeout period
+
+        Example:
+            with SyncSkillBox() as box:
+                box.wait_until_ready()
+                print(f"Desktop ready at http://localhost:{box.gui_http_port}")
+        """
+        logger.info("Waiting for desktop to become ready...")
+
+        start_time = time.time()
+        expected_size = f"{const.COMPUTERBOX_DISPLAY_WIDTH}x{const.COMPUTERBOX_DISPLAY_HEIGHT}"
+
+        while True:
+            elapsed = time.time() - start_time
+            if elapsed > timeout:
+                raise TimeoutError(
+                    f"Desktop did not become ready within {timeout} seconds"
+                )
+
+            try:
+                exec_result = self._run_cmd("xwininfo", "-tree", "-root")
+
+                if (
+                    "xfdesktop" in exec_result.stdout
+                    and expected_size in exec_result.stdout
+                ):
+                    logger.info(f"Desktop ready after {elapsed:.1f} seconds")
+                    return
+
+                logger.debug(
+                    f"Desktop not ready yet (waited {elapsed:.1f}s), retrying..."
+                )
+                time.sleep(const.DESKTOP_READY_RETRY_DELAY)
+
+            except (RuntimeError, OSError) as e:
+                logger.debug(f"Desktop not ready: {e}, retrying...")
+                time.sleep(const.DESKTOP_READY_RETRY_DELAY)
 
     def call(self, prompt: str) -> str:
         """
@@ -185,33 +290,41 @@ class SyncSkillBox(SyncSimpleBox):
             return False
 
     def _install_dependencies(self) -> None:
-        """Install Claude CLI and required dependencies."""
-        # Install Claude CLI
+        """Install Claude CLI and required dependencies (Ubuntu/apt-get)."""
+        # Update package lists first
+        logger.info("Updating package lists...")
+        result = self._run_cmd("apt-get", "update")
+        if result.exit_code != 0:
+            logger.warning("apt-get update failed: %s", result.stderr)
+
+        # Install Claude CLI via official shell script installer
         logger.info("Installing Claude CLI...")
-        result = self._run_cmd("npm", "install", "-g", "@anthropic-ai/claude-code")
+        result = self._run_cmd(
+            "bash", "-c", "curl -fsSL https://claude.ai/install.sh | bash"
+        )
         if result.exit_code != 0:
             raise RuntimeError(f"Failed to install Claude CLI: {result.stderr}")
 
-        # Install bash (Claude CLI requires bash/zsh, not ash)
+        # Install bash (Claude CLI requires bash/zsh)
         logger.info("Installing bash...")
-        result = self._run_cmd("apk", "add", "--no-cache", "bash")
+        result = self._run_cmd("apt-get", "install", "-y", "bash")
         if result.exit_code != 0:
             raise RuntimeError(f"Failed to install bash: {result.stderr}")
 
         # Install git (required by skills CLI to clone skill repos)
         logger.info("Installing git...")
-        result = self._run_cmd("apk", "add", "--no-cache", "git")
+        result = self._run_cmd("apt-get", "install", "-y", "git")
         if result.exit_code != 0:
             raise RuntimeError(f"Failed to install git: {result.stderr}")
 
         # Install Python (required by document skills like pdf, docx, pptx)
         logger.info("Installing Python...")
-        result = self._run_cmd("apk", "add", "--no-cache", "python3", "py3-pip")
+        result = self._run_cmd("apt-get", "install", "-y", "python3", "python3-pip")
         if result.exit_code != 0:
             raise RuntimeError(f"Failed to install Python: {result.stderr}")
 
-        # Verify installation
-        result = self._run_cmd("claude", "--version")
+        # Verify installation (Claude installs to ~/.local/bin = /config/.local/bin for abc user)
+        result = self._run_cmd("/config/.local/bin/claude", "--version")
         logger.info("Installed: %s", result.stdout.strip())
 
     def _install_skill_internal(self, skill_id: str) -> bool:
@@ -227,13 +340,15 @@ class SyncSkillBox(SyncSimpleBox):
 
     def _run_cmd(self, cmd: str, *args: str):
         """Internal helper to run a command using parent's exec method."""
-        return SyncSimpleBox.exec(self, cmd, *args)
+        return SyncSimpleBox.exec(self, cmd, *args, env=self._skillbox_env)
 
     def _start_claude(self) -> None:
         """Start the Claude CLI process with stream-json format."""
         logger.info("Starting Claude CLI process...")
 
         # Use raw box method for process with stdin control
+        # MCP config is at /config/.claude.json (abc user's home)
+        # Container's PATH already includes /config/.local/bin (set in Dockerfile)
         self._process = self._box.exec(
             "claude",
             [
@@ -242,12 +357,15 @@ class SyncSkillBox(SyncSimpleBox):
                 "stream-json",
                 "--output-format",
                 "stream-json",
+                "--mcp-config",
+                "/config/.claude.json",
                 "--verbose",
             ],
             [
                 ("CLAUDE_CODE_OAUTH_TOKEN", self._oauth_token),
                 ("IS_SANDBOX", "1"),
                 ("SHELL", "/bin/bash"),
+                ("DISPLAY", ":1"),  # X11 display for computer_use tools
             ],
         )
         self._stdin = self._process.stdin()
@@ -308,44 +426,59 @@ class SyncSkillBox(SyncSimpleBox):
         timeout = 120
         start_time = time.time()
 
-        try:
-            for chunk in self._stdout:
-                if time.time() - start_time > timeout:
-                    logger.warning("Timeout waiting for response")
-                    break
+        done = False
+        for chunk in self._stdout:
+            if time.time() - start_time > timeout:
+                logger.warning("Timeout waiting for response")
+                break
 
-                if isinstance(chunk, bytes):
-                    chunk_str = chunk.decode("utf-8", errors="replace")
-                else:
-                    chunk_str = chunk
+            if isinstance(chunk, bytes):
+                chunk_str = chunk.decode("utf-8", errors="replace")
+            else:
+                chunk_str = chunk
 
-                buffer += chunk_str
+            buffer += chunk_str
 
-                # Process complete lines
-                while "\n" in buffer:
-                    line, buffer = buffer.split("\n", 1)
-                    line = line.strip()
-                    if not line:
-                        continue
+            # Process complete lines
+            while "\n" in buffer:
+                line, buffer = buffer.split("\n", 1)
+                line = line.strip()
+                if not line:
+                    continue
 
-                    try:
-                        parsed_msg = json.loads(line)
-                        responses.append(parsed_msg)
-                        msg_type = parsed_msg.get("type", "unknown")
-                        logger.debug("Received message type: %s", msg_type)
+                try:
+                    parsed_msg = json.loads(line)
+                    responses.append(parsed_msg)
+                    msg_type = parsed_msg.get("type", "unknown")
+                    logger.debug("Received message type: %s", msg_type)
 
-                        # Capture session_id for multi-turn
-                        if parsed_msg.get("session_id"):
-                            new_session_id = parsed_msg.get("session_id")
+                    # Capture session_id for multi-turn
+                    if parsed_msg.get("session_id"):
+                        new_session_id = parsed_msg.get("session_id")
 
-                        # Stop on result message
-                        if msg_type == "result":
-                            raise StopIteration
-                    except json.JSONDecodeError as e:
-                        logger.debug("JSON parse error: %s", e)
+                    # Stop on result message
+                    if msg_type == "result":
+                        done = True
+                        break
+                except json.JSONDecodeError as e:
+                    logger.debug("JSON parse error: %s", e)
 
-        except StopIteration:
-            logger.debug("Response complete")
+            if done:
+                break
+
+        # Parse any remaining complete lines in buffer after timeout/stream end
+        while "\n" in buffer:
+            line, buffer = buffer.split("\n", 1)
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                parsed_msg = json.loads(line)
+                responses.append(parsed_msg)
+                if parsed_msg.get("session_id"):
+                    new_session_id = parsed_msg.get("session_id")
+            except json.JSONDecodeError:
+                pass
 
         # Extract response text from result message
         result_msg = next((r for r in responses if r.get("type") == "result"), None)

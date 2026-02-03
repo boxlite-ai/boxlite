@@ -26,6 +26,13 @@ BROWSERBOX_PORT = 3000
 # Network constants (must match boxlite/src/net/constants.rs)
 GUEST_IP = "192.168.127.2"
 
+# SkillBox defaults (AI CLI container with noVNC)
+SKILLBOX_IMAGE = "ghcr.io/boxlite-ai/boxlite-skillbox:0.1.0"
+SKILLBOX_MEMORY_MIB = 4096
+SKILLBOX_DISK_SIZE_GB = 10
+SKILLBOX_GUI_HTTP_PORT = 3000
+SKILLBOX_GUI_HTTPS_PORT = 3001
+
 # Timeouts (seconds)
 DESKTOP_READY_TIMEOUT = 60
 DESKTOP_READY_RETRY_DELAY = 0.5

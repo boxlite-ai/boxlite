@@ -1,4 +1,4 @@
-.PHONY: help clean setup package dev\:python dev\:node dist dist\:python dist\:node test test\:rust test\:python test\:node test\:cli fmt fmt-check guest runtime runtime-debug cli
+.PHONY: help clean setup package dev\:python dev\:node dist dist\:python dist\:node test test\:rust test\:python test\:node test\:cli fmt fmt-check guest runtime runtime-debug cli skillbox-image
 
 # Ensure cargo is in PATH (source ~/.cargo/env if it exists and cargo is not found)
 SHELL := /bin/bash
@@ -25,6 +25,7 @@ help:
 	@echo "  Build:"
 	@echo "    make cli            - Build the CLI (boxlite command)"
 	@echo "    make guest          - Build the guest binary (cross-compile for VM)"
+	@echo "    make skillbox-image - Build SkillBox Docker image (APT_SOURCE=mirrors.aliyun.com for China)"
 	@echo ""
 	@echo "  Testing:"
 	@echo "    make test           - Run all unit tests (Rust + Python + Node.js)"
@@ -93,6 +94,13 @@ cli: runtime-debug
 	@echo "🔨 Building boxlite CLI..."
 	@cargo build -p boxlite-cli
 	@echo "✅ CLI built: ./target/debug/boxlite"
+
+# Build SkillBox container image (all-in-one AI CLI with noVNC)
+# Usage: make skillbox-image [APT_SOURCE=mirrors.aliyun.com]
+skillbox-image:
+	@echo "🐳 Building SkillBox container image..."
+	@docker build $(if $(APT_SOURCE),--build-arg APT_SOURCE=$(APT_SOURCE)) -t boxlite-skillbox:latest boxlite/resources/images/skillbox/
+	@echo "✅ SkillBox image built: boxlite-skillbox:latest"
 
 dist\:python:
 	@if [ ! -d .venv ]; then \
