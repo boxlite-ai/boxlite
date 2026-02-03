@@ -1,7 +1,7 @@
 //! Inspect a box by ID or name; output JSON, YAML, or Go-style template.
 
 use crate::cli::GlobalFlags;
-use crate::formatter::{self, OutputFormat, value_from_serde_json, GtmplWithJson};
+use crate::formatter::{self, GtmplWithJson, OutputFormat, value_from_serde_json};
 use boxlite::{BoxInfo, BoxStateInfo};
 use clap::Args;
 use serde::Serialize;
@@ -117,7 +117,10 @@ fn parse_single_path_template(s: &str) -> Option<String> {
     if path.is_empty() || path.contains("{{") || path.contains("}}") {
         return None;
     }
-    if path.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_') {
+    if path
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_')
+    {
         Some(path.to_string())
     } else {
         None
@@ -125,7 +128,10 @@ fn parse_single_path_template(s: &str) -> Option<String> {
 }
 
 /// Get a reference to the value at dot-separated path in a JSON value.
-fn json_value_at_path<'a>(root: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value> {
+fn json_value_at_path<'a>(
+    root: &'a serde_json::Value,
+    path: &str,
+) -> Option<&'a serde_json::Value> {
     let mut current = root;
     for segment in path.split('.') {
         current = current.get(segment)?;

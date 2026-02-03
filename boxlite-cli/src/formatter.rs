@@ -2,8 +2,8 @@
 // Provides unified formatting for different output formats (table, JSON, YAML, Go template).
 
 use anyhow::{Result, anyhow};
-use gtmpl::{Context, Template};
 use gtmpl::Value;
+use gtmpl::{Context, Template};
 use gtmpl_value::{FuncError, Value as GtmplValue};
 use serde::Serialize;
 use tabled::{Table, Tabled, settings::Style};
@@ -55,20 +55,25 @@ impl GtmplWithJson {
     /// Parse template string once. Use `render` for each context.
     pub fn parse(template_str: &str) -> Result<Self> {
         let json_func: gtmpl::Func = |args: &[Value]| -> std::result::Result<Value, FuncError> {
-            let v = args.first().ok_or_else(|| FuncError::ExactlyXArgs("json".into(), 1))?;
+            let v = args
+                .first()
+                .ok_or_else(|| FuncError::ExactlyXArgs("json".into(), 1))?;
             let j = value_to_serde_json(v);
             let s = serde_json::to_string(&j).map_err(|e| FuncError::Generic(e.to_string()))?;
             Ok(Value::from(s))
         };
         let mut tmpl = Template::default();
         tmpl.add_func("json", json_func);
-        tmpl.parse(template_str).map_err(|e| anyhow!("Template parse error: {}", e))?;
+        tmpl.parse(template_str)
+            .map_err(|e| anyhow!("Template parse error: {}", e))?;
         Ok(Self { tmpl })
     }
 
     pub fn render(&self, context: impl Into<Value>) -> Result<String> {
         let ctx = Context::from(context);
-        self.tmpl.render(&ctx).map_err(|e| anyhow!("Template error: {}", e))
+        self.tmpl
+            .render(&ctx)
+            .map_err(|e| anyhow!("Template error: {}", e))
     }
 }
 
@@ -114,9 +119,7 @@ fn value_to_serde_json(v: &GtmplValue) -> serde_json::Value {
                 .collect();
             JsonValue::Object(obj)
         }
-        GtmplValue::Array(arr) => {
-            JsonValue::Array(arr.iter().map(value_to_serde_json).collect())
-        }
+        GtmplValue::Array(arr) => JsonValue::Array(arr.iter().map(value_to_serde_json).collect()),
         GtmplValue::String(s) => JsonValue::String(s.clone()),
         GtmplValue::Bool(b) => JsonValue::Bool(*b),
         GtmplValue::Number(n) => {
@@ -125,7 +128,9 @@ fn value_to_serde_json(v: &GtmplValue) -> serde_json::Value {
             } else if let Some(u) = n.as_u64() {
                 JsonValue::Number(serde_json::Number::from(u))
             } else if let Some(f) = n.as_f64() {
-                JsonValue::Number(serde_json::Number::from_f64(f).unwrap_or(serde_json::Number::from(0)))
+                JsonValue::Number(
+                    serde_json::Number::from_f64(f).unwrap_or(serde_json::Number::from(0)),
+                )
             } else {
                 JsonValue::Null
             }
