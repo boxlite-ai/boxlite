@@ -13,6 +13,7 @@ Demonstrates core BoxLite features using SyncSimpleBox directly:
 Requires: pip install boxlite[sync]
 """
 
+import inspect
 import logging
 import sys
 
@@ -28,6 +29,15 @@ def setup_logging():
         format="%(asctime)s [%(levelname)s] %(message)s",
         handlers=[logging.StreamHandler(sys.stdout)],
     )
+
+
+def supports_reuse_existing() -> bool:
+    """Detect whether the installed SyncSimpleBox supports reuse_existing."""
+    try:
+        params = inspect.signature(boxlite.SyncSimpleBox.__init__).parameters
+    except (TypeError, ValueError):
+        return False
+    return "reuse_existing" in params
 
 
 def example_basic():
@@ -138,6 +148,11 @@ def example_reuse_existing():
     from boxlite.sync_api import SyncBoxlite
 
     name = "sync-reuse-demo"
+
+    if not supports_reuse_existing():
+        print("Skipping: installed boxlite does not support reuse_existing.")
+        print("Upgrade boxlite or install from source to enable this example.")
+        return
 
     # Nested SyncSimpleBox instances must share a single runtime,
     # because the sync API runs one greenlet event loop that cannot

@@ -12,6 +12,7 @@ Demonstrates core BoxLite features using SimpleBox directly:
 """
 
 import asyncio
+import inspect
 import logging
 import sys
 
@@ -27,6 +28,15 @@ def setup_logging():
         format="%(asctime)s [%(levelname)s] %(message)s",
         handlers=[logging.StreamHandler(sys.stdout)],
     )
+
+
+def supports_reuse_existing() -> bool:
+    """Detect whether the installed SimpleBox supports reuse_existing."""
+    try:
+        params = inspect.signature(boxlite.SimpleBox.__init__).parameters
+    except (TypeError, ValueError):
+        return False
+    return "reuse_existing" in params
 
 
 async def example_basic():
@@ -135,6 +145,11 @@ async def example_reuse_existing():
     print("\n\n=== Example 6: Reuse Existing Box ===")
 
     name = "reuse-demo"
+
+    if not supports_reuse_existing():
+        print("Skipping: installed boxlite does not support reuse_existing.")
+        print("Upgrade boxlite or install from source to enable this example.")
+        return
 
     # First call creates a new box
     async with boxlite.SimpleBox(
