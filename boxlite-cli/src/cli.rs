@@ -84,6 +84,9 @@ pub enum Commands {
     /// Copy files/folders between host and box
     Cp(crate::commands::cp::CpArgs),
 
+    /// Display system-wide runtime information
+    Info(crate::commands::info::InfoArgs),
+
     /// Generate shell completion script (hidden from help)
     #[command(hide = true)]
     Completion(CompletionArgs),

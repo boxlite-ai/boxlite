@@ -40,7 +40,7 @@ pub use runtime::options::{
     BoxOptions, BoxliteOptions, ResourceLimits, RootfsSpec, SecurityOptions,
 };
 pub use runtime::types::ContainerID;
-pub use runtime::types::{BoxID, BoxInfo, BoxState, BoxStateInfo, BoxStatus};
+pub use runtime::types::{BoxID, BoxInfo, BoxState, BoxStateInfo, BoxStatus, SystemInfo};
 
 /// Initialize tracing for Boxlite using the provided filesystem layout.
 ///

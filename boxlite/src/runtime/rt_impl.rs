@@ -11,7 +11,7 @@ use crate::runtime::layout::{FilesystemLayout, FsLayoutConfig};
 use crate::runtime::lock::RuntimeLock;
 use crate::runtime::options::{BoxOptions, BoxliteOptions};
 use crate::runtime::signal_handler::timeout_to_duration;
-use crate::runtime::types::{BoxID, BoxInfo, BoxState, BoxStatus, ContainerID};
+use crate::runtime::types::{BoxID, BoxInfo, BoxState, BoxStatus, ContainerID, SystemInfo};
 use crate::vmm::VmmKind;
 use boxlite_shared::{BoxliteError, BoxliteResult, Transport};
 use chrono::Utc;
@@ -521,6 +521,45 @@ impl RuntimeImpl {
     /// Get runtime-wide metrics.
     pub async fn metrics(&self) -> RuntimeMetrics {
         RuntimeMetrics::new(self.runtime_metrics.clone())
+    }
+
+    /// Get system-wide runtime information.
+    pub async fn system_info(self: &Arc<Self>) -> BoxliteResult<SystemInfo> {
+        let version = env!("CARGO_PKG_VERSION").to_string();
+        let home_dir = self.layout.home_dir().to_string_lossy().to_string();
+        let virtualization = crate::vmm::host_check::check_virtualization_support()
+            .map(|s| s.reason)
+            .unwrap_or_else(|e| format!("unavailable: {}", e));
+        let os = std::env::consts::OS.to_string();
+        let arch = std::env::consts::ARCH.to_string();
+
+        let boxes_list = self.list_info().await?;
+        let boxes_total = boxes_list.len() as u32;
+        let boxes_running = boxes_list.iter().filter(|b| b.status.is_active()).count() as u32;
+        let boxes_stopped = boxes_list
+            .iter()
+            .filter(|b| b.status == BoxStatus::Stopped)
+            .count() as u32;
+        let boxes_configured = boxes_list
+            .iter()
+            .filter(|b| b.status == BoxStatus::Configured)
+            .count() as u32;
+
+        let images = self.image_manager.list().await?;
+        let images_count = images.len() as u32;
+
+        Ok(SystemInfo {
+            version,
+            home_dir,
+            virtualization,
+            os,
+            arch,
+            boxes_total,
+            boxes_running,
+            boxes_stopped,
+            boxes_configured,
+            images_count,
+        })
     }
 
     // ========================================================================
