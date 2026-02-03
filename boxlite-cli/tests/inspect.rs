@@ -2,7 +2,6 @@ use std::time::Duration;
 
 use assert_cmd::Command;
 use predicates::prelude::*;
-use tempfile;
 
 mod common;
 
