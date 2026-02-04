@@ -3,7 +3,6 @@
 
 use boxlite::SystemInfo;
 use predicates::prelude::*;
-use serde_json;
 
 mod common;
 
