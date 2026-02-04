@@ -88,7 +88,10 @@ async fn main() -> BoxliteResult<()> {
 
     // Parse command-line arguments with clap
     let args = GuestArgs::parse();
-    info!("Arguments parsed: listen={}, notify={:?}", args.listen, args.notify);
+    info!(
+        "Arguments parsed: listen={}, notify={:?}",
+        args.listen, args.notify
+    );
 
     // Prepare guest layout directories
     let layout = layout::GuestLayout::new();

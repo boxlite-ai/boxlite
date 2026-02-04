@@ -23,7 +23,6 @@ Run with:
 
 import asyncio
 import logging
-import sys
 
 from boxlite.orchestration import BoxRuntime
 
@@ -57,34 +56,49 @@ async def main():
         def handle_review(sender, data):
             import sys
             from boxlite_runtime import send_message
+
             action = data.get("action")
             if action == "review":
                 code = data.get("code", "")
                 tests = data.get("tests", "")
                 task = data.get("task", "unknown")
 
-                print(f"[reviewer] Reviewing code from {sender} for: {task}", file=sys.stderr)
+                print(
+                    f"[reviewer] Reviewing code from {sender} for: {task}",
+                    file=sys.stderr,
+                )
 
                 if not code.strip():
                     return {"approved": False, "reason": "Empty code"}
                 if "def " not in code:
                     return {"approved": False, "reason": "No function definition found"}
 
-                print("[reviewer] Syntax looks good, sending to tester...", file=sys.stderr)
-                test_result = send_message("tester", {"action": "test", "code": code, "tests": tests})
+                print(
+                    "[reviewer] Syntax looks good, sending to tester...",
+                    file=sys.stderr,
+                )
+                test_result = send_message(
+                    "tester", {"action": "test", "code": code, "tests": tests}
+                )
                 print(f"[reviewer] Test result: {test_result}", file=sys.stderr)
 
                 if test_result.get("passed"):
                     return {"approved": True, "test_output": test_result.get("output")}
                 else:
-                    return {"approved": False, "reason": f"Tests failed: {test_result.get('error')}"}
+                    return {
+                        "approved": False,
+                        "reason": f"Tests failed: {test_result.get('error')}",
+                    }
 
             return {"error": f"Unknown action: {action}"}
 
         @reviewer.on_event("pipeline_complete")
         def reviewer_on_complete(data):
             import sys
-            print(f"[reviewer] Pipeline complete: {data.get('status')}", file=sys.stderr)
+
+            print(
+                f"[reviewer] Pipeline complete: {data.get('status')}", file=sys.stderr
+            )
 
         # ====================================================================
         # TESTER: Executes code in isolation and runs test assertions
@@ -92,6 +106,7 @@ async def main():
         @tester.on_message
         def handle_test(sender, data):
             import sys
+
             action = data.get("action")
             if action == "test":
                 code = data.get("code", "")
@@ -118,11 +133,14 @@ async def main():
         @tester.on_event("pipeline_complete")
         def tester_on_complete(data):
             import sys
+
             status = data.get("status", "unknown")
             if status == "success":
                 print("[tester] Pipeline succeeded!", file=sys.stderr)
             else:
-                print(f"[tester] Pipeline failed: {data.get('reason')}", file=sys.stderr)
+                print(
+                    f"[tester] Pipeline failed: {data.get('reason')}", file=sys.stderr
+                )
 
         # ====================================================================
         # CODER: Generates code and submits for review (one-shot task)
@@ -138,7 +156,7 @@ async def main():
             print(f"[coder] Generating code for: {task}", file=sys.stderr)
 
             # Simulated AI code generation
-            generated_code = '''
+            generated_code = """
 def fibonacci(n):
     if n <= 0:
         return 0
@@ -149,32 +167,40 @@ def fibonacci(n):
         for _ in range(2, n + 1):
             a, b = b, a + b
         return b
-'''
+"""
 
-            test_code = '''
+            test_code = """
 assert fibonacci(0) == 0, "fib(0) should be 0"
 assert fibonacci(1) == 1, "fib(1) should be 1"
 assert fibonacci(10) == 55, "fib(10) should be 55"
 assert fibonacci(20) == 6765, "fib(20) should be 6765"
-'''
+"""
 
             print("[coder] Sending code to reviewer...", file=sys.stderr)
-            review_result = send_message("reviewer", {
-                "action": "review",
-                "code": generated_code,
-                "tests": test_code,
-                "task": task,
-            })
+            review_result = send_message(
+                "reviewer",
+                {
+                    "action": "review",
+                    "code": generated_code,
+                    "tests": test_code,
+                    "task": task,
+                },
+            )
 
             print(f"[coder] Review result: {review_result}", file=sys.stderr)
 
             if review_result.get("approved"):
-                print("[coder] Code approved! Publishing completion event.", file=sys.stderr)
+                print(
+                    "[coder] Code approved! Publishing completion event.",
+                    file=sys.stderr,
+                )
                 publish_event("pipeline_complete", {"status": "success", "task": task})
             else:
                 reason = review_result.get("reason", "unknown")
                 print(f"[coder] Code rejected: {reason}", file=sys.stderr)
-                publish_event("pipeline_complete", {"status": "failed", "reason": reason})
+                publish_event(
+                    "pipeline_complete", {"status": "failed", "reason": reason}
+                )
 
             print("[coder] Done!", file=sys.stderr)
 

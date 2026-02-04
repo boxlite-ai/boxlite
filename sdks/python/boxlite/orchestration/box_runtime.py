@@ -50,10 +50,13 @@ class ManagedBox:
 
     async def _inject_sdk(self) -> None:
         from importlib.resources import files, as_file
+
         result = await self._box.exec("pip", "install", "-q", "cloudpickle")
         if result.exit_code != 0:
             raise RuntimeError(f"Failed to install cloudpickle: {result.stderr}")
-        site_packages = f"/usr/local/lib/python{self._runtime._python_version}/site-packages"
+        site_packages = (
+            f"/usr/local/lib/python{self._runtime._python_version}/site-packages"
+        )
         sdk_file = files("boxlite.orchestration.guest").joinpath("boxlite_runtime.py")
         with as_file(sdk_file) as path:
             await self._box.copy_in(str(path), site_packages, include_parent=False)
@@ -70,14 +73,20 @@ class ManagedBox:
 
     def on_event(self, event: str) -> Callable:
         """Register event handler for specific event type."""
+
         def decorator(handler: Callable) -> Callable:
             self._event_handlers.setdefault(event, []).append(handler)
             return handler
+
         return decorator
 
     async def run(self, env: Optional[dict[str, str]] = None) -> None:
         """Run with registered task and/or handlers."""
-        if not self._task_func and not self._message_handlers and not self._event_handlers:
+        if (
+            not self._task_func
+            and not self._message_handlers
+            and not self._event_handlers
+        ):
             raise RuntimeError("No task or handlers registered")
         if not self._box:
             raise RuntimeError("Box not started")
@@ -89,7 +98,9 @@ class ManagedBox:
         if env:
             script_env.update(env)
 
-        self._execution = await self._box._box.exec("python3", ["-c", code], list(script_env.items()))
+        self._execution = await self._box._box.exec(
+            "python3", ["-c", code], list(script_env.items())
+        )
         self._stdin = self._execution.stdin()
         self._stdout = self._execution.stdout()
         self._pump_task = asyncio.create_task(self._message_pump())
@@ -136,7 +147,11 @@ if _d["message_handlers"] or _d["event_handlers"]: run_forever()
             pass
 
     async def _handle_send(self, msg: dict) -> None:
-        request_id, target, data = msg.get("request_id"), msg.get("target"), msg.get("data")
+        request_id, target, data = (
+            msg.get("request_id"),
+            msg.get("target"),
+            msg.get("data"),
+        )
         try:
             target_box = self._runtime._boxes.get(target)
             if not target_box:
@@ -173,12 +188,20 @@ if _d["message_handlers"] or _d["event_handlers"]: run_forever()
 
     async def _deliver_message(self, sender: str, data: Any) -> Any:
         import uuid
+
         if not self._execution:
             raise RuntimeError(f"Box {self._name} not running")
         request_id = str(uuid.uuid4())
         future = asyncio.get_event_loop().create_future()
         self._pending[request_id] = future
-        await self._send({"type": "message", "sender": sender, "data": data, "request_id": request_id})
+        await self._send(
+            {
+                "type": "message",
+                "sender": sender,
+                "data": data,
+                "request_id": request_id,
+            }
+        )
         try:
             return await asyncio.wait_for(future, timeout=30.0)
         except asyncio.TimeoutError:
@@ -231,7 +254,9 @@ class BoxRuntime:
     async def __aexit__(self, *_):
         await self.shutdown()
 
-    async def create_box(self, name: str, *, auto_start: bool = True, **kwargs) -> ManagedBox:
+    async def create_box(
+        self, name: str, *, auto_start: bool = True, **kwargs
+    ) -> ManagedBox:
         if name in self._boxes:
             raise ValueError(f"Box '{name}' exists")
         box = ManagedBox(self, name, **kwargs)
@@ -249,13 +274,17 @@ class BoxRuntime:
             return []
         tasks = [box.wait() for box in self._boxes.values()]
         if timeout:
-            results = await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout)
+            results = await asyncio.wait_for(
+                asyncio.gather(*tasks, return_exceptions=True), timeout
+            )
         else:
             results = await asyncio.gather(*tasks, return_exceptions=True)
         return [-1 if isinstance(r, Exception) else r for r in results]
 
     async def stop_all(self) -> None:
-        await asyncio.gather(*[box.stop() for box in self._boxes.values()], return_exceptions=True)
+        await asyncio.gather(
+            *[box.stop() for box in self._boxes.values()], return_exceptions=True
+        )
 
     async def shutdown(self) -> None:
         await self.stop_all()

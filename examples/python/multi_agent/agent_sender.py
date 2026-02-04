@@ -21,28 +21,37 @@ def main():
     # Point-to-point messaging
     # Send a computation request to worker-b
     print(f"[{BOX_NAME}] Sending compute request to worker-b...", file=sys.stderr)
-    result = send_message("worker-b", {
-        "task": "compute",
-        "operation": "fibonacci",
-        "n": 10,
-    })
+    result = send_message(
+        "worker-b",
+        {
+            "task": "compute",
+            "operation": "fibonacci",
+            "n": 10,
+        },
+    )
     print(f"[{BOX_NAME}] Received result: {result}", file=sys.stderr)
 
     # Send another request
     print(f"[{BOX_NAME}] Sending double request...", file=sys.stderr)
-    result = send_message("worker-b", {
-        "task": "double",
-        "value": 42,
-    })
+    result = send_message(
+        "worker-b",
+        {
+            "task": "double",
+            "value": 42,
+        },
+    )
     print(f"[{BOX_NAME}] Doubled result: {result}", file=sys.stderr)
 
     # Pub/Sub: Publish completion event
     print(f"[{BOX_NAME}] Publishing completion event...", file=sys.stderr)
-    publish_event("pipeline_complete", {
-        "sender": BOX_NAME,
-        "status": "success",
-        "tasks_completed": 2,
-    })
+    publish_event(
+        "pipeline_complete",
+        {
+            "sender": BOX_NAME,
+            "status": "success",
+            "tasks_completed": 2,
+        },
+    )
 
     print(f"[{BOX_NAME}] Agent finished!", file=sys.stderr)
 
