@@ -9,11 +9,13 @@ on:
       - '**/*.ts'
       - '**/*.c'
       - '**/*.h'
+      - '**/*.go'
       - '**/Cargo.toml'
       - 'Cargo.lock'
       - 'sdks/python/**'
       - 'sdks/node/**'
       - 'sdks/c/**'
+      - 'sdks/go/**'
       - 'make/quality.mk'
       - '.pre-commit-config.yaml'
       - '.github/workflows/lint.yml'
@@ -26,11 +28,13 @@ on:
       - '**/*.ts'
       - '**/*.c'
       - '**/*.h'
+      - '**/*.go'
       - '**/Cargo.toml'
       - 'Cargo.lock'
       - 'sdks/python/**'
       - 'sdks/node/**'
       - 'sdks/c/**'
+      - 'sdks/go/**'
       - 'make/quality.mk'
       - '.pre-commit-config.yaml'
       - '.github/workflows/lint.yml'
@@ -49,6 +53,7 @@ jobs:
       python: ${{ steps.filter.outputs.python }}
       node: ${{ steps.filter.outputs.node }}
       c: ${{ steps.filter.outputs.c }}
+      go: ${{ steps.filter.outputs.go }}
       quality: ${{ steps.filter.outputs.quality }}
     steps:
       - uses: actions/checkout@v5
@@ -71,6 +76,9 @@ jobs:
               - 'sdks/c/**/*.c'
               - 'sdks/c/**/*.h'
               - 'sdks/c/tests/CMakeLists.txt'
+            go:
+              - 'sdks/go/**/*.go'
+              - 'sdks/go/go.mod'
             quality:
               - 'make/quality.mk'
               - '.pre-commit-config.yaml'
@@ -177,6 +185,10 @@ jobs:
       - name: Check Node formatting
         run: make fmt:check:node
 
+      - name: Type check
+        working-directory: sdks/node
+        run: npx tsc --noEmit
+
   c:
     name: C SDK lint and format checks
     needs: changes
@@ -196,3 +208,23 @@ jobs:
 
       - name: Check C formatting
         run: make fmt:check:c
+
+  go:
+    name: Go Lint
+    needs: changes
+    if: ${{ needs.changes.outputs.go == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          working-directory: sdks/go
+          args: --timeout=5m
