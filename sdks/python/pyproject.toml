@@ -7,6 +7,7 @@ requires-python = ">=3.10"
 authors = [{ name = "Dorian Zheng" }]
 license = "Apache-2.0"
 keywords = ["sandbox", "virtual machine", "vm", "ai agents", "code execution", "isolation", "container", "security", "kvm", "hypervisor"]
+dependencies = ["cloudpickle>=3.0"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",

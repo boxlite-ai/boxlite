@@ -274,12 +274,20 @@ fn build_guest_entrypoint(
         env.push((key.clone(), value.clone()));
     }
 
-    // Inject RUST_LOG from host
+    // Inject RUST_LOG from host for debugging
     if !env.iter().any(|(k, _)| k == "RUST_LOG")
         && let Ok(rust_log) = std::env::var("RUST_LOG")
         && !rust_log.is_empty()
     {
         env.push(("RUST_LOG".to_string(), rust_log));
+    }
+
+    // Inject RUST_BACKTRACE from host for debugging
+    if !env.iter().any(|(k, _)| k == "RUST_BACKTRACE")
+        && let Ok(rust_backtrace) = std::env::var("RUST_BACKTRACE")
+        && !rust_backtrace.is_empty()
+    {
+        env.push(("RUST_BACKTRACE".to_string(), rust_backtrace));
     }
 
     Ok(Entrypoint {

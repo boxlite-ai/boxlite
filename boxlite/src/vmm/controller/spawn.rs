@@ -58,9 +58,12 @@ pub(crate) fn spawn_subprocess(
     // Build isolated command (includes pre_exec FD cleanup hook)
     let mut cmd = jailer.build_command(binary_path, &shim_args);
 
-    // Pass RUST_LOG to subprocess if set
+    // Pass debugging environment variables to subprocess
     if let Ok(rust_log) = std::env::var("RUST_LOG") {
         cmd.env("RUST_LOG", rust_log);
+    }
+    if let Ok(rust_backtrace) = std::env::var("RUST_BACKTRACE") {
+        cmd.env("RUST_BACKTRACE", rust_backtrace);
     }
 
     // Set library search paths for bundled dependencies

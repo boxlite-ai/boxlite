@@ -54,20 +54,25 @@ struct GuestArgs {
 #[cfg(target_os = "linux")]
 #[tokio::main]
 async fn main() -> BoxliteResult<()> {
+    // Early diagnostic - visible even if tracing fails
+    eprintln!("[BOOT] BoxLite guest agent starting");
+
     // Set panic hook to ensure we see panics
     std::panic::set_hook(Box::new(|panic_info| {
         eprintln!("[PANIC] Guest agent panicked: {}", panic_info);
         std::process::exit(1);
     }));
 
+    eprintln!("[BOOT] Initializing tracing");
+
     // Initialize tracing subscriber - respects RUST_LOG env var
-    // Default to "error" level if RUST_LOG is not set
+    // Default to "info" level if RUST_LOG is not set (for visibility)
     if let Err(e) = tracing_subscriber::fmt()
         .with_target(true) // Show module names
         .with_writer(std::io::stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("error")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
         .try_init()
     {
@@ -75,7 +80,7 @@ async fn main() -> BoxliteResult<()> {
         // Continue anyway - logging failure shouldn't stop the server
     }
 
-    info!("🚀 BoxLite Guest Agent starting");
+    info!("BoxLite Guest Agent starting");
 
     // Mount essential tmpfs directories early
     // Needed because virtio-fs doesn't support open-unlink-fstat pattern
@@ -83,7 +88,7 @@ async fn main() -> BoxliteResult<()> {
 
     // Parse command-line arguments with clap
     let args = GuestArgs::parse();
-    info!("✅ Arguments parsed successfully");
+    info!("Arguments parsed: listen={}, notify={:?}", args.listen, args.notify);
 
     // Prepare guest layout directories
     let layout = layout::GuestLayout::new();
@@ -92,7 +97,7 @@ async fn main() -> BoxliteResult<()> {
 
     // Start server in uninitialized state
     // All initialization (mounts, rootfs, network) will happen via Guest.Init RPC
-    info!("🌐 Starting guest server on: {}", args.listen);
+    info!("Starting guest server on: {}", args.listen);
     let server = GuestServer::new(layout);
     server.run(args.listen, args.notify).await
 }

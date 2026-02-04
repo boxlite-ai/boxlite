@@ -475,9 +475,12 @@ pub fn build_shim_command(
         );
     }
 
-    // Preserve RUST_LOG for debugging
+    // Preserve debugging environment variables
     if let Ok(rust_log) = std::env::var("RUST_LOG") {
         bwrap.setenv("RUST_LOG", rust_log);
+    }
+    if let Ok(rust_backtrace) = std::env::var("RUST_BACKTRACE") {
+        bwrap.setenv("RUST_BACKTRACE", rust_backtrace);
     }
 
     // Set working directory

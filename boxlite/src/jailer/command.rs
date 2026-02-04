@@ -285,9 +285,12 @@ impl Jailer {
         bwrap.setenv("LD_LIBRARY_PATH", bin_dir.to_string_lossy().to_string());
         tracing::debug!(ld_library_path = %bin_dir.display(), "Set LD_LIBRARY_PATH to copied libs directory");
 
-        // Preserve RUST_LOG for debugging
+        // Preserve debugging environment variables
         if let Ok(rust_log) = std::env::var("RUST_LOG") {
             bwrap.setenv("RUST_LOG", rust_log);
+        }
+        if let Ok(rust_backtrace) = std::env::var("RUST_BACKTRACE") {
+            bwrap.setenv("RUST_BACKTRACE", rust_backtrace);
         }
 
         bwrap.chdir("/");
