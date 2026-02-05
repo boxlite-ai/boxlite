@@ -1,4 +1,4 @@
-use crate::cli::{GlobalFlags, ResourceFlags};
+use crate::cli::{GlobalFlags, PublishFlags, ResourceFlags, VolumeFlags};
 use boxlite::{BoxOptions, RootfsSpec};
 use clap::Args;
 
@@ -22,11 +22,17 @@ pub struct CreateArgs {
 
     #[command(flatten)]
     pub resource: ResourceFlags,
+
+    #[command(flatten)]
+    pub publish: PublishFlags,
+
+    #[command(flatten)]
+    pub volume: VolumeFlags,
 }
 
 pub async fn execute(args: CreateArgs, global: &GlobalFlags) -> anyhow::Result<()> {
     let rt = global.create_runtime()?;
-    let box_options = args.to_box_options();
+    let box_options = args.to_box_options(global)?;
 
     let litebox = rt.create(box_options, args.management.name.clone()).await?;
     println!("{}", litebox.id());
@@ -35,13 +41,15 @@ pub async fn execute(args: CreateArgs, global: &GlobalFlags) -> anyhow::Result<(
 }
 
 impl CreateArgs {
-    fn to_box_options(&self) -> BoxOptions {
+    fn to_box_options(&self, global: &GlobalFlags) -> anyhow::Result<BoxOptions> {
         let mut options = BoxOptions::default();
         self.resource.apply_to(&mut options);
         self.management.apply_to(&mut options);
+        self.publish.apply_to(&mut options)?;
+        self.volume.apply_to(&mut options, global.home.as_deref())?;
         options.working_dir = self.workdir.clone();
         crate::cli::apply_env_vars(&self.env, &mut options);
         options.rootfs = RootfsSpec::Image(self.image.clone());
-        options
+        Ok(options)
     }
 }
