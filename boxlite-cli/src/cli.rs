@@ -265,6 +265,7 @@ impl PublishFlags {
 /// Parse a single publish spec: `[hostPort:]boxPort[/tcp|udp]`.
 /// - `boxPort` → host_port=None, guest_port=boxPort
 /// - `hostPort:boxPort` → host_port=Some(hostPort), guest_port=boxPort
+///
 /// Only TCP is forwarded by the runtime today; UDP is accepted but not yet implemented.
 fn parse_publish_spec(s: &str) -> anyhow::Result<PortSpec> {
     let s = s.trim();
@@ -360,9 +361,10 @@ fn parse_volume_read_only(opts: &str) -> bool {
 /// Parse a single volume spec.
 /// - Anonymous : `boxPath` or `boxPath:ro` (e.g. `/data`, `/data:ro`).
 /// - Bind mount: `hostPath:boxPath[:options]` (e.g. `/data:/app/data`, `/data:/app/data:ro`).
+///
 /// Options: `ro` (read-only), `rw` (read-write, default). Other options are ignored.
-/// Windows: host path may be a drive path like `C:\data`; the colon after the drive letter is not
-/// treated as a separator (e.g. `C:\data:/app/data` → host=`C:\data`, guest=`/app/data`).
+///   Windows: host path may be a drive path like `C:\data`; the colon after the drive letter is not
+///   treated as a separator (e.g. `C:\data:/app/data` → host=`C:\data`, guest=`/app/data`).
 fn parse_volume_spec(s: &str) -> anyhow::Result<ParsedVolumeSpec> {
     let s = s.trim();
     if s.is_empty() {
@@ -427,10 +429,10 @@ fn parse_volume_spec(s: &str) -> anyhow::Result<ParsedVolumeSpec> {
         }
     };
 
-    if let Some(ref host) = host_path {
-        if host.is_empty() {
-            anyhow::bail!("volume host path must be non-empty");
-        }
+    if let Some(ref host) = host_path
+        && host.is_empty()
+    {
+        anyhow::bail!("volume host path must be non-empty");
     }
     if guest_path.is_empty() {
         anyhow::bail!("volume box path must be non-empty");
