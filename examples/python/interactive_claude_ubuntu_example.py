@@ -12,6 +12,7 @@ Usage:
 Optional env:
     CLAUDE_CODE_OAUTH_TOKEN  OAuth token for Claude Code (forwarded into the box)
     BOXLITE_CLAUDE_BOX_NAME  Box name to persist and reuse (default: claude-ubuntu)
+    BOXLITE_CLAUDE_BOX_ID    Existing box ID to reattach to instead of creating/selecting by name
 """
 
 import asyncio
