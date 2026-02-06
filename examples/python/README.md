@@ -61,6 +61,10 @@ python list_boxes_example.py
 
 # Low-level native API
 python native_example.py
+
+# OpenClaw AI agent gateway
+export CLAUDE_CODE_OAUTH_TOKEN="sk-ant-oat01-..."
+python clawboxlite.py
 ```
 
 ## Examples Overview
@@ -143,6 +147,16 @@ Low-level native API:
 - Direct Rust API access
 - Advanced configuration
 - Performance-critical use cases
+
+### clawboxlite.py
+OpenClaw (ClawdBot/Moltbot) AI agent:
+- Running OpenClaw gateway in a container
+- Port forwarding and volume mounting
+- Claude API authentication setup
+- Service readiness polling
+
+Requires `CLAUDE_CODE_OAUTH_TOKEN` environment variable.
+Access the chat UI at `http://127.0.0.1:18789/chat?token=boxlite`
 
 ## Tips
 
