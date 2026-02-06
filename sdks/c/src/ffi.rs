@@ -710,7 +710,7 @@ pub unsafe extern "C" fn boxlite_get_info(
             }
         }
         Ok(None) => {
-            let err = BoxliteError::NotFound(format!("Box not found: {}", id_str));
+            let err = BoxliteError::NotFound(id_str.clone());
             write_error(out_error, err);
             BoxliteErrorCode::NotFound
         }
@@ -773,7 +773,7 @@ pub unsafe extern "C" fn boxlite_get(
             BoxliteErrorCode::Ok
         }
         Ok(None) => {
-            let err = BoxliteError::NotFound(format!("Box not found: {}", id_str));
+            let err = BoxliteError::NotFound(id_str.clone());
             write_error(out_error, err);
             BoxliteErrorCode::NotFound
         }

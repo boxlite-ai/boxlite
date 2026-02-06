@@ -112,7 +112,7 @@ impl BoxStore {
 
         // Podman pattern: verify rows were actually updated
         if rows_affected == 0 {
-            return Err(BoxliteError::NotFound(format!("Box not found: {}", box_id)));
+            return Err(BoxliteError::NotFound(box_id.to_string()));
         }
 
         Ok(())

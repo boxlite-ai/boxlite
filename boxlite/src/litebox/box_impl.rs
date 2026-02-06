@@ -334,7 +334,19 @@ impl BoxImpl {
 
             if was_persisted {
                 // Box was persisted - sync to DB
-                self.runtime.box_manager.save_box(&self.config.id, &state)?;
+                // Note: If the box was already removed (e.g., by cleanup after init failure),
+                // this will return NotFound. We ignore that error since the box is already gone.
+                match self.runtime.box_manager.save_box(&self.config.id, &state) {
+                    Ok(()) => {}
+                    Err(BoxliteError::NotFound(_)) => {
+                        tracing::debug!(
+                            box_id = %self.config.id,
+                            "Box already removed from DB during stop (likely cleanup after init failure)"
+                        );
+                        return Ok(());
+                    }
+                    Err(e) => return Err(e),
+                }
             } else {
                 // Box was never started - persist now so it survives restarts
                 self.runtime.box_manager.add_box(&self.config, &state)?;

@@ -165,7 +165,7 @@ impl BoxManager {
     pub fn update_box(&self, id: &BoxID) -> BoxliteResult<BoxState> {
         self.store
             .load_state(id.as_str())?
-            .ok_or_else(|| BoxliteError::NotFound(format!("box {} state not found", id)))
+            .ok_or_else(|| BoxliteError::NotFound(id.to_string()))
     }
 
     // ========================================================================

@@ -771,7 +771,7 @@ impl RuntimeImpl {
         }
 
         // Box not found anywhere
-        Err(BoxliteError::NotFound(format!("Box not found: {}", id)))
+        Err(BoxliteError::NotFound(id.to_string()))
     }
 
     // ========================================================================
