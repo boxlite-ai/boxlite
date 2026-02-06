@@ -107,6 +107,7 @@ async def run_interactive_shell(box, env, shell="/bin/bash"):
                     target.buffer.write(chunk.encode("utf-8", errors="replace"))
                 target.buffer.flush()
         except asyncio.CancelledError:
+            # Task was cancelled as part of normal shutdown; no action needed.
             pass
         except Exception as e:
             logger.error(f"Error forwarding output: {e}")
