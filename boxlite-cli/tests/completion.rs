@@ -32,10 +32,8 @@ fn visible_subcommand_names() -> Vec<String> {
                 break;
             }
             // Lines like "  run      Run a box" or "  ls       List boxes (alias)"
-            if let Some(first) = line.trim_start().split_whitespace().next() {
-                if first != "help" {
-                    names.push(first.to_string());
-                }
+            if let Some(first) = line.split_whitespace().next() && first != "help" {
+                names.push(first.to_string());
             }
         }
     }
