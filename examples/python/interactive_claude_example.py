@@ -2,16 +2,16 @@
 """
 Interactive terminal for installing Claude Code.
 
-This example opens an interactive /bin/bash shell inside a Debian Bookworm Slim container
-(default image: debian:bookworm-slim) so you can install Claude Code directly in that
-terminal. Use BOXLITE_CLAUDE_IMAGE to override the image.
+This example opens an interactive /bin/bash shell inside a container (default image:
+debian:bookworm-slim) so you can install Claude Code directly in that terminal.
 
 Usage:
-    python examples/python/interactive_claude_ubuntu_example.py
+    python examples/python/interactive_claude_example.py
 
 Optional env:
     CLAUDE_CODE_OAUTH_TOKEN  OAuth token for Claude Code (forwarded into the box)
-    BOXLITE_CLAUDE_BOX_NAME  Box name to persist and reuse (default: claude-ubuntu)
+    BOXLITE_CLAUDE_IMAGE     Container image to use (default: debian:bookworm-slim)
+    BOXLITE_CLAUDE_BOX_NAME  Box name to persist and reuse (default: claude-box)
     BOXLITE_CLAUDE_BOX_ID    Existing box ID to reattach to instead of creating/selecting by name
 """
 
@@ -22,9 +22,9 @@ import sys
 import termios
 import tty
 
-logger = logging.getLogger("interactive_claude_ubuntu_example")
+logger = logging.getLogger("interactive_claude_example")
 
-BOX_NAME = os.environ.get("BOXLITE_CLAUDE_BOX_NAME", "claude-ubuntu")
+BOX_NAME = os.environ.get("BOXLITE_CLAUDE_BOX_NAME", "claude-box")
 BOX_ID = os.environ.get("BOXLITE_CLAUDE_BOX_ID", "")
 IMAGE = os.environ.get("BOXLITE_CLAUDE_IMAGE", "debian:bookworm-slim")
 OAUTH_TOKEN = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "")
@@ -143,7 +143,7 @@ async def main():
     print()
 
     try:
-        import boxlite
+        from boxlite import Boxlite, InteractiveBox
 
         term_mode = os.environ.get("TERM", "xterm-256color")
         env = [("TERM", term_mode)]
@@ -153,9 +153,11 @@ async def main():
             print("Note: CLAUDE_CODE_OAUTH_TOKEN not set on host.")
             print("You can export it inside the box before running `claude`.\n")
 
-        runtime = boxlite.Boxlite.default()
+        runtime = Boxlite.default()
 
         if BOX_ID:
+            # Reattach to existing box by ID
+            # Note: env variables are only used for this shell session, not applied to box config
             box = await runtime.get(BOX_ID)
             if box is None:
                 raise RuntimeError(f"Box not found: {BOX_ID}")
@@ -167,6 +169,8 @@ async def main():
 
         existing = await runtime.get(BOX_NAME)
         if existing is not None:
+            # Found existing box by name
+            # Note: env variables are only used for this shell session, not applied to box config
             print("Found existing box with same name.")
             print(f"Set BOXLITE_CLAUDE_BOX_ID={existing.id} to reattach.")
             print("Or remove it and re-run to create a new one.")
@@ -175,7 +179,7 @@ async def main():
             print("Box stopped (data persisted). Re-run to continue.")
             return
 
-        from boxlite import InteractiveBox
+        # Create new box with specified configuration
         async with InteractiveBox(
             image=IMAGE,
             shell="/bin/bash",
