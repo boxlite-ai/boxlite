@@ -154,13 +154,6 @@ async def main():
             print("You can export it inside the box before running `claude`.\n")
 
         runtime = boxlite.Boxlite.default()
-        options = boxlite.BoxOptions(
-            image=IMAGE,
-            memory_mib=2048,
-            disk_size_gb=8,
-            auto_remove=False,
-            env=env,
-        )
 
         if BOX_ID:
             box = await runtime.get(BOX_ID)
