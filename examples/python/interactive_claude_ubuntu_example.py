@@ -2,8 +2,9 @@
 """
 Interactive terminal for installing Claude Code.
 
-This example opens an interactive /bin/bash shell inside a Debian Slim box so you can
-install Claude Code directly in that terminal. Use BOXLITE_CLAUDE_IMAGE to override.
+This example opens an interactive /bin/bash shell inside a Debian Bookworm Slim container
+(default image: debian:bookworm-slim) so you can install Claude Code directly in that
+terminal. Use BOXLITE_CLAUDE_IMAGE to override the image.
 
 Usage:
     python examples/python/interactive_claude_ubuntu_example.py
