@@ -1,9 +1,18 @@
 # BoxLite [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/bCmaK4Ce)
 
+[![GitHub stars](https://img.shields.io/github/stars/boxlite-ai/boxlite?style=social)](https://github.com/boxlite-ai/boxlite)
 [![Build](https://github.com/boxlite-ai/boxlite/actions/workflows/build-wheels.yml/badge.svg)](https://github.com/boxlite-ai/boxlite/actions/workflows/build-wheels.yml)
 [![Lint](https://github.com/boxlite-ai/boxlite/actions/workflows/lint.yml/badge.svg)](https://github.com/boxlite-ai/boxlite/actions/workflows/lint.yml)
-[![PyPI](https://img.shields.io/pypi/v/boxlite.svg)](https://pypi.org/project/boxlite/)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+
+[![Rust](https://img.shields.io/badge/Built_with-Rust-dea584?logo=rust)](https://www.rust-lang.org/)
+[![PyPI](https://img.shields.io/pypi/v/boxlite.svg)](https://pypi.org/project/boxlite/)
+[![npm](https://img.shields.io/npm/v/@boxlite-ai/boxlite)](https://www.npmjs.com/package/@boxlite-ai/boxlite)
+[![C](https://img.shields.io/badge/C-SDK-A8B9CC?logo=c&logoColor=white)](https://github.com/boxlite-ai/boxlite/tree/main/sdks/c)
+
+[![macOS](https://img.shields.io/badge/macOS-Apple_Silicon-000000?logo=apple&logoColor=white)](https://github.com/boxlite-ai/boxlite)
+[![Linux](https://img.shields.io/badge/Linux-x86__64%20%7C%20ARM64-FCC624?logo=linux&logoColor=black)](https://github.com/boxlite-ai/boxlite)
+[![Windows](https://img.shields.io/badge/Windows-WSL2-0078D6?logo=windows&logoColor=white)](https://github.com/boxlite-ai/boxlite)
 
 **Embedded, lightweight** micro-VM runtime for **AI agents** running OCI containers with
 hardware-level isolation — built for **high concurrency**, **no daemon required**.
