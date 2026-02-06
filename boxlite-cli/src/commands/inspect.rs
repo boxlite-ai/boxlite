@@ -55,7 +55,7 @@ struct InspectStatePresenter {
 
 impl From<&BoxInfo> for InspectPresenter {
     fn from(info: &BoxInfo) -> Self {
-        let state = BoxStateInfo::from_box_info(info);
+        let state = BoxStateInfo::from(info);
         Self {
             id: info.id.to_string(),
             name: info.name.as_deref().unwrap_or("").to_string(),
