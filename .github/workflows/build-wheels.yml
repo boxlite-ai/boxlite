@@ -98,7 +98,7 @@ jobs:
 
       - name: Install wheel
         run: |
-          # Use --find-links to let pip select the compatible wheel
+          # --no-index ensures wheel has no external dependencies (acts as lint)
           pip install --find-links=wheelhouse --no-index boxlite
 
       - name: Test import
