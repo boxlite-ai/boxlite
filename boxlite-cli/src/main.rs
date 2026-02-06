@@ -7,6 +7,7 @@ pub mod util;
 
 use std::process;
 
+use clap::CommandFactory;
 use clap::Parser;
 use cli::Cli;
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
@@ -22,18 +23,25 @@ fn main() {
         }
     }
 
+    let cli = Cli::parse();
+
+    // Handle shell completion before starting tokio or tracing
+    if let cli::Commands::Completion(args) = &cli.command {
+        let mut cmd = Cli::command();
+        cli::generate_completion(&args.shell, &mut cmd, "boxlite", &mut std::io::stdout());
+        process::exit(0);
+    }
+
     // Start tokio runtime manually to ensure environment is set up safely
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .expect("Failed to build tokio runtime");
 
-    let _ = rt.block_on(run_cli());
+    let _ = rt.block_on(run_cli(cli));
 }
 
-async fn run_cli() -> anyhow::Result<()> {
-    let cli = Cli::parse();
-
+async fn run_cli(cli: Cli) -> anyhow::Result<()> {
     // Initialize tracing based on --debug flag
     let level = if cli.global.debug { "debug" } else { "info" };
     let env_filter = EnvFilter::try_from_default_env()
@@ -45,18 +53,23 @@ async fn run_cli() -> anyhow::Result<()> {
         .with(fmt::layer().with_writer(std::io::stderr))
         .init();
 
+    let global = cli.global;
     let result = match cli.command {
-        cli::Commands::Run(args) => commands::run::execute(args, &cli.global).await,
-        cli::Commands::Exec(args) => commands::exec::execute(args, &cli.global).await,
-        cli::Commands::Create(args) => commands::create::execute(args, &cli.global).await,
-        cli::Commands::List(args) => commands::list::execute(args, &cli.global).await,
-        cli::Commands::Rm(args) => commands::rm::execute(args, &cli.global).await,
-        cli::Commands::Start(args) => commands::start::execute(args, &cli.global).await,
-        cli::Commands::Stop(args) => commands::stop::execute(args, &cli.global).await,
-        cli::Commands::Restart(args) => commands::restart::execute(args, &cli.global).await,
-        cli::Commands::Pull(args) => commands::pull::execute(args, &cli.global).await,
-        cli::Commands::Images(args) => commands::images::execute(args, &cli.global).await,
-        cli::Commands::Cp(args) => commands::cp::execute(args, &cli.global).await,
+        cli::Commands::Run(args) => commands::run::execute(args, &global).await,
+        cli::Commands::Exec(args) => commands::exec::execute(args, &global).await,
+        cli::Commands::Create(args) => commands::create::execute(args, &global).await,
+        cli::Commands::List(args) => commands::list::execute(args, &global).await,
+        cli::Commands::Rm(args) => commands::rm::execute(args, &global).await,
+        cli::Commands::Start(args) => commands::start::execute(args, &global).await,
+        cli::Commands::Stop(args) => commands::stop::execute(args, &global).await,
+        cli::Commands::Restart(args) => commands::restart::execute(args, &global).await,
+        cli::Commands::Pull(args) => commands::pull::execute(args, &global).await,
+        cli::Commands::Images(args) => commands::images::execute(args, &global).await,
+        cli::Commands::Cp(args) => commands::cp::execute(args, &global).await,
+        // Handled in main() before tokio; never reaches run_cli
+        cli::Commands::Completion(_) => {
+            unreachable!("completion subcommand is handled before tokio in main()")
+        }
     };
 
     if let Err(error) = result {

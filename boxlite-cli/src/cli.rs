@@ -3,8 +3,9 @@
 //! subcommands, and flag definitions.
 
 use boxlite::{BoxCommand, BoxOptions, BoxliteOptions, BoxliteRuntime};
-use clap::{Args, Parser, Subcommand};
-use std::io::IsTerminal;
+use clap::{Args, Command, Parser, Subcommand, ValueEnum};
+use clap_complete::shells::{Bash, Fish, Zsh};
+use std::io::{IsTerminal, Write};
 use std::path::Path;
 
 /// Helper to parse CLI environment variables and apply them to BoxOptions
@@ -78,6 +79,35 @@ pub enum Commands {
 
     /// Copy files/folders between host and box
     Cp(crate::commands::cp::CpArgs),
+
+    /// Generate shell completion script (hidden from help)
+    #[command(hide = true)]
+    Completion(CompletionArgs),
+}
+
+/// Shell for which to generate completion script.
+#[derive(ValueEnum, Clone, Debug)]
+#[value(rename_all = "lower")]
+pub enum Shell {
+    Bash,
+    Zsh,
+    Fish,
+}
+
+/// Arguments for the completion subcommand.
+#[derive(Args, Debug)]
+pub struct CompletionArgs {
+    /// Shell to generate completion for (bash, zsh, fish).
+    pub shell: Shell,
+}
+
+/// Writes a completion script for the given shell to `out`.
+pub fn generate_completion(shell: &Shell, cmd: &mut Command, name: &str, out: &mut dyn Write) {
+    match shell {
+        Shell::Bash => clap_complete::generate(Bash, cmd, name, out),
+        Shell::Zsh => clap_complete::generate(Zsh, cmd, name, out),
+        Shell::Fish => clap_complete::generate(Fish, cmd, name, out),
+    }
 }
 
 // ============================================================================
