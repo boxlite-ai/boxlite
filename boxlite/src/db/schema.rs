@@ -7,7 +7,7 @@
 //! Each table has queryable columns for efficient filtering + JSON blob for full data.
 
 /// Current schema version.
-pub const SCHEMA_VERSION: i32 = 4;
+pub const SCHEMA_VERSION: i32 = 5;
 
 /// Schema version tracking table.
 pub const SCHEMA_VERSION_TABLE: &str = r#"
@@ -80,6 +80,24 @@ CREATE TABLE IF NOT EXISTS image_index (
 CREATE INDEX IF NOT EXISTS idx_image_index_manifest_digest ON image_index(manifest_digest);
 "#;
 
+/// Snapshots table schema (added in v5).
+///
+/// Stores snapshot metadata for box state persistence.
+/// Each snapshot captures the disk state of a stopped box at a point in time.
+pub const SNAPSHOTS_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS snapshots (
+    id TEXT PRIMARY KEY NOT NULL,
+    box_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (box_id) REFERENCES box_config(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_snapshots_box_id ON snapshots(box_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_snapshots_box_name ON snapshots(box_id, name);
+"#;
+
 /// Get all schema creation statements.
 pub fn all_schemas() -> Vec<&'static str> {
     vec![
@@ -88,5 +106,6 @@ pub fn all_schemas() -> Vec<&'static str> {
         BOX_STATE_TABLE,
         ALIVE_TABLE,
         IMAGE_INDEX_TABLE,
+        SNAPSHOTS_TABLE,
     ]
 }

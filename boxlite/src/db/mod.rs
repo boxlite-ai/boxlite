@@ -9,6 +9,7 @@
 mod boxes;
 mod images;
 mod schema;
+pub(crate) mod snapshots;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -21,6 +22,7 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 pub use boxes::BoxStore;
 pub use images::{CachedImage, ImageIndexStore};
+pub use snapshots::SnapshotStore;
 
 /// Helper macro to convert rusqlite errors to BoxliteError.
 macro_rules! db_err {
@@ -81,7 +83,7 @@ impl Database {
     /// 1. Create schema_version table (safe, no dependencies)
     /// 2. Check current version
     /// 3. New DB: apply full schema
-    ///    Existing DB with older version: run migrations
+    ///    Existing DB with older version: run migrations automatically
     ///    Existing DB with newer version: error (need newer boxlite)
     ///    Existing DB with same version: nothing to do
     fn init_schema(conn: &Connection) -> BoxliteResult<()> {
@@ -106,14 +108,23 @@ impl Database {
             Some(v) if v == schema::SCHEMA_VERSION => {
                 // Already at current version - nothing to do
             }
-            Some(v) => {
-                // Strict version check: any mismatch is an error
+            Some(v) if v > schema::SCHEMA_VERSION => {
+                // Database is newer than this process - user needs to upgrade boxlite
                 return Err(BoxliteError::Database(format!(
                     "Schema version mismatch: database has v{}, process expects v{}. \
-                     Remove the database file in $BOXLITE_HOME/db to reset.",
+                     Upgrade boxlite to a newer version.",
                     v,
                     schema::SCHEMA_VERSION
                 )));
+            }
+            Some(v) => {
+                // Older database - run migrations automatically
+                tracing::info!(
+                    "Database schema v{} is older than expected v{}, running migrations",
+                    v,
+                    schema::SCHEMA_VERSION
+                );
+                Self::run_migrations(conn, v)?;
             }
         }
 
@@ -140,9 +151,6 @@ impl Database {
     }
 
     /// Run migrations from `from_version` to current schema version.
-    ///
-    /// Called by explicit `boxlite migrate` command, not automatically.
-    #[allow(dead_code)] // Will be used by CLI migrate command
     fn run_migrations(conn: &Connection, from_version: i32) -> BoxliteResult<()> {
         let mut current = from_version;
 
@@ -175,11 +183,20 @@ impl Database {
             current = 4;
         }
 
+        // Migration 4 -> 5: Add snapshots table
+        if current == 4 {
+            tracing::info!("Running migration 4 -> 5: Adding snapshots table");
+
+            db_err!(conn.execute_batch(schema::SNAPSHOTS_TABLE))?;
+
+            current = 5;
+        }
+
         // Update schema version
         let now = Utc::now().to_rfc3339();
         db_err!(conn.execute(
             "UPDATE schema_version SET version = ?1, updated_at = ?2 WHERE id = 1",
-            rusqlite::params![schema::SCHEMA_VERSION, now],
+            rusqlite::params![current, now],
         ))?;
 
         tracing::info!("Database migration complete, now at version {}", current);
@@ -197,5 +214,109 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let db_path = temp_dir.path().join("test.db");
         let _db = Database::open(&db_path).unwrap();
+    }
+
+    #[test]
+    fn test_db_open_creates_all_tables() {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+        let db = Database::open(&db_path).unwrap();
+
+        let conn = db.conn();
+
+        // Verify all tables exist
+        let tables: Vec<String> = {
+            let mut stmt = conn
+                .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+                .unwrap();
+            stmt.query_map([], |row| row.get(0))
+                .unwrap()
+                .map(|r| r.unwrap())
+                .collect()
+        };
+
+        assert!(tables.contains(&"schema_version".to_string()));
+        assert!(tables.contains(&"box_config".to_string()));
+        assert!(tables.contains(&"box_state".to_string()));
+        assert!(tables.contains(&"alive".to_string()));
+        assert!(tables.contains(&"image_index".to_string()));
+        assert!(tables.contains(&"snapshots".to_string()));
+    }
+
+    #[test]
+    fn test_db_migration_v4_to_v5() {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+
+        // Simulate a v4 database (without snapshots table)
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute_batch(schema::SCHEMA_VERSION_TABLE).unwrap();
+            conn.execute_batch(schema::BOX_CONFIG_TABLE).unwrap();
+            conn.execute_batch(schema::BOX_STATE_TABLE).unwrap();
+            conn.execute_batch(schema::ALIVE_TABLE).unwrap();
+            conn.execute_batch(schema::IMAGE_INDEX_TABLE).unwrap();
+
+            let now = Utc::now().to_rfc3339();
+            conn.execute(
+                "INSERT INTO schema_version (id, version, updated_at) VALUES (1, 4, ?1)",
+                rusqlite::params![now],
+            )
+            .unwrap();
+        }
+
+        // Open with current code - should auto-migrate to v5
+        let db = Database::open(&db_path).unwrap();
+        let conn = db.conn();
+
+        // Verify migration succeeded
+        let version: i32 = conn
+            .query_row(
+                "SELECT version FROM schema_version WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, 5);
+
+        // Verify snapshots table exists
+        let table_exists: bool = conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='snapshots'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(table_exists, "snapshots table should exist after migration");
+    }
+
+    #[test]
+    fn test_db_rejects_newer_version() {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+
+        // Create a database with a version higher than current
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute_batch(schema::SCHEMA_VERSION_TABLE).unwrap();
+            let now = Utc::now().to_rfc3339();
+            conn.execute(
+                "INSERT INTO schema_version (id, version, updated_at) VALUES (1, 999, ?1)",
+                rusqlite::params![now],
+            )
+            .unwrap();
+        }
+
+        // Should fail with version mismatch
+        let result = Database::open(&db_path);
+        assert!(result.is_err());
+        match result {
+            Err(e) => {
+                let err = e.to_string();
+                assert!(err.contains("Schema version mismatch"));
+                assert!(err.contains("Upgrade boxlite"));
+            }
+            Ok(_) => panic!("expected error"),
+        }
     }
 }
