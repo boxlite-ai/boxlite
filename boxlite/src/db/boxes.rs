@@ -30,6 +30,11 @@ impl BoxStore {
         Self { db }
     }
 
+    /// Get a reference to the underlying database.
+    pub(crate) fn db(&self) -> Database {
+        self.db.clone()
+    }
+
     // ========================================================================
     // BoxConfig operations (immutable after creation)
     // ========================================================================
