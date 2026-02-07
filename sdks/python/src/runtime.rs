@@ -7,6 +7,7 @@ use crate::box_handle::PyBox;
 use crate::info::PyBoxInfo;
 use crate::metrics::PyRuntimeMetrics;
 use crate::options::{PyBoxOptions, PyOptions};
+use crate::snapshots::PySnapshotRecord;
 use crate::util::map_err;
 
 #[pyclass(name = "Boxlite")]
@@ -181,6 +182,141 @@ impl PyBoxlite {
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             runtime.shutdown(timeout).await.map_err(map_err)?;
             Ok(())
+        })
+    }
+
+    // ========================================================================
+    // EXPORT / IMPORT
+    // ========================================================================
+
+    /// Export a stopped box as a portable `.boxlite` archive.
+    fn export<'py>(
+        &self,
+        py: Python<'py>,
+        id_or_name: String,
+        output_path: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let runtime = Arc::clone(&self.runtime);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            runtime
+                .export(&id_or_name, std::path::Path::new(&output_path))
+                .await
+                .map_err(map_err)?;
+            Ok(())
+        })
+    }
+
+    /// Import a box from a `.boxlite` archive.
+    #[pyo3(signature = (archive_path, name=None))]
+    fn import_archive<'py>(
+        &self,
+        py: Python<'py>,
+        archive_path: String,
+        name: Option<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let runtime = Arc::clone(&self.runtime);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let info = runtime
+                .import(std::path::Path::new(&archive_path), name)
+                .await
+                .map_err(map_err)?;
+            Ok(PyBoxInfo::from(info))
+        })
+    }
+
+    // ========================================================================
+    // SNAPSHOTS
+    // ========================================================================
+
+    /// Create a snapshot of a stopped box.
+    #[pyo3(signature = (id_or_name, snapshot_name, description=""))]
+    fn snapshot<'py>(
+        &self,
+        py: Python<'py>,
+        id_or_name: String,
+        snapshot_name: String,
+        description: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let runtime = Arc::clone(&self.runtime);
+        let desc = description.to_string();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let record = runtime
+                .snapshot(&id_or_name, &snapshot_name, &desc)
+                .await
+                .map_err(map_err)?;
+            Ok(PySnapshotRecord::from(record))
+        })
+    }
+
+    /// Restore a stopped box to a previous snapshot.
+    fn restore<'py>(
+        &self,
+        py: Python<'py>,
+        id_or_name: String,
+        snapshot_name: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let runtime = Arc::clone(&self.runtime);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            runtime
+                .restore(&id_or_name, &snapshot_name)
+                .await
+                .map_err(map_err)?;
+            Ok(())
+        })
+    }
+
+    /// List all snapshots for a box.
+    fn list_snapshots<'py>(
+        &self,
+        py: Python<'py>,
+        id_or_name: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let runtime = Arc::clone(&self.runtime);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let records = runtime.list_snapshots(&id_or_name).await.map_err(map_err)?;
+            Ok(records
+                .into_iter()
+                .map(PySnapshotRecord::from)
+                .collect::<Vec<_>>())
+        })
+    }
+
+    /// Delete a snapshot from a stopped box.
+    fn delete_snapshot<'py>(
+        &self,
+        py: Python<'py>,
+        id_or_name: String,
+        snapshot_name: String,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let runtime = Arc::clone(&self.runtime);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            runtime
+                .delete_snapshot(&id_or_name, &snapshot_name)
+                .await
+                .map_err(map_err)?;
+            Ok(())
+        })
+    }
+
+    // ========================================================================
+    // CLONE
+    // ========================================================================
+
+    /// Create an independent copy of a stopped box.
+    #[pyo3(signature = (id_or_name, new_name=None))]
+    fn duplicate<'py>(
+        &self,
+        py: Python<'py>,
+        id_or_name: String,
+        new_name: Option<String>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let runtime = Arc::clone(&self.runtime);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let info = runtime
+                .duplicate(&id_or_name, new_name)
+                .await
+                .map_err(map_err)?;
+            Ok(PyBoxInfo::from(info))
         })
     }
 
