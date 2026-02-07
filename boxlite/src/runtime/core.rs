@@ -33,7 +33,7 @@ static DEFAULT_RUNTIME: OnceLock<BoxliteRuntime> = OnceLock::new();
 /// **Cloning**: Runtime is cheaply cloneable via `Arc` - all clones share the same state.
 #[derive(Clone)]
 pub struct BoxliteRuntime {
-    rt_impl: SharedRuntimeImpl,
+    pub(crate) rt_impl: SharedRuntimeImpl,
 }
 
 // ============================================================================

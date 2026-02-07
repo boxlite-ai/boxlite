@@ -34,6 +34,11 @@ impl BoxManager {
         }
     }
 
+    /// Get a reference to the underlying database.
+    pub(crate) fn db(&self) -> crate::db::Database {
+        self.store.db()
+    }
+
     // ========================================================================
     // State Interface
     // ========================================================================

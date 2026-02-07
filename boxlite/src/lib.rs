@@ -39,6 +39,7 @@ use runtime::layout::FilesystemLayout;
 pub use runtime::options::{
     BoxOptions, BoxliteOptions, ResourceLimits, RootfsSpec, SecurityOptions,
 };
+pub use db::snapshots::SnapshotRecord;
 pub use runtime::types::ContainerID;
 pub use runtime::types::{BoxID, BoxInfo, BoxState, BoxStateInfo, BoxStatus};
 
