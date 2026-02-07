@@ -222,7 +222,7 @@ impl FilesystemLayout {
 /// │           │   └── work/   # Overlayfs work
 /// │           └── rootfs/     # Final rootfs (overlayfs merged)
 /// ├── shared/             # Guest-visible (ro bind mount → mounts/)
-/// ├── root.qcow2          # Data disk
+/// ├── disk.qcow2          # Container rootfs COW disk
 /// └── console.log         # Kernel/init output
 /// ```
 #[derive(Clone, Debug)]
@@ -322,7 +322,12 @@ impl BoxFilesystemLayout {
 
     /// Virtual disk path: ~/.boxlite/boxes/{box_id}/disk.qcow2
     pub fn disk_path(&self) -> PathBuf {
-        self.box_dir.join("disk.qcow2")
+        self.box_dir.join(crate::disk::constants::filenames::CONTAINER_DISK)
+    }
+
+    /// Guest rootfs disk path: ~/.boxlite/boxes/{box_id}/guest-rootfs.qcow2
+    pub fn guest_rootfs_disk_path(&self) -> PathBuf {
+        self.box_dir.join(crate::disk::constants::filenames::GUEST_ROOTFS_DISK)
     }
 
     /// Console output path: ~/.boxlite/boxes/{box_id}/console.log

@@ -86,7 +86,7 @@ fn create_or_reuse_cow_disk(
     layout: &BoxFilesystemLayout,
     reuse_rootfs: bool,
 ) -> BoxliteResult<(GuestRootfs, Option<Disk>)> {
-    let guest_rootfs_disk_path = layout.root().join("guest-rootfs.qcow2");
+    let guest_rootfs_disk_path = layout.guest_rootfs_disk_path();
 
     if reuse_rootfs {
         // Restart: reuse existing COW disk
