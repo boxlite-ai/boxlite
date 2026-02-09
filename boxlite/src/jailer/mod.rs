@@ -79,6 +79,8 @@ pub(crate) mod bwrap;
 #[cfg(target_os = "linux")]
 pub(crate) mod cgroup;
 #[cfg(target_os = "linux")]
+pub(crate) mod credentials;
+#[cfg(target_os = "linux")]
 pub mod seccomp;
 #[cfg(target_os = "linux")]
 pub(crate) mod shim_copy;
