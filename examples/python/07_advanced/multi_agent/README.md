@@ -61,7 +61,7 @@ def on_complete(data):
 
 ```bash
 # From project root
-python examples/python/multi_agent/host.py
+python examples/python/07_advanced/multi_agent/host.py
 ```
 
 ## Expected Output

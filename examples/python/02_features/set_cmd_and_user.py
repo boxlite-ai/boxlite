@@ -10,20 +10,19 @@ Demonstrates how to override image CMD and container user:
 
 import asyncio
 import logging
+import os
 import sys
 
 import boxlite
 
+try:
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+    from _helpers import setup_logging
+except ImportError:
+    def setup_logging():
+        logging.basicConfig(level=logging.ERROR)
+
 logger = logging.getLogger("cmd_user_example")
-
-
-def setup_logging():
-    """Configure stdout logging for the example."""
-    logging.basicConfig(
-        level=logging.ERROR,
-        format="%(asctime)s [%(levelname)s] %(message)s",
-        handlers=[logging.StreamHandler(sys.stdout)],
-    )
 
 
 async def example_cmd_override():

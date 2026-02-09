@@ -20,18 +20,20 @@ import sys
 
 import boxlite
 
+try:
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+    from _helpers import setup_logging as _base_setup_logging
+except ImportError:
+    def _base_setup_logging(**_):
+        logging.basicConfig(level=logging.INFO)
+
 logger = logging.getLogger("claude_in_boxlite_example")
 
 
 def setup_logging():
-    """Configure stdout logging for the example."""
-    # Use INFO by default for clean output; set LOGLEVEL=DEBUG for verbose logging
+    """Configure logging; uses INFO by default, set LOGLEVEL=DEBUG for verbose."""
     level = os.environ.get("LOGLEVEL", "INFO").upper()
-    logging.basicConfig(
-        level=getattr(logging, level, logging.INFO),
-        format="%(asctime)s [%(levelname)s] %(message)s",
-        handlers=[logging.StreamHandler(sys.stdout)],
-    )
+    _base_setup_logging(level=getattr(logging, level, logging.INFO))
 
 
 # Configuration

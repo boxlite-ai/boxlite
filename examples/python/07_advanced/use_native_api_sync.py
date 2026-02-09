@@ -2,6 +2,8 @@
 """
 Sync Native API Example - Low-Level Box API (Synchronous)
 
+Synchronous version of use_native_api.py.  See that file for detailed comments.
+
 Demonstrates the synchronous native boxlite API (mirrors async API exactly):
 - SyncBoxlite.default() returns SyncBoxlite runtime (mirrors Boxlite.default())
 - runtime.create() returns SyncBox (mirrors runtime.create())

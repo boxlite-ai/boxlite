@@ -2,6 +2,8 @@
 """
 SyncCodeBox Example - Secure Python Code Execution (Synchronous)
 
+Synchronous version of run_codebox.py.  See that file for detailed comments.
+
 Demonstrates running untrusted Python code safely:
 - Execute arbitrary Python code in isolation
 - Install packages dynamically

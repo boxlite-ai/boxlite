@@ -8,20 +8,19 @@ Tests all ComputerBox functions comprehensively.
 import asyncio
 import base64
 import logging
+import os
 import sys
 
 import boxlite
 
+try:
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+    from _helpers import setup_logging
+except ImportError:
+    def setup_logging():
+        logging.basicConfig(level=logging.ERROR)
+
 logger = logging.getLogger("computerbox_example")
-
-
-def setup_logging():
-    """Configure stdout logging for the example."""
-    logging.basicConfig(
-        level=logging.ERROR,
-        format="%(asctime)s [%(levelname)s] %(message)s",
-        handlers=[logging.StreamHandler(sys.stdout)],
-    )
 
 
 async def test_all_functions():

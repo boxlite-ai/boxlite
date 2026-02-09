@@ -22,21 +22,19 @@ import sys
 import termios
 import tty
 
+try:
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+    from _helpers import setup_logging
+except ImportError:
+    def setup_logging():
+        logging.basicConfig(level=logging.ERROR)
+
 logger = logging.getLogger("interactive_claude_example")
 
 BOX_NAME = os.environ.get("BOXLITE_CLAUDE_BOX_NAME", "claude-box")
 BOX_ID = os.environ.get("BOXLITE_CLAUDE_BOX_ID", "")
 IMAGE = os.environ.get("BOXLITE_CLAUDE_IMAGE", "debian:bookworm-slim")
 OAUTH_TOKEN = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "")
-
-
-def setup_logging():
-    """Configure stdout logging for the example."""
-    logging.basicConfig(
-        level=logging.ERROR,
-        format="%(asctime)s [%(levelname)s] %(message)s",
-        handlers=[logging.StreamHandler(sys.stdout)],
-    )
 
 
 def print_install_instructions():

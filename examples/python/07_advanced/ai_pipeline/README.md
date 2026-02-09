@@ -43,7 +43,7 @@ Three agents work together in isolated VMs:
 make dev:python
 
 # Run the example
-python examples/python/ai_pipeline/host.py
+python examples/python/07_advanced/ai_pipeline/host.py
 ```
 
 ## Expected Output
@@ -77,7 +77,7 @@ To see detailed message routing, enable debug logging:
 python -c "
 import logging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s [%(name)s] %(message)s')
-exec(open('examples/python/ai_pipeline/host.py').read())
+exec(open('examples/python/07_advanced/ai_pipeline/host.py').read())
 "
 ```
 
@@ -192,4 +192,4 @@ results = await asyncio.gather(*[
 ## Related Examples
 
 - [`multi_agent/`](../multi_agent/) - Basic point-to-point and pub/sub messaging
-- [`codebox_example.py`](../codebox_example.py) - Simpler code execution without orchestration
+- [`run_codebox.py`](../../01_getting_started/run_codebox.py) - Simpler code execution without orchestration

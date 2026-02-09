@@ -101,28 +101,28 @@ cd boxlite
 make dev:python
 
 # Run examples
-python examples/python/simplebox_example.py
-python examples/python/codebox_example.py
-python examples/python/browserbox_example.py
-python examples/python/computerbox_example.py
-python examples/python/lifecycle_example.py
-python examples/python/list_boxes_example.py
-python examples/python/cross_process_example.py
-python examples/python/interactivebox_example.py
-python examples/python/native_example.py
+python examples/python/01_getting_started/run_simplebox.py
+python examples/python/01_getting_started/run_codebox.py
+python examples/python/05_browser_desktop/automate_with_playwright.py
+python examples/python/05_browser_desktop/automate_desktop.py
+python examples/python/03_lifecycle/manage_lifecycle.py
+python examples/python/01_getting_started/list_boxes.py
+python examples/python/03_lifecycle/share_across_processes.py
+python examples/python/04_interactive/run_interactive_shell.py
+python examples/python/07_advanced/use_native_api.py
 ```
 
 **Examples overview:**
 
-1. **simplebox_example.py** - Foundation patterns
-2. **codebox_example.py** - AI code execution
-3. **browserbox_example.py** - Browser automation
-4. **computerbox_example.py** - Desktop automation
-5. **lifecycle_example.py** - Box lifecycle management
-6. **list_boxes_example.py** - Runtime introspection
-7. **cross_process_example.py** - Multi-process operations
-8. **interactivebox_example.py** - Interactive shells
-9. **native_example.py** - Low-level Rust API
+1. **run_simplebox.py** - Foundation patterns (`01_getting_started/`)
+2. **run_codebox.py** - AI code execution (`01_getting_started/`)
+3. **automate_with_playwright.py** - Browser automation (`05_browser_desktop/`)
+4. **automate_desktop.py** - Desktop automation (`05_browser_desktop/`)
+5. **manage_lifecycle.py** - Box lifecycle management (`03_lifecycle/`)
+6. **list_boxes.py** - Runtime introspection (`01_getting_started/`)
+7. **share_across_processes.py** - Multi-process operations (`03_lifecycle/`)
+8. **run_interactive_shell.py** - Interactive shells (`04_interactive/`)
+9. **use_native_api.py** - Low-level Rust API (`07_advanced/`)
 
 ## Next Steps
 
