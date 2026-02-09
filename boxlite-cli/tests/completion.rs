@@ -8,7 +8,7 @@ use predicates::prelude::*;
 use rstest::rstest;
 
 /// Minimum number of visible subcommands in `boxlite --help`. Bump when adding a new visible subcommand.
-const MIN_VISIBLE_SUBCOMMANDS: usize = 11;
+const MIN_VISIBLE_SUBCOMMANDS: usize = 13;
 
 fn boxlite_cmd() -> Command {
     Command::new(assert_cmd::cargo::cargo_bin!("boxlite"))
