@@ -52,17 +52,15 @@ impl Jailer {
             use boxlite_shared::errors::BoxliteError;
 
             // Preflight: verify bwrap can create user namespaces before proceeding.
-            // Catches AppArmor restrictions and missing kernel support early.
+            // Uses Chrome-style clone(CLONE_NEWUSER) probe for diagnosis + bwrap
+            // probe for actual capability (handles AppArmor per-binary profiles).
             if self.security.jailer_enabled
                 && bwrap::is_available()
-                && let Err(reason) = bwrap::check_userns_available()
+                && let Err(diagnostic) = bwrap::can_create_user_namespace()
             {
                 return Err(BoxliteError::Config(format!(
-                    "Sandbox preflight failed: bwrap cannot create user namespaces.\n\
-                     {reason}\n\n\
-                     This usually means unprivileged user namespaces are restricted \
-                     on this system.\n\n\
-                     To fix, see: https://boxlite.dev/docs/faq#sandbox-userns\n\n\
+                    "Sandbox preflight failed: bwrap cannot create user namespaces.\n\n\
+                     {diagnostic}\n\n\
                      To skip the sandbox (development only):\n  \
                        SecurityOptions::development()"
                 )));
