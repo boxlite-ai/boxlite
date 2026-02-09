@@ -14,27 +14,27 @@ on:
   push:
     branches: [main]
     paths:
-      - "boxlite/**"
-      - "boxlite-cli/**"
-      - "boxlite-shared/**"
-      - "guest/**"
-      - "sdks/**"
-      - "**/Cargo.toml"
-      - "Cargo.lock"
-      - ".github/workflows/test.yml"
-      - ".github/workflows/config.yml"
+      - 'boxlite/**'
+      - 'boxlite-shared/**'
+      - 'boxlite-cli/**'
+      - 'guest/**'
+      - 'sdks/**'
+      - '**/Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/test.yml'
+      - '.github/workflows/config.yml'
   pull_request:
     branches: [main]
     paths:
-      - "boxlite/**"
-      - "boxlite-cli/**"
-      - "boxlite-shared/**"
-      - "guest/**"
-      - "sdks/**"
-      - "**/Cargo.toml"
-      - "Cargo.lock"
-      - ".github/workflows/test.yml"
-      - ".github/workflows/config.yml"
+      - 'boxlite/**'
+      - 'boxlite-shared/**'
+      - 'boxlite-cli/**'
+      - 'guest/**'
+      - 'sdks/**'
+      - '**/Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/test.yml'
+      - '.github/workflows/config.yml'
 
 env:
   CARGO_TERM_COLOR: always
