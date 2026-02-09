@@ -14,7 +14,6 @@
 //! ├── command.rs      (Command building for isolated processes)
 //! ├── pre_exec.rs     (Pre-exec hook for process isolation)
 //! ├── shim_copy.rs    (Firecracker copy-to-jail pattern)
-//! ├── config.rs       (Re-exports SecurityOptions, ResourceLimits)
 //! ├── error.rs        (Hierarchical error types)
 //! ├── seccomp.rs      (Seccomp BPF filter generation)
 //! ├── bwrap.rs        (Bubblewrap command builder)
@@ -68,7 +67,6 @@
 mod builder;
 mod command;
 mod common;
-mod config;
 mod error;
 mod pre_exec;
 
@@ -90,8 +88,8 @@ pub(crate) mod shim_copy;
 // ============================================================================
 
 // Core types
+pub use crate::runtime::advanced_options::{ResourceLimits, SecurityOptions};
 pub use builder::{Jailer, JailerBuilder};
-pub use config::{ResourceLimits, SecurityOptions};
 pub use error::{ConfigError, IsolationError, JailerError, SystemError};
 pub use platform::{PlatformIsolation, SpawnIsolation};
 
@@ -101,6 +99,8 @@ pub use crate::runtime::options::VolumeSpec;
 // Linux-specific exports
 #[cfg(target_os = "linux")]
 pub use bwrap::{build_shim_command, is_available as is_bwrap_available};
+#[cfg(target_os = "linux")]
+pub use seccomp::SeccompRole;
 
 // macOS-specific exports
 #[cfg(target_os = "macos")]

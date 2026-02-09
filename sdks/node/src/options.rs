@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 
+use boxlite::runtime::advanced_options::{AdvancedBoxOptions, ResourceLimits, SecurityOptions};
 use boxlite::runtime::constants::images;
 use boxlite::runtime::options::{
-    BoxOptions, BoxliteOptions, NetworkSpec, PortProtocol, PortSpec, ResourceLimits, RootfsSpec,
-    SecurityOptions, VolumeSpec,
+    BoxOptions, BoxliteOptions, NetworkSpec, PortProtocol, PortSpec, RootfsSpec, VolumeSpec,
 };
 use napi_derive::napi;
 
@@ -319,10 +319,12 @@ impl From<JsBoxOptions> for BoxOptions {
             volumes,
             network,
             ports,
-            isolate_mounts: false, // Not exposed in JS API yet
+            advanced: AdvancedBoxOptions {
+                security,
+                ..Default::default()
+            },
             auto_remove: js_opts.auto_remove.unwrap_or(false),
             detach: js_opts.detach.unwrap_or(false),
-            security,
             entrypoint: js_opts.entrypoint,
             cmd: js_opts.cmd,
             user: js_opts.user,

@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 
 use boxlite::CopyOptions;
+use boxlite::runtime::advanced_options::{ResourceLimits, SecurityOptions};
 use boxlite::runtime::constants::images;
 use boxlite::runtime::options::{
-    BoxOptions, BoxliteOptions, NetworkSpec, PortProtocol, PortSpec, ResourceLimits, RootfsSpec,
-    SecurityOptions, VolumeSpec,
+    BoxOptions, BoxliteOptions, NetworkSpec, PortProtocol, PortSpec, RootfsSpec, VolumeSpec,
 };
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
@@ -173,7 +173,7 @@ impl PySecurityOptions {
     /// Create a new SecurityOptions with custom settings.
     #[new]
     #[pyo3(signature = (
-        jailer_enabled=false,
+        jailer_enabled=true,
         seccomp_enabled=false,
         max_open_files=None,
         max_file_size=None,
@@ -228,6 +228,7 @@ impl PySecurityOptions {
 
     /// Standard mode: recommended for most use cases.
     ///
+    /// Equivalent to `SecurityOptions()` with no arguments.
     /// Provides good security without being overly restrictive.
     #[staticmethod]
     fn standard() -> Self {
@@ -290,6 +291,30 @@ impl From<PySecurityOptions> for SecurityOptions {
 }
 
 // ============================================================================
+// Advanced Options
+// ============================================================================
+
+/// Advanced options for expert users.
+///
+/// Entry-level users can ignore this — defaults are secure and reasonable.
+#[pyclass(name = "AdvancedBoxOptions")]
+#[derive(Clone, Debug)]
+pub struct PyAdvancedBoxOptions {
+    /// Security isolation options.
+    #[pyo3(get, set)]
+    pub(crate) security: Option<PySecurityOptions>,
+}
+
+#[pymethods]
+impl PyAdvancedBoxOptions {
+    #[new]
+    #[pyo3(signature = (security=None))]
+    fn new(security: Option<PySecurityOptions>) -> Self {
+        Self { security }
+    }
+}
+
+// ============================================================================
 // Box Options
 // ============================================================================
 
@@ -331,9 +356,9 @@ pub(crate) struct PyBoxOptions {
     /// If None, uses the image's USER directive (defaults to root).
     #[pyo3(get, set)]
     pub(crate) user: Option<String>,
-    /// Security isolation options for the box.
+    /// Advanced options for expert users (security, mount isolation).
     #[pyo3(get, set)]
-    pub(crate) security: Option<PySecurityOptions>,
+    pub(crate) advanced: Option<PyAdvancedBoxOptions>,
 }
 
 #[pymethods]
@@ -355,7 +380,7 @@ impl PyBoxOptions {
         entrypoint=None,
         cmd=None,
         user=None,
-        security=None,
+        advanced=None,
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -374,7 +399,7 @@ impl PyBoxOptions {
         entrypoint: Option<Vec<String>>,
         cmd: Option<Vec<String>>,
         user: Option<String>,
-        security: Option<PySecurityOptions>,
+        advanced: Option<PyAdvancedBoxOptions>,
     ) -> Self {
         Self {
             image,
@@ -392,18 +417,18 @@ impl PyBoxOptions {
             entrypoint,
             cmd,
             user,
-            security,
+            advanced,
         }
     }
 
     fn __repr__(&self) -> String {
         format!(
-            "BoxOptions(image={:?}, rootfs_path={:?}, cpus={:?}, memory_mib={:?}, security={:?})",
+            "BoxOptions(image={:?}, rootfs_path={:?}, cpus={:?}, memory_mib={:?}, advanced={:?})",
             self.image,
             self.rootfs_path,
             self.cpus,
             self.memory_mib,
-            self.security.is_some()
+            self.advanced.is_some()
         )
     }
 }
@@ -459,8 +484,10 @@ impl From<PyBoxOptions> for BoxOptions {
             opts.detach = detach;
         }
 
-        if let Some(security) = py_opts.security {
-            opts.security = SecurityOptions::from(security);
+        if let Some(advanced) = py_opts.advanced
+            && let Some(security) = advanced.security
+        {
+            opts.advanced.security = SecurityOptions::from(security);
         }
 
         opts

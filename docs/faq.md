@@ -554,10 +554,10 @@ If you don't need sandbox isolation (e.g., development environment),
 disable the jailer:
 
 ```python
-from boxlite.boxlite import SecurityOptions
+from boxlite.boxlite import SecurityOptions, AdvancedBoxOptions
 
 boxlite.BoxOptions(
-    security=SecurityOptions(jailer_enabled=False),
+    advanced=AdvancedBoxOptions(security=SecurityOptions.development()),
     # ... other options
 )
 ```

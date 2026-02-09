@@ -47,7 +47,7 @@ pub(crate) fn spawn_subprocess(
 
     // Create Jailer with security options and volumes
     let jailer = Jailer::new(box_id, &box_dir)
-        .with_security(options.security.clone())
+        .with_security(options.advanced.security.clone())
         .with_volumes(options.volumes.clone());
 
     // Setup pre-spawn isolation (cgroups on Linux, no-op on macOS)

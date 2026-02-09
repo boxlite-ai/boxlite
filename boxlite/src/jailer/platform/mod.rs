@@ -17,7 +17,7 @@ pub mod linux;
 #[cfg(target_os = "macos")]
 pub mod macos;
 
-use crate::jailer::config::SecurityOptions;
+use crate::runtime::advanced_options::SecurityOptions;
 use crate::runtime::layout::FilesystemLayout;
 use crate::runtime::options::VolumeSpec;
 use boxlite_shared::errors::BoxliteResult;

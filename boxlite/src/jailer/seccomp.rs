@@ -16,8 +16,9 @@
 //!
 //! ## Filter Application
 //!
-//! - VMM filter: Applied to shim main thread before VM takeover
-//! - vCPU filter: Compiled but not yet applied (requires libkrun hooks)
+//! - VMM filter: Applied to shim main thread before VM takeover (with TSYNC
+//!   to synchronize across all existing threads)
+//! - vCPU filter: Compiled; vCPU threads inherit VMM filter via TSYNC
 //! - API filter: Not used in BoxLite (no separate API thread)
 //!
 //! ## Thread Model Differences
@@ -27,9 +28,7 @@
 //! threads are created internally by libkrun. This means:
 //!
 //! - Main thread: Becomes VMM thread after `ctx.start_enter()` (vmm filter applied)
-//! - vCPU threads: Created by libkrun (currently inherit vmm filter)
-//!
-//! Future enhancement: Add libkrun hooks to apply vcpu filter to vCPU threads.
+//! - vCPU threads: Created by libkrun (inherit vmm filter via TSYNC)
 
 use std::collections::HashMap;
 use std::io::Read;
@@ -64,6 +63,33 @@ pub type BpfProgramRef<'a> = &'a [BpfInstruction];
 /// Type that associates a thread category to a BPF program.
 pub type BpfThreadMap = HashMap<String, Arc<BpfProgram>>;
 
+/// Thread categories for seccomp filter application.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SeccompRole {
+    /// VMM (Virtual Machine Monitor) — main shim thread
+    Vmm,
+    /// vCPU — virtual CPU threads created by libkrun
+    Vcpu,
+    /// API — not used in BoxLite (reserved for compatibility)
+    Api,
+}
+
+impl SeccompRole {
+    /// Filter key used in BpfThreadMap.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Vmm => "vmm",
+            Self::Vcpu => "vcpu",
+            Self::Api => "api",
+        }
+    }
+}
+
+/// Get the BPF filter for a specific thread role.
+pub fn get_filter(filters: &BpfThreadMap, role: SeccompRole) -> Option<&Arc<BpfProgram>> {
+    filters.get(role.as_str())
+}
+
 /// Binary filter deserialization errors.
 pub type DeserializationError = bincode::error::DecodeError;
 
@@ -91,6 +117,8 @@ pub fn deserialize_binary<R: Read>(mut reader: R) -> Result<BpfThreadMap, Deseri
 pub enum InstallationError {
     /// Filter length exceeds the maximum size of 4096 instructions
     FilterTooLarge,
+    /// Thread synchronization failed. The value is the TID of the thread that could not sync: {0}
+    TsyncFailed(i64),
     /// `prctl` syscall failed with error code: {0}
     Prctl(std::io::Error),
 }
@@ -107,7 +135,7 @@ struct SockFprog {
     filter: *const BpfInstruction,
 }
 
-/// Apply BPF filter to current thread.
+/// Apply BPF filter to the calling thread only.
 ///
 /// This function installs a seccomp filter on the calling thread. The filter
 /// is applied using the SECCOMP_SET_MODE_FILTER operation, which allows the
@@ -124,6 +152,32 @@ struct SockFprog {
 /// - `FilterTooLarge`: Filter exceeds kernel's BPF_MAX_LEN limit
 /// - `Prctl`: System call failed (check errno for details)
 pub fn apply_filter(bpf_filter: BpfProgramRef) -> Result<(), InstallationError> {
+    install_filter(bpf_filter, 0)
+}
+
+/// Apply BPF filter to ALL threads in the process (TSYNC).
+///
+/// Uses `SECCOMP_FILTER_FLAG_TSYNC` to synchronize the filter across all
+/// existing threads. New threads created after this call inherit the filter
+/// automatically (standard kernel behavior).
+///
+/// This is defense-in-depth: ensures no thread escapes filtering,
+/// even if the process has unexpected threads at filter time.
+///
+/// ## Errors
+///
+/// - `FilterTooLarge`: Filter exceeds kernel's BPF_MAX_LEN limit
+/// - `TsyncFailed`: A thread could not be synchronized (returns its TID)
+/// - `Prctl`: System call failed
+pub fn apply_filter_all_threads(bpf_filter: BpfProgramRef) -> Result<(), InstallationError> {
+    install_filter(bpf_filter, libc::SECCOMP_FILTER_FLAG_TSYNC)
+}
+
+/// Internal: install seccomp filter with the given flags.
+fn install_filter(
+    bpf_filter: BpfProgramRef,
+    flags: libc::c_ulong,
+) -> Result<(), InstallationError> {
     // If the program is empty, don't install the filter.
     if bpf_filter.is_empty() {
         return Ok(());
@@ -158,9 +212,12 @@ pub fn apply_filter(bpf_filter: BpfProgramRef) -> Result<(), InstallationError> 
             let rc = libc::syscall(
                 libc::SYS_seccomp,
                 libc::SECCOMP_SET_MODE_FILTER,
-                0,
+                flags,
                 bpf_prog_ptr,
             );
+            if rc > 0 {
+                return Err(InstallationError::TsyncFailed(rc));
+            }
             if rc != 0 {
                 return Err(InstallationError::Prctl(std::io::Error::last_os_error()));
             }
@@ -268,6 +325,44 @@ mod tests {
         assert!(filters.get("vmm").unwrap().is_empty());
         assert!(filters.get("vcpu").unwrap().is_empty());
         assert!(filters.get("api").unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_seccomp_role() {
+        assert_eq!(SeccompRole::Vmm.as_str(), "vmm");
+        assert_eq!(SeccompRole::Vcpu.as_str(), "vcpu");
+        assert_eq!(SeccompRole::Api.as_str(), "api");
+    }
+
+    #[test]
+    fn test_get_filter() {
+        let mut map = BpfThreadMap::new();
+        map.insert("vmm".to_string(), Arc::new(vec![1, 2, 3]));
+        map.insert("vcpu".to_string(), Arc::new(vec![4, 5]));
+
+        assert!(get_filter(&map, SeccompRole::Vmm).is_some());
+        assert_eq!(get_filter(&map, SeccompRole::Vmm).unwrap().len(), 3);
+        assert!(get_filter(&map, SeccompRole::Vcpu).is_some());
+        assert!(get_filter(&map, SeccompRole::Api).is_none());
+    }
+
+    #[test]
+    fn test_tsync_failed_display() {
+        let err = InstallationError::TsyncFailed(12345);
+        assert!(err.to_string().contains("12345"));
+    }
+
+    #[test]
+    fn test_apply_filter_all_threads_empty() {
+        // Empty filter should be a no-op
+        thread::spawn(|| {
+            let filter: BpfProgram = vec![];
+            apply_filter_all_threads(&filter).unwrap();
+            let seccomp_level = unsafe { libc::prctl(libc::PR_GET_SECCOMP) };
+            assert_eq!(seccomp_level, 0);
+        })
+        .join()
+        .unwrap();
     }
 
     #[cfg(target_os = "linux")]

@@ -18,8 +18,8 @@
 //! Seccomp must be applied after exec because the seccompiler library
 //! is not async-signal-safe (cannot be used in pre_exec hook).
 
-use crate::jailer::config::SecurityOptions;
 use crate::jailer::seccomp;
+use crate::runtime::advanced_options::SecurityOptions;
 use crate::runtime::layout::FilesystemLayout;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
@@ -96,12 +96,11 @@ pub fn apply_isolation(
 ///
 /// ## Filter Application
 ///
-/// - **VMM filter**: Applied to main thread (this thread)
-/// - **vCPU filter**: Compiled but not applied (requires libkrun hooks)
+/// - **VMM filter**: Applied to all threads via TSYNC (defense-in-depth)
+/// - **vCPU filter**: Compiled; vCPU threads inherit VMM filter
 ///
-/// The vCPU filter is compiled and embedded in the binary but not yet
-/// applied because libkrun creates vCPU threads internally. vCPU threads
-/// currently inherit the vmm filter (still secure, less restrictive).
+/// vCPU threads created by libkrun inherit the VMM filter. The vCPU filter
+/// is compiled and available for future per-thread application.
 ///
 /// Once applied, the filter cannot be removed.
 fn apply_seccomp_filter(box_id: &str) -> BoxliteResult<()> {
@@ -126,7 +125,7 @@ fn apply_seccomp_filter(box_id: &str) -> BoxliteResult<()> {
     })?;
 
     // Apply VMM filter to main thread (before libkrun takeover)
-    let vmm_filter = filters.get("vmm").ok_or_else(|| {
+    let vmm_filter = seccomp::get_filter(&filters, seccomp::SeccompRole::Vmm).ok_or_else(|| {
         tracing::error!(
             box_id = %box_id,
             "VMM filter not found in compiled filters"
@@ -137,14 +136,14 @@ fn apply_seccomp_filter(box_id: &str) -> BoxliteResult<()> {
     tracing::debug!(
         box_id = %box_id,
         bpf_instructions = vmm_filter.len(),
-        "Applying VMM seccomp filter to main thread"
+        "Applying VMM seccomp filter to all threads (TSYNC)"
     );
 
-    seccomp::apply_filter(vmm_filter).map_err(|e| {
+    seccomp::apply_filter_all_threads(vmm_filter).map_err(|e| {
         tracing::error!(
             box_id = %box_id,
             error = %e,
-            "Failed to apply VMM seccomp filter"
+            "Failed to apply VMM seccomp filter (TSYNC)"
         );
         JailerError::Isolation(IsolationError::Seccomp(e.to_string()))
     })?;
@@ -152,17 +151,14 @@ fn apply_seccomp_filter(box_id: &str) -> BoxliteResult<()> {
     tracing::info!(
         box_id = %box_id,
         vmm_filter_instructions = vmm_filter.len(),
-        "Seccomp VMM filter applied to main thread"
+        "Seccomp VMM filter applied to all threads (TSYNC)"
     );
 
-    // NOTE: vCPU filter is compiled but not applied yet
-    // Requires libkrun thread creation hooks (future enhancement)
-    // vCPU threads currently inherit vmm filter (still secure, less restrictive)
-    if let Some(vcpu_filter) = filters.get("vcpu") {
+    if let Some(vcpu_filter) = seccomp::get_filter(&filters, seccomp::SeccompRole::Vcpu) {
         tracing::debug!(
             box_id = %box_id,
             vcpu_filter_instructions = vcpu_filter.len(),
-            "vCPU filter compiled but not applied (requires libkrun hooks)"
+            "vCPU filter available (vCPU threads inherit vmm filter via TSYNC)"
         );
     }
 

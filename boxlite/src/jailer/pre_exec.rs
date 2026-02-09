@@ -21,7 +21,7 @@
 //! See the [`common`](crate::jailer::common) module for async-signal-safe utilities.
 
 use crate::jailer::common;
-use crate::jailer::config::ResourceLimits;
+use crate::runtime::advanced_options::ResourceLimits;
 use std::process::Command;
 
 /// Add pre-execution hook for process isolation (async-signal-safe).

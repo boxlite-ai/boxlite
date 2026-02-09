@@ -28,7 +28,7 @@
 // Allow dead_code on non-Linux platforms where bwrap is not available
 #![allow(dead_code)]
 
-use super::config::SecurityOptions;
+use crate::runtime::advanced_options::SecurityOptions;
 use crate::runtime::layout::FilesystemLayout;
 use crate::util::find_binary;
 use std::path::{Path, PathBuf};
@@ -105,7 +105,7 @@ pub fn check_userns_available() -> Result<(), String> {
     };
 
     let output = Command::new(bwrap_path)
-        .args(["--unshare-user", "--", "true"])
+        .args(["--unshare-user", "--ro-bind", "/", "/", "--", "true"])
         .output();
 
     match output {

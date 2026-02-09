@@ -3,7 +3,7 @@
 //! This module provides the main `Jailer` type for process isolation,
 //! along with a fluent `JailerBuilder` for configuration.
 
-use crate::jailer::config::{ResourceLimits, SecurityOptions};
+use crate::runtime::advanced_options::{ResourceLimits, SecurityOptions};
 use crate::runtime::options::VolumeSpec;
 use std::path::{Path, PathBuf};
 

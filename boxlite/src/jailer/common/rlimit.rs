@@ -6,7 +6,7 @@
 //! Only the async-signal-safe `apply_limits_raw()` is used,
 //! called from the `pre_exec` hook before exec().
 
-use crate::jailer::config::ResourceLimits;
+use crate::runtime::advanced_options::ResourceLimits;
 use std::io;
 
 /// Resource type alias for cross-platform compatibility.
