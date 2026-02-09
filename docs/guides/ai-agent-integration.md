@@ -226,6 +226,7 @@ options = boxlite.BoxOptions(
 )
 ```
 
+> **OS support note:** In the Python bindings, `network_enabled` is currently a macOS-only control. On Linux and other platforms, network isolation is typically enforced by the container/runtime networking configuration (for example, running in an isolated network namespace and not publishing ports), and `network_enabled` may not itself hard-disable all outbound connectivity.
 ### Resource Limits as Security Boundaries
 
 Resource limits prevent a rogue agent from consuming all host resources:
