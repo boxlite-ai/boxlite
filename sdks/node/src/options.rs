@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use boxlite::runtime::advanced_options::AdvancedBoxOptions;
 use boxlite::runtime::constants::images;
 use boxlite::runtime::options::{
     BoxOptions, BoxliteOptions, NetworkSpec, PortProtocol, PortSpec, ResourceLimits, RootfsSpec,
@@ -319,7 +320,7 @@ impl From<JsBoxOptions> for BoxOptions {
             volumes,
             network,
             ports,
-            isolate_mounts: false, // Not exposed in JS API yet
+            advanced: AdvancedBoxOptions::default(),
             auto_remove: js_opts.auto_remove.unwrap_or(false),
             detach: js_opts.detach.unwrap_or(false),
             security,

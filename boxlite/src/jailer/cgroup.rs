@@ -31,7 +31,7 @@
 //! ```
 
 use super::common;
-use super::config::ResourceLimits;
+use crate::runtime::advanced_options::ResourceLimits;
 use super::error::JailerError;
 use std::fs;
 use std::path::{Path, PathBuf};

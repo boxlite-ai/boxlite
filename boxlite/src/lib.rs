@@ -36,12 +36,12 @@ pub use litebox::{
 };
 pub use metrics::{BoxMetrics, RuntimeMetrics};
 use runtime::layout::FilesystemLayout;
-pub use runtime::options::{
-    BoxOptions, BoxliteOptions, ResourceLimits, RootfsSpec, SecurityOptions,
+pub use runtime::advanced_options::{
+    AdvancedBoxOptions, ResourceLimits, SecurityOptions,
 };
+pub use runtime::options::{BoxOptions, BoxliteOptions, RootfsSpec};
 /// Boxlite library version (from CARGO_PKG_VERSION at compile time).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
-
 pub use runtime::types::ContainerID;
 pub use runtime::types::{BoxID, BoxInfo, BoxState, BoxStateInfo, BoxStatus};
 

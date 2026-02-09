@@ -47,7 +47,7 @@
 //!     boxlite-shim --config ...
 //! ```
 
-use crate::jailer::config::SecurityOptions;
+use crate::runtime::advanced_options::SecurityOptions;
 use crate::runtime::options::VolumeSpec;
 use boxlite_shared::errors::BoxliteResult;
 use std::ffi::CStr;

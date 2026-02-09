@@ -202,7 +202,7 @@ async fn build_config(
     let instance_spec = InstanceSpec {
         // Box identification and security
         box_id: box_id.to_string(),
-        security: options.security.clone(),
+        security: options.advanced.security.clone(),
         // VM resources
         cpus: options.cpus,
         memory_mib: options.memory_mib,

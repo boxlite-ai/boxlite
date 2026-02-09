@@ -64,7 +64,7 @@ impl Jailer {
                      on this system.\n\n\
                      To fix, see: https://boxlite.dev/docs/faq#sandbox-userns\n\n\
                      To skip the sandbox (development only):\n  \
-                       SecurityOptions {{ jailer_enabled: false, .. }}"
+                       SecurityOptions::development()"
                 )));
             }
 
@@ -359,7 +359,7 @@ impl Jailer {
 #[cfg(test)]
 mod tests {
     use crate::jailer::builder::Jailer;
-    use crate::jailer::config::SecurityOptions;
+    use crate::runtime::advanced_options::SecurityOptions;
     use std::path::Path;
 
     /// When `jailer_enabled=false`, build_command must return a direct command
