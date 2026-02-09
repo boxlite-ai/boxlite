@@ -48,7 +48,7 @@ python browserbox_example.py
 python interactivebox_example.py
 
 # Interactive terminal for Claude Code install
-python interactive_claude_ubuntu_example.py
+python interactive_claude_example.py
 
 # Lifecycle management
 python lifecycle_example.py
