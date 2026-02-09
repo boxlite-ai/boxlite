@@ -195,7 +195,7 @@ async fn build_config(
         build_guest_entrypoint(&transport, &ready_transport, &guest_rootfs, options)?;
 
     // Network configuration
-    let network_config = build_network_config(container_image_config, options);
+    let network_config = build_network_config(container_image_config, options, layout);
 
     // Use runtime home for logs (not box_home)
     let runtime_home = runtime.layout.home_dir();
@@ -306,6 +306,7 @@ fn build_guest_entrypoint(
 fn build_network_config(
     container_image_config: &crate::images::ContainerImageConfig,
     options: &crate::runtime::options::BoxOptions,
+    layout: &BoxFilesystemLayout,
 ) -> Option<NetworkBackendConfig> {
     let mut port_map: HashMap<u16, u16> = HashMap::new();
 
@@ -338,7 +339,10 @@ fn build_network_config(
     );
 
     // Always return Some - gvproxy provides virtio-net (eth0) even without port mappings
-    Some(NetworkBackendConfig::new(final_mappings))
+    Some(NetworkBackendConfig::new(
+        final_mappings,
+        layout.net_backend_socket_path(),
+    ))
 }
 
 /// Spawn VM subprocess and return handler.

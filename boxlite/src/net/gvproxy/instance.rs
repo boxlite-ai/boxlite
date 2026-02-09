@@ -3,7 +3,7 @@
 //! This module provides a safe, RAII-style wrapper around gvproxy instances.
 //! Instances are automatically cleaned up when dropped.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Weak;
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
@@ -40,12 +40,14 @@ use super::stats::NetworkStats;
 ///
 /// ```no_run
 /// use boxlite::net::gvproxy::GvproxyInstance;
+/// use std::path::PathBuf;
 ///
-/// // Create instance with port forwards
-/// let instance = GvproxyInstance::new(&[(8080, 80), (8443, 443)])?;
+/// // Create instance with caller-provided socket path
+/// let socket_path = PathBuf::from("/tmp/my-box/net.sock");
+/// let instance = GvproxyInstance::new(socket_path, &[(8080, 80), (8443, 443)])?;
 ///
-/// // Get socket path for connecting
-/// let socket_path = instance.get_socket_path()?;
+/// // Socket path is known from creation — no FFI call needed
+/// println!("Socket: {:?}", instance.socket_path());
 ///
 /// // Instance is automatically cleaned up when dropped
 /// # Ok::<(), boxlite_shared::errors::BoxliteError>(())
@@ -53,66 +55,39 @@ use super::stats::NetworkStats;
 #[derive(Debug)]
 pub struct GvproxyInstance {
     id: i64,
+    socket_path: PathBuf,
 }
 
 impl GvproxyInstance {
-    /// Create a new gvproxy instance with the given port mappings
+    /// Create a new gvproxy instance with the given socket path and port mappings
     ///
     /// This automatically initializes the logging bridge on first use.
     ///
     /// # Arguments
     ///
+    /// * `socket_path` - Caller-provided Unix socket path (must be unique per box)
     /// * `port_mappings` - List of (host_port, guest_port) tuples for port forwarding
-    ///
-    /// # Returns
-    ///
-    /// A new `GvproxyInstance` or an error if creation fails
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// use boxlite::net::gvproxy::GvproxyInstance;
-    ///
-    /// // Forward host port 8080 to guest port 80, and 8443 to 443
-    /// let instance = GvproxyInstance::new(&[(8080, 80), (8443, 443)])?;
-    /// # Ok::<(), boxlite_shared::errors::BoxliteError>(())
-    /// ```
-    pub fn new(port_mappings: &[(u16, u16)]) -> BoxliteResult<Self> {
+    pub fn new(socket_path: PathBuf, port_mappings: &[(u16, u16)]) -> BoxliteResult<Self> {
         // Initialize logging callback (one-time setup)
         // This ensures all gvproxy logs are routed to Rust's tracing system
         logging::init_logging();
 
-        // Create config with defaults + port mappings
-        let config = super::config::GvproxyConfig::new(port_mappings.to_vec());
+        // Create config with caller-provided socket path + port mappings
+        let config = super::config::GvproxyConfig::new(socket_path.clone(), port_mappings.to_vec());
 
         // Create instance via FFI with full config
         let id = ffi::create_instance(&config)?;
 
-        tracing::info!(id, "Created GvproxyInstance");
+        tracing::info!(id, ?socket_path, "Created GvproxyInstance");
 
-        Ok(Self { id })
+        Ok(Self { id, socket_path })
     }
 
-    /// Get the Unix socket path for the network tap interface
+    /// Unix socket path for the network tap interface.
     ///
-    /// This path should be used to connect to the gvisor-tap-vsock instance.
-    ///
-    /// # Returns
-    ///
-    /// The Unix socket path or an error
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// use boxlite::net::gvproxy::GvproxyInstance;
-    ///
-    /// let instance = GvproxyInstance::new(&[(8080, 80)])?;
-    /// let socket_path = instance.get_socket_path()?;
-    /// println!("Connect to: {:?}", socket_path);
-    /// # Ok::<(), boxlite_shared::errors::BoxliteError>(())
-    /// ```
-    pub fn get_socket_path(&self) -> BoxliteResult<PathBuf> {
-        ffi::get_socket_path(self.id)
+    /// This is the caller-provided path passed at creation — no FFI call needed.
+    pub fn socket_path(&self) -> &Path {
+        &self.socket_path
     }
 
     /// Get network statistics from this gvproxy instance
@@ -289,12 +264,12 @@ mod tests {
     #[test]
     #[ignore] // Requires libgvproxy.dylib to be available
     fn test_gvproxy_create_destroy() {
-        let port_mappings = vec![(8080, 80), (8443, 443)];
-        let instance = GvproxyInstance::new(&port_mappings).unwrap();
+        let socket_path = PathBuf::from("/tmp/test-gvproxy-instance.sock");
+        let instance =
+            GvproxyInstance::new(socket_path.clone(), &[(8080, 80), (8443, 443)]).unwrap();
 
-        // Get socket path
-        let socket_path = instance.get_socket_path().unwrap();
-        assert!(socket_path.to_str().unwrap().contains("gvproxy"));
+        // Socket path matches what we provided
+        assert_eq!(instance.socket_path(), socket_path);
 
         // Instance will be destroyed automatically when dropped
     }
@@ -302,14 +277,13 @@ mod tests {
     #[test]
     #[ignore] // Requires libgvproxy.dylib to be available
     fn test_multiple_instances() {
-        let instance1 = GvproxyInstance::new(&[(8080, 80)]).unwrap();
-        let instance2 = GvproxyInstance::new(&[(9090, 90)]).unwrap();
+        let path1 = PathBuf::from("/tmp/test-gvproxy-1.sock");
+        let path2 = PathBuf::from("/tmp/test-gvproxy-2.sock");
+
+        let instance1 = GvproxyInstance::new(path1.clone(), &[(8080, 80)]).unwrap();
+        let instance2 = GvproxyInstance::new(path2.clone(), &[(9090, 90)]).unwrap();
 
         assert_ne!(instance1.id(), instance2.id());
-
-        let path1 = instance1.get_socket_path().unwrap();
-        let path2 = instance2.get_socket_path().unwrap();
-
-        assert_ne!(path1, path2);
+        assert_ne!(instance1.socket_path(), instance2.socket_path());
     }
 }

@@ -274,6 +274,15 @@ impl BoxFilesystemLayout {
         self.sockets_dir().join("ready.sock")
     }
 
+    /// Network backend socket: ~/.boxlite/boxes/{box_id}/sockets/net.sock
+    ///
+    /// Used by the network backend (e.g., gvisor-tap-vsock) to provide
+    /// virtio-net connectivity to the guest VM. Each box gets its own
+    /// socket to prevent collisions between concurrent instances.
+    pub fn net_backend_socket_path(&self) -> PathBuf {
+        self.sockets_dir().join("net.sock")
+    }
+
     // ========================================================================
     // MOUNTS AND SHARED
     // ========================================================================
@@ -590,5 +599,44 @@ mod tests {
             cache1, cache2,
             "Different paths should have different cache dirs"
         );
+    }
+
+    #[test]
+    fn test_different_boxes_get_different_net_backend_socket_paths() {
+        // Regression test for gvproxy socket collision bug.
+        // OLD CODE: Socket paths were generated inside Go as /tmp/gvproxy-{id}.sock
+        //           with id starting at 1 per process — two shim processes would both
+        //           create /tmp/gvproxy-1.sock, causing a collision.
+        // NEW CODE: Each box gets its own socket path from the layout.
+
+        let config = FsLayoutConfig::without_bind_mount();
+        let box_a = BoxFilesystemLayout::new(
+            PathBuf::from("/home/user/.boxlite/boxes/box-aaa"),
+            config.clone(),
+            false,
+        );
+        let box_b = BoxFilesystemLayout::new(
+            PathBuf::from("/home/user/.boxlite/boxes/box-bbb"),
+            config,
+            false,
+        );
+
+        let path_a = box_a.net_backend_socket_path();
+        let path_b = box_b.net_backend_socket_path();
+
+        // CRITICAL: Different boxes MUST have different socket paths
+        // This was the root cause of the collision bug
+        assert_ne!(
+            path_a, path_b,
+            "Two different boxes must have different net backend socket paths"
+        );
+
+        // Verify paths are under their respective box directories
+        assert!(path_a.starts_with("/home/user/.boxlite/boxes/box-aaa/sockets/"));
+        assert!(path_b.starts_with("/home/user/.boxlite/boxes/box-bbb/sockets/"));
+
+        // Verify the socket filename
+        assert_eq!(path_a.file_name().unwrap(), "net.sock");
+        assert_eq!(path_b.file_name().unwrap(), "net.sock");
     }
 }
