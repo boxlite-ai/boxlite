@@ -39,6 +39,9 @@ use runtime::layout::FilesystemLayout;
 pub use runtime::options::{
     BoxOptions, BoxliteOptions, ResourceLimits, RootfsSpec, SecurityOptions,
 };
+/// Boxlite library version (from CARGO_PKG_VERSION at compile time).
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 pub use runtime::types::ContainerID;
 pub use runtime::types::{BoxID, BoxInfo, BoxState, BoxStateInfo, BoxStatus};
 

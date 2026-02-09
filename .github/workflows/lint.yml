@@ -139,6 +139,22 @@ jobs:
         working-directory: sdks/python
         run: ruff format --check .
 
+      - name: Check no required dependencies
+        working-directory: sdks/python
+        run: |
+          # Ensure core package has no required dependencies (optional deps OK)
+          python -c "
+          import tomllib
+          with open('pyproject.toml', 'rb') as f:
+              config = tomllib.load(f)
+          deps = config.get('project', {}).get('dependencies', [])
+          if deps:
+              print(f'ERROR: pyproject.toml has required dependencies: {deps}')
+              print('Move dependencies to [project.optional-dependencies] instead.')
+              exit(1)
+          print('✓ No required dependencies')
+          "
+
   node:
     name: Node.js Lint
     needs: changes

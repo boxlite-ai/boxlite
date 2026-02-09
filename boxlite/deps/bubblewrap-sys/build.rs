@@ -41,12 +41,6 @@ fn build_linux() {
     let build_dir = out_dir.join("bubblewrap-build");
     let bwrap_path = build_dir.join("bwrap");
 
-    // Skip build if output already exists (incremental build optimization)
-    if bwrap_path.exists() {
-        println!("cargo:bwrap_BOXLITE_DEP={}", bwrap_path.display());
-        return;
-    }
-
     // Verify vendor submodule exists
     if !vendor_dir.join("meson.build").exists() {
         panic!(

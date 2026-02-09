@@ -27,10 +27,7 @@ fn main() {
     let mke2fs_path = build_dir.join("misc/mke2fs");
     let debugfs_path = build_dir.join("debugfs/debugfs");
 
-    // Skip build if outputs already exist (incremental build optimization)
-    if !mke2fs_path.exists() || !debugfs_path.exists() {
-        build_e2fsprogs(&vendor_dir, &build_dir);
-    }
+    build_e2fsprogs(&vendor_dir, &build_dir);
 
     println!("cargo:mke2fs_BOXLITE_DEP={}", mke2fs_path.display());
     println!("cargo:debugfs_BOXLITE_DEP={}", debugfs_path.display());

@@ -348,7 +348,7 @@ fn test_run_rm_cleanup() {
 
     ctx.cmd.assert().success();
 
-    // run another container with the SAME name
+    // run another box with the SAME name
     let mut cmd2 = ctx.new_cmd();
 
     cmd2.args([
@@ -361,6 +361,165 @@ fn test_run_rm_cleanup() {
         "reused",
     ]);
     cmd2.assert().success().stdout("reused\n");
+}
+
+// ============================================================================
+// Port Publish (-p / --publish) Tests
+// ============================================================================
+
+#[test]
+fn test_run_with_publish_success() {
+    let mut ctx = common::boxlite();
+    ctx.cmd.args([
+        "run",
+        "--rm",
+        "-p",
+        "18789:18789",
+        "alpine:latest",
+        "echo",
+        "ok",
+    ]);
+    ctx.cmd.assert().success().stdout("ok\n");
+}
+
+#[test]
+fn test_run_with_publish_short_flag() {
+    let mut ctx = common::boxlite();
+    ctx.cmd.args([
+        "run",
+        "--rm",
+        "-p",
+        "8080:80",
+        "alpine:latest",
+        "sh",
+        "-c",
+        "echo done",
+    ]);
+    ctx.cmd.assert().success().stdout("done\n");
+}
+
+#[test]
+fn test_run_with_publish_tcp_suffix() {
+    let mut ctx = common::boxlite();
+    ctx.cmd.args([
+        "run",
+        "--rm",
+        "--publish",
+        "9000:9000/tcp",
+        "alpine:latest",
+        "echo",
+        "tcp",
+    ]);
+    ctx.cmd.assert().success().stdout("tcp\n");
+}
+
+#[test]
+fn test_run_with_publish_invalid_format() {
+    let mut ctx = common::boxlite();
+    ctx.cmd.args([
+        "run",
+        "--rm",
+        "-p",
+        "not-a-port",
+        "alpine:latest",
+        "echo",
+        "ok",
+    ]);
+    ctx.cmd
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("invalid"));
+}
+
+// ============================================================================
+// Volume (-v / --volume) Tests
+// ============================================================================
+
+#[test]
+fn test_run_with_volume_success() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path();
+    std::fs::write(path.join("hello.txt"), "hello-boxlite\n").unwrap();
+
+    let mut ctx = common::boxlite();
+    let host_path = path.to_str().unwrap();
+    ctx.cmd.args([
+        "run",
+        "--rm",
+        "-v",
+        &format!("{}:/data", host_path),
+        "alpine:latest",
+        "cat",
+        "/data/hello.txt",
+    ]);
+    ctx.cmd.assert().success().stdout("hello-boxlite\n");
+}
+
+#[test]
+fn test_run_with_volume_short_flag() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path();
+    std::fs::write(path.join("x"), "ok").unwrap();
+
+    let mut ctx = common::boxlite();
+    ctx.cmd.args([
+        "run",
+        "--rm",
+        "-v",
+        &format!("{}:/mnt", path.to_str().unwrap()),
+        "alpine:latest",
+        "cat",
+        "/mnt/x",
+    ]);
+    ctx.cmd.assert().success().stdout("ok");
+}
+
+#[test]
+fn test_run_with_volume_read_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path();
+    std::fs::write(path.join("boxlite.txt"), "readonly").unwrap();
+
+    let mut ctx = common::boxlite();
+    ctx.cmd.args([
+        "run",
+        "--rm",
+        "-v",
+        &format!("{}:/data:ro", path.to_str().unwrap()),
+        "alpine:latest",
+        "cat",
+        "/data/boxlite.txt",
+    ]);
+    ctx.cmd.assert().success().stdout("readonly");
+}
+
+#[test]
+fn test_run_with_volume_invalid_format() {
+    // Relative box path is invalid for anonymous volume
+    let mut ctx = common::boxlite();
+    ctx.cmd
+        .args(["run", "--rm", "-v", "data", "alpine:latest", "echo", "ok"]);
+    ctx.cmd
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("absolute"));
+}
+
+#[test]
+fn test_run_with_volume_anonymous() {
+    // -v /data (anonymous volume): CLI creates a host dir and mounts it at /data
+    let mut ctx = common::boxlite();
+    ctx.cmd.args([
+        "run",
+        "--rm",
+        "-v",
+        "/data",
+        "alpine:latest",
+        "sh",
+        "-c",
+        "echo anon > /data/x && cat /data/x",
+    ]);
+    ctx.cmd.assert().success().stdout("anon\n");
 }
 
 // ============================================================================

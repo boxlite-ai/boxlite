@@ -1,4 +1,6 @@
-use crate::cli::{GlobalFlags, ManagementFlags, ProcessFlags, ResourceFlags};
+use crate::cli::{
+    GlobalFlags, ManagementFlags, ProcessFlags, PublishFlags, ResourceFlags, VolumeFlags,
+};
 use crate::terminal::StreamManager;
 use crate::util::to_shell_exit_code;
 use boxlite::BoxCommand;
@@ -13,6 +15,12 @@ pub struct RunArgs {
 
     #[command(flatten)]
     pub resource: ResourceFlags,
+
+    #[command(flatten)]
+    pub publish: PublishFlags,
+
+    #[command(flatten)]
+    pub volume: VolumeFlags,
 
     #[command(flatten)]
     pub management: ManagementFlags,
@@ -34,13 +42,15 @@ pub async fn execute(args: RunArgs, global: &GlobalFlags) -> anyhow::Result<()> 
 struct BoxRunner {
     args: RunArgs,
     rt: BoxliteRuntime,
+    home: Option<std::path::PathBuf>,
 }
 
 impl BoxRunner {
     fn new(args: RunArgs, global: &GlobalFlags) -> anyhow::Result<Self> {
         let rt = global.create_runtime()?;
+        let home = global.home.clone();
 
-        Ok(Self { args, rt })
+        Ok(Self { args, rt, home })
     }
 
     async fn run(&mut self) -> anyhow::Result<()> {
@@ -79,6 +89,10 @@ impl BoxRunner {
         let mut options = BoxOptions::default();
         self.args.resource.apply_to(&mut options);
         self.args.management.apply_to(&mut options);
+        self.args.publish.apply_to(&mut options)?;
+        self.args
+            .volume
+            .apply_to(&mut options, self.home.as_deref())?;
         self.args.process.apply_to(&mut options)?;
 
         // Runtime requires detached boxes to have manual lifecycle control (auto_remove=false)

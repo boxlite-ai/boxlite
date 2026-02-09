@@ -149,8 +149,6 @@ class TestExecResultExports:
 
     def test_in_boxlite_module(self):
         """Test that ExecResult is exported from boxlite."""
-        import boxlite
-
         assert hasattr(boxlite, "ExecResult")
         assert boxlite.ExecResult is ExecResult
 

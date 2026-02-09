@@ -67,6 +67,7 @@ Follow the [Rust Style Guide](./docs/development/rust-style.md) which includes:
 
 ```
 boxlite/          # Core runtime (Rust)
+boxlite-cli/      # CLI
 guest/            # Guest agent (runs inside VM)
 sdks/
   python/         # Python SDK

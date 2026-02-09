@@ -10,7 +10,7 @@ fn test_create_basic() {
         .arg("alpine:latest")
         .assert()
         .success()
-        .stdout(predicate::str::is_match(r"^[0-9A-Z]{26}\n$").unwrap());
+        .stdout(predicate::str::is_match(r"^[0-9A-HJ-NP-Z]{26}\n$").unwrap());
 }
 
 #[test]
@@ -24,7 +24,7 @@ fn test_create_named() {
         .arg("alpine:latest")
         .assert()
         .success()
-        .stdout(predicate::str::is_match(r"^[0-9A-Z]{26}\n$").unwrap());
+        .stdout(predicate::str::is_match(r"^[0-9A-HJ-NP-Z]{26}\n$").unwrap());
 
     ctx.new_cmd()
         .arg("create")
@@ -60,4 +60,77 @@ fn test_create_resources() {
         .success();
 
     ctx.cleanup_box(name);
+}
+
+// ============================================================================
+// Publish (-p / --publish) Tests
+// ============================================================================
+
+#[test]
+fn test_create_with_publish_success() {
+    let mut ctx = common::boxlite();
+    let name = "create-publish";
+
+    ctx.cmd
+        .args([
+            "create",
+            "--name",
+            name,
+            "-p",
+            "19000:9000",
+            "alpine:latest",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_match(r"^[0-9A-HJ-NP-Z]{26}\n$").unwrap());
+
+    ctx.cleanup_box(name);
+}
+
+#[test]
+fn test_create_with_publish_invalid_format() {
+    let mut ctx = common::boxlite();
+    ctx.cmd
+        .args(["create", "-p", "not-a-port", "alpine:latest"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("invalid"));
+}
+
+// ============================================================================
+// Volume (-v / --volume) Tests
+// ============================================================================
+
+#[test]
+fn test_create_with_volume_success() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path();
+
+    let mut ctx = common::boxlite();
+    let name = "create-volume";
+    ctx.cmd
+        .args([
+            "create",
+            "--name",
+            name,
+            "-v",
+            &format!("{}:/data", path.to_str().unwrap()),
+            "alpine:latest",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_match(r"^[0-9A-HJ-NP-Z]{26}\n$").unwrap());
+
+    ctx.cleanup_box(name);
+}
+
+#[test]
+fn test_create_with_volume_invalid_format() {
+    // Relative box path is invalid for anonymous volume
+    let mut ctx = common::boxlite();
+    ctx.cmd
+        .args(["create", "-v", "data", "alpine:latest"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("absolute"));
 }

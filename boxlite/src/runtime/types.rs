@@ -486,6 +486,18 @@ impl BoxStateInfo {
     }
 }
 
+impl From<&BoxInfo> for BoxStateInfo {
+    /// Build state view from public BoxInfo (e.g. for CLI templates).
+    /// Equivalent to `BoxStateInfo::new(state)` when the same box is BoxInfo.
+    fn from(info: &BoxInfo) -> Self {
+        Self {
+            status: info.status,
+            running: info.status.is_running(),
+            pid: info.pid,
+        }
+    }
+}
+
 // ============================================================================
 // IMAGE INFO
 // ============================================================================

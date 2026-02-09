@@ -169,12 +169,12 @@ fn main() -> BoxliteResult<()> {
             "Creating network backend (gvproxy) from config"
         );
 
-        // Create gvproxy instance
-        let gvproxy = GvproxyInstance::new(&net_config.port_mappings)?;
-        let socket_path = gvproxy.get_socket_path()?;
+        // Create gvproxy instance with caller-provided socket path
+        let gvproxy =
+            GvproxyInstance::new(net_config.socket_path.clone(), &net_config.port_mappings)?;
 
         tracing::info!(
-            socket_path = ?socket_path,
+            socket_path = ?net_config.socket_path,
             "Network backend created"
         );
 
@@ -192,7 +192,7 @@ fn main() -> BoxliteResult<()> {
         use boxlite::net::constants::GUEST_MAC;
 
         config.network_backend_endpoint = Some(NetworkBackendEndpoint::UnixSocket {
-            path: socket_path,
+            path: net_config.socket_path.clone(),
             connection_type,
             mac_address: GUEST_MAC,
         });
