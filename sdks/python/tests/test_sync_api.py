@@ -200,6 +200,57 @@ class TestSyncExecution:
         execution.wait()
         box.stop()
 
+    def test_resize_tty_on_tty_execution(self, shared_sync_runtime):
+        """resize_tty succeeds on a TTY-enabled execution."""
+        box = shared_sync_runtime.create(boxlite.BoxOptions(image="alpine:latest"))
+        execution = box.exec("sh", tty=True)
+
+        # Should not raise
+        execution.resize_tty(40, 120)
+
+        execution.kill()
+        execution.wait()
+        box.stop()
+
+    def test_resize_tty_on_non_tty_execution(self, shared_sync_runtime):
+        """resize_tty on a non-TTY execution raises an error."""
+        box = shared_sync_runtime.create(boxlite.BoxOptions(image="alpine:latest"))
+        execution = box.exec("echo", ["hello"])
+
+        with pytest.raises(Exception):
+            execution.resize_tty(40, 120)
+
+        execution.wait()
+        box.stop()
+
+    def test_resize_tty_various_dimensions(self, shared_sync_runtime):
+        """resize_tty accepts various terminal dimensions."""
+        box = shared_sync_runtime.create(boxlite.BoxOptions(image="alpine:latest"))
+        execution = box.exec("sh", tty=True)
+
+        # Small terminal
+        execution.resize_tty(24, 80)
+        # Large terminal
+        execution.resize_tty(100, 300)
+        # Minimum dimensions
+        execution.resize_tty(1, 1)
+
+        execution.kill()
+        execution.wait()
+        box.stop()
+
+    def test_resize_tty_method_exists(self, shared_sync_runtime):
+        """SyncExecution has resize_tty method."""
+        box = shared_sync_runtime.create(boxlite.BoxOptions(image="alpine:latest"))
+        execution = box.exec("echo", ["test"])
+
+        assert hasattr(execution, "resize_tty")
+        assert callable(execution.resize_tty)
+
+        list(execution.stdout())
+        execution.wait()
+        box.stop()
+
 
 # =============================================================================
 # Runtime Methods Tests

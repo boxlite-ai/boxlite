@@ -246,6 +246,9 @@ Represents a running command execution.
 - `kill(signal: int = 9) -> None`
   Send signal to process (async)
 
+- `resize_tty(rows: int, cols: int) -> None`
+  Resize PTY terminal window (async). Only works with TTY-enabled executions.
+
 **Example:**
 
 ```python

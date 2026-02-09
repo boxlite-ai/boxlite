@@ -751,6 +751,9 @@ asyncio.run(main())
 
 ## Using with AI Agents
 
+> For a comprehensive guide covering configuration, concurrency, timeouts,
+> security, and file transfer patterns, see [AI Agent Integration Guide](ai-agent-integration.md).
+
 BoxLite is designed for AI agents that need full execution freedom.
 
 ### CodeBox for AI Code Execution

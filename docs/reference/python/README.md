@@ -184,6 +184,7 @@ Represents a running command execution.
 | `stdin()` | `() -> ExecStdin` | Get stdin writer |
 | `wait()` | `() -> ExecResult` | Wait for completion (async) |
 | `kill()` | `(signal: int = 9) -> None` | Send signal to process (async) |
+| `resize_tty()` | `(rows: int, cols: int) -> None` | Resize PTY terminal (async) |
 
 #### Example
 
