@@ -7,7 +7,7 @@ use crate::metrics::RuntimeMetrics;
 use crate::runtime::options::{BoxOptions, BoxliteOptions};
 use crate::runtime::rt_impl::{RuntimeImpl, SharedRuntimeImpl};
 use crate::runtime::signal_handler::install_signal_handler;
-use crate::runtime::types::{BoxInfo, SystemInfo};
+use crate::runtime::types::BoxInfo;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 // ============================================================================
 // GLOBAL DEFAULT RUNTIME
@@ -238,11 +238,6 @@ impl BoxliteRuntime {
     /// Get runtime-wide metrics.
     pub async fn metrics(&self) -> RuntimeMetrics {
         self.rt_impl.metrics().await
-    }
-
-    /// Get system-wide runtime information.
-    pub async fn system_info(&self) -> BoxliteResult<SystemInfo> {
-        self.rt_impl.system_info().await
     }
 
     /// Remove a box completely by ID or name.

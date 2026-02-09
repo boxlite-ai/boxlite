@@ -1,31 +1,24 @@
 //! Info command tests.
 //! Default output is YAML (Podman-style). Only json/yaml formats supported.
+//! Assertions use serde_json::Value (sqlx-cli / inspect.rs style), no duplicate structs.
 
-use boxlite::SystemInfo;
 use predicates::prelude::*;
 
 mod common;
 
-fn system_info_json_keys() -> Vec<String> {
-    let sample = SystemInfo {
-        version: String::new(),
-        home_dir: String::new(),
-        virtualization: String::new(),
-        os: String::new(),
-        arch: String::new(),
-        boxes_total: 0,
-        boxes_running: 0,
-        boxes_stopped: 0,
-        boxes_configured: 0,
-        images_count: 0,
-    };
-    let v = serde_json::to_value(&sample).expect("serialize SystemInfo");
-    v.as_object()
-        .expect("object")
-        .keys()
-        .map(String::from)
-        .collect()
-}
+/// Expected top-level keys for `boxlite info --format json` (camelCase, must match info command).
+const INFO_JSON_KEYS: &[&str] = &[
+    "version",
+    "homeDir",
+    "virtualization",
+    "os",
+    "arch",
+    "boxesTotal",
+    "boxesRunning",
+    "boxesStopped",
+    "boxesConfigured",
+    "imagesCount",
+];
 
 #[test]
 fn test_info_default_is_yaml() {
@@ -45,38 +38,23 @@ fn test_info_default_is_yaml() {
 #[test]
 fn test_info_json_format() {
     let mut ctx = common::boxlite();
-    let assert = ctx
-        .cmd
-        .args(["info", "--format", "json"])
-        .assert()
-        .success();
-    let output = assert.get_output();
-    let stdout = std::str::from_utf8(&output.stdout).unwrap();
-
-    assert!(stdout.trim().starts_with('{'));
-    assert!(stdout.trim().ends_with('}'));
-
-    for key in system_info_json_keys() {
-        assert!(
-            stdout.contains(&format!("\"{}\"", key)),
-            "JSON must contain key {:?}",
-            key
-        );
+    let output = ctx.cmd.args(["info", "--format", "json"]).output().unwrap();
+    assert!(output.status.success());
+    let v: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("info --format json should be valid JSON");
+    let obj = v.as_object().expect("root should be object");
+    for key in INFO_JSON_KEYS {
+        assert!(obj.contains_key(*key), "JSON must contain key {:?}", key);
     }
 }
 
 #[test]
 fn test_info_yaml_format() {
     let mut ctx = common::boxlite();
-    let assert = ctx
-        .cmd
-        .args(["info", "--format", "yaml"])
-        .assert()
-        .success();
-    let output = assert.get_output();
+    let output = ctx.cmd.args(["info", "--format", "yaml"]).output().unwrap();
+    assert!(output.status.success());
     let stdout = std::str::from_utf8(&output.stdout).unwrap();
-
-    for key in system_info_json_keys() {
+    for key in INFO_JSON_KEYS {
         let needle = format!("{}:", key);
         assert!(stdout.contains(&needle), "YAML must contain {:?}:", key);
     }
@@ -99,17 +77,29 @@ fn test_info_box_counts() {
         .unwrap();
     assert!(output.status.success());
 
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    let info: SystemInfo =
-        serde_json::from_str(stdout.trim()).expect("valid JSON roundtrip to SystemInfo");
-    assert!(
-        info.boxes_total >= 1,
-        "expected at least one box after create"
-    );
-    // Breakdown must sum to total (only created box: configured or stopped)
+    let v: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("info --format json should be valid JSON");
+    let obj = v.as_object().expect("root should be object");
+    let boxes_total = obj
+        .get("boxesTotal")
+        .and_then(|n| n.as_u64())
+        .expect("boxesTotal");
+    let boxes_running = obj
+        .get("boxesRunning")
+        .and_then(|n| n.as_u64())
+        .unwrap_or(0);
+    let boxes_stopped = obj
+        .get("boxesStopped")
+        .and_then(|n| n.as_u64())
+        .unwrap_or(0);
+    let boxes_configured = obj
+        .get("boxesConfigured")
+        .and_then(|n| n.as_u64())
+        .unwrap_or(0);
+    assert!(boxes_total >= 1, "expected at least one box after create");
     assert_eq!(
-        info.boxes_configured + info.boxes_stopped + info.boxes_running,
-        info.boxes_total,
+        boxes_configured + boxes_stopped + boxes_running,
+        boxes_total,
         "box count breakdown must sum to total"
     );
 
@@ -132,11 +122,15 @@ fn test_info_version_present() {
     let mut ctx = common::boxlite();
     let output = ctx.cmd.args(["info", "--format", "json"]).output().unwrap();
     assert!(output.status.success());
-    let info: SystemInfo =
-        serde_json::from_slice(&output.stdout).expect("valid JSON roundtrip to SystemInfo");
-    assert!(!info.version.is_empty(), "version must not be empty");
+    let v: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("info --format json should be valid JSON");
+    let version = v
+        .get("version")
+        .and_then(|s| s.as_str())
+        .expect("version key present");
+    assert!(!version.is_empty(), "version must not be empty");
     assert!(
-        info.version.chars().any(|c| c.is_ascii_digit()),
+        version.chars().any(|c| c.is_ascii_digit()),
         "version should contain a digit"
     );
 }
@@ -161,16 +155,14 @@ fn test_info_format_table_rejected() {
 }
 
 #[test]
-fn test_info_json_roundtrip() {
+fn test_info_json_has_expected_keys() {
     let mut ctx = common::boxlite();
     let output = ctx.cmd.args(["info", "--format", "json"]).output().unwrap();
     assert!(output.status.success());
-    let info: SystemInfo =
-        serde_json::from_slice(&output.stdout).expect("valid JSON roundtrip to SystemInfo");
-    let expected_keys = system_info_json_keys();
-    let actual: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    for key in &expected_keys {
-        assert!(actual.get(key).is_some(), "JSON must contain key {:?}", key);
+    let v: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("info --format json should be valid JSON");
+    let obj = v.as_object().expect("root should be object");
+    for key in INFO_JSON_KEYS {
+        assert!(obj.contains_key(*key), "JSON must contain key {:?}", key);
     }
-    let _ = info;
 }

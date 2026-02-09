@@ -528,38 +528,6 @@ pub struct ImageInfo {
 }
 
 // ============================================================================
-// SYSTEM INFO (runtime-wide)
-// ============================================================================
-
-/// System-wide runtime information.
-///
-/// Contains version, paths, host/virtualization info, and box/image counts.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SystemInfo {
-    /// Runtime/workspace version (e.g. from CARGO_PKG_VERSION).
-    pub version: String,
-    /// BOXLITE_HOME directory (absolute path).
-    pub home_dir: String,
-    /// Virtualization support status (human-readable).
-    pub virtualization: String,
-    /// Operating system (e.g. "macos", "linux").
-    pub os: String,
-    /// Architecture (e.g. "aarch64", "x86_64").
-    pub arch: String,
-    /// Total number of boxes.
-    pub boxes_total: u32,
-    /// Number of running boxes.
-    pub boxes_running: u32,
-    /// Number of stopped boxes.
-    pub boxes_stopped: u32,
-    /// Number of configured (created but never started) boxes.
-    pub boxes_configured: u32,
-    /// Number of cached images.
-    pub images_count: u32,
-}
-
-// ============================================================================
 // BOX CONFIG (Podman-style separation)
 // ============================================================================
 

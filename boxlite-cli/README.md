@@ -16,8 +16,10 @@ The BoxLite CLI (`boxlite`) lets you create, run, and manage BoxLite boxes from 
 
 ### Key Features
 
-- **Run** — Create a box from an image and run a command (interactive, TTY, or detached)
-- **Lifecycle** — Create, start, stop, restart, remove boxes
+- **Run** — Create a box from an image and run a command (interactive, TTY, or detached); supports `-p` (publish ports) and `-v` (volumes)
+- **Create** — Create a box without running; supports `-p` and `-v`
+- **Lifecycle** — Start, stop, restart, remove boxes
+- **Inspect** — Show detailed box info (JSON, YAML, or Go template)
 - **Exec** — Run commands inside a running box
 - **Images** — Pull and list OCI images
 - **Copy** — Copy files between host and box (`boxlite cp`)
@@ -128,6 +130,8 @@ Create a box from an image and run a command.
 | `--tty` | `-t` | Allocate a pseudo-TTY |
 | `--env KEY=VALUE` | `-e` | Set environment variables (repeatable) |
 | `--workdir PATH` | `-w` | Working directory in the box |
+| `--publish PORT` | `-p` | Publish box port to host (e.g. `8080:80`, `8080:80/tcp`) |
+| `--volume VOLUME` | `-v` | Mount a volume (e.g. `hostPath:boxPath`, `boxPath` for anonymous) |
 | `--cpus N` | | CPU limit |
 | `--memory MiB` | | Memory limit (MiB) |
 | `--name NAME` | | Name the box |
@@ -139,7 +143,8 @@ Create a box from an image and run a command.
 ```bash
 boxlite run alpine:latest echo "Hello"
 boxlite run -it --rm alpine:latest /bin/sh
-boxlite run -d --name web -p 8080:80 nginx:alpine
+boxlite run -d --name openclaw -p 18789:18789 ghcr.io/openclaw/openclaw:main
+boxlite run -v /host/data:/app/data alpine:latest cat /app/data/hello.txt
 ```
 
 ### `boxlite create`
@@ -153,16 +158,20 @@ Create a new box without running a command.
 | `--name NAME` | | Name the box |
 | `--env KEY=VALUE` | `-e` | Environment variables |
 | `--workdir PATH` | `-w` | Working directory |
+| `--publish PORT` | `-p` | Publish box port to host (e.g. `8080:80`) |
+| `--volume VOLUME` | `-v` | Mount a volume (e.g. `hostPath:boxPath`, or box path for anonymous) |
 | `--cpus N` | | CPU limit |
 | `--memory MiB` | | Memory limit (MiB) |
 | `--detach` | `-d` | (create always “detaches”) |
 | `--rm` | | Auto-remove when stopped |
 
-**Example:**
+**Examples:**
 
 ```bash
 boxlite create --name mybox alpine:latest
+boxlite create -p 18789:18789 -v /data:/app/data --name openclaw ghcr.io/openclaw/openclaw:main
 boxlite start mybox
+boxlite start openclaw
 ```
 
 ### `boxlite exec`
@@ -236,6 +245,27 @@ Pull an image from a registry.
 |--------|-------|-------------|
 | `--quiet` | `-q` | Only print digest |
 
+### `boxlite inspect`
+
+Display detailed information on one or more boxes (JSON, YAML, or Go-style template).
+
+**Usage:** `boxlite inspect [OPTIONS] [BOX ...]` or `boxlite inspect --latest`
+
+| Option | Short | Description |
+|--------|-------|-------------|
+| `--latest` | `-l` | Inspect the most recently created box (cannot be used with BOX) |
+| `--format FMT` | `-f` | Output: `json`, `yaml`, or a Go template (e.g. `{{.State.Status}}`, `{{.Id}}`). Default: `json`. Table format is not supported. |
+
+**Examples:**
+
+```bash
+boxlite inspect mybox
+boxlite inspect -f '{{.State.Status}}' mybox
+boxlite inspect --latest -f yaml
+boxlite inspect box1 box2 -f json
+```
+
+
 ### `boxlite images`
 
 List cached images.
@@ -267,6 +297,26 @@ Copy files or directories between host and box.
 ```bash
 boxlite cp ./local.txt mybox:/tmp/
 boxlite cp mybox:/app/out ./output
+```
+
+
+### `boxlite info`
+
+Display system-wide runtime information (version, paths, host/virtualization, box and image counts). Default output is YAML.
+
+**Usage:** `boxlite info [OPTIONS]`
+
+| Option | Description |
+|--------|-------------|
+| `--format FMT` | Output format: `yaml`, `json` (default: `yaml`). Table format is not supported. |
+
+**Output fields:** `version`, `homeDir`, `virtualization`, `os`, `arch`, `boxesTotal`, `boxesRunning`, `boxesStopped`, `boxesConfigured`, `imagesCount`.
+
+**Examples:**
+
+```bash
+boxlite info
+boxlite info --format json
 ```
 
 ## Shell completion
