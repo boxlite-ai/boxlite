@@ -119,14 +119,11 @@ fn main() {
     let lib_name = get_library_name();
     let lib_output = Path::new(&out_dir).join(lib_name);
 
-    // Skip build if output already exists (incremental build optimization)
-    if !lib_output.exists() {
-        // Build libgvproxy from Go sources
-        build_gvproxy(&source_dir, &lib_output);
-
-        // Fix install_name on use absolute path
-        fix_install_name(lib_name, &lib_output);
-    }
+    // Build libgvproxy from Go sources
+    // Note: cargo only re-runs this script when rerun-if-changed files change,
+    // so no extra caching is needed here.
+    build_gvproxy(&source_dir, &lib_output);
+    fix_install_name(lib_name, &lib_output);
 
     // Copy header file for downstream C/C++ usage (optional)
     let header_src = source_dir.join("libgvproxy.h");

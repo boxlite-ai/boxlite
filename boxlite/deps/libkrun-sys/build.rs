@@ -775,12 +775,6 @@ fn build() {
     let libkrunfw_lib = libkrunfw_install.join(LIB_DIR);
     let libkrun_lib = libkrun_install.join(LIB_DIR);
 
-    // Skip build if outputs already exist (incremental build optimization)
-    if has_library(&libkrunfw_lib, "libkrunfw") && has_library(&libkrun_lib, "libkrun") {
-        configure_linking(&libkrun_lib, &libkrunfw_lib);
-        return;
-    }
-
     println!("cargo:warning=Building libkrun-sys for macOS (from source)");
 
     // Verify vendored libkrun source exists (libkrunfw is downloaded as prebuilt)
@@ -820,12 +814,6 @@ fn build() {
     let libkrun_install = out_dir.join("libkrun");
     let libkrunfw_lib_dir = libkrunfw_install.join(LIB_DIR);
     let libkrun_lib_dir = libkrun_install.join(LIB_DIR);
-
-    // Skip build if outputs already exist (incremental build optimization)
-    if has_library(&libkrunfw_lib_dir, "libkrunfw") && has_library(&libkrun_lib_dir, "libkrun") {
-        configure_linking(&libkrun_lib_dir, &libkrunfw_lib_dir);
-        return;
-    }
 
     // Check if user wants to build libkrunfw from source (slow, ~20 min)
     let build_from_source = env::var("BOXLITE_BUILD_LIBKRUNFW").is_ok();
