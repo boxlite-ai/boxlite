@@ -27,17 +27,13 @@ impl LiteBox {
     ///
     /// # Arguments
     ///
-    /// * `name` - Optional name for the new box
+    /// * `name` - Name for the new box
     /// * `opts` - Clone options (COW, start after clone, from snapshot)
     ///
     /// # Returns
     ///
     /// A LiteBox handle for the newly created clone.
-    pub async fn clone_box(
-        &self,
-        name: Option<&str>,
-        opts: CloneOptions,
-    ) -> BoxliteResult<LiteBox> {
+    pub async fn clone(&self, name: &str, opts: CloneOptions) -> BoxliteResult<LiteBox> {
         // Verify stopped
         {
             let state = self.inner.state.read();
@@ -115,7 +111,7 @@ impl LiteBox {
         // Build config for the cloned box
         let config = BoxConfig {
             id: box_id.clone(),
-            name: name.map(|s| s.to_string()),
+            name: Some(name.to_string()),
             created_at: now,
             container: ContainerRuntimeConfig { id: container_id },
             options: self.inner.config.options.clone(),

@@ -122,18 +122,17 @@ impl PyBox {
     }
 
     /// Clone this box, creating a new box with copied disks.
-    #[pyo3(signature = (name=None, options=None))]
-    fn clone_box<'a>(
+    #[pyo3(signature = (name, options=None))]
+    fn clone<'a>(
         &self,
         py: Python<'a>,
-        name: Option<String>,
+        name: String,
         options: Option<PyCloneOptions>,
     ) -> PyResult<Bound<'a, PyAny>> {
         let handle = Arc::clone(&self.handle);
         let opts: CloneOptions = options.map(Into::into).unwrap_or_default();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let cloned = handle
-                .clone_box(name.as_deref(), opts)
+            let cloned = LiteBox::clone(&handle, &name, opts)
                 .await
                 .map_err(map_err)?;
             Ok(PyBox {
