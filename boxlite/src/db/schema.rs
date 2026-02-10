@@ -92,8 +92,8 @@ CREATE TABLE IF NOT EXISTS box_snapshot (
     name TEXT NOT NULL,
     created_at INTEGER NOT NULL,
     snapshot_dir TEXT NOT NULL,
-    guest_disk_size_bytes INTEGER NOT NULL,
-    container_disk_size_bytes INTEGER NOT NULL,
+    guest_disk_bytes INTEGER NOT NULL,
+    container_disk_bytes INTEGER NOT NULL,
     size_bytes INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY (box_id) REFERENCES box_config(id) ON DELETE CASCADE,
     UNIQUE(box_id, name)

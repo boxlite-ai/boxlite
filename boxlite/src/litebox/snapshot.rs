@@ -163,8 +163,8 @@ impl<'a> SnapshotHandle<'a> {
             name: name.to_string(),
             created_at: Utc::now().timestamp(),
             snapshot_dir: snapshot_dir.to_string_lossy().to_string(),
-            guest_disk_size_bytes: guest_virtual_size,
-            container_disk_size_bytes: container_virtual_size,
+            guest_disk_bytes: guest_virtual_size,
+            container_disk_bytes: container_virtual_size,
             size_bytes,
         };
         self.snapshot_store().save(&record)?;
@@ -313,7 +313,7 @@ impl<'a> SnapshotHandle<'a> {
             &snap_container,
             BackingFormat::Qcow2,
             &container_disk,
-            info.container_disk_size_bytes,
+            info.container_disk_bytes,
         )?;
 
         // Handle guest disk
@@ -331,7 +331,7 @@ impl<'a> SnapshotHandle<'a> {
                 &snap_guest,
                 BackingFormat::Qcow2,
                 &guest_disk,
-                info.guest_disk_size_bytes,
+                info.guest_disk_bytes,
             )?;
         }
 

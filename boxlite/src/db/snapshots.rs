@@ -23,9 +23,9 @@ pub struct SnapshotInfo {
     /// Path to the snapshot directory containing disk files.
     pub snapshot_dir: String,
     /// Virtual size in bytes of the guest rootfs disk (0 if not present).
-    pub guest_disk_size_bytes: u64,
+    pub guest_disk_bytes: u64,
     /// Virtual size in bytes of the container disk.
-    pub container_disk_size_bytes: u64,
+    pub container_disk_bytes: u64,
     /// Total on-disk size in bytes of all snapshot files.
     pub size_bytes: u64,
 }
@@ -46,7 +46,7 @@ impl SnapshotStore {
         let conn = self.db.conn();
         db_err!(conn.execute(
             "INSERT INTO box_snapshot (id, box_id, name, created_at, snapshot_dir, \
-             guest_disk_size_bytes, container_disk_size_bytes, size_bytes) \
+             guest_disk_bytes, container_disk_bytes, size_bytes) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             rusqlite::params![
                 record.id,
@@ -54,8 +54,8 @@ impl SnapshotStore {
                 record.name,
                 record.created_at,
                 record.snapshot_dir,
-                record.guest_disk_size_bytes as i64,
-                record.container_disk_size_bytes as i64,
+                record.guest_disk_bytes as i64,
+                record.container_disk_bytes as i64,
                 record.size_bytes as i64,
             ],
         ))?;
@@ -67,7 +67,7 @@ impl SnapshotStore {
         let conn = self.db.conn();
         let mut stmt = db_err!(conn.prepare(
             "SELECT id, box_id, name, created_at, snapshot_dir, \
-             guest_disk_size_bytes, container_disk_size_bytes, size_bytes \
+             guest_disk_bytes, container_disk_bytes, size_bytes \
              FROM box_snapshot WHERE box_id = ?1 ORDER BY created_at DESC"
         ))?;
 
@@ -78,8 +78,8 @@ impl SnapshotStore {
                 name: row.get(2)?,
                 created_at: row.get(3)?,
                 snapshot_dir: row.get(4)?,
-                guest_disk_size_bytes: row.get::<_, i64>(5)? as u64,
-                container_disk_size_bytes: row.get::<_, i64>(6)? as u64,
+                guest_disk_bytes: row.get::<_, i64>(5)? as u64,
+                container_disk_bytes: row.get::<_, i64>(6)? as u64,
                 size_bytes: row.get::<_, i64>(7)? as u64,
             })
         }))?;
@@ -97,7 +97,7 @@ impl SnapshotStore {
         let result = db_err!(
             conn.query_row(
                 "SELECT id, box_id, name, created_at, snapshot_dir, \
-                 guest_disk_size_bytes, container_disk_size_bytes, size_bytes \
+                 guest_disk_bytes, container_disk_bytes, size_bytes \
                  FROM box_snapshot WHERE box_id = ?1 AND name = ?2",
                 rusqlite::params![box_id, name],
                 |row| {
@@ -107,8 +107,8 @@ impl SnapshotStore {
                         name: row.get(2)?,
                         created_at: row.get(3)?,
                         snapshot_dir: row.get(4)?,
-                        guest_disk_size_bytes: row.get::<_, i64>(5)? as u64,
-                        container_disk_size_bytes: row.get::<_, i64>(6)? as u64,
+                        guest_disk_bytes: row.get::<_, i64>(5)? as u64,
+                        container_disk_bytes: row.get::<_, i64>(6)? as u64,
                         size_bytes: row.get::<_, i64>(7)? as u64,
                     })
                 },
@@ -125,7 +125,7 @@ impl SnapshotStore {
         let result = db_err!(
             conn.query_row(
                 "SELECT id, box_id, name, created_at, snapshot_dir, \
-                 guest_disk_size_bytes, container_disk_size_bytes, size_bytes \
+                 guest_disk_bytes, container_disk_bytes, size_bytes \
                  FROM box_snapshot WHERE id = ?1",
                 rusqlite::params![snapshot_id],
                 |row| {
@@ -135,8 +135,8 @@ impl SnapshotStore {
                         name: row.get(2)?,
                         created_at: row.get(3)?,
                         snapshot_dir: row.get(4)?,
-                        guest_disk_size_bytes: row.get::<_, i64>(5)? as u64,
-                        container_disk_size_bytes: row.get::<_, i64>(6)? as u64,
+                        guest_disk_bytes: row.get::<_, i64>(5)? as u64,
+                        container_disk_bytes: row.get::<_, i64>(6)? as u64,
                         size_bytes: row.get::<_, i64>(7)? as u64,
                     })
                 },
@@ -187,8 +187,8 @@ mod tests {
             name: name.to_string(),
             created_at: Utc::now().timestamp(),
             snapshot_dir: format!("/snapshots/{}", name),
-            guest_disk_size_bytes: 1024,
-            container_disk_size_bytes: 10 * 1024 * 1024 * 1024,
+            guest_disk_bytes: 1024,
+            container_disk_bytes: 10 * 1024 * 1024 * 1024,
             size_bytes: 512,
         }
     }
@@ -215,10 +215,7 @@ mod tests {
         let snapshots = store.list("box1").unwrap();
         assert_eq!(snapshots.len(), 1);
         assert_eq!(snapshots[0].name, "snap1");
-        assert_eq!(
-            snapshots[0].container_disk_size_bytes,
-            10 * 1024 * 1024 * 1024
-        );
+        assert_eq!(snapshots[0].container_disk_bytes, 10 * 1024 * 1024 * 1024);
     }
 
     #[test]
