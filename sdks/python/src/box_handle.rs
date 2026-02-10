@@ -3,8 +3,10 @@ use std::sync::Arc;
 use crate::exec::PyExecution;
 use crate::info::PyBoxInfo;
 use crate::metrics::PyBoxMetrics;
+use crate::snapshot_options::{PyCloneOptions, PyExportOptions};
+use crate::snapshots::PySnapshotHandle;
 use crate::util::map_err;
-use boxlite::{BoxCommand, LiteBox};
+use boxlite::{BoxCommand, CloneOptions, ExportOptions, LiteBox};
 use pyo3::prelude::*;
 
 #[pyclass(name = "Box")]
@@ -26,6 +28,16 @@ impl PyBox {
 
     fn info(&self) -> PyBoxInfo {
         PyBoxInfo::from(self.handle.info())
+    }
+
+    /// Get the snapshot handle for snapshot operations.
+    ///
+    /// Usage: `box.snapshot.create("name")`, `box.snapshot.list()`, etc.
+    #[getter]
+    fn snapshot(&self) -> PySnapshotHandle {
+        PySnapshotHandle {
+            handle: Arc::clone(&self.handle),
+        }
     }
 
     #[pyo3(signature = (command, args=None, env=None, tty=false))]
@@ -50,7 +62,6 @@ impl PyBox {
                 }
             }
             if tty {
-                // Auto-detect terminal size like Docker (done inside .tty())
                 cmd = cmd.tty(true);
             }
 
@@ -63,12 +74,6 @@ impl PyBox {
     }
 
     /// Start the box (initialize VM).
-    ///
-    /// For Configured boxes: initializes VM for the first time.
-    /// For Stopped boxes: restarts the VM.
-    ///
-    /// This is idempotent - calling start() on a Running box is a no-op.
-    /// Also called implicitly by exec() if the box is not running.
     fn start<'a>(&self, py: Python<'a>) -> PyResult<Bound<'a, PyAny>> {
         let handle = Arc::clone(&self.handle);
 
@@ -97,13 +102,47 @@ impl PyBox {
         })
     }
 
+    /// Export this box as a portable archive.
+    #[pyo3(signature = (dest, options=None))]
+    fn export<'a>(
+        &self,
+        py: Python<'a>,
+        dest: String,
+        options: Option<PyExportOptions>,
+    ) -> PyResult<Bound<'a, PyAny>> {
+        let handle = Arc::clone(&self.handle);
+        let opts: ExportOptions = options.map(Into::into).unwrap_or_default();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let path = handle
+                .export(std::path::Path::new(&dest), opts)
+                .await
+                .map_err(map_err)?;
+            Ok(path.to_string_lossy().to_string())
+        })
+    }
+
+    /// Clone this box, creating a new box with copied disks.
+    #[pyo3(signature = (name=None, options=None))]
+    fn clone_box<'a>(
+        &self,
+        py: Python<'a>,
+        name: Option<String>,
+        options: Option<PyCloneOptions>,
+    ) -> PyResult<Bound<'a, PyAny>> {
+        let handle = Arc::clone(&self.handle);
+        let opts: CloneOptions = options.map(Into::into).unwrap_or_default();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let cloned = handle
+                .clone_box(name.as_deref(), opts)
+                .await
+                .map_err(map_err)?;
+            Ok(PyBox {
+                handle: Arc::new(cloned),
+            })
+        })
+    }
+
     /// Copy from host into the box container rootfs.
-    ///
-    /// **Note:** Destinations under tmpfs mounts (e.g. `/tmp`, `/dev/shm`) will
-    /// silently fail — files land behind the mount and are invisible to the
-    /// container. Same limitation as `docker cp`. Workaround: pipe tar via
-    /// stdin through the box's command execution API.
-    /// See: <https://github.com/moby/moby/issues/22020>
     #[pyo3(signature = (host_path, container_dest, copy_options=None))]
     fn copy_in<'a>(
         &self,

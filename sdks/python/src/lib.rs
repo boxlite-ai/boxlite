@@ -6,6 +6,7 @@ mod info;
 mod metrics;
 mod options;
 mod runtime;
+mod snapshot_options;
 mod snapshots;
 mod util;
 
@@ -15,7 +16,8 @@ use crate::info::{PyBoxInfo, PyBoxStateInfo};
 use crate::metrics::{PyBoxMetrics, PyRuntimeMetrics};
 use crate::options::{PyBoxOptions, PyCopyOptions, PyOptions, PySecurityOptions};
 use crate::runtime::PyBoxlite;
-use crate::snapshots::PySnapshotRecord;
+use crate::snapshot_options::{PyCloneOptions, PyExportOptions, PySnapshotOptions};
+use crate::snapshots::{PySnapshotHandle, PySnapshotInfo};
 use pyo3::prelude::*;
 
 #[pymodule(name = "boxlite")]
@@ -34,7 +36,11 @@ fn boxlite_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyRuntimeMetrics>()?;
     m.add_class::<PyBoxMetrics>()?;
     m.add_class::<PyCopyOptions>()?;
-    m.add_class::<PySnapshotRecord>()?;
+    m.add_class::<PySnapshotInfo>()?;
+    m.add_class::<PySnapshotHandle>()?;
+    m.add_class::<PySnapshotOptions>()?;
+    m.add_class::<PyExportOptions>()?;
+    m.add_class::<PyCloneOptions>()?;
 
     Ok(())
 }
