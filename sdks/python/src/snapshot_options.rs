@@ -6,19 +6,35 @@ use pyo3::prelude::*;
 /// Options for creating a snapshot.
 #[pyclass(name = "SnapshotOptions")]
 #[derive(Clone)]
-pub(crate) struct PySnapshotOptions {}
+pub(crate) struct PySnapshotOptions {
+    #[pyo3(get, set)]
+    pub quiesce: bool,
+    #[pyo3(get, set)]
+    pub quiesce_timeout_secs: u64,
+    #[pyo3(get, set)]
+    pub stop_on_quiesce_fail: bool,
+}
 
 #[pymethods]
 impl PySnapshotOptions {
     #[new]
-    fn new() -> Self {
-        Self {}
+    #[pyo3(signature = (quiesce=true, quiesce_timeout_secs=30, stop_on_quiesce_fail=true))]
+    fn new(quiesce: bool, quiesce_timeout_secs: u64, stop_on_quiesce_fail: bool) -> Self {
+        Self {
+            quiesce,
+            quiesce_timeout_secs,
+            stop_on_quiesce_fail,
+        }
     }
 }
 
 impl From<PySnapshotOptions> for SnapshotOptions {
-    fn from(_py: PySnapshotOptions) -> Self {
-        SnapshotOptions::default()
+    fn from(py: PySnapshotOptions) -> Self {
+        SnapshotOptions {
+            quiesce: py.quiesce,
+            quiesce_timeout_secs: py.quiesce_timeout_secs,
+            stop_on_quiesce_fail: py.stop_on_quiesce_fail,
+        }
     }
 }
 

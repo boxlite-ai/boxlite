@@ -1,10 +1,45 @@
 //! Options types for snapshot, export, and clone operations.
 
 /// Options for creating a snapshot.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct SnapshotOptions {
-    // Quiesce fields present for future guest-side FIFREEZE support.
-    // Currently no-op.
+    /// Whether to quiesce guest filesystems before snapshot (default: true).
+    /// Currently a no-op; reserved for future guest-side FIFREEZE support.
+    pub quiesce: bool,
+    /// Timeout in seconds to wait for quiesce (default: 30).
+    pub quiesce_timeout_secs: u64,
+    /// Whether to abort the snapshot if quiesce fails (default: true).
+    pub stop_on_quiesce_fail: bool,
+}
+
+impl Default for SnapshotOptions {
+    fn default() -> Self {
+        Self {
+            quiesce: true,
+            quiesce_timeout_secs: 30,
+            stop_on_quiesce_fail: true,
+        }
+    }
+}
+
+impl SnapshotOptions {
+    /// Set whether to quiesce guest filesystems before snapshot.
+    pub fn quiesce(&mut self, quiesce: bool) -> &mut Self {
+        self.quiesce = quiesce;
+        self
+    }
+
+    /// Set the quiesce timeout in seconds.
+    pub fn quiesce_timeout_secs(&mut self, secs: u64) -> &mut Self {
+        self.quiesce_timeout_secs = secs;
+        self
+    }
+
+    /// Set whether to abort the snapshot if quiesce fails.
+    pub fn stop_on_quiesce_fail(&mut self, stop: bool) -> &mut Self {
+        self.stop_on_quiesce_fail = stop;
+        self
+    }
 }
 
 /// Options for exporting a box archive.
