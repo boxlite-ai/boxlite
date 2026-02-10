@@ -183,13 +183,37 @@ impl Database {
             current = 4;
         }
 
-        // Migration 4 -> 5: Add snapshots table
+        // Migration 4 -> 5: Add snapshots table (legacy, now replaced by box_snapshot in v6)
         if current == 4 {
             tracing::info!("Running migration 4 -> 5: Adding snapshots table");
 
-            db_err!(conn.execute_batch(schema::SNAPSHOTS_TABLE))?;
+            // Create the old snapshots table so migration 5->6 can drop it
+            db_err!(conn.execute_batch(
+                r#"
+                CREATE TABLE IF NOT EXISTS snapshots (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    box_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    description TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (box_id) REFERENCES box_config(id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_snapshots_box_id ON snapshots(box_id);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_snapshots_box_name ON snapshots(box_id, name);
+                "#
+            ))?;
 
             current = 5;
+        }
+
+        // Migration 5 -> 6: Replace snapshots table with box_snapshot
+        if current == 5 {
+            tracing::info!("Running migration 5 -> 6: Replacing snapshots with box_snapshot");
+
+            db_err!(conn.execute_batch("DROP TABLE IF EXISTS snapshots;"))?;
+            db_err!(conn.execute_batch(schema::BOX_SNAPSHOT_TABLE))?;
+
+            current = 6;
         }
 
         // Update schema version
@@ -240,15 +264,15 @@ mod tests {
         assert!(tables.contains(&"box_state".to_string()));
         assert!(tables.contains(&"alive".to_string()));
         assert!(tables.contains(&"image_index".to_string()));
-        assert!(tables.contains(&"snapshots".to_string()));
+        assert!(tables.contains(&"box_snapshot".to_string()));
     }
 
     #[test]
-    fn test_db_migration_v4_to_v5() {
+    fn test_db_migration_v4_to_v6() {
         let temp_dir = TempDir::new().unwrap();
         let db_path = temp_dir.path().join("test.db");
 
-        // Simulate a v4 database (without snapshots table)
+        // Simulate a v4 database (without snapshots or box_snapshot table)
         {
             let conn = Connection::open(&db_path).unwrap();
             conn.execute_batch(schema::SCHEMA_VERSION_TABLE).unwrap();
@@ -265,7 +289,7 @@ mod tests {
             .unwrap();
         }
 
-        // Open with current code - should auto-migrate to v5
+        // Open with current code - should auto-migrate to v6
         let db = Database::open(&db_path).unwrap();
         let conn = db.conn();
 
@@ -277,17 +301,92 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(version, 5);
+        assert_eq!(version, 6);
 
-        // Verify snapshots table exists
+        // Verify box_snapshot table exists
         let table_exists: bool = conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='box_snapshot'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(
+            table_exists,
+            "box_snapshot table should exist after migration"
+        );
+
+        // Verify old snapshots table is gone
+        let old_exists: bool = conn
             .query_row(
                 "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='snapshots'",
                 [],
                 |row| row.get(0),
             )
             .unwrap();
-        assert!(table_exists, "snapshots table should exist after migration");
+        assert!(
+            !old_exists,
+            "old snapshots table should be dropped after migration"
+        );
+    }
+
+    #[test]
+    fn test_db_migration_v5_to_v6() {
+        let temp_dir = TempDir::new().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+
+        // Simulate a v5 database (with old snapshots table)
+        {
+            let conn = Connection::open(&db_path).unwrap();
+            conn.execute_batch(schema::SCHEMA_VERSION_TABLE).unwrap();
+            conn.execute_batch(schema::BOX_CONFIG_TABLE).unwrap();
+            conn.execute_batch(schema::BOX_STATE_TABLE).unwrap();
+            conn.execute_batch(schema::ALIVE_TABLE).unwrap();
+            conn.execute_batch(schema::IMAGE_INDEX_TABLE).unwrap();
+            conn.execute_batch(
+                r#"
+                CREATE TABLE IF NOT EXISTS snapshots (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    box_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    description TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (box_id) REFERENCES box_config(id) ON DELETE CASCADE
+                );
+                "#,
+            )
+            .unwrap();
+
+            let now = Utc::now().to_rfc3339();
+            conn.execute(
+                "INSERT INTO schema_version (id, version, updated_at) VALUES (1, 5, ?1)",
+                rusqlite::params![now],
+            )
+            .unwrap();
+        }
+
+        // Open with current code - should auto-migrate to v6
+        let db = Database::open(&db_path).unwrap();
+        let conn = db.conn();
+
+        let version: i32 = conn
+            .query_row(
+                "SELECT version FROM schema_version WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, 6);
+
+        // box_snapshot should exist
+        let table_exists: bool = conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='box_snapshot'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(table_exists);
     }
 
     #[test]
