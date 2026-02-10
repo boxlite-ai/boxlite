@@ -317,17 +317,34 @@ impl BoxFilesystemLayout {
     }
 
     // ========================================================================
+    // SNAPSHOTS
+    // ========================================================================
+
+    /// Snapshots directory: ~/.boxlite/boxes/{box_id}/snapshots
+    pub fn snapshots_dir(&self) -> PathBuf {
+        self.box_dir
+            .join(crate::disk::constants::dirs::SNAPSHOTS_DIR)
+    }
+
+    /// Named snapshot directory: ~/.boxlite/boxes/{box_id}/snapshots/{name}
+    pub fn snapshot_dir(&self, name: &str) -> PathBuf {
+        self.snapshots_dir().join(name)
+    }
+
+    // ========================================================================
     // DISK AND CONSOLE
     // ========================================================================
 
     /// Virtual disk path: ~/.boxlite/boxes/{box_id}/disk.qcow2
     pub fn disk_path(&self) -> PathBuf {
-        self.box_dir.join(crate::disk::constants::filenames::CONTAINER_DISK)
+        self.box_dir
+            .join(crate::disk::constants::filenames::CONTAINER_DISK)
     }
 
     /// Guest rootfs disk path: ~/.boxlite/boxes/{box_id}/guest-rootfs.qcow2
     pub fn guest_rootfs_disk_path(&self) -> PathBuf {
-        self.box_dir.join(crate::disk::constants::filenames::GUEST_ROOTFS_DISK)
+        self.box_dir
+            .join(crate::disk::constants::filenames::GUEST_ROOTFS_DISK)
     }
 
     /// Console output path: ~/.boxlite/boxes/{box_id}/console.log

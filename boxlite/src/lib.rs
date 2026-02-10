@@ -31,15 +31,18 @@ pub use portal::GuestSession;
 pub use runtime::BoxliteRuntime;
 
 pub use boxlite_shared::errors::{BoxliteError, BoxliteResult};
+pub use db::snapshots::SnapshotInfo;
+pub use litebox::SnapshotHandle;
+pub use litebox::snapshot_types::{CloneOptions, ExportOptions, SnapshotOptions};
 pub use litebox::{
     BoxCommand, CopyOptions, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execution, ExecutionId,
 };
 pub use metrics::{BoxMetrics, RuntimeMetrics};
+pub use runtime::ArchiveManifest;
 use runtime::layout::FilesystemLayout;
 pub use runtime::options::{
     BoxOptions, BoxliteOptions, ResourceLimits, RootfsSpec, SecurityOptions,
 };
-pub use db::snapshots::SnapshotRecord;
 pub use runtime::types::ContainerID;
 pub use runtime::types::{BoxID, BoxInfo, BoxState, BoxStateInfo, BoxStatus};
 

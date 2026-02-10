@@ -1,15 +1,10 @@
-//! Box export and import operations.
+//! Box import operations.
 //!
-//! Export creates a portable `.boxlite` archive from a stopped box.
-//! Import recreates a box from a `.boxlite` archive.
+//! Import recreates a box from a `.boxsnap` or `.boxlite` archive.
 //!
-//! Archive format (tar):
-//! ```text
-//! archive.boxlite/
-//! ├── manifest.json       # Archive metadata and box config
-//! ├── disk.qcow2          # Container rootfs (flattened, standalone)
-//! └── guest-rootfs.qcow2  # Guest rootfs (flattened, standalone)
-//! ```
+//! Supports two archive formats:
+//! - v2 (`.boxsnap`): tar.zst compressed with SHA-256 checksums
+//! - v1 (`.boxlite`): plain tar (legacy, backward compatible)
 
 use std::path::Path;
 
@@ -18,18 +13,19 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 use crate::disk::constants::filenames as disk_filenames;
-use crate::disk::qemu_img;
+use crate::litebox::LiteBox;
 use crate::litebox::config::{BoxConfig, ContainerRuntimeConfig};
 use crate::runtime::constants::filenames as rt_filenames;
 use crate::runtime::options::BoxOptions;
-use crate::runtime::rt_impl::SharedRuntimeImpl;
-use crate::runtime::types::{BoxID, BoxInfo, BoxState, BoxStatus, ContainerID};
+use crate::runtime::types::{BoxID, BoxState, BoxStatus, ContainerID};
 use crate::vmm::VmmKind;
 
-/// Archive manifest stored as `manifest.json` inside the `.boxlite` archive.
+/// Archive manifest stored as `manifest.json` inside the archive.
+///
+/// Compatible with both v1 (plain tar) and v2 (tar.zst with checksums).
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ArchiveManifest {
-    /// Archive format version (for forward compatibility).
+    /// Archive format version (1 or 2).
     pub version: u32,
     /// Original box options (used to recreate the box on import).
     pub options: BoxOptions,
@@ -39,128 +35,31 @@ pub struct ArchiveManifest {
     pub exported_at: String,
     /// Files included in the archive.
     pub files: Vec<String>,
+    /// SHA-256 checksums (v2 only, empty for v1).
+    #[serde(default)]
+    pub checksums: std::collections::HashMap<String, String>,
 }
 
-const ARCHIVE_VERSION: u32 = 1;
+const MAX_SUPPORTED_VERSION: u32 = 2;
 const MANIFEST_FILENAME: &str = "manifest.json";
 
 impl super::BoxliteRuntime {
-    /// Export a stopped box as a portable `.boxlite` archive.
-    ///
-    /// The archive contains flattened disk images (no backing file references)
-    /// and box configuration metadata. The exported archive can be imported
-    /// on any compatible BoxLite installation.
-    ///
-    /// # Arguments
-    ///
-    /// * `id_or_name` - Box ID or name to export
-    /// * `output_path` - Path where the `.boxlite` archive will be written
-    ///
-    /// # Errors
-    ///
-    /// Returns error if:
-    /// - Box is not found
-    /// - Box is not in Stopped state
-    /// - `qemu-img` is not installed (needed to flatten COW chains)
-    /// - I/O errors during archive creation
-    pub async fn export(
-        &self,
-        id_or_name: &str,
-        output_path: &Path,
-    ) -> BoxliteResult<()> {
-        let rt = &self.rt_impl;
-
-        // Resolve box and verify it's stopped
-        let (config, _state) = resolve_stopped_box(rt, id_or_name)?;
-
-        let box_home = &config.box_home;
-        let container_disk = box_home.join(disk_filenames::CONTAINER_DISK);
-        let guest_disk = box_home.join(disk_filenames::GUEST_ROOTFS_DISK);
-
-        // Validate disks exist
-        if !container_disk.exists() {
-            return Err(BoxliteError::Storage(format!(
-                "Container disk not found at {}",
-                container_disk.display()
-            )));
-        }
-
-        // Create temp directory for flattened disks (same filesystem for efficiency)
-        let temp_dir = tempfile::tempdir_in(rt.layout.temp_dir()).map_err(|e| {
-            BoxliteError::Storage(format!("Failed to create temp directory: {}", e))
-        })?;
-
-        // Flatten COW disks to standalone images
-        let flat_container = temp_dir.path().join(disk_filenames::CONTAINER_DISK);
-        qemu_img::convert(&container_disk, &flat_container)?;
-
-        let mut archive_files = vec![
-            MANIFEST_FILENAME.to_string(),
-            disk_filenames::CONTAINER_DISK.to_string(),
-        ];
-
-        let flat_guest = if guest_disk.exists() {
-            let flat = temp_dir.path().join(disk_filenames::GUEST_ROOTFS_DISK);
-            qemu_img::convert(&guest_disk, &flat)?;
-            archive_files.push(disk_filenames::GUEST_ROOTFS_DISK.to_string());
-            Some(flat)
-        } else {
-            None
-        };
-
-        // Create manifest
-        let manifest = ArchiveManifest {
-            version: ARCHIVE_VERSION,
-            options: config.options.clone(),
-            original_name: config.name.clone(),
-            exported_at: Utc::now().to_rfc3339(),
-            files: archive_files,
-        };
-
-        let manifest_json = serde_json::to_string_pretty(&manifest).map_err(|e| {
-            BoxliteError::Internal(format!("Failed to serialize manifest: {}", e))
-        })?;
-        let manifest_path = temp_dir.path().join(MANIFEST_FILENAME);
-        std::fs::write(&manifest_path, manifest_json)?;
-
-        // Build tar archive
-        build_tar_archive(output_path, &manifest_path, &flat_container, flat_guest.as_deref())?;
-
-        tracing::info!(
-            box_id = %config.id,
-            output = %output_path.display(),
-            "Exported box to archive"
-        );
-
-        Ok(())
-    }
-
-    /// Import a box from a `.boxlite` archive.
+    /// Import a box from a `.boxsnap` or `.boxlite` archive.
     ///
     /// Creates a new box with a new ID from the archived disk images and
     /// configuration. The imported box starts in `Stopped` state and can
     /// be started normally.
     ///
-    /// # Arguments
-    ///
-    /// * `archive_path` - Path to the `.boxlite` archive
-    /// * `name` - Optional name for the imported box (overrides archived name)
+    /// Supports both v1 (plain tar) and v2 (tar.zst) archive formats.
     ///
     /// # Returns
     ///
-    /// Information about the newly created box.
-    ///
-    /// # Errors
-    ///
-    /// Returns error if:
-    /// - Archive is invalid or corrupt
-    /// - Manifest version is unsupported
-    /// - I/O errors during extraction
+    /// A LiteBox handle for the newly created box.
     pub async fn import(
         &self,
         archive_path: &Path,
         name: Option<String>,
-    ) -> BoxliteResult<BoxInfo> {
+    ) -> BoxliteResult<LiteBox> {
         let rt = &self.rt_impl;
 
         if !archive_path.exists() {
@@ -175,7 +74,8 @@ impl super::BoxliteRuntime {
             BoxliteError::Storage(format!("Failed to create temp directory: {}", e))
         })?;
 
-        extract_tar_archive(archive_path, temp_dir.path())?;
+        // Try zstd decompression first, fall back to plain tar
+        extract_archive(archive_path, temp_dir.path())?;
 
         // Read and validate manifest
         let manifest_path = temp_dir.path().join(MANIFEST_FILENAME);
@@ -186,14 +86,13 @@ impl super::BoxliteRuntime {
         }
 
         let manifest_json = std::fs::read_to_string(&manifest_path)?;
-        let manifest: ArchiveManifest = serde_json::from_str(&manifest_json).map_err(|e| {
-            BoxliteError::Storage(format!("Invalid manifest: {}", e))
-        })?;
+        let manifest: ArchiveManifest = serde_json::from_str(&manifest_json)
+            .map_err(|e| BoxliteError::Storage(format!("Invalid manifest: {}", e)))?;
 
-        if manifest.version > ARCHIVE_VERSION {
+        if manifest.version > MAX_SUPPORTED_VERSION {
             return Err(BoxliteError::Storage(format!(
                 "Unsupported archive version {} (max supported: {}). Upgrade boxlite.",
-                manifest.version, ARCHIVE_VERSION
+                manifest.version, MAX_SUPPORTED_VERSION
             )));
         }
 
@@ -226,17 +125,21 @@ impl super::BoxliteRuntime {
         })?;
 
         // Move disk files into box directory
-        std::fs::rename(&extracted_container, box_home.join(disk_filenames::CONTAINER_DISK))
-            .map_err(|e| {
-                BoxliteError::Storage(format!("Failed to install container disk: {}", e))
-            })?;
+        std::fs::rename(
+            &extracted_container,
+            box_home.join(disk_filenames::CONTAINER_DISK),
+        )
+        .map_err(|e| BoxliteError::Storage(format!("Failed to install container disk: {}", e)))?;
 
         let extracted_guest = temp_dir.path().join(disk_filenames::GUEST_ROOTFS_DISK);
         if extracted_guest.exists() {
-            std::fs::rename(&extracted_guest, box_home.join(disk_filenames::GUEST_ROOTFS_DISK))
-                .map_err(|e| {
-                    BoxliteError::Storage(format!("Failed to install guest rootfs disk: {}", e))
-                })?;
+            std::fs::rename(
+                &extracted_guest,
+                box_home.join(disk_filenames::GUEST_ROOTFS_DISK),
+            )
+            .map_err(|e| {
+                BoxliteError::Storage(format!("Failed to install guest rootfs disk: {}", e))
+            })?;
         }
 
         // Build config for the imported box
@@ -262,13 +165,10 @@ impl super::BoxliteRuntime {
 
         // Persist to database
         if let Err(e) = rt.box_manager.add_box(&config, &state) {
-            // Clean up on failure
             let _ = rt.lock_manager.free(lock_id);
             let _ = std::fs::remove_dir_all(&config.box_home);
             return Err(e);
         }
-
-        let info = BoxInfo::new(&config, &state);
 
         tracing::info!(
             box_id = %config.id,
@@ -276,74 +176,15 @@ impl super::BoxliteRuntime {
             "Imported box from archive"
         );
 
-        Ok(info)
+        // Return a LiteBox handle
+        rt.get(box_id.as_str()).await?.ok_or_else(|| {
+            BoxliteError::Internal("Imported box not found after persist".to_string())
+        })
     }
 }
 
-/// Resolve a box by ID or name and verify it's in Stopped state.
-pub(crate) fn resolve_stopped_box(
-    rt: &SharedRuntimeImpl,
-    id_or_name: &str,
-) -> BoxliteResult<(BoxConfig, BoxState)> {
-    let (config, state) = rt
-        .box_manager
-        .lookup_box(id_or_name)?
-        .ok_or_else(|| BoxliteError::NotFound(format!("box '{}' not found", id_or_name)))?;
-
-    if state.status != BoxStatus::Stopped {
-        return Err(BoxliteError::InvalidState(format!(
-            "box '{}' must be stopped for this operation (current status: {:?})",
-            id_or_name, state.status
-        )));
-    }
-
-    Ok((config, state))
-}
-
-/// Build a tar archive from the given files.
-fn build_tar_archive(
-    output_path: &Path,
-    manifest_path: &Path,
-    container_disk: &Path,
-    guest_disk: Option<&Path>,
-) -> BoxliteResult<()> {
-    let file = std::fs::File::create(output_path).map_err(|e| {
-        BoxliteError::Storage(format!(
-            "Failed to create archive file {}: {}",
-            output_path.display(),
-            e
-        ))
-    })?;
-
-    let mut builder = tar::Builder::new(file);
-
-    builder
-        .append_path_with_name(manifest_path, MANIFEST_FILENAME)
-        .map_err(|e| BoxliteError::Storage(format!("Failed to add manifest to archive: {}", e)))?;
-
-    builder
-        .append_path_with_name(container_disk, disk_filenames::CONTAINER_DISK)
-        .map_err(|e| {
-            BoxliteError::Storage(format!("Failed to add container disk to archive: {}", e))
-        })?;
-
-    if let Some(guest) = guest_disk {
-        builder
-            .append_path_with_name(guest, disk_filenames::GUEST_ROOTFS_DISK)
-            .map_err(|e| {
-                BoxliteError::Storage(format!("Failed to add guest rootfs disk to archive: {}", e))
-            })?;
-    }
-
-    builder
-        .finish()
-        .map_err(|e| BoxliteError::Storage(format!("Failed to finalize archive: {}", e)))?;
-
-    Ok(())
-}
-
-/// Extract a tar archive to the given directory.
-fn extract_tar_archive(archive_path: &Path, dest_dir: &Path) -> BoxliteResult<()> {
+/// Extract an archive, auto-detecting format (try zstd first, then plain tar).
+fn extract_archive(archive_path: &Path, dest_dir: &Path) -> BoxliteResult<()> {
     let file = std::fs::File::open(archive_path).map_err(|e| {
         BoxliteError::Storage(format!(
             "Failed to open archive {}: {}",
@@ -352,14 +193,41 @@ fn extract_tar_archive(archive_path: &Path, dest_dir: &Path) -> BoxliteResult<()
         ))
     })?;
 
-    let mut archive = tar::Archive::new(file);
-    archive.unpack(dest_dir).map_err(|e| {
-        BoxliteError::Storage(format!(
-            "Failed to extract archive {}: {}",
-            archive_path.display(),
-            e
-        ))
-    })?;
+    // Try zstd-compressed tar first
+    match try_extract_zstd_tar(file, dest_dir) {
+        Ok(()) => return Ok(()),
+        Err(_) => {
+            // Fall back to plain tar
+            let file = std::fs::File::open(archive_path).map_err(|e| {
+                BoxliteError::Storage(format!(
+                    "Failed to reopen archive {}: {}",
+                    archive_path.display(),
+                    e
+                ))
+            })?;
+            extract_plain_tar(file, dest_dir)?;
+        }
+    }
 
+    Ok(())
+}
+
+/// Try to extract a zstd-compressed tar archive.
+fn try_extract_zstd_tar(file: std::fs::File, dest_dir: &Path) -> BoxliteResult<()> {
+    let decoder = zstd::Decoder::new(file)
+        .map_err(|e| BoxliteError::Storage(format!("Not a zstd archive: {}", e)))?;
+    let mut archive = tar::Archive::new(decoder);
+    archive
+        .unpack(dest_dir)
+        .map_err(|e| BoxliteError::Storage(format!("Failed to extract zstd tar: {}", e)))?;
+    Ok(())
+}
+
+/// Extract a plain tar archive.
+fn extract_plain_tar(file: std::fs::File, dest_dir: &Path) -> BoxliteResult<()> {
+    let mut archive = tar::Archive::new(file);
+    archive
+        .unpack(dest_dir)
+        .map_err(|e| BoxliteError::Storage(format!("Failed to extract archive: {}", e)))?;
     Ok(())
 }

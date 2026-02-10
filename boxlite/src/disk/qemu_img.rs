@@ -51,9 +51,7 @@ pub fn convert(src: &Path, dst: &Path) -> BoxliteResult<()> {
         .arg(src)
         .arg(dst)
         .output()
-        .map_err(|e| {
-            BoxliteError::Storage(format!("Failed to run qemu-img convert: {}", e))
-        })?;
+        .map_err(|e| BoxliteError::Storage(format!("Failed to run qemu-img convert: {}", e)))?;
 
     if !output.status.success() {
         return Err(BoxliteError::Storage(format!(
@@ -65,99 +63,9 @@ pub fn convert(src: &Path, dst: &Path) -> BoxliteResult<()> {
     Ok(())
 }
 
-/// Create an internal QCOW2 snapshot of a disk image.
-///
-/// Equivalent to: `qemu-img snapshot -c <name> <disk>`
-pub fn snapshot_create(disk: &Path, name: &str) -> BoxliteResult<()> {
-    require_qemu_img()?;
-
-    tracing::info!(
-        disk = %disk.display(),
-        name = %name,
-        "Creating QCOW2 internal snapshot"
-    );
-
-    let output = Command::new("qemu-img")
-        .args(["snapshot", "-c", name])
-        .arg(disk)
-        .output()
-        .map_err(|e| {
-            BoxliteError::Storage(format!("Failed to run qemu-img snapshot: {}", e))
-        })?;
-
-    if !output.status.success() {
-        return Err(BoxliteError::Storage(format!(
-            "qemu-img snapshot -c failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )));
-    }
-
-    Ok(())
-}
-
-/// Apply (restore) an internal QCOW2 snapshot.
-///
-/// Equivalent to: `qemu-img snapshot -a <name> <disk>`
-pub fn snapshot_apply(disk: &Path, name: &str) -> BoxliteResult<()> {
-    require_qemu_img()?;
-
-    tracing::info!(
-        disk = %disk.display(),
-        name = %name,
-        "Applying QCOW2 internal snapshot"
-    );
-
-    let output = Command::new("qemu-img")
-        .args(["snapshot", "-a", name])
-        .arg(disk)
-        .output()
-        .map_err(|e| {
-            BoxliteError::Storage(format!("Failed to run qemu-img snapshot: {}", e))
-        })?;
-
-    if !output.status.success() {
-        return Err(BoxliteError::Storage(format!(
-            "qemu-img snapshot -a failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )));
-    }
-
-    Ok(())
-}
-
-/// Delete an internal QCOW2 snapshot.
-///
-/// Equivalent to: `qemu-img snapshot -d <name> <disk>`
-pub fn snapshot_delete(disk: &Path, name: &str) -> BoxliteResult<()> {
-    require_qemu_img()?;
-
-    tracing::info!(
-        disk = %disk.display(),
-        name = %name,
-        "Deleting QCOW2 internal snapshot"
-    );
-
-    let output = Command::new("qemu-img")
-        .args(["snapshot", "-d", name])
-        .arg(disk)
-        .output()
-        .map_err(|e| {
-            BoxliteError::Storage(format!("Failed to run qemu-img snapshot: {}", e))
-        })?;
-
-    if !output.status.success() {
-        return Err(BoxliteError::Storage(format!(
-            "qemu-img snapshot -d failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )));
-    }
-
-    Ok(())
-}
-
 /// Create a full copy of a disk image (no COW, standalone).
 ///
-/// Used for clone operations. Produces a completely independent copy
+/// Used for clone and export operations. Produces a completely independent copy
 /// with no backing file references.
 ///
 /// Equivalent to: `qemu-img convert -O qcow2 <src> <dst>`
