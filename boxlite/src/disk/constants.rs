@@ -11,6 +11,12 @@ pub mod filenames {
     pub const GUEST_ROOTFS_DISK: &str = "guest-rootfs.qcow2";
 }
 
+/// Directory names within a box home.
+pub mod dirs {
+    /// Snapshots subdirectory: `~/.boxlite/boxes/{box_id}/snapshots/`
+    pub const SNAPSHOTS_DIR: &str = "snapshots";
+}
+
 /// QCOW2 disk image configuration
 pub mod qcow2 {
     /// Default disk size in GB (sparse, grows as needed)

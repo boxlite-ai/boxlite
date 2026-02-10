@@ -29,6 +29,9 @@ fn status_to_string(status: BoxStatus) -> String {
         BoxStatus::Running => "running",
         BoxStatus::Stopping => "stopping",
         BoxStatus::Stopped => "stopped",
+        BoxStatus::Snapshotting => "snapshotting",
+        BoxStatus::Restoring => "restoring",
+        BoxStatus::Exporting => "exporting",
     }
     .to_string()
 }

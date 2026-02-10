@@ -38,6 +38,15 @@ pub enum BoxStatus {
     /// Box is not running. VM process terminated.
     /// Rootfs is preserved, box can be restarted.
     Stopped,
+
+    /// Box is being snapshotted (transient state).
+    Snapshotting,
+
+    /// Box is being restored from a snapshot (transient state).
+    Restoring,
+
+    /// Box is being exported (transient state).
+    Exporting,
 }
 
 impl BoxStatus {
@@ -59,9 +68,14 @@ impl BoxStatus {
     }
 
     /// Check if this status represents a transient state.
-    /// Only Stopping is transient - Configured is a stable state.
     pub fn is_transient(&self) -> bool {
-        matches!(self, BoxStatus::Stopping)
+        matches!(
+            self,
+            BoxStatus::Stopping
+                | BoxStatus::Snapshotting
+                | BoxStatus::Restoring
+                | BoxStatus::Exporting
+        )
     }
 
     /// Check if start() can be called from this state.
@@ -112,9 +126,19 @@ impl BoxStatus {
             // Stopping → Stopped (complete) or Unknown (error)
             (Stopping, Stopped) |
             (Stopping, Unknown) |
-            // Stopped → Running (restart directly, no intermediate state)
+            // Stopped → Running (restart) or transient operation states
             (Stopped, Running) |
-            (Stopped, Unknown)
+            (Stopped, Snapshotting) |
+            (Stopped, Restoring) |
+            (Stopped, Exporting) |
+            (Stopped, Unknown) |
+            // Transient operation states → Stopped (on completion or error)
+            (Snapshotting, Stopped) |
+            (Snapshotting, Unknown) |
+            (Restoring, Stopped) |
+            (Restoring, Unknown) |
+            (Exporting, Stopped) |
+            (Exporting, Unknown)
         )
     }
 
@@ -126,6 +150,9 @@ impl BoxStatus {
             BoxStatus::Running => "running",
             BoxStatus::Stopping => "stopping",
             BoxStatus::Stopped => "stopped",
+            BoxStatus::Snapshotting => "snapshotting",
+            BoxStatus::Restoring => "restoring",
+            BoxStatus::Exporting => "exporting",
         }
     }
 }
@@ -142,6 +169,9 @@ impl std::str::FromStr for BoxStatus {
             "running" => Ok(BoxStatus::Running),
             "stopping" => Ok(BoxStatus::Stopping),
             "stopped" => Ok(BoxStatus::Stopped),
+            "snapshotting" => Ok(BoxStatus::Snapshotting),
+            "restoring" => Ok(BoxStatus::Restoring),
+            "exporting" => Ok(BoxStatus::Exporting),
             _ => Err(()),
         }
     }
@@ -324,10 +354,21 @@ mod tests {
         assert!(!BoxStatus::Stopping.can_transition_to(BoxStatus::Running));
         assert!(!BoxStatus::Stopping.can_transition_to(BoxStatus::Configured));
 
-        // Stopped transitions - can go directly to Running
+        // Stopped transitions
         assert!(BoxStatus::Stopped.can_transition_to(BoxStatus::Running));
+        assert!(BoxStatus::Stopped.can_transition_to(BoxStatus::Snapshotting));
+        assert!(BoxStatus::Stopped.can_transition_to(BoxStatus::Restoring));
+        assert!(BoxStatus::Stopped.can_transition_to(BoxStatus::Exporting));
         assert!(!BoxStatus::Stopped.can_transition_to(BoxStatus::Configured));
         assert!(!BoxStatus::Stopped.can_transition_to(BoxStatus::Stopping));
+
+        // Transient operation states → Stopped
+        assert!(BoxStatus::Snapshotting.can_transition_to(BoxStatus::Stopped));
+        assert!(!BoxStatus::Snapshotting.can_transition_to(BoxStatus::Running));
+        assert!(BoxStatus::Restoring.can_transition_to(BoxStatus::Stopped));
+        assert!(!BoxStatus::Restoring.can_transition_to(BoxStatus::Running));
+        assert!(BoxStatus::Exporting.can_transition_to(BoxStatus::Stopped));
+        assert!(!BoxStatus::Exporting.can_transition_to(BoxStatus::Running));
 
         // Unknown can go anywhere (recovery)
         assert!(BoxStatus::Unknown.can_transition_to(BoxStatus::Configured));
@@ -411,6 +452,9 @@ mod tests {
         assert_eq!(BoxStatus::Running.as_str(), "running");
         assert_eq!(BoxStatus::Stopping.as_str(), "stopping");
         assert_eq!(BoxStatus::Stopped.as_str(), "stopped");
+        assert_eq!(BoxStatus::Snapshotting.as_str(), "snapshotting");
+        assert_eq!(BoxStatus::Restoring.as_str(), "restoring");
+        assert_eq!(BoxStatus::Exporting.as_str(), "exporting");
     }
 
     #[test]
@@ -422,6 +466,9 @@ mod tests {
         assert_eq!("running".parse(), Ok(BoxStatus::Running));
         assert_eq!("stopping".parse(), Ok(BoxStatus::Stopping));
         assert_eq!("stopped".parse(), Ok(BoxStatus::Stopped));
+        assert_eq!("snapshotting".parse(), Ok(BoxStatus::Snapshotting));
+        assert_eq!("restoring".parse(), Ok(BoxStatus::Restoring));
+        assert_eq!("exporting".parse(), Ok(BoxStatus::Exporting));
         assert!("invalid".parse::<BoxStatus>().is_err());
     }
 }

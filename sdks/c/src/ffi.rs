@@ -200,6 +200,9 @@ fn status_to_string(status: BoxStatus) -> &'static str {
         BoxStatus::Running => "running",
         BoxStatus::Stopping => "stopping",
         BoxStatus::Stopped => "stopped",
+        BoxStatus::Snapshotting => "snapshotting",
+        BoxStatus::Restoring => "restoring",
+        BoxStatus::Exporting => "exporting",
     }
 }
 
