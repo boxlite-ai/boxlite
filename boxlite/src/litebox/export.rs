@@ -3,7 +3,6 @@
 //! Creates a `.boxsnap` archive containing flattened disk images,
 //! optionally compressed with zstd, with SHA-256 checksums.
 
-use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -97,42 +96,35 @@ impl LiteBox {
         let flat_container = temp_dir.path().join(disk_filenames::CONTAINER_DISK);
         qemu_img::convert(&container_disk, &flat_container)?;
 
-        let mut archive_files = vec![disk_filenames::CONTAINER_DISK.to_string()];
-
         let flat_guest = if guest_disk.exists() {
             let flat = temp_dir.path().join(disk_filenames::GUEST_ROOTFS_DISK);
             qemu_img::convert(&guest_disk, &flat)?;
-            archive_files.push(disk_filenames::GUEST_ROOTFS_DISK.to_string());
             Some(flat)
         } else {
             None
         };
 
         // Compute checksums
-        let mut checksums = HashMap::new();
-        checksums.insert(
-            disk_filenames::CONTAINER_DISK.to_string(),
-            sha256_file(&flat_container)?,
-        );
-        if let Some(ref fg) = flat_guest {
-            checksums.insert(
-                disk_filenames::GUEST_ROOTFS_DISK.to_string(),
-                sha256_file(fg)?,
-            );
-        }
+        let container_disk_checksum = sha256_file(&flat_container)?;
+        let guest_disk_checksum = match flat_guest {
+            Some(ref fg) => sha256_file(fg)?,
+            None => String::new(),
+        };
+
+        // Extract image reference from rootfs spec
+        let image = match &self.inner.config.options.rootfs {
+            crate::runtime::options::RootfsSpec::Image(img) => img.clone(),
+            crate::runtime::options::RootfsSpec::RootfsPath(path) => path.clone(),
+        };
 
         // Create manifest
-        if opts.include_metadata {
-            archive_files.insert(0, MANIFEST_FILENAME.to_string());
-        }
-
         let manifest = ArchiveManifest {
             version: ARCHIVE_VERSION,
-            options: self.inner.config.options.clone(),
-            original_name: self.inner.config.name.clone(),
+            box_name: self.inner.config.name.clone(),
+            image,
+            guest_disk_checksum,
+            container_disk_checksum,
             exported_at: Utc::now().to_rfc3339(),
-            files: archive_files,
-            checksums,
         };
 
         let manifest_json = serde_json::to_string_pretty(&manifest)
@@ -281,5 +273,5 @@ fn sha256_file(path: &Path) -> BoxliteResult<String> {
         hasher.update(&buf[..n]);
     }
 
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(format!("sha256:{:x}", hasher.finalize()))
 }

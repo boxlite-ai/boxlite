@@ -16,7 +16,7 @@ use crate::disk::constants::filenames as disk_filenames;
 use crate::litebox::LiteBox;
 use crate::litebox::config::{BoxConfig, ContainerRuntimeConfig};
 use crate::runtime::constants::filenames as rt_filenames;
-use crate::runtime::options::BoxOptions;
+use crate::runtime::options::{BoxOptions, RootfsSpec};
 use crate::runtime::types::{BoxID, BoxState, BoxStatus, ContainerID};
 use crate::vmm::VmmKind;
 
@@ -27,17 +27,16 @@ use crate::vmm::VmmKind;
 pub struct ArchiveManifest {
     /// Archive format version (1 or 2).
     pub version: u32,
-    /// Original box options (used to recreate the box on import).
-    pub options: BoxOptions,
     /// Original box name (optional, may be renamed on import).
-    pub original_name: Option<String>,
+    pub box_name: Option<String>,
+    /// Image reference used to create the box (e.g. "alpine:latest").
+    pub image: String,
+    /// SHA-256 checksum of the guest rootfs disk.
+    pub guest_disk_checksum: String,
+    /// SHA-256 checksum of the container disk.
+    pub container_disk_checksum: String,
     /// Timestamp when the archive was created.
     pub exported_at: String,
-    /// Files included in the archive.
-    pub files: Vec<String>,
-    /// SHA-256 checksums (v2 only, empty for v1).
-    #[serde(default)]
-    pub checksums: std::collections::HashMap<String, String>,
 }
 
 const MAX_SUPPORTED_VERSION: u32 = 2;
@@ -55,11 +54,7 @@ impl super::BoxliteRuntime {
     /// # Returns
     ///
     /// A LiteBox handle for the newly created box.
-    pub async fn import(
-        &self,
-        archive_path: &Path,
-        name: Option<String>,
-    ) -> BoxliteResult<LiteBox> {
+    pub async fn import(&self, archive_path: &Path, name: &str) -> BoxliteResult<LiteBox> {
         let rt = &self.rt_impl;
 
         if !archive_path.exists() {
@@ -109,7 +104,7 @@ impl super::BoxliteRuntime {
         let box_id = BoxID::new();
         let container_id = ContainerID::new();
         let now = Utc::now();
-        let import_name = name.or(manifest.original_name);
+        let import_name = Some(name.to_string());
 
         let box_home = rt.layout.boxes_dir().join(box_id.as_str());
         let socket_path = rt_filenames::unix_socket_path(rt.layout.home_dir(), box_id.as_str());
@@ -142,13 +137,20 @@ impl super::BoxliteRuntime {
             })?;
         }
 
+        // Reconstruct BoxOptions from the image reference.
+        // Imported boxes use default runtime config; disk state is fully preserved.
+        let options = BoxOptions {
+            rootfs: RootfsSpec::Image(manifest.image),
+            ..Default::default()
+        };
+
         // Build config for the imported box
         let config = BoxConfig {
             id: box_id.clone(),
             name: import_name,
             created_at: now,
             container: ContainerRuntimeConfig { id: container_id },
-            options: manifest.options,
+            options,
             engine_kind: VmmKind::Libkrun,
             transport: boxlite_shared::Transport::unix(socket_path),
             box_home,
