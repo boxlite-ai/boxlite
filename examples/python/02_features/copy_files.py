@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 Copy files into and out of a box (docker-like cp).
 
