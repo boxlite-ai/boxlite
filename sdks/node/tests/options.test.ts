@@ -66,6 +66,20 @@ describe('SimpleBoxOptions', () => {
     expect(opts.user).toBe('nginx');
   });
 
+  test('accepts security options', () => {
+    const opts: SimpleBoxOptions = {
+      security: {
+        jailerEnabled: true,
+        seccompEnabled: true,
+        maxOpenFiles: 1024,
+      },
+    };
+
+    expect(opts.security?.jailerEnabled).toBe(true);
+    expect(opts.security?.seccompEnabled).toBe(true);
+    expect(opts.security?.maxOpenFiles).toBe(1024);
+  });
+
   test('cmd and user can be combined with other options', () => {
     const opts: SimpleBoxOptions = {
       image: 'python:slim',

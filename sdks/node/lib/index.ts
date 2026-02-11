@@ -31,7 +31,7 @@ export type CopyOptions = InstanceType<typeof nativeModule.JsCopyOptions>;
 export { getNativeModule, getJsBoxlite };
 
 // Re-export TypeScript wrappers
-export { SimpleBox, type SimpleBoxOptions } from './simplebox.js';
+export { SimpleBox, type SimpleBoxOptions, type SecurityOptions } from './simplebox.js';
 export { type ExecResult } from './exec.js';
 export { BoxliteError, ExecError, TimeoutError, ParseError } from './errors.js';
 export * from './constants.js';
