@@ -265,6 +265,32 @@ impl Jailer {
                 bwrap.ro_bind(&images_dir, &images_dir);
                 tracing::debug!(images_dir = %images_dir.display(), "bwrap: mounted images directory (ro)");
             }
+
+            // 5. Mount rootfs directory (read-only for VM init rootfs)
+            //    Contains: Alpine bootstrap filesystem (kernel + init)
+            let rootfs_dir = home_dir.join("rootfs");
+            if rootfs_dir.exists() {
+                bwrap.ro_bind(&rootfs_dir, &rootfs_dir);
+                tracing::debug!(rootfs_dir = %rootfs_dir.display(), "bwrap: mounted rootfs directory (ro)");
+            }
+
+            // 6. Mount user-specified volume host paths
+            for vol in &self.volumes {
+                let host_path = std::path::Path::new(&vol.host_path);
+                if host_path.exists() {
+                    if vol.read_only {
+                        bwrap.ro_bind(host_path, host_path);
+                    } else {
+                        bwrap.bind(host_path, host_path);
+                    }
+                    tracing::debug!(
+                        host_path = %host_path.display(),
+                        guest_path = %vol.guest_path,
+                        read_only = vol.read_only,
+                        "bwrap: mounted user volume"
+                    );
+                }
+            }
         }
 
         // NOTE: No external shim directory bind mount needed!
