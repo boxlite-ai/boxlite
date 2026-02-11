@@ -76,6 +76,7 @@ fn install_signal_handlers(exit_file: PathBuf) {
         libc::signal(libc::SIGSEGV, crash_signal_handler as *const () as usize);
         libc::signal(libc::SIGBUS, crash_signal_handler as *const () as usize);
         libc::signal(libc::SIGILL, crash_signal_handler as *const () as usize);
+        libc::signal(libc::SIGSYS, crash_signal_handler as *const () as usize);
     }
 }
 
@@ -90,6 +91,7 @@ extern "C" fn crash_signal_handler(sig: libc::c_int) {
         libc::SIGSEGV => "SIGSEGV",
         libc::SIGBUS => "SIGBUS",
         libc::SIGILL => "SIGILL",
+        libc::SIGSYS => "SIGSYS",
         _ => "UNKNOWN",
     };
 
