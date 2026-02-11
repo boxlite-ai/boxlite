@@ -96,6 +96,17 @@ impl CrashReport {
                      • Console: {console_display}\n\
                      • Stderr:  {stderr_display}"
                 ),
+                "SIGSYS" => format!(
+                    "Box {box_id} failed to start: seccomp violation (SIGSYS)\n\n\
+                     The VM was killed by a seccomp filter blocking a required syscall.\n\n\
+                     Common causes:\n\
+                     • Seccomp filter missing syscalls needed by gvproxy (Go runtime)\n\
+                     • Custom seccomp profile too restrictive\n\n\
+                     Debug files:\n\
+                     • Console: {console_display}\n\
+                     • Stderr:  {stderr_display}\n\n\
+                     Tip: Run with RUST_LOG=debug or strace to identify the blocked syscall"
+                ),
                 _ => format!(
                     "Box {box_id} failed to start\n\n\
                      The VM exited unexpectedly during startup.\n\n\
@@ -335,6 +346,32 @@ mod tests {
 
         assert!(report.user_message.contains("error"));
         assert!(report.user_message.contains("Failed to create VM instance"));
+    }
+
+    #[test]
+    fn test_sigsys_crash() {
+        let dir = tempfile::tempdir().unwrap();
+        let exit_file = dir.path().join("exit");
+        let console_log = dir.path().join("console.log");
+        let stderr_file = dir.path().join("stderr");
+
+        std::fs::write(
+            &exit_file,
+            r#"{"type":"signal","exit_code":159,"signal":"SIGSYS","stderr":""}"#,
+        )
+        .unwrap();
+
+        let report = CrashReport::from_exit_file(
+            &exit_file,
+            &console_log,
+            &stderr_file,
+            "test-box",
+            Some(159),
+        );
+
+        assert!(report.user_message.contains("SIGSYS"));
+        assert!(report.user_message.contains("seccomp violation"));
+        assert!(report.user_message.contains("strace"));
     }
 
     #[test]
