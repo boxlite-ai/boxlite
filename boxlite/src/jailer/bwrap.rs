@@ -185,9 +185,28 @@ fn build_diagnostic(
              (kernel.apparmor_restrict_unprivileged_userns=1).",
         );
         if bwrap_source == "bundled" {
-            msg.push_str("\nBundled bwrap has no AppArmor profile.");
-            msg.push_str("\n\nFix (recommended): Install system bubblewrap:");
-            msg.push_str("\n  sudo apt install bubblewrap");
+            match boxlite_apparmor_dir()
+                .and_then(|dir| super::apparmor::write_bwrap_profile(bwrap_path, &dir))
+            {
+                Ok(profile_path) => {
+                    msg.push_str(&format!(
+                        "\nBundled bwrap has no AppArmor profile.\n\
+                         BoxLite generated one at: {}\n\n\
+                         Fix (one command):\n  \
+                           sudo apparmor_parser -r {}\n\n\
+                         Alternative: Install system bubblewrap:\n  \
+                           sudo apt install bubblewrap",
+                        profile_path.display(),
+                        profile_path.display()
+                    ));
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "Failed to generate AppArmor profile");
+                    msg.push_str("\nBundled bwrap has no AppArmor profile.");
+                    msg.push_str("\n\nFix (recommended): Install system bubblewrap:");
+                    msg.push_str("\n  sudo apt install bubblewrap");
+                }
+            }
         } else {
             msg.push_str("\nSystem bwrap needs an AppArmor profile with 'userns' permission.");
             msg.push_str("\n\nFix (recommended): Install/reinstall bubblewrap:");
@@ -224,6 +243,20 @@ fn build_diagnostic(
     }
 
     msg
+}
+
+/// Compute the AppArmor profile directory (`~/.boxlite/apparmor/`).
+///
+/// Uses `BOXLITE_HOME` env var if set, otherwise falls back to `$HOME/.boxlite`.
+fn boxlite_apparmor_dir() -> Result<PathBuf, String> {
+    let home = std::env::var(crate::runtime::constants::envs::BOXLITE_HOME)
+        .map(PathBuf::from)
+        .or_else(|_| {
+            dirs::home_dir()
+                .map(|h| h.join(crate::runtime::layout::dirs::BOXLITE_DIR))
+                .ok_or_else(|| "cannot determine home directory".to_string())
+        })?;
+    Ok(home.join("apparmor"))
 }
 
 /// Read a sysctl value from /proc/sys/.
