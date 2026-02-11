@@ -41,12 +41,86 @@ pub fn kill_process(pid: u32) -> bool {
 /// Check if a process with the given PID exists.
 ///
 /// Uses `libc::kill(pid, 0)` which sends a null signal to check existence.
+/// A zombie/defunct process is treated as not alive.
 ///
 /// # Returns
 /// * `true` - Process exists
 /// * `false` - Process does not exist or permission denied
 pub fn is_process_alive(pid: u32) -> bool {
-    unsafe { libc::kill(pid as i32, 0) == 0 }
+    if unsafe { libc::kill(pid as i32, 0) } != 0 {
+        return false;
+    }
+
+    !is_process_zombie(pid)
+}
+
+fn is_process_zombie(pid: u32) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        is_process_zombie_linux(pid)
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        is_process_zombie_macos(pid)
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        false
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn is_process_zombie_linux(pid: u32) -> bool {
+    let status_path = format!("/proc/{pid}/status");
+    let Ok(status) = std::fs::read_to_string(status_path) else {
+        return false;
+    };
+
+    status.lines().find_map(|line| {
+        line.strip_prefix("State:")
+            .and_then(|state| state.trim_start().chars().next())
+    }) == Some('Z')
+}
+
+#[cfg(target_os = "macos")]
+fn is_process_zombie_macos(pid: u32) -> bool {
+    let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::uninit();
+    let expected_size = std::mem::size_of::<libc::proc_bsdinfo>() as i32;
+
+    let bytes = unsafe {
+        libc::proc_pidinfo(
+            pid as i32,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            info.as_mut_ptr().cast(),
+            expected_size,
+        )
+    };
+
+    if bytes != expected_size {
+        if bytes != 0 {
+            return false;
+        }
+
+        // On macOS, PROC_PIDTBSDINFO may return 0 for zombies.
+        // Distinguish that from live processes by checking whether
+        // the executable path is still queryable.
+        let mut path_buf = [0 as libc::c_char; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+        let path_len = unsafe {
+            libc::proc_pidpath(
+                pid as i32,
+                path_buf.as_mut_ptr().cast(),
+                path_buf.len() as u32,
+            )
+        };
+
+        return path_len == 0;
+    }
+
+    let info = unsafe { info.assume_init() };
+    info.pbi_status == libc::SZOMB
 }
 
 /// Verify that a PID belongs to a boxlite-shim process for the given box.
@@ -138,6 +212,51 @@ mod tests {
         // Note: PID 0 might exist on some systems (kernel/scheduler)
         assert!(!is_process_alive(999999999));
         assert!(!is_process_alive(888888888));
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn test_is_process_alive_false_for_zombie() {
+        use std::time::{Duration, Instant};
+
+        struct PidReaper {
+            pid: libc::pid_t,
+        }
+
+        impl Drop for PidReaper {
+            fn drop(&mut self) {
+                let mut status = 0;
+                let _ = unsafe { libc::waitpid(self.pid, &mut status, 0) };
+            }
+        }
+
+        let child_pid = unsafe { libc::fork() };
+        assert!(child_pid >= 0, "fork() failed");
+        if child_pid == 0 {
+            unsafe { libc::_exit(0) };
+        }
+
+        let _reaper = PidReaper { pid: child_pid };
+        let child_pid = child_pid as u32;
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            let raw_exists = unsafe { libc::kill(child_pid as i32, 0) == 0 };
+
+            if !raw_exists {
+                // Some environments auto-reap exited children immediately.
+                // In that case there is no zombie window to assert against.
+                return;
+            }
+
+            if !is_process_alive(child_pid) {
+                return;
+            }
+
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        panic!("Exited child remained reported as alive while still existing");
     }
 
     #[test]

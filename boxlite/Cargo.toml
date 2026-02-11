@@ -14,7 +14,7 @@ crate-type = ["rlib"]
 
 [[bin]]
 name = "boxlite-shim"
-path = "src/bin/shim.rs"
+path = "src/bin/shim/main.rs"
 
 [features]
 default = ["gvproxy-backend"]

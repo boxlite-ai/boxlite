@@ -3,6 +3,7 @@
 //! Builds VMM InstanceSpec from prepared components, then spawns a new VM
 //! subprocess and returns a handler for runtime operations.
 
+use super::guest_entrypoint::GuestEntrypointBuilder;
 use super::{InitCtx, log_task_error, task_start};
 use crate::disk::DiskFormat;
 use crate::images::ContainerImageConfig;
@@ -197,10 +198,6 @@ async fn build_config(
     // Network configuration
     let network_config = build_network_config(container_image_config, options, layout);
 
-    // Use runtime home for logs (not box_home)
-    let runtime_home = runtime.layout.home_dir();
-    let logs_dir = runtime.layout.logs_dir();
-
     // Assemble VMM instance spec
     let instance_spec = InstanceSpec {
         // Box identification and security
@@ -218,8 +215,11 @@ async fn build_config(
         guest_rootfs,
         network_config,
         network_backend_endpoint: None,
-        home_dir: runtime_home.to_path_buf(),
-        console_output: Some(logs_dir.join(format!("{}-console.log", box_id))),
+        home_dir: runtime.layout.home_dir().to_path_buf(),
+        // Diagnostic files in box_dir (preserved on crash)
+        console_output: Some(layout.console_output_path()),
+        exit_file: layout.exit_file_path(),
+        stderr_file: layout.stderr_file_path(),
         detach: options.detach,
         parent_pid: std::process::id(),
     };
@@ -265,41 +265,30 @@ fn build_guest_entrypoint(
     let listen_uri = transport.to_uri();
     let ready_notify_uri = ready_transport.to_uri();
 
-    // Start with guest rootfs env
-    let mut env: Vec<(String, String)> = guest_rootfs.env.clone();
+    let executable = format!("{}/boxlite-guest", guest_paths::BIN_DIR);
+    let mut builder = GuestEntrypointBuilder::new(executable);
+    builder.with_arg("--listen");
+    builder.with_arg(&listen_uri);
+    builder.with_arg("--notify");
+    builder.with_arg(&ready_notify_uri);
 
-    // Override with user env vars
+    // Debug vars first (prioritized - guaranteed space)
+    if let Ok(v) = std::env::var("RUST_LOG") {
+        builder.with_env("RUST_LOG", &v);
+    }
+    if let Ok(v) = std::env::var("RUST_BACKTRACE") {
+        builder.with_env("RUST_BACKTRACE", &v);
+    }
+
+    // FILO order: image → user (later overrides earlier)
+    for (key, value) in &guest_rootfs.env {
+        builder.with_env(key, value);
+    }
     for (key, value) in &options.env {
-        env.retain(|(k, _)| k != key);
-        env.push((key.clone(), value.clone()));
+        builder.with_env(key, value);
     }
 
-    // Inject RUST_LOG from host for debugging
-    if !env.iter().any(|(k, _)| k == "RUST_LOG")
-        && let Ok(rust_log) = std::env::var("RUST_LOG")
-        && !rust_log.is_empty()
-    {
-        env.push(("RUST_LOG".to_string(), rust_log));
-    }
-
-    // Inject RUST_BACKTRACE from host for debugging
-    if !env.iter().any(|(k, _)| k == "RUST_BACKTRACE")
-        && let Ok(rust_backtrace) = std::env::var("RUST_BACKTRACE")
-        && !rust_backtrace.is_empty()
-    {
-        env.push(("RUST_BACKTRACE".to_string(), rust_backtrace));
-    }
-
-    Ok(Entrypoint {
-        executable: format!("{}/boxlite-guest", guest_paths::BIN_DIR),
-        args: vec![
-            "--listen".to_string(),
-            listen_uri,
-            "--notify".to_string(),
-            ready_notify_uri,
-        ],
-        env,
-    })
+    Ok(builder.build())
 }
 
 /// Build network configuration from container image config and options.

@@ -133,7 +133,7 @@ impl VmmHandlerTrait for ShimHandler {
                 if result < 0 {
                     // Error - process may not be our child (common in attached mode)
                     // Fall back to checking if process still exists
-                    let exists = unsafe { libc::kill(self.pid as i32, 0) } == 0;
+                    let exists = crate::util::is_process_alive(self.pid);
                     if !exists {
                         return Ok(()); // Already dead
                     }
@@ -278,6 +278,8 @@ impl VmmController for ShimController {
             network_backend_endpoint: None, // Will be populated by shim (not serialized)
             home_dir: config.home_dir.clone(),
             console_output: config.console_output.clone(),
+            exit_file: config.exit_file.clone(),
+            stderr_file: config.stderr_file.clone(),
             detach: config.detach,
             parent_pid: config.parent_pid,
         };

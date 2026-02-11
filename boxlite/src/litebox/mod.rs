@@ -5,12 +5,14 @@
 pub(crate) mod box_impl;
 pub(crate) mod config;
 pub mod copy;
+mod crash_report;
 mod exec;
 mod init;
 mod manager;
 mod state;
 
 pub use copy::CopyOptions;
+pub(crate) use crash_report::CrashReport;
 pub use exec::{BoxCommand, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execution, ExecutionId};
 pub(crate) use manager::BoxManager;
 pub use state::{BoxState, BoxStatus};

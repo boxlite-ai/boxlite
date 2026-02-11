@@ -350,6 +350,23 @@ impl BoxFilesystemLayout {
         self.box_dir.join("shim.pid")
     }
 
+    /// Exit file path: ~/.boxlite/boxes/{box_id}/exit
+    ///
+    /// Written by the shim process on exit (normal or panic).
+    /// Format: First line is exit code, subsequent lines contain error details.
+    /// Follows Podman's conmon pattern for capturing exit information.
+    pub fn exit_file_path(&self) -> PathBuf {
+        self.box_dir.join("exit")
+    }
+
+    /// Stderr file path: ~/.boxlite/boxes/{box_id}/shim.stderr
+    ///
+    /// Captures libkrun stderr output for crash diagnostics.
+    /// The signal handler reads this and includes content in exit file.
+    pub fn stderr_file_path(&self) -> PathBuf {
+        self.box_dir.join("shim.stderr")
+    }
+
     // ========================================================================
     // PREPARATION AND CLEANUP
     // ========================================================================

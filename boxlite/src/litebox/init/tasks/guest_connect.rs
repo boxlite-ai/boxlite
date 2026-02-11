@@ -7,11 +7,13 @@
 //! Races guest readiness against shim process death for fast failure detection.
 
 use super::{InitCtx, log_task_error, task_start};
+use crate::litebox::CrashReport;
 use crate::pipeline::PipelineTask;
 use crate::portal::GuestSession;
 use async_trait::async_trait;
 use boxlite_shared::Transport;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
+use std::path::Path;
 use std::time::Duration;
 
 pub struct GuestConnectTask;
@@ -22,13 +24,28 @@ impl PipelineTask<InitCtx> for GuestConnectTask {
         let task_name = self.name();
         let box_id = task_start(&ctx, task_name).await;
 
-        let (transport, ready_transport, skip_guest_wait, shim_pid) = {
+        let (
+            transport,
+            ready_transport,
+            skip_guest_wait,
+            shim_pid,
+            exit_file,
+            console_log,
+            stderr_file,
+        ) = {
             let ctx = ctx.lock().await;
+            let box_home = &ctx.config.box_home;
+            let exit_file = box_home.join("exit");
+            let console_log = box_home.join("console.log");
+            let stderr_file = box_home.join("shim.stderr");
             (
                 ctx.config.transport.clone(),
                 Transport::unix(ctx.config.ready_socket_path.clone()),
                 ctx.skip_guest_wait,
                 ctx.guard.handler_pid(),
+                exit_file,
+                console_log,
+                stderr_file,
             )
         };
 
@@ -38,9 +55,16 @@ impl PipelineTask<InitCtx> for GuestConnectTask {
             tracing::debug!(box_id = %box_id, "Skipping guest ready wait (reattach)");
         } else {
             tracing::debug!(box_id = %box_id, "Waiting for guest to be ready");
-            wait_for_guest_ready(&ready_transport, shim_pid)
-                .await
-                .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
+            wait_for_guest_ready(
+                &ready_transport,
+                shim_pid,
+                &exit_file,
+                &console_log,
+                &stderr_file,
+                box_id.as_str(),
+            )
+            .await
+            .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
         }
 
         tracing::debug!(box_id = %box_id, "Guest is ready, creating session");
@@ -66,6 +90,10 @@ impl PipelineTask<InitCtx> for GuestConnectTask {
 async fn wait_for_guest_ready(
     ready_transport: &Transport,
     shim_pid: Option<u32>,
+    exit_file: &Path,
+    console_log: &Path,
+    stderr_file: &Path,
+    box_id: &str,
 ) -> BoxliteResult<()> {
     let ready_socket_path = match ready_transport {
         Transport::Unix { socket_path } => socket_path,
@@ -109,21 +137,33 @@ async fn wait_for_guest_ready(
                     "Ready socket accept failed: {}", e
                 ))),
                 Err(_) => Err(BoxliteError::Engine(format!(
-                    "Timeout waiting for guest ready ({}s). \
-                     Check logs: ~/.boxlite/logs/boxlite-shim.log, \
-                     and system: dmesg | grep -i 'apparmor\\|kvm'",
-                    timeout.as_secs()
+                    "Box {box_id} failed to start: timeout after {}s\n\n\
+                     The VM did not respond within the expected time.\n\n\
+                     Common causes:\n\
+                     • Slow disk I/O during rootfs setup\n\
+                     • Network configuration issues\n\
+                     • Guest agent failed to start\n\n\
+                     Debug files:\n\
+                     • Console: {}\n\n\
+                     Tip: Run with RUST_LOG=debug for more details",
+                    timeout.as_secs(),
+                    console_log.display()
                 ))),
             }
         }
         _ = wait_for_process_exit(shim_pid) => {
-            Err(BoxliteError::Engine(
-                "VM subprocess exited before guest became ready. \
-                 Common causes: (1) AppArmor blocking bwrap — run: \
-                 dmesg | grep apparmor, (2) /dev/kvm not accessible — \
-                 check permissions, (3) missing shared libraries. \
-                 See: ~/.boxlite/logs/boxlite-shim.log".into()
-            ))
+            // Parse exit file and present user-friendly message
+            let report = CrashReport::from_exit_file(exit_file, console_log, stderr_file, box_id);
+
+            // Log raw debug info for troubleshooting
+            if !report.debug_info.is_empty() {
+                tracing::error!(
+                    "Box crash details (raw stderr):\n{}",
+                    report.debug_info
+                );
+            }
+
+            Err(BoxliteError::Engine(report.user_message))
         }
     }
 }
@@ -162,6 +202,9 @@ mod tests {
     async fn test_guest_ready_success() {
         let dir = tempfile::tempdir().unwrap();
         let socket_path = dir.path().join("ready.sock");
+        let exit_file = dir.path().join("exit");
+        let console_log = dir.path().join("console.log");
+        let stderr_file = dir.path().join("shim.stderr");
         let transport = Transport::unix(socket_path.clone());
 
         // Spawn a task that connects after a short delay
@@ -172,16 +215,36 @@ mod tests {
         });
 
         // No shim PID to monitor (None = never triggers death branch)
-        let result = wait_for_guest_ready(&transport, None).await;
+        let result = wait_for_guest_ready(
+            &transport,
+            None,
+            &exit_file,
+            &console_log,
+            &stderr_file,
+            "test-box",
+        )
+        .await;
         assert!(result.is_ok(), "Expected success, got: {:?}", result);
     }
 
     /// Non-Unix transport should be rejected immediately.
     #[tokio::test]
     async fn test_guest_ready_rejects_non_unix_transport() {
+        let dir = tempfile::tempdir().unwrap();
+        let exit_file = dir.path().join("exit");
+        let console_log = dir.path().join("console.log");
+        let stderr_file = dir.path().join("shim.stderr");
         let transport = Transport::Vsock { port: 2695 };
 
-        let result = wait_for_guest_ready(&transport, None).await;
+        let result = wait_for_guest_ready(
+            &transport,
+            None,
+            &exit_file,
+            &console_log,
+            &stderr_file,
+            "test-box",
+        )
+        .await;
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(
@@ -196,6 +259,9 @@ mod tests {
     async fn test_guest_ready_cleans_stale_socket() {
         let dir = tempfile::tempdir().unwrap();
         let socket_path = dir.path().join("ready.sock");
+        let exit_file = dir.path().join("exit");
+        let console_log = dir.path().join("console.log");
+        let stderr_file = dir.path().join("shim.stderr");
 
         // Create a stale socket file
         std::fs::write(&socket_path, b"stale").unwrap();
@@ -210,7 +276,15 @@ mod tests {
             let _ = tokio::net::UnixStream::connect(&connect_path).await;
         });
 
-        let result = wait_for_guest_ready(&transport, None).await;
+        let result = wait_for_guest_ready(
+            &transport,
+            None,
+            &exit_file,
+            &console_log,
+            &stderr_file,
+            "test-box",
+        )
+        .await;
         assert!(
             result.is_ok(),
             "Expected success after stale cleanup, got: {:?}",
@@ -224,6 +298,9 @@ mod tests {
     async fn test_guest_ready_detects_shim_death() {
         let dir = tempfile::tempdir().unwrap();
         let socket_path = dir.path().join("ready.sock");
+        let exit_file = dir.path().join("exit");
+        let console_log = dir.path().join("console.log");
+        let stderr_file = dir.path().join("shim.stderr");
         let transport = Transport::unix(socket_path);
 
         // Use a PID that doesn't exist — wait_for_process_exit will
@@ -231,14 +308,22 @@ mod tests {
         let dead_pid = Some(999_999_999u32);
 
         let start = std::time::Instant::now();
-        let result = wait_for_guest_ready(&transport, dead_pid).await;
+        let result = wait_for_guest_ready(
+            &transport,
+            dead_pid,
+            &exit_file,
+            &console_log,
+            &stderr_file,
+            "test-box",
+        )
+        .await;
         let elapsed = start.elapsed();
 
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(
-            err.contains("VM subprocess exited before guest became ready"),
-            "Expected shim death error, got: {}",
+            err.contains("test-box failed to start"),
+            "Expected user-friendly error with box_id, got: {}",
             err
         );
 
@@ -296,5 +381,39 @@ mod tests {
 
         // Current process is alive, so this should timeout
         assert!(result.is_err(), "Live PID should not resolve");
+    }
+
+    /// Zombie PID should resolve quickly (treated as not alive).
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[tokio::test]
+    async fn test_wait_for_process_exit_zombie_pid_resolves() {
+        struct PidReaper {
+            pid: libc::pid_t,
+        }
+
+        impl Drop for PidReaper {
+            fn drop(&mut self) {
+                let mut status = 0;
+                let _ = unsafe { libc::waitpid(self.pid, &mut status, 0) };
+            }
+        }
+
+        let child_pid = unsafe { libc::fork() };
+        assert!(child_pid >= 0, "fork() failed");
+        if child_pid == 0 {
+            unsafe { libc::_exit(0) };
+        }
+        let _reaper = PidReaper { pid: child_pid };
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            wait_for_process_exit(Some(child_pid as u32)),
+        )
+        .await;
+
+        assert!(
+            result.is_ok(),
+            "Zombie PID should resolve quickly, got timeout"
+        );
     }
 }

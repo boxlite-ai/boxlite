@@ -12,6 +12,9 @@
 //! This ensures networking survives detach operations - the gvproxy lives in the
 //! shim subprocess, not the main boxlite process.
 
+mod crash_capture;
+
+use std::os::unix::io::AsRawFd;
 use std::path::Path;
 use std::thread;
 use std::time::Duration;
@@ -23,6 +26,7 @@ use boxlite::{
 };
 use boxlite_shared::errors::BoxliteResult;
 use clap::Parser;
+use crash_capture::CrashCapture;
 #[allow(unused_imports)]
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
@@ -78,6 +82,20 @@ fn init_logging(home_dir: &Path) -> tracing_appender::non_blocking::WorkerGuard 
     guard
 }
 
+/// Redirect stderr to a file to capture vmm crash messages.
+///
+/// vmm prints error messages to stderr before calling abort().
+/// Since shim's stderr is /dev/null, we redirect it to the configured stderr_file.
+/// The crash handler reads this file and includes content in exit file.
+fn redirect_stderr_to_file(stderr_file: &Path) {
+    if let Ok(file) = std::fs::File::create(stderr_file) {
+        let fd = file.as_raw_fd();
+        unsafe {
+            libc::dup2(fd, libc::STDERR_FILENO);
+        }
+    }
+}
+
 fn main() -> BoxliteResult<()> {
     // Parse command line arguments with clap
     // VmmKind parsed via FromStr trait automatically
@@ -91,6 +109,12 @@ fn main() -> BoxliteResult<()> {
     // Initialize logging using home_dir from config
     // Keep guard alive until end of main to ensure logs are written
     let _log_guard = init_logging(&config.home_dir);
+
+    // Redirect stderr to capture libkrun crash messages
+    redirect_stderr_to_file(&config.stderr_file);
+
+    // Install crash capture (panic hook, signal handlers)
+    CrashCapture::install(config.exit_file.clone(), config.stderr_file.clone());
 
     tracing::info!(
         engine = ?args.engine,

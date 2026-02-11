@@ -177,11 +177,14 @@ impl Drop for CleanupGuard {
             tracing::warn!("Failed to stop handler during cleanup: {}", e);
         }
 
-        // Cleanup filesystem
-        if let Some(ref layout) = self.layout
-            && let Err(e) = layout.cleanup()
-        {
-            tracing::warn!("Failed to cleanup box directory: {}", e);
+        // DON'T cleanup filesystem - preserve diagnostic files for debugging
+        // Log message to user about preserved files
+        if let Some(ref layout) = self.layout {
+            tracing::error!(
+                "Box crashed. Diagnostic files preserved at:\n  {}\n\nTo clean up: rm -rf {}",
+                layout.root().display(),
+                layout.root().display()
+            );
         }
 
         // Remove from BoxManager (which handles DB delete via database-first pattern)

@@ -7,6 +7,7 @@ use std::str::FromStr;
 
 pub mod controller;
 pub mod engine;
+pub mod exit_info;
 pub mod factory;
 pub mod host_check;
 pub mod krun;
@@ -15,6 +16,7 @@ pub mod registry;
 use crate::jailer::SecurityOptions;
 use crate::runtime::guest_rootfs::GuestRootfs;
 pub use engine::{Vmm, VmmConfig, VmmInstance};
+pub use exit_info::ExitInfo;
 pub use factory::VmmFactory;
 pub use registry::create_engine;
 
@@ -174,6 +176,10 @@ pub struct InstanceSpec {
     pub home_dir: PathBuf,
     /// Optional file path to redirect console output (kernel/init messages)
     pub console_output: Option<PathBuf>,
+    /// Exit file for shim to write on panic (Podman pattern).
+    pub exit_file: PathBuf,
+    /// Stderr file to capture libkrun crash messages.
+    pub stderr_file: PathBuf,
     /// Whether the box should continue running when the parent process exits.
     /// When false, a watchdog thread monitors parent PID and triggers shutdown.
     pub detach: bool,
