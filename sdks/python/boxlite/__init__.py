@@ -22,6 +22,7 @@ try:
         BoxMetrics,
         CopyOptions,
         RootfsSpec,
+        SecurityOptions,
     )
 
     __all__ = [
@@ -39,6 +40,7 @@ try:
         "BoxMetrics",
         "CopyOptions",
         "RootfsSpec",
+        "SecurityOptions",
     ]
 except ImportError as e:
     warnings.warn(f"BoxLite native extension not available: {e}", ImportWarning)

@@ -42,7 +42,7 @@ class CodeBox(SimpleBox):
             runtime: Optional runtime instance (uses global default if None)
             **kwargs: Additional configuration options
         """
-        super().__init__(image, memory_mib, cpus, runtime, **kwargs)
+        super().__init__(image=image, memory_mib=memory_mib, cpus=cpus, runtime=runtime, **kwargs)
 
     async def run(self, code: str, timeout: Optional[int] = None) -> str:
         """
@@ -53,7 +53,8 @@ class CodeBox(SimpleBox):
             timeout: Execution timeout in seconds (not yet implemented)
 
         Returns:
-            Execution output as a string (stdout + stderr)
+            Execution stdout as a string. Use exec() directly if you need
+            both stdout and stderr.
 
         Example:
             >>> async with CodeBox() as cb:
@@ -68,21 +69,38 @@ class CodeBox(SimpleBox):
         """
         # Execute Python code using python3 -c
         result = await self.exec("/usr/local/bin/python", "-c", code)
-        return result.stdout + result.stderr
+        return result.stdout
 
     async def run_script(self, script_path: str) -> str:
         """
-        Execute a Python script file in the container.
+        Read a Python script from the **host** filesystem and execute it in the container.
+
+        The script file is read on the host side and its contents are sent to
+        the container for execution via ``python -c``. To run a script that
+        already exists inside the VM, use :meth:`run_guest_script` instead.
 
         Args:
-            script_path: Path to the Python script on the host
+            script_path: Path to the Python script on the **host** filesystem
 
         Returns:
-            Execution output as a string
+            Execution stdout as a string
         """
         with open(script_path, "r") as f:
             code = f.read()
         return await self.run(code)
+
+    async def run_guest_script(self, guest_script_path: str) -> str:
+        """
+        Execute a Python script that exists inside the container.
+
+        Args:
+            guest_script_path: Path to the script inside the container
+
+        Returns:
+            Execution stdout as a string
+        """
+        result = await self.exec("/usr/local/bin/python", guest_script_path)
+        return result.stdout
 
     async def install_package(self, package: str) -> str:
         """
