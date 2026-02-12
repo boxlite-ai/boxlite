@@ -132,55 +132,36 @@ fn run_shim(args: ShimArgs, mut config: InstanceSpec) -> BoxliteResult<()> {
     );
 
     // =========================================================================
-    // Apply Linux jailer isolation (seccomp)
+    // Seccomp + Gvproxy (two-phase stacking on Linux)
     // =========================================================================
     //
-    // On Linux, apply seccomp filtering before any untrusted code runs.
-    // This restricts the syscalls available to this process.
+    // Seccomp filters are applied in two phases when gvproxy is used:
     //
-    // By this point, the following isolation is already in place (from bwrap):
-    // - Namespaces: mount, user, PID, IPC, UTS
-    // - Filesystem: chroot/pivot_root with minimal mounts
-    // - Environment: cleared (clearenv)
-    // - FDs: closed except stdin/stdout/stderr (pre_exec hook)
-    // - Resource limits: rlimits and cgroup membership (pre_exec hook)
+    // Phase 1: Gvproxy filter (TSYNC) — permissive, covers VMM + Go syscalls
+    //          Applied BEFORE gvproxy creation so Go threads inherit it.
     //
-    // We add: Seccomp syscall filtering
+    // Phase 2: VMM filter (no TSYNC) — restrictive, VMM syscalls only
+    //          Stacked on main thread AFTER gvproxy creation.
+    //          Go threads keep only the gvproxy filter.
+    //          vCPU threads inherit both from main (effective = vmm).
+    //
+    // Without gvproxy, VMM filter is applied with TSYNC (original behavior).
+
+    // Determine if gvproxy will be created (needed for seccomp phase decision)
     #[cfg(target_os = "linux")]
-    {
+    let has_gvproxy = cfg!(feature = "gvproxy-backend") && config.network_config.is_some();
+
+    // Phase 1: Apply gvproxy seccomp filter with TSYNC (before Go threads start)
+    #[cfg(target_os = "linux")]
+    if config.security.jailer_enabled && config.security.seccomp_enabled && has_gvproxy {
         use boxlite::jailer::platform::linux;
-        use boxlite::runtime::layout::{FilesystemLayout, FsLayoutConfig};
 
-        if config.security.jailer_enabled {
-            tracing::info!(
-                box_id = %config.box_id,
-                seccomp_enabled = config.security.seccomp_enabled,
-                "Applying Linux jailer isolation"
-            );
+        tracing::info!(
+            box_id = %config.box_id,
+            "Seccomp phase 1: applying gvproxy filter (TSYNC)"
+        );
 
-            let layout = FilesystemLayout::new(config.home_dir.clone(), FsLayoutConfig::default());
-
-            if let Err(e) = linux::apply_isolation(&config.security, &config.box_id, &layout) {
-                // Log error but don't fail - allows debugging with isolation disabled
-                tracing::error!(
-                    box_id = %config.box_id,
-                    error = %e,
-                    "Failed to apply Linux jailer isolation"
-                );
-                // Re-raise the error to fail startup if isolation was required
-                return Err(e);
-            }
-
-            tracing::info!(
-                box_id = %config.box_id,
-                "Linux jailer isolation applied successfully"
-            );
-        } else {
-            tracing::warn!(
-                box_id = %config.box_id,
-                "Jailer disabled - running without process isolation"
-            );
-        }
+        linux::apply_gvproxy_filter(&config.box_id)?;
     }
 
     // Create network backend (gvproxy) from network_config if present.
@@ -227,6 +208,40 @@ fn run_shim(args: ShimArgs, mut config: InstanceSpec) -> BoxliteResult<()> {
         // and OS cleanup handles resources when process exits.
         let _gvproxy_leaked = Box::leak(Box::new(gvproxy));
         tracing::debug!("Leaked gvproxy instance for VM lifetime");
+    }
+
+    // Phase 2 (or single-phase): Apply VMM seccomp filter
+    #[cfg(target_os = "linux")]
+    {
+        use boxlite::jailer::platform::linux;
+
+        if config.security.jailer_enabled && config.security.seccomp_enabled {
+            // With gvproxy: stack VMM on main thread only (no TSYNC)
+            // Without gvproxy: apply VMM with TSYNC (original behavior)
+            let tsync = !has_gvproxy;
+            tracing::info!(
+                box_id = %config.box_id,
+                tsync = tsync,
+                "Seccomp phase 2: applying VMM filter"
+            );
+
+            linux::apply_vmm_filter(&config.box_id, tsync)?;
+
+            tracing::info!(
+                box_id = %config.box_id,
+                "Seccomp isolation complete"
+            );
+        } else if config.security.jailer_enabled {
+            tracing::warn!(
+                box_id = %config.box_id,
+                "Seccomp disabled - running without syscall filtering"
+            );
+        } else {
+            tracing::warn!(
+                box_id = %config.box_id,
+                "Jailer disabled - running without process isolation"
+            );
+        }
     }
 
     // Save detach/parent_pid/transport before config is moved into engine.create()
