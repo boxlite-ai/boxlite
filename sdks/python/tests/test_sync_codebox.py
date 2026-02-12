@@ -72,10 +72,12 @@ print(round(math.pi, 2))
             assert "3.14" in result
 
     def test_run_exception(self, shared_sync_runtime):
-        """Captures exceptions in output."""
+        """Exceptions go to stderr, not run() output."""
         with SyncCodeBox(runtime=shared_sync_runtime) as box:
-            result = box.run("raise ValueError('test error')")
-            assert "ValueError" in result or "test error" in result
+            result = box.exec(
+                "/usr/local/bin/python", "-c", "raise ValueError('test error')"
+            )
+            assert "ValueError" in result.stderr or "test error" in result.stderr
 
     @pytest.mark.slow
     def test_install_package(self, shared_sync_runtime):
