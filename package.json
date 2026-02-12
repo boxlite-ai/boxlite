@@ -23,10 +23,10 @@
   },
   "homepage": "https://github.com/boxlite-labs/boxlite#readme",
   "dependencies": {
-    "@boxlite-ai/boxlite": "^0.1.6"
+    "@boxlite-ai/boxlite": "^0.2.8"
   },
   "optionalDependencies": {
-    "@boxlite-ai/boxlite-darwin-arm64": "^0.1.6",
-    "@boxlite-ai/boxlite-linux-x64-gnu": "^0.1.6"
+    "@boxlite-ai/boxlite-darwin-arm64": "^0.2.8",
+    "@boxlite-ai/boxlite-linux-x64-gnu": "^0.2.8"
   }
 }

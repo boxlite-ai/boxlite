@@ -302,7 +302,7 @@ dependencies = [
 
 [[package]]
 name = "boxlite"
-version = "0.5.10"
+version = "0.5.11"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -363,7 +363,7 @@ dependencies = [
 
 [[package]]
 name = "boxlite-c"
-version = "0.5.10"
+version = "0.5.11"
 dependencies = [
  "boxlite",
  "cbindgen",
@@ -404,7 +404,7 @@ dependencies = [
 
 [[package]]
 name = "boxlite-guest"
-version = "0.5.10"
+version = "0.5.11"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -433,7 +433,7 @@ dependencies = [
 
 [[package]]
 name = "boxlite-node"
-version = "0.5.10"
+version = "0.5.11"
 dependencies = [
  "boxlite",
  "boxlite-shared",
@@ -447,7 +447,7 @@ dependencies = [
 
 [[package]]
 name = "boxlite-python"
-version = "0.5.10"
+version = "0.5.11"
 dependencies = [
  "boxlite",
  "futures",
@@ -460,7 +460,7 @@ dependencies = [
 
 [[package]]
 name = "boxlite-shared"
-version = "0.5.10"
+version = "0.5.11"
 dependencies = [
  "prost",
  "serde",
