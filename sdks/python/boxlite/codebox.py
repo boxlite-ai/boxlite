@@ -42,7 +42,9 @@ class CodeBox(SimpleBox):
             runtime: Optional runtime instance (uses global default if None)
             **kwargs: Additional configuration options
         """
-        super().__init__(image, memory_mib, cpus, runtime, **kwargs)
+        super().__init__(
+            image=image, memory_mib=memory_mib, cpus=cpus, runtime=runtime, **kwargs
+        )
 
     async def run(self, code: str, timeout: Optional[int] = None) -> str:
         """
