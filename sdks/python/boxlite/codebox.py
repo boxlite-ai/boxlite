@@ -72,17 +72,34 @@ class CodeBox(SimpleBox):
 
     async def run_script(self, script_path: str) -> str:
         """
-        Execute a Python script file in the container.
+        Read a Python script from the **host** filesystem and execute it in the container.
+
+        The script file is read on the host side and its contents are sent to
+        the container for execution via ``python -c``. To run a script that
+        already exists inside the VM, use :meth:`run_guest_script` instead.
 
         Args:
-            script_path: Path to the Python script on the host
+            script_path: Path to the Python script on the **host** filesystem
 
         Returns:
-            Execution output as a string
+            Execution output as a string (stdout + stderr)
         """
         with open(script_path, "r") as f:
             code = f.read()
         return await self.run(code)
+
+    async def run_guest_script(self, guest_script_path: str) -> str:
+        """
+        Execute a Python script that exists inside the container.
+
+        Args:
+            guest_script_path: Path to the script inside the container
+
+        Returns:
+            Execution output as a string (stdout + stderr)
+        """
+        result = await self.exec("/usr/local/bin/python", guest_script_path)
+        return result.stdout + result.stderr
 
     async def install_package(self, package: str) -> str:
         """
