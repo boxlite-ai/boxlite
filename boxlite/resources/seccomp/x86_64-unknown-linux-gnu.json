@@ -115,14 +115,14 @@
             },
             {
                 "syscall": "accept4",
-                "comment": "Called to accept vsock connections",
+                "comment": "Go runtime + libkrun: accept connections with any flags (ge 0 = match any)",
                 "args": [
                     {
                         "index": 3,
                         "type": "dword",
-                        "op": "eq",
-                        "val": 524288,
-                        "comment": "libc::SOCK_CLOEXEC"
+                        "op": "ge",
+                        "val": 0,
+                        "comment": "any accept4 flags"
                     }
                 ]
             },
@@ -472,6 +472,328 @@
             {
                 "syscall": "restart_syscall",
                 "comment": "automatically issued by the kernel when specific timing-related syscalls (e.g. nanosleep) get interrupted by SIGSTOP"
+            },
+            {
+                "syscall": "openat",
+                "comment": "Go runtime (gvproxy): glibc maps open() to openat(AT_FDCWD, ...) on modern x86_64"
+            },
+            {
+                "syscall": "nanosleep",
+                "comment": "Go runtime (gvproxy): timer and sleep operations"
+            },
+            {
+                "syscall": "mprotect",
+                "comment": "Go runtime (gvproxy): memory protection changes for GC and stack growth"
+            },
+            {
+                "syscall": "clone3",
+                "comment": "Go runtime (gvproxy): thread creation by Go scheduler"
+            },
+            {
+                "syscall": "epoll_create1",
+                "comment": "Go runtime (gvproxy): creates epoll instance for Go netpoller"
+            },
+            {
+                "syscall": "bind",
+                "comment": "Go runtime (gvproxy): bind socket for network proxy"
+            },
+            {
+                "syscall": "listen",
+                "comment": "Go runtime (gvproxy): listen on socket for network proxy"
+            },
+            {
+                "syscall": "getsockname",
+                "comment": "Go runtime (gvproxy): get socket address"
+            },
+            {
+                "syscall": "setsockopt",
+                "comment": "Go runtime (gvproxy): set socket options"
+            },
+            {
+                "syscall": "getpid",
+                "comment": "Go runtime (gvproxy): get process ID"
+            },
+            {
+                "syscall": "gettid",
+                "comment": "Go runtime (gvproxy): get thread ID"
+            },
+            {
+                "syscall": "tgkill",
+                "comment": "Go runtime (gvproxy): thread group kill for signal delivery"
+            },
+            {
+                "syscall": "pread64",
+                "comment": "Go runtime (gvproxy): positioned read"
+            },
+            {
+                "syscall": "prlimit64",
+                "comment": "Go runtime (gvproxy): get/set resource limits"
+            },
+            {
+                "syscall": "sched_getaffinity",
+                "comment": "Go runtime (gvproxy): CPU affinity for Go scheduler"
+            },
+            {
+                "syscall": "set_robust_list",
+                "comment": "Go runtime (gvproxy): robust futex list for pthread"
+            },
+            {
+                "syscall": "set_tid_address",
+                "comment": "Go runtime (gvproxy): set thread ID pointer for clone"
+            },
+            {
+                "syscall": "arch_prctl",
+                "comment": "Go runtime (gvproxy): architecture-specific thread state for TLS setup"
+            },
+            {
+                "syscall": "access",
+                "comment": "Go runtime (gvproxy): check file access permissions"
+            },
+            {
+                "syscall": "uname",
+                "comment": "Go runtime (gvproxy): get system info"
+            },
+            {
+                "syscall": "rseq",
+                "comment": "Go runtime (gvproxy): restartable sequences for performance"
+            },
+            {
+                "syscall": "rt_sigaction",
+                "comment": "Go runtime (gvproxy): signal handler registration for all signals (ge 0 = match any signal number)",
+                "args": [
+                    {
+                        "index": 0,
+                        "type": "dword",
+                        "op": "ge",
+                        "val": 0,
+                        "comment": "any signal number"
+                    }
+                ]
+            },
+            {
+                "syscall": "unlinkat",
+                "comment": "Go runtime (gvproxy): file deletion"
+            },
+            {
+                "syscall": "socket",
+                "comment": "Go runtime + libkrun: allow all socket domains/types (ge 0 = match any). Needed because Go runtime and libkrun use various combinations of AF_UNIX/AF_INET/AF_INET6 with different flags (SOCK_STREAM, SOCK_CLOEXEC, SOCK_NONBLOCK).",
+                "args": [
+                    {
+                        "index": 0,
+                        "type": "dword",
+                        "op": "ge",
+                        "val": 0,
+                        "comment": "any socket domain"
+                    }
+                ]
+            },
+            {
+                "syscall": "fcntl",
+                "comment": "Go runtime + libkrun: allow all fcntl commands (ge 0 = match any). Go and libkrun use F_GETFD, F_GETFL, F_SETFL, F_SETFD, etc.",
+                "args": [
+                    {
+                        "index": 1,
+                        "type": "dword",
+                        "op": "ge",
+                        "val": 0,
+                        "comment": "any fcntl command"
+                    }
+                ]
+            },
+            {
+                "syscall": "mmap",
+                "comment": "Go runtime (gvproxy): goroutine stack allocation",
+                "args": [
+                    {
+                        "index": 3,
+                        "type": "dword",
+                        "op": "eq",
+                        "val": 131106,
+                        "comment": "MAP_PRIVATE | MAP_ANONYMOUS | MAP_STACK"
+                    }
+                ]
+            },
+            {
+                "syscall": "statx",
+                "comment": "Go runtime (gvproxy): modern file stat (replaces fstat/newfstatat)"
+            },
+            {
+                "syscall": "mmap",
+                "comment": "Go runtime (gvproxy): general memory allocation (ge 0 = match any flags, needed for MAP_DROPPABLE, PROT_NONE reservation, etc.)",
+                "args": [
+                    {
+                        "index": 3,
+                        "type": "dword",
+                        "op": "ge",
+                        "val": 0,
+                        "comment": "any mmap flags"
+                    }
+                ]
+            },
+            {
+                "syscall": "ioctl",
+                "comment": "Go runtime + KVM init: allow all ioctl request codes (ge 0 = match any). Needed because TSYNC applies one filter to all threads, but libkrun init requires 28+ KVM ioctls and Go runtime uses TCGETS2/FIONBIO/FIOCLEX.",
+                "args": [
+                    {
+                        "index": 1,
+                        "type": "dword",
+                        "op": "ge",
+                        "val": 0,
+                        "comment": "any ioctl request code"
+                    }
+                ]
+            },
+            {
+                "syscall": "dup",
+                "comment": "Go runtime (gvproxy) + libkrun: file descriptor duplication"
+            },
+            {
+                "syscall": "dup2",
+                "comment": "Go runtime (gvproxy): file descriptor duplication"
+            },
+            {
+                "syscall": "mkdir",
+                "comment": "Go runtime (gvproxy): directory creation"
+            },
+            {
+                "syscall": "newfstatat",
+                "comment": "Go runtime (gvproxy): file stat operations"
+            },
+            {
+                "syscall": "poll",
+                "comment": "Go runtime (gvproxy): I/O multiplexing"
+            },
+            {
+                "syscall": "prctl",
+                "comment": "Go runtime (gvproxy): thread setup (PR_SET_NAME, etc.)"
+            },
+            {
+                "syscall": "readlinkat",
+                "comment": "Go runtime (gvproxy): read symbolic links (e.g. /proc/self/exe)"
+            },
+            {
+                "syscall": "clock_nanosleep",
+                "comment": "Go runtime (gvproxy): precise sleep (glibc maps nanosleep to clock_nanosleep)"
+            },
+            {
+                "syscall": "pwrite64",
+                "comment": "Go runtime (gvproxy): positioned write"
+            },
+            {
+                "syscall": "preadv",
+                "comment": "Go runtime (gvproxy): vectorized positioned read"
+            },
+            {
+                "syscall": "pwritev",
+                "comment": "Go runtime (gvproxy): vectorized positioned write"
+            },
+            {
+                "syscall": "clone",
+                "comment": "libkrun: process/thread creation (legacy clone)"
+            },
+            {
+                "syscall": "copy_file_range",
+                "comment": "libkrun: efficient file copy"
+            },
+            {
+                "syscall": "epoll_wait",
+                "comment": "libkrun: epoll wait (fallback from epoll_pwait)"
+            },
+            {
+                "syscall": "fchmod",
+                "comment": "libkrun: change file permissions"
+            },
+            {
+                "syscall": "flock",
+                "comment": "libkrun: file locking"
+            },
+            {
+                "syscall": "getcwd",
+                "comment": "Go runtime (gvproxy): get current working directory"
+            },
+            {
+                "syscall": "getdents64",
+                "comment": "libkrun: read directory entries"
+            },
+            {
+                "syscall": "geteuid",
+                "comment": "Go runtime (gvproxy): get effective user ID"
+            },
+            {
+                "syscall": "getgid",
+                "comment": "Go runtime (gvproxy): get group ID"
+            },
+            {
+                "syscall": "getsockopt",
+                "comment": "Go runtime (gvproxy): get socket options"
+            },
+            {
+                "syscall": "getuid",
+                "comment": "Go runtime (gvproxy): get user ID"
+            },
+            {
+                "syscall": "kill",
+                "comment": "libkrun: send signal to process"
+            },
+            {
+                "syscall": "pipe2",
+                "comment": "libkrun: create pipe with flags"
+            },
+            {
+                "syscall": "readlink",
+                "comment": "libkrun: read symbolic link"
+            },
+            {
+                "syscall": "sendto",
+                "comment": "Go runtime (gvproxy): send data on socket"
+            },
+            {
+                "syscall": "shutdown",
+                "comment": "Go runtime (gvproxy): shutdown socket"
+            },
+            {
+                "syscall": "socketpair",
+                "comment": "libkrun: create connected socket pair"
+            },
+            {
+                "syscall": "unlink",
+                "comment": "libkrun: delete file"
+            },
+            {
+                "syscall": "wait4",
+                "comment": "libkrun: wait for child process"
+            },
+            {
+                "syscall": "waitid",
+                "comment": "libkrun: wait for child process (extended)"
+            },
+            {
+                "syscall": "capget",
+                "comment": "libkrun: query process capabilities"
+            },
+            {
+                "syscall": "capset",
+                "comment": "libkrun: set process capabilities"
+            },
+            {
+                "syscall": "close_range",
+                "comment": "libkrun: close range of file descriptors"
+            },
+            {
+                "syscall": "signalfd4",
+                "comment": "libkrun: create signalfd for signal handling"
+            },
+            {
+                "syscall": "accept",
+                "comment": "libkrun: accept connections (older variant without flags)"
+            },
+            {
+                "syscall": "mkdirat",
+                "comment": "libkrun: create directory relative to fd"
+            },
+            {
+                "syscall": "umask",
+                "comment": "libkrun: set file creation mask"
             }
         ]
     },
