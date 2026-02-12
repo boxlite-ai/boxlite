@@ -102,6 +102,7 @@ fn main() {
     println!("cargo:rerun-if-changed=gvproxy-bridge/main.go");
     println!("cargo:rerun-if-changed=gvproxy-bridge/stats.go");
     println!("cargo:rerun-if-changed=gvproxy-bridge/go.mod");
+    println!("cargo:rerun-if-env-changed=BOXLITE_DEPS_STUB");
 
     // Check for stub mode (for CI linting without building)
     // Set BOXLITE_DEPS_STUB=1 to skip building and emit stub link directives

@@ -4,8 +4,14 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "Library-only sandbox runtime for Boxlite"
+description = "Embeddable virtual machine runtime for secure, isolated code execution"
+repository = "https://github.com/boxlite-ai/boxlite"
+keywords = ["vm", "sandbox", "isolation", "container", "security"]
+categories = ["virtualization"]
 links = "boxlite"
+
+[package.metadata.docs.rs]
+no-default-features = true  # Build docs without native deps (API-only)
 
 [lib]
 name = "boxlite"

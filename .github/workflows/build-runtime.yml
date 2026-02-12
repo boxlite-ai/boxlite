@@ -1,7 +1,8 @@
-# Build and test BoxLite core runtime.
+# Build BoxLite core runtime and upload artifacts.
 #
 # This workflow builds the Rust runtime and populates the shared cache.
-# Runs only on main branch to keep cache clean.
+# On push to main: builds and caches (existing behavior).
+# On release: builds and uploads runtime tarballs to GitHub Release.
 #
 # Note: SDK workflows (build-wheels, build-node) are self-contained
 # and trigger independently on release.
@@ -18,6 +19,8 @@ on:
       - 'Cargo.lock'
       - '.github/workflows/build-runtime.yml'
       - '.github/workflows/config.yml'
+  release:
+    types: [published]
   workflow_dispatch:
 
 env:
@@ -60,3 +63,35 @@ jobs:
 
       - name: Build BoxLite runtime
         run: make runtime
+
+      - name: Package runtime
+        run: tar czf boxlite-runtime-${{ matrix.target }}.tar.gz -C target boxlite-runtime/
+
+      - name: Upload runtime artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-${{ matrix.target }}
+          path: boxlite-runtime-${{ matrix.target }}.tar.gz
+          retention-days: 7
+
+  upload_to_release:
+    name: Upload runtime to GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release'
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all runtime artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: runtime-*
+          merge-multiple: true
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/boxlite-runtime-*.tar.gz
+          fail_on_unmatched_files: true

@@ -13,6 +13,7 @@ use std::process::{Command, Stdio};
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=vendor/bubblewrap");
+    println!("cargo:rerun-if-env-changed=BOXLITE_DEPS_STUB");
 
     // Check for stub mode (for CI linting without building)
     // Set BOXLITE_DEPS_STUB=1 to skip building and emit stub directives

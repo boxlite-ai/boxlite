@@ -73,6 +73,7 @@ fn main() {
     // Rebuild if vendored sources change
     println!("cargo:rerun-if-changed=vendor/libkrun");
     println!("cargo:rerun-if-changed=vendor/libkrunfw");
+    println!("cargo:rerun-if-env-changed=BOXLITE_DEPS_STUB");
     #[cfg(target_os = "macos")]
     println!("cargo:rerun-if-env-changed=BOXLITE_LIBKRUN_CC_LINUX");
 
