@@ -7,13 +7,15 @@
 //!
 //! Signal crash:
 //! ```json
-//! {"exit_code":134,"type":"signal","signal":"SIGABRT","stderr":"error message..."}
+//! {"exit_code":134,"type":"signal","signal":"SIGABRT"}
 //! ```
 //!
 //! Panic:
 //! ```json
 //! {"exit_code":101,"type":"panic","message":"panic message","location":"file.rs:42:5"}
 //! ```
+//!
+//! Note: Stderr content is captured separately in shim.stderr file (not embedded here).
 
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -28,11 +30,7 @@ use std::path::Path;
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum ExitInfo {
     /// Process killed by a signal (SIGABRT, SIGSEGV, SIGBUS, SIGILL).
-    Signal {
-        exit_code: i32,
-        signal: String,
-        stderr: String,
-    },
+    Signal { exit_code: i32, signal: String },
     /// Rust panic occurred.
     Panic {
         exit_code: i32,
@@ -85,14 +83,6 @@ impl ExitInfo {
         }
     }
 
-    /// Get the stderr content (for signal crashes).
-    pub fn stderr(&self) -> Option<&str> {
-        match self {
-            ExitInfo::Signal { stderr, .. } => Some(stderr),
-            ExitInfo::Panic { .. } | ExitInfo::Error { .. } => None,
-        }
-    }
-
     /// Check if this is a signal crash.
     pub fn is_signal(&self) -> bool {
         matches!(self, ExitInfo::Signal { .. })
@@ -118,7 +108,6 @@ mod tests {
         let info = ExitInfo::Signal {
             exit_code: 134,
             signal: "SIGABRT".to_string(),
-            stderr: "error message".to_string(),
         };
 
         let json = serde_json::to_string(&info).unwrap();
@@ -173,7 +162,7 @@ mod tests {
         let path = dir.path().join("exit");
         std::fs::write(
             &path,
-            r#"{"type":"signal","exit_code":134,"signal":"SIGABRT","stderr":"test"}"#,
+            r#"{"type":"signal","exit_code":134,"signal":"SIGABRT"}"#,
         )
         .unwrap();
 

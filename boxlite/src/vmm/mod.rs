@@ -178,8 +178,6 @@ pub struct InstanceSpec {
     pub console_output: Option<PathBuf>,
     /// Exit file for shim to write on panic (Podman pattern).
     pub exit_file: PathBuf,
-    /// Stderr file to capture libkrun crash messages.
-    pub stderr_file: PathBuf,
     /// Whether the box should continue running when the parent process exits.
     /// When false, a watchdog thread monitors parent PID and triggers shutdown.
     pub detach: bool,

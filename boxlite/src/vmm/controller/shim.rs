@@ -4,6 +4,7 @@ use std::{path::PathBuf, process::Child, sync::Mutex, time::Instant};
 
 use crate::{
     BoxID,
+    runtime::layout::BoxFilesystemLayout,
     vmm::{InstanceSpec, VmmKind},
 };
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
@@ -203,6 +204,8 @@ pub struct ShimController {
     box_id: BoxID,
     /// Box options (includes security and volumes for jailer isolation)
     options: crate::runtime::options::BoxOptions,
+    /// Box filesystem layout (provides paths for stderr, sockets, etc.)
+    layout: BoxFilesystemLayout,
 }
 
 impl ShimController {
@@ -213,6 +216,7 @@ impl ShimController {
     /// * `engine_type` - Type of VM engine to use (libkrun, firecracker, etc.)
     /// * `box_id` - Unique identifier for this box
     /// * `options` - Box options (includes security and volumes)
+    /// * `layout` - Box filesystem layout
     ///
     /// # Returns
     /// * `Ok(ShimController)` - Successfully created controller
@@ -222,6 +226,7 @@ impl ShimController {
         engine_type: VmmKind,
         box_id: BoxID,
         options: crate::runtime::options::BoxOptions,
+        layout: BoxFilesystemLayout,
     ) -> BoxliteResult<Self> {
         // Verify that the shim binary exists
         if !binary_path.exists() {
@@ -236,6 +241,7 @@ impl ShimController {
             engine_type,
             box_id,
             options,
+            layout,
         })
     }
 }
@@ -279,7 +285,6 @@ impl VmmController for ShimController {
             home_dir: config.home_dir.clone(),
             console_output: config.console_output.clone(),
             exit_file: config.exit_file.clone(),
-            stderr_file: config.stderr_file.clone(),
             detach: config.detach,
             parent_pid: config.parent_pid,
         };
@@ -312,7 +317,7 @@ impl VmmController for ShimController {
             &self.binary_path,
             self.engine_type,
             &config_json,
-            &config.home_dir,
+            &self.layout,
             self.box_id.as_str(),
             &self.options,
         )?;

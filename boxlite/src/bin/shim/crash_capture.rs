@@ -3,6 +3,9 @@
 //! Captures crash information (panics, signals) to an exit file for diagnostics.
 //! Signal handlers can't capture closures, so we use global statics for paths.
 //!
+//! Note: Stderr content is captured separately by the parent process (to shim.stderr).
+//! CrashReport reads it directly from file - we don't embed it in the exit file.
+//!
 //! Uses [`boxlite::vmm::ExitInfo`] for the JSON format.
 
 use boxlite::vmm::ExitInfo;
@@ -18,22 +21,16 @@ const PANIC_EXIT_CODE: i32 = 101;
 /// Global exit file path for signal handlers.
 static EXIT_FILE_PATH: OnceLock<PathBuf> = OnceLock::new();
 
-/// Global stderr file path for signal handlers to read crash messages.
-static STDERR_FILE_PATH: OnceLock<PathBuf> = OnceLock::new();
-
 /// Crash capture installer.
 ///
 /// Installs panic hook and signal handlers to capture crash info.
-/// The stderr_file is used for reading crash messages (not redirecting).
 pub struct CrashCapture;
 
 impl CrashCapture {
     /// Install crash capture mechanisms (panic hook + signal handlers).
     ///
     /// - `exit_file`: Where to write crash info (JSON format)
-    /// - `stderr_file`: Where to read stderr content from (for crash diagnostics)
-    pub fn install(exit_file: PathBuf, stderr_file: PathBuf) {
-        let _ = STDERR_FILE_PATH.set(stderr_file);
+    pub fn install(exit_file: PathBuf) {
         install_panic_hook(exit_file.clone());
         install_signal_handlers(exit_file);
     }
@@ -83,6 +80,10 @@ fn install_signal_handlers(exit_file: PathBuf) {
 }
 
 /// Signal handler that writes JSON crash info to exit file.
+///
+/// Note: We intentionally don't read stderr here. Signal handlers should be
+/// minimal and avoid async-signal-unsafe operations. CrashReport reads stderr
+/// directly from the file when formatting the error message.
 extern "C" fn crash_signal_handler(sig: libc::c_int) {
     let signal = match sig {
         libc::SIGABRT => "SIGABRT",
@@ -93,16 +94,9 @@ extern "C" fn crash_signal_handler(sig: libc::c_int) {
     };
 
     if let Some(exit_file) = EXIT_FILE_PATH.get() {
-        let stderr = STDERR_FILE_PATH
-            .get()
-            .and_then(|p| std::fs::read_to_string(p).ok())
-            .map(|s| s.trim().to_string())
-            .unwrap_or_default();
-
         let info = ExitInfo::Signal {
             exit_code: SIGNAL_EXIT_CODE_BASE + sig,
             signal: signal.to_string(),
-            stderr,
         };
         if let Ok(json) = serde_json::to_string(&info) {
             let _ = std::fs::write(exit_file, json);

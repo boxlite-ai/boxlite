@@ -10,6 +10,7 @@ use super::{InitCtx, log_task_error, task_start};
 use crate::litebox::CrashReport;
 use crate::pipeline::PipelineTask;
 use crate::portal::GuestSession;
+use crate::util::{ProcessExit, ProcessMonitor};
 use async_trait::async_trait;
 use boxlite_shared::Transport;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
@@ -151,9 +152,15 @@ async fn wait_for_guest_ready(
                 ))),
             }
         }
-        _ = wait_for_process_exit(shim_pid) => {
+        exit_code = wait_for_process_exit(shim_pid) => {
             // Parse exit file and present user-friendly message
-            let report = CrashReport::from_exit_file(exit_file, console_log, stderr_file, box_id);
+            let report = CrashReport::from_exit_file(
+                exit_file,
+                console_log,
+                stderr_file,
+                box_id,
+                exit_code,
+            );
 
             // Log raw debug info for troubleshooting
             if !report.debug_info.is_empty() {
@@ -168,23 +175,30 @@ async fn wait_for_guest_ready(
     }
 }
 
-/// Async poll until a process exits. Resolves when process is no longer alive.
+/// Async poll until a process exits. Returns exit code when process terminates.
 /// If pid is None, never resolves (lets other select! branches win).
-async fn wait_for_process_exit(pid: Option<u32>) {
+async fn wait_for_process_exit(pid: Option<u32>) -> Option<i32> {
     let Some(pid) = pid else {
         // No PID to monitor — pend forever, let timeout branch handle it
         return std::future::pending().await;
     };
 
-    let poll_interval = Duration::from_millis(500);
-    loop {
-        tokio::time::sleep(poll_interval).await;
-        if !crate::util::is_process_alive(pid) {
+    let monitor = ProcessMonitor::new(pid);
+    match monitor.wait_for_exit().await {
+        ProcessExit::Code(code) => {
             tracing::warn!(
                 pid = pid,
+                exit_code = code,
                 "VM subprocess exited unexpectedly during startup"
             );
-            return;
+            Some(code)
+        }
+        ProcessExit::Unknown => {
+            tracing::warn!(
+                pid = pid,
+                "VM subprocess exited (not our child, exit code unknown)"
+            );
+            None
         }
     }
 }

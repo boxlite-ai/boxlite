@@ -89,7 +89,7 @@ impl PipelineTask<InitCtx> for VmmSpawnTask {
         .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
 
         // Spawn VM
-        let handler = spawn_vm(&box_id, &instance_spec, &options)
+        let handler = spawn_vm(&box_id, &instance_spec, &options, &layout)
             .await
             .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
 
@@ -219,7 +219,6 @@ async fn build_config(
         // Diagnostic files in box_dir (preserved on crash)
         console_output: Some(layout.console_output_path()),
         exit_file: layout.exit_file_path(),
-        stderr_file: layout.stderr_file_path(),
         detach: options.detach,
         parent_pid: std::process::id(),
     };
@@ -339,12 +338,14 @@ async fn spawn_vm(
     box_id: &BoxID,
     config: &InstanceSpec,
     options: &BoxOptions,
+    layout: &BoxFilesystemLayout,
 ) -> BoxliteResult<Box<dyn VmmHandler>> {
     let mut controller = ShimController::new(
         find_binary("boxlite-shim")?,
         VmmKind::Libkrun,
         box_id.clone(),
         options.clone(),
+        layout.clone(),
     )?;
 
     controller.start(config).await

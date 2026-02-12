@@ -6,7 +6,7 @@ use std::{
 };
 
 use crate::jailer::Jailer;
-use crate::runtime::layout::FilesystemLayout;
+use crate::runtime::layout::BoxFilesystemLayout;
 use crate::runtime::options::BoxOptions;
 use crate::util::configure_library_env;
 use crate::vmm::VmmKind;
@@ -19,7 +19,7 @@ use libkrun_sys::krun_create_ctx;
 /// * `binary_path` - Path to the boxlite-shim binary
 /// * `engine_type` - Type of VM engine to use
 /// * `config_json` - Serialized BoxConfig
-/// * `home_dir` - BoxLite home directory
+/// * `layout` - Box filesystem layout (provides paths for box directory, stderr, etc.)
 /// * `box_id` - Unique box identifier
 /// * `options` - Box options (includes security and volumes)
 ///
@@ -30,7 +30,7 @@ pub(crate) fn spawn_subprocess(
     binary_path: &Path,
     engine_type: VmmKind,
     config_json: &str,
-    home_dir: &Path,
+    layout: &BoxFilesystemLayout,
     box_id: &str,
     options: &BoxOptions,
 ) -> BoxliteResult<Child> {
@@ -42,10 +42,8 @@ pub(crate) fn spawn_subprocess(
         config_json.to_string(),
     ];
 
-    // Create filesystem layout and box directory
-    use crate::runtime::layout::FsLayoutConfig;
-    let layout = FilesystemLayout::new(home_dir.to_path_buf(), FsLayoutConfig::default());
-    let box_dir = layout.boxes_dir().join(box_id);
+    // Get box directory from layout
+    let box_dir = layout.root().to_path_buf();
 
     // Create Jailer with security options and volumes
     let jailer = Jailer::new(box_id, &box_dir)
@@ -69,12 +67,24 @@ pub(crate) fn spawn_subprocess(
     // Set library search paths for bundled dependencies
     configure_library_env(&mut cmd, krun_create_ctx as *const libc::c_void);
 
-    // Use null for all stdio to support detach/reattach without pipe issues.
+    // Create stderr file BEFORE spawn to capture ALL errors including pre-main dyld errors.
+    // This is critical: dyld errors happen before main() and would go to /dev/null otherwise.
+    let stderr_file_path = layout.stderr_file_path();
+    let stderr_file = std::fs::File::create(&stderr_file_path).map_err(|e| {
+        BoxliteError::Storage(format!(
+            "Failed to create stderr file {}: {}",
+            stderr_file_path.display(),
+            e
+        ))
+    })?;
+
+    // Use null for stdin/stdout to support detach/reattach without pipe issues.
     // - stdin: prevents libkrun from affecting parent's stdin
-    // - stdout/stderr: prevents SIGPIPE when LogStreamHandler is dropped on detach
+    // - stdout: prevents SIGPIPE when LogStreamHandler is dropped on detach
+    // - stderr: captured to file for crash diagnostics
     cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::null());
-    cmd.stderr(Stdio::null());
+    cmd.stderr(Stdio::from(stderr_file));
 
     cmd.spawn().map_err(|e| {
         let err_msg = format!(
