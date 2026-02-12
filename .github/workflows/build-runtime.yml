@@ -4,6 +4,12 @@
 # On push to main: builds and caches (existing behavior).
 # On release: builds and uploads runtime tarballs to GitHub Release.
 #
+# Platform-specific considerations:
+# - Linux: Uses manylinux_2_28 container for glibc compatibility
+#   - Guest binary built on host first (Ubuntu has musl-tools, manylinux doesn't)
+#   - Shim/libkrun built in container (needs glibc 2.28)
+# - macOS: Builds directly on runner (ARM64 only)
+#
 # Note: SDK workflows (build-wheels, build-node) are self-contained
 # and trigger independently on release.
 name: Build Runtime
@@ -32,7 +38,7 @@ jobs:
     uses: ./.github/workflows/config.yml
 
   build:
-    name: Build Runtime (${{ matrix.os }})
+    name: Build Runtime (${{ matrix.target }})
     needs: config
     runs-on: ${{ matrix.os }}
     strategy:
@@ -50,19 +56,73 @@ jobs:
         with:
           toolchain: ${{ needs.config.outputs.rust-toolchain }}
 
-      # Cache Rust dependencies
+      # Cache Rust dependencies (used by guest build on Linux, full build on macOS)
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: "boxlite"
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      # Install platform dependencies
-      - name: Install platform dependencies
-        run: make setup
+      # Build guest on host BEFORE manylinux container because:
+      # - manylinux (AlmaLinux/RHEL) doesn't have musl packages in repos
+      # - Building musl-cross-make from source takes ~15 minutes
+      # - Ubuntu host has musl-tools via apt (~30 seconds)
+      # - Guest is static musl binary, doesn't need manylinux glibc compatibility
+      # - Shim/libkrun must be built IN container (needs glibc 2.28 for manylinux)
+      - name: Build guest binary (Linux only)
+        if: runner.os == 'Linux'
+        run: |
+          make setup guest
 
-      - name: Build BoxLite runtime
-        run: make runtime
+          # Cache only the final binary (11MB), not entire target dir (2.3GB)
+          # Guest is not rebuilt in container (SKIP_GUEST_BUILD=1), so no incremental compilation needed
+          GUEST_TARGET=$(scripts/util.sh --target)
+          mkdir -p ".cache/$GUEST_TARGET/release"
+          cp "target/$GUEST_TARGET/release/boxlite-guest" ".cache/$GUEST_TARGET/release/"
+
+          # Clean up to save disk space
+          rm -rf target ~/.rustup ~/.cargo
+
+      # Cache cargo registry for manylinux container.
+      # Swatinem/rust-cache can't run inside Docker, so we use actions/cache
+      # with CARGO_HOME redirected to a host-mounted path.
+      - name: Cache manylinux cargo registry
+        if: runner.os == 'Linux'
+        uses: actions/cache@v4
+        with:
+          path: .cargo-manylinux
+          key: manylinux-cargo-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            manylinux-cargo-${{ matrix.target }}-
+
+      - name: Build runtime (Linux)
+        if: runner.os == 'Linux'
+        uses: addnab/docker-run-action@v3
+        with:
+          image: quay.io/pypa/manylinux_2_28_${{ contains(matrix.target, 'arm64') && 'aarch64' || 'x86_64' }}
+          options: -v ${{ github.workspace }}:/work -w /work -e CARGO_HOME=/work/.cargo-manylinux
+          run: |
+            set -ex
+
+            # Mark directory as safe for git (ownership differs in container)
+            git config --global --add safe.directory /work
+
+            # Restore pre-built guest target directory
+            GUEST_TARGET=$(scripts/util.sh --target)
+            if [ -d ".cache/$GUEST_TARGET" ]; then
+              echo "Restoring guest from .cache/$GUEST_TARGET"
+              mkdir -p target
+              cp -a ".cache/$GUEST_TARGET" "target/$GUEST_TARGET"
+            fi
+
+            # Build with SKIP_GUEST_BUILD=1 to use pre-built guest
+            export SKIP_GUEST_BUILD=1
+            export PATH="$CARGO_HOME/bin:$PATH"
+            make setup runtime
+
+      - name: Build runtime (macOS)
+        if: runner.os == 'macOS'
+        run: make setup runtime
 
       - name: Package runtime
         run: tar czf boxlite-runtime-${{ matrix.target }}.tar.gz -C target boxlite-runtime/
