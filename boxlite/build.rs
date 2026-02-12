@@ -540,7 +540,10 @@ fn main() {
     // Embed runtime directory for compile-time discovery by RuntimeBinaryFinder.
     // option_env!("BOXLITE_RUNTIME_DIR") reads this at compile time.
     // std::env::var("BOXLITE_RUNTIME_DIR") at runtime takes priority (checked first).
-    println!("cargo:rustc-env=BOXLITE_RUNTIME_DIR={}", runtime_dir.display());
+    println!(
+        "cargo:rustc-env=BOXLITE_RUNTIME_DIR={}",
+        runtime_dir.display()
+    );
 
     // Set rpath for boxlite-shim
     #[cfg(target_os = "macos")]
