@@ -90,7 +90,9 @@ jobs:
         if: runner.os == 'Linux'
         uses: actions/cache@v4
         with:
-          path: .cargo-manylinux
+          path: |
+            .cargo-manylinux/registry
+            .cargo-manylinux/git
           key: manylinux-cargo-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             manylinux-cargo-${{ matrix.target }}-
