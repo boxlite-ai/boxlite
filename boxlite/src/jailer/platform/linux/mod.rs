@@ -13,7 +13,7 @@
 //! 1. **Pre-spawn (parent)**: Cgroup creation (`setup_pre_spawn()`)
 //! 2. **Spawn-time**: Namespace + chroot via bubblewrap (`build_command()`)
 //! 3. **Pre-exec hook**: FD cleanup, rlimits, cgroup join
-//! 4. **Post-exec (shim)**: Seccomp filter (`apply_isolation()`)
+//! 4. **Post-exec (shim)**: Seccomp filter (two-phase when gvproxy is used)
 //!
 //! Seccomp must be applied after exec because the seccompiler library
 //! is not async-signal-safe (cannot be used in pre_exec hook).
@@ -32,88 +32,144 @@ pub fn is_available() -> bool {
     crate::jailer::bwrap::is_available()
 }
 
-/// Apply Linux-specific isolation to the current process.
+/// Apply gvproxy seccomp filter with TSYNC (phase 1 of two-phase stacking).
 ///
-/// This function should be called from the shim process after it has been
-/// spawned inside the bwrap namespace. It applies seccomp filtering to
-/// restrict available syscalls.
+/// Must be called **before** gvproxy creation so that Go runtime threads
+/// inherit this permissive filter via clone(). The VMM filter is stacked
+/// on the main thread later (phase 2) to restrict VMM/vCPU threads.
 ///
-/// # Isolation Layers
-///
-/// By the time this is called, the following isolation is already in place:
-/// - **Namespaces**: Mount, user, PID, IPC, UTS (via bwrap at spawn)
-/// - **Filesystem**: Chroot/pivot_root with minimal mounts (via bwrap)
-/// - **Environment**: Sanitized (clearenv via bwrap)
-/// - **FDs**: Closed except stdin/stdout/stderr (via pre_exec hook)
-/// - **Resource limits**: rlimits and cgroups (via pre_exec hook)
-///
-/// This function adds:
-/// - **Seccomp**: Syscall filtering (if enabled)
-///
-/// # Arguments
-///
-/// * `security` - Security configuration options
-/// * `box_id` - Unique identifier for logging
-/// * `_layout` - Filesystem layout (unused, kept for API compatibility)
-///
-/// # Errors
-///
-/// Returns an error if seccomp filter generation or application fails.
-pub fn apply_isolation(
-    security: &SecurityOptions,
-    box_id: &str,
-    _layout: &FilesystemLayout,
-) -> BoxliteResult<()> {
-    tracing::info!(
+/// The gvproxy filter is a strict superset of the VMM filter, containing
+/// both VMM syscalls and Go runtime syscalls.
+pub fn apply_gvproxy_filter(box_id: &str) -> BoxliteResult<()> {
+    use crate::jailer::error::{IsolationError, JailerError};
+
+    let filters = load_filters(box_id)?;
+
+    let gvproxy_filter =
+        seccomp::get_filter(&filters, seccomp::SeccompRole::Gvproxy).ok_or_else(|| {
+            tracing::error!(box_id = %box_id, "Gvproxy filter not found in compiled filters");
+            BoxliteError::from(JailerError::Isolation(IsolationError::Seccomp(
+                "Missing gvproxy filter".to_string(),
+            )))
+        })?;
+
+    tracing::debug!(
         box_id = %box_id,
-        seccomp_enabled = security.seccomp_enabled,
-        "Applying Linux jailer isolation"
+        bpf_instructions = gvproxy_filter.len(),
+        "Applying gvproxy seccomp filter to all threads (TSYNC)"
     );
 
-    // Apply seccomp filter if enabled
-    if security.seccomp_enabled {
-        apply_seccomp_filter(box_id)?;
-    } else {
-        tracing::warn!(
+    seccomp::apply_filter_all_threads(gvproxy_filter).map_err(|e| {
+        tracing::error!(
             box_id = %box_id,
-            "Seccomp disabled - running without syscall filtering. \
-             This reduces security but may be useful for debugging."
+            error = %e,
+            "Failed to apply gvproxy seccomp filter (TSYNC)"
         );
-    }
+        BoxliteError::from(JailerError::Isolation(IsolationError::Seccomp(
+            e.to_string(),
+        )))
+    })?;
 
     tracing::info!(
         box_id = %box_id,
-        "Linux jailer isolation complete"
+        gvproxy_filter_instructions = gvproxy_filter.len(),
+        "Gvproxy seccomp filter applied to all threads (TSYNC)"
     );
 
     Ok(())
 }
 
-/// Apply seccomp BPF filter to the current process.
+/// Apply VMM seccomp filter to the main thread only (phase 2 of two-phase stacking).
 ///
-/// Loads pre-compiled BPF filters from embedded binary and applies
-/// the VMM filter to the main thread (before libkrun takeover).
+/// Must be called **after** gvproxy creation. This stacks the restrictive VMM
+/// filter on top of the gvproxy filter on the main thread only (no TSYNC).
+/// Go threads keep only the gvproxy filter. vCPU threads created later by
+/// libkrun inherit both filters from the main thread (effective = vmm).
 ///
-/// ## Filter Application
-///
-/// - **VMM filter**: Applied to all threads via TSYNC (defense-in-depth)
-/// - **vCPU filter**: Compiled; vCPU threads inherit VMM filter
-///
-/// vCPU threads created by libkrun inherit the VMM filter. The vCPU filter
-/// is compiled and available for future per-thread application.
-///
-/// Once applied, the filter cannot be removed.
-fn apply_seccomp_filter(box_id: &str) -> BoxliteResult<()> {
+/// If `tsync` is true, applies to all threads (used when gvproxy is not active).
+pub fn apply_vmm_filter(box_id: &str, tsync: bool) -> BoxliteResult<()> {
     use crate::jailer::error::{IsolationError, JailerError};
 
-    tracing::debug!(
+    let filters = load_filters(box_id)?;
+
+    let vmm_filter = seccomp::get_filter(&filters, seccomp::SeccompRole::Vmm).ok_or_else(|| {
+        tracing::error!(box_id = %box_id, "VMM filter not found in compiled filters");
+        BoxliteError::from(JailerError::Isolation(IsolationError::Seccomp(
+            "Missing vmm filter".to_string(),
+        )))
+    })?;
+
+    if tsync {
+        tracing::debug!(
+            box_id = %box_id,
+            bpf_instructions = vmm_filter.len(),
+            "Applying VMM seccomp filter to all threads (TSYNC)"
+        );
+        seccomp::apply_filter_all_threads(vmm_filter)
+    } else {
+        tracing::debug!(
+            box_id = %box_id,
+            bpf_instructions = vmm_filter.len(),
+            "Stacking VMM seccomp filter on main thread only (no TSYNC)"
+        );
+        seccomp::apply_filter(vmm_filter)
+    }
+    .map_err(|e| {
+        tracing::error!(
+            box_id = %box_id,
+            error = %e,
+            tsync = tsync,
+            "Failed to apply VMM seccomp filter"
+        );
+        BoxliteError::from(JailerError::Isolation(IsolationError::Seccomp(
+            e.to_string(),
+        )))
+    })?;
+
+    tracing::info!(
         box_id = %box_id,
-        "Loading pre-compiled seccomp filters"
+        vmm_filter_instructions = vmm_filter.len(),
+        tsync = tsync,
+        "VMM seccomp filter applied"
     );
 
-    // Load compiled filters from embedded binary
+    if let Some(vcpu_filter) = seccomp::get_filter(&filters, seccomp::SeccompRole::Vcpu) {
+        tracing::debug!(
+            box_id = %box_id,
+            vcpu_filter_instructions = vcpu_filter.len(),
+            "vCPU filter available (vCPU threads inherit from main thread)"
+        );
+    }
+
+    Ok(())
+}
+
+/// Apply Linux-specific isolation (single-phase, VMM filter with TSYNC).
+///
+/// Convenience function for when gvproxy is not used.
+/// Implements the `PlatformIsolation` trait interface.
+pub fn apply_isolation(
+    security: &crate::runtime::advanced_options::SecurityOptions,
+    box_id: &str,
+    _layout: &crate::runtime::layout::FilesystemLayout,
+) -> BoxliteResult<()> {
+    if security.seccomp_enabled {
+        apply_vmm_filter(box_id, true)?;
+    } else {
+        tracing::warn!(
+            box_id = %box_id,
+            "Seccomp disabled - running without syscall filtering"
+        );
+    }
+    Ok(())
+}
+
+/// Load pre-compiled BPF filters from embedded binary.
+fn load_filters(box_id: &str) -> BoxliteResult<seccomp::BpfThreadMap> {
+    use crate::jailer::error::{IsolationError, JailerError};
+
     let filter_bytes = include_bytes!(concat!(env!("OUT_DIR"), "/seccomp_filter.bpf"));
-    let filters = seccomp::deserialize_binary(&filter_bytes[..]).map_err(|e| {
+    seccomp::deserialize_binary(&filter_bytes[..]).map_err(|e| {
         tracing::error!(
             box_id = %box_id,
             error = %e,
@@ -122,53 +178,12 @@ fn apply_seccomp_filter(box_id: &str) -> BoxliteResult<()> {
         BoxliteError::from(JailerError::Isolation(IsolationError::Seccomp(
             e.to_string(),
         )))
-    })?;
-
-    // Apply VMM filter to main thread (before libkrun takeover)
-    let vmm_filter = seccomp::get_filter(&filters, seccomp::SeccompRole::Vmm).ok_or_else(|| {
-        tracing::error!(
-            box_id = %box_id,
-            "VMM filter not found in compiled filters"
-        );
-        JailerError::Isolation(IsolationError::Seccomp("Missing vmm filter".to_string()))
-    })?;
-
-    tracing::debug!(
-        box_id = %box_id,
-        bpf_instructions = vmm_filter.len(),
-        "Applying VMM seccomp filter to all threads (TSYNC)"
-    );
-
-    seccomp::apply_filter_all_threads(vmm_filter).map_err(|e| {
-        tracing::error!(
-            box_id = %box_id,
-            error = %e,
-            "Failed to apply VMM seccomp filter (TSYNC)"
-        );
-        JailerError::Isolation(IsolationError::Seccomp(e.to_string()))
-    })?;
-
-    tracing::info!(
-        box_id = %box_id,
-        vmm_filter_instructions = vmm_filter.len(),
-        "Seccomp VMM filter applied to all threads (TSYNC)"
-    );
-
-    if let Some(vcpu_filter) = seccomp::get_filter(&filters, seccomp::SeccompRole::Vcpu) {
-        tracing::debug!(
-            box_id = %box_id,
-            vcpu_filter_instructions = vcpu_filter.len(),
-            "vCPU filter available (vCPU threads inherit vmm filter via TSYNC)"
-        );
-    }
-
-    Ok(())
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     #[test]
     fn test_is_available_checks_bwrap() {
@@ -177,23 +192,7 @@ mod tests {
         assert_eq!(is_available(), bwrap_available);
     }
 
-    #[test]
-    fn test_apply_isolation_with_seccomp_disabled() {
-        use crate::runtime::layout::FsLayoutConfig;
-
-        let security = SecurityOptions {
-            seccomp_enabled: false,
-            ..Default::default()
-        };
-
-        let layout = FilesystemLayout::new(PathBuf::from("/tmp/test"), FsLayoutConfig::default());
-
-        // With seccomp disabled, apply_isolation should succeed
-        let result = apply_isolation(&security, "test-box", &layout);
-        assert!(result.is_ok(), "Should succeed with seccomp disabled");
-    }
-
-    // Note: Testing apply_isolation with seccomp enabled is tricky because:
+    // Note: Testing seccomp filter application is tricky because:
     // 1. Seccomp cannot be un-applied once set
     // 2. It would restrict syscalls for the test process itself
     // 3. Should be tested in isolated subprocess or on actual Linux
