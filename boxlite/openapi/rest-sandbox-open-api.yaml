@@ -1,19 +1,16 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
+# Copyright 2024-2026 BoxLite Contributors
 #
-#   http://www.apache.org/licenses/LICENSE-2.0
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
 #
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 ---
 openapi: 3.1.1
@@ -55,7 +52,7 @@ info:
     url: https://www.apache.org/licenses/LICENSE-2.0
   contact:
     name: BoxLite
-    url: https://github.com/bxlite/boxlite
+    url: https://github.com/boxlite-ai/boxlite
 
 servers:
   - url: "{scheme}://{host}/v1"
@@ -872,7 +869,7 @@ components:
       in: query
       description: |
         Opaque token for the next page of results.
-        Returned as `next-page-token` in list responses.
+        Returned as `next_page_token` in list responses.
         Clients must not parse or interpret this value.
       schema:
         type: string
@@ -1366,7 +1363,7 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Box"
-        next-page-token:
+        next_page_token:
           type: string
           nullable: true
           description: |
@@ -1631,7 +1628,7 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ImageInfo"
-        next-page-token:
+        next_page_token:
           type: string
           nullable: true
           description: Opaque token for next page
