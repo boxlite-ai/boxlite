@@ -1095,6 +1095,8 @@ components:
       type: object
       description: |
         Standard error response. Maps directly to BoxliteError variants.
+        `UnauthorizedError` is a server-layer error (auth middleware) and does
+        not correspond to a BoxliteError variant in the core library.
       required: [message, type, code]
       properties:
         message:
@@ -1113,6 +1115,7 @@ components:
             - PortalError
             - NetworkError
             - RpcError
+            - RpcTransportError
             - InternalError
             - ExecutionError
             - NotFoundError
@@ -1276,8 +1279,9 @@ components:
             $ref: "#/components/schemas/PortSpec"
         network:
           type: string
-          description: Network isolation mode
-          enum: [isolated]
+          description: |
+            Network isolation mode. Currently supported: `isolated`.
+            Additional modes may be added in future versions.
           default: isolated
         auto_remove:
           type: boolean
@@ -1289,11 +1293,6 @@ components:
           default: false
         security:
           $ref: "#/components/schemas/SecurityPreset"
-        labels:
-          type: object
-          additionalProperties:
-            type: string
-          description: User-defined key-value labels
 
     VolumeSpec:
       type: object
