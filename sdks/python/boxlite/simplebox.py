@@ -291,6 +291,7 @@ class SimpleBox:
                 "or call 'await box.start()' first."
             )
         await self._box.stop()
+        self._started = False
 
     async def shutdown(self):
         """
