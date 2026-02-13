@@ -1,5 +1,6 @@
 #![allow(unsafe_op_in_unsafe_fn, non_local_definitions)]
 
+mod advanced_options;
 mod box_handle;
 mod exec;
 mod info;
@@ -8,13 +9,12 @@ mod options;
 mod runtime;
 mod util;
 
+use crate::advanced_options::{PyAdvancedBoxOptions, PySecurityOptions};
 use crate::box_handle::PyBox;
 use crate::exec::{PyExecStderr, PyExecStdin, PyExecStdout, PyExecution};
 use crate::info::{PyBoxInfo, PyBoxStateInfo};
 use crate::metrics::{PyBoxMetrics, PyRuntimeMetrics};
-use crate::options::{
-    PyAdvancedBoxOptions, PyBoxOptions, PyCopyOptions, PyOptions, PySecurityOptions,
-};
+use crate::options::{PyBoxOptions, PyCopyOptions, PyOptions};
 use crate::runtime::PyBoxlite;
 use pyo3::prelude::*;
 
