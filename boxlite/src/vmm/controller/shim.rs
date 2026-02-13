@@ -402,8 +402,8 @@ fn write_instance_spec_file(config: &InstanceSpec, config_path: &Path) -> Boxlit
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::jailer::SecurityOptions;
     use crate::runtime::guest_rootfs::{GuestRootfs, Strategy};
-    use crate::runtime::options::SecurityOptions;
     use crate::vmm::{BlockDevices, Entrypoint, FsShares};
     use std::sync::{Mutex, OnceLock};
     use std::thread;
