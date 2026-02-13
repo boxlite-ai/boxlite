@@ -30,8 +30,8 @@
 //!
 //! Without gvproxy, the VMM filter is applied with TSYNC as before.
 //!
-//! - VMM filter: Core VMM syscalls only (~48 entries)
-//! - Gvproxy filter: VMM + Go runtime syscalls (~100 entries, strict superset)
+//! - VMM filter: Core VMM + libkrun syscalls (~106 entries)
+//! - Gvproxy filter: VMM + Go runtime syscalls (~107 entries, strict superset)
 //! - vCPU filter: Compiled; vCPU threads inherit from main thread
 //! - API filter: Not used in BoxLite (reserved for compatibility)
 

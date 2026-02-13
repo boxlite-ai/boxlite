@@ -472,6 +472,343 @@
       {
         "syscall": "restart_syscall",
         "comment": "automatically issued by the kernel when specific timing-related syscalls (e.g. nanosleep) get interrupted by SIGSTOP"
+      },
+
+      {
+        "syscall": "openat",
+        "comment": "libkrun: glibc 2.26+ maps open() to openat(AT_FDCWD, ...)"
+      },
+      {
+        "syscall": "newfstatat",
+        "comment": "libkrun: glibc 2.33+ maps stat/fstat to newfstatat"
+      },
+      {
+        "syscall": "statx",
+        "comment": "libkrun: modern file stat (used by glibc 2.38+)"
+      },
+      {
+        "syscall": "readlinkat",
+        "comment": "libkrun: modern readlink (glibc uses readlinkat)"
+      },
+      {
+        "syscall": "unlinkat",
+        "comment": "libkrun: modern unlink (glibc uses unlinkat)"
+      },
+      {
+        "syscall": "clone3",
+        "comment": "libkrun: modern thread creation (glibc 2.34+, used for vCPU threads)"
+      },
+      {
+        "syscall": "clone",
+        "comment": "libkrun: legacy thread/process creation"
+      },
+      {
+        "syscall": "close_range",
+        "comment": "libkrun: close range of file descriptors (glibc 2.34+)"
+      },
+      {
+        "syscall": "epoll_create1",
+        "comment": "libkrun: create epoll instance"
+      },
+      {
+        "syscall": "epoll_wait",
+        "comment": "libkrun: epoll wait (used alongside epoll_pwait)"
+      },
+      {
+        "syscall": "mprotect",
+        "comment": "libkrun: memory protection changes for guest RAM regions"
+      },
+      {
+        "syscall": "bind",
+        "comment": "libkrun: bind socket for networking"
+      },
+      {
+        "syscall": "listen",
+        "comment": "libkrun: listen on socket"
+      },
+      {
+        "syscall": "getsockname",
+        "comment": "libkrun: get socket address"
+      },
+      {
+        "syscall": "setsockopt",
+        "comment": "libkrun: set socket options"
+      },
+      {
+        "syscall": "sendto",
+        "comment": "libkrun: send data on socket"
+      },
+      {
+        "syscall": "poll",
+        "comment": "libkrun: I/O multiplexing"
+      },
+      {
+        "syscall": "pread64",
+        "comment": "libkrun: positioned read for block device I/O"
+      },
+      {
+        "syscall": "pwrite64",
+        "comment": "libkrun: positioned write for block device I/O"
+      },
+      {
+        "syscall": "preadv",
+        "comment": "libkrun: vectorized positioned read"
+      },
+      {
+        "syscall": "mkdir",
+        "comment": "libkrun: directory creation"
+      },
+      {
+        "syscall": "dup",
+        "comment": "libkrun: file descriptor duplication"
+      },
+      {
+        "syscall": "dup2",
+        "comment": "libkrun: file descriptor duplication"
+      },
+      {
+        "syscall": "kill",
+        "comment": "libkrun: signal delivery"
+      },
+      {
+        "syscall": "capget",
+        "comment": "libkrun: query process capabilities"
+      },
+      {
+        "syscall": "prctl",
+        "comment": "libkrun: thread setup (PR_SET_NAME, etc.)"
+      },
+      {
+        "syscall": "pipe2",
+        "comment": "libkrun: pipe creation"
+      },
+      {
+        "syscall": "tgkill",
+        "comment": "libkrun: thread-group signal delivery"
+      },
+      {
+        "syscall": "nanosleep",
+        "comment": "libkrun: sleep operations"
+      },
+      {
+        "syscall": "clock_nanosleep",
+        "comment": "libkrun: precise sleep (glibc maps nanosleep to clock_nanosleep)"
+      },
+      {
+        "syscall": "getpid",
+        "comment": "libkrun: get process ID"
+      },
+      {
+        "syscall": "gettid",
+        "comment": "libkrun: get thread ID (vCPU thread init)"
+      },
+      {
+        "syscall": "getuid",
+        "comment": "libkrun: get user ID"
+      },
+      {
+        "syscall": "getgid",
+        "comment": "libkrun: get group ID"
+      },
+      {
+        "syscall": "access",
+        "comment": "libkrun: check file access permissions"
+      },
+      {
+        "syscall": "arch_prctl",
+        "comment": "libkrun: x86_64 TLS setup (called by new threads via clone)"
+      },
+      {
+        "syscall": "set_robust_list",
+        "comment": "libkrun: pthread robust futex list (called by new threads)"
+      },
+      {
+        "syscall": "set_tid_address",
+        "comment": "libkrun: set thread ID pointer (called by new threads)"
+      },
+      {
+        "syscall": "rseq",
+        "comment": "libkrun: restartable sequences (glibc 2.35+)"
+      },
+      {
+        "syscall": "prlimit64",
+        "comment": "libkrun: get/set resource limits"
+      },
+      {
+        "syscall": "sched_getaffinity",
+        "comment": "libkrun: CPU affinity query for vCPU scheduling"
+      },
+      {
+        "syscall": "umask",
+        "comment": "libkrun: set file creation mask (used by libcontainer)"
+      },
+      {
+        "syscall": "accept",
+        "comment": "libkrun: accept connections (older variant without flags)"
+      },
+      {
+        "syscall": "capset",
+        "comment": "libkrun: set process capabilities"
+      },
+      {
+        "syscall": "copy_file_range",
+        "comment": "libkrun: efficient file copy"
+      },
+      {
+        "syscall": "fchmod",
+        "comment": "libkrun: change file permissions"
+      },
+      {
+        "syscall": "flock",
+        "comment": "libkrun: file locking"
+      },
+      {
+        "syscall": "getcwd",
+        "comment": "libkrun: get current working directory"
+      },
+      {
+        "syscall": "getdents64",
+        "comment": "libkrun: read directory entries"
+      },
+      {
+        "syscall": "geteuid",
+        "comment": "libkrun: get effective user ID"
+      },
+      {
+        "syscall": "getsockopt",
+        "comment": "libkrun: get socket options"
+      },
+      {
+        "syscall": "mkdirat",
+        "comment": "libkrun: create directory relative to fd"
+      },
+      {
+        "syscall": "pwritev",
+        "comment": "libkrun: vectorized positioned write"
+      },
+      {
+        "syscall": "readlink",
+        "comment": "libkrun: read symbolic link"
+      },
+      {
+        "syscall": "shutdown",
+        "comment": "libkrun: shutdown socket"
+      },
+      {
+        "syscall": "signalfd4",
+        "comment": "libkrun: create signalfd for signal handling"
+      },
+      {
+        "syscall": "socketpair",
+        "comment": "libkrun: create connected socket pair"
+      },
+      {
+        "syscall": "uname",
+        "comment": "libkrun: get system info"
+      },
+      {
+        "syscall": "unlink",
+        "comment": "libkrun: delete file"
+      },
+      {
+        "syscall": "wait4",
+        "comment": "libkrun: wait for child process"
+      },
+      {
+        "syscall": "waitid",
+        "comment": "libkrun: wait for child process (extended)"
+      },
+
+      {
+        "syscall": "ioctl",
+        "comment": "libkrun: KVM VM setup requires 28+ ioctl codes; ge 0 matches any request code",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "ge",
+            "val": 0,
+            "comment": "any ioctl request code"
+          }
+        ]
+      },
+      {
+        "syscall": "mmap",
+        "comment": "libkrun: VM memory mapping requires various flag combinations (guest RAM, balloon, mmap'd I/O)",
+        "args": [
+          {
+            "index": 3,
+            "type": "dword",
+            "op": "ge",
+            "val": 0,
+            "comment": "any mmap flags"
+          }
+        ]
+      },
+      {
+        "syscall": "socket",
+        "comment": "libkrun: needs AF_UNIX, AF_INET, AF_INET6 with various types",
+        "args": [
+          {
+            "index": 0,
+            "type": "dword",
+            "op": "ge",
+            "val": 0,
+            "comment": "any socket domain"
+          }
+        ]
+      },
+      {
+        "syscall": "fcntl",
+        "comment": "libkrun: FD management F_GETFD, F_SETFD, F_GETFL, F_SETFL",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "ge",
+            "val": 0,
+            "comment": "any fcntl command"
+          }
+        ]
+      },
+      {
+        "syscall": "futex",
+        "comment": "libkrun: thread synchronization for VM runtime (all futex ops)",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "ge",
+            "val": 0,
+            "comment": "any futex op"
+          }
+        ]
+      },
+      {
+        "syscall": "rt_sigaction",
+        "comment": "libkrun: signal handler registration for VM exits (all signals)",
+        "args": [
+          {
+            "index": 0,
+            "type": "dword",
+            "op": "ge",
+            "val": 0,
+            "comment": "any signal number"
+          }
+        ]
+      },
+      {
+        "syscall": "accept4",
+        "comment": "libkrun: accept connections with various flags",
+        "args": [
+          {
+            "index": 3,
+            "type": "dword",
+            "op": "ge",
+            "val": 0,
+            "comment": "any accept4 flags"
+          }
+        ]
       }
     ]
   },
