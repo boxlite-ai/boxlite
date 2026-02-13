@@ -192,8 +192,7 @@ async fn build_config(
     let vmm_config = volume_mgr.build_vmm_config();
 
     // Guest entrypoint
-    let guest_entrypoint =
-        build_guest_entrypoint(&transport, &ready_transport, &guest_rootfs, options)?;
+    let guest_entrypoint = build_guest_entrypoint(&transport, &ready_transport, &guest_rootfs)?;
 
     // Network configuration
     let network_config = build_network_config(container_image_config, options, layout);
@@ -258,7 +257,6 @@ fn build_guest_entrypoint(
     transport: &Transport,
     ready_transport: &Transport,
     guest_rootfs: &GuestRootfs,
-    options: &crate::runtime::options::BoxOptions,
 ) -> BoxliteResult<Entrypoint> {
     let listen_uri = transport.to_uri();
     let ready_notify_uri = ready_transport.to_uri();
@@ -278,11 +276,9 @@ fn build_guest_entrypoint(
         builder.with_env("RUST_BACKTRACE", &v);
     }
 
-    // FILO order: image → user (later overrides earlier)
+    // Guest bootstrap env only.
+    // Container runtime env (options.env) is delivered via ContainerInit gRPC.
     for (key, value) in &guest_rootfs.env {
-        builder.with_env(key, value);
-    }
-    for (key, value) in &options.env {
         builder.with_env(key, value);
     }
 
@@ -348,4 +344,87 @@ async fn spawn_vm(
     )?;
 
     controller.start(config).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::guest_rootfs::{GuestRootfs, Strategy};
+    use std::path::PathBuf;
+
+    fn test_guest_rootfs(env: Vec<(String, String)>) -> GuestRootfs {
+        GuestRootfs {
+            path: PathBuf::from("/tmp/rootfs"),
+            strategy: Strategy::Direct,
+            kernel: None,
+            initrd: None,
+            env,
+        }
+    }
+
+    #[test]
+    fn guest_entrypoint_includes_guest_rootfs_env() {
+        let guest_rootfs = test_guest_rootfs(vec![
+            (
+                "PATH".to_string(),
+                "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin".to_string(),
+            ),
+            ("HOME".to_string(), "/root".to_string()),
+        ]);
+        let entrypoint = build_guest_entrypoint(
+            &Transport::unix(PathBuf::from("/tmp/box.sock")),
+            &Transport::unix(PathBuf::from("/tmp/ready.sock")),
+            &guest_rootfs,
+        )
+        .unwrap();
+
+        assert!(entrypoint.env.iter().any(|(k, v)| {
+            k == "PATH" && v == "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"
+        }));
+        assert!(
+            entrypoint
+                .env
+                .iter()
+                .any(|(k, v)| k == "HOME" && v == "/root")
+        );
+    }
+
+    #[test]
+    fn guest_entrypoint_sets_listen_and_notify_args() {
+        let guest_rootfs = test_guest_rootfs(vec![]);
+        let entrypoint = build_guest_entrypoint(
+            &Transport::unix(PathBuf::from("/tmp/box.sock")),
+            &Transport::unix(PathBuf::from("/tmp/ready.sock")),
+            &guest_rootfs,
+        )
+        .unwrap();
+
+        assert_eq!(
+            entrypoint.args,
+            vec![
+                "--listen".to_string(),
+                "unix:///tmp/box.sock".to_string(),
+                "--notify".to_string(),
+                "unix:///tmp/ready.sock".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn guest_entrypoint_does_not_include_user_container_env() {
+        let guest_rootfs = test_guest_rootfs(vec![("PATH".to_string(), "/usr/bin".to_string())]);
+        let entrypoint = build_guest_entrypoint(
+            &Transport::unix(PathBuf::from("/tmp/box.sock")),
+            &Transport::unix(PathBuf::from("/tmp/ready.sock")),
+            &guest_rootfs,
+        )
+        .unwrap();
+
+        assert!(
+            entrypoint
+                .env
+                .iter()
+                .any(|(k, v)| k == "PATH" && v == "/usr/bin")
+        );
+    }
 }

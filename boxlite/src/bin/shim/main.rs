@@ -14,7 +14,7 @@
 
 mod crash_capture;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
 
@@ -49,8 +49,20 @@ struct ShimArgs {
     ///
     /// This contains the full InstanceSpec including rootfs path, volumes,
     /// networking, guest entrypoint, and other runtime configuration.
-    #[arg(long)]
-    config: String,
+    #[arg(
+        long,
+        conflicts_with = "config_file",
+        required_unless_present = "config_file"
+    )]
+    config: Option<String>,
+
+    /// Path to Box configuration JSON file
+    #[arg(
+        long = "config-file",
+        conflicts_with = "config",
+        required_unless_present = "config"
+    )]
+    config_file: Option<PathBuf>,
 }
 
 /// Initialize tracing with file logging.
@@ -85,9 +97,8 @@ fn main() -> BoxliteResult<()> {
     // VmmKind parsed via FromStr trait automatically
     let args = ShimArgs::parse();
 
-    // Parse InstanceSpec from JSON
-    let config: InstanceSpec = serde_json::from_str(&args.config)
-        .map_err(|e| BoxliteError::Engine(format!("Failed to parse config JSON: {}", e)))?;
+    // Parse InstanceSpec from --config-file (preferred) or --config.
+    let config = load_instance_spec(&args)?;
 
     // Initialize logging using box_dir derived from exit_file path.
     // Logs go to box_dir/logs/ so the sandbox only needs write access to box_dir.
@@ -123,6 +134,35 @@ fn main() -> BoxliteResult<()> {
             let _ = std::fs::write(&exit_file, json);
         }
     })
+}
+
+fn load_instance_spec(args: &ShimArgs) -> BoxliteResult<InstanceSpec> {
+    if let Some(config_file) = &args.config_file {
+        let config_json = std::fs::read_to_string(config_file).map_err(|e| {
+            BoxliteError::Engine(format!(
+                "Failed to read config file {}: {}",
+                config_file.display(),
+                e
+            ))
+        })?;
+
+        return serde_json::from_str(&config_json).map_err(|e| {
+            BoxliteError::Engine(format!(
+                "Failed to parse config JSON from {}: {}",
+                config_file.display(),
+                e
+            ))
+        });
+    }
+
+    if let Some(config_json) = &args.config {
+        return serde_json::from_str(config_json)
+            .map_err(|e| BoxliteError::Engine(format!("Failed to parse config JSON: {}", e)));
+    }
+
+    Err(BoxliteError::Engine(
+        "Either --config-file or --config must be provided".to_string(),
+    ))
 }
 
 fn run_shim(args: ShimArgs, mut config: InstanceSpec) -> BoxliteResult<()> {
@@ -393,4 +433,118 @@ fn start_parent_watchdog() {
         // Fallback: if SIGKILL somehow didn't work, exit forcefully
         std::process::exit(137); // 128 + 9 (SIGKILL)
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::Value;
+    use std::io::Write;
+
+    fn test_instance_spec_json() -> String {
+        serde_json::json!({
+            "box_id": "box-test",
+            "cpus": null,
+            "memory_mib": null,
+            "fs_shares": { "shares": [] },
+            "block_devices": { "devices": [] },
+            "guest_entrypoint": {
+                "executable": "/boxlite/bin/boxlite-guest",
+                "args": ["--listen", "vsock://2695"],
+                "env": []
+            },
+            "transport": { "Unix": { "socket_path": "/tmp/box.sock" } },
+            "ready_transport": { "Unix": { "socket_path": "/tmp/ready.sock" } },
+            "guest_rootfs": {
+                "path": "/tmp/rootfs",
+                "strategy": "Direct",
+                "kernel": null,
+                "initrd": null,
+                "env": []
+            },
+            "network_config": null,
+            "home_dir": "/tmp/home",
+            "console_output": "/tmp/console.log",
+            "exit_file": "/tmp/exit",
+            "detach": false,
+            "parent_pid": 1
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn shim_args_accepts_legacy_config_flag() {
+        let args =
+            ShimArgs::try_parse_from(["boxlite-shim", "--engine", "libkrun", "--config", "{}"])
+                .unwrap();
+        assert!(args.config.is_some());
+        assert!(args.config_file.is_none());
+    }
+
+    #[test]
+    fn shim_args_accepts_config_file_flag() {
+        let args = ShimArgs::try_parse_from([
+            "boxlite-shim",
+            "--engine",
+            "libkrun",
+            "--config-file",
+            "/tmp/shim-config.json",
+        ])
+        .unwrap();
+        assert!(args.config.is_none());
+        assert_eq!(
+            args.config_file.as_deref(),
+            Some(Path::new("/tmp/shim-config.json"))
+        );
+    }
+
+    #[test]
+    fn load_instance_spec_from_legacy_config() {
+        let args = ShimArgs {
+            engine: VmmKind::Libkrun,
+            config: Some(test_instance_spec_json()),
+            config_file: None,
+        };
+
+        let parsed = load_instance_spec(&args).unwrap();
+        assert_eq!(parsed.box_id, "box-test");
+    }
+
+    #[test]
+    fn load_instance_spec_from_config_file() {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(test_instance_spec_json().as_bytes())
+            .unwrap();
+
+        let args = ShimArgs {
+            engine: VmmKind::Libkrun,
+            config: None,
+            config_file: Some(file.path().to_path_buf()),
+        };
+
+        let parsed = load_instance_spec(&args).unwrap();
+        assert_eq!(parsed.box_id, "box-test");
+    }
+
+    #[test]
+    fn load_instance_spec_from_config_file_with_large_payload() {
+        let mut json: Value = serde_json::from_str(&test_instance_spec_json()).unwrap();
+        let large_env: Vec<(String, String)> = (0..2000)
+            .map(|i| (format!("KEY_{i}"), "x".repeat(128)))
+            .collect();
+        json["guest_entrypoint"]["env"] = serde_json::json!(large_env);
+
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(json.to_string().as_bytes()).unwrap();
+
+        let args = ShimArgs {
+            engine: VmmKind::Libkrun,
+            config: None,
+            config_file: Some(file.path().to_path_buf()),
+        };
+
+        let parsed = load_instance_spec(&args).unwrap();
+        assert_eq!(parsed.box_id, "box-test");
+        assert_eq!(parsed.guest_entrypoint.env.len(), 2000);
+    }
 }
