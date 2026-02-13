@@ -4,6 +4,7 @@ version = "0.2.0"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+publish = false
 description = "Command-line interface for BoxLite container runtime"
 
 [[bin]]

@@ -1,6 +1,6 @@
 use std::env;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Builds libgvproxy from Go sources using cgo.
@@ -97,12 +97,25 @@ fn get_library_name() -> &'static str {
     }
 }
 
+/// Auto-set BOXLITE_DEPS_STUB=2 when downloaded from a registry (crates.io).
+/// Cargo adds .cargo_vcs_info.json to published packages.
+fn auto_detect_registry() {
+    if env::var("BOXLITE_DEPS_STUB").is_err() {
+        let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+        if manifest_dir.join(".cargo_vcs_info.json").exists() {
+            env::set_var("BOXLITE_DEPS_STUB", "2");
+        }
+    }
+}
+
 fn main() {
     // Rebuild if Go sources change
     println!("cargo:rerun-if-changed=gvproxy-bridge/main.go");
     println!("cargo:rerun-if-changed=gvproxy-bridge/stats.go");
     println!("cargo:rerun-if-changed=gvproxy-bridge/go.mod");
     println!("cargo:rerun-if-env-changed=BOXLITE_DEPS_STUB");
+
+    auto_detect_registry();
 
     // Check for stub mode (for CI linting without building)
     // Set BOXLITE_DEPS_STUB=1 to skip building and emit stub link directives

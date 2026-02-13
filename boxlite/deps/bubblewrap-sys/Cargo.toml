@@ -1,11 +1,13 @@
 [package]
 name = "bubblewrap-sys"
-version = "0.1.0"
+version.workspace = true
 edition = "2021"
-authors = ["BoxLite Contributors"]
+authors.workspace = true
+license.workspace = true
 description = "Builds and bundles bwrap from bubblewrap"
-license = "Apache-2.0"
+repository = "https://github.com/boxlite-ai/boxlite"
 links = "bubblewrap"
+exclude = ["vendor"]
 
 [build-dependencies]
 num_cpus = "1.16"

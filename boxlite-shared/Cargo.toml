@@ -17,3 +17,6 @@ tokio = { version = "1", features = ["io-util"] }
 
 [build-dependencies]
 tonic-build = "0.12"
+
+[package.metadata.docs.rs]
+default-features = true
