@@ -2,9 +2,10 @@
 """
 Copy files into and out of a box (docker-like cp).
 
-Demonstrates two approaches:
+Demonstrates three approaches:
   1. copy_in / copy_out via the native API (works for persistent filesystem paths)
-  2. Tar-pipe workaround for tmpfs destinations (e.g. /tmp)
+  2. Tar-pipe workaround for tmpfs destinations (e.g. /tmp) — async
+  3. Tar-pipe workaround — sync variant (requires boxlite[sync])
 
 Background on tmpfs:
   copy_in() writes to the rootfs layer, so files destined for tmpfs mounts are
@@ -121,14 +122,48 @@ async def example_tmpfs_workaround():
         print(f"read /tmp/hello.txt: {result.stdout.strip()}")
 
 
+
+# ---------------------------------------------------------------------------
+# Example 3: sync version of the tmpfs workaround  (requires boxlite[sync])
+# ---------------------------------------------------------------------------
+
+def example_tmpfs_workaround_sync():
+    """Synchronous version of the tmpfs tar-pipe workaround."""
+    print("\n=== Example 3: tmpfs workaround – sync API ===\n")
+
+    from boxlite import SyncSimpleBox
+
+    with SyncSimpleBox("alpine:latest", name="sync-tmpfs-cp-demo") as box:
+        tar_data = make_tar({"hello_sync.txt": b"visible from sync!\n"})
+
+        # TODO: Replace with public stdin API once available.
+        # Currently requires the low-level _box handle for stdin access.
+        execution = box._box.exec("tar", ["xf", "-", "-C", "/tmp"])
+        stdin = execution.stdin()
+        stdin.send_input(tar_data)
+        stdin.close()
+        result = execution.wait()
+        print(f"tar via stdin:       exit={result.exit_code}")
+
+        result = box.exec("cat", "/tmp/hello_sync.txt")
+        print(f"read /tmp/hello_sync.txt: {result.stdout.strip()}")
+
+
 async def main():
     await example_copy_in_out()
     await example_tmpfs_workaround()
 
-    print("\nKey Takeaways:")
-    print("  - copy_in/copy_out work for persistent filesystem paths")
-    print("  - For tmpfs destinations, pipe a tar archive via stdin")
-
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+    # Sync variant (requires greenlet: pip install boxlite[sync])
+    try:
+        example_tmpfs_workaround_sync()
+    except ImportError:
+        print("\nSkipping sync example – install boxlite[sync] for greenlet support")
+
+    print("\nKey Takeaways:")
+    print("  - copy_in/copy_out work for persistent filesystem paths")
+    print("  - For tmpfs destinations, pipe a tar archive via stdin")
+    print("  - Sync API uses the same tar-pipe pattern (requires boxlite[sync])")
