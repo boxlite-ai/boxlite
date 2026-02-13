@@ -109,7 +109,7 @@ repair-wheel-command = ""  # Skip auditwheel repair
 
 # Set Rust and library paths
 # SKIP_GUEST_BUILD=1: Use pre-built guest from Ubuntu host (manylinux lacks musl packages)
-environment = { SKIP_GUEST_BUILD = "1", PATH = "$CARGO_HOME:$PATH", PKG_CONFIG_PATH = "/usr/local/lib64/pkgconfig:/usr/local/lib/pkgconfig", LD_LIBRARY_PATH = "/usr/local/lib64:/usr/local/lib" }
+environment = { SKIP_GUEST_BUILD = "1", PATH = "$HOME/.cargo/bin:/usr/local/bin:$PATH", PKG_CONFIG_PATH = "/usr/local/lib64/pkgconfig:/usr/local/lib/pkgconfig", LD_LIBRARY_PATH = "/usr/local/lib64:/usr/local/lib" }
 
 # Retag wheel for PyPI compliance without bundling libs (we handle runtime deps ourselves)
 # Uses 'wheel tags' to change linux_x86_64 -> manylinux_2_28_x86_64

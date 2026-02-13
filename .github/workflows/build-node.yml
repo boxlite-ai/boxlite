@@ -93,38 +93,40 @@ jobs:
 
       - name: Build Node.js package (Linux)
         if: runner.os == 'Linux'
-        uses: addnab/docker-run-action@v3
-        with:
-          image: quay.io/pypa/manylinux_2_28_${{ contains(matrix.target, 'arm64') && 'aarch64' || 'x86_64' }}
-          options: -v ${{ github.workspace }}:/work -w /work
-          run: |
-            set -ex
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/work \
+            -w /work \
+            quay.io/pypa/manylinux_2_28_${{ contains(matrix.target, 'arm64') && 'aarch64' || 'x86_64' }} \
+            bash -c '
+              set -ex
 
-            # Mark directory as safe for git (ownership differs in container)
-            git config --global --add safe.directory /work
+              # Mark directory as safe for git (ownership differs in container)
+              git config --global --add safe.directory /work
 
-            # Restore pre-built guest target directory
-            GUEST_TARGET=$(scripts/util.sh --target)
-            if [ -d ".cache/$GUEST_TARGET" ]; then
-              echo "Restoring guest from .cache/$GUEST_TARGET"
-              mkdir -p target
-              cp -a ".cache/$GUEST_TARGET" "target/$GUEST_TARGET"
-            fi
+              # Restore pre-built guest target directory
+              GUEST_TARGET=$(scripts/util.sh --target)
+              if [ -d ".cache/$GUEST_TARGET" ]; then
+                echo "Restoring guest from .cache/$GUEST_TARGET"
+                mkdir -p target
+                cp -a ".cache/$GUEST_TARGET" "target/$GUEST_TARGET"
+              fi
 
-            # Build with SKIP_GUEST_BUILD=1 to use pre-built guest
-            export SKIP_GUEST_BUILD=1
-            make setup runtime
+              # Build with SKIP_GUEST_BUILD=1 to use pre-built guest
+              export SKIP_GUEST_BUILD=1
+              make setup runtime
 
-            # Add cargo to PATH for npm commands (matches Makefile pattern)
-            # (make installs cargo to ~/.cargo/bin but npm subprocesses don't inherit PATH)
-            export PATH="$HOME/.cargo/bin:$PATH"
+              # Add cargo to PATH for npm commands (matches Makefile pattern)
+              # (make installs cargo to ~/.cargo/bin but npm subprocesses don't inherit PATH)
+              export PATH="$HOME/.cargo/bin:$PATH"
 
-            # Build Node.js artifacts (no pack - CI uploads raw artifacts)
-            cd sdks/node
-            npm install --silent
-            npm run build:native -- --release
-            npm run artifacts
-            npm run bundle:runtime
+              # Build Node.js artifacts (no pack - CI uploads raw artifacts)
+              cd sdks/node
+              npm install --silent
+              npm run build:native -- --release
+              npm run artifacts
+              npm run bundle:runtime
+            '
 
       - name: Build Node.js package (macOS)
         if: runner.os == 'macOS'
