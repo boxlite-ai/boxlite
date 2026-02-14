@@ -514,7 +514,7 @@ fn parse_protocol<S: AsRef<str>>(s: S) -> PortProtocol {
 ///
 #[pyclass(name = "BoxliteRestOptions")]
 #[derive(Clone, Debug)]
-pub(crate) struct PyRestOptions {
+pub(crate) struct PyBoxliteRestOptions {
     #[pyo3(get, set)]
     pub(crate) url: String,
     #[pyo3(get, set)]
@@ -526,7 +526,7 @@ pub(crate) struct PyRestOptions {
 }
 
 #[pymethods]
-impl PyRestOptions {
+impl PyBoxliteRestOptions {
     #[new]
     #[pyo3(signature = (url, client_id=None, client_secret=None, prefix=None))]
     fn new(
@@ -568,8 +568,8 @@ impl PyRestOptions {
     }
 }
 
-impl From<PyRestOptions> for BoxliteRestOptions {
-    fn from(py_opts: PyRestOptions) -> Self {
+impl From<PyBoxliteRestOptions> for BoxliteRestOptions {
+    fn from(py_opts: PyBoxliteRestOptions) -> Self {
         let mut opts = BoxliteRestOptions::new(py_opts.url);
         opts.client_id = py_opts.client_id;
         opts.client_secret = py_opts.client_secret;

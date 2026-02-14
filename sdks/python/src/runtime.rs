@@ -6,7 +6,7 @@ use pyo3::prelude::*;
 use crate::box_handle::PyBox;
 use crate::info::PyBoxInfo;
 use crate::metrics::PyRuntimeMetrics;
-use crate::options::{PyBoxOptions, PyOptions, PyRestOptions};
+use crate::options::{PyBoxOptions, PyOptions, PyBoxliteRestOptions};
 use crate::util::map_err;
 
 #[pyclass(name = "Boxlite")]
@@ -46,7 +46,7 @@ impl PyBoxlite {
     ///     opts = boxlite.BoxliteRestOptions.from_env()
     ///     runtime = boxlite.Boxlite.rest(opts)
     #[staticmethod]
-    fn rest(options: PyRestOptions) -> PyResult<Self> {
+    fn rest(options: PyBoxliteRestOptions) -> PyResult<Self> {
         let runtime = BoxliteRuntime::rest(options.into()).map_err(map_err)?;
         Ok(Self {
             runtime: Arc::new(runtime),
