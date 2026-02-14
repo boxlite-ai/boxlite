@@ -9,12 +9,12 @@ use tokio::sync::mpsc;
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
+use crate::BoxInfo;
 use crate::litebox::copy::CopyOptions;
 use crate::litebox::{BoxCommand, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execution};
 use crate::metrics::BoxMetrics;
 use crate::runtime::backend::BoxBackend;
 use crate::runtime::types::BoxID;
-use crate::BoxInfo;
 
 use super::client::ApiClient;
 use super::exec::RestExecControl;
@@ -111,13 +111,7 @@ impl BoxBackend for RestBox {
         let stdin_box_id = box_id.clone();
         let stdin_exec_id = execution_id.clone();
         tokio::spawn(async move {
-            forward_stdin(
-                &stdin_client,
-                &stdin_box_id,
-                &stdin_exec_id,
-                stdin_rx,
-            )
-            .await;
+            forward_stdin(&stdin_client, &stdin_box_id, &stdin_exec_id, stdin_rx).await;
         });
 
         // 5. Build Execution handle
@@ -243,10 +237,7 @@ async fn read_sse_output(
     stderr_tx: mpsc::UnboundedSender<String>,
     result_tx: mpsc::UnboundedSender<ExecResult>,
 ) -> BoxliteResult<()> {
-    let path = format!(
-        "/boxes/{}/executions/{}/output",
-        box_id, execution_id
-    );
+    let path = format!("/boxes/{}/executions/{}/output", box_id, execution_id);
     let builder = client.authorized_get(&path).await?;
     let resp = builder
         .header("Accept", "text/event-stream")
@@ -271,9 +262,8 @@ async fn read_sse_output(
     let mut current_data = String::new();
 
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|e| {
-            BoxliteError::Internal(format!("SSE stream read error: {}", e))
-        })?;
+        let chunk =
+            chunk.map_err(|e| BoxliteError::Internal(format!("SSE stream read error: {}", e)))?;
         buffer.push_str(&String::from_utf8_lossy(&chunk));
 
         // Process complete lines
@@ -399,10 +389,7 @@ async fn forward_stdin(
     execution_id: &str,
     mut stdin_rx: mpsc::UnboundedReceiver<Vec<u8>>,
 ) {
-    let path = format!(
-        "/boxes/{}/executions/{}/input",
-        box_id, execution_id
-    );
+    let path = format!("/boxes/{}/executions/{}/input", box_id, execution_id);
     while let Some(data) = stdin_rx.recv().await {
         if client.post_bytes(&path, data, false).await.is_err() {
             break;
@@ -434,11 +421,7 @@ fn create_tar_from_path(host_src: &Path) -> BoxliteResult<Vec<u8>> {
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| "file".to_string());
         let mut file = std::fs::File::open(host_src).map_err(|e| {
-            BoxliteError::Internal(format!(
-                "failed to open {}: {}",
-                host_src.display(),
-                e
-            ))
+            BoxliteError::Internal(format!("failed to open {}: {}", host_src.display(), e))
         })?;
         archive.append_file(&file_name, &mut file).map_err(|e| {
             BoxliteError::Internal(format!(
@@ -449,9 +432,9 @@ fn create_tar_from_path(host_src: &Path) -> BoxliteResult<Vec<u8>> {
         })?;
     }
 
-    archive.into_inner().map_err(|e| {
-        BoxliteError::Internal(format!("failed to finalize tar archive: {}", e))
-    })
+    archive
+        .into_inner()
+        .map_err(|e| BoxliteError::Internal(format!("failed to finalize tar archive: {}", e)))
 }
 
 /// Extract a tar archive to a host directory.
@@ -483,21 +466,29 @@ fn extract_tar_to_path(tar_bytes: &[u8], host_dst: &Path) -> BoxliteResult<()> {
 
 /// Convert REST box metrics response to core BoxMetrics.
 fn box_metrics_from_response(resp: &BoxMetricsResponse) -> BoxMetrics {
-    let (total_create_ms, guest_boot_ms, fs_setup_ms, img_prepare_ms, guest_rootfs_ms, box_config_ms, box_spawn_ms, container_init_ms) =
-        if let Some(ref timing) = resp.boot_timing {
-            (
-                timing.total_create_ms.map(|v| v as u128),
-                timing.guest_boot_ms.map(|v| v as u128),
-                timing.filesystem_setup_ms.map(|v| v as u128),
-                timing.image_prepare_ms.map(|v| v as u128),
-                timing.guest_rootfs_ms.map(|v| v as u128),
-                timing.box_config_ms.map(|v| v as u128),
-                timing.box_spawn_ms.map(|v| v as u128),
-                timing.container_init_ms.map(|v| v as u128),
-            )
-        } else {
-            (None, None, None, None, None, None, None, None)
-        };
+    let (
+        total_create_ms,
+        guest_boot_ms,
+        fs_setup_ms,
+        img_prepare_ms,
+        guest_rootfs_ms,
+        box_config_ms,
+        box_spawn_ms,
+        container_init_ms,
+    ) = if let Some(ref timing) = resp.boot_timing {
+        (
+            timing.total_create_ms.map(|v| v as u128),
+            timing.guest_boot_ms.map(|v| v as u128),
+            timing.filesystem_setup_ms.map(|v| v as u128),
+            timing.image_prepare_ms.map(|v| v as u128),
+            timing.guest_rootfs_ms.map(|v| v as u128),
+            timing.box_config_ms.map(|v| v as u128),
+            timing.box_spawn_ms.map(|v| v as u128),
+            timing.container_init_ms.map(|v| v as u128),
+        )
+    } else {
+        (None, None, None, None, None, None, None, None)
+    };
 
     BoxMetrics {
         commands_executed_total: resp.commands_executed_total,

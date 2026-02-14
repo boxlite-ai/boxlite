@@ -81,7 +81,10 @@ pub(crate) struct CreateBoxRequest {
 }
 
 impl CreateBoxRequest {
-    pub fn from_options(options: &crate::runtime::options::BoxOptions, name: Option<String>) -> Self {
+    pub fn from_options(
+        options: &crate::runtime::options::BoxOptions,
+        name: Option<String>,
+    ) -> Self {
         use crate::runtime::options::RootfsSpec;
 
         let (image, rootfs_path) = match &options.rootfs {
@@ -131,11 +134,10 @@ pub(crate) struct BoxResponse {
 
 impl BoxResponse {
     pub fn to_box_info(&self) -> crate::BoxInfo {
-        use crate::runtime::types::BoxID;
         use crate::litebox::BoxStatus;
+        use crate::runtime::types::BoxID;
 
-        let id = BoxID::parse(&self.box_id)
-            .unwrap_or_else(|| BoxID::new());
+        let id = BoxID::parse(&self.box_id).unwrap_or_else(BoxID::new);
 
         let status = match self.status.as_str() {
             "configured" => BoxStatus::Configured,
@@ -196,9 +198,10 @@ pub(crate) struct ExecRequest {
 
 impl ExecRequest {
     pub fn from_command(cmd: &crate::BoxCommand) -> Self {
-        let env = cmd.env.as_ref().map(|pairs| {
-            pairs.iter().cloned().collect::<HashMap<String, String>>()
-        });
+        let env = cmd
+            .env
+            .as_ref()
+            .map(|pairs| pairs.iter().cloned().collect::<HashMap<String, String>>());
         let timeout_seconds = cmd.timeout.map(|d| d.as_secs_f64());
 
         Self {

@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
-use boxlite::CopyOptions;
 use boxlite::BoxliteRestOptions;
+use boxlite::CopyOptions;
 use boxlite::runtime::advanced_options::SecurityOptions;
 use boxlite::runtime::constants::images;
 use boxlite::runtime::options::{

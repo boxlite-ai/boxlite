@@ -17,11 +17,9 @@ use boxlite::{BoxCommand, BoxOptions, BoxliteRestOptions, BoxliteRuntime};
 
 /// Create a REST-backed runtime pointing at the reference server.
 fn rest_runtime() -> BoxliteRuntime {
-    let url =
-        std::env::var("BOXLITE_REST_URL").unwrap_or_else(|_| "http://localhost:8080".into());
+    let url = std::env::var("BOXLITE_REST_URL").unwrap_or_else(|_| "http://localhost:8080".into());
     BoxliteRuntime::rest(
-        BoxliteRestOptions::new(&url)
-            .with_credentials("test-client".into(), "test-secret".into()),
+        BoxliteRestOptions::new(&url).with_credentials("test-client".into(), "test-secret".into()),
     )
     .expect("failed to create REST runtime")
 }
@@ -35,7 +33,10 @@ async fn test_rest_auth() {
     let rt = rest_runtime();
     // list_info exercises the full OAuth2 token acquisition + authenticated request flow.
     // If auth is broken, this will fail with an error.
-    let _boxes = rt.list_info().await.expect("list_info failed — auth broken?");
+    let _boxes = rt
+        .list_info()
+        .await
+        .expect("list_info failed — auth broken?");
 }
 
 // ── Box CRUD ────────────────────────────────────────────────────────────

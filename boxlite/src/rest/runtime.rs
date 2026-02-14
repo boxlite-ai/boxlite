@@ -14,8 +14,8 @@ use super::client::ApiClient;
 use super::litebox::RestBox;
 use super::options::BoxliteRestOptions;
 use super::types::{
-    BoxResponse, CreateBoxRequest, ListBoxesResponse, ListImagesResponse,
-    PullImageRequest, RuntimeMetricsResponse,
+    BoxResponse, CreateBoxRequest, ListBoxesResponse, ListImagesResponse, PullImageRequest,
+    RuntimeMetricsResponse,
 };
 
 pub(crate) struct RestRuntime {
@@ -45,10 +45,10 @@ impl RuntimeBackend for RestRuntime {
         name: Option<String>,
     ) -> BoxliteResult<(LiteBox, bool)> {
         // Try to get existing box by name first
-        if let Some(ref box_name) = name {
-            if let Some(litebox) = self.get(box_name).await? {
-                return Ok((litebox, false));
-            }
+        if let Some(ref box_name) = name
+            && let Some(litebox) = self.get(box_name).await?
+        {
+            return Ok((litebox, false));
         }
         // Create new box
         let litebox = self.create(options, name).await?;
@@ -113,8 +113,7 @@ impl RuntimeBackend for RestRuntime {
         let req = PullImageRequest {
             reference: image_ref.to_string(),
         };
-        let resp: super::types::ImageInfoResponse =
-            self.client.post("/images/pull", &req).await?;
+        let resp: super::types::ImageInfoResponse = self.client.post("/images/pull", &req).await?;
         Ok(image_info_from_response(&resp))
     }
 
@@ -130,11 +129,21 @@ fn runtime_metrics_from_response(resp: &RuntimeMetricsResponse) -> RuntimeMetric
     use std::sync::atomic::Ordering;
 
     let storage = RuntimeMetricsStorage::new();
-    storage.boxes_created.store(resp.boxes_created_total, Ordering::Relaxed);
-    storage.boxes_failed.store(resp.boxes_failed_total, Ordering::Relaxed);
-    storage.boxes_stopped.store(resp.boxes_stopped_total, Ordering::Relaxed);
-    storage.total_commands.store(resp.total_commands_executed, Ordering::Relaxed);
-    storage.total_exec_errors.store(resp.total_exec_errors, Ordering::Relaxed);
+    storage
+        .boxes_created
+        .store(resp.boxes_created_total, Ordering::Relaxed);
+    storage
+        .boxes_failed
+        .store(resp.boxes_failed_total, Ordering::Relaxed);
+    storage
+        .boxes_stopped
+        .store(resp.boxes_stopped_total, Ordering::Relaxed);
+    storage
+        .total_commands
+        .store(resp.total_commands_executed, Ordering::Relaxed);
+    storage
+        .total_exec_errors
+        .store(resp.total_exec_errors, Ordering::Relaxed);
 
     RuntimeMetrics::new(storage)
 }

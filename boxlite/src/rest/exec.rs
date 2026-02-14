@@ -26,10 +26,7 @@ impl RestExecControl {
 #[async_trait]
 impl ExecBackend for RestExecControl {
     async fn kill(&mut self, execution_id: &str, signal: i32) -> BoxliteResult<()> {
-        let path = format!(
-            "/boxes/{}/executions/{}/signal",
-            self.box_id, execution_id
-        );
+        let path = format!("/boxes/{}/executions/{}/signal", self.box_id, execution_id);
         let body = SignalRequestBody { signal };
         self.client.post_no_content(&path, &body).await
     }
@@ -42,10 +39,7 @@ impl ExecBackend for RestExecControl {
         _x_pixels: u32,
         _y_pixels: u32,
     ) -> BoxliteResult<()> {
-        let path = format!(
-            "/boxes/{}/executions/{}/resize",
-            self.box_id, execution_id
-        );
+        let path = format!("/boxes/{}/executions/{}/resize", self.box_id, execution_id);
         let body = ResizeRequestBody { cols, rows };
         self.client.post_no_content(&path, &body).await
     }

@@ -335,7 +335,10 @@ impl BoxliteRuntime {
     ///
     /// Returns an `ImageInfo` with metadata about the pulled image.
     ///
-    pub async fn pull_image(&self, image_ref: &str) -> BoxliteResult<crate::runtime::types::ImageInfo> {
+    pub async fn pull_image(
+        &self,
+        image_ref: &str,
+    ) -> BoxliteResult<crate::runtime::types::ImageInfo> {
         self.backend.pull_image(image_ref).await
     }
 

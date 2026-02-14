@@ -110,8 +110,7 @@ mod tests {
 
     #[test]
     fn test_with_prefix() {
-        let opts = BoxliteRestOptions::new("https://api.example.com")
-            .with_prefix("v2".into());
+        let opts = BoxliteRestOptions::new("https://api.example.com").with_prefix("v2".into());
         assert_eq!(opts.prefix.as_deref(), Some("v2"));
         assert_eq!(opts.effective_prefix(), "v2");
     }

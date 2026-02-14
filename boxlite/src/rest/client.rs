@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use reqwest::{Client, Method, RequestBuilder, StatusCode};
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use tokio::sync::RwLock;
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
@@ -126,7 +126,10 @@ impl ApiClient {
         let expires_at = now + token_resp.expires_in;
 
         let mut cache = self.token_cache.write().await;
-        *cache = Some(TokenCache { token: token.clone(), expires_at });
+        *cache = Some(TokenCache {
+            token: token.clone(),
+            expires_at,
+        });
 
         Ok(Some(token))
     }
@@ -175,7 +178,11 @@ impl ApiClient {
     }
 
     /// Parse an error response body and map to BoxliteError.
-    async fn handle_error<T>(&self, status: StatusCode, resp: reqwest::Response) -> BoxliteResult<T> {
+    async fn handle_error<T>(
+        &self,
+        status: StatusCode,
+        resp: reqwest::Response,
+    ) -> BoxliteResult<T> {
         let text = resp.text().await.unwrap_or_default();
         if let Ok(err_resp) = serde_json::from_str::<ErrorResponse>(&text) {
             Err(map_http_error(status, &err_resp.error))
@@ -252,13 +259,22 @@ impl ApiClient {
     }
 
     /// Build an authorized request (for custom operations like file upload/download).
-    pub async fn authorized_request(&self, method: Method, path: &str) -> BoxliteResult<RequestBuilder> {
+    pub async fn authorized_request(
+        &self,
+        method: Method,
+        path: &str,
+    ) -> BoxliteResult<RequestBuilder> {
         let builder = self.http.request(method, self.url(path));
         self.authorize(builder).await
     }
 
     /// Send raw bytes as POST body (for stdin input).
-    pub async fn post_bytes(&self, path: &str, data: Vec<u8>, close_stdin: bool) -> BoxliteResult<()> {
+    pub async fn post_bytes(
+        &self,
+        path: &str,
+        data: Vec<u8>,
+        close_stdin: bool,
+    ) -> BoxliteResult<()> {
         let mut builder = self
             .http
             .post(self.url(path))
