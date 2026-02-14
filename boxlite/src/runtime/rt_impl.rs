@@ -1180,3 +1180,72 @@ impl std::fmt::Debug for RuntimeImpl {
             .finish()
     }
 }
+
+// ============================================================================
+// LocalRuntime — RuntimeBackend adapter for local VM execution
+// ============================================================================
+
+/// Adapter bridging `RuntimeImpl` (Arc-receiver methods) to `RuntimeBackend` trait.
+///
+/// `RuntimeImpl` methods use `self: &Arc<Self>` for back-references from `BoxImpl`.
+/// Trait methods use `&self`. This newtype holds the Arc as a field to bridge the gap.
+pub(crate) struct LocalRuntime(pub(crate) SharedRuntimeImpl);
+
+#[async_trait::async_trait]
+impl super::backend::RuntimeBackend for LocalRuntime {
+    async fn create(
+        &self,
+        options: BoxOptions,
+        name: Option<String>,
+    ) -> BoxliteResult<crate::litebox::LiteBox> {
+        self.0.create(options, name).await
+    }
+
+    async fn get_or_create(
+        &self,
+        options: BoxOptions,
+        name: Option<String>,
+    ) -> BoxliteResult<(crate::litebox::LiteBox, bool)> {
+        self.0.get_or_create(options, name).await
+    }
+
+    async fn get(&self, id_or_name: &str) -> BoxliteResult<Option<crate::litebox::LiteBox>> {
+        self.0.get(id_or_name).await
+    }
+
+    async fn get_info(&self, id_or_name: &str) -> BoxliteResult<Option<BoxInfo>> {
+        self.0.get_info(id_or_name).await
+    }
+
+    async fn list_info(&self) -> BoxliteResult<Vec<BoxInfo>> {
+        self.0.list_info().await
+    }
+
+    async fn exists(&self, id_or_name: &str) -> BoxliteResult<bool> {
+        self.0.exists(id_or_name).await
+    }
+
+    async fn metrics(&self) -> BoxliteResult<crate::metrics::RuntimeMetrics> {
+        Ok(self.0.metrics().await)
+    }
+
+    async fn remove(&self, id_or_name: &str, force: bool) -> BoxliteResult<()> {
+        self.0.remove(id_or_name, force)
+    }
+
+    async fn shutdown(&self, timeout: Option<i32>) -> BoxliteResult<()> {
+        self.0.shutdown(timeout).await
+    }
+}
+
+// Image operations (separate from RuntimeBackend)
+#[async_trait::async_trait]
+impl super::images::ImageManager for LocalRuntime {
+    async fn pull_image(&self, image_ref: &str) -> BoxliteResult<crate::images::ImageObject> {
+        self.0.image_manager.pull(image_ref).await
+    }
+
+    async fn list_images(&self) -> BoxliteResult<Vec<crate::runtime::types::ImageInfo>> {
+        self.0.image_manager.list().await
+    }
+}

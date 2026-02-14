@@ -15,8 +15,9 @@ pub struct PullArgs {
 
 pub async fn execute(args: PullArgs, global: &GlobalFlags) -> Result<()> {
     let runtime = global.create_runtime()?;
+    let images = runtime.images()?;
 
-    let image = runtime.pull_image(&args.image).await?;
+    let image = images.pull(&args.image).await?;
     if args.quiet {
         println!("{}", image.config_digest());
     } else {

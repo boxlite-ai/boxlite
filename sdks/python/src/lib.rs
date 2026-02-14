@@ -14,7 +14,7 @@ use crate::box_handle::PyBox;
 use crate::exec::{PyExecStderr, PyExecStdin, PyExecStdout, PyExecution};
 use crate::info::{PyBoxInfo, PyBoxStateInfo};
 use crate::metrics::{PyBoxMetrics, PyRuntimeMetrics};
-use crate::options::{PyBoxOptions, PyCopyOptions, PyOptions};
+use crate::options::{PyBoxOptions, PyBoxliteRestOptions, PyCopyOptions, PyOptions};
 use crate::runtime::PyBoxlite;
 use pyo3::prelude::*;
 
@@ -35,6 +35,7 @@ fn boxlite_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyRuntimeMetrics>()?;
     m.add_class::<PyBoxMetrics>()?;
     m.add_class::<PyCopyOptions>()?;
+    m.add_class::<PyBoxliteRestOptions>()?;
 
     Ok(())
 }

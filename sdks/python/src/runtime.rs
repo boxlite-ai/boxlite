@@ -6,7 +6,7 @@ use pyo3::prelude::*;
 use crate::box_handle::PyBox;
 use crate::info::PyBoxInfo;
 use crate::metrics::PyRuntimeMetrics;
-use crate::options::{PyBoxOptions, PyOptions};
+use crate::options::{PyBoxOptions, PyBoxliteRestOptions, PyOptions};
 use crate::util::map_err;
 
 #[pyclass(name = "Boxlite")]
@@ -30,6 +30,26 @@ impl PyBoxlite {
         let runtime = BoxliteRuntime::default_runtime();
         Ok(Self {
             runtime: Arc::new(runtime.clone()),
+        })
+    }
+
+    /// Create a REST-backed runtime connecting to a remote BoxLite server.
+    ///
+    /// All box operations are delegated to the remote server via HTTP.
+    ///
+    /// Example::
+    ///
+    ///     opts = boxlite.BoxliteRestOptions(url="https://api.example.com")
+    ///     runtime = boxlite.Boxlite.rest(opts)
+    ///
+    ///     # From environment variables
+    ///     opts = boxlite.BoxliteRestOptions.from_env()
+    ///     runtime = boxlite.Boxlite.rest(opts)
+    #[staticmethod]
+    fn rest(options: PyBoxliteRestOptions) -> PyResult<Self> {
+        let runtime = BoxliteRuntime::rest(options.into()).map_err(map_err)?;
+        Ok(Self {
+            runtime: Arc::new(runtime),
         })
     }
 
@@ -135,7 +155,8 @@ impl PyBoxlite {
     fn metrics<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let runtime = Arc::clone(&self.runtime);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            Ok(PyRuntimeMetrics::from(runtime.metrics().await))
+            let metrics = runtime.metrics().await.map_err(map_err)?;
+            Ok(PyRuntimeMetrics::from(metrics))
         })
     }
 

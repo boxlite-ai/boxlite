@@ -87,6 +87,12 @@ pub enum Commands {
     /// Display system-wide runtime information
     Info(crate::commands::info::InfoArgs),
 
+    /// Show logs from a box
+    Logs(crate::commands::logs::LogsArgs),
+
+    /// Display resource usage statistics for a box
+    Stats(crate::commands::stats::StatsArgs),
+
     /// Generate shell completion script (hidden from help)
     #[command(hide = true)]
     Completion(CompletionArgs),

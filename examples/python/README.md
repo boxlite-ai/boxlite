@@ -14,6 +14,7 @@ README with a quick summary.
 | [`05_browser_desktop/`](05_browser_desktop/) | Playwright, Puppeteer, desktop automation |
 | [`06_ai_agents/`](06_ai_agents/) | LLM-driven boxes, SkillBox, Claude chat, Starbucks agent, OpenClaw |
 | [`07_advanced/`](07_advanced/) | Native Rust API, FUSE filesystem, multi-agent orchestration, AI pipeline |
+| [`08_rest_api/`](08_rest_api/) | Remote REST API: connect, CRUD, commands, files, metrics, config |
 
 ## Quick Start
 

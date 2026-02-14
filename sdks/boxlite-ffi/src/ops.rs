@@ -524,7 +524,13 @@ pub unsafe fn runtime_metrics(
         }
 
         let runtime_ref = &*runtime;
-        let metrics = runtime_ref.tokio_rt.block_on(runtime_ref.runtime.metrics());
+        let metrics = match runtime_ref.tokio_rt.block_on(runtime_ref.runtime.metrics()) {
+            Ok(m) => m,
+            Err(e) => {
+                write_error(out_error, e);
+                return BoxliteErrorCode::Internal;
+            }
+        };
 
         let json = serde_json::json!({
             "boxes_created_total": metrics.boxes_created_total(),

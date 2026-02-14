@@ -1,11 +1,12 @@
 //! High-level sandbox runtime structures.
 
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use crate::litebox::LiteBox;
 use crate::metrics::RuntimeMetrics;
+use crate::runtime::backend::RuntimeBackend;
 use crate::runtime::options::{BoxOptions, BoxliteOptions};
-use crate::runtime::rt_impl::{RuntimeImpl, SharedRuntimeImpl};
+use crate::runtime::rt_impl::{LocalRuntime, RuntimeImpl};
 use crate::runtime::signal_handler::install_signal_handler;
 use crate::runtime::types::BoxInfo;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
@@ -24,16 +25,19 @@ static DEFAULT_RUNTIME: OnceLock<BoxliteRuntime> = OnceLock::new();
 
 /// BoxliteRuntime provides the main entry point for creating and managing Boxes.
 ///
-/// **Architecture**: Uses a single `RwLock` to protect all mutable state (boxes and images).
-/// This eliminates nested locking and simplifies reasoning about concurrency.
+/// **Architecture**: Backend-agnostic — delegates to a `RuntimeBackend` implementation.
+/// The default backend manages local VMs. Alternative backends (e.g., REST API)
+/// can be selected via named constructors.
 ///
-/// **Lock Behavior**: Only one `BoxliteRuntime` can use a given `BOXLITE_HOME`
-/// directory at a time. The filesystem lock is automatically released when dropped.
+/// **Lock Behavior** (local backend): Only one local runtime can use a given
+/// `BOXLITE_HOME` directory at a time. The filesystem lock is automatically
+/// released when dropped.
 ///
 /// **Cloning**: Runtime is cheaply cloneable via `Arc` - all clones share the same state.
 #[derive(Clone)]
 pub struct BoxliteRuntime {
-    rt_impl: SharedRuntimeImpl,
+    backend: Arc<dyn RuntimeBackend>,
+    image_manager: Option<Arc<dyn crate::runtime::images::ImageManager>>,
 }
 
 // ============================================================================
@@ -41,7 +45,7 @@ pub struct BoxliteRuntime {
 // ============================================================================
 
 impl BoxliteRuntime {
-    /// Create a new BoxliteRuntime with the provided options.
+    /// Create a new BoxliteRuntime with the provided options (local backend).
     ///
     /// **Prepare Before Execute**: All setup (filesystem, locks, managers) completes
     /// before returning. No partial initialization states.
@@ -53,8 +57,39 @@ impl BoxliteRuntime {
     /// - Filesystem initialization fails
     /// - Image API initialization fails
     pub fn new(options: BoxliteOptions) -> BoxliteResult<Self> {
+        let local = LocalRuntime(RuntimeImpl::new(options)?);
+        let backend_arc = Arc::new(local);
+        let image_manager =
+            Arc::clone(&backend_arc) as Arc<dyn crate::runtime::images::ImageManager>;
         Ok(Self {
-            rt_impl: RuntimeImpl::new(options)?,
+            backend: backend_arc,
+            image_manager: Some(image_manager),
+        })
+    }
+
+    /// Create a REST-backed runtime connecting to a remote BoxLite API server.
+    ///
+    /// All box operations are delegated to the remote server via HTTP.
+    /// The server manages its own VM lifecycle — this client just sends requests.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use boxlite::runtime::BoxliteRuntime;
+    /// use boxlite::BoxliteRestOptions;
+    ///
+    /// let runtime = BoxliteRuntime::rest(
+    ///     BoxliteRestOptions::new("https://api.example.com")
+    ///         .with_credentials("client-id".into(), "secret".into())
+    /// )?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    #[cfg(feature = "rest")]
+    pub fn rest(config: crate::rest::options::BoxliteRestOptions) -> BoxliteResult<Self> {
+        let rest_runtime = crate::rest::runtime::RestRuntime::new(&config)?;
+        Ok(Self {
+            backend: Arc::new(rest_runtime),
+            image_manager: None, // REST runtime doesn't support image operations
         })
     }
 
@@ -114,9 +149,9 @@ impl BoxliteRuntime {
         // Install signal handler for graceful shutdown.
         // Thread-based: works from any context (sync or async, with or without Tokio).
         // When signal is received, the shutdown callback stops all boxes gracefully.
-        let rt_impl = rt.rt_impl.clone();
+        let backend = rt.backend.clone();
         install_signal_handler(move || async move {
-            let _ = rt_impl.shutdown(None).await;
+            let _ = backend.shutdown(None).await;
         });
 
         rt
@@ -180,7 +215,7 @@ impl BoxliteRuntime {
     }
 
     // ========================================================================
-    // BOX LIFECYCLE OPERATIONS (delegate to RuntimeInnerImpl)
+    // BOX LIFECYCLE OPERATIONS (delegate to backend)
     // ========================================================================
 
     /// Create a box handle.
@@ -195,7 +230,7 @@ impl BoxliteRuntime {
         options: BoxOptions,
         name: Option<String>,
     ) -> BoxliteResult<LiteBox> {
-        self.rt_impl.create(options, name).await
+        self.backend.create(options, name).await
     }
 
     /// Get an existing box by name, or create a new one if it doesn't exist.
@@ -208,7 +243,7 @@ impl BoxliteRuntime {
         options: BoxOptions,
         name: Option<String>,
     ) -> BoxliteResult<(LiteBox, bool)> {
-        self.rt_impl.get_or_create(options, name).await
+        self.backend.get_or_create(options, name).await
     }
 
     /// Get a handle to an existing box by ID or name.
@@ -217,32 +252,32 @@ impl BoxliteRuntime {
     /// - A box ID (ULID format, 26 characters)
     /// - A user-defined box name
     pub async fn get(&self, id_or_name: &str) -> BoxliteResult<Option<LiteBox>> {
-        self.rt_impl.get(id_or_name).await
+        self.backend.get(id_or_name).await
     }
 
     /// Get information about a specific box by ID or name (without creating a handle).
     pub async fn get_info(&self, id_or_name: &str) -> BoxliteResult<Option<BoxInfo>> {
-        self.rt_impl.get_info(id_or_name).await
+        self.backend.get_info(id_or_name).await
     }
 
     /// List all boxes, sorted by creation time (newest first).
     pub async fn list_info(&self) -> BoxliteResult<Vec<BoxInfo>> {
-        self.rt_impl.list_info().await
+        self.backend.list_info().await
     }
 
     /// Check if a box with the given ID or name exists.
     pub async fn exists(&self, id_or_name: &str) -> BoxliteResult<bool> {
-        self.rt_impl.exists(id_or_name).await
+        self.backend.exists(id_or_name).await
     }
 
     /// Get runtime-wide metrics.
-    pub async fn metrics(&self) -> RuntimeMetrics {
-        self.rt_impl.metrics().await
+    pub async fn metrics(&self) -> BoxliteResult<RuntimeMetrics> {
+        self.backend.metrics().await
     }
 
     /// Remove a box completely by ID or name.
     pub async fn remove(&self, id_or_name: &str, force: bool) -> BoxliteResult<()> {
-        self.rt_impl.remove(id_or_name, force)
+        self.backend.remove(id_or_name, force).await
     }
 
     // ========================================================================
@@ -286,54 +321,60 @@ impl BoxliteRuntime {
     /// }
     /// ```
     pub async fn shutdown(&self, timeout: Option<i32>) -> BoxliteResult<()> {
-        self.rt_impl.shutdown(timeout).await
+        self.backend.shutdown(timeout).await
     }
 
     // ========================================================================
-    // IMAGE OPERATIONS (delegate to ImageManager)
+    // IMAGE OPERATIONS (via ImageHandle)
     // ========================================================================
 
-    /// Pull an OCI image from a registry.
+    /// Get a handle for image operations (pull, list).
     ///
-    /// Checks local cache first. If the image is already cached and complete,
-    /// returns immediately without network access. Otherwise pulls from registry.
+    /// Returns an `ImageHandle` that provides methods for pulling and listing images.
+    /// This abstraction separates image management from runtime management,
+    /// following the same pattern as `LiteBox` for box operations.
     ///
-    /// # Arguments
+    /// # Errors
     ///
-    /// * `image_ref` - Image reference (e.g., "alpine:latest", "docker.io/library/python:3.11")
+    /// Returns `BoxliteError::Unsupported` if called on a REST runtime,
+    /// as image operations are only supported for local runtimes.
     ///
-    /// # Returns
+    /// # Example
     ///
-    /// Returns an `ImageObject` that provides access to image metadata, layers,
-    /// and configuration.
+    /// ```no_run
+    /// use boxlite::runtime::BoxliteRuntime;
     ///
-    pub async fn pull_image(&self, image_ref: &str) -> BoxliteResult<crate::images::ImageObject> {
-        self.rt_impl.image_manager.pull(image_ref).await
-    }
-
-    /// List all cached images.
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let runtime = BoxliteRuntime::with_defaults()?;
+    /// let images = runtime.images()?;
     ///
-    /// Returns a list of images available in the local content store.
-    /// The returned `ImageInfo` objects contain metadata suitable for listing (display),
-    /// such as reference, ID, creation time, and size.
+    /// // Pull an image
+    /// let image = images.pull("alpine:latest").await?;
+    /// println!("Pulled: {}", image.reference());
     ///
-    /// # Returns
-    ///
-    /// Returns a vector of `ImageInfo` structs containing metadata for all cached images.
-    pub async fn list_images(&self) -> BoxliteResult<Vec<crate::runtime::types::ImageInfo>> {
-        self.rt_impl.image_manager.list().await
+    /// // List all images
+    /// let all_images = images.list().await?;
+    /// println!("Total images: {}", all_images.len());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn images(&self) -> BoxliteResult<crate::runtime::ImageHandle> {
+        match &self.image_manager {
+            Some(manager) => Ok(crate::runtime::ImageHandle::new(Arc::clone(manager))),
+            None => Err(BoxliteError::Unsupported(
+                "Image operations not supported over REST API".to_string(),
+            )),
+        }
     }
 }
 
 // ============================================================================
-// RUNTIME INNER - LOCK HELPERS ONLY
+// DEBUG
 // ============================================================================
 
 impl std::fmt::Debug for BoxliteRuntime {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("BoxliteRuntime")
-            .field("home_dir", &self.rt_impl.layout.home_dir())
-            .finish()
+        f.debug_struct("BoxliteRuntime").finish_non_exhaustive()
     }
 }
 
