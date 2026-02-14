@@ -378,12 +378,9 @@ mod tests {
     #[test]
     fn test_security_builder_new() {
         let opts = SecurityOptionsBuilder::new().build();
-        // Default should match SecurityOptions::default() = standard security
-        assert_eq!(
-            opts.jailer_enabled,
-            cfg!(any(target_os = "linux", target_os = "macos"))
-        );
-        assert_eq!(opts.seccomp_enabled, cfg!(target_os = "linux"));
+        // Default should disable jailer/seccomp unless explicitly enabled.
+        assert!(!opts.jailer_enabled);
+        assert!(!opts.seccomp_enabled);
     }
 
     #[test]

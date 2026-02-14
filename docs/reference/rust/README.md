@@ -549,7 +549,7 @@ let options = BoxOptions {
 
 ### AdvancedBoxOptions
 
-Advanced options for expert users. Most users can ignore this — defaults are secure and reasonable.
+Advanced options for expert users. Most users can ignore this — defaults prioritize compatibility.
 
 ```rust
 pub struct AdvancedBoxOptions {
@@ -560,7 +560,7 @@ pub struct AdvancedBoxOptions {
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `security` | `SecurityOptions` | Platform defaults | Security isolation options (jailer, seccomp, namespaces) |
+| `security` | `SecurityOptions` | Compatibility defaults | Security isolation options (jailer, seccomp, namespaces) |
 | `isolate_mounts` | `bool` | `false` | Enable bind mount isolation (requires CAP_SYS_ADMIN on Linux) |
 
 ### RootfsSpec
@@ -701,8 +701,13 @@ let dev = SecurityOptions::development();
 // - seccomp_enabled: false
 // - close_fds: false
 
-// Default / Standard: recommended for most use cases
-let std = SecurityOptions::default(); // or SecurityOptions::standard()
+// Default: compatibility-focused
+let default_security = SecurityOptions::default();
+// - jailer_enabled: false
+// - seccomp_enabled: false
+
+// Standard: recommended for most use cases
+let std = SecurityOptions::standard();
 // - jailer_enabled: true (Linux/macOS)
 // - seccomp_enabled: true (Linux)
 

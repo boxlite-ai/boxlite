@@ -183,7 +183,7 @@ Provides OS-level isolation on top of hardware virtualization.
 ```rust
 use boxlite::{AdvancedBoxOptions, SecurityOptions};
 
-// Most users don't need to configure security — defaults are secure
+// Most users don't need to configure security — defaults prioritize compatibility
 // For advanced users who need maximum isolation:
 let opts = BoxOptions {
     advanced: AdvancedBoxOptions {

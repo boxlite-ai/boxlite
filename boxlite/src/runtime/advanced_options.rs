@@ -2,7 +2,7 @@
 //!
 //! This module contains [`AdvancedBoxOptions`], [`SecurityOptions`], [`ResourceLimits`],
 //! and [`SecurityOptionsBuilder`] — configuration that entry-level users can safely
-//! ignore. Defaults are secure on all supported platforms.
+//! ignore. Defaults prioritize compatibility.
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -23,14 +23,14 @@ pub struct SecurityOptions {
     /// - Linux: seccomp, namespaces, chroot, privilege drop
     /// - macOS: sandbox-exec profile
     ///
-    /// Default: true on Linux/macOS (use `SecurityOptions::development()` to disable)
+    /// Default: false
     #[serde(default = "default_jailer_enabled")]
     pub jailer_enabled: bool,
 
     /// Enable seccomp syscall filtering (Linux only).
     ///
     /// When true, applies a whitelist of allowed syscalls.
-    /// Default: true on Linux (use `SecurityOptions::development()` to disable)
+    /// Default: false
     #[serde(default = "default_seccomp_enabled")]
     pub seccomp_enabled: bool,
 
@@ -143,11 +143,11 @@ pub struct ResourceLimits {
 // Default value functions for SecurityOptions
 
 fn default_jailer_enabled() -> bool {
-    cfg!(any(target_os = "linux", target_os = "macos"))
+    false
 }
 
 fn default_seccomp_enabled() -> bool {
-    cfg!(target_os = "linux")
+    false
 }
 
 fn default_chroot_base() -> PathBuf {
@@ -219,11 +219,13 @@ impl SecurityOptions {
 
     /// Standard mode: recommended for most use cases.
     ///
-    /// Equivalent to `SecurityOptions::default()`. Provides good security
-    /// without being overly restrictive. Enables jailer on Linux/macOS,
-    /// seccomp on Linux.
+    /// Enables jailer on Linux/macOS and seccomp on Linux.
     pub fn standard() -> Self {
-        Self::default()
+        Self {
+            jailer_enabled: cfg!(any(target_os = "linux", target_os = "macos")),
+            seccomp_enabled: cfg!(target_os = "linux"),
+            ..Default::default()
+        }
     }
 
     /// Maximum mode: all isolation features enabled.
@@ -259,7 +261,7 @@ impl SecurityOptions {
 
     /// Create a builder for customizing security options.
     ///
-    /// Starts with default settings (jailer enabled on Linux/macOS).
+    /// Starts with default settings (jailer/seccomp disabled).
     ///
     /// # Example
     ///
@@ -496,14 +498,15 @@ impl SecurityOptionsBuilder {
 
 /// Advanced options for expert users.
 ///
-/// Entry-level users can ignore this — defaults are secure and reasonable.
+/// Entry-level users can ignore this — defaults are compatibility-focused.
 /// Only modify these if you understand the security implications.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct AdvancedBoxOptions {
     /// Security isolation options (jailer, seccomp, namespaces, resource limits).
     ///
-    /// Defaults are secure on all supported platforms. Use presets:
-    /// - `SecurityOptions::default()` / `standard()` — recommended for production
+    /// Defaults disable jailer and seccomp for compatibility. Use presets:
+    /// - `SecurityOptions::default()` — compatibility-focused defaults
+    /// - `SecurityOptions::standard()` — recommended for production
     /// - `SecurityOptions::development()` — minimal isolation for debugging
     /// - `SecurityOptions::maximum()` — maximum isolation for untrusted workloads
     #[serde(default)]

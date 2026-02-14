@@ -71,7 +71,7 @@ impl PySecurityOptions {
     /// Create a new SecurityOptions with custom settings.
     #[new]
     #[pyo3(signature = (
-        jailer_enabled=true,
+        jailer_enabled=false,
         seccomp_enabled=false,
         max_open_files=None,
         max_file_size=None,
@@ -126,8 +126,7 @@ impl PySecurityOptions {
 
     /// Standard mode: recommended for most use cases.
     ///
-    /// Equivalent to `SecurityOptions()` with no arguments.
-    /// Provides good security without being overly restrictive.
+    /// Enables jailer on Linux/macOS and seccomp on Linux.
     #[staticmethod]
     fn standard() -> Self {
         Self {
@@ -194,7 +193,7 @@ impl From<PySecurityOptions> for SecurityOptions {
 
 /// Advanced options for expert users.
 ///
-/// Entry-level users can ignore this — defaults are secure and reasonable.
+/// Entry-level users can ignore this — defaults are compatibility-focused.
 #[pyclass(name = "AdvancedBoxOptions")]
 #[derive(Clone, Debug)]
 pub struct PyAdvancedBoxOptions {
