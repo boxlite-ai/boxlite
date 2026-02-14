@@ -3,8 +3,8 @@
 use crate::cli::GlobalFlags;
 use clap::Args;
 use dirs;
-use std::io::BufReader;
 use std::fs::File;
+use std::io::BufReader;
 use std::io::{BufRead, Seek, SeekFrom};
 use std::path::PathBuf;
 
@@ -34,15 +34,22 @@ pub async fn execute(args: LogsArgs, global: &GlobalFlags) -> anyhow::Result<()>
 
     // Construct console.log path: ~/.boxlite/boxes/{box_id}/console.log
     let box_id = litebox.id();
-    let home_dir = global.home.as_ref()
+    let home_dir = global
+        .home
+        .as_ref()
         .cloned()
-        .or_else(|| dirs::home_dir().map(|mut p| {
-            p.push(".boxlite");
-            p
-        }))
+        .or_else(|| {
+            dirs::home_dir().map(|mut p| {
+                p.push(".boxlite");
+                p
+            })
+        })
         .ok_or_else(|| anyhow::anyhow!("Cannot determine BoxLite home directory"))?;
 
-    let log_path = home_dir.join("boxes").join(box_id.as_str()).join("console.log");
+    let log_path = home_dir
+        .join("boxes")
+        .join(box_id.as_str())
+        .join("console.log");
 
     if !log_path.exists() {
         eprintln!("No log file found for box '{}'", args.target);
@@ -88,7 +95,7 @@ fn read_logs(path: &PathBuf, tail_lines: usize) -> anyhow::Result<Vec<String>> {
 
 /// Follow log file for new lines (real-time mode).
 async fn follow_logs(path: &PathBuf) -> anyhow::Result<()> {
-    use notify::{Watcher, RecursiveMode};
+    use notify::{RecursiveMode, Watcher};
     use tokio::signal;
 
     eprintln!("\nFollowing log output (Ctrl+C to stop)...\n");

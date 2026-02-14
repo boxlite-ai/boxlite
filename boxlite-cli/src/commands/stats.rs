@@ -9,7 +9,6 @@ use std::fmt::Write as FmtWrite;
 use std::io::{Write, Write as _};
 use tabled::Tabled;
 
-
 #[derive(Args, Debug)]
 pub struct StatsArgs {
     /// Box ID or name
@@ -161,7 +160,10 @@ mod tests {
     fn test_format_bytes() {
         assert_eq!(format_bytes(Some(1024)), "1.0 KiB".to_string());
         assert_eq!(format_bytes(Some(1024 * 1024)), "1.0 MiB".to_string());
-        assert_eq!(format_bytes(Some(1024 * 1024 * 1024)), "1.0 GiB".to_string());
+        assert_eq!(
+            format_bytes(Some(1024 * 1024 * 1024)),
+            "1.0 GiB".to_string()
+        );
         assert_eq!(format_bytes(None), "N/A".to_string());
     }
 
