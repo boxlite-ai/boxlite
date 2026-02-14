@@ -146,7 +146,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 - **Images**: OCI pull + caching, custom rootfs support
 - **Security**: hardware isolation (KVM/HVF), OS sandboxing (seccomp/sandbox-exec), resource limits
 - **Image Registry Configuration**: Configure custom registries via config file (`--config`), CLI flags (`--registry`), or SDK options. See the [configuration guide](./docs/guides/image-registry-configuration.md).
-- **SDKs**: Python (stable), Node.js (v0.1.6); Go coming soon
+- **SDKs**: Rust (>=0.5.12), Python (>=0.5.12), C (>=0.5.12), Node.js (>=0.2.9); Go coming soon
 
 ## Architecture
 

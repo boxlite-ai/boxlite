@@ -2,7 +2,7 @@
 
 C bindings for the BoxLite runtime, providing a stable C API for integrating BoxLite into C/C++ applications.
 
-**Version:** 0.2.0 (breaking changes from 0.1.x)
+**Version:** 0.5.12 (C API v0.2.x, breaking changes from 0.1.x)
 
 ## Table of Contents
 
@@ -408,7 +408,7 @@ int boxlite_box_metrics(
 
 ### Error Handling
 
-**Version 0.2.0** introduces structured error handling with error codes and detailed messages.
+**C API v0.2.x** introduces structured error handling with error codes and detailed messages.
 
 #### Error Codes
 

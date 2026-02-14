@@ -4,6 +4,8 @@ Get up and running with BoxLite C SDK in 5 minutes.
 
 ## Installation
 
+Minimum supported C SDK version: **v0.5.12** (C API v0.2.x).
+
 ### Prerequisites
 
 **macOS (Apple Silicon):**
@@ -220,7 +222,7 @@ make
 
 ## Error Handling
 
-The C SDK v0.2.0 uses structured error handling:
+The C API v0.2.x (SDK v0.5.12+) uses structured error handling:
 
 ```c
 CBoxliteError error = {0};  // Always initialize to zero

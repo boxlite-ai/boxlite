@@ -31,9 +31,9 @@ This document provides project context for AI-assisted development with Claude C
 - gRPC (tonic) for host-guest communication
 
 **SDKs:**
-- Python (PyO3, stable v0.4.4)
+- Python (PyO3, stable v0.5.12)
 - C (FFI, early stage)
-- Node.js (napi-rs, v0.1.5)
+- Node.js (napi-rs, v0.2.9)
 
 **For complete tech stack details, see:**
 - [docs/architecture/README.md](./docs/architecture/README.md#tech-stack) - Detailed component breakdown
@@ -46,9 +46,9 @@ boxlite/              # Core runtime (Rust) - 19 modules
 boxlite-shared/       # Shared types and protocol
 guest/                # Guest agent (runs inside VM)
 sdks/
-  python/             # Python SDK (PyO3, v0.4.4)
+  python/             # Python SDK (PyO3, v0.5.12)
   c/                  # C SDK (FFI)
-  node/               # Node.js SDK (v0.1.5)
+  node/               # Node.js SDK (v0.2.9)
 examples/python/      # Python examples (7 categorized subdirectories)
 docs/                 # Documentation
 scripts/              # Build and setup scripts
@@ -151,7 +151,7 @@ Key guidelines to internalize:
 **When writing code:**
 - All I/O is async (Tokio runtime)
 - Errors use centralized `BoxliteError` enum (see `boxlite-shared/src/errors.rs`)
-- Python SDK version: 0.4.4 (requires Python 3.10+)
+- Python SDK version: 0.5.12 (requires Python 3.10+)
 - Examples: categorized Python examples in `examples/python/` (7 subdirectories)
 
 **Common pitfalls:**
