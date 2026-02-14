@@ -247,7 +247,7 @@ impl BoxImpl {
         let components = result?;
         Ok(Execution::new(
             components.execution_id,
-            exec_interface,
+            Box::new(exec_interface),
             components.result_rx,
             Some(ExecStdin::new(components.stdin_tx)),
             Some(ExecStdout::new(components.stdout_rx)),
@@ -575,6 +575,59 @@ impl BoxImpl {
 
         // Lock is automatically released when _guard drops
         Ok(live_state)
+    }
+}
+
+// ============================================================================
+// BoxBackend trait implementation
+// ============================================================================
+
+#[async_trait::async_trait]
+impl crate::runtime::backend::BoxBackend for BoxImpl {
+    fn id(&self) -> &BoxID {
+        self.id()
+    }
+
+    fn name(&self) -> Option<&str> {
+        self.config.name.as_deref()
+    }
+
+    fn info(&self) -> BoxInfo {
+        self.info()
+    }
+
+    async fn start(&self) -> BoxliteResult<()> {
+        self.start().await
+    }
+
+    async fn exec(&self, command: BoxCommand) -> BoxliteResult<Execution> {
+        self.exec(command).await
+    }
+
+    async fn metrics(&self) -> BoxliteResult<BoxMetrics> {
+        self.metrics().await
+    }
+
+    async fn stop(&self) -> BoxliteResult<()> {
+        self.stop().await
+    }
+
+    async fn copy_into(
+        &self,
+        host_src: &std::path::Path,
+        container_dst: &str,
+        opts: CopyOptions,
+    ) -> BoxliteResult<()> {
+        self.copy_into(host_src, container_dst, opts).await
+    }
+
+    async fn copy_out(
+        &self,
+        container_src: &str,
+        host_dst: &std::path::Path,
+        opts: CopyOptions,
+    ) -> BoxliteResult<()> {
+        self.copy_out(container_src, host_dst, opts).await
     }
 }
 

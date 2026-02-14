@@ -15,7 +15,7 @@ crate-type = ["cdylib"]
 default = []
 
 [dependencies]
-boxlite = { path = "../../boxlite" }
+boxlite = { path = "../../boxlite", features = ["rest"] }
 pyo3 = { version = "0.27.1", features = ["extension-module"] }
 pyo3-async-runtimes = { version = "0.27", features = ["tokio-runtime"] }
 tokio = { version = "1.37", features = ["sync"] }

@@ -57,6 +57,35 @@ impl ImageObject {
         &self.reference
     }
 
+    /// Get the manifest digest (image ID).
+    #[allow(dead_code)]
+    pub fn manifest_digest(&self) -> &str {
+        &self.manifest.manifest_digest
+    }
+
+    /// Convert to public `ImageInfo` metadata.
+    pub fn to_info(&self) -> crate::runtime::types::ImageInfo {
+        use oci_client::Reference;
+        use std::str::FromStr;
+
+        let (repository, tag) = match Reference::from_str(&self.reference) {
+            Ok(r) => (
+                r.repository().to_string(),
+                r.tag().unwrap_or("latest").to_string(),
+            ),
+            Err(_) => (self.reference.clone(), "<none>".to_string()),
+        };
+
+        crate::runtime::types::ImageInfo {
+            reference: self.reference.clone(),
+            repository,
+            tag,
+            id: self.manifest.manifest_digest.clone(),
+            cached_at: chrono::Utc::now(),
+            size: None,
+        }
+    }
+
     /// Get list of layer digests
     #[allow(dead_code)]
     pub fn layer_digests(&self) -> Vec<&str> {

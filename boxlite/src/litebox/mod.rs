@@ -20,35 +20,35 @@ pub use state::{BoxState, BoxStatus};
 pub(crate) use box_impl::SharedBoxImpl;
 pub(crate) use init::BoxBuilder;
 
+use std::path::Path;
+use std::sync::Arc;
+
 use crate::metrics::BoxMetrics;
+use crate::runtime::backend::BoxBackend;
 use crate::{BoxID, BoxInfo};
 use boxlite_shared::errors::BoxliteResult;
 pub use config::BoxConfig;
-use std::path::Path;
 
 /// LiteBox - Handle to a box.
 ///
-/// Thin wrapper around BoxImpl. BoxImpl is created immediately with config,
-/// but VM resources (LiveState) are lazily initialized on first use.
+/// Thin wrapper delegating to a `BoxBackend` implementation.
+/// Local backend: `BoxImpl` (VM-backed). REST backend: `RestBox` (HTTP-backed).
 ///
-/// Following the same pattern as BoxliteRuntime wrapping RuntimeImpl.
+/// Following the same pattern as BoxliteRuntime wrapping RuntimeBackend.
 pub struct LiteBox {
     /// Box ID for quick access without locking.
     id: BoxID,
     /// Box name for quick access without locking.
     name: Option<String>,
-    /// Box implementation (created immediately, LiveState is lazy).
-    inner: SharedBoxImpl,
+    /// Backend implementation.
+    inner: Arc<dyn BoxBackend>,
 }
 
 impl LiteBox {
-    /// Create a LiteBox from a shared BoxImpl.
-    ///
-    /// Used by RuntimeImpl to create handles that share the same BoxImpl.
-    /// Multiple handles to the same box share the same LiveState.
-    pub(crate) fn new(inner: SharedBoxImpl) -> Self {
+    /// Create a LiteBox from a backend implementation.
+    pub(crate) fn new(inner: Arc<dyn BoxBackend>) -> Self {
         let id = inner.id().clone();
-        let name = inner.config.name.clone();
+        let name = inner.name().map(|s| s.to_string());
         Self { id, name, inner }
     }
 

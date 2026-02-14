@@ -160,6 +160,29 @@ impl ExecutionInterface {
 }
 
 // ============================================================================
+// ExecBackend trait implementation
+// ============================================================================
+
+#[async_trait::async_trait]
+impl crate::runtime::backend::ExecBackend for ExecutionInterface {
+    async fn kill(&mut self, execution_id: &str, signal: i32) -> BoxliteResult<()> {
+        self.kill(execution_id, signal).await
+    }
+
+    async fn resize_tty(
+        &mut self,
+        execution_id: &str,
+        rows: u32,
+        cols: u32,
+        x_pixels: u32,
+        y_pixels: u32,
+    ) -> BoxliteResult<()> {
+        self.resize_tty(execution_id, rows, cols, x_pixels, y_pixels)
+            .await
+    }
+}
+
+// ============================================================================
 // Helper: Protocol wiring
 // ============================================================================
 

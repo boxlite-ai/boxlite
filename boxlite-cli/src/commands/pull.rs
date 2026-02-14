@@ -18,11 +18,10 @@ pub async fn execute(args: PullArgs, global: &GlobalFlags) -> Result<()> {
 
     let image = runtime.pull_image(&args.image).await?;
     if args.quiet {
-        println!("{}", image.config_digest());
+        println!("{}", image.id);
     } else {
-        println!("Pulled: {}", image.reference());
-        println!("Digest: {}", image.config_digest());
-        println!("Layers: {}", image.layer_count());
+        println!("Pulled: {}", image.reference);
+        println!("Digest: {}", image.id);
     }
 
     Ok(())

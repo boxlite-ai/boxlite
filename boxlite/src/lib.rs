@@ -23,6 +23,8 @@ mod disk;
 mod fs;
 mod images;
 mod portal;
+#[cfg(feature = "rest")]
+mod rest;
 mod rootfs;
 mod volumes;
 
@@ -42,6 +44,9 @@ pub use runtime::options::{BoxOptions, BoxliteOptions, RootfsSpec};
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub use runtime::types::ContainerID;
 pub use runtime::types::{BoxID, BoxInfo, BoxState, BoxStateInfo, BoxStatus};
+
+#[cfg(feature = "rest")]
+pub use rest::options::BoxliteRestOptions;
 
 /// Initialize tracing for Boxlite using the provided filesystem layout.
 ///
