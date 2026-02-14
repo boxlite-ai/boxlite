@@ -1236,7 +1236,11 @@ impl super::backend::RuntimeBackend for LocalRuntime {
     async fn shutdown(&self, timeout: Option<i32>) -> BoxliteResult<()> {
         self.0.shutdown(timeout).await
     }
+}
 
+// Image operations (separate from RuntimeBackend)
+#[async_trait::async_trait]
+impl super::images::ImageManager for LocalRuntime {
     async fn pull_image(&self, image_ref: &str) -> BoxliteResult<crate::runtime::types::ImageInfo> {
         let image_obj = self.0.image_manager.pull(image_ref).await?;
         Ok(image_obj.to_info())

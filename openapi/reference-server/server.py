@@ -132,10 +132,6 @@ class ResizeRequest(BaseModel):
     rows: int
 
 
-class PullImageRequest(BaseModel):
-    reference: str
-
-
 # ============================================================================
 # State
 # ============================================================================
@@ -885,52 +881,6 @@ async def get_box_metrics(
             "box_spawn_ms": m.stage_box_spawn_ms,
             "container_init_ms": m.stage_container_init_ms,
         },
-    }
-
-
-# ============================================================================
-# Images
-# ============================================================================
-
-
-@app.post("/v1/{prefix}/images/pull")
-async def pull_image(
-    prefix: str,
-    req: PullImageRequest,
-    _auth: dict = Depends(require_auth),
-):
-    image = await state.runtime.pull_image(req.reference)
-    return {
-        "reference": image.reference,
-        "repository": image.repository,
-        "tag": image.tag,
-        "id": image.id,
-        "cached_at": image.cached_at,
-        "size_bytes": image.size,
-    }
-
-
-@app.get("/v1/{prefix}/images")
-async def list_images(
-    prefix: str,
-    pageSize: int = Query(100, ge=1, le=1000),
-    pageToken: Optional[str] = Query(None),
-    _auth: dict = Depends(require_auth),
-):
-    images = await state.runtime.list_images()
-    return {
-        "images": [
-            {
-                "reference": img.reference,
-                "repository": img.repository,
-                "tag": img.tag,
-                "id": img.id,
-                "cached_at": img.cached_at,
-                "size_bytes": img.size,
-            }
-            for img in images
-        ],
-        "next_page_token": None,
     }
 
 

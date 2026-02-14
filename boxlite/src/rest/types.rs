@@ -283,32 +283,6 @@ pub(crate) struct BootTimingResponse {
     pub container_init_ms: Option<u64>,
 }
 
-// ============================================================================
-// Images
-// ============================================================================
-
-#[derive(Debug, Serialize)]
-pub(crate) struct PullImageRequest {
-    pub reference: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct ImageInfoResponse {
-    pub reference: String,
-    pub repository: String,
-    pub tag: String,
-    pub id: String,
-    pub cached_at: String,
-    pub size_bytes: Option<u64>,
-}
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct ListImagesResponse {
-    pub images: Vec<ImageInfoResponse>,
-    #[allow(dead_code)]
-    pub next_page_token: Option<String>,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -445,21 +419,5 @@ mod tests {
         let resp: RuntimeMetricsResponse = serde_json::from_str(json).unwrap();
         assert_eq!(resp.boxes_created_total, 10);
         assert_eq!(resp.total_commands_executed, 100);
-    }
-
-    #[test]
-    fn test_image_info_response_deserialization() {
-        let json = r#"{
-            "reference": "python:3.11",
-            "repository": "library/python",
-            "tag": "3.11",
-            "id": "sha256:abc123",
-            "cached_at": "2024-01-01T00:00:00Z",
-            "size_bytes": 123456789
-        }"#;
-        let resp: ImageInfoResponse = serde_json::from_str(json).unwrap();
-        assert_eq!(resp.reference, "python:3.11");
-        assert_eq!(resp.id, "sha256:abc123");
-        assert_eq!(resp.size_bytes, Some(123456789));
     }
 }

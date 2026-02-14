@@ -60,7 +60,7 @@ pub async fn execute(args: InfoArgs, global: &GlobalFlags) -> anyhow::Result<()>
         .filter(|b| b.status == BoxStatus::Configured)
         .count() as u32;
 
-    let images_count = rt.list_images().await?.len() as u32;
+    let images_count = rt.images()?.list().await?.len() as u32;
 
     let info = SystemInfo {
         version,

@@ -8,7 +8,7 @@ use crate::litebox::copy::CopyOptions;
 use crate::litebox::{BoxCommand, Execution, LiteBox};
 use crate::metrics::{BoxMetrics, RuntimeMetrics};
 use crate::runtime::options::BoxOptions;
-use crate::runtime::types::{BoxInfo, ImageInfo};
+use crate::runtime::types::BoxInfo;
 use boxlite_shared::errors::BoxliteResult;
 
 use super::types::BoxID;
@@ -43,10 +43,6 @@ pub(crate) trait RuntimeBackend: Send + Sync {
     async fn remove(&self, id_or_name: &str, force: bool) -> BoxliteResult<()>;
 
     async fn shutdown(&self, timeout: Option<i32>) -> BoxliteResult<()>;
-
-    async fn pull_image(&self, image_ref: &str) -> BoxliteResult<ImageInfo>;
-
-    async fn list_images(&self) -> BoxliteResult<Vec<ImageInfo>>;
 }
 
 /// Backend abstraction for individual box operations.

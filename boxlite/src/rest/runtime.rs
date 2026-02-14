@@ -7,16 +7,12 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use crate::metrics::RuntimeMetrics;
 use crate::runtime::backend::RuntimeBackend;
 use crate::runtime::options::BoxOptions;
-use crate::runtime::types::ImageInfo;
 use crate::{BoxInfo, LiteBox};
 
 use super::client::ApiClient;
 use super::litebox::RestBox;
 use super::options::BoxliteRestOptions;
-use super::types::{
-    BoxResponse, CreateBoxRequest, ListBoxesResponse, ListImagesResponse, PullImageRequest,
-    RuntimeMetricsResponse,
-};
+use super::types::{BoxResponse, CreateBoxRequest, ListBoxesResponse, RuntimeMetricsResponse};
 
 pub(crate) struct RestRuntime {
     client: ApiClient,
@@ -108,19 +104,6 @@ impl RuntimeBackend for RestRuntime {
         // The server manages its own lifecycle.
         Ok(())
     }
-
-    async fn pull_image(&self, image_ref: &str) -> BoxliteResult<ImageInfo> {
-        let req = PullImageRequest {
-            reference: image_ref.to_string(),
-        };
-        let resp: super::types::ImageInfoResponse = self.client.post("/images/pull", &req).await?;
-        Ok(image_info_from_response(&resp))
-    }
-
-    async fn list_images(&self) -> BoxliteResult<Vec<ImageInfo>> {
-        let resp: ListImagesResponse = self.client.get("/images").await?;
-        Ok(resp.images.iter().map(image_info_from_response).collect())
-    }
 }
 
 /// Convert REST metrics response to core RuntimeMetrics.
@@ -146,20 +129,4 @@ fn runtime_metrics_from_response(resp: &RuntimeMetricsResponse) -> RuntimeMetric
         .store(resp.total_exec_errors, Ordering::Relaxed);
 
     RuntimeMetrics::new(storage)
-}
-
-/// Convert REST image response to core ImageInfo.
-fn image_info_from_response(resp: &super::types::ImageInfoResponse) -> ImageInfo {
-    use crate::runtime::types::Bytes;
-
-    ImageInfo {
-        reference: resp.reference.clone(),
-        repository: resp.repository.clone(),
-        tag: resp.tag.clone(),
-        id: resp.id.clone(),
-        cached_at: chrono::DateTime::parse_from_rfc3339(&resp.cached_at)
-            .map(|dt| dt.with_timezone(&chrono::Utc))
-            .unwrap_or_else(|_| chrono::Utc::now()),
-        size: resp.size_bytes.map(Bytes::from_bytes),
-    }
 }

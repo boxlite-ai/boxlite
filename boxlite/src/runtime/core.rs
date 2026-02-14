@@ -37,6 +37,7 @@ static DEFAULT_RUNTIME: OnceLock<BoxliteRuntime> = OnceLock::new();
 #[derive(Clone)]
 pub struct BoxliteRuntime {
     backend: Arc<dyn RuntimeBackend>,
+    image_manager: Option<Arc<dyn crate::runtime::images::ImageManager>>,
 }
 
 // ============================================================================
@@ -57,8 +58,12 @@ impl BoxliteRuntime {
     /// - Image API initialization fails
     pub fn new(options: BoxliteOptions) -> BoxliteResult<Self> {
         let local = LocalRuntime(RuntimeImpl::new(options)?);
+        let backend_arc = Arc::new(local);
+        let image_manager =
+            Arc::clone(&backend_arc) as Arc<dyn crate::runtime::images::ImageManager>;
         Ok(Self {
-            backend: Arc::new(local),
+            backend: backend_arc,
+            image_manager: Some(image_manager),
         })
     }
 
@@ -84,6 +89,7 @@ impl BoxliteRuntime {
         let rest_runtime = crate::rest::runtime::RestRuntime::new(&config)?;
         Ok(Self {
             backend: Arc::new(rest_runtime),
+            image_manager: None, // REST runtime doesn't support image operations
         })
     }
 
@@ -319,40 +325,46 @@ impl BoxliteRuntime {
     }
 
     // ========================================================================
-    // IMAGE OPERATIONS (delegate to backend)
+    // IMAGE OPERATIONS (via ImageHandle)
     // ========================================================================
 
-    /// Pull an OCI image from a registry.
+    /// Get a handle for image operations (pull, list).
     ///
-    /// Checks local cache first. If the image is already cached and complete,
-    /// returns immediately without network access. Otherwise pulls from registry.
+    /// Returns an `ImageHandle` that provides methods for pulling and listing images.
+    /// This abstraction separates image management from runtime management,
+    /// following the same pattern as `LiteBox` for box operations.
     ///
-    /// # Arguments
+    /// # Errors
     ///
-    /// * `image_ref` - Image reference (e.g., "alpine:latest", "docker.io/library/python:3.11")
+    /// Returns `BoxliteError::Unsupported` if called on a REST runtime,
+    /// as image operations are only supported for local runtimes.
     ///
-    /// # Returns
+    /// # Example
     ///
-    /// Returns an `ImageInfo` with metadata about the pulled image.
+    /// ```no_run
+    /// use boxlite::runtime::BoxliteRuntime;
     ///
-    pub async fn pull_image(
-        &self,
-        image_ref: &str,
-    ) -> BoxliteResult<crate::runtime::types::ImageInfo> {
-        self.backend.pull_image(image_ref).await
-    }
-
-    /// List all cached images.
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let runtime = BoxliteRuntime::with_defaults()?;
+    /// let images = runtime.images()?;
     ///
-    /// Returns a list of images available in the local content store.
-    /// The returned `ImageInfo` objects contain metadata suitable for listing (display),
-    /// such as reference, ID, creation time, and size.
+    /// // Pull an image
+    /// let image = images.pull("alpine:latest").await?;
+    /// println!("Pulled: {}", image.reference());
     ///
-    /// # Returns
-    ///
-    /// Returns a vector of `ImageInfo` structs containing metadata for all cached images.
-    pub async fn list_images(&self) -> BoxliteResult<Vec<crate::runtime::types::ImageInfo>> {
-        self.backend.list_images().await
+    /// // List all images
+    /// let all_images = images.list().await?;
+    /// println!("Total images: {}", all_images.len());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn images(&self) -> BoxliteResult<crate::runtime::ImageHandle> {
+        match &self.image_manager {
+            Some(manager) => Ok(crate::runtime::ImageHandle::new(Arc::clone(manager))),
+            None => Err(BoxliteError::Unsupported(
+                "Image operations not supported over REST API".to_string(),
+            )),
+        }
     }
 }
 
