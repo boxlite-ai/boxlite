@@ -14,24 +14,13 @@
 //! - Runtime deserialization and application
 //! - Thread-specific filters: vmm, vcpu, api
 //!
-//! ## Filter Application (Two-Phase Stacking)
+//! ## Filter Application
 //!
-//! When gvproxy is used (in-process Go shared library), seccomp filters are
-//! applied in two phases to give Go threads a more permissive filter:
+//! The VMM filter is applied with TSYNC (thread synchronization) to ensure
+//! all threads — including Go runtime threads from gvproxy — share the same
+//! filter. New threads created after application inherit it automatically.
 //!
-//! 1. **Phase 1**: Gvproxy filter applied with TSYNC (all existing threads)
-//! 2. Gvproxy created → Go threads inherit gvproxy filter via clone()
-//! 3. **Phase 2**: VMM filter applied without TSYNC (main thread only)
-//! 4. `krun_start_enter()` → vCPU threads inherit both filters from main
-//!
-//! Stacked filters evaluate independently; the most restrictive result wins.
-//! Since vmm ⊂ gvproxy, the effective filter on main/vCPU threads is vmm.
-//! Go threads only have the gvproxy filter (more permissive for Go runtime).
-//!
-//! Without gvproxy, the VMM filter is applied with TSYNC as before.
-//!
-//! - VMM filter: Core VMM + libkrun syscalls (~106 entries)
-//! - Gvproxy filter: VMM + Go runtime syscalls (~107 entries, strict superset)
+//! - VMM filter: Core VMM + libkrun + Go runtime syscalls (~106 entries)
 //! - vCPU filter: Compiled; vCPU threads inherit from main thread
 //! - API filter: Not used in BoxLite (reserved for compatibility)
 
@@ -77,12 +66,6 @@ pub enum SeccompRole {
     Vcpu,
     /// API — not used in BoxLite (reserved for compatibility)
     Api,
-    /// Gvproxy — Go runtime threads from in-process libgvproxy.so
-    ///
-    /// Applied with TSYNC before gvproxy creation. Go threads inherit it.
-    /// VMM filter is then stacked on the main thread (without TSYNC),
-    /// so Go threads keep only this more permissive filter.
-    Gvproxy,
 }
 
 impl SeccompRole {
@@ -92,7 +75,6 @@ impl SeccompRole {
             Self::Vmm => "vmm",
             Self::Vcpu => "vcpu",
             Self::Api => "api",
-            Self::Gvproxy => "gvproxy",
         }
     }
 }
@@ -111,7 +93,6 @@ pub fn get_empty_filters() -> BpfThreadMap {
     map.insert("vmm".to_string(), Arc::new(vec![]));
     map.insert("api".to_string(), Arc::new(vec![]));
     map.insert("vcpu".to_string(), Arc::new(vec![]));
-    map.insert("gvproxy".to_string(), Arc::new(vec![]));
     map
 }
 
@@ -334,11 +315,10 @@ mod tests {
     #[test]
     fn test_get_empty_filters() {
         let filters = get_empty_filters();
-        assert_eq!(filters.len(), 4);
+        assert_eq!(filters.len(), 3);
         assert!(filters.get("vmm").unwrap().is_empty());
         assert!(filters.get("vcpu").unwrap().is_empty());
         assert!(filters.get("api").unwrap().is_empty());
-        assert!(filters.get("gvproxy").unwrap().is_empty());
     }
 
     #[test]
@@ -346,7 +326,6 @@ mod tests {
         assert_eq!(SeccompRole::Vmm.as_str(), "vmm");
         assert_eq!(SeccompRole::Vcpu.as_str(), "vcpu");
         assert_eq!(SeccompRole::Api.as_str(), "api");
-        assert_eq!(SeccompRole::Gvproxy.as_str(), "gvproxy");
     }
 
     #[test]
@@ -391,7 +370,6 @@ mod tests {
         assert!(filters.contains_key("vmm"), "Missing vmm filter");
         assert!(filters.contains_key("vcpu"), "Missing vcpu filter");
         assert!(filters.contains_key("api"), "Missing api filter");
-        assert!(filters.contains_key("gvproxy"), "Missing gvproxy filter");
 
         // Verify filters are non-empty (actual filters should have instructions)
         assert!(
