@@ -137,7 +137,7 @@ impl BoxResponse {
         use crate::litebox::BoxStatus;
         use crate::runtime::types::BoxID;
 
-        let id = BoxID::parse(&self.box_id).unwrap_or_else(BoxID::new);
+        let id = BoxID::parse(&self.box_id).unwrap_or_default();
 
         let status = match self.status.as_str() {
             "configured" => BoxStatus::Configured,
