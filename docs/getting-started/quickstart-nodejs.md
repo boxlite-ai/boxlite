@@ -4,8 +4,6 @@ Get up and running with BoxLite Node.js SDK in 5 minutes.
 
 ## Installation
 
-Minimum supported Node.js SDK version: **v0.2.9**.
-
 ```bash
 npm install @boxlite-ai/boxlite
 ```

@@ -6,7 +6,6 @@ Python bindings for BoxLite - an embeddable virtual machine runtime for secure, 
 
 The BoxLite Python SDK provides a Pythonic API for creating and managing isolated execution environments. Built with PyO3, it wraps the Rust BoxLite runtime with async-first Python bindings.
 
-**Version:** 0.5.12
 **Python:** 3.10+
 **Platforms:** macOS (Apple Silicon), Linux (x86_64, ARM64)
 
@@ -31,7 +30,7 @@ Requires Python 3.10 or later.
 
 ```python
 import boxlite
-print(boxlite.__version__)  # Should print: 0.5.12
+print(boxlite.__version__)  # Prints installed package version
 ```
 
 ### System Requirements

@@ -2,7 +2,6 @@
 
 Complete API reference for the BoxLite Node.js/TypeScript SDK.
 
-**Version:** 0.2.9
 **Node.js:** 18+
 **Platforms:** macOS (Apple Silicon), Linux (x86_64, ARM64)
 

@@ -99,10 +99,10 @@ pyenv install 3.11.0
 
 ### Is BoxLite production-ready?
 
-**Yes.** BoxLite v0.5.12 is stable and used in production.
+**Yes.** BoxLite is stable and used in production.
 
 **Production considerations:**
-- ✅ Stable API (v0.5.x series)
+- ✅ Stable API
 - ✅ Hardware-level isolation
 - ✅ Resource limits enforced
 - ✅ Error handling robust

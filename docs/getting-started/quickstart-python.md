@@ -4,8 +4,6 @@ Get up and running with BoxLite Python SDK in 5 minutes.
 
 ## Installation
 
-Minimum supported Python SDK version: **v0.5.12**.
-
 ```bash
 pip install boxlite
 ```
@@ -17,7 +15,7 @@ pip install boxlite
 **Verify Installation:**
 ```python
 python3 -c "import boxlite; print(boxlite.__version__)"
-# Output: 0.5.12
+# Output: installed boxlite package version
 ```
 
 ## Basic Execution
