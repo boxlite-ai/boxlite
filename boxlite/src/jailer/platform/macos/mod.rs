@@ -117,11 +117,7 @@ const SEATBELT_FILE_WRITE_POLICY: &str = include_str!("seatbelt_file_write_polic
 ///
 /// Note: The actual sandbox is applied when spawning the shim process,
 /// not from within the process. This function logs what protections are active.
-pub fn apply_isolation(
-    security: &SecurityOptions,
-    box_id: &str,
-    _layout: &crate::runtime::layout::FilesystemLayout,
-) -> BoxliteResult<()> {
+pub fn apply_isolation(security: &SecurityOptions, box_id: &str) -> BoxliteResult<()> {
     tracing::info!(box_id = %box_id, "Applying macOS jailer isolation");
 
     // Log warning about macOS limitations

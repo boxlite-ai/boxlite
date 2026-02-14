@@ -18,7 +18,6 @@ pub mod linux;
 pub mod macos;
 
 use crate::runtime::advanced_options::SecurityOptions;
-use crate::runtime::layout::FilesystemLayout;
 use crate::runtime::options::VolumeSpec;
 use boxlite_shared::errors::BoxliteResult;
 use std::path::Path;
@@ -34,12 +33,7 @@ pub trait PlatformIsolation: Send + Sync {
     /// Apply isolation to the current process.
     ///
     /// Called inside the shim after fork but before exec.
-    fn apply_isolation(
-        &self,
-        security: &SecurityOptions,
-        box_id: &str,
-        layout: &FilesystemLayout,
-    ) -> BoxliteResult<()>;
+    fn apply_isolation(&self, security: &SecurityOptions, box_id: &str) -> BoxliteResult<()>;
 
     /// Get spawn-time sandbox arguments.
     ///
@@ -82,12 +76,7 @@ pub struct LinuxPlatform;
 
 #[cfg(target_os = "linux")]
 impl PlatformIsolation for LinuxPlatform {
-    fn apply_isolation(
-        &self,
-        security: &SecurityOptions,
-        box_id: &str,
-        _layout: &FilesystemLayout,
-    ) -> BoxliteResult<()> {
+    fn apply_isolation(&self, security: &SecurityOptions, box_id: &str) -> BoxliteResult<()> {
         if security.seccomp_enabled {
             linux::apply_vmm_filter(box_id)?;
         } else {
@@ -126,13 +115,8 @@ pub struct MacOSPlatform;
 
 #[cfg(target_os = "macos")]
 impl PlatformIsolation for MacOSPlatform {
-    fn apply_isolation(
-        &self,
-        security: &SecurityOptions,
-        box_id: &str,
-        layout: &FilesystemLayout,
-    ) -> BoxliteResult<()> {
-        macos::apply_isolation(security, box_id, layout)
+    fn apply_isolation(&self, security: &SecurityOptions, box_id: &str) -> BoxliteResult<()> {
+        macos::apply_isolation(security, box_id)
     }
 
     fn get_spawn_args(
@@ -186,12 +170,7 @@ struct UnsupportedPlatform;
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 impl PlatformIsolation for UnsupportedPlatform {
-    fn apply_isolation(
-        &self,
-        _security: &SecurityOptions,
-        _box_id: &str,
-        _layout: &FilesystemLayout,
-    ) -> BoxliteResult<()> {
+    fn apply_isolation(&self, _security: &SecurityOptions, _box_id: &str) -> BoxliteResult<()> {
         Err(crate::jailer::JailerError::UnsupportedPlatform.into())
     }
 
