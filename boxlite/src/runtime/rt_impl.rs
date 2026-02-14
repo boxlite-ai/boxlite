@@ -1241,9 +1241,8 @@ impl super::backend::RuntimeBackend for LocalRuntime {
 // Image operations (separate from RuntimeBackend)
 #[async_trait::async_trait]
 impl super::images::ImageManager for LocalRuntime {
-    async fn pull_image(&self, image_ref: &str) -> BoxliteResult<crate::runtime::types::ImageInfo> {
-        let image_obj = self.0.image_manager.pull(image_ref).await?;
-        Ok(image_obj.to_info())
+    async fn pull_image(&self, image_ref: &str) -> BoxliteResult<crate::images::ImageObject> {
+        self.0.image_manager.pull(image_ref).await
     }
 
     async fn list_images(&self) -> BoxliteResult<Vec<crate::runtime::types::ImageInfo>> {

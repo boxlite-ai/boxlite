@@ -8,6 +8,7 @@ use async_trait::async_trait;
 use std::sync::Arc;
 
 use crate::BoxliteResult;
+use crate::images::ImageObject;
 use crate::runtime::types::ImageInfo;
 
 /// Internal trait for image management.
@@ -17,7 +18,7 @@ use crate::runtime::types::ImageInfo;
 #[async_trait]
 pub(crate) trait ImageManager: Send + Sync {
     /// Pull an image from a registry.
-    async fn pull_image(&self, image_ref: &str) -> BoxliteResult<ImageInfo>;
+    async fn pull_image(&self, image_ref: &str) -> BoxliteResult<ImageObject>;
 
     /// List all locally cached images.
     async fn list_images(&self) -> BoxliteResult<Vec<ImageInfo>>;
@@ -40,7 +41,7 @@ pub(crate) trait ImageManager: Send + Sync {
 ///
 ///     // Pull an image
 ///     let image = images.pull("alpine:latest").await?;
-///     println!("Pulled: {}", image.reference);
+///     println!("Pulled: {}", image.reference());
 ///
 ///     // List all images
 ///     let all_images = images.list().await?;
@@ -64,7 +65,7 @@ impl ImageHandle {
     /// Pull an image from a registry.
     ///
     /// Downloads the image layers and stores them in the local image cache.
-    /// Returns metadata about the pulled image.
+    /// Returns an ImageObject handle for the pulled image.
     ///
     /// # Example
     ///
@@ -75,11 +76,11 @@ impl ImageHandle {
     /// # let runtime = Boxlite::new(Options::default())?;
     /// let images = runtime.images()?;
     /// let image = images.pull("alpine:latest").await?;
-    /// println!("Image ID: {}", image.id);
+    /// println!("Image digest: {}", image.config_digest());
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn pull(&self, image_ref: &str) -> BoxliteResult<ImageInfo> {
+    pub async fn pull(&self, image_ref: &str) -> BoxliteResult<ImageObject> {
         self.manager.pull_image(image_ref).await
     }
 
