@@ -86,9 +86,17 @@ impl PlatformIsolation for LinuxPlatform {
         &self,
         security: &SecurityOptions,
         box_id: &str,
-        layout: &FilesystemLayout,
+        _layout: &FilesystemLayout,
     ) -> BoxliteResult<()> {
-        linux::apply_isolation(security, box_id, layout)
+        if security.seccomp_enabled {
+            linux::apply_vmm_filter(box_id)?;
+        } else {
+            tracing::warn!(
+                box_id = %box_id,
+                "Seccomp disabled - running without syscall filtering"
+            );
+        }
+        Ok(())
     }
 
     fn get_spawn_args(
