@@ -1,12 +1,11 @@
-//! Display live metrics for a box.
+//! Display resource usage statistics for a box.
 
 use crate::cli::GlobalFlags;
 use crate::formatter::{self, OutputFormat};
 use boxlite::BoxMetrics;
 use clap::Args;
 use serde::Serialize;
-use std::fmt::Write as FmtWrite;
-use std::io::{Write, Write as _};
+use std::io::Write;
 use tabled::Tabled;
 
 #[derive(Args, Debug)]
@@ -18,6 +17,10 @@ pub struct StatsArgs {
     /// Output format (table, json, yaml)
     #[arg(long, default_value = "table")]
     pub format: String,
+
+    /// Stream stats in real-time
+    #[arg(short = 's', long = "stream")]
+    pub stream: bool,
 }
 
 #[derive(Tabled, Serialize)]
@@ -31,7 +34,6 @@ struct StatsPresenter {
     value: String,
 }
 
-/// Execute `stats` command.
 pub async fn execute(args: StatsArgs, global: &GlobalFlags) -> anyhow::Result<()> {
     let rt = global.create_runtime()?;
     let litebox = rt
@@ -39,25 +41,53 @@ pub async fn execute(args: StatsArgs, global: &GlobalFlags) -> anyhow::Result<()
         .await?
         .ok_or_else(|| anyhow::anyhow!("No such box: {}", args.target))?;
 
-    let metrics = litebox.metrics().await?;
-    let presenters = format_metrics(metrics);
-
     let format = OutputFormat::from_str(&args.format)?;
-    formatter::print_output(
-        &mut std::io::stdout().lock(),
-        &presenters,
-        format,
-        |writer, data| {
-            let table = formatter::create_table(data).to_string();
-            writeln!(writer, "{}", table)?;
-            Ok(())
-        },
-    )?;
+
+    if args.stream {
+        loop {
+            // Clear screen and move cursor to top-left
+            print!("\x1B[2J\x1B[1;1H");
+            std::io::stdout().flush()?;
+
+            let metrics = litebox.metrics().await?;
+            let presenters = format_metrics(metrics);
+
+            formatter::print_output(
+                &mut std::io::stdout().lock(),
+                &presenters,
+                format,
+                |writer, data| {
+                    let table = formatter::create_table(data).to_string();
+                    writeln!(writer, "{}", table)?;
+                    Ok(())
+                },
+            )?;
+
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {
+                    break;
+                }
+                _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {}
+            }
+        }
+    } else {
+        let metrics = litebox.metrics().await?;
+        let presenters = format_metrics(metrics);
+        formatter::print_output(
+            &mut std::io::stdout().lock(),
+            &presenters,
+            format,
+            |writer, data| {
+                let table = formatter::create_table(data).to_string();
+                writeln!(writer, "{}", table)?;
+                Ok(())
+            },
+        )?;
+    }
 
     Ok(())
 }
 
-/// Convert BoxMetrics to Vec<StatsPresenter> for display.
 fn format_metrics(metrics: BoxMetrics) -> Vec<StatsPresenter> {
     vec![
         StatsPresenter {
@@ -107,7 +137,6 @@ fn format_percent(value: Option<f32>) -> String {
     }
 }
 
-/// Format optional byte value to human-readable form.
 fn format_bytes(value: Option<u64>) -> String {
     match value {
         Some(bytes) => {
@@ -129,7 +158,6 @@ fn format_bytes(value: Option<u64>) -> String {
     }
 }
 
-/// Format optional duration in milliseconds.
 fn format_duration_ms(value: Option<u128>) -> String {
     match value {
         Some(ms) => format!("{} ms", ms),
@@ -137,7 +165,6 @@ fn format_duration_ms(value: Option<u128>) -> String {
     }
 }
 
-/// Format optional u64 value.
 fn format_optional_u64(value: Option<u64>) -> String {
     match value {
         Some(v) => v.to_string(),

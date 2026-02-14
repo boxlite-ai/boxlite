@@ -2,13 +2,11 @@
 
 use crate::cli::GlobalFlags;
 use clap::Args;
-use dirs;
 use std::fs::File;
 use std::io::BufReader;
-use std::io::{BufRead, Seek, SeekFrom};
+use std::io::{BufRead, Read, Seek};
 use std::path::PathBuf;
 
-/// Show logs from a box
 #[derive(Args, Debug)]
 pub struct LogsArgs {
     /// Box ID or name
@@ -24,27 +22,18 @@ pub struct LogsArgs {
     pub follow: bool,
 }
 
-/// Execute `logs` command.
 pub async fn execute(args: LogsArgs, global: &GlobalFlags) -> anyhow::Result<()> {
-    let rt = global.create_runtime()?;
+    let options = global.resolve_runtime_options()?;
+    let home_dir = options.home_dir.clone();
+    let rt = global.create_runtime_with_options(options)?;
+
     let litebox = rt
         .get(&args.target)
         .await?
         .ok_or_else(|| anyhow::anyhow!("No such box: {}", args.target))?;
 
-    // Construct console.log path: ~/.boxlite/boxes/{box_id}/console.log
+    // Construct console.log path: {home_dir}/boxes/{box_id}/console.log
     let box_id = litebox.id();
-    let home_dir = global
-        .home
-        .as_ref()
-        .cloned()
-        .or_else(|| {
-            dirs::home_dir().map(|mut p| {
-                p.push(".boxlite");
-                p
-            })
-        })
-        .ok_or_else(|| anyhow::anyhow!("Cannot determine BoxLite home directory"))?;
 
     let log_path = home_dir
         .join("boxes")
@@ -74,26 +63,61 @@ pub async fn execute(args: LogsArgs, global: &GlobalFlags) -> anyhow::Result<()>
 
 /// Read logs from a file, optionally returning only the last N lines.
 fn read_logs(path: &PathBuf, tail_lines: usize) -> anyhow::Result<Vec<String>> {
-    let file = File::open(path)?;
-    let reader = BufReader::new(file);
+    let mut file = File::open(path)?;
 
     if tail_lines == 0 {
         // Read all lines
+        let reader = BufReader::new(file);
         let lines: Vec<String> = reader.lines().collect::<Result<_, _>>()?;
         Ok(lines)
     } else {
-        // Read last N lines
-        let all_lines: Vec<String> = reader.lines().collect::<Result<_, _>>()?;
-        let start = if tail_lines >= all_lines.len() {
-            0
-        } else {
-            all_lines.len() - tail_lines
-        };
-        Ok(all_lines[start..].to_vec())
+        // Read last N lines optimized
+        let start_pos = find_start_offset(&mut file, tail_lines)?;
+        file.seek(std::io::SeekFrom::Start(start_pos))?;
+        let reader = BufReader::new(file);
+        let lines: Vec<String> = reader.lines().collect::<Result<_, _>>()?;
+        Ok(lines)
     }
 }
 
-/// Follow log file for new lines (real-time mode).
+/// Find the file offset to start reading the last N lines from.
+fn find_start_offset(file: &mut File, tail_lines: usize) -> anyhow::Result<u64> {
+    let file_len = file.metadata()?.len();
+    if file_len == 0 {
+        return Ok(0);
+    }
+
+    let mut lines_found = 0;
+    let mut pos = file_len;
+    let chunk_size = 4096;
+    let mut buf = vec![0u8; chunk_size];
+
+    while pos > 0 {
+        let to_read = std::cmp::min(pos, chunk_size as u64) as usize;
+        pos -= to_read as u64;
+
+        file.seek(std::io::SeekFrom::Start(pos))?;
+        file.read_exact(&mut buf[..to_read])?;
+
+        // Iterate backwards through the buffer
+        for i in (0..to_read).rev() {
+            if buf[i] == b'\n' {
+                // Ignore trailing newline if it's the very last byte of the file
+                if pos + i as u64 == file_len - 1 {
+                    continue;
+                }
+
+                lines_found += 1;
+                if lines_found >= tail_lines {
+                    return Ok(pos + i as u64 + 1);
+                }
+            }
+        }
+    }
+
+    Ok(0)
+}
+
 async fn follow_logs(path: &PathBuf) -> anyhow::Result<()> {
     use notify::{RecursiveMode, Watcher};
     use tokio::signal;
@@ -120,12 +144,17 @@ async fn follow_logs(path: &PathBuf) -> anyhow::Result<()> {
             }
             Some(event) = rx.recv() => {
                 if event.kind.is_modify() {
-                    if let Ok(new_lines) = read_new_lines(path, last_pos) {
-                        for line in new_lines {
-                            println!("{}", line);
+                    match read_new_lines(path, last_pos) {
+                        Ok(new_lines) => {
+                            for line in new_lines {
+                                println!("{}", line);
+                            }
+                            if let Ok(metadata) = std::fs::metadata(path) {
+                                last_pos = metadata.len();
+                            }
                         }
-                        if let Ok(metadata) = std::fs::metadata(path) {
-                            last_pos = metadata.len();
+                        Err(e) => {
+                            eprintln!("Warning: failed to read new log lines: {}", e);
                         }
                     }
                 }
@@ -136,7 +165,6 @@ async fn follow_logs(path: &PathBuf) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Read new lines from a file starting from a given position.
 fn read_new_lines(path: &PathBuf, from_pos: u64) -> anyhow::Result<Vec<String>> {
     let mut file = File::open(path)?;
     file.seek(std::io::SeekFrom::Start(from_pos))?;
@@ -150,89 +178,64 @@ fn read_new_lines(path: &PathBuf, from_pos: u64) -> anyhow::Result<Vec<String>> 
 mod tests {
     use super::*;
     use std::io::Write;
+    use tempfile::NamedTempFile;
 
     #[test]
     fn test_read_logs_all() {
         // Create a temporary file with test content
-        let temp_dir = std::env::temp_dir();
-        let file_path = temp_dir.join("test_console.log");
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "Line 1").unwrap();
+        writeln!(file, "Line 2").unwrap();
+        writeln!(file, "Line 3").unwrap();
+        writeln!(file, "Line 4").unwrap();
+        writeln!(file, "Line 5").unwrap();
 
-        {
-            let mut file = File::create(&file_path).unwrap();
-            writeln!(file, "Line 1").unwrap();
-            writeln!(file, "Line 2").unwrap();
-            writeln!(file, "Line 3").unwrap();
-            writeln!(file, "Line 4").unwrap();
-            writeln!(file, "Line 5").unwrap();
-        }
+        let file_path = file.path().to_path_buf();
 
         // Test reading all lines
         let lines = read_logs(&file_path, 0).unwrap();
         assert_eq!(lines.len(), 5);
         assert_eq!(lines[0], "Line 1");
         assert_eq!(lines[4], "Line 5");
-
-        // Clean up
-        std::fs::remove_file(&file_path).unwrap();
     }
 
     #[test]
     fn test_read_logs_tail() {
         // Create a temporary file with test content
-        let temp_dir = std::env::temp_dir();
-        let file_path = temp_dir.join("test_tail_console.log");
-
-        {
-            let mut file = File::create(&file_path).unwrap();
-            for i in 1..=10 {
-                writeln!(file, "Line {}", i).unwrap();
-            }
+        let mut file = NamedTempFile::new().unwrap();
+        for i in 1..=10 {
+            writeln!(file, "Line {}", i).unwrap();
         }
+
+        let file_path = file.path().to_path_buf();
 
         // Test reading last 3 lines
         let lines = read_logs(&file_path, 3).unwrap();
         assert_eq!(lines.len(), 3);
         assert_eq!(lines[0], "Line 8");
         assert_eq!(lines[2], "Line 10");
-
-        // Clean up
-        std::fs::remove_file(&file_path).unwrap();
     }
 
     #[test]
     fn test_read_logs_empty_file() {
         // Test reading from an empty file
-        let temp_dir = std::env::temp_dir();
-        let file_path = temp_dir.join("test_empty.log");
-
-        {
-            File::create(&file_path).unwrap();
-        }
+        let file = NamedTempFile::new().unwrap();
+        let file_path = file.path().to_path_buf();
 
         let lines = read_logs(&file_path, 0).unwrap();
         assert_eq!(lines.len(), 0);
-
-        // Clean up
-        std::fs::remove_file(&file_path).unwrap();
     }
 
     #[test]
     fn test_read_logs_tail_exceeds_file() {
         // Test tail larger than file
-        let temp_dir = std::env::temp_dir();
-        let file_path = temp_dir.join("test_exceed.log");
-
-        {
-            let mut file = File::create(&file_path).unwrap();
-            writeln!(file, "Line 1").unwrap();
-        }
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "Line 1").unwrap();
+        let file_path = file.path().to_path_buf();
 
         // Test tail larger than file (should return all lines)
         let lines = read_logs(&file_path, 10).unwrap();
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0], "Line 1");
-
-        // Clean up
-        std::fs::remove_file(&file_path).unwrap();
     }
 }
