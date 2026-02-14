@@ -39,11 +39,11 @@ impl PyBoxlite {
     ///
     /// Example::
     ///
-    ///     opts = boxlite.RestOptions(url="https://api.example.com")
+    ///     opts = boxlite.BoxliteRestOptions(url="https://api.example.com")
     ///     runtime = boxlite.Boxlite.rest(opts)
     ///
     ///     # From environment variables
-    ///     opts = boxlite.RestOptions.from_env()
+    ///     opts = boxlite.BoxliteRestOptions.from_env()
     ///     runtime = boxlite.Boxlite.rest(opts)
     #[staticmethod]
     fn rest(options: PyRestOptions) -> PyResult<Self> {

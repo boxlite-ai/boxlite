@@ -3,7 +3,7 @@
 Load REST connection config from environment variables.
 
 Demonstrates:
-- RestOptions.from_env() for environment-based configuration
+- BoxliteRestOptions.from_env() for environment-based configuration
 - Useful for CI/CD pipelines and production deployments
 
 Environment variables:
@@ -25,7 +25,7 @@ Prerequisites:
 
 import asyncio
 
-from boxlite import Boxlite, RestOptions
+from boxlite import Boxlite, BoxliteRestOptions
 
 
 async def main():
@@ -35,7 +35,7 @@ async def main():
 
     # Load connection config from environment variables
     try:
-        opts = RestOptions.from_env()
+        opts = BoxliteRestOptions.from_env()
     except Exception as e:
         print(f"\n  Error: {e}")
         print("  Set BOXLITE_REST_URL (and optionally credentials) first.")

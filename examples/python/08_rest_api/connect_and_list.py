@@ -3,7 +3,7 @@
 Connect to a remote BoxLite server and list boxes.
 
 Demonstrates:
-- Creating a REST-backed runtime with RestOptions
+- Creating a REST-backed runtime with BoxliteRestOptions
 - OAuth2 authentication (automatic token management)
 - Listing existing boxes
 
@@ -14,7 +14,7 @@ Prerequisites:
 
 import asyncio
 
-from boxlite import Boxlite, RestOptions
+from boxlite import Boxlite, BoxliteRestOptions
 
 
 SERVER_URL = "http://localhost:8080"
@@ -28,7 +28,7 @@ async def main():
     print("=" * 50)
 
     # Connect to the remote BoxLite server
-    opts = RestOptions(
+    opts = BoxliteRestOptions(
         url=SERVER_URL,
         client_id=CLIENT_ID,
         client_secret=CLIENT_SECRET,

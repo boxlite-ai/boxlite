@@ -13,14 +13,14 @@ Prerequisites:
 
 import asyncio
 
-from boxlite import Boxlite, BoxOptions, RestOptions
+from boxlite import Boxlite, BoxOptions, BoxliteRestOptions
 
 
 SERVER_URL = "http://localhost:8080"
 
 
 def connect() -> Boxlite:
-    return Boxlite.rest(RestOptions(
+    return Boxlite.rest(BoxliteRestOptions(
         url=SERVER_URL, client_id="test-client", client_secret="test-secret",
     ))
 

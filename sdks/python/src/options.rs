@@ -504,15 +504,15 @@ fn parse_protocol<S: AsRef<str>>(s: S) -> PortProtocol {
 ///
 /// Example::
 ///
-///     opts = RestOptions(url="https://api.example.com")
-///     opts = RestOptions(
+///     opts = BoxliteRestOptions(url="https://api.example.com")
+///     opts = BoxliteRestOptions(
 ///         url="https://api.example.com",
 ///         client_id="my-client",
 ///         client_secret="my-secret",
 ///     )
-///     opts = RestOptions.from_env()
+///     opts = BoxliteRestOptions.from_env()
 ///
-#[pyclass(name = "RestOptions")]
+#[pyclass(name = "BoxliteRestOptions")]
 #[derive(Clone, Debug)]
 pub(crate) struct PyRestOptions {
     #[pyo3(get, set)]
@@ -543,7 +543,7 @@ impl PyRestOptions {
         }
     }
 
-    /// Create RestOptions from environment variables.
+    /// Create BoxliteRestOptions from environment variables.
     ///
     /// Reads: BOXLITE_REST_URL (required), BOXLITE_REST_CLIENT_ID,
     ///        BOXLITE_REST_CLIENT_SECRET, BOXLITE_REST_PREFIX
@@ -560,7 +560,7 @@ impl PyRestOptions {
 
     fn __repr__(&self) -> String {
         format!(
-            "RestOptions(url={:?}, client_id={:?}, prefix={:?})",
+            "BoxliteRestOptions(url={:?}, client_id={:?}, prefix={:?})",
             self.url,
             self.client_id.as_deref().map(|_| "***"),
             self.prefix,

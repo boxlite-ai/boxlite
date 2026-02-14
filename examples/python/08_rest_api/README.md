@@ -1,7 +1,7 @@
 # 08 REST API
 
 Use BoxLite through a remote REST API server instead of the local runtime.
-All examples use the Python SDK's `Boxlite.rest()` constructor with `RestOptions`.
+All examples use the Python SDK's `Boxlite.rest()` constructor with `BoxliteRestOptions`.
 
 | File | Description |
 |------|-------------|

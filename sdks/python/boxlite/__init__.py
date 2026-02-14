@@ -11,7 +11,7 @@ try:
     from .boxlite import (
         Options,
         BoxOptions,
-        RestOptions,
+        BoxliteRestOptions,
         Boxlite,
         Box,
         Execution,
@@ -30,7 +30,7 @@ try:
         # Core Rust API
         "Options",
         "BoxOptions",
-        "RestOptions",
+        "BoxliteRestOptions",
         "Boxlite",
         "Box",
         "Execution",
