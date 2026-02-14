@@ -6,7 +6,7 @@ use pyo3::prelude::*;
 use crate::box_handle::PyBox;
 use crate::info::PyBoxInfo;
 use crate::metrics::PyRuntimeMetrics;
-use crate::options::{PyBoxOptions, PyOptions, PyBoxliteRestOptions};
+use crate::options::{PyBoxOptions, PyBoxliteRestOptions, PyOptions};
 use crate::util::map_err;
 
 #[pyclass(name = "Boxlite")]

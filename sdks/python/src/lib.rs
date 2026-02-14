@@ -14,7 +14,7 @@ use crate::box_handle::PyBox;
 use crate::exec::{PyExecStderr, PyExecStdin, PyExecStdout, PyExecution};
 use crate::info::{PyBoxInfo, PyBoxStateInfo};
 use crate::metrics::{PyBoxMetrics, PyRuntimeMetrics};
-use crate::options::{PyBoxOptions, PyCopyOptions, PyOptions, PyBoxliteRestOptions};
+use crate::options::{PyBoxOptions, PyBoxliteRestOptions, PyCopyOptions, PyOptions};
 use crate::runtime::PyBoxlite;
 use pyo3::prelude::*;
 
