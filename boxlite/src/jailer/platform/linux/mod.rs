@@ -19,8 +19,6 @@
 //! is not async-signal-safe (cannot be used in pre_exec hook).
 
 use crate::jailer::seccomp;
-use crate::runtime::advanced_options::SecurityOptions;
-use crate::runtime::layout::FilesystemLayout;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 /// Check if Linux jailer is available.
