@@ -92,7 +92,7 @@ impl Executor for GuestExecutor {
 fn spawn_with_pipes(req: &ExecRequest) -> BoxliteResult<ExecHandle> {
     use nix::unistd::Pid;
     use std::os::unix::io::{FromRawFd, IntoRawFd};
-    use tokio::process::Command;
+    use std::process::Command;
 
     let mut cmd = Command::new(&req.program);
     cmd.args(&req.args);
@@ -125,9 +125,7 @@ fn spawn_with_pipes(req: &ExecRequest) -> BoxliteResult<ExecHandle> {
         .spawn()
         .map_err(|e| BoxliteError::Internal(format!("Failed to spawn '{}': {}", req.program, e)))?;
 
-    let pid = child
-        .id()
-        .ok_or_else(|| BoxliteError::Internal("Process exited immediately".into()))?;
+    let pid = child.id();
 
     // Non-PTY mode: stdout and stderr are separate pipes
     Ok(ExecHandle::new(

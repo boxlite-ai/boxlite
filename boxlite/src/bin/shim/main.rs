@@ -254,10 +254,14 @@ fn run_shim(args: ShimArgs, mut config: InstanceSpec) -> BoxliteResult<()> {
 
     tracing::info!("Box instance created, handing over process control to Box");
 
+    // Install SIGTERM handler for graceful shutdown (all boxes, detached or not).
+    // When SIGTERM is received: Guest.Shutdown() RPC (flush qcow2) → re-raise SIGTERM.
+    install_graceful_shutdown_handler(transport);
+
     // Start parent watchdog if detach=false
-    // Watchdog monitors parent process and exits gracefully when parent dies
+    // Watchdog monitors parent process and sends SIGTERM when parent dies
     if !detach {
-        start_parent_watchdog(parent_pid, transport);
+        start_parent_watchdog(parent_pid);
         tracing::info!(
             parent_pid = parent_pid,
             "Parent watchdog started (detach=false)"
@@ -286,19 +290,83 @@ const GRACEFUL_SHUTDOWN_TIMEOUT_SECS: u64 = 5;
 /// Timeout for guest RPC shutdown (filesystem sync) in seconds.
 const GUEST_SHUTDOWN_TIMEOUT_SECS: u64 = 3;
 
+/// Install SIGTERM handler for graceful VM shutdown.
+///
+/// Uses `signal-hook` to catch SIGTERM in a dedicated thread.
+/// When received: Guest.Shutdown() RPC (flush qcow2) → re-raise SIGTERM.
+///
+/// This ensures any SIGTERM source (runtime shutdown, watchdog, systemd, manual kill)
+/// triggers a graceful guest shutdown with filesystem sync. Without this handler,
+/// SIGTERM would immediately kill the process, risking qcow2 COW disk buffer loss
+/// and ext4 filesystem corruption on next restart.
+fn install_graceful_shutdown_handler(transport: boxlite_shared::Transport) {
+    use signal_hook::consts::signal::SIGTERM;
+    use signal_hook::iterator::Signals;
+
+    let mut signals = match Signals::new([SIGTERM]) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!("Failed to install SIGTERM handler: {e}");
+            return;
+        }
+    };
+
+    thread::spawn(move || {
+        // Block until SIGTERM received
+        for sig in signals.forever() {
+            if sig == SIGTERM {
+                tracing::info!("SIGTERM received, initiating graceful guest shutdown");
+                break;
+            }
+        }
+
+        // Guest.Shutdown() RPC — flush qcow2 buffers (critical for data integrity)
+        match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(rt) => {
+                let session = boxlite::GuestSession::new(transport);
+                let result = rt.block_on(async {
+                    tokio::time::timeout(Duration::from_secs(GUEST_SHUTDOWN_TIMEOUT_SECS), async {
+                        match session.guest().await {
+                            Ok(mut guest) => {
+                                let _ = guest.shutdown().await;
+                            }
+                            Err(e) => {
+                                tracing::debug!("Could not connect to guest for shutdown: {e}");
+                            }
+                        }
+                    })
+                    .await
+                });
+                match result {
+                    Ok(()) => tracing::info!("Guest shutdown completed (filesystems synced)"),
+                    Err(_) => tracing::warn!(
+                        timeout_secs = GUEST_SHUTDOWN_TIMEOUT_SECS,
+                        "Guest shutdown timed out"
+                    ),
+                }
+            }
+            Err(e) => tracing::warn!("Failed to build tokio runtime for guest shutdown: {e}"),
+        }
+
+        // Re-raise SIGTERM with default handler for correct exit status (128+15=143)
+        unsafe {
+            libc::signal(libc::SIGTERM, libc::SIG_DFL);
+            libc::raise(libc::SIGTERM);
+        }
+    });
+}
+
 /// Start a watchdog thread that monitors the parent process.
 ///
-/// If the parent process exits (clean exit or crash), this triggers shutdown:
-/// 1. Calls Guest.Shutdown() RPC to flush filesystems (sync)
-/// 2. Sends SIGTERM for graceful shutdown
-/// 3. Waits for timeout
-/// 4. Force kills via SIGKILL if still running
-///
-/// Step 1 is critical: without it, qcow2 COW disk buffers may not be flushed,
-/// leading to ext4 filesystem corruption on the next restart.
+/// When parent exits: sends SIGTERM to self. The SIGTERM handler
+/// ([`install_graceful_shutdown_handler`]) does the actual graceful shutdown
+/// (Guest.Shutdown() RPC → qcow2 flush → exit).
 ///
 /// This ensures orphan boxes don't accumulate when `detach=false`.
-fn start_parent_watchdog(parent_pid: u32, transport: boxlite_shared::Transport) {
+fn start_parent_watchdog(parent_pid: u32) {
     thread::spawn(move || {
         let self_pid = std::process::id();
 
@@ -308,62 +376,20 @@ fn start_parent_watchdog(parent_pid: u32, transport: boxlite_shared::Transport) 
             if !is_process_alive(parent_pid) {
                 tracing::info!(
                     parent_pid = parent_pid,
-                    "Parent process exited, initiating graceful shutdown"
+                    "Parent process exited, sending SIGTERM to trigger graceful shutdown"
                 );
 
-                // Step 1: Gracefully shut down guest (sync filesystems)
-                match tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                {
-                    Ok(rt) => {
-                        let session = boxlite::GuestSession::new(transport);
-                        let result = rt.block_on(async {
-                            tokio::time::timeout(
-                                Duration::from_secs(GUEST_SHUTDOWN_TIMEOUT_SECS),
-                                async {
-                                    match session.guest().await {
-                                        Ok(mut guest) => {
-                                            let _ = guest.shutdown().await;
-                                        }
-                                        Err(e) => {
-                                            tracing::debug!(
-                                                "Could not connect to guest for shutdown: {e}"
-                                            );
-                                        }
-                                    }
-                                },
-                            )
-                            .await
-                        });
-                        match result {
-                            Ok(()) => {
-                                tracing::info!("Guest shutdown completed (filesystems synced)")
-                            }
-                            Err(_) => tracing::warn!(
-                                timeout_secs = GUEST_SHUTDOWN_TIMEOUT_SECS,
-                                "Guest shutdown timed out"
-                            ),
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!("Failed to build tokio runtime for guest shutdown: {e}");
-                    }
-                }
-
-                // Step 2: SIGTERM for graceful process shutdown
+                // SIGTERM triggers the graceful shutdown handler
                 unsafe {
                     libc::kill(self_pid as i32, libc::SIGTERM);
                 }
 
-                // Step 3: Wait for graceful shutdown timeout
-                thread::sleep(Duration::from_secs(GRACEFUL_SHUTDOWN_TIMEOUT_SECS));
+                // Safety net: wait for handler to complete, then force kill
+                thread::sleep(Duration::from_secs(
+                    GUEST_SHUTDOWN_TIMEOUT_SECS + GRACEFUL_SHUTDOWN_TIMEOUT_SECS,
+                ));
 
-                // Step 4: If still running, force kill
-                tracing::warn!(
-                    timeout_secs = GRACEFUL_SHUTDOWN_TIMEOUT_SECS,
-                    "Graceful shutdown timed out, forcing exit with SIGKILL"
-                );
+                tracing::warn!("Graceful shutdown timed out, forcing exit with SIGKILL");
                 unsafe {
                     libc::kill(self_pid as i32, libc::SIGKILL);
                 }

@@ -174,8 +174,19 @@ impl ExecutionState {
         // Wait for process (blocking call in spawn_blocking)
         let result = tokio::task::spawn_blocking(move || waitpid(pid, None))
             .await
-            .map_err(|e| Status::internal(format!("spawn_blocking failed: {}", e)))?
-            .map_err(|e| Status::internal(format!("waitpid failed: {}", e)))?;
+            .map_err(|e| Status::internal(format!("spawn_blocking failed: {}", e)))?;
+
+        let result = match result {
+            Ok(status) => status,
+            Err(nix::errno::Errno::ECHILD) => {
+                // Child already reaped — process exited but exit code is lost.
+                // This can happen if another reaper (container init, signal handler)
+                // called waitpid() before us. Return 0 as best-effort.
+                tracing::debug!(pid = pid.as_raw(), "waitpid ECHILD: child already reaped");
+                return Ok(ExitStatus::Code(0));
+            }
+            Err(e) => return Err(Status::internal(format!("waitpid failed: {}", e))),
+        };
 
         match result {
             WaitStatus::Exited(_, code) => Ok(ExitStatus::Code(code)),

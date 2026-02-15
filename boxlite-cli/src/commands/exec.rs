@@ -59,6 +59,10 @@ impl BoxExecutor {
 
         let exit_code = streamer.start().await?;
 
+        // Gracefully stop non-detached boxes before CLI exits.
+        // This is the primary shutdown path: async with live LiteBox handles.
+        let _ = self.rt.shutdown(None).await;
+
         if exit_code != 0 {
             std::process::exit(to_shell_exit_code(exit_code));
         }

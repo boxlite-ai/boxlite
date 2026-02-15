@@ -539,12 +539,15 @@ impl RuntimeImpl {
     // PUBLIC API - SHUTDOWN
     // ========================================================================
 
-    /// Gracefully shutdown all boxes in this runtime.
+    /// Gracefully shutdown all non-detached boxes in this runtime.
     ///
     /// This method:
     /// 1. Marks the runtime as shut down (no new operations allowed)
     /// 2. Cancels the shutdown token (signals in-flight operations)
-    /// 3. Stops all active boxes with the given timeout
+    /// 3. Stops all active non-detached boxes with the given timeout
+    ///
+    /// Detached boxes (`detach=true`) are skipped — they are designed to
+    /// survive parent process exit and runtime shutdown.
     ///
     /// # Arguments
     /// * `timeout` - Seconds before force-kill. None=10s, Some(-1)=infinite
@@ -562,12 +565,13 @@ impl RuntimeImpl {
         // Cancel the shutdown token - marks shutdown and signals all in-flight operations
         self.shutdown_token.cancel();
 
-        // Collect all active boxes
+        // Collect all active non-detached boxes
         let active_boxes: Vec<SharedBoxImpl> = {
             let sync = self.sync_state.read().unwrap();
             sync.active_boxes_by_id
                 .values()
                 .filter_map(|weak| weak.upgrade())
+                .filter(|box_impl| !box_impl.config.options.detach)
                 .collect()
         };
 
@@ -623,6 +627,70 @@ impl RuntimeImpl {
                 "Shutdown completed with errors: {}",
                 errors.join(", ")
             )))
+        }
+    }
+
+    /// Synchronous shutdown for atexit/Drop contexts.
+    ///
+    /// At atexit/Drop time, all `LiteBox` handles are gone (Weak refs dead),
+    /// so async `shutdown()` would find nothing. This method queries the DB
+    /// directly and sends SIGTERM to shim processes. The shim's SIGTERM handler
+    /// does graceful Guest.Shutdown() RPC (qcow2 flush) before exiting.
+    ///
+    /// Detached boxes are skipped (same contract as async `shutdown()`).
+    pub(crate) fn shutdown_sync(&self) {
+        if self.shutdown_token.is_cancelled() {
+            return;
+        }
+        self.shutdown_token.cancel();
+
+        let boxes = match self.box_manager.all_boxes(true) {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::warn!("Failed to query boxes during sync shutdown: {e}");
+                return;
+            }
+        };
+
+        for (config, mut state) in boxes {
+            if state.status != BoxStatus::Running || config.options.detach {
+                continue;
+            }
+            let Some(pid) = state.pid else { continue };
+            if !crate::util::is_process_alive(pid) {
+                continue;
+            }
+
+            tracing::info!(box_id = %config.id, pid, "Auto-stopping non-detached box");
+
+            // SIGTERM triggers shim's graceful shutdown handler (Guest.Shutdown RPC)
+            unsafe {
+                libc::kill(pid as i32, libc::SIGTERM);
+            }
+
+            // Wait for shim to finish graceful shutdown (3s guest RPC + margin)
+            let start = std::time::Instant::now();
+            let timeout = std::time::Duration::from_secs(5);
+            loop {
+                if !crate::util::is_process_alive(pid) {
+                    break;
+                }
+                if start.elapsed() > timeout {
+                    tracing::warn!(box_id = %config.id, pid, "Shim didn't exit after SIGTERM, force killing");
+                    crate::util::kill_process(pid);
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+
+            state.mark_stop();
+            let _ = self.box_manager.save_box(&config.id, &state);
+            let pid_file = self
+                .layout
+                .boxes_dir()
+                .join(config.id.as_str())
+                .join("shim.pid");
+            let _ = std::fs::remove_file(&pid_file);
         }
     }
 
@@ -1253,6 +1321,10 @@ impl super::backend::RuntimeBackend for LocalRuntime {
     async fn shutdown(&self, timeout: Option<i32>) -> BoxliteResult<()> {
         self.0.shutdown(timeout).await
     }
+
+    fn shutdown_sync(&self) {
+        self.0.shutdown_sync();
+    }
 }
 
 // Image operations (separate from RuntimeBackend)
@@ -1264,5 +1336,678 @@ impl super::images::ImageManager for LocalRuntime {
 
     async fn list_images(&self) -> BoxliteResult<Vec<crate::runtime::types::ImageInfo>> {
         self.0.image_manager.list().await
+    }
+}
+
+// ============================================================================
+// Drop — Safety net for non-default runtimes
+// ============================================================================
+
+impl Drop for RuntimeImpl {
+    fn drop(&mut self) {
+        if self.shutdown_token.is_cancelled() {
+            return; // shutdown() was already called
+        }
+        // Safety net: stop non-detached boxes if shutdown() wasn't called.
+        // shutdown_sync() logs per-box when it actually stops something.
+        self.shutdown_sync();
+    }
+}
+
+// ============================================================================
+// TESTS
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::litebox::config::{BoxConfig, ContainerRuntimeConfig};
+    use crate::runtime::backend::RuntimeBackend;
+    use crate::runtime::options::RootfsSpec;
+    use tempfile::TempDir;
+
+    /// Create a RuntimeImpl with isolated temp directory.
+    fn create_test_runtime() -> (SharedRuntimeImpl, TempDir) {
+        let temp_dir = TempDir::new_in("/tmp").expect("Failed to create temp dir");
+        let options = BoxliteOptions {
+            home_dir: temp_dir.path().to_path_buf(),
+            image_registries: vec![],
+        };
+        let runtime = RuntimeImpl::new(options).expect("Failed to create runtime");
+        (runtime, temp_dir)
+    }
+
+    /// Create a minimal BoxConfig for testing.
+    fn test_box_config(detach: bool) -> BoxConfig {
+        BoxConfig {
+            id: BoxID::new(),
+            name: None,
+            created_at: Utc::now(),
+            container: ContainerRuntimeConfig {
+                id: ContainerID::new(),
+            },
+            options: BoxOptions {
+                rootfs: RootfsSpec::Image("alpine:latest".into()),
+                detach,
+                auto_remove: false,
+                ..Default::default()
+            },
+            engine_kind: VmmKind::Libkrun,
+            transport: Transport::Unix {
+                socket_path: "/tmp/test.sock".into(),
+            },
+            box_home: std::path::PathBuf::from("/tmp/test-box"),
+            ready_socket_path: std::path::PathBuf::from("/tmp/test-ready.sock"),
+        }
+    }
+
+    /// Create a BoxState with Running status and a given PID.
+    fn running_state(pid: u32) -> BoxState {
+        let mut state = BoxState::new();
+        state.status = BoxStatus::Running;
+        state.pid = Some(pid);
+        state
+    }
+
+    /// Spawn a dummy sleep process and return its PID.
+    fn spawn_dummy_process() -> (u32, std::process::Child) {
+        let child = std::process::Command::new("sleep")
+            .arg("300")
+            .spawn()
+            .expect("Failed to spawn dummy process");
+        let pid = child.id();
+        (pid, child)
+    }
+
+    /// Spawn a process that ignores SIGTERM (for force-kill testing).
+    fn spawn_sigterm_ignoring_process() -> (u32, std::process::Child) {
+        let child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("trap '' TERM; sleep 300")
+            .spawn()
+            .expect("Failed to spawn SIGTERM-ignoring process");
+        let pid = child.id();
+        // Wait for the trap to be installed
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        (pid, child)
+    }
+
+    /// Create a BoxConfig whose box_home aligns with the runtime's layout.
+    /// This is needed for tests that verify PID file operations.
+    fn test_box_config_in_layout(detach: bool, runtime: &RuntimeImpl) -> BoxConfig {
+        let id = BoxID::new();
+        let box_home = runtime.layout.boxes_dir().join(id.as_str());
+        BoxConfig {
+            id,
+            name: None,
+            created_at: Utc::now(),
+            container: ContainerRuntimeConfig {
+                id: ContainerID::new(),
+            },
+            options: BoxOptions {
+                rootfs: RootfsSpec::Image("alpine:latest".into()),
+                detach,
+                auto_remove: false,
+                ..Default::default()
+            },
+            engine_kind: VmmKind::Libkrun,
+            transport: Transport::Unix {
+                socket_path: "/tmp/test.sock".into(),
+            },
+            box_home,
+            ready_socket_path: std::path::PathBuf::from("/tmp/test-ready.sock"),
+        }
+    }
+
+    // ====================================================================
+    // shutdown() tests
+    // ====================================================================
+
+    #[tokio::test]
+    async fn test_shutdown_is_idempotent() {
+        let (runtime, _dir) = create_test_runtime();
+
+        // First shutdown should succeed
+        let result1 = runtime.shutdown(None).await;
+        assert!(result1.is_ok());
+        assert!(runtime.shutdown_token.is_cancelled());
+
+        // Second shutdown should also succeed (no-op)
+        let result2 = runtime.shutdown(None).await;
+        assert!(result2.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_shutdown_cancels_token() {
+        let (runtime, _dir) = create_test_runtime();
+
+        assert!(!runtime.shutdown_token.is_cancelled());
+        runtime.shutdown(None).await.unwrap();
+        assert!(runtime.shutdown_token.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn test_shutdown_with_empty_active_boxes() {
+        let (runtime, _dir) = create_test_runtime();
+
+        // No boxes created — shutdown should complete cleanly
+        let result = runtime.shutdown(Some(1)).await;
+        assert!(result.is_ok());
+    }
+
+    // ====================================================================
+    // shutdown_sync() tests
+    // ====================================================================
+
+    #[test]
+    fn test_shutdown_sync_cancels_token() {
+        let (runtime, _dir) = create_test_runtime();
+
+        assert!(!runtime.shutdown_token.is_cancelled());
+        runtime.shutdown_sync();
+        assert!(runtime.shutdown_token.is_cancelled());
+    }
+
+    #[test]
+    fn test_shutdown_sync_is_idempotent() {
+        let (runtime, _dir) = create_test_runtime();
+
+        runtime.shutdown_sync();
+        assert!(runtime.shutdown_token.is_cancelled());
+
+        // Second call should be no-op (token already cancelled)
+        runtime.shutdown_sync();
+        assert!(runtime.shutdown_token.is_cancelled());
+    }
+
+    #[test]
+    fn test_shutdown_sync_stops_non_detached_running_box() {
+        let (runtime, _dir) = create_test_runtime();
+
+        // Spawn a dummy process to simulate a shim
+        let (pid, mut child) = spawn_dummy_process();
+
+        // Insert a non-detached Running box into the DB
+        let config = test_box_config(false); // detach=false
+        let state = running_state(pid);
+        runtime
+            .box_manager
+            .add_box(&config, &state)
+            .expect("Failed to add box");
+
+        // shutdown_sync should kill the process
+        runtime.shutdown_sync();
+
+        // Process should be dead
+        let wait_result = child.try_wait().expect("Failed to check child");
+        // Give a moment for the process to die
+        if wait_result.is_none() {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+        assert!(
+            !crate::util::is_process_alive(pid),
+            "Non-detached process should be killed by shutdown_sync"
+        );
+
+        // Verify DB state updated to Stopped
+        let (_, updated_state) = runtime
+            .box_manager
+            .box_by_id(&config.id)
+            .expect("Failed to query box")
+            .expect("Box should exist");
+        assert_eq!(updated_state.status, BoxStatus::Stopped);
+        assert!(updated_state.pid.is_none());
+    }
+
+    #[test]
+    fn test_shutdown_sync_skips_detached_box() {
+        let (runtime, _dir) = create_test_runtime();
+
+        // Spawn a dummy process to simulate a detached shim
+        let (pid, mut child) = spawn_dummy_process();
+
+        // Insert a detached Running box into the DB
+        let config = test_box_config(true); // detach=true
+        let state = running_state(pid);
+        runtime
+            .box_manager
+            .add_box(&config, &state)
+            .expect("Failed to add box");
+
+        // shutdown_sync should skip detached boxes
+        runtime.shutdown_sync();
+
+        // Process should still be alive
+        assert!(
+            crate::util::is_process_alive(pid),
+            "Detached process should NOT be killed by shutdown_sync"
+        );
+
+        // Verify DB state NOT changed (still Running)
+        let (_, db_state) = runtime
+            .box_manager
+            .box_by_id(&config.id)
+            .expect("Failed to query box")
+            .expect("Box should exist");
+        assert_eq!(db_state.status, BoxStatus::Running);
+        assert_eq!(db_state.pid, Some(pid));
+
+        // Cleanup
+        child.kill().ok();
+        child.wait().ok();
+    }
+
+    #[test]
+    fn test_shutdown_sync_skips_stopped_box() {
+        let (runtime, _dir) = create_test_runtime();
+
+        // Insert a Stopped box into the DB
+        let config = test_box_config(false);
+        let mut state = BoxState::new();
+        state.status = BoxStatus::Stopped;
+        state.pid = None;
+        runtime
+            .box_manager
+            .add_box(&config, &state)
+            .expect("Failed to add box");
+
+        // shutdown_sync should skip non-running boxes
+        runtime.shutdown_sync();
+
+        // Verify DB state unchanged
+        let (_, db_state) = runtime
+            .box_manager
+            .box_by_id(&config.id)
+            .expect("Failed to query box")
+            .expect("Box should exist");
+        assert_eq!(db_state.status, BoxStatus::Stopped);
+    }
+
+    #[test]
+    fn test_shutdown_sync_skips_dead_pid() {
+        let (runtime, _dir) = create_test_runtime();
+
+        // Use an invalid PID (not a real process)
+        let dead_pid = 999_999_999u32;
+
+        let config = test_box_config(false);
+        let state = running_state(dead_pid);
+        runtime
+            .box_manager
+            .add_box(&config, &state)
+            .expect("Failed to add box");
+
+        // shutdown_sync should skip dead PIDs without errors
+        runtime.shutdown_sync();
+
+        // DB state should NOT be updated (process was already dead)
+        let (_, db_state) = runtime
+            .box_manager
+            .box_by_id(&config.id)
+            .expect("Failed to query box")
+            .expect("Box should exist");
+        assert_eq!(db_state.status, BoxStatus::Running);
+    }
+
+    #[test]
+    fn test_shutdown_sync_mixed_boxes() {
+        let (runtime, _dir) = create_test_runtime();
+
+        // Spawn two dummy processes
+        let (pid_regular, mut child_regular) = spawn_dummy_process();
+        let (pid_detached, mut child_detached) = spawn_dummy_process();
+
+        // Non-detached running box
+        let config_regular = test_box_config(false);
+        let state_regular = running_state(pid_regular);
+        runtime
+            .box_manager
+            .add_box(&config_regular, &state_regular)
+            .unwrap();
+
+        // Detached running box
+        let config_detached = test_box_config(true);
+        let state_detached = running_state(pid_detached);
+        runtime
+            .box_manager
+            .add_box(&config_detached, &state_detached)
+            .unwrap();
+
+        // Stopped box (should be skipped regardless)
+        let config_stopped = test_box_config(false);
+        let mut state_stopped = BoxState::new();
+        state_stopped.status = BoxStatus::Stopped;
+        runtime
+            .box_manager
+            .add_box(&config_stopped, &state_stopped)
+            .unwrap();
+
+        runtime.shutdown_sync();
+
+        // Non-detached box: killed, DB updated
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert!(
+            !crate::util::is_process_alive(pid_regular),
+            "Non-detached box should be killed"
+        );
+        let (_, db_regular) = runtime
+            .box_manager
+            .box_by_id(&config_regular.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(db_regular.status, BoxStatus::Stopped);
+
+        // Detached box: still alive, DB unchanged
+        assert!(
+            crate::util::is_process_alive(pid_detached),
+            "Detached box should survive"
+        );
+        let (_, db_detached) = runtime
+            .box_manager
+            .box_by_id(&config_detached.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(db_detached.status, BoxStatus::Running);
+
+        // Stopped box: DB unchanged
+        let (_, db_stopped) = runtime
+            .box_manager
+            .box_by_id(&config_stopped.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(db_stopped.status, BoxStatus::Stopped);
+
+        // Cleanup
+        child_regular.kill().ok();
+        child_regular.wait().ok();
+        child_detached.kill().ok();
+        child_detached.wait().ok();
+    }
+
+    // ====================================================================
+    // Drop tests
+    // ====================================================================
+
+    #[test]
+    fn test_drop_triggers_shutdown_sync_when_not_cancelled() {
+        let (runtime, _dir) = create_test_runtime();
+
+        // Spawn a dummy process
+        let (pid, mut child) = spawn_dummy_process();
+
+        let config = test_box_config(false);
+        let state = running_state(pid);
+        runtime.box_manager.add_box(&config, &state).unwrap();
+
+        // Drop the runtime without calling shutdown
+        drop(runtime);
+
+        // Process should be killed by Drop → shutdown_sync
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert!(
+            !crate::util::is_process_alive(pid),
+            "Drop should trigger shutdown_sync and kill the process"
+        );
+
+        // Cleanup
+        child.kill().ok();
+        child.wait().ok();
+    }
+
+    #[tokio::test]
+    async fn test_drop_skips_when_shutdown_already_called() {
+        let (runtime, _dir) = create_test_runtime();
+
+        // Spawn a dummy process for a detached box
+        let (pid, mut child) = spawn_dummy_process();
+
+        let config = test_box_config(true); // detached
+        let state = running_state(pid);
+        runtime.box_manager.add_box(&config, &state).unwrap();
+
+        // Call shutdown explicitly (async) — skips detached boxes
+        runtime.shutdown(None).await.unwrap();
+
+        // Token is now cancelled
+        assert!(runtime.shutdown_token.is_cancelled());
+
+        // Drop should be no-op since token is already cancelled
+        drop(runtime);
+
+        // Detached process should still be alive
+        assert!(
+            crate::util::is_process_alive(pid),
+            "Detached process should survive both shutdown() and Drop"
+        );
+
+        // Cleanup
+        child.kill().ok();
+        child.wait().ok();
+    }
+
+    // ====================================================================
+    // shutdown() detach filter tests (async, uses in-memory cache)
+    // ====================================================================
+
+    #[tokio::test]
+    async fn test_shutdown_with_no_boxes_returns_ok() {
+        let (runtime, _dir) = create_test_runtime();
+        let result = runtime.shutdown(None).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_shutdown_then_shutdown_sync_is_noop() {
+        let (runtime, _dir) = create_test_runtime();
+
+        // Async shutdown first
+        runtime.shutdown(None).await.unwrap();
+        assert!(runtime.shutdown_token.is_cancelled());
+
+        // Sync shutdown should be no-op
+        runtime.shutdown_sync();
+        assert!(runtime.shutdown_token.is_cancelled());
+    }
+
+    #[test]
+    fn test_shutdown_sync_then_async_shutdown_is_noop() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        let (runtime, _dir) = create_test_runtime();
+
+        // Sync shutdown first
+        runtime.shutdown_sync();
+        assert!(runtime.shutdown_token.is_cancelled());
+
+        // Async shutdown should be no-op
+        let result = rt.block_on(runtime.shutdown(None));
+        assert!(result.is_ok());
+    }
+
+    // ====================================================================
+    // PID file removal
+    // ====================================================================
+
+    #[test]
+    fn test_shutdown_sync_removes_pid_file() {
+        let (runtime, _dir) = create_test_runtime();
+
+        let (pid, mut child) = spawn_dummy_process();
+
+        // Use config with box_home aligned to runtime layout
+        let config = test_box_config_in_layout(false, &runtime);
+        let state = running_state(pid);
+
+        // Create the box directory and PID file
+        let box_dir = runtime.layout.boxes_dir().join(config.id.as_str());
+        std::fs::create_dir_all(&box_dir).expect("Failed to create box directory");
+        let pid_file = box_dir.join("shim.pid");
+        std::fs::write(&pid_file, pid.to_string()).expect("Failed to write PID file");
+        assert!(pid_file.exists(), "PID file should exist before shutdown");
+
+        runtime
+            .box_manager
+            .add_box(&config, &state)
+            .expect("Failed to add box");
+
+        runtime.shutdown_sync();
+
+        // PID file should be removed
+        assert!(
+            !pid_file.exists(),
+            "PID file should be removed after shutdown_sync"
+        );
+
+        // Process should be dead
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert!(!crate::util::is_process_alive(pid));
+
+        // DB should be updated to Stopped
+        let (_, db_state) = runtime.box_manager.box_by_id(&config.id).unwrap().unwrap();
+        assert_eq!(db_state.status, BoxStatus::Stopped);
+        assert!(db_state.pid.is_none());
+
+        child.kill().ok();
+        child.wait().ok();
+    }
+
+    // ====================================================================
+    // Edge case: Running box with no PID
+    // ====================================================================
+
+    #[test]
+    fn test_shutdown_sync_skips_running_box_with_no_pid() {
+        let (runtime, _dir) = create_test_runtime();
+
+        // Running box with pid=None (anomalous but possible after crash)
+        let config = test_box_config(false);
+        let mut state = BoxState::new();
+        state.status = BoxStatus::Running;
+        state.pid = None;
+
+        runtime
+            .box_manager
+            .add_box(&config, &state)
+            .expect("Failed to add box");
+
+        // Should not panic — the `let Some(pid) = state.pid else { continue }` skips it
+        runtime.shutdown_sync();
+
+        // DB state should remain unchanged (continue skips mark_stop)
+        let (_, db_state) = runtime.box_manager.box_by_id(&config.id).unwrap().unwrap();
+        assert_eq!(db_state.status, BoxStatus::Running);
+        assert!(db_state.pid.is_none());
+    }
+
+    // ====================================================================
+    // Force-kill path (SIGTERM timeout → SIGKILL)
+    // ====================================================================
+
+    #[test]
+    fn test_shutdown_sync_force_kills_stuck_process() {
+        let (runtime, _dir) = create_test_runtime();
+
+        // Spawn a process that ignores SIGTERM
+        let (pid, mut child) = spawn_sigterm_ignoring_process();
+
+        let config = test_box_config(false);
+        let state = running_state(pid);
+        runtime.box_manager.add_box(&config, &state).unwrap();
+
+        let start = std::time::Instant::now();
+        runtime.shutdown_sync();
+        let elapsed = start.elapsed();
+
+        // Should have waited ~5s before force killing
+        assert!(
+            elapsed >= std::time::Duration::from_secs(4),
+            "Expected ~5s timeout before force kill, got {:?}",
+            elapsed
+        );
+
+        // Process must be dead (SIGKILL)
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert!(
+            !crate::util::is_process_alive(pid),
+            "Process should be force-killed after SIGTERM timeout"
+        );
+
+        // DB should be updated to Stopped
+        let (_, db_state) = runtime.box_manager.box_by_id(&config.id).unwrap().unwrap();
+        assert_eq!(db_state.status, BoxStatus::Stopped);
+
+        child.kill().ok();
+        child.wait().ok();
+    }
+
+    // ====================================================================
+    // Backend trait delegation
+    // ====================================================================
+
+    #[test]
+    fn test_shutdown_sync_delegates_through_local_runtime() {
+        let (runtime, _dir) = create_test_runtime();
+
+        let (pid, mut child) = spawn_dummy_process();
+
+        let config = test_box_config(false);
+        let state = running_state(pid);
+        runtime.box_manager.add_box(&config, &state).unwrap();
+
+        // Wrap in LocalRuntime (the backend wrapper) and call via trait
+        let local = LocalRuntime(Arc::clone(&runtime));
+        RuntimeBackend::shutdown_sync(&local);
+
+        // Token should be cancelled (proves delegation to RuntimeImpl)
+        assert!(runtime.shutdown_token.is_cancelled());
+
+        // Process should be dead
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert!(!crate::util::is_process_alive(pid));
+
+        // DB should be updated
+        let (_, db_state) = runtime.box_manager.box_by_id(&config.id).unwrap().unwrap();
+        assert_eq!(db_state.status, BoxStatus::Stopped);
+
+        child.kill().ok();
+        child.wait().ok();
+    }
+
+    // ====================================================================
+    // Post-shutdown operation rejection
+    // ====================================================================
+
+    #[tokio::test]
+    async fn test_create_after_shutdown_returns_stopped() {
+        let (runtime, _dir) = create_test_runtime();
+
+        // Shutdown the runtime
+        runtime.shutdown(None).await.unwrap();
+
+        // Attempt to create a box — should be rejected
+        let result = runtime
+            .create_inner(
+                BoxOptions {
+                    rootfs: RootfsSpec::Image("alpine:latest".into()),
+                    ..Default::default()
+                },
+                Some("test-box".into()),
+                false,
+            )
+            .await;
+
+        match result {
+            Err(BoxliteError::Stopped(msg)) => {
+                assert!(
+                    msg.contains("shut down"),
+                    "Error should mention 'shut down': {msg}"
+                );
+            }
+            Err(other) => panic!("Expected Stopped error, got: {other}"),
+            Ok(_) => panic!("create should fail after shutdown"),
+        }
     }
 }

@@ -43,6 +43,10 @@ pub(crate) trait RuntimeBackend: Send + Sync {
     async fn remove(&self, id_or_name: &str, force: bool) -> BoxliteResult<()>;
 
     async fn shutdown(&self, timeout: Option<i32>) -> BoxliteResult<()>;
+
+    /// Synchronous shutdown for atexit/Drop contexts.
+    /// Default no-op (REST backend doesn't manage local processes).
+    fn shutdown_sync(&self) {}
 }
 
 /// Backend abstraction for individual box operations.

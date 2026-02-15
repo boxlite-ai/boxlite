@@ -1,5 +1,6 @@
 //! High-level sandbox runtime structures.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use crate::litebox::LiteBox;
@@ -19,6 +20,20 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 /// This runtime uses `BoxliteOptions::default()` for configuration.
 /// Most applications should use this instead of creating custom runtimes.
 static DEFAULT_RUNTIME: OnceLock<BoxliteRuntime> = OnceLock::new();
+
+/// Flag to ensure atexit handler is only registered once.
+static ATEXIT_INSTALLED: AtomicBool = AtomicBool::new(false);
+
+/// Atexit handler: stops non-detached boxes on normal process exit.
+///
+/// The default runtime is `static` (never drops), so `Drop` won't fire.
+/// This atexit handler covers the normal exit path. Signal handler covers
+/// SIGTERM/SIGINT. Together they ensure all exit paths are handled.
+extern "C" fn shutdown_on_exit() {
+    if let Some(rt) = DEFAULT_RUNTIME.get() {
+        rt.backend.shutdown_sync();
+    }
+}
 // ============================================================================
 // PUBLIC API
 // ============================================================================
@@ -145,6 +160,18 @@ impl BoxliteRuntime {
         let rt = DEFAULT_RUNTIME.get_or_init(|| {
             Self::with_defaults().expect("Failed to initialize default BoxliteRuntime")
         });
+
+        // Register atexit handler (once) for normal exit cleanup.
+        // The default runtime is static (never drops), so Drop won't fire.
+        // This covers normal process exit; signal handler covers SIGTERM/SIGINT.
+        if ATEXIT_INSTALLED
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
+            unsafe {
+                libc::atexit(shutdown_on_exit);
+            }
+        }
 
         // Install signal handler for graceful shutdown.
         // Thread-based: works from any context (sync or async, with or without Tokio).
