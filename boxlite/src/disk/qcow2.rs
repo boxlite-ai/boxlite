@@ -728,7 +728,7 @@ mod tests {
         let qcow2_path = dir.path().join("short.qcow2");
 
         // Write only 10 bytes (less than required 20)
-        std::fs::write(&qcow2_path, &[0u8; 10]).unwrap();
+        std::fs::write(&qcow2_path, [0u8; 10]).unwrap();
 
         let result = read_backing_file_path(&qcow2_path);
         assert!(result.is_err());
