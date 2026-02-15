@@ -104,7 +104,9 @@ impl GuestRootfsManager {
             version_key = %version_key,
             "get_or_create: CACHE MISS — building guest rootfs"
         );
-        let result = self.build_and_install(&image_disk, &digest, &version_key).await;
+        let result = self
+            .build_and_install(&image_disk, &digest, &version_key)
+            .await;
 
         tracing::info!(
             total_ms = total_start.elapsed().as_millis() as u64,
