@@ -7,8 +7,8 @@
 //! For restart (reuse_rootfs=true), opens existing COW disk instead of creating new.
 
 use super::{InitCtx, log_task_error, task_start};
-use crate::disk::{BackingFormat, Disk, DiskFormat, Qcow2Helper, create_ext4_from_dir};
-use crate::images::ContainerImageConfig;
+use crate::disk::{BackingFormat, Disk, DiskFormat, Qcow2Helper};
+use crate::images::{ContainerImageConfig, ImageDiskManager};
 use crate::litebox::init::types::{ContainerRootfsPrepResult, USE_DISK_ROOTFS, USE_OVERLAYFS};
 use crate::pipeline::PipelineTask;
 use crate::runtime::layout::BoxFilesystemLayout;
@@ -167,7 +167,7 @@ async fn run_container_rootfs(
 
     // Prepare rootfs from image
     let rootfs_result = if USE_DISK_ROOTFS {
-        prepare_disk_rootfs(runtime, &image).await?
+        prepare_disk_rootfs(&runtime.image_disk_mgr, &image).await?
     } else if USE_OVERLAYFS {
         prepare_overlayfs_layers(&image).await?
     } else {
@@ -315,99 +315,26 @@ async fn prepare_overlayfs_layers(
     })
 }
 
-/// Prepare disk-based rootfs from image layers.
+/// Prepare disk-based rootfs from image via ImageDiskManager.
 ///
-/// This function:
-/// 1. Checks if a cached base disk image exists for this image
-/// 2. If not, merges layers and creates an ext4 disk image
-/// 3. Returns the path to the base disk for COW overlay creation
+/// Delegates to ImageDiskManager which handles caching, layer merging,
+/// and ext4 creation with staged atomic install.
 async fn prepare_disk_rootfs(
-    runtime: &crate::runtime::SharedRuntimeImpl,
+    image_disk_mgr: &ImageDiskManager,
     image: &crate::images::ImageObject,
 ) -> BoxliteResult<ContainerRootfsPrepResult> {
-    // Check if we already have a cached disk image for this image
-    if let Some(disk) = image.disk_image() {
-        let disk_path = disk.path().to_path_buf();
-        let disk_size = std::fs::metadata(&disk_path)
-            .map(|m| m.len())
-            .unwrap_or(64 * 1024 * 1024);
+    let disk = image_disk_mgr.get_or_create(image).await?;
 
-        tracing::info!(
-            "Using cached disk image: {} ({}MB)",
-            disk_path.display(),
-            disk_size / (1024 * 1024)
-        );
-
-        // Leak the disk to prevent cleanup (it's a cached persistent disk)
-        let _ = disk.leak();
-
-        return Ok(ContainerRootfsPrepResult::DiskImage {
-            base_disk_path: disk_path,
-            disk_size,
-        });
-    }
-
-    // No cached disk - we need to create one from layers
-    tracing::info!("Creating disk image from layers (first run for this image)");
-
-    // Step 1: Extract and merge layers using RootfsBuilder
-    let layer_paths = image.layer_extracted().await?;
-
-    if layer_paths.is_empty() {
-        return Err(BoxliteError::Storage(
-            "No layers found for disk rootfs".into(),
-        ));
-    }
-
-    // Create a temporary directory for merged rootfs within boxlite home (same filesystem as destination)
-    let temp_base = runtime.layout.temp_dir();
-    let temp_dir = tempfile::tempdir_in(&temp_base)
-        .map_err(|e| BoxliteError::Storage(format!("Failed to create temp directory: {}", e)))?;
-    let merged_path = temp_dir.path().join("merged");
-
-    // Use RootfsBuilder to merge layers
-    let builder = crate::rootfs::RootfsBuilder::new();
-    let _prepared = builder.prepare(merged_path.clone(), image).await?;
-
-    tracing::info!(
-        "Merged {} layers into temporary directory",
-        layer_paths.len()
-    );
-
-    // Step 2: Create ext4 disk image from merged rootfs
-    let temp_disk_path = temp_dir.path().join("rootfs.ext4");
-
-    // Use blocking spawn for sync disk creation
-    let merged_clone = merged_path.clone();
-    let disk_path_clone = temp_disk_path.clone();
-    let temp_disk =
-        tokio::task::spawn_blocking(move || create_ext4_from_dir(&merged_clone, &disk_path_clone))
-            .await
-            .map_err(|e| BoxliteError::Internal(format!("Disk creation task failed: {}", e)))??;
-
-    let disk_size = std::fs::metadata(temp_disk.path())
+    let disk_path = disk.path().to_path_buf();
+    let disk_size = std::fs::metadata(&disk_path)
         .map(|m| m.len())
         .unwrap_or(64 * 1024 * 1024);
 
-    tracing::info!(
-        "Created ext4 disk image: {} ({}MB)",
-        temp_disk.path().display(),
-        disk_size / (1024 * 1024)
-    );
-
-    // Step 3: Install disk image to cache
-    let installed_disk = image.install_disk_image(temp_disk).await?;
-    let final_path = installed_disk.path().to_path_buf();
-
-    // Leak the disk to prevent cleanup
-    let _ = installed_disk.leak();
-
-    tracing::info!("Installed disk image to cache: {}", final_path.display());
-
-    // Cleanup: temp_dir is dropped automatically
+    // Ownership stays with cache — prevent drop cleanup
+    let _ = disk.leak();
 
     Ok(ContainerRootfsPrepResult::DiskImage {
-        base_disk_path: final_path,
+        base_disk_path: disk_path,
         disk_size,
     })
 }

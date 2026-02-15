@@ -14,7 +14,6 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::disk::{Disk, DiskFormat};
 use crate::images::archive::extract_layer_tarball_streaming;
 use crate::images::storage::ImageStorage;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
@@ -85,29 +84,6 @@ impl BlobSource {
         .await
         .map_err(|e| BoxliteError::Internal(format!("Extract layers task failed: {}", e)))?
     }
-
-    /// Get cached disk image if available.
-    pub fn disk_image(&self, image_digest: &str) -> Option<Disk> {
-        match self {
-            Self::Store(s) => s.disk_image(image_digest),
-            Self::LocalBundle(l) => l.disk_image(image_digest),
-        }
-    }
-
-    /// Install disk image to source-specific cache.
-    ///
-    /// This method is async because `fs::rename` can block on network filesystems
-    /// or slow storage. Using `spawn_blocking` prevents executor starvation.
-    pub async fn install_disk_image(&self, image_digest: &str, disk: Disk) -> BoxliteResult<Disk> {
-        let source = self.clone();
-        let digest = image_digest.to_string();
-        tokio::task::spawn_blocking(move || match &source {
-            Self::Store(s) => s.install_disk_image(&digest, disk),
-            Self::LocalBundle(l) => l.install_disk_image(&digest, disk),
-        })
-        .await
-        .map_err(|e| BoxliteError::Internal(format!("Install disk image task failed: {}", e)))?
-    }
 }
 
 // ============================================================================
@@ -120,7 +96,6 @@ impl BlobSource {
 /// - Layers: `~/.boxlite/images/layers/sha256-{hash}.tar.gz`
 /// - Configs: `~/.boxlite/images/configs/sha256-{hash}.json`
 /// - Extracted: `~/.boxlite/images/extracted/sha256-{hash}/`
-/// - Disk images: `~/.boxlite/images/disk-images/sha256-{hash}.ext4`
 #[derive(Clone, Debug)]
 pub struct StoreBlobSource {
     /// Shared reference to image storage
@@ -166,59 +141,6 @@ impl StoreBlobSource {
             })
             .collect()
     }
-
-    /// Get cached disk image if available.
-    pub fn disk_image(&self, image_digest: &str) -> Option<Disk> {
-        self.storage
-            .find_disk_image(image_digest)
-            .map(|(path, format)| Disk::new(path, format, true))
-    }
-
-    /// Install disk image to cache.
-    pub fn install_disk_image(&self, image_digest: &str, disk: Disk) -> BoxliteResult<Disk> {
-        let disk_format = disk.format();
-        let target_path = self.storage.disk_image_path(image_digest, disk_format);
-
-        // Ensure parent directory exists
-        if let Some(parent) = target_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                BoxliteError::Storage(format!(
-                    "Failed to create disk image directory {}: {}",
-                    parent.display(),
-                    e
-                ))
-            })?;
-        }
-
-        // If target already exists, return it (idempotent)
-        if target_path.exists() {
-            tracing::debug!("Disk image already installed: {}", target_path.display());
-            let _ = disk.leak();
-            return Ok(Disk::new(target_path, disk_format, true));
-        }
-
-        let source_path = disk.path().to_path_buf();
-
-        // Atomic rename
-        std::fs::rename(&source_path, &target_path).map_err(|e| {
-            BoxliteError::Storage(format!(
-                "Failed to install disk image from {} to {}: {}",
-                source_path.display(),
-                target_path.display(),
-                e
-            ))
-        })?;
-
-        let _ = disk.leak();
-
-        tracing::info!(
-            "Installed disk image: {} -> {}",
-            source_path.display(),
-            target_path.display()
-        );
-
-        Ok(Disk::new(target_path, disk_format, true))
-    }
 }
 
 // ============================================================================
@@ -228,12 +150,11 @@ impl StoreBlobSource {
 /// Blob source for local OCI bundles.
 ///
 /// Reads blobs directly from the bundle directory and caches extracted
-/// layers and disk images in a namespaced directory to prevent cache
-/// contamination with trusted store sources.
+/// layers in a namespaced directory to prevent cache contamination
+/// with trusted store sources.
 ///
 /// Cache layout:
 /// - Extracted: `~/.boxlite/images/local/{bundle_hash}/extracted/sha256-{hash}/`
-/// - Disk images: `~/.boxlite/images/local/{bundle_hash}/disk-images/sha256-{hash}.ext4`
 #[derive(Clone, Debug)]
 pub struct LocalBundleBlobSource {
     /// Path to the OCI bundle directory
@@ -355,80 +276,6 @@ impl LocalBundleBlobSource {
 
         Ok(())
     }
-
-    /// Get path to disk image in cache.
-    fn disk_image_path(&self, image_digest: &str, format: DiskFormat) -> PathBuf {
-        let filename = image_digest.replace(':', "-");
-        self.cache_dir
-            .join("disk-images")
-            .join(format!("{}.{}", filename, format.as_str()))
-    }
-
-    /// Get cached disk image if available.
-    pub fn disk_image(&self, image_digest: &str) -> Option<Disk> {
-        // Check for ext4 format first
-        let ext4_path = self.disk_image_path(image_digest, DiskFormat::Ext4);
-        if ext4_path.exists() {
-            return Some(Disk::new(ext4_path, DiskFormat::Ext4, true));
-        }
-
-        // Check for qcow2 format
-        let qcow2_path = self.disk_image_path(image_digest, DiskFormat::Qcow2);
-        if qcow2_path.exists() {
-            return Some(Disk::new(qcow2_path, DiskFormat::Qcow2, true));
-        }
-
-        None
-    }
-
-    /// Install disk image to namespaced cache.
-    pub fn install_disk_image(&self, image_digest: &str, disk: Disk) -> BoxliteResult<Disk> {
-        let disk_format = disk.format();
-        let target_path = self.disk_image_path(image_digest, disk_format);
-
-        // Ensure parent directory exists
-        if let Some(parent) = target_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                BoxliteError::Storage(format!(
-                    "Failed to create local disk cache directory {}: {}",
-                    parent.display(),
-                    e
-                ))
-            })?;
-        }
-
-        // If target already exists, return it (idempotent)
-        if target_path.exists() {
-            tracing::debug!(
-                "Disk image already installed (local): {}",
-                target_path.display()
-            );
-            let _ = disk.leak();
-            return Ok(Disk::new(target_path, disk_format, true));
-        }
-
-        let source_path = disk.path().to_path_buf();
-
-        // Atomic rename
-        std::fs::rename(&source_path, &target_path).map_err(|e| {
-            BoxliteError::Storage(format!(
-                "Failed to install disk image from {} to {}: {}",
-                source_path.display(),
-                target_path.display(),
-                e
-            ))
-        })?;
-
-        let _ = disk.leak();
-
-        tracing::info!(
-            "Installed disk image (local): {} -> {}",
-            source_path.display(),
-            target_path.display()
-        );
-
-        Ok(Disk::new(target_path, disk_format, true))
-    }
 }
 
 // ============================================================================
@@ -489,19 +336,6 @@ mod tests {
         assert!(path.starts_with("/images/local/abc12345-def67890"));
         assert!(path.to_string_lossy().contains("extracted"));
         assert!(path.to_string_lossy().contains("sha256-layer123"));
-    }
-
-    #[test]
-    fn test_local_bundle_disk_image_path() {
-        let source = LocalBundleBlobSource::new(
-            PathBuf::from("/my/bundle"),
-            PathBuf::from("/images/local/abc12345-def67890"),
-        );
-
-        let path = source.disk_image_path("sha256:image123", crate::disk::DiskFormat::Ext4);
-        assert!(path.starts_with("/images/local/abc12345-def67890"));
-        assert!(path.to_string_lossy().contains("disk-images"));
-        assert!(path.to_string_lossy().ends_with(".ext4"));
     }
 
     #[test]

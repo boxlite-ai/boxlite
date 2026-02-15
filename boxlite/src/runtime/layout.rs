@@ -138,6 +138,14 @@ impl FilesystemLayout {
         self.home_dir.join("tmp")
     }
 
+    /// Versioned guest rootfs cache directory: ~/.boxlite/rootfs
+    ///
+    /// Contains guest rootfs disks (image + injected boxlite-guest binary),
+    /// versioned by image digest and guest binary hash.
+    pub fn guest_rootfs_dir(&self) -> PathBuf {
+        self.home_dir.join("rootfs")
+    }
+
     /// Initialize the filesystem structure.
     ///
     /// Creates necessary directories (home_dir, sockets, images, etc.).
@@ -151,11 +159,68 @@ impl FilesystemLayout {
         std::fs::create_dir_all(self.temp_dir())
             .map_err(|e| BoxliteError::Storage(format!("failed to create temp dir: {e}")))?;
 
+        std::fs::create_dir_all(self.guest_rootfs_dir())
+            .map_err(|e| BoxliteError::Storage(format!("failed to create rootfs dir: {e}")))?;
+
         std::fs::create_dir_all(self.image_layers_dir())
             .map_err(|e| BoxliteError::Storage(format!("failed to create layers dir: {e}")))?;
 
         std::fs::create_dir_all(self.image_manifests_dir())
             .map_err(|e| BoxliteError::Storage(format!("failed to create manifests dir: {e}")))?;
+
+        std::fs::create_dir_all(self.image_layout().disk_images_dir())
+            .map_err(|e| BoxliteError::Storage(format!("failed to create disk-images dir: {e}")))?;
+
+        self.validate_same_filesystem()?;
+
+        Ok(())
+    }
+
+    /// Validate that temp, rootfs, and disk-images directories are on the same filesystem.
+    ///
+    /// This is required for atomic `rename(2)` in staged install operations.
+    /// Refuse to start if directories span multiple filesystems.
+    fn validate_same_filesystem(&self) -> BoxliteResult<()> {
+        use std::os::unix::fs::MetadataExt;
+
+        let temp_dev = std::fs::metadata(self.temp_dir())
+            .map_err(|e| {
+                BoxliteError::Storage(format!(
+                    "Failed to stat temp dir {}: {}",
+                    self.temp_dir().display(),
+                    e
+                ))
+            })?
+            .dev();
+
+        let rootfs_dev = std::fs::metadata(self.guest_rootfs_dir())
+            .map_err(|e| {
+                BoxliteError::Storage(format!(
+                    "Failed to stat rootfs dir {}: {}",
+                    self.guest_rootfs_dir().display(),
+                    e
+                ))
+            })?
+            .dev();
+
+        let images_dev = std::fs::metadata(self.image_layout().disk_images_dir())
+            .map_err(|e| {
+                BoxliteError::Storage(format!(
+                    "Failed to stat disk-images dir {}: {}",
+                    self.image_layout().disk_images_dir().display(),
+                    e
+                ))
+            })?
+            .dev();
+
+        if temp_dev != rootfs_dev || temp_dev != images_dev {
+            return Err(BoxliteError::Storage(format!(
+                "tmp, rootfs, and disk-images directories must be on the same filesystem \
+                 for atomic rename. Found devices: tmp={}, rootfs={}, disk-images={}. \
+                 Check your BOXLITE_HOME configuration.",
+                temp_dev, rootfs_dev, images_dev
+            )));
+        }
 
         Ok(())
     }
@@ -655,5 +720,45 @@ mod tests {
         // Verify the socket filename
         assert_eq!(path_a.file_name().unwrap(), "net.sock");
         assert_eq!(path_b.file_name().unwrap(), "net.sock");
+    }
+
+    #[test]
+    fn test_guest_rootfs_dir() {
+        let layout = FilesystemLayout::new(
+            PathBuf::from("/home/user/.boxlite"),
+            FsLayoutConfig::without_bind_mount(),
+        );
+        assert_eq!(
+            layout.guest_rootfs_dir(),
+            PathBuf::from("/home/user/.boxlite/rootfs")
+        );
+    }
+
+    #[test]
+    fn test_prepare_creates_guest_rootfs_dir() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let layout = FilesystemLayout::new(
+            dir.path().to_path_buf(),
+            FsLayoutConfig::without_bind_mount(),
+        );
+        layout.prepare().unwrap();
+
+        assert!(layout.guest_rootfs_dir().exists());
+        assert!(layout.temp_dir().exists());
+        assert!(layout.boxes_dir().exists());
+    }
+
+    #[test]
+    fn test_prepare_validates_same_filesystem() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let layout = FilesystemLayout::new(
+            dir.path().to_path_buf(),
+            FsLayoutConfig::without_bind_mount(),
+        );
+        // All dirs under same temp dir → same filesystem → should pass
+        layout.prepare().unwrap();
+
+        // Verify the validation passes independently
+        layout.validate_same_filesystem().unwrap();
     }
 }

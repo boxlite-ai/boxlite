@@ -4,14 +4,14 @@
 //! Then creates or reuses per-box COW overlay disk.
 
 use super::{InitCtx, log_task_error, task_start};
-use crate::disk::{BackingFormat, Disk, DiskFormat, Qcow2Helper, create_ext4_from_dir};
+use crate::disk::{BackingFormat, Disk, DiskFormat, Qcow2Helper};
+use crate::images::ImageDiskManager;
 use crate::pipeline::PipelineTask;
-use crate::rootfs::RootfsBuilder;
 use crate::runtime::constants::images;
 use crate::runtime::guest_rootfs::{GuestRootfs, Strategy};
+use crate::runtime::guest_rootfs_manager::GuestRootfsManager;
 use crate::runtime::layout::BoxFilesystemLayout;
 use crate::runtime::rt_impl::SharedRuntimeImpl;
-use crate::util;
 use async_trait::async_trait;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
@@ -64,7 +64,13 @@ async fn run_guest_rootfs(
 
             let base_image = pull_guest_rootfs_image(runtime).await?;
             let env = extract_env_from_image(&base_image).await?;
-            let guest_rootfs = prepare_guest_rootfs(runtime, &base_image, env).await?;
+            let guest_rootfs = prepare_guest_rootfs(
+                &runtime.guest_rootfs_mgr,
+                &runtime.image_disk_mgr,
+                &base_image,
+                env,
+            )
+            .await?;
 
             tracing::info!("Bootstrap guest rootfs ready: {:?}", guest_rootfs.strategy);
 
@@ -159,116 +165,31 @@ fn create_or_reuse_cow_disk(
     }
 }
 
-/// Prepare guest rootfs as a disk image.
+/// Prepare guest rootfs as a versioned disk image.
+///
+/// Uses the two-stage pipeline:
+/// 1. `ImageDiskManager`: pure image layers → ext4 disk (cached by image digest)
+/// 2. `GuestRootfsManager`: image disk + boxlite-guest → versioned rootfs (cached by digest+guest hash)
 async fn prepare_guest_rootfs(
-    runtime: &crate::runtime::SharedRuntimeImpl,
+    guest_rootfs_mgr: &GuestRootfsManager,
+    image_disk_mgr: &ImageDiskManager,
     base_image: &crate::images::ImageObject,
     env: Vec<(String, String)>,
 ) -> BoxliteResult<GuestRootfs> {
-    // Check if we already have a cached disk image
-    if let Some(disk) = base_image.disk_image() {
-        // Verify guest binary is not newer than cached disk
-        if is_cache_valid(disk.path())? {
-            let disk_path = disk.path().to_path_buf();
-            tracing::info!(
-                "Using cached guest rootfs disk image: {}",
-                disk_path.display()
-            );
+    let rootfs_disk = guest_rootfs_mgr
+        .get_or_create(base_image, image_disk_mgr)
+        .await?;
 
-            // Leak the disk to prevent cleanup (it's a cached persistent disk)
-            let _ = disk.leak();
+    let disk_path = rootfs_disk.path().to_path_buf();
 
-            return GuestRootfs::new(
-                disk_path.clone(),
-                Strategy::Disk {
-                    disk_path,
-                    device_path: None, // Set later in build_disk_attachments
-                },
-                None,
-                None,
-                env,
-            );
-        }
-
-        // Cache invalid - delete and recreate
-        tracing::info!(
-            "Guest binary updated, invalidating cached guest rootfs disk: {}",
-            disk.path().display()
-        );
-        std::fs::remove_file(disk.path()).ok();
-    }
-
-    // No cached disk - create from layers
-    tracing::info!("Creating guest rootfs disk image from layers (first run)");
-
-    // Extract layers to temp directory within boxlite home (same filesystem as destination)
-    let temp_base = runtime.layout.temp_dir();
-    let temp_dir = tempfile::tempdir_in(&temp_base)
-        .map_err(|e| BoxliteError::Storage(format!("Failed to create temp directory: {}", e)))?;
-    let merged_path = temp_dir.path().join("merged");
-
-    let builder = RootfsBuilder::new();
-    let prepared = builder.prepare(merged_path.clone(), base_image).await?;
-
-    // Inject guest binary
-    util::inject_guest_binary(&prepared.path)?;
-
-    // Verify guest binary
-    let guest_bin_path = prepared.path.join("boxlite/bin/boxlite-guest");
-    if guest_bin_path.exists() {
-        tracing::info!(
-            "Guest binary at: {} ({} bytes)",
-            guest_bin_path.display(),
-            std::fs::metadata(&guest_bin_path)
-                .map(|m| m.len())
-                .unwrap_or(0)
-        );
-    } else {
-        return Err(BoxliteError::Storage(format!(
-            "Guest binary not found at: {}",
-            guest_bin_path.display()
-        )));
-    }
-
-    // Create ext4 disk from merged directory
-    let temp_disk_path = temp_dir.path().join("guest-rootfs.ext4");
-    let merged_clone = prepared.path.clone();
-    let disk_clone = temp_disk_path.clone();
-    let temp_disk =
-        tokio::task::spawn_blocking(move || create_ext4_from_dir(&merged_clone, &disk_clone))
-            .await
-            .map_err(|e| BoxliteError::Internal(format!("Disk creation task failed: {}", e)))??;
-
-    let disk_size = std::fs::metadata(temp_disk.path())
-        .map(|m| m.len())
-        .unwrap_or(0);
-
-    tracing::info!(
-        "Created guest rootfs disk: {} ({}MB)",
-        temp_disk.path().display(),
-        disk_size / (1024 * 1024)
-    );
-
-    // Install disk image to cache
-    // TODO(@DorianZheng) Shouldn't inject disk image here, consider use local bundle blob source instead.
-    let installed_disk = base_image.install_disk_image(temp_disk).await?;
-    let final_path = installed_disk.path().to_path_buf();
-
-    // Leak the disk to prevent cleanup
-    let _ = installed_disk.leak();
-
-    tracing::info!(
-        "Installed guest rootfs disk to cache: {}",
-        final_path.display()
-    );
-
-    // temp_dir is dropped here, cleaning up the merged directory
+    // Ownership transfers to GuestRootfs/OnceCell — prevent drop cleanup
+    let _ = rootfs_disk.leak();
 
     GuestRootfs::new(
-        final_path.clone(),
+        disk_path.clone(),
         Strategy::Disk {
-            disk_path: final_path,
-            device_path: None, // Set later in build_disk_attachments
+            disk_path,
+            device_path: None,
         },
         None,
         None,
@@ -277,7 +198,7 @@ async fn prepare_guest_rootfs(
 }
 
 async fn pull_guest_rootfs_image(
-    runtime: &crate::runtime::SharedRuntimeImpl,
+    runtime: &SharedRuntimeImpl,
 ) -> BoxliteResult<crate::images::ImageObject> {
     // ImageManager has internal locking - direct access
     runtime.image_manager.pull(images::INIT_ROOTFS).await
@@ -308,35 +229,4 @@ async fn extract_env_from_image(
     };
 
     Ok(env)
-}
-
-/// Check if cached guest rootfs disk is still valid.
-///
-/// Returns false if the current guest binary is newer than the cached disk,
-/// indicating the cache should be invalidated and recreated.
-fn is_cache_valid(cache_path: &std::path::Path) -> BoxliteResult<bool> {
-    let guest_bin = util::find_binary("boxlite-guest")?;
-
-    let guest_mtime = std::fs::metadata(&guest_bin)
-        .and_then(|m| m.modified())
-        .map_err(|e| {
-            BoxliteError::Storage(format!(
-                "Failed to get guest binary mtime {}: {}",
-                guest_bin.display(),
-                e
-            ))
-        })?;
-
-    let cache_mtime = std::fs::metadata(cache_path)
-        .and_then(|m| m.modified())
-        .map_err(|e| {
-            BoxliteError::Storage(format!(
-                "Failed to get cache mtime {}: {}",
-                cache_path.display(),
-                e
-            ))
-        })?;
-
-    // Cache is valid if it's newer than the guest binary
-    Ok(cache_mtime >= guest_mtime)
 }

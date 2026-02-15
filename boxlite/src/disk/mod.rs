@@ -11,6 +11,6 @@ pub(crate) mod ext4;
 mod image;
 mod qcow2;
 
-pub use ext4::create_ext4_from_dir;
+pub use ext4::{create_ext4_from_dir, inject_file_into_ext4};
 pub use image::{Disk, DiskFormat};
-pub use qcow2::{BackingFormat, Qcow2Helper};
+pub use qcow2::{BackingFormat, Qcow2Helper, read_backing_file_path};

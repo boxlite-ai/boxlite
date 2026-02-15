@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 /// Disk image format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum DiskFormat {
     /// Ext4 filesystem disk image.
     Ext4,
@@ -13,32 +14,23 @@ pub enum DiskFormat {
     Qcow2,
 }
 
-impl DiskFormat {
-    /// Get string representation of this format.
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            DiskFormat::Ext4 => "ext4",
-            DiskFormat::Qcow2 => "qcow2",
-        }
-    }
-}
-
 /// RAII-managed disk image.
 ///
 /// Automatically deletes the disk file when dropped (unless persistent=true).
 pub struct Disk {
     path: PathBuf,
+    #[allow(dead_code)]
     format: DiskFormat,
     /// If true, disk will NOT be deleted on drop (used for base disks)
     persistent: bool,
 }
 
 impl Disk {
-    /// Create a new Disk from path.
+    /// Create a new Disk from path and format.
     ///
     /// # Arguments
     /// * `path` - Path to the disk file
-    /// * `format` - Disk format (Ext4 or Qcow2)
+    /// * `format` - Disk image format
     /// * `persistent` - If true, disk won't be deleted on drop
     pub fn new(path: PathBuf, format: DiskFormat, persistent: bool) -> Self {
         Self {
@@ -54,6 +46,7 @@ impl Disk {
     }
 
     /// Get the disk format.
+    #[allow(dead_code)]
     pub fn format(&self) -> DiskFormat {
         self.format
     }
@@ -62,7 +55,6 @@ impl Disk {
     ///
     /// Use when transferring ownership elsewhere or when cleanup
     /// should be handled manually.
-    #[allow(dead_code)]
     pub fn leak(self) -> PathBuf {
         let path = self.path.clone();
         std::mem::forget(self);

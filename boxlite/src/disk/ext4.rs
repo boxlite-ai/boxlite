@@ -1,5 +1,6 @@
 use crate::util;
 use boxlite_shared::{BoxliteError, BoxliteResult};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use walkdir::WalkDir;
@@ -224,7 +225,6 @@ fn fix_ownership_with_debugfs(image_path: &Path, source_dir: &Path) -> BoxliteRe
         .map_err(|e| BoxliteError::Storage(format!("Failed to spawn debugfs: {}", e)))?;
 
     // Write commands to stdin
-    use std::io::Write;
     if let Some(mut stdin) = child.stdin.take() {
         stdin.write_all(commands.as_bytes()).map_err(|e| {
             BoxliteError::Storage(format!("Failed to write to debugfs stdin: {}", e))
@@ -253,4 +253,169 @@ fn fix_ownership_with_debugfs(image_path: &Path, source_dir: &Path) -> BoxliteRe
     }
 
     Ok(())
+}
+
+/// Inject a host file into an ext4 disk image using debugfs.
+///
+/// Creates parent directories as needed within the ext4 image,
+/// writes the file, and sets ownership to root (0:0) with mode 0555.
+///
+/// # Arguments
+/// * `image_path` - Path to the ext4 disk image file
+/// * `host_file` - Path to the file on the host to inject
+/// * `guest_path` - Destination path inside the ext4 image (e.g. "boxlite/bin/boxlite-guest")
+pub fn inject_file_into_ext4(
+    image_path: &Path,
+    host_file: &Path,
+    guest_path: &str,
+) -> BoxliteResult<()> {
+    let host_file_str = host_file.to_str().ok_or_else(|| {
+        BoxliteError::Storage(format!("Invalid host file path: {}", host_file.display()))
+    })?;
+
+    let commands = build_inject_commands(host_file_str, guest_path);
+
+    let debugfs = get_debugfs_path();
+
+    let mut child = Command::new(&debugfs)
+        .args(["-w", "-f", "-"])
+        .arg(image_path)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| {
+            BoxliteError::Storage(format!("Failed to spawn debugfs for injection: {}", e))
+        })?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(commands.as_bytes()).map_err(|e| {
+            BoxliteError::Storage(format!("Failed to write to debugfs stdin: {}", e))
+        })?;
+    }
+
+    let output = child
+        .wait_with_output()
+        .map_err(|e| BoxliteError::Storage(format!("Failed to wait for debugfs: {}", e)))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(BoxliteError::Storage(format!(
+            "debugfs injection failed for {} -> {}: {}",
+            host_file.display(),
+            guest_path,
+            stderr
+        )));
+    }
+
+    tracing::debug!(
+        "Injected {} into ext4 image at /{}",
+        host_file.display(),
+        guest_path
+    );
+
+    Ok(())
+}
+
+/// Build debugfs commands for injecting a file into an ext4 image.
+///
+/// Creates parent directories, writes the file, and sets ownership/mode.
+/// Separated from `inject_file_into_ext4` for testability.
+fn build_inject_commands(host_file_str: &str, guest_path: &str) -> String {
+    let mut commands = String::new();
+
+    // Create parent directories
+    let guest_path_obj = Path::new(guest_path);
+    let mut current = PathBuf::new();
+    if let Some(parent) = guest_path_obj.parent() {
+        for component in parent.components() {
+            current.push(component);
+            commands.push_str(&format!("mkdir /{}\n", current.display()));
+        }
+    }
+
+    // Write host file into ext4 image
+    let ext4_dest = format!("/{}", guest_path);
+    commands.push_str(&format!("write {} {}\n", host_file_str, ext4_dest));
+
+    // Set ownership (uid=0, gid=0) and mode (0555 = r-xr-xr-x)
+    commands.push_str(&format!("sif {} uid 0\n", ext4_dest));
+    commands.push_str(&format!("sif {} gid 0\n", ext4_dest));
+    commands.push_str(&format!("sif {} mode 0100555\n", ext4_dest));
+
+    // Set ownership on parent directories too
+    let mut current = PathBuf::new();
+    if let Some(parent) = guest_path_obj.parent() {
+        for component in parent.components() {
+            current.push(component);
+            let dir_path = format!("/{}", current.display());
+            commands.push_str(&format!("sif {} uid 0\n", dir_path));
+            commands.push_str(&format!("sif {} gid 0\n", dir_path));
+        }
+    }
+
+    commands
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_build_inject_commands_nested_path() {
+        let cmds = build_inject_commands("/host/boxlite-guest", "boxlite/bin/boxlite-guest");
+
+        // Should create parent dirs: boxlite, boxlite/bin
+        assert!(cmds.contains("mkdir /boxlite\n"));
+        assert!(cmds.contains("mkdir /boxlite/bin\n"));
+
+        // Should write the file
+        assert!(cmds.contains("write /host/boxlite-guest /boxlite/bin/boxlite-guest\n"));
+
+        // Should set file permissions
+        assert!(cmds.contains("sif /boxlite/bin/boxlite-guest uid 0\n"));
+        assert!(cmds.contains("sif /boxlite/bin/boxlite-guest gid 0\n"));
+        assert!(cmds.contains("sif /boxlite/bin/boxlite-guest mode 0100555\n"));
+
+        // Should set parent dir ownership
+        assert!(cmds.contains("sif /boxlite uid 0\n"));
+        assert!(cmds.contains("sif /boxlite gid 0\n"));
+        assert!(cmds.contains("sif /boxlite/bin uid 0\n"));
+        assert!(cmds.contains("sif /boxlite/bin gid 0\n"));
+    }
+
+    #[test]
+    fn test_build_inject_commands_single_dir() {
+        let cmds = build_inject_commands("/host/file", "dir/file");
+
+        assert!(cmds.contains("mkdir /dir\n"));
+        assert!(cmds.contains("write /host/file /dir/file\n"));
+        assert!(cmds.contains("sif /dir uid 0\n"));
+        assert!(cmds.contains("sif /dir gid 0\n"));
+    }
+
+    #[test]
+    fn test_build_inject_commands_root_level_file() {
+        let cmds = build_inject_commands("/host/file", "file");
+
+        // No mkdir commands for root-level file
+        assert!(!cmds.contains("mkdir"));
+
+        // Should still write and set permissions
+        assert!(cmds.contains("write /host/file /file\n"));
+        assert!(cmds.contains("sif /file uid 0\n"));
+        assert!(cmds.contains("sif /file gid 0\n"));
+        assert!(cmds.contains("sif /file mode 0100555\n"));
+    }
+
+    #[test]
+    fn test_build_inject_commands_deeply_nested() {
+        let cmds = build_inject_commands("/src/bin", "a/b/c/d/bin");
+
+        assert!(cmds.contains("mkdir /a\n"));
+        assert!(cmds.contains("mkdir /a/b\n"));
+        assert!(cmds.contains("mkdir /a/b/c\n"));
+        assert!(cmds.contains("mkdir /a/b/c/d\n"));
+        assert!(cmds.contains("write /src/bin /a/b/c/d/bin\n"));
+    }
 }

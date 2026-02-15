@@ -1,5 +1,5 @@
 use crate::db::{BoxStore, Database};
-use crate::images::ImageManager;
+use crate::images::{ImageDiskManager, ImageManager};
 use crate::init_logging_for;
 use crate::litebox::config::BoxConfig;
 use crate::litebox::{BoxManager, LiteBox, SharedBoxImpl};
@@ -7,6 +7,7 @@ use crate::lock::{FileLockManager, LockManager};
 use crate::metrics::{RuntimeMetrics, RuntimeMetricsStorage};
 use crate::runtime::constants::filenames;
 use crate::runtime::guest_rootfs::GuestRootfs;
+use crate::runtime::guest_rootfs_manager::GuestRootfsManager;
 use crate::runtime::layout::{FilesystemLayout, FsLayoutConfig};
 use crate::runtime::lock::RuntimeLock;
 use crate::runtime::options::{BoxOptions, BoxliteOptions};
@@ -52,6 +53,10 @@ pub struct RuntimeImpl {
     // ========================================================================
     /// Filesystem layout (immutable after init)
     pub(crate) layout: FilesystemLayout,
+    /// Pure image disk cache manager (image layers → ext4, no guest binary)
+    pub(crate) image_disk_mgr: ImageDiskManager,
+    /// Versioned guest rootfs manager (image disk + guest binary → ext4)
+    pub(crate) guest_rootfs_mgr: GuestRootfsManager,
     /// Guest rootfs lazy initialization (Arc<OnceCell>)
     pub(crate) guest_rootfs: Arc<OnceCell<GuestRootfs>>,
     /// Runtime-wide metrics (AtomicU64 based, lock-free)
@@ -189,6 +194,11 @@ impl RuntimeImpl {
             "Initialized lock manager"
         );
 
+        let image_disk_mgr =
+            ImageDiskManager::new(layout.image_layout().disk_images_dir(), layout.temp_dir());
+        let guest_rootfs_mgr =
+            GuestRootfsManager::new(layout.guest_rootfs_dir(), layout.temp_dir());
+
         let inner = Arc::new(Self {
             sync_state: RwLock::new(SynchronizedState {
                 active_boxes_by_id: HashMap::new(),
@@ -197,6 +207,8 @@ impl RuntimeImpl {
             box_manager: BoxManager::new(box_store),
             image_manager,
             layout,
+            image_disk_mgr,
+            guest_rootfs_mgr,
             guest_rootfs: Arc::new(OnceCell::new()),
             runtime_metrics: RuntimeMetricsStorage::new(),
             lock_manager,
@@ -1001,6 +1013,11 @@ impl RuntimeImpl {
             if state.status != original_status {
                 self.box_manager.save_box(box_id, &state)?;
             }
+        }
+
+        // GC unreferenced guest rootfs entries
+        if let Err(e) = self.guest_rootfs_mgr.gc(&self.layout.boxes_dir()) {
+            tracing::warn!("Guest rootfs GC failed: {}", e);
         }
 
         tracing::info!("Box recovery complete");

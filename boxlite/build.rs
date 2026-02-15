@@ -1,7 +1,9 @@
 use regex::Regex;
+use sha2::{Digest, Sha256};
 use std::env;
 use std::fs;
 use std::io;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -559,9 +561,73 @@ fn main() {
         runtime_dir.display()
     );
 
+    // Compute and embed guest binary hash at compile time (best-effort).
+    // Falls back to runtime computation if the binary isn't available yet.
+    compute_guest_hash(&runtime_dir);
+
     // Set rpath for boxlite-shim
     #[cfg(target_os = "macos")]
     println!("cargo:rustc-link-arg=-Wl,-rpath,@loader_path");
     #[cfg(target_os = "linux")]
     println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN");
+}
+
+/// Compute SHA256 hash of the `boxlite-guest` binary and embed it via `cargo:rustc-env`.
+///
+/// Search order:
+/// 1. `runtime_dir` (OUT_DIR/runtime/ — for prebuilt mode)
+/// 2. `target/boxlite-runtime/boxlite-guest` (assembled by `make runtime-debug`)
+///
+/// If the binary isn't found, silently skips — runtime will compute the hash as fallback.
+fn compute_guest_hash(runtime_dir: &Path) {
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+
+    let candidates = [
+        runtime_dir.join("boxlite-guest"),
+        manifest_dir
+            .parent()
+            .map(|root| root.join("target/boxlite-runtime/boxlite-guest"))
+            .unwrap_or_default(),
+    ];
+
+    let guest_path = candidates.iter().find(|p| p.is_file());
+
+    let Some(guest_path) = guest_path else {
+        println!("cargo:warning=boxlite-guest not found, skipping compile-time hash");
+        return;
+    };
+
+    match sha256_file(guest_path) {
+        Ok(hash) => {
+            println!("cargo:rustc-env=BOXLITE_GUEST_HASH={}", hash);
+            println!("cargo:rerun-if-changed={}", guest_path.display());
+            println!(
+                "cargo:warning=Embedded guest hash: {}... (from {})",
+                &hash[..12],
+                guest_path.display()
+            );
+        }
+        Err(e) => {
+            println!(
+                "cargo:warning=Failed to hash boxlite-guest at {}: {}",
+                guest_path.display(),
+                e
+            );
+        }
+    }
+}
+
+/// Compute SHA256 hex digest of a file.
+fn sha256_file(path: &Path) -> io::Result<String> {
+    let mut file = fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0u8; 64 * 1024];
+    loop {
+        let n = file.read(&mut buffer)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buffer[..n]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
 }

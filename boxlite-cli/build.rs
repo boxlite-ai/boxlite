@@ -32,6 +32,12 @@ fn main() {
     // Set rpath
     set_rpath(&dest);
 
+    // Clean destination before copying to avoid stale binaries
+    // (e.g. unsigned binaries that macOS taskgated would kill)
+    if dest.exists() {
+        let _ = fs::remove_dir_all(&dest);
+    }
+
     // Copy runtime to destination
     if let Err(e) = copy_dir_all(&runtime_src, &dest) {
         println!("cargo:warning=Failed to copy runtime: {}", e);

@@ -1,6 +1,7 @@
 mod archive;
 mod blob_source;
 mod config;
+mod image_disk;
 mod manager;
 mod object;
 mod storage;
@@ -8,6 +9,7 @@ mod store;
 
 pub use archive::extract_layer_tarball_streaming;
 pub use config::ContainerImageConfig;
+pub use image_disk::ImageDiskManager;
 pub use manager::ImageManager;
 pub use object::ImageObject;
 

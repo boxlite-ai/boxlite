@@ -2,6 +2,7 @@ pub mod advanced_options;
 pub(crate) mod backend;
 pub mod constants;
 pub(crate) mod guest_rootfs;
+pub(crate) mod guest_rootfs_manager;
 pub mod images;
 pub mod layout;
 pub(crate) mod lock;
