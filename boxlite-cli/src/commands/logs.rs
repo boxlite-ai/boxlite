@@ -1,6 +1,7 @@
 //! Display logs from a box.
 
 use crate::cli::GlobalFlags;
+use boxlite::runtime::layout::{FilesystemLayout, FsLayoutConfig};
 use clap::Args;
 use std::fs::File;
 use std::io::BufReader;
@@ -32,13 +33,12 @@ pub async fn execute(args: LogsArgs, global: &GlobalFlags) -> anyhow::Result<()>
         .await?
         .ok_or_else(|| anyhow::anyhow!("No such box: {}", args.target))?;
 
-    // Construct console.log path: {home_dir}/boxes/{box_id}/console.log
+    // Construct console.log path: {home_dir}/boxes/{box_id}/logs/console.log
     let box_id = litebox.id();
 
-    let log_path = home_dir
-        .join("boxes")
-        .join(box_id.as_str())
-        .join("console.log");
+    let log_path = FilesystemLayout::new(home_dir, FsLayoutConfig::with_bind_mount())
+        .box_layout(box_id.as_str(), false)?
+        .console_output_path();
 
     if !log_path.exists() {
         eprintln!("No log file found for box '{}'", args.target);

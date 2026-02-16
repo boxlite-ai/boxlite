@@ -32,6 +32,7 @@
 //! `resources/seccomp/`. Future work: profile libkrun's actual syscall args
 //! and restore per-argument restrictions where possible.
 
+use boxlite_shared::errors::BoxliteError;
 use std::collections::HashMap;
 use std::io::Read;
 use std::sync::Arc;
@@ -227,6 +228,80 @@ fn install_filter(
     }
 
     Ok(())
+}
+
+// ============================================================================
+// VMM filter application (Linux only)
+// ============================================================================
+
+/// Apply VMM seccomp filter to all threads (TSYNC).
+///
+/// The VMM filter covers both libkrun and Go runtime (gvproxy) syscalls.
+/// TSYNC ensures all existing threads receive the filter; new threads
+/// created after this call inherit it automatically via clone().
+#[cfg(target_os = "linux")]
+pub fn apply_vmm_filter(box_id: &str) -> crate::BoxliteResult<()> {
+    use crate::jailer::error::{IsolationError, JailerError};
+
+    let filters = load_filters(box_id)?;
+
+    let vmm_filter = get_filter(&filters, SeccompRole::Vmm).ok_or_else(|| {
+        tracing::error!(box_id = %box_id, "VMM filter not found in compiled filters");
+        BoxliteError::from(JailerError::Isolation(IsolationError::Seccomp(
+            "Missing vmm filter".to_string(),
+        )))
+    })?;
+
+    tracing::debug!(
+        box_id = %box_id,
+        bpf_instructions = vmm_filter.len(),
+        "Applying VMM seccomp filter to all threads (TSYNC)"
+    );
+
+    apply_filter_all_threads(vmm_filter).map_err(|e| {
+        tracing::error!(
+            box_id = %box_id,
+            error = %e,
+            "Failed to apply VMM seccomp filter (TSYNC)"
+        );
+        BoxliteError::from(JailerError::Isolation(IsolationError::Seccomp(
+            e.to_string(),
+        )))
+    })?;
+
+    tracing::info!(
+        box_id = %box_id,
+        vmm_filter_instructions = vmm_filter.len(),
+        "VMM seccomp filter applied to all threads (TSYNC)"
+    );
+
+    if let Some(vcpu_filter) = get_filter(&filters, SeccompRole::Vcpu) {
+        tracing::debug!(
+            box_id = %box_id,
+            vcpu_filter_instructions = vcpu_filter.len(),
+            "vCPU filter available (vCPU threads inherit from main thread)"
+        );
+    }
+
+    Ok(())
+}
+
+/// Load pre-compiled BPF filters from embedded binary.
+#[cfg(target_os = "linux")]
+fn load_filters(box_id: &str) -> crate::BoxliteResult<BpfThreadMap> {
+    use crate::jailer::error::{IsolationError, JailerError};
+
+    let filter_bytes = include_bytes!(concat!(env!("OUT_DIR"), "/seccomp_filter.bpf"));
+    deserialize_binary(&filter_bytes[..]).map_err(|e| {
+        tracing::error!(
+            box_id = %box_id,
+            error = %e,
+            "Failed to deserialize seccomp filters"
+        );
+        BoxliteError::from(JailerError::Isolation(IsolationError::Seccomp(
+            e.to_string(),
+        )))
+    })
 }
 
 #[cfg(test)]

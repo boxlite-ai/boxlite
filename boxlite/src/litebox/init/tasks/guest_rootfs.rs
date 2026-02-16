@@ -92,7 +92,7 @@ fn create_or_reuse_cow_disk(
     layout: &BoxFilesystemLayout,
     reuse_rootfs: bool,
 ) -> BoxliteResult<(GuestRootfs, Option<Disk>)> {
-    let guest_rootfs_disk_path = layout.root().join("guest-rootfs.qcow2");
+    let guest_rootfs_disk_path = layout.guest_rootfs_disk_path();
 
     if reuse_rootfs {
         // Restart: reuse existing COW disk
@@ -132,10 +132,16 @@ fn create_or_reuse_cow_disk(
             .map(|m| m.len())
             .unwrap_or(512 * 1024 * 1024);
 
+        // Try reflink base rootfs into box_dir so the qcow2 overlay references
+        // a box-local path, eliminating the sandbox dependency on home_dir/rootfs/.
+        // Reflink is instant on CoW filesystems (APFS, btrfs, xfs); falls back
+        // to the external path on ext4/tmpfs where reflink isn't supported.
+        let effective_base = reflink_rootfs_base(base_disk_path, layout);
+
         // Create COW child disk
         let qcow2_helper = Qcow2Helper::new();
         let temp_disk = qcow2_helper.create_cow_child_disk(
-            base_disk_path,
+            &effective_base,
             BackingFormat::Raw,
             &guest_rootfs_disk_path,
             base_size,
@@ -204,6 +210,44 @@ async fn pull_guest_rootfs_image(
     runtime.image_manager.pull(images::INIT_ROOTFS).await
 }
 
+/// Try to reflink the base rootfs into box_dir for sandbox isolation.
+///
+/// On CoW filesystems (APFS, btrfs, xfs), this creates a zero-cost clone
+/// with a new inode inside the box directory. The qcow2 overlay then
+/// references this local path, so the sandbox doesn't need access to
+/// `home_dir/rootfs/`.
+///
+/// Falls back to the original path on filesystems without reflink (ext4, tmpfs).
+fn reflink_rootfs_base(
+    base_disk_path: &std::path::Path,
+    layout: &BoxFilesystemLayout,
+) -> std::path::PathBuf {
+    let local_base = layout.rootfs_base_path();
+
+    // Skip if local base already exists (e.g. restart with existing reflink)
+    if local_base.exists() {
+        return local_base;
+    }
+
+    match reflink_copy::reflink(base_disk_path, &local_base) {
+        Ok(()) => {
+            tracing::info!(
+                src = %base_disk_path.display(),
+                dst = %local_base.display(),
+                "Reflinked base rootfs into box_dir (zero-copy)"
+            );
+            local_base
+        }
+        Err(e) => {
+            tracing::debug!(
+                error = %e,
+                "Reflink not supported, using external rootfs backing path"
+            );
+            base_disk_path.to_path_buf()
+        }
+    }
+}
+
 async fn extract_env_from_image(
     image: &crate::images::ImageObject,
 ) -> BoxliteResult<Vec<(String, String)>> {
@@ -229,4 +273,88 @@ async fn extract_env_from_image(
     };
 
     Ok(env)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::layout::FsLayoutConfig;
+    use tempfile::tempdir;
+
+    fn test_layout(box_dir: std::path::PathBuf) -> BoxFilesystemLayout {
+        BoxFilesystemLayout::new(box_dir, FsLayoutConfig::without_bind_mount(), false)
+    }
+
+    /// When rootfs_base_path() already exists, reflink_rootfs_base returns it
+    /// without overwriting. This is critical for restart safety.
+    #[test]
+    fn test_reflink_rootfs_base_returns_existing_local() {
+        let dir = tempdir().unwrap();
+        let layout = test_layout(dir.path().to_path_buf());
+
+        // Pre-create local base with known content
+        std::fs::write(layout.rootfs_base_path(), "existing-local-base").unwrap();
+
+        // Source file with different content
+        let base_disk = dir.path().join("original-rootfs.raw");
+        std::fs::write(&base_disk, "original-content").unwrap();
+
+        let result = reflink_rootfs_base(&base_disk, &layout);
+
+        // Should return the existing local path without overwriting
+        assert_eq!(result, layout.rootfs_base_path());
+        assert_eq!(
+            std::fs::read_to_string(&result).unwrap(),
+            "existing-local-base",
+            "Content must NOT be overwritten"
+        );
+    }
+
+    /// On CoW-capable filesystems (APFS on macOS), reflink succeeds and returns
+    /// the box-local path. On unsupported filesystems, falls back to original.
+    /// This test handles both outcomes.
+    #[test]
+    fn test_reflink_rootfs_base_success_or_fallback() {
+        let dir = tempdir().unwrap();
+        let layout = test_layout(dir.path().to_path_buf());
+
+        let base_disk = dir.path().join("rootfs.raw");
+        std::fs::write(&base_disk, "rootfs-content-for-reflink-test").unwrap();
+
+        let result = reflink_rootfs_base(&base_disk, &layout);
+
+        // On APFS (macOS dev machines): reflink succeeds → local path
+        // On ext4/tmpfs (Linux CI): reflink fails → original path
+        if layout.rootfs_base_path().exists() {
+            // Reflink succeeded
+            assert_eq!(result, layout.rootfs_base_path());
+            assert_eq!(
+                std::fs::read_to_string(&result).unwrap(),
+                "rootfs-content-for-reflink-test"
+            );
+        } else {
+            // Reflink failed — fallback to original
+            assert_eq!(result, base_disk);
+        }
+    }
+
+    /// When the source doesn't exist, reflink fails and returns the original path.
+    #[test]
+    fn test_reflink_rootfs_base_failure_returns_original() {
+        let dir = tempdir().unwrap();
+        let layout = test_layout(dir.path().to_path_buf());
+
+        // Source that doesn't exist → reflink will fail
+        let nonexistent = dir.path().join("does-not-exist.raw");
+
+        let result = reflink_rootfs_base(&nonexistent, &layout);
+
+        // Must return the original path (fallback)
+        assert_eq!(result, nonexistent);
+        // Local base must NOT be created
+        assert!(
+            !layout.rootfs_base_path().exists(),
+            "Local base should not exist when reflink fails"
+        );
+    }
 }

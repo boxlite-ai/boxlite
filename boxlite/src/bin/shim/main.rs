@@ -19,7 +19,6 @@ use std::thread;
 use std::time::Duration;
 
 use boxlite::{
-    runtime::layout,
     util::{self, is_process_alive},
     vmm::{self, ExitInfo, InstanceSpec, VmmConfig, VmmKind},
 };
@@ -56,10 +55,10 @@ struct ShimArgs {
 
 /// Initialize tracing with file logging.
 ///
-/// Logs are written to {home_dir}/logs/boxlite-shim.log with daily rotation.
+/// Logs are written to {box_dir}/logs/boxlite-shim.log with daily rotation.
 /// Returns WorkerGuard that must be kept alive to maintain the background writer thread.
-fn init_logging(home_dir: &Path) -> tracing_appender::non_blocking::WorkerGuard {
-    let logs_dir = home_dir.join(layout::dirs::LOGS_DIR);
+fn init_logging(box_dir: &Path) -> tracing_appender::non_blocking::WorkerGuard {
+    let logs_dir = box_dir.join("logs");
 
     // Create logs directory if it doesn't exist
     std::fs::create_dir_all(&logs_dir).expect("Failed to create logs directory");
@@ -90,9 +89,14 @@ fn main() -> BoxliteResult<()> {
     let config: InstanceSpec = serde_json::from_str(&args.config)
         .map_err(|e| BoxliteError::Engine(format!("Failed to parse config JSON: {}", e)))?;
 
-    // Initialize logging using home_dir from config
-    // Keep guard alive until end of main to ensure logs are written
-    let _log_guard = init_logging(&config.home_dir);
+    // Initialize logging using box_dir derived from exit_file path.
+    // Logs go to box_dir/logs/ so the sandbox only needs write access to box_dir.
+    let box_dir = config
+        .exit_file
+        .parent()
+        .unwrap_or(Path::new("."))
+        .to_path_buf();
+    let _log_guard = init_logging(&box_dir);
 
     // Install crash capture (panic hook, signal handlers).
     // Note: stderr is already redirected to file by parent process (spawn.rs).
@@ -184,7 +188,7 @@ fn run_shim(args: ShimArgs, mut config: InstanceSpec) -> BoxliteResult<()> {
     // Apply VMM seccomp filter with TSYNC (covers all threads including gvproxy)
     #[cfg(target_os = "linux")]
     {
-        use boxlite::jailer::platform::linux;
+        use boxlite::jailer::seccomp;
 
         if config.security.jailer_enabled && config.security.seccomp_enabled {
             tracing::info!(
@@ -192,7 +196,7 @@ fn run_shim(args: ShimArgs, mut config: InstanceSpec) -> BoxliteResult<()> {
                 "Applying VMM seccomp filter (TSYNC)"
             );
 
-            linux::apply_vmm_filter(&config.box_id)?;
+            seccomp::apply_vmm_filter(&config.box_id)?;
 
             tracing::info!(
                 box_id = %config.box_id,

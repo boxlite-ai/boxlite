@@ -30,7 +30,14 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use std::path::{Path, PathBuf};
 
 /// Library file patterns to copy alongside the shim binary.
+#[cfg(target_os = "linux")]
 const BUNDLED_LIB_PATTERNS: &[&str] = &["libkrun.so", "libkrunfw.so", "libgvproxy.so"];
+
+#[cfg(target_os = "macos")]
+const BUNDLED_LIB_PATTERNS: &[&str] = &["libkrun.dylib", "libkrunfw.dylib", "libgvproxy.dylib"];
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+const BUNDLED_LIB_PATTERNS: &[&str] = &[];
 
 /// Copy shim binary and bundled libraries to box directory for jail isolation.
 ///
@@ -59,7 +66,6 @@ const BUNDLED_LIB_PATTERNS: &[&str] = &["libkrun.so", "libkrunfw.so", "libgvprox
 /// let copied_shim = copy_shim_to_box(&shim_path, &box_dir)?;
 /// // Use copied_shim instead of original shim_path
 /// ```
-#[cfg(target_os = "linux")]
 pub fn copy_shim_to_box(shim_path: &Path, box_dir: &Path) -> BoxliteResult<PathBuf> {
     let bin_dir = box_dir.join("bin");
     std::fs::create_dir_all(&bin_dir).map_err(|e| {
@@ -112,7 +118,6 @@ pub fn copy_shim_to_box(shim_path: &Path, box_dir: &Path) -> BoxliteResult<PathB
 /// # Errors
 ///
 /// Returns [`BoxliteError::Storage`] if a library copy fails.
-#[cfg(target_os = "linux")]
 fn copy_bundled_libraries(src_dir: &Path, dest_dir: &Path) -> BoxliteResult<()> {
     let entries = match std::fs::read_dir(src_dir) {
         Ok(entries) => entries,
@@ -157,50 +162,56 @@ fn copy_bundled_libraries(src_dir: &Path, dest_dir: &Path) -> BoxliteResult<()> 
     Ok(())
 }
 
-/// Result of a shim copy operation.
-#[allow(dead_code)] // Prepared for future structured return type
-#[derive(Debug)]
-pub struct ShimCopyResult {
-    /// Path to the copied shim binary
-    pub shim_path: PathBuf,
-    /// Path to the bin directory containing shim and libraries
-    pub bin_dir: PathBuf,
-}
-
-#[allow(dead_code)]
-impl ShimCopyResult {
-    /// Get the LD_LIBRARY_PATH value for the copied libraries.
-    pub fn ld_library_path(&self) -> String {
-        self.bin_dir.to_string_lossy().to_string()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_bundled_lib_patterns() {
-        assert!(BUNDLED_LIB_PATTERNS.contains(&"libkrun.so"));
-        assert!(BUNDLED_LIB_PATTERNS.contains(&"libkrunfw.so"));
-        assert!(BUNDLED_LIB_PATTERNS.contains(&"libgvproxy.so"));
+        #[cfg(target_os = "linux")]
+        {
+            assert!(BUNDLED_LIB_PATTERNS.contains(&"libkrun.so"));
+            assert!(BUNDLED_LIB_PATTERNS.contains(&"libkrunfw.so"));
+            assert!(BUNDLED_LIB_PATTERNS.contains(&"libgvproxy.so"));
+        }
+        #[cfg(target_os = "macos")]
+        {
+            assert!(BUNDLED_LIB_PATTERNS.contains(&"libkrun.dylib"));
+            assert!(BUNDLED_LIB_PATTERNS.contains(&"libkrunfw.dylib"));
+            assert!(BUNDLED_LIB_PATTERNS.contains(&"libgvproxy.dylib"));
+        }
     }
 
     #[test]
     fn test_lib_pattern_matching() {
         let patterns = BUNDLED_LIB_PATTERNS;
 
-        // Should match
-        assert!(patterns.iter().any(|p| "libkrun.so.1.2.3".starts_with(p)));
-        assert!(patterns.iter().any(|p| "libkrunfw.so".starts_with(p)));
-        assert!(
-            patterns
-                .iter()
-                .any(|p| "libgvproxy.so.debug".starts_with(p))
-        );
+        #[cfg(target_os = "linux")]
+        {
+            // Should match
+            assert!(patterns.iter().any(|p| "libkrun.so.1.2.3".starts_with(p)));
+            assert!(patterns.iter().any(|p| "libkrunfw.so".starts_with(p)));
+            assert!(
+                patterns
+                    .iter()
+                    .any(|p| "libgvproxy.so.debug".starts_with(p))
+            );
 
-        // Should not match
-        assert!(!patterns.iter().any(|p| "libc.so.6".starts_with(p)));
-        assert!(!patterns.iter().any(|p| "boxlite-shim".starts_with(p)));
+            // Should not match
+            assert!(!patterns.iter().any(|p| "libc.so.6".starts_with(p)));
+            assert!(!patterns.iter().any(|p| "boxlite-shim".starts_with(p)));
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            // Should match
+            assert!(patterns.iter().any(|p| "libkrun.dylib".starts_with(p)));
+            assert!(patterns.iter().any(|p| "libkrunfw.dylib".starts_with(p)));
+            assert!(patterns.iter().any(|p| "libgvproxy.dylib".starts_with(p)));
+
+            // Should not match
+            assert!(!patterns.iter().any(|p| "libc.dylib".starts_with(p)));
+            assert!(!patterns.iter().any(|p| "boxlite-shim".starts_with(p)));
+        }
     }
 }

@@ -287,8 +287,11 @@ impl FilesystemLayout {
 /// │           │   └── work/   # Overlayfs work
 /// │           └── rootfs/     # Final rootfs (overlayfs merged)
 /// ├── shared/             # Guest-visible (ro bind mount → mounts/)
+/// ├── logs/               # Per-box logging
+/// │   ├── boxlite-shim.log  # Shim tracing output
+/// │   └── console.log       # Kernel/init output
 /// ├── root.qcow2          # Data disk
-/// └── console.log         # Kernel/init output
+/// └── guest-rootfs.qcow2  # Guest rootfs COW overlay
 /// ```
 #[derive(Clone, Debug)]
 pub struct BoxFilesystemLayout {
@@ -391,6 +394,26 @@ impl BoxFilesystemLayout {
     }
 
     // ========================================================================
+    // BIN AND LOGS (jailer isolation)
+    // ========================================================================
+
+    /// Bin directory: ~/.boxlite/boxes/{box_id}/bin
+    ///
+    /// Contains the shim binary and bundled libraries, copied (or reflinked)
+    /// by the jailer for memory isolation between boxes.
+    pub fn bin_dir(&self) -> PathBuf {
+        self.box_dir.join("bin")
+    }
+
+    /// Per-box logs directory: ~/.boxlite/boxes/{box_id}/logs
+    ///
+    /// Shim writes its logs here instead of the shared home_dir/logs/,
+    /// so the sandbox doesn't need access to any home_dir paths for writing.
+    pub fn logs_dir(&self) -> PathBuf {
+        self.box_dir.join("logs")
+    }
+
+    // ========================================================================
     // DISK AND CONSOLE
     // ========================================================================
 
@@ -399,11 +422,30 @@ impl BoxFilesystemLayout {
         self.box_dir.join("disk.qcow2")
     }
 
-    /// Console output path: ~/.boxlite/boxes/{box_id}/console.log
+    /// Console output path: ~/.boxlite/boxes/{box_id}/logs/console.log
     ///
     /// Captures kernel and init output for debugging.
+    /// Lives inside `logs/` so the sandbox grants it via the `logs/` [RW subpath].
     pub fn console_output_path(&self) -> PathBuf {
-        self.box_dir.join("console.log")
+        self.logs_dir().join("console.log")
+    }
+
+    /// Guest rootfs COW overlay: ~/.boxlite/boxes/{box_id}/guest-rootfs.qcow2
+    ///
+    /// A qcow2 COW overlay that references a base rootfs (either reflinked
+    /// locally or in the shared `~/.boxlite/rootfs/` directory).
+    pub fn guest_rootfs_disk_path(&self) -> PathBuf {
+        self.box_dir.join("guest-rootfs.qcow2")
+    }
+
+    /// Reflinked rootfs base: ~/.boxlite/boxes/{box_id}/rootfs-base
+    ///
+    /// When the filesystem supports reflink (APFS, btrfs, xfs), the base
+    /// rootfs is cloned here so the sandbox doesn't need access to
+    /// `~/.boxlite/rootfs/`. On ext4 (no reflink), this file won't exist
+    /// and the qcow2 overlay references the shared rootfs directly.
+    pub fn rootfs_base_path(&self) -> PathBuf {
+        self.box_dir.join("rootfs-base")
     }
 
     /// PID file path: ~/.boxlite/boxes/{box_id}/shim.pid
@@ -760,5 +802,81 @@ mod tests {
 
         // Verify the validation passes independently
         layout.validate_same_filesystem().unwrap();
+    }
+
+    // ========================================================================
+    // BoxFilesystemLayout — jailer path method tests
+    // ========================================================================
+
+    fn test_box_layout(box_dir: &str) -> BoxFilesystemLayout {
+        BoxFilesystemLayout::new(
+            PathBuf::from(box_dir),
+            FsLayoutConfig::without_bind_mount(),
+            false,
+        )
+    }
+
+    #[test]
+    fn test_box_layout_logs_dir() {
+        let layout = test_box_layout("/home/.boxlite/boxes/mybox");
+        assert_eq!(
+            layout.logs_dir(),
+            PathBuf::from("/home/.boxlite/boxes/mybox/logs")
+        );
+    }
+
+    #[test]
+    fn test_box_layout_bin_dir() {
+        let layout = test_box_layout("/home/.boxlite/boxes/mybox");
+        assert_eq!(
+            layout.bin_dir(),
+            PathBuf::from("/home/.boxlite/boxes/mybox/bin")
+        );
+    }
+
+    #[test]
+    fn test_box_layout_guest_rootfs_disk_path() {
+        let layout = test_box_layout("/home/.boxlite/boxes/mybox");
+        assert_eq!(
+            layout.guest_rootfs_disk_path(),
+            PathBuf::from("/home/.boxlite/boxes/mybox/guest-rootfs.qcow2")
+        );
+    }
+
+    #[test]
+    fn test_box_layout_rootfs_base_path() {
+        let layout = test_box_layout("/home/.boxlite/boxes/mybox");
+        assert_eq!(
+            layout.rootfs_base_path(),
+            PathBuf::from("/home/.boxlite/boxes/mybox/rootfs-base")
+        );
+    }
+
+    /// All jailer-relevant paths must be rooted under box_dir.
+    /// This is the core guarantee: the sandbox never grants access outside the box.
+    #[test]
+    fn test_box_layout_all_jailer_paths_inside_box_dir() {
+        let box_dir = "/home/.boxlite/boxes/test";
+        let layout = test_box_layout(box_dir);
+
+        let paths = [
+            layout.logs_dir(),
+            layout.bin_dir(),
+            layout.sockets_dir(),
+            layout.guest_rootfs_disk_path(),
+            layout.rootfs_base_path(),
+            layout.exit_file_path(),
+            layout.console_output_path(),
+            layout.disk_path(),
+        ];
+
+        for path in &paths {
+            assert!(
+                path.starts_with(box_dir),
+                "Path {} should be inside box_dir {}",
+                path.display(),
+                box_dir
+            );
+        }
     }
 }

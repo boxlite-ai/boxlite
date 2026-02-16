@@ -10,6 +10,7 @@ use super::{InitCtx, log_task_error, task_start};
 use crate::litebox::CrashReport;
 use crate::pipeline::PipelineTask;
 use crate::portal::GuestSession;
+use crate::runtime::layout::{BoxFilesystemLayout, FsLayoutConfig};
 use crate::util::{ProcessExit, ProcessMonitor};
 use async_trait::async_trait;
 use boxlite_shared::Transport;
@@ -35,10 +36,23 @@ impl PipelineTask<InitCtx> for GuestConnectTask {
             stderr_file,
         ) = {
             let ctx = ctx.lock().await;
-            let box_home = &ctx.config.box_home;
-            let exit_file = box_home.join("exit");
-            let console_log = box_home.join("console.log");
-            let stderr_file = box_home.join("shim.stderr");
+            // Use pipeline layout if available, otherwise construct from box_home
+            // (reattach scenario: layout not set because FilesystemTask didn't run)
+            let fallback_layout;
+            let layout = match ctx.layout.as_ref() {
+                Some(l) => l,
+                None => {
+                    fallback_layout = BoxFilesystemLayout::new(
+                        ctx.config.box_home.clone(),
+                        FsLayoutConfig::without_bind_mount(),
+                        false,
+                    );
+                    &fallback_layout
+                }
+            };
+            let exit_file = layout.exit_file_path();
+            let console_log = layout.console_output_path();
+            let stderr_file = layout.stderr_file_path();
             (
                 ctx.config.transport.clone(),
                 Transport::unix(ctx.config.ready_socket_path.clone()),
