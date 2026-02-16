@@ -5,6 +5,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 description = "Shared FFI layer for BoxLite SDKs"
+publish = false
 
 [lib]
 crate-type = ["rlib"]

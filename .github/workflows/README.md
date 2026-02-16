@@ -58,10 +58,11 @@ Shared configuration loaded by all workflows.
 
 ### `build-runtime.yml`
 
-Builds BoxLite runtime and saves to cache.
+Builds BoxLite runtime, uploads to GitHub Release, and publishes Rust crates to crates.io.
 
 **Triggers:**
 - Push to `main` with changes in `boxlite/**`, `Cargo.*`, etc.
+- Release published
 - Manual dispatch
 
 **What it builds:**
@@ -69,6 +70,12 @@ Builds BoxLite runtime and saves to cache.
 - `boxlite-shim` - Process isolation shim
 - `libkrun`, `libkrunfw`, `libgvproxy` - Hypervisor libraries
 - `debugfs`, `mke2fs` - Filesystem tools
+
+**Jobs:**
+1. `config` - Load shared configuration
+2. `build` - Build runtime for each platform (matrix: macOS ARM64, Linux x64)
+3. `upload_to_release` - Upload runtime tarballs to GitHub Release (release only)
+4. `publish_crates` - Publish Rust crates to crates.io (release only, after upload)
 
 ### `build-wheels.yml`
 
@@ -122,7 +129,7 @@ Runs code quality checks.
 | `boxlite/**` | ✅ Runs | ❌ Skips | ❌ Skips |
 | `sdks/python/**` | ❌ Skips | ❌ Skips | ❌ Skips |
 | `sdks/node/**` | ❌ Skips | ❌ Skips | ❌ Skips |
-| Release published | ❌ Skips | ✅ Runs | ✅ Runs |
+| Release published | ✅ Runs (build + upload + publish crates) | ✅ Runs | ✅ Runs |
 
 ## Cache Strategy
 
@@ -171,6 +178,7 @@ Additional platforms (darwin-x64, linux-arm64-gnu) can be added to `config.yml` 
 
 ## Secrets Required
 
+- `CARGO_REGISTRY_TOKEN` - crates.io API token for publishing Rust crates
 - `PYPI_API_TOKEN` - PyPI API token for publishing Python wheels
 - `NPM_TOKEN` - npm access token for publishing Node.js packages
 
