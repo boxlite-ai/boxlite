@@ -23,6 +23,14 @@
 //! - VMM filter: Core VMM + libkrun + Go runtime syscalls (~106 entries)
 //! - vCPU filter: Compiled; vCPU threads inherit from main thread
 //! - API filter: Not used in BoxLite (reserved for compatibility)
+//!
+//! ## TODO: Tighten filters
+//!
+//! The current VMM filter is intentionally broad — all arg-restricted entries
+//! from the original Firecracker filters were widened to unrestricted to get
+//! libkrun working. Original filters are backed up as `*.original.json` in
+//! `resources/seccomp/`. Future work: profile libkrun's actual syscall args
+//! and restore per-argument restrictions where possible.
 
 use std::collections::HashMap;
 use std::io::Read;
