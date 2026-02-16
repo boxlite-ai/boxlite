@@ -282,6 +282,9 @@ pub struct Jailer<S: Sandbox> {
     pub(crate) box_id: String,
     /// Box filesystem layout (provides typed path accessors).
     pub(crate) layout: BoxFilesystemLayout,
+    /// FDs to preserve through pre_exec: each (source_fd, target_fd) is dup2'd
+    /// before FD cleanup. Used for watchdog pipe inheritance across fork.
+    pub(crate) preserved_fds: Vec<(std::os::fd::RawFd, i32)>,
 }
 
 impl<S: Sandbox> Jail for Jailer<S> {
@@ -348,11 +351,17 @@ impl<S: Sandbox> Jail for Jailer<S> {
             cmd.env("LD_LIBRARY_PATH", dir);
         }
 
-        // Pre-exec hook: FD cleanup, rlimits, cgroup join, PID file
+        // Pre-exec hook: FD preservation, FD cleanup, rlimits, cgroup join, PID file
         let resource_limits = self.security.resource_limits.clone();
         let cgroup_procs = self.sandbox.cgroup_procs_path(&ctx);
         let pid_file = self.pid_file_path();
-        pre_exec::add_pre_exec_hook(&mut cmd, resource_limits, cgroup_procs, pid_file);
+        pre_exec::add_pre_exec_hook(
+            &mut cmd,
+            resource_limits,
+            cgroup_procs,
+            pid_file,
+            self.preserved_fds.clone(),
+        );
         cmd
     }
 }

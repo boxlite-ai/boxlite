@@ -19,8 +19,8 @@ use std::thread;
 use std::time::Duration;
 
 use boxlite::{
-    util::{self, is_process_alive},
-    vmm::{self, ExitInfo, InstanceSpec, VmmConfig, VmmKind},
+    util,
+    vmm::{self, ExitInfo, InstanceSpec, VmmConfig, VmmKind, controller::watchdog},
 };
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use clap::Parser;
@@ -215,9 +215,8 @@ fn run_shim(args: ShimArgs, mut config: InstanceSpec) -> BoxliteResult<()> {
         }
     }
 
-    // Save detach/parent_pid/transport before config is moved into engine.create()
+    // Save detach/transport before config is moved into engine.create()
     let detach = config.detach;
-    let parent_pid = config.parent_pid;
     let transport = config.transport.clone();
 
     // Initialize engine options with defaults
@@ -244,14 +243,13 @@ fn run_shim(args: ShimArgs, mut config: InstanceSpec) -> BoxliteResult<()> {
     // When SIGTERM is received: Guest.Shutdown() RPC (flush qcow2) → re-raise SIGTERM.
     install_graceful_shutdown_handler(transport);
 
-    // Start parent watchdog if detach=false
-    // Watchdog monitors parent process and sends SIGTERM when parent dies
+    // Start parent watchdog if detach=false.
+    // The parent holds the write end of a pipe (fd 3 in this process).
+    // When parent dies or drops the keepalive, kernel closes the write end,
+    // delivering POLLHUP to our watchdog thread → SIGTERM → graceful shutdown.
     if !detach {
-        start_parent_watchdog(parent_pid);
-        tracing::info!(
-            parent_pid = parent_pid,
-            "Parent watchdog started (detach=false)"
-        );
+        start_parent_watchdog();
+        tracing::info!("Parent watchdog started via pipe POLLHUP (detach=false)");
     } else {
         tracing::info!("Running in detached mode (detach=true)");
     }
@@ -345,44 +343,54 @@ fn install_graceful_shutdown_handler(transport: boxlite_shared::Transport) {
     });
 }
 
-/// Start a watchdog thread that monitors the parent process.
+/// Start a watchdog thread that detects parent death via pipe POLLHUP.
 ///
-/// When parent exits: sends SIGTERM to self. The SIGTERM handler
+/// The parent holds the write end of a pipe; the read end is fd 3 in this process
+/// (dup2'd by the pre_exec hook). When the parent dies or drops its keepalive,
+/// the kernel closes the write end, delivering POLLHUP immediately — zero latency,
+/// works across PID/mount namespaces.
+///
+/// On POLLHUP: sends SIGTERM to self. The SIGTERM handler
 /// ([`install_graceful_shutdown_handler`]) does the actual graceful shutdown
 /// (Guest.Shutdown() RPC → qcow2 flush → exit).
-///
-/// This ensures orphan boxes don't accumulate when `detach=false`.
-fn start_parent_watchdog(parent_pid: u32) {
-    thread::spawn(move || {
-        let self_pid = std::process::id();
+fn start_parent_watchdog() {
+    thread::spawn(|| {
+        let mut pollfd = libc::pollfd {
+            fd: watchdog::PIPE_FD,
+            events: libc::POLLIN, // POLLIN for macOS compatibility; POLLHUP is reported in revents
+            revents: 0,
+        };
 
-        loop {
-            thread::sleep(Duration::from_secs(1));
+        // Block until write end is closed (parent death or keepalive drop)
+        let ret = unsafe { libc::poll(&mut pollfd, 1, -1) };
 
-            if !is_process_alive(parent_pid) {
-                tracing::info!(
-                    parent_pid = parent_pid,
-                    "Parent process exited, sending SIGTERM to trigger graceful shutdown"
-                );
-
-                // SIGTERM triggers the graceful shutdown handler
-                unsafe {
-                    libc::kill(self_pid as i32, libc::SIGTERM);
-                }
-
-                // Safety net: wait for handler to complete, then force kill
-                thread::sleep(Duration::from_secs(
-                    GUEST_SHUTDOWN_TIMEOUT_SECS + GRACEFUL_SHUTDOWN_TIMEOUT_SECS,
-                ));
-
-                tracing::warn!("Graceful shutdown timed out, forcing exit with SIGKILL");
-                unsafe {
-                    libc::kill(self_pid as i32, libc::SIGKILL);
-                }
-
-                // Fallback: if SIGKILL somehow didn't work, exit forcefully
-                std::process::exit(137); // 128 + 9 (SIGKILL)
-            }
+        if ret > 0 && (pollfd.revents & libc::POLLHUP) != 0 {
+            tracing::info!("Parent death detected (POLLHUP on watchdog pipe)");
+        } else {
+            tracing::warn!(
+                ret = ret,
+                revents = pollfd.revents,
+                "Watchdog poll returned unexpectedly"
+            );
         }
+
+        // SIGTERM triggers the graceful shutdown handler
+        let self_pid = std::process::id();
+        unsafe {
+            libc::kill(self_pid as i32, libc::SIGTERM);
+        }
+
+        // Safety net: wait for handler to complete, then force kill
+        thread::sleep(Duration::from_secs(
+            GUEST_SHUTDOWN_TIMEOUT_SECS + GRACEFUL_SHUTDOWN_TIMEOUT_SECS,
+        ));
+
+        tracing::warn!("Graceful shutdown timed out, forcing exit with SIGKILL");
+        unsafe {
+            libc::kill(self_pid as i32, libc::SIGKILL);
+        }
+
+        // Fallback: if SIGKILL somehow didn't work, exit forcefully
+        std::process::exit(137); // 128 + 9 (SIGKILL)
     });
 }
