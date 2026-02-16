@@ -183,13 +183,20 @@ fn write_u32_to_buf(buf: &mut [u8], mut n: u32) -> usize {
 /// The `path` must be a null-terminated string (e.g., "/proc/self/uid_map\0").
 unsafe fn write_proc_file(path: &str, content: &[u8]) -> Result<(), ()> {
     // Path must be null-terminated for libc::open
-    let fd = libc::open(path.as_ptr() as *const libc::c_char, libc::O_WRONLY | libc::O_CLOEXEC);
-    if fd < 0 {
-        return Err(());
+    // SAFETY: path is a null-terminated string literal, content is a valid slice.
+    // All three syscalls (open, write, close) are async-signal-safe.
+    unsafe {
+        let fd = libc::open(
+            path.as_ptr() as *const libc::c_char,
+            libc::O_WRONLY | libc::O_CLOEXEC,
+        );
+        if fd < 0 {
+            return Err(());
+        }
+        let written = libc::write(fd, content.as_ptr() as *const libc::c_void, content.len());
+        libc::close(fd);
+        if written < 0 { Err(()) } else { Ok(()) }
     }
-    let written = libc::write(fd, content.as_ptr() as *const libc::c_void, content.len());
-    libc::close(fd);
-    if written < 0 { Err(()) } else { Ok(()) }
 }
 
 #[cfg(test)]

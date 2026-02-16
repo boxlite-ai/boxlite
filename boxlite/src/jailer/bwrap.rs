@@ -138,7 +138,12 @@ pub fn can_create_user_namespace() -> Result<(), String> {
             } else {
                 "bundled"
             };
-            Err(build_diagnostic(clone_errno, bwrap_source, bwrap_path, &stderr))
+            Err(build_diagnostic(
+                clone_errno,
+                bwrap_source,
+                bwrap_path,
+                &stderr,
+            ))
         }
         Err(e) => Err(format!("failed to run bwrap: {}", e)),
     }
