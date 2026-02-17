@@ -34,7 +34,7 @@ use std::path::{Path, PathBuf};
 const BUNDLED_LIB_PATTERNS: &[&str] = &["libkrun.so", "libkrunfw.so", "libgvproxy.so"];
 
 #[cfg(target_os = "macos")]
-const BUNDLED_LIB_PATTERNS: &[&str] = &["libkrun.", "libkrunfw.", "libgvproxy."];
+const BUNDLED_LIB_PATTERNS: &[&str] = &["libkrun.dylib", "libkrunfw.dylib", "libgvproxy.dylib"];
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 const BUNDLED_LIB_PATTERNS: &[&str] = &[];
@@ -176,9 +176,9 @@ mod tests {
         }
         #[cfg(target_os = "macos")]
         {
-            assert!(BUNDLED_LIB_PATTERNS.contains(&"libkrun."));
-            assert!(BUNDLED_LIB_PATTERNS.contains(&"libkrunfw."));
-            assert!(BUNDLED_LIB_PATTERNS.contains(&"libgvproxy."));
+            assert!(BUNDLED_LIB_PATTERNS.contains(&"libkrun.dylib"));
+            assert!(BUNDLED_LIB_PATTERNS.contains(&"libkrunfw.dylib"));
+            assert!(BUNDLED_LIB_PATTERNS.contains(&"libgvproxy.dylib"));
         }
     }
 
@@ -204,9 +204,9 @@ mod tests {
 
         #[cfg(target_os = "macos")]
         {
-            // Should match (versioned dylibs)
-            assert!(patterns.iter().any(|p| "libkrun.1.16.0.dylib".starts_with(p)));
-            assert!(patterns.iter().any(|p| "libkrunfw.5.dylib".starts_with(p)));
+            // Should match
+            assert!(patterns.iter().any(|p| "libkrun.dylib".starts_with(p)));
+            assert!(patterns.iter().any(|p| "libkrunfw.dylib".starts_with(p)));
             assert!(patterns.iter().any(|p| "libgvproxy.dylib".starts_with(p)));
 
             // Should not match
