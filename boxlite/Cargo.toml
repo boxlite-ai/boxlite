@@ -28,11 +28,11 @@ libslirp-backend = []  # Uses external libslirp-helper binary, no Rust crate nee
 gvproxy-backend = ["dep:libgvproxy-sys"]   # Uses libgvproxy CGO shared library, links via FFI
 
 [dependencies]
-boxlite-shared = { path = "../boxlite-shared" }
+boxlite-shared = { path = "../boxlite-shared", version = "0.5.11" }
 
-e2fsprogs-sys = { path = "deps/e2fsprogs-sys" }
-libgvproxy-sys = { path = "deps/libgvproxy-sys", optional = true }
-libkrun-sys = { path = "deps/libkrun-sys" }
+e2fsprogs-sys = { path = "deps/e2fsprogs-sys", version = "0.5.11" }
+libgvproxy-sys = { path = "deps/libgvproxy-sys", version = "0.5.11", optional = true }
+libkrun-sys = { path = "deps/libkrun-sys", version = "0.5.11" }
 
 thiserror = "1.0"
 async-trait = "0.1"
@@ -80,7 +80,7 @@ signal-hook = "0.3"
 
 # Linux-specific dependencies for bind mount support
 [target.'cfg(target_os = "linux")'.dependencies]
-bubblewrap-sys = { path = "deps/bubblewrap-sys" }  # Bundled bwrap for sandbox isolation
+bubblewrap-sys = { path = "deps/bubblewrap-sys", version = "0.5.11" }  # Bundled bwrap for sandbox isolation
 caps = "0.5"
 fuse-backend-rs = { version = "0.12", features = ["fusedev"] }
 seccompiler = "0.4"  # Generate seccomp BPF filters for jailer

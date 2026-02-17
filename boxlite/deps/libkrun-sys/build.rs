@@ -69,6 +69,17 @@ fn verify_vendored_sources(manifest_dir: &Path, require_libkrunfw: bool) {
     }
 }
 
+/// Auto-set BOXLITE_DEPS_STUB=2 when downloaded from a registry (crates.io).
+/// Cargo adds .cargo_vcs_info.json to published packages.
+fn auto_detect_registry() {
+    if env::var("BOXLITE_DEPS_STUB").is_err() {
+        let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+        if manifest_dir.join(".cargo_vcs_info.json").exists() {
+            env::set_var("BOXLITE_DEPS_STUB", "2");
+        }
+    }
+}
+
 fn main() {
     // Rebuild if vendored sources change
     println!("cargo:rerun-if-changed=vendor/libkrun");
@@ -76,6 +87,8 @@ fn main() {
     println!("cargo:rerun-if-env-changed=BOXLITE_DEPS_STUB");
     #[cfg(target_os = "macos")]
     println!("cargo:rerun-if-env-changed=BOXLITE_LIBKRUN_CC_LINUX");
+
+    auto_detect_registry();
 
     // Check for stub mode (for CI linting without building)
     // Set BOXLITE_DEPS_STUB=1 to skip building and emit stub link directives

@@ -490,12 +490,26 @@ impl DepsMode {
     }
 }
 
+/// Auto-set BOXLITE_DEPS_STUB=2 when downloaded from a registry (crates.io).
+/// Cargo adds .cargo_vcs_info.json to published packages.
+fn auto_detect_registry() {
+    if env::var("BOXLITE_DEPS_STUB").is_err() {
+        let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+        if manifest_dir.join(".cargo_vcs_info.json").exists() {
+            // SAFETY: build.rs is single-threaded; no concurrent env var access.
+            unsafe { env::set_var("BOXLITE_DEPS_STUB", "2") };
+        }
+    }
+}
+
 /// Collects all FFI dependencies into a single runtime directory.
 /// This directory can be used by downstream crates (e.g., Python SDK) to
 /// bundle all required libraries and binaries together.
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=BOXLITE_DEPS_STUB");
+
+    auto_detect_registry();
 
     // Compile seccomp filters at build time (fast, required for include_bytes!())
     compile_seccomp_filters();

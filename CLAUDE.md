@@ -49,7 +49,7 @@ sdks/
   python/             # Python SDK (PyO3, v0.4.4)
   c/                  # C SDK (FFI)
   node/               # Node.js SDK (v0.1.5)
-examples/python/      # 9 comprehensive Python examples
+examples/python/      # Python examples (7 categorized subdirectories)
 docs/                 # Documentation
 scripts/              # Build and setup scripts
 ```
@@ -152,7 +152,7 @@ Key guidelines to internalize:
 - All I/O is async (Tokio runtime)
 - Errors use centralized `BoxliteError` enum (see `boxlite-shared/src/errors.rs`)
 - Python SDK version: 0.4.4 (requires Python 3.10+)
-- Examples: 9 comprehensive Python examples in `examples/python/`
+- Examples: categorized Python examples in `examples/python/` (7 subdirectories)
 
 **Common pitfalls:**
 - Forgetting to initialize submodules → build fails

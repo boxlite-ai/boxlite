@@ -484,7 +484,7 @@ dependencies = [
 
 [[package]]
 name = "bubblewrap-sys"
-version = "0.1.0"
+version = "0.5.11"
 dependencies = [
  "num_cpus",
 ]
@@ -959,7 +959,7 @@ checksum = "f678cf4a922c215c63e0de95eb1ff08a958a81d47e485cf9da1e27bf6305cfa5"
 
 [[package]]
 name = "e2fsprogs-sys"
-version = "0.1.0"
+version = "0.5.11"
 dependencies = [
  "num_cpus",
 ]
@@ -1820,14 +1820,14 @@ dependencies = [
 
 [[package]]
 name = "libgvproxy-sys"
-version = "0.1.0"
+version = "0.5.11"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "libkrun-sys"
-version = "0.1.0"
+version = "0.5.11"
 dependencies = [
  "libc",
  "num_cpus",

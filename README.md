@@ -5,39 +5,31 @@
 [![Lint](https://github.com/boxlite-ai/boxlite/actions/workflows/lint.yml/badge.svg)](https://github.com/boxlite-ai/boxlite/actions/workflows/lint.yml)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-Local-first micro-VM sandbox for **AI agents** — stateful, lightweight,
-hardware-level isolation, **no daemon required**.
+**The SQLite of sandboxing** — embeddable, stateful micro-VMs with snapshots and hardware isolation.
+Boot in milliseconds. Just `import` and run.
 
 
-## What is BoxLite?
+## Why BoxLite?
 
-BoxLite lets you spin up **lightweight VMs** ("Boxes") and run **OCI containers inside them**. Unlike
-ephemeral sandboxes that destroy state after each execution, BoxLite Boxes are **persistent workspaces** —
-install packages, create files, build up environment state, then come back later and pick up where you left off.
+- **Embeddable** — Single importable library. No cloud accounts, no daemons, no root access.
+- **Stateful** — Environments persist across sessions. Packages and files survive restarts.
+- **Snapshots** — Checkpoint before risky operations and instantly rollback. Fork environments for parallel work.
+- **Hardware Isolation** — Each sandbox runs in its own micro-VM with a dedicated Linux kernel via KVM or Hypervisor.framework.
 
-**Why BoxLite**
+| | BoxLite | Cloud Sandboxes |
+|---|---|---|
+| Boot time | Sub-50ms | Seconds |
+| State | Persistent | Ephemeral |
+| Snapshots | Built-in | Limited |
+| Isolation | Hardware VM | Container/VM |
+| Cost | Free & open source | Per-minute billing |
+| Data | Stays on your machine | Sent to cloud |
 
-- **Stateful**: Boxes retain packages, files, and environment across stop/restart. No rebuilding on every interaction.
-- **Lightweight**: small footprint, fast boot, async-first API for high concurrency.
-- **Hardware isolation**: each Box runs its own kernel — not just namespaces or containers.
-- **No daemon**: embed as a library, no root, no background service.
-- **OCI compatible**: use standard Docker images (`python:slim`, `node:alpine`, `alpine:latest`).
-- **Local-first**: runs entirely on your machine — no cloud account needed. Scale out when ready.
-
-## Python Quick Start
-
-<details>
-<summary>View guide</summary>
-
-### Install
+## Quick Start
 
 ```bash
 pip install boxlite
 ```
-
-Requires Python 3.10+.
-
-### Run
 
 ```python
 import asyncio
@@ -46,30 +38,33 @@ import boxlite
 
 async def main():
     async with boxlite.SimpleBox(image="python:slim") as box:
-        result = await box.exec("python", "-c", "print('Hello from BoxLite!')")
+        # Install packages — they persist across sessions
+        await box.exec("pip", "install", "requests")
+
+        result = await box.exec("python", "-c", "import requests; print(requests.__version__)")
         print(result.stdout)
 
 
 asyncio.run(main())
 ```
 
-</details>
+Also available for **Node.js**, **Rust**, and **C** — see [SDK Quick Starts](#sdk-quick-starts) below.
 
 
-## Node.js Quick Start
+## Use Cases
+
+- **AI Agent Sandboxing** — Safe execution of untrusted AI-generated code
+- **Code Execution** — Multi-tenant isolated environments for running user code
+- **Browser Automation** — Headless browsers in isolated VMs for web scraping and testing
+
+## SDK Quick Starts
 
 <details>
-<summary>View guide</summary>
-
-### Install
+<summary>Node.js</summary>
 
 ```bash
 npm install @boxlite-ai/boxlite
 ```
-
-Requires Node.js 18+.
-
-### Run
 
 ```javascript
 import { SimpleBox } from '@boxlite-ai/boxlite';
@@ -89,20 +84,13 @@ main();
 
 </details>
 
-
-## Rust Quick Start
-
 <details>
-<summary>View guide</summary>
-
-### Install
+<summary>Rust</summary>
 
 ```toml
 [dependencies]
 boxlite = { git = "https://github.com/boxlite-ai/boxlite" }
 ```
-
-### Run
 
 ```rust
 use boxlite::{BoxCommand, BoxOptions, BoxliteRuntime, RootfsSpec};
@@ -132,21 +120,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 </details>
 
+## Next Steps
 
-## Next steps
-
-- Run more real-world scenarios in [Examples](./examples/)
-- Learn how images, disks, networking, and isolation work in [Architecture](./docs/architecture/)
+- [Examples](./examples/) — Real-world scenarios and sample code
+- [Architecture](./docs/architecture/) — How images, disks, networking, and isolation work
 
 ## Features
 
-- **Compute**: CPU/memory limits, async-first API, streaming stdout/stderr, metrics
-- **Storage**: volume mounts (ro/rw), persistent disks (QCOW2), copy-on-write
-- **Networking**: outbound internet, port forwarding (TCP/UDP), network metrics
-- **Images**: OCI pull + caching, custom rootfs support
-- **Security**: hardware isolation (KVM/HVF), OS sandboxing (seccomp/sandbox-exec), resource limits
-- **Image Registry Configuration**: Configure custom registries via config file (`--config`), CLI flags (`--registry`), or SDK options. See the [configuration guide](./docs/guides/image-registry-configuration.md).
-- **SDKs**: Python (stable), Node.js (v0.1.6); Go coming soon
+- **Compute** — CPU/memory limits, async-first API, streaming stdout/stderr, metrics
+- **Storage** — Volume mounts (ro/rw), persistent disks (QCOW2), copy-on-write
+- **Networking** — Outbound internet, port forwarding (TCP/UDP), network metrics
+- **Images** — OCI pull + caching, custom rootfs, [custom registries](./docs/guides/image-registry-configuration.md)
+- **Security** — Hardware isolation (KVM/HVF), OS sandboxing (seccomp/sandbox-exec), resource limits
+- **SDKs** — Python (stable), Node.js (v0.1.6), Rust, C
 
 ## Architecture
 

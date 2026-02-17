@@ -3,6 +3,7 @@ name = "boxlite-guest"
 version.workspace = true
 authors.workspace = true
 license.workspace = true
+publish = false
 description = "Boxlite Guest Runtime"
 edition = "2021"
 

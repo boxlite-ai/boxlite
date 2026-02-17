@@ -76,7 +76,8 @@ class SyncCodeBox(SyncSimpleBox):
             timeout: Execution timeout in seconds (not yet implemented)
 
         Returns:
-            Combined stdout and stderr output
+            Execution stdout as a string. Use exec() directly if you need
+            both stdout and stderr.
 
         Example:
             with SyncCodeBox() as box:
@@ -90,7 +91,7 @@ class SyncCodeBox(SyncSimpleBox):
                 ''')
         """
         result = self.exec("/usr/local/bin/python", "-c", code)
-        return result.stdout + result.stderr
+        return result.stdout
 
     def install_package(self, package: str) -> str:
         """
@@ -135,7 +136,7 @@ class SyncCodeBox(SyncSimpleBox):
             script_path: Path to the Python script on the host
 
         Returns:
-            Script output (stdout + stderr)
+            Script stdout as a string
 
         Example:
             result = box.run_script("./my_script.py")

@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+publish = false
 description = "Node.js bindings for BoxLite - embeddable VM runtime for secure code execution"
 
 [lib]
