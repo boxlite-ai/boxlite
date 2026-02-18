@@ -6,6 +6,7 @@
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use chrono::Utc;
+use std::sync::Arc;
 
 use crate::disk::constants::dirs as disk_dirs;
 use crate::disk::constants::filenames as disk_filenames;
@@ -34,9 +35,11 @@ impl LiteBox {
     ///
     /// A LiteBox handle for the newly created clone.
     pub async fn clone(&self, name: &str, opts: CloneOptions) -> BoxliteResult<LiteBox> {
+        let local = self.require_local_impl()?;
+
         // Verify stopped
         {
-            let state = self.inner.state.read();
+            let state = local.state.read();
             if !state.status.is_stopped() {
                 return Err(BoxliteError::InvalidState(format!(
                     "box '{}' must be stopped for clone (current status: {})",
@@ -46,8 +49,8 @@ impl LiteBox {
             }
         }
 
-        let rt = &self.inner.runtime;
-        let src_home = &self.inner.config.box_home;
+        let rt = Arc::clone(&local.runtime);
+        let src_home = local.config.box_home.clone();
 
         // Determine source disks (current state or from a named snapshot)
         let (src_container, src_guest) = if let Some(ref snap_name) = opts.from_snapshot {
@@ -114,7 +117,7 @@ impl LiteBox {
             name: Some(name.to_string()),
             created_at: now,
             container: ContainerRuntimeConfig { id: container_id },
-            options: self.inner.config.options.clone(),
+            options: local.config.options.clone(),
             engine_kind: VmmKind::Libkrun,
             transport: boxlite_shared::Transport::unix(socket_path),
             box_home,

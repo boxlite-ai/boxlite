@@ -31,7 +31,7 @@ use std::sync::Arc;
 use crate::metrics::BoxMetrics;
 use crate::runtime::backend::BoxBackend;
 use crate::{BoxID, BoxInfo};
-use boxlite_shared::errors::BoxliteResult;
+use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 pub use config::BoxConfig;
 
 /// LiteBox - Handle to a box.
@@ -108,6 +108,15 @@ impl LiteBox {
     /// Get a snapshot handle for snapshot operations.
     pub fn snapshot(&self) -> SnapshotHandle<'_> {
         SnapshotHandle::new(self)
+    }
+
+    pub(crate) fn require_local_impl(&self) -> BoxliteResult<&crate::litebox::box_impl::BoxImpl> {
+        self.inner.as_local_impl().ok_or_else(|| {
+            BoxliteError::Unsupported(
+                "This operation is only supported for local runtimes (not REST backends)"
+                    .to_string(),
+            )
+        })
     }
 
     /// Copy files/directories from container rootfs to host.

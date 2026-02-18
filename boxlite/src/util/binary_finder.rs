@@ -4,8 +4,9 @@
 //! bundled with BoxLite. The search follows a priority order:
 //!
 //! 1. `BOXLITE_RUNTIME_DIR` - Explicit override (highest priority)
-//! 2. `DYLD_LIBRARY_PATH` (macOS) / `LD_LIBRARY_PATH` (Linux) - User-specified runtime location
-//! 3. dladdr-based detection - For packaged/installed scenarios
+//! 2. Workspace runtime (`target/boxlite-runtime`) - Local dev/test default
+//! 3. `DYLD_LIBRARY_PATH` (macOS) / `LD_LIBRARY_PATH` (Linux) - User-specified runtime location
+//! 4. dladdr-based detection - For packaged/installed scenarios
 
 use std::path::PathBuf;
 
@@ -69,8 +70,9 @@ impl RuntimeBinaryFinder {
     ///
     /// Search priority:
     /// 1. `BOXLITE_RUNTIME_DIR` (explicit override)
-    /// 2. `DYLD_LIBRARY_PATH` / `LD_LIBRARY_PATH` (user-specified runtime location)
-    /// 3. dladdr-based detection (for packaged scenarios)
+    /// 2. workspace `target/boxlite-runtime` (local dev/test)
+    /// 3. `DYLD_LIBRARY_PATH` / `LD_LIBRARY_PATH` (user-specified runtime location)
+    /// 4. dladdr-based detection (for packaged scenarios)
     pub fn from_env() -> Self {
         let mut builder = Self::builder();
 
@@ -81,7 +83,16 @@ impl RuntimeBinaryFinder {
             }
         }
 
-        // 2. Library path environment variables
+        // 2. Workspace fallback for local development and integration tests.
+        // Runtime bundles are produced at <workspace>/target/boxlite-runtime.
+        if let Some(workspace_root) = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent() {
+            let runtime_dir = workspace_root.join("target/boxlite-runtime");
+            if runtime_dir.exists() {
+                builder = builder.with_path(runtime_dir);
+            }
+        }
+
+        // 3. Library path environment variables
         #[cfg(target_os = "macos")]
         {
             if let Ok(dyld_path) = std::env::var("DYLD_LIBRARY_PATH") {
@@ -105,7 +116,7 @@ impl RuntimeBinaryFinder {
             }
         }
 
-        // 3. dladdr-based detection (for packaged scenarios)
+        // 4. dladdr-based detection (for packaged scenarios)
         if let Some(lib_dir) =
             super::LibraryLoadPath::get(None).and_then(|p| p.parent().map(|d| d.to_path_buf()))
         {
@@ -115,7 +126,7 @@ impl RuntimeBinaryFinder {
             builder = builder.with_path(lib_dir.join("runtime"));
         }
 
-        // 4. Compile-time fallback: embedded by build.rs via cargo:rustc-env.
+        // 5. Compile-time fallback: embedded by build.rs via cargo:rustc-env.
         // Same name as the runtime env var — runtime check (above) takes priority.
         // Only used if the directory still exists (won't survive cargo clean).
         if let Some(dir) = option_env!("BOXLITE_RUNTIME_DIR") {

@@ -367,7 +367,10 @@ async fn remove_active_without_force_fails() {
         .unwrap();
     let box_id = handle.id().clone();
 
-    // Box is in Starting state (active)
+    // Start box so it becomes active.
+    handle.start().await.unwrap();
+
+    // Box should now be active.
     let info = ctx
         .runtime
         .get_info(box_id.as_str())
@@ -409,7 +412,10 @@ async fn remove_active_with_force_stops_and_removes() {
         .unwrap();
     let box_id = handle.id().clone();
 
-    // Box is in Starting state (active)
+    // Start box so it becomes active.
+    handle.start().await.unwrap();
+
+    // Box should now be active.
     let info = ctx
         .runtime
         .get_info(box_id.as_str())
@@ -471,6 +477,9 @@ async fn stop_marks_box_as_stopped() {
         .await
         .unwrap();
     let box_id = handle.id().clone();
+
+    // Start first so stop() transitions to Stopped.
+    handle.start().await.unwrap();
 
     // Stop the box
     handle.stop().await.unwrap();
@@ -603,7 +612,8 @@ async fn boxes_persist_across_runtime_restart() {
         let boxes = runtime.list_info().await.unwrap();
         assert_eq!(boxes.len(), 1);
 
-        // Stop the box before "restart"
+        // Start then stop before "restart" so persisted state is Stopped.
+        litebox.start().await.unwrap();
         litebox.stop().await.unwrap();
     }
 
@@ -686,7 +696,12 @@ async fn multiple_boxes_persist_and_recover_without_lock_errors() {
             litebox3.id().clone(),
         ];
 
-        // Stop all boxes before runtime drops
+        // Start all boxes so stop() persists Stopped status.
+        litebox1.start().await.unwrap();
+        litebox2.start().await.unwrap();
+        litebox3.start().await.unwrap();
+
+        // Stop all boxes before runtime drops.
         litebox1.stop().await.unwrap();
         litebox2.stop().await.unwrap();
         litebox3.stop().await.unwrap();
@@ -792,6 +807,9 @@ async fn auto_remove_false_preserves_box_on_stop() {
         .await
         .unwrap();
     let box_id = handle.id().clone();
+
+    // Start first so stop() transitions to Stopped.
+    handle.start().await.unwrap();
 
     // Stop should NOT auto-remove
     handle.stop().await.unwrap();
@@ -979,6 +997,9 @@ async fn recovery_removes_orphaned_stopped_boxes_without_directory() {
             .unwrap();
         box_id = litebox.id().clone();
         box_home = home_dir.join("boxes").join(box_id.as_str());
+
+        // Start first so stop() persists Stopped status.
+        litebox.start().await.unwrap();
 
         // Stop the box (persists to DB with status=Stopped)
         litebox.stop().await.unwrap();

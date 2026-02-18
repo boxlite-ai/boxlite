@@ -61,6 +61,14 @@ pub(crate) trait BoxBackend: Send + Sync {
 
     fn info(&self) -> BoxInfo;
 
+    /// Expose local BoxImpl internals for local-only operations.
+    ///
+    /// REST backends return `None`, and callers should surface a clear
+    /// `Unsupported` error for operations that require local filesystem access.
+    fn as_local_impl(&self) -> Option<&crate::litebox::box_impl::BoxImpl> {
+        None
+    }
+
     async fn start(&self) -> BoxliteResult<()>;
 
     async fn exec(&self, command: BoxCommand) -> BoxliteResult<Execution>;

@@ -621,9 +621,10 @@ mod tests {
             FsLayoutConfig::without_bind_mount(),
             false,
         );
+        let mounts_base = layout.shared_layout().base().to_path_buf();
 
         // Create mounts_dir on disk (it exists but should be excluded)
-        std::fs::create_dir_all(layout.mounts_dir()).unwrap();
+        std::fs::create_dir_all(&mounts_base).unwrap();
         // Also create dirs that SHOULD appear
         std::fs::create_dir_all(layout.sockets_dir()).unwrap();
         std::fs::create_dir_all(layout.logs_dir()).unwrap();
@@ -632,7 +633,7 @@ mod tests {
         let binary = PathBuf::from("/usr/local/bin/boxlite-shim");
         let policy = build_sandbox_policy(&paths, &binary, false);
 
-        let mounts_str = layout.mounts_dir().to_string_lossy().to_string();
+        let mounts_str = mounts_base.to_string_lossy().to_string();
         assert!(
             !policy.contains(&mounts_str),
             "mounts_dir path must not appear anywhere in sandbox policy"

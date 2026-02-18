@@ -86,68 +86,148 @@ mod tests {
     const STDOUT_FD: i32 = 1;
     const STDERR_FD: i32 = 2;
 
-    #[test]
-    fn test_close_fds_raw_succeeds() {
+    fn run_in_child(test_name: &str, f: fn() -> i32) {
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0, "fork failed for {}", test_name);
+
+        if pid == 0 {
+            let code = f();
+            unsafe { libc::_exit(code) };
+        }
+
+        let mut status = 0;
+        let waited = unsafe { libc::waitpid(pid, &mut status, 0) };
+        assert_eq!(waited, pid, "waitpid failed for {}", test_name);
+        assert!(
+            libc::WIFEXITED(status),
+            "{} child did not exit normally (status={})",
+            test_name,
+            status
+        );
+        assert_eq!(
+            libc::WEXITSTATUS(status),
+            0,
+            "{} child failed (status={})",
+            test_name,
+            status
+        );
+    }
+
+    fn child_close_fds_raw_succeeds() -> i32 {
         // Create a test FD
         let fd = unsafe { libc::dup(STDOUT_FD) };
-        assert!(fd > STDERR_FD);
+        if fd <= STDERR_FD {
+            return 1;
+        }
 
         // Close inherited FDs (raw version)
-        close_inherited_fds_raw().expect("Should succeed");
+        if close_inherited_fds_raw().is_err() {
+            return 2;
+        }
 
         // The test FD should be closed now
-        let result = unsafe { libc::close(fd) };
-        // On some systems this returns 0, on others -1 with EBADF
-        let _ = result;
+        let result = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+        if result != -1 {
+            return 3;
+        }
+        0
+    }
+
+    #[test]
+    fn test_close_fds_raw_succeeds() {
+        run_in_child("test_close_fds_raw_succeeds", child_close_fds_raw_succeeds);
+    }
+
+    fn child_stdin_stdout_stderr_preserved() -> i32 {
+        if close_inherited_fds_raw().is_err() {
+            return 1;
+        }
+
+        // Standard FDs should still be valid
+        if unsafe { libc::fcntl(0, libc::F_GETFD) } < 0 {
+            return 2;
+        }
+        if unsafe { libc::fcntl(1, libc::F_GETFD) } < 0 {
+            return 3;
+        }
+        if unsafe { libc::fcntl(2, libc::F_GETFD) } < 0 {
+            return 4;
+        }
+        0
     }
 
     #[test]
     fn test_stdin_stdout_stderr_preserved() {
-        close_inherited_fds_raw().expect("Should succeed");
+        run_in_child(
+            "test_stdin_stdout_stderr_preserved",
+            child_stdin_stdout_stderr_preserved,
+        );
+    }
 
-        // Standard FDs should still be valid
-        let result = unsafe { libc::fcntl(0, libc::F_GETFD) };
-        assert!(result >= 0 || result == -1, "stdin should be accessible");
+    fn child_close_fds_from_preserves_below() -> i32 {
+        // Create two test FDs (will get 3 and 4, or similar)
+        let fd_a = unsafe { libc::dup(STDOUT_FD) };
+        let fd_b = unsafe { libc::dup(STDOUT_FD) };
+        if fd_a < 3 {
+            return 1;
+        }
+        if fd_b <= fd_a {
+            return 2;
+        }
 
-        let result = unsafe { libc::fcntl(1, libc::F_GETFD) };
-        assert!(result >= 0 || result == -1, "stdout should be accessible");
+        // Close from fd_b onwards — fd_a should survive
+        if close_fds_from(fd_b).is_err() {
+            return 3;
+        }
 
-        let result = unsafe { libc::fcntl(2, libc::F_GETFD) };
-        assert!(result >= 0 || result == -1, "stderr should be accessible");
+        // fd_a should still be valid
+        let result = unsafe { libc::fcntl(fd_a, libc::F_GETFD) };
+        if result < 0 {
+            return 4;
+        }
+
+        // fd_b should be closed
+        let result = unsafe { libc::fcntl(fd_b, libc::F_GETFD) };
+        if result != -1 {
+            return 5;
+        }
+
+        // Cleanup fd_a
+        unsafe { libc::close(fd_a) };
+        0
     }
 
     #[test]
     fn test_close_fds_from_preserves_below() {
-        // Create two test FDs (will get 3 and 4, or similar)
-        let fd_a = unsafe { libc::dup(STDOUT_FD) };
-        let fd_b = unsafe { libc::dup(STDOUT_FD) };
-        assert!(fd_a >= 3);
-        assert!(fd_b > fd_a);
+        run_in_child(
+            "test_close_fds_from_preserves_below",
+            child_close_fds_from_preserves_below,
+        );
+    }
 
-        // Close from fd_b onwards — fd_a should survive
-        close_fds_from(fd_b).expect("Should succeed");
+    fn child_close_fds_from_closes_target_and_above() -> i32 {
+        let fd = unsafe { libc::dup(STDOUT_FD) };
+        if fd < 3 {
+            return 1;
+        }
 
-        // fd_a should still be valid
-        let result = unsafe { libc::fcntl(fd_a, libc::F_GETFD) };
-        assert!(result >= 0, "fd_a should still be open");
+        // Close from fd onwards — fd itself should be closed
+        if close_fds_from(fd).is_err() {
+            return 2;
+        }
 
-        // fd_b should be closed
-        let result = unsafe { libc::fcntl(fd_b, libc::F_GETFD) };
-        assert_eq!(result, -1, "fd_b should be closed");
-
-        // Cleanup fd_a
-        unsafe { libc::close(fd_a) };
+        let result = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+        if result != -1 {
+            return 3;
+        }
+        0
     }
 
     #[test]
     fn test_close_fds_from_closes_target_and_above() {
-        let fd = unsafe { libc::dup(STDOUT_FD) };
-        assert!(fd >= 3);
-
-        // Close from fd onwards — fd itself should be closed
-        close_fds_from(fd).expect("Should succeed");
-
-        let result = unsafe { libc::fcntl(fd, libc::F_GETFD) };
-        assert_eq!(result, -1, "target fd should be closed");
+        run_in_child(
+            "test_close_fds_from_closes_target_and_above",
+            child_close_fds_from_closes_target_and_above,
+        );
     }
 }

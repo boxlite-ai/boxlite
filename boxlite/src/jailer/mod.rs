@@ -642,9 +642,10 @@ mod tests {
     fn test_build_path_access_mounts_dir_excluded() {
         let dir = tempdir().unwrap();
         let layout = test_layout(dir.path().to_path_buf());
+        let mounts_base = layout.shared_layout().base().to_path_buf();
 
         // Create mounts_dir AND other dirs that SHOULD appear
-        std::fs::create_dir_all(layout.mounts_dir()).unwrap();
+        std::fs::create_dir_all(&mounts_base).unwrap();
         std::fs::create_dir_all(layout.sockets_dir()).unwrap();
         std::fs::create_dir_all(layout.logs_dir()).unwrap();
 
@@ -652,7 +653,7 @@ mod tests {
 
         // mounts_dir must be absent
         assert!(
-            paths.iter().all(|p| p.path != layout.mounts_dir()),
+            paths.iter().all(|p| p.path != mounts_base),
             "mounts_dir must NOT appear in path access"
         );
 

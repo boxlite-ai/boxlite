@@ -15,6 +15,6 @@ pub(crate) mod portability;
 pub(crate) mod rt_impl;
 
 pub use core::BoxliteRuntime;
-pub use portability::ArchiveManifest;
 pub use images::ImageHandle;
+pub use portability::ArchiveManifest;
 pub(crate) use rt_impl::SharedRuntimeImpl;

@@ -7,7 +7,7 @@ use crate::litebox::LiteBox;
 use crate::metrics::RuntimeMetrics;
 use crate::runtime::backend::RuntimeBackend;
 use crate::runtime::options::{BoxOptions, BoxliteOptions};
-use crate::runtime::rt_impl::{LocalRuntime, RuntimeImpl};
+use crate::runtime::rt_impl::{LocalRuntime, RuntimeImpl, SharedRuntimeImpl};
 use crate::runtime::signal_handler::install_signal_handler;
 use crate::runtime::types::BoxInfo;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
@@ -53,6 +53,7 @@ extern "C" fn shutdown_on_exit() {
 pub struct BoxliteRuntime {
     backend: Arc<dyn RuntimeBackend>,
     image_manager: Option<Arc<dyn crate::runtime::images::ImageManager>>,
+    local_runtime: Option<SharedRuntimeImpl>,
 }
 
 // ============================================================================
@@ -73,12 +74,14 @@ impl BoxliteRuntime {
     /// - Image API initialization fails
     pub fn new(options: BoxliteOptions) -> BoxliteResult<Self> {
         let local = LocalRuntime(RuntimeImpl::new(options)?);
+        let local_runtime = Arc::clone(&local.0);
         let backend_arc = Arc::new(local);
         let image_manager =
             Arc::clone(&backend_arc) as Arc<dyn crate::runtime::images::ImageManager>;
         Ok(Self {
             backend: backend_arc,
             image_manager: Some(image_manager),
+            local_runtime: Some(local_runtime),
         })
     }
 
@@ -105,6 +108,7 @@ impl BoxliteRuntime {
         Ok(Self {
             backend: Arc::new(rest_runtime),
             image_manager: None, // REST runtime doesn't support image operations
+            local_runtime: None,
         })
     }
 
@@ -392,6 +396,15 @@ impl BoxliteRuntime {
                 "Image operations not supported over REST API".to_string(),
             )),
         }
+    }
+
+    pub(crate) fn require_local_runtime(&self) -> BoxliteResult<&SharedRuntimeImpl> {
+        self.local_runtime.as_ref().ok_or_else(|| {
+            BoxliteError::Unsupported(
+                "This operation is only supported for local runtimes (not REST backends)"
+                    .to_string(),
+            )
+        })
     }
 }
 

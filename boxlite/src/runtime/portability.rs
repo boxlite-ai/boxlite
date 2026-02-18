@@ -55,7 +55,7 @@ impl super::BoxliteRuntime {
     ///
     /// A LiteBox handle for the newly created box.
     pub async fn import(&self, archive_path: &Path, name: &str) -> BoxliteResult<LiteBox> {
-        let rt = &self.rt_impl;
+        let rt = self.require_local_runtime()?;
 
         if !archive_path.exists() {
             return Err(BoxliteError::NotFound(format!(

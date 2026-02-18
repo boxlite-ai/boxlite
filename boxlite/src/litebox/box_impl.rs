@@ -596,6 +596,10 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
         self.info()
     }
 
+    fn as_local_impl(&self) -> Option<&Self> {
+        Some(self)
+    }
+
     async fn start(&self) -> BoxliteResult<()> {
         self.start().await
     }

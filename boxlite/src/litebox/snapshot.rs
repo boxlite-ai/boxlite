@@ -42,8 +42,9 @@ impl<'a> SnapshotHandle<'a> {
     /// directory and COW children are created at the original paths.
     pub async fn create(&self, name: &str, _opts: SnapshotOptions) -> BoxliteResult<SnapshotInfo> {
         self.require_stopped()?;
+        let local = self.local_impl()?;
 
-        let box_home = self.box_home();
+        let box_home = self.box_home()?;
         let container_disk = box_home.join(disk_filenames::CONTAINER_DISK);
         let guest_disk = box_home.join(disk_filenames::GUEST_ROOTFS_DISK);
 
@@ -56,7 +57,7 @@ impl<'a> SnapshotHandle<'a> {
         }
 
         // Check for duplicate snapshot name
-        let store = self.snapshot_store();
+        let store = self.snapshot_store()?;
         let box_id = self.litebox.id().as_str();
         if store.get_by_name(box_id, name)?.is_some() {
             return Err(BoxliteError::AlreadyExists(format!(
@@ -67,20 +68,18 @@ impl<'a> SnapshotHandle<'a> {
 
         // Transition to Snapshotting
         {
-            let inner = &self.litebox.inner;
-            let mut state = inner.state.write();
+            let mut state = local.state.write();
             state.transition_to(BoxStatus::Snapshotting)?;
-            inner.runtime.box_manager.save_box(inner.id(), &state)?;
+            local.runtime.box_manager.save_box(local.id(), &state)?;
         }
 
         let result = self.do_create(name, &box_home, &container_disk, &guest_disk);
 
         // Transition back to Stopped regardless of outcome
         {
-            let inner = &self.litebox.inner;
-            let mut state = inner.state.write();
+            let mut state = local.state.write();
             state.force_status(BoxStatus::Stopped);
-            let _ = inner.runtime.box_manager.save_box(inner.id(), &state);
+            let _ = local.runtime.box_manager.save_box(local.id(), &state);
         }
 
         result
@@ -167,7 +166,7 @@ impl<'a> SnapshotHandle<'a> {
             container_disk_bytes: container_virtual_size,
             size_bytes,
         };
-        self.snapshot_store().save(&record)?;
+        self.snapshot_store()?.save(&record)?;
 
         tracing::info!(
             box_id = %self.litebox.id(),
@@ -180,12 +179,12 @@ impl<'a> SnapshotHandle<'a> {
 
     /// List all snapshots for this box.
     pub async fn list(&self) -> BoxliteResult<Vec<SnapshotInfo>> {
-        self.snapshot_store().list(self.litebox.id().as_str())
+        self.snapshot_store()?.list(self.litebox.id().as_str())
     }
 
     /// Get a snapshot by name.
     pub async fn get(&self, name: &str) -> BoxliteResult<Option<SnapshotInfo>> {
-        self.snapshot_store()
+        self.snapshot_store()?
             .get_by_name(self.litebox.id().as_str(), name)
     }
 
@@ -197,7 +196,7 @@ impl<'a> SnapshotHandle<'a> {
         self.require_stopped()?;
 
         let box_id = self.litebox.id().as_str();
-        let store = self.snapshot_store();
+        let store = self.snapshot_store()?;
 
         let info = store.get_by_name(box_id, name)?.ok_or_else(|| {
             BoxliteError::NotFound(format!(
@@ -209,7 +208,7 @@ impl<'a> SnapshotHandle<'a> {
         // Check if current disk depends on this snapshot
         let snapshot_dir = PathBuf::from(&info.snapshot_dir);
         let snap_container = snapshot_dir.join(disk_filenames::CONTAINER_DISK);
-        let container_disk = self.box_home().join(disk_filenames::CONTAINER_DISK);
+        let container_disk = self.box_home()?.join(disk_filenames::CONTAINER_DISK);
 
         if container_disk.exists() && snap_container.exists() {
             // Read backing file from current disk to see if it points to this snapshot
@@ -255,9 +254,10 @@ impl<'a> SnapshotHandle<'a> {
     /// the snapshot's disks. Box stays stopped after restore.
     pub async fn restore(&self, name: &str) -> BoxliteResult<()> {
         self.require_stopped()?;
+        let local = self.local_impl()?;
 
         let box_id = self.litebox.id().as_str();
-        let store = self.snapshot_store();
+        let store = self.snapshot_store()?;
 
         let info = store.get_by_name(box_id, name)?.ok_or_else(|| {
             BoxliteError::NotFound(format!(
@@ -268,27 +268,25 @@ impl<'a> SnapshotHandle<'a> {
 
         // Transition to Restoring
         {
-            let inner = &self.litebox.inner;
-            let mut state = inner.state.write();
+            let mut state = local.state.write();
             state.transition_to(BoxStatus::Restoring)?;
-            inner.runtime.box_manager.save_box(inner.id(), &state)?;
+            local.runtime.box_manager.save_box(local.id(), &state)?;
         }
 
         let result = self.do_restore(&info);
 
         // Transition back to Stopped
         {
-            let inner = &self.litebox.inner;
-            let mut state = inner.state.write();
+            let mut state = local.state.write();
             state.force_status(BoxStatus::Stopped);
-            let _ = inner.runtime.box_manager.save_box(inner.id(), &state);
+            let _ = local.runtime.box_manager.save_box(local.id(), &state);
         }
 
         result
     }
 
     fn do_restore(&self, info: &SnapshotInfo) -> BoxliteResult<()> {
-        let box_home = self.box_home();
+        let box_home = self.box_home()?;
         let snapshot_dir = PathBuf::from(&info.snapshot_dir);
         let qcow2 = Qcow2Helper::new();
 
@@ -348,8 +346,13 @@ impl<'a> SnapshotHandle<'a> {
     // Helpers
     // ========================================================================
 
+    fn local_impl(&self) -> BoxliteResult<&crate::litebox::box_impl::BoxImpl> {
+        self.litebox.require_local_impl()
+    }
+
     fn require_stopped(&self) -> BoxliteResult<()> {
-        let state = self.litebox.inner.state.read();
+        let local = self.local_impl()?;
+        let state = local.state.read();
         if !state.status.is_stopped() {
             return Err(BoxliteError::InvalidState(format!(
                 "box '{}' must be stopped for this operation (current status: {})",
@@ -360,16 +363,18 @@ impl<'a> SnapshotHandle<'a> {
         Ok(())
     }
 
-    fn box_home(&self) -> PathBuf {
-        self.litebox.inner.config.box_home.clone()
+    fn box_home(&self) -> BoxliteResult<PathBuf> {
+        Ok(self.local_impl()?.config.box_home.clone())
     }
 
     fn snapshot_dir(&self, box_home: &Path, name: &str) -> PathBuf {
         box_home.join(disk_dirs::SNAPSHOTS_DIR).join(name)
     }
 
-    fn snapshot_store(&self) -> SnapshotStore {
-        SnapshotStore::new(self.litebox.inner.runtime.box_manager.db())
+    fn snapshot_store(&self) -> BoxliteResult<SnapshotStore> {
+        Ok(SnapshotStore::new(
+            self.local_impl()?.runtime.box_manager.db(),
+        ))
     }
 }
 

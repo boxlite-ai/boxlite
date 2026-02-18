@@ -29,9 +29,11 @@ impl LiteBox {
     ///
     /// Returns the path to the created archive.
     pub async fn export(&self, dest: &Path, opts: ExportOptions) -> BoxliteResult<PathBuf> {
+        let local = self.require_local_impl()?;
+
         // Verify stopped
         {
-            let state = self.inner.state.read();
+            let state = local.state.read();
             if !state.status.is_stopped() {
                 return Err(BoxliteError::InvalidState(format!(
                     "box '{}' must be stopped for export (current status: {})",
@@ -43,32 +45,30 @@ impl LiteBox {
 
         // Transition to Exporting
         {
-            let mut state = self.inner.state.write();
+            let mut state = local.state.write();
             state.transition_to(BoxStatus::Exporting)?;
-            self.inner
-                .runtime
-                .box_manager
-                .save_box(self.inner.id(), &state)?;
+            local.runtime.box_manager.save_box(local.id(), &state)?;
         }
 
-        let result = self.do_export(dest, &opts);
+        let result = self.do_export(local, dest, &opts);
 
         // Transition back to Stopped
         {
-            let mut state = self.inner.state.write();
+            let mut state = local.state.write();
             state.force_status(BoxStatus::Stopped);
-            let _ = self
-                .inner
-                .runtime
-                .box_manager
-                .save_box(self.inner.id(), &state);
+            let _ = local.runtime.box_manager.save_box(local.id(), &state);
         }
 
         result
     }
 
-    fn do_export(&self, dest: &Path, opts: &ExportOptions) -> BoxliteResult<PathBuf> {
-        let box_home = &self.inner.config.box_home;
+    fn do_export(
+        &self,
+        local: &crate::litebox::box_impl::BoxImpl,
+        dest: &Path,
+        opts: &ExportOptions,
+    ) -> BoxliteResult<PathBuf> {
+        let box_home = &local.config.box_home;
         let container_disk = box_home.join(disk_filenames::CONTAINER_DISK);
         let guest_disk = box_home.join(disk_filenames::GUEST_ROOTFS_DISK);
 
@@ -88,7 +88,7 @@ impl LiteBox {
         };
 
         // Create temp directory for flattened disks
-        let temp_dir = tempfile::tempdir_in(self.inner.runtime.layout.temp_dir()).map_err(|e| {
+        let temp_dir = tempfile::tempdir_in(local.runtime.layout.temp_dir()).map_err(|e| {
             BoxliteError::Storage(format!("Failed to create temp directory: {}", e))
         })?;
 
@@ -112,7 +112,7 @@ impl LiteBox {
         };
 
         // Extract image reference from rootfs spec
-        let image = match &self.inner.config.options.rootfs {
+        let image = match &local.config.options.rootfs {
             crate::runtime::options::RootfsSpec::Image(img) => img.clone(),
             crate::runtime::options::RootfsSpec::RootfsPath(path) => path.clone(),
         };
@@ -120,7 +120,7 @@ impl LiteBox {
         // Create manifest
         let manifest = ArchiveManifest {
             version: ARCHIVE_VERSION,
-            box_name: self.inner.config.name.clone(),
+            box_name: local.config.name.clone(),
             image,
             guest_disk_checksum,
             container_disk_checksum,
