@@ -50,11 +50,17 @@ pub enum NetworkBackendEndpoint {
 pub struct NetworkBackendConfig {
     /// Port mappings: (host_port, guest_port)
     pub port_mappings: Vec<(u16, u16)>,
+    /// Unix socket path for the network backend.
+    /// Each box must have its own unique path to prevent collisions.
+    pub socket_path: PathBuf,
 }
 
 impl NetworkBackendConfig {
-    pub fn new(port_mappings: Vec<(u16, u16)>) -> Self {
-        Self { port_mappings }
+    pub fn new(port_mappings: Vec<(u16, u16)>, socket_path: PathBuf) -> Self {
+        Self {
+            port_mappings,
+            socket_path,
+        }
     }
 }
 

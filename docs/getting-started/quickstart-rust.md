@@ -4,6 +4,8 @@ Get up and running with BoxLite Rust crate in 5 minutes.
 
 ## Installation
 
+**Requirements:** Rust 1.88 or later
+
 Add BoxLite to your `Cargo.toml`:
 
 ```toml

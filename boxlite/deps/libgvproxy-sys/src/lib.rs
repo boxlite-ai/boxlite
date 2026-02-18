@@ -24,15 +24,6 @@ extern "C" {
     /// Instance ID (handle) or -1 on error
     pub fn gvproxy_create(portMappingsJSON: *const c_char) -> c_longlong;
 
-    /// Get the Unix socket path for a gvproxy instance
-    ///
-    /// # Arguments
-    /// * `id` - Instance ID returned from gvproxy_create
-    ///
-    /// # Returns
-    /// Pointer to socket path string (must be freed with gvproxy_free_string)
-    pub fn gvproxy_get_socket_path(id: c_longlong) -> *mut c_char;
-
     /// Free a string allocated by libgvproxy
     ///
     /// # Arguments

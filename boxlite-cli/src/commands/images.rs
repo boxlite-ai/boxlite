@@ -55,7 +55,8 @@ impl From<&ImageInfo> for ImagePresenter {
 
 pub async fn execute(args: ImagesArgs, global: &GlobalFlags) -> anyhow::Result<()> {
     let rt = global.create_runtime()?;
-    let images = rt.list_images().await?;
+    let image_handle = rt.images()?;
+    let images = image_handle.list().await?;
 
     if args.quiet {
         for info in images {

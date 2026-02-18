@@ -188,6 +188,18 @@ impl PyExecution {
         })
     }
 
+    /// Resize PTY terminal window.
+    ///
+    /// Only works for executions started with TTY enabled (tty=True).
+    fn resize_tty<'a>(&self, py: Python<'a>, rows: u32, cols: u32) -> PyResult<Bound<'a, PyAny>> {
+        let execution = Arc::clone(&self.execution);
+
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            execution.resize_tty(rows, cols).await.map_err(map_err)?;
+            Ok(())
+        })
+    }
+
     fn __repr__(&self) -> String {
         "Execution(...)".to_string()
     }

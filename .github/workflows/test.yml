@@ -16,6 +16,7 @@ on:
     paths:
       - 'boxlite/**'
       - 'boxlite-shared/**'
+      - 'boxlite-cli/**'
       - 'guest/**'
       - 'sdks/**'
       - '**/Cargo.toml'
@@ -27,6 +28,7 @@ on:
     paths:
       - 'boxlite/**'
       - 'boxlite-shared/**'
+      - 'boxlite-cli/**'
       - 'guest/**'
       - 'sdks/**'
       - '**/Cargo.toml'
@@ -49,6 +51,7 @@ jobs:
       pull-requests: read
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
+      cli: ${{ steps.filter.outputs.boxlite_cli }}
       python: ${{ steps.filter.outputs.python }}
       node: ${{ steps.filter.outputs.node }}
     steps:
@@ -63,6 +66,8 @@ jobs:
               - 'guest/**'
               - '**/Cargo.toml'
               - 'Cargo.lock'
+            cli:
+              - 'boxlite-cli/**'
             python:
               - 'sdks/python/**'
             node:
@@ -104,6 +109,45 @@ jobs:
       - name: Run Rust unit tests
         # Only test boxlite-shared - boxlite requires libkrun/libgvproxy not available in CI
         run: cargo test -p boxlite-shared --lib
+
+  # cli unit tests (integration tests in tests/ are ignored - require VM)
+  cli:
+    name: CLI Unit Tests (${{ matrix.platform.target }})
+    needs: [config, changes]
+    if: ${{ needs.changes.outputs.cli == 'true' }}
+    runs-on: ${{ matrix.platform.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: ${{ fromJson(needs.config.outputs.platforms) }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: ${{ needs.config.outputs.rust-toolchain }}
+
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Install system dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install protobuf
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: boxlite-test
+
+      - name: Run boxlite-cli unit tests
+        # Only run tests in src/ (name contains "::tests::"); skip integration tests in tests/ (require VM)
+        env:
+          BOXLITE_DEPS_STUB: "1"
+        run: cargo test -p boxlite-cli -- "::tests::"
 
   # Python SDK unit tests
   python:

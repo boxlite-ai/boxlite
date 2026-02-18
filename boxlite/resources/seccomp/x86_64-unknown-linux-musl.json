@@ -1,1214 +1,2262 @@
 {
-    "vmm": {
-        "default_action": "trap",
-        "filter_action": "allow",
-        "filter": [
-            {
-                "syscall": "stat",
-                "comment": "Used when creating snapshots in vmm:persist::snapshot_memory_to_file through std::fs::File::metadata"
-            },
-            {
-                "syscall": "epoll_ctl"
-            },
-            {
-                "syscall": "epoll_pwait"
-            },
-            {
-                "syscall": "exit"
-            },
-            {
-                "syscall": "exit_group"
-            },
-            {
-                "syscall": "open"
-            },
-            {
-                "syscall": "read"
-            },
-            {
-                "syscall": "write"
-            },
-            {
-                "syscall": "mincore"
-            },
-            {
-                "syscall": "writev",
-                "comment": "Used by the VirtIO net device to write to tap"
-            },
-            {
-                "syscall": "readv",
-                "comment": "Used by the VirtIO net device to read from tap"
-            },
-            {
-                "syscall": "fsync"
-            },
-            {
-                "syscall": "close"
-            },
-            {
-                "syscall": "eventfd2",
-                "comment": "Used for creating io_uring completion event, on drive patch"
-            },
-            {
-                "syscall": "io_uring_enter",
-                "comment": "Used for submitting io_uring requests"
-            },
-            {
-                "syscall": "io_uring_setup",
-                "comment": "Used on drive patch"
-            },
-            {
-                "syscall": "io_uring_register",
-                "comment": "Used on drive patch"
-            },
-            {
-                "syscall": "brk",
-                "comment": "Called for expanding the heap"
-            },
-            {
-                "syscall": "clock_gettime",
-                "comment": "Used for metrics and logging, via the helpers in utils/src/time.rs. It's not called on some platforms, because of vdso optimisations."
-            },
-            {
-                "syscall": "connect",
-                "comment": "Needed for vsock"
-            },
-            {
-                "syscall": "fstat",
-                "comment": "Used for drive patching & rescanning, for reading the local timezone from /etc/localtime"
-            },
-            {
-                "syscall": "ftruncate",
-                "comment": "Used for snapshotting"
-            },
-            {
-                "syscall": "lseek",
-                "comment": "Used by the block device"
-            },
-            {
-                "syscall": "mremap",
-                "comment": "Used for re-allocating large memory regions, for example vectors"
-            },
-            {
-                "syscall": "munmap",
-                "comment": "Used for freeing memory"
-            },
-            {
-                "syscall": "recvfrom",
-                "comment": "Used by vsock to retrieve data from the socket"
-            },
-            {
-                "syscall": "rt_sigprocmask",
-                "comment": "rt_sigprocmask is used by libc::abort during a panic to block and unblock signals"
-            },
-            {
-                "syscall": "rt_sigreturn",
-                "comment": "rt_sigreturn is needed in case a fault does occur, so that the signal handler can return. Otherwise we get stuck in a fault loop."
-            },
-            {
-                "syscall": "sigaltstack",
-                "comment": "sigaltstack is used by Rust stdlib to remove alternative signal stack during thread teardown."
-            },
-            {
-                "syscall": "getrandom",
-                "comment": "getrandom is used by aws-lc library which we consume in virtio-rng"
-            },
-            {
-                "syscall": "accept4",
-                "comment": "Called to accept vsock connections",
-                "args": [
-                    {
-                        "index": 3,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 524288,
-                        "comment": "libc::SOCK_CLOEXEC"
-                    }
-                ]
-            },
-            {
-                "syscall": "fcntl",
-                "comment": "Used by snapshotting, drive patching and rescanning",
-                "args": [
-                    {
-                        "index": 1,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 2,
-                        "comment": "FCNTL_F_SETFD"
-                    },
-                    {
-                        "index": 2,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 1,
-                        "comment": "FCNTL_FD_CLOEXEC"
-                    }
-                ]
-            },
-            {
-                "syscall": "futex",
-                "comment": "Used for synchronization (during thread teardown when joining multiple vcpu threads at once)",
-                "args": [
-                    {
-                        "index": 1,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 0,
-                        "comment": "FUTEX_WAIT"
-                    }
-                ]
-            },
-            {
-                "syscall": "futex",
-                "comment": "Used for synchronization (during thread teardown)",
-                "args": [
-                    {
-                        "index": 1,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 1,
-                        "comment": "FUTEX_WAKE"
-                    }
-                ]
-            },
-            {
-                "syscall": "futex",
-                "comment": "Used for synchronization",
-                "args": [
-                    {
-                        "index": 1,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 128,
-                        "comment": "FUTEX_WAIT_PRIVATE"
-                    }
-                ]
-            },
-            {
-                "syscall": "futex",
-                "comment": "Used for synchronization",
-                "args": [
-                    {
-                        "index": 1,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 137,
-                        "comment": "FUTEX_WAIT_BITSET_PRIVATE"
-                    }
-                ]
-            },
-            {
-                "syscall": "futex",
-                "comment": "Used for synchronization",
-                "args": [
-                    {
-                        "index": 1,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 129,
-                        "comment": "FUTEX_WAKE_PRIVATE"
-                    }
-                ]
-            },
-            {
-                "syscall": "madvise",
-                "comment": "Used by the VirtIO balloon device and by musl for some customer workloads. It is also used by aws-lc during random number generation. They setup a memory page that mark with MADV_WIPEONFORK to be able to detect forks. They also call it with -1 to see if madvise is supported in certain platforms."
-            },
-            {
-                "syscall": "msync",
-                "comment": "Used by the VirtIO pmem device to sync the file content with the backing file.",
-                "args": [
-                    {
-                        "index": 2,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 4,
-                        "comment": "libc::MS_SYNC"
-                    }
-                ]
-            },
-            {
-                "syscall": "mmap",
-                "comment": "Used by the VirtIO balloon device",
-                "args": [
-                    {
-                        "index": 3,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 50,
-                        "comment": "libc::MAP_FIXED | libc::MAP_ANONYMOUS | libc::MAP_PRIVATE"
-                    }
-                ]
-            },
-            {
-                "syscall": "mmap",
-                "comment": "Used for reading the timezone in LocalTime::now()",
-                "args": [
-                    {
-                        "index": 3,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 1,
-                        "comment": "libc::MAP_SHARED"
-                    }
-                ]
-            },
-            {
-                "syscall": "mmap",
-                "comment": "Used by rust's stdlib, particularly when creating a diff snapshot of a VM with ~16 GB of memory",
-                "args": [
-                    {
-                        "index": 3,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 34,
-                        "comment": "libc::MAP_ANONYMOUS | libc::MAP_PRIVATE"
-                    }
-                ]
-            },
-            {
-                "syscall": "mmap",
-                "comment": "Used by io_uring for mapping the queues",
-                "args": [
-                    {
-                        "index": 3,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 32769,
-                        "comment": "libc::MAP_SHARED | libc::MAP_POPULATE"
-                    }
-                ]
-            },
-            {
-                "syscall": "rt_sigaction",
-                "comment": "rt_sigaction is used by libc::abort during a panic to install the default handler for SIGABRT",
-                "args": [
-                    {
-                        "index": 0,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 6,
-                        "comment": "SIGABRT"
-                    }
-                ]
-            },
-            {
-                "syscall": "socket",
-                "comment": "Called to open the vsock UDS",
-                "args": [
-                    {
-                        "index": 0,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 1,
-                        "comment": "libc::AF_UNIX"
-                    },
-                    {
-                        "index": 1,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 524289,
-                        "comment": "libc::SOCK_STREAM | libc::SOCK_CLOEXEC"
-                    },
-                    {
-                        "index": 2,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 0
-                    }
-                ]
-            },
-            {
-                "syscall": "tkill",
-                "comment": "tkill is used by libc::abort during a panic to raise SIGABRT",
-                "args": [
-                    {
-                        "index": 1,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 6,
-                        "comment": "SIGABRT"
-                    }
-                ]
-            },
-            {
-                "syscall": "tkill",
-                "comment": "Used to kick vcpus",
-                "args": [
-                    {
-                        "index": 1,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 35,
-                        "comment": "sigrtmin() + vcpu::VCPU_RTSIG_OFFSET"
-                    }
-                ]
-            },
-            {
-                "syscall": "timerfd_settime",
-                "comment": "Needed for rate limiting and metrics",
-                "args": [
-                    {
-                        "index": 1,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 0
-                    }
-                ]
-            },
-            {
-                "syscall": "ioctl",
-                "comment": "Used to make vsock UDS nonblocking",
-                "args": [
-                    {
-                        "index": 1,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 21537,
-                        "comment": "FIONBIO"
-                    }
-                ]
-            },
-            {
-                "syscall": "ioctl",
-                "comment": "Triggered on shutdown, to restore the initial terminal settings.",
-                "args": [
-                    {
-                        "index": 1,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 21523,
-                        "comment": "TIOCGWINSZ"
-                    }
-                ]
-            },
-            {
-                "syscall": "ioctl",
-                "comment": "Triggered on shutdown, to restore the initial terminal settings, only when Firecracker was launched from a shell.",
-                "args": [
-                    {
-                        "index": 1,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 21505,
-                        "comment": "TCGETS"
-                    }
-                ]
-            },
-            {
-                "syscall": "ioctl",
-                "comment": "Triggered on shutdown, to restore the initial terminal settings, only when Firecracker was launched from a shell.",
-                "args": [
-                    {
-                        "index": 1,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 21506,
-                        "comment": "TCSETS"
-                    }
-                ]
-            },
-            {
-                "syscall": "ioctl",
-                "args": [
-                    {
-                        "index": 1,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 1074835010,
-                        "comment": "KVM_GET_DIRTY_LOG"
-                    }
-                ]
-            },
-            {
-                "syscall": "ioctl",
-                "args": [
-                    {
-                        "index": 1,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 3255348834,
-                        "comment": "KVM_GET_IRQCHIP"
-                    }
-                ]
-            },
-            {
-                "syscall": "ioctl",
-                "args": [
-                    {
-                        "index": 1,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 2150674044,
-                        "comment": "KVM_GET_CLOCK"
-                    }
-                ]
-            },
-            {
-                "syscall": "ioctl",
-                "args": [
-                    {
-                        "index": 1,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 2154868383,
-                        "comment": "KVM_GET_PIT2"
-                    }
-                ]
-            },
-            {
-                "syscall": "sched_yield",
-                "comment": "Used by the rust standard library in std::sync::mpmc. Firecracker uses mpsc channels from this module for inter-thread communication"
-            },
-            {
-                "syscall": "sendmsg",
-                "comment": "Used by vhost-user frontend to communicate with the backend"
-            },
-            {
-                "syscall": "recvmsg",
-                "comment": "Used by vhost-user frontend to read response from the backend"
-            },
-            {
-                "syscall": "restart_syscall",
-                "comment": "automatically issued by the kernel when specific timing-related syscalls (e.g. nanosleep) get interrupted by SIGSTOP"
-            }
+  "vmm": {
+    "default_action": "trap",
+    "filter_action": "allow",
+    "filter": [
+      {
+        "syscall": "stat",
+        "comment": "Used when creating snapshots in vmm:persist::snapshot_memory_to_file through std::fs::File::metadata"
+      },
+      {
+        "syscall": "epoll_ctl"
+      },
+      {
+        "syscall": "epoll_pwait"
+      },
+      {
+        "syscall": "exit"
+      },
+      {
+        "syscall": "exit_group"
+      },
+      {
+        "syscall": "open"
+      },
+      {
+        "syscall": "read"
+      },
+      {
+        "syscall": "write"
+      },
+      {
+        "syscall": "mincore"
+      },
+      {
+        "syscall": "writev",
+        "comment": "Used by the VirtIO net device to write to tap"
+      },
+      {
+        "syscall": "readv",
+        "comment": "Used by the VirtIO net device to read from tap"
+      },
+      {
+        "syscall": "fsync"
+      },
+      {
+        "syscall": "close"
+      },
+      {
+        "syscall": "eventfd2",
+        "comment": "Used for creating io_uring completion event, on drive patch"
+      },
+      {
+        "syscall": "io_uring_enter",
+        "comment": "Used for submitting io_uring requests"
+      },
+      {
+        "syscall": "io_uring_setup",
+        "comment": "Used on drive patch"
+      },
+      {
+        "syscall": "io_uring_register",
+        "comment": "Used on drive patch"
+      },
+      {
+        "syscall": "brk",
+        "comment": "Called for expanding the heap"
+      },
+      {
+        "syscall": "clock_gettime",
+        "comment": "Used for metrics and logging, via the helpers in utils/src/time.rs. It's not called on some platforms, because of vdso optimisations."
+      },
+      {
+        "syscall": "connect",
+        "comment": "Needed for vsock"
+      },
+      {
+        "syscall": "fstat",
+        "comment": "Used for drive patching & rescanning, for reading the local timezone from /etc/localtime"
+      },
+      {
+        "syscall": "ftruncate",
+        "comment": "Used for snapshotting"
+      },
+      {
+        "syscall": "lseek",
+        "comment": "Used by the block device"
+      },
+      {
+        "syscall": "mremap",
+        "comment": "Used for re-allocating large memory regions, for example vectors"
+      },
+      {
+        "syscall": "munmap",
+        "comment": "Used for freeing memory"
+      },
+      {
+        "syscall": "recvfrom",
+        "comment": "Used by vsock to retrieve data from the socket"
+      },
+      {
+        "syscall": "rt_sigprocmask",
+        "comment": "rt_sigprocmask is used by libc::abort during a panic to block and unblock signals"
+      },
+      {
+        "syscall": "rt_sigreturn",
+        "comment": "rt_sigreturn is needed in case a fault does occur, so that the signal handler can return. Otherwise we get stuck in a fault loop."
+      },
+      {
+        "syscall": "sigaltstack",
+        "comment": "sigaltstack is used by Rust stdlib to remove alternative signal stack during thread teardown."
+      },
+      {
+        "syscall": "getrandom",
+        "comment": "getrandom is used by aws-lc library which we consume in virtio-rng"
+      },
+      {
+        "syscall": "accept4",
+        "comment": "Called to accept vsock connections",
+        "args": [
+          {
+            "index": 3,
+            "type": "dword",
+            "op": "eq",
+            "val": 524288,
+            "comment": "libc::SOCK_CLOEXEC"
+          }
         ]
-    },
-    "api": {
-        "default_action": "trap",
-        "filter_action": "allow",
-        "filter": [
-            {
-                "syscall": "epoll_ctl"
-            },
-            {
-                "syscall": "epoll_pwait"
-            },
-            {
-                "syscall": "exit"
-            },
-            {
-                "syscall": "exit_group"
-            },
-            {
-                "syscall": "open"
-            },
-            {
-                "syscall": "read"
-            },
-            {
-                "syscall": "write"
-            },
-            {
-                "syscall": "close"
-            },
-            {
-                "syscall": "brk",
-                "comment": "Called for expanding the heap"
-            },
-            {
-                "syscall": "clock_gettime",
-                "comment": "Used for metrics and logging, via the helpers in utils/src/time.rs. It's not called on some platforms, because of vdso optimisations."
-            },
-            {
-                "syscall": "fstat",
-                "comment": "Used for reading the local timezone from /etc/localtime"
-            },
-            {
-                "syscall": "mremap",
-                "comment": "Used for re-allocating large memory regions, for example vectors"
-            },
-            {
-                "syscall": "munmap",
-                "comment": "Used for freeing memory"
-            },
-            {
-                "syscall": "recvfrom",
-                "comment": "Used to retrieve data from the socket"
-            },
-            {
-                "syscall": "recvmsg",
-                "comment": "Needed by micro-http to read from the byte stream."
-            },
-            {
-                "syscall": "rt_sigprocmask",
-                "comment": "rt_sigprocmask is used by Rust stdlib to remove custom signal handler during thread teardown."
-            },
-            {
-                "syscall": "sigaltstack",
-                "comment": "sigaltstack is used by Rust stdlib to remove alternative signal stack during thread teardown."
-            },
-            {
-              "syscall": "getrandom",
-              "comment": "getrandom is used by `HttpServer` to reinialize `HashMap` after moving to the API thread"
-            },
-            {
-                "syscall": "accept4",
-                "comment": "Called to accept socket connections",
-                "args": [
-                    {
-                        "index": 3,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 524288,
-                        "comment": "libc::SOCK_CLOEXEC"
-                    }
-                ]
-            },
-            {
-                "syscall": "fcntl",
-                "comment": "Used by MMDS version 2 to extract entropy",
-                "args": [
-                    {
-                        "index": 1,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 2,
-                        "comment": "FCNTL_F_SETFD"
-                    }
-                ]
-            },
-            {
-                "syscall": "futex",
-                "comment": "Used for synchronization (during thread teardown)",
-                "args": [
-                    {
-                        "index": 1,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 0,
-                        "comment": "FUTEX_WAIT"
-                    }
-                ]
-            },
-            {
-                "syscall": "futex",
-                "comment": "Used for synchronization (during thread teardown)",
-                "args": [
-                    {
-                        "index": 1,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 1,
-                        "comment": "FUTEX_WAKE"
-                    }
-                ]
-            },
-            {
-                "syscall": "futex",
-                "comment": "Used for synchronization",
-                "args": [
-                    {
-                        "index": 1,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 128,
-                        "comment": "FUTEX_WAIT_PRIVATE"
-                    }
-                ]
-            },
-            {
-                "syscall": "futex",
-                "comment": "Used for synchronization",
-                "args": [
-                    {
-                        "index": 1,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 137,
-                        "comment": "FUTEX_WAIT_BITSET_PRIVATE"
-                    }
-                ]
-            },
-            {
-                "syscall": "futex",
-                "comment": "Used for synchronization",
-                "args": [
-                    {
-                        "index": 1,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 129,
-                        "comment": "FUTEX_WAKE_PRIVATE"
-                    }
-                ]
-            },
-            {
-                "syscall": "madvise",
-                "comment": "Triggered by musl for some customer workloads",
-                "args": [
-                    {
-                        "index": 2,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 4,
-                        "comment": "libc::MADV_DONTNEED"
-                    }
-                ]
-            },
-            {
-                "syscall": "madvise",
-                "comment": "Triggered on some deallocation paths in musl free()",
-                "args": [
-                    {
-                        "index": 2,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 8,
-                        "comment": "libc::MADV_FREE"
-                    }
-                ]
-            },
-            {
-                "syscall": "mmap",
-                "comment": "Used for large buffers sent to api_server",
-                "args": [
-                    {
-                        "index": 3,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 34,
-                        "comment": "libc::MAP_ANONYMOUS | libc::MAP_PRIVATE"
-                    }
-                ]
-            },
-            {
-                "syscall": "mmap",
-                "comment": "Used for reading the timezone in LocalTime::now()",
-                "args": [
-                    {
-                        "index": 3,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 1,
-                        "comment": "libc::MAP_SHARED"
-                    }
-                ]
-            },
-            {
-                "syscall": "rt_sigaction",
-                "comment": "rt_sigaction is used by libc::abort during a panic to install the default handler for SIGABRT",
-                "args": [
-                    {
-                        "index": 0,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 6,
-                        "comment": "SIGABRT"
-                    }
-                ]
-            },
-            {
-                "syscall": "socket",
-                "comment": "Called to open the unix domain socket",
-                "args": [
-                    {
-                        "index": 0,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 1,
-                        "comment": "libc::AF_UNIX"
-                    },
-                    {
-                        "index": 1,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 524289,
-                        "comment": "libc::SOCK_STREAM | libc::SOCK_CLOEXEC"
-                    },
-                    {
-                        "index": 2,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 0
-                    }
-                ]
-            },
-            {
-                "syscall": "tkill",
-                "comment": "tkill is used by libc::abort during a panic to raise SIGABRT",
-                "args": [
-                    {
-                        "index": 1,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 6,
-                        "comment": "SIGABRT"
-                    }
-                ]
-            },
-            {
-                "syscall": "ioctl",
-                "comment": "Used to make api socket nonblocking",
-                "args": [
-                    {
-                        "index": 1,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 21537,
-                        "comment": "FIONBIO"
-                    }
-                ]
-            },
-            {
-                "syscall": "sched_yield",
-                "comment": "Used by the rust standard library in std::sync::mpmc. Firecracker uses mpsc channels from this module for inter-thread communication"
-            },
-            {
-                "syscall": "restart_syscall",
-                "comment": "automatically issued by the kernel when specific timing-related syscalls (e.g. nanosleep) get interrupted by SIGSTOP"
-            }
+      },
+      {
+        "syscall": "fcntl",
+        "comment": "Used by snapshotting, drive patching and rescanning",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 2,
+            "comment": "FCNTL_F_SETFD"
+          },
+          {
+            "index": 2,
+            "type": "dword",
+            "op": "eq",
+            "val": 1,
+            "comment": "FCNTL_FD_CLOEXEC"
+          }
         ]
-    },
-    "vcpu": {
-        "default_action": "trap",
-        "filter_action": "allow",
-        "filter": [
-            {
-                "syscall": "exit"
-            },
-            {
-                "syscall": "exit_group"
-            },
-            {
-                "syscall": "write"
-            },
-            {
-                "syscall": "open"
-            },
-            {
-                "syscall": "close"
-            },
-            {
-                "syscall": "fstat",
-                "comment": "Used for reading the local timezone from /etc/localtime"
-            },
-            {
-                "syscall": "brk",
-                "comment": "Called for expanding the heap"
-            },
-            {
-                "syscall": "clock_gettime",
-                "comment": "Used for metrics and logging, via the helpers in utils/src/time.rs. It's not called on some platforms, because of vdso optimisations."
-            },
-            {
-                "syscall": "mremap",
-                "comment": "Used for re-allocating large memory regions, for example vectors"
-            },
-            {
-                "syscall": "munmap",
-                "comment": "Used for freeing memory"
-            },
-            {
-                "syscall": "rt_sigprocmask",
-                "comment": "rt_sigprocmask is used by Rust stdlib to remove custom signal handler during thread teardown."
-            },
-            {
-                "syscall": "rt_sigreturn",
-                "comment": "rt_sigreturn is needed in case a fault does occur, so that the signal handler can return. Otherwise we get stuck in a fault loop."
-            },
-            {
-                "syscall": "sigaltstack",
-                "comment": "sigaltstack is used by Rust stdlib to remove alternative signal stack during thread teardown."
-            },
-            {
-                "syscall": "futex",
-                "comment": "Used for synchronization (during thread teardown when joining multiple vcpu threads at once)",
-                "args": [
-                    {
-                        "index": 1,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 0,
-                        "comment": "FUTEX_WAIT"
-                    }
-                ]
-            },
-            {
-                "syscall": "futex",
-                "comment": "Used for synchronization (during thread teardown)",
-                "args": [
-                    {
-                        "index": 1,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 1,
-                        "comment": "FUTEX_WAKE"
-                    }
-                ]
-            },
-            {
-                "syscall": "futex",
-                "comment": "Used for synchronization",
-                "args": [
-                    {
-                        "index": 1,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 128,
-                        "comment": "FUTEX_WAIT_PRIVATE"
-                    }
-                ]
-            },
-            {
-                "syscall": "futex",
-                "comment": "Used for synchronization",
-                "args": [
-                    {
-                        "index": 1,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 137,
-                        "comment": "FUTEX_WAIT_BITSET_PRIVATE"
-                    }
-                ]
-            },
-            {
-                "syscall": "futex",
-                "comment": "Used for synchronization",
-                "args": [
-                    {
-                        "index": 1,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 129,
-                        "comment": "FUTEX_WAKE_PRIVATE"
-                    }
-                ]
-            },
-            {
-                "syscall": "madvise",
-                "comment": "Triggered by musl for some customer workloads",
-                "args": [
-                    {
-                        "index": 2,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 4,
-                        "comment": "libc::MADV_DONTNEED"
-                    }
-                ]
-            },
-            {
-                "syscall": "madvise",
-                "comment": "Triggered on some deallocation paths in musl free()",
-                "args": [
-                    {
-                        "index": 2,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 8,
-                        "comment": "libc::MADV_FREE"
-                    }
-                ]
-            },
-            {
-                "syscall": "mmap",
-                "comment": "Used for reading the timezone in LocalTime::now()",
-                "args": [
-                    {
-                        "index": 3,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 1,
-                        "comment": "libc::MAP_SHARED"
-                    }
-                ]
-            },
-            {
-                "syscall": "mmap",
-                "comment": "Used for allocating memory for FamStructWrapper called by KvmCpu::get_cpuid",
-                "args": [
-                    {
-                        "index": 3,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 34,
-                        "comment": "libc::MAP_ANONYMOUS|libc::MAP_PRIVATE"
-                    },
-                    {
-                        "index": 2,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 3,
-                        "comment": "libc::PROT_READ|libc::PROT_WRITE"
-                    }
-                ]
-            },
-            {
-                "syscall": "rt_sigaction",
-                "comment": "rt_sigaction is used by libc::abort during a panic to install the default handler for SIGABRT",
-                "args": [
-                    {
-                        "index": 0,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 6,
-                        "comment": "SIGABRT"
-                    }
-                ]
-            },
-            {
-                "syscall": "timerfd_settime",
-                "comment": "Needed for updating the balloon statistics interval",
-                "args": [
-                    {
-                        "index": 1,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 0
-                    }
-                ]
-            },
-            {
-                "syscall": "tkill",
-                "comment": "tkill is used by libc::abort during a panic to raise SIGABRT",
-                "args": [
-                    {
-                        "index": 1,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 6,
-                        "comment": "SIGABRT"
-                    }
-                ]
-            },
-            {
-                "syscall": "ioctl",
-                "args": [
-                    {
-                        "index": 1,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 44672,
-                        "comment": "KVM_RUN"
-                    }
-                ]
-            },
-            {
-                "syscall": "ioctl",
-                "args": [
-                    {
-                        "index": 1,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 2147790488,
-                        "comment": "KVM_GET_MP_STATE"
-                    }
-                ]
-            },
-            {
-                "syscall": "ioctl",
-                "args": [
-                    {
-                        "index": 1,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 2151722655,
-                        "comment": "KVM_GET_VCPU_EVENTS"
-                    }
-                ]
-            },
-            {
-                "syscall": "ioctl",
-                "args": [
-                    {
-                        "index": 1,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 2214637198,
-                        "comment": "KVM_GET_LAPIC"
-                    }
-                ]
-            },
-            {
-                "syscall": "ioctl",
-                "args": [
-                    {
-                        "index": 1,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 2167975555,
-                        "comment": "KVM_GET_SREGS"
-                    }
-                ]
-            },
-            {
-                "syscall": "ioctl",
-                "args": [
-                    {
-                        "index": 1,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 2156965505,
-                        "comment": "KVM_GET_REGS"
-                    }
-                ]
-            },
-            {
-                "syscall": "ioctl",
-                "args": [
-                    {
-                        "index": 1,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 3221794440,
-                        "comment": "KVM_GET_MSRS"
-                    }
-                ]
-            },
-            {
-                "syscall": "ioctl",
-                "args": [
-                    {
-                        "index": 1,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 3221794449,
-                        "comment": "KVM_GET_CPUID2"
-                    }
-                ]
-            },
-            {
-                "syscall": "ioctl",
-                "args": [
-                    {
-                        "index": 1,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 2155916961,
-                        "comment": "KVM_GET_DEBUGREGS"
-                    }
-                ]
-            },
-            {
-                "syscall": "ioctl",
-                "args": [
-                    {
-                        "index": 1,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 2415963812,
-                        "comment": "KVM_GET_XSAVE"
-                    }
-                ]
-            },
-            {
-                "syscall": "ioctl",
-                "args": [
-                    {
-                        "index": 1,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 2415963855,
-                        "comment": "KVM_GET_XSAVE2"
-                    }
-                ]
-            },
-            {
-                "syscall": "ioctl",
-                "args": [
-                    {
-                        "index": 1,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 2173218470,
-                        "comment": "KVM_GET_XCRS"
-                    }
-                ]
-            },
-            {
-                "syscall": "ioctl",
-                "args": [
-                    {
-                        "index": 1,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 44707,
-                        "comment": "KVM_GET_TSC_KHZ"
-                    }
-                ]
-            },
-            {
-                "syscall": "ioctl",
-                "args": [
-                    {
-                        "index": 1,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 1074025680,
-                        "comment": "TUNSETOFFLOAD"
-                    }
-                ]
-            },
-            {
-                "syscall": "ioctl",
-                "args": [
-                    {
-                        "index": 1,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 44717,
-                        "comment": "KVM_KVMCLOCK_CTRL. We call this after pausing vCPUs to avoid soft lockups in the guest."
-                    }
-                ]
-            },
-            {
-                "syscall": "sched_yield",
-                "comment": "Used by the rust standard library in std::sync::mpmc. Firecracker uses mpsc channels from this module for inter-thread communication"
-            },
-            {
-                "syscall": "sendmsg",
-                "comment": "Used by vhost-user frontend to communicate with the backend"
-            },
-            {
-                "syscall": "restart_syscall",
-                "comment": "automatically issued by the kernel when specific timing-related syscalls (e.g. nanosleep) get interrupted by SIGSTOP"
-            },
-            {
-                "syscall": "ioctl",
-                "args": [
-                    {
-                        "index": 1,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 44547,
-                        "comment": "KVM_CHECK_EXTENSION"
-                    },
-                    {
-                        "index": 2,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 131,
-                        "comment": "KVM_CAP_MSI_DEVID"
-                    }
-                ]
-            },
-            {
-                "syscall": "ioctl",
-                "args": [
-                    {
-                        "index": 1,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 1074310762,
-                        "comment": "KVM_SET_GSI_ROUTING"
-                    }
-                ]
-            },
-            {
-                "syscall": "ioctl",
-                "args": [
-                    {
-                        "index": 1,
-                        "type": "dword",
-                        "op": "eq",
-                        "val": 1075883638,
-                        "comment": "KVM_IRQFD"
-                    }
-                ]
-            }
+      },
+      {
+        "syscall": "futex",
+        "comment": "Used for synchronization (during thread teardown when joining multiple vcpu threads at once)",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 0,
+            "comment": "FUTEX_WAIT"
+          }
         ]
-    }
+      },
+      {
+        "syscall": "futex",
+        "comment": "Used for synchronization (during thread teardown)",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 1,
+            "comment": "FUTEX_WAKE"
+          }
+        ]
+      },
+      {
+        "syscall": "futex",
+        "comment": "Used for synchronization",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 128,
+            "comment": "FUTEX_WAIT_PRIVATE"
+          }
+        ]
+      },
+      {
+        "syscall": "futex",
+        "comment": "Used for synchronization",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 137,
+            "comment": "FUTEX_WAIT_BITSET_PRIVATE"
+          }
+        ]
+      },
+      {
+        "syscall": "futex",
+        "comment": "Used for synchronization",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 129,
+            "comment": "FUTEX_WAKE_PRIVATE"
+          }
+        ]
+      },
+      {
+        "syscall": "madvise",
+        "comment": "Used by the VirtIO balloon device and by musl for some customer workloads. It is also used by aws-lc during random number generation. They setup a memory page that mark with MADV_WIPEONFORK to be able to detect forks. They also call it with -1 to see if madvise is supported in certain platforms."
+      },
+      {
+        "syscall": "msync",
+        "comment": "Used by the VirtIO pmem device to sync the file content with the backing file.",
+        "args": [
+          {
+            "index": 2,
+            "type": "dword",
+            "op": "eq",
+            "val": 4,
+            "comment": "libc::MS_SYNC"
+          }
+        ]
+      },
+      {
+        "syscall": "mmap",
+        "comment": "Used by the VirtIO balloon device",
+        "args": [
+          {
+            "index": 3,
+            "type": "dword",
+            "op": "eq",
+            "val": 50,
+            "comment": "libc::MAP_FIXED | libc::MAP_ANONYMOUS | libc::MAP_PRIVATE"
+          }
+        ]
+      },
+      {
+        "syscall": "mmap",
+        "comment": "Used for reading the timezone in LocalTime::now()",
+        "args": [
+          {
+            "index": 3,
+            "type": "dword",
+            "op": "eq",
+            "val": 1,
+            "comment": "libc::MAP_SHARED"
+          }
+        ]
+      },
+      {
+        "syscall": "mmap",
+        "comment": "Used by rust's stdlib, particularly when creating a diff snapshot of a VM with ~16 GB of memory",
+        "args": [
+          {
+            "index": 3,
+            "type": "dword",
+            "op": "eq",
+            "val": 34,
+            "comment": "libc::MAP_ANONYMOUS | libc::MAP_PRIVATE"
+          }
+        ]
+      },
+      {
+        "syscall": "mmap",
+        "comment": "Used by io_uring for mapping the queues",
+        "args": [
+          {
+            "index": 3,
+            "type": "dword",
+            "op": "eq",
+            "val": 32769,
+            "comment": "libc::MAP_SHARED | libc::MAP_POPULATE"
+          }
+        ]
+      },
+      {
+        "syscall": "rt_sigaction",
+        "comment": "rt_sigaction is used by libc::abort during a panic to install the default handler for SIGABRT",
+        "args": [
+          {
+            "index": 0,
+            "type": "dword",
+            "op": "eq",
+            "val": 6,
+            "comment": "SIGABRT"
+          }
+        ]
+      },
+      {
+        "syscall": "socket",
+        "comment": "Called to open the vsock UDS",
+        "args": [
+          {
+            "index": 0,
+            "type": "dword",
+            "op": "eq",
+            "val": 1,
+            "comment": "libc::AF_UNIX"
+          },
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 524289,
+            "comment": "libc::SOCK_STREAM | libc::SOCK_CLOEXEC"
+          },
+          {
+            "index": 2,
+            "type": "dword",
+            "op": "eq",
+            "val": 0
+          }
+        ]
+      },
+      {
+        "syscall": "tkill",
+        "comment": "tkill is used by libc::abort during a panic to raise SIGABRT",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 6,
+            "comment": "SIGABRT"
+          }
+        ]
+      },
+      {
+        "syscall": "tkill",
+        "comment": "Used to kick vcpus",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 35,
+            "comment": "sigrtmin() + vcpu::VCPU_RTSIG_OFFSET"
+          }
+        ]
+      },
+      {
+        "syscall": "timerfd_settime",
+        "comment": "Needed for rate limiting and metrics",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 0
+          }
+        ]
+      },
+      {
+        "syscall": "ioctl",
+        "comment": "Used to make vsock UDS nonblocking",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 21537,
+            "comment": "FIONBIO"
+          }
+        ]
+      },
+      {
+        "syscall": "ioctl",
+        "comment": "Triggered on shutdown, to restore the initial terminal settings.",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 21523,
+            "comment": "TIOCGWINSZ"
+          }
+        ]
+      },
+      {
+        "syscall": "ioctl",
+        "comment": "Triggered on shutdown, to restore the initial terminal settings, only when Firecracker was launched from a shell.",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 21505,
+            "comment": "TCGETS"
+          }
+        ]
+      },
+      {
+        "syscall": "ioctl",
+        "comment": "Triggered on shutdown, to restore the initial terminal settings, only when Firecracker was launched from a shell.",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 21506,
+            "comment": "TCSETS"
+          }
+        ]
+      },
+      {
+        "syscall": "ioctl",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 1074835010,
+            "comment": "KVM_GET_DIRTY_LOG"
+          }
+        ]
+      },
+      {
+        "syscall": "ioctl",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 3255348834,
+            "comment": "KVM_GET_IRQCHIP"
+          }
+        ]
+      },
+      {
+        "syscall": "ioctl",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 2150674044,
+            "comment": "KVM_GET_CLOCK"
+          }
+        ]
+      },
+      {
+        "syscall": "ioctl",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 2154868383,
+            "comment": "KVM_GET_PIT2"
+          }
+        ]
+      },
+      {
+        "syscall": "sched_yield",
+        "comment": "Used by the rust standard library in std::sync::mpmc. Firecracker uses mpsc channels from this module for inter-thread communication"
+      },
+      {
+        "syscall": "sendmsg",
+        "comment": "Used by vhost-user frontend to communicate with the backend"
+      },
+      {
+        "syscall": "recvmsg",
+        "comment": "Used by vhost-user frontend to read response from the backend"
+      },
+      {
+        "syscall": "restart_syscall",
+        "comment": "automatically issued by the kernel when specific timing-related syscalls (e.g. nanosleep) get interrupted by SIGSTOP"
+      },
+
+      {
+        "syscall": "openat",
+        "comment": "libkrun: glibc 2.26+ maps open() to openat(AT_FDCWD, ...)"
+      },
+      {
+        "syscall": "newfstatat",
+        "comment": "libkrun: glibc 2.33+ maps stat/fstat to newfstatat"
+      },
+      {
+        "syscall": "statx",
+        "comment": "libkrun: modern file stat (used by glibc 2.38+)"
+      },
+      {
+        "syscall": "readlinkat",
+        "comment": "libkrun: modern readlink (glibc uses readlinkat)"
+      },
+      {
+        "syscall": "unlinkat",
+        "comment": "libkrun: modern unlink (glibc uses unlinkat)"
+      },
+      {
+        "syscall": "clone3",
+        "comment": "libkrun: modern thread creation (glibc 2.34+, used for vCPU threads)"
+      },
+      {
+        "syscall": "clone",
+        "comment": "libkrun: legacy thread/process creation"
+      },
+      {
+        "syscall": "close_range",
+        "comment": "libkrun: close range of file descriptors (glibc 2.34+)"
+      },
+      {
+        "syscall": "epoll_create1",
+        "comment": "libkrun: create epoll instance"
+      },
+      {
+        "syscall": "epoll_wait",
+        "comment": "libkrun: epoll wait (used alongside epoll_pwait)"
+      },
+      {
+        "syscall": "mprotect",
+        "comment": "libkrun: memory protection changes for guest RAM regions"
+      },
+      {
+        "syscall": "bind",
+        "comment": "libkrun: bind socket for networking"
+      },
+      {
+        "syscall": "listen",
+        "comment": "libkrun: listen on socket"
+      },
+      {
+        "syscall": "getsockname",
+        "comment": "libkrun: get socket address"
+      },
+      {
+        "syscall": "setsockopt",
+        "comment": "libkrun: set socket options"
+      },
+      {
+        "syscall": "sendto",
+        "comment": "libkrun: send data on socket"
+      },
+      {
+        "syscall": "poll",
+        "comment": "libkrun: I/O multiplexing"
+      },
+      {
+        "syscall": "pread64",
+        "comment": "libkrun: positioned read for block device I/O"
+      },
+      {
+        "syscall": "pwrite64",
+        "comment": "libkrun: positioned write for block device I/O"
+      },
+      {
+        "syscall": "preadv",
+        "comment": "libkrun: vectorized positioned read"
+      },
+      {
+        "syscall": "mkdir",
+        "comment": "libkrun: directory creation"
+      },
+      {
+        "syscall": "dup",
+        "comment": "libkrun: file descriptor duplication"
+      },
+      {
+        "syscall": "dup2",
+        "comment": "libkrun: file descriptor duplication"
+      },
+      {
+        "syscall": "kill",
+        "comment": "libkrun: signal delivery"
+      },
+      {
+        "syscall": "capget",
+        "comment": "libkrun: query process capabilities"
+      },
+      {
+        "syscall": "prctl",
+        "comment": "libkrun: thread setup (PR_SET_NAME, etc.)"
+      },
+      {
+        "syscall": "pipe2",
+        "comment": "libkrun: pipe creation"
+      },
+      {
+        "syscall": "tgkill",
+        "comment": "libkrun: thread-group signal delivery"
+      },
+      {
+        "syscall": "nanosleep",
+        "comment": "libkrun: sleep operations"
+      },
+      {
+        "syscall": "clock_nanosleep",
+        "comment": "libkrun: precise sleep (glibc maps nanosleep to clock_nanosleep)"
+      },
+      {
+        "syscall": "getpid",
+        "comment": "libkrun: get process ID"
+      },
+      {
+        "syscall": "gettid",
+        "comment": "libkrun: get thread ID (vCPU thread init)"
+      },
+      {
+        "syscall": "getuid",
+        "comment": "libkrun: get user ID"
+      },
+      {
+        "syscall": "getgid",
+        "comment": "libkrun: get group ID"
+      },
+      {
+        "syscall": "access",
+        "comment": "libkrun: check file access permissions"
+      },
+      {
+        "syscall": "arch_prctl",
+        "comment": "libkrun: x86_64 TLS setup (called by new threads via clone)"
+      },
+      {
+        "syscall": "set_robust_list",
+        "comment": "libkrun: pthread robust futex list (called by new threads)"
+      },
+      {
+        "syscall": "set_tid_address",
+        "comment": "libkrun: set thread ID pointer (called by new threads)"
+      },
+      {
+        "syscall": "rseq",
+        "comment": "libkrun: restartable sequences (glibc 2.35+)"
+      },
+      {
+        "syscall": "prlimit64",
+        "comment": "libkrun: get/set resource limits"
+      },
+      {
+        "syscall": "sched_getaffinity",
+        "comment": "libkrun: CPU affinity query for vCPU scheduling"
+      },
+      {
+        "syscall": "umask",
+        "comment": "libkrun: set file creation mask (used by libcontainer)"
+      },
+      {
+        "syscall": "accept",
+        "comment": "libkrun: accept connections (older variant without flags)"
+      },
+      {
+        "syscall": "capset",
+        "comment": "libkrun: set process capabilities"
+      },
+      {
+        "syscall": "copy_file_range",
+        "comment": "libkrun: efficient file copy"
+      },
+      {
+        "syscall": "fchmod",
+        "comment": "libkrun: change file permissions"
+      },
+      {
+        "syscall": "flock",
+        "comment": "libkrun: file locking"
+      },
+      {
+        "syscall": "getcwd",
+        "comment": "libkrun: get current working directory"
+      },
+      {
+        "syscall": "getdents64",
+        "comment": "libkrun: read directory entries"
+      },
+      {
+        "syscall": "geteuid",
+        "comment": "libkrun: get effective user ID"
+      },
+      {
+        "syscall": "getsockopt",
+        "comment": "libkrun: get socket options"
+      },
+      {
+        "syscall": "mkdirat",
+        "comment": "libkrun: create directory relative to fd"
+      },
+      {
+        "syscall": "pwritev",
+        "comment": "libkrun: vectorized positioned write"
+      },
+      {
+        "syscall": "readlink",
+        "comment": "libkrun: read symbolic link"
+      },
+      {
+        "syscall": "shutdown",
+        "comment": "libkrun: shutdown socket"
+      },
+      {
+        "syscall": "signalfd4",
+        "comment": "libkrun: create signalfd for signal handling"
+      },
+      {
+        "syscall": "socketpair",
+        "comment": "libkrun: create connected socket pair"
+      },
+      {
+        "syscall": "uname",
+        "comment": "libkrun: get system info"
+      },
+      {
+        "syscall": "unlink",
+        "comment": "libkrun: delete file"
+      },
+      {
+        "syscall": "wait4",
+        "comment": "libkrun: wait for child process"
+      },
+      {
+        "syscall": "waitid",
+        "comment": "libkrun: wait for child process (extended)"
+      },
+
+      {
+        "syscall": "ioctl",
+        "comment": "libkrun: KVM VM setup requires 28+ ioctl codes; ge 0 matches any request code",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "ge",
+            "val": 0,
+            "comment": "any ioctl request code"
+          }
+        ]
+      },
+      {
+        "syscall": "mmap",
+        "comment": "libkrun: VM memory mapping requires various flag combinations (guest RAM, balloon, mmap'd I/O)",
+        "args": [
+          {
+            "index": 3,
+            "type": "dword",
+            "op": "ge",
+            "val": 0,
+            "comment": "any mmap flags"
+          }
+        ]
+      },
+      {
+        "syscall": "socket",
+        "comment": "libkrun: needs AF_UNIX, AF_INET, AF_INET6 with various types",
+        "args": [
+          {
+            "index": 0,
+            "type": "dword",
+            "op": "ge",
+            "val": 0,
+            "comment": "any socket domain"
+          }
+        ]
+      },
+      {
+        "syscall": "fcntl",
+        "comment": "libkrun: FD management F_GETFD, F_SETFD, F_GETFL, F_SETFL",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "ge",
+            "val": 0,
+            "comment": "any fcntl command"
+          }
+        ]
+      },
+      {
+        "syscall": "futex",
+        "comment": "libkrun: thread synchronization for VM runtime (all futex ops)",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "ge",
+            "val": 0,
+            "comment": "any futex op"
+          }
+        ]
+      },
+      {
+        "syscall": "rt_sigaction",
+        "comment": "libkrun: signal handler registration for VM exits (all signals)",
+        "args": [
+          {
+            "index": 0,
+            "type": "dword",
+            "op": "ge",
+            "val": 0,
+            "comment": "any signal number"
+          }
+        ]
+      },
+      {
+        "syscall": "accept4",
+        "comment": "libkrun: accept connections with various flags",
+        "args": [
+          {
+            "index": 3,
+            "type": "dword",
+            "op": "ge",
+            "val": 0,
+            "comment": "any accept4 flags"
+          }
+        ]
+      }
+    ]
+  },
+  "gvproxy": {
+    "default_action": "trap",
+    "filter_action": "allow",
+    "filter": [
+      {
+        "syscall": "stat",
+        "comment": "Used when creating snapshots in vmm:persist::snapshot_memory_to_file through std::fs::File::metadata"
+      },
+      {
+        "syscall": "epoll_ctl"
+      },
+      {
+        "syscall": "epoll_pwait"
+      },
+      {
+        "syscall": "exit"
+      },
+      {
+        "syscall": "exit_group"
+      },
+      {
+        "syscall": "open"
+      },
+      {
+        "syscall": "read"
+      },
+      {
+        "syscall": "write"
+      },
+      {
+        "syscall": "mincore"
+      },
+      {
+        "syscall": "writev",
+        "comment": "Used by the VirtIO net device to write to tap"
+      },
+      {
+        "syscall": "readv",
+        "comment": "Used by the VirtIO net device to read from tap"
+      },
+      {
+        "syscall": "fsync"
+      },
+      {
+        "syscall": "close"
+      },
+      {
+        "syscall": "eventfd2",
+        "comment": "Used for creating io_uring completion event, on drive patch"
+      },
+      {
+        "syscall": "io_uring_enter",
+        "comment": "Used for submitting io_uring requests"
+      },
+      {
+        "syscall": "io_uring_setup",
+        "comment": "Used on drive patch"
+      },
+      {
+        "syscall": "io_uring_register",
+        "comment": "Used on drive patch"
+      },
+      {
+        "syscall": "brk",
+        "comment": "Called for expanding the heap"
+      },
+      {
+        "syscall": "clock_gettime",
+        "comment": "Used for metrics and logging, via the helpers in utils/src/time.rs. It's not called on some platforms, because of vdso optimisations."
+      },
+      {
+        "syscall": "connect",
+        "comment": "Needed for vsock"
+      },
+      {
+        "syscall": "fstat",
+        "comment": "Used for drive patching & rescanning, for reading the local timezone from /etc/localtime"
+      },
+      {
+        "syscall": "ftruncate",
+        "comment": "Used for snapshotting"
+      },
+      {
+        "syscall": "lseek",
+        "comment": "Used by the block device"
+      },
+      {
+        "syscall": "mremap",
+        "comment": "Used for re-allocating large memory regions, for example vectors"
+      },
+      {
+        "syscall": "munmap",
+        "comment": "Used for freeing memory"
+      },
+      {
+        "syscall": "recvfrom",
+        "comment": "Used by vsock to retrieve data from the socket"
+      },
+      {
+        "syscall": "rt_sigprocmask",
+        "comment": "rt_sigprocmask is used by libc::abort during a panic to block and unblock signals"
+      },
+      {
+        "syscall": "rt_sigreturn",
+        "comment": "rt_sigreturn is needed in case a fault does occur, so that the signal handler can return. Otherwise we get stuck in a fault loop."
+      },
+      {
+        "syscall": "sigaltstack",
+        "comment": "sigaltstack is used by Rust stdlib to remove alternative signal stack during thread teardown."
+      },
+      {
+        "syscall": "getrandom",
+        "comment": "getrandom is used by aws-lc library which we consume in virtio-rng"
+      },
+      {
+        "syscall": "accept4",
+        "comment": "Go runtime + libkrun: accept connections with any flags (ge 0 = match any)",
+        "args": [
+          {
+            "index": 3,
+            "type": "dword",
+            "op": "ge",
+            "val": 0,
+            "comment": "any accept4 flags"
+          }
+        ]
+      },
+      {
+        "syscall": "fcntl",
+        "comment": "libkrun: FD flags management (F_GETFD, F_SETFD, F_GETFL, F_SETFL)"
+      },
+      {
+        "syscall": "futex",
+        "comment": "Used for synchronization (during thread teardown when joining multiple vcpu threads at once)",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 0,
+            "comment": "FUTEX_WAIT"
+          }
+        ]
+      },
+      {
+        "syscall": "futex",
+        "comment": "Used for synchronization (during thread teardown)",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 1,
+            "comment": "FUTEX_WAKE"
+          }
+        ]
+      },
+      {
+        "syscall": "futex",
+        "comment": "Used for synchronization",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 128,
+            "comment": "FUTEX_WAIT_PRIVATE"
+          }
+        ]
+      },
+      {
+        "syscall": "futex",
+        "comment": "Used for synchronization",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 137,
+            "comment": "FUTEX_WAIT_BITSET_PRIVATE"
+          }
+        ]
+      },
+      {
+        "syscall": "futex",
+        "comment": "Used for synchronization",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 129,
+            "comment": "FUTEX_WAKE_PRIVATE"
+          }
+        ]
+      },
+      {
+        "syscall": "madvise",
+        "comment": "Used by the VirtIO balloon device and by musl for some customer workloads. It is also used by aws-lc during random number generation. They setup a memory page that mark with MADV_WIPEONFORK to be able to detect forks. They also call it with -1 to see if madvise is supported in certain platforms."
+      },
+      {
+        "syscall": "msync",
+        "comment": "Used by the VirtIO pmem device to sync the file content with the backing file.",
+        "args": [
+          {
+            "index": 2,
+            "type": "dword",
+            "op": "eq",
+            "val": 4,
+            "comment": "libc::MS_SYNC"
+          }
+        ]
+      },
+      {
+        "syscall": "mmap",
+        "comment": "libkrun VM memory management (balloon, guest RAM, mmap'd I/O)"
+      },
+      {
+        "syscall": "rt_sigaction",
+        "comment": "libkrun: signal handler registration (SIGABRT, SIGSEGV, etc.)"
+      },
+      {
+        "syscall": "socket",
+        "comment": "Called to open the vsock UDS",
+        "args": [
+          {
+            "index": 0,
+            "type": "dword",
+            "op": "eq",
+            "val": 1,
+            "comment": "libc::AF_UNIX"
+          },
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 524289,
+            "comment": "libc::SOCK_STREAM | libc::SOCK_CLOEXEC"
+          },
+          {
+            "index": 2,
+            "type": "dword",
+            "op": "eq",
+            "val": 0
+          }
+        ]
+      },
+      {
+        "syscall": "tkill",
+        "comment": "tkill is used by libc::abort during a panic to raise SIGABRT",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 6,
+            "comment": "SIGABRT"
+          }
+        ]
+      },
+      {
+        "syscall": "tkill",
+        "comment": "Used to kick vcpus",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 35,
+            "comment": "sigrtmin() + vcpu::VCPU_RTSIG_OFFSET"
+          }
+        ]
+      },
+      {
+        "syscall": "timerfd_settime",
+        "comment": "Needed for rate limiting and metrics",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 0
+          }
+        ]
+      },
+      {
+        "syscall": "ioctl",
+        "comment": "Used to make vsock UDS nonblocking",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 21537,
+            "comment": "FIONBIO"
+          }
+        ]
+      },
+      {
+        "syscall": "ioctl",
+        "comment": "Triggered on shutdown, to restore the initial terminal settings.",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 21523,
+            "comment": "TIOCGWINSZ"
+          }
+        ]
+      },
+      {
+        "syscall": "ioctl",
+        "comment": "Triggered on shutdown, to restore the initial terminal settings, only when Firecracker was launched from a shell.",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 21505,
+            "comment": "TCGETS"
+          }
+        ]
+      },
+      {
+        "syscall": "ioctl",
+        "comment": "Triggered on shutdown, to restore the initial terminal settings, only when Firecracker was launched from a shell.",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 21506,
+            "comment": "TCSETS"
+          }
+        ]
+      },
+      {
+        "syscall": "ioctl",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 1074835010,
+            "comment": "KVM_GET_DIRTY_LOG"
+          }
+        ]
+      },
+      {
+        "syscall": "ioctl",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 3255348834,
+            "comment": "KVM_GET_IRQCHIP"
+          }
+        ]
+      },
+      {
+        "syscall": "ioctl",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 2150674044,
+            "comment": "KVM_GET_CLOCK"
+          }
+        ]
+      },
+      {
+        "syscall": "ioctl",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 2154868383,
+            "comment": "KVM_GET_PIT2"
+          }
+        ]
+      },
+      {
+        "syscall": "sched_yield",
+        "comment": "Used by the rust standard library in std::sync::mpmc. Firecracker uses mpsc channels from this module for inter-thread communication"
+      },
+      {
+        "syscall": "sendmsg",
+        "comment": "Used by vhost-user frontend to communicate with the backend"
+      },
+      {
+        "syscall": "recvmsg",
+        "comment": "Used by vhost-user frontend to read response from the backend"
+      },
+      {
+        "syscall": "restart_syscall",
+        "comment": "automatically issued by the kernel when specific timing-related syscalls (e.g. nanosleep) get interrupted by SIGSTOP"
+      },
+      {
+        "syscall": "openat",
+        "comment": "Go runtime (gvproxy): glibc maps open() to openat(AT_FDCWD, ...) on modern x86_64"
+      },
+      {
+        "syscall": "nanosleep",
+        "comment": "Go runtime (gvproxy): timer and sleep operations"
+      },
+      {
+        "syscall": "mprotect",
+        "comment": "Go runtime (gvproxy): memory protection changes for GC and stack growth"
+      },
+      {
+        "syscall": "clone3",
+        "comment": "Go runtime (gvproxy): thread creation by Go scheduler"
+      },
+      {
+        "syscall": "epoll_create1",
+        "comment": "Go runtime (gvproxy): creates epoll instance for Go netpoller"
+      },
+      {
+        "syscall": "bind",
+        "comment": "Go runtime (gvproxy): bind socket for network proxy"
+      },
+      {
+        "syscall": "listen",
+        "comment": "Go runtime (gvproxy): listen on socket for network proxy"
+      },
+      {
+        "syscall": "getsockname",
+        "comment": "Go runtime (gvproxy): get socket address"
+      },
+      {
+        "syscall": "setsockopt",
+        "comment": "Go runtime (gvproxy): set socket options"
+      },
+      {
+        "syscall": "getpid",
+        "comment": "Go runtime (gvproxy): get process ID"
+      },
+      {
+        "syscall": "gettid",
+        "comment": "Go runtime (gvproxy): get thread ID"
+      },
+      {
+        "syscall": "tgkill",
+        "comment": "Go runtime (gvproxy): thread group kill for signal delivery"
+      },
+      {
+        "syscall": "pread64",
+        "comment": "Go runtime (gvproxy): positioned read"
+      },
+      {
+        "syscall": "prlimit64",
+        "comment": "Go runtime (gvproxy): get/set resource limits"
+      },
+      {
+        "syscall": "sched_getaffinity",
+        "comment": "Go runtime (gvproxy): CPU affinity for Go scheduler"
+      },
+      {
+        "syscall": "set_robust_list",
+        "comment": "Go runtime (gvproxy): robust futex list for pthread"
+      },
+      {
+        "syscall": "set_tid_address",
+        "comment": "Go runtime (gvproxy): set thread ID pointer for clone"
+      },
+      {
+        "syscall": "arch_prctl",
+        "comment": "Go runtime (gvproxy): architecture-specific thread state for TLS setup"
+      },
+      {
+        "syscall": "access",
+        "comment": "Go runtime (gvproxy): check file access permissions"
+      },
+      {
+        "syscall": "uname",
+        "comment": "Go runtime (gvproxy): get system info"
+      },
+      {
+        "syscall": "rseq",
+        "comment": "Go runtime (gvproxy): restartable sequences for performance"
+      },
+      {
+        "syscall": "rt_sigaction",
+        "comment": "Go runtime (gvproxy): signal handler registration for all signals (ge 0 = match any signal number)",
+        "args": [
+          {
+            "index": 0,
+            "type": "dword",
+            "op": "ge",
+            "val": 0,
+            "comment": "any signal number"
+          }
+        ]
+      },
+      {
+        "syscall": "unlinkat",
+        "comment": "Go runtime (gvproxy): file deletion"
+      },
+      {
+        "syscall": "socket",
+        "comment": "Go runtime + libkrun: allow all socket domains/types (ge 0 = match any). Needed because Go runtime and libkrun use various combinations of AF_UNIX/AF_INET/AF_INET6 with different flags (SOCK_STREAM, SOCK_CLOEXEC, SOCK_NONBLOCK).",
+        "args": [
+          {
+            "index": 0,
+            "type": "dword",
+            "op": "ge",
+            "val": 0,
+            "comment": "any socket domain"
+          }
+        ]
+      },
+      {
+        "syscall": "fcntl",
+        "comment": "Go runtime + libkrun: allow all fcntl commands (ge 0 = match any). Go uses F_GETFD/F_GETFL/F_SETFL; libkrun may use others.",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "ge",
+            "val": 0,
+            "comment": "any fcntl command"
+          }
+        ]
+      },
+      {
+        "syscall": "mmap",
+        "comment": "Go runtime (gvproxy): goroutine stack allocation",
+        "args": [
+          {
+            "index": 3,
+            "type": "dword",
+            "op": "eq",
+            "val": 131106,
+            "comment": "MAP_PRIVATE | MAP_ANONYMOUS | MAP_STACK"
+          }
+        ]
+      },
+      {
+        "syscall": "statx",
+        "comment": "Go runtime (gvproxy): modern file stat (replaces fstat/newfstatat)"
+      },
+      {
+        "syscall": "mmap",
+        "comment": "Go runtime (gvproxy): general memory allocation (ge 0 = match any flags, needed for MAP_DROPPABLE, PROT_NONE reservation, etc.)",
+        "args": [
+          {
+            "index": 3,
+            "type": "dword",
+            "op": "ge",
+            "val": 0,
+            "comment": "any mmap flags"
+          }
+        ]
+      },
+      {
+        "syscall": "ioctl",
+        "comment": "Go runtime + KVM init: allow all ioctl request codes (ge 0 = match any). Needed because TSYNC applies one filter to all threads, but libkrun init requires 28+ KVM ioctls and Go runtime uses TCGETS2/FIONBIO/FIOCLEX.",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "ge",
+            "val": 0,
+            "comment": "any ioctl request code"
+          }
+        ]
+      },
+      {
+        "syscall": "dup",
+        "comment": "Go runtime (gvproxy) + libkrun: file descriptor duplication"
+      },
+      {
+        "syscall": "dup2",
+        "comment": "Go runtime (gvproxy): file descriptor duplication"
+      },
+      {
+        "syscall": "mkdir",
+        "comment": "Go runtime (gvproxy): directory creation"
+      },
+      {
+        "syscall": "newfstatat",
+        "comment": "Go runtime (gvproxy): file stat operations"
+      },
+      {
+        "syscall": "poll",
+        "comment": "Go runtime (gvproxy): I/O multiplexing"
+      },
+      {
+        "syscall": "prctl",
+        "comment": "Go runtime (gvproxy): thread setup (PR_SET_NAME, etc.)"
+      },
+      {
+        "syscall": "readlinkat",
+        "comment": "Go runtime (gvproxy): read symbolic links (e.g. /proc/self/exe)"
+      },
+      {
+        "syscall": "clock_nanosleep",
+        "comment": "Go runtime (gvproxy): precise sleep (glibc maps nanosleep to clock_nanosleep)"
+      },
+      {
+        "syscall": "pwrite64",
+        "comment": "Go runtime (gvproxy): positioned write"
+      },
+      {
+        "syscall": "preadv",
+        "comment": "Go runtime (gvproxy): vectorized positioned read"
+      },
+      {
+        "syscall": "pwritev",
+        "comment": "Go runtime (gvproxy): vectorized positioned write"
+      },
+      {
+        "syscall": "clone",
+        "comment": "libkrun: process/thread creation (legacy clone)"
+      },
+      {
+        "syscall": "copy_file_range",
+        "comment": "libkrun: efficient file copy"
+      },
+      {
+        "syscall": "epoll_wait",
+        "comment": "libkrun: epoll wait (fallback from epoll_pwait)"
+      },
+      {
+        "syscall": "fchmod",
+        "comment": "libkrun: change file permissions"
+      },
+      {
+        "syscall": "flock",
+        "comment": "libkrun: file locking"
+      },
+      {
+        "syscall": "getcwd",
+        "comment": "Go runtime (gvproxy): get current working directory"
+      },
+      {
+        "syscall": "getdents64",
+        "comment": "libkrun: read directory entries"
+      },
+      {
+        "syscall": "geteuid",
+        "comment": "Go runtime (gvproxy): get effective user ID"
+      },
+      {
+        "syscall": "getgid",
+        "comment": "Go runtime (gvproxy): get group ID"
+      },
+      {
+        "syscall": "getsockopt",
+        "comment": "Go runtime (gvproxy): get socket options"
+      },
+      {
+        "syscall": "getuid",
+        "comment": "Go runtime (gvproxy): get user ID"
+      },
+      {
+        "syscall": "kill",
+        "comment": "libkrun: send signal to process"
+      },
+      {
+        "syscall": "pipe2",
+        "comment": "libkrun: create pipe with flags"
+      },
+      {
+        "syscall": "readlink",
+        "comment": "libkrun: read symbolic link"
+      },
+      {
+        "syscall": "sendto",
+        "comment": "Go runtime (gvproxy): send data on socket"
+      },
+      {
+        "syscall": "shutdown",
+        "comment": "Go runtime (gvproxy): shutdown socket"
+      },
+      {
+        "syscall": "socketpair",
+        "comment": "libkrun: create connected socket pair"
+      },
+      {
+        "syscall": "unlink",
+        "comment": "libkrun: delete file"
+      },
+      {
+        "syscall": "wait4",
+        "comment": "libkrun: wait for child process"
+      },
+      {
+        "syscall": "waitid",
+        "comment": "libkrun: wait for child process (extended)"
+      },
+      {
+        "syscall": "capget",
+        "comment": "libkrun: query process capabilities"
+      },
+      {
+        "syscall": "capset",
+        "comment": "libkrun: set process capabilities"
+      },
+      {
+        "syscall": "close_range",
+        "comment": "libkrun: close range of file descriptors"
+      },
+      {
+        "syscall": "signalfd4",
+        "comment": "libkrun: create signalfd for signal handling"
+      },
+      {
+        "syscall": "accept",
+        "comment": "libkrun: accept connections (older variant without flags)"
+      },
+      {
+        "syscall": "mkdirat",
+        "comment": "libkrun: create directory relative to fd"
+      },
+      {
+        "syscall": "umask",
+        "comment": "libkrun: set file creation mask"
+      },
+      {
+        "syscall": "seccomp",
+        "comment": "Two-phase stacking: allow main thread to install VMM filter in phase 2"
+      }
+    ]
+  },
+  "api": {
+    "default_action": "trap",
+    "filter_action": "allow",
+    "filter": [
+      {
+        "syscall": "epoll_ctl"
+      },
+      {
+        "syscall": "epoll_pwait"
+      },
+      {
+        "syscall": "exit"
+      },
+      {
+        "syscall": "exit_group"
+      },
+      {
+        "syscall": "open"
+      },
+      {
+        "syscall": "read"
+      },
+      {
+        "syscall": "write"
+      },
+      {
+        "syscall": "close"
+      },
+      {
+        "syscall": "brk",
+        "comment": "Called for expanding the heap"
+      },
+      {
+        "syscall": "clock_gettime",
+        "comment": "Used for metrics and logging, via the helpers in utils/src/time.rs. It's not called on some platforms, because of vdso optimisations."
+      },
+      {
+        "syscall": "fstat",
+        "comment": "Used for reading the local timezone from /etc/localtime"
+      },
+      {
+        "syscall": "mremap",
+        "comment": "Used for re-allocating large memory regions, for example vectors"
+      },
+      {
+        "syscall": "munmap",
+        "comment": "Used for freeing memory"
+      },
+      {
+        "syscall": "recvfrom",
+        "comment": "Used to retrieve data from the socket"
+      },
+      {
+        "syscall": "recvmsg",
+        "comment": "Needed by micro-http to read from the byte stream."
+      },
+      {
+        "syscall": "rt_sigprocmask",
+        "comment": "rt_sigprocmask is used by Rust stdlib to remove custom signal handler during thread teardown."
+      },
+      {
+        "syscall": "sigaltstack",
+        "comment": "sigaltstack is used by Rust stdlib to remove alternative signal stack during thread teardown."
+      },
+      {
+        "syscall": "getrandom",
+        "comment": "getrandom is used by `HttpServer` to reinialize `HashMap` after moving to the API thread"
+      },
+      {
+        "syscall": "accept4",
+        "comment": "Called to accept socket connections",
+        "args": [
+          {
+            "index": 3,
+            "type": "dword",
+            "op": "eq",
+            "val": 524288,
+            "comment": "libc::SOCK_CLOEXEC"
+          }
+        ]
+      },
+      {
+        "syscall": "fcntl",
+        "comment": "Used by MMDS version 2 to extract entropy",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 2,
+            "comment": "FCNTL_F_SETFD"
+          }
+        ]
+      },
+      {
+        "syscall": "futex",
+        "comment": "Used for synchronization (during thread teardown)",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 0,
+            "comment": "FUTEX_WAIT"
+          }
+        ]
+      },
+      {
+        "syscall": "futex",
+        "comment": "Used for synchronization (during thread teardown)",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 1,
+            "comment": "FUTEX_WAKE"
+          }
+        ]
+      },
+      {
+        "syscall": "futex",
+        "comment": "Used for synchronization",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 128,
+            "comment": "FUTEX_WAIT_PRIVATE"
+          }
+        ]
+      },
+      {
+        "syscall": "futex",
+        "comment": "Used for synchronization",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 137,
+            "comment": "FUTEX_WAIT_BITSET_PRIVATE"
+          }
+        ]
+      },
+      {
+        "syscall": "futex",
+        "comment": "Used for synchronization",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 129,
+            "comment": "FUTEX_WAKE_PRIVATE"
+          }
+        ]
+      },
+      {
+        "syscall": "madvise",
+        "comment": "Triggered by musl for some customer workloads",
+        "args": [
+          {
+            "index": 2,
+            "type": "dword",
+            "op": "eq",
+            "val": 4,
+            "comment": "libc::MADV_DONTNEED"
+          }
+        ]
+      },
+      {
+        "syscall": "madvise",
+        "comment": "Triggered on some deallocation paths in musl free()",
+        "args": [
+          {
+            "index": 2,
+            "type": "dword",
+            "op": "eq",
+            "val": 8,
+            "comment": "libc::MADV_FREE"
+          }
+        ]
+      },
+      {
+        "syscall": "mmap",
+        "comment": "Used for large buffers sent to api_server",
+        "args": [
+          {
+            "index": 3,
+            "type": "dword",
+            "op": "eq",
+            "val": 34,
+            "comment": "libc::MAP_ANONYMOUS | libc::MAP_PRIVATE"
+          }
+        ]
+      },
+      {
+        "syscall": "mmap",
+        "comment": "Used for reading the timezone in LocalTime::now()",
+        "args": [
+          {
+            "index": 3,
+            "type": "dword",
+            "op": "eq",
+            "val": 1,
+            "comment": "libc::MAP_SHARED"
+          }
+        ]
+      },
+      {
+        "syscall": "rt_sigaction",
+        "comment": "libkrun: signal handler registration (SIGABRT, SIGSEGV, etc.)"
+      },
+      {
+        "syscall": "socket",
+        "comment": "Called to open the unix domain socket",
+        "args": [
+          {
+            "index": 0,
+            "type": "dword",
+            "op": "eq",
+            "val": 1,
+            "comment": "libc::AF_UNIX"
+          },
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 524289,
+            "comment": "libc::SOCK_STREAM | libc::SOCK_CLOEXEC"
+          },
+          {
+            "index": 2,
+            "type": "dword",
+            "op": "eq",
+            "val": 0
+          }
+        ]
+      },
+      {
+        "syscall": "tkill",
+        "comment": "tkill is used by libc::abort during a panic to raise SIGABRT",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 6,
+            "comment": "SIGABRT"
+          }
+        ]
+      },
+      {
+        "syscall": "ioctl",
+        "comment": "Used to make api socket nonblocking",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 21537,
+            "comment": "FIONBIO"
+          }
+        ]
+      },
+      {
+        "syscall": "sched_yield",
+        "comment": "Used by the rust standard library in std::sync::mpmc. Firecracker uses mpsc channels from this module for inter-thread communication"
+      },
+      {
+        "syscall": "restart_syscall",
+        "comment": "automatically issued by the kernel when specific timing-related syscalls (e.g. nanosleep) get interrupted by SIGSTOP"
+      }
+    ]
+  },
+  "vcpu": {
+    "default_action": "trap",
+    "filter_action": "allow",
+    "filter": [
+      {
+        "syscall": "exit"
+      },
+      {
+        "syscall": "exit_group"
+      },
+      {
+        "syscall": "write"
+      },
+      {
+        "syscall": "open"
+      },
+      {
+        "syscall": "close"
+      },
+      {
+        "syscall": "fstat",
+        "comment": "Used for reading the local timezone from /etc/localtime"
+      },
+      {
+        "syscall": "brk",
+        "comment": "Called for expanding the heap"
+      },
+      {
+        "syscall": "clock_gettime",
+        "comment": "Used for metrics and logging, via the helpers in utils/src/time.rs. It's not called on some platforms, because of vdso optimisations."
+      },
+      {
+        "syscall": "mremap",
+        "comment": "Used for re-allocating large memory regions, for example vectors"
+      },
+      {
+        "syscall": "munmap",
+        "comment": "Used for freeing memory"
+      },
+      {
+        "syscall": "rt_sigprocmask",
+        "comment": "rt_sigprocmask is used by Rust stdlib to remove custom signal handler during thread teardown."
+      },
+      {
+        "syscall": "rt_sigreturn",
+        "comment": "rt_sigreturn is needed in case a fault does occur, so that the signal handler can return. Otherwise we get stuck in a fault loop."
+      },
+      {
+        "syscall": "sigaltstack",
+        "comment": "sigaltstack is used by Rust stdlib to remove alternative signal stack during thread teardown."
+      },
+      {
+        "syscall": "futex",
+        "comment": "Used for synchronization (during thread teardown when joining multiple vcpu threads at once)",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 0,
+            "comment": "FUTEX_WAIT"
+          }
+        ]
+      },
+      {
+        "syscall": "futex",
+        "comment": "Used for synchronization (during thread teardown)",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 1,
+            "comment": "FUTEX_WAKE"
+          }
+        ]
+      },
+      {
+        "syscall": "futex",
+        "comment": "Used for synchronization",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 128,
+            "comment": "FUTEX_WAIT_PRIVATE"
+          }
+        ]
+      },
+      {
+        "syscall": "futex",
+        "comment": "Used for synchronization",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 137,
+            "comment": "FUTEX_WAIT_BITSET_PRIVATE"
+          }
+        ]
+      },
+      {
+        "syscall": "futex",
+        "comment": "Used for synchronization",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 129,
+            "comment": "FUTEX_WAKE_PRIVATE"
+          }
+        ]
+      },
+      {
+        "syscall": "madvise",
+        "comment": "Triggered by musl for some customer workloads",
+        "args": [
+          {
+            "index": 2,
+            "type": "dword",
+            "op": "eq",
+            "val": 4,
+            "comment": "libc::MADV_DONTNEED"
+          }
+        ]
+      },
+      {
+        "syscall": "madvise",
+        "comment": "Triggered on some deallocation paths in musl free()",
+        "args": [
+          {
+            "index": 2,
+            "type": "dword",
+            "op": "eq",
+            "val": 8,
+            "comment": "libc::MADV_FREE"
+          }
+        ]
+      },
+      {
+        "syscall": "mmap",
+        "comment": "Used for reading the timezone in LocalTime::now()",
+        "args": [
+          {
+            "index": 3,
+            "type": "dword",
+            "op": "eq",
+            "val": 1,
+            "comment": "libc::MAP_SHARED"
+          }
+        ]
+      },
+      {
+        "syscall": "mmap",
+        "comment": "Used for allocating memory for FamStructWrapper called by KvmCpu::get_cpuid",
+        "args": [
+          {
+            "index": 3,
+            "type": "dword",
+            "op": "eq",
+            "val": 34,
+            "comment": "libc::MAP_ANONYMOUS|libc::MAP_PRIVATE"
+          },
+          {
+            "index": 2,
+            "type": "dword",
+            "op": "eq",
+            "val": 3,
+            "comment": "libc::PROT_READ|libc::PROT_WRITE"
+          }
+        ]
+      },
+      {
+        "syscall": "rt_sigaction",
+        "comment": "libkrun: signal handler registration (SIGABRT, SIGSEGV, etc.)"
+      },
+      {
+        "syscall": "timerfd_settime",
+        "comment": "Needed for updating the balloon statistics interval",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 0
+          }
+        ]
+      },
+      {
+        "syscall": "tkill",
+        "comment": "tkill is used by libc::abort during a panic to raise SIGABRT",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 6,
+            "comment": "SIGABRT"
+          }
+        ]
+      },
+      {
+        "syscall": "ioctl",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 44672,
+            "comment": "KVM_RUN"
+          }
+        ]
+      },
+      {
+        "syscall": "ioctl",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 2147790488,
+            "comment": "KVM_GET_MP_STATE"
+          }
+        ]
+      },
+      {
+        "syscall": "ioctl",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 2151722655,
+            "comment": "KVM_GET_VCPU_EVENTS"
+          }
+        ]
+      },
+      {
+        "syscall": "ioctl",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 2214637198,
+            "comment": "KVM_GET_LAPIC"
+          }
+        ]
+      },
+      {
+        "syscall": "ioctl",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 2167975555,
+            "comment": "KVM_GET_SREGS"
+          }
+        ]
+      },
+      {
+        "syscall": "ioctl",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 2156965505,
+            "comment": "KVM_GET_REGS"
+          }
+        ]
+      },
+      {
+        "syscall": "ioctl",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 3221794440,
+            "comment": "KVM_GET_MSRS"
+          }
+        ]
+      },
+      {
+        "syscall": "ioctl",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 3221794449,
+            "comment": "KVM_GET_CPUID2"
+          }
+        ]
+      },
+      {
+        "syscall": "ioctl",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 2155916961,
+            "comment": "KVM_GET_DEBUGREGS"
+          }
+        ]
+      },
+      {
+        "syscall": "ioctl",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 2415963812,
+            "comment": "KVM_GET_XSAVE"
+          }
+        ]
+      },
+      {
+        "syscall": "ioctl",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 2415963855,
+            "comment": "KVM_GET_XSAVE2"
+          }
+        ]
+      },
+      {
+        "syscall": "ioctl",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 2173218470,
+            "comment": "KVM_GET_XCRS"
+          }
+        ]
+      },
+      {
+        "syscall": "ioctl",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 44707,
+            "comment": "KVM_GET_TSC_KHZ"
+          }
+        ]
+      },
+      {
+        "syscall": "ioctl",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 1074025680,
+            "comment": "TUNSETOFFLOAD"
+          }
+        ]
+      },
+      {
+        "syscall": "ioctl",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 44717,
+            "comment": "KVM_KVMCLOCK_CTRL. We call this after pausing vCPUs to avoid soft lockups in the guest."
+          }
+        ]
+      },
+      {
+        "syscall": "sched_yield",
+        "comment": "Used by the rust standard library in std::sync::mpmc. Firecracker uses mpsc channels from this module for inter-thread communication"
+      },
+      {
+        "syscall": "sendmsg",
+        "comment": "Used by vhost-user frontend to communicate with the backend"
+      },
+      {
+        "syscall": "restart_syscall",
+        "comment": "automatically issued by the kernel when specific timing-related syscalls (e.g. nanosleep) get interrupted by SIGSTOP"
+      },
+      {
+        "syscall": "ioctl",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 44547,
+            "comment": "KVM_CHECK_EXTENSION"
+          },
+          {
+            "index": 2,
+            "type": "dword",
+            "op": "eq",
+            "val": 131,
+            "comment": "KVM_CAP_MSI_DEVID"
+          }
+        ]
+      },
+      {
+        "syscall": "ioctl",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 1074310762,
+            "comment": "KVM_SET_GSI_ROUTING"
+          }
+        ]
+      },
+      {
+        "syscall": "ioctl",
+        "args": [
+          {
+            "index": 1,
+            "type": "dword",
+            "op": "eq",
+            "val": 1075883638,
+            "comment": "KVM_IRQFD"
+          }
+        ]
+      }
+    ]
+  }
 }

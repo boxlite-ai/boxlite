@@ -28,7 +28,7 @@
 // Allow dead_code on non-Linux platforms where bwrap is not available
 #![allow(dead_code)]
 
-use super::config::SecurityOptions;
+use crate::runtime::advanced_options::SecurityOptions;
 use crate::runtime::layout::FilesystemLayout;
 use crate::util::find_binary;
 use std::path::{Path, PathBuf};
@@ -91,35 +91,186 @@ pub fn is_available() -> bool {
     get_bwrap_path().is_some()
 }
 
-/// Check if bwrap can create user namespaces.
+/// Probe whether bwrap can create user namespaces.
 ///
-/// Runs `bwrap --unshare-user -- true` as a preflight check.
-/// This catches AppArmor restrictions and missing kernel support
-/// before the actual shim spawn.
+/// Performs two checks:
+/// 1. **Chrome-style raw probe** — `clone(CLONE_NEWUSER)` for kernel-level
+///    diagnosis (captures errno: EPERM, EUSERS, EINVAL, ENOSPC)
+/// 2. **bwrap probe** — `bwrap --unshare-user` to test actual bwrap capability
+///    (handles AppArmor per-binary profiles where bwrap may work even if
+///    our process's clone fails)
 ///
-/// Returns `Ok(())` if user namespaces work, or `Err` with diagnostic info.
-pub fn check_userns_available() -> Result<(), String> {
+/// If the bwrap probe fails, returns an error with targeted diagnostic
+/// guidance combining Chrome errno + sysctl detection.
+///
+/// Returns `Ok(())` if working, `Err` with diagnostic guidance.
+pub fn can_create_user_namespace() -> Result<(), String> {
     let bwrap_path = match get_bwrap_path() {
         Some(p) => p,
-        None => return Err("bwrap binary not found".to_string()),
+        None => return Err("bwrap binary not found (neither system nor bundled)".to_string()),
     };
 
+    // Chrome-style raw probe for kernel-level diagnosis.
+    // This may fail on AppArmor systems even when system bwrap works
+    // (bwrap has its own AppArmor profile with userns permission).
+    let clone_errno = match super::credentials::can_create_process_in_new_user_ns() {
+        Ok(()) => None,
+        Err(errno) => {
+            tracing::debug!(
+                errno = errno,
+                "clone(CLONE_NEWUSER) failed — will still try bwrap (may have AppArmor profile)"
+            );
+            Some(errno)
+        }
+    };
+
+    // Probe the selected bwrap binary
     let output = Command::new(bwrap_path)
-        .args(["--unshare-user", "--", "true"])
+        .args(["--unshare-user", "--ro-bind", "/", "/", "--", "true"])
         .output();
 
     match output {
         Ok(o) if o.status.success() => Ok(()),
         Ok(o) => {
-            let stderr = String::from_utf8_lossy(&o.stderr);
-            Err(format!(
-                "bwrap --unshare-user failed (exit {}): {}",
-                o.status.code().unwrap_or(-1),
-                stderr.trim()
+            let stderr = String::from_utf8_lossy(&o.stderr).trim().to_string();
+            let bwrap_source = if is_system_bwrap(bwrap_path) {
+                "system"
+            } else {
+                "bundled"
+            };
+            Err(build_diagnostic(
+                clone_errno,
+                bwrap_source,
+                bwrap_path,
+                &stderr,
             ))
         }
         Err(e) => Err(format!("failed to run bwrap: {}", e)),
     }
+}
+
+/// Check if the bwrap path is the system binary (in PATH, not an absolute path).
+fn is_system_bwrap(path: &Path) -> bool {
+    path == Path::new("bwrap")
+}
+
+/// Build diagnostic error combining Chrome errno + sysctl detection + fix guidance.
+///
+/// Reads sysctl files to detect the specific restriction and provides
+/// targeted fix commands for each scenario.
+fn build_diagnostic(
+    clone_errno: Option<i32>,
+    bwrap_source: &str,
+    bwrap_path: &Path,
+    bwrap_stderr: &str,
+) -> String {
+    let mut msg = format!(
+        "bwrap --unshare-user failed ({} bwrap at {})",
+        bwrap_source,
+        bwrap_path.display()
+    );
+
+    if !bwrap_stderr.is_empty() {
+        msg.push_str(&format!("\nbwrap stderr: {}", bwrap_stderr));
+    }
+
+    // Chrome errno diagnosis
+    if let Some(errno) = clone_errno {
+        msg.push_str(&format!(
+            "\nclone(CLONE_NEWUSER) errno: {} ({})",
+            errno,
+            std::io::Error::from_raw_os_error(errno)
+        ));
+    }
+
+    // Sysctl detection for targeted fix
+    if read_sysctl("kernel/apparmor_restrict_unprivileged_userns").as_deref() == Some("1") {
+        msg.push_str(
+            "\n\nCause: AppArmor restricts user namespaces \
+             (kernel.apparmor_restrict_unprivileged_userns=1).",
+        );
+        if bwrap_source == "bundled" {
+            match boxlite_apparmor_dir()
+                .and_then(|dir| super::apparmor::write_bwrap_profile(bwrap_path, &dir))
+            {
+                Ok(profile_path) => {
+                    msg.push_str(&format!(
+                        "\nBundled bwrap has no AppArmor profile.\n\
+                         BoxLite generated one at: {}\n\n\
+                         Fix (one command):\n  \
+                           sudo apparmor_parser -r {}\n\n\
+                         Alternative: Install system bubblewrap:\n  \
+                           sudo apt install bubblewrap",
+                        profile_path.display(),
+                        profile_path.display()
+                    ));
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "Failed to generate AppArmor profile");
+                    msg.push_str("\nBundled bwrap has no AppArmor profile.");
+                    msg.push_str("\n\nFix (recommended): Install system bubblewrap:");
+                    msg.push_str("\n  sudo apt install bubblewrap");
+                }
+            }
+        } else {
+            msg.push_str("\nSystem bwrap needs an AppArmor profile with 'userns' permission.");
+            msg.push_str("\n\nFix (recommended): Install/reinstall bubblewrap:");
+            msg.push_str("\n  sudo apt install --reinstall bubblewrap");
+        }
+        msg.push_str(
+            "\n\nFix (quick, less secure): \
+             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0",
+        );
+    } else if read_sysctl("kernel/unprivileged_userns_clone").as_deref() == Some("0") {
+        msg.push_str(
+            "\n\nCause: Unprivileged user namespaces disabled \
+             (kernel.unprivileged_userns_clone=0).",
+        );
+        msg.push_str("\n\nFix: sudo sysctl -w kernel.unprivileged_userns_clone=1");
+        msg.push_str(
+            "\n  # Persist: echo 'kernel.unprivileged_userns_clone=1' \
+             | sudo tee /etc/sysctl.d/99-boxlite-userns.conf",
+        );
+    } else if read_sysctl("user/max_user_namespaces").as_deref() == Some("0") {
+        msg.push_str(
+            "\n\nCause: Max user namespaces set to zero \
+             (user.max_user_namespaces=0).",
+        );
+        msg.push_str("\n\nFix: sudo sysctl -w user.max_user_namespaces=15000");
+        msg.push_str(
+            "\n  # Persist: echo 'user.max_user_namespaces=15000' \
+             | sudo tee /etc/sysctl.d/99-boxlite-userns.conf",
+        );
+    } else {
+        msg.push_str("\n\nCause: Unknown restriction.");
+        msg.push_str("\n  Check: dmesg | grep -i 'apparmor\\|selinux\\|userns'");
+        msg.push_str("\n  See: https://boxlite.dev/docs/faq#sandbox-userns");
+    }
+
+    msg
+}
+
+/// Compute the AppArmor profile directory (`~/.boxlite/apparmor/`).
+///
+/// Uses `BOXLITE_HOME` env var if set, otherwise falls back to `$HOME/.boxlite`.
+fn boxlite_apparmor_dir() -> Result<PathBuf, String> {
+    let home = std::env::var(crate::runtime::constants::envs::BOXLITE_HOME)
+        .map(PathBuf::from)
+        .or_else(|_| {
+            dirs::home_dir()
+                .map(|h| h.join(crate::runtime::layout::dirs::BOXLITE_DIR))
+                .ok_or_else(|| "cannot determine home directory".to_string())
+        })?;
+    Ok(home.join("apparmor"))
+}
+
+/// Read a sysctl value from /proc/sys/.
+///
+/// Returns `None` if the file doesn't exist or can't be read (e.g., on macOS).
+fn read_sysctl(name: &str) -> Option<String> {
+    std::fs::read_to_string(format!("/proc/sys/{}", name))
+        .ok()
+        .map(|s| s.trim().to_string())
 }
 
 /// Get the bwrap version string.
@@ -586,18 +737,24 @@ mod tests {
         assert!(!args.contains(&"/nonexistent_dev".to_string()));
     }
 
-    /// Verify check_userns_available() returns a well-formed result.
-    /// On CI/dev machines this will either succeed or fail with a clear message.
+    /// Verify can_create_user_namespace() returns a well-formed result.
+    /// On CI/dev machines this will either succeed or fail with a clear diagnostic.
     #[test]
-    fn test_check_userns_available() {
-        let result = check_userns_available();
+    fn test_can_create_user_namespace() {
+        let result = can_create_user_namespace();
         match result {
             Ok(()) => {
-                // bwrap user namespaces are available — nothing else to verify
+                // bwrap user namespaces are available
             }
             Err(e) => {
-                // Should contain diagnostic info (exit code + stderr)
+                // Should contain diagnostic info
                 assert!(!e.is_empty(), "Error message should not be empty");
+                // Diagnostic should mention bwrap
+                assert!(
+                    e.contains("bwrap"),
+                    "Diagnostic should mention bwrap: {}",
+                    e
+                );
             }
         }
     }

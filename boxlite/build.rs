@@ -1,7 +1,11 @@
 use regex::Regex;
+use sha2::{Digest, Sha256};
 use std::env;
 use std::fs;
+use std::io;
+use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 /// Copies all dynamic library files from source directory to destination.
 /// Only copies files with library extensions (.dylib, .so, .so.*, .dll).
@@ -283,53 +287,347 @@ fn compile_seccomp_filters() {
     println!("cargo:warning=Seccomp compilation skipped (not Linux)");
 }
 
+/// Downloads a file from URL using curl.
+fn download_file(url: &str, dest: &Path) -> io::Result<()> {
+    println!("cargo:warning=Downloading {}...", url);
+
+    let output = Command::new("curl")
+        .args(["-fsSL", "-o", dest.to_str().unwrap(), url])
+        .output()?;
+
+    if !output.status.success() {
+        return Err(io::Error::other(format!(
+            "curl failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+
+    Ok(())
+}
+
+/// Maps the host platform to the runtime artifact target name.
+/// Matches the naming convention from config.yml and build-runtime.yml.
+fn runtime_target() -> Option<&'static str> {
+    let os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
+
+    match (os.as_str(), arch.as_str()) {
+        ("macos", "aarch64") => Some("darwin-arm64"),
+        ("linux", "x86_64") => Some("linux-x64-gnu"),
+        ("linux", "aarch64") => Some("linux-arm64-gnu"),
+        _ => None,
+    }
+}
+
+/// Extracts an entire tarball to the destination directory.
+fn extract_runtime_tarball(tarball: &Path, dest: &Path) -> io::Result<()> {
+    let status = Command::new("tar")
+        .args([
+            "-xzf",
+            tarball.to_str().unwrap(),
+            "-C",
+            dest.to_str().unwrap(),
+            "--strip-components=1",
+        ])
+        .status()?;
+
+    if !status.success() {
+        return Err(io::Error::other("tar extraction failed"));
+    }
+
+    Ok(())
+}
+
+/// Creates unversioned symlinks for versioned library files.
+///
+/// Build-time linking (`-lkrun`) requires `libkrun.dylib` (unversioned),
+/// but the prebuilt tarball only contains versioned files like `libkrun.1.16.0.dylib`.
+/// This creates the symlinks that `make install` would normally create.
+///
+/// Patterns:
+/// - macOS: `libfoo.1.2.3.dylib` → `libfoo.dylib`
+/// - Linux: `libfoo.so.1.2.3` → `libfoo.so`
+fn create_library_symlinks(dir: &Path) {
+    // macOS: lib<name>.<version>.dylib → lib<name>.dylib
+    // Linux: lib<name>.so.<version>    → lib<name>.so
+    let re = Regex::new(r"^(lib\w+)\.(\d+\.)*\d+\.dylib$|^(lib\w+\.so)\.\d+(\.\d+)*$").unwrap();
+
+    let entries: Vec<_> = fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.ok())
+        .collect();
+
+    for entry in &entries {
+        let filename = entry.file_name();
+        let filename = filename.to_string_lossy();
+
+        if let Some(caps) = re.captures(&filename) {
+            // Group 1 = macOS base (e.g., "libkrun"), Group 3 = Linux base (e.g., "libkrun.so")
+            let base = caps.get(1).or(caps.get(3)).map(|m| m.as_str());
+            if let Some(base) = base {
+                let symlink_name = if caps.get(1).is_some() {
+                    format!("{}.dylib", base)
+                } else {
+                    base.to_string()
+                };
+
+                let symlink_path = dir.join(&symlink_name);
+                if !symlink_path.exists() {
+                    #[cfg(unix)]
+                    {
+                        // Relative symlink: libkrun.dylib → libkrun.1.16.0.dylib
+                        std::os::unix::fs::symlink(filename.as_ref(), &symlink_path).ok();
+                        println!(
+                            "cargo:warning=Created symlink: {} -> {}",
+                            symlink_name, filename
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Downloads prebuilt runtime binaries from GitHub Releases.
+///
+/// Called when BOXLITE_DEPS_STUB is set (i.e., -sys crates skipped their builds).
+/// Downloads the full `boxlite-runtime-{target}.tar.gz` tarball which contains
+/// all native libraries (libkrun, libgvproxy, etc.) and tool binaries.
+fn download_prebuilt_runtime(runtime_dir: &Path) {
+    // Skip if already downloaded (check for any library file)
+    if runtime_dir.exists()
+        && fs::read_dir(runtime_dir)
+            .map(|entries| {
+                entries
+                    .filter_map(|e| e.ok())
+                    .any(|e| is_library_file(&e.path()))
+            })
+            .unwrap_or(false)
+    {
+        println!("cargo:warning=Prebuilt runtime already present, skipping download");
+        return;
+    }
+
+    let target = match runtime_target() {
+        Some(t) => t,
+        None => {
+            println!("cargo:warning=Unsupported platform for prebuilt download, skipping");
+            return;
+        }
+    };
+
+    let version = env::var("CARGO_PKG_VERSION").unwrap();
+    let default_url = format!(
+        "https://github.com/boxlite-ai/boxlite/releases/download/v{}/boxlite-runtime-{}.tar.gz",
+        version, target
+    );
+
+    println!("cargo:rerun-if-env-changed=BOXLITE_RUNTIME_URL");
+    let url = env::var("BOXLITE_RUNTIME_URL").unwrap_or(default_url);
+
+    fs::create_dir_all(runtime_dir)
+        .unwrap_or_else(|e| panic!("Failed to create runtime directory: {}", e));
+
+    let tarball_path = runtime_dir.join("boxlite-runtime.tar.gz");
+
+    match download_file(&url, &tarball_path) {
+        Ok(()) => {}
+        Err(e) => {
+            println!(
+                "cargo:warning=Failed to download prebuilt runtime from {}: {}",
+                url, e
+            );
+            println!("cargo:warning=Native libraries will not be available.");
+            return;
+        }
+    }
+
+    match extract_runtime_tarball(&tarball_path, runtime_dir) {
+        Ok(()) => {
+            // Clean up tarball before listing
+            fs::remove_file(&tarball_path).ok();
+
+            // Create unversioned symlinks for build-time linking
+            create_library_symlinks(runtime_dir);
+
+            let files: Vec<_> = fs::read_dir(runtime_dir)
+                .into_iter()
+                .flatten()
+                .filter_map(|e| e.ok())
+                .map(|e| e.file_name().to_string_lossy().to_string())
+                .collect();
+            println!(
+                "cargo:warning=Downloaded prebuilt runtime v{}: [{}]",
+                version,
+                files.join(", ")
+            );
+        }
+        Err(e) => {
+            fs::remove_file(&tarball_path).ok();
+            println!("cargo:warning=Failed to extract runtime tarball: {}", e);
+        }
+    }
+}
+
+/// How native dependencies are resolved.
+///
+/// Controlled by the `BOXLITE_DEPS_STUB` environment variable:
+/// - unset  → `Source`:   build -sys crates from source, bundle outputs
+/// - `1`    → `Stub`:     skip everything, for CI `cargo check`/`cargo clippy`
+/// - `2`    → `Prebuilt`: skip -sys builds, download prebuilt from GitHub Releases
+enum DepsMode {
+    Source,
+    Stub,
+    Prebuilt,
+}
+
+impl DepsMode {
+    fn from_env() -> Self {
+        match env::var("BOXLITE_DEPS_STUB").ok().as_deref() {
+            Some("2") => Self::Prebuilt,
+            Some(_) => Self::Stub,
+            None => Self::Source,
+        }
+    }
+}
+
+/// Auto-set BOXLITE_DEPS_STUB=2 when downloaded from a registry (crates.io).
+/// Cargo adds .cargo_vcs_info.json to published packages.
+fn auto_detect_registry() {
+    if env::var("BOXLITE_DEPS_STUB").is_err() {
+        let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+        if manifest_dir.join(".cargo_vcs_info.json").exists() {
+            // SAFETY: build.rs is single-threaded; no concurrent env var access.
+            unsafe { env::set_var("BOXLITE_DEPS_STUB", "2") };
+        }
+    }
+}
+
 /// Collects all FFI dependencies into a single runtime directory.
 /// This directory can be used by downstream crates (e.g., Python SDK) to
 /// bundle all required libraries and binaries together.
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-env-changed=BOXLITE_DEPS_STUB");
 
-    // Compile seccomp filters at build time (even in stub mode)
-    // This is fast and required for include_bytes!() to work
+    auto_detect_registry();
+
+    // Compile seccomp filters at build time (fast, required for include_bytes!())
     compile_seccomp_filters();
 
-    // Check for stub mode (for CI linting without building dependencies)
-    // Set BOXLITE_DEPS_STUB=1 to skip all native dependency builds
-    if env::var("BOXLITE_DEPS_STUB").is_ok() {
-        println!("cargo:warning=BOXLITE_DEPS_STUB mode: skipping dependency bundling");
-        println!("cargo:runtime_dir=/nonexistent");
-        return;
-    }
+    let mode = DepsMode::from_env();
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     let runtime_dir = out_dir.join("runtime");
 
-    // Force rerun if runtime directory doesn't exist or is empty
-    if !runtime_dir.exists()
-        || fs::read_dir(&runtime_dir)
-            .map(|mut d| d.next().is_none())
-            .unwrap_or(true)
-    {
-        println!("cargo:rerun-if-changed=FORCE_REBUILD");
+    match mode {
+        DepsMode::Stub => {
+            // Check-only mode: skip everything, return early
+            println!("cargo:warning=BOXLITE_DEPS_STUB=1: skipping dependency bundling");
+            println!("cargo:runtime_dir=/nonexistent");
+            return;
+        }
+        DepsMode::Prebuilt => {
+            // Download prebuilt runtime from GitHub Releases
+            println!("cargo:warning=BOXLITE_DEPS_STUB=2: downloading prebuilt runtime");
+            fs::create_dir_all(&runtime_dir)
+                .unwrap_or_else(|e| panic!("Failed to create runtime directory: {}", e));
+            download_prebuilt_runtime(&runtime_dir);
+            // -sys crates emit rustc-link-lib in STUB mode.
+            // Tell the linker where to find the prebuilt libraries.
+            println!("cargo:rustc-link-search=native={}", runtime_dir.display());
+        }
+        DepsMode::Source => {
+            // Normal: -sys crates built from source, bundle outputs
+            fs::create_dir_all(&runtime_dir)
+                .unwrap_or_else(|e| panic!("Failed to create runtime directory: {}", e));
+            let collected = bundle_boxlite_deps(&runtime_dir);
+            if !collected.is_empty() {
+                let names: Vec<_> = collected.iter().map(|(name, _)| name.as_str()).collect();
+                println!("cargo:warning=Bundled: {}", names.join(", "));
+            }
+        }
     }
-
-    // Create the runtime directory
-    fs::create_dir_all(&runtime_dir)
-        .unwrap_or_else(|e| panic!("Failed to create runtime directory: {}", e));
-
-    // Auto-discover and bundle all dependencies from -sys crates
-    let collected = bundle_boxlite_deps(&runtime_dir);
 
     // Expose the runtime directory to downstream crates (e.g., Python SDK)
     println!("cargo:runtime_dir={}", runtime_dir.display());
-    if !collected.is_empty() {
-        let names: Vec<_> = collected.iter().map(|(name, _)| name.as_str()).collect();
-        println!("cargo:warning=Bundled: {}", names.join(", "));
-    }
+
+    // Embed runtime directory for compile-time discovery by RuntimeBinaryFinder.
+    // option_env!("BOXLITE_RUNTIME_DIR") reads this at compile time.
+    // std::env::var("BOXLITE_RUNTIME_DIR") at runtime takes priority (checked first).
+    println!(
+        "cargo:rustc-env=BOXLITE_RUNTIME_DIR={}",
+        runtime_dir.display()
+    );
+
+    // Compute and embed guest binary hash at compile time (best-effort).
+    // Falls back to runtime computation if the binary isn't available yet.
+    compute_guest_hash(&runtime_dir);
 
     // Set rpath for boxlite-shim
     #[cfg(target_os = "macos")]
     println!("cargo:rustc-link-arg=-Wl,-rpath,@loader_path");
     #[cfg(target_os = "linux")]
     println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN");
+}
+
+/// Compute SHA256 hash of the `boxlite-guest` binary and embed it via `cargo:rustc-env`.
+///
+/// Search order:
+/// 1. `runtime_dir` (OUT_DIR/runtime/ — for prebuilt mode)
+/// 2. `target/boxlite-runtime/boxlite-guest` (assembled by `make runtime-debug`)
+///
+/// If the binary isn't found, silently skips — runtime will compute the hash as fallback.
+fn compute_guest_hash(runtime_dir: &Path) {
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+
+    let candidates = [
+        runtime_dir.join("boxlite-guest"),
+        manifest_dir
+            .parent()
+            .map(|root| root.join("target/boxlite-runtime/boxlite-guest"))
+            .unwrap_or_default(),
+    ];
+
+    let guest_path = candidates.iter().find(|p| p.is_file());
+
+    let Some(guest_path) = guest_path else {
+        println!("cargo:warning=boxlite-guest not found, skipping compile-time hash");
+        return;
+    };
+
+    match sha256_file(guest_path) {
+        Ok(hash) => {
+            println!("cargo:rustc-env=BOXLITE_GUEST_HASH={}", hash);
+            println!("cargo:rerun-if-changed={}", guest_path.display());
+            println!(
+                "cargo:warning=Embedded guest hash: {}... (from {})",
+                &hash[..12],
+                guest_path.display()
+            );
+        }
+        Err(e) => {
+            println!(
+                "cargo:warning=Failed to hash boxlite-guest at {}: {}",
+                guest_path.display(),
+                e
+            );
+        }
+    }
+}
+
+/// Compute SHA256 hex digest of a file.
+fn sha256_file(path: &Path) -> io::Result<String> {
+    let mut file = fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0u8; 64 * 1024];
+    loop {
+        let n = file.read(&mut buffer)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buffer[..n]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
 }

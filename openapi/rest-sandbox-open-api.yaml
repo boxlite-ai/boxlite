@@ -1,0 +1,1633 @@
+# Copyright 2024-2026 BoxLite Contributors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+---
+openapi: 3.1.1
+info:
+  title: BoxLite Cloud Sandbox REST API
+  version: 0.1.0
+  description: |
+    RESTful API for the BoxLite cloud sandbox service.
+
+    BoxLite provides hardware-level VM isolation for secure, isolated code execution.
+    This API exposes sandbox lifecycle management, command execution, file transfer,
+    and image management as a multi-tenant cloud service.
+
+    ## Design Principles
+
+    This specification follows industry-standard REST API patterns:
+    - Versioned prefix (`/v1/`) for graceful API evolution
+    - Multi-tenancy via `{prefix}` path segment (organization/workspace)
+    - Capability discovery via `GET /v1/config`
+    - Optional idempotency keys for safe mutation retries
+    - Opaque page-token pagination
+    - Standard error model with typed error codes
+
+    ## Authentication
+
+    All endpoints (except `GET /v1/config` and `POST /v1/oauth/tokens`) require
+    a Bearer token in the `Authorization` header. Obtain tokens via the OAuth2
+    client credentials flow.
+
+    ## Execution Model
+
+    Command execution is asynchronous:
+    1. `POST /exec` starts an execution and returns an `execution_id`
+    2. `GET /executions/{exec_id}/output` streams stdout/stderr via SSE
+    3. `POST /executions/{exec_id}/input` sends stdin data
+    4. Interactive TTY sessions use `WebSocket /exec/tty`
+  license:
+    name: Apache-2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+  contact:
+    name: BoxLite
+    url: https://github.com/boxlite-ai/boxlite
+
+servers:
+  - url: "{scheme}://{host}/v1"
+    description: BoxLite Sandbox API v1
+    variables:
+      scheme:
+        default: https
+        enum: [https, http]
+      host:
+        default: api.boxlite.ai
+
+# ---------------------------------------------------------------------------
+# Security
+# ---------------------------------------------------------------------------
+security:
+  - BearerAuth: []
+  - OAuth2:
+      - boxes:read
+      - boxes:write
+      - boxes:exec
+      - images:read
+      - images:write
+      - runtime:admin
+
+tags:
+  - name: Configuration
+    description: Server capability discovery
+  - name: Authentication
+    description: OAuth2 token exchange
+  - name: Boxes
+    description: Sandbox box lifecycle management
+  - name: Execution
+    description: Command execution and streaming
+  - name: Files
+    description: File upload and download
+  - name: Metrics
+    description: Runtime and per-box metrics
+  - name: Images
+    description: Container image management
+
+# ===========================================================================
+# Paths
+# ===========================================================================
+paths:
+
+  # -------------------------------------------------------------------------
+  # Configuration & Discovery
+  # -------------------------------------------------------------------------
+  /config:
+    get:
+      operationId: getConfig
+      summary: Get server configuration and capabilities
+      description: |
+        Returns server defaults, enforced limits, and supported features.
+        Clients should call this on startup to adapt behavior.
+        No authentication required.
+      tags: [Configuration]
+      security: []
+      responses:
+        "200":
+          description: Server configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SandboxConfig"
+
+  # -------------------------------------------------------------------------
+  # Authentication
+  # -------------------------------------------------------------------------
+  /oauth/tokens:
+    post:
+      operationId: getToken
+      summary: Exchange credentials for an access token
+      description: |
+        OAuth2 client credentials flow. Returns a Bearer token for
+        authenticating subsequent API requests.
+      tags: [Authentication]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: "#/components/schemas/TokenRequest"
+      responses:
+        "200":
+          description: Token issued successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenResponse"
+        "401":
+          $ref: "#/components/responses/UnauthorizedError"
+
+  # -------------------------------------------------------------------------
+  # Boxes
+  # -------------------------------------------------------------------------
+  /{prefix}/boxes:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+
+    post:
+      operationId: createBox
+      summary: Create a new sandbox box
+      description: |
+        Creates a new sandbox box with the specified configuration.
+        The box starts in `configured` status. Call `POST /start` to
+        initialize the VM, or it will start lazily on first `exec`.
+      tags: [Boxes]
+      parameters:
+        - $ref: "#/components/parameters/idempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateBoxRequest"
+      responses:
+        "201":
+          description: Box created
+          headers:
+            Location:
+              description: URL of the created box
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Box"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntityError"
+
+    get:
+      operationId: listBoxes
+      summary: List all boxes
+      description: |
+        Returns a paginated list of boxes in the workspace.
+        Optionally filter by status or name.
+      tags: [Boxes]
+      parameters:
+        - $ref: "#/components/parameters/pageSize"
+        - $ref: "#/components/parameters/pageToken"
+        - name: status
+          in: query
+          description: Filter by box status
+          schema:
+            $ref: "#/components/schemas/BoxStatus"
+      responses:
+        "200":
+          description: List of boxes
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListBoxesResponse"
+
+  /{prefix}/boxes/{box_id}:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+
+    get:
+      operationId: getBox
+      summary: Get box details
+      description: Returns full metadata for a box. Accepts box ID (ULID) or name.
+      tags: [Boxes]
+      responses:
+        "200":
+          description: Box details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Box"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+
+    head:
+      operationId: boxExists
+      summary: Check if a box exists
+      description: Returns 204 if the box exists, 404 if not. No response body.
+      tags: [Boxes]
+      responses:
+        "204":
+          description: Box exists
+        "404":
+          description: Box not found
+
+    delete:
+      operationId: removeBox
+      summary: Remove a box
+      description: |
+        Removes a box and all its associated data (disk, config, state).
+        Use `?force=true` to force-remove a running box.
+      tags: [Boxes]
+      parameters:
+        - $ref: "#/components/parameters/idempotencyKey"
+        - name: force
+          in: query
+          description: Force remove even if the box is running
+          schema:
+            type: boolean
+            default: false
+      responses:
+        "204":
+          description: Box removed
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+
+  # -------------------------------------------------------------------------
+  # Box Lifecycle
+  # -------------------------------------------------------------------------
+  /{prefix}/boxes/{box_id}/start:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+    post:
+      operationId: startBox
+      summary: Start a box (initialize VM)
+      description: |
+        Initializes the VM for a box. Idempotent: if already running, returns
+        current state. Transitions: configured → running, stopped → running.
+      tags: [Boxes]
+      parameters:
+        - $ref: "#/components/parameters/idempotencyKey"
+      responses:
+        "200":
+          description: Box started (or already running)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Box"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+
+  /{prefix}/boxes/{box_id}/stop:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+    post:
+      operationId: stopBox
+      summary: Stop a box (terminate VM)
+      description: |
+        Gracefully stops the VM. The box transitions to `stopped` status.
+        If `auto_remove` was set on creation, the box is also deleted.
+      tags: [Boxes]
+      parameters:
+        - $ref: "#/components/parameters/idempotencyKey"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StopBoxRequest"
+      responses:
+        "200":
+          description: Box stopped
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Box"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+
+  # -------------------------------------------------------------------------
+  # Execution
+  # -------------------------------------------------------------------------
+  /{prefix}/boxes/{box_id}/exec:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+    post:
+      operationId: startExecution
+      summary: Start an asynchronous command execution
+      description: |
+        Starts a command in the box and returns an execution ID immediately.
+        The box is automatically started if not already running.
+
+        Use the returned `execution_id` to:
+        - Stream output: `GET /executions/{exec_id}/output` (SSE)
+        - Send input: `POST /executions/{exec_id}/input`
+        - Check status: `GET /executions/{exec_id}`
+        - Send signal: `POST /executions/{exec_id}/signal`
+      tags: [Execution]
+      parameters:
+        - $ref: "#/components/parameters/idempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ExecRequest"
+      responses:
+        "201":
+          description: Execution started
+          headers:
+            Location:
+              description: URL of the execution resource
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExecResponse"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+
+  /{prefix}/boxes/{box_id}/exec/tty:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+    get:
+      operationId: execTty
+      summary: Interactive TTY session (WebSocket)
+      description: |
+        Opens an interactive terminal session via WebSocket upgrade.
+
+        **Protocol:**
+        - Client → Server: raw stdin bytes (binary frames)
+        - Server → Client: raw PTY output (binary frames)
+        - Client → Server control: `{"type":"resize","cols":120,"rows":40}` (text frame)
+        - Server → Client exit: `{"type":"exit","exit_code":0}` (text frame)
+
+        **Query parameters** configure the initial session.
+      tags: [Execution]
+      parameters:
+        - name: command
+          in: query
+          description: Command to execute (default "bash")
+          schema:
+            type: string
+            default: bash
+        - name: args
+          in: query
+          description: Command arguments (repeated parameter)
+          schema:
+            type: array
+            items:
+              type: string
+          style: form
+          explode: true
+        - name: cols
+          in: query
+          description: Initial terminal columns
+          schema:
+            type: integer
+            default: 80
+        - name: rows
+          in: query
+          description: Initial terminal rows
+          schema:
+            type: integer
+            default: 24
+      responses:
+        "101":
+          description: WebSocket upgrade successful
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+
+  /{prefix}/boxes/{box_id}/executions/{exec_id}:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+      - $ref: "#/components/parameters/execId"
+    get:
+      operationId: getExecution
+      summary: Get execution status
+      description: Returns the current status and result of an execution.
+      tags: [Execution]
+      responses:
+        "200":
+          description: Execution status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExecutionInfo"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+
+  /{prefix}/boxes/{box_id}/executions/{exec_id}/output:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+      - $ref: "#/components/parameters/execId"
+    get:
+      operationId: streamExecutionOutput
+      summary: Stream execution output (SSE)
+      description: |
+        Returns a Server-Sent Events stream of execution output.
+
+        **Event types:**
+        - `stdout` — standard output data (base64-encoded)
+        - `stderr` — standard error data (base64-encoded)
+        - `exit` — execution completed with exit code
+
+        **Example SSE stream:**
+        ```
+        event: stdout
+        data: {"data":"SGVsbG8gV29ybGQK"}
+
+        event: stderr
+        data: {"data":"V2FybmluZzogLi4u"}
+
+        event: exit
+        data: {"exit_code":0,"duration_ms":1523}
+        ```
+
+        The stream closes after the `exit` event is sent.
+        Clients can reconnect using the `Last-Event-ID` header.
+      tags: [Execution]
+      responses:
+        "200":
+          description: SSE event stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: Server-Sent Events stream
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+
+  /{prefix}/boxes/{box_id}/executions/{exec_id}/input:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+      - $ref: "#/components/parameters/execId"
+    post:
+      operationId: sendExecutionInput
+      summary: Send stdin data to an execution
+      description: |
+        Sends raw bytes to the execution's standard input.
+        Set `X-Close-Stdin: true` header to signal EOF after this write.
+      tags: [Execution]
+      parameters:
+        - name: X-Close-Stdin
+          in: header
+          description: Close stdin after this write (signal EOF)
+          schema:
+            type: boolean
+            default: false
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+              description: Raw stdin bytes
+      responses:
+        "204":
+          description: Input accepted
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+
+  /{prefix}/boxes/{box_id}/executions/{exec_id}/signal:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+      - $ref: "#/components/parameters/execId"
+    post:
+      operationId: signalExecution
+      summary: Send a signal to an execution
+      description: |
+        Sends a POSIX signal to the running execution.
+        Common signals: 9 (SIGKILL), 15 (SIGTERM), 2 (SIGINT).
+      tags: [Execution]
+      parameters:
+        - $ref: "#/components/parameters/idempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SignalRequest"
+      responses:
+        "204":
+          description: Signal sent
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+
+  /{prefix}/boxes/{box_id}/executions/{exec_id}/resize:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+      - $ref: "#/components/parameters/execId"
+    post:
+      operationId: resizeExecution
+      summary: Resize execution TTY
+      description: |
+        Resizes the pseudo-terminal for a TTY-enabled execution.
+        Only applicable to executions started with `tty: true`.
+      tags: [Execution]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResizeRequest"
+      responses:
+        "204":
+          description: TTY resized
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+
+  # -------------------------------------------------------------------------
+  # Files
+  # -------------------------------------------------------------------------
+  /{prefix}/boxes/{box_id}/files:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+
+    put:
+      operationId: uploadFiles
+      summary: Upload files into the box
+      description: |
+        Uploads a tar archive and extracts it at the specified path
+        inside the container. The box must be running.
+      tags: [Files]
+      parameters:
+        - name: path
+          in: query
+          required: true
+          description: Destination path inside the container
+          schema:
+            type: string
+          example: /app
+        - name: overwrite
+          in: query
+          description: Overwrite existing files at destination
+          schema:
+            type: boolean
+            default: true
+      requestBody:
+        required: true
+        content:
+          application/x-tar:
+            schema:
+              type: string
+              format: binary
+              description: Tar archive to extract at destination
+      responses:
+        "204":
+          description: Upload successful
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+
+    get:
+      operationId: downloadFiles
+      summary: Download files from the box
+      description: |
+        Downloads files from the specified path inside the container
+        as a tar archive. The box must be running.
+      tags: [Files]
+      parameters:
+        - name: path
+          in: query
+          required: true
+          description: Source path inside the container
+          schema:
+            type: string
+          example: /app/output
+        - name: follow_symlinks
+          in: query
+          description: Follow symlinks when archiving
+          schema:
+            type: boolean
+            default: false
+      responses:
+        "200":
+          description: Tar archive of requested path
+          content:
+            application/x-tar:
+              schema:
+                type: string
+                format: binary
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+
+  # -------------------------------------------------------------------------
+  # Metrics
+  # -------------------------------------------------------------------------
+  /{prefix}/metrics:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+    get:
+      operationId: getRuntimeMetrics
+      summary: Get runtime-wide metrics
+      description: |
+        Returns aggregate metrics across all boxes in the workspace.
+        All counters are monotonic (never decrease).
+      tags: [Metrics]
+      responses:
+        "200":
+          description: Runtime metrics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuntimeMetrics"
+
+  /{prefix}/boxes/{box_id}/metrics:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+    get:
+      operationId: getBoxMetrics
+      summary: Get per-box metrics
+      description: |
+        Returns resource usage and execution metrics for a specific box.
+        Includes CPU, memory, network, and stage-level boot timing.
+      tags: [Metrics]
+      responses:
+        "200":
+          description: Box metrics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BoxMetrics"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+
+  # -------------------------------------------------------------------------
+  # Images
+  # -------------------------------------------------------------------------
+  /{prefix}/images/pull:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+    post:
+      operationId: pullImage
+      summary: Pull a container image
+      description: |
+        Pulls a container image from a registry and caches it locally.
+        Returns 200 with image info when the pull completes.
+      tags: [Images]
+      parameters:
+        - $ref: "#/components/parameters/idempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PullImageRequest"
+      responses:
+        "200":
+          description: Image pulled and cached
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImageInfo"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntityError"
+
+  /{prefix}/images:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+    get:
+      operationId: listImages
+      summary: List cached images
+      description: Returns a paginated list of locally cached container images.
+      tags: [Images]
+      parameters:
+        - $ref: "#/components/parameters/pageSize"
+        - $ref: "#/components/parameters/pageToken"
+      responses:
+        "200":
+          description: List of cached images
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListImagesResponse"
+
+  /{prefix}/images/{image_id}:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/imageId"
+
+    get:
+      operationId: getImage
+      summary: Get image details
+      description: Returns metadata for a cached image by its manifest digest.
+      tags: [Images]
+      responses:
+        "200":
+          description: Image details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImageInfo"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+
+    head:
+      operationId: imageExists
+      summary: Check if an image is cached
+      description: Returns 204 if the image exists in the local cache, 404 if not.
+      tags: [Images]
+      responses:
+        "204":
+          description: Image exists
+        "404":
+          description: Image not found
+
+# ===========================================================================
+# Components
+# ===========================================================================
+components:
+
+  # -------------------------------------------------------------------------
+  # Security Schemes
+  # -------------------------------------------------------------------------
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Bearer token obtained via OAuth2 client credentials flow
+
+    OAuth2:
+      type: oauth2
+      flows:
+        clientCredentials:
+          tokenUrl: /v1/oauth/tokens
+          scopes:
+            boxes:read: Read box information and status
+            boxes:write: Create, modify, and delete boxes
+            boxes:exec: Execute commands and manage executions
+            images:read: List and inspect cached images
+            images:write: Pull images from registries
+            runtime:admin: Runtime administration (metrics, shutdown)
+
+  # -------------------------------------------------------------------------
+  # Parameters
+  # -------------------------------------------------------------------------
+  parameters:
+    prefix:
+      name: prefix
+      in: path
+      required: true
+      description: |
+        Organization or workspace identifier for multi-tenancy isolation.
+        All resources are scoped to this prefix.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+        pattern: "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+      example: acme-corp
+
+    boxId:
+      name: box_id
+      in: path
+      required: true
+      description: |
+        Box identifier. Accepts either:
+        - Full ULID (26 characters, e.g., `01HJK4TNRPQSXYZ8WM6NCVT9R5`)
+        - User-defined name (e.g., `my-sandbox`)
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+      example: 01HJK4TNRPQSXYZ8WM6NCVT9R5
+
+    execId:
+      name: exec_id
+      in: path
+      required: true
+      description: Execution identifier returned by `POST /exec`
+      schema:
+        type: string
+      example: exec-01HJK5ABCDEF
+
+    imageId:
+      name: image_id
+      in: path
+      required: true
+      description: Image manifest digest (e.g., `sha256:abc123...`)
+      schema:
+        type: string
+      example: "sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4"
+
+    pageSize:
+      name: pageSize
+      in: query
+      description: Maximum number of results per page
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 1000
+        default: 100
+
+    pageToken:
+      name: pageToken
+      in: query
+      description: |
+        Opaque token for the next page of results.
+        Returned as `next_page_token` in list responses.
+        Clients must not parse or interpret this value.
+      schema:
+        type: string
+
+    idempotencyKey:
+      name: Idempotency-Key
+      in: header
+      description: |
+        Optional client-provided UUID for safe request retries.
+        If the server has already processed a request with this key,
+        it returns the original response without re-executing.
+        Same key with different payload returns 422.
+        Keys expire after the duration advertised in `GET /v1/config`.
+      schema:
+        type: string
+        format: uuid
+      example: "017f22e2-79b0-7cc3-98c4-dc0c0c07398f"
+
+  # -------------------------------------------------------------------------
+  # Responses (Error Templates)
+  # -------------------------------------------------------------------------
+  responses:
+    BadRequestError:
+      description: Invalid request parameters or body
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              message: "invalid argument: cpus must be between 1 and 32"
+              type: InvalidArgumentError
+              code: 400
+
+    UnauthorizedError:
+      description: Missing or invalid authentication credentials
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              message: "invalid or expired access token"
+              type: UnauthorizedError
+              code: 401
+
+    NotFoundError:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              message: "box not found: 01HJK4TNRPQSXYZ8WM6NCVT9R5"
+              type: NotFoundError
+              code: 404
+
+    ConflictError:
+      description: Resource state conflict
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              message: "invalid state: box is already running"
+              type: InvalidStateError
+              code: 409
+
+    UnprocessableEntityError:
+      description: Request understood but cannot be processed
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              message: "image error: failed to pull python:nonexistent"
+              type: ImageError
+              code: 422
+
+  # -------------------------------------------------------------------------
+  # Schemas
+  # -------------------------------------------------------------------------
+  schemas:
+
+    # =======================================================================
+    # Configuration
+    # =======================================================================
+    SandboxConfig:
+      type: object
+      description: Server configuration and capabilities
+      properties:
+        defaults:
+          type: object
+          description: Default values applied when not specified in requests
+          properties:
+            cpus:
+              type: integer
+              description: Default vCPU count
+              example: 2
+            memory_mib:
+              type: integer
+              description: Default memory in MiB
+              example: 512
+            disk_size_gb:
+              type: integer
+              description: Default disk size in GB
+              example: 10
+            security_preset:
+              type: string
+              description: Default security preset
+              example: standard
+            auto_remove:
+              type: boolean
+              description: Default auto-remove on stop
+              example: true
+        overrides:
+          type: object
+          description: Server-enforced overrides that clients cannot change
+          additionalProperties:
+            type: string
+        capabilities:
+          type: object
+          description: Server capability limits and feature flags
+          properties:
+            max_cpus:
+              type: integer
+              description: Maximum allowed vCPUs per box
+              example: 32
+            max_memory_mib:
+              type: integer
+              description: Maximum allowed memory in MiB
+              example: 16384
+            max_disk_size_gb:
+              type: integer
+              description: Maximum allowed disk size in GB
+              example: 100
+            max_boxes_per_prefix:
+              type: integer
+              description: Maximum boxes per organization/workspace
+              example: 50
+            max_concurrent_executions:
+              type: integer
+              description: Maximum concurrent executions per box
+              example: 10
+            file_transfer_max_bytes:
+              type: integer
+              description: Maximum file upload/download size in bytes
+              example: 1073741824
+            exec_timeout_max_seconds:
+              type: number
+              description: Maximum allowed execution timeout in seconds
+              example: 3600
+            tty_enabled:
+              type: boolean
+              description: Whether WebSocket TTY sessions are supported
+              example: true
+            streaming_enabled:
+              type: boolean
+              description: Whether SSE output streaming is supported
+              example: true
+            supported_security_presets:
+              type: array
+              items:
+                type: string
+              example: [development, standard, maximum]
+            idempotency_key_lifetime:
+              type: string
+              description: How long idempotency keys are retained (ISO 8601 duration)
+              example: PT24H
+
+    # =======================================================================
+    # Authentication
+    # =======================================================================
+    TokenRequest:
+      type: object
+      required: [grant_type, client_id, client_secret]
+      properties:
+        grant_type:
+          type: string
+          enum: [client_credentials]
+        client_id:
+          type: string
+        client_secret:
+          type: string
+        scope:
+          type: string
+          description: Space-separated list of requested scopes
+          example: "boxes:read boxes:write boxes:exec"
+
+    TokenResponse:
+      type: object
+      required: [access_token, token_type, expires_in]
+      properties:
+        access_token:
+          type: string
+          description: Bearer token for authenticating API requests
+        token_type:
+          type: string
+          enum: [bearer]
+        expires_in:
+          type: integer
+          description: Token lifetime in seconds
+          example: 3600
+        scope:
+          type: string
+          description: Granted scopes (may differ from requested)
+          example: "boxes:read boxes:write boxes:exec"
+
+    # =======================================================================
+    # Error Model
+    # =======================================================================
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          $ref: "#/components/schemas/ErrorModel"
+
+    ErrorModel:
+      type: object
+      description: |
+        Standard error response. Maps directly to BoxliteError variants.
+        `UnauthorizedError` is a server-layer error (auth middleware) and does
+        not correspond to a BoxliteError variant in the core library.
+      required: [message, type, code]
+      properties:
+        message:
+          type: string
+          description: Human-readable error message with context
+          example: "box not found: 01HJK4TNRPQSXYZ8WM6NCVT9R5"
+        type:
+          type: string
+          description: Error type identifier (matches BoxliteError variants)
+          enum:
+            - UnsupportedError
+            - EngineError
+            - ConfigError
+            - StorageError
+            - ImageError
+            - PortalError
+            - NetworkError
+            - RpcError
+            - RpcTransportError
+            - InternalError
+            - ExecutionError
+            - NotFoundError
+            - AlreadyExistsError
+            - InvalidStateError
+            - DatabaseError
+            - MetadataError
+            - InvalidArgumentError
+            - StoppedError
+            - UnauthorizedError
+          example: NotFoundError
+        code:
+          type: integer
+          description: HTTP response status code
+          minimum: 400
+          maximum: 599
+          example: 404
+        stack:
+          type: array
+          description: Stack trace (only included when server debug mode is enabled)
+          items:
+            type: string
+
+    # =======================================================================
+    # Box
+    # =======================================================================
+    Box:
+      type: object
+      description: Sandbox box metadata (maps to BoxInfo)
+      required: [box_id, status, created_at, updated_at, image, cpus, memory_mib]
+      properties:
+        box_id:
+          type: string
+          description: ULID identifier (26 characters, lexicographically sortable)
+          pattern: "^[0-9A-Z]{26}$"
+          example: 01HJK4TNRPQSXYZ8WM6NCVT9R5
+        name:
+          type: string
+          nullable: true
+          description: User-defined name (unique within prefix)
+          example: my-sandbox
+        status:
+          $ref: "#/components/schemas/BoxStatus"
+        created_at:
+          type: string
+          format: date-time
+          description: Box creation timestamp (UTC)
+        updated_at:
+          type: string
+          format: date-time
+          description: Last state change timestamp (UTC)
+        pid:
+          type: integer
+          nullable: true
+          description: VMM subprocess PID (null if not running)
+        image:
+          type: string
+          description: OCI image reference or rootfs path
+          example: python:3.11-slim
+        cpus:
+          type: integer
+          minimum: 1
+          maximum: 32
+          description: Allocated vCPU cores
+          example: 2
+        memory_mib:
+          type: integer
+          minimum: 128
+          description: Allocated memory in MiB
+          example: 512
+        labels:
+          type: object
+          additionalProperties:
+            type: string
+          description: User-defined key-value labels
+
+    BoxStatus:
+      type: string
+      description: |
+        Box lifecycle state machine:
+        - `configured`: Created, VM not yet started
+        - `running`: VM active, accepting commands
+        - `stopping`: Graceful shutdown in progress (transient)
+        - `stopped`: VM terminated, can be restarted
+        - `unknown`: Error recovery state
+      enum:
+        - configured
+        - running
+        - stopping
+        - stopped
+        - unknown
+
+    CreateBoxRequest:
+      type: object
+      description: Configuration for creating a new box (maps to BoxOptions)
+      properties:
+        name:
+          type: string
+          description: Unique name within the workspace
+          minLength: 1
+          maxLength: 128
+          pattern: "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+          example: dev-sandbox
+        image:
+          type: string
+          description: OCI image reference
+          default: "alpine:latest"
+          example: python:3.11-slim
+        rootfs_path:
+          type: string
+          description: |
+            Path to a pre-built rootfs (alternative to `image`).
+            Mutually exclusive with `image`.
+        cpus:
+          type: integer
+          minimum: 1
+          maximum: 32
+          description: Number of vCPUs to allocate
+          example: 2
+        memory_mib:
+          type: integer
+          minimum: 128
+          description: Memory in MiB to allocate
+          example: 512
+        disk_size_gb:
+          type: integer
+          minimum: 1
+          description: Disk size in GB (sparse, grows as needed)
+        working_dir:
+          type: string
+          description: Default working directory inside the container
+        env:
+          type: object
+          additionalProperties:
+            type: string
+          description: Environment variables as key-value pairs
+          example:
+            PYTHONPATH: /app
+            DEBUG: "1"
+        entrypoint:
+          type: array
+          items:
+            type: string
+          description: Override image ENTRYPOINT
+        cmd:
+          type: array
+          items:
+            type: string
+          description: Override image CMD
+        user:
+          type: string
+          description: "User to run as (format: <name|uid>[:<group|gid>])"
+          example: "1000:1000"
+        volumes:
+          type: array
+          items:
+            $ref: "#/components/schemas/VolumeSpec"
+        ports:
+          type: array
+          items:
+            $ref: "#/components/schemas/PortSpec"
+        network:
+          type: string
+          description: |
+            Network isolation mode. Currently supported: `isolated`.
+            Additional modes may be added in future versions.
+          default: isolated
+        auto_remove:
+          type: boolean
+          description: Automatically remove box when stopped
+          default: true
+        detach:
+          type: boolean
+          description: Box survives parent process exit
+          default: false
+        security:
+          $ref: "#/components/schemas/SecurityPreset"
+
+    VolumeSpec:
+      type: object
+      description: Host-to-guest filesystem mount
+      required: [host_path, guest_path]
+      properties:
+        host_path:
+          type: string
+          description: Path on the host filesystem
+        guest_path:
+          type: string
+          description: Mount point inside the container
+        read_only:
+          type: boolean
+          default: false
+
+    PortSpec:
+      type: object
+      description: Port forwarding rule (host → guest)
+      required: [guest_port]
+      properties:
+        host_port:
+          type: integer
+          minimum: 0
+          maximum: 65535
+          description: Host port (0 or omit for dynamic assignment)
+        guest_port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+          description: Container port to expose
+        protocol:
+          type: string
+          enum: [tcp, udp]
+          default: tcp
+        host_ip:
+          type: string
+          description: Host IP to bind (defaults to 0.0.0.0)
+
+    SecurityPreset:
+      type: string
+      description: |
+        Security isolation preset:
+        - `development`: Minimal isolation for debugging
+        - `standard`: Recommended for most use cases (jailer + seccomp on Linux)
+        - `maximum`: All isolation features enabled (untrusted workloads)
+      enum:
+        - development
+        - standard
+        - maximum
+      default: standard
+
+    StopBoxRequest:
+      type: object
+      properties:
+        timeout_seconds:
+          type: number
+          minimum: 0
+          description: Graceful shutdown timeout in seconds. After expiry, force-kill.
+          default: 30
+
+    ListBoxesResponse:
+      type: object
+      required: [boxes]
+      properties:
+        boxes:
+          type: array
+          items:
+            $ref: "#/components/schemas/Box"
+        next_page_token:
+          type: string
+          nullable: true
+          description: |
+            Opaque token for next page. Null or absent if no more results.
+
+    # =======================================================================
+    # Execution
+    # =======================================================================
+    ExecRequest:
+      type: object
+      description: Command execution request (maps to BoxCommand)
+      required: [command]
+      properties:
+        command:
+          type: string
+          description: Program to execute
+          example: python3
+        args:
+          type: array
+          items:
+            type: string
+          description: Command arguments
+          example: ["-c", "print('hello')"]
+        env:
+          type: object
+          additionalProperties:
+            type: string
+          description: Environment variable overrides for this execution
+        timeout_seconds:
+          type: number
+          minimum: 0.1
+          description: Execution timeout in seconds
+        working_dir:
+          type: string
+          description: Working directory override for this execution
+        tty:
+          type: boolean
+          default: false
+          description: Enable pseudo-terminal allocation
+
+    ExecResponse:
+      type: object
+      description: Response from starting an async execution
+      required: [execution_id]
+      properties:
+        execution_id:
+          type: string
+          description: Unique execution identifier
+          example: exec-01HJK5ABCDEF
+
+    ExecutionInfo:
+      type: object
+      description: Execution status and result
+      required: [execution_id, status]
+      properties:
+        execution_id:
+          type: string
+        status:
+          type: string
+          description: Current execution status
+          enum:
+            - running
+            - completed
+            - killed
+            - timed_out
+        exit_code:
+          type: integer
+          nullable: true
+          description: Process exit code (null while running)
+        started_at:
+          type: string
+          format: date-time
+        duration_ms:
+          type: integer
+          nullable: true
+          description: Total execution duration in milliseconds
+        error_message:
+          type: string
+          nullable: true
+          description: Diagnostic message if process died unexpectedly
+
+    SignalRequest:
+      type: object
+      required: [signal]
+      properties:
+        signal:
+          type: integer
+          description: |
+            POSIX signal number to send.
+            Common values: 2 (SIGINT), 9 (SIGKILL), 15 (SIGTERM).
+          example: 9
+
+    ResizeRequest:
+      type: object
+      required: [cols, rows]
+      properties:
+        cols:
+          type: integer
+          minimum: 1
+          description: Terminal width in columns
+          example: 120
+        rows:
+          type: integer
+          minimum: 1
+          description: Terminal height in rows
+          example: 40
+
+    # =======================================================================
+    # Metrics
+    # =======================================================================
+    RuntimeMetrics:
+      type: object
+      description: Aggregate metrics across all boxes (maps to RuntimeMetrics)
+      properties:
+        boxes_created_total:
+          type: integer
+          description: Total boxes created since runtime startup (monotonic)
+        boxes_failed_total:
+          type: integer
+          description: Total boxes that failed to start (monotonic)
+        boxes_stopped_total:
+          type: integer
+          description: Total boxes stopped (monotonic)
+        num_running_boxes:
+          type: integer
+          description: Currently running boxes (calculated)
+        total_commands_executed:
+          type: integer
+          description: Total commands across all boxes (monotonic)
+        total_exec_errors:
+          type: integer
+          description: Total execution errors across all boxes (monotonic)
+
+    BoxMetrics:
+      type: object
+      description: Per-box resource usage and execution metrics (maps to BoxMetrics)
+      properties:
+        commands_executed_total:
+          type: integer
+          description: Commands executed on this box (monotonic)
+        exec_errors_total:
+          type: integer
+          description: Execution errors on this box (monotonic)
+        bytes_sent_total:
+          type: integer
+          description: Bytes sent to box via stdin (monotonic)
+        bytes_received_total:
+          type: integer
+          description: Bytes received from box via stdout/stderr (monotonic)
+        cpu_percent:
+          type: number
+          format: float
+          nullable: true
+          description: CPU usage percentage (0.0 - 100.0)
+        memory_bytes:
+          type: integer
+          nullable: true
+          description: Current memory usage in bytes
+        network_bytes_sent:
+          type: integer
+          nullable: true
+          description: Network bytes sent (host → guest)
+        network_bytes_received:
+          type: integer
+          nullable: true
+          description: Network bytes received (guest → host)
+        network_tcp_connections:
+          type: integer
+          nullable: true
+          description: Current ESTABLISHED TCP connections
+        network_tcp_errors:
+          type: integer
+          nullable: true
+          description: Total failed TCP connection attempts
+        boot_timing:
+          $ref: "#/components/schemas/BootTiming"
+
+    BootTiming:
+      type: object
+      description: Stage-level initialization timing breakdown (milliseconds)
+      properties:
+        total_create_ms:
+          type: integer
+          nullable: true
+          description: Total time from create() to box ready
+        guest_boot_ms:
+          type: integer
+          nullable: true
+          description: Time from subprocess spawn to guest agent ready
+        filesystem_setup_ms:
+          type: integer
+          nullable: true
+          description: "Stage 1: directory structure creation"
+        image_prepare_ms:
+          type: integer
+          nullable: true
+          description: "Stage 2: image pull and layer extraction"
+        guest_rootfs_ms:
+          type: integer
+          nullable: true
+          description: "Stage 3: guest rootfs bootstrap"
+        box_config_ms:
+          type: integer
+          nullable: true
+          description: "Stage 4: disk and network configuration"
+        box_spawn_ms:
+          type: integer
+          nullable: true
+          description: "Stage 5: subprocess spawn"
+        container_init_ms:
+          type: integer
+          nullable: true
+          description: "Stage 6: container initialization inside guest"
+
+    # =======================================================================
+    # Images
+    # =======================================================================
+    ImageInfo:
+      type: object
+      description: Cached container image metadata (maps to ImageInfo)
+      required: [reference, repository, tag, id, cached_at]
+      properties:
+        reference:
+          type: string
+          description: Full image reference
+          example: docker.io/library/python:3.11-slim
+        repository:
+          type: string
+          description: Repository name
+          example: docker.io/library/python
+        tag:
+          type: string
+          description: Image tag
+          example: 3.11-slim
+        id:
+          type: string
+          description: Image manifest digest
+          example: "sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4"
+        cached_at:
+          type: string
+          format: date-time
+          description: When the image was pulled into the local cache
+        size_bytes:
+          type: integer
+          nullable: true
+          description: Image size in bytes
+
+    PullImageRequest:
+      type: object
+      required: [reference]
+      properties:
+        reference:
+          type: string
+          description: Image reference to pull from registry
+          example: python:3.11-slim
+
+    ListImagesResponse:
+      type: object
+      required: [images]
+      properties:
+        images:
+          type: array
+          items:
+            $ref: "#/components/schemas/ImageInfo"
+        next_page_token:
+          type: string
+          nullable: true
+          description: Opaque token for next page

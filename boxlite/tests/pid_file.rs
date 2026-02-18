@@ -375,6 +375,80 @@ async fn detached_box_survives_runtime_drop() {
     runtime.remove(&box_id, true).await.unwrap();
 }
 
+/// Non-detached box should exit when runtime drops (watchdog POLLHUP).
+///
+/// Symmetric counterpart to `detached_box_survives_runtime_drop`.
+/// Verifies the full watchdog chain:
+///   Keepalive drop → pipe close → shim POLLHUP → SIGTERM → process exit
+#[tokio::test]
+async fn non_detached_box_exits_on_runtime_drop() {
+    // Use /tmp for shorter paths — macOS default TempDir paths exceed SUN_LEN for Unix sockets.
+    let temp_dir = TempDir::new_in("/tmp").unwrap();
+    let home_dir = temp_dir.path().to_path_buf();
+    let original_pid: u32;
+
+    // Create non-detached box
+    {
+        let runtime = BoxliteRuntime::new(BoxliteOptions {
+            home_dir: home_dir.clone(),
+            image_registries: vec![],
+        })
+        .unwrap();
+
+        let handle = runtime
+            .create(
+                BoxOptions {
+                    rootfs: RootfsSpec::Image("alpine:latest".into()),
+                    detach: false, // KEY: non-detached → watchdog active
+                    auto_remove: false,
+                    ..Default::default()
+                },
+                None,
+            )
+            .await
+            .unwrap();
+
+        handle
+            .exec(BoxCommand::new("sleep").args(["300"]))
+            .await
+            .unwrap();
+
+        let pid_file = home_dir
+            .join("boxes")
+            .join(handle.id().as_str())
+            .join("shim.pid");
+        original_pid = read_pid_file(&pid_file).unwrap();
+
+        // Verify process is running before drop
+        assert!(
+            is_process_alive(original_pid),
+            "Process {} should be alive before runtime drop",
+            original_pid
+        );
+
+        // Runtime + handler + Keepalive drop here → POLLHUP → shim exit
+    }
+
+    // Wait for shim to detect POLLHUP and exit gracefully.
+    // The chain: Keepalive drop → pipe close → poll() returns POLLHUP →
+    // SIGTERM to self → Guest.Shutdown() RPC → process exit.
+    // Allow generous timeout for guest shutdown RPC.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+        if !is_process_alive(original_pid) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+
+    // Verify process exited
+    assert!(
+        !is_process_alive(original_pid),
+        "Non-detached box process {} should exit after runtime drop (watchdog POLLHUP)",
+        original_pid
+    );
+}
+
 #[tokio::test]
 async fn detached_box_recoverable_after_restart() {
     let temp_dir = TempDir::new().unwrap();

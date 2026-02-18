@@ -1,6 +1,6 @@
 # C SDK API Reference
 
-Complete API reference for the BoxLite C SDK v0.2.0.
+Complete API reference for the BoxLite C SDK.
 
 ## Overview
 
@@ -8,7 +8,7 @@ The C SDK provides C-compatible FFI bindings for integrating BoxLite into C/C++ 
 
 **Library**: `libboxlite`
 **Header**: `boxlite.h`
-**Version**: 0.2.0
+**C Standard**: C11-compatible compiler (GCC/Clang)
 
 ### API Styles
 
@@ -159,7 +159,7 @@ export LD_LIBRARY_PATH=/path/to/boxlite/target/release:$LD_LIBRARY_PATH
 
 ## Error Handling
 
-v0.2.0 introduces structured error handling with error codes and detailed messages.
+The C SDK introduces structured error handling with error codes and detailed messages.
 
 ### BoxliteErrorCode
 

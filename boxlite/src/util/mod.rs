@@ -12,7 +12,9 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, fmt};
 
-pub use process::{is_process_alive, is_same_process, kill_process, read_pid_file};
+pub use process::{
+    ProcessExit, ProcessMonitor, is_process_alive, is_same_process, kill_process, read_pid_file,
+};
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 unsafe extern "C" {
@@ -265,8 +267,54 @@ pub fn get_terminal_size() -> (u32, u32) {
     }
 }
 
+/// Check if string contains only printable ASCII characters.
+///
+/// Returns `true` if every character is in the range ' '..='~' (ASCII 32-126).
+/// This range matches what libkrun's kernel cmdline accepts.
+///
+/// # Examples
+/// ```
+/// assert!(is_printable_ascii("hello"));
+/// assert!(is_printable_ascii("PATH=/usr/bin"));
+/// assert!(!is_printable_ascii("日本語"));  // Non-ASCII
+/// assert!(!is_printable_ascii("hello\t"));  // Tab is below space
+/// ```
+pub fn is_printable_ascii(s: &str) -> bool {
+    s.chars().all(|c| matches!(c, ' '..='~'))
+}
+
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_printable_ascii() {
+        // Valid: printable ASCII (space through tilde)
+        assert!(is_printable_ascii("hello"));
+        assert!(is_printable_ascii("Hello World!"));
+        assert!(is_printable_ascii("PATH=/usr/bin:/bin"));
+        assert!(is_printable_ascii("key=value with spaces"));
+        assert!(is_printable_ascii(" ")); // Space (ASCII 32)
+        assert!(is_printable_ascii("~")); // Tilde (ASCII 126)
+        assert!(is_printable_ascii("")); // Empty string is valid
+
+        // Invalid: non-ASCII characters
+        assert!(!is_printable_ascii("➜")); // Unicode arrow
+        assert!(!is_printable_ascii("hello ➜ world")); // Mixed
+        assert!(!is_printable_ascii("José")); // Accented character
+        assert!(!is_printable_ascii("日本語")); // Japanese
+        assert!(!is_printable_ascii("emoji 🎉")); // Emoji
+
+        // Invalid: control characters (below space)
+        assert!(!is_printable_ascii("\t")); // Tab (ASCII 9)
+        assert!(!is_printable_ascii("\n")); // Newline (ASCII 10)
+        assert!(!is_printable_ascii("\x00")); // Null (ASCII 0)
+        assert!(!is_printable_ascii("\x1b")); // Escape (ASCII 27)
+
+        // Invalid: DEL and above
+        assert!(!is_printable_ascii("\x7f")); // DEL (ASCII 127)
+    }
+
     #[test]
     fn test_xattr_format_with_leading_zeros() {
         // Test that xattr values are formatted with 4-digit octal (leading zeros)

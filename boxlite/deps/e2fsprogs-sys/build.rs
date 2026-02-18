@@ -6,9 +6,23 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+/// Auto-set BOXLITE_DEPS_STUB=2 when downloaded from a registry (crates.io).
+/// Cargo adds .cargo_vcs_info.json to published packages.
+fn auto_detect_registry() {
+    if env::var("BOXLITE_DEPS_STUB").is_err() {
+        let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+        if manifest_dir.join(".cargo_vcs_info.json").exists() {
+            env::set_var("BOXLITE_DEPS_STUB", "2");
+        }
+    }
+}
+
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=vendor/e2fsprogs");
+    println!("cargo:rerun-if-env-changed=BOXLITE_DEPS_STUB");
+
+    auto_detect_registry();
 
     // Check for stub mode (for CI linting without building)
     // Set BOXLITE_DEPS_STUB=1 to skip building and emit stub directives
@@ -27,10 +41,7 @@ fn main() {
     let mke2fs_path = build_dir.join("misc/mke2fs");
     let debugfs_path = build_dir.join("debugfs/debugfs");
 
-    // Skip build if outputs already exist (incremental build optimization)
-    if !mke2fs_path.exists() || !debugfs_path.exists() {
-        build_e2fsprogs(&vendor_dir, &build_dir);
-    }
+    build_e2fsprogs(&vendor_dir, &build_dir);
 
     println!("cargo:mke2fs_BOXLITE_DEP={}", mke2fs_path.display());
     println!("cargo:debugfs_BOXLITE_DEP={}", debugfs_path.display());

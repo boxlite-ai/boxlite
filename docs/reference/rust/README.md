@@ -29,6 +29,7 @@ The Rust SDK is the core implementation of BoxLite. It provides async-first APIs
   - [ExecResult](#execresult)
 - [Box Configuration](#box-configuration)
   - [BoxOptions](#boxoptions)
+  - [AdvancedBoxOptions](#advancedoptions)
   - [RootfsSpec](#rootfsspec)
   - [VolumeSpec](#volumespec)
   - [NetworkSpec](#networkspec)
@@ -503,17 +504,14 @@ pub struct BoxOptions {
     /// Port mappings
     pub ports: Vec<PortSpec>,
 
-    /// Enable bind mount isolation (Linux only)
-    pub isolate_mounts: bool,
-
     /// Auto-remove box when stopped (default: true)
     pub auto_remove: bool,
 
     /// Run independently of parent process (default: false)
     pub detach: bool,
 
-    /// Security isolation options
-    pub security: SecurityOptions,
+    /// Advanced options for expert users (security, mount isolation). Defaults are secure.
+    pub advanced: AdvancedBoxOptions,
 }
 ```
 
@@ -548,6 +546,22 @@ let options = BoxOptions {
     ..Default::default()
 };
 ```
+
+### AdvancedBoxOptions
+
+Advanced options for expert users. Most users can ignore this — defaults prioritize compatibility.
+
+```rust
+pub struct AdvancedBoxOptions {
+    pub security: SecurityOptions,
+    pub isolate_mounts: bool,
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `security` | `SecurityOptions` | Compatibility defaults | Security isolation options (jailer, seccomp, namespaces) |
+| `isolate_mounts` | `bool` | `false` | Enable bind mount isolation (requires CAP_SYS_ADMIN on Linux) |
 
 ### RootfsSpec
 
@@ -687,6 +701,11 @@ let dev = SecurityOptions::development();
 // - seccomp_enabled: false
 // - close_fds: false
 
+// Default: compatibility-focused
+let default_security = SecurityOptions::default();
+// - jailer_enabled: false
+// - seccomp_enabled: false
+
 // Standard: recommended for most use cases
 let std = SecurityOptions::standard();
 // - jailer_enabled: true (Linux/macOS)
@@ -707,7 +726,6 @@ Fluent builder for security options.
 use boxlite::runtime::options::{SecurityOptions, SecurityOptionsBuilder};
 
 let security = SecurityOptionsBuilder::standard()
-    .jailer_enabled(true)
     .max_open_files(2048)
     .max_file_size_bytes(1024 * 1024 * 512)  // 512 MiB
     .max_processes(100)
@@ -716,7 +734,6 @@ let security = SecurityOptionsBuilder::standard()
 
 // Or via SecurityOptions::builder()
 let security = SecurityOptions::builder()
-    .jailer_enabled(true)
     .seccomp_enabled(false)
     .build();
 ```
@@ -1007,7 +1024,7 @@ match runtime.create(options, None).await {
 
 ```rust
 use boxlite::runtime::{BoxliteRuntime, BoxOptions};
-use boxlite::runtime::options::{RootfsSpec, SecurityOptions, VolumeSpec};
+use boxlite::runtime::options::{AdvancedBoxOptions, RootfsSpec, SecurityOptions, VolumeSpec};
 use boxlite::BoxCommand;
 use futures::StreamExt;
 use std::time::Duration;
@@ -1029,7 +1046,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 read_only: true,
             },
         ],
-        security: SecurityOptions::standard(),
+        advanced: AdvancedBoxOptions {
+            security: SecurityOptions::standard(),
+            ..Default::default()
+        },
         ..Default::default()
     };
 

@@ -1,0 +1,19 @@
+# cbindgen configuration for boxlite-c
+# See: https://github.com/mozilla/cbindgen/blob/master/docs.md
+
+language = "C"
+include_guard = "BOXLITE_H"
+pragma_once = true
+cpp_compat = true
+documentation = true
+documentation_style = "c99"
+
+# Style settings
+style = "both"
+usize_is_size_t = true
+
+[parse]
+# Enable parsing dependency crates to resolve types defined in boxlite-ffi
+parse_deps = true
+# Only parse boxlite-ffi (avoid scanning the entire boxlite core crate)
+include = ["boxlite-ffi"]

@@ -23,12 +23,14 @@ mod disk;
 mod fs;
 mod images;
 mod portal;
+#[cfg(feature = "rest")]
+mod rest;
 mod rootfs;
 mod volumes;
 
 pub use litebox::LiteBox;
 pub use portal::GuestSession;
-pub use runtime::BoxliteRuntime;
+pub use runtime::{BoxliteRuntime, ImageHandle};
 
 pub use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 pub use db::snapshots::SnapshotInfo;
@@ -39,12 +41,16 @@ pub use litebox::{
 };
 pub use metrics::{BoxMetrics, RuntimeMetrics};
 pub use runtime::ArchiveManifest;
+pub use runtime::advanced_options::{AdvancedBoxOptions, ResourceLimits, SecurityOptions};
 use runtime::layout::FilesystemLayout;
-pub use runtime::options::{
-    BoxOptions, BoxliteOptions, ResourceLimits, RootfsSpec, SecurityOptions,
-};
+pub use runtime::options::{BoxOptions, BoxliteOptions, RootfsSpec};
+/// Boxlite library version (from CARGO_PKG_VERSION at compile time).
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub use runtime::types::ContainerID;
 pub use runtime::types::{BoxID, BoxInfo, BoxState, BoxStateInfo, BoxStatus};
+
+#[cfg(feature = "rest")]
+pub use rest::options::BoxliteRestOptions;
 
 /// Initialize tracing for Boxlite using the provided filesystem layout.
 ///

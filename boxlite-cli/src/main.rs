@@ -67,6 +67,9 @@ async fn run_cli(cli: Cli) -> anyhow::Result<()> {
         cli::Commands::Images(args) => commands::images::execute(args, &global).await,
         cli::Commands::Inspect(args) => commands::inspect::execute(args, &global).await,
         cli::Commands::Cp(args) => commands::cp::execute(args, &global).await,
+        cli::Commands::Info(args) => commands::info::execute(args, &global).await,
+        cli::Commands::Logs(args) => commands::logs::execute(args, &global).await,
+        cli::Commands::Stats(args) => commands::stats::execute(args, &global).await,
         // Handled in main() before tokio; never reaches run_cli
         cli::Commands::Completion(_) => {
             unreachable!("completion subcommand is handled before tokio in main()")

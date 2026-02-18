@@ -250,3 +250,15 @@ class SyncExecution:
     def kill(self) -> None:
         """Kill the running execution."""
         self._sync(self._execution.kill())
+
+    def resize_tty(self, rows: int, cols: int) -> None:
+        """
+        Resize PTY terminal window.
+
+        Only works for executions started with TTY enabled (tty=True in exec()).
+
+        Args:
+            rows: Number of rows (height) for the terminal.
+            cols: Number of columns (width) for the terminal.
+        """
+        self._sync(self._execution.resize_tty(rows, cols))

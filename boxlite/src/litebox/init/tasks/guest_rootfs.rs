@@ -4,14 +4,14 @@
 //! Then creates or reuses per-box COW overlay disk.
 
 use super::{InitCtx, log_task_error, task_start};
-use crate::disk::{BackingFormat, Disk, DiskFormat, Qcow2Helper, create_ext4_from_dir};
+use crate::disk::{BackingFormat, Disk, DiskFormat, Qcow2Helper};
+use crate::images::ImageDiskManager;
 use crate::pipeline::PipelineTask;
-use crate::rootfs::RootfsBuilder;
 use crate::runtime::constants::images;
 use crate::runtime::guest_rootfs::{GuestRootfs, Strategy};
+use crate::runtime::guest_rootfs_manager::GuestRootfsManager;
 use crate::runtime::layout::BoxFilesystemLayout;
 use crate::runtime::rt_impl::SharedRuntimeImpl;
-use crate::util;
 use async_trait::async_trait;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
@@ -64,7 +64,13 @@ async fn run_guest_rootfs(
 
             let base_image = pull_guest_rootfs_image(runtime).await?;
             let env = extract_env_from_image(&base_image).await?;
-            let guest_rootfs = prepare_guest_rootfs(runtime, &base_image, env).await?;
+            let guest_rootfs = prepare_guest_rootfs(
+                &runtime.guest_rootfs_mgr,
+                &runtime.image_disk_mgr,
+                &base_image,
+                env,
+            )
+            .await?;
 
             tracing::info!("Bootstrap guest rootfs ready: {:?}", guest_rootfs.strategy);
 
@@ -126,10 +132,16 @@ fn create_or_reuse_cow_disk(
             .map(|m| m.len())
             .unwrap_or(512 * 1024 * 1024);
 
+        // Try reflink base rootfs into box_dir so the qcow2 overlay references
+        // a box-local path, eliminating the sandbox dependency on home_dir/rootfs/.
+        // Reflink is instant on CoW filesystems (APFS, btrfs, xfs); falls back
+        // to the external path on ext4/tmpfs where reflink isn't supported.
+        let effective_base = reflink_rootfs_base(base_disk_path, layout);
+
         // Create COW child disk
         let qcow2_helper = Qcow2Helper::new();
         let temp_disk = qcow2_helper.create_cow_child_disk(
-            base_disk_path,
+            &effective_base,
             BackingFormat::Raw,
             &guest_rootfs_disk_path,
             base_size,
@@ -159,116 +171,31 @@ fn create_or_reuse_cow_disk(
     }
 }
 
-/// Prepare guest rootfs as a disk image.
+/// Prepare guest rootfs as a versioned disk image.
+///
+/// Uses the two-stage pipeline:
+/// 1. `ImageDiskManager`: pure image layers → ext4 disk (cached by image digest)
+/// 2. `GuestRootfsManager`: image disk + boxlite-guest → versioned rootfs (cached by digest+guest hash)
 async fn prepare_guest_rootfs(
-    runtime: &crate::runtime::SharedRuntimeImpl,
+    guest_rootfs_mgr: &GuestRootfsManager,
+    image_disk_mgr: &ImageDiskManager,
     base_image: &crate::images::ImageObject,
     env: Vec<(String, String)>,
 ) -> BoxliteResult<GuestRootfs> {
-    // Check if we already have a cached disk image
-    if let Some(disk) = base_image.disk_image() {
-        // Verify guest binary is not newer than cached disk
-        if is_cache_valid(disk.path())? {
-            let disk_path = disk.path().to_path_buf();
-            tracing::info!(
-                "Using cached guest rootfs disk image: {}",
-                disk_path.display()
-            );
+    let rootfs_disk = guest_rootfs_mgr
+        .get_or_create(base_image, image_disk_mgr)
+        .await?;
 
-            // Leak the disk to prevent cleanup (it's a cached persistent disk)
-            let _ = disk.leak();
+    let disk_path = rootfs_disk.path().to_path_buf();
 
-            return GuestRootfs::new(
-                disk_path.clone(),
-                Strategy::Disk {
-                    disk_path,
-                    device_path: None, // Set later in build_disk_attachments
-                },
-                None,
-                None,
-                env,
-            );
-        }
-
-        // Cache invalid - delete and recreate
-        tracing::info!(
-            "Guest binary updated, invalidating cached guest rootfs disk: {}",
-            disk.path().display()
-        );
-        std::fs::remove_file(disk.path()).ok();
-    }
-
-    // No cached disk - create from layers
-    tracing::info!("Creating guest rootfs disk image from layers (first run)");
-
-    // Extract layers to temp directory within boxlite home (same filesystem as destination)
-    let temp_base = runtime.layout.temp_dir();
-    let temp_dir = tempfile::tempdir_in(&temp_base)
-        .map_err(|e| BoxliteError::Storage(format!("Failed to create temp directory: {}", e)))?;
-    let merged_path = temp_dir.path().join("merged");
-
-    let builder = RootfsBuilder::new();
-    let prepared = builder.prepare(merged_path.clone(), base_image).await?;
-
-    // Inject guest binary
-    util::inject_guest_binary(&prepared.path)?;
-
-    // Verify guest binary
-    let guest_bin_path = prepared.path.join("boxlite/bin/boxlite-guest");
-    if guest_bin_path.exists() {
-        tracing::info!(
-            "Guest binary at: {} ({} bytes)",
-            guest_bin_path.display(),
-            std::fs::metadata(&guest_bin_path)
-                .map(|m| m.len())
-                .unwrap_or(0)
-        );
-    } else {
-        return Err(BoxliteError::Storage(format!(
-            "Guest binary not found at: {}",
-            guest_bin_path.display()
-        )));
-    }
-
-    // Create ext4 disk from merged directory
-    let temp_disk_path = temp_dir.path().join("guest-rootfs.ext4");
-    let merged_clone = prepared.path.clone();
-    let disk_clone = temp_disk_path.clone();
-    let temp_disk =
-        tokio::task::spawn_blocking(move || create_ext4_from_dir(&merged_clone, &disk_clone))
-            .await
-            .map_err(|e| BoxliteError::Internal(format!("Disk creation task failed: {}", e)))??;
-
-    let disk_size = std::fs::metadata(temp_disk.path())
-        .map(|m| m.len())
-        .unwrap_or(0);
-
-    tracing::info!(
-        "Created guest rootfs disk: {} ({}MB)",
-        temp_disk.path().display(),
-        disk_size / (1024 * 1024)
-    );
-
-    // Install disk image to cache
-    // TODO(@DorianZheng) Shouldn't inject disk image here, consider use local bundle blob source instead.
-    let installed_disk = base_image.install_disk_image(temp_disk).await?;
-    let final_path = installed_disk.path().to_path_buf();
-
-    // Leak the disk to prevent cleanup
-    let _ = installed_disk.leak();
-
-    tracing::info!(
-        "Installed guest rootfs disk to cache: {}",
-        final_path.display()
-    );
-
-    // temp_dir is dropped here, cleaning up the merged directory
+    // Ownership transfers to GuestRootfs/OnceCell — prevent drop cleanup
+    let _ = rootfs_disk.leak();
 
     GuestRootfs::new(
-        final_path.clone(),
+        disk_path.clone(),
         Strategy::Disk {
-            disk_path: final_path,
-            device_path: None, // Set later in build_disk_attachments
+            disk_path,
+            device_path: None,
         },
         None,
         None,
@@ -277,10 +204,48 @@ async fn prepare_guest_rootfs(
 }
 
 async fn pull_guest_rootfs_image(
-    runtime: &crate::runtime::SharedRuntimeImpl,
+    runtime: &SharedRuntimeImpl,
 ) -> BoxliteResult<crate::images::ImageObject> {
     // ImageManager has internal locking - direct access
     runtime.image_manager.pull(images::INIT_ROOTFS).await
+}
+
+/// Try to reflink the base rootfs into box_dir for sandbox isolation.
+///
+/// On CoW filesystems (APFS, btrfs, xfs), this creates a zero-cost clone
+/// with a new inode inside the box directory. The qcow2 overlay then
+/// references this local path, so the sandbox doesn't need access to
+/// `home_dir/rootfs/`.
+///
+/// Falls back to the original path on filesystems without reflink (ext4, tmpfs).
+fn reflink_rootfs_base(
+    base_disk_path: &std::path::Path,
+    layout: &BoxFilesystemLayout,
+) -> std::path::PathBuf {
+    let local_base = layout.rootfs_base_path();
+
+    // Skip if local base already exists (e.g. restart with existing reflink)
+    if local_base.exists() {
+        return local_base;
+    }
+
+    match reflink_copy::reflink(base_disk_path, &local_base) {
+        Ok(()) => {
+            tracing::info!(
+                src = %base_disk_path.display(),
+                dst = %local_base.display(),
+                "Reflinked base rootfs into box_dir (zero-copy)"
+            );
+            local_base
+        }
+        Err(e) => {
+            tracing::debug!(
+                error = %e,
+                "Reflink not supported, using external rootfs backing path"
+            );
+            base_disk_path.to_path_buf()
+        }
+    }
 }
 
 async fn extract_env_from_image(
@@ -310,33 +275,86 @@ async fn extract_env_from_image(
     Ok(env)
 }
 
-/// Check if cached guest rootfs disk is still valid.
-///
-/// Returns false if the current guest binary is newer than the cached disk,
-/// indicating the cache should be invalidated and recreated.
-fn is_cache_valid(cache_path: &std::path::Path) -> BoxliteResult<bool> {
-    let guest_bin = util::find_binary("boxlite-guest")?;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::layout::FsLayoutConfig;
+    use tempfile::tempdir;
 
-    let guest_mtime = std::fs::metadata(&guest_bin)
-        .and_then(|m| m.modified())
-        .map_err(|e| {
-            BoxliteError::Storage(format!(
-                "Failed to get guest binary mtime {}: {}",
-                guest_bin.display(),
-                e
-            ))
-        })?;
+    fn test_layout(box_dir: std::path::PathBuf) -> BoxFilesystemLayout {
+        BoxFilesystemLayout::new(box_dir, FsLayoutConfig::without_bind_mount(), false)
+    }
 
-    let cache_mtime = std::fs::metadata(cache_path)
-        .and_then(|m| m.modified())
-        .map_err(|e| {
-            BoxliteError::Storage(format!(
-                "Failed to get cache mtime {}: {}",
-                cache_path.display(),
-                e
-            ))
-        })?;
+    /// When rootfs_base_path() already exists, reflink_rootfs_base returns it
+    /// without overwriting. This is critical for restart safety.
+    #[test]
+    fn test_reflink_rootfs_base_returns_existing_local() {
+        let dir = tempdir().unwrap();
+        let layout = test_layout(dir.path().to_path_buf());
 
-    // Cache is valid if it's newer than the guest binary
-    Ok(cache_mtime >= guest_mtime)
+        // Pre-create local base with known content
+        std::fs::write(layout.rootfs_base_path(), "existing-local-base").unwrap();
+
+        // Source file with different content
+        let base_disk = dir.path().join("original-rootfs.raw");
+        std::fs::write(&base_disk, "original-content").unwrap();
+
+        let result = reflink_rootfs_base(&base_disk, &layout);
+
+        // Should return the existing local path without overwriting
+        assert_eq!(result, layout.rootfs_base_path());
+        assert_eq!(
+            std::fs::read_to_string(&result).unwrap(),
+            "existing-local-base",
+            "Content must NOT be overwritten"
+        );
+    }
+
+    /// On CoW-capable filesystems (APFS on macOS), reflink succeeds and returns
+    /// the box-local path. On unsupported filesystems, falls back to original.
+    /// This test handles both outcomes.
+    #[test]
+    fn test_reflink_rootfs_base_success_or_fallback() {
+        let dir = tempdir().unwrap();
+        let layout = test_layout(dir.path().to_path_buf());
+
+        let base_disk = dir.path().join("rootfs.raw");
+        std::fs::write(&base_disk, "rootfs-content-for-reflink-test").unwrap();
+
+        let result = reflink_rootfs_base(&base_disk, &layout);
+
+        // On APFS (macOS dev machines): reflink succeeds → local path
+        // On ext4/tmpfs (Linux CI): reflink fails → original path
+        if layout.rootfs_base_path().exists() {
+            // Reflink succeeded
+            assert_eq!(result, layout.rootfs_base_path());
+            assert_eq!(
+                std::fs::read_to_string(&result).unwrap(),
+                "rootfs-content-for-reflink-test"
+            );
+        } else {
+            // Reflink failed — fallback to original
+            assert_eq!(result, base_disk);
+        }
+    }
+
+    /// When the source doesn't exist, reflink fails and returns the original path.
+    #[test]
+    fn test_reflink_rootfs_base_failure_returns_original() {
+        let dir = tempdir().unwrap();
+        let layout = test_layout(dir.path().to_path_buf());
+
+        // Source that doesn't exist → reflink will fail
+        let nonexistent = dir.path().join("does-not-exist.raw");
+
+        let result = reflink_rootfs_base(&nonexistent, &layout);
+
+        // Must return the original path (fallback)
+        assert_eq!(result, nonexistent);
+        // Local base must NOT be created
+        assert!(
+            !layout.rootfs_base_path().exists(),
+            "Local base should not exist when reflink fails"
+        );
+    }
 }

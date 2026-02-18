@@ -6,7 +6,6 @@ Python bindings for BoxLite - an embeddable virtual machine runtime for secure, 
 
 The BoxLite Python SDK provides a Pythonic API for creating and managing isolated execution environments. Built with PyO3, it wraps the Rust BoxLite runtime with async-first Python bindings.
 
-**Version:** 0.4.4
 **Python:** 3.10+
 **Platforms:** macOS (Apple Silicon), Linux (x86_64, ARM64)
 
@@ -31,7 +30,7 @@ Requires Python 3.10 or later.
 
 ```python
 import boxlite
-print(boxlite.__version__)  # Should print: 0.4.4
+print(boxlite.__version__)  # Prints installed package version
 ```
 
 ### System Requirements
@@ -245,6 +244,9 @@ Represents a running command execution.
 
 - `kill(signal: int = 9) -> None`
   Send signal to process (async)
+
+- `resize_tty(rows: int, cols: int) -> None`
+  Resize PTY terminal window (async). Only works with TTY-enabled executions.
 
 **Example:**
 
@@ -531,9 +533,9 @@ boxlite.BoxOptions(
 
 ## Examples Gallery
 
-The `examples/python/` directory contains 9 comprehensive examples:
+The [`examples/python/`](../../examples/python/) directory contains categorized examples:
 
-### 1. **simplebox_example.py** - Foundation Patterns
+### 1. **run_simplebox.py** - Foundation Patterns
 Demonstrates core BoxLite features:
 - Basic command execution with results
 - Separate stdout/stderr handling
@@ -542,76 +544,76 @@ Demonstrates core BoxLite features:
 - Multiple commands in same box
 - Data processing pipeline
 
-[View source](../../examples/python/simplebox_example.py)
+[View source](../../examples/python/01_getting_started/run_simplebox.py)
 
-### 2. **codebox_example.py** - AI Code Execution
+### 2. **run_codebox.py** - AI Code Execution
 Secure Python code execution for AI agents:
 - Basic code execution
 - Dynamic package installation
 - Data processing (AI agent use case)
 - Isolation demonstration
 
-[View source](../../examples/python/codebox_example.py)
+[View source](../../examples/python/01_getting_started/run_codebox.py)
 
-### 3. **browserbox_example.py** - Browser Automation
-Browser automation with Puppeteer/Playwright:
+### 3. **automate_with_playwright.py** - Browser Automation
+Browser automation with Playwright:
 - Basic Chromium setup
 - Custom browser configurations (Firefox, WebKit)
 - Cross-browser testing patterns
 - Integration examples
 
-[View source](../../examples/python/browserbox_example.py)
+[View source](../../examples/python/05_browser_desktop/automate_with_playwright.py)
 
-### 4. **computerbox_example.py** - Desktop Automation
+### 4. **automate_desktop.py** - Desktop Automation
 Desktop interaction for agent workflows:
 - 14 desktop functions (mouse, keyboard, screenshots)
 - Screen size detection
 - Workflow automation
 - GUI interaction patterns
 
-[View source](../../examples/python/computerbox_example.py)
+[View source](../../examples/python/05_browser_desktop/automate_desktop.py)
 
-### 5. **lifecycle_example.py** - Box Lifecycle Management
+### 5. **manage_lifecycle.py** - Box Lifecycle Management
 Managing box state:
 - Stop and restart operations
 - State persistence
 - Data persistence verification
 - Resource cleanup
 
-[View source](../../examples/python/lifecycle_example.py)
+[View source](../../examples/python/03_lifecycle/manage_lifecycle.py)
 
-### 6. **list_boxes_example.py** - Runtime Introspection
+### 6. **list_boxes.py** - Runtime Introspection
 Enumerate and inspect boxes:
 - List all boxes with status
 - Display box metadata (ID, name, state, resources)
 - Filter by status
 
-[View source](../../examples/python/list_boxes_example.py)
+[View source](../../examples/python/01_getting_started/list_boxes.py)
 
-### 7. **cross_process_example.py** - Multi-Process Operations
+### 7. **share_across_processes.py** - Multi-Process Operations
 Cross-process box management:
 - Reattach to running boxes from different processes
 - Restart stopped boxes
 - Multi-process runtime handling
 
-[View source](../../examples/python/cross_process_example.py)
+[View source](../../examples/python/03_lifecycle/share_across_processes.py)
 
-### 8. **interactivebox_example.py** - Interactive Shells
+### 8. **run_interactive_shell.py** - Interactive Shells
 Direct shell access:
 - Interactive terminal sessions
 - Terminal mode handling
 - Simple container experience
 
-[View source](../../examples/python/interactivebox_example.py)
+[View source](../../examples/python/04_interactive/run_interactive_shell.py)
 
-### 9. **native_example.py** - Low-Level API
+### 9. **use_native_api.py** - Low-Level API
 Using the Rust API directly from Python:
 - Default and custom runtime initialization
 - Resource limits (CPU, memory, volumes, ports)
 - Box information retrieval
 - Streaming execution
 
-[View source](../../examples/python/native_example.py)
+[View source](../../examples/python/07_advanced/use_native_api.py)
 
 ## Metrics & Monitoring
 

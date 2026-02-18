@@ -17,6 +17,22 @@ pub mod guest_paths {
 
 pub mod envs {
     pub const BOXLITE_HOME: &str = "BOXLITE_HOME";
+
+    /// REST API base URL (required for REST mode).
+    #[cfg(feature = "rest")]
+    pub const BOXLITE_REST_URL: &str = "BOXLITE_REST_URL";
+
+    /// OAuth2 client ID (optional).
+    #[cfg(feature = "rest")]
+    pub const BOXLITE_REST_CLIENT_ID: &str = "BOXLITE_REST_CLIENT_ID";
+
+    /// OAuth2 client secret (optional).
+    #[cfg(feature = "rest")]
+    pub const BOXLITE_REST_CLIENT_SECRET: &str = "BOXLITE_REST_CLIENT_SECRET";
+
+    /// API path prefix (default: "v1").
+    #[cfg(feature = "rest")]
+    pub const BOXLITE_REST_PREFIX: &str = "BOXLITE_REST_PREFIX";
 }
 
 /// Container images used by the runtime

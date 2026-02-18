@@ -31,9 +31,9 @@ This document provides project context for AI-assisted development with Claude C
 - gRPC (tonic) for host-guest communication
 
 **SDKs:**
-- Python (PyO3, stable v0.4.4)
+- Python (PyO3, Python 3.10+)
 - C (FFI, early stage)
-- Node.js (napi-rs, v0.1.5)
+- Node.js (napi-rs, Node.js 18+)
 
 **For complete tech stack details, see:**
 - [docs/architecture/README.md](./docs/architecture/README.md#tech-stack) - Detailed component breakdown
@@ -46,10 +46,10 @@ boxlite/              # Core runtime (Rust) - 19 modules
 boxlite-shared/       # Shared types and protocol
 guest/                # Guest agent (runs inside VM)
 sdks/
-  python/             # Python SDK (PyO3, v0.4.4)
+  python/             # Python SDK (PyO3)
   c/                  # C SDK (FFI)
-  node/               # Node.js SDK (v0.1.5)
-examples/python/      # 9 comprehensive Python examples
+  node/               # Node.js SDK (napi-rs)
+examples/python/      # Python examples (7 categorized subdirectories)
 docs/                 # Documentation
 scripts/              # Build and setup scripts
 ```
@@ -151,8 +151,8 @@ Key guidelines to internalize:
 **When writing code:**
 - All I/O is async (Tokio runtime)
 - Errors use centralized `BoxliteError` enum (see `boxlite-shared/src/errors.rs`)
-- Python SDK version: 0.4.4 (requires Python 3.10+)
-- Examples: 9 comprehensive Python examples in `examples/python/`
+- Python SDK requires Python 3.10+
+- Examples: categorized Python examples in `examples/python/` (7 subdirectories)
 
 **Common pitfalls:**
 - Forgetting to initialize submodules → build fails
@@ -636,6 +636,19 @@ src/
 - "Does this design actually make sense, or am I just agreeing?"
 - "Is this the simplest thing that could possibly work?"
 - "If I delete this, can I recreate it from git history?"
+
+**Post-Coding (AFTER writing code, BEFORE submitting):**
+
+This is the #1 critical requirement. Every code change MUST pass all of the following:
+
+- [ ] **Unit & integration tests cover all points** — every new behavior, edge case, and error path must have a corresponding test. This is the number one priority.
+  - **Tests must exercise actual code** — every test must directly call the real boxlite code it covers. Tests that only verify language/framework behavior (e.g., testing `tokio::select!` with mock sleeps) are not acceptable.
+  - **Integration tests are mandatory** — don't skip because of VM/hardware dependencies. The test infrastructure handles that (uses real `alpine:latest`, temp dirs). Integration tests validate that code changes actually work end-to-end.
+  - **Test patterns**: Unit tests in `#[cfg(test)] mod tests` within the source file. Integration tests in `boxlite/tests/` or `boxlite-cli/tests/`.
+- [ ] **All tests pass** — both new and existing tests. Run: `cargo test -p <package>` (or the relevant test command for the language)
+- [ ] **Clippy clean** — `cargo clippy -p <package> --tests -- -D warnings` (zero warnings)
+- [ ] **Format clean** — `cargo fmt --check` for Rust, `ruff format --check` / `ruff check` for Python
+- [ ] If any of the above fail, fix before proceeding — do not submit code with failing tests or lint warnings
 
 ---
 

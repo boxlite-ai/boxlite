@@ -247,7 +247,7 @@ impl BoxImpl {
         let components = result?;
         Ok(Execution::new(
             components.execution_id,
-            exec_interface,
+            Box::new(exec_interface),
             components.result_rx,
             Some(ExecStdin::new(components.stdin_tx)),
             Some(ExecStdout::new(components.stdout_rx)),
@@ -329,8 +329,13 @@ impl BoxImpl {
         // Update state
         {
             let mut state = self.state.write();
-            state.set_status(BoxStatus::Stopped);
-            state.set_pid(None);
+
+            // Only transition to Stopped if we were Running (or other active state).
+            // If we were Configured (never started), stay Configured so next start()
+            // triggers full initialization (creating disks).
+            if !state.status.is_configured() {
+                state.mark_stop();
+            }
 
             if was_persisted {
                 // Box was persisted - sync to DB
@@ -573,6 +578,59 @@ impl BoxImpl {
     }
 }
 
+// ============================================================================
+// BoxBackend trait implementation
+// ============================================================================
+
+#[async_trait::async_trait]
+impl crate::runtime::backend::BoxBackend for BoxImpl {
+    fn id(&self) -> &BoxID {
+        self.id()
+    }
+
+    fn name(&self) -> Option<&str> {
+        self.config.name.as_deref()
+    }
+
+    fn info(&self) -> BoxInfo {
+        self.info()
+    }
+
+    async fn start(&self) -> BoxliteResult<()> {
+        self.start().await
+    }
+
+    async fn exec(&self, command: BoxCommand) -> BoxliteResult<Execution> {
+        self.exec(command).await
+    }
+
+    async fn metrics(&self) -> BoxliteResult<BoxMetrics> {
+        self.metrics().await
+    }
+
+    async fn stop(&self) -> BoxliteResult<()> {
+        self.stop().await
+    }
+
+    async fn copy_into(
+        &self,
+        host_src: &std::path::Path,
+        container_dst: &str,
+        opts: CopyOptions,
+    ) -> BoxliteResult<()> {
+        self.copy_into(host_src, container_dst, opts).await
+    }
+
+    async fn copy_out(
+        &self,
+        container_src: &str,
+        host_dst: &std::path::Path,
+        opts: CopyOptions,
+    ) -> BoxliteResult<()> {
+        self.copy_out(container_src, host_dst, opts).await
+    }
+}
+
 fn build_tar_from_host(
     src: &std::path::Path,
     tar_path: &std::path::Path,
@@ -620,27 +678,126 @@ fn build_tar_from_host(
     })
 }
 
+/// Whether to extract as a single file or into a directory.
+enum ExtractionMode {
+    /// Destination is a file path — extract the single tar entry directly to it.
+    FileToFile,
+    /// Destination is a directory — extract all tar entries into it.
+    IntoDirectory,
+}
+
+/// Inspect the destination path and tar contents to decide extraction mode.
+///
+/// Rules (evaluated in order):
+/// 1. Dest path has trailing `/` → directory mode
+/// 2. Dest exists as a directory → directory mode
+/// 3. Tar contains exactly one regular file → file-to-file mode
+/// 4. Fallback → directory mode
+fn determine_extraction_mode(
+    dest: &std::path::Path,
+    tar_path: &std::path::Path,
+) -> BoxliteResult<ExtractionMode> {
+    if dest.as_os_str().to_string_lossy().ends_with('/') {
+        return Ok(ExtractionMode::IntoDirectory);
+    }
+    if dest.is_dir() {
+        return Ok(ExtractionMode::IntoDirectory);
+    }
+    let tar_file = std::fs::File::open(tar_path).map_err(|e| {
+        BoxliteError::Storage(format!("failed to open tar {}: {}", tar_path.display(), e))
+    })?;
+    let mut archive = tar::Archive::new(tar_file);
+    if let Ok(entries) = archive.entries() {
+        let mut count = 0u32;
+        let mut is_regular = false;
+        for entry in entries {
+            count += 1;
+            if count > 1 {
+                break;
+            }
+            if let Ok(e) = entry {
+                is_regular = e.header().entry_type() == tar::EntryType::Regular;
+            }
+        }
+        if count == 1 && is_regular {
+            return Ok(ExtractionMode::FileToFile);
+        }
+    }
+    Ok(ExtractionMode::IntoDirectory)
+}
+
 fn extract_tar_to_host(
     tar_path: &std::path::Path,
     dest: &std::path::Path,
     overwrite: bool,
 ) -> BoxliteResult<()> {
-    // Basic overwrite check
-    if dest.exists() && !overwrite {
-        return Err(BoxliteError::Storage(format!(
-            "destination {} exists and overwrite=false",
-            dest.display()
-        )));
-    }
-
     tokio::task::block_in_place(|| {
-        let tar_file = std::fs::File::open(tar_path).map_err(|e| {
-            BoxliteError::Storage(format!("failed to open tar {}: {}", tar_path.display(), e))
-        })?;
-        let mut archive = tar::Archive::new(tar_file);
-        archive
-            .unpack(dest)
-            .map_err(|e| BoxliteError::Storage(format!("failed to extract archive: {}", e)))
+        let mode = determine_extraction_mode(dest, tar_path)?;
+
+        match mode {
+            ExtractionMode::FileToFile => {
+                if !overwrite && dest.exists() {
+                    return Err(BoxliteError::Storage(format!(
+                        "destination {} exists and overwrite=false",
+                        dest.display()
+                    )));
+                }
+                if let Some(parent) = dest.parent()
+                    && !parent.exists()
+                {
+                    std::fs::create_dir_all(parent).map_err(|e| {
+                        BoxliteError::Storage(format!(
+                            "failed to create parent dir {}: {}",
+                            parent.display(),
+                            e
+                        ))
+                    })?;
+                }
+                let tar_file = std::fs::File::open(tar_path).map_err(|e| {
+                    BoxliteError::Storage(format!(
+                        "failed to open tar {}: {}",
+                        tar_path.display(),
+                        e
+                    ))
+                })?;
+                let mut archive = tar::Archive::new(tar_file);
+                let mut entries = archive.entries().map_err(|e| {
+                    BoxliteError::Storage(format!("failed to read tar entries: {}", e))
+                })?;
+                if let Some(entry) = entries.next() {
+                    let mut entry = entry.map_err(|e| {
+                        BoxliteError::Storage(format!("failed to read tar entry: {}", e))
+                    })?;
+                    entry.unpack(dest).map_err(|e| {
+                        BoxliteError::Storage(format!(
+                            "failed to unpack file to {}: {}",
+                            dest.display(),
+                            e
+                        ))
+                    })?;
+                }
+                Ok(())
+            }
+            ExtractionMode::IntoDirectory => {
+                if dest.exists() && !overwrite {
+                    return Err(BoxliteError::Storage(format!(
+                        "destination {} exists and overwrite=false",
+                        dest.display()
+                    )));
+                }
+                let tar_file = std::fs::File::open(tar_path).map_err(|e| {
+                    BoxliteError::Storage(format!(
+                        "failed to open tar {}: {}",
+                        tar_path.display(),
+                        e
+                    ))
+                })?;
+                let mut archive = tar::Archive::new(tar_file);
+                archive
+                    .unpack(dest)
+                    .map_err(|e| BoxliteError::Storage(format!("failed to extract archive: {}", e)))
+            }
+        }
     })
 }
 
@@ -680,5 +837,332 @@ mod tests {
             let data = std::fs::read_to_string(extracted).unwrap();
             assert_eq!(data, "hello");
         });
+    }
+
+    /// Helper: create a tar containing a single file with the given entry name and content.
+    fn create_single_file_tar(tar_path: &std::path::Path, entry_name: &str, content: &[u8]) {
+        let tar_file = std::fs::File::create(tar_path).unwrap();
+        let mut builder = tar::Builder::new(tar_file);
+        let mut header = tar::Header::new_gnu();
+        header.set_size(content.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        builder
+            .append_data(&mut header, entry_name, content)
+            .unwrap();
+        builder.finish().unwrap();
+    }
+
+    /// Helper: create a tar containing a directory with files inside.
+    fn create_dir_tar(tar_path: &std::path::Path) {
+        let tar_file = std::fs::File::create(tar_path).unwrap();
+        let mut builder = tar::Builder::new(tar_file);
+
+        // Add a directory entry
+        let mut dir_header = tar::Header::new_gnu();
+        dir_header.set_entry_type(tar::EntryType::Directory);
+        dir_header.set_size(0);
+        dir_header.set_mode(0o755);
+        dir_header.set_cksum();
+        builder
+            .append_data(&mut dir_header, "mydir/", &[] as &[u8])
+            .unwrap();
+
+        // Add a file inside the directory
+        let content = b"inside dir";
+        let mut file_header = tar::Header::new_gnu();
+        file_header.set_size(content.len() as u64);
+        file_header.set_mode(0o644);
+        file_header.set_cksum();
+        builder
+            .append_data(&mut file_header, "mydir/file.txt", &content[..])
+            .unwrap();
+
+        builder.finish().unwrap();
+    }
+
+    #[test]
+    fn extraction_mode_single_file_no_trailing_slash() {
+        let tmp = TempDir::new().unwrap();
+        let tar_path = tmp.path().join("single.tar");
+        create_single_file_tar(&tar_path, "hello.txt", b"hello");
+
+        let dest = tmp.path().join("output.txt");
+        let mode = determine_extraction_mode(&dest, &tar_path).unwrap();
+        assert!(matches!(mode, ExtractionMode::FileToFile));
+    }
+
+    #[test]
+    fn extraction_mode_single_file_trailing_slash() {
+        let tmp = TempDir::new().unwrap();
+        let tar_path = tmp.path().join("single.tar");
+        create_single_file_tar(&tar_path, "hello.txt", b"hello");
+
+        // Trailing slash → directory mode even for single-file tar
+        let dest = std::path::Path::new("/tmp/some_dir/");
+        let mode = determine_extraction_mode(dest, &tar_path).unwrap();
+        assert!(matches!(mode, ExtractionMode::IntoDirectory));
+    }
+
+    #[test]
+    fn extraction_mode_single_file_dest_is_existing_dir() {
+        let tmp = TempDir::new().unwrap();
+        let tar_path = tmp.path().join("single.tar");
+        create_single_file_tar(&tar_path, "hello.txt", b"hello");
+
+        // Dest exists as a directory → directory mode
+        let dest = tmp.path(); // this IS a directory
+        let mode = determine_extraction_mode(dest, &tar_path).unwrap();
+        assert!(matches!(mode, ExtractionMode::IntoDirectory));
+    }
+
+    #[test]
+    fn extraction_mode_multi_entry_tar() {
+        let tmp = TempDir::new().unwrap();
+        let tar_path = tmp.path().join("multi.tar");
+        create_dir_tar(&tar_path);
+
+        let dest = tmp.path().join("output");
+        let mode = determine_extraction_mode(&dest, &tar_path).unwrap();
+        assert!(matches!(mode, ExtractionMode::IntoDirectory));
+    }
+
+    #[test]
+    fn extract_single_file_to_file_path() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+
+        rt.block_on(async {
+            let tmp = TempDir::new().unwrap();
+
+            // Create a single-file tar
+            let src_file = tmp.path().join("source.py");
+            std::fs::write(&src_file, b"print('hello')").unwrap();
+            let tar_path = tmp.path().join("file.tar");
+            let opts = CopyOptions::default();
+            build_tar_from_host(&src_file, &tar_path, &opts).unwrap();
+
+            // Extract to a file path (not a directory)
+            let dest_file = tmp.path().join("dest_dir").join("script.py");
+            extract_tar_to_host(&tar_path, &dest_file, true).unwrap();
+
+            // Verify it's a file, not a directory
+            assert!(dest_file.is_file(), "dest should be a regular file");
+            let data = std::fs::read_to_string(&dest_file).unwrap();
+            assert_eq!(data, "print('hello')");
+        });
+    }
+
+    #[test]
+    fn extract_single_file_to_existing_dir() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+
+        rt.block_on(async {
+            let tmp = TempDir::new().unwrap();
+
+            // Create a single-file tar
+            let src_file = tmp.path().join("source.py");
+            std::fs::write(&src_file, b"print('hello')").unwrap();
+            let tar_path = tmp.path().join("file.tar");
+            let opts = CopyOptions::default();
+            build_tar_from_host(&src_file, &tar_path, &opts).unwrap();
+
+            // Extract to an existing directory — should copy INTO the dir
+            let dest_dir = tmp.path().join("workspace");
+            std::fs::create_dir(&dest_dir).unwrap();
+            extract_tar_to_host(&tar_path, &dest_dir, true).unwrap();
+
+            // File should be inside the directory with its original name
+            let extracted = dest_dir.join("source.py");
+            assert!(extracted.is_file(), "file should be inside the directory");
+            let data = std::fs::read_to_string(&extracted).unwrap();
+            assert_eq!(data, "print('hello')");
+        });
+    }
+
+    /// Regression test for #238: copy_in creates directory when destination is a file path.
+    /// This is the exact scenario from the issue report.
+    #[test]
+    fn issue_238_file_to_file_path_not_directory() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+
+        rt.block_on(async {
+            let tmp = TempDir::new().unwrap();
+
+            // Create source file (simulating /tmp/test_copy/script.py)
+            let src_file = tmp.path().join("script.py");
+            std::fs::write(&src_file, b"print('hello')\n").unwrap();
+
+            let tar_path = tmp.path().join("issue238.tar");
+            let opts = CopyOptions::default();
+            build_tar_from_host(&src_file, &tar_path, &opts).unwrap();
+
+            // Extract to /workspace/script.py — the bug created a DIRECTORY here
+            let workspace = tmp.path().join("workspace");
+            std::fs::create_dir(&workspace).unwrap();
+            let dest_file = workspace.join("script.py");
+            extract_tar_to_host(&tar_path, &dest_file, true).unwrap();
+
+            // MUST be a regular file, NOT a directory
+            assert!(
+                dest_file.is_file(),
+                "script.py should be a file, not a directory (issue #238)"
+            );
+            assert!(
+                !dest_file.is_dir(),
+                "script.py must NOT be a directory (issue #238)"
+            );
+            let data = std::fs::read_to_string(&dest_file).unwrap();
+            assert_eq!(data, "print('hello')\n");
+        });
+    }
+
+    #[test]
+    fn extract_file_to_file_creates_parent_dirs() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+
+        rt.block_on(async {
+            let tmp = TempDir::new().unwrap();
+            let tar_path = tmp.path().join("file.tar");
+            create_single_file_tar(&tar_path, "data.txt", b"content");
+
+            // Deep nested path — parent dirs should be created automatically
+            let dest = tmp.path().join("a").join("b").join("c").join("data.txt");
+            extract_tar_to_host(&tar_path, &dest, true).unwrap();
+
+            assert!(dest.is_file());
+            assert_eq!(std::fs::read_to_string(&dest).unwrap(), "content");
+        });
+    }
+
+    #[test]
+    fn extract_file_to_file_overwrite_false_rejects_existing() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+
+        rt.block_on(async {
+            let tmp = TempDir::new().unwrap();
+            let tar_path = tmp.path().join("file.tar");
+            create_single_file_tar(&tar_path, "data.txt", b"new content");
+
+            // Create existing file at dest
+            let dest = tmp.path().join("data.txt");
+            std::fs::write(&dest, b"old content").unwrap();
+
+            // overwrite=false should fail
+            let result = extract_tar_to_host(&tar_path, &dest, false);
+            assert!(
+                result.is_err(),
+                "should reject overwrite when overwrite=false"
+            );
+
+            // Original content preserved
+            assert_eq!(std::fs::read_to_string(&dest).unwrap(), "old content");
+        });
+    }
+
+    #[test]
+    fn extract_file_to_file_overwrite_true_replaces_existing() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+
+        rt.block_on(async {
+            let tmp = TempDir::new().unwrap();
+            let tar_path = tmp.path().join("file.tar");
+            create_single_file_tar(&tar_path, "data.txt", b"new content");
+
+            // Create existing file at dest
+            let dest = tmp.path().join("data.txt");
+            std::fs::write(&dest, b"old content").unwrap();
+
+            // overwrite=true should succeed
+            extract_tar_to_host(&tar_path, &dest, true).unwrap();
+            assert_eq!(std::fs::read_to_string(&dest).unwrap(), "new content");
+        });
+    }
+
+    #[test]
+    fn extract_dir_tar_into_directory() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+
+        rt.block_on(async {
+            let tmp = TempDir::new().unwrap();
+            let tar_path = tmp.path().join("dir.tar");
+            create_dir_tar(&tar_path);
+
+            // Extract multi-entry tar to a directory — should use directory mode
+            let dest = tmp.path().join("output");
+            std::fs::create_dir(&dest).unwrap();
+            extract_tar_to_host(&tar_path, &dest, true).unwrap();
+
+            let extracted = dest.join("mydir").join("file.txt");
+            assert!(extracted.is_file());
+            assert_eq!(std::fs::read_to_string(&extracted).unwrap(), "inside dir");
+        });
+    }
+
+    #[test]
+    fn extraction_mode_single_dir_entry() {
+        let tmp = TempDir::new().unwrap();
+        let tar_path = tmp.path().join("dir_only.tar");
+
+        // Create a tar with a single directory entry (not a regular file)
+        let tar_file = std::fs::File::create(&tar_path).unwrap();
+        let mut builder = tar::Builder::new(tar_file);
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Directory);
+        header.set_size(0);
+        header.set_mode(0o755);
+        header.set_cksum();
+        builder
+            .append_data(&mut header, "somedir/", &[] as &[u8])
+            .unwrap();
+        builder.finish().unwrap();
+
+        let dest = tmp.path().join("output");
+        let mode = determine_extraction_mode(&dest, &tar_path).unwrap();
+        // Single directory entry → NOT file-to-file, should be directory mode
+        assert!(matches!(mode, ExtractionMode::IntoDirectory));
+    }
+
+    #[test]
+    fn extraction_mode_empty_tar() {
+        let tmp = TempDir::new().unwrap();
+        let tar_path = tmp.path().join("empty.tar");
+
+        // Create an empty tar
+        let tar_file = std::fs::File::create(&tar_path).unwrap();
+        let builder = tar::Builder::new(tar_file);
+        builder.into_inner().unwrap();
+
+        let dest = tmp.path().join("output");
+        let mode = determine_extraction_mode(&dest, &tar_path).unwrap();
+        // Empty tar → directory mode (fallback)
+        assert!(matches!(mode, ExtractionMode::IntoDirectory));
     }
 }

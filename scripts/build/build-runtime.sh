@@ -219,22 +219,33 @@ collect_libraries() {
         build_flag="--release"
     fi
 
-    cargo build $build_flag --lib -p boxlite
-
-    # Find the OUT_DIR by parsing cargo metadata
-    local out_dir
-    out_dir=$(cargo metadata --format-version 1 2>/dev/null | \
-        grep -o '"target_directory":"[^"]*"' | \
+    # Build boxlite crate and capture the exact OUT_DIR from cargo's JSON output
+    # This is deterministic - no guessing based on directory names or timestamps
+    local runtime_src=""
+    runtime_src=$(cargo build $build_flag --lib -p boxlite --message-format=json 2>/dev/null | \
+        grep -o '"out_dir":"[^"]*"' | \
+        tail -1 | \
         cut -d'"' -f4)
 
-    if [ -z "$out_dir" ]; then
-        out_dir="$PROJECT_ROOT/target"
+    if [ -n "$runtime_src" ]; then
+        runtime_src="$runtime_src/runtime"
     fi
 
-    # Look for runtime directory in build output
-    # It's created by boxlite/build.rs in OUT_DIR/runtime
-    local runtime_src=""
-    runtime_src=$(find "$out_dir/$PROFILE/build/boxlite-"*/out/runtime -type d 2>/dev/null | head -1)
+    # Fallback: if JSON parsing failed, find by modification time (newest first)
+    if [ -z "$runtime_src" ] || [ ! -d "$runtime_src" ]; then
+        local out_dir
+        out_dir=$(cargo metadata --format-version 1 2>/dev/null | \
+            grep -o '"target_directory":"[^"]*"' | \
+            cut -d'"' -f4)
+
+        if [ -z "$out_dir" ]; then
+            out_dir="$PROJECT_ROOT/target"
+        fi
+
+        # Sort by modification time (newest first) to get the most recent build
+        runtime_src=$(find "$out_dir/$PROFILE/build/boxlite-"*/out/runtime -type d -print0 2>/dev/null | \
+            xargs -0 ls -dt 2>/dev/null | head -1)
+    fi
 
     if [ -z "$runtime_src" ] || [ ! -d "$runtime_src" ]; then
         print_error "Could not find runtime libraries directory"
@@ -251,7 +262,8 @@ assemble_runtime() {
     echo ""
     print_section "Assembling runtime directory..."
 
-    # Create destination directory
+    # Clean and create destination directory to prevent stale files
+    rm -rf "$DEST_DIR"
     mkdir -p "$DEST_DIR"
 
     # Copy binaries

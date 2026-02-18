@@ -99,10 +99,10 @@ pyenv install 3.11.0
 
 ### Is BoxLite production-ready?
 
-**Yes.** BoxLite v0.4.4 is stable and used in production.
+**Yes.** BoxLite is stable and used in production.
 
 **Production considerations:**
-- ✅ Stable API (v0.4.x series)
+- ✅ Stable API
 - ✅ Hardware-level isolation
 - ✅ Resource limits enforced
 - ✅ Error handling robust
@@ -554,10 +554,10 @@ If you don't need sandbox isolation (e.g., development environment),
 disable the jailer:
 
 ```python
-from boxlite.boxlite import SecurityOptions
+from boxlite.boxlite import SecurityOptions, AdvancedBoxOptions
 
 boxlite.BoxOptions(
-    security=SecurityOptions(jailer_enabled=False),
+    advanced=AdvancedBoxOptions(security=SecurityOptions.development()),
     # ... other options
 )
 ```

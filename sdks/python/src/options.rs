@@ -1,14 +1,17 @@
 use std::path::PathBuf;
 
+use boxlite::BoxliteRestOptions;
 use boxlite::CopyOptions;
+use boxlite::runtime::advanced_options::SecurityOptions;
 use boxlite::runtime::constants::images;
 use boxlite::runtime::options::{
-    BoxOptions, BoxliteOptions, NetworkSpec, PortProtocol, PortSpec, ResourceLimits, RootfsSpec,
-    SecurityOptions, VolumeSpec,
+    BoxOptions, BoxliteOptions, NetworkSpec, PortProtocol, PortSpec, RootfsSpec, VolumeSpec,
 };
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::{PyAnyMethods, PyDict, PyTuple};
+
+use crate::advanced_options::PyAdvancedBoxOptions;
 
 #[pyclass(name = "Options")]
 #[derive(Clone, Debug)]
@@ -104,192 +107,6 @@ impl From<PyCopyOptions> for CopyOptions {
 }
 
 // ============================================================================
-// Security Options
-// ============================================================================
-
-/// Security isolation options for a box.
-///
-/// Controls how the boxlite-shim process is isolated from the host.
-/// Different presets are available: `development()`, `standard()`, `maximum()`.
-///
-/// Example:
-///     ```python
-///     from boxlite import SecurityOptions
-///
-///     # Use preset with customizations
-///     security = SecurityOptions.standard()
-///     security.max_open_files = 2048
-///     security.max_memory = 1024 * 1024 * 1024  # 1 GiB
-///
-///     # Or create from scratch
-///     security = SecurityOptions(
-///         jailer_enabled=True,
-///         seccomp_enabled=True,
-///         max_open_files=1024,
-///     )
-///     ```
-#[pyclass(name = "SecurityOptions")]
-#[derive(Clone, Debug)]
-pub(crate) struct PySecurityOptions {
-    /// Enable jailer isolation (Linux/macOS).
-    #[pyo3(get, set)]
-    pub(crate) jailer_enabled: bool,
-
-    /// Enable seccomp syscall filtering (Linux only).
-    #[pyo3(get, set)]
-    pub(crate) seccomp_enabled: bool,
-
-    /// Maximum number of open file descriptors.
-    #[pyo3(get, set)]
-    pub(crate) max_open_files: Option<u64>,
-
-    /// Maximum file size in bytes.
-    #[pyo3(get, set)]
-    pub(crate) max_file_size: Option<u64>,
-
-    /// Maximum number of processes.
-    #[pyo3(get, set)]
-    pub(crate) max_processes: Option<u64>,
-
-    /// Maximum virtual memory in bytes.
-    #[pyo3(get, set)]
-    pub(crate) max_memory: Option<u64>,
-
-    /// Maximum CPU time in seconds.
-    #[pyo3(get, set)]
-    pub(crate) max_cpu_time: Option<u64>,
-
-    /// Enable network access in sandbox (macOS only).
-    #[pyo3(get, set)]
-    pub(crate) network_enabled: bool,
-
-    /// Close inherited file descriptors.
-    #[pyo3(get, set)]
-    pub(crate) close_fds: bool,
-}
-
-#[pymethods]
-impl PySecurityOptions {
-    /// Create a new SecurityOptions with custom settings.
-    #[new]
-    #[pyo3(signature = (
-        jailer_enabled=false,
-        seccomp_enabled=false,
-        max_open_files=None,
-        max_file_size=None,
-        max_processes=None,
-        max_memory=None,
-        max_cpu_time=None,
-        network_enabled=true,
-        close_fds=true,
-    ))]
-    #[allow(clippy::too_many_arguments)]
-    fn new(
-        jailer_enabled: bool,
-        seccomp_enabled: bool,
-        max_open_files: Option<u64>,
-        max_file_size: Option<u64>,
-        max_processes: Option<u64>,
-        max_memory: Option<u64>,
-        max_cpu_time: Option<u64>,
-        network_enabled: bool,
-        close_fds: bool,
-    ) -> Self {
-        Self {
-            jailer_enabled,
-            seccomp_enabled,
-            max_open_files,
-            max_file_size,
-            max_processes,
-            max_memory,
-            max_cpu_time,
-            network_enabled,
-            close_fds,
-        }
-    }
-
-    /// Development mode: minimal isolation for debugging.
-    ///
-    /// Use this when debugging issues where isolation interferes.
-    #[staticmethod]
-    fn development() -> Self {
-        Self {
-            jailer_enabled: false,
-            seccomp_enabled: false,
-            max_open_files: None,
-            max_file_size: None,
-            max_processes: None,
-            max_memory: None,
-            max_cpu_time: None,
-            network_enabled: true,
-            close_fds: false,
-        }
-    }
-
-    /// Standard mode: recommended for most use cases.
-    ///
-    /// Provides good security without being overly restrictive.
-    #[staticmethod]
-    fn standard() -> Self {
-        Self {
-            jailer_enabled: cfg!(any(target_os = "linux", target_os = "macos")),
-            seccomp_enabled: cfg!(target_os = "linux"),
-            max_open_files: None,
-            max_file_size: None,
-            max_processes: None,
-            max_memory: None,
-            max_cpu_time: None,
-            network_enabled: true,
-            close_fds: true,
-        }
-    }
-
-    /// Maximum mode: all isolation features enabled.
-    ///
-    /// Use this for untrusted workloads (AI sandbox, multi-tenant).
-    #[staticmethod]
-    fn maximum() -> Self {
-        Self {
-            jailer_enabled: true,
-            seccomp_enabled: cfg!(target_os = "linux"),
-            max_open_files: Some(1024),
-            max_file_size: Some(1024 * 1024 * 1024), // 1 GiB
-            max_processes: Some(100),
-            max_memory: None,   // Let VM config handle this
-            max_cpu_time: None, // Let VM config handle this
-            network_enabled: true,
-            close_fds: true,
-        }
-    }
-
-    fn __repr__(&self) -> String {
-        format!(
-            "SecurityOptions(jailer_enabled={}, seccomp_enabled={}, max_open_files={:?})",
-            self.jailer_enabled, self.seccomp_enabled, self.max_open_files
-        )
-    }
-}
-
-impl From<PySecurityOptions> for SecurityOptions {
-    fn from(py_opts: PySecurityOptions) -> Self {
-        SecurityOptions {
-            jailer_enabled: py_opts.jailer_enabled,
-            seccomp_enabled: py_opts.seccomp_enabled,
-            network_enabled: py_opts.network_enabled,
-            close_fds: py_opts.close_fds,
-            resource_limits: ResourceLimits {
-                max_open_files: py_opts.max_open_files,
-                max_file_size: py_opts.max_file_size,
-                max_processes: py_opts.max_processes,
-                max_memory: py_opts.max_memory,
-                max_cpu_time: py_opts.max_cpu_time,
-            },
-            ..Default::default()
-        }
-    }
-}
-
-// ============================================================================
 // Box Options
 // ============================================================================
 
@@ -331,9 +148,9 @@ pub(crate) struct PyBoxOptions {
     /// If None, uses the image's USER directive (defaults to root).
     #[pyo3(get, set)]
     pub(crate) user: Option<String>,
-    /// Security isolation options for the box.
+    /// Advanced options for expert users (security, mount isolation).
     #[pyo3(get, set)]
-    pub(crate) security: Option<PySecurityOptions>,
+    pub(crate) advanced: Option<PyAdvancedBoxOptions>,
 }
 
 #[pymethods]
@@ -355,7 +172,7 @@ impl PyBoxOptions {
         entrypoint=None,
         cmd=None,
         user=None,
-        security=None,
+        advanced=None,
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -374,7 +191,7 @@ impl PyBoxOptions {
         entrypoint: Option<Vec<String>>,
         cmd: Option<Vec<String>>,
         user: Option<String>,
-        security: Option<PySecurityOptions>,
+        advanced: Option<PyAdvancedBoxOptions>,
     ) -> Self {
         Self {
             image,
@@ -392,18 +209,18 @@ impl PyBoxOptions {
             entrypoint,
             cmd,
             user,
-            security,
+            advanced,
         }
     }
 
     fn __repr__(&self) -> String {
         format!(
-            "BoxOptions(image={:?}, rootfs_path={:?}, cpus={:?}, memory_mib={:?}, security={:?})",
+            "BoxOptions(image={:?}, rootfs_path={:?}, cpus={:?}, memory_mib={:?}, advanced={:?})",
             self.image,
             self.rootfs_path,
             self.cpus,
             self.memory_mib,
-            self.security.is_some()
+            self.advanced.is_some()
         )
     }
 }
@@ -459,8 +276,10 @@ impl From<PyBoxOptions> for BoxOptions {
             opts.detach = detach;
         }
 
-        if let Some(security) = py_opts.security {
-            opts.security = SecurityOptions::from(security);
+        if let Some(advanced) = py_opts.advanced
+            && let Some(security) = advanced.security
+        {
+            opts.advanced.security = SecurityOptions::from(security);
         }
 
         opts
@@ -674,5 +493,87 @@ fn parse_protocol<S: AsRef<str>>(s: S) -> PortProtocol {
         "udp" => PortProtocol::Udp,
         // "sctp" => PortProtocol::Sctp,
         _ => PortProtocol::Tcp,
+    }
+}
+
+// ============================================================================
+// REST Options
+// ============================================================================
+
+/// Configuration for connecting to a remote BoxLite REST API server.
+///
+/// Example::
+///
+///     opts = BoxliteRestOptions(url="https://api.example.com")
+///     opts = BoxliteRestOptions(
+///         url="https://api.example.com",
+///         client_id="my-client",
+///         client_secret="my-secret",
+///     )
+///     opts = BoxliteRestOptions.from_env()
+///
+#[pyclass(name = "BoxliteRestOptions")]
+#[derive(Clone, Debug)]
+pub(crate) struct PyBoxliteRestOptions {
+    #[pyo3(get, set)]
+    pub(crate) url: String,
+    #[pyo3(get, set)]
+    pub(crate) client_id: Option<String>,
+    #[pyo3(get, set)]
+    pub(crate) client_secret: Option<String>,
+    #[pyo3(get, set)]
+    pub(crate) prefix: Option<String>,
+}
+
+#[pymethods]
+impl PyBoxliteRestOptions {
+    #[new]
+    #[pyo3(signature = (url, client_id=None, client_secret=None, prefix=None))]
+    fn new(
+        url: String,
+        client_id: Option<String>,
+        client_secret: Option<String>,
+        prefix: Option<String>,
+    ) -> Self {
+        Self {
+            url,
+            client_id,
+            client_secret,
+            prefix,
+        }
+    }
+
+    /// Create BoxliteRestOptions from environment variables.
+    ///
+    /// Reads: BOXLITE_REST_URL (required), BOXLITE_REST_CLIENT_ID,
+    ///        BOXLITE_REST_CLIENT_SECRET, BOXLITE_REST_PREFIX
+    #[staticmethod]
+    fn from_env() -> PyResult<Self> {
+        let opts = BoxliteRestOptions::from_env().map_err(crate::util::map_err)?;
+        Ok(Self {
+            url: opts.url,
+            client_id: opts.client_id,
+            client_secret: opts.client_secret,
+            prefix: opts.prefix,
+        })
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "BoxliteRestOptions(url={:?}, client_id={:?}, prefix={:?})",
+            self.url,
+            self.client_id.as_deref().map(|_| "***"),
+            self.prefix,
+        )
+    }
+}
+
+impl From<PyBoxliteRestOptions> for BoxliteRestOptions {
+    fn from(py_opts: PyBoxliteRestOptions) -> Self {
+        let mut opts = BoxliteRestOptions::new(py_opts.url);
+        opts.client_id = py_opts.client_id;
+        opts.client_secret = py_opts.client_secret;
+        opts.prefix = py_opts.prefix;
+        opts
     }
 }

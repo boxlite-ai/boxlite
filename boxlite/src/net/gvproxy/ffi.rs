@@ -4,14 +4,12 @@
 //! functions from libgvproxy-sys. All unsafe operations are encapsulated here.
 
 use std::ffi::{CStr, CString};
-use std::path::PathBuf;
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use super::config::GvproxyConfig;
 use libgvproxy_sys::{
-    gvproxy_create, gvproxy_destroy, gvproxy_free_string, gvproxy_get_socket_path,
-    gvproxy_get_stats, gvproxy_get_version,
+    gvproxy_create, gvproxy_destroy, gvproxy_free_string, gvproxy_get_stats, gvproxy_get_version,
 };
 
 /// Create a new gvproxy instance with full configuration
@@ -39,34 +37,6 @@ pub fn create_instance(config: &GvproxyConfig) -> BoxliteResult<i64> {
     tracing::info!(id, "Created gvproxy instance via FFI");
 
     Ok(id)
-}
-
-/// Get the Unix socket path for a gvproxy instance
-///
-/// # Arguments
-/// * `id` - Instance ID returned from `create_instance`
-///
-/// # Returns
-/// Socket path or error
-pub fn get_socket_path(id: i64) -> BoxliteResult<PathBuf> {
-    let c_str = unsafe { gvproxy_get_socket_path(id) };
-
-    if c_str.is_null() {
-        return Err(BoxliteError::Network(format!(
-            "gvproxy_get_socket_path failed for instance {}",
-            id
-        )));
-    }
-
-    let path_str = unsafe { CStr::from_ptr(c_str) }
-        .to_str()
-        .map_err(|e| BoxliteError::Network(format!("Invalid UTF-8 in socket path: {}", e)))?
-        .to_string();
-
-    // Free the string returned by CGO
-    unsafe { gvproxy_free_string(c_str) };
-
-    Ok(PathBuf::from(path_str))
 }
 
 /// Destroy a gvproxy instance and free resources
@@ -158,12 +128,10 @@ mod tests {
     #[test]
     #[ignore] // Requires libgvproxy.dylib to be available
     fn test_ffi_create_destroy() {
-        let config = GvproxyConfig::new(vec![(8080, 80), (8443, 443)]);
+        use std::path::PathBuf;
+        let socket_path = PathBuf::from("/tmp/test-gvproxy-ffi.sock");
+        let config = GvproxyConfig::new(socket_path, vec![(8080, 80), (8443, 443)]);
         let id = create_instance(&config).unwrap();
-
-        // Get socket path
-        let socket_path = get_socket_path(id).unwrap();
-        assert!(socket_path.to_str().unwrap().contains("gvproxy"));
 
         // Destroy instance
         destroy_instance(id).unwrap();

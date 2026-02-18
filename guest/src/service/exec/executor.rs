@@ -91,8 +91,8 @@ impl Executor for GuestExecutor {
 /// Spawn process with pipes (standard mode).
 fn spawn_with_pipes(req: &ExecRequest) -> BoxliteResult<ExecHandle> {
     use nix::unistd::Pid;
-    use std::os::unix::io::{AsRawFd, FromRawFd};
-    use tokio::process::Command;
+    use std::os::unix::io::{FromRawFd, IntoRawFd};
+    use std::process::Command;
 
     let mut cmd = Command::new(&req.program);
     cmd.args(&req.args);
@@ -113,25 +113,19 @@ fn spawn_with_pipes(req: &ExecRequest) -> BoxliteResult<ExecHandle> {
     let (stderr_read, stderr_write) = nix::unistd::pipe()
         .map_err(|e| BoxliteError::Internal(format!("Failed to create stderr pipe: {}", e)))?;
 
-    // Configure command to use our pipes
+    // Configure command to use our pipes.
+    // into_raw_fd() transfers ownership from OwnedFd to Stdio, preventing double-close.
     unsafe {
-        cmd.stdin(std::process::Stdio::from_raw_fd(stdin_read.as_raw_fd()));
-        cmd.stdout(std::process::Stdio::from_raw_fd(stdout_write.as_raw_fd()));
-        cmd.stderr(std::process::Stdio::from_raw_fd(stderr_write.as_raw_fd()));
+        cmd.stdin(std::process::Stdio::from_raw_fd(stdin_read.into_raw_fd()));
+        cmd.stdout(std::process::Stdio::from_raw_fd(stdout_write.into_raw_fd()));
+        cmd.stderr(std::process::Stdio::from_raw_fd(stderr_write.into_raw_fd()));
     }
 
     let child = cmd
         .spawn()
         .map_err(|e| BoxliteError::Internal(format!("Failed to spawn '{}': {}", req.program, e)))?;
 
-    let pid = child
-        .id()
-        .ok_or_else(|| BoxliteError::Internal("Process exited immediately".into()))?;
-
-    // Close the read end of stdin and write ends of stdout/stderr in parent
-    drop(stdin_read);
-    drop(stdout_write);
-    drop(stderr_write);
+    let pid = child.id();
 
     // Non-PTY mode: stdout and stderr are separate pipes
     Ok(ExecHandle::new(

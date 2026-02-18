@@ -419,7 +419,7 @@ Apache 2.0 - See [../../LICENSE](../../LICENSE)
 
 ## Related Projects
 
-- [Python SDK](../python/) - Python bindings (stable, v0.4.4)
+- [Python SDK](../python/) - Python bindings (Python 3.10+)
 - [C SDK](../c/) - C FFI bindings (early stage)
 - [Core Runtime](../../boxlite/) - Rust runtime implementation
 

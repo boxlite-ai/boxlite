@@ -179,29 +179,6 @@ impl ImageObject {
         format!("sha256:{:x}", hasher.finalize())
     }
 
-    /// Get existing disk image if available.
-    ///
-    /// Returns a persistent Disk if the cached disk image exists, None otherwise.
-    /// Does not create a new disk image - use for cache lookups only.
-    pub fn disk_image(&self) -> Option<crate::disk::Disk> {
-        let image_digest = self.compute_image_digest();
-        self.blob_source.disk_image(&image_digest)
-    }
-
-    /// Install a disk as the cached disk image for this image.
-    ///
-    /// Atomically moves the source disk to the image store path.
-    /// The source disk is consumed and a new persistent Disk is returned.
-    pub async fn install_disk_image(
-        &self,
-        disk: crate::disk::Disk,
-    ) -> boxlite_shared::BoxliteResult<crate::disk::Disk> {
-        let image_digest = self.compute_image_digest();
-        self.blob_source
-            .install_disk_image(&image_digest, disk)
-            .await
-    }
-
     // ========================================================================
     // INSPECTION
     // ========================================================================

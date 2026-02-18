@@ -30,6 +30,7 @@ help:
 	@echo "  Testing:"
 	@echo "    make test           - Run all unit tests (Rust + Python + Node.js)"
 	@echo "    make test:rust      - Run Rust unit tests"
+	@echo "    make test:ffi       - Run BoxLite FFI unit tests"
 	@echo "    make test:python    - Run Python SDK unit tests"
 	@echo "    make test:node      - Run Node.js SDK unit tests"
 	@echo "    make test:cli       - Run CLI integration tests (prepares runtime first)"
@@ -177,8 +178,10 @@ dev\:node: runtime-debug
 # Run all unit tests (excludes integration tests that require VMs)
 test:
 	@$(MAKE) test:rust
+	@$(MAKE) test:ffi
 	@$(MAKE) test:python
 	@$(MAKE) test:node
+	@$(MAKE) test:c
 	@echo "✅ All tests passed"
 
 # Run Rust unit tests (single-threaded, without gvproxy to avoid Go runtime issues)
@@ -186,6 +189,12 @@ test\:rust:
 	@echo "🧪 Running Rust unit tests..."
 	@cargo test -p boxlite --no-default-features --lib -- --test-threads=1
 	@cargo test -p boxlite-shared --lib -- --test-threads=1
+
+# Run BoxLite FFI unit tests
+test\:ffi:
+	@echo "🧪 Running BoxLite FFI unit tests..."
+	@cargo test -p boxlite-ffi
+
 
 # Run Python SDK unit tests (excludes integration tests)
 test\:python:

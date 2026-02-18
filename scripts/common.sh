@@ -62,8 +62,8 @@ command_exists() {
 
 # Ensure cargo is in PATH (sources cargo env if available)
 ensure_cargo() {
-    if [ -f "$HOME/.cargo/env" ]; then
-        source "$HOME/.cargo/env"
+    if [ -f "${CARGO_HOME:-$HOME/.cargo}/env" ]; then
+        source "${CARGO_HOME:-$HOME/.cargo}/env"
     fi
 }
 
@@ -85,8 +85,8 @@ install_rust() {
         curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 
         # Source Rust environment
-        if [ -f "$HOME/.cargo/env" ]; then
-            source "$HOME/.cargo/env"
+        if [ -f "${CARGO_HOME:-$HOME/.cargo}/env" ]; then
+            source "${CARGO_HOME:-$HOME/.cargo}/env"
         else
             echo "❌ ERROR: Rust installation failed"
             exit 1

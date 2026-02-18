@@ -91,40 +91,53 @@ jobs:
           # Clean up to save disk space
           rm -rf target ~/.rustup ~/.cargo
 
+      # Cache cargo registry for manylinux container.
+      # Swatinem/rust-cache can't run inside Docker, so we use actions/cache
+      # with CARGO_HOME redirected to a host-mounted path.
+      - name: Cache manylinux cargo registry
+        if: runner.os == 'Linux'
+        uses: actions/cache@v4
+        with:
+          path: |
+            .cargo-manylinux/registry
+            .cargo-manylinux/git
+          key: manylinux-cargo-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            manylinux-cargo-${{ matrix.target }}-
+
       - name: Build Node.js package (Linux)
         if: runner.os == 'Linux'
-        uses: addnab/docker-run-action@v3
-        with:
-          image: quay.io/pypa/manylinux_2_28_${{ contains(matrix.target, 'arm64') && 'aarch64' || 'x86_64' }}
-          options: -v ${{ github.workspace }}:/work -w /work
-          run: |
-            set -ex
+        run: |
+          cat > "$RUNNER_TEMP/build.sh" << 'CONTAINER_SCRIPT'
+          set -ex
+          git config --global --add safe.directory /work
 
-            # Mark directory as safe for git (ownership differs in container)
-            git config --global --add safe.directory /work
+          GUEST_TARGET=$(scripts/util.sh --target)
+          if [ -d ".cache/$GUEST_TARGET" ]; then
+            echo "Restoring guest from .cache/$GUEST_TARGET"
+            mkdir -p target
+            cp -a ".cache/$GUEST_TARGET" "target/$GUEST_TARGET"
+          fi
 
-            # Restore pre-built guest target directory
-            GUEST_TARGET=$(scripts/util.sh --target)
-            if [ -d ".cache/$GUEST_TARGET" ]; then
-              echo "Restoring guest from .cache/$GUEST_TARGET"
-              mkdir -p target
-              cp -a ".cache/$GUEST_TARGET" "target/$GUEST_TARGET"
-            fi
+          export SKIP_GUEST_BUILD=1
+          export PATH="$CARGO_HOME/bin:$PATH"
+          make setup runtime
 
-            # Build with SKIP_GUEST_BUILD=1 to use pre-built guest
-            export SKIP_GUEST_BUILD=1
-            make setup runtime
+          export PATH="$HOME/.cargo/bin:$PATH"
+          cd sdks/node
+          npm install --silent
+          npm run build:native -- --release
+          npm run artifacts
+          npm run bundle:runtime
+          CONTAINER_SCRIPT
 
-            # Add cargo to PATH for npm commands (matches Makefile pattern)
-            # (make installs cargo to ~/.cargo/bin but npm subprocesses don't inherit PATH)
-            export PATH="$HOME/.cargo/bin:$PATH"
-
-            # Build Node.js artifacts (no pack - CI uploads raw artifacts)
-            cd sdks/node
-            npm install --silent
-            npm run build:native -- --release
-            npm run artifacts
-            npm run bundle:runtime
+          docker run --rm \
+            -v ${{ github.workspace }}:/work \
+            -v "$RUNNER_TEMP/build.sh:/tmp/build.sh:ro" \
+            -w /work \
+            -e CARGO_HOME=/work/.cargo-manylinux \
+            quay.io/pypa/manylinux_2_28_${{ contains(matrix.target, 'arm64') && 'aarch64' || 'x86_64' }} \
+            bash /tmp/build.sh
 
       - name: Build Node.js package (macOS)
         if: runner.os == 'macOS'

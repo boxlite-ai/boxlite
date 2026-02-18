@@ -1,163 +1,46 @@
 # BoxLite Python SDK Examples
 
-This directory contains comprehensive examples demonstrating how to use the BoxLite Python SDK.
+Categorized examples from beginner to advanced.  Each subdirectory has its own
+README with a quick summary.
 
-## For End Users
+## Directory Index
 
-If you installed BoxLite via pip:
+| Directory | What it covers |
+|-----------|----------------|
+| [`01_getting_started/`](01_getting_started/) | SimpleBox, CodeBox, sync variants, listing boxes |
+| [`02_features/`](02_features/) | CMD/user overrides, port forwarding, file copy, registries, OCI bundles |
+| [`03_lifecycle/`](03_lifecycle/) | Stop/restart, detach/reattach, shutdown, cross-process sharing |
+| [`04_interactive/`](04_interactive/) | Interactive shell, Claude Code install in a terminal |
+| [`05_browser_desktop/`](05_browser_desktop/) | Playwright, Puppeteer, desktop automation |
+| [`06_ai_agents/`](06_ai_agents/) | LLM-driven boxes, SkillBox, Claude chat, Starbucks agent, OpenClaw |
+| [`07_advanced/`](07_advanced/) | Native Rust API, FUSE filesystem, multi-agent orchestration, AI pipeline |
+| [`08_rest_api/`](08_rest_api/) | Remote REST API: connect, CRUD, commands, files, metrics, config |
+
+## Quick Start
 
 ```bash
 # Install BoxLite
 pip install boxlite
 
-# Run examples directly
-python simplebox_example.py
-python codebox_example.py
+# Run the simplest example
+python examples/python/01_getting_started/run_simplebox.py
 ```
 
-## For Developers (Working in the Repo)
-
-If you're developing BoxLite:
+### For Developers (Working in the Repo)
 
 ```bash
-# 1. Build the SDK
-cd ../../sdks/python
-pip install -e .
+# Build the SDK
+cd sdks/python && pip install -e . && cd ../..
 
-# 2. Run examples
-cd ../../examples/python
-python simplebox_example.py
+# Run examples
+python examples/python/01_getting_started/run_simplebox.py
 ```
 
-## Running Examples
+## Shared Utilities
 
-```bash
-# Simple command execution
-python simplebox_example.py
-
-# Python code execution
-python codebox_example.py
-
-# Desktop automation (requires X11)
-python computerbox_example.py
-
-# Browser automation
-python browserbox_example.py
-
-# Interactive terminal session
-python interactivebox_example.py
-
-# Interactive terminal for Claude Code install
-python interactive_claude_example.py
-
-# Lifecycle management
-python lifecycle_example.py
-
-# Cross-process communication
-python cross_process_example.py
-
-# List all boxes
-python list_boxes_example.py
-
-# Low-level native API
-python native_example.py
-
-# OpenClaw AI agent gateway
-export CLAUDE_CODE_OAUTH_TOKEN="sk-ant-oat01-..."
-python clawboxlite.py
-```
-
-## Examples Overview
-
-### simplebox_example.py
-Foundation for custom containers:
-- Command execution with results
-- Separate stdout and stderr handling
-- Environment variables and working directory
-- Error handling and exit codes
-- Multiple commands in same container
-
-### codebox_example.py
-Secure Python code execution:
-- Running untrusted Python code safely
-- Installing packages dynamically
-- Using popular libraries (requests, numpy, etc.)
-- Real-world use case: AI agent code execution
-
-### computerbox_example.py
-Desktop automation:
-- GUI environment with web access
-- Mouse automation (move, click, drag)
-- Keyboard automation (type, key combinations)
-- Screenshots
-- Web browser access
-
-Access the desktop via browser:
-- HTTP: `http://localhost:3000`
-- HTTPS: `https://localhost:3001` (self-signed certificate)
-
-### browserbox_example.py
-Browser automation:
-- Starting different browsers (chromium, firefox, webkit)
-- Chrome DevTools Protocol (CDP) endpoints
-- Integration with Puppeteer/Playwright
-- Cross-browser testing
-
-Optional: Install Playwright for full example:
-```bash
-pip install playwright
-playwright install chromium
-```
-
-### interactivebox_example.py
-Interactive terminal sessions:
-- PTY-based interactive shells
-- Real-time I/O forwarding
-- Terminal size auto-detection
-- Similar to `docker exec -it`
-
-### interactive_claude_example.py
-Interactive terminal for Claude Code:
-- Persistent box with a bash shell
-- Install Claude Code directly in the terminal
-- Reuse the same box across sessions
-- OS-agnostic (default: Debian, configurable via BOXLITE_CLAUDE_IMAGE)
-
-### lifecycle_example.py
-Complete lifecycle management:
-- Creating, starting, stopping boxes
-- Resource monitoring (CPU, memory, disk)
-- Persistent boxes (named, survives restarts)
-- Box metadata and state tracking
-
-### cross_process_example.py
-Multi-process coordination:
-- Creating boxes in one process
-- Attaching from other processes
-- Shared box access patterns
-- Cross-process communication
-
-### list_boxes_example.py
-Box management:
-- Listing all active boxes
-- Filtering by status
-- Box metadata inspection
-
-### native_example.py
-Low-level native API:
-- Direct Rust API access
-- Advanced configuration
-- Performance-critical use cases
-
-### clawboxlite.py
-OpenClaw (ClawdBot/Moltbot) AI agent:
-- Running OpenClaw gateway in a container
-- Port forwarding and volume mounting
-- Claude API authentication setup
-- Service readiness polling
-
-Requires `CLAUDE_CODE_OAUTH_TOKEN` environment variable.
-Access the chat UI at `http://127.0.0.1:18789/chat?token=boxlite`
+[`_helpers.py`](_helpers.py) contains `setup_logging()` used across examples.
+Each example has a fallback so it can also run standalone when copied out of this
+directory.
 
 ## Tips
 
@@ -167,8 +50,8 @@ Access the chat UI at `http://127.0.0.1:18789/chat?token=boxlite`
    ```python
    box = boxlite.SimpleBox(
        image='alpine:latest',
-       memory_mib=512,   # Memory in MiB
-       cpus=1            # Number of CPU cores
+       memory_mib=512,
+       cpus=1
    )
    ```
 
@@ -176,7 +59,6 @@ Access the chat UI at `http://127.0.0.1:18789/chat?token=boxlite`
    ```python
    async with boxlite.SimpleBox(image='alpine:latest') as box:
        result = await box.exec('echo', 'hello')
-   # Automatically cleaned up
    ```
 
 4. **Logging**: Enable debug logging to troubleshoot:
@@ -197,14 +79,12 @@ Access the chat UI at `http://127.0.0.1:18789/chat?token=boxlite`
 **"Permission denied" on Linux**
 - Check KVM access: `ls -l /dev/kvm`
 - Add user to kvm group: `sudo usermod -aG kvm $USER`
-- Logout and login for group changes to take effect
 
 **"UnsupportedEngine" on macOS Intel**
-- Intel Macs are not supported (Hypervisor.framework stability issues)
-- Use Apple Silicon (ARM64) instead or Linux with KVM
+- Intel Macs are not supported; use Apple Silicon or Linux with KVM
 
 ## Next Steps
 
-- See [../../sdks/python/README.md](../../sdks/python/README.md) for full API documentation
-- Check [../../docs/](../../docs/) for architecture details
-- Browse [../../README.md](../../README.md) for project overview
+- [Python SDK README](../../sdks/python/README.md) - Full API documentation
+- [Architecture](../../docs/architecture/README.md) - How BoxLite works
+- [Project README](../../README.md) - Overview

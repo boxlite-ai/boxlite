@@ -25,8 +25,7 @@ The `boxlite` crate auto-discovers these using regex and bundles all libraries i
 For CI linting (clippy), building native libraries can be skipped by setting environment variables:
 
 ```bash
-LIBKRUN_SYS_STUB=1      # Skip building libkrun/libkrunfw
-LIBGVPROXY_SYS_STUB=1   # Skip building libgvproxy
+BOXLITE_DEPS_STUB=1      # Skip building libkrun/libkrunfw/libgvproxy
 ```
 
 This emits stub link directives allowing `cargo clippy` to check Rust code without expensive native builds.

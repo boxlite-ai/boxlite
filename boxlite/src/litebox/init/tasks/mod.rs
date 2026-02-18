@@ -26,6 +26,7 @@
 mod container_rootfs;
 mod filesystem;
 mod guest_connect;
+mod guest_entrypoint;
 mod guest_init;
 mod guest_rootfs;
 mod vmm_attach;

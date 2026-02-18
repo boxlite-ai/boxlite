@@ -68,8 +68,13 @@ impl ExecutionInterface {
 
         let execution_id = exec_response.execution_id.clone();
 
-        // Spawn stdin pump (no cancellation needed - closes when stdin_tx is dropped)
-        ExecProtocol::spawn_stdin(self.client.clone(), execution_id.clone(), stdin_rx);
+        // Spawn stdin pump (cancellable — exits cleanly during shutdown)
+        ExecProtocol::spawn_stdin(
+            self.client.clone(),
+            execution_id.clone(),
+            stdin_rx,
+            shutdown_token.clone(),
+        );
 
         // Spawn attach fanout (cancellable)
         ExecProtocol::spawn_attach(
@@ -156,6 +161,29 @@ impl ExecutionInterface {
                     .unwrap_or_else(|| "Resize TTY failed".to_string()),
             ))
         }
+    }
+}
+
+// ============================================================================
+// ExecBackend trait implementation
+// ============================================================================
+
+#[async_trait::async_trait]
+impl crate::runtime::backend::ExecBackend for ExecutionInterface {
+    async fn kill(&mut self, execution_id: &str, signal: i32) -> BoxliteResult<()> {
+        self.kill(execution_id, signal).await
+    }
+
+    async fn resize_tty(
+        &mut self,
+        execution_id: &str,
+        rows: u32,
+        cols: u32,
+        x_pixels: u32,
+        y_pixels: u32,
+    ) -> BoxliteResult<()> {
+        self.resize_tty(execution_id, rows, cols, x_pixels, y_pixels)
+            .await
     }
 }
 
@@ -341,7 +369,7 @@ impl ExecProtocol {
                     let _ = result_tx.send(mapped);
                 }
                 Err(e) => {
-                    tracing::error!(
+                    tracing::warn!(
                         execution_id = %execution_id,
                         error = %e,
                         "Wait failed"
@@ -359,6 +387,7 @@ impl ExecProtocol {
         mut client: ExecutionClient<Channel>,
         execution_id: String,
         mut stdin_rx: mpsc::UnboundedReceiver<Vec<u8>>,
+        shutdown_token: CancellationToken,
     ) {
         tokio::spawn(async move {
             let (tx, rx) = mpsc::channel::<ExecStdin>(8);
@@ -388,12 +417,20 @@ impl ExecProtocol {
             });
 
             let stream = ReceiverStream::new(rx);
-            if let Err(e) = client.send_input(stream).await {
-                tracing::warn!(
-                    execution_id = %execution_id,
-                    error = %e,
-                    "SendInput failed"
-                );
+            tokio::select! {
+                biased;
+                _ = shutdown_token.cancelled() => {
+                    tracing::debug!(execution_id = %execution_id, "SendInput cancelled during shutdown");
+                }
+                result = client.send_input(stream) => {
+                    if let Err(e) = result {
+                        tracing::warn!(
+                            execution_id = %execution_id,
+                            error = %e,
+                            "SendInput failed"
+                        );
+                    }
+                }
             }
         });
     }

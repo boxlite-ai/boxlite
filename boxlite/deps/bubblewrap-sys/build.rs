@@ -4,15 +4,30 @@
 //! Only builds on Linux (bubblewrap uses Linux-specific features).
 
 use std::env;
+use std::path::PathBuf;
 
 #[cfg(target_os = "linux")]
-use std::path::{Path, PathBuf};
+use std::path::Path;
 #[cfg(target_os = "linux")]
 use std::process::{Command, Stdio};
+
+/// Auto-set BOXLITE_DEPS_STUB=2 when downloaded from a registry (crates.io).
+/// Cargo adds .cargo_vcs_info.json to published packages.
+fn auto_detect_registry() {
+    if env::var("BOXLITE_DEPS_STUB").is_err() {
+        let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+        if manifest_dir.join(".cargo_vcs_info.json").exists() {
+            env::set_var("BOXLITE_DEPS_STUB", "2");
+        }
+    }
+}
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=vendor/bubblewrap");
+    println!("cargo:rerun-if-env-changed=BOXLITE_DEPS_STUB");
+
+    auto_detect_registry();
 
     // Check for stub mode (for CI linting without building)
     // Set BOXLITE_DEPS_STUB=1 to skip building and emit stub directives
@@ -40,12 +55,6 @@ fn build_linux() {
     let vendor_dir = manifest_dir.join("vendor/bubblewrap");
     let build_dir = out_dir.join("bubblewrap-build");
     let bwrap_path = build_dir.join("bwrap");
-
-    // Skip build if output already exists (incremental build optimization)
-    if bwrap_path.exists() {
-        println!("cargo:bwrap_BOXLITE_DEP={}", bwrap_path.display());
-        return;
-    }
 
     // Verify vendor submodule exists
     if !vendor_dir.join("meson.build").exists() {

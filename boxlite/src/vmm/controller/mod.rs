@@ -17,6 +17,7 @@
 mod handler;
 mod shim;
 mod spawn;
+pub mod watchdog;
 
 use crate::vmm::InstanceSpec;
 use boxlite_shared::BoxliteResult;

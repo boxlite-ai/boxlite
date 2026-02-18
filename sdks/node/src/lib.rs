@@ -5,6 +5,7 @@
 //! This crate provides napi-rs bindings for BoxLite, allowing JavaScript/TypeScript
 //! applications to create and manage isolated VM-based containers.
 
+mod advanced_options;
 mod box_handle;
 mod copy;
 mod exec;
@@ -15,6 +16,7 @@ mod runtime;
 mod util;
 
 // Re-export all public types
+pub use advanced_options::JsSecurityOptions;
 pub use box_handle::JsBox;
 pub use copy::JsCopyOptions;
 pub use exec::{JsExecResult, JsExecStderr, JsExecStdin, JsExecStdout, JsExecution};

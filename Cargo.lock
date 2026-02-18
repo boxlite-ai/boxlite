@@ -302,7 +302,7 @@ dependencies = [
 
 [[package]]
 name = "boxlite"
-version = "0.5.10"
+version = "0.5.14"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -335,7 +335,9 @@ dependencies = [
  "qcow2-rs",
  "rand 0.9.2",
  "rayon",
+ "reflink-copy",
  "regex",
+ "reqwest",
  "rusqlite",
  "seccompiler",
  "serde",
@@ -356,6 +358,7 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "ulid",
+ "urlencoding",
  "uuid",
  "walkdir",
  "xattr",
@@ -364,13 +367,10 @@ dependencies = [
 
 [[package]]
 name = "boxlite-c"
-version = "0.5.10"
+version = "0.5.14"
 dependencies = [
- "boxlite",
+ "boxlite-ffi",
  "cbindgen",
- "futures",
- "serde_json",
- "tokio",
 ]
 
 [[package]]
@@ -389,6 +389,7 @@ dependencies = [
  "gtmpl",
  "gtmpl_value",
  "nix 0.30.1",
+ "notify",
  "predicates",
  "rstest",
  "serde",
@@ -404,8 +405,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "boxlite-ffi"
+version = "0.5.14"
+dependencies = [
+ "boxlite",
+ "futures",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "boxlite-guest"
-version = "0.5.10"
+version = "0.5.14"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -434,7 +446,7 @@ dependencies = [
 
 [[package]]
 name = "boxlite-node"
-version = "0.5.10"
+version = "0.5.14"
 dependencies = [
  "boxlite",
  "boxlite-shared",
@@ -448,7 +460,7 @@ dependencies = [
 
 [[package]]
 name = "boxlite-python"
-version = "0.5.10"
+version = "0.5.14"
 dependencies = [
  "boxlite",
  "futures",
@@ -461,7 +473,7 @@ dependencies = [
 
 [[package]]
 name = "boxlite-shared"
-version = "0.5.10"
+version = "0.5.14"
 dependencies = [
  "prost",
  "serde",
@@ -485,7 +497,7 @@ dependencies = [
 
 [[package]]
 name = "bubblewrap-sys"
-version = "0.1.0"
+version = "0.5.14"
 dependencies = [
  "num_cpus",
 ]
@@ -962,7 +974,7 @@ checksum = "f678cf4a922c215c63e0de95eb1ff08a958a81d47e485cf9da1e27bf6305cfa5"
 
 [[package]]
 name = "e2fsprogs-sys"
-version = "0.1.0"
+version = "0.5.14"
 dependencies = [
  "num_cpus",
 ]
@@ -1081,6 +1093,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
 dependencies = [
  "percent-encoding",
+]
+
+[[package]]
+name = "fsevent-sys"
+version = "4.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "76ee7a02da4d231650c7cea31349b889be2f45ddb3ef3032d2ec8185f6313fd2"
+dependencies = [
+ "libc",
 ]
 
 [[package]]
@@ -1685,6 +1706,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "inotify"
+version = "0.9.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8069d3ec154eb856955c1c0fbffefbf5f3c40a104ec912d4797314c1801abff"
+dependencies = [
+ "bitflags 1.3.2",
+ "inotify-sys",
+ "libc",
+]
+
+[[package]]
+name = "inotify-sys"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e05c02b5e89bff3b946cedeca278abc628fe811e604f027c45a8aa3cf793d0eb"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "inventory"
 version = "0.3.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1776,6 +1817,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "kqueue"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eac30106d7dce88daf4a3fcb4879ea939476d5074a9b7ddd0fb97fa4bed5596a"
+dependencies = [
+ "kqueue-sys",
+ "libc",
+]
+
+[[package]]
+name = "kqueue-sys"
+version = "1.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ed9625ffda8729b85e45cf04090035ac368927b8cebc34898e7c120f52e4838b"
+dependencies = [
+ "bitflags 1.3.2",
+ "libc",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1833,14 +1894,14 @@ dependencies = [
 
 [[package]]
 name = "libgvproxy-sys"
-version = "0.1.0"
+version = "0.5.14"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "libkrun-sys"
-version = "0.1.0"
+version = "0.5.14"
 dependencies = [
  "libc",
  "num_cpus",
@@ -2251,6 +2312,25 @@ name = "normalize-line-endings"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "61807f77802ff30975e01f4f071c8ba10c022052f98b3294119f3e615d13e5be"
+
+[[package]]
+name = "notify"
+version = "6.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6205bd8bb1e454ad2e27422015fb5e4f2bcc7e08fa8f27058670d208324a4d2d"
+dependencies = [
+ "bitflags 2.10.0",
+ "crossbeam-channel",
+ "filetime",
+ "fsevent-sys",
+ "inotify",
+ "kqueue",
+ "libc",
+ "log",
+ "mio 0.8.11",
+ "walkdir",
+ "windows-sys 0.48.0",
+]
 
 [[package]]
 name = "ntapi"
@@ -3067,6 +3147,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "reflink-copy"
+version = "0.1.28"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "23bbed272e39c47a095a5242218a67412a220006842558b03fe2935e8f3d7b92"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "rustix 1.1.3",
+ "windows 0.62.2",
+]
+
+[[package]]
 name = "regex"
 version = "1.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3651,7 +3743,7 @@ dependencies = [
  "ntapi",
  "once_cell",
  "rayon",
- "windows",
+ "windows 0.52.0",
 ]
 
 [[package]]
@@ -4260,6 +4352,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "urlencoding"
+version = "2.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "daf8dba3b7eb870caf1ddeed7bc9d2a049f3cfdfae7cb521b087cc33ae4c49da"
+
+[[package]]
 name = "utf8_iter"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4535,6 +4633,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "windows"
+version = "0.62.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "527fadee13e0c05939a6a05d5bd6eec6cd2e3dbd648b9f8e447c6518133d8580"
+dependencies = [
+ "windows-collections",
+ "windows-core 0.62.2",
+ "windows-future",
+ "windows-numerics",
+]
+
+[[package]]
+name = "windows-collections"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "23b2d95af1a8a14a3c7367e1ed4fc9c20e0a26e79551b1454d72583c97cc6610"
+dependencies = [
+ "windows-core 0.62.2",
+]
+
+[[package]]
 name = "windows-core"
 version = "0.52.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4554,6 +4673,17 @@ dependencies = [
  "windows-link",
  "windows-result",
  "windows-strings",
+]
+
+[[package]]
+name = "windows-future"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e1d6f90251fe18a279739e78025bd6ddc52a7e22f921070ccdc67dde84c605cb"
+dependencies = [
+ "windows-core 0.62.2",
+ "windows-link",
+ "windows-threading",
 ]
 
 [[package]]
@@ -4583,6 +4713,16 @@ name = "windows-link"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5"
+
+[[package]]
+name = "windows-numerics"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6e2e40844ac143cdb44aead537bbf727de9b044e107a0f1220392177d15b0f26"
+dependencies = [
+ "windows-core 0.62.2",
+ "windows-link",
+]
 
 [[package]]
 name = "windows-result"
@@ -4693,6 +4833,15 @@ dependencies = [
  "windows_x86_64_gnu 0.53.1",
  "windows_x86_64_gnullvm 0.53.1",
  "windows_x86_64_msvc 0.53.1",
+]
+
+[[package]]
+name = "windows-threading"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3949bd5b99cafdf1c7ca86b43ca564028dfe27d66958f2470940f73d86d75b37"
+dependencies = [
+ "windows-link",
 ]
 
 [[package]]

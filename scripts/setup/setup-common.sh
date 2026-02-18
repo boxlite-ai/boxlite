@@ -23,7 +23,7 @@ check_rust() {
 
     # Source cargo env if not already in PATH
     if ! command_exists rustc; then
-        [ -f "$HOME/.cargo/env" ] && source "$HOME/.cargo/env"
+        [ -f "${CARGO_HOME:-$HOME/.cargo}/env" ] && source "${CARGO_HOME:-$HOME/.cargo}/env"
     fi
 
     if command_exists rustc; then
@@ -41,7 +41,7 @@ install_rust() {
     echo ""
     print_section "Installing Rust..."
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-    source "$HOME/.cargo/env"
+    source "${CARGO_HOME:-$HOME/.cargo}/env"
     print_success "Rust installed"
 }
 

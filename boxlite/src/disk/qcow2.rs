@@ -562,6 +562,77 @@ impl Qcow2Helper {
     }
 }
 
+/// Read the backing file path from a qcow2 disk image header.
+///
+/// Returns `None` if the qcow2 has no backing file (offset or size is 0).
+/// Returns `Err` if the file is not a valid qcow2 image.
+pub fn read_backing_file_path(path: &Path) -> BoxliteResult<Option<String>> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let mut file = std::fs::File::open(path).map_err(|e| {
+        BoxliteError::Storage(format!("Failed to open qcow2 {}: {}", path.display(), e))
+    })?;
+
+    // Read the first 20 bytes of the header
+    let mut header = [0u8; 20];
+    file.read_exact(&mut header).map_err(|e| {
+        BoxliteError::Storage(format!(
+            "Failed to read qcow2 header from {}: {}",
+            path.display(),
+            e
+        ))
+    })?;
+
+    // Verify magic
+    let magic = u32::from_be_bytes([header[0], header[1], header[2], header[3]]);
+    if magic != 0x514649fb {
+        return Err(BoxliteError::Storage(format!(
+            "Invalid qcow2 magic in {}: 0x{:08x}",
+            path.display(),
+            magic
+        )));
+    }
+
+    // Backing file offset (bytes 8-15) and size (bytes 16-19)
+    let backing_offset = u64::from_be_bytes([
+        header[8], header[9], header[10], header[11], header[12], header[13], header[14],
+        header[15],
+    ]);
+    let backing_size = u32::from_be_bytes([header[16], header[17], header[18], header[19]]);
+
+    if backing_offset == 0 || backing_size == 0 {
+        return Ok(None);
+    }
+
+    // Read backing file path
+    file.seek(SeekFrom::Start(backing_offset)).map_err(|e| {
+        BoxliteError::Storage(format!(
+            "Failed to seek to backing file path in {}: {}",
+            path.display(),
+            e
+        ))
+    })?;
+
+    let mut backing_buf = vec![0u8; backing_size as usize];
+    file.read_exact(&mut backing_buf).map_err(|e| {
+        BoxliteError::Storage(format!(
+            "Failed to read backing file path from {}: {}",
+            path.display(),
+            e
+        ))
+    })?;
+
+    let backing_path = String::from_utf8(backing_buf).map_err(|e| {
+        BoxliteError::Storage(format!(
+            "Invalid UTF-8 in backing file path of {}: {}",
+            path.display(),
+            e
+        ))
+    })?;
+
+    Ok(Some(backing_path))
+}
+
 /// Backing file format for qcow2 COW overlays.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackingFormat {
@@ -579,5 +650,99 @@ impl BackingFormat {
             BackingFormat::Raw => "raw",
             BackingFormat::Qcow2 => "qcow2",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::TempDir;
+
+    /// Build a minimal qcow2 file with optional backing file.
+    fn write_qcow2_with_backing(path: &Path, backing_path: Option<&str>) {
+        let mut buf = vec![0u8; 1024];
+
+        // Magic: QFI\xfb
+        buf[0..4].copy_from_slice(&0x514649fbu32.to_be_bytes());
+        // Version: 3
+        buf[4..8].copy_from_slice(&3u32.to_be_bytes());
+
+        if let Some(backing) = backing_path {
+            let backing_bytes = backing.as_bytes();
+            let backing_offset: u64 = 512;
+            let backing_size = backing_bytes.len() as u32;
+
+            buf[8..16].copy_from_slice(&backing_offset.to_be_bytes());
+            buf[16..20].copy_from_slice(&backing_size.to_be_bytes());
+            buf[backing_offset as usize..backing_offset as usize + backing_bytes.len()]
+                .copy_from_slice(backing_bytes);
+        }
+        // else: offset=0, size=0 (no backing file)
+
+        let mut file = std::fs::File::create(path).unwrap();
+        file.write_all(&buf).unwrap();
+    }
+
+    #[test]
+    fn test_read_backing_file_path_with_backing() {
+        let dir = TempDir::new().unwrap();
+        let qcow2_path = dir.path().join("test.qcow2");
+
+        write_qcow2_with_backing(&qcow2_path, Some("/data/rootfs/base.ext4"));
+
+        let result = read_backing_file_path(&qcow2_path).unwrap();
+        assert_eq!(result, Some("/data/rootfs/base.ext4".to_string()));
+    }
+
+    #[test]
+    fn test_read_backing_file_path_no_backing() {
+        let dir = TempDir::new().unwrap();
+        let qcow2_path = dir.path().join("test.qcow2");
+
+        write_qcow2_with_backing(&qcow2_path, None);
+
+        let result = read_backing_file_path(&qcow2_path).unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_read_backing_file_path_invalid_magic() {
+        let dir = TempDir::new().unwrap();
+        let qcow2_path = dir.path().join("bad.qcow2");
+
+        // Write a file with wrong magic bytes
+        let mut buf = vec![0u8; 64];
+        buf[0..4].copy_from_slice(&0xDEADBEEFu32.to_be_bytes());
+        std::fs::write(&qcow2_path, &buf).unwrap();
+
+        let result = read_backing_file_path(&qcow2_path);
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(err_msg.contains("Invalid qcow2 magic"));
+    }
+
+    #[test]
+    fn test_read_backing_file_path_file_too_short() {
+        let dir = TempDir::new().unwrap();
+        let qcow2_path = dir.path().join("short.qcow2");
+
+        // Write only 10 bytes (less than required 20)
+        std::fs::write(&qcow2_path, [0u8; 10]).unwrap();
+
+        let result = read_backing_file_path(&qcow2_path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_read_backing_file_path_nonexistent_file() {
+        let result = read_backing_file_path(Path::new("/nonexistent/file.qcow2"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_backing_format_as_str() {
+        assert_eq!(BackingFormat::Raw.as_str(), "raw");
+        assert_eq!(BackingFormat::Qcow2.as_str(), "qcow2");
     }
 }

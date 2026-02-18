@@ -2,11 +2,13 @@
 members = [
     "boxlite",
     "boxlite-cli",
+    "boxlite/deps/bubblewrap-sys",
     "boxlite/deps/e2fsprogs-sys",
     "boxlite/deps/libgvproxy-sys",
     "boxlite/deps/libkrun-sys",
     "boxlite-shared",
     "guest",
+    "sdks/boxlite-ffi",
     "sdks/c",
     "sdks/python",
     "sdks/node",
@@ -16,7 +18,7 @@ exclude = ["build/tmp", "target", ".venv", "examples/*/.venv"]
 resolver = "2"
 
 [workspace.package]
-version = "0.5.10"
+version = "0.5.14"
 edition = "2024"
 authors = ["Dorian Zheng <https://github.com/dorianzheng>"]
 license = "Apache-2.0"

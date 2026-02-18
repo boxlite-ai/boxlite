@@ -1,36 +1,28 @@
-# BoxLite [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://discord.gg/bCmaK4Ce)
+# BoxLite [![Discord](https://img.shields.io/badge/Discord-Join-5865F2?logo=discord&logoColor=white)](https://go.boxlite.ai/discord)
 
 [![GitHub stars](https://img.shields.io/github/stars/boxlite-ai/boxlite?style=social)](https://github.com/boxlite-ai/boxlite)
 [![Build](https://github.com/boxlite-ai/boxlite/actions/workflows/build-wheels.yml/badge.svg)](https://github.com/boxlite-ai/boxlite/actions/workflows/build-wheels.yml)
 [![Lint](https://github.com/boxlite-ai/boxlite/actions/workflows/lint.yml/badge.svg)](https://github.com/boxlite-ai/boxlite/actions/workflows/lint.yml)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-[![Rust](https://img.shields.io/badge/Built_with-Rust-dea584?logo=rust)](https://www.rust-lang.org/)
-[![PyPI](https://img.shields.io/pypi/v/boxlite.svg)](https://pypi.org/project/boxlite/)
-[![npm](https://img.shields.io/npm/v/@boxlite-ai/boxlite)](https://www.npmjs.com/package/@boxlite-ai/boxlite)
-[![C](https://img.shields.io/badge/C-SDK-A8B9CC?logo=c&logoColor=white)](https://github.com/boxlite-ai/boxlite/tree/main/sdks/c)
-
-[![macOS](https://img.shields.io/badge/macOS-Apple_Silicon-000000?logo=apple&logoColor=white)](https://github.com/boxlite-ai/boxlite)
-[![Linux](https://img.shields.io/badge/Linux-x86__64%20%7C%20ARM64-FCC624?logo=linux&logoColor=black)](https://github.com/boxlite-ai/boxlite)
-[![Windows](https://img.shields.io/badge/Windows-WSL2-0078D6?logo=windows&logoColor=white)](https://github.com/boxlite-ai/boxlite)
-
-**Embedded, lightweight** micro-VM runtime for **AI agents** running OCI containers with
-hardware-level isolation — built for **high concurrency**, **no daemon required**.
+Local-first micro-VM sandbox for **AI agents** — stateful, lightweight,
+hardware-level isolation, **no daemon required**.
 
 
 ## What is BoxLite?
 
-BoxLite lets you spin up **lightweight VMs** ("Boxes") and run **OCI containers inside them**. It's
-designed for use cases like **AI agent sandboxes** and **multi-tenant code execution**, where Docker
-alone isn't enough and full VM infrastructure is too heavy.
+BoxLite lets you spin up **lightweight VMs** ("Boxes") and run **OCI containers inside them**. Unlike
+ephemeral sandboxes that destroy state after each execution, BoxLite Boxes are **persistent workspaces** —
+install packages, create files, build up environment state, then come back later and pick up where you left off.
 
 **Why BoxLite**
 
-- **Lightweight**: small footprint, fast-starting Boxes, minimal operational overhead.
-- **High concurrency**: async-first API designed to run many Boxes in parallel; stream stdout/stderr.
-- **Hardware isolation**: each Box has its own kernel (not just namespaces).
-- **Embeddable**: link a library; no root; no background service to manage.
-- **OCI compatible**: use Docker/OCI images (`python:slim`, `node:alpine`, `alpine:latest`).
+- **Stateful**: Boxes retain packages, files, and environment across stop/restart. No rebuilding on every interaction.
+- **Lightweight**: small footprint, fast boot, async-first API for high concurrency.
+- **Hardware isolation**: each Box runs its own kernel — not just namespaces or containers.
+- **No daemon**: embed as a library, no root, no background service.
+- **OCI compatible**: use standard Docker images (`python:slim`, `node:alpine`, `alpine:latest`).
+- **Local-first**: runs entirely on your machine — no cloud account needed. Scale out when ready.
 
 ## Python Quick Start
 
@@ -154,7 +146,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 - **Images**: OCI pull + caching, custom rootfs support
 - **Security**: hardware isolation (KVM/HVF), OS sandboxing (seccomp/sandbox-exec), resource limits
 - **Image Registry Configuration**: Configure custom registries via config file (`--config`), CLI flags (`--registry`), or SDK options. See the [configuration guide](./docs/guides/image-registry-configuration.md).
-- **SDKs**: Python (stable), Node.js (v0.1.6); Go coming soon
+- **SDKs**: Rust (Rust 1.88+), Python (Python 3.10+), C (C11-compatible compiler), Node.js (Node.js 18+); Go coming soon
 
 ## Architecture
 

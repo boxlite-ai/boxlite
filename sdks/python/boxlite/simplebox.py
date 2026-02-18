@@ -279,9 +279,9 @@ class SimpleBox:
             error_message=error_message,
         )
 
-    def shutdown(self):
+    async def stop(self):
         """
-        Shutdown the box and release resources.
+        Stop the box and release resources.
 
         Note: Usually not needed as context manager handles cleanup.
         """
@@ -290,7 +290,16 @@ class SimpleBox:
                 "Box not started. Use 'async with SimpleBox(...) as box:' "
                 "or call 'await box.start()' first."
             )
-        self._box.shutdown()
+        await self._box.stop()
+        self._started = False
+
+    async def shutdown(self):
+        """
+        Shutdown the box and release resources.
+
+        Alias for stop(). Usually not needed as context manager handles cleanup.
+        """
+        await self.stop()
 
     async def copy_in(
         self,

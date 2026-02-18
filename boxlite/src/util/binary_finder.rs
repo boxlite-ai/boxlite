@@ -115,6 +115,16 @@ impl RuntimeBinaryFinder {
             builder = builder.with_path(lib_dir.join("runtime"));
         }
 
+        // 4. Compile-time fallback: embedded by build.rs via cargo:rustc-env.
+        // Same name as the runtime env var — runtime check (above) takes priority.
+        // Only used if the directory still exists (won't survive cargo clean).
+        if let Some(dir) = option_env!("BOXLITE_RUNTIME_DIR") {
+            let path = std::path::Path::new(dir);
+            if path.exists() {
+                builder = builder.with_path(path);
+            }
+        }
+
         builder.build()
     }
 

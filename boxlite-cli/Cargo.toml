@@ -4,6 +4,7 @@ version = "0.2.0"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+publish = false
 description = "Command-line interface for BoxLite container runtime"
 
 [[bin]]
@@ -15,6 +16,7 @@ boxlite = { path = "../boxlite" }
 clap = { version = "4.5", features = ["derive", "env"] }
 clap_complete = "4.5"
 tokio = { version = "1.37", features = ["rt", "rt-multi-thread", "macros", "signal"] }
+notify = "6.1"
 futures = "0.3"
 term_size = "0.3"
 nix = { version = "0.30.1", features = ["term", "signal"] }

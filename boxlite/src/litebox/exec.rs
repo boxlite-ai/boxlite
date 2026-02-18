@@ -3,7 +3,7 @@
 //! Type definitions for executing commands in a box.
 //! The actual execution logic is in BoxImpl::exec().
 
-use crate::portal::interfaces::ExecutionInterface;
+use crate::runtime::backend::ExecBackend;
 use boxlite_shared::errors::BoxliteResult;
 use futures::Stream;
 use std::pin::Pin;
@@ -127,7 +127,7 @@ pub struct Execution {
 }
 
 pub(crate) struct ExecutionInner {
-    interface: ExecutionInterface,
+    interface: Box<dyn ExecBackend>,
     result_rx: mpsc::UnboundedReceiver<ExecResult>,
     cached_result: Option<ExecResult>,
 
@@ -148,7 +148,7 @@ impl Execution {
     /// Create a new Execution (internal use).
     pub(crate) fn new(
         execution_id: ExecutionId,
-        interface: ExecutionInterface,
+        interface: Box<dyn ExecBackend>,
         result_rx: mpsc::UnboundedReceiver<ExecResult>,
         stdin: Option<ExecStdin>,
         stdout: Option<ExecStdout>,

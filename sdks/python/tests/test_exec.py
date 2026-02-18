@@ -6,6 +6,8 @@ Tests the ExecResult structure and behavior.
 
 import pytest
 from dataclasses import is_dataclass
+
+import boxlite
 from boxlite.exec import ExecResult
 
 
@@ -147,8 +149,6 @@ class TestExecResultExports:
 
     def test_in_boxlite_module(self):
         """Test that ExecResult is exported from boxlite."""
-        import boxlite
-
         assert hasattr(boxlite, "ExecResult")
         assert boxlite.ExecResult is ExecResult
 
@@ -157,6 +157,79 @@ class TestExecResultExports:
         from boxlite.exec import ExecResult as ER
 
         assert ER is ExecResult
+
+
+class TestExecutionAPIExports:
+    """Test that Execution class exposes expected methods.
+
+    These tests require the native Rust extension to be compiled
+    (run ``make dev:python`` first).
+    """
+
+    @pytest.fixture(autouse=True)
+    def _require_native(self):
+        if not hasattr(boxlite, "Execution"):
+            pytest.skip("native extension not compiled (run make dev:python)")
+
+    def test_execution_in_module(self):
+        """Test that Execution is exported from boxlite."""
+        assert hasattr(boxlite, "Execution")
+
+    def test_execution_has_resize_tty(self):
+        """Test that Execution class has resize_tty method."""
+        assert hasattr(boxlite.Execution, "resize_tty")
+
+    def test_execution_has_kill(self):
+        """Test that Execution class has kill method."""
+        assert hasattr(boxlite.Execution, "kill")
+
+    def test_execution_has_wait(self):
+        """Test that Execution class has wait method."""
+        assert hasattr(boxlite.Execution, "wait")
+
+    def test_execution_has_stdin(self):
+        """Test that Execution class has stdin method."""
+        assert hasattr(boxlite.Execution, "stdin")
+
+    def test_execution_has_stdout(self):
+        """Test that Execution class has stdout method."""
+        assert hasattr(boxlite.Execution, "stdout")
+
+    def test_execution_has_stderr(self):
+        """Test that Execution class has stderr method."""
+        assert hasattr(boxlite.Execution, "stderr")
+
+
+class TestSyncExecutionAPIExports:
+    """Test that SyncExecution class exposes expected methods."""
+
+    def test_sync_execution_has_resize_tty(self):
+        """Test that SyncExecution class has resize_tty method."""
+        try:
+            from boxlite.sync_api._execution import SyncExecution
+
+            assert hasattr(SyncExecution, "resize_tty")
+            assert callable(getattr(SyncExecution, "resize_tty"))
+        except ImportError:
+            pytest.skip("sync API not available")
+
+    def test_sync_execution_has_kill(self):
+        """Test that SyncExecution class has kill method."""
+        try:
+            from boxlite.sync_api._execution import SyncExecution
+
+            assert hasattr(SyncExecution, "kill")
+        except ImportError:
+            pytest.skip("sync API not available")
+
+    def test_sync_execution_has_wait(self):
+        """Test that SyncExecution class has wait method."""
+        try:
+            from boxlite.sync_api._execution import SyncExecution
+
+            assert hasattr(SyncExecution, "wait")
+        except ImportError:
+            pytest.skip("sync API not available")
 
 
 if __name__ == "__main__":

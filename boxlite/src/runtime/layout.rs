@@ -138,6 +138,14 @@ impl FilesystemLayout {
         self.home_dir.join("tmp")
     }
 
+    /// Versioned guest rootfs cache directory: ~/.boxlite/rootfs
+    ///
+    /// Contains guest rootfs disks (image + injected boxlite-guest binary),
+    /// versioned by image digest and guest binary hash.
+    pub fn guest_rootfs_dir(&self) -> PathBuf {
+        self.home_dir.join("rootfs")
+    }
+
     /// Initialize the filesystem structure.
     ///
     /// Creates necessary directories (home_dir, sockets, images, etc.).
@@ -151,11 +159,68 @@ impl FilesystemLayout {
         std::fs::create_dir_all(self.temp_dir())
             .map_err(|e| BoxliteError::Storage(format!("failed to create temp dir: {e}")))?;
 
+        std::fs::create_dir_all(self.guest_rootfs_dir())
+            .map_err(|e| BoxliteError::Storage(format!("failed to create rootfs dir: {e}")))?;
+
         std::fs::create_dir_all(self.image_layers_dir())
             .map_err(|e| BoxliteError::Storage(format!("failed to create layers dir: {e}")))?;
 
         std::fs::create_dir_all(self.image_manifests_dir())
             .map_err(|e| BoxliteError::Storage(format!("failed to create manifests dir: {e}")))?;
+
+        std::fs::create_dir_all(self.image_layout().disk_images_dir())
+            .map_err(|e| BoxliteError::Storage(format!("failed to create disk-images dir: {e}")))?;
+
+        self.validate_same_filesystem()?;
+
+        Ok(())
+    }
+
+    /// Validate that temp, rootfs, and disk-images directories are on the same filesystem.
+    ///
+    /// This is required for atomic `rename(2)` in staged install operations.
+    /// Refuse to start if directories span multiple filesystems.
+    fn validate_same_filesystem(&self) -> BoxliteResult<()> {
+        use std::os::unix::fs::MetadataExt;
+
+        let temp_dev = std::fs::metadata(self.temp_dir())
+            .map_err(|e| {
+                BoxliteError::Storage(format!(
+                    "Failed to stat temp dir {}: {}",
+                    self.temp_dir().display(),
+                    e
+                ))
+            })?
+            .dev();
+
+        let rootfs_dev = std::fs::metadata(self.guest_rootfs_dir())
+            .map_err(|e| {
+                BoxliteError::Storage(format!(
+                    "Failed to stat rootfs dir {}: {}",
+                    self.guest_rootfs_dir().display(),
+                    e
+                ))
+            })?
+            .dev();
+
+        let images_dev = std::fs::metadata(self.image_layout().disk_images_dir())
+            .map_err(|e| {
+                BoxliteError::Storage(format!(
+                    "Failed to stat disk-images dir {}: {}",
+                    self.image_layout().disk_images_dir().display(),
+                    e
+                ))
+            })?
+            .dev();
+
+        if temp_dev != rootfs_dev || temp_dev != images_dev {
+            return Err(BoxliteError::Storage(format!(
+                "tmp, rootfs, and disk-images directories must be on the same filesystem \
+                 for atomic rename. Found devices: tmp={}, rootfs={}, disk-images={}. \
+                 Check your BOXLITE_HOME configuration.",
+                temp_dev, rootfs_dev, images_dev
+            )));
+        }
 
         Ok(())
     }
@@ -222,8 +287,11 @@ impl FilesystemLayout {
 /// │           │   └── work/   # Overlayfs work
 /// │           └── rootfs/     # Final rootfs (overlayfs merged)
 /// ├── shared/             # Guest-visible (ro bind mount → mounts/)
-/// ├── disk.qcow2          # Container rootfs COW disk
-/// └── console.log         # Kernel/init output
+/// ├── logs/               # Per-box logging
+/// │   ├── boxlite-shim.log  # Shim tracing output
+/// │   └── console.log       # Kernel/init output
+/// ├── root.qcow2          # Data disk
+/// └── guest-rootfs.qcow2  # Guest rootfs COW overlay
 /// ```
 #[derive(Clone, Debug)]
 pub struct BoxFilesystemLayout {
@@ -272,6 +340,15 @@ impl BoxFilesystemLayout {
     /// Guest connects to this socket to signal it's ready to serve.
     pub fn ready_socket_path(&self) -> PathBuf {
         self.sockets_dir().join("ready.sock")
+    }
+
+    /// Network backend socket: ~/.boxlite/boxes/{box_id}/sockets/net.sock
+    ///
+    /// Used by the network backend (e.g., gvisor-tap-vsock) to provide
+    /// virtio-net connectivity to the guest VM. Each box gets its own
+    /// socket to prevent collisions between concurrent instances.
+    pub fn net_backend_socket_path(&self) -> PathBuf {
+        self.sockets_dir().join("net.sock")
     }
 
     // ========================================================================
@@ -329,6 +406,23 @@ impl BoxFilesystemLayout {
     /// Named snapshot directory: ~/.boxlite/boxes/{box_id}/snapshots/{name}
     pub fn snapshot_dir(&self, name: &str) -> PathBuf {
         self.snapshots_dir().join(name)
+    // BIN AND LOGS (jailer isolation)
+    // ========================================================================
+
+    /// Bin directory: ~/.boxlite/boxes/{box_id}/bin
+    ///
+    /// Contains the shim binary and bundled libraries, copied (or reflinked)
+    /// by the jailer for memory isolation between boxes.
+    pub fn bin_dir(&self) -> PathBuf {
+        self.box_dir.join("bin")
+    }
+
+    /// Per-box logs directory: ~/.boxlite/boxes/{box_id}/logs
+    ///
+    /// Shim writes its logs here instead of the shared home_dir/logs/,
+    /// so the sandbox doesn't need access to any home_dir paths for writing.
+    pub fn logs_dir(&self) -> PathBuf {
+        self.box_dir.join("logs")
     }
 
     // ========================================================================
@@ -347,11 +441,30 @@ impl BoxFilesystemLayout {
             .join(crate::disk::constants::filenames::GUEST_ROOTFS_DISK)
     }
 
-    /// Console output path: ~/.boxlite/boxes/{box_id}/console.log
+    /// Console output path: ~/.boxlite/boxes/{box_id}/logs/console.log
     ///
     /// Captures kernel and init output for debugging.
+    /// Lives inside `logs/` so the sandbox grants it via the `logs/` [RW subpath].
     pub fn console_output_path(&self) -> PathBuf {
-        self.box_dir.join("console.log")
+        self.logs_dir().join("console.log")
+    }
+
+    /// Guest rootfs COW overlay: ~/.boxlite/boxes/{box_id}/guest-rootfs.qcow2
+    ///
+    /// A qcow2 COW overlay that references a base rootfs (either reflinked
+    /// locally or in the shared `~/.boxlite/rootfs/` directory).
+    pub fn guest_rootfs_disk_path(&self) -> PathBuf {
+        self.box_dir.join("guest-rootfs.qcow2")
+    }
+
+    /// Reflinked rootfs base: ~/.boxlite/boxes/{box_id}/rootfs-base
+    ///
+    /// When the filesystem supports reflink (APFS, btrfs, xfs), the base
+    /// rootfs is cloned here so the sandbox doesn't need access to
+    /// `~/.boxlite/rootfs/`. On ext4 (no reflink), this file won't exist
+    /// and the qcow2 overlay references the shared rootfs directly.
+    pub fn rootfs_base_path(&self) -> PathBuf {
+        self.box_dir.join("rootfs-base")
     }
 
     /// PID file path: ~/.boxlite/boxes/{box_id}/shim.pid
@@ -361,6 +474,23 @@ impl BoxFilesystemLayout {
     /// Database PID is a cache that can be reconstructed from this file.
     pub fn pid_file_path(&self) -> PathBuf {
         self.box_dir.join("shim.pid")
+    }
+
+    /// Exit file path: ~/.boxlite/boxes/{box_id}/exit
+    ///
+    /// Written by the shim process on exit (normal or panic).
+    /// Format: First line is exit code, subsequent lines contain error details.
+    /// Follows Podman's conmon pattern for capturing exit information.
+    pub fn exit_file_path(&self) -> PathBuf {
+        self.box_dir.join("exit")
+    }
+
+    /// Stderr file path: ~/.boxlite/boxes/{box_id}/shim.stderr
+    ///
+    /// Captures libkrun stderr output for crash diagnostics.
+    /// The signal handler reads this and includes content in exit file.
+    pub fn stderr_file_path(&self) -> PathBuf {
+        self.box_dir.join("shim.stderr")
     }
 
     // ========================================================================
@@ -612,5 +742,160 @@ mod tests {
             cache1, cache2,
             "Different paths should have different cache dirs"
         );
+    }
+
+    #[test]
+    fn test_different_boxes_get_different_net_backend_socket_paths() {
+        // Regression test for gvproxy socket collision bug.
+        // OLD CODE: Socket paths were generated inside Go as /tmp/gvproxy-{id}.sock
+        //           with id starting at 1 per process — two shim processes would both
+        //           create /tmp/gvproxy-1.sock, causing a collision.
+        // NEW CODE: Each box gets its own socket path from the layout.
+
+        let config = FsLayoutConfig::without_bind_mount();
+        let box_a = BoxFilesystemLayout::new(
+            PathBuf::from("/home/user/.boxlite/boxes/box-aaa"),
+            config.clone(),
+            false,
+        );
+        let box_b = BoxFilesystemLayout::new(
+            PathBuf::from("/home/user/.boxlite/boxes/box-bbb"),
+            config,
+            false,
+        );
+
+        let path_a = box_a.net_backend_socket_path();
+        let path_b = box_b.net_backend_socket_path();
+
+        // CRITICAL: Different boxes MUST have different socket paths
+        // This was the root cause of the collision bug
+        assert_ne!(
+            path_a, path_b,
+            "Two different boxes must have different net backend socket paths"
+        );
+
+        // Verify paths are under their respective box directories
+        assert!(path_a.starts_with("/home/user/.boxlite/boxes/box-aaa/sockets/"));
+        assert!(path_b.starts_with("/home/user/.boxlite/boxes/box-bbb/sockets/"));
+
+        // Verify the socket filename
+        assert_eq!(path_a.file_name().unwrap(), "net.sock");
+        assert_eq!(path_b.file_name().unwrap(), "net.sock");
+    }
+
+    #[test]
+    fn test_guest_rootfs_dir() {
+        let layout = FilesystemLayout::new(
+            PathBuf::from("/home/user/.boxlite"),
+            FsLayoutConfig::without_bind_mount(),
+        );
+        assert_eq!(
+            layout.guest_rootfs_dir(),
+            PathBuf::from("/home/user/.boxlite/rootfs")
+        );
+    }
+
+    #[test]
+    fn test_prepare_creates_guest_rootfs_dir() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let layout = FilesystemLayout::new(
+            dir.path().to_path_buf(),
+            FsLayoutConfig::without_bind_mount(),
+        );
+        layout.prepare().unwrap();
+
+        assert!(layout.guest_rootfs_dir().exists());
+        assert!(layout.temp_dir().exists());
+        assert!(layout.boxes_dir().exists());
+    }
+
+    #[test]
+    fn test_prepare_validates_same_filesystem() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let layout = FilesystemLayout::new(
+            dir.path().to_path_buf(),
+            FsLayoutConfig::without_bind_mount(),
+        );
+        // All dirs under same temp dir → same filesystem → should pass
+        layout.prepare().unwrap();
+
+        // Verify the validation passes independently
+        layout.validate_same_filesystem().unwrap();
+    }
+
+    // ========================================================================
+    // BoxFilesystemLayout — jailer path method tests
+    // ========================================================================
+
+    fn test_box_layout(box_dir: &str) -> BoxFilesystemLayout {
+        BoxFilesystemLayout::new(
+            PathBuf::from(box_dir),
+            FsLayoutConfig::without_bind_mount(),
+            false,
+        )
+    }
+
+    #[test]
+    fn test_box_layout_logs_dir() {
+        let layout = test_box_layout("/home/.boxlite/boxes/mybox");
+        assert_eq!(
+            layout.logs_dir(),
+            PathBuf::from("/home/.boxlite/boxes/mybox/logs")
+        );
+    }
+
+    #[test]
+    fn test_box_layout_bin_dir() {
+        let layout = test_box_layout("/home/.boxlite/boxes/mybox");
+        assert_eq!(
+            layout.bin_dir(),
+            PathBuf::from("/home/.boxlite/boxes/mybox/bin")
+        );
+    }
+
+    #[test]
+    fn test_box_layout_guest_rootfs_disk_path() {
+        let layout = test_box_layout("/home/.boxlite/boxes/mybox");
+        assert_eq!(
+            layout.guest_rootfs_disk_path(),
+            PathBuf::from("/home/.boxlite/boxes/mybox/guest-rootfs.qcow2")
+        );
+    }
+
+    #[test]
+    fn test_box_layout_rootfs_base_path() {
+        let layout = test_box_layout("/home/.boxlite/boxes/mybox");
+        assert_eq!(
+            layout.rootfs_base_path(),
+            PathBuf::from("/home/.boxlite/boxes/mybox/rootfs-base")
+        );
+    }
+
+    /// All jailer-relevant paths must be rooted under box_dir.
+    /// This is the core guarantee: the sandbox never grants access outside the box.
+    #[test]
+    fn test_box_layout_all_jailer_paths_inside_box_dir() {
+        let box_dir = "/home/.boxlite/boxes/test";
+        let layout = test_box_layout(box_dir);
+
+        let paths = [
+            layout.logs_dir(),
+            layout.bin_dir(),
+            layout.sockets_dir(),
+            layout.guest_rootfs_disk_path(),
+            layout.rootfs_base_path(),
+            layout.exit_file_path(),
+            layout.console_output_path(),
+            layout.disk_path(),
+        ];
+
+        for path in &paths {
+            assert!(
+                path.starts_with(box_dir),
+                "Path {} should be inside box_dir {}",
+                path.display(),
+                box_dir
+            );
+        }
     }
 }

@@ -120,19 +120,19 @@ print(json.dumps(data))
 
     @pytest.mark.asyncio
     async def test_exception_output(self, shared_runtime):
-        """Test that exceptions are captured in output."""
+        """Test that exceptions are captured in stderr."""
         async with boxlite.CodeBox(runtime=shared_runtime) as box:
             code = "raise ValueError('test error')"
-            result = await box.run(code)
-            assert "ValueError" in result or "test error" in result
+            result = await box.exec("/usr/local/bin/python", "-c", code)
+            assert "ValueError" in result.stderr or "test error" in result.stderr
 
     @pytest.mark.asyncio
     async def test_syntax_error(self, shared_runtime):
-        """Test that syntax errors are captured."""
+        """Test that syntax errors are captured in stderr."""
         async with boxlite.CodeBox(runtime=shared_runtime) as box:
             code = "print('unclosed"
-            result = await box.run(code)
-            assert "SyntaxError" in result or "error" in result.lower()
+            result = await box.exec("/usr/local/bin/python", "-c", code)
+            assert "SyntaxError" in result.stderr or "error" in result.stderr.lower()
 
 
 class TestCodeBoxRunScript:
@@ -259,10 +259,11 @@ class TestCodeBoxMultipleRuns:
             # Define a variable
             await box.run("x = 42")
 
-            # Try to use it in next run - should fail
-            result = await box.run("print(x)")
+            # Try to use it in next run - should fail since each run is
+            # a separate python -c invocation
+            result = await box.exec("/usr/local/bin/python", "-c", "print(x)")
             # Should get NameError since each run is independent
-            assert "NameError" in result or "42" in result  # Behavior may vary
+            assert "NameError" in result.stderr or "42" in result.stdout
 
 
 class TestCodeBoxExports:

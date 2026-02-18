@@ -242,9 +242,10 @@ impl JsBoxlite {
     /// console.log(`Running: ${metrics.numRunningBoxes}`);
     /// ```
     #[napi]
-    pub async fn metrics(&self) -> JsRuntimeMetrics {
+    pub async fn metrics(&self) -> napi::Result<JsRuntimeMetrics> {
         let runtime = Arc::clone(&self.runtime);
-        JsRuntimeMetrics::from(runtime.metrics().await)
+        let metrics = runtime.metrics().await.map_err(map_err)?;
+        Ok(JsRuntimeMetrics::from(metrics))
     }
 
     /// Remove a box by ID or name.

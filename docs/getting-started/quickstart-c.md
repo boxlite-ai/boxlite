@@ -220,7 +220,7 @@ make
 
 ## Error Handling
 
-The C SDK v0.2.0 uses structured error handling:
+The C SDK uses structured error handling:
 
 ```c
 CBoxliteError error = {0};  // Always initialize to zero

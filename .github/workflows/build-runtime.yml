@@ -1,7 +1,15 @@
-# Build and test BoxLite core runtime.
+# Build BoxLite core runtime, upload artifacts, and publish to crates.io.
 #
 # This workflow builds the Rust runtime and populates the shared cache.
-# Runs only on main branch to keep cache clean.
+# On push to main: builds and caches (existing behavior).
+# On release: builds, uploads runtime tarballs to GitHub Release, and publishes
+#   Rust crates to crates.io (requires CARGO_REGISTRY_TOKEN secret).
+#
+# Platform-specific considerations:
+# - Linux: Uses manylinux_2_28 container for glibc compatibility
+#   - Guest binary built on host first (Ubuntu has musl-tools, manylinux doesn't)
+#   - Shim/libkrun built in container (needs glibc 2.28)
+# - macOS: Builds directly on runner (ARM64 only)
 #
 # Note: SDK workflows (build-wheels, build-node) are self-contained
 # and trigger independently on release.
@@ -18,6 +26,8 @@ on:
       - 'Cargo.lock'
       - '.github/workflows/build-runtime.yml'
       - '.github/workflows/config.yml'
+  release:
+    types: [published]
   workflow_dispatch:
 
 env:
@@ -29,7 +39,7 @@ jobs:
     uses: ./.github/workflows/config.yml
 
   build:
-    name: Build Runtime (${{ matrix.os }})
+    name: Build Runtime (${{ matrix.target }})
     needs: config
     runs-on: ${{ matrix.os }}
     strategy:
@@ -47,16 +57,180 @@ jobs:
         with:
           toolchain: ${{ needs.config.outputs.rust-toolchain }}
 
-      # Cache Rust dependencies
+      # Cache Rust dependencies (used by guest build on Linux, full build on macOS)
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: "boxlite"
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      # Install platform dependencies
-      - name: Install platform dependencies
-        run: make setup
+      # Build guest on host BEFORE manylinux container because:
+      # - manylinux (AlmaLinux/RHEL) doesn't have musl packages in repos
+      # - Building musl-cross-make from source takes ~15 minutes
+      # - Ubuntu host has musl-tools via apt (~30 seconds)
+      # - Guest is static musl binary, doesn't need manylinux glibc compatibility
+      # - Shim/libkrun must be built IN container (needs glibc 2.28 for manylinux)
+      - name: Build guest binary (Linux only)
+        if: runner.os == 'Linux'
+        run: |
+          make setup guest
 
-      - name: Build BoxLite runtime
-        run: make runtime
+          # Cache only the final binary (11MB), not entire target dir (2.3GB)
+          # Guest is not rebuilt in container (SKIP_GUEST_BUILD=1), so no incremental compilation needed
+          GUEST_TARGET=$(scripts/util.sh --target)
+          mkdir -p ".cache/$GUEST_TARGET/release"
+          cp "target/$GUEST_TARGET/release/boxlite-guest" ".cache/$GUEST_TARGET/release/"
+
+          # Clean up to save disk space
+          rm -rf target ~/.rustup ~/.cargo
+
+      # Cache cargo registry for manylinux container.
+      # Swatinem/rust-cache can't run inside Docker, so we use actions/cache
+      # with CARGO_HOME redirected to a host-mounted path.
+      - name: Cache manylinux cargo registry
+        if: runner.os == 'Linux'
+        uses: actions/cache@v4
+        with:
+          path: |
+            .cargo-manylinux/registry
+            .cargo-manylinux/git
+          key: manylinux-cargo-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            manylinux-cargo-${{ matrix.target }}-
+
+      - name: Build runtime (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cat > "$RUNNER_TEMP/build.sh" << 'CONTAINER_SCRIPT'
+          set -ex
+          git config --global --add safe.directory /work
+
+          GUEST_TARGET=$(scripts/util.sh --target)
+          if [ -d ".cache/$GUEST_TARGET" ]; then
+            echo "Restoring guest from .cache/$GUEST_TARGET"
+            mkdir -p target
+            cp -a ".cache/$GUEST_TARGET" "target/$GUEST_TARGET"
+          fi
+
+          export SKIP_GUEST_BUILD=1
+          export PATH="$CARGO_HOME/bin:$PATH"
+          make setup runtime
+          CONTAINER_SCRIPT
+
+          docker run --rm \
+            -v ${{ github.workspace }}:/work \
+            -v "$RUNNER_TEMP/build.sh:/tmp/build.sh:ro" \
+            -w /work \
+            -e CARGO_HOME=/work/.cargo-manylinux \
+            quay.io/pypa/manylinux_2_28_${{ contains(matrix.target, 'arm64') && 'aarch64' || 'x86_64' }} \
+            bash /tmp/build.sh
+
+      - name: Build runtime (macOS)
+        if: runner.os == 'macOS'
+        run: make setup runtime
+
+      - name: Package runtime
+        run: tar czf boxlite-runtime-${{ matrix.target }}.tar.gz -C target boxlite-runtime/
+
+      - name: Upload runtime artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-${{ matrix.target }}
+          path: boxlite-runtime-${{ matrix.target }}.tar.gz
+          retention-days: 7
+
+  upload_to_release:
+    name: Upload runtime to GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release'
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all runtime artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: runtime-*
+          merge-multiple: true
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/boxlite-runtime-*.tar.gz
+          fail_on_unmatched_files: true
+
+  # Publish Rust crates to crates.io after runtime tarballs are on GitHub Release.
+  # Runtime tarballs must exist first because crates.io consumers download them
+  # via boxlite/build.rs (auto_detect_registry -> download_prebuilt_runtime).
+  #
+  # Publish order matters: leaf crates (Tier 1) before boxlite (Tier 2).
+  # BOXLITE_DEPS_STUB=1 skips native builds during cargo publish verification.
+  publish_crates:
+    name: Publish to crates.io
+    needs: upload_to_release
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release'
+    env:
+      BOXLITE_DEPS_STUB: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Publish leaf crates (Tier 1)
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          publish_crate() {
+            local crate="$1"
+            echo "::group::Publishing $crate"
+            if cargo publish -p "$crate" 2>&1 | tee /tmp/publish-"$crate".log; then
+              echo "$crate published successfully"
+            else
+              if grep -q "already uploaded" /tmp/publish-"$crate".log; then
+                echo "$crate already on crates.io, skipping"
+              else
+                echo "::error::Failed to publish $crate"
+                exit 1
+              fi
+            fi
+            echo "::endgroup::"
+          }
+
+          publish_crate boxlite-shared
+          publish_crate libkrun-sys
+          publish_crate e2fsprogs-sys
+          publish_crate libgvproxy-sys
+          publish_crate bubblewrap-sys
+
+      - name: Wait for crates.io indexing
+        run: sleep 60
+
+      # boxlite uses --no-verify because the boxlite-shim binary links libkrun,
+      # which isn't available in stub mode. The real build already succeeded in the
+      # build job, so skipping verification is safe.
+      - name: Publish boxlite (Tier 2)
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          echo "::group::Publishing boxlite"
+          if cargo publish -p boxlite --no-verify 2>&1 | tee /tmp/publish-boxlite.log; then
+            echo "boxlite published successfully"
+          else
+            if grep -q "already uploaded" /tmp/publish-boxlite.log; then
+              echo "boxlite already on crates.io, skipping"
+            else
+              echo "::error::Failed to publish boxlite"
+              exit 1
+            fi
+          fi
+          echo "::endgroup::"

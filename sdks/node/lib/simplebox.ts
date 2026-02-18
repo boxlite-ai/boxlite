@@ -18,6 +18,94 @@ type Execution = any;
 type BoxOptions = any;
 
 /**
+ * Security isolation options for a box.
+ */
+export interface SecurityOptions {
+  /** Enable jailer isolation (Linux/macOS). */
+  jailerEnabled?: boolean;
+
+  /** Enable seccomp syscall filtering (Linux only). */
+  seccompEnabled?: boolean;
+
+  /**
+   * Maximum number of open file descriptors.
+   */
+  maxOpenFiles?: number;
+
+  /**
+   * Maximum file size in bytes.
+   */
+  maxFileSize?: number;
+
+  /**
+   * Maximum number of processes.
+   */
+  maxProcesses?: number;
+
+  /**
+   * Maximum virtual memory in bytes.
+   */
+  maxMemory?: number;
+
+  /**
+   * Maximum CPU time in seconds.
+   */
+  maxCpuTime?: number;
+
+  /** Enable network access in sandbox (macOS only). */
+  networkEnabled?: boolean;
+
+  /** Close inherited file descriptors. */
+  closeFds?: boolean;
+}
+
+const MAX_SAFE_U64_NUMBER = Number.MAX_SAFE_INTEGER;
+
+function normalizeU64Limit(value: number | undefined, field: string): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (!Number.isFinite(value)) {
+    throw new TypeError(`Invalid security option \`${field}\`: number must be finite`);
+  }
+
+  if (!Number.isInteger(value)) {
+    throw new TypeError(`Invalid security option \`${field}\`: number must be an integer`);
+  }
+
+  if (value < 0) {
+    throw new TypeError(`Invalid security option \`${field}\`: number must be >= 0`);
+  }
+
+  if (!Number.isSafeInteger(value) || value > MAX_SAFE_U64_NUMBER) {
+    throw new TypeError(
+      `Invalid security option \`${field}\`: number exceeds Number.MAX_SAFE_INTEGER`,
+    );
+  }
+
+  return value;
+}
+
+function normalizeSecurityOptions(security: SecurityOptions | undefined): SecurityOptions | undefined {
+  if (!security) {
+    return undefined;
+  }
+
+  return {
+    jailerEnabled: security.jailerEnabled,
+    seccompEnabled: security.seccompEnabled,
+    maxOpenFiles: normalizeU64Limit(security.maxOpenFiles, 'security.maxOpenFiles'),
+    maxFileSize: normalizeU64Limit(security.maxFileSize, 'security.maxFileSize'),
+    maxProcesses: normalizeU64Limit(security.maxProcesses, 'security.maxProcesses'),
+    maxMemory: normalizeU64Limit(security.maxMemory, 'security.maxMemory'),
+    maxCpuTime: normalizeU64Limit(security.maxCpuTime, 'security.maxCpuTime'),
+    networkEnabled: security.networkEnabled,
+    closeFds: security.closeFds,
+  };
+}
+
+/**
  * Options for creating a SimpleBox.
  */
 export interface SimpleBoxOptions {
@@ -102,6 +190,9 @@ export interface SimpleBoxOptions {
    * If not set, uses the image's USER directive (defaults to root "0:0").
    */
   user?: string;
+
+  /** Security isolation options for the box. */
+  security?: SecurityOptions;
 }
 
 /**
@@ -170,6 +261,7 @@ export class SimpleBox {
    */
   constructor(options: SimpleBoxOptions = {}) {
     const JsBoxlite = getJsBoxlite();
+    const security = normalizeSecurityOptions(options.security);
 
     // Use provided runtime or get global default
     if (options.runtime) {
@@ -196,6 +288,7 @@ export class SimpleBox {
       entrypoint: options.entrypoint,
       cmd: options.cmd,
       user: options.user,
+      security,
     };
 
     this._name = options.name;

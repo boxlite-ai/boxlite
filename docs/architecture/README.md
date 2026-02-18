@@ -181,19 +181,16 @@ Provides OS-level isolation on top of hardware virtualization.
 **Configuration:**
 
 ```rust
-use boxlite::SecurityOptions;
+use boxlite::{AdvancedBoxOptions, SecurityOptions};
 
-// Maximum security (recommended for untrusted workloads)
-let security = SecurityOptions::maximum();
-
-// Custom configuration
-let security = SecurityOptions {
-    jailer_enabled: true,
-    seccomp_enabled: true,  // Linux only
-    chroot_enabled: true,   // Linux only
-    close_fds: true,
-    sanitize_env: true,
-    resource_limits: Some(ResourceLimits::default()),
+// Most users don't need to configure security — defaults prioritize compatibility
+// For advanced users who need maximum isolation:
+let opts = BoxOptions {
+    advanced: AdvancedBoxOptions {
+        security: SecurityOptions::maximum(),
+        ..Default::default()
+    },
+    ..Default::default()
 };
 ```
 

@@ -4,6 +4,8 @@ version.workspace = true
 edition = "2021"
 authors.workspace = true
 license.workspace = true
+description = "Shared types and protocol definitions for BoxLite host-guest communication"
+repository = "https://github.com/boxlite-ai/boxlite"
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
@@ -15,3 +17,6 @@ tokio = { version = "1", features = ["io-util"] }
 
 [build-dependencies]
 tonic-build = "0.12"
+
+[package.metadata.docs.rs]
+default-features = true

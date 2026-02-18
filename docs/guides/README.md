@@ -81,7 +81,7 @@ make dev:python
 
 #### 1. SimpleBox - Foundation Patterns
 
-**File:** `examples/python/simplebox_example.py`
+**File:** `examples/python/01_getting_started/run_simplebox.py`
 
 Demonstrates core BoxLite features:
 - Basic command execution
@@ -93,7 +93,7 @@ Demonstrates core BoxLite features:
 
 **Run:**
 ```bash
-python examples/python/simplebox_example.py
+python examples/python/01_getting_started/run_simplebox.py
 ```
 
 **Key Patterns:**
@@ -112,13 +112,13 @@ async with boxlite.SimpleBox(image="python:alpine") as box:
 
 #### 2. CodeBox - AI Code Execution
 
-**File:** `examples/python/codebox_example.py`
+**File:** `examples/python/01_getting_started/run_codebox.py`
 
 Secure Python code execution for AI agents.
 
 **Run:**
 ```bash
-python examples/python/codebox_example.py
+python examples/python/01_getting_started/run_codebox.py
 ```
 
 **Key Patterns:**
@@ -137,11 +137,11 @@ print(response.text)
 
 #### 3. BrowserBox - Browser Automation
 
-**File:** `examples/python/browserbox_example.py`
+**File:** `examples/python/05_browser_desktop/automate_with_playwright.py`
 
 **Run:**
 ```bash
-python examples/python/browserbox_example.py
+python examples/python/05_browser_desktop/automate_with_playwright.py
 ```
 
 **Use Cases:**
@@ -152,11 +152,11 @@ python examples/python/browserbox_example.py
 
 #### 4. ComputerBox - Desktop Automation
 
-**File:** `examples/python/computerbox_example.py`
+**File:** `examples/python/05_browser_desktop/automate_desktop.py`
 
 **Run:**
 ```bash
-python examples/python/computerbox_example.py
+python examples/python/05_browser_desktop/automate_desktop.py
 ```
 
 **Available Functions:**
@@ -169,21 +169,21 @@ python examples/python/computerbox_example.py
 
 #### 5. Lifecycle Management
 
-**File:** `examples/python/lifecycle_example.py`
+**File:** `examples/python/03_lifecycle/manage_lifecycle.py`
 
 Demonstrates box state management.
 
 **Run:**
 ```bash
-python examples/python/lifecycle_example.py
+python examples/python/03_lifecycle/manage_lifecycle.py
 ```
 
 #### 6-9. Other Examples
 
-- `list_boxes_example.py` - Runtime introspection
-- `cross_process_example.py` - Multi-process operations
-- `interactivebox_example.py` - Interactive shells
-- `native_example.py` - Low-level Rust API
+- `01_getting_started/list_boxes.py` - Runtime introspection
+- `03_lifecycle/share_across_processes.py` - Multi-process operations
+- `04_interactive/run_interactive_shell.py` - Interactive shells
+- `07_advanced/use_native_api.py` - Low-level Rust API
 
 ### Customizing Examples
 
@@ -750,6 +750,9 @@ asyncio.run(main())
 - Monitor metrics to avoid oversubscription
 
 ## Using with AI Agents
+
+> For a comprehensive guide covering configuration, concurrency, timeouts,
+> security, and file transfer patterns, see [AI Agent Integration Guide](ai-agent-integration.md).
 
 BoxLite is designed for AI agents that need full execution freedom.
 

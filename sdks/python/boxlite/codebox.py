@@ -42,7 +42,9 @@ class CodeBox(SimpleBox):
             runtime: Optional runtime instance (uses global default if None)
             **kwargs: Additional configuration options
         """
-        super().__init__(image, memory_mib, cpus, runtime, **kwargs)
+        super().__init__(
+            image=image, memory_mib=memory_mib, cpus=cpus, runtime=runtime, **kwargs
+        )
 
     async def run(self, code: str, timeout: Optional[int] = None) -> str:
         """
@@ -53,7 +55,8 @@ class CodeBox(SimpleBox):
             timeout: Execution timeout in seconds (not yet implemented)
 
         Returns:
-            Execution output as a string (stdout + stderr)
+            Execution stdout as a string. Use exec() directly if you need
+            both stdout and stderr.
 
         Example:
             >>> async with CodeBox() as cb:
@@ -68,7 +71,7 @@ class CodeBox(SimpleBox):
         """
         # Execute Python code using python3 -c
         result = await self.exec("/usr/local/bin/python", "-c", code)
-        return result.stdout + result.stderr
+        return result.stdout
 
     async def run_script(self, script_path: str) -> str:
         """
@@ -78,7 +81,7 @@ class CodeBox(SimpleBox):
             script_path: Path to the Python script on the host
 
         Returns:
-            Execution output as a string
+            Execution stdout as a string
         """
         with open(script_path, "r") as f:
             code = f.read()

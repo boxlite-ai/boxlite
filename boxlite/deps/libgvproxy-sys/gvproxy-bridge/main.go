@@ -20,7 +20,6 @@ import (
 	"log"
 	"net"
 	"os"
-	"path/filepath"
 	"runtime"
 	"runtime/debug"
 	"sync"
@@ -175,6 +174,7 @@ type DNSZone struct {
 
 // GvproxyConfig matches the Rust structure (must stay in sync!)
 type GvproxyConfig struct {
+	SocketPath       string        `json:"socket_path"`
 	Subnet           string        `json:"subnet"`
 	GatewayIP        string        `json:"gateway_ip"`
 	GatewayMac       string        `json:"gateway_mac"`
@@ -221,10 +221,14 @@ func gvproxy_create(configJSON *C.char) C.longlong {
 	nextID++
 	instancesMu.Unlock()
 
-	// Create Unix socket path
-	socketPath := filepath.Join(os.TempDir(), fmt.Sprintf("gvproxy-%d.sock", id))
+	// Use caller-provided socket path (unique per box)
+	socketPath := config.SocketPath
+	if socketPath == "" {
+		logrus.Error("socket_path is required in GvproxyConfig")
+		return -1
+	}
 
-	// Remove existing socket if present
+	// Remove stale socket from a previous crash (safe: path is unique per box)
 	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
 		logrus.WithFields(logrus.Fields{"error": err, "path": socketPath}).Warn("Failed to remove existing socket")
 	}
@@ -432,19 +436,6 @@ func gvproxy_create(configJSON *C.char) C.longlong {
 
 	logrus.Info("Created gvproxy instance", "id", id, "socket", socketPath, "protocol", protocol)
 	return C.longlong(id)
-}
-
-//export gvproxy_get_socket_path
-func gvproxy_get_socket_path(id C.longlong) *C.char {
-	instancesMu.RLock()
-	instance, ok := instances[int64(id)]
-	instancesMu.RUnlock()
-
-	if !ok {
-		return nil
-	}
-
-	return C.CString(instance.SocketPath)
 }
 
 //export gvproxy_free_string

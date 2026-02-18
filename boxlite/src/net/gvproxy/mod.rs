@@ -55,10 +55,12 @@
 //!
 //! ```no_run
 //! use boxlite::net::{NetworkBackendConfig, GvisorTapBackend, NetworkBackend};
+//! use std::path::PathBuf;
 //!
-//! let config = NetworkBackendConfig {
-//!     port_mappings: vec![(8080, 80), (8443, 443)],
-//! };
+//! let config = NetworkBackendConfig::new(
+//!     vec![(8080, 80), (8443, 443)],
+//!     PathBuf::from("/tmp/my-box/net.sock"),
+//! );
 //!
 //! // Create backend - logs from gvproxy will appear in tracing
 //! let backend = GvisorTapBackend::new(config)?;
@@ -126,31 +128,36 @@ impl GvisorTapBackend {
     ///
     /// ```no_run
     /// use boxlite::net::{NetworkBackendConfig, GvisorTapBackend};
+    /// use std::path::PathBuf;
     ///
-    /// let config = NetworkBackendConfig {
-    ///     port_mappings: vec![(8080, 80), (8443, 443)],
-    /// };
+    /// let config = NetworkBackendConfig::new(
+    ///     vec![(8080, 80), (8443, 443)],
+    ///     PathBuf::from("/tmp/my-box/net.sock"),
+    /// );
     ///
     /// let backend = GvisorTapBackend::new(config)?;
     /// # Ok::<(), boxlite_shared::errors::BoxliteError>(())
     /// ```
     pub fn new(config: NetworkBackendConfig) -> BoxliteResult<Self> {
         tracing::debug!(
-            "Creating gvisor-tap-vsock backend with port mappings: {:?}",
-            config.port_mappings
+            socket_path = ?config.socket_path,
+            port_mappings = ?config.port_mappings,
+            "Creating gvisor-tap-vsock backend",
         );
 
-        // Create gvproxy instance with port mappings
-        let instance = Arc::new(GvproxyInstance::new(&config.port_mappings)?);
+        // Create gvproxy instance with caller-provided socket path
+        let instance = Arc::new(GvproxyInstance::new(
+            config.socket_path.clone(),
+            &config.port_mappings,
+        )?);
 
         // Start background stats logging thread
         instance::start_stats_logging(Arc::downgrade(&instance));
 
-        // Get the Unix socket path
-        let socket_path = instance.get_socket_path()?;
+        let socket_path = config.socket_path;
 
         tracing::info!(
-            socket_path = ?socket_path,
+            ?socket_path,
             version = ?ffi::get_version()?,
             "Created gvisor-tap-vsock backend"
         );
@@ -174,10 +181,12 @@ impl GvisorTapBackend {
     ///
     /// ```no_run
     /// use boxlite::net::{NetworkBackendConfig, GvisorTapBackend};
+    /// use std::path::PathBuf;
     ///
-    /// let config = NetworkBackendConfig {
-    ///     port_mappings: vec![(8080, 80)],
-    /// };
+    /// let config = NetworkBackendConfig::new(
+    ///     vec![(8080, 80)],
+    ///     PathBuf::from("/tmp/my-box/net.sock"),
+    /// );
     /// let backend = GvisorTapBackend::new(config)?;
     ///
     /// // Get stats

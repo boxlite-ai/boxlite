@@ -1,10 +1,13 @@
 use std::path::PathBuf;
 
+use boxlite::runtime::advanced_options::{AdvancedBoxOptions, SecurityOptions};
 use boxlite::runtime::constants::images;
 use boxlite::runtime::options::{
     BoxOptions, BoxliteOptions, NetworkSpec, PortProtocol, PortSpec, RootfsSpec, VolumeSpec,
 };
 use napi_derive::napi;
+
+use crate::advanced_options::JsSecurityOptions;
 
 /// Runtime configuration options.
 ///
@@ -94,6 +97,9 @@ pub struct JsBoxOptions {
     /// Username or UID (format: <name|uid>[:<group|gid>]).
     /// If None, uses the image's USER directive (defaults to root).
     pub user: Option<String>,
+
+    /// Security isolation options for the box.
+    pub security: Option<JsSecurityOptions>,
 }
 
 /// Environment variable specification.
@@ -212,6 +218,11 @@ impl From<JsBoxOptions> for BoxOptions {
             .map(|e| (e.key, e.value))
             .collect();
 
+        let security = js_opts
+            .security
+            .map(SecurityOptions::from)
+            .unwrap_or_default();
+
         BoxOptions {
             cpus: js_opts.cpus,
             memory_mib: js_opts.memory_mib,
@@ -222,10 +233,12 @@ impl From<JsBoxOptions> for BoxOptions {
             volumes,
             network,
             ports,
-            isolate_mounts: false, // Not exposed in JS API yet
+            advanced: AdvancedBoxOptions {
+                security,
+                ..Default::default()
+            },
             auto_remove: js_opts.auto_remove.unwrap_or(false),
             detach: js_opts.detach.unwrap_or(false),
-            security: Default::default(), // Use default security options
             entrypoint: js_opts.entrypoint,
             cmd: js_opts.cmd,
             user: js_opts.user,

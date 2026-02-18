@@ -878,3 +878,133 @@ async fn test_runtime_shutdown_stops_all_boxes() {
         }
     }
 }
+
+// ============================================================================
+// ECHILD FIX + SENDINPUT SHUTDOWN TESTS
+// ============================================================================
+// These tests cover:
+// - ECHILD fix: guest uses std::process::Command (no Tokio SIGCHLD race)
+// - SendInput fix: spawn_stdin uses shutdown_token for clean cancellation
+// - Exit code preservation after the ECHILD safety net
+
+/// Exec completes normally, then runtime shutdown — should be clean.
+///
+/// Before fix: spawn_stdin hit transport error during shutdown (WARN log).
+/// After fix: spawn_stdin cancelled cleanly via shutdown_token.
+#[tokio::test]
+async fn test_exec_completes_then_shutdown_is_clean() {
+    let ctx = TestContext::new();
+    let handle = ctx
+        .runtime
+        .create(default_box_options(), None)
+        .await
+        .unwrap();
+    handle.start().await.unwrap();
+
+    let mut execution = handle
+        .exec(BoxCommand::new("echo").arg("hello"))
+        .await
+        .unwrap();
+    let result = execution.wait().await.unwrap();
+    assert_eq!(result.exit_code, 0);
+
+    // Shutdown after exec completes — should not produce transport errors
+    let shutdown_result = ctx.runtime.shutdown(Some(5)).await;
+    assert!(shutdown_result.is_ok());
+}
+
+/// Sequential exec on same box should both succeed.
+///
+/// This tests the original bug: transport error on second exec.
+/// Root cause was Tokio's orphan reaper racing with waitpid in the guest.
+#[tokio::test]
+async fn test_sequential_exec_same_box() {
+    let ctx = TestContext::new();
+    let handle = ctx
+        .runtime
+        .create(default_box_options(), None)
+        .await
+        .unwrap();
+    handle.start().await.unwrap();
+
+    // First exec
+    let mut exec1 = handle
+        .exec(BoxCommand::new("echo").arg("first"))
+        .await
+        .unwrap();
+    let result1 = exec1.wait().await.unwrap();
+    assert_eq!(result1.exit_code, 0);
+
+    // Second exec on same box — should also succeed
+    let mut exec2 = handle
+        .exec(BoxCommand::new("echo").arg("second"))
+        .await
+        .unwrap();
+    let result2 = exec2.wait().await.unwrap();
+    assert_eq!(result2.exit_code, 0);
+
+    // Cleanup
+    let _ = ctx.runtime.remove(handle.id().as_str(), true).await;
+}
+
+/// Exit codes should be correctly preserved.
+///
+/// Before ECHILD fix: could return -1 due to waitpid race.
+/// After fix: std::process::Command avoids the race entirely.
+#[tokio::test]
+async fn test_exec_exit_code_preserved() {
+    let ctx = TestContext::new();
+    let handle = ctx
+        .runtime
+        .create(default_box_options(), None)
+        .await
+        .unwrap();
+    handle.start().await.unwrap();
+
+    // Success (exit 0)
+    let mut exec0 = handle.exec(BoxCommand::new("true")).await.unwrap();
+    assert_eq!(exec0.wait().await.unwrap().exit_code, 0);
+
+    // Failure (exit 1)
+    let mut exec1 = handle.exec(BoxCommand::new("false")).await.unwrap();
+    assert_eq!(exec1.wait().await.unwrap().exit_code, 1);
+
+    // Custom exit code
+    let mut exec42 = handle
+        .exec(BoxCommand::new("sh").args(["-c", "exit 42"]))
+        .await
+        .unwrap();
+    assert_eq!(exec42.wait().await.unwrap().exit_code, 42);
+
+    // Cleanup
+    let _ = ctx.runtime.remove(handle.id().as_str(), true).await;
+}
+
+/// Multiple sequential execs followed by shutdown — the full CLI workflow.
+///
+/// This is the exact scenario that triggered the original bug:
+/// run several commands, then shutdown cleanly.
+#[tokio::test]
+async fn test_exec_then_shutdown_sequential() {
+    let ctx = TestContext::new();
+    let handle = ctx
+        .runtime
+        .create(default_box_options(), None)
+        .await
+        .unwrap();
+    handle.start().await.unwrap();
+
+    // Run 3 commands sequentially
+    for i in 0..3 {
+        let mut execution = handle
+            .exec(BoxCommand::new("echo").arg(format!("cmd-{}", i)))
+            .await
+            .unwrap();
+        let result = execution.wait().await.unwrap();
+        assert_eq!(result.exit_code, 0, "Command {} should succeed", i);
+    }
+
+    // Shutdown after all commands complete
+    let shutdown_result = ctx.runtime.shutdown(Some(5)).await;
+    assert!(shutdown_result.is_ok());
+}

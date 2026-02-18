@@ -17,7 +17,10 @@ impl PipelineTask<InitCtx> for FilesystemTask {
 
         let (runtime, isolate_mounts) = {
             let ctx = ctx.lock().await;
-            (ctx.runtime.clone(), ctx.config.options.isolate_mounts)
+            (
+                ctx.runtime.clone(),
+                ctx.config.options.advanced.isolate_mounts,
+            )
         };
 
         let layout = runtime

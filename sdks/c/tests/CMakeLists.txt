@@ -63,21 +63,50 @@ endforeach()
 # Enable testing
 enable_testing()
 
-# Add tests
-add_test(NAME basic COMMAND test_basic)
-add_test(NAME lifecycle COMMAND test_lifecycle)
-add_test(NAME execute COMMAND test_execute)
-add_test(NAME errors COMMAND test_errors)
-add_test(NAME simple_api COMMAND test_simple_api)
-add_test(NAME streaming COMMAND test_streaming)
-add_test(NAME memory COMMAND test_memory)
-add_test(NAME integration COMMAND test_integration)
+# Auto-discover runtime directory
+# Priority: BOXLITE_RUNTIME_DIR env > target/boxlite-runtime (from `make runtime`)
+# The runtime directory contains: boxlite-guest, mke2fs, debugfs, libkrun, libgvproxy, etc.
+if(DEFINED ENV{BOXLITE_RUNTIME_DIR})
+    set(BOXLITE_RUNTIME_DIR "$ENV{BOXLITE_RUNTIME_DIR}")
+elseif(EXISTS "${BOXLITE_ROOT}/target/boxlite-runtime")
+    set(BOXLITE_RUNTIME_DIR "${BOXLITE_ROOT}/target/boxlite-runtime")
+else()
+    # Fallback: try to find the build output from boxlite crate
+    file(GLOB _RUNTIME_CANDIDATES "${BOXLITE_ROOT}/target/release/build/boxlite-*/out/runtime")
+    list(LENGTH _RUNTIME_CANDIDATES _NUM_CANDIDATES)
+    if(_NUM_CANDIDATES GREATER 0)
+        list(GET _RUNTIME_CANDIDATES 0 BOXLITE_RUNTIME_DIR)
+    else()
+        set(BOXLITE_RUNTIME_DIR "")
+    endif()
+endif()
+
+# Add tests with runtime environment
+foreach(TARGET ${TEST_TARGETS})
+    add_test(NAME ${TARGET} COMMAND ${TARGET})
+    if(BOXLITE_RUNTIME_DIR)
+        set_tests_properties(${TARGET} PROPERTIES
+            ENVIRONMENT "BOXLITE_RUNTIME_DIR=${BOXLITE_RUNTIME_DIR};DYLD_LIBRARY_PATH=${BOXLITE_RUNTIME_DIR}:${BOXLITE_LIB_DIR}"
+        )
+    endif()
+endforeach()
 
 # Print instructions
+if(BOXLITE_RUNTIME_DIR)
+    message(STATUS "  Runtime dir: ${BOXLITE_RUNTIME_DIR}")
+else()
+    message(WARNING "Runtime directory not found. Tests requiring VM (execute, streaming, etc.) will fail.")
+    message(WARNING "Run 'make runtime' from the project root first, or set BOXLITE_RUNTIME_DIR.")
+endif()
+
 message(STATUS "BoxLite C Tests Configuration:")
 message(STATUS "  Include dir: ${BOXLITE_INCLUDE_DIR}")
 message(STATUS "  Library: ${BOXLITE_LIB}")
 message(STATUS "  Test targets: ${TEST_TARGETS}")
+message(STATUS "")
+message(STATUS "Prerequisites:")
+message(STATUS "  1. cargo build --release -p boxlite-c   (build libboxlite)")
+message(STATUS "  2. make runtime                         (build runtime binaries)")
 message(STATUS "")
 message(STATUS "To build and run tests:")
 message(STATUS "  mkdir -p build && cd build")

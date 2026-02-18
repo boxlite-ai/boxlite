@@ -4,11 +4,16 @@ use std::{path::PathBuf, process::Child, sync::Mutex, time::Instant};
 
 use crate::{
     BoxID,
+    runtime::layout::BoxFilesystemLayout,
     vmm::{InstanceSpec, VmmKind},
 };
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
-use super::{VmmController, VmmHandler as VmmHandlerTrait, VmmMetrics, spawn::spawn_subprocess};
+use super::watchdog;
+use super::{
+    VmmController, VmmHandler as VmmHandlerTrait, VmmMetrics,
+    spawn::{ShimSpawner, SpawnedShim},
+};
 
 // ============================================================================
 // SHIM HANDLER - Runtime operations on running VM
@@ -26,34 +31,38 @@ pub struct ShimHandler {
     /// When we spawn the process, we keep the Child to properly wait() on stop.
     /// When we attach to an existing process, this is None.
     process: Option<Child>,
+    /// Watchdog keepalive. Dropping closes the pipe write end, delivering
+    /// POLLHUP to the shim and triggering graceful shutdown.
+    /// Defense-in-depth: even if `stop()` is never called, dropping the
+    /// handler closes this, triggering shim cleanup automatically.
+    #[allow(dead_code)]
+    keepalive: Option<watchdog::Keepalive>,
     /// Shared System instance for CPU metrics calculation across calls.
     /// CPU usage requires comparing snapshots over time, so we must reuse the same System.
     metrics_sys: Mutex<sysinfo::System>,
 }
 
 impl ShimHandler {
-    /// Create a handler for a spawned VM with process ownership.
+    /// Create a handler from a spawned shim.
     ///
-    /// This constructor takes ownership of the Child process handle for proper
-    /// lifecycle management (clean shutdown with wait()).
-    ///
-    /// # Arguments
-    /// * `process` - The spawned subprocess (Child handle)
-    /// * `box_id` - Box identifier (for logging)
-    pub fn from_child(process: Child, box_id: BoxID) -> Self {
-        let pid = process.id();
+    /// Takes ownership of the `SpawnedShim` (child process + keepalive) for
+    /// proper lifecycle management. The keepalive keeps the watchdog pipe
+    /// alive; dropping it triggers shim shutdown.
+    pub fn from_spawned(spawned: SpawnedShim, box_id: BoxID) -> Self {
+        let pid = spawned.child.id();
         Self {
             pid,
             box_id,
-            process: Some(process),
+            process: Some(spawned.child),
+            keepalive: spawned.keepalive,
             metrics_sys: Mutex::new(sysinfo::System::new()),
         }
     }
 
     /// Create a handler for an existing VM (attach mode).
     ///
-    /// Used when reconnecting to a running box. We don't have a Child handle,
-    /// so we manage the process by PID only.
+    /// Used when reconnecting to a running box. We don't have a Child handle
+    /// or keepalive, so we manage the process by PID only.
     ///
     /// # Arguments
     /// * `pid` - Process ID of the running VM
@@ -63,6 +72,7 @@ impl ShimHandler {
             pid,
             box_id,
             process: None,
+            keepalive: None,
             metrics_sys: Mutex::new(sysinfo::System::new()),
         }
     }
@@ -133,7 +143,7 @@ impl VmmHandlerTrait for ShimHandler {
                 if result < 0 {
                     // Error - process may not be our child (common in attached mode)
                     // Fall back to checking if process still exists
-                    let exists = unsafe { libc::kill(self.pid as i32, 0) } == 0;
+                    let exists = crate::util::is_process_alive(self.pid);
                     if !exists {
                         return Ok(()); // Already dead
                     }
@@ -203,6 +213,8 @@ pub struct ShimController {
     box_id: BoxID,
     /// Box options (includes security and volumes for jailer isolation)
     options: crate::runtime::options::BoxOptions,
+    /// Box filesystem layout (provides paths for stderr, sockets, etc.)
+    layout: BoxFilesystemLayout,
 }
 
 impl ShimController {
@@ -213,6 +225,7 @@ impl ShimController {
     /// * `engine_type` - Type of VM engine to use (libkrun, firecracker, etc.)
     /// * `box_id` - Unique identifier for this box
     /// * `options` - Box options (includes security and volumes)
+    /// * `layout` - Box filesystem layout
     ///
     /// # Returns
     /// * `Ok(ShimController)` - Successfully created controller
@@ -222,6 +235,7 @@ impl ShimController {
         engine_type: VmmKind,
         box_id: BoxID,
         options: crate::runtime::options::BoxOptions,
+        layout: BoxFilesystemLayout,
     ) -> BoxliteResult<Self> {
         // Verify that the shim binary exists
         if !binary_path.exists() {
@@ -236,6 +250,7 @@ impl ShimController {
             engine_type,
             box_id,
             options,
+            layout,
         })
     }
 }
@@ -264,7 +279,7 @@ impl VmmController for ShimController {
         let serializable_config = InstanceSpec {
             // Box identification and security (from ShimController)
             box_id: self.box_id.to_string(),
-            security: self.options.security.clone(),
+            security: self.options.advanced.security.clone(),
             // VM configuration
             cpus: config.cpus,
             memory_mib: config.memory_mib,
@@ -278,8 +293,8 @@ impl VmmController for ShimController {
             network_backend_endpoint: None, // Will be populated by shim (not serialized)
             home_dir: config.home_dir.clone(),
             console_output: config.console_output.clone(),
+            exit_file: config.exit_file.clone(),
             detach: config.detach,
-            parent_pid: config.parent_pid,
         };
 
         // Serialize the config for passing to subprocess
@@ -306,18 +321,18 @@ impl VmmController for ShimController {
 
         // Measure subprocess spawn time
         let shim_spawn_start = Instant::now();
-        let child = spawn_subprocess(
+        let spawner = ShimSpawner::new(
             &self.binary_path,
             self.engine_type,
-            &config_json,
-            &config.home_dir,
+            &self.layout,
             self.box_id.as_str(),
             &self.options,
-        )?;
+        );
+        let spawned = spawner.spawn(&config_json, config.detach)?;
         // spawn_duration: time to create Box subprocess
         let shim_spawn_duration = shim_spawn_start.elapsed();
 
-        let pid = child.id();
+        let pid = spawned.child.id();
         tracing::info!(
             box_id = %self.box_id,
             pid = pid,
@@ -329,9 +344,8 @@ impl VmmController for ShimController {
         // GuestConnectTask handles waiting for guest readiness,
         // which allows reusing that task across spawn/restart/reconnect.
 
-        // Create handler for the running VM
-        // Note: stdio is null (no pipes), so no LogStreamHandler needed
-        let handler = ShimHandler::from_child(child, self.box_id.clone());
+        // Create handler from spawned shim (takes ownership of child + keepalive)
+        let handler = ShimHandler::from_spawned(spawned, self.box_id.clone());
 
         tracing::info!(
             box_id = %self.box_id,

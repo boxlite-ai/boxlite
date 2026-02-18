@@ -86,42 +86,65 @@ impl Files for GuestServer {
             .await
             .map_err(|e| Status::internal(format!("failed to flush temp file: {}", e)))?;
 
-        // Ensure destination exists
-        if !dest_root.exists() {
-            if mkdir_parents {
-                std::fs::create_dir_all(&dest_root).map_err(|e| {
-                    Status::internal(format!("failed to create destination: {}", e))
-                })?;
-            } else {
-                return Err(Status::failed_precondition(format!(
-                    "destination {} does not exist",
-                    dest_path
-                )));
-            }
-        }
-
-        if !overwrite
-            && dest_root
-                .read_dir()
-                .ok()
-                .and_then(|mut r| r.next())
-                .is_some()
-        {
-            return Err(Status::failed_precondition(
-                "destination exists and overwrite=false",
-            ));
-        }
-
-        // Extract tar (blocking) inside spawn_blocking to avoid blocking runtime
+        // Extract tar with mode-aware logic:
+        // - FileToFile: single regular file in tar + dest not trailing '/' + dest not existing dir
+        //   → use entry.unpack(dest) to write directly to dest path
+        // - IntoDirectory: everything else → archive.unpack(dest) (current behavior)
         let dest = dest_root.clone();
+        let dest_path_clone = dest_path.clone();
         let temp_clone = temp_path.clone();
         tokio::task::spawn_blocking(move || -> Result<(), String> {
-            let tar_file =
-                std::fs::File::open(&temp_clone).map_err(|e| format!("open temp: {}", e))?;
-            let mut archive = tar::Archive::new(tar_file);
-            archive
-                .unpack(&dest)
-                .map_err(|e| format!("extract failed: {}", e))?;
+            let mode = determine_extraction_mode(&dest, &dest_path_clone, &temp_clone)?;
+
+            match mode {
+                ExtractionMode::FileToFile => {
+                    if let Some(parent) = dest.parent() {
+                        if mkdir_parents {
+                            std::fs::create_dir_all(parent)
+                                .map_err(|e| format!("failed to create parent dir: {}", e))?;
+                        } else if !parent.exists() {
+                            return Err(format!(
+                                "parent directory of {} does not exist",
+                                dest_path_clone
+                            ));
+                        }
+                    }
+                    if !overwrite && dest.exists() {
+                        return Err("destination file exists and overwrite=false".into());
+                    }
+                    let tar_file = std::fs::File::open(&temp_clone)
+                        .map_err(|e| format!("open temp: {}", e))?;
+                    let mut archive = tar::Archive::new(tar_file);
+                    let mut entries = archive
+                        .entries()
+                        .map_err(|e| format!("read entries: {}", e))?;
+                    if let Some(entry) = entries.next() {
+                        let mut entry = entry.map_err(|e| format!("read entry: {}", e))?;
+                        entry
+                            .unpack(&dest)
+                            .map_err(|e| format!("unpack file: {}", e))?;
+                    }
+                }
+                ExtractionMode::IntoDirectory => {
+                    if !dest.exists() {
+                        if mkdir_parents {
+                            std::fs::create_dir_all(&dest)
+                                .map_err(|e| format!("failed to create destination: {}", e))?;
+                        } else {
+                            return Err(format!("destination {} does not exist", dest_path_clone));
+                        }
+                    }
+                    if !overwrite && dest.read_dir().ok().and_then(|mut r| r.next()).is_some() {
+                        return Err("destination exists and overwrite=false".into());
+                    }
+                    let tar_file = std::fs::File::open(&temp_clone)
+                        .map_err(|e| format!("open temp: {}", e))?;
+                    let mut archive = tar::Archive::new(tar_file);
+                    archive
+                        .unpack(&dest)
+                        .map_err(|e| format!("extract failed: {}", e))?;
+                }
+            }
             Ok(())
         })
         .await
@@ -293,6 +316,54 @@ impl GuestServer {
 
         Ok(rootfs.join(rel))
     }
+}
+
+/// Whether to extract as a single file or into a directory.
+enum ExtractionMode {
+    /// Destination is a file path — extract the single tar entry directly to it.
+    FileToFile,
+    /// Destination is a directory — extract all tar entries into it.
+    IntoDirectory,
+}
+
+/// Inspect the destination path and tar contents to decide extraction mode.
+///
+/// Rules (evaluated in order):
+/// 1. Trailing `/` in dest_path → directory mode
+/// 2. Dest exists as a directory → directory mode
+/// 3. Tar contains exactly one regular file → file-to-file mode
+/// 4. Fallback → directory mode
+fn determine_extraction_mode(
+    dest: &Path,
+    dest_path: &str,
+    tar_path: &Path,
+) -> Result<ExtractionMode, String> {
+    if dest_path.ends_with('/') {
+        return Ok(ExtractionMode::IntoDirectory);
+    }
+    if dest.is_dir() {
+        return Ok(ExtractionMode::IntoDirectory);
+    }
+    let tar_file =
+        std::fs::File::open(tar_path).map_err(|e| format!("open tar for inspection: {}", e))?;
+    let mut archive = tar::Archive::new(tar_file);
+    if let Ok(entries) = archive.entries() {
+        let mut count = 0u32;
+        let mut is_regular = false;
+        for entry in entries {
+            count += 1;
+            if count > 1 {
+                break;
+            }
+            if let Ok(e) = entry {
+                is_regular = e.header().entry_type() == tar::EntryType::Regular;
+            }
+        }
+        if count == 1 && is_regular {
+            return Ok(ExtractionMode::FileToFile);
+        }
+    }
+    Ok(ExtractionMode::IntoDirectory)
 }
 
 fn append_dir_recursive(
