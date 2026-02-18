@@ -406,6 +406,8 @@ impl BoxFilesystemLayout {
     /// Named snapshot directory: ~/.boxlite/boxes/{box_id}/snapshots/{name}
     pub fn snapshot_dir(&self, name: &str) -> PathBuf {
         self.snapshots_dir().join(name)
+    }
+
     // BIN AND LOGS (jailer isolation)
     // ========================================================================
 
@@ -447,14 +449,6 @@ impl BoxFilesystemLayout {
     /// Lives inside `logs/` so the sandbox grants it via the `logs/` [RW subpath].
     pub fn console_output_path(&self) -> PathBuf {
         self.logs_dir().join("console.log")
-    }
-
-    /// Guest rootfs COW overlay: ~/.boxlite/boxes/{box_id}/guest-rootfs.qcow2
-    ///
-    /// A qcow2 COW overlay that references a base rootfs (either reflinked
-    /// locally or in the shared `~/.boxlite/rootfs/` directory).
-    pub fn guest_rootfs_disk_path(&self) -> PathBuf {
-        self.box_dir.join("guest-rootfs.qcow2")
     }
 
     /// Reflinked rootfs base: ~/.boxlite/boxes/{box_id}/rootfs-base
