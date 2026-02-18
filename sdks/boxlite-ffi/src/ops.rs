@@ -1376,6 +1376,9 @@ mod tests {
         assert_eq!(status_to_string(BoxStatus::Running), "running");
         assert_eq!(status_to_string(BoxStatus::Stopping), "stopping");
         assert_eq!(status_to_string(BoxStatus::Stopped), "stopped");
+        assert_eq!(status_to_string(BoxStatus::Snapshotting), "snapshotting");
+        assert_eq!(status_to_string(BoxStatus::Restoring), "restoring");
+        assert_eq!(status_to_string(BoxStatus::Exporting), "exporting");
     }
 
     #[test]
