@@ -261,7 +261,8 @@ impl SecurityOptions {
 
     /// Create a builder for customizing security options.
     ///
-    /// Starts with default settings (jailer/seccomp disabled).
+    /// Starts with default settings (jailer enabled on macOS, disabled on Linux/other platforms;
+    /// seccomp disabled by default).
     ///
     /// # Example
     ///
@@ -504,7 +505,8 @@ impl SecurityOptionsBuilder {
 pub struct AdvancedBoxOptions {
     /// Security isolation options (jailer, seccomp, namespaces, resource limits).
     ///
-    /// Defaults disable jailer and seccomp for compatibility. Use presets:
+    /// Defaults are compatibility-focused (jailer enabled on macOS, disabled on Linux/other
+    /// platforms; seccomp disabled). Use presets:
     /// - `SecurityOptions::default()` — compatibility-focused defaults
     /// - `SecurityOptions::standard()` — recommended for production
     /// - `SecurityOptions::development()` — minimal isolation for debugging

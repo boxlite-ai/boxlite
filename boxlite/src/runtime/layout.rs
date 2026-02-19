@@ -290,7 +290,7 @@ impl FilesystemLayout {
 /// ├── logs/               # Per-box logging
 /// │   ├── boxlite-shim.log  # Shim tracing output
 /// │   └── console.log       # Kernel/init output
-/// ├── root.qcow2          # Data disk
+/// ├── disk.qcow2          # Data disk (container rootfs COW disk)
 /// └── guest-rootfs.qcow2  # Guest rootfs COW overlay
 /// ```
 #[derive(Clone, Debug)]

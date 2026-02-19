@@ -159,13 +159,13 @@ use std::path::PathBuf;
 /// {box_dir}/                          # NOT granted wholesale
 /// ├── bin/                        [RO]  # copied shim binary + bundled libs
 /// ├── shared/                     [RW]  # guest-visible virtio-fs share root
-/// ├── rootfs-base                 [RO]  # reflinked base rootfs (qcow2 backing)
+/// ├── rootfs-base                 [RO]  # reflinked rootfs backing file for guest-rootfs.qcow2
 /// ├── sockets/                    [RW]  # libkrun vsock/unix sockets
 /// ├── logs/                       [RW]  # shim logging + VM console output
 /// │   ├── boxlite-shim.log                # tracing_appender daily log
 /// │   └── console.log                     # libkrun serial console (krun_set_console_output)
 /// ├── exit                        [RW]  # crash_capture ExitInfo JSON
-/// ├── root.qcow2                  [RW]  # VM root disk image
+/// ├── disk.qcow2                  [RW]  # VM/container root disk image
 /// ├── guest-rootfs.qcow2          [RW]  # guest rootfs COW overlay
 /// ├── mounts/                     [--]  # EXCLUDED: host writes, shim reads via shared/
 /// ├── shim.pid                    [--]  # EXCLUDED: written by pre_exec (before sandbox)

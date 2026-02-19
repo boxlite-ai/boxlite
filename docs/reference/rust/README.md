@@ -560,7 +560,7 @@ pub struct AdvancedBoxOptions {
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `security` | `SecurityOptions` | Compatibility defaults | Security isolation options (jailer, seccomp, namespaces) |
+| `security` | `SecurityOptions` | Compatibility defaults (jailer `true` on macOS; `false` on Linux/others) | Security isolation options (jailer, seccomp, namespaces) |
 | `isolate_mounts` | `bool` | `false` | Enable bind mount isolation (requires CAP_SYS_ADMIN on Linux) |
 
 ### RootfsSpec
@@ -703,7 +703,7 @@ let dev = SecurityOptions::development();
 
 // Default: compatibility-focused
 let default_security = SecurityOptions::default();
-// - jailer_enabled: false
+// - jailer_enabled: true (macOS), false (Linux/other platforms)
 // - seccomp_enabled: false
 
 // Standard: recommended for most use cases
