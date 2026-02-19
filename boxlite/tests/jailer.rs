@@ -7,11 +7,10 @@
 //! 4. On Linux: bwrap creates isolated mount/user namespaces
 
 use boxlite::BoxCommand;
-use boxlite::BoxliteError;
 use boxlite::BoxliteRuntime;
 use boxlite::runtime::advanced_options::{AdvancedBoxOptions, SecurityOptions};
 use boxlite::runtime::options::{BoxOptions, BoxliteOptions, RootfsSpec};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use tempfile::TempDir;
 
 // ============================================================================
@@ -28,7 +27,7 @@ fn jailer_test_home_base_dir() -> PathBuf {
 }
 
 #[cfg(target_os = "macos")]
-fn assert_macos_socket_path_budget(home_dir: &Path) {
+fn assert_macos_socket_path_budget(home_dir: &std::path::Path) {
     let probe = home_dir
         .join("boxes")
         .join("12345678-1234-1234-1234-123456789abc")
@@ -339,7 +338,7 @@ async fn jailer_enabled_custom_profile_deny_boxes_subpath_blocks_start() {
 
     match ctx.runtime.remove(box_id.as_str(), true).await {
         Ok(()) => {}
-        Err(BoxliteError::NotFound(_)) => {
+        Err(boxlite::BoxliteError::NotFound(_)) => {
             // Startup failure cleanup may already remove the box from runtime state.
         }
         Err(e) => panic!("Cleanup should succeed after denied startup: {}", e),
