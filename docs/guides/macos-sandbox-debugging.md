@@ -6,6 +6,8 @@ This guide explains how to debug sandbox policy issues when developing or troubl
 
 BoxLite uses macOS's built-in sandbox system (Seatbelt) to isolate the `boxlite-shim` process. The sandbox uses SBPL (Sandbox Profile Language) policies that whitelist specific operations. When an operation is denied, macOS logs the denial to the system log.
 
+The shipped profile is **deny-by-default** (`(deny default)`) with explicit allowlists for required process/sysctl/mach/file/network operations.
+
 ## Quick Reference
 
 ```bash
@@ -199,29 +201,16 @@ BoxLite's sandbox policy is split into multiple files:
 | `seatbelt_file_read_policy.sbpl` | Static system paths for reading |
 | `seatbelt_file_write_policy.sbpl` | Static paths for writing (/tmp) |
 | `seatbelt_network_policy.sbpl` | Network access (optional) |
-| `macos.rs` | Dynamic paths (binary, volumes, box_dir) |
+| `seatbelt.rs` | Dynamic policy assembly (binary, volumes, box_dir) |
 
 ### Viewing Generated Policy
 
-To see the complete generated policy:
+The full runtime policy is assembled in `boxlite/src/jailer/sandbox/seatbelt.rs` by `build_sandbox_policy()` and passed directly via `sandbox-exec -p`.
 
-```rust
-// In Rust code
-use boxlite::jailer::{SecurityOptions, write_sandbox_profile};
-
-let security = SecurityOptions::default();
-let box_dir = Path::new("/tmp/test-box");
-let binary_path = Path::new("/path/to/boxlite-shim");
-
-write_sandbox_profile(
-    Path::new("/tmp/debug-policy.sbpl"),
-    &security,
-    box_dir,
-    binary_path,
-).unwrap();
-```
-
-Then inspect `/tmp/debug-policy.sbpl`.
+When debugging, inspect:
+- Static fragments in `boxlite/resources/seatbelt/*.sbpl`
+- Dynamic path grants from `build_dynamic_read_paths()` and `build_dynamic_write_paths()`
+- Sandbox denials from `log show`/`log stream` to identify missing allowlist clauses
 
 ## Common Issues
 
