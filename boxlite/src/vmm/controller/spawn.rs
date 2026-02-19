@@ -148,7 +148,7 @@ impl<'a> ShimSpawner<'a> {
         if self.options.advanced.security.jailer_enabled
             && self.options.advanced.security.sandbox_profile.is_none()
         {
-            let tmp_dir = self.layout.sockets_dir();
+            let tmp_dir = self.layout.tmp_dir();
             cmd.env("TMPDIR", &tmp_dir);
             cmd.env("TMP", &tmp_dir);
             cmd.env("TEMP", &tmp_dir);
@@ -229,7 +229,7 @@ mod tests {
         spawner.configure_env(&mut cmd);
 
         let envs: std::collections::HashMap<_, _> = cmd.get_envs().collect();
-        let expected = layout.sockets_dir();
+        let expected = layout.tmp_dir();
 
         assert_eq!(
             envs.get(OsStr::new("TMPDIR")).and_then(|v| *v),

@@ -161,6 +161,7 @@ use std::path::PathBuf;
 /// ├── shared/                     [RW]  # guest-visible virtio-fs share root
 /// ├── rootfs-base                 [RO]  # reflinked rootfs backing file for guest-rootfs.qcow2
 /// ├── sockets/                    [RW]  # libkrun vsock/unix sockets
+/// ├── tmp/                        [RW]  # shim/libkrun transient temp files
 /// ├── logs/                       [RW]  # shim logging + VM console output
 /// │   ├── boxlite-shim.log                # tracing_appender daily log
 /// │   └── console.log                     # libkrun serial console (krun_set_console_output)
@@ -182,7 +183,7 @@ fn build_path_access(layout: &BoxFilesystemLayout, volumes: &[VolumeSpec]) -> Ve
 
     // Writable directories (shim creates files inside these at runtime)
     // Note: mounts_dir not included — host writes before spawn, shim accesses via shared_dir
-    for dir in [layout.sockets_dir(), layout.logs_dir()] {
+    for dir in [layout.sockets_dir(), layout.tmp_dir(), layout.logs_dir()] {
         if dir.exists() {
             paths.push(PathAccess {
                 path: dir,
@@ -513,6 +514,7 @@ mod tests {
         // Create writable dirs the shim would write to
         // Note: mounts_dir is NOT included — host writes before spawn, shim reads via shared_dir
         std::fs::create_dir_all(layout.sockets_dir()).unwrap();
+        std::fs::create_dir_all(layout.tmp_dir()).unwrap();
         std::fs::create_dir_all(layout.logs_dir()).unwrap();
 
         let paths = build_path_access(&layout, &[]);
@@ -523,14 +525,18 @@ mod tests {
             .collect();
         assert_eq!(
             writable_dirs.len(),
-            2,
-            "Should have 2 writable dirs (sockets, logs)"
+            3,
+            "Should have 3 writable dirs (sockets, tmp, logs)"
         );
 
         // All should be writable
         for pa in &writable_dirs {
             assert!(pa.writable);
         }
+
+        let tmp = paths.iter().find(|p| p.path == layout.tmp_dir());
+        assert!(tmp.is_some(), "tmp/ should be included");
+        assert!(tmp.unwrap().writable, "tmp/ should be writable");
     }
 
     #[test]

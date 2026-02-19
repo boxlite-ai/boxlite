@@ -29,7 +29,6 @@
 
 use super::{PathAccess, Sandbox, SandboxContext};
 use boxlite_shared::errors::BoxliteResult;
-use std::collections::HashSet;
 use std::ffi::CStr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -237,12 +236,10 @@ fn build_sandbox_policy(paths: &[PathAccess], binary_path: &Path, network_enable
 /// Generate dynamic file-read policy for binary path + all pre-computed paths.
 fn build_dynamic_read_paths(binary_path: &Path, paths: &[PathAccess]) -> String {
     let mut policy = String::from("; Dynamic readable paths\n(allow file-read*\n");
-    let mut traversal_literals = HashSet::new();
 
     // Add binary's parent directory (contains bundled .dylibs)
     if let Some(bin_dir) = binary_path.parent() {
         let bin_dir = canonicalize_or_original(bin_dir);
-        push_parent_dir_literals(&mut policy, &bin_dir, &mut traversal_literals);
         policy.push_str(&format!(
             "    (subpath \"{}\")  ; shim binary + bundled libs\n",
             bin_dir.display()
@@ -260,7 +257,6 @@ fn build_dynamic_read_paths(binary_path: &Path, paths: &[PathAccess]) -> String 
     for pa in paths {
         let path = canonicalize_or_original(&pa.path);
         let marker = if pa.writable { "rw" } else { "ro" };
-        push_parent_dir_literals(&mut policy, &path, &mut traversal_literals);
         if pa.path.is_dir() {
             // Directory access needs both:
             // - literal: the directory node itself (open/stat on root)
@@ -323,30 +319,6 @@ fn build_dynamic_write_paths(paths: &[PathAccess]) -> String {
 /// Canonicalize a path, falling back to the original if canonicalization fails.
 fn canonicalize_or_original(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
-}
-
-/// Add literal read rules for parent directories used during path traversal.
-///
-/// libkrun's virtio-fs path handling may open ancestors one-by-one (openat walk),
-/// so deny-default seatbelt needs explicit metadata access to parent directories.
-/// These are literal-only grants (no descendant broadening).
-fn push_parent_dir_literals(policy: &mut String, path: &Path, emitted: &mut HashSet<PathBuf>) {
-    if !path.is_absolute() {
-        return;
-    }
-
-    for parent in path.ancestors().skip(1) {
-        if parent == Path::new("/") {
-            continue;
-        }
-        let parent_buf = parent.to_path_buf();
-        if emitted.insert(parent_buf.clone()) {
-            policy.push_str(&format!(
-                "    (literal \"{}\")  ; traversal metadata\n",
-                parent_buf.display()
-            ));
-        }
-    }
 }
 
 /// Get the Darwin user cache directory using confstr.
@@ -618,32 +590,45 @@ mod tests {
     }
 
     #[test]
-    fn test_dynamic_read_paths_include_parent_traversal_literals() {
+    fn test_dynamic_read_paths_do_not_include_parent_traversal_literals() {
         let binary_path = PathBuf::from("/usr/local/bin/boxlite-shim");
+        let dir = tempfile::tempdir().unwrap();
+        let shared_dir = dir.path().join("case/boxes/box-1/shared");
+        std::fs::create_dir_all(&shared_dir).unwrap();
+        let shared_dir = canonicalize_or_original(&shared_dir);
+        let box_dir = shared_dir.parent().unwrap();
+        let boxes_dir = box_dir.parent().unwrap();
+        let case_dir = boxes_dir.parent().unwrap();
+
         let paths = vec![PathAccess {
-            path: PathBuf::from("/Users/tester/.boxlite-it/case/boxes/box-1/shared"),
+            path: shared_dir.clone(),
             writable: true,
         }];
 
         let policy = build_dynamic_read_paths(&binary_path, &paths);
 
-        // Parent traversal literals (not broad subpaths) are required for
-        // deny-default directory walks in libkrun virtio-fs setup.
+        // Dynamic read policy should include explicit target path grants.
         assert!(
-            policy.contains("(literal \"/Users/tester/.boxlite-it/case/boxes/box-1\")"),
-            "Expected parent traversal literal for box directory: {policy}"
+            policy.contains(&format!("(literal \"{}\")", shared_dir.display())),
+            "Expected target directory literal grant: {policy}"
         );
         assert!(
-            policy.contains("(literal \"/Users/tester/.boxlite-it/case/boxes\")"),
-            "Expected parent traversal literal for boxes directory: {policy}"
+            policy.contains(&format!("(subpath \"{}\")", shared_dir.display())),
+            "Expected target directory subpath grant: {policy}"
+        );
+
+        // Parent traversal literals are intentionally omitted.
+        assert!(
+            !policy.contains(&format!("(literal \"{}\")", box_dir.display())),
+            "Did not expect parent traversal literal for box directory: {policy}"
         );
         assert!(
-            policy.contains("(literal \"/Users/tester/.boxlite-it/case\")"),
-            "Expected parent traversal literal for case directory: {policy}"
+            !policy.contains(&format!("(literal \"{}\")", boxes_dir.display())),
+            "Did not expect parent traversal literal for boxes directory: {policy}"
         );
         assert!(
-            !policy.contains("(subpath \"/Users/tester/.boxlite-it/case/boxes/box-1\")"),
-            "Parent traversal should stay literal-only (no broad subpath grants): {policy}"
+            !policy.contains(&format!("(literal \"{}\")", case_dir.display())),
+            "Did not expect parent traversal literal for case directory: {policy}"
         );
     }
 
