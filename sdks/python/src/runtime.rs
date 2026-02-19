@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use boxlite::BoxliteRuntime;
+use boxlite::{BoxliteRuntime, ImportOptions};
 use pyo3::prelude::*;
 
 use crate::box_handle::PyBox;
@@ -187,18 +187,18 @@ impl PyBoxlite {
     /// Import a box from a `.boxsnap` or `.boxlite` archive.
     ///
     /// Returns a Box handle for the imported box.
+    /// If `name` is omitted, the imported box remains unnamed.
+    #[pyo3(signature = (archive_path, name=None))]
     fn import_box<'py>(
         &self,
         py: Python<'py>,
         archive_path: String,
-        name: String,
+        name: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let runtime = Arc::clone(&self.runtime);
+        let options = ImportOptions::new(archive_path);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let handle = runtime
-                .import(std::path::Path::new(&archive_path), &name)
-                .await
-                .map_err(map_err)?;
+            let handle = runtime.import_box(options, name).await.map_err(map_err)?;
             Ok(PyBox {
                 handle: Arc::new(handle),
             })

@@ -596,10 +596,6 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
         self.info()
     }
 
-    fn as_local_impl(&self) -> Option<&Self> {
-        Some(self)
-    }
-
     async fn start(&self) -> BoxliteResult<()> {
         self.start().await
     }
@@ -632,6 +628,22 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
         opts: CopyOptions,
     ) -> BoxliteResult<()> {
         self.copy_out(container_src, host_dst, opts).await
+    }
+
+    async fn clone_box(
+        &self,
+        options: crate::runtime::options::CloneOptions,
+        name: &str,
+    ) -> BoxliteResult<crate::LiteBox> {
+        BoxImpl::clone_box(self, options, name).await
+    }
+
+    async fn export_box(
+        &self,
+        options: crate::runtime::options::ExportOptions,
+        dest: &std::path::Path,
+    ) -> BoxliteResult<std::path::PathBuf> {
+        BoxImpl::export_box(self, options, dest).await
     }
 }
 

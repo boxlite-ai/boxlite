@@ -325,6 +325,160 @@ paths:
           $ref: "#/components/responses/ConflictError"
 
   # -------------------------------------------------------------------------
+  # Snapshot / Portability
+  # -------------------------------------------------------------------------
+  /{prefix}/boxes/{box_id}/snapshots:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+    post:
+      operationId: createSnapshot
+      summary: Create a snapshot
+      description: |
+        Creates a named snapshot from the box's current stopped disk state.
+        The box must be stopped.
+      tags: [Boxes]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSnapshotRequest"
+      responses:
+        "201":
+          description: Snapshot created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Snapshot"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+    get:
+      operationId: listSnapshots
+      summary: List box snapshots
+      tags: [Boxes]
+      responses:
+        "200":
+          description: Snapshot list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListSnapshotsResponse"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+
+  /{prefix}/boxes/{box_id}/snapshots/{snapshot_name}:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+      - name: snapshot_name
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getSnapshot
+      summary: Get snapshot details
+      tags: [Boxes]
+      responses:
+        "200":
+          description: Snapshot details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Snapshot"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+    delete:
+      operationId: removeSnapshot
+      summary: Remove a snapshot
+      tags: [Boxes]
+      responses:
+        "204":
+          description: Snapshot removed
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+
+  /{prefix}/boxes/{box_id}/snapshots/{snapshot_name}/restore:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+      - name: snapshot_name
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      operationId: restoreSnapshot
+      summary: Restore box from snapshot
+      description: Restores the box's stopped disks from a named snapshot.
+      tags: [Boxes]
+      responses:
+        "204":
+          description: Snapshot restored
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+
+  /{prefix}/boxes/{box_id}/clone:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+    post:
+      operationId: cloneBox
+      summary: Clone a box
+      description: |
+        Creates a new box cloned from the source box's current state or a named snapshot.
+        The source box must be stopped.
+      tags: [Boxes]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CloneBoxRequest"
+      responses:
+        "201":
+          description: Cloned box created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Box"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+
+  /{prefix}/boxes/{box_id}/export:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+    post:
+      operationId: exportBox
+      summary: Export a box archive
+      description: Exports a stopped box as a portable archive payload.
+      tags: [Boxes]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ExportBoxRequest"
+      responses:
+        "200":
+          description: Archive payload
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+
+  # -------------------------------------------------------------------------
   # Execution
   # -------------------------------------------------------------------------
   /{prefix}/boxes/{box_id}/exec:
@@ -1033,6 +1187,18 @@ components:
               type: boolean
               description: Whether SSE output streaming is supported
               example: true
+            snapshots_enabled:
+              type: boolean
+              description: Whether snapshot create/list/get/remove/restore is supported
+              example: true
+            clone_enabled:
+              type: boolean
+              description: Whether box clone is supported
+              example: true
+            export_enabled:
+              type: boolean
+              description: Whether box export is supported
+              example: true
             supported_security_presets:
               type: array
               items:
@@ -1200,12 +1366,18 @@ components:
         - `running`: VM active, accepting commands
         - `stopping`: Graceful shutdown in progress (transient)
         - `stopped`: VM terminated, can be restarted
+        - `snapshotting`: Snapshot operation in progress (transient)
+        - `restoring`: Snapshot restore in progress (transient)
+        - `exporting`: Export operation in progress (transient)
         - `unknown`: Error recovery state
       enum:
         - configured
         - running
         - stopping
         - stopped
+        - snapshotting
+        - restoring
+        - exporting
         - unknown
 
     CreateBoxRequest:
@@ -1344,6 +1516,105 @@ components:
         - standard
         - maximum
       default: standard
+
+    Snapshot:
+      type: object
+      required:
+        - id
+        - box_id
+        - name
+        - created_at
+        - snapshot_dir
+        - guest_disk_bytes
+        - container_disk_bytes
+        - size_bytes
+      properties:
+        id:
+          type: string
+          description: Snapshot ULID
+        box_id:
+          type: string
+          description: Owning box ULID
+        name:
+          type: string
+          description: Snapshot name unique per box
+        created_at:
+          type: integer
+          format: int64
+          description: Unix timestamp (seconds)
+        snapshot_dir:
+          type: string
+          description: Backend-defined snapshot location identifier
+        guest_disk_bytes:
+          type: integer
+          format: int64
+        container_disk_bytes:
+          type: integer
+          format: int64
+        size_bytes:
+          type: integer
+          format: int64
+
+    CreateSnapshotRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 128
+        quiesce:
+          type: boolean
+          default: true
+        quiesce_timeout_secs:
+          type: integer
+          minimum: 0
+          default: 30
+        stop_on_quiesce_fail:
+          type: boolean
+          default: true
+
+    ListSnapshotsResponse:
+      type: object
+      required: [snapshots]
+      properties:
+        snapshots:
+          type: array
+          items:
+            $ref: "#/components/schemas/Snapshot"
+
+    CloneBoxRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 128
+        cow:
+          type: boolean
+          default: true
+        start_after_clone:
+          type: boolean
+          default: false
+        from_snapshot:
+          type: string
+          nullable: true
+
+    ExportBoxRequest:
+      type: object
+      properties:
+        compress:
+          type: boolean
+          default: true
+        compression_level:
+          type: integer
+          minimum: 1
+          maximum: 22
+          default: 3
+        include_metadata:
+          type: boolean
+          default: true
 
     StopBoxRequest:
       type: object

@@ -1,8 +1,9 @@
 use crate::db::{BoxStore, Database};
+use crate::disk::constants::filenames as disk_filenames;
 use crate::images::{ImageDiskManager, ImageManager};
 use crate::init_logging_for;
-use crate::litebox::config::BoxConfig;
-use crate::litebox::{BoxManager, LiteBox, SharedBoxImpl};
+use crate::litebox::config::{BoxConfig, ContainerRuntimeConfig};
+use crate::litebox::{BoxManager, LiteBox, LocalSnapshotBackend, SharedBoxImpl};
 use crate::lock::{FileLockManager, LockManager};
 use crate::metrics::{RuntimeMetrics, RuntimeMetricsStorage};
 use crate::runtime::constants::filenames;
@@ -10,21 +11,52 @@ use crate::runtime::guest_rootfs::GuestRootfs;
 use crate::runtime::guest_rootfs_manager::GuestRootfsManager;
 use crate::runtime::layout::{FilesystemLayout, FsLayoutConfig};
 use crate::runtime::lock::RuntimeLock;
-use crate::runtime::options::{BoxOptions, BoxliteOptions};
+use crate::runtime::options::{BoxOptions, BoxliteOptions, ImportOptions, RootfsSpec};
 use crate::runtime::signal_handler::timeout_to_duration;
 use crate::runtime::types::{BoxID, BoxInfo, BoxState, BoxStatus, ContainerID};
 use crate::vmm::VmmKind;
 use boxlite_shared::{BoxliteError, BoxliteResult, Transport};
 use chrono::Utc;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::{Arc, RwLock, Weak};
 use tokio::sync::OnceCell;
 use tokio_util::sync::CancellationToken;
+
+fn litebox_from_impl(box_impl: SharedBoxImpl) -> LiteBox {
+    let box_backend: Arc<dyn crate::runtime::backend::BoxBackend> = box_impl.clone();
+    let snapshot_backend: Arc<dyn crate::runtime::backend::SnapshotBackend> =
+        Arc::new(LocalSnapshotBackend::new(box_impl));
+    LiteBox::new(box_backend, snapshot_backend)
+}
 
 /// Internal runtime state protected by single lock.
 ///
 /// **Shared via Arc**: This is the actual shared state that can be cloned cheaply.
 pub type SharedRuntimeImpl = Arc<RuntimeImpl>;
+
+/// Archive manifest stored as `manifest.json` inside exported archives.
+///
+/// Compatible with both v1 (plain tar) and v2 (tar.zst with checksums).
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ArchiveManifest {
+    /// Archive format version (1 or 2).
+    pub version: u32,
+    /// Original box name (optional, may be renamed on import).
+    pub box_name: Option<String>,
+    /// Image reference used to create the box (e.g. "alpine:latest").
+    pub image: String,
+    /// SHA-256 checksum of the guest rootfs disk.
+    pub guest_disk_checksum: String,
+    /// SHA-256 checksum of the container disk.
+    pub container_disk_checksum: String,
+    /// Timestamp when the archive was created.
+    pub exported_at: String,
+}
+
+const MAX_SUPPORTED_VERSION: u32 = 2;
+const MANIFEST_FILENAME: &str = "manifest.json";
 
 /// Runtime inner implementation.
 ///
@@ -256,6 +288,142 @@ impl RuntimeImpl {
         self.create_inner(options, name, true).await
     }
 
+    /// Import a box from a `.boxsnap` or `.boxlite` archive.
+    ///
+    /// Creates a new box with a new ID from archived disk images and
+    /// configuration. The imported box starts in `Stopped` state.
+    pub async fn import_box(
+        self: &Arc<Self>,
+        options: ImportOptions,
+        name: Option<String>,
+    ) -> BoxliteResult<LiteBox> {
+        let archive_path = options.archive_path;
+        if !archive_path.exists() {
+            return Err(BoxliteError::NotFound(format!(
+                "Archive not found: {}",
+                archive_path.display()
+            )));
+        }
+
+        // Extract archive to temp directory.
+        let temp_dir = tempfile::tempdir_in(self.layout.temp_dir()).map_err(|e| {
+            BoxliteError::Storage(format!("Failed to create temp directory: {}", e))
+        })?;
+
+        // Try zstd decompression first, fall back to plain tar.
+        extract_archive(&archive_path, temp_dir.path())?;
+
+        // Read and validate manifest.
+        let manifest_path = temp_dir.path().join(MANIFEST_FILENAME);
+        if !manifest_path.exists() {
+            return Err(BoxliteError::Storage(
+                "Invalid archive: manifest.json not found".to_string(),
+            ));
+        }
+
+        let manifest_json = std::fs::read_to_string(&manifest_path)?;
+        let manifest: ArchiveManifest = serde_json::from_str(&manifest_json)
+            .map_err(|e| BoxliteError::Storage(format!("Invalid manifest: {}", e)))?;
+
+        if manifest.version > MAX_SUPPORTED_VERSION {
+            return Err(BoxliteError::Storage(format!(
+                "Unsupported archive version {} (max supported: {}). Upgrade boxlite.",
+                manifest.version, MAX_SUPPORTED_VERSION
+            )));
+        }
+
+        // Validate required files exist in extracted archive.
+        let extracted_container = temp_dir.path().join(disk_filenames::CONTAINER_DISK);
+        if !extracted_container.exists() {
+            return Err(BoxliteError::Storage(format!(
+                "Invalid archive: {} not found",
+                disk_filenames::CONTAINER_DISK
+            )));
+        }
+
+        // Generate new box identity.
+        let box_id = BoxID::new();
+        let container_id = ContainerID::new();
+        let now = Utc::now();
+        let import_name = name;
+
+        let box_home = self.layout.boxes_dir().join(box_id.as_str());
+        let socket_path = filenames::unix_socket_path(self.layout.home_dir(), box_id.as_str());
+        let ready_socket_path = box_home.join("sockets").join("ready.sock");
+
+        // Create box directory.
+        std::fs::create_dir_all(&box_home).map_err(|e| {
+            BoxliteError::Storage(format!(
+                "Failed to create box directory {}: {}",
+                box_home.display(),
+                e
+            ))
+        })?;
+
+        // Move disk files into box directory.
+        std::fs::rename(
+            &extracted_container,
+            box_home.join(disk_filenames::CONTAINER_DISK),
+        )
+        .map_err(|e| BoxliteError::Storage(format!("Failed to install container disk: {}", e)))?;
+
+        let extracted_guest = temp_dir.path().join(disk_filenames::GUEST_ROOTFS_DISK);
+        if extracted_guest.exists() {
+            std::fs::rename(
+                &extracted_guest,
+                box_home.join(disk_filenames::GUEST_ROOTFS_DISK),
+            )
+            .map_err(|e| {
+                BoxliteError::Storage(format!("Failed to install guest rootfs disk: {}", e))
+            })?;
+        }
+
+        // Reconstruct BoxOptions from the image reference.
+        let options = BoxOptions {
+            rootfs: RootfsSpec::Image(manifest.image),
+            ..Default::default()
+        };
+
+        // Build config for the imported box.
+        let config = BoxConfig {
+            id: box_id.clone(),
+            name: import_name,
+            created_at: now,
+            container: ContainerRuntimeConfig { id: container_id },
+            options,
+            engine_kind: VmmKind::Libkrun,
+            transport: boxlite_shared::Transport::unix(socket_path),
+            box_home,
+            ready_socket_path,
+        };
+
+        // Create state as Stopped (box has disk state, just needs VM start).
+        let mut state = BoxState::new();
+        state.set_status(BoxStatus::Stopped);
+
+        // Allocate lock.
+        let lock_id = self.lock_manager.allocate()?;
+        state.set_lock_id(lock_id);
+
+        // Persist to database.
+        if let Err(e) = self.box_manager.add_box(&config, &state) {
+            let _ = self.lock_manager.free(lock_id);
+            let _ = std::fs::remove_dir_all(&config.box_home);
+            return Err(e);
+        }
+
+        tracing::info!(
+            box_id = %config.id,
+            archive = %archive_path.display(),
+            "Imported box from archive"
+        );
+
+        // Return a LiteBox handle.
+        self.get(box_id.as_str()).await?.ok_or_else(|| {
+            BoxliteError::Internal("Imported box not found after persist".to_string())
+        })
+    }
+
     /// Inner create logic shared by `create()` and `get_or_create()`.
     ///
     /// When `reuse_existing` is false, returns an error if a box with the same
@@ -281,7 +449,7 @@ impl RuntimeImpl {
         {
             if reuse_existing {
                 let (box_impl, _) = self.get_or_create_box_impl(config, state);
-                return Ok((LiteBox::new(box_impl), false));
+                return Ok((litebox_from_impl(box_impl), false));
             } else {
                 return Err(BoxliteError::InvalidArgument(format!(
                     "box with name '{}' already exists",
@@ -321,7 +489,7 @@ impl RuntimeImpl {
                 && let Some((config, state)) = self.box_manager.lookup_box(name)?
             {
                 let (box_impl, _) = self.get_or_create_box_impl(config, state);
-                return Ok((LiteBox::new(box_impl), false));
+                return Ok((litebox_from_impl(box_impl), false));
             }
 
             return Err(e);
@@ -347,7 +515,7 @@ impl RuntimeImpl {
             .boxes_created
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-        Ok((LiteBox::new(box_impl), true))
+        Ok((litebox_from_impl(box_impl), true))
     }
 
     /// Get a handle to an existing box by ID or name.
@@ -370,7 +538,7 @@ impl RuntimeImpl {
                 && let Some(strong) = weak.upgrade()
             {
                 tracing::trace!(box_id = %box_id, "Found box in cache by ID");
-                return Ok(Some(LiteBox::new(strong)));
+                return Ok(Some(litebox_from_impl(strong)));
             }
 
             // Try as name
@@ -378,7 +546,7 @@ impl RuntimeImpl {
                 && let Some(strong) = weak.upgrade()
             {
                 tracing::trace!(name = %id_or_name, "Found box in cache by name");
-                return Ok(Some(LiteBox::new(strong)));
+                return Ok(Some(litebox_from_impl(strong)));
             }
         }
 
@@ -399,7 +567,7 @@ impl RuntimeImpl {
 
             let (box_impl, _) = self.get_or_create_box_impl(config, state);
             tracing::trace!(id_or_name = %id_or_name, "LiteBox created successfully");
-            return Ok(Some(LiteBox::new(box_impl)));
+            return Ok(Some(litebox_from_impl(box_impl)));
         }
 
         tracing::trace!(id_or_name = %id_or_name, "Box not found");
@@ -1258,6 +1426,55 @@ impl RuntimeImpl {
     }
 }
 
+/// Extract an archive, auto-detecting format (try zstd first, then plain tar).
+fn extract_archive(archive_path: &Path, dest_dir: &Path) -> BoxliteResult<()> {
+    let file = std::fs::File::open(archive_path).map_err(|e| {
+        BoxliteError::Storage(format!(
+            "Failed to open archive {}: {}",
+            archive_path.display(),
+            e
+        ))
+    })?;
+
+    // Try zstd-compressed tar first.
+    match try_extract_zstd_tar(file, dest_dir) {
+        Ok(()) => return Ok(()),
+        Err(_) => {
+            // Fall back to plain tar.
+            let file = std::fs::File::open(archive_path).map_err(|e| {
+                BoxliteError::Storage(format!(
+                    "Failed to reopen archive {}: {}",
+                    archive_path.display(),
+                    e
+                ))
+            })?;
+            extract_plain_tar(file, dest_dir)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Try to extract a zstd-compressed tar archive.
+fn try_extract_zstd_tar(file: std::fs::File, dest_dir: &Path) -> BoxliteResult<()> {
+    let decoder = zstd::Decoder::new(file)
+        .map_err(|e| BoxliteError::Storage(format!("Not a zstd archive: {}", e)))?;
+    let mut archive = tar::Archive::new(decoder);
+    archive
+        .unpack(dest_dir)
+        .map_err(|e| BoxliteError::Storage(format!("Failed to extract zstd tar: {}", e)))?;
+    Ok(())
+}
+
+/// Extract a plain tar archive.
+fn extract_plain_tar(file: std::fs::File, dest_dir: &Path) -> BoxliteResult<()> {
+    let mut archive = tar::Archive::new(file);
+    archive
+        .unpack(dest_dir)
+        .map_err(|e| BoxliteError::Storage(format!("Failed to extract archive: {}", e)))?;
+    Ok(())
+}
+
 impl std::fmt::Debug for RuntimeImpl {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RuntimeInner")
@@ -1322,6 +1539,14 @@ impl super::backend::RuntimeBackend for LocalRuntime {
         self.0.shutdown(timeout).await
     }
 
+    async fn import_box(
+        &self,
+        options: ImportOptions,
+        name: Option<String>,
+    ) -> BoxliteResult<crate::litebox::LiteBox> {
+        self.0.import_box(options, name).await
+    }
+
     fn shutdown_sync(&self) {
         self.0.shutdown_sync();
     }
@@ -1329,7 +1554,7 @@ impl super::backend::RuntimeBackend for LocalRuntime {
 
 // Image operations (separate from RuntimeBackend)
 #[async_trait::async_trait]
-impl super::images::ImageManager for LocalRuntime {
+impl super::images::ImageBackend for LocalRuntime {
     async fn pull_image(&self, image_ref: &str) -> BoxliteResult<crate::images::ImageObject> {
         self.0.image_manager.pull(image_ref).await
     }
@@ -1974,6 +2199,30 @@ mod tests {
 
         child.kill().ok();
         child.wait().ok();
+    }
+
+    #[tokio::test]
+    async fn test_import_box_delegates_through_local_runtime() {
+        let (runtime, dir) = create_test_runtime();
+        let missing_archive = dir.path().join("missing.boxsnap");
+
+        let local = LocalRuntime(Arc::clone(&runtime));
+        let result = RuntimeBackend::import_box(
+            &local,
+            ImportOptions::new(missing_archive),
+            Some("imported".to_string()),
+        )
+        .await;
+
+        match result {
+            Err(BoxliteError::NotFound(msg)) => {
+                assert!(
+                    msg.contains("Archive not found"),
+                    "Expected archive-not-found error, got: {msg}"
+                );
+            }
+            _ => panic!("Expected NotFound for missing archive"),
+        }
     }
 
     // ====================================================================

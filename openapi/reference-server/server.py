@@ -132,6 +132,26 @@ class ResizeRequest(BaseModel):
     rows: int
 
 
+class CreateSnapshotRequest(BaseModel):
+    name: str
+    quiesce: bool = True
+    quiesce_timeout_secs: int = 30
+    stop_on_quiesce_fail: bool = True
+
+
+class CloneBoxRequest(BaseModel):
+    name: str
+    cow: bool = True
+    start_after_clone: bool = False
+    from_snapshot: Optional[str] = None
+
+
+class ExportBoxRequest(BaseModel):
+    compress: bool = True
+    compression_level: int = 3
+    include_metadata: bool = True
+
+
 # ============================================================================
 # State
 # ============================================================================
@@ -336,6 +356,20 @@ def build_box_options(req: CreateBoxRequest) -> boxlite.BoxOptions:
     return boxlite.BoxOptions(**kwargs)
 
 
+def snapshot_info_to_dict(info) -> dict:
+    # Do not expose host filesystem paths over REST.
+    return {
+        "id": info.id,
+        "box_id": info.box_id,
+        "name": info.name,
+        "created_at": info.created_at,
+        "snapshot_dir": f"remote://snapshots/{info.name}",
+        "guest_disk_bytes": info.guest_disk_bytes,
+        "container_disk_bytes": info.container_disk_bytes,
+        "size_bytes": info.size_bytes,
+    }
+
+
 async def get_box_or_404(box_id: str):
     box_handle = await state.runtime.get(box_id)
     if box_handle is None:
@@ -375,7 +409,9 @@ def get_active_execution_or_404(exec_id: str) -> ActiveExecution:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    state.runtime = boxlite.Boxlite.default()
+    # Prefer a public mirror first to avoid Docker Hub unauthenticated pull limits.
+    options = boxlite.Options(image_registries=["mirror.gcr.io", "docker.io"])
+    state.runtime = boxlite.Boxlite(options)
     logger.info("BoxLite runtime initialized")
     yield
     try:
@@ -424,6 +460,9 @@ async def get_config():
             "exec_timeout_max_seconds": 3600,
             "tty_enabled": True,
             "streaming_enabled": True,
+            "snapshots_enabled": True,
+            "clone_enabled": True,
+            "export_enabled": True,
             "supported_security_presets": ["development", "standard", "maximum"],
             "idempotency_key_lifetime": "PT24H",
         },
@@ -544,6 +583,121 @@ async def stop_box(
     return box_info_to_dict(info)
 
 
+@app.post("/v1/{prefix}/boxes/{box_id}/snapshots", status_code=201)
+async def create_snapshot(
+    prefix: str,
+    box_id: str,
+    req: CreateSnapshotRequest,
+    _auth: dict = Depends(require_auth),
+):
+    box_handle = await get_box_or_404(box_id)
+    opts = boxlite.SnapshotOptions(
+        quiesce=req.quiesce,
+        quiesce_timeout_secs=req.quiesce_timeout_secs,
+        stop_on_quiesce_fail=req.stop_on_quiesce_fail,
+    )
+    info = await box_handle.snapshot.create(req.name, opts)
+    return JSONResponse(status_code=201, content=snapshot_info_to_dict(info))
+
+
+@app.get("/v1/{prefix}/boxes/{box_id}/snapshots")
+async def list_snapshots(
+    prefix: str,
+    box_id: str,
+    _auth: dict = Depends(require_auth),
+):
+    box_handle = await get_box_or_404(box_id)
+    snapshots = await box_handle.snapshot.list()
+    return {"snapshots": [snapshot_info_to_dict(s) for s in snapshots]}
+
+
+@app.get("/v1/{prefix}/boxes/{box_id}/snapshots/{snapshot_name}")
+async def get_snapshot(
+    prefix: str,
+    box_id: str,
+    snapshot_name: str,
+    _auth: dict = Depends(require_auth),
+):
+    box_handle = await get_box_or_404(box_id)
+    info = await box_handle.snapshot.get(snapshot_name)
+    if info is None:
+        return error_response(
+            404, f"snapshot '{snapshot_name}' not found", "NotFoundError"
+        )
+    return snapshot_info_to_dict(info)
+
+
+@app.delete("/v1/{prefix}/boxes/{box_id}/snapshots/{snapshot_name}", status_code=204)
+async def remove_snapshot(
+    prefix: str,
+    box_id: str,
+    snapshot_name: str,
+    _auth: dict = Depends(require_auth),
+):
+    box_handle = await get_box_or_404(box_id)
+    await box_handle.snapshot.remove(snapshot_name)
+    return Response(status_code=204)
+
+
+@app.post(
+    "/v1/{prefix}/boxes/{box_id}/snapshots/{snapshot_name}/restore",
+    status_code=204,
+)
+async def restore_snapshot(
+    prefix: str,
+    box_id: str,
+    snapshot_name: str,
+    _auth: dict = Depends(require_auth),
+):
+    box_handle = await get_box_or_404(box_id)
+    await box_handle.snapshot.restore(snapshot_name)
+    return Response(status_code=204)
+
+
+@app.post("/v1/{prefix}/boxes/{box_id}/clone", status_code=201)
+async def clone_box(
+    prefix: str,
+    box_id: str,
+    req: CloneBoxRequest,
+    _auth: dict = Depends(require_auth),
+):
+    box_handle = await get_box_or_404(box_id)
+    opts = boxlite.CloneOptions(
+        cow=req.cow,
+        start_after_clone=req.start_after_clone,
+        from_snapshot=req.from_snapshot,
+    )
+    cloned = await box_handle.clone(req.name, opts)
+    info = cloned.info()
+    return JSONResponse(
+        status_code=201,
+        content=box_info_to_dict(info),
+        headers={"Location": f"/v1/{prefix}/boxes/{info.id}"},
+    )
+
+
+@app.post("/v1/{prefix}/boxes/{box_id}/export")
+async def export_box(
+    prefix: str,
+    box_id: str,
+    req: ExportBoxRequest,
+    _auth: dict = Depends(require_auth),
+):
+    box_handle = await get_box_or_404(box_id)
+    opts = boxlite.ExportOptions(
+        compress=req.compress,
+        compression_level=req.compression_level,
+        include_metadata=req.include_metadata,
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        archive_path = await box_handle.export(tmpdir, opts)
+        with open(archive_path, "rb") as f:
+            payload = f.read()
+
+    return Response(content=payload, media_type="application/octet-stream")
+
+
 # ============================================================================
 # Execution
 # ============================================================================
@@ -566,7 +720,23 @@ async def start_execution(
     if req.tty:
         kwargs["tty"] = True
 
-    execution = await box_handle.exec(req.command, **kwargs)
+    # Box startup and guest bridge establishment can be briefly racy; retry
+    # transient transport errors so exec behaves like a stable REST surface.
+    execution = None
+    last_error = None
+    for _ in range(5):
+        try:
+            execution = await box_handle.exec(req.command, **kwargs)
+            break
+        except Exception as err:
+            message = str(err).lower()
+            if "transport error" not in message:
+                raise
+            last_error = err
+            await asyncio.sleep(0.2)
+    if execution is None:
+        raise last_error  # type: ignore[misc]
+
     exec_id = execution.id()
 
     # Take streams immediately (can only be called once)

@@ -3,17 +3,17 @@
 //! Provides lazy initialization and execution capabilities for isolated boxes.
 
 pub(crate) mod box_impl;
-mod clone;
 pub(crate) mod config;
 pub mod copy;
 mod crash_report;
 mod exec;
-mod export;
 mod init;
+mod local_snapshot;
 mod manager;
 mod snapshot;
-pub mod snapshot_types;
 mod state;
+
+use std::path::PathBuf;
 
 pub use copy::CopyOptions;
 pub(crate) use crash_report::CrashReport;
@@ -24,14 +24,17 @@ pub use state::{BoxState, BoxStatus};
 
 pub(crate) use box_impl::SharedBoxImpl;
 pub(crate) use init::BoxBuilder;
+pub(crate) use local_snapshot::LocalSnapshotBackend;
 
 use std::path::Path;
 use std::sync::Arc;
 
 use crate::metrics::BoxMetrics;
-use crate::runtime::backend::BoxBackend;
+use crate::runtime::backend::{BoxBackend, SnapshotBackend};
+use crate::runtime::options::CloneOptions;
+use crate::runtime::options::ExportOptions;
 use crate::{BoxID, BoxInfo};
-use boxlite_shared::errors::{BoxliteError, BoxliteResult};
+use boxlite_shared::errors::BoxliteResult;
 pub use config::BoxConfig;
 
 /// LiteBox - Handle to a box.
@@ -45,16 +48,26 @@ pub struct LiteBox {
     id: BoxID,
     /// Box name for quick access without locking.
     name: Option<String>,
-    /// Backend implementation.
-    inner: Arc<dyn BoxBackend>,
+    /// Backend for lifecycle/exec/file operations.
+    box_backend: Arc<dyn BoxBackend>,
+    /// Backend for snapshot lifecycle operations.
+    snapshot_backend: Arc<dyn SnapshotBackend>,
 }
 
 impl LiteBox {
-    /// Create a LiteBox from a backend implementation.
-    pub(crate) fn new(inner: Arc<dyn BoxBackend>) -> Self {
-        let id = inner.id().clone();
-        let name = inner.name().map(|s| s.to_string());
-        Self { id, name, inner }
+    /// Create a LiteBox from backend implementations.
+    pub(crate) fn new(
+        box_backend: Arc<dyn BoxBackend>,
+        snapshot_backend: Arc<dyn SnapshotBackend>,
+    ) -> Self {
+        let id = box_backend.id().clone();
+        let name = box_backend.name().map(|s| s.to_string());
+        Self {
+            id,
+            name,
+            box_backend,
+            snapshot_backend,
+        }
     }
 
     pub fn id(&self) -> &BoxID {
@@ -67,7 +80,7 @@ impl LiteBox {
 
     /// Get box info without triggering VM initialization.
     pub fn info(&self) -> BoxInfo {
-        self.inner.info()
+        self.box_backend.info()
     }
 
     /// Start the box (initialize VM).
@@ -78,19 +91,19 @@ impl LiteBox {
     /// This is idempotent - calling start() on a Running box is a no-op.
     /// Also called implicitly by exec() if the box is not running.
     pub async fn start(&self) -> BoxliteResult<()> {
-        self.inner.start().await
+        self.box_backend.start().await
     }
 
     pub async fn exec(&self, command: BoxCommand) -> BoxliteResult<Execution> {
-        self.inner.exec(command).await
+        self.box_backend.exec(command).await
     }
 
     pub async fn metrics(&self) -> BoxliteResult<BoxMetrics> {
-        self.inner.metrics().await
+        self.box_backend.metrics().await
     }
 
     pub async fn stop(&self) -> BoxliteResult<()> {
-        self.inner.stop().await
+        self.box_backend.stop().await
     }
 
     /// Copy files/directories from host into the container rootfs.
@@ -100,23 +113,9 @@ impl LiteBox {
         container_dst: impl AsRef<str>,
         opts: copy::CopyOptions,
     ) -> BoxliteResult<()> {
-        self.inner
+        self.box_backend
             .copy_into(host_src.as_ref(), container_dst.as_ref(), opts)
             .await
-    }
-
-    /// Get a snapshot handle for snapshot operations.
-    pub fn snapshot(&self) -> SnapshotHandle<'_> {
-        SnapshotHandle::new(self)
-    }
-
-    pub(crate) fn require_local_impl(&self) -> BoxliteResult<&crate::litebox::box_impl::BoxImpl> {
-        self.inner.as_local_impl().ok_or_else(|| {
-            BoxliteError::Unsupported(
-                "This operation is only supported for local runtimes (not REST backends)"
-                    .to_string(),
-            )
-        })
     }
 
     /// Copy files/directories from container rootfs to host.
@@ -126,9 +125,24 @@ impl LiteBox {
         host_dst: impl AsRef<Path>,
         opts: copy::CopyOptions,
     ) -> BoxliteResult<()> {
-        self.inner
+        self.box_backend
             .copy_out(container_src.as_ref(), host_dst.as_ref(), opts)
             .await
+    }
+
+    /// Get a snapshot handle for snapshot operations.
+    pub fn snapshots(&self) -> SnapshotHandle {
+        SnapshotHandle::new(Arc::clone(&self.snapshot_backend))
+    }
+
+    /// Clone this box, creating a new box with a copy of its disks.
+    pub async fn clone(&self, options: CloneOptions, name: &str) -> BoxliteResult<LiteBox> {
+        self.box_backend.clone_box(options, name).await
+    }
+
+    /// Export this box as a portable `.boxsnap` archive.
+    pub async fn export(&self, options: ExportOptions, dest: &Path) -> BoxliteResult<PathBuf> {
+        self.box_backend.export_box(options, dest).await
     }
 }
 

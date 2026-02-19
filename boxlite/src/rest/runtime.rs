@@ -6,7 +6,7 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use crate::metrics::RuntimeMetrics;
 use crate::runtime::backend::RuntimeBackend;
-use crate::runtime::options::BoxOptions;
+use crate::runtime::options::{BoxOptions, ImportOptions};
 use crate::{BoxInfo, LiteBox};
 
 use super::client::ApiClient;
@@ -25,14 +25,20 @@ impl RestRuntime {
     }
 }
 
+fn litebox_from_rest(rest_box: Arc<RestBox>) -> LiteBox {
+    let box_backend: Arc<dyn crate::runtime::backend::BoxBackend> = rest_box.clone();
+    let snapshot_backend: Arc<dyn crate::runtime::backend::SnapshotBackend> = rest_box;
+    LiteBox::new(box_backend, snapshot_backend)
+}
+
 #[async_trait::async_trait]
 impl RuntimeBackend for RestRuntime {
     async fn create(&self, options: BoxOptions, name: Option<String>) -> BoxliteResult<LiteBox> {
         let req = CreateBoxRequest::from_options(&options, name);
         let resp: BoxResponse = self.client.post("/boxes", &req).await?;
         let info = resp.to_box_info();
-        let rest_box = RestBox::new(self.client.clone(), info);
-        Ok(LiteBox::new(Arc::new(rest_box)))
+        let rest_box = Arc::new(RestBox::new(self.client.clone(), info));
+        Ok(litebox_from_rest(rest_box))
     }
 
     async fn get_or_create(
@@ -56,8 +62,8 @@ impl RuntimeBackend for RestRuntime {
         match self.client.get::<BoxResponse>(&path).await {
             Ok(resp) => {
                 let info = resp.to_box_info();
-                let rest_box = RestBox::new(self.client.clone(), info);
-                Ok(Some(LiteBox::new(Arc::new(rest_box))))
+                let rest_box = Arc::new(RestBox::new(self.client.clone(), info));
+                Ok(Some(litebox_from_rest(rest_box)))
             }
             Err(BoxliteError::NotFound(_)) => Ok(None),
             Err(e) => Err(e),
@@ -104,6 +110,16 @@ impl RuntimeBackend for RestRuntime {
         // The server manages its own lifecycle.
         Ok(())
     }
+
+    async fn import_box(
+        &self,
+        _options: ImportOptions,
+        _name: Option<String>,
+    ) -> BoxliteResult<LiteBox> {
+        Err(BoxliteError::Unsupported(
+            "This operation is only supported for local runtimes (not REST backends)".to_string(),
+        ))
+    }
 }
 
 /// Convert REST metrics response to core RuntimeMetrics.
@@ -129,4 +145,32 @@ fn runtime_metrics_from_response(resp: &RuntimeMetricsResponse) -> RuntimeMetric
         .store(resp.total_exec_errors, Ordering::Relaxed);
 
     RuntimeMetrics::new(storage)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_import_box_is_unsupported() {
+        let options = BoxliteRestOptions::new("http://localhost:8080");
+        let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
+
+        let result = RuntimeBackend::import_box(
+            &runtime,
+            ImportOptions::new("/tmp/ignored.boxsnap"),
+            Some("x".to_string()),
+        )
+        .await;
+
+        match result {
+            Err(BoxliteError::Unsupported(msg)) => {
+                assert!(
+                    msg.contains("only supported for local runtimes"),
+                    "Unexpected unsupported error: {msg}"
+                );
+            }
+            _ => panic!("Expected Unsupported for REST import_box"),
+        }
+    }
 }

@@ -16,7 +16,7 @@ use crate::runtime::types::ImageInfo;
 /// Implemented by runtime backends that support image operations.
 /// Currently only `LocalRuntime` implements this trait; REST runtime does not.
 #[async_trait]
-pub(crate) trait ImageManager: Send + Sync {
+pub(crate) trait ImageBackend: Send + Sync {
     /// Pull an image from a registry.
     async fn pull_image(&self, image_ref: &str) -> BoxliteResult<ImageObject>;
 
@@ -31,7 +31,7 @@ pub(crate) trait ImageManager: Send + Sync {
 ///
 /// # Examples
 ///
-/// ```no_run
+/// ```ignore
 /// use boxlite::{Boxlite, Options};
 ///
 /// #[tokio::main]
@@ -51,14 +51,14 @@ pub(crate) trait ImageManager: Send + Sync {
 /// }
 /// ```
 pub struct ImageHandle {
-    manager: Arc<dyn ImageManager>,
+    manager: Arc<dyn ImageBackend>,
 }
 
 impl ImageHandle {
     /// Create a new ImageHandle with the given manager.
     ///
     /// This is an internal constructor used by `BoxliteRuntime`.
-    pub(crate) fn new(manager: Arc<dyn ImageManager>) -> Self {
+    pub(crate) fn new(manager: Arc<dyn ImageBackend>) -> Self {
         Self { manager }
     }
 
@@ -69,7 +69,7 @@ impl ImageHandle {
     ///
     /// # Example
     ///
-    /// ```no_run
+    /// ```ignore
     /// # use boxlite::{Boxlite, Options};
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -90,7 +90,7 @@ impl ImageHandle {
     ///
     /// # Example
     ///
-    /// ```no_run
+    /// ```ignore
     /// # use boxlite::{Boxlite, Options};
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {

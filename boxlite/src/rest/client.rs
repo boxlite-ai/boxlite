@@ -11,7 +11,7 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use super::error::{map_http_error, map_http_status};
 use super::options::BoxliteRestOptions;
-use super::types::{ErrorResponse, TokenRequest, TokenResponse};
+use super::types::{ErrorResponse, SandboxConfigResponse, TokenRequest, TokenResponse};
 
 /// Cached OAuth2 token with expiry.
 struct TokenCache {
@@ -32,6 +32,7 @@ pub(crate) struct ApiClient {
     client_id: Option<String>,
     client_secret: Option<String>,
     token_cache: Arc<RwLock<Option<TokenCache>>>,
+    config_cache: Arc<RwLock<Option<SandboxConfigResponse>>>,
 }
 
 impl ApiClient {
@@ -51,6 +52,7 @@ impl ApiClient {
             client_id: config.client_id.clone(),
             client_secret: config.client_secret.clone(),
             token_cache: Arc::new(RwLock::new(None)),
+            config_cache: Arc::new(RwLock::new(None)),
         })
     }
 
@@ -200,6 +202,11 @@ impl ApiClient {
         self.send_json(builder).await
     }
 
+    pub async fn get_root<T: DeserializeOwned>(&self, path: &str) -> BoxliteResult<T> {
+        let builder = self.http.get(self.url_root(path));
+        self.send_json(builder).await
+    }
+
     pub async fn post<B: Serialize, T: DeserializeOwned>(
         &self,
         path: &str,
@@ -217,6 +224,35 @@ impl ApiClient {
     pub async fn post_empty<T: DeserializeOwned>(&self, path: &str) -> BoxliteResult<T> {
         let builder = self.http.post(self.url(path));
         self.send_json(builder).await
+    }
+
+    pub async fn post_empty_no_content(&self, path: &str) -> BoxliteResult<()> {
+        let builder = self.http.post(self.url(path));
+        self.send_no_content(builder).await
+    }
+
+    pub async fn post_for_bytes<B: Serialize>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> BoxliteResult<Vec<u8>> {
+        let builder = self.http.post(self.url(path)).json(body);
+        let builder = self.authorize(builder).await?;
+        let resp = builder
+            .send()
+            .await
+            .map_err(|e| BoxliteError::Internal(format!("HTTP request failed: {}", e)))?;
+
+        let status = resp.status();
+        if status.is_success() {
+            let bytes = resp
+                .bytes()
+                .await
+                .map_err(|e| BoxliteError::Internal(format!("failed to read response: {}", e)))?;
+            Ok(bytes.to_vec())
+        } else {
+            self.handle_error::<Vec<u8>>(status, resp).await
+        }
     }
 
     pub async fn delete(&self, path: &str) -> BoxliteResult<()> {
@@ -286,5 +322,86 @@ impl ApiClient {
         }
 
         self.send_no_content(builder).await
+    }
+
+    pub async fn get_config(&self) -> BoxliteResult<SandboxConfigResponse> {
+        {
+            let cache = self.config_cache.read().await;
+            if let Some(config) = cache.as_ref() {
+                return Ok(config.clone());
+            }
+        }
+
+        let config: SandboxConfigResponse = self.get_root("/config").await?;
+        let mut cache = self.config_cache.write().await;
+        *cache = Some(config.clone());
+        Ok(config)
+    }
+
+    pub async fn require_snapshots_enabled(&self) -> BoxliteResult<()> {
+        let config = self.get_config().await?;
+        let capabilities = config.capabilities.ok_or_else(|| {
+            BoxliteError::Unsupported(
+                "Remote server did not advertise snapshots capability".to_string(),
+            )
+        })?;
+        ensure_capability("snapshots", capabilities.snapshots_enabled)
+    }
+
+    pub async fn require_clone_enabled(&self) -> BoxliteResult<()> {
+        let config = self.get_config().await?;
+        let capabilities = config.capabilities.ok_or_else(|| {
+            BoxliteError::Unsupported(
+                "Remote server did not advertise clone capability".to_string(),
+            )
+        })?;
+        ensure_capability("clone", capabilities.clone_enabled)
+    }
+
+    pub async fn require_export_enabled(&self) -> BoxliteResult<()> {
+        let config = self.get_config().await?;
+        let capabilities = config.capabilities.ok_or_else(|| {
+            BoxliteError::Unsupported(
+                "Remote server did not advertise export capability".to_string(),
+            )
+        })?;
+        ensure_capability("export", capabilities.export_enabled)
+    }
+}
+
+fn ensure_capability(name: &str, enabled: Option<bool>) -> BoxliteResult<()> {
+    match enabled {
+        Some(true) => Ok(()),
+        Some(false) => Err(BoxliteError::Unsupported(format!(
+            "Remote server does not support {} operations",
+            name
+        ))),
+        None => Err(BoxliteError::Unsupported(format!(
+            "Remote server did not advertise {} capability",
+            name
+        ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ensure_capability;
+    use boxlite_shared::errors::BoxliteError;
+
+    #[test]
+    fn test_ensure_capability_enabled() {
+        assert!(ensure_capability("snapshots", Some(true)).is_ok());
+    }
+
+    #[test]
+    fn test_ensure_capability_disabled() {
+        let err = ensure_capability("snapshots", Some(false)).unwrap_err();
+        assert!(matches!(err, BoxliteError::Unsupported(_)));
+    }
+
+    #[test]
+    fn test_ensure_capability_missing() {
+        let err = ensure_capability("snapshots", None).unwrap_err();
+        assert!(matches!(err, BoxliteError::Unsupported(_)));
     }
 }

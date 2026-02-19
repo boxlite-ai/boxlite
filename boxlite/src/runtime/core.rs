@@ -6,11 +6,15 @@ use std::sync::{Arc, OnceLock};
 use crate::litebox::LiteBox;
 use crate::metrics::RuntimeMetrics;
 use crate::runtime::backend::RuntimeBackend;
-use crate::runtime::options::{BoxOptions, BoxliteOptions};
-use crate::runtime::rt_impl::{LocalRuntime, RuntimeImpl, SharedRuntimeImpl};
+use crate::runtime::images::ImageBackend;
+use crate::runtime::options::{BoxOptions, BoxliteOptions, ImportOptions};
+use crate::runtime::rt_impl::{LocalRuntime, RuntimeImpl};
 use crate::runtime::signal_handler::install_signal_handler;
 use crate::runtime::types::BoxInfo;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
+
+#[cfg(feature = "rest")]
+use crate::rest::runtime::RestRuntime;
 // ============================================================================
 // GLOBAL DEFAULT RUNTIME
 // ============================================================================
@@ -52,8 +56,7 @@ extern "C" fn shutdown_on_exit() {
 #[derive(Clone)]
 pub struct BoxliteRuntime {
     backend: Arc<dyn RuntimeBackend>,
-    image_manager: Option<Arc<dyn crate::runtime::images::ImageManager>>,
-    local_runtime: Option<SharedRuntimeImpl>,
+    image_backend: Option<Arc<dyn ImageBackend>>,
 }
 
 // ============================================================================
@@ -74,14 +77,11 @@ impl BoxliteRuntime {
     /// - Image API initialization fails
     pub fn new(options: BoxliteOptions) -> BoxliteResult<Self> {
         let local = LocalRuntime(RuntimeImpl::new(options)?);
-        let local_runtime = Arc::clone(&local.0);
         let backend_arc = Arc::new(local);
-        let image_manager =
-            Arc::clone(&backend_arc) as Arc<dyn crate::runtime::images::ImageManager>;
+        let image_backend = Arc::clone(&backend_arc) as Arc<dyn ImageBackend>;
         Ok(Self {
             backend: backend_arc,
-            image_manager: Some(image_manager),
-            local_runtime: Some(local_runtime),
+            image_backend: Some(image_backend),
         })
     }
 
@@ -104,11 +104,10 @@ impl BoxliteRuntime {
     /// ```
     #[cfg(feature = "rest")]
     pub fn rest(config: crate::rest::options::BoxliteRestOptions) -> BoxliteResult<Self> {
-        let rest_runtime = crate::rest::runtime::RestRuntime::new(&config)?;
+        let rest_runtime = RestRuntime::new(&config)?;
         Ok(Self {
             backend: Arc::new(rest_runtime),
-            image_manager: None, // REST runtime doesn't support image operations
-            local_runtime: None,
+            image_backend: None, // REST runtime doesn't support image operations
         })
     }
 
@@ -221,7 +220,7 @@ impl BoxliteRuntime {
     ///
     /// # Example
     ///
-    /// ```no_run
+    /// ```ignore
     /// use boxlite::runtime::{BoxliteRuntime, BoxliteOptions};
     /// use std::path::PathBuf;
     ///
@@ -311,6 +310,19 @@ impl BoxliteRuntime {
         self.backend.remove(id_or_name, force).await
     }
 
+    /// Import a box from a `.boxsnap` or `.boxlite` archive.
+    ///
+    /// Creates a new box with a new ID from archived disk images and configuration.
+    /// Pass `name=None` to keep the imported box unnamed.
+    /// Support depends on backend capabilities (local backends implement import).
+    pub async fn import_box(
+        &self,
+        options: ImportOptions,
+        name: Option<String>,
+    ) -> BoxliteResult<LiteBox> {
+        self.backend.import_box(options, name).await
+    }
+
     // ========================================================================
     // SHUTDOWN OPERATIONS
     // ========================================================================
@@ -390,21 +402,12 @@ impl BoxliteRuntime {
     /// # }
     /// ```
     pub fn images(&self) -> BoxliteResult<crate::runtime::ImageHandle> {
-        match &self.image_manager {
+        match &self.image_backend {
             Some(manager) => Ok(crate::runtime::ImageHandle::new(Arc::clone(manager))),
             None => Err(BoxliteError::Unsupported(
                 "Image operations not supported over REST API".to_string(),
             )),
         }
-    }
-
-    pub(crate) fn require_local_runtime(&self) -> BoxliteResult<&SharedRuntimeImpl> {
-        self.local_runtime.as_ref().ok_or_else(|| {
-            BoxliteError::Unsupported(
-                "This operation is only supported for local runtimes (not REST backends)"
-                    .to_string(),
-            )
-        })
     }
 }
 

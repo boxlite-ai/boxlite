@@ -1,15 +1,18 @@
 //! Runtime backend trait — internal abstraction for local vs REST execution.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 
+use crate::db::snapshots::SnapshotInfo;
 use crate::litebox::copy::CopyOptions;
 use crate::litebox::{BoxCommand, Execution, LiteBox};
 use crate::metrics::{BoxMetrics, RuntimeMetrics};
-use crate::runtime::options::BoxOptions;
+use crate::runtime::options::{
+    BoxOptions, CloneOptions, ExportOptions, ImportOptions, SnapshotOptions,
+};
 use crate::runtime::types::BoxInfo;
-use boxlite_shared::errors::BoxliteResult;
+use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use super::types::BoxID;
 
@@ -44,6 +47,16 @@ pub(crate) trait RuntimeBackend: Send + Sync {
 
     async fn shutdown(&self, timeout: Option<i32>) -> BoxliteResult<()>;
 
+    async fn import_box(
+        &self,
+        _options: ImportOptions,
+        _name: Option<String>,
+    ) -> BoxliteResult<LiteBox> {
+        Err(BoxliteError::Unsupported(
+            "This operation is only supported for local runtimes (not REST backends)".to_string(),
+        ))
+    }
+
     /// Synchronous shutdown for atexit/Drop contexts.
     /// Default no-op (REST backend doesn't manage local processes).
     fn shutdown_sync(&self) {}
@@ -60,14 +73,6 @@ pub(crate) trait BoxBackend: Send + Sync {
     fn name(&self) -> Option<&str>;
 
     fn info(&self) -> BoxInfo;
-
-    /// Expose local BoxImpl internals for local-only operations.
-    ///
-    /// REST backends return `None`, and callers should surface a clear
-    /// `Unsupported` error for operations that require local filesystem access.
-    fn as_local_impl(&self) -> Option<&crate::litebox::box_impl::BoxImpl> {
-        None
-    }
 
     async fn start(&self) -> BoxliteResult<()>;
 
@@ -90,6 +95,27 @@ pub(crate) trait BoxBackend: Send + Sync {
         host_dst: &Path,
         opts: CopyOptions,
     ) -> BoxliteResult<()>;
+
+    async fn clone_box(&self, options: CloneOptions, name: &str) -> BoxliteResult<LiteBox>;
+
+    async fn export_box(&self, options: ExportOptions, dest: &Path) -> BoxliteResult<PathBuf>;
+}
+
+/// Backend abstraction for snapshot lifecycle operations on a box.
+///
+/// Kept separate from `BoxBackend` so lifecycle/exec/file operations can evolve
+/// independently from snapshot/clone/export behavior.
+#[async_trait]
+pub(crate) trait SnapshotBackend: Send + Sync {
+    async fn create(&self, options: SnapshotOptions, name: &str) -> BoxliteResult<SnapshotInfo>;
+
+    async fn list(&self) -> BoxliteResult<Vec<SnapshotInfo>>;
+
+    async fn get(&self, name: &str) -> BoxliteResult<Option<SnapshotInfo>>;
+
+    async fn remove(&self, name: &str) -> BoxliteResult<()>;
+
+    async fn restore(&self, name: &str) -> BoxliteResult<()>;
 }
 
 /// Backend abstraction for execution control (kill, resize).

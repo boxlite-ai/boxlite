@@ -13,7 +13,9 @@
 
 #![cfg(feature = "rest")]
 
-use boxlite::{BoxCommand, BoxOptions, BoxliteRestOptions, BoxliteRuntime};
+use boxlite::{
+    BoxCommand, BoxOptions, BoxliteRestOptions, BoxliteRuntime, CloneOptions, ExportOptions,
+};
 
 /// Create a REST-backed runtime pointing at the reference server.
 fn rest_runtime() -> BoxliteRuntime {
@@ -245,4 +247,134 @@ async fn test_rest_not_found() {
         .expect("get should not error for missing box");
 
     assert!(result.is_none(), "non-existent box should return None");
+}
+
+// ── Snapshot / Clone / Export ─────────────────────────────────────────────
+
+#[tokio::test]
+#[ignore]
+async fn test_rest_snapshot_lifecycle() {
+    let rt = rest_runtime();
+    let opts = BoxOptions {
+        auto_remove: false,
+        ..Default::default()
+    };
+
+    let litebox = rt
+        .create(opts, Some("test-snapshot".into()))
+        .await
+        .expect("create failed");
+    let id_str = litebox.id().to_string();
+
+    // Move to stopped state (not configured) so snapshot preconditions match local behavior.
+    litebox.start().await.expect("start failed");
+    litebox.stop().await.expect("stop failed");
+
+    let snapshot = litebox
+        .snapshots()
+        .create(Default::default(), "snap1")
+        .await
+        .expect("snapshot create failed");
+    assert_eq!(snapshot.name, "snap1");
+
+    let snapshots = litebox
+        .snapshots()
+        .list()
+        .await
+        .expect("snapshot list failed");
+    assert!(snapshots.iter().any(|s| s.name == "snap1"));
+
+    let got = litebox
+        .snapshots()
+        .get("snap1")
+        .await
+        .expect("snapshot get failed");
+    assert!(got.is_some(), "snapshot should exist");
+
+    litebox
+        .snapshots()
+        .restore("snap1")
+        .await
+        .expect("snapshot restore failed");
+    litebox
+        .snapshots()
+        .remove("snap1")
+        .await
+        .expect("snapshot remove failed");
+
+    let after_remove = litebox
+        .snapshots()
+        .get("snap1")
+        .await
+        .expect("snapshot get after remove failed");
+    assert!(after_remove.is_none(), "snapshot should be removed");
+
+    rt.remove(&id_str, true).await.ok();
+}
+
+#[tokio::test]
+#[ignore]
+async fn test_rest_clone_from_snapshot() {
+    let rt = rest_runtime();
+    let opts = BoxOptions {
+        auto_remove: false,
+        ..Default::default()
+    };
+
+    let source = rt
+        .create(opts, Some("test-clone-source".into()))
+        .await
+        .expect("create failed");
+    let source_id = source.id().to_string();
+
+    source.start().await.expect("start failed");
+    source.stop().await.expect("stop failed");
+    source
+        .snapshots()
+        .create(Default::default(), "snap-clone")
+        .await
+        .expect("snapshot create failed");
+
+    let mut clone_opts = CloneOptions::default();
+    clone_opts.from_snapshot("snap-clone");
+    let cloned = source
+        .clone(clone_opts, "test-clone-child")
+        .await
+        .expect("clone failed");
+    let cloned_id = cloned.id().to_string();
+    assert_ne!(source_id, cloned_id, "clone should create new box");
+
+    rt.remove(&cloned_id, true).await.ok();
+    rt.remove(&source_id, true).await.ok();
+}
+
+#[tokio::test]
+#[ignore]
+async fn test_rest_export_box() {
+    let rt = rest_runtime();
+    let opts = BoxOptions {
+        auto_remove: false,
+        ..Default::default()
+    };
+
+    let litebox = rt
+        .create(opts, Some("test-export".into()))
+        .await
+        .expect("create failed");
+    let id_str = litebox.id().to_string();
+
+    litebox.start().await.expect("start failed");
+    litebox.stop().await.expect("stop failed");
+
+    let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
+    let archive_path = litebox
+        .export(ExportOptions::default(), temp_dir.path())
+        .await
+        .expect("export failed");
+
+    assert!(archive_path.exists(), "export archive file should exist");
+    let metadata = std::fs::metadata(&archive_path).expect("failed to stat export archive");
+    assert!(metadata.len() > 0, "export archive should be non-empty");
+
+    rt.remove(&id_str, true).await.ok();
 }

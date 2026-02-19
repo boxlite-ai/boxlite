@@ -1,6 +1,7 @@
 //! RestBox — implements BoxBackend for the REST API.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use parking_lot::RwLock;
@@ -10,15 +11,20 @@ use tokio::sync::mpsc;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use crate::BoxInfo;
+use crate::db::snapshots::SnapshotInfo;
 use crate::litebox::copy::CopyOptions;
 use crate::litebox::{BoxCommand, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execution};
 use crate::metrics::BoxMetrics;
-use crate::runtime::backend::BoxBackend;
+use crate::runtime::backend::{BoxBackend, SnapshotBackend};
+use crate::runtime::options::{CloneOptions, ExportOptions, SnapshotOptions};
 use crate::runtime::types::BoxID;
 
 use super::client::ApiClient;
 use super::exec::RestExecControl;
-use super::types::{BoxMetricsResponse, BoxResponse, ExecRequest, ExecResponse};
+use super::types::{
+    BoxMetricsResponse, BoxResponse, CloneBoxRequest, CreateSnapshotRequest, ExecRequest,
+    ExecResponse, ExportBoxRequest, ListSnapshotsResponse, SnapshotResponse,
+};
 
 /// REST-backed box handle.
 ///
@@ -221,6 +227,118 @@ impl BoxBackend for RestBox {
 
         // Extract tar to host path
         extract_tar_to_path(&tar_bytes, host_dst)
+    }
+
+    async fn clone_box(&self, options: CloneOptions, name: &str) -> BoxliteResult<crate::LiteBox> {
+        self.client.require_clone_enabled().await?;
+
+        let box_id = self.box_id_str();
+        let path = format!("/boxes/{}/clone", box_id);
+        let req = CloneBoxRequest::from_options(&options, name);
+        let resp: BoxResponse = self.client.post(&path, &req).await?;
+
+        let info = resp.to_box_info();
+        let rest_box = Arc::new(RestBox::new(self.client.clone(), info));
+        let box_backend: Arc<dyn BoxBackend> = rest_box.clone();
+        let snapshot_backend: Arc<dyn SnapshotBackend> = rest_box;
+        Ok(crate::LiteBox::new(box_backend, snapshot_backend))
+    }
+
+    async fn export_box(
+        &self,
+        options: ExportOptions,
+        dest: &Path,
+    ) -> BoxliteResult<std::path::PathBuf> {
+        self.client.require_export_enabled().await?;
+
+        let box_id = self.box_id_str();
+        let path = format!("/boxes/{}/export", box_id);
+        let req = ExportBoxRequest::from_options(&options);
+        let archive_bytes = self.client.post_for_bytes(&path, &req).await?;
+
+        let output_path = if dest.is_dir() {
+            let name = self.name().unwrap_or("box");
+            dest.join(format!("{}.boxsnap", name))
+        } else {
+            dest.to_path_buf()
+        };
+
+        if let Some(parent) = output_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                BoxliteError::Storage(format!(
+                    "Failed to create export destination directory {}: {}",
+                    parent.display(),
+                    e
+                ))
+            })?;
+        }
+
+        std::fs::write(&output_path, archive_bytes).map_err(|e| {
+            BoxliteError::Storage(format!(
+                "Failed to write export archive {}: {}",
+                output_path.display(),
+                e
+            ))
+        })?;
+
+        Ok(output_path)
+    }
+}
+
+#[async_trait]
+impl SnapshotBackend for RestBox {
+    async fn create(&self, options: SnapshotOptions, name: &str) -> BoxliteResult<SnapshotInfo> {
+        self.client.require_snapshots_enabled().await?;
+
+        let box_id = self.box_id_str();
+        let path = format!("/boxes/{}/snapshots", box_id);
+        let req = CreateSnapshotRequest::from_options(&options, name);
+        let resp: SnapshotResponse = self.client.post(&path, &req).await?;
+        Ok(resp.to_snapshot_info())
+    }
+
+    async fn list(&self) -> BoxliteResult<Vec<SnapshotInfo>> {
+        self.client.require_snapshots_enabled().await?;
+
+        let box_id = self.box_id_str();
+        let path = format!("/boxes/{}/snapshots", box_id);
+        let resp: ListSnapshotsResponse = self.client.get(&path).await?;
+        Ok(resp
+            .snapshots
+            .iter()
+            .map(SnapshotResponse::to_snapshot_info)
+            .collect())
+    }
+
+    async fn get(&self, name: &str) -> BoxliteResult<Option<SnapshotInfo>> {
+        self.client.require_snapshots_enabled().await?;
+
+        let box_id = self.box_id_str();
+        let encoded_name = urlencoding::encode(name);
+        let path = format!("/boxes/{}/snapshots/{}", box_id, encoded_name);
+        match self.client.get::<SnapshotResponse>(&path).await {
+            Ok(resp) => Ok(Some(resp.to_snapshot_info())),
+            Err(BoxliteError::NotFound(_)) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    async fn remove(&self, name: &str) -> BoxliteResult<()> {
+        self.client.require_snapshots_enabled().await?;
+
+        let box_id = self.box_id_str();
+        let encoded_name = urlencoding::encode(name);
+        let path = format!("/boxes/{}/snapshots/{}", box_id, encoded_name);
+        self.client.delete(&path).await
+    }
+
+    async fn restore(&self, name: &str) -> BoxliteResult<()> {
+        self.client.require_snapshots_enabled().await?;
+
+        let box_id = self.box_id_str();
+        let encoded_name = urlencoding::encode(name);
+        let path = format!("/boxes/{}/snapshots/{}/restore", box_id, encoded_name);
+        self.client.post_empty_no_content(&path).await
     }
 }
 

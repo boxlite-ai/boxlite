@@ -7,6 +7,10 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::db::snapshots::SnapshotInfo;
+use crate::litebox::BoxStatus;
+use crate::runtime::options::{CloneOptions, ExportOptions, SnapshotOptions};
+
 // ============================================================================
 // Error Model
 // ============================================================================
@@ -42,6 +46,22 @@ pub(crate) struct TokenResponse {
     #[allow(dead_code)]
     pub token_type: String,
     pub expires_in: u64,
+}
+
+// ============================================================================
+// Configuration
+// ============================================================================
+
+#[derive(Debug, Deserialize, Clone)]
+pub(crate) struct SandboxConfigResponse {
+    pub capabilities: Option<SandboxCapabilities>,
+}
+
+#[derive(Debug, Deserialize, Clone, Default)]
+pub(crate) struct SandboxCapabilities {
+    pub snapshots_enabled: Option<bool>,
+    pub clone_enabled: Option<bool>,
+    pub export_enabled: Option<bool>,
 }
 
 // ============================================================================
@@ -134,18 +154,11 @@ pub(crate) struct BoxResponse {
 
 impl BoxResponse {
     pub fn to_box_info(&self) -> crate::BoxInfo {
-        use crate::litebox::BoxStatus;
         use crate::runtime::types::BoxID;
 
         let id = BoxID::parse(&self.box_id).unwrap_or_default();
 
-        let status = match self.status.as_str() {
-            "configured" => BoxStatus::Configured,
-            "running" => BoxStatus::Running,
-            "stopping" => BoxStatus::Stopping,
-            "stopped" => BoxStatus::Stopped,
-            _ => BoxStatus::Unknown,
-        };
+        let status = parse_box_status(&self.status);
 
         let created_at = chrono::DateTime::parse_from_rfc3339(&self.created_at)
             .map(|dt| dt.with_timezone(&chrono::Utc))
@@ -175,6 +188,98 @@ pub(crate) struct ListBoxesResponse {
     pub boxes: Vec<BoxResponse>,
     #[allow(dead_code)]
     pub next_page_token: Option<String>,
+}
+
+// ============================================================================
+// Snapshot / Clone / Export
+// ============================================================================
+
+#[derive(Debug, Serialize)]
+pub(crate) struct CreateSnapshotRequest {
+    pub name: String,
+    pub quiesce: bool,
+    pub quiesce_timeout_secs: u64,
+    pub stop_on_quiesce_fail: bool,
+}
+
+impl CreateSnapshotRequest {
+    pub fn from_options(options: &SnapshotOptions, name: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            quiesce: options.quiesce,
+            quiesce_timeout_secs: options.quiesce_timeout_secs,
+            stop_on_quiesce_fail: options.stop_on_quiesce_fail,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub(crate) struct SnapshotResponse {
+    pub id: String,
+    pub box_id: String,
+    pub name: String,
+    pub created_at: i64,
+    pub snapshot_dir: String,
+    pub guest_disk_bytes: u64,
+    pub container_disk_bytes: u64,
+    pub size_bytes: u64,
+}
+
+impl SnapshotResponse {
+    pub fn to_snapshot_info(&self) -> SnapshotInfo {
+        SnapshotInfo {
+            id: self.id.clone(),
+            box_id: self.box_id.clone(),
+            name: self.name.clone(),
+            created_at: self.created_at,
+            snapshot_dir: self.snapshot_dir.clone(),
+            guest_disk_bytes: self.guest_disk_bytes,
+            container_disk_bytes: self.container_disk_bytes,
+            size_bytes: self.size_bytes,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct ListSnapshotsResponse {
+    pub snapshots: Vec<SnapshotResponse>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct CloneBoxRequest {
+    pub name: String,
+    pub cow: bool,
+    pub start_after_clone: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from_snapshot: Option<String>,
+}
+
+impl CloneBoxRequest {
+    pub fn from_options(options: &CloneOptions, name: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            cow: options.cow,
+            start_after_clone: options.start_after_clone,
+            from_snapshot: options.from_snapshot.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct ExportBoxRequest {
+    pub compress: bool,
+    pub compression_level: i32,
+    pub include_metadata: bool,
+}
+
+impl ExportBoxRequest {
+    pub fn from_options(options: &ExportOptions) -> Self {
+        Self {
+            compress: options.compress,
+            compression_level: options.compression_level,
+            include_metadata: options.include_metadata,
+        }
+    }
 }
 
 // ============================================================================
@@ -281,6 +386,19 @@ pub(crate) struct BootTimingResponse {
     pub box_config_ms: Option<u64>,
     pub box_spawn_ms: Option<u64>,
     pub container_init_ms: Option<u64>,
+}
+
+fn parse_box_status(status: &str) -> BoxStatus {
+    match status {
+        "configured" => BoxStatus::Configured,
+        "running" => BoxStatus::Running,
+        "stopping" => BoxStatus::Stopping,
+        "stopped" => BoxStatus::Stopped,
+        "snapshotting" => BoxStatus::Snapshotting,
+        "restoring" => BoxStatus::Restoring,
+        "exporting" => BoxStatus::Exporting,
+        _ => BoxStatus::Unknown,
+    }
 }
 
 #[cfg(test)]
@@ -419,5 +537,62 @@ mod tests {
         let resp: RuntimeMetricsResponse = serde_json::from_str(json).unwrap();
         assert_eq!(resp.boxes_created_total, 10);
         assert_eq!(resp.total_commands_executed, 100);
+    }
+
+    #[test]
+    fn test_box_status_transient_mapping() {
+        let mut resp = BoxResponse {
+            box_id: "01J0000000000000000000000A".to_string(),
+            name: Some("mybox".to_string()),
+            status: "snapshotting".to_string(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            updated_at: "2024-01-01T00:01:00Z".to_string(),
+            pid: Some(1234),
+            image: "python:3.11".to_string(),
+            cpus: 2,
+            memory_mib: 512,
+            labels: HashMap::new(),
+        };
+
+        assert_eq!(resp.to_box_info().status, BoxStatus::Snapshotting);
+        resp.status = "restoring".to_string();
+        assert_eq!(resp.to_box_info().status, BoxStatus::Restoring);
+        resp.status = "exporting".to_string();
+        assert_eq!(resp.to_box_info().status, BoxStatus::Exporting);
+    }
+
+    #[test]
+    fn test_sandbox_config_capabilities_deserialization() {
+        let json = r#"{
+            "capabilities": {
+                "snapshots_enabled": true,
+                "clone_enabled": false,
+                "export_enabled": true
+            }
+        }"#;
+        let resp: SandboxConfigResponse = serde_json::from_str(json).unwrap();
+        let caps = resp.capabilities.unwrap();
+        assert_eq!(caps.snapshots_enabled, Some(true));
+        assert_eq!(caps.clone_enabled, Some(false));
+        assert_eq!(caps.export_enabled, Some(true));
+    }
+
+    #[test]
+    fn test_snapshot_response_to_snapshot_info() {
+        let resp = SnapshotResponse {
+            id: "01JABCDEF0123456789XYZABCD".to_string(),
+            box_id: "01J0000000000000000000000A".to_string(),
+            name: "snap1".to_string(),
+            created_at: 1_700_000_000,
+            snapshot_dir: "remote://snapshots/snap1".to_string(),
+            guest_disk_bytes: 1024,
+            container_disk_bytes: 2048,
+            size_bytes: 4096,
+        };
+
+        let info = resp.to_snapshot_info();
+        assert_eq!(info.name, "snap1");
+        assert_eq!(info.snapshot_dir, "remote://snapshots/snap1");
+        assert_eq!(info.size_bytes, 4096);
     }
 }
