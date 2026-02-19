@@ -5,7 +5,7 @@
 ; Static system paths required for any process to execute on macOS.
 ; These are the MINIMUM paths needed for dynamic linking and execution.
 ;
-; User volumes are added dynamically by macos.rs at runtime.
+; User volumes are added dynamically by seatbelt.rs at runtime.
 ;
 ; Why these paths are needed:
 ;   - /usr/lib: libSystem.B.dylib and other system libraries
@@ -23,8 +23,11 @@
     ; === Root and /var directory metadata ===
     ; libkrun/virtio-fs needs to stat "/" and "/var" for path canonicalization.
     ; /var is a symlink to /private/var on macOS, stat needed for resolution.
+    ; /tmp traversal metadata is required for exec of dynamic binaries created
+    ; under TempDir::new_in("/tmp") in integration tests and runtime flows.
     (literal "/")
     (literal "/var")
+    (literal "/tmp")
 
     ; === System Libraries (required for dynamic linking) ===
     ; Without these, sandbox-exec itself cannot start the shim
@@ -47,5 +50,5 @@
 ; ============================================================================
 ; END OF STATIC FILE READ POLICY
 ; ============================================================================
-; User volumes are added dynamically by macos.rs
+; User volumes are added dynamically by seatbelt.rs
 ; ============================================================================

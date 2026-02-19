@@ -140,6 +140,7 @@ pub trait Jail: Send + Sync {
 // Jailer<S: Sandbox> — implements Jail
 // ============================================================================
 
+use crate::disk::read_backing_file_path;
 use crate::runtime::layout::BoxFilesystemLayout;
 use std::path::PathBuf;
 
@@ -157,7 +158,7 @@ use std::path::PathBuf;
 /// ```text
 /// {box_dir}/                          # NOT granted wholesale
 /// ├── bin/                        [RO]  # copied shim binary + bundled libs
-/// ├── shared/                     [RO]  # guest-visible container images
+/// ├── shared/                     [RW]  # guest-visible virtio-fs share root
 /// ├── rootfs-base                 [RO]  # reflinked base rootfs (qcow2 backing)
 /// ├── sockets/                    [RW]  # libkrun vsock/unix sockets
 /// ├── logs/                       [RW]  # shim logging + VM console output
@@ -205,14 +206,59 @@ fn build_path_access(layout: &BoxFilesystemLayout, volumes: &[VolumeSpec]) -> Ve
         }
     }
 
-    // Read-only directories (shim reads but never writes)
-    for dir in [layout.bin_dir(), layout.shared_dir()] {
-        if dir.exists() {
-            paths.push(PathAccess {
-                path: dir,
-                writable: false,
-            });
+    // Qcow2 overlays may reference backing files outside box_dir (for example
+    // ~/.boxlite/images/disk-images/*.ext4). Under deny-default seatbelt, those
+    // backing files must be explicitly granted as read-only or libkrun fails
+    // virtio-blk setup with EINVAL.
+    for qcow2 in [layout.disk_path(), layout.guest_rootfs_disk_path()] {
+        if !qcow2.exists() {
+            continue;
         }
+        match read_backing_file_path(&qcow2) {
+            Ok(Some(backing)) => {
+                let backing_path = PathBuf::from(backing);
+                if backing_path.exists() {
+                    if let Some(parent) = backing_path.parent().filter(|p| p.exists()) {
+                        paths.push(PathAccess {
+                            path: parent.to_path_buf(),
+                            writable: false,
+                        });
+                    }
+                    paths.push(PathAccess {
+                        path: backing_path,
+                        writable: false,
+                    });
+                }
+            }
+            Ok(None) => {}
+            Err(e) => {
+                tracing::debug!(
+                    qcow2 = %qcow2.display(),
+                    error = %e,
+                    "Failed to read qcow2 backing path while building sandbox access"
+                );
+            }
+        }
+    }
+
+    // Read-only directory (shim binary + bundled dylibs)
+    let bin_dir = layout.bin_dir();
+    if bin_dir.exists() {
+        paths.push(PathAccess {
+            path: bin_dir,
+            writable: false,
+        });
+    }
+
+    // shared/ is exposed as a read-write virtio-fs share root on macOS.
+    // libkrun's passthrough fs opens this path during worker init; under
+    // deny-default seatbelt it must be writable to avoid EPERM startup panics.
+    let shared_dir = layout.shared_dir();
+    if shared_dir.exists() {
+        paths.push(PathAccess {
+            path: shared_dir,
+            writable: true,
+        });
     }
 
     // Rootfs backing file: prefer box-local reflink, fallback to home_dir/rootfs/
@@ -406,9 +452,20 @@ impl<S: Sandbox> Jailer<S> {
     ///
     /// Delegates to [`build_path_access`] for granular filesystem rules.
     fn context(&self) -> SandboxContext<'_> {
+        let paths = build_path_access(&self.layout, &self.volumes);
+        tracing::debug!(
+            box_id = %self.box_id,
+            path_count = paths.len(),
+            paths = ?paths,
+            "Built sandbox path access list"
+        );
+        if std::env::var_os("BOXLITE_DEBUG_PRINT_SEATBELT").is_some() {
+            eprintln!("BOXLITE_DEBUG paths for {}: {:#?}", self.box_id, paths);
+        }
+
         SandboxContext {
             id: &self.box_id,
-            paths: build_path_access(&self.layout, &self.volumes),
+            paths,
             resource_limits: &self.security.resource_limits,
             network_enabled: self.security.network_enabled,
             sandbox_profile: self.security.sandbox_profile.as_deref(),
@@ -505,14 +562,19 @@ mod tests {
         let box_dir = dir.path().to_path_buf();
         let layout = test_layout(box_dir.clone());
 
-        // Create read-only dirs
+        // Create bin + shared dirs
         std::fs::create_dir_all(layout.bin_dir()).unwrap();
         std::fs::create_dir_all(layout.shared_dir()).unwrap();
 
         let paths = build_path_access(&layout, &[]);
 
-        let ro_dirs: Vec<_> = paths.iter().filter(|p| !p.writable).collect();
-        assert_eq!(ro_dirs.len(), 2, "bin/ + shared/ should be read-only");
+        let bin = paths.iter().find(|p| p.path == layout.bin_dir());
+        assert!(bin.is_some(), "bin/ should be included");
+        assert!(!bin.unwrap().writable, "bin/ should be read-only");
+
+        let shared = paths.iter().find(|p| p.path == layout.shared_dir());
+        assert!(shared.is_some(), "shared/ should be included");
+        assert!(shared.unwrap().writable, "shared/ should be writable");
     }
 
     #[test]
@@ -554,6 +616,52 @@ mod tests {
         let rootfs_paths: Vec<_> = paths.iter().filter(|p| p.path == rootfs_dir).collect();
         assert_eq!(rootfs_paths.len(), 1, "Should fallback to home_dir/rootfs/");
         assert!(!rootfs_paths[0].writable);
+    }
+
+    #[test]
+    fn test_build_path_access_includes_qcow2_backing_file() {
+        use crate::disk::{BackingFormat, Qcow2Helper};
+
+        let dir = tempdir().unwrap();
+        let home_dir = dir.path().to_path_buf();
+        let boxes_dir = home_dir.join("boxes");
+        let box_dir = boxes_dir.join("test-box");
+        std::fs::create_dir_all(&box_dir).unwrap();
+
+        // Simulate image cache backing file outside box_dir.
+        let disk_images_dir = home_dir.join("images").join("disk-images");
+        std::fs::create_dir_all(&disk_images_dir).unwrap();
+        let base_disk = disk_images_dir.join("sha256-test.ext4");
+        std::fs::write(&base_disk, vec![0u8; 1024 * 1024]).unwrap();
+
+        let layout = test_layout(box_dir);
+        let child_disk = Qcow2Helper::new()
+            .create_cow_child_disk(
+                &base_disk,
+                BackingFormat::Raw,
+                &layout.disk_path(),
+                16 * 1024 * 1024,
+            )
+            .unwrap();
+
+        let paths = build_path_access(&layout, &[]);
+
+        let expected_backing = base_disk.canonicalize().unwrap_or(base_disk);
+        let backing_paths: Vec<_> = paths
+            .iter()
+            .filter(|p| {
+                p.path.canonicalize().unwrap_or_else(|_| p.path.clone()) == expected_backing
+            })
+            .collect();
+        assert_eq!(
+            backing_paths.len(),
+            1,
+            "Expected qcow2 backing file to be included in sandbox paths"
+        );
+        assert!(!backing_paths[0].writable, "Backing file must be read-only");
+
+        // Keep child disk alive until after assertions.
+        let _ = child_disk.path();
     }
 
     #[test]
@@ -664,9 +772,9 @@ mod tests {
         );
     }
 
-    /// shared_dir must appear as read-only — shim reads container images but never modifies them.
+    /// shared_dir must be writable because it is exposed as an RW virtio-fs share root.
     #[test]
-    fn test_build_path_access_shared_dir_is_readonly() {
+    fn test_build_path_access_shared_dir_is_writable() {
         let dir = tempdir().unwrap();
         let layout = test_layout(dir.path().to_path_buf());
 
@@ -676,7 +784,7 @@ mod tests {
 
         let shared = paths.iter().find(|p| p.path == layout.shared_dir());
         assert!(shared.is_some(), "shared_dir should be in path access");
-        assert!(!shared.unwrap().writable, "shared_dir must be read-only");
+        assert!(shared.unwrap().writable, "shared_dir must be writable");
     }
 
     /// After pre-creating files (as Jailer::command() does), all appear in path access as writable.

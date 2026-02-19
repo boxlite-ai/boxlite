@@ -7,6 +7,7 @@
 //! 2. Workspace runtime (`target/boxlite-runtime`) - Local dev/test default
 //! 3. `DYLD_LIBRARY_PATH` (macOS) / `LD_LIBRARY_PATH` (Linux) - User-specified runtime location
 //! 4. dladdr-based detection - For packaged/installed scenarios
+//! 5. `option_env!("BOXLITE_RUNTIME_DIR")` - Compile-time fallback (prebuilt mode only)
 
 use std::path::PathBuf;
 
@@ -73,6 +74,7 @@ impl RuntimeBinaryFinder {
     /// 2. workspace `target/boxlite-runtime` (local dev/test)
     /// 3. `DYLD_LIBRARY_PATH` / `LD_LIBRARY_PATH` (user-specified runtime location)
     /// 4. dladdr-based detection (for packaged scenarios)
+    /// 5. compile-time `BOXLITE_RUNTIME_DIR` fallback (only when build.rs emitted it)
     pub fn from_env() -> Self {
         let mut builder = Self::builder();
 
@@ -126,9 +128,9 @@ impl RuntimeBinaryFinder {
             builder = builder.with_path(lib_dir.join("runtime"));
         }
 
-        // 5. Compile-time fallback: embedded by build.rs via cargo:rustc-env.
-        // Same name as the runtime env var — runtime check (above) takes priority.
-        // Only used if the directory still exists (won't survive cargo clean).
+        // 5. Compile-time fallback: build.rs emits this in prebuilt mode.
+        // Same name as the runtime env var; runtime lookup (above) still takes priority.
+        // Only used if the embedded directory still exists (won't survive cargo clean).
         if let Some(dir) = option_env!("BOXLITE_RUNTIME_DIR") {
             let path = std::path::Path::new(dir);
             if path.exists() {

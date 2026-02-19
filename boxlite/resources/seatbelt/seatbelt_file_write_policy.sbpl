@@ -5,7 +5,7 @@
 ; Static write paths for temporary files.
 ; These are needed by many tools and libraries for temporary storage.
 ;
-; Box shared directory and user volumes are added dynamically by macos.rs.
+; Box shared directory and user volumes are added dynamically by seatbelt.rs.
 ;
 ; Why these paths are needed:
 ;   - /private/tmp: Standard temporary directory (macOS canonical path)
@@ -32,7 +32,7 @@
 ; ============================================================================
 ; END OF STATIC FILE WRITE POLICY
 ; ============================================================================
-; Dynamic write paths added by macos.rs:
+; Dynamic write paths added by seatbelt.rs:
 ;   - {box_dir}/shared/ (guest-visible directory)
 ;   - User volumes with read_only=false
 ; ============================================================================

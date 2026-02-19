@@ -23,7 +23,7 @@ pub struct SecurityOptions {
     /// - Linux: seccomp, namespaces, chroot, privilege drop
     /// - macOS: sandbox-exec profile
     ///
-    /// Default: false
+    /// Default: true on Linux/macOS, false on other platforms
     #[serde(default = "default_jailer_enabled")]
     pub jailer_enabled: bool,
 
@@ -143,7 +143,7 @@ pub struct ResourceLimits {
 // Default value functions for SecurityOptions
 
 fn default_jailer_enabled() -> bool {
-    false
+    cfg!(any(target_os = "linux", target_os = "macos"))
 }
 
 fn default_seccomp_enabled() -> bool {

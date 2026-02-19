@@ -537,6 +537,13 @@ fn main() {
             // -sys crates emit rustc-link-lib in STUB mode.
             // Tell the linker where to find the prebuilt libraries.
             println!("cargo:rustc-link-search=native={}", runtime_dir.display());
+            // Embed runtime directory for compile-time fallback by RuntimeBinaryFinder.
+            // Runtime override remains BOXLITE_RUNTIME_DIR (read via std::env::var).
+            // Compile-time embed is only needed in prebuilt mode.
+            println!(
+                "cargo:rustc-env=BOXLITE_RUNTIME_DIR={}",
+                runtime_dir.display()
+            );
         }
         DepsMode::Source => {
             // Normal: -sys crates built from source, bundle outputs
@@ -552,14 +559,6 @@ fn main() {
 
     // Expose the runtime directory to downstream crates (e.g., Python SDK)
     println!("cargo:runtime_dir={}", runtime_dir.display());
-
-    // Embed runtime directory for compile-time discovery by RuntimeBinaryFinder.
-    // option_env!("BOXLITE_RUNTIME_DIR") reads this at compile time.
-    // std::env::var("BOXLITE_RUNTIME_DIR") at runtime takes priority (checked first).
-    println!(
-        "cargo:rustc-env=BOXLITE_RUNTIME_DIR={}",
-        runtime_dir.display()
-    );
 
     // Compute and embed guest binary hash at compile time (best-effort).
     // Falls back to runtime computation if the binary isn't available yet.
