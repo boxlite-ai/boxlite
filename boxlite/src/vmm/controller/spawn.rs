@@ -5,7 +5,7 @@ use std::{
     process::{Child, Stdio},
 };
 
-use crate::jailer::Jailer;
+use crate::jailer::{Jail, JailerBuilder};
 use crate::runtime::layout::BoxFilesystemLayout;
 use crate::runtime::options::BoxOptions;
 use crate::util::configure_library_env;
@@ -37,19 +37,20 @@ pub(crate) fn spawn_subprocess(
     // Build shim arguments
     let shim_args = build_shim_args(engine_type, config_path);
 
-    // Get box directory from layout
-    let box_dir = layout.root().to_path_buf();
-
-    // Create Jailer with security options and volumes
-    let jailer = Jailer::new(box_id, &box_dir)
+    // Build jailer with security options and volumes
+    let jailer = JailerBuilder::new()
+        .with_box_id(box_id)
+        .with_layout(layout.clone())
         .with_security(options.advanced.security.clone())
-        .with_volumes(options.volumes.clone());
+        .with_volumes(options.volumes.clone())
+        .build()
+        .map_err(BoxliteError::from)?;
 
     // Setup pre-spawn isolation (cgroups on Linux, no-op on macOS)
-    jailer.setup_pre_spawn()?;
+    jailer.prepare()?;
 
     // Build isolated command (includes pre_exec FD cleanup hook)
-    let mut cmd = jailer.build_command(binary_path, &shim_args);
+    let mut cmd = jailer.command(binary_path, &shim_args);
 
     // Pass debugging environment variables to subprocess
     if let Ok(rust_log) = std::env::var("RUST_LOG") {

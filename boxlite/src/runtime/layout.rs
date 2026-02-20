@@ -800,6 +800,7 @@ mod tests {
         assert_eq!(path_b.file_name().unwrap(), "net.sock");
     }
 
+    #[test]
     fn test_guest_rootfs_dir() {
         let layout = FilesystemLayout::new(
             PathBuf::from("/home/user/.boxlite"),

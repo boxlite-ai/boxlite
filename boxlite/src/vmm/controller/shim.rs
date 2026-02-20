@@ -274,7 +274,6 @@ impl VmmController for ShimController {
             console_output: config.console_output.clone(),
             exit_file: config.exit_file.clone(),
             detach: config.detach,
-            parent_pid: config.parent_pid,
         };
 
         let config_path = self.layout.shim_config_path();
@@ -436,7 +435,6 @@ mod tests {
             console_output: Some(PathBuf::from("/tmp/console.log")),
             exit_file: PathBuf::from("/tmp/exit"),
             detach: false,
-            parent_pid: 1,
         }
     }
 
