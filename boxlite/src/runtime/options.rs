@@ -411,7 +411,10 @@ mod tests {
     #[test]
     fn test_security_builder_new() {
         let opts = SecurityOptionsBuilder::new().build();
-        // Default should disable jailer/seccomp unless explicitly enabled.
+        // Default enables jailer on macOS, disables on Linux and other platforms.
+        #[cfg(target_os = "macos")]
+        assert!(opts.jailer_enabled);
+        #[cfg(not(target_os = "macos"))]
         assert!(!opts.jailer_enabled);
         assert!(!opts.seccomp_enabled);
     }

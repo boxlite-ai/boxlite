@@ -261,6 +261,7 @@ impl FilesystemLayout {
 ///
 /// Each box has its own directory containing:
 /// - sockets/: Unix sockets for communication
+/// - tmp/: Per-box temp directory for shim/libkrun transient files
 /// - mounts/: Host preparation area (writable by host)
 /// - shared/: Guest-visible directory (bind mount or symlink to mounts/)
 /// - disk.qcow2: Virtual disk for the box
@@ -278,6 +279,7 @@ impl FilesystemLayout {
 /// ├── sockets/
 /// │   ├── box.sock        # gRPC communication
 /// │   └── ready.sock      # Ready notification
+/// ├── tmp/                # Per-box temp files for shim/libkrun
 /// ├── mounts/             # Host preparation (SharedGuestLayout)
 /// │   └── containers/
 /// │       └── {cid}/
@@ -290,7 +292,7 @@ impl FilesystemLayout {
 /// ├── logs/               # Per-box logging
 /// │   ├── boxlite-shim.log  # Shim tracing output
 /// │   └── console.log       # Kernel/init output
-/// ├── root.qcow2          # Data disk
+/// ├── disk.qcow2          # Data disk (container rootfs COW disk)
 /// └── guest-rootfs.qcow2  # Guest rootfs COW overlay
 /// ```
 #[derive(Clone, Debug)]
@@ -427,6 +429,14 @@ impl BoxFilesystemLayout {
         self.box_dir.join("logs")
     }
 
+    /// Per-box temp directory: ~/.boxlite/boxes/{box_id}/tmp
+    ///
+    /// Used for shim/libkrun transient files when jailer is enabled with the
+    /// built-in seatbelt profile.
+    pub fn tmp_dir(&self) -> PathBuf {
+        self.box_dir.join("tmp")
+    }
+
     // ========================================================================
     // DISK AND CONSOLE
     // ========================================================================
@@ -495,6 +505,7 @@ impl BoxFilesystemLayout {
     ///
     /// Creates:
     /// - sockets/
+    /// - tmp/
     /// - mounts/ (via SharedGuestLayout base)
     ///
     /// Note: shared/ is NOT created here - it will be created as a bind mount
@@ -505,6 +516,9 @@ impl BoxFilesystemLayout {
 
         std::fs::create_dir_all(self.sockets_dir())
             .map_err(|e| BoxliteError::Storage(format!("failed to create sockets dir: {e}")))?;
+
+        std::fs::create_dir_all(self.tmp_dir())
+            .map_err(|e| BoxliteError::Storage(format!("failed to create tmp dir: {e}")))?;
 
         std::fs::create_dir_all(self.mounts_dir())
             .map_err(|e| BoxliteError::Storage(format!("failed to create mounts dir: {e}")))?;
@@ -848,6 +862,15 @@ mod tests {
     }
 
     #[test]
+    fn test_box_layout_tmp_dir() {
+        let layout = test_box_layout("/home/.boxlite/boxes/mybox");
+        assert_eq!(
+            layout.tmp_dir(),
+            PathBuf::from("/home/.boxlite/boxes/mybox/tmp")
+        );
+    }
+
+    #[test]
     fn test_box_layout_guest_rootfs_disk_path() {
         let layout = test_box_layout("/home/.boxlite/boxes/mybox");
         assert_eq!(
@@ -876,6 +899,7 @@ mod tests {
             layout.logs_dir(),
             layout.bin_dir(),
             layout.sockets_dir(),
+            layout.tmp_dir(),
             layout.guest_rootfs_disk_path(),
             layout.rootfs_base_path(),
             layout.exit_file_path(),
@@ -891,5 +915,16 @@ mod tests {
                 box_dir
             );
         }
+    }
+
+    #[test]
+    fn test_box_layout_prepare_creates_tmp_dir() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let box_dir = dir.path().join("box-tmp-test");
+        let layout = BoxFilesystemLayout::new(box_dir, FsLayoutConfig::without_bind_mount(), false);
+
+        layout.prepare().unwrap();
+
+        assert!(layout.tmp_dir().exists());
     }
 }

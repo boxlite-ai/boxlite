@@ -57,6 +57,7 @@ pub(crate) struct SandboxConfigResponse {
     pub capabilities: Option<SandboxCapabilities>,
 }
 
+#[allow(dead_code)] // Constructed via serde::Deserialize
 #[derive(Debug, Deserialize, Clone, Default)]
 pub(crate) struct SandboxCapabilities {
     pub snapshots_enabled: Option<bool>,

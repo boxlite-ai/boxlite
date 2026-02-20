@@ -742,11 +742,16 @@ impl BoxImpl {
                 true
             }
             Ok(Err(e)) => {
-                tracing::warn!("Guest quiesce RPC failed: {}, proceeding with crash-consistent snapshot", e);
+                tracing::warn!(
+                    "Guest quiesce RPC failed: {}, proceeding with crash-consistent snapshot",
+                    e
+                );
                 false
             }
             Err(_) => {
-                tracing::warn!("Guest quiesce timed out, proceeding with crash-consistent snapshot");
+                tracing::warn!(
+                    "Guest quiesce timed out, proceeding with crash-consistent snapshot"
+                );
                 false
             }
         }

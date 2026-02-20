@@ -140,6 +140,20 @@ impl<'a> ShimSpawner<'a> {
             cmd.env("RUST_BACKTRACE", rust_backtrace);
         }
 
+        // Keep temp artifacts inside the box-scoped allowlist when using the
+        // built-in macOS seatbelt profile. libkrun may create a transient
+        // `krun-empty-root-*` under `env::temp_dir()` when booting from block
+        // devices; under deny-default seatbelt this must resolve to an
+        // explicitly granted path.
+        if self.options.advanced.security.jailer_enabled
+            && self.options.advanced.security.sandbox_profile.is_none()
+        {
+            let tmp_dir = self.layout.tmp_dir();
+            cmd.env("TMPDIR", &tmp_dir);
+            cmd.env("TMP", &tmp_dir);
+            cmd.env("TEMP", &tmp_dir);
+        }
+
         // Set library search paths for bundled dependencies
         configure_library_env(cmd, krun_create_ctx as *const libc::c_void);
     }
@@ -161,6 +175,7 @@ impl<'a> ShimSpawner<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsStr;
 
     #[test]
     fn test_build_shim_args() {
@@ -188,5 +203,85 @@ mod tests {
         assert_eq!(args[1], "Libkrun");
         assert_eq!(args[2], "--config");
         assert_eq!(args[3], "{\"test\":true}");
+    }
+
+    #[test]
+    fn test_configure_env_sets_box_scoped_temp_dir() {
+        use crate::runtime::layout::{BoxFilesystemLayout, FsLayoutConfig};
+        use std::path::PathBuf;
+
+        let layout = BoxFilesystemLayout::new(
+            PathBuf::from("/tmp/box"),
+            FsLayoutConfig::without_bind_mount(),
+            false,
+        );
+        let options = BoxOptions::default();
+
+        let spawner = ShimSpawner::new(
+            Path::new("/usr/bin/boxlite-shim"),
+            VmmKind::Libkrun,
+            &layout,
+            "test-box",
+            &options,
+        );
+
+        let mut cmd = std::process::Command::new("/usr/bin/true");
+        spawner.configure_env(&mut cmd);
+
+        let envs: std::collections::HashMap<_, _> = cmd.get_envs().collect();
+        let expected = layout.tmp_dir();
+
+        assert_eq!(
+            envs.get(OsStr::new("TMPDIR")).and_then(|v| *v),
+            Some(expected.as_os_str())
+        );
+        assert_eq!(
+            envs.get(OsStr::new("TMP")).and_then(|v| *v),
+            Some(expected.as_os_str())
+        );
+        assert_eq!(
+            envs.get(OsStr::new("TEMP")).and_then(|v| *v),
+            Some(expected.as_os_str())
+        );
+    }
+
+    #[test]
+    fn test_configure_env_does_not_override_temp_for_custom_profile() {
+        use crate::runtime::advanced_options::{AdvancedBoxOptions, SecurityOptions};
+        use crate::runtime::layout::{BoxFilesystemLayout, FsLayoutConfig};
+        use std::path::PathBuf;
+
+        let layout = BoxFilesystemLayout::new(
+            PathBuf::from("/tmp/box"),
+            FsLayoutConfig::without_bind_mount(),
+            false,
+        );
+        let options = BoxOptions {
+            advanced: AdvancedBoxOptions {
+                security: SecurityOptions {
+                    jailer_enabled: true,
+                    sandbox_profile: Some(PathBuf::from("/tmp/custom.sbpl")),
+                    ..SecurityOptions::default()
+                },
+                ..AdvancedBoxOptions::default()
+            },
+            ..BoxOptions::default()
+        };
+
+        let spawner = ShimSpawner::new(
+            Path::new("/usr/bin/boxlite-shim"),
+            VmmKind::Libkrun,
+            &layout,
+            "test-box",
+            &options,
+        );
+
+        let mut cmd = std::process::Command::new("/usr/bin/true");
+        spawner.configure_env(&mut cmd);
+
+        let envs: std::collections::HashMap<_, _> = cmd.get_envs().collect();
+        assert!(!envs.contains_key(OsStr::new("TMPDIR")));
+        assert!(!envs.contains_key(OsStr::new("TMP")));
+        assert!(!envs.contains_key(OsStr::new("TEMP")));
     }
 }

@@ -10,7 +10,7 @@ This directory contains integration tests for the BoxLite runtime. These tests r
    make runtime-debug
    ```
 
-2. **Set environment variable** (optional): By default, tests use a temporary directory. For debugging, you can specify a persistent directory:
+2. **Set environment variable** (optional): By default, tests use temporary home directories. For debugging, you can specify a persistent runtime artifact directory:
 
    ```bash
    export BOXLITE_RUNTIME_DIR=/path/to/runtime/dir
@@ -29,6 +29,18 @@ This directory contains integration tests for the BoxLite runtime. These tests r
 | `network.rs` | Network configuration and connectivity tests |
 | `pid_file.rs` | PID file management and process tracking tests |
 | `execution_shutdown.rs` | Execution behavior during shutdown scenarios |
+| `jailer.rs` | Jailer default behavior and macOS seatbelt deny lifecycle tests |
+
+### macOS Seatbelt deny lifecycle tests
+
+`jailer.rs` includes macOS-only integration tests that pass a custom
+`sandbox_profile` to explicitly deny access to `<home_dir>/boxes`.
+
+- With `jailer_enabled=true`, `start()` must fail and denial evidence must appear in `shim.stderr`.
+- With `jailer_enabled=false`, the same profile is ignored and startup should succeed.
+- `jailer.rs` test homes are created under `~/.boxlite-it` (non-default, short path) to avoid:
+  - `/private/tmp` broad static seatbelt grants masking missing dynamic path access
+  - macOS Unix socket path-length failures
 
 ## Running Tests
 
@@ -86,19 +98,10 @@ impl TestContext {
 
 ### macOS Socket Path Limits
 
-Some tests (like `execution_shutdown.rs`) use `/tmp` directly instead of `TempDir::new()` because:
+macOS has a ~104 character limit on Unix socket paths (`SUN_LEN`).
 
-- macOS has a ~104 character limit on Unix socket paths (`SUN_LEN`)
-- Default temp directories on macOS have long paths like `/var/folders/xx/yyyyyy/T/...`
-- Using `/tmp` directly ensures socket paths stay within limits
-
-```rust
-// Instead of:
-let temp_dir = TempDir::new()?;
-
-// Use:
-let temp_dir = TempDir::new_in("/tmp")?;
-```
+- `jailer.rs` uses a short non-default base (`~/.boxlite-it`) with per-test `TempDir::new_in(...)`.
+- This keeps socket paths short without relying on `/tmp` (which canonicalizes to `/private/tmp`).
 
 ## CI Exclusion
 
@@ -123,10 +126,11 @@ You're running on an unsupported platform. BoxLite requires:
 
 ### Socket Path Too Long
 
-If you see errors about socket paths, ensure tests use `/tmp` for temporary directories:
+If you see errors about socket paths, ensure the test home base path is short:
 
 ```rust
-let temp_dir = TempDir::new_in("/tmp").expect("Failed to create temp dir");
+let base = dirs::home_dir().unwrap().join(".boxlite-it");
+let temp_dir = TempDir::new_in(base).expect("Failed to create temp dir");
 ```
 
 ### Tests Hang

@@ -129,7 +129,7 @@ others continue to provide protection.
 
 | Mechanism | Purpose |
 |-----------|---------|
-| sandbox-exec (Seatbelt) | Kernel-enforced sandbox profile |
+| sandbox-exec (Seatbelt) | Kernel-enforced deny-default sandbox profile |
 | rlimits | Limit file descriptors, memory, CPU |
 
 **Note**: macOS provides weaker isolation than Linux. Production deployments

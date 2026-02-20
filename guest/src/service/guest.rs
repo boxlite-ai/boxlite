@@ -144,10 +144,7 @@ impl GuestService for GuestServer {
     /// Thaw previously quiesced filesystems (FITHAW ioctl).
     ///
     /// Unblocks writes on all filesystems frozen by the last Quiesce call.
-    async fn thaw(
-        &self,
-        _request: Request<ThawRequest>,
-    ) -> Result<Response<ThawResponse>, Status> {
+    async fn thaw(&self, _request: Request<ThawRequest>) -> Result<Response<ThawResponse>, Status> {
         info!("Received thaw request — thawing filesystems");
 
         let mut stored = self.frozen_mounts.lock().await;

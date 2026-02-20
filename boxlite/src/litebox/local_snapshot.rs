@@ -16,12 +16,10 @@ use crate::disk::{BackingFormat, Qcow2Helper};
 use crate::litebox::box_impl::BoxImpl;
 use crate::runtime::options::SnapshotOptions;
 
-#[allow(dead_code)] // Snapshots temporarily disabled; will be re-enabled
 pub(crate) struct LocalSnapshotBackend {
     inner: Arc<BoxImpl>,
 }
 
-#[allow(dead_code)] // Snapshots temporarily disabled; will be re-enabled
 impl LocalSnapshotBackend {
     pub(crate) fn new(inner: Arc<BoxImpl>) -> Self {
         Self { inner }
@@ -320,7 +318,6 @@ impl crate::runtime::backend::SnapshotBackend for LocalSnapshotBackend {
     }
 }
 
-#[allow(dead_code)] // Used by snapshots (temporarily disabled)
 fn dir_size(path: &Path) -> u64 {
     walkdir::WalkDir::new(path)
         .into_iter()

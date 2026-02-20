@@ -2,13 +2,13 @@
 ; BoxLite macOS Seatbelt Base Policy
 ; ============================================================================
 ;
-; This policy uses allow-default with explicit denials for dangerous operations.
-; The Hypervisor.framework requires many permissions that are difficult to
-; enumerate individually. The VM itself provides hardware-level isolation.
+; This policy uses deny-default with explicit allowlists.
+; It is based on Chrome and Codex seatbelt profiles, with clauses needed by
+; BoxLite's shim/runtime behavior.
 ;
 ; Derived from:
 ;   - OpenAI Codex (Apache 2.0): https://github.com/openai/codex
-;   - https://source.chromium.org/chromium/chromium/src/+/main:sandbox/policy/mac/
+;   - Chromium sandbox policy (BSD): https://chromium.googlesource.com/chromium/src/+/main/sandbox/policy/mac/
 ;
 ; Security Model:
 ;   The primary security boundary is the hardware VM isolation (Hypervisor.framework).
@@ -17,30 +17,124 @@
 ;   - Modification of system files
 ;   - Network connections (unless explicitly enabled)
 ;
-; TODO: Investigate switching to (deny default) whitelist approach
-;   Currently using (allow default) because Hypervisor.framework requires
-;   undocumented Mach services and IOKit permissions that can't be enumerated.
-;   When Apple documents HV.framework's sandbox requirements, revisit this.
-;   See: https://developer.apple.com/forums/thread/668496
-;
 ; ============================================================================
 
 (version 1)
 
 ; ============================================================================
-; BASE: ALLOW DEFAULT
+; BASE: DENY DEFAULT
 ; ============================================================================
-; Hypervisor.framework requires many undocumented permissions.
-; We allow by default and explicitly deny dangerous operations.
-(allow default)
+; Start closed and permit only required operations.
+(deny default)
 
-; Note: Specific path restrictions are added dynamically by macos.rs
-; based on user volumes and box shared directory.
+; ============================================================================
+; Process lifecycle and intra-sandbox signaling
+; ============================================================================
+(allow process-exec)
+(allow process-fork)
+(allow signal (target same-sandbox))
+(allow process-info* (target same-sandbox))
+
+; ============================================================================
+; Device write safety (/dev/null as character device)
+; ============================================================================
+(allow file-write-data
+  (require-all
+    (literal "/dev/null")
+    (vnode-type CHARACTER-DEVICE)))
+
+; ============================================================================
+; Sysctls required by runtime libraries
+; ============================================================================
+(allow sysctl-read
+  (sysctl-name "hw.activecpu")
+  (sysctl-name "hw.busfrequency_compat")
+  (sysctl-name "hw.byteorder")
+  (sysctl-name "hw.cacheconfig")
+  (sysctl-name "hw.cachelinesize_compat")
+  (sysctl-name "hw.cpufamily")
+  (sysctl-name "hw.cpufrequency_compat")
+  (sysctl-name "hw.cputype")
+  (sysctl-name "hw.l1dcachesize_compat")
+  (sysctl-name "hw.l1icachesize_compat")
+  (sysctl-name "hw.l2cachesize_compat")
+  (sysctl-name "hw.l3cachesize_compat")
+  (sysctl-name "hw.logicalcpu_max")
+  (sysctl-name "hw.machine")
+  (sysctl-name "hw.model")
+  (sysctl-name "hw.memsize")
+  (sysctl-name "hw.ncpu")
+  (sysctl-name "hw.nperflevels")
+  (sysctl-name-prefix "hw.optional.arm.")
+  (sysctl-name-prefix "hw.optional.armv8_")
+  (sysctl-name "hw.packages")
+  (sysctl-name "hw.pagesize_compat")
+  (sysctl-name "hw.pagesize")
+  (sysctl-name "hw.physicalcpu")
+  (sysctl-name "hw.physicalcpu_max")
+  (sysctl-name "hw.logicalcpu")
+  (sysctl-name "hw.cpufrequency")
+  (sysctl-name "hw.tbfrequency_compat")
+  (sysctl-name "hw.vectorunit")
+  (sysctl-name "machdep.cpu.brand_string")
+  (sysctl-name "kern.argmax")
+  (sysctl-name "kern.hostname")
+  (sysctl-name "kern.maxfilesperproc")
+  (sysctl-name "kern.maxproc")
+  (sysctl-name "kern.osproductversion")
+  (sysctl-name "kern.osrelease")
+  (sysctl-name "kern.ostype")
+  (sysctl-name "kern.osvariant_status")
+  (sysctl-name "kern.osversion")
+  (sysctl-name "kern.secure_kernel")
+  (sysctl-name "kern.usrstack64")
+  (sysctl-name "kern.version")
+  (sysctl-name "sysctl.proc_cputype")
+  (sysctl-name "vm.loadavg")
+  (sysctl-name-prefix "hw.perflevel")
+  (sysctl-name-prefix "kern.proc.pgrp.")
+  (sysctl-name-prefix "kern.proc.pid.")
+  (sysctl-name-prefix "net.routetable.")
+)
+
+; Some runtimes classify this read path as a write sysctl call.
+(allow sysctl-write
+  (sysctl-name "kern.grade_cputype"))
+
+; ============================================================================
+; IOKit and mach services
+; ============================================================================
+(allow iokit-open
+  (iokit-registry-entry-class "RootDomainUserClient")
+)
+
+(allow mach-lookup
+  (global-name "com.apple.system.opendirectoryd.libinfo")
+  (global-name "com.apple.PowerManagement.control")
+  (global-name "com.apple.logd")
+  (global-name "com.apple.system.notification_center")
+)
+
+; ============================================================================
+; POSIX IPC and PTY compatibility
+; ============================================================================
+(allow ipc-posix-sem)
+
+(allow pseudo-tty)
+(allow file-read* file-write* file-ioctl (literal "/dev/ptmx"))
+(allow file-read* file-write*
+  (require-all
+    (regex #"^/dev/ttys[0-9]+")
+    (extension "com.apple.sandbox.pty")))
+(allow file-ioctl (regex #"^/dev/ttys[0-9]+"))
+
+; Note: Specific path restrictions are added dynamically by seatbelt.rs
+; based on user volumes and box directory access rules.
 
 ; ============================================================================
 ; END OF BASE POLICY
 ; ============================================================================
-; File read/write policies are added dynamically by macos.rs based on:
+; File read/write policies are added dynamically by seatbelt.rs based on:
 ;   - User volumes (BoxOptions.volumes)
 ;   - Box shared directory ({box_dir}/shared/)
 ;

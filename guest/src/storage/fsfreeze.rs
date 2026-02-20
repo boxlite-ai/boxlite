@@ -27,10 +27,26 @@ const FITHAW: libc::c_ulong = 0xC004_5878;
 
 /// Virtual/pseudo filesystem types that should not be frozen.
 const SKIP_FS_TYPES: &[&str] = &[
-    "proc", "sysfs", "devtmpfs", "devpts", "tmpfs", "cgroup", "cgroup2",
-    "securityfs", "debugfs", "tracefs", "configfs", "fusectl", "mqueue",
-    "hugetlbfs", "pstore", "binfmt_misc", "autofs", "rpc_pipefs",
-    "nfsd", "overlay",
+    "proc",
+    "sysfs",
+    "devtmpfs",
+    "devpts",
+    "tmpfs",
+    "cgroup",
+    "cgroup2",
+    "securityfs",
+    "debugfs",
+    "tracefs",
+    "configfs",
+    "fusectl",
+    "mqueue",
+    "hugetlbfs",
+    "pstore",
+    "binfmt_misc",
+    "autofs",
+    "rpc_pipefs",
+    "nfsd",
+    "overlay",
 ];
 
 /// Freeze all writable filesystems.

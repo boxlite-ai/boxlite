@@ -9,15 +9,16 @@
 //! - OpenAI Codex (Apache 2.0): https://github.com/openai/codex
 //! - Chrome's macOS sandbox: https://source.chromium.org/chromium/chromium/src/+/main:sandbox/policy/mac/
 //!
-//! ## Security Model: Strict Whitelist
+//! ## Security Model: Deny-by-default allowlist
 //!
-//! BoxLite implements a **stricter** policy than Codex:
+//! BoxLite starts from `(deny default)` and explicitly grants:
 //!
-//! | Access Type | Codex | BoxLite |
-//! |-------------|-------|---------|
-//! | File reads  | `(allow file-read*)` - everything | ONLY user volumes |
-//! | File writes | cwd + /tmp + user roots | shared/ + /tmp + rw volumes |
-//! | System paths | Allowed for reads | NOT allowed by default |
+//! | Category | Policy source |
+//! |----------|---------------|
+//! | Base capabilities (process, sysctl, mach, iokit) | `seatbelt_base_policy.sbpl` |
+//! | Static system file read/write paths | `seatbelt_file_read_policy.sbpl`, `seatbelt_file_write_policy.sbpl` |
+//! | Dynamic file read/write paths | Computed from [`PathAccess`] in `build_sandbox_policy()` |
+//! | Network access (optional) | `seatbelt_network_policy.sbpl` when `network_enabled=true` |
 //!
 //! ## Debugging Sandbox Violations
 //!
@@ -156,6 +157,16 @@ fn build_sandbox_exec_args(
     } else {
         // Build strict modular policy: base + file permissions + optional network
         let policy = build_sandbox_policy(paths, binary_path, network_enabled);
+        if std::env::var_os("BOXLITE_DEBUG_PRINT_SEATBELT").is_some() {
+            eprintln!(
+                "BOXLITE_DEBUG seatbelt policy for {}:\n{}",
+                binary_path.display(),
+                policy
+            );
+        }
+        if let Ok(debug_policy_file) = std::env::var("BOXLITE_DEBUG_POLICY_FILE") {
+            let _ = std::fs::write(debug_policy_file, &policy);
+        }
         args.push("-p".to_string());
         args.push(policy);
     }
@@ -245,17 +256,28 @@ fn build_dynamic_read_paths(binary_path: &Path, paths: &[PathAccess]) -> String 
     // All pre-computed paths (both rw and ro need read access)
     for pa in paths {
         let path = canonicalize_or_original(&pa.path);
-        let rule = if pa.path.is_dir() {
-            "subpath"
-        } else {
-            "literal"
-        };
         let marker = if pa.writable { "rw" } else { "ro" };
-        policy.push_str(&format!(
-            "    ({rule} \"{}\")  ; ({})\n",
-            path.display(),
-            marker
-        ));
+        if pa.path.is_dir() {
+            // Directory access needs both:
+            // - literal: the directory node itself (open/stat on root)
+            // - subpath: descendants inside the directory
+            policy.push_str(&format!(
+                "    (literal \"{}\")  ; ({}) dir root\n",
+                path.display(),
+                marker
+            ));
+            policy.push_str(&format!(
+                "    (subpath \"{}\")  ; ({}) dir tree\n",
+                path.display(),
+                marker
+            ));
+        } else {
+            policy.push_str(&format!(
+                "    (literal \"{}\")  ; ({})\n",
+                path.display(),
+                marker
+            ));
+        }
     }
 
     policy.push_str(")\n");
@@ -268,15 +290,22 @@ fn build_dynamic_write_paths(paths: &[PathAccess]) -> String {
 
     for pa in paths.iter().filter(|p| p.writable) {
         let path = canonicalize_or_original(&pa.path);
-        let rule = if pa.path.is_dir() {
-            "subpath"
+        if pa.path.is_dir() {
+            // See read policy rationale: allow both directory root and descendants.
+            policy.push_str(&format!(
+                "    (literal \"{}\")  ; writable dir root\n",
+                path.display()
+            ));
+            policy.push_str(&format!(
+                "    (subpath \"{}\")  ; writable dir tree\n",
+                path.display()
+            ));
         } else {
-            "literal"
-        };
-        policy.push_str(&format!(
-            "    ({rule} \"{}\")  ; writable\n",
-            path.display()
-        ));
+            policy.push_str(&format!(
+                "    (literal \"{}\")  ; writable\n",
+                path.display()
+            ));
+        }
     }
 
     policy.push_str(")\n");
@@ -334,10 +363,32 @@ mod tests {
     #[test]
     fn test_base_policy_is_valid_sbpl() {
         assert!(SEATBELT_BASE_POLICY.contains("(version 1)"));
-        assert!(SEATBELT_BASE_POLICY.contains("(allow default)"));
+        assert!(SEATBELT_BASE_POLICY.contains("(deny default)"));
+        assert!(SEATBELT_BASE_POLICY.contains("(allow process-exec)"));
+        assert!(SEATBELT_BASE_POLICY.contains("(allow process-fork)"));
+        assert!(SEATBELT_BASE_POLICY.contains("(allow process-info* (target same-sandbox))"));
         assert!(
-            SEATBELT_BASE_POLICY.contains("Hypervisor.framework"),
-            "Should document why allow-default is used"
+            SEATBELT_BASE_POLICY.contains("(iokit-registry-entry-class \"RootDomainUserClient\")")
+        );
+        assert!(
+            SEATBELT_BASE_POLICY.contains("com.apple.system.opendirectoryd.libinfo"),
+            "Base policy must allow OpenDirectory lookup"
+        );
+        assert!(
+            SEATBELT_BASE_POLICY.contains("com.apple.PowerManagement.control"),
+            "Base policy must allow power management lookup"
+        );
+        assert!(
+            SEATBELT_BASE_POLICY.contains("com.apple.logd"),
+            "Base policy must allow logd lookup for runtime logging"
+        );
+        assert!(
+            SEATBELT_BASE_POLICY.contains("com.apple.system.notification_center"),
+            "Base policy must allow notification center lookup used by macOS runtime components"
+        );
+        assert!(
+            SEATBELT_BASE_POLICY.contains("(allow sysctl-read"),
+            "Base policy must include a sysctl allowlist"
         );
     }
 
@@ -399,6 +450,7 @@ mod tests {
     fn test_file_read_policy_structure() {
         assert!(SEATBELT_FILE_READ_POLICY.contains("(subpath \"/usr/lib\")"));
         assert!(SEATBELT_FILE_READ_POLICY.contains("(subpath \"/System/Library\")"));
+        assert!(SEATBELT_FILE_READ_POLICY.contains("(literal \"/tmp\")"));
         assert!(SEATBELT_FILE_READ_POLICY.contains("(literal \"/dev/null\")"));
         assert!(!SEATBELT_FILE_READ_POLICY.contains("(subpath \"/usr\")"));
     }
@@ -538,6 +590,49 @@ mod tests {
     }
 
     #[test]
+    fn test_dynamic_read_paths_do_not_include_parent_traversal_literals() {
+        let binary_path = PathBuf::from("/usr/local/bin/boxlite-shim");
+        let dir = tempfile::tempdir().unwrap();
+        let shared_dir = dir.path().join("case/boxes/box-1/shared");
+        std::fs::create_dir_all(&shared_dir).unwrap();
+        let shared_dir = canonicalize_or_original(&shared_dir);
+        let box_dir = shared_dir.parent().unwrap();
+        let boxes_dir = box_dir.parent().unwrap();
+        let case_dir = boxes_dir.parent().unwrap();
+
+        let paths = vec![PathAccess {
+            path: shared_dir.clone(),
+            writable: true,
+        }];
+
+        let policy = build_dynamic_read_paths(&binary_path, &paths);
+
+        // Dynamic read policy should include explicit target path grants.
+        assert!(
+            policy.contains(&format!("(literal \"{}\")", shared_dir.display())),
+            "Expected target directory literal grant: {policy}"
+        );
+        assert!(
+            policy.contains(&format!("(subpath \"{}\")", shared_dir.display())),
+            "Expected target directory subpath grant: {policy}"
+        );
+
+        // Parent traversal literals are intentionally omitted.
+        assert!(
+            !policy.contains(&format!("(literal \"{}\")", box_dir.display())),
+            "Did not expect parent traversal literal for box directory: {policy}"
+        );
+        assert!(
+            !policy.contains(&format!("(literal \"{}\")", boxes_dir.display())),
+            "Did not expect parent traversal literal for boxes directory: {policy}"
+        );
+        assert!(
+            !policy.contains(&format!("(literal \"{}\")", case_dir.display())),
+            "Did not expect parent traversal literal for case directory: {policy}"
+        );
+    }
+
+    #[test]
     fn test_seatbelt_sandbox_name() {
         let sandbox = SeatbeltSandbox::new();
         assert_eq!(sandbox.name(), "seatbelt");
@@ -618,8 +713,8 @@ mod tests {
         let dir = tempdir().unwrap();
         let layout = BoxFilesystemLayout::new(
             dir.path().to_path_buf(),
-            FsLayoutConfig::without_bind_mount(),
-            false,
+            FsLayoutConfig::with_bind_mount(),
+            true,
         );
         let mounts_base = layout.shared_layout().base().to_path_buf();
 
@@ -636,7 +731,9 @@ mod tests {
         let mounts_str = mounts_base.to_string_lossy().to_string();
         assert!(
             !policy.contains(&mounts_str),
-            "mounts_dir path must not appear anywhere in sandbox policy"
+            "mounts_dir path must not appear anywhere in sandbox policy\nmounts_dir={}\npolicy=\n{}",
+            mounts_str,
+            policy
         );
     }
 
@@ -697,6 +794,161 @@ mod tests {
         assert!(
             !write_policy.contains(ro_dir.to_string_lossy().as_ref()),
             "Write policy should NOT contain read-only dir"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    fn run_sandboxed_sh(
+        paths: &[PathAccess],
+        shell_snippet: &str,
+        arg: &std::path::Path,
+    ) -> std::process::Output {
+        let (sandbox_cmd, sandbox_args) =
+            build_sandbox_exec_args(paths, std::path::Path::new("/bin/sh"), false, None);
+        std::process::Command::new(sandbox_cmd)
+            .args(sandbox_args)
+            .arg("/bin/sh")
+            .arg("-c")
+            .arg(shell_snippet)
+            .arg("sh")
+            .arg(arg)
+            .output()
+            .expect("Failed to execute sandboxed shell command")
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_seatbelt_runtime_allows_write_to_writable_path() {
+        if !is_sandbox_available() {
+            eprintln!("Skipping: sandbox-exec not available");
+            return;
+        }
+
+        let cwd = std::env::current_dir().expect("cwd");
+        let dir = tempfile::tempdir_in(cwd).expect("tempdir in workspace");
+        let allowed_dir = dir.path().join("allowed");
+        std::fs::create_dir_all(&allowed_dir).expect("create allowed dir");
+        let allowed_file = allowed_dir.join("ok.txt");
+
+        let paths = vec![PathAccess {
+            path: allowed_dir.clone(),
+            writable: true,
+        }];
+
+        let output = run_sandboxed_sh(&paths, "echo ok > \"$1\"", &allowed_file);
+        assert!(
+            output.status.success(),
+            "Expected write to allowed path to succeed, stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let written = std::fs::read_to_string(&allowed_file).expect("read allowed file");
+        assert_eq!(written, "ok\n");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_seatbelt_runtime_allows_exec_from_tmp_dynamic_path() {
+        if !is_sandbox_available() {
+            eprintln!("Skipping: sandbox-exec not available");
+            return;
+        }
+
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir_in("/tmp").expect("tempdir in /tmp");
+        let script_path = dir.path().join("probe.sh");
+        std::fs::write(&script_path, "#!/bin/sh\necho tmp-exec-ok\n").expect("write /tmp script");
+        std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755))
+            .expect("set exec bit");
+
+        let paths = vec![PathAccess {
+            path: dir.path().to_path_buf(),
+            writable: false,
+        }];
+
+        let (sandbox_cmd, sandbox_args) =
+            build_sandbox_exec_args(&paths, std::path::Path::new("/bin/sh"), false, None);
+        let output = std::process::Command::new(sandbox_cmd)
+            .args(sandbox_args)
+            .arg("/bin/sh")
+            .arg(&script_path)
+            .output()
+            .expect("Failed to execute sandboxed /tmp script");
+        assert!(
+            output.status.success(),
+            "Expected /tmp script exec to succeed, stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "tmp-exec-ok\n");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_seatbelt_runtime_denies_write_outside_writable_path() {
+        if !is_sandbox_available() {
+            eprintln!("Skipping: sandbox-exec not available");
+            return;
+        }
+
+        let cwd = std::env::current_dir().expect("cwd");
+        let dir = tempfile::tempdir_in(cwd).expect("tempdir in workspace");
+        let allowed_dir = dir.path().join("allowed");
+        std::fs::create_dir_all(&allowed_dir).expect("create allowed dir");
+        let blocked_file = dir.path().join("blocked.txt");
+
+        let paths = vec![PathAccess {
+            path: allowed_dir,
+            writable: true,
+        }];
+
+        let output = run_sandboxed_sh(&paths, "echo blocked > \"$1\"", &blocked_file);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            !output.status.success(),
+            "Expected write outside allowlist to fail"
+        );
+        assert!(
+            stderr.contains("Operation not permitted"),
+            "Expected sandbox denial, got stderr: {}",
+            stderr
+        );
+        assert!(
+            !blocked_file.exists(),
+            "Blocked file must not be created outside writable allowlist"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_seatbelt_runtime_denies_read_outside_allowlist() {
+        if !is_sandbox_available() {
+            eprintln!("Skipping: sandbox-exec not available");
+            return;
+        }
+
+        let cwd = std::env::current_dir().expect("cwd");
+        let dir = tempfile::tempdir_in(cwd).expect("tempdir in workspace");
+        let allowed_dir = dir.path().join("allowed");
+        std::fs::create_dir_all(&allowed_dir).expect("create allowed dir");
+        let blocked_file = dir.path().join("secret.txt");
+        std::fs::write(&blocked_file, "secret").expect("write blocked file");
+
+        let paths = vec![PathAccess {
+            path: allowed_dir,
+            writable: true,
+        }];
+
+        let output = run_sandboxed_sh(&paths, "cat \"$1\" >/dev/null", &blocked_file);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            !output.status.success(),
+            "Expected read outside allowlist to fail"
+        );
+        assert!(
+            stderr.contains("Operation not permitted"),
+            "Expected sandbox denial, got stderr: {}",
+            stderr
         );
     }
 }
