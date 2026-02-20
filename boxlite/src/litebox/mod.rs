@@ -13,8 +13,6 @@ mod manager;
 mod snapshot;
 mod state;
 
-use std::path::PathBuf;
-
 pub use copy::CopyOptions;
 pub(crate) use crash_report::CrashReport;
 pub use exec::{BoxCommand, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execution, ExecutionId};
@@ -31,8 +29,7 @@ use std::sync::Arc;
 
 use crate::metrics::BoxMetrics;
 use crate::runtime::backend::{BoxBackend, SnapshotBackend};
-use crate::runtime::options::CloneOptions;
-use crate::runtime::options::ExportOptions;
+use crate::runtime::options::{BoxArchive, CloneOptions, ExportOptions};
 use crate::{BoxID, BoxInfo};
 use boxlite_shared::errors::BoxliteResult;
 pub use config::BoxConfig;
@@ -136,12 +133,16 @@ impl LiteBox {
     }
 
     /// Clone this box, creating a new box with a copy of its disks.
-    pub async fn clone(&self, options: CloneOptions, name: &str) -> BoxliteResult<LiteBox> {
+    pub async fn clone_box(
+        &self,
+        options: CloneOptions,
+        name: Option<String>,
+    ) -> BoxliteResult<LiteBox> {
         self.box_backend.clone_box(options, name).await
     }
 
-    /// Export this box as a portable `.boxsnap` archive.
-    pub async fn export(&self, options: ExportOptions, dest: &Path) -> BoxliteResult<PathBuf> {
+    /// Export this box as a portable `.boxlite` archive.
+    pub async fn export(&self, options: ExportOptions, dest: &Path) -> BoxliteResult<BoxArchive> {
         self.box_backend.export_box(options, dest).await
     }
 }

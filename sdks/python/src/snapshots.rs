@@ -20,8 +20,6 @@ pub(crate) struct PySnapshotInfo {
     #[pyo3(get)]
     pub created_at: i64,
     #[pyo3(get)]
-    pub snapshot_dir: String,
-    #[pyo3(get)]
     pub guest_disk_bytes: u64,
     #[pyo3(get)]
     pub container_disk_bytes: u64,
@@ -46,7 +44,6 @@ impl From<SnapshotInfo> for PySnapshotInfo {
             box_id: r.box_id,
             name: r.name,
             created_at: r.created_at,
-            snapshot_dir: r.snapshot_dir,
             guest_disk_bytes: r.guest_disk_bytes,
             container_disk_bytes: r.container_disk_bytes,
             size_bytes: r.size_bytes,

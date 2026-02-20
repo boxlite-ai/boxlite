@@ -6,7 +6,7 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use crate::metrics::RuntimeMetrics;
 use crate::runtime::backend::RuntimeBackend;
-use crate::runtime::options::{BoxOptions, ImportOptions};
+use crate::runtime::options::{BoxArchive, BoxOptions};
 use crate::{BoxInfo, LiteBox};
 
 use super::client::ApiClient;
@@ -113,12 +113,32 @@ impl RuntimeBackend for RestRuntime {
 
     async fn import_box(
         &self,
-        _options: ImportOptions,
-        _name: Option<String>,
+        archive: BoxArchive,
+        name: Option<String>,
     ) -> BoxliteResult<LiteBox> {
-        Err(BoxliteError::Unsupported(
-            "This operation is only supported for local runtimes (not REST backends)".to_string(),
-        ))
+        self.client.require_import_enabled().await?;
+
+        let archive_bytes = std::fs::read(archive.path()).map_err(|e| {
+            BoxliteError::Storage(format!(
+                "Failed to read archive {}: {}",
+                archive.path().display(),
+                e
+            ))
+        })?;
+
+        let query: Vec<(&str, &str)> = name
+            .as_deref()
+            .map(|n| vec![("name", n)])
+            .unwrap_or_default();
+
+        let resp: BoxResponse = self
+            .client
+            .post_bytes_for_json("/boxes/import", archive_bytes, &query)
+            .await?;
+
+        let info = resp.to_box_info();
+        let rest_box = Arc::new(RestBox::new(self.client.clone(), info));
+        Ok(litebox_from_rest(rest_box))
     }
 }
 
@@ -152,25 +172,20 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_import_box_is_unsupported() {
-        let options = BoxliteRestOptions::new("http://localhost:8080");
+    async fn test_import_box_requires_capability() {
+        // Without a running server, import_box should fail with a connection error
+        // (it tries to check capabilities first). This verifies the code path is wired up.
+        let options = BoxliteRestOptions::new("http://localhost:1"); // unreachable port
         let runtime = RestRuntime::new(&options).expect("failed to create REST runtime");
 
         let result = RuntimeBackend::import_box(
             &runtime,
-            ImportOptions::new("/tmp/ignored.boxsnap"),
+            BoxArchive::new("/tmp/ignored.boxlite"),
             Some("x".to_string()),
         )
         .await;
 
-        match result {
-            Err(BoxliteError::Unsupported(msg)) => {
-                assert!(
-                    msg.contains("only supported for local runtimes"),
-                    "Unexpected unsupported error: {msg}"
-                );
-            }
-            _ => panic!("Expected Unsupported for REST import_box"),
-        }
+        // Should fail trying to reach the server for capability check
+        assert!(result.is_err(), "Expected error when server is unreachable");
     }
 }

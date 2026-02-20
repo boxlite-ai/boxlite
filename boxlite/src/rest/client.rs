@@ -367,6 +367,32 @@ impl ApiClient {
         })?;
         ensure_capability("export", capabilities.export_enabled)
     }
+
+    pub async fn require_import_enabled(&self) -> BoxliteResult<()> {
+        let config = self.get_config().await?;
+        let capabilities = config.capabilities.ok_or_else(|| {
+            BoxliteError::Unsupported(
+                "Remote server did not advertise import capability".to_string(),
+            )
+        })?;
+        ensure_capability("import", capabilities.import_enabled)
+    }
+
+    /// POST binary data with query params, parse JSON response.
+    pub async fn post_bytes_for_json<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        data: Vec<u8>,
+        query: &[(&str, &str)],
+    ) -> BoxliteResult<T> {
+        let builder = self
+            .http
+            .post(self.url(path))
+            .header("Content-Type", "application/octet-stream")
+            .query(query)
+            .body(data);
+        self.send_json(builder).await
+    }
 }
 
 fn ensure_capability(name: &str, enabled: Option<bool>) -> BoxliteResult<()> {

@@ -219,9 +219,8 @@ fn create_cow_disk(
                 *base_disk_size
             };
 
-            let qcow2_helper = Qcow2Helper::new();
             let cow_disk_path = layout.disk_path();
-            let temp_disk = qcow2_helper.create_cow_child_disk(
+            let temp_disk = Qcow2Helper::create_cow_child_disk(
                 base_disk_path,
                 BackingFormat::Raw,
                 &cow_disk_path,

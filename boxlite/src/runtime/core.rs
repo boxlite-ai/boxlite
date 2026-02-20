@@ -7,7 +7,7 @@ use crate::litebox::LiteBox;
 use crate::metrics::RuntimeMetrics;
 use crate::runtime::backend::RuntimeBackend;
 use crate::runtime::images::ImageBackend;
-use crate::runtime::options::{BoxOptions, BoxliteOptions, ImportOptions};
+use crate::runtime::options::{BoxArchive, BoxOptions, BoxliteOptions};
 use crate::runtime::rt_impl::{LocalRuntime, RuntimeImpl};
 use crate::runtime::signal_handler::install_signal_handler;
 use crate::runtime::types::BoxInfo;
@@ -310,17 +310,17 @@ impl BoxliteRuntime {
         self.backend.remove(id_or_name, force).await
     }
 
-    /// Import a box from a `.boxsnap` or `.boxlite` archive.
+    /// Import a box from a `.boxlite` archive.
     ///
     /// Creates a new box with a new ID from archived disk images and configuration.
     /// Pass `name=None` to keep the imported box unnamed.
     /// Support depends on backend capabilities (local backends implement import).
     pub async fn import_box(
         &self,
-        options: ImportOptions,
+        archive: BoxArchive,
         name: Option<String>,
     ) -> BoxliteResult<LiteBox> {
-        self.backend.import_box(options, name).await
+        self.backend.import_box(archive, name).await
     }
 
     // ========================================================================

@@ -18,6 +18,7 @@ pub mod runtime;
 pub mod util;
 pub mod vmm;
 
+mod archive;
 mod db;
 mod disk;
 mod fs;
@@ -32,6 +33,7 @@ pub use litebox::LiteBox;
 pub use portal::GuestSession;
 pub use runtime::{BoxliteRuntime, ImageHandle};
 
+pub use archive::ArchiveManifest;
 pub use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 pub use db::snapshots::SnapshotInfo;
 pub use litebox::SnapshotHandle;
@@ -39,11 +41,10 @@ pub use litebox::{
     BoxCommand, CopyOptions, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execution, ExecutionId,
 };
 pub use metrics::{BoxMetrics, RuntimeMetrics};
-pub use runtime::ArchiveManifest;
 pub use runtime::advanced_options::{AdvancedBoxOptions, ResourceLimits, SecurityOptions};
 use runtime::layout::FilesystemLayout;
 pub use runtime::options::{
-    BoxOptions, BoxliteOptions, CloneOptions, ExportOptions, ImportOptions, RootfsSpec,
+    BoxArchive, BoxOptions, BoxliteOptions, CloneOptions, ExportOptions, RootfsSpec,
     SnapshotOptions,
 };
 /// Boxlite library version (from CARGO_PKG_VERSION at compile time).

@@ -335,10 +335,9 @@ async fn test_rest_clone_from_snapshot() {
         .await
         .expect("snapshot create failed");
 
-    let mut clone_opts = CloneOptions::default();
-    clone_opts.from_snapshot("snap-clone");
+    let clone_opts = CloneOptions::default();
     let cloned = source
-        .clone(clone_opts, "test-clone-child")
+        .clone_box(clone_opts, Some("test-clone-child".into()))
         .await
         .expect("clone failed");
     let cloned_id = cloned.id().to_string();
@@ -367,13 +366,13 @@ async fn test_rest_export_box() {
     litebox.stop().await.expect("stop failed");
 
     let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
-    let archive_path = litebox
+    let archive = litebox
         .export(ExportOptions::default(), temp_dir.path())
         .await
         .expect("export failed");
 
-    assert!(archive_path.exists(), "export archive file should exist");
-    let metadata = std::fs::metadata(&archive_path).expect("failed to stat export archive");
+    assert!(archive.path().exists(), "export archive file should exist");
+    let metadata = std::fs::metadata(archive.path()).expect("failed to stat export archive");
     assert!(metadata.len() > 0, "export archive should be non-empty");
 
     rt.remove(&id_str, true).await.ok();

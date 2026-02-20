@@ -15,5 +15,4 @@ pub(crate) mod rt_impl;
 
 pub use core::BoxliteRuntime;
 pub use images::ImageHandle;
-pub use rt_impl::ArchiveManifest;
 pub(crate) use rt_impl::SharedRuntimeImpl;

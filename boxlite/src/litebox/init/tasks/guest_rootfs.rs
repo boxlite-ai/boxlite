@@ -139,8 +139,7 @@ fn create_or_reuse_cow_disk(
         let effective_base = reflink_rootfs_base(base_disk_path, layout);
 
         // Create COW child disk
-        let qcow2_helper = Qcow2Helper::new();
-        let temp_disk = qcow2_helper.create_cow_child_disk(
+        let temp_disk = Qcow2Helper::create_cow_child_disk(
             &effective_base,
             BackingFormat::Raw,
             &guest_rootfs_disk_path,

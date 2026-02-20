@@ -10,7 +10,6 @@ pub mod constants;
 pub(crate) mod ext4;
 mod image;
 mod qcow2;
-pub(crate) mod qemu_img;
 
 pub use ext4::{create_ext4_from_dir, inject_file_into_ext4};
 pub use image::{Disk, DiskFormat};

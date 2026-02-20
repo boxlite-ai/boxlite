@@ -102,7 +102,7 @@ impl PyBox {
         })
     }
 
-    /// Export this box as a portable archive.
+    /// Export this box as a portable `.boxlite` archive.
     #[pyo3(signature = (*, options=None, dest))]
     fn export<'a>(
         &self,
@@ -113,28 +113,26 @@ impl PyBox {
         let handle = Arc::clone(&self.handle);
         let options: ExportOptions = options.map(Into::into).unwrap_or_default();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let path = handle
+            let archive = handle
                 .export(options, std::path::Path::new(&dest))
                 .await
                 .map_err(map_err)?;
-            Ok(path.to_string_lossy().to_string())
+            Ok(archive.path().to_string_lossy().to_string())
         })
     }
 
     /// Clone this box, creating a new box with copied disks.
-    #[pyo3(signature = (*, options=None, name))]
-    fn clone<'a>(
+    #[pyo3(signature = (*, options=None, name=None))]
+    fn clone_box<'a>(
         &self,
         py: Python<'a>,
         options: Option<PyCloneOptions>,
-        name: String,
+        name: Option<String>,
     ) -> PyResult<Bound<'a, PyAny>> {
         let handle = Arc::clone(&self.handle);
         let options: CloneOptions = options.map(Into::into).unwrap_or_default();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let cloned = LiteBox::clone(&handle, options, &name)
-                .await
-                .map_err(map_err)?;
+            let cloned = handle.clone_box(options, name).await.map_err(map_err)?;
             Ok(PyBox {
                 handle: Arc::new(cloned),
             })

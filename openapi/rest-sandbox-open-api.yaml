@@ -433,7 +433,7 @@ paths:
       operationId: cloneBox
       summary: Clone a box
       description: |
-        Creates a new box cloned from the source box's current state or a named snapshot.
+        Creates a new box cloned from the source box's current stopped disk state.
         The source box must be stopped.
       tags: [Boxes]
       requestBody:
@@ -464,7 +464,7 @@ paths:
       description: Exports a stopped box as a portable archive payload.
       tags: [Boxes]
       requestBody:
-        required: true
+        required: false
         content:
           application/json:
             schema:
@@ -477,6 +477,39 @@ paths:
               schema:
                 type: string
                 format: binary
+
+  /{prefix}/boxes/import:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+    post:
+      operationId: importBox
+      summary: Import a box from an archive
+      description: |
+        Imports a `.boxlite` archive (produced by the export endpoint) to create
+        a new box. The archive is uploaded as a binary payload.
+      tags: [Boxes]
+      parameters:
+        - name: name
+          in: query
+          description: Name for the imported box (auto-generated if omitted)
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "201":
+          description: Imported box created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Box"
+        "400":
+          $ref: "#/components/responses/ValidationError"
 
   # -------------------------------------------------------------------------
   # Execution
@@ -1366,18 +1399,14 @@ components:
         - `running`: VM active, accepting commands
         - `stopping`: Graceful shutdown in progress (transient)
         - `stopped`: VM terminated, can be restarted
-        - `snapshotting`: Snapshot operation in progress (transient)
-        - `restoring`: Snapshot restore in progress (transient)
-        - `exporting`: Export operation in progress (transient)
+        - `paused`: VM frozen via SIGSTOP (during snapshot/export)
         - `unknown`: Error recovery state
       enum:
         - configured
         - running
         - stopping
         - stopped
-        - snapshotting
-        - restoring
-        - exporting
+        - paused
         - unknown
 
     CreateBoxRequest:
@@ -1524,7 +1553,6 @@ components:
         - box_id
         - name
         - created_at
-        - snapshot_dir
         - guest_disk_bytes
         - container_disk_bytes
         - size_bytes
@@ -1542,9 +1570,6 @@ components:
           type: integer
           format: int64
           description: Unix timestamp (seconds)
-        snapshot_dir:
-          type: string
-          description: Backend-defined snapshot location identifier
         guest_disk_bytes:
           type: integer
           format: int64
@@ -1563,16 +1588,6 @@ components:
           type: string
           minLength: 1
           maxLength: 128
-        quiesce:
-          type: boolean
-          default: true
-        quiesce_timeout_secs:
-          type: integer
-          minimum: 0
-          default: 30
-        stop_on_quiesce_fail:
-          type: boolean
-          default: true
 
     ListSnapshotsResponse:
       type: object
@@ -1585,36 +1600,16 @@ components:
 
     CloneBoxRequest:
       type: object
-      required: [name]
       properties:
         name:
           type: string
           minLength: 1
           maxLength: 128
-        cow:
-          type: boolean
-          default: true
-        start_after_clone:
-          type: boolean
-          default: false
-        from_snapshot:
-          type: string
-          nullable: true
+          description: Name for the cloned box (auto-generated if omitted)
 
     ExportBoxRequest:
       type: object
-      properties:
-        compress:
-          type: boolean
-          default: true
-        compression_level:
-          type: integer
-          minimum: 1
-          maximum: 22
-          default: 3
-        include_metadata:
-          type: boolean
-          default: true
+      description: Forward-compatible export options (no configurable fields yet).
 
     StopBoxRequest:
       type: object

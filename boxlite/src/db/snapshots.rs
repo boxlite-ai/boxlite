@@ -35,6 +35,24 @@ pub struct SnapshotStore {
     db: Database,
 }
 
+/// Map a database row to a `SnapshotInfo`.
+///
+/// Expects columns in order: id, box_id, name, created_at, snapshot_dir,
+/// guest_disk_bytes, container_disk_bytes, size_bytes.
+fn row_to_snapshot(row: &rusqlite::Row) -> rusqlite::Result<SnapshotInfo> {
+    Ok(SnapshotInfo {
+        id: row.get(0)?,
+        box_id: row.get(1)?,
+        name: row.get(2)?,
+        created_at: row.get(3)?,
+        snapshot_dir: row.get(4)?,
+        guest_disk_bytes: row.get::<_, i64>(5)? as u64,
+        container_disk_bytes: row.get::<_, i64>(6)? as u64,
+        size_bytes: row.get::<_, i64>(7)? as u64,
+    })
+}
+
+#[allow(dead_code)] // Snapshots temporarily disabled; will be re-enabled
 impl SnapshotStore {
     /// Create a new SnapshotStore wrapping the given database.
     pub fn new(db: Database) -> Self {
@@ -71,18 +89,7 @@ impl SnapshotStore {
              FROM box_snapshot WHERE box_id = ?1 ORDER BY created_at DESC"
         ))?;
 
-        let rows = db_err!(stmt.query_map(rusqlite::params![box_id], |row| {
-            Ok(SnapshotInfo {
-                id: row.get(0)?,
-                box_id: row.get(1)?,
-                name: row.get(2)?,
-                created_at: row.get(3)?,
-                snapshot_dir: row.get(4)?,
-                guest_disk_bytes: row.get::<_, i64>(5)? as u64,
-                container_disk_bytes: row.get::<_, i64>(6)? as u64,
-                size_bytes: row.get::<_, i64>(7)? as u64,
-            })
-        }))?;
+        let rows = db_err!(stmt.query_map(rusqlite::params![box_id], row_to_snapshot))?;
 
         let mut snapshots = Vec::new();
         for row in rows {
@@ -100,18 +107,7 @@ impl SnapshotStore {
                  guest_disk_bytes, container_disk_bytes, size_bytes \
                  FROM box_snapshot WHERE box_id = ?1 AND name = ?2",
                 rusqlite::params![box_id, name],
-                |row| {
-                    Ok(SnapshotInfo {
-                        id: row.get(0)?,
-                        box_id: row.get(1)?,
-                        name: row.get(2)?,
-                        created_at: row.get(3)?,
-                        snapshot_dir: row.get(4)?,
-                        guest_disk_bytes: row.get::<_, i64>(5)? as u64,
-                        container_disk_bytes: row.get::<_, i64>(6)? as u64,
-                        size_bytes: row.get::<_, i64>(7)? as u64,
-                    })
-                },
+                row_to_snapshot,
             )
             .optional()
         )?;
@@ -128,18 +124,7 @@ impl SnapshotStore {
                  guest_disk_bytes, container_disk_bytes, size_bytes \
                  FROM box_snapshot WHERE id = ?1",
                 rusqlite::params![snapshot_id],
-                |row| {
-                    Ok(SnapshotInfo {
-                        id: row.get(0)?,
-                        box_id: row.get(1)?,
-                        name: row.get(2)?,
-                        created_at: row.get(3)?,
-                        snapshot_dir: row.get(4)?,
-                        guest_disk_bytes: row.get::<_, i64>(5)? as u64,
-                        container_disk_bytes: row.get::<_, i64>(6)? as u64,
-                        size_bytes: row.get::<_, i64>(7)? as u64,
-                    })
-                },
+                row_to_snapshot,
             )
             .optional()
         )?;

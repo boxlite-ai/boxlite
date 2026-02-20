@@ -229,12 +229,16 @@ impl BoxBackend for RestBox {
         extract_tar_to_path(&tar_bytes, host_dst)
     }
 
-    async fn clone_box(&self, options: CloneOptions, name: &str) -> BoxliteResult<crate::LiteBox> {
+    async fn clone_box(
+        &self,
+        options: CloneOptions,
+        name: Option<String>,
+    ) -> BoxliteResult<crate::LiteBox> {
         self.client.require_clone_enabled().await?;
 
         let box_id = self.box_id_str();
         let path = format!("/boxes/{}/clone", box_id);
-        let req = CloneBoxRequest::from_options(&options, name);
+        let req = CloneBoxRequest::from_options(&options, name.as_deref());
         let resp: BoxResponse = self.client.post(&path, &req).await?;
 
         let info = resp.to_box_info();
@@ -248,7 +252,7 @@ impl BoxBackend for RestBox {
         &self,
         options: ExportOptions,
         dest: &Path,
-    ) -> BoxliteResult<std::path::PathBuf> {
+    ) -> BoxliteResult<crate::runtime::options::BoxArchive> {
         self.client.require_export_enabled().await?;
 
         let box_id = self.box_id_str();
@@ -258,7 +262,7 @@ impl BoxBackend for RestBox {
 
         let output_path = if dest.is_dir() {
             let name = self.name().unwrap_or("box");
-            dest.join(format!("{}.boxsnap", name))
+            dest.join(format!("{}.boxlite", name))
         } else {
             dest.to_path_buf()
         };
@@ -273,7 +277,7 @@ impl BoxBackend for RestBox {
             })?;
         }
 
-        std::fs::write(&output_path, archive_bytes).map_err(|e| {
+        std::fs::write(&output_path, &archive_bytes).map_err(|e| {
             BoxliteError::Storage(format!(
                 "Failed to write export archive {}: {}",
                 output_path.display(),
@@ -281,7 +285,7 @@ impl BoxBackend for RestBox {
             ))
         })?;
 
-        Ok(output_path)
+        Ok(crate::runtime::options::BoxArchive::new(output_path))
     }
 }
 

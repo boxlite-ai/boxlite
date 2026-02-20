@@ -31,6 +31,7 @@ impl BoxStore {
     }
 
     /// Get a reference to the underlying database.
+    #[allow(dead_code)] // Used by snapshots (temporarily disabled)
     pub(crate) fn db(&self) -> Database {
         self.db.clone()
     }

@@ -13,11 +13,13 @@ use serde::{Deserialize, Serialize};
 /// Represents the current operational state of a VM box.
 /// Transitions between states are validated by the state machine.
 ///
-/// State machine (Docker/Podman-style):
+/// State machine:
 /// ```text
-/// create() → Configured (persisted to DB, no VM)
-/// start()  → Running (VM initialized)
-/// stop()   → Stopped (VM terminated, can restart)
+/// create()  → Configured (persisted to DB, no VM)
+/// start()   → Running (VM initialized)
+/// SIGSTOP   → Paused (VM frozen, used during export/snapshot)
+/// SIGCONT   → Running (VM resumed)
+/// stop()    → Stopped (VM terminated, can restart)
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -39,20 +41,16 @@ pub enum BoxStatus {
     /// Rootfs is preserved, box can be restarted.
     Stopped,
 
-    /// Box is being snapshotted (transient state).
-    Snapshotting,
-
-    /// Box is being restored from a snapshot (transient state).
-    Restoring,
-
-    /// Box is being exported (transient state).
-    Exporting,
+    /// Box VM is frozen via SIGSTOP (all vCPUs and virtio backends paused).
+    /// Used during export/snapshot for point-in-time consistency.
+    /// Equivalent to Docker's cgroup freezer pause.
+    Paused,
 }
 
 impl BoxStatus {
-    /// Check if this status represents an active VM (process is running).
+    /// Check if this status represents an active VM (process is running or paused).
     pub fn is_active(&self) -> bool {
-        matches!(self, BoxStatus::Running)
+        matches!(self, BoxStatus::Running | BoxStatus::Paused)
     }
 
     pub fn is_running(&self) -> bool {
@@ -67,15 +65,13 @@ impl BoxStatus {
         matches!(self, BoxStatus::Stopped)
     }
 
+    pub fn is_paused(&self) -> bool {
+        matches!(self, BoxStatus::Paused)
+    }
+
     /// Check if this status represents a transient state.
     pub fn is_transient(&self) -> bool {
-        matches!(
-            self,
-            BoxStatus::Stopping
-                | BoxStatus::Snapshotting
-                | BoxStatus::Restoring
-                | BoxStatus::Exporting
-        )
+        matches!(self, BoxStatus::Stopping)
     }
 
     /// Check if start() can be called from this state.
@@ -85,9 +81,9 @@ impl BoxStatus {
     }
 
     /// Check if stop() can be called from this state.
-    /// Only running boxes can be stopped.
+    /// Running and Paused boxes can be stopped.
     pub fn can_stop(&self) -> bool {
-        matches!(self, BoxStatus::Running)
+        matches!(self, BoxStatus::Running | BoxStatus::Paused)
     }
 
     /// Check if remove() can be called from this state.
@@ -119,26 +115,21 @@ impl BoxStatus {
             (Configured, Running) |
             (Configured, Stopped) |
             (Configured, Unknown) |
-            // Running → Stopping (graceful) or Stopped (crash)
+            // Running → Stopping (graceful), Stopped (crash), or Paused (SIGSTOP)
             (Running, Stopping) |
             (Running, Stopped) |
+            (Running, Paused) |
             (Running, Unknown) |
             // Stopping → Stopped (complete) or Unknown (error)
             (Stopping, Stopped) |
             (Stopping, Unknown) |
-            // Stopped → Running (restart) or transient operation states
+            // Stopped → Running (restart)
             (Stopped, Running) |
-            (Stopped, Snapshotting) |
-            (Stopped, Restoring) |
-            (Stopped, Exporting) |
             (Stopped, Unknown) |
-            // Transient operation states → Stopped (on completion or error)
-            (Snapshotting, Stopped) |
-            (Snapshotting, Unknown) |
-            (Restoring, Stopped) |
-            (Restoring, Unknown) |
-            (Exporting, Stopped) |
-            (Exporting, Unknown)
+            // Paused → Running (SIGCONT resume) or Stopped (killed while paused)
+            (Paused, Running) |
+            (Paused, Stopped) |
+            (Paused, Unknown)
         )
     }
 
@@ -150,9 +141,7 @@ impl BoxStatus {
             BoxStatus::Running => "running",
             BoxStatus::Stopping => "stopping",
             BoxStatus::Stopped => "stopped",
-            BoxStatus::Snapshotting => "snapshotting",
-            BoxStatus::Restoring => "restoring",
-            BoxStatus::Exporting => "exporting",
+            BoxStatus::Paused => "paused",
         }
     }
 }
@@ -169,9 +158,9 @@ impl std::str::FromStr for BoxStatus {
             "running" => Ok(BoxStatus::Running),
             "stopping" => Ok(BoxStatus::Stopping),
             "stopped" => Ok(BoxStatus::Stopped),
-            "snapshotting" => Ok(BoxStatus::Snapshotting),
-            "restoring" => Ok(BoxStatus::Restoring),
-            "exporting" => Ok(BoxStatus::Exporting),
+            "paused" => Ok(BoxStatus::Paused),
+            // Legacy: old transient statuses map to Stopped (DB backward compat)
+            "snapshotting" | "restoring" | "exporting" | "cloning" => Ok(BoxStatus::Stopped),
             _ => Err(()),
         }
     }
@@ -267,7 +256,7 @@ impl BoxState {
 
     /// Reset state after system reboot.
     ///
-    /// Active boxes become Stopped since VM rootfs is preserved.
+    /// Active boxes (Running or Paused) become Stopped since VM rootfs is preserved.
     /// PID is cleared since all processes are gone after reboot.
     pub fn reset_for_reboot(&mut self) {
         if self.status.is_active() {
@@ -290,11 +279,11 @@ mod tests {
 
     #[test]
     fn test_status_is_active() {
-        // Only Running is active (VM process running)
         assert!(!BoxStatus::Configured.is_active());
         assert!(BoxStatus::Running.is_active());
         assert!(!BoxStatus::Stopping.is_active());
         assert!(!BoxStatus::Stopped.is_active());
+        assert!(BoxStatus::Paused.is_active());
         assert!(!BoxStatus::Unknown.is_active());
     }
 
@@ -302,38 +291,43 @@ mod tests {
     fn test_status_is_configured() {
         assert!(BoxStatus::Configured.is_configured());
         assert!(!BoxStatus::Running.is_configured());
-        assert!(!BoxStatus::Stopping.is_configured());
         assert!(!BoxStatus::Stopped.is_configured());
-        assert!(!BoxStatus::Unknown.is_configured());
+    }
+
+    #[test]
+    fn test_status_is_paused() {
+        assert!(BoxStatus::Paused.is_paused());
+        assert!(!BoxStatus::Running.is_paused());
+        assert!(!BoxStatus::Stopped.is_paused());
     }
 
     #[test]
     fn test_status_can_start() {
-        // Configured and Stopped can be started
         assert!(BoxStatus::Configured.can_start());
         assert!(!BoxStatus::Running.can_start());
         assert!(!BoxStatus::Stopping.can_start());
         assert!(BoxStatus::Stopped.can_start());
+        assert!(!BoxStatus::Paused.can_start());
         assert!(!BoxStatus::Unknown.can_start());
     }
 
     #[test]
     fn test_status_can_stop() {
-        // Only Running boxes can be stopped
         assert!(!BoxStatus::Configured.can_stop());
         assert!(BoxStatus::Running.can_stop());
         assert!(!BoxStatus::Stopping.can_stop());
         assert!(!BoxStatus::Stopped.can_stop());
+        assert!(BoxStatus::Paused.can_stop());
         assert!(!BoxStatus::Unknown.can_stop());
     }
 
     #[test]
     fn test_status_can_exec() {
-        // Configured and Stopped trigger implicit start
         assert!(BoxStatus::Configured.can_exec());
         assert!(BoxStatus::Running.can_exec());
         assert!(!BoxStatus::Stopping.can_exec());
         assert!(BoxStatus::Stopped.can_exec());
+        assert!(!BoxStatus::Paused.can_exec());
         assert!(!BoxStatus::Unknown.can_exec());
     }
 
@@ -347,33 +341,29 @@ mod tests {
         // Running transitions
         assert!(BoxStatus::Running.can_transition_to(BoxStatus::Stopping));
         assert!(BoxStatus::Running.can_transition_to(BoxStatus::Stopped));
+        assert!(BoxStatus::Running.can_transition_to(BoxStatus::Paused));
         assert!(!BoxStatus::Running.can_transition_to(BoxStatus::Configured));
 
         // Stopping transitions
         assert!(BoxStatus::Stopping.can_transition_to(BoxStatus::Stopped));
         assert!(!BoxStatus::Stopping.can_transition_to(BoxStatus::Running));
-        assert!(!BoxStatus::Stopping.can_transition_to(BoxStatus::Configured));
 
         // Stopped transitions
         assert!(BoxStatus::Stopped.can_transition_to(BoxStatus::Running));
-        assert!(BoxStatus::Stopped.can_transition_to(BoxStatus::Snapshotting));
-        assert!(BoxStatus::Stopped.can_transition_to(BoxStatus::Restoring));
-        assert!(BoxStatus::Stopped.can_transition_to(BoxStatus::Exporting));
         assert!(!BoxStatus::Stopped.can_transition_to(BoxStatus::Configured));
         assert!(!BoxStatus::Stopped.can_transition_to(BoxStatus::Stopping));
+        assert!(!BoxStatus::Stopped.can_transition_to(BoxStatus::Paused));
 
-        // Transient operation states → Stopped
-        assert!(BoxStatus::Snapshotting.can_transition_to(BoxStatus::Stopped));
-        assert!(!BoxStatus::Snapshotting.can_transition_to(BoxStatus::Running));
-        assert!(BoxStatus::Restoring.can_transition_to(BoxStatus::Stopped));
-        assert!(!BoxStatus::Restoring.can_transition_to(BoxStatus::Running));
-        assert!(BoxStatus::Exporting.can_transition_to(BoxStatus::Stopped));
-        assert!(!BoxStatus::Exporting.can_transition_to(BoxStatus::Running));
+        // Paused transitions
+        assert!(BoxStatus::Paused.can_transition_to(BoxStatus::Running));
+        assert!(BoxStatus::Paused.can_transition_to(BoxStatus::Stopped));
+        assert!(!BoxStatus::Paused.can_transition_to(BoxStatus::Configured));
 
         // Unknown can go anywhere (recovery)
         assert!(BoxStatus::Unknown.can_transition_to(BoxStatus::Configured));
         assert!(BoxStatus::Unknown.can_transition_to(BoxStatus::Running));
         assert!(BoxStatus::Unknown.can_transition_to(BoxStatus::Stopped));
+        assert!(BoxStatus::Unknown.can_transition_to(BoxStatus::Paused));
     }
 
     #[test]
@@ -381,21 +371,20 @@ mod tests {
         let mut state = BoxState::new();
         assert_eq!(state.status, BoxStatus::Configured);
 
-        // Valid: Configured → Running
         assert!(state.transition_to(BoxStatus::Running).is_ok());
         assert_eq!(state.status, BoxStatus::Running);
 
-        // Valid: Running → Stopping
+        // Running → Paused
+        assert!(state.transition_to(BoxStatus::Paused).is_ok());
+        assert_eq!(state.status, BoxStatus::Paused);
+
+        // Paused → Running
+        assert!(state.transition_to(BoxStatus::Running).is_ok());
+        assert_eq!(state.status, BoxStatus::Running);
+
         assert!(state.transition_to(BoxStatus::Stopping).is_ok());
-        assert_eq!(state.status, BoxStatus::Stopping);
-
-        // Valid: Stopping → Stopped
         assert!(state.transition_to(BoxStatus::Stopped).is_ok());
-        assert_eq!(state.status, BoxStatus::Stopped);
-
-        // Valid: Stopped → Running (direct restart)
         assert!(state.transition_to(BoxStatus::Running).is_ok());
-        assert_eq!(state.status, BoxStatus::Running);
     }
 
     #[test]
@@ -403,10 +392,9 @@ mod tests {
         let mut state = BoxState::new();
         state.status = BoxStatus::Configured;
 
-        // Invalid: Configured → Stopping (must go through Running)
         let result = state.transition_to(BoxStatus::Stopping);
         assert!(result.is_err());
-        assert_eq!(state.status, BoxStatus::Configured); // Unchanged
+        assert_eq!(state.status, BoxStatus::Configured);
     }
 
     #[test]
@@ -414,9 +402,17 @@ mod tests {
         let mut state = BoxState::new();
         state.status = BoxStatus::Running;
         state.pid = Some(12345);
-
         state.reset_for_reboot();
+        assert_eq!(state.status, BoxStatus::Stopped);
+        assert_eq!(state.pid, None);
+    }
 
+    #[test]
+    fn test_reset_for_reboot_paused() {
+        let mut state = BoxState::new();
+        state.status = BoxStatus::Paused;
+        state.pid = Some(12345);
+        state.reset_for_reboot();
         assert_eq!(state.status, BoxStatus::Stopped);
         assert_eq!(state.pid, None);
     }
@@ -425,23 +421,15 @@ mod tests {
     fn test_reset_for_reboot_stopped() {
         let mut state = BoxState::new();
         state.status = BoxStatus::Stopped;
-        state.pid = None;
-
         state.reset_for_reboot();
-
-        // Stopped stays stopped
         assert_eq!(state.status, BoxStatus::Stopped);
     }
 
     #[test]
     fn test_reset_for_reboot_configured() {
         let mut state = BoxState::new();
-        // Configured is not active, should stay configured
         assert_eq!(state.status, BoxStatus::Configured);
-
         state.reset_for_reboot();
-
-        // Configured stays configured (no VM was running)
         assert_eq!(state.status, BoxStatus::Configured);
     }
 
@@ -452,23 +440,23 @@ mod tests {
         assert_eq!(BoxStatus::Running.as_str(), "running");
         assert_eq!(BoxStatus::Stopping.as_str(), "stopping");
         assert_eq!(BoxStatus::Stopped.as_str(), "stopped");
-        assert_eq!(BoxStatus::Snapshotting.as_str(), "snapshotting");
-        assert_eq!(BoxStatus::Restoring.as_str(), "restoring");
-        assert_eq!(BoxStatus::Exporting.as_str(), "exporting");
+        assert_eq!(BoxStatus::Paused.as_str(), "paused");
     }
 
     #[test]
     fn test_status_from_str() {
         assert_eq!("unknown".parse(), Ok(BoxStatus::Unknown));
         assert_eq!("configured".parse(), Ok(BoxStatus::Configured));
-        // Legacy support: "starting" maps to Configured
         assert_eq!("starting".parse(), Ok(BoxStatus::Configured));
         assert_eq!("running".parse(), Ok(BoxStatus::Running));
         assert_eq!("stopping".parse(), Ok(BoxStatus::Stopping));
         assert_eq!("stopped".parse(), Ok(BoxStatus::Stopped));
-        assert_eq!("snapshotting".parse(), Ok(BoxStatus::Snapshotting));
-        assert_eq!("restoring".parse(), Ok(BoxStatus::Restoring));
-        assert_eq!("exporting".parse(), Ok(BoxStatus::Exporting));
+        assert_eq!("paused".parse(), Ok(BoxStatus::Paused));
+        // Legacy transient statuses map to Stopped
+        assert_eq!("snapshotting".parse(), Ok(BoxStatus::Stopped));
+        assert_eq!("restoring".parse(), Ok(BoxStatus::Stopped));
+        assert_eq!("exporting".parse(), Ok(BoxStatus::Stopped));
+        assert_eq!("cloning".parse(), Ok(BoxStatus::Stopped));
         assert!("invalid".parse::<BoxStatus>().is_err());
     }
 }

@@ -4,7 +4,7 @@
 
 use std::fs::OpenOptions;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
@@ -28,11 +28,6 @@ struct Qcow2HeaderInfo {
 pub struct Qcow2Helper;
 
 impl Qcow2Helper {
-    /// Create a new disk manager.
-    pub fn new() -> Self {
-        Self
-    }
-
     /// Create a qcow2 disk image at the specified path (uses native Rust implementation).
     ///
     /// The disk is sparse (10GB virtual size, ~200KB actual until written).
@@ -42,13 +37,7 @@ impl Qcow2Helper {
     /// * `disk_path` - Path where the disk should be created
     /// * `persistent` - If true, disk won't be deleted on drop (used for base disks)
     #[allow(dead_code)]
-    pub fn create_disk(&self, disk_path: &Path, persistent: bool) -> BoxliteResult<Disk> {
-        self.create_disk_native(disk_path, persistent)
-    }
-
-    /// Create a qcow2 disk image using native Rust implementation (qcow2-rs).
-    #[allow(dead_code)]
-    fn create_disk_native(&self, disk_path: &Path, persistent: bool) -> BoxliteResult<Disk> {
+    pub fn create_disk(disk_path: &Path, persistent: bool) -> BoxliteResult<Disk> {
         // Ensure parent directory exists
         if let Some(parent) = disk_path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| {
@@ -134,7 +123,7 @@ impl Qcow2Helper {
 
     /// Create a qcow2 disk image using external qemu-img binary.
     #[allow(dead_code)]
-    fn create_disk_external(&self, disk_path: &Path, persistent: bool) -> BoxliteResult<Disk> {
+    fn create_disk_external(disk_path: &Path, persistent: bool) -> BoxliteResult<Disk> {
         // Ensure parent directory exists
         if let Some(parent) = disk_path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| {
@@ -201,7 +190,6 @@ impl Qcow2Helper {
     /// # Returns
     /// RAII-managed Disk (auto-cleanup on drop)
     pub fn create_cow_child_disk(
-        &self,
         base_disk: &Path,
         backing_format: BackingFormat,
         child_path: &Path,
@@ -251,6 +239,263 @@ impl Qcow2Helper {
     pub fn qcow2_virtual_size(path: &Path) -> BoxliteResult<u64> {
         let header = Self::read_qcow2_header(path)?;
         Ok(header.size)
+    }
+
+    /// Flatten a QCOW2 backing chain into a standalone QCOW2 file.
+    ///
+    /// Reads `src` and its entire backing chain, merging all COW layers into
+    /// a single standalone QCOW2 at `dst` with no backing file reference.
+    /// Only non-zero clusters are written (sparse output).
+    ///
+    /// Equivalent to: `qemu-img convert -O qcow2 <src> <dst>`
+    ///
+    /// Errors on compressed clusters (bit 62 in L2 entries).
+    pub fn flatten(src: &Path, dst: &Path) -> BoxliteResult<()> {
+        use std::io::{Seek, SeekFrom, Write};
+
+        tracing::info!(
+            src = %src.display(),
+            dst = %dst.display(),
+            "Flattening QCOW2 disk image"
+        );
+
+        // Open the full backing chain (top layer first, base last).
+        let mut chain = Self::open_flatten_chain(src)?;
+
+        let (virtual_size, cluster_bits) = match &chain[0] {
+            FlattenLayer::Qcow2 {
+                virtual_size,
+                cluster_bits,
+                ..
+            } => (*virtual_size, *cluster_bits),
+            FlattenLayer::Raw { .. } => {
+                return Err(BoxliteError::Storage(
+                    "flatten: source file is not QCOW2".into(),
+                ));
+            }
+        };
+
+        let cluster_size = 1u64 << cluster_bits;
+        let num_virtual_clusters = virtual_size.div_ceil(cluster_size);
+        let l2_entries = cluster_size / 8;
+        let num_l1 = num_virtual_clusters.div_ceil(l2_entries) as u32;
+        let l1_clusters = ((num_l1 as u64) * 8).div_ceil(cluster_size);
+
+        // Output layout:
+        //   Cluster 0:                             Header
+        //   Clusters 1..1+l1_clusters:             L1 table
+        //   Clusters l2_start..l2_start+num_l1:    L2 tables (pre-allocated slots)
+        //   Clusters data_start..:                 Data clusters
+        //   After data:                            Refcount table + blocks
+        let l2_start = 1 + l1_clusters;
+        let data_start = l2_start + num_l1 as u64;
+
+        let mut output = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(dst)
+            .map_err(|e| {
+                BoxliteError::Storage(format!("Failed to create {}: {}", dst.display(), e))
+            })?;
+
+        // Phase 1: Write data clusters, building L2 tables in memory.
+        let mut l2_tables: Vec<Vec<u64>> = vec![vec![0u64; l2_entries as usize]; num_l1 as usize];
+        let mut next_data_cluster = data_start;
+        let zero_cluster = vec![0u8; cluster_size as usize];
+
+        for vc in 0..num_virtual_clusters {
+            // Resolve cluster through the chain (top-to-bottom).
+            let mut data = None;
+            for layer in chain.iter_mut() {
+                if let Some(d) = layer.read_cluster(vc, cluster_size)? {
+                    data = Some(d);
+                    break;
+                }
+            }
+
+            if let Some(ref d) = data
+                && d.as_slice() != zero_cluster.as_slice()
+            {
+                let offset = next_data_cluster * cluster_size;
+                output
+                    .seek(SeekFrom::Start(offset))
+                    .map_err(|e| BoxliteError::Storage(format!("flatten: data seek: {}", e)))?;
+                output
+                    .write_all(d)
+                    .map_err(|e| BoxliteError::Storage(format!("flatten: data write: {}", e)))?;
+
+                let l1_idx = (vc / l2_entries) as usize;
+                let l2_idx = (vc % l2_entries) as usize;
+                l2_tables[l1_idx][l2_idx] = offset;
+                next_data_cluster += 1;
+            }
+        }
+
+        // Phase 2: Calculate refcount layout.
+        let rc_entries_per_block = cluster_size / 2; // 16-bit refcounts
+        let rc_table_cluster = next_data_cluster;
+        let rc_block_start = rc_table_cluster + 1;
+        // Iterate to handle the circular dependency (rc structures count themselves).
+        let mut total_clusters = rc_block_start;
+        loop {
+            let blocks_needed = total_clusters.div_ceil(rc_entries_per_block);
+            let new_total = rc_block_start + blocks_needed;
+            if new_total <= total_clusters {
+                break;
+            }
+            total_clusters = new_total;
+        }
+        let num_rc_blocks = total_clusters - rc_block_start;
+        let rc_table_offset = rc_table_cluster * cluster_size;
+
+        // Phase 3: Write L1 table.
+        output
+            .seek(SeekFrom::Start(cluster_size))
+            .map_err(|e| BoxliteError::Storage(format!("flatten: L1 seek: {}", e)))?;
+        for (i, l2) in l2_tables.iter().enumerate() {
+            let has_data = l2.iter().any(|&e| e != 0);
+            let entry: u64 = if has_data {
+                (l2_start + i as u64) * cluster_size
+            } else {
+                0
+            };
+            output
+                .write_all(&entry.to_be_bytes())
+                .map_err(|e| BoxliteError::Storage(format!("flatten: L1 write: {}", e)))?;
+        }
+
+        // Phase 4: Write L2 tables (only those with data).
+        for (i, l2) in l2_tables.iter().enumerate() {
+            if l2.iter().all(|&e| e == 0) {
+                continue;
+            }
+            let offset = (l2_start + i as u64) * cluster_size;
+            output
+                .seek(SeekFrom::Start(offset))
+                .map_err(|e| BoxliteError::Storage(format!("flatten: L2 seek: {}", e)))?;
+            for entry in l2 {
+                output
+                    .write_all(&entry.to_be_bytes())
+                    .map_err(|e| BoxliteError::Storage(format!("flatten: L2 write: {}", e)))?;
+            }
+        }
+
+        // Phase 5: Write refcount table.
+        output
+            .seek(SeekFrom::Start(rc_table_offset))
+            .map_err(|e| BoxliteError::Storage(format!("flatten: rc table seek: {}", e)))?;
+        for i in 0..num_rc_blocks {
+            let block_offset = (rc_block_start + i) * cluster_size;
+            output
+                .write_all(&block_offset.to_be_bytes())
+                .map_err(|e| BoxliteError::Storage(format!("flatten: rc table write: {}", e)))?;
+        }
+
+        // Phase 6: Write refcount blocks.
+        // Mark used clusters: header, L1, referenced L2 tables, data, rc table, rc blocks.
+        let mut used = vec![false; total_clusters as usize];
+        used[0] = true; // header
+        for c in 1..1 + l1_clusters {
+            used[c as usize] = true; // L1
+        }
+        for (i, l2) in l2_tables.iter().enumerate() {
+            if l2.iter().any(|&e| e != 0) {
+                used[(l2_start + i as u64) as usize] = true; // L2
+            }
+        }
+        for c in data_start..next_data_cluster {
+            used[c as usize] = true; // data
+        }
+        used[rc_table_cluster as usize] = true; // rc table
+        for c in rc_block_start..total_clusters {
+            used[c as usize] = true; // rc blocks
+        }
+
+        for bi in 0..num_rc_blocks {
+            let block_offset = (rc_block_start + bi) * cluster_size;
+            output
+                .seek(SeekFrom::Start(block_offset))
+                .map_err(|e| BoxliteError::Storage(format!("flatten: rc block seek: {}", e)))?;
+            let first = (bi * rc_entries_per_block) as usize;
+            for c in 0..rc_entries_per_block as usize {
+                let refcount: u16 = if first + c < used.len() && used[first + c] {
+                    1
+                } else {
+                    0
+                };
+                output.write_all(&refcount.to_be_bytes()).map_err(|e| {
+                    BoxliteError::Storage(format!("flatten: rc block write: {}", e))
+                })?;
+            }
+        }
+
+        // Phase 7: Write QCOW2 v3 header at cluster 0 (standalone, no backing).
+        output
+            .seek(SeekFrom::Start(0))
+            .map_err(|e| BoxliteError::Storage(format!("flatten: header seek: {}", e)))?;
+        let mut hdr = [0u8; 112]; // 104 bytes header + 8 bytes end-of-extensions
+        // Magic
+        hdr[0..4].copy_from_slice(&QCOW2_MAGIC.to_be_bytes());
+        // Version 3
+        hdr[4..8].copy_from_slice(&3u32.to_be_bytes());
+        // No backing file (offset=0, size=0) — bytes 8-19 stay zero
+        // Cluster bits
+        hdr[20..24].copy_from_slice(&cluster_bits.to_be_bytes());
+        // Virtual size
+        hdr[24..32].copy_from_slice(&virtual_size.to_be_bytes());
+        // Crypt method 0
+        // L1 size
+        hdr[36..40].copy_from_slice(&num_l1.to_be_bytes());
+        // L1 table offset (cluster 1)
+        hdr[40..48].copy_from_slice(&cluster_size.to_be_bytes());
+        // Refcount table offset
+        hdr[48..56].copy_from_slice(&rc_table_offset.to_be_bytes());
+        // Refcount table clusters
+        hdr[56..60].copy_from_slice(&1u32.to_be_bytes());
+        // Refcount order (4 = 16-bit)
+        hdr[96..100].copy_from_slice(&(REFCOUNT_ORDER as u32).to_be_bytes());
+        // Header length
+        hdr[100..104].copy_from_slice(&104u32.to_be_bytes());
+        // Bytes 104-111: end-of-extensions marker (all zeros, already initialized)
+        output
+            .write_all(&hdr)
+            .map_err(|e| BoxliteError::Storage(format!("flatten: header write: {}", e)))?;
+
+        output
+            .sync_all()
+            .map_err(|e| BoxliteError::Storage(format!("flatten: sync: {}", e)))?;
+
+        tracing::info!(
+            dst = %dst.display(),
+            data_clusters = next_data_cluster - data_start,
+            "Flattened QCOW2 disk image"
+        );
+
+        Ok(())
+    }
+
+    /// Open the full backing chain starting from `path`.
+    ///
+    /// Returns layers from top (index 0) to base (last index).
+    fn open_flatten_chain(path: &Path) -> BoxliteResult<Vec<FlattenLayer>> {
+        let mut chain = Vec::new();
+        let mut current_path = path.to_path_buf();
+
+        loop {
+            let (layer, backing) = FlattenLayer::open(&current_path)?;
+            chain.push(layer);
+            match backing {
+                Some(bp) => current_path = PathBuf::from(bp),
+                None => break,
+            }
+        }
+
+        if chain.is_empty() {
+            return Err(BoxliteError::Storage("flatten: empty backing chain".into()));
+        }
+
+        Ok(chain)
     }
 
     /// Read qcow2 header from disk file.
@@ -499,11 +744,7 @@ impl Qcow2Helper {
 
     /// Create COW child disk using external qemu-img binary.
     #[allow(dead_code)]
-    fn create_cow_child_disk_external(
-        &self,
-        base_disk: &Path,
-        child_path: &Path,
-    ) -> BoxliteResult<Disk> {
+    fn create_cow_child_disk_external(base_disk: &Path, child_path: &Path) -> BoxliteResult<Disk> {
         // Ensure parent directory exists
         if let Some(parent) = child_path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| {
@@ -633,6 +874,195 @@ pub fn read_backing_file_path(path: &Path) -> BoxliteResult<Option<String>> {
     Ok(Some(backing_path))
 }
 
+/// QCOW2 magic number: "QFI\xfb".
+const QCOW2_MAGIC: u32 = 0x514649fb;
+
+/// A layer in a QCOW2 backing chain, used during flatten.
+enum FlattenLayer {
+    /// A QCOW2 layer with L1/L2 indirection.
+    Qcow2 {
+        file: std::fs::File,
+        cluster_bits: u32,
+        virtual_size: u64,
+        l1_table: Vec<u64>,
+    },
+    /// A raw (non-QCOW2) base image.
+    Raw { file: std::fs::File, size: u64 },
+}
+
+impl FlattenLayer {
+    /// Open a file and determine if it's QCOW2 or raw.
+    ///
+    /// For QCOW2: parses header and reads L1 table.
+    /// For raw: just records file size.
+    fn open(path: &Path) -> BoxliteResult<(Self, Option<String>)> {
+        use std::io::{Read, Seek, SeekFrom};
+
+        let mut file = std::fs::File::open(path).map_err(|e| {
+            BoxliteError::Storage(format!("Failed to open {}: {}", path.display(), e))
+        })?;
+
+        let mut magic_buf = [0u8; 4];
+        file.read_exact(&mut magic_buf).map_err(|e| {
+            BoxliteError::Storage(format!("Failed to read {}: {}", path.display(), e))
+        })?;
+
+        let magic = u32::from_be_bytes(magic_buf);
+        if magic != QCOW2_MAGIC {
+            // Raw file — no backing chain.
+            let size = file
+                .metadata()
+                .map_err(|e| {
+                    BoxliteError::Storage(format!("Failed to stat {}: {}", path.display(), e))
+                })?
+                .len();
+            return Ok((FlattenLayer::Raw { file, size }, None));
+        }
+
+        // Parse QCOW2 header.
+        let mut hdr = [0u8; 104];
+        file.seek(SeekFrom::Start(0)).unwrap();
+        file.read_exact(&mut hdr).map_err(|e| {
+            BoxliteError::Storage(format!(
+                "Failed to read QCOW2 header from {}: {}",
+                path.display(),
+                e
+            ))
+        })?;
+
+        let backing_offset = u64::from_be_bytes(hdr[8..16].try_into().unwrap());
+        let backing_size = u32::from_be_bytes(hdr[16..20].try_into().unwrap());
+        let cluster_bits = u32::from_be_bytes(hdr[20..24].try_into().unwrap());
+        let virtual_size = u64::from_be_bytes(hdr[24..32].try_into().unwrap());
+        let l1_size = u32::from_be_bytes(hdr[36..40].try_into().unwrap());
+        let l1_offset = u64::from_be_bytes(hdr[40..48].try_into().unwrap());
+
+        // Read backing file path (if any).
+        let backing = if backing_offset != 0 && backing_size != 0 {
+            file.seek(SeekFrom::Start(backing_offset)).map_err(|e| {
+                BoxliteError::Storage(format!("Failed to seek in {}: {}", path.display(), e))
+            })?;
+            let mut buf = vec![0u8; backing_size as usize];
+            file.read_exact(&mut buf).map_err(|e| {
+                BoxliteError::Storage(format!(
+                    "Failed to read backing path from {}: {}",
+                    path.display(),
+                    e
+                ))
+            })?;
+            Some(String::from_utf8(buf).map_err(|e| {
+                BoxliteError::Storage(format!("Invalid backing path in {}: {}", path.display(), e))
+            })?)
+        } else {
+            None
+        };
+
+        // Read L1 table.
+        file.seek(SeekFrom::Start(l1_offset)).map_err(|e| {
+            BoxliteError::Storage(format!("Failed to seek to L1 in {}: {}", path.display(), e))
+        })?;
+        let mut l1_buf = vec![0u8; (l1_size as usize) * 8];
+        file.read_exact(&mut l1_buf).map_err(|e| {
+            BoxliteError::Storage(format!(
+                "Failed to read L1 table from {}: {}",
+                path.display(),
+                e
+            ))
+        })?;
+        let l1_table: Vec<u64> = l1_buf
+            .chunks_exact(8)
+            .map(|c| u64::from_be_bytes(c.try_into().unwrap()))
+            .collect();
+
+        Ok((
+            FlattenLayer::Qcow2 {
+                file,
+                cluster_bits,
+                virtual_size,
+                l1_table,
+            },
+            backing,
+        ))
+    }
+
+    /// Read a single virtual cluster from this layer.
+    ///
+    /// Returns `Some(data)` if the cluster is allocated in this layer,
+    /// `None` if unallocated (should fall through to backing layer).
+    fn read_cluster(
+        &mut self,
+        virtual_cluster: u64,
+        cluster_size: u64,
+    ) -> BoxliteResult<Option<Vec<u8>>> {
+        use std::io::{Read, Seek, SeekFrom};
+
+        match self {
+            FlattenLayer::Raw { file, size } => {
+                let offset = virtual_cluster * cluster_size;
+                if offset >= *size {
+                    return Ok(None);
+                }
+                file.seek(SeekFrom::Start(offset))
+                    .map_err(|e| BoxliteError::Storage(format!("flatten: raw seek: {}", e)))?;
+                let mut buf = vec![0u8; cluster_size as usize];
+                let remaining = (*size - offset).min(cluster_size) as usize;
+                file.read_exact(&mut buf[..remaining])
+                    .map_err(|e| BoxliteError::Storage(format!("flatten: raw read: {}", e)))?;
+                Ok(Some(buf))
+            }
+            FlattenLayer::Qcow2 {
+                file,
+                cluster_bits,
+                l1_table,
+                ..
+            } => {
+                let cs = 1u64 << *cluster_bits;
+                let l2_entries = cs / 8;
+                let l1_idx = (virtual_cluster / l2_entries) as usize;
+                let l2_idx = virtual_cluster % l2_entries;
+
+                if l1_idx >= l1_table.len() {
+                    return Ok(None);
+                }
+
+                // L1 entry: bits 9-55 hold the L2 table offset.
+                let l2_table_offset = l1_table[l1_idx] & 0x00FF_FFFF_FFFF_FE00;
+                if l2_table_offset == 0 {
+                    return Ok(None);
+                }
+
+                // Read the single L2 entry we need.
+                let l2_entry_offset = l2_table_offset + l2_idx * 8;
+                file.seek(SeekFrom::Start(l2_entry_offset))
+                    .map_err(|e| BoxliteError::Storage(format!("flatten: L2 seek: {}", e)))?;
+                let mut entry_buf = [0u8; 8];
+                file.read_exact(&mut entry_buf)
+                    .map_err(|e| BoxliteError::Storage(format!("flatten: L2 read: {}", e)))?;
+                let l2_entry = u64::from_be_bytes(entry_buf);
+
+                // Bit 62: compressed cluster (not supported).
+                if l2_entry & (1 << 62) != 0 {
+                    return Err(BoxliteError::Storage(
+                        "flatten: compressed QCOW2 clusters are not supported".into(),
+                    ));
+                }
+
+                let data_offset = l2_entry & 0x00FF_FFFF_FFFF_FE00;
+                if data_offset == 0 {
+                    return Ok(None); // Unallocated — fall through to backing.
+                }
+
+                file.seek(SeekFrom::Start(data_offset))
+                    .map_err(|e| BoxliteError::Storage(format!("flatten: data seek: {}", e)))?;
+                let mut buf = vec![0u8; cs as usize];
+                file.read_exact(&mut buf)
+                    .map_err(|e| BoxliteError::Storage(format!("flatten: data read: {}", e)))?;
+                Ok(Some(buf))
+            }
+        }
+    }
+}
+
 /// Backing file format for qcow2 COW overlays.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackingFormat {
@@ -744,5 +1174,208 @@ mod tests {
     fn test_backing_format_as_str() {
         assert_eq!(BackingFormat::Raw.as_str(), "raw");
         assert_eq!(BackingFormat::Qcow2.as_str(), "qcow2");
+    }
+
+    // ── Flatten tests ──────────────────────────────────────────────────
+
+    /// Create a small raw disk file with a known pattern.
+    fn write_raw_disk(path: &Path, size: u64) {
+        let mut data = vec![0u8; size as usize];
+        // Write a recognizable pattern in the first few bytes of each 64KB cluster.
+        let cluster_size = 1u64 << CLUSTER_BITS;
+        let mut cluster_idx = 0u64;
+        while cluster_idx * cluster_size < size {
+            let offset = (cluster_idx * cluster_size) as usize;
+            if offset + 8 <= data.len() {
+                // Pattern: (cluster_idx + 1) so cluster 0 is non-zero.
+                let marker = cluster_idx + 1;
+                data[offset..offset + 8].copy_from_slice(&marker.to_be_bytes());
+            }
+            cluster_idx += 1;
+        }
+        std::fs::write(path, &data).unwrap();
+    }
+
+    /// Verify that a flattened QCOW2 file is standalone (no backing) and
+    /// can be read through FlattenLayer to get expected data.
+    fn verify_flatten_output(path: &Path, expected_virtual_size: u64) {
+        // Should have no backing file.
+        let backing = read_backing_file_path(path).unwrap();
+        assert_eq!(backing, None, "flattened file should have no backing");
+
+        // Should parse as QCOW2.
+        let (layer, backing) = FlattenLayer::open(path).unwrap();
+        assert!(backing.is_none());
+        match &layer {
+            FlattenLayer::Qcow2 { virtual_size, .. } => {
+                assert_eq!(*virtual_size, expected_virtual_size);
+            }
+            FlattenLayer::Raw { .. } => panic!("expected QCOW2, got raw"),
+        }
+    }
+
+    #[test]
+    fn test_flatten_standalone_qcow2() {
+        // Flatten a standalone QCOW2 (no backing) → should produce a valid standalone copy.
+        let dir = TempDir::new().unwrap();
+        // Create a standalone QCOW2 via create_disk.
+        let src = dir.path().join("src.qcow2");
+        let _disk = Qcow2Helper::create_disk(&src, true).unwrap();
+
+        let dst = dir.path().join("dst.qcow2");
+        Qcow2Helper::flatten(&src, &dst).unwrap();
+
+        verify_flatten_output(&dst, DEFAULT_DISK_SIZE_GB * 1024 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_flatten_two_layer_chain() {
+        // Raw base → QCOW2 child → flatten.
+        let dir = TempDir::new().unwrap();
+        let cluster_size = 1u64 << CLUSTER_BITS;
+        let raw_size = cluster_size * 4;
+
+        // Create raw base with known data.
+        let base = dir.path().join("base.raw");
+        write_raw_disk(&base, raw_size);
+
+        // Create COW child pointing to the raw base.
+        let child = dir.path().join("child.qcow2");
+        let _child_disk =
+            Qcow2Helper::create_cow_child_disk(&base, BackingFormat::Raw, &child, raw_size)
+                .unwrap();
+
+        // Flatten.
+        let dst = dir.path().join("flat.qcow2");
+        Qcow2Helper::flatten(&child, &dst).unwrap();
+
+        verify_flatten_output(&dst, raw_size);
+
+        // Read cluster 0 from the flattened file — should have our pattern.
+        let mut chain = Qcow2Helper::open_flatten_chain(&dst).unwrap();
+        let data = chain[0].read_cluster(0, cluster_size).unwrap();
+        assert!(data.is_some(), "cluster 0 should have data");
+        let d = data.unwrap();
+        let val = u64::from_be_bytes(d[0..8].try_into().unwrap());
+        assert_eq!(val, 1, "cluster 0 marker should be 1 (cluster_idx + 1)");
+
+        // Read cluster 2.
+        let data = chain[0].read_cluster(2, cluster_size).unwrap();
+        assert!(data.is_some(), "cluster 2 should have data");
+        let d = data.unwrap();
+        let val = u64::from_be_bytes(d[0..8].try_into().unwrap());
+        assert_eq!(val, 3, "cluster 2 marker should be 3 (cluster_idx + 1)");
+    }
+
+    #[test]
+    fn test_flatten_three_layer_chain() {
+        // Raw base → QCOW2 mid → QCOW2 top → flatten.
+        // The mid layer adds no new data; top layer adds no new data.
+        // All data comes from the raw base.
+        let dir = TempDir::new().unwrap();
+        let cluster_size = 1u64 << CLUSTER_BITS;
+        let raw_size = cluster_size * 2;
+
+        let base = dir.path().join("base.raw");
+        write_raw_disk(&base, raw_size);
+
+        let mid = dir.path().join("mid.qcow2");
+        let _mid_disk =
+            Qcow2Helper::create_cow_child_disk(&base, BackingFormat::Raw, &mid, raw_size).unwrap();
+
+        let top = dir.path().join("top.qcow2");
+        let _top_disk =
+            Qcow2Helper::create_cow_child_disk(&mid, BackingFormat::Qcow2, &top, raw_size).unwrap();
+
+        let dst = dir.path().join("flat.qcow2");
+        Qcow2Helper::flatten(&top, &dst).unwrap();
+
+        verify_flatten_output(&dst, raw_size);
+
+        // Verify data from base propagated through.
+        let mut chain = Qcow2Helper::open_flatten_chain(&dst).unwrap();
+        let data = chain[0].read_cluster(1, cluster_size).unwrap();
+        assert!(data.is_some());
+        let val = u64::from_be_bytes(data.unwrap()[0..8].try_into().unwrap());
+        assert_eq!(val, 2, "cluster 1 marker should be 2 (cluster_idx + 1)");
+    }
+
+    #[test]
+    fn test_flatten_compressed_cluster_errors() {
+        // Create a QCOW2 with a manually crafted compressed L2 entry.
+        let dir = TempDir::new().unwrap();
+        let cluster_size = 1u64 << CLUSTER_BITS;
+        let virtual_size = cluster_size * 2;
+
+        // Create a raw base.
+        let base = dir.path().join("base.raw");
+        write_raw_disk(&base, virtual_size);
+
+        // Create a QCOW2 child, then tamper with its L2 table to set bit 62.
+        let child = dir.path().join("child.qcow2");
+        let _child_disk =
+            Qcow2Helper::create_cow_child_disk(&base, BackingFormat::Raw, &child, virtual_size)
+                .unwrap();
+
+        // Read the child's L1 table to find L2 offset, then write a fake compressed entry.
+        {
+            use std::io::{Read, Seek, SeekFrom};
+
+            let mut f = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&child)
+                .unwrap();
+
+            // Read header to get L1 offset and L1 size.
+            let mut hdr = [0u8; 48];
+            f.read_exact(&mut hdr).unwrap();
+            let l1_size = u32::from_be_bytes(hdr[36..40].try_into().unwrap());
+            let l1_offset = u64::from_be_bytes(hdr[40..48].try_into().unwrap());
+
+            if l1_size == 0 {
+                // Can't test without L1 entries — skip gracefully.
+                return;
+            }
+
+            // Read first L1 entry.
+            f.seek(SeekFrom::Start(l1_offset)).unwrap();
+            let mut l1_buf = [0u8; 8];
+            f.read_exact(&mut l1_buf).unwrap();
+            let l1_entry = u64::from_be_bytes(l1_buf);
+            let l2_offset = l1_entry & 0x00FF_FFFF_FFFF_FE00;
+
+            if l2_offset == 0 {
+                // L1 doesn't point to an L2 table (child has no written data).
+                // Write a fake L1 entry pointing to a new cluster with a compressed L2 entry.
+                // Use the cluster right after the header metadata.
+                let fake_l2_cluster = 10u64 * cluster_size; // far enough from header
+                let fake_l1 = fake_l2_cluster;
+
+                // Write L1 entry.
+                f.seek(SeekFrom::Start(l1_offset)).unwrap();
+                f.write_all(&fake_l1.to_be_bytes()).unwrap();
+
+                // Write a compressed L2 entry at the fake L2 table.
+                f.seek(SeekFrom::Start(fake_l2_cluster)).unwrap();
+                let compressed_entry: u64 = 1u64 << 62; // bit 62 = compressed
+                f.write_all(&compressed_entry.to_be_bytes()).unwrap();
+            } else {
+                // Overwrite first L2 entry with compressed flag.
+                f.seek(SeekFrom::Start(l2_offset)).unwrap();
+                let compressed_entry: u64 = 1u64 << 62;
+                f.write_all(&compressed_entry.to_be_bytes()).unwrap();
+            }
+        }
+
+        let dst = dir.path().join("flat.qcow2");
+        let result = Qcow2Helper::flatten(&child, &dst);
+        assert!(result.is_err());
+        let err = format!("{}", result.unwrap_err());
+        assert!(
+            err.contains("compressed"),
+            "error should mention compressed clusters, got: {}",
+            err
+        );
     }
 }

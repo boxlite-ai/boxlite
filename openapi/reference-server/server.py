@@ -134,22 +134,14 @@ class ResizeRequest(BaseModel):
 
 class CreateSnapshotRequest(BaseModel):
     name: str
-    quiesce: bool = True
-    quiesce_timeout_secs: int = 30
-    stop_on_quiesce_fail: bool = True
 
 
 class CloneBoxRequest(BaseModel):
-    name: str
-    cow: bool = True
-    start_after_clone: bool = False
-    from_snapshot: Optional[str] = None
+    name: Optional[str] = None
 
 
 class ExportBoxRequest(BaseModel):
-    compress: bool = True
-    compression_level: int = 3
-    include_metadata: bool = True
+    pass  # Forward-compatible, no configurable fields yet
 
 
 # ============================================================================
@@ -357,13 +349,11 @@ def build_box_options(req: CreateBoxRequest) -> boxlite.BoxOptions:
 
 
 def snapshot_info_to_dict(info) -> dict:
-    # Do not expose host filesystem paths over REST.
     return {
         "id": info.id,
         "box_id": info.box_id,
         "name": info.name,
         "created_at": info.created_at,
-        "snapshot_dir": f"remote://snapshots/{info.name}",
         "guest_disk_bytes": info.guest_disk_bytes,
         "container_disk_bytes": info.container_disk_bytes,
         "size_bytes": info.size_bytes,
@@ -463,6 +453,7 @@ async def get_config():
             "snapshots_enabled": True,
             "clone_enabled": True,
             "export_enabled": True,
+            "import_enabled": True,
             "supported_security_presets": ["development", "standard", "maximum"],
             "idempotency_key_lifetime": "PT24H",
         },
@@ -591,11 +582,7 @@ async def create_snapshot(
     _auth: dict = Depends(require_auth),
 ):
     box_handle = await get_box_or_404(box_id)
-    opts = boxlite.SnapshotOptions(
-        quiesce=req.quiesce,
-        quiesce_timeout_secs=req.quiesce_timeout_secs,
-        stop_on_quiesce_fail=req.stop_on_quiesce_fail,
-    )
+    opts = boxlite.SnapshotOptions()
     info = await box_handle.snapshot.create(req.name, opts)
     return JSONResponse(status_code=201, content=snapshot_info_to_dict(info))
 
@@ -662,11 +649,7 @@ async def clone_box(
     _auth: dict = Depends(require_auth),
 ):
     box_handle = await get_box_or_404(box_id)
-    opts = boxlite.CloneOptions(
-        cow=req.cow,
-        start_after_clone=req.start_after_clone,
-        from_snapshot=req.from_snapshot,
-    )
+    opts = boxlite.CloneOptions()
     cloned = await box_handle.clone(req.name, opts)
     info = cloned.info()
     return JSONResponse(
@@ -680,15 +663,11 @@ async def clone_box(
 async def export_box(
     prefix: str,
     box_id: str,
-    req: ExportBoxRequest,
+    req: Optional[ExportBoxRequest] = None,
     _auth: dict = Depends(require_auth),
 ):
     box_handle = await get_box_or_404(box_id)
-    opts = boxlite.ExportOptions(
-        compress=req.compress,
-        compression_level=req.compression_level,
-        include_metadata=req.include_metadata,
-    )
+    opts = boxlite.ExportOptions()
 
     with tempfile.TemporaryDirectory() as tmpdir:
         archive_path = await box_handle.export(tmpdir, opts)
@@ -696,6 +675,32 @@ async def export_box(
             payload = f.read()
 
     return Response(content=payload, media_type="application/octet-stream")
+
+
+@app.post("/v1/{prefix}/boxes/import", status_code=201)
+async def import_box(
+    prefix: str,
+    request: Request,
+    name: Optional[str] = Query(None),
+    _auth: dict = Depends(require_auth),
+):
+    payload = await request.body()
+    if not payload:
+        return error_response(400, "archive payload is required", "ValidationError")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        archive_path = os.path.join(tmpdir, "import.boxlite")
+        with open(archive_path, "wb") as f:
+            f.write(payload)
+
+        imported = await state.runtime.import_box(archive_path, name=name)
+
+    info = imported.info()
+    return JSONResponse(
+        status_code=201,
+        content=box_info_to_dict(info),
+        headers={"Location": f"/v1/{prefix}/boxes/{info.id}"},
+    )
 
 
 # ============================================================================

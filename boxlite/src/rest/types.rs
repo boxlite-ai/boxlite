@@ -62,6 +62,7 @@ pub(crate) struct SandboxCapabilities {
     pub snapshots_enabled: Option<bool>,
     pub clone_enabled: Option<bool>,
     pub export_enabled: Option<bool>,
+    pub import_enabled: Option<bool>,
 }
 
 // ============================================================================
@@ -197,18 +198,12 @@ pub(crate) struct ListBoxesResponse {
 #[derive(Debug, Serialize)]
 pub(crate) struct CreateSnapshotRequest {
     pub name: String,
-    pub quiesce: bool,
-    pub quiesce_timeout_secs: u64,
-    pub stop_on_quiesce_fail: bool,
 }
 
 impl CreateSnapshotRequest {
-    pub fn from_options(options: &SnapshotOptions, name: &str) -> Self {
+    pub fn from_options(_options: &SnapshotOptions, name: &str) -> Self {
         Self {
             name: name.to_string(),
-            quiesce: options.quiesce,
-            quiesce_timeout_secs: options.quiesce_timeout_secs,
-            stop_on_quiesce_fail: options.stop_on_quiesce_fail,
         }
     }
 }
@@ -219,7 +214,6 @@ pub(crate) struct SnapshotResponse {
     pub box_id: String,
     pub name: String,
     pub created_at: i64,
-    pub snapshot_dir: String,
     pub guest_disk_bytes: u64,
     pub container_disk_bytes: u64,
     pub size_bytes: u64,
@@ -232,7 +226,7 @@ impl SnapshotResponse {
             box_id: self.box_id.clone(),
             name: self.name.clone(),
             created_at: self.created_at,
-            snapshot_dir: self.snapshot_dir.clone(),
+            snapshot_dir: String::new(),
             guest_disk_bytes: self.guest_disk_bytes,
             container_disk_bytes: self.container_disk_bytes,
             size_bytes: self.size_bytes,
@@ -247,38 +241,24 @@ pub(crate) struct ListSnapshotsResponse {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct CloneBoxRequest {
-    pub name: String,
-    pub cow: bool,
-    pub start_after_clone: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub from_snapshot: Option<String>,
+    pub name: Option<String>,
 }
 
 impl CloneBoxRequest {
-    pub fn from_options(options: &CloneOptions, name: &str) -> Self {
+    pub fn from_options(_options: &CloneOptions, name: Option<&str>) -> Self {
         Self {
-            name: name.to_string(),
-            cow: options.cow,
-            start_after_clone: options.start_after_clone,
-            from_snapshot: options.from_snapshot.clone(),
+            name: name.map(|s| s.to_string()),
         }
     }
 }
 
 #[derive(Debug, Serialize)]
-pub(crate) struct ExportBoxRequest {
-    pub compress: bool,
-    pub compression_level: i32,
-    pub include_metadata: bool,
-}
+pub(crate) struct ExportBoxRequest {}
 
 impl ExportBoxRequest {
-    pub fn from_options(options: &ExportOptions) -> Self {
-        Self {
-            compress: options.compress,
-            compression_level: options.compression_level,
-            include_metadata: options.include_metadata,
-        }
+    pub fn from_options(_options: &ExportOptions) -> Self {
+        Self {}
     }
 }
 
@@ -394,9 +374,7 @@ fn parse_box_status(status: &str) -> BoxStatus {
         "running" => BoxStatus::Running,
         "stopping" => BoxStatus::Stopping,
         "stopped" => BoxStatus::Stopped,
-        "snapshotting" => BoxStatus::Snapshotting,
-        "restoring" => BoxStatus::Restoring,
-        "exporting" => BoxStatus::Exporting,
+        "paused" => BoxStatus::Paused,
         _ => BoxStatus::Unknown,
     }
 }
@@ -554,11 +532,10 @@ mod tests {
             labels: HashMap::new(),
         };
 
-        assert_eq!(resp.to_box_info().status, BoxStatus::Snapshotting);
-        resp.status = "restoring".to_string();
-        assert_eq!(resp.to_box_info().status, BoxStatus::Restoring);
-        resp.status = "exporting".to_string();
-        assert_eq!(resp.to_box_info().status, BoxStatus::Exporting);
+        // Legacy transient statuses map to Unknown (no longer valid)
+        assert_eq!(resp.to_box_info().status, BoxStatus::Unknown);
+        resp.status = "paused".to_string();
+        assert_eq!(resp.to_box_info().status, BoxStatus::Paused);
     }
 
     #[test]
@@ -584,7 +561,6 @@ mod tests {
             box_id: "01J0000000000000000000000A".to_string(),
             name: "snap1".to_string(),
             created_at: 1_700_000_000,
-            snapshot_dir: "remote://snapshots/snap1".to_string(),
             guest_disk_bytes: 1024,
             container_disk_bytes: 2048,
             size_bytes: 4096,
@@ -592,7 +568,7 @@ mod tests {
 
         let info = resp.to_snapshot_info();
         assert_eq!(info.name, "snap1");
-        assert_eq!(info.snapshot_dir, "remote://snapshots/snap1");
+        assert_eq!(info.snapshot_dir, "");
         assert_eq!(info.size_bytes, 4096);
     }
 }
