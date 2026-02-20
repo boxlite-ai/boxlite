@@ -12,17 +12,55 @@ local development and remote production environments.
 
 Prerequisites:
     make dev:python
-    cd openapi/reference-server && uv run --active server.py --port 8080
 """
 
 import asyncio
+import os
+import socket
+import subprocess
+import sys
 import tempfile
+import time
+import urllib.request
 
 import boxlite
 from boxlite import Boxlite, BoxOptions, BoxliteRestOptions, Options
 
 
-SERVER_URL = "http://localhost:8080"
+def find_free_port() -> int:
+    """Find a random available TCP port."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("", 0))
+        return s.getsockname()[1]
+
+
+def start_server(port: int) -> subprocess.Popen:
+    """Start the reference server as a subprocess and wait until ready."""
+    server_script = os.path.join(
+        os.path.dirname(__file__), "..", "..", "..", "openapi", "reference-server", "server.py"
+    )
+    server_script = os.path.abspath(server_script)
+
+    proc = subprocess.Popen(
+        [sys.executable, server_script, "--port", str(port)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+    # Poll until server is ready
+    url = f"http://localhost:{port}/v1/config"
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        try:
+            urllib.request.urlopen(url, timeout=1)
+            return proc
+        except Exception:
+            if proc.poll() is not None:
+                raise RuntimeError(f"Reference server exited with code {proc.returncode}")
+            time.sleep(0.3)
+
+    proc.kill()
+    raise RuntimeError("Reference server did not start within 15 seconds")
 
 
 async def main():
@@ -32,13 +70,21 @@ async def main():
     print("\nThis example exports a box from the local SDK and imports")
     print("it into a remote REST server, preserving all data.\n")
 
+    # Start the reference server on a random port
+    port = find_free_port()
+    print(f"  Starting reference server on port {port}...")
+    server_proc = start_server(port)
+    print("  Server ready.\n")
+
+    server_url = f"http://localhost:{port}"
+
     # Use a separate home directory for the local runtime to avoid
     # conflicting with the reference server (which also uses a local runtime).
     # Use /tmp for shorter paths — macOS has a SUN_LEN limit for Unix sockets.
     local_home = tempfile.mkdtemp(prefix="bl-", dir="/tmp")
     local_rt = Boxlite(Options(home_dir=local_home))
     rest_rt = Boxlite.rest(BoxliteRestOptions(
-        url=SERVER_URL, client_id="test-client", client_secret="test-secret",
+        url=server_url, client_id="test-client", client_secret="test-secret",
     ))
 
     source = None
@@ -86,7 +132,6 @@ async def main():
             print(f"  Name: {imported_info.name}")
             print(f"  State: {imported_info.state}")
 
-        # --- Step 4: Verify data on remote ---
         # --- Step 4: Verify data on remote (single exec to avoid connection issues) ---
         print("\n=== Step 4: Verify Data on Remote ===")
         verify_script = (
@@ -132,6 +177,8 @@ async def main():
                 await local_rt.remove(source.id, force=True)
             except Exception:
                 pass
+        server_proc.terminate()
+        server_proc.wait(timeout=5)
 
     print("\n" + "=" * 60)
     print("Migration complete!")
