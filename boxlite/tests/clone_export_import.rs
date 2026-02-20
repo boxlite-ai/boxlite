@@ -254,12 +254,6 @@ async fn test_export_import_running_box_roundtrip() {
     let result = exec.wait().await.expect("Wait for write");
     assert_eq!(result.exit_code, 0, "Marker file write should succeed");
 
-    // Sync filesystem to flush writes to the block device before export
-    let cmd = BoxCommand::new("sync");
-    let mut exec = source.exec(cmd).await.expect("Run sync");
-    let result = exec.wait().await.expect("Wait for sync");
-    assert_eq!(result.exit_code, 0, "sync should succeed");
-
     // Export while running (PauseGuard freezes VM for consistent snapshot)
     let export_path = dir.path().join("exports");
     std::fs::create_dir_all(&export_path).unwrap();
@@ -287,6 +281,66 @@ async fn test_export_import_running_box_roundtrip() {
         result.exit_code, 0,
         "Marker file should exist in imported box"
     );
+
+    imported.stop().await.expect("Stop imported box");
+    source.stop().await.expect("Stop source box");
+}
+
+// ============================================================================
+// Stress tests
+// ============================================================================
+
+#[tokio::test]
+#[ignore] // Requires VM runtime
+async fn test_export_under_write_pressure() {
+    let (runtime, dir) = test_runtime();
+    let source = create_running_box(&runtime, "write-stress").await;
+
+    // Start a background process that continuously writes random 4KB blocks
+    // to a file at random offsets. This simulates active I/O during export.
+    let write_script = concat!(
+        "while true; do ",
+        "dd if=/dev/urandom of=/root/stress.bin bs=4096 count=1 ",
+        "seek=$((RANDOM % 256)) conv=notrunc 2>/dev/null; ",
+        "done"
+    );
+    let cmd = BoxCommand::new("sh").args(["-c", write_script]);
+    let _bg_exec = source.exec(cmd).await.expect("Start background writer");
+
+    // Let writes accumulate briefly
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+    // Export while writes are happening — PauseGuard quiesces the VM
+    let export_path = dir.path().join("exports");
+    std::fs::create_dir_all(&export_path).unwrap();
+
+    let archive = source
+        .export(ExportOptions::default(), &export_path)
+        .await
+        .expect("Export under write pressure should succeed");
+
+    // Source should still be running after export
+    assert_eq!(source.info().status, BoxStatus::Running);
+
+    // Import the archive and verify the filesystem is intact (bootable)
+    let imported = runtime
+        .import_box(archive, Some("imported-stress".to_string()))
+        .await
+        .expect("Import should succeed");
+
+    imported.start().await.expect("Start imported box");
+
+    // Verify the box boots and can execute commands (filesystem integrity)
+    let cmd = BoxCommand::new("echo").args(["fs-ok"]);
+    let mut exec = imported.exec(cmd).await.expect("Exec on imported box");
+    let result = exec.wait().await.expect("Wait on exec");
+    assert_eq!(result.exit_code, 0, "Imported box should be functional");
+
+    // Verify stress file exists (some data was captured)
+    let cmd = BoxCommand::new("test").args(["-f", "/root/stress.bin"]);
+    let mut exec = imported.exec(cmd).await.expect("Check stress file");
+    let result = exec.wait().await.expect("Wait on check");
+    assert_eq!(result.exit_code, 0, "Stress file should exist in snapshot");
 
     imported.stop().await.expect("Stop imported box");
     source.stop().await.expect("Stop source box");

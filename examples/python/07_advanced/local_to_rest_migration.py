@@ -66,10 +66,7 @@ async def main():
             result = await exec_handle.wait()
             assert result.exit_code == 0, f"Command failed: {cmd}"
 
-        # Sync filesystem before export
-        exec_handle = await source.exec("sync", [])
-        await exec_handle.wait()
-        print("  Data written and synced")
+        print("  Data written")
 
         # --- Step 2: Export to portable archive ---
         print("\n=== Step 2: Export Archive ===")
@@ -142,7 +139,7 @@ async def main():
     print("  - .boxlite archives are portable across backends")
     print("  - Export from local SDK, import on REST server (or vice versa)")
     print("  - All rootfs data is preserved in the archive")
-    print("  - Always sync before export to flush filesystem caches")
+    print("  - PauseGuard auto-quiesces the VM during export for consistency")
 
 
 if __name__ == "__main__":

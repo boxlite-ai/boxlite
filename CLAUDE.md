@@ -214,6 +214,7 @@ When helping users debug:
 **12. Thoughtful Naming** - Consider 5+ alternatives, choose the clearest
 **13. Structured Code** - Organized hierarchy, clear layers, predictable organization
 **14. Idiomatic by Default** - Follow each language's standard patterns and libraries first; only diverge with a clear, documented reason
+**15. No Sleep for Events** - Never use `sleep` to wait on events (especially > 10ms). Use proper event-driven mechanisms (channels, waitpid, condition variables, futures) instead.
 
 ### Quick Examples
 

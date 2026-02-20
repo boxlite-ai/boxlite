@@ -1,12 +1,13 @@
 //! Guest service implementation.
 //!
-//! Handles guest initialization and management (Init, Ping, Shutdown RPCs).
+//! Handles guest initialization and management (Init, Ping, Shutdown,
+//! Quiesce, Thaw RPCs).
 
 use crate::service::server::GuestServer;
 use boxlite_shared::{
     guest_init_response, Guest as GuestService, GuestInitError, GuestInitRequest,
-    GuestInitResponse, GuestInitSuccess, PingRequest, PingResponse, ShutdownRequest,
-    ShutdownResponse,
+    GuestInitResponse, GuestInitSuccess, PingRequest, PingResponse, QuiesceRequest,
+    QuiesceResponse, ShutdownRequest, ShutdownResponse, ThawRequest, ThawResponse,
 };
 use tonic::{Request, Response, Status};
 use tracing::{debug, error, info};
@@ -118,5 +119,41 @@ impl GuestService for GuestServer {
 
         info!("Graceful shutdown complete");
         Ok(Response::new(ShutdownResponse {}))
+    }
+
+    /// Quiesce all writable filesystems (FIFREEZE ioctl).
+    ///
+    /// Atomically flushes dirty pages and blocks new writes on each filesystem.
+    /// Follows QEMU guest-agent's `guest-fsfreeze-freeze` protocol.
+    async fn quiesce(
+        &self,
+        _request: Request<QuiesceRequest>,
+    ) -> Result<Response<QuiesceResponse>, Status> {
+        info!("Received quiesce request — freezing filesystems");
+
+        let frozen = crate::storage::fsfreeze::freeze_filesystems();
+        let frozen_count = frozen.len() as u32;
+
+        // Store frozen mount points for the subsequent Thaw call
+        let mut stored = self.frozen_mounts.lock().await;
+        *stored = frozen;
+
+        Ok(Response::new(QuiesceResponse { frozen_count }))
+    }
+
+    /// Thaw previously quiesced filesystems (FITHAW ioctl).
+    ///
+    /// Unblocks writes on all filesystems frozen by the last Quiesce call.
+    async fn thaw(
+        &self,
+        _request: Request<ThawRequest>,
+    ) -> Result<Response<ThawResponse>, Status> {
+        info!("Received thaw request — thawing filesystems");
+
+        let mut stored = self.frozen_mounts.lock().await;
+        let thawed_count = crate::storage::fsfreeze::thaw_filesystems(&stored);
+        stored.clear();
+
+        Ok(Response::new(ThawResponse { thawed_count }))
     }
 }

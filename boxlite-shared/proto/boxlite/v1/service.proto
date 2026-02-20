@@ -24,6 +24,16 @@ service Guest {
 
   // Shutdown guest agent gracefully
   rpc Shutdown(ShutdownRequest) returns (ShutdownResponse);
+
+  // Quiesce all writable filesystems (FIFREEZE ioctl).
+  // Flushes dirty pages and blocks new writes atomically.
+  // Used before SIGSTOP for point-in-time consistent snapshots.
+  // Follows QEMU guest-agent's guest-fsfreeze-freeze protocol.
+  rpc Quiesce(QuiesceRequest) returns (QuiesceResponse);
+
+  // Thaw previously quiesced filesystems (FITHAW ioctl).
+  // Must be called after SIGCONT to unblock writes.
+  rpc Thaw(ThawRequest) returns (ThawResponse);
 }
 
 // Command execution
@@ -168,6 +178,20 @@ message PingResponse {
 message ShutdownRequest {}
 
 message ShutdownResponse {}
+
+message QuiesceRequest {}
+
+message QuiesceResponse {
+  // Number of filesystems successfully frozen
+  uint32 frozen_count = 1;
+}
+
+message ThawRequest {}
+
+message ThawResponse {
+  // Number of filesystems successfully thawed
+  uint32 thawed_count = 1;
+}
 
 // ============================================================================
 // Container Service Messages

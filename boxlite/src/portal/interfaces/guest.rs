@@ -2,7 +2,8 @@
 
 use boxlite_shared::{
     BlockDeviceSource, BoxliteError, BoxliteResult, Filesystem, GuestClient, GuestInitRequest,
-    NetworkInit, PingRequest, ShutdownRequest, VirtiofsSource, Volume, guest_init_response,
+    NetworkInit, PingRequest, QuiesceRequest, ShutdownRequest, ThawRequest, VirtiofsSource, Volume,
+    guest_init_response,
 };
 use tonic::transport::Channel;
 
@@ -71,6 +72,24 @@ impl GuestInterface {
     pub async fn shutdown(&mut self) -> BoxliteResult<()> {
         let _response = self.client.shutdown(ShutdownRequest {}).await?;
         Ok(())
+    }
+
+    /// Quiesce guest filesystems (FIFREEZE).
+    ///
+    /// Flushes dirty pages and blocks new writes atomically.
+    /// Returns the number of filesystems frozen.
+    pub async fn quiesce(&mut self) -> BoxliteResult<u32> {
+        let response = self.client.quiesce(QuiesceRequest {}).await?.into_inner();
+        Ok(response.frozen_count)
+    }
+
+    /// Thaw guest filesystems (FITHAW).
+    ///
+    /// Unblocks writes on filesystems frozen by the last quiesce call.
+    /// Returns the number of filesystems thawed.
+    pub async fn thaw(&mut self) -> BoxliteResult<u32> {
+        let response = self.client.thaw(ThawRequest {}).await?.into_inner();
+        Ok(response.thawed_count)
     }
 }
 

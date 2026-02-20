@@ -277,6 +277,7 @@ impl RuntimeImpl {
         archive: BoxArchive,
         name: Option<String>,
     ) -> BoxliteResult<LiteBox> {
+        let t0 = std::time::Instant::now();
         let archive_path = archive.path().to_path_buf();
         if !archive_path.exists() {
             return Err(BoxliteError::NotFound(format!(
@@ -426,6 +427,7 @@ impl RuntimeImpl {
 
         tracing::info!(
             box_id = %config.id,
+            elapsed_ms = t0.elapsed().as_millis() as u64,
             "Imported box from archive"
         );
 

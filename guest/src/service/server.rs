@@ -3,6 +3,7 @@ use crate::layout::GuestLayout;
 use crate::service::exec::registry::ExecutionRegistry;
 use boxlite_shared::{BoxliteResult, Transport};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tonic::transport::Server;
@@ -35,6 +36,9 @@ pub(crate) struct GuestServer {
 
     /// Execution registry for tracking running executions
     pub registry: ExecutionRegistry,
+
+    /// Mount points frozen by Quiesce RPC, thawed by Thaw RPC.
+    pub frozen_mounts: Mutex<Vec<PathBuf>>,
 }
 
 impl GuestServer {
@@ -48,6 +52,7 @@ impl GuestServer {
             init_state: Arc::new(Mutex::new(GuestInitState::default())),
             containers: Arc::new(Mutex::new(HashMap::new())),
             registry: ExecutionRegistry::new(),
+            frozen_mounts: Mutex::new(Vec::new()),
         }
     }
 

@@ -3,6 +3,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use std::time::Instant;
+
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use chrono::Utc;
 
@@ -11,7 +13,7 @@ use crate::db::snapshots::SnapshotInfo;
 use crate::disk::constants::dirs as disk_dirs;
 use crate::disk::constants::filenames as disk_filenames;
 use crate::disk::{BackingFormat, Qcow2Helper};
-use crate::litebox::box_impl::{BoxImpl, PauseGuard};
+use crate::litebox::box_impl::BoxImpl;
 use crate::runtime::options::SnapshotOptions;
 
 #[allow(dead_code)] // Snapshots temporarily disabled; will be re-enabled
@@ -30,6 +32,7 @@ impl LocalSnapshotBackend {
         name: &str,
         _opts: SnapshotOptions,
     ) -> BoxliteResult<SnapshotInfo> {
+        let t0 = Instant::now();
         let _lock = self.inner.disk_ops.lock().await;
 
         let box_home = self.inner.config.box_home.clone();
@@ -52,10 +55,23 @@ impl LocalSnapshotBackend {
             )));
         }
 
-        // Freeze VM for point-in-time snapshot consistency.
-        let _pause = PauseGuard::freeze(&self.inner)?;
+        // Quiesce VM for point-in-time snapshot consistency.
+        let result = self
+            .inner
+            .with_quiesce_async(async {
+                self.do_snapshot_create(name, &box_home, &container_disk, &guest_disk)
+            })
+            .await;
 
-        self.do_snapshot_create(name, &box_home, &container_disk, &guest_disk)
+        tracing::info!(
+            box_id = %self.inner.id(),
+            snapshot = %name,
+            elapsed_ms = t0.elapsed().as_millis() as u64,
+            ok = result.is_ok(),
+            "snapshot_create completed"
+        );
+
+        result
     }
 
     async fn snapshot_list(&self) -> BoxliteResult<Vec<SnapshotInfo>> {

@@ -38,10 +38,6 @@ async def test_clone_running_box():
         result = await exec_handle.wait()
         assert result.exit_code == 0, "Failed to write marker"
 
-        # Sync filesystem to flush writes to the block device
-        exec_handle = await source.exec("sync", [])
-        await exec_handle.wait()
-
         # Clone while running — PauseGuard auto-pauses/resumes the VM
         print("Cloning running box...")
         cloned = await source.clone_box(name="clone-target")
@@ -111,10 +107,6 @@ async def test_export_import_roundtrip():
         result = await exec_handle.wait()
         assert result.exit_code == 0
 
-        # Sync filesystem to ensure data is flushed to disk
-        exec_handle = await source.exec("sync", [])
-        await exec_handle.wait()
-
         # Export while running — PauseGuard ensures consistent snapshot
         with tempfile.TemporaryDirectory() as export_dir:
             print(f"Exporting to {export_dir}...")
@@ -176,8 +168,6 @@ async def test_clone_stopped_box():
         # Start, write data, stop
         exec_handle = await source.exec("sh", ["-c", "echo 'stopped-clone' > /root/marker.txt"])
         await exec_handle.wait()
-        exec_handle = await source.exec("sync", [])
-        await exec_handle.wait()
         await source.stop()
         print(f"  Source stopped: {source.id}")
 
@@ -232,7 +222,7 @@ async def main():
     print("  - export() creates portable .boxlite archives")
     print("  - import_box() restores a box from an archive")
     print("  - Data written to rootfs is preserved across all operations")
-    print("  - Always sync before export to flush filesystem caches")
+    print("  - PauseGuard auto-quiesces the VM during export for consistency")
 
 
 if __name__ == "__main__":
