@@ -489,6 +489,15 @@ impl BoxFilesystemLayout {
         self.box_dir.join("exit")
     }
 
+    /// Shim config file path: ~/.boxlite/boxes/{box_id}/shim-config.json
+    ///
+    /// Written by the host process before spawning the shim. The shim reads this
+    /// file via `--config-file` to avoid large command-line payloads.
+    /// Context: https://github.com/boxlite-ai/boxlite/pull/227
+    pub fn shim_config_path(&self) -> PathBuf {
+        self.box_dir.join("shim-config.json")
+    }
+
     /// Stderr file path: ~/.boxlite/boxes/{box_id}/shim.stderr
     ///
     /// Captures libkrun stderr output for crash diagnostics.
@@ -926,5 +935,21 @@ mod tests {
         layout.prepare().unwrap();
 
         assert!(layout.tmp_dir().exists());
+    }
+
+    #[test]
+    fn test_shim_config_path_is_under_box_dir() {
+        let config = FsLayoutConfig::without_bind_mount();
+        let layout = BoxFilesystemLayout::new(
+            PathBuf::from("/home/user/.boxlite/boxes/box-123"),
+            config,
+            false,
+        );
+
+        let path = layout.shim_config_path();
+        assert_eq!(
+            path,
+            PathBuf::from("/home/user/.boxlite/boxes/box-123/shim-config.json")
+        );
     }
 }

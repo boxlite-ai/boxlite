@@ -215,20 +215,23 @@ impl BoxImpl {
 
         let live = self.live_state().await?;
 
-        // Inject container ID into environment if not already set
-        let command = if command
-            .env
-            .as_ref()
-            .map(|env| env.iter().any(|(k, _)| k == executor_const::ENV_VAR))
-            .unwrap_or(false)
-        {
-            command
-        } else {
-            command.env(
+        // Inject container ID into environment if not already set.
+        let mut command = command;
+        if effective_env_value(&command, executor_const::ENV_VAR).is_none() {
+            command = command.env(
                 executor_const::ENV_VAR,
                 format!("{}={}", executor_const::CONTAINER_KEY, self.container_id()),
-            )
-        };
+            );
+        }
+
+        // For explicit guest execution, merge box-level defaults at exec-time.
+        // Command-level env entries must take precedence.
+        if matches!(
+            effective_env_value(&command, executor_const::ENV_VAR),
+            Some(v) if v == executor_const::GUEST
+        ) {
+            command = merge_box_env_for_guest_exec(command, &self.config.options.env);
+        }
 
         // Set working directory from BoxOptions if not set in command
         let command = match (&command.working_dir, &self.config.options.working_dir) {
@@ -850,6 +853,31 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
     ) -> BoxliteResult<crate::runtime::options::BoxArchive> {
         BoxImpl::export_box(self, options, dest).await
     }
+}
+
+fn effective_env_value<'a>(command: &'a BoxCommand, key: &str) -> Option<&'a str> {
+    command.env.as_ref().and_then(|env| {
+        env.iter()
+            .rev()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.as_str())
+    })
+}
+
+fn merge_box_env_for_guest_exec(
+    mut command: BoxCommand,
+    box_env: &[(String, String)],
+) -> BoxCommand {
+    if box_env.is_empty() {
+        return command;
+    }
+
+    let mut merged_env = box_env.to_vec();
+    if let Some(command_env) = command.env.take() {
+        merged_env.extend(command_env);
+    }
+    command.env = Some(merged_env);
+    command
 }
 
 fn build_tar_from_host(

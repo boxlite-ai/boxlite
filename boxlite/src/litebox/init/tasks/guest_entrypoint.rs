@@ -92,20 +92,11 @@ impl GuestEntrypointBuilder {
 
     /// Add an env var, using FILO semantics (later calls override earlier ones).
     ///
-    /// If a var with the same key exists, it's removed and its space is reclaimed
-    /// before adding the new value.
+    /// If a var with the same key exists, replacement is atomic: when the new value
+    /// is invalid or doesn't fit, the old value is preserved.
     ///
     /// Returns `true` if added, `false` if skipped (logged as warning).
     pub fn with_env(&mut self, key: &str, value: &str) -> bool {
-        // FILO: Remove existing key if present, reclaim space
-        if let Some(pos) = self.env.iter().position(|(k, _)| k == key) {
-            let (old_key, old_value) = &self.env[pos];
-            let old_size = old_key.len() + old_value.len() + Self::ENV_VAR_OVERHEAD;
-            self.total_size = self.total_size.saturating_sub(old_size);
-            self.env.remove(pos);
-            tracing::trace!(env_key = %key, "Overriding existing env var");
-        }
-
         // Check ASCII
         if !is_printable_ascii(key) || !is_printable_ascii(value) {
             tracing::warn!(
@@ -118,16 +109,35 @@ impl GuestEntrypointBuilder {
 
         // Check size limit
         let var_size = key.len() + value.len() + Self::ENV_VAR_OVERHEAD;
-        if self.total_size + var_size > self.limit {
+        let existing = self.env.iter().position(|(k, _)| k == key).map(|pos| {
+            let old_size = {
+                let (old_key, old_value) = &self.env[pos];
+                old_key.len() + old_value.len() + Self::ENV_VAR_OVERHEAD
+            };
+            (pos, old_size)
+        });
+        let projected_total = match existing {
+            Some((_, old_size)) => self.total_size.saturating_sub(old_size) + var_size,
+            None => self.total_size + var_size,
+        };
+
+        if projected_total > self.limit {
             tracing::warn!(
                 env_key = %key,
                 env_value = %Self::redact_for_log(value),
                 total_size = self.total_size,
+                projected_total = projected_total,
                 var_size,
                 limit = self.limit,
                 "Skipping env var: kernel cmdline size limit reached"
             );
             return false;
+        }
+
+        if let Some((pos, old_size)) = existing {
+            self.total_size = self.total_size.saturating_sub(old_size);
+            self.env.remove(pos);
+            tracing::trace!(env_key = %key, "Overriding existing env var");
         }
 
         self.total_size += var_size;
@@ -182,5 +192,49 @@ impl GuestEntrypointBuilder {
                 value.len()
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GuestEntrypointBuilder;
+
+    #[test]
+    fn with_env_oversized_override_preserves_existing_value() {
+        let mut builder = GuestEntrypointBuilder::new("/boxlite/bin/boxlite-guest".to_string());
+        assert!(builder.with_env("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"));
+
+        let long_path = "x".repeat(10_000);
+        assert!(!builder.with_env("PATH", &long_path));
+
+        let entrypoint = builder.build();
+        let path = entrypoint
+            .env
+            .iter()
+            .find(|(k, _)| k == "PATH")
+            .map(|(_, v)| v.as_str());
+        assert_eq!(
+            path,
+            Some("/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin")
+        );
+    }
+
+    #[test]
+    fn with_env_invalid_override_preserves_existing_value() {
+        let mut builder = GuestEntrypointBuilder::new("/boxlite/bin/boxlite-guest".to_string());
+        assert!(builder.with_env("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"));
+
+        assert!(!builder.with_env("PATH", "ok\u{0080}bad"));
+
+        let entrypoint = builder.build();
+        let path = entrypoint
+            .env
+            .iter()
+            .find(|(k, _)| k == "PATH")
+            .map(|(_, v)| v.as_str());
+        assert_eq!(
+            path,
+            Some("/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin")
+        );
     }
 }

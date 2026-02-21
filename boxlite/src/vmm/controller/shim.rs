@@ -1,6 +1,6 @@
 //! ShimController and ShimHandler - Universal process management for all Box engines.
 
-use std::{path::PathBuf, process::Child, sync::Mutex, time::Instant};
+use std::{io::Write, path::Path, path::PathBuf, process::Child, sync::Mutex, time::Instant};
 
 use crate::{
     BoxID,
@@ -9,11 +9,7 @@ use crate::{
 };
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
-use super::watchdog;
-use super::{
-    VmmController, VmmHandler as VmmHandlerTrait, VmmMetrics,
-    spawn::{ShimSpawner, SpawnedShim},
-};
+use super::{VmmController, VmmHandler as VmmHandlerTrait, VmmMetrics, spawn::spawn_subprocess};
 
 // ============================================================================
 // SHIM HANDLER - Runtime operations on running VM
@@ -31,38 +27,34 @@ pub struct ShimHandler {
     /// When we spawn the process, we keep the Child to properly wait() on stop.
     /// When we attach to an existing process, this is None.
     process: Option<Child>,
-    /// Watchdog keepalive. Dropping closes the pipe write end, delivering
-    /// POLLHUP to the shim and triggering graceful shutdown.
-    /// Defense-in-depth: even if `stop()` is never called, dropping the
-    /// handler closes this, triggering shim cleanup automatically.
-    #[allow(dead_code)]
-    keepalive: Option<watchdog::Keepalive>,
     /// Shared System instance for CPU metrics calculation across calls.
     /// CPU usage requires comparing snapshots over time, so we must reuse the same System.
     metrics_sys: Mutex<sysinfo::System>,
 }
 
 impl ShimHandler {
-    /// Create a handler from a spawned shim.
+    /// Create a handler for a spawned VM with process ownership.
     ///
-    /// Takes ownership of the `SpawnedShim` (child process + keepalive) for
-    /// proper lifecycle management. The keepalive keeps the watchdog pipe
-    /// alive; dropping it triggers shim shutdown.
-    pub fn from_spawned(spawned: SpawnedShim, box_id: BoxID) -> Self {
-        let pid = spawned.child.id();
+    /// This constructor takes ownership of the Child process handle for proper
+    /// lifecycle management (clean shutdown with wait()).
+    ///
+    /// # Arguments
+    /// * `process` - The spawned subprocess (Child handle)
+    /// * `box_id` - Box identifier (for logging)
+    pub fn from_child(process: Child, box_id: BoxID) -> Self {
+        let pid = process.id();
         Self {
             pid,
             box_id,
-            process: Some(spawned.child),
-            keepalive: spawned.keepalive,
+            process: Some(process),
             metrics_sys: Mutex::new(sysinfo::System::new()),
         }
     }
 
     /// Create a handler for an existing VM (attach mode).
     ///
-    /// Used when reconnecting to a running box. We don't have a Child handle
-    /// or keepalive, so we manage the process by PID only.
+    /// Used when reconnecting to a running box. We don't have a Child handle,
+    /// so we manage the process by PID only.
     ///
     /// # Arguments
     /// * `pid` - Process ID of the running VM
@@ -72,7 +64,6 @@ impl ShimHandler {
             pid,
             box_id,
             process: None,
-            keepalive: None,
             metrics_sys: Mutex::new(sysinfo::System::new()),
         }
     }
@@ -264,18 +255,6 @@ impl VmmController for ShimController {
             config.guest_entrypoint.args
         );
 
-        // Prepare environment with RUST_LOG if present
-        // Note: We clone the config components needed for subprocess serialization
-        let mut env = config.guest_entrypoint.env.clone();
-        if let Ok(rust_log) = std::env::var("RUST_LOG") {
-            env.push(("RUST_LOG".to_string(), rust_log.clone()));
-        }
-
-        // Create a temporary struct for serialization with modified env
-        // This avoids cloning the config which now contains non-clonable NetworkBackend
-        let mut guest_entrypoint = config.guest_entrypoint.clone();
-        guest_entrypoint.env = env; // Use the modified env with RUST_LOG
-
         let serializable_config = InstanceSpec {
             // Box identification and security (from ShimController)
             box_id: self.box_id.to_string(),
@@ -285,7 +264,7 @@ impl VmmController for ShimController {
             memory_mib: config.memory_mib,
             fs_shares: config.fs_shares.clone(),
             block_devices: config.block_devices.clone(),
-            guest_entrypoint,
+            guest_entrypoint: config.guest_entrypoint.clone(),
             transport: config.transport.clone(),
             ready_transport: config.ready_transport.clone(),
             guest_rootfs: config.guest_rootfs.clone(),
@@ -297,9 +276,8 @@ impl VmmController for ShimController {
             detach: config.detach,
         };
 
-        // Serialize the config for passing to subprocess
-        let config_json = serde_json::to_string(&serializable_config)
-            .map_err(|e| BoxliteError::Engine(format!("Failed to serialize config: {}", e)))?;
+        let config_path = self.layout.shim_config_path();
+        write_instance_spec_file(&serializable_config, &config_path)?;
 
         // Clean up stale socket file if it exists (defense in depth)
         // Only relevant for Unix sockets
@@ -317,22 +295,22 @@ impl VmmController for ShimController {
             "Starting Box subprocess"
         );
         tracing::debug!(binary = %self.binary_path.display(), "Box runner binary");
-        tracing::trace!(config = %config_json, "Box configuration");
+        tracing::trace!(config_path = %config_path.display(), "Box configuration file");
 
         // Measure subprocess spawn time
         let shim_spawn_start = Instant::now();
-        let spawner = ShimSpawner::new(
+        let child = spawn_subprocess(
             &self.binary_path,
             self.engine_type,
+            &config_path,
             &self.layout,
             self.box_id.as_str(),
             &self.options,
-        );
-        let spawned = spawner.spawn(&config_json, config.detach)?;
+        )?;
         // spawn_duration: time to create Box subprocess
         let shim_spawn_duration = shim_spawn_start.elapsed();
 
-        let pid = spawned.child.id();
+        let pid = child.id();
         tracing::info!(
             box_id = %self.box_id,
             pid = pid,
@@ -344,8 +322,9 @@ impl VmmController for ShimController {
         // GuestConnectTask handles waiting for guest readiness,
         // which allows reusing that task across spawn/restart/reconnect.
 
-        // Create handler from spawned shim (takes ownership of child + keepalive)
-        let handler = ShimHandler::from_spawned(spawned, self.box_id.clone());
+        // Create handler for the running VM
+        // Note: stdio is null (no pipes), so no LogStreamHandler needed
+        let handler = ShimHandler::from_child(child, self.box_id.clone());
 
         tracing::info!(
             box_id = %self.box_id,
@@ -355,5 +334,199 @@ impl VmmController for ShimController {
         // Note: Child is dropped here, but process continues running
         // Handler manages it by PID
         Ok(Box::new(handler))
+    }
+}
+
+fn write_instance_spec_file(config: &InstanceSpec, config_path: &Path) -> BoxliteResult<()> {
+    let config_json = serde_json::to_vec(config)
+        .map_err(|e| BoxliteError::Engine(format!("Failed to serialize shim config: {}", e)))?;
+
+    let config_dir = config_path.parent().ok_or_else(|| {
+        BoxliteError::Storage(format!(
+            "Invalid shim config path (missing parent): {}",
+            config_path.display()
+        ))
+    })?;
+
+    let mut temp_file = tempfile::NamedTempFile::new_in(config_dir).map_err(|e| {
+        BoxliteError::Storage(format!(
+            "Failed to create temporary shim config in {}: {}",
+            config_dir.display(),
+            e
+        ))
+    })?;
+
+    temp_file.write_all(&config_json).map_err(|e| {
+        BoxliteError::Storage(format!(
+            "Failed to write temporary shim config {}: {}",
+            config_path.display(),
+            e
+        ))
+    })?;
+    temp_file.flush().map_err(|e| {
+        BoxliteError::Storage(format!(
+            "Failed to flush temporary shim config {}: {}",
+            config_path.display(),
+            e
+        ))
+    })?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        temp_file
+            .as_file()
+            .set_permissions(std::fs::Permissions::from_mode(0o600))
+            .map_err(|e| {
+                BoxliteError::Storage(format!(
+                    "Failed to set permissions on temporary shim config {}: {}",
+                    config_path.display(),
+                    e
+                ))
+            })?;
+    }
+
+    temp_file.persist(config_path).map_err(|e| {
+        BoxliteError::Storage(format!(
+            "Failed to persist shim config {}: {}",
+            config_path.display(),
+            e.error
+        ))
+    })?;
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::jailer::SecurityOptions;
+    use crate::runtime::guest_rootfs::{GuestRootfs, Strategy};
+    use crate::vmm::{BlockDevices, Entrypoint, FsShares};
+    use std::sync::{Mutex, OnceLock};
+    use std::thread;
+
+    fn test_instance_spec() -> InstanceSpec {
+        InstanceSpec {
+            box_id: "box-test".to_string(),
+            security: SecurityOptions::default(),
+            cpus: None,
+            memory_mib: None,
+            fs_shares: FsShares::default(),
+            block_devices: BlockDevices::default(),
+            guest_entrypoint: Entrypoint {
+                executable: "/boxlite/bin/boxlite-guest".to_string(),
+                args: vec!["--listen".to_string(), "vsock://2695".to_string()],
+                env: vec![("RUST_LOG".to_string(), "info".to_string())],
+            },
+            transport: boxlite_shared::Transport::unix(PathBuf::from("/tmp/box.sock")),
+            ready_transport: boxlite_shared::Transport::unix(PathBuf::from("/tmp/ready.sock")),
+            guest_rootfs: GuestRootfs {
+                path: PathBuf::from("/tmp/rootfs"),
+                strategy: Strategy::Direct,
+                kernel: None,
+                initrd: None,
+                env: vec![],
+            },
+            network_config: None,
+            network_backend_endpoint: None,
+            home_dir: PathBuf::from("/tmp/home"),
+            console_output: Some(PathBuf::from("/tmp/console.log")),
+            exit_file: PathBuf::from("/tmp/exit"),
+            detach: false,
+        }
+    }
+
+    #[test]
+    fn write_instance_spec_file_persists_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("shim-config.json");
+        let spec = test_instance_spec();
+
+        write_instance_spec_file(&spec, &path).unwrap();
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        let parsed: InstanceSpec = serde_json::from_str(&content).unwrap();
+        assert_eq!(parsed.box_id, "box-test");
+        assert_eq!(
+            parsed.guest_entrypoint.executable,
+            "/boxlite/bin/boxlite-guest"
+        );
+    }
+
+    fn fd_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
+
+    fn count_open_fds() -> usize {
+        #[cfg(target_os = "linux")]
+        {
+            if let Ok(entries) = std::fs::read_dir("/proc/self/fd") {
+                return entries.count();
+            }
+        }
+
+        std::fs::read_dir("/dev/fd")
+            .map(|entries| entries.count())
+            .unwrap_or(0)
+    }
+
+    #[test]
+    fn write_instance_spec_file_concurrent_writes_are_isolated() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut handles = Vec::new();
+        let mut expected = Vec::new();
+
+        for i in 0..16 {
+            let box_id = format!("box-concurrent-{i}");
+            let path = dir.path().join(format!("shim-config-{i}.json"));
+            let path_for_thread = path.clone();
+            let box_id_for_thread = box_id.clone();
+            expected.push((box_id, path));
+
+            handles.push(thread::spawn(move || {
+                let mut spec = test_instance_spec();
+                spec.box_id = box_id_for_thread;
+                write_instance_spec_file(&spec, &path_for_thread).unwrap();
+            }));
+        }
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        for (expected_box_id, path) in expected {
+            let content = std::fs::read_to_string(&path).unwrap();
+            let parsed: InstanceSpec = serde_json::from_str(&content).unwrap();
+            assert_eq!(parsed.box_id, expected_box_id);
+            assert_eq!(
+                parsed.guest_entrypoint.executable,
+                "/boxlite/bin/boxlite-guest"
+            );
+        }
+    }
+
+    #[test]
+    fn write_instance_spec_file_persist_failure_does_not_leak_fds() {
+        let _guard = fd_test_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let target_dir = dir.path().join("target-as-dir");
+        std::fs::create_dir_all(&target_dir).unwrap();
+        let spec = test_instance_spec();
+
+        let baseline = count_open_fds();
+        for _ in 0..50 {
+            let err = write_instance_spec_file(&spec, &target_dir).unwrap_err();
+            let msg = err.to_string();
+            assert!(msg.contains("Failed to persist shim config"), "{msg}");
+        }
+        let after = count_open_fds();
+
+        assert!(
+            after <= baseline + 4,
+            "FD count grew unexpectedly: baseline={baseline}, after={after}"
+        );
     }
 }
