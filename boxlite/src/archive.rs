@@ -79,31 +79,6 @@ pub(crate) fn build_zstd_tar_archive(
     Ok(())
 }
 
-/// Build a plain (uncompressed) tar archive.
-#[allow(dead_code)] // Kept for backward compatibility testing
-pub(crate) fn build_tar_archive(
-    output_path: &Path,
-    manifest_path: &Path,
-    container_disk: &Path,
-    guest_disk: Option<&Path>,
-) -> BoxliteResult<()> {
-    let file = std::fs::File::create(output_path).map_err(|e| {
-        BoxliteError::Storage(format!(
-            "Failed to create archive file {}: {}",
-            output_path.display(),
-            e
-        ))
-    })?;
-
-    let mut builder = tar::Builder::new(file);
-    append_archive_files(&mut builder, manifest_path, container_disk, guest_disk)?;
-    builder
-        .finish()
-        .map_err(|e| BoxliteError::Storage(format!("Failed to finalize archive: {}", e)))?;
-
-    Ok(())
-}
-
 fn append_archive_files<W: Write>(
     builder: &mut tar::Builder<W>,
     manifest_path: &Path,

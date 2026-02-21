@@ -1,12 +1,7 @@
-use crate::archive::{
-    ArchiveManifest, MANIFEST_FILENAME, MAX_SUPPORTED_VERSION, extract_archive, move_file,
-    sha256_file,
-};
 use crate::db::{BoxStore, Database};
-use crate::disk::constants::filenames as disk_filenames;
 use crate::images::{ImageDiskManager, ImageManager};
 use crate::init_logging_for;
-use crate::litebox::config::{BoxConfig, ContainerRuntimeConfig};
+use crate::litebox::config::BoxConfig;
 use crate::litebox::{BoxManager, LiteBox, LocalSnapshotBackend, SharedBoxImpl};
 use crate::lock::{FileLockManager, LockManager};
 use crate::metrics::{RuntimeMetrics, RuntimeMetricsStorage};
@@ -15,7 +10,7 @@ use crate::runtime::guest_rootfs::GuestRootfs;
 use crate::runtime::guest_rootfs_manager::GuestRootfsManager;
 use crate::runtime::layout::{FilesystemLayout, FsLayoutConfig};
 use crate::runtime::lock::RuntimeLock;
-use crate::runtime::options::{BoxArchive, BoxOptions, BoxliteOptions, RootfsSpec};
+use crate::runtime::options::{BoxArchive, BoxOptions, BoxliteOptions};
 use crate::runtime::signal_handler::timeout_to_duration;
 use crate::runtime::types::{BoxID, BoxInfo, BoxState, BoxStatus, ContainerID};
 use crate::vmm::VmmKind;
@@ -277,164 +272,7 @@ impl RuntimeImpl {
         archive: BoxArchive,
         name: Option<String>,
     ) -> BoxliteResult<LiteBox> {
-        let t0 = std::time::Instant::now();
-        let archive_path = archive.path().to_path_buf();
-        if !archive_path.exists() {
-            return Err(BoxliteError::NotFound(format!(
-                "Archive not found: {}",
-                archive_path.display()
-            )));
-        }
-
-        // Extract and validate archive on a blocking thread (heavy I/O).
-        let layout = self.layout.clone();
-        let (manifest, temp_dir) = tokio::task::spawn_blocking(
-            move || -> BoxliteResult<(ArchiveManifest, tempfile::TempDir)> {
-                let temp_dir = tempfile::tempdir_in(layout.temp_dir()).map_err(|e| {
-                    BoxliteError::Storage(format!("Failed to create temp directory: {}", e))
-                })?;
-
-                extract_archive(&archive_path, temp_dir.path())?;
-
-                let manifest_path = temp_dir.path().join(MANIFEST_FILENAME);
-                if !manifest_path.exists() {
-                    return Err(BoxliteError::Storage(
-                        "Invalid archive: manifest.json not found".to_string(),
-                    ));
-                }
-
-                let manifest_json = std::fs::read_to_string(&manifest_path)?;
-                let manifest: ArchiveManifest = serde_json::from_str(&manifest_json)
-                    .map_err(|e| BoxliteError::Storage(format!("Invalid manifest: {}", e)))?;
-
-                if manifest.version > MAX_SUPPORTED_VERSION {
-                    return Err(BoxliteError::Storage(format!(
-                        "Unsupported archive version {} (max supported: {}). Upgrade boxlite.",
-                        manifest.version, MAX_SUPPORTED_VERSION
-                    )));
-                }
-
-                let extracted_container = temp_dir.path().join(disk_filenames::CONTAINER_DISK);
-                if !extracted_container.exists() {
-                    return Err(BoxliteError::Storage(format!(
-                        "Invalid archive: {} not found",
-                        disk_filenames::CONTAINER_DISK
-                    )));
-                }
-
-                // Verify checksums (v2+ archives have non-empty checksums).
-                if !manifest.container_disk_checksum.is_empty() {
-                    let actual = sha256_file(&extracted_container)?;
-                    if actual != manifest.container_disk_checksum {
-                        return Err(BoxliteError::Storage(format!(
-                            "Container disk checksum mismatch: expected {}, got {}",
-                            manifest.container_disk_checksum, actual
-                        )));
-                    }
-                }
-
-                let extracted_guest = temp_dir.path().join(disk_filenames::GUEST_ROOTFS_DISK);
-                if extracted_guest.exists() && !manifest.guest_disk_checksum.is_empty() {
-                    let actual = sha256_file(&extracted_guest)?;
-                    if actual != manifest.guest_disk_checksum {
-                        return Err(BoxliteError::Storage(format!(
-                            "Guest disk checksum mismatch: expected {}, got {}",
-                            manifest.guest_disk_checksum, actual
-                        )));
-                    }
-                }
-
-                Ok((manifest, temp_dir))
-            },
-        )
-        .await
-        .map_err(|e| BoxliteError::Internal(format!("Import extraction task panicked: {}", e)))??;
-
-        // Generate new box identity.
-        let box_id = BoxID::new();
-        let container_id = ContainerID::new();
-        let now = Utc::now();
-        let import_name = name;
-
-        let box_home = self.layout.boxes_dir().join(box_id.as_str());
-        let socket_path = filenames::unix_socket_path(self.layout.home_dir(), box_id.as_str());
-        let ready_socket_path = box_home.join("sockets").join("ready.sock");
-
-        // Create box directory and move disks (blocking I/O).
-        let temp_path = temp_dir.path().to_path_buf();
-        let box_home_clone = box_home.clone();
-        tokio::task::spawn_blocking(move || -> BoxliteResult<()> {
-            std::fs::create_dir_all(&box_home_clone).map_err(|e| {
-                BoxliteError::Storage(format!(
-                    "Failed to create box directory {}: {}",
-                    box_home_clone.display(),
-                    e
-                ))
-            })?;
-
-            let extracted_container = temp_path.join(disk_filenames::CONTAINER_DISK);
-            move_file(
-                &extracted_container,
-                &box_home_clone.join(disk_filenames::CONTAINER_DISK),
-            )?;
-
-            let extracted_guest = temp_path.join(disk_filenames::GUEST_ROOTFS_DISK);
-            if extracted_guest.exists() {
-                move_file(
-                    &extracted_guest,
-                    &box_home_clone.join(disk_filenames::GUEST_ROOTFS_DISK),
-                )?;
-            }
-
-            Ok(())
-        })
-        .await
-        .map_err(|e| BoxliteError::Internal(format!("Import install task panicked: {}", e)))??;
-
-        // Use full BoxOptions from v3+ manifest, or reconstruct from image for v1/v2.
-        let options = manifest.box_options.unwrap_or_else(|| BoxOptions {
-            rootfs: RootfsSpec::Image(manifest.image),
-            ..Default::default()
-        });
-
-        // Build config for the imported box.
-        let config = BoxConfig {
-            id: box_id.clone(),
-            name: import_name,
-            created_at: now,
-            container: ContainerRuntimeConfig { id: container_id },
-            options,
-            engine_kind: VmmKind::Libkrun,
-            transport: boxlite_shared::Transport::unix(socket_path),
-            box_home,
-            ready_socket_path,
-        };
-
-        // Create state as Stopped (box has disk state, just needs VM start).
-        let mut state = BoxState::new();
-        state.set_status(BoxStatus::Stopped);
-
-        // Allocate lock.
-        let lock_id = self.lock_manager.allocate()?;
-        state.set_lock_id(lock_id);
-
-        // Persist to database.
-        if let Err(e) = self.box_manager.add_box(&config, &state) {
-            let _ = self.lock_manager.free(lock_id);
-            let _ = std::fs::remove_dir_all(&config.box_home);
-            return Err(e);
-        }
-
-        tracing::info!(
-            box_id = %config.id,
-            elapsed_ms = t0.elapsed().as_millis() as u64,
-            "Imported box from archive"
-        );
-
-        // Return a LiteBox handle.
-        self.get(box_id.as_str()).await?.ok_or_else(|| {
-            BoxliteError::Internal("Imported box not found after persist".to_string())
-        })
+        super::import::import_box(self, archive, name).await
     }
 
     /// Inner create logic shared by `create()` and `get_or_create()`.
@@ -951,6 +789,18 @@ impl RuntimeImpl {
                 }
             }
 
+            // Check if other boxes depend on this box's disks (COW backing references).
+            if !force {
+                let dependents = find_boxes_depending_on(self, &config.box_home)?;
+                if !dependents.is_empty() {
+                    return Err(BoxliteError::InvalidState(format!(
+                        "Cannot remove box: boxes [{}] have clone dependencies on it. \
+                         Remove those first or use force=true.",
+                        dependents.join(", ")
+                    )));
+                }
+            }
+
             // Remove from BoxManager (database-first)
             self.box_manager.remove_box(id)?;
 
@@ -1086,6 +936,70 @@ impl RuntimeImpl {
         (config, state)
     }
 
+    /// Provision a new box: create identity, persist config+state, return LiteBox.
+    ///
+    /// Caller provides `staging_dir` (already created with disks in place) and
+    /// `options` for the box configuration. The staging directory is renamed to
+    /// the canonical `boxes_dir/<box_id>` path. The box is persisted with the
+    /// given `initial_status` (typically `Stopped` for clone/import operations).
+    ///
+    /// On failure, cleans up the allocated lock and box directory.
+    pub(crate) async fn provision_box(
+        self: &Arc<Self>,
+        staging_dir: std::path::PathBuf,
+        name: Option<String>,
+        options: BoxOptions,
+        initial_status: BoxStatus,
+    ) -> BoxliteResult<LiteBox> {
+        use crate::litebox::config::ContainerRuntimeConfig;
+
+        let box_id = BoxID::new();
+        let container_id = ContainerID::new();
+        let now = Utc::now();
+
+        // Move staging dir to canonical path.
+        let box_home = self.layout.boxes_dir().join(box_id.as_str());
+        std::fs::rename(&staging_dir, &box_home).map_err(|e| {
+            BoxliteError::Storage(format!(
+                "Failed to rename {} to {}: {}",
+                staging_dir.display(),
+                box_home.display(),
+                e
+            ))
+        })?;
+
+        let socket_path = filenames::unix_socket_path(self.layout.home_dir(), box_id.as_str());
+        let ready_socket_path = box_home.join("sockets").join("ready.sock");
+
+        let config = BoxConfig {
+            id: box_id.clone(),
+            name,
+            created_at: now,
+            container: ContainerRuntimeConfig { id: container_id },
+            options,
+            engine_kind: VmmKind::Libkrun,
+            transport: Transport::unix(socket_path),
+            box_home,
+            ready_socket_path,
+        };
+
+        let mut state = BoxState::new();
+        state.set_status(initial_status);
+
+        let lock_id = self.lock_manager.allocate()?;
+        state.set_lock_id(lock_id);
+
+        if let Err(e) = self.box_manager.add_box(&config, &state) {
+            let _ = self.lock_manager.free(lock_id);
+            let _ = std::fs::remove_dir_all(&config.box_home);
+            return Err(e);
+        }
+
+        self.get(box_id.as_str()).await?.ok_or_else(|| {
+            BoxliteError::Internal("Provisioned box not found after persist".to_string())
+        })
+    }
+
     /// Recover boxes from persistent storage on runtime startup.
     fn recover_boxes(&self) -> BoxliteResult<()> {
         use crate::util::{is_process_alive, is_same_process};
@@ -1173,6 +1087,20 @@ impl RuntimeImpl {
                 "Cleaned up {} boxes during recovery (auto_remove or orphaned)",
                 boxes_to_remove.len()
             );
+        }
+
+        // Phase 1.5: Recover any pending snapshots that were interrupted by a crash.
+        {
+            let boxes_dir = self.layout.boxes_dir();
+            if boxes_dir.exists()
+                && let Ok(entries) = std::fs::read_dir(&boxes_dir)
+            {
+                for entry in entries.flatten() {
+                    if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+                        crate::litebox::local_snapshot::recover_pending_snapshot(&entry.path());
+                    }
+                }
+            }
         }
 
         // Phase 2: Recover remaining valid boxes
@@ -1439,6 +1367,54 @@ impl RuntimeImpl {
     }
 }
 
+/// Find boxes whose disks have backing file references pointing into `box_home`.
+///
+/// Used to prevent removing a box that other boxes depend on (COW clones).
+fn find_boxes_depending_on(
+    runtime: &RuntimeImpl,
+    box_home: &std::path::Path,
+) -> BoxliteResult<Vec<String>> {
+    use crate::disk::constants::filenames as disk_filenames;
+
+    let canonical_home = box_home
+        .canonicalize()
+        .unwrap_or_else(|_| box_home.to_path_buf());
+
+    let all_boxes = runtime.box_manager.all_boxes(true)?;
+    let mut dependents = Vec::new();
+
+    for (config, _state) in &all_boxes {
+        // Skip the box being removed.
+        if config.box_home == box_home {
+            continue;
+        }
+
+        for disk_name in [
+            disk_filenames::CONTAINER_DISK,
+            disk_filenames::GUEST_ROOTFS_DISK,
+        ] {
+            let disk_path = config.box_home.join(disk_name);
+            if !disk_path.exists() {
+                continue;
+            }
+            if let Ok(Some(backing)) = crate::disk::read_backing_file_path(&disk_path) {
+                let backing_path = std::path::PathBuf::from(&backing);
+                let canonical_backing = backing_path.canonicalize().unwrap_or(backing_path);
+                if canonical_backing.starts_with(&canonical_home) {
+                    dependents.push(config.id.to_string());
+                    break; // One match per box is enough.
+                }
+            }
+        }
+    }
+
+    Ok(dependents)
+}
+
+/// Reject qcow2 disks that contain backing file references.
+///
+/// Imported disks must be standalone — a backing reference could point to
+/// arbitrary host files (e.g. /etc/shadow) and leak their contents.
 impl std::fmt::Debug for RuntimeImpl {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RuntimeInner")
@@ -2222,5 +2198,88 @@ mod tests {
             Err(other) => panic!("Expected Stopped error, got: {other}"),
             Ok(_) => panic!("create should fail after shutdown"),
         }
+    }
+
+    // ====================================================================
+    // Remove box clone dependency guard (Fix #7)
+    // ====================================================================
+
+    #[test]
+    fn test_remove_box_blocked_by_clone_dependency() {
+        let (runtime, _dir) = create_test_runtime();
+
+        // Create box A with a disk.
+        let config_a = test_box_config_in_layout(false, &runtime);
+        let state_a = BoxState::new();
+        std::fs::create_dir_all(&config_a.box_home).unwrap();
+
+        // Create a standalone qcow2 for box A.
+        let disk_a = config_a.box_home.join("disk.qcow2");
+        crate::disk::qcow2::write_test_qcow2(&disk_a, None);
+
+        runtime.box_manager.add_box(&config_a, &state_a).unwrap();
+
+        // Create box B whose disk has a backing reference into A's directory.
+        let config_b = test_box_config_in_layout(false, &runtime);
+        let state_b = BoxState::new();
+        std::fs::create_dir_all(&config_b.box_home).unwrap();
+
+        let disk_b = config_b.box_home.join("disk.qcow2");
+        crate::disk::qcow2::write_test_qcow2(&disk_b, Some(disk_a.to_str().unwrap()));
+
+        runtime.box_manager.add_box(&config_b, &state_b).unwrap();
+
+        // Try to remove box A (non-force) — should fail.
+        let result = runtime.remove_box(&config_a.id, false);
+        assert!(result.is_err());
+        let msg = format!("{}", result.unwrap_err());
+        assert!(
+            msg.contains("clone dependencies"),
+            "Expected dependency error, got: {msg}"
+        );
+        assert!(msg.contains(&config_b.id.to_string()));
+    }
+
+    #[test]
+    fn test_remove_box_succeeds_when_no_dependents() {
+        let (runtime, _dir) = create_test_runtime();
+
+        let config = test_box_config_in_layout(false, &runtime);
+        let state = BoxState::new();
+        std::fs::create_dir_all(&config.box_home).unwrap();
+
+        // Standalone disk (no backing).
+        let disk = config.box_home.join("disk.qcow2");
+        crate::disk::qcow2::write_test_qcow2(&disk, None);
+
+        runtime.box_manager.add_box(&config, &state).unwrap();
+
+        let result = runtime.remove_box(&config.id, false);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_remove_box_with_force_ignores_dependents() {
+        let (runtime, _dir) = create_test_runtime();
+
+        // Create box A.
+        let config_a = test_box_config_in_layout(false, &runtime);
+        let state_a = BoxState::new();
+        std::fs::create_dir_all(&config_a.box_home).unwrap();
+        let disk_a = config_a.box_home.join("disk.qcow2");
+        crate::disk::qcow2::write_test_qcow2(&disk_a, None);
+        runtime.box_manager.add_box(&config_a, &state_a).unwrap();
+
+        // Create box B depending on A.
+        let config_b = test_box_config_in_layout(false, &runtime);
+        let state_b = BoxState::new();
+        std::fs::create_dir_all(&config_b.box_home).unwrap();
+        let disk_b = config_b.box_home.join("disk.qcow2");
+        crate::disk::qcow2::write_test_qcow2(&disk_b, Some(disk_a.to_str().unwrap()));
+        runtime.box_manager.add_box(&config_b, &state_b).unwrap();
+
+        // Force remove should succeed despite dependency.
+        let result = runtime.remove_box(&config_a.id, true);
+        assert!(result.is_ok());
     }
 }

@@ -3,12 +3,13 @@
 //! Provides lazy initialization and execution capabilities for isolated boxes.
 
 pub(crate) mod box_impl;
+mod clone_export;
 pub(crate) mod config;
 pub mod copy;
 mod crash_report;
 mod exec;
 mod init;
-mod local_snapshot;
+pub(crate) mod local_snapshot;
 mod manager;
 mod snapshot;
 mod state;

@@ -801,6 +801,40 @@ impl Qcow2Helper {
             false,
         ))
     }
+
+    /// Create COW children for a container disk (and optional guest disk).
+    ///
+    /// Each child is backed by the source disk and starts empty — all reads go
+    /// to the source, writes go to the child. The returned `Disk` handles are
+    /// leaked so they persist beyond this call.
+    pub fn clone_disk_pair(
+        src_container: &Path,
+        dst_container: &Path,
+        src_guest: &Path,
+        dst_dir: &Path,
+    ) -> BoxliteResult<()> {
+        use super::constants::filenames as disk_filenames;
+
+        let container_size = Self::qcow2_virtual_size(src_container)?;
+
+        // Leak Disk handles — clone creates persistent files that outlive this call.
+        Self::create_cow_child_disk(
+            src_container,
+            BackingFormat::Qcow2,
+            dst_container,
+            container_size,
+        )?
+        .leak();
+
+        if src_guest.exists() {
+            let guest_size = Self::qcow2_virtual_size(src_guest)?;
+            let dst_guest = dst_dir.join(disk_filenames::GUEST_ROOTFS_DISK);
+            Self::create_cow_child_disk(src_guest, BackingFormat::Qcow2, &dst_guest, guest_size)?
+                .leak();
+        }
+
+        Ok(())
+    }
 }
 
 /// Read the backing file path from a qcow2 disk image header.
@@ -1083,6 +1117,26 @@ impl BackingFormat {
     }
 }
 
+/// Test helper: Build a minimal qcow2 file with optional backing file.
+#[cfg(test)]
+pub(crate) fn write_test_qcow2(path: &Path, backing_path: Option<&str>) {
+    use std::io::Write;
+    let mut buf = vec![0u8; 1024];
+    buf[0..4].copy_from_slice(&0x514649fbu32.to_be_bytes());
+    buf[4..8].copy_from_slice(&3u32.to_be_bytes());
+    if let Some(backing) = backing_path {
+        let backing_bytes = backing.as_bytes();
+        let backing_offset: u64 = 512;
+        let backing_size = backing_bytes.len() as u32;
+        buf[8..16].copy_from_slice(&backing_offset.to_be_bytes());
+        buf[16..20].copy_from_slice(&backing_size.to_be_bytes());
+        buf[backing_offset as usize..backing_offset as usize + backing_bytes.len()]
+            .copy_from_slice(backing_bytes);
+    }
+    let mut file = std::fs::File::create(path).unwrap();
+    file.write_all(&buf).unwrap();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1090,7 +1144,7 @@ mod tests {
     use tempfile::TempDir;
 
     /// Build a minimal qcow2 file with optional backing file.
-    fn write_qcow2_with_backing(path: &Path, backing_path: Option<&str>) {
+    pub(crate) fn write_qcow2_with_backing(path: &Path, backing_path: Option<&str>) {
         let mut buf = vec![0u8; 1024];
 
         // Magic: QFI\xfb

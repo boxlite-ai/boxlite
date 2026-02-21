@@ -11,6 +11,7 @@ pub(crate) mod signal_handler;
 pub mod types;
 
 mod core;
+mod import;
 pub(crate) mod rt_impl;
 
 pub use core::BoxliteRuntime;
