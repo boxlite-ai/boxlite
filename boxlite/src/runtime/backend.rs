@@ -14,7 +14,7 @@ use crate::runtime::options::{
 use crate::runtime::types::BoxInfo;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
-use super::types::BoxID;
+use super::id::BoxID;
 
 /// Backend abstraction for runtime operations.
 ///

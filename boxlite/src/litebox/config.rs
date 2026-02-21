@@ -22,7 +22,7 @@ pub struct ContainerRuntimeConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BoxConfig {
     // === Identity & Timestamps ===
-    /// Unique box identifier (ULID).
+    /// Unique box identifier.
     pub id: BoxID,
     /// User-defined name (optional, must be unique if provided).
     pub name: Option<String>,

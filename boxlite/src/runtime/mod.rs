@@ -3,6 +3,7 @@ pub(crate) mod backend;
 pub mod constants;
 pub(crate) mod guest_rootfs;
 pub(crate) mod guest_rootfs_manager;
+pub mod id;
 pub mod images;
 pub mod layout;
 pub(crate) mod lock;

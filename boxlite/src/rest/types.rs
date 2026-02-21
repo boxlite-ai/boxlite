@@ -156,9 +156,9 @@ pub(crate) struct BoxResponse {
 
 impl BoxResponse {
     pub fn to_box_info(&self) -> crate::BoxInfo {
-        use crate::runtime::types::BoxID;
+        use crate::runtime::id::{BoxID, BoxIDMint};
 
-        let id = BoxID::parse(&self.box_id).unwrap_or_default();
+        let id = BoxID::parse(&self.box_id).unwrap_or_else(BoxIDMint::mint);
 
         let status = parse_box_status(&self.status);
 

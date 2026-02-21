@@ -8,11 +8,12 @@ use crate::metrics::{RuntimeMetrics, RuntimeMetricsStorage};
 use crate::runtime::constants::filenames;
 use crate::runtime::guest_rootfs::GuestRootfs;
 use crate::runtime::guest_rootfs_manager::GuestRootfsManager;
+use crate::runtime::id::{BoxID, BoxIDMint};
 use crate::runtime::layout::{FilesystemLayout, FsLayoutConfig};
 use crate::runtime::lock::RuntimeLock;
 use crate::runtime::options::{BoxArchive, BoxOptions, BoxliteOptions};
 use crate::runtime::signal_handler::timeout_to_duration;
-use crate::runtime::types::{BoxID, BoxInfo, BoxState, BoxStatus, ContainerID};
+use crate::runtime::types::{BoxInfo, BoxState, BoxStatus, ContainerID};
 use crate::vmm::VmmKind;
 use boxlite_shared::{BoxliteError, BoxliteResult, Transport};
 use chrono::Utc;
@@ -900,8 +901,8 @@ impl RuntimeImpl {
     ) -> (BoxConfig, BoxState) {
         use crate::litebox::config::ContainerRuntimeConfig;
 
-        // Generate unique ID (26 chars, ULID format, sortable by time)
-        let box_id = BoxID::new();
+        // Generate unique box ID (12-char Base62)
+        let box_id = BoxIDMint::mint();
 
         // Generate container ID (64-char hex)
         let container_id = ContainerID::new();
@@ -953,7 +954,7 @@ impl RuntimeImpl {
     ) -> BoxliteResult<LiteBox> {
         use crate::litebox::config::ContainerRuntimeConfig;
 
-        let box_id = BoxID::new();
+        let box_id = BoxIDMint::mint();
         let container_id = ContainerID::new();
         let now = Utc::now();
 
@@ -1545,7 +1546,7 @@ mod tests {
     /// Create a minimal BoxConfig for testing.
     fn test_box_config(detach: bool) -> BoxConfig {
         BoxConfig {
-            id: BoxID::new(),
+            id: BoxIDMint::mint(),
             name: None,
             created_at: Utc::now(),
             container: ContainerRuntimeConfig {
@@ -1600,7 +1601,7 @@ mod tests {
     /// Create a BoxConfig whose box_home aligns with the runtime's layout.
     /// This is needed for tests that verify PID file operations.
     fn test_box_config_in_layout(detach: bool, runtime: &RuntimeImpl) -> BoxConfig {
-        let id = BoxID::new();
+        let id = BoxIDMint::mint();
         let box_home = runtime.layout.boxes_dir().join(id.as_str());
         BoxConfig {
             id,

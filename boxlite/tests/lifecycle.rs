@@ -1,8 +1,9 @@
 //! Integration tests for box lifecycle (create, list, get, remove, stop).
 
 use boxlite::BoxliteRuntime;
+use boxlite::runtime::id::BoxID;
 use boxlite::runtime::options::{BoxOptions, BoxliteOptions, RootfsSpec};
-use boxlite::runtime::types::{BoxID, BoxStatus};
+use boxlite::runtime::types::BoxStatus;
 use tempfile::TempDir;
 
 // ============================================================================

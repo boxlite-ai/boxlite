@@ -279,7 +279,7 @@ impl BoxliteRuntime {
     /// Get a handle to an existing box by ID or name.
     ///
     /// The `id_or_name` parameter can be either:
-    /// - A box ID (ULID format, 26 characters)
+    /// - A box ID (full or prefix)
     /// - A user-defined box name
     pub async fn get(&self, id_or_name: &str) -> BoxliteResult<Option<LiteBox>> {
         self.backend.get(id_or_name).await

@@ -49,8 +49,9 @@ pub use runtime::options::{
 };
 /// Boxlite library version (from CARGO_PKG_VERSION at compile time).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+pub use runtime::id::{BoxID, BoxIDMint};
 pub use runtime::types::ContainerID;
-pub use runtime::types::{BoxID, BoxInfo, BoxState, BoxStateInfo, BoxStatus};
+pub use runtime::types::{BoxInfo, BoxState, BoxStateInfo, BoxStatus};
 
 #[cfg(feature = "rest")]
 pub use rest::options::BoxliteRestOptions;

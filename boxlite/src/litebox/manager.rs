@@ -9,7 +9,8 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use crate::db::BoxStore;
 use crate::litebox::config::BoxConfig;
-use crate::runtime::types::{BoxID, BoxState};
+use crate::runtime::id::BoxID;
+use crate::runtime::types::BoxState;
 
 /// State backend for box persistence.
 ///
@@ -201,7 +202,8 @@ mod tests {
     use super::*;
     use crate::db::Database;
     use crate::litebox::config::ContainerRuntimeConfig;
-    use crate::runtime::types::{BoxID, BoxStatus, ContainerID};
+    use crate::runtime::id::BoxID;
+    use crate::runtime::types::{BoxStatus, ContainerID};
     use crate::vmm::VmmKind;
     use boxlite_shared::Transport;
     use chrono::Utc;
@@ -243,7 +245,6 @@ mod tests {
         state
     }
 
-    // Valid ULID test IDs
     const TEST_ID_1: &str = "01HJK4TNRPQSXYZ8WM6NCVT9R1";
     const TEST_ID_2: &str = "01HJK4TNRPQSXYZ8WM6NCVT9R2";
     const TEST_ID_3: &str = "01HJK4TNRPQSXYZ8WM6NCVT9R3";

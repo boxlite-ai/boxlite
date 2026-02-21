@@ -10,8 +10,8 @@ use std::ptr;
 
 use boxlite::litebox::LiteBox;
 use boxlite::runtime::BoxliteRuntime;
+use boxlite::runtime::id::BoxID;
 use boxlite::runtime::options::{BoxOptions, BoxliteOptions};
-use boxlite::runtime::types::BoxID;
 use boxlite::{BoxliteError, RootfsSpec};
 
 use crate::error::{BoxliteErrorCode, FFIError, error_to_code, null_pointer_error, write_error};

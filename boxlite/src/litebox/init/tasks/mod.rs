@@ -33,7 +33,7 @@ mod vmm_attach;
 mod vmm_spawn;
 
 use super::types::InitPipelineContext;
-use crate::runtime::types::BoxID;
+use crate::runtime::id::BoxID;
 use boxlite_shared::errors::BoxliteError;
 use std::sync::Arc;
 use tokio::sync::Mutex;

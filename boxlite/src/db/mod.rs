@@ -8,6 +8,7 @@
 
 mod boxes;
 mod images;
+pub(crate) mod migration;
 mod schema;
 pub(crate) mod snapshots;
 
@@ -44,6 +45,9 @@ pub struct Database {
 
 impl Database {
     /// Open or create the database.
+    ///
+    /// `db_path` is the path to the SQLite file. The `home_dir` (e.g., `~/.boxlite`)
+    /// is derived from the DB path for migrations that need filesystem access.
     pub fn open(db_path: &Path) -> BoxliteResult<Self> {
         if let Some(parent) = db_path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -65,7 +69,7 @@ impl Database {
             "
         ))?;
 
-        Self::init_schema(&conn)?;
+        Self::init_schema(&conn, db_path)?;
 
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -86,7 +90,7 @@ impl Database {
     ///    Existing DB with older version: run migrations automatically
     ///    Existing DB with newer version: error (need newer boxlite)
     ///    Existing DB with same version: nothing to do
-    fn init_schema(conn: &Connection) -> BoxliteResult<()> {
+    fn init_schema(conn: &Connection, db_path: &Path) -> BoxliteResult<()> {
         // Step 1: Create schema_version table first (always safe)
         db_err!(conn.execute_batch(schema::SCHEMA_VERSION_TABLE))?;
 
@@ -124,7 +128,9 @@ impl Database {
                     v,
                     schema::SCHEMA_VERSION
                 );
-                Self::run_migrations(conn, v)?;
+                // Derive home_dir from db_path: ~/.boxlite/db/boxlite.db → ~/.boxlite/
+                let home_dir = db_path.parent().and_then(|db_dir| db_dir.parent());
+                migration::run_migrations(conn, v, home_dir)?;
             }
         }
 
@@ -147,83 +153,6 @@ impl Database {
             "Initialized database schema version {}",
             schema::SCHEMA_VERSION
         );
-        Ok(())
-    }
-
-    /// Run migrations from `from_version` to current schema version.
-    fn run_migrations(conn: &Connection, from_version: i32) -> BoxliteResult<()> {
-        let mut current = from_version;
-
-        // Migration 2 -> 3: Add name column with UNIQUE constraint
-        if current == 2 {
-            tracing::info!("Running migration 2 -> 3: Adding name column to box_config");
-
-            // Add name column
-            db_err!(conn.execute_batch("ALTER TABLE box_config ADD COLUMN name TEXT;"))?;
-
-            // Create unique index (enforces uniqueness, allows multiple NULLs)
-            db_err!(conn.execute_batch(
-                "CREATE UNIQUE INDEX IF NOT EXISTS idx_box_config_name_unique ON box_config(name);"
-            ))?;
-
-            // Populate name from JSON for existing rows
-            db_err!(conn.execute_batch(
-                "UPDATE box_config SET name = json_extract(json, '$.name') WHERE name IS NULL;"
-            ))?;
-
-            current = 3;
-        }
-
-        // Migration 3 -> 4: Add image_index table
-        if current == 3 {
-            tracing::info!("Running migration 3 -> 4: Adding image_index table");
-
-            db_err!(conn.execute_batch(schema::IMAGE_INDEX_TABLE))?;
-
-            current = 4;
-        }
-
-        // Migration 4 -> 5: Add snapshots table (legacy, now replaced by box_snapshot in v6)
-        if current == 4 {
-            tracing::info!("Running migration 4 -> 5: Adding snapshots table");
-
-            // Create the old snapshots table so migration 5->6 can drop it
-            db_err!(conn.execute_batch(
-                r#"
-                CREATE TABLE IF NOT EXISTS snapshots (
-                    id TEXT PRIMARY KEY NOT NULL,
-                    box_id TEXT NOT NULL,
-                    name TEXT NOT NULL,
-                    description TEXT NOT NULL DEFAULT '',
-                    created_at TEXT NOT NULL,
-                    FOREIGN KEY (box_id) REFERENCES box_config(id) ON DELETE CASCADE
-                );
-                CREATE INDEX IF NOT EXISTS idx_snapshots_box_id ON snapshots(box_id);
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_snapshots_box_name ON snapshots(box_id, name);
-                "#
-            ))?;
-
-            current = 5;
-        }
-
-        // Migration 5 -> 6: Replace snapshots table with box_snapshot
-        if current == 5 {
-            tracing::info!("Running migration 5 -> 6: Replacing snapshots with box_snapshot");
-
-            db_err!(conn.execute_batch("DROP TABLE IF EXISTS snapshots;"))?;
-            db_err!(conn.execute_batch(schema::BOX_SNAPSHOT_TABLE))?;
-
-            current = 6;
-        }
-
-        // Update schema version
-        let now = Utc::now().to_rfc3339();
-        db_err!(conn.execute(
-            "UPDATE schema_version SET version = ?1, updated_at = ?2 WHERE id = 1",
-            rusqlite::params![current, now],
-        ))?;
-
-        tracing::info!("Database migration complete, now at version {}", current);
         Ok(())
     }
 }
@@ -301,7 +230,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(version, 6);
+        assert_eq!(version, schema::SCHEMA_VERSION);
 
         // Verify box_snapshot table exists
         let table_exists: bool = conn
@@ -376,7 +305,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(version, 6);
+        assert_eq!(version, schema::SCHEMA_VERSION);
 
         // box_snapshot should exist
         let table_exists: bool = conn

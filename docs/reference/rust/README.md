@@ -902,17 +902,17 @@ println!("{}", Seconds::from_minutes(30));  // "30 minutes"
 
 ### BoxID
 
-Box identifier in ULID format (26 characters, sortable).
+Box identifier in Base62 format (12 characters, ~71 bits of entropy).
 
 ```rust
-use boxlite::runtime::types::BoxID;
+use boxlite::runtime::id::{BoxID, BoxIDMint};
 
-let id = BoxID::new();
-println!("Full: {}", id.as_str());   // "01HJK4TNRPQSXYZ8WM6NCVT9R5"
-println!("Short: {}", id.short());    // "01HJK4TN"
+let id = BoxIDMint::mint();
+println!("Full: {}", id.as_str());   // "aB3cD4eF5gH6"
+println!("Short: {}", id.short());    // "aB3cD4eF"
 
-// Validation
-let valid = BoxID::parse("01HJK4TNRPQSXYZ8WM6NCVT9R5");
+// Validation (accepts 12-char Base62 and 26-char legacy ULID)
+let valid = BoxID::parse("aB3cD4eF5gH6");
 let invalid = BoxID::parse("too-short");  // None
 ```
 

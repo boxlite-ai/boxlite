@@ -10,7 +10,8 @@ use chrono::Utc;
 use rusqlite::{OptionalExtension, params};
 
 use crate::litebox::config::BoxConfig;
-use crate::runtime::types::{BoxID, BoxState};
+use crate::runtime::id::BoxID;
+use crate::runtime::types::BoxState;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use super::{Database, db_err};
@@ -344,7 +345,8 @@ fn get_boot_id() -> String {
 mod tests {
     use super::*;
     use crate::litebox::config::ContainerRuntimeConfig;
-    use crate::runtime::types::{BoxID, BoxStatus, ContainerID};
+    use crate::runtime::id::BoxID;
+    use crate::runtime::types::{BoxStatus, ContainerID};
     use crate::vmm::VmmKind;
     use boxlite_shared::Transport;
     use std::path::PathBuf;
@@ -380,7 +382,7 @@ mod tests {
         }
     }
 
-    // Valid ULID test IDs
+    // Test IDs (26-char ULID format, accepted by BoxID::parse)
     const TEST_ID_1: &str = "01HJK4TNRPQSXYZ8WM6NCVT9R1";
     const TEST_ID_2: &str = "01HJK4TNRPQSXYZ8WM6NCVT9R2";
     const TEST_ID_3: &str = "01HJK4TNRPQSXYZ8WM6NCVT9R3";

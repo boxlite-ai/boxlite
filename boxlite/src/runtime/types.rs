@@ -2,16 +2,14 @@
 
 use chrono::{DateTime, Utc};
 use rand::RngCore;
-use rusqlite::ToSql;
-use rusqlite::types::{ToSqlOutput, ValueRef};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fmt;
 use std::hash::Hash;
 
-// Re-export status types from litebox module
 pub use crate::litebox::{BoxState, BoxStatus};
+use crate::runtime::id::BoxID;
 
 // ============================================================================
 // RESOURCE LIMIT TYPES (C-NEWTYPE: Semantic newtypes for distinct concepts)
@@ -188,109 +186,6 @@ impl fmt::Display for Seconds {
 }
 
 // ============================================================================
-// BOX ID
-// ============================================================================
-
-/// Box identifier (ULID format for sortability).
-///
-/// ULIDs are 26-character strings that encode:
-/// - 48-bit timestamp (millisecond precision)
-/// - 80 bits of randomness
-/// - Lexicographically sortable by creation time
-///
-/// # Example
-///
-/// ```
-/// use boxlite::runtime::types::BoxID;
-///
-/// let id = BoxID::new();
-/// assert_eq!(id.as_str().len(), 26);
-/// assert_eq!(id.short().len(), 8);
-/// ```
-#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct BoxID(String);
-
-impl BoxID {
-    /// Length of full box ID (26 chars = ULID format).
-    pub const FULL_LENGTH: usize = 26;
-
-    /// Length of short box ID for display (8 chars).
-    pub const SHORT_LENGTH: usize = 8;
-
-    /// Generate a new ULID-based box ID.
-    pub fn new() -> Self {
-        Self(ulid::Ulid::new().to_string())
-    }
-
-    /// Parse a BoxID from an existing string.
-    ///
-    /// Returns `None` if the string is not a valid 26-char ULID string.
-    pub fn parse(s: &str) -> Option<Self> {
-        if Self::is_valid(s) {
-            Some(Self(s.to_string()))
-        } else {
-            None
-        }
-    }
-
-    /// Check if a string is a valid box ID format.
-    pub fn is_valid(s: &str) -> bool {
-        s.len() == Self::FULL_LENGTH && ulid::Ulid::from_string(s).is_ok()
-    }
-
-    /// Get the full box ID as a string slice.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-
-    /// Get the short form (first 8 characters) for display.
-    pub fn short(&self) -> &str {
-        &self.0[..Self::SHORT_LENGTH]
-    }
-
-    /// Check if this ID starts with the given prefix.
-    pub fn starts_with(&self, prefix: &str) -> bool {
-        self.0.starts_with(prefix)
-    }
-}
-
-impl Default for BoxID {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl fmt::Display for BoxID {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl fmt::Debug for BoxID {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "BoxID({})", self.short())
-    }
-}
-
-impl AsRef<str> for BoxID {
-    fn as_ref(&self) -> &str {
-        &self.0
-    }
-}
-
-impl std::borrow::Borrow<str> for BoxID {
-    fn borrow(&self) -> &str {
-        &self.0
-    }
-}
-
-impl ToSql for BoxID {
-    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
-        Ok(ToSqlOutput::Borrowed(ValueRef::Text(self.0.as_bytes())))
-    }
-}
-
-// ============================================================================
 // CONTAINER ID
 // ============================================================================
 
@@ -388,7 +283,7 @@ impl AsRef<str> for ContainerID {
 /// Public metadata about a box (returned by list operations).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BoxInfo {
-    /// Unique box identifier (ULID).
+    /// Unique box identifier.
     pub id: BoxID,
 
     /// User-defined name (optional).
@@ -541,60 +436,6 @@ mod tests {
     use crate::runtime::options::{BoxOptions, RootfsSpec};
     use boxlite_shared::Transport;
     use std::path::PathBuf;
-
-    #[test]
-    fn test_box_id_new() {
-        let id1 = BoxID::new();
-        let id2 = BoxID::new();
-
-        // IDs should be 26 characters (ULID format)
-        assert_eq!(id1.as_str().len(), BoxID::FULL_LENGTH);
-        assert_eq!(id2.as_str().len(), BoxID::FULL_LENGTH);
-
-        // IDs should be unique
-        assert_ne!(id1, id2);
-    }
-
-    #[test]
-    fn test_box_id_short() {
-        let id = BoxID::new();
-
-        // Short form should be 8 characters
-        assert_eq!(id.short().len(), BoxID::SHORT_LENGTH);
-
-        // Short form should be prefix of full ID
-        assert!(id.as_str().starts_with(id.short()));
-    }
-
-    #[test]
-    fn test_box_id_parse() {
-        // Valid ULID
-        let valid = "01HJK4TNRPQSXYZ8WM6NCVT9R5";
-        assert!(BoxID::parse(valid).is_some());
-
-        // Invalid: too short
-        assert!(BoxID::parse("abc123").is_none());
-
-        // Invalid: wrong length
-        assert!(BoxID::parse("01HJK4TNRPQSXYZ8WM6NCVT9R5X").is_none());
-    }
-
-    #[test]
-    fn test_box_id_display() {
-        let id = BoxID::new();
-        let display = format!("{}", id);
-        assert_eq!(display, id.as_str());
-    }
-
-    #[test]
-    fn test_box_id_debug() {
-        let id = BoxID::new();
-        let debug = format!("{:?}", id);
-        assert!(debug.contains(id.short()));
-        assert!(debug.starts_with("BoxID("));
-    }
-
-    // BoxStatus and BoxState tests are in litebox/state
 
     #[test]
     fn test_config_state_to_info() {

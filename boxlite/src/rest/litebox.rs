@@ -16,8 +16,8 @@ use crate::litebox::copy::CopyOptions;
 use crate::litebox::{BoxCommand, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execution};
 use crate::metrics::BoxMetrics;
 use crate::runtime::backend::{BoxBackend, SnapshotBackend};
+use crate::runtime::id::BoxID;
 use crate::runtime::options::{CloneOptions, ExportOptions, SnapshotOptions};
-use crate::runtime::types::BoxID;
 
 use super::client::ApiClient;
 use super::exec::RestExecControl;
