@@ -8,36 +8,11 @@
 //! - Async shutdown: idempotency, token cancellation
 //! - Shutdown across runtimes: independent isolation
 
+mod common;
+
 use boxlite::BoxliteRuntime;
 use boxlite::runtime::options::{BoxOptions, BoxliteOptions, RootfsSpec};
 use tempfile::TempDir;
-
-// ============================================================================
-// TEST FIXTURES
-// ============================================================================
-
-/// Test context with isolated runtime and automatic cleanup.
-struct TestContext {
-    runtime: BoxliteRuntime,
-    _temp_dir: TempDir,
-}
-
-impl TestContext {
-    fn new() -> Self {
-        // Use /tmp directly to avoid macOS's long temp paths that exceed SUN_LEN
-        // for Unix socket paths (limited to ~104 chars)
-        let temp_dir = TempDir::new_in("/tmp").expect("Failed to create temp dir");
-        let options = BoxliteOptions {
-            home_dir: temp_dir.path().to_path_buf(),
-            image_registries: vec![],
-        };
-        let runtime = BoxliteRuntime::new(options).expect("Failed to create runtime");
-        Self {
-            runtime,
-            _temp_dir: temp_dir,
-        }
-    }
-}
 
 // ============================================================================
 // SHUTDOWN IDEMPOTENCY
@@ -46,7 +21,7 @@ impl TestContext {
 /// Calling shutdown() twice should succeed (second call is no-op).
 #[tokio::test]
 async fn shutdown_is_idempotent() {
-    let ctx = TestContext::new();
+    let ctx = common::IsolatedRuntime::new_in("/tmp");
 
     let result1 = ctx.runtime.shutdown(None).await;
     assert!(result1.is_ok());
@@ -58,7 +33,7 @@ async fn shutdown_is_idempotent() {
 /// Shutdown with explicit timeout should succeed.
 #[tokio::test]
 async fn shutdown_with_timeout() {
-    let ctx = TestContext::new();
+    let ctx = common::IsolatedRuntime::new_in("/tmp");
 
     let result = ctx.runtime.shutdown(Some(5)).await;
     assert!(result.is_ok());
@@ -67,7 +42,7 @@ async fn shutdown_with_timeout() {
 /// Shutdown with no boxes should complete immediately.
 #[tokio::test]
 async fn shutdown_empty_runtime() {
-    let ctx = TestContext::new();
+    let ctx = common::IsolatedRuntime::new_in("/tmp");
 
     let result = ctx.runtime.shutdown(None).await;
     assert!(result.is_ok());
@@ -80,8 +55,8 @@ async fn shutdown_empty_runtime() {
 /// Shutting down one runtime should not affect another.
 #[tokio::test]
 async fn shutdown_does_not_affect_other_runtimes() {
-    let ctx1 = TestContext::new();
-    let ctx2 = TestContext::new();
+    let ctx1 = common::IsolatedRuntime::new_in("/tmp");
+    let ctx2 = common::IsolatedRuntime::new_in("/tmp");
 
     // Shutdown runtime 1
     ctx1.runtime.shutdown(None).await.unwrap();
@@ -96,7 +71,7 @@ async fn shutdown_does_not_affect_other_runtimes() {
 /// Only box creation/start should fail.
 #[tokio::test]
 async fn read_operations_work_after_shutdown() {
-    let ctx = TestContext::new();
+    let ctx = common::IsolatedRuntime::new_in("/tmp");
 
     ctx.runtime.shutdown(None).await.unwrap();
 
@@ -137,7 +112,7 @@ fn drop_releases_lock() {
 /// Both see the same shutdown token, so double-shutdown via clone is safe.
 #[tokio::test]
 async fn cloned_runtime_shares_shutdown_state() {
-    let ctx = TestContext::new();
+    let ctx = common::IsolatedRuntime::new_in("/tmp");
     let clone = ctx.runtime.clone();
 
     // Shutdown via clone
@@ -159,19 +134,19 @@ async fn cloned_runtime_shares_shutdown_state() {
 #[tokio::test]
 async fn shutdown_timeout_edge_values() {
     // Some(0) — zero timeout
-    let ctx = TestContext::new();
+    let ctx = common::IsolatedRuntime::new_in("/tmp");
     assert!(ctx.runtime.shutdown(Some(0)).await.is_ok());
 
     // Some(-1) — infinite timeout
-    let ctx = TestContext::new();
+    let ctx = common::IsolatedRuntime::new_in("/tmp");
     assert!(ctx.runtime.shutdown(Some(-1)).await.is_ok());
 
     // Some(30) — explicit 30s
-    let ctx = TestContext::new();
+    let ctx = common::IsolatedRuntime::new_in("/tmp");
     assert!(ctx.runtime.shutdown(Some(30)).await.is_ok());
 
     // Some(-5) — negative value
-    let ctx = TestContext::new();
+    let ctx = common::IsolatedRuntime::new_in("/tmp");
     assert!(ctx.runtime.shutdown(Some(-5)).await.is_ok());
 }
 
@@ -182,7 +157,7 @@ async fn shutdown_timeout_edge_values() {
 /// Multiple concurrent shutdown() calls should all succeed without panic or deadlock.
 #[tokio::test]
 async fn concurrent_shutdown_is_safe() {
-    let ctx = TestContext::new();
+    let ctx = common::IsolatedRuntime::new_in("/tmp");
 
     // Clone runtime 4 times and call shutdown concurrently
     let handles: Vec<_> = (0..4)
@@ -208,7 +183,7 @@ async fn concurrent_shutdown_is_safe() {
 /// Creating a box after shutdown should fail with a clear error.
 #[tokio::test]
 async fn create_after_shutdown_is_rejected() {
-    let ctx = TestContext::new();
+    let ctx = common::IsolatedRuntime::new_in("/tmp");
 
     ctx.runtime.shutdown(None).await.unwrap();
 

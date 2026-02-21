@@ -7,36 +7,21 @@
 //! cargo test -p boxlite --test clone_export_import -- --ignored
 //! ```
 
-use boxlite::BoxliteRuntime;
-use boxlite::runtime::options::{
-    BoxOptions, BoxliteOptions, CloneOptions, ExportOptions, RootfsSpec,
-};
+mod common;
+
+use boxlite::runtime::options::{CloneOptions, ExportOptions};
 use boxlite::runtime::types::BoxStatus;
-use boxlite::{BoxCommand, LiteBox};
+use boxlite::{BoxCommand, BoxliteRuntime, LiteBox};
 use tempfile::TempDir;
 
-/// Create an isolated runtime with a temp home directory.
-/// Uses /tmp for shorter paths — macOS default TempDir paths exceed SUN_LEN for Unix sockets.
-fn test_runtime() -> (BoxliteRuntime, TempDir) {
-    let temp_dir = TempDir::new_in("/tmp").expect("Failed to create temp dir");
-    let options = BoxliteOptions {
-        home_dir: temp_dir.path().to_path_buf(),
-        image_registries: vec!["mirror.gcr.io".to_string(), "docker.io".to_string()],
-    };
-    let runtime = BoxliteRuntime::new(options).expect("Failed to create runtime");
-    (runtime, temp_dir)
-}
+// ============================================================================
+// LOCAL HELPERS
+// ============================================================================
 
 /// Create a box from alpine:latest image, start it, stop it, return it ready for operations.
 async fn create_stopped_box(runtime: &BoxliteRuntime) -> LiteBox {
-    let options = BoxOptions {
-        rootfs: RootfsSpec::Image("alpine:latest".to_string()),
-        auto_remove: false,
-        ..Default::default()
-    };
-
     let litebox = runtime
-        .create(options, Some("test-box".to_string()))
+        .create(common::alpine_opts(), Some("test-box".to_string()))
         .await
         .expect("Failed to create box");
 
@@ -49,14 +34,8 @@ async fn create_stopped_box(runtime: &BoxliteRuntime) -> LiteBox {
 
 /// Create a box from alpine:latest, start it, return it in Running state.
 async fn create_running_box(runtime: &BoxliteRuntime, name: &str) -> LiteBox {
-    let options = BoxOptions {
-        rootfs: RootfsSpec::Image("alpine:latest".to_string()),
-        auto_remove: false,
-        ..Default::default()
-    };
-
     let litebox = runtime
-        .create(options, Some(name.to_string()))
+        .create(common::alpine_opts(), Some(name.to_string()))
         .await
         .expect("Failed to create box");
 
@@ -73,8 +52,8 @@ async fn create_running_box(runtime: &BoxliteRuntime, name: &str) -> LiteBox {
 #[tokio::test]
 #[ignore] // Requires VM runtime
 async fn test_clone_produces_independent_box() {
-    let (runtime, _dir) = test_runtime();
-    let source = create_stopped_box(&runtime).await;
+    let ctx = common::WarmRuntime::new();
+    let source = create_stopped_box(&ctx.runtime).await;
 
     let cloned = source
         .clone_box(CloneOptions::default(), Some("cloned-box".to_string()))
@@ -91,26 +70,29 @@ async fn test_clone_produces_independent_box() {
     // Both can start independently
     cloned.start().await.expect("Failed to start cloned box");
     cloned.stop().await.expect("Failed to stop cloned box");
+
+    ctx.cleanup().await;
 }
 
 #[tokio::test]
 #[ignore] // Requires VM runtime
 async fn test_export_import_roundtrip() {
-    let (runtime, dir) = test_runtime();
-    let source = create_stopped_box(&runtime).await;
+    let ctx = common::WarmRuntime::new();
+    let source = create_stopped_box(&ctx.runtime).await;
 
-    let export_path = dir.path().join("exports");
-    std::fs::create_dir_all(&export_path).unwrap();
+    let export_dir = TempDir::new_in("/tmp").unwrap();
+    let export_path = export_dir.path();
 
     let archive = source
-        .export(ExportOptions::default(), &export_path)
+        .export(ExportOptions::default(), export_path)
         .await
         .expect("Failed to export box");
 
     assert!(archive.path().exists());
     assert!(archive.path().extension().is_some_and(|e| e == "boxlite"));
 
-    let imported = runtime
+    let imported = ctx
+        .runtime
         .import_box(archive, Some("imported-box".to_string()))
         .await
         .expect("Failed to import box");
@@ -125,39 +107,38 @@ async fn test_export_import_roundtrip() {
         .await
         .expect("Failed to start imported box");
     imported.stop().await.expect("Failed to stop imported box");
+
+    ctx.cleanup().await;
 }
 
 #[tokio::test]
 #[ignore] // Requires VM runtime
 async fn test_export_import_preserves_box_options() {
-    let (runtime, dir) = test_runtime();
+    let ctx = common::WarmRuntime::new();
 
-    let options = BoxOptions {
-        rootfs: RootfsSpec::Image("alpine:latest".to_string()),
-        auto_remove: false,
-        ..Default::default()
-    };
-
-    let source = runtime
-        .create(options, Some("options-test".to_string()))
+    let source = ctx
+        .runtime
+        .create(common::alpine_opts(), Some("options-test".to_string()))
         .await
         .expect("Failed to create box");
 
     source.start().await.expect("start");
     source.stop().await.expect("stop");
 
-    let export_path = dir.path().join("exports");
-    std::fs::create_dir_all(&export_path).unwrap();
+    let export_dir = TempDir::new_in("/tmp").unwrap();
+    let export_path = export_dir.path();
 
     let archive = source
-        .export(ExportOptions::default(), &export_path)
+        .export(ExportOptions::default(), export_path)
         .await
         .expect("export");
 
-    let imported = runtime.import_box(archive, None).await.expect("import");
+    let imported = ctx.runtime.import_box(archive, None).await.expect("import");
 
     let imported_info = imported.info();
     assert_eq!(imported_info.status, BoxStatus::Stopped);
+
+    ctx.cleanup().await;
 }
 
 // ============================================================================
@@ -167,8 +148,8 @@ async fn test_export_import_preserves_box_options() {
 #[tokio::test]
 #[ignore] // Requires VM runtime
 async fn test_clone_running_box() {
-    let (runtime, _dir) = test_runtime();
-    let source = create_running_box(&runtime, "clone-src").await;
+    let ctx = common::WarmRuntime::new();
+    let source = create_running_box(&ctx.runtime, "clone-src").await;
 
     // Clone while source is running — should succeed without stopping
     let cloned = source
@@ -200,20 +181,22 @@ async fn test_clone_running_box() {
     assert_eq!(result.exit_code, 0);
 
     source.stop().await.expect("Stop source box");
+
+    ctx.cleanup().await;
 }
 
 #[tokio::test]
 #[ignore] // Requires VM runtime
 async fn test_export_running_box() {
-    let (runtime, dir) = test_runtime();
-    let source = create_running_box(&runtime, "export-running").await;
+    let ctx = common::WarmRuntime::new();
+    let source = create_running_box(&ctx.runtime, "export-running").await;
 
-    let export_path = dir.path().join("exports");
-    std::fs::create_dir_all(&export_path).unwrap();
+    let export_dir = TempDir::new_in("/tmp").unwrap();
+    let export_path = export_dir.path();
 
     // Export while running — PauseGuard auto-pauses and resumes
     let archive = source
-        .export(ExportOptions::default(), &export_path)
+        .export(ExportOptions::default(), export_path)
         .await
         .expect("Export on running box should succeed");
 
@@ -231,7 +214,8 @@ async fn test_export_running_box() {
     assert_eq!(result.exit_code, 0);
 
     // Archived box can be imported and started
-    let imported = runtime
+    let imported = ctx
+        .runtime
         .import_box(archive, Some("imported-running".to_string()))
         .await
         .expect("Import should succeed");
@@ -240,13 +224,15 @@ async fn test_export_running_box() {
     imported.stop().await.expect("Stop imported box");
 
     source.stop().await.expect("Stop source box");
+
+    ctx.cleanup().await;
 }
 
 #[tokio::test]
 #[ignore] // Requires VM runtime
 async fn test_export_import_running_box_roundtrip() {
-    let (runtime, dir) = test_runtime();
-    let source = create_running_box(&runtime, "roundtrip-running").await;
+    let ctx = common::WarmRuntime::new();
+    let source = create_running_box(&ctx.runtime, "roundtrip-running").await;
 
     // Write a marker file inside the running VM
     let cmd = BoxCommand::new("sh").args(["-c", "echo boxlite-test-data > /root/marker.txt"]);
@@ -255,11 +241,11 @@ async fn test_export_import_running_box_roundtrip() {
     assert_eq!(result.exit_code, 0, "Marker file write should succeed");
 
     // Export while running (PauseGuard freezes VM for consistent snapshot)
-    let export_path = dir.path().join("exports");
-    std::fs::create_dir_all(&export_path).unwrap();
+    let export_dir = TempDir::new_in("/tmp").unwrap();
+    let export_path = export_dir.path();
 
     let archive = source
-        .export(ExportOptions::default(), &export_path)
+        .export(ExportOptions::default(), export_path)
         .await
         .expect("Export running box should succeed");
 
@@ -267,7 +253,8 @@ async fn test_export_import_running_box_roundtrip() {
     assert_eq!(source.info().status, BoxStatus::Running);
 
     // Import and verify the marker file is preserved
-    let imported = runtime
+    let imported = ctx
+        .runtime
         .import_box(archive, Some("imported-roundtrip".to_string()))
         .await
         .expect("Import should succeed");
@@ -284,6 +271,8 @@ async fn test_export_import_running_box_roundtrip() {
 
     imported.stop().await.expect("Stop imported box");
     source.stop().await.expect("Stop source box");
+
+    ctx.cleanup().await;
 }
 
 // ============================================================================
@@ -293,8 +282,8 @@ async fn test_export_import_running_box_roundtrip() {
 #[tokio::test]
 #[ignore] // Requires VM runtime
 async fn test_export_under_write_pressure() {
-    let (runtime, dir) = test_runtime();
-    let source = create_running_box(&runtime, "write-stress").await;
+    let ctx = common::WarmRuntime::new();
+    let source = create_running_box(&ctx.runtime, "write-stress").await;
 
     // Start a background process that continuously writes random 4KB blocks
     // to a file at random offsets. This simulates active I/O during export.
@@ -311,11 +300,11 @@ async fn test_export_under_write_pressure() {
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
     // Export while writes are happening — PauseGuard quiesces the VM
-    let export_path = dir.path().join("exports");
-    std::fs::create_dir_all(&export_path).unwrap();
+    let export_dir = TempDir::new_in("/tmp").unwrap();
+    let export_path = export_dir.path();
 
     let archive = source
-        .export(ExportOptions::default(), &export_path)
+        .export(ExportOptions::default(), export_path)
         .await
         .expect("Export under write pressure should succeed");
 
@@ -323,7 +312,8 @@ async fn test_export_under_write_pressure() {
     assert_eq!(source.info().status, BoxStatus::Running);
 
     // Import the archive and verify the filesystem is intact (bootable)
-    let imported = runtime
+    let imported = ctx
+        .runtime
         .import_box(archive, Some("imported-stress".to_string()))
         .await
         .expect("Import should succeed");
@@ -344,4 +334,6 @@ async fn test_export_under_write_pressure() {
 
     imported.stop().await.expect("Stop imported box");
     source.stop().await.expect("Stop source box");
+
+    ctx.cleanup().await;
 }

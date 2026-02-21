@@ -1,35 +1,12 @@
 //! Integration tests for box lifecycle (create, list, get, remove, stop).
 
+mod common;
+
 use boxlite::BoxliteRuntime;
 use boxlite::runtime::id::BoxID;
-use boxlite::runtime::options::{BoxOptions, BoxliteOptions, RootfsSpec};
+use boxlite::runtime::options::{BoxOptions, BoxliteOptions};
 use boxlite::runtime::types::BoxStatus;
 use tempfile::TempDir;
-
-// ============================================================================
-// TEST FIXTURES
-// ============================================================================
-
-/// Test context with isolated runtime and automatic cleanup.
-struct TestContext {
-    runtime: BoxliteRuntime,
-    _temp_dir: TempDir, // Dropped after test
-}
-
-impl TestContext {
-    fn new() -> Self {
-        let temp_dir = TempDir::new().expect("Failed to create temp dir");
-        let options = BoxliteOptions {
-            home_dir: temp_dir.path().to_path_buf(),
-            image_registries: vec![],
-        };
-        let runtime = BoxliteRuntime::new(options).expect("Failed to create runtime");
-        Self {
-            runtime,
-            _temp_dir: temp_dir,
-        }
-    }
-}
 
 // ============================================================================
 // RUNTIME INITIALIZATION TESTS
@@ -37,7 +14,7 @@ impl TestContext {
 
 #[tokio::test]
 async fn runtime_initialization_creates_empty_list() {
-    let ctx = TestContext::new();
+    let ctx = common::IsolatedRuntime::new();
     assert!(ctx.runtime.list_info().await.unwrap().is_empty());
 }
 
@@ -47,29 +24,15 @@ async fn runtime_initialization_creates_empty_list() {
 
 #[tokio::test]
 async fn create_generates_unique_ulid_ids() {
-    let ctx = TestContext::new();
+    let ctx = common::IsolatedRuntime::new();
     let box1 = ctx
         .runtime
-        .create(
-            BoxOptions {
-                rootfs: RootfsSpec::Image("alpine:latest".into()),
-                auto_remove: false, // Keep box after stop for cleanup
-                ..Default::default()
-            },
-            None,
-        )
+        .create(common::alpine_opts(), None)
         .await
         .unwrap();
     let box2 = ctx
         .runtime
-        .create(
-            BoxOptions {
-                rootfs: RootfsSpec::Image("alpine:latest".into()),
-                auto_remove: false, // Keep box after stop for cleanup
-                ..Default::default()
-            },
-            None,
-        )
+        .create(common::alpine_opts(), None)
         .await
         .unwrap();
 
@@ -90,14 +53,12 @@ async fn create_generates_unique_ulid_ids() {
 #[tokio::test]
 async fn create_stores_custom_options() {
     let options = BoxOptions {
-        rootfs: RootfsSpec::Image("alpine:latest".into()),
         cpus: Some(4),
         memory_mib: Some(1024),
-        auto_remove: false, // Keep box after stop for cleanup
-        ..Default::default()
+        ..common::alpine_opts()
     };
 
-    let ctx = TestContext::new();
+    let ctx = common::IsolatedRuntime::new();
     let handle = ctx.runtime.create(options, None).await.unwrap();
     let box_id = handle.id().clone();
 
@@ -124,7 +85,7 @@ async fn create_stores_custom_options() {
 
 #[tokio::test]
 async fn list_info_returns_all_boxes() {
-    let ctx = TestContext::new();
+    let ctx = common::IsolatedRuntime::new();
 
     // Initially empty
     assert_eq!(ctx.runtime.list_info().await.unwrap().len(), 0);
@@ -132,26 +93,12 @@ async fn list_info_returns_all_boxes() {
     // Create two boxes
     let box1 = ctx
         .runtime
-        .create(
-            BoxOptions {
-                rootfs: RootfsSpec::Image("alpine:latest".into()),
-                auto_remove: false, // Keep box after stop for cleanup
-                ..Default::default()
-            },
-            None,
-        )
+        .create(common::alpine_opts(), None)
         .await
         .unwrap();
     let box2 = ctx
         .runtime
-        .create(
-            BoxOptions {
-                rootfs: RootfsSpec::Image("alpine:latest".into()),
-                auto_remove: false, // Keep box after stop for cleanup
-                ..Default::default()
-            },
-            None,
-        )
+        .create(common::alpine_opts(), None)
         .await
         .unwrap();
 
@@ -172,45 +119,22 @@ async fn list_info_returns_all_boxes() {
 
 #[tokio::test]
 async fn list_info_sorted_by_creation_time_newest_first() {
-    let ctx = TestContext::new();
+    let ctx = common::IsolatedRuntime::new();
 
-    // Create boxes with small delay to ensure different timestamps
+    // Create boxes (chrono has microsecond resolution — timestamps differ naturally)
     let box1 = ctx
         .runtime
-        .create(
-            BoxOptions {
-                rootfs: RootfsSpec::Image("alpine:latest".into()),
-                auto_remove: false, // Keep box after stop for cleanup
-                ..Default::default()
-            },
-            None,
-        )
+        .create(common::alpine_opts(), None)
         .await
         .unwrap();
-    tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
     let box2 = ctx
         .runtime
-        .create(
-            BoxOptions {
-                rootfs: RootfsSpec::Image("alpine:latest".into()),
-                auto_remove: false, // Keep box after stop for cleanup
-                ..Default::default()
-            },
-            None,
-        )
+        .create(common::alpine_opts(), None)
         .await
         .unwrap();
-    tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
     let box3 = ctx
         .runtime
-        .create(
-            BoxOptions {
-                rootfs: RootfsSpec::Image("alpine:latest".into()),
-                auto_remove: false, // Keep box after stop for cleanup
-                ..Default::default()
-            },
-            None,
-        )
+        .create(common::alpine_opts(), None)
         .await
         .unwrap();
 
@@ -239,16 +163,10 @@ async fn list_info_sorted_by_creation_time_newest_first() {
 
 #[tokio::test]
 async fn get_info_returns_box_metadata() {
-    let ctx = TestContext::new();
+    let ctx = common::IsolatedRuntime::new();
     let handle = ctx
         .runtime
-        .create(
-            BoxOptions {
-                rootfs: RootfsSpec::Image("alpine:latest".into()),
-                ..Default::default()
-            },
-            None,
-        )
+        .create(common::alpine_opts_auto(), None)
         .await
         .unwrap();
     let box_id = handle.id().clone();
@@ -274,23 +192,17 @@ async fn get_info_returns_box_metadata() {
 
 #[tokio::test]
 async fn get_info_returns_none_for_nonexistent() {
-    let ctx = TestContext::new();
+    let ctx = common::IsolatedRuntime::new();
     let missing = ctx.runtime.get_info("nonexistent-id").await.unwrap();
     assert!(missing.is_none());
 }
 
 #[tokio::test]
 async fn exists_returns_true_for_existing_box() {
-    let ctx = TestContext::new();
+    let ctx = common::IsolatedRuntime::new();
     let handle = ctx
         .runtime
-        .create(
-            BoxOptions {
-                rootfs: RootfsSpec::Image("alpine:latest".into()),
-                ..Default::default()
-            },
-            None,
-        )
+        .create(common::alpine_opts_auto(), None)
         .await
         .unwrap();
     let box_id = handle.id().clone();
@@ -303,7 +215,7 @@ async fn exists_returns_true_for_existing_box() {
 
 #[tokio::test]
 async fn exists_returns_false_for_nonexistent() {
-    let ctx = TestContext::new();
+    let ctx = common::IsolatedRuntime::new();
     assert!(!ctx.runtime.exists("nonexistent-id").await.unwrap());
 }
 
@@ -313,7 +225,7 @@ async fn exists_returns_false_for_nonexistent() {
 
 #[tokio::test]
 async fn remove_nonexistent_returns_not_found() {
-    let ctx = TestContext::new();
+    let ctx = common::IsolatedRuntime::new();
     let result = ctx.runtime.remove("nonexistent-id", false).await;
 
     assert!(result.is_err());
@@ -327,17 +239,10 @@ async fn remove_nonexistent_returns_not_found() {
 
 #[tokio::test]
 async fn remove_stopped_box_succeeds() {
-    let ctx = TestContext::new();
+    let ctx = common::IsolatedRuntime::new();
     let handle = ctx
         .runtime
-        .create(
-            BoxOptions {
-                rootfs: RootfsSpec::Image("alpine:latest".into()),
-                auto_remove: false, // Keep box after stop for explicit remove
-                ..Default::default()
-            },
-            None,
-        )
+        .create(common::alpine_opts(), None)
         .await
         .unwrap();
     let box_id = handle.id().clone();
@@ -354,16 +259,10 @@ async fn remove_stopped_box_succeeds() {
 
 #[tokio::test]
 async fn remove_active_without_force_fails() {
-    let ctx = TestContext::new();
+    let ctx = common::WarmRuntime::new();
     let handle = ctx
         .runtime
-        .create(
-            BoxOptions {
-                rootfs: RootfsSpec::Image("alpine:latest".into()),
-                ..Default::default()
-            },
-            None,
-        )
+        .create(common::alpine_opts_auto(), None)
         .await
         .unwrap();
     let box_id = handle.id().clone();
@@ -395,20 +294,15 @@ async fn remove_active_without_force_fails() {
 
     // Cleanup with force
     ctx.runtime.remove(box_id.as_str(), true).await.unwrap();
+    ctx.cleanup().await;
 }
 
 #[tokio::test]
 async fn remove_active_with_force_stops_and_removes() {
-    let ctx = TestContext::new();
+    let ctx = common::WarmRuntime::new();
     let handle = ctx
         .runtime
-        .create(
-            BoxOptions {
-                rootfs: RootfsSpec::Image("alpine:latest".into()),
-                ..Default::default()
-            },
-            None,
-        )
+        .create(common::alpine_opts_auto(), None)
         .await
         .unwrap();
     let box_id = handle.id().clone();
@@ -430,20 +324,15 @@ async fn remove_active_with_force_stops_and_removes() {
 
     // Box should no longer exist
     assert!(!ctx.runtime.exists(box_id.as_str()).await.unwrap());
+    ctx.cleanup().await;
 }
 
 #[tokio::test]
 async fn remove_deletes_box_from_database() {
-    let ctx = TestContext::new();
+    let ctx = common::IsolatedRuntime::new();
     let handle = ctx
         .runtime
-        .create(
-            BoxOptions {
-                rootfs: RootfsSpec::Image("alpine:latest".into()),
-                ..Default::default()
-            },
-            None,
-        )
+        .create(common::alpine_opts_auto(), None)
         .await
         .unwrap();
     let box_id = handle.id().clone();
@@ -464,17 +353,10 @@ async fn remove_deletes_box_from_database() {
 
 #[tokio::test]
 async fn stop_marks_box_as_stopped() {
-    let ctx = TestContext::new();
+    let ctx = common::WarmRuntime::new();
     let handle = ctx
         .runtime
-        .create(
-            BoxOptions {
-                rootfs: RootfsSpec::Image("alpine:latest".into()),
-                auto_remove: false, // Keep box after stop for status check
-                ..Default::default()
-            },
-            None,
-        )
+        .create(common::alpine_opts(), None)
         .await
         .unwrap();
     let box_id = handle.id().clone();
@@ -496,6 +378,7 @@ async fn stop_marks_box_as_stopped() {
 
     // Cleanup
     ctx.runtime.remove(box_id.as_str(), false).await.unwrap();
+    ctx.cleanup().await;
 }
 
 // ============================================================================
@@ -504,16 +387,10 @@ async fn stop_marks_box_as_stopped() {
 
 #[tokio::test]
 async fn litebox_info_returns_correct_metadata() {
-    let ctx = TestContext::new();
+    let ctx = common::IsolatedRuntime::new();
     let handle = ctx
         .runtime
-        .create(
-            BoxOptions {
-                rootfs: RootfsSpec::Image("alpine:latest".into()),
-                ..Default::default()
-            },
-            None,
-        )
+        .create(common::alpine_opts_auto(), None)
         .await
         .unwrap();
     let box_id = handle.id().clone();
@@ -540,29 +417,17 @@ async fn litebox_info_returns_correct_metadata() {
 
 #[tokio::test]
 async fn multiple_runtimes_are_isolated() {
-    let ctx1 = TestContext::new();
-    let ctx2 = TestContext::new();
+    let ctx1 = common::IsolatedRuntime::new();
+    let ctx2 = common::IsolatedRuntime::new();
 
     let box1 = ctx1
         .runtime
-        .create(
-            BoxOptions {
-                rootfs: RootfsSpec::Image("alpine:latest".into()),
-                ..Default::default()
-            },
-            None,
-        )
+        .create(common::alpine_opts_auto(), None)
         .await
         .unwrap();
     let box2 = ctx2
         .runtime
-        .create(
-            BoxOptions {
-                rootfs: RootfsSpec::Image("alpine:latest".into()),
-                ..Default::default()
-            },
-            None,
-        )
+        .create(common::alpine_opts_auto(), None)
         .await
         .unwrap();
 
@@ -584,6 +449,7 @@ async fn multiple_runtimes_are_isolated() {
 
 #[tokio::test]
 async fn boxes_persist_across_runtime_restart() {
+    // Persistence tests need their own home_dir to test restart behavior
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let home_dir = temp_dir.path().to_path_buf();
 
@@ -596,17 +462,7 @@ async fn boxes_persist_across_runtime_restart() {
             image_registries: vec![],
         };
         let runtime = BoxliteRuntime::new(options).expect("Failed to create runtime");
-        let litebox = runtime
-            .create(
-                BoxOptions {
-                    rootfs: RootfsSpec::Image("alpine:latest".into()),
-                    auto_remove: false, // Keep box for persistence test
-                    ..Default::default()
-                },
-                None,
-            )
-            .await
-            .unwrap();
+        let litebox = runtime.create(common::alpine_opts(), None).await.unwrap();
         box_id = litebox.id().clone();
 
         // Box should be in database
@@ -657,39 +513,9 @@ async fn multiple_boxes_persist_and_recover_without_lock_errors() {
         let runtime = BoxliteRuntime::new(options).expect("Failed to create runtime");
 
         // Create 3 boxes
-        let litebox1 = runtime
-            .create(
-                BoxOptions {
-                    rootfs: RootfsSpec::Image("alpine:latest".into()),
-                    auto_remove: false, // Keep box for persistence test
-                    ..Default::default()
-                },
-                None,
-            )
-            .await
-            .unwrap();
-        let litebox2 = runtime
-            .create(
-                BoxOptions {
-                    rootfs: RootfsSpec::Image("alpine:latest".into()),
-                    auto_remove: false, // Keep box for persistence test
-                    ..Default::default()
-                },
-                None,
-            )
-            .await
-            .unwrap();
-        let litebox3 = runtime
-            .create(
-                BoxOptions {
-                    rootfs: RootfsSpec::Image("alpine:latest".into()),
-                    auto_remove: false, // Keep box for persistence test
-                    ..Default::default()
-                },
-                None,
-            )
-            .await
-            .unwrap();
+        let litebox1 = runtime.create(common::alpine_opts(), None).await.unwrap();
+        let litebox2 = runtime.create(common::alpine_opts(), None).await.unwrap();
+        let litebox3 = runtime.create(common::alpine_opts(), None).await.unwrap();
 
         box_ids = vec![
             litebox1.id().clone(),
@@ -764,17 +590,10 @@ async fn auto_remove_default_is_true() {
 
 #[tokio::test]
 async fn auto_remove_true_removes_box_on_stop() {
-    let ctx = TestContext::new();
+    let ctx = common::IsolatedRuntime::new();
     let handle = ctx
         .runtime
-        .create(
-            BoxOptions {
-                rootfs: RootfsSpec::Image("alpine:latest".into()),
-                auto_remove: true,
-                ..Default::default()
-            },
-            None,
-        )
+        .create(common::alpine_opts_auto(), None)
         .await
         .unwrap();
     let box_id = handle.id().clone();
@@ -794,17 +613,10 @@ async fn auto_remove_true_removes_box_on_stop() {
 
 #[tokio::test]
 async fn auto_remove_false_preserves_box_on_stop() {
-    let ctx = TestContext::new();
+    let ctx = common::WarmRuntime::new();
     let handle = ctx
         .runtime
-        .create(
-            BoxOptions {
-                rootfs: RootfsSpec::Image("alpine:latest".into()),
-                auto_remove: false,
-                ..Default::default()
-            },
-            None,
-        )
+        .create(common::alpine_opts(), None)
         .await
         .unwrap();
     let box_id = handle.id().clone();
@@ -832,6 +644,7 @@ async fn auto_remove_false_preserves_box_on_stop() {
 
     // Cleanup manually
     ctx.runtime.remove(box_id.as_str(), false).await.unwrap();
+    ctx.cleanup().await;
 }
 
 // ============================================================================
@@ -849,17 +662,15 @@ async fn detach_default_is_false() {
 
 #[tokio::test]
 async fn detach_option_is_stored_in_box_config() {
-    let ctx = TestContext::new();
+    let ctx = common::IsolatedRuntime::new();
 
     // Create box with detach=true
     let handle = ctx
         .runtime
         .create(
             BoxOptions {
-                rootfs: RootfsSpec::Image("alpine:latest".into()),
                 detach: true,
-                auto_remove: false, // Keep for inspection
-                ..Default::default()
+                ..common::alpine_opts()
             },
             None,
         )
@@ -899,29 +710,12 @@ async fn recovery_removes_auto_remove_true_boxes() {
 
         // Create auto_remove=true box (should be cleaned up on recovery)
         let auto_remove_box = runtime
-            .create(
-                BoxOptions {
-                    rootfs: RootfsSpec::Image("alpine:latest".into()),
-                    auto_remove: true,
-                    ..Default::default()
-                },
-                None,
-            )
+            .create(common::alpine_opts_auto(), None)
             .await
             .unwrap();
 
         // Create auto_remove=false box (should persist)
-        let persistent_box = runtime
-            .create(
-                BoxOptions {
-                    rootfs: RootfsSpec::Image("alpine:latest".into()),
-                    auto_remove: false,
-                    ..Default::default()
-                },
-                None,
-            )
-            .await
-            .unwrap();
+        let persistent_box = runtime.create(common::alpine_opts(), None).await.unwrap();
         persistent_box_id = persistent_box.id().clone();
 
         // Both boxes should exist before shutdown
@@ -985,17 +779,7 @@ async fn recovery_removes_orphaned_stopped_boxes_without_directory() {
         };
         let runtime = BoxliteRuntime::new(options).expect("Failed to create runtime");
 
-        let litebox = runtime
-            .create(
-                BoxOptions {
-                    rootfs: RootfsSpec::Image("alpine:latest".into()),
-                    auto_remove: false,
-                    ..Default::default()
-                },
-                None,
-            )
-            .await
-            .unwrap();
+        let litebox = runtime.create(common::alpine_opts(), None).await.unwrap();
         box_id = litebox.id().clone();
         box_home = home_dir.join("boxes").join(box_id.as_str());
 

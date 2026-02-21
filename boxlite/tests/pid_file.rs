@@ -9,45 +9,23 @@
 //! - P0 (Critical): Basic functionality, Detach mode, Recovery scenarios
 //! - P1 (Important): Edge cases, Cleanup, Process validation
 
+mod common;
+
 use boxlite::BoxliteRuntime;
 use boxlite::litebox::BoxCommand;
-use boxlite::runtime::options::{BoxOptions, BoxliteOptions, RootfsSpec};
+use boxlite::runtime::options::BoxliteOptions;
 use boxlite::runtime::types::BoxStatus;
 use boxlite::util::{is_process_alive, is_same_process, read_pid_file};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
 // ============================================================================
-// TEST FIXTURES
+// LOCAL HELPERS
 // ============================================================================
 
-/// Test context with isolated runtime, temp directory access, and automatic cleanup.
-struct TestContext {
-    runtime: BoxliteRuntime,
-    home_dir: PathBuf,
-    _temp_dir: TempDir, // Dropped after test
-}
-
-impl TestContext {
-    fn new() -> Self {
-        let temp_dir = TempDir::new().expect("Failed to create temp dir");
-        let home_dir = temp_dir.path().to_path_buf();
-        let options = BoxliteOptions {
-            home_dir: home_dir.clone(),
-            image_registries: vec![],
-        };
-        let runtime = BoxliteRuntime::new(options).expect("Failed to create runtime");
-        Self {
-            runtime,
-            home_dir,
-            _temp_dir: temp_dir,
-        }
-    }
-
-    /// Get the PID file path for a box.
-    fn pid_file_path(&self, box_id: &str) -> PathBuf {
-        self.home_dir.join("boxes").join(box_id).join("shim.pid")
-    }
+/// Get the PID file path for a box under the given home directory.
+fn pid_file_path(home_dir: &Path, box_id: &str) -> PathBuf {
+    home_dir.join("boxes").join(box_id).join("shim.pid")
 }
 
 // ============================================================================
@@ -56,17 +34,10 @@ impl TestContext {
 
 #[tokio::test]
 async fn pid_file_created_on_box_start() {
-    let ctx = TestContext::new();
+    let ctx = common::WarmRuntime::new();
     let handle = ctx
         .runtime
-        .create(
-            BoxOptions {
-                rootfs: RootfsSpec::Image("alpine:latest".into()),
-                auto_remove: false,
-                ..Default::default()
-            },
-            None,
-        )
+        .create(common::alpine_opts(), None)
         .await
         .unwrap();
 
@@ -74,8 +45,8 @@ async fn pid_file_created_on_box_start() {
     let _ = handle.exec(BoxCommand::new("true")).await;
 
     // Verify PID file exists
-    let pid_file = ctx.pid_file_path(handle.id().as_str());
-    assert!(pid_file.exists(), "PID file should exist after run");
+    let pf = pid_file_path(ctx.home_dir, handle.id().as_str());
+    assert!(pf.exists(), "PID file should exist after run");
 
     // Cleanup
     handle.stop().await.unwrap();
@@ -87,25 +58,18 @@ async fn pid_file_created_on_box_start() {
 
 #[tokio::test]
 async fn pid_file_contains_correct_pid() {
-    let ctx = TestContext::new();
+    let ctx = common::WarmRuntime::new();
     let handle = ctx
         .runtime
-        .create(
-            BoxOptions {
-                rootfs: RootfsSpec::Image("alpine:latest".into()),
-                auto_remove: false,
-                ..Default::default()
-            },
-            None,
-        )
+        .create(common::alpine_opts(), None)
         .await
         .unwrap();
 
     // Start a long-running command
     let _ = handle.exec(BoxCommand::new("sleep").args(["30"])).await;
 
-    let pid_file = ctx.pid_file_path(handle.id().as_str());
-    let pid_from_file = read_pid_file(&pid_file).expect("Should read PID file");
+    let pf = pid_file_path(ctx.home_dir, handle.id().as_str());
+    let pid_from_file = read_pid_file(&pf).expect("Should read PID file");
 
     // Verify process is actually running
     assert!(
@@ -132,28 +96,21 @@ async fn pid_file_contains_correct_pid() {
 
 #[tokio::test]
 async fn pid_file_deleted_on_normal_stop() {
-    let ctx = TestContext::new();
+    let ctx = common::WarmRuntime::new();
     let handle = ctx
         .runtime
-        .create(
-            BoxOptions {
-                rootfs: RootfsSpec::Image("alpine:latest".into()),
-                auto_remove: false,
-                ..Default::default()
-            },
-            None,
-        )
+        .create(common::alpine_opts(), None)
         .await
         .unwrap();
 
     let _ = handle.exec(BoxCommand::new("sleep").args(["30"])).await;
 
-    let pid_file = ctx.pid_file_path(handle.id().as_str());
-    assert!(pid_file.exists(), "PID file should exist before stop");
+    let pf = pid_file_path(ctx.home_dir, handle.id().as_str());
+    assert!(pf.exists(), "PID file should exist before stop");
 
     handle.stop().await.unwrap();
 
-    assert!(!pid_file.exists(), "PID file should be deleted after stop");
+    assert!(!pf.exists(), "PID file should be deleted after stop");
 
     // Cleanup
     ctx.runtime
@@ -164,24 +121,17 @@ async fn pid_file_deleted_on_normal_stop() {
 
 #[tokio::test]
 async fn pid_matches_box_info() {
-    let ctx = TestContext::new();
+    let ctx = common::WarmRuntime::new();
     let handle = ctx
         .runtime
-        .create(
-            BoxOptions {
-                rootfs: RootfsSpec::Image("alpine:latest".into()),
-                auto_remove: false,
-                ..Default::default()
-            },
-            None,
-        )
+        .create(common::alpine_opts(), None)
         .await
         .unwrap();
 
     let _ = handle.exec(BoxCommand::new("sleep").args(["30"])).await;
 
-    let pid_file = ctx.pid_file_path(handle.id().as_str());
-    let pid_from_file = read_pid_file(&pid_file).expect("Should read PID file");
+    let pf = pid_file_path(ctx.home_dir, handle.id().as_str());
+    let pid_from_file = read_pid_file(&pf).expect("Should read PID file");
 
     let info = ctx
         .runtime
@@ -206,19 +156,12 @@ async fn pid_matches_box_info() {
 
 #[tokio::test]
 async fn pid_available_immediately_after_run() {
-    let ctx = TestContext::new();
+    let ctx = common::WarmRuntime::new();
 
     // Create and start box
     let handle = ctx
         .runtime
-        .create(
-            BoxOptions {
-                rootfs: RootfsSpec::Image("alpine:latest".into()),
-                auto_remove: false,
-                ..Default::default()
-            },
-            None,
-        )
+        .create(common::alpine_opts(), None)
         .await
         .unwrap();
 
@@ -239,8 +182,8 @@ async fn pid_available_immediately_after_run() {
     assert_eq!(info.status, BoxStatus::Running, "Status should be Running");
 
     // PID file should also exist immediately
-    let pid_file = ctx.pid_file_path(handle.id().as_str());
-    assert!(pid_file.exists(), "PID file should exist immediately");
+    let pf = pid_file_path(ctx.home_dir, handle.id().as_str());
+    assert!(pf.exists(), "PID file should exist immediately");
 
     // Cleanup
     handle.stop().await.unwrap();
@@ -252,24 +195,17 @@ async fn pid_available_immediately_after_run() {
 
 #[tokio::test]
 async fn pid_file_path_is_correct() {
-    let ctx = TestContext::new();
+    let ctx = common::WarmRuntime::new();
     let handle = ctx
         .runtime
-        .create(
-            BoxOptions {
-                rootfs: RootfsSpec::Image("alpine:latest".into()),
-                auto_remove: false,
-                ..Default::default()
-            },
-            None,
-        )
+        .create(common::alpine_opts(), None)
         .await
         .unwrap();
 
     let _ = handle.exec(BoxCommand::new("true")).await;
 
     // Expected path: {home}/boxes/{box_id}/shim.pid
-    let expected = ctx.pid_file_path(handle.id().as_str());
+    let expected = pid_file_path(ctx.home_dir, handle.id().as_str());
     assert!(expected.exists(), "PID file should be at expected path");
 
     // Verify no PID file in wrong locations
@@ -292,15 +228,13 @@ async fn pid_file_path_is_correct() {
 
 #[tokio::test]
 async fn detached_box_creates_pid_file() {
-    let ctx = TestContext::new();
+    let ctx = common::WarmRuntime::new();
     let handle = ctx
         .runtime
         .create(
-            BoxOptions {
-                rootfs: RootfsSpec::Image("alpine:latest".into()),
+            boxlite::runtime::options::BoxOptions {
                 detach: true,
-                auto_remove: false,
-                ..Default::default()
+                ..common::alpine_opts()
             },
             None,
         )
@@ -309,8 +243,8 @@ async fn detached_box_creates_pid_file() {
 
     let _ = handle.exec(BoxCommand::new("sleep").args(["300"])).await;
 
-    let pid_file = ctx.pid_file_path(handle.id().as_str());
-    assert!(pid_file.exists(), "Detached box should have PID file");
+    let pf = pid_file_path(ctx.home_dir, handle.id().as_str());
+    assert!(pf.exists(), "Detached box should have PID file");
 
     // Cleanup
     ctx.runtime
@@ -336,11 +270,9 @@ async fn detached_box_survives_runtime_drop() {
 
         let handle = runtime
             .create(
-                BoxOptions {
-                    rootfs: RootfsSpec::Image("alpine:latest".into()),
+                boxlite::runtime::options::BoxOptions {
                     detach: true,
-                    auto_remove: false,
-                    ..Default::default()
+                    ..common::alpine_opts()
                 },
                 None,
             )
@@ -350,8 +282,8 @@ async fn detached_box_survives_runtime_drop() {
         let _ = handle.exec(BoxCommand::new("sleep").args(["300"])).await;
         box_id = handle.id().to_string();
 
-        let pid_file = home_dir.join("boxes").join(&box_id).join("shim.pid");
-        original_pid = read_pid_file(&pid_file).unwrap();
+        let pf = pid_file_path(&home_dir, &box_id);
+        original_pid = read_pid_file(&pf).unwrap();
 
         // Runtime drops here - box should survive
     }
@@ -395,29 +327,15 @@ async fn non_detached_box_exits_on_runtime_drop() {
         })
         .unwrap();
 
-        let handle = runtime
-            .create(
-                BoxOptions {
-                    rootfs: RootfsSpec::Image("alpine:latest".into()),
-                    detach: false, // KEY: non-detached → watchdog active
-                    auto_remove: false,
-                    ..Default::default()
-                },
-                None,
-            )
-            .await
-            .unwrap();
+        let handle = runtime.create(common::alpine_opts(), None).await.unwrap();
 
         handle
             .exec(BoxCommand::new("sleep").args(["300"]))
             .await
             .unwrap();
 
-        let pid_file = home_dir
-            .join("boxes")
-            .join(handle.id().as_str())
-            .join("shim.pid");
-        original_pid = read_pid_file(&pid_file).unwrap();
+        let pf = pid_file_path(&home_dir, handle.id().as_str());
+        original_pid = read_pid_file(&pf).unwrap();
 
         // Verify process is running before drop
         assert!(
@@ -430,9 +348,6 @@ async fn non_detached_box_exits_on_runtime_drop() {
     }
 
     // Wait for shim to detect POLLHUP and exit gracefully.
-    // The chain: Keepalive drop → pipe close → poll() returns POLLHUP →
-    // SIGTERM to self → Guest.Shutdown() RPC → process exit.
-    // Allow generous timeout for guest shutdown RPC.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     while std::time::Instant::now() < deadline {
         if !is_process_alive(original_pid) {
@@ -465,11 +380,9 @@ async fn detached_box_recoverable_after_restart() {
 
         let handle = runtime
             .create(
-                BoxOptions {
-                    rootfs: RootfsSpec::Image("alpine:latest".into()),
+                boxlite::runtime::options::BoxOptions {
                     detach: true,
-                    auto_remove: false,
-                    ..Default::default()
+                    ..common::alpine_opts()
                 },
                 None,
             )
@@ -520,7 +433,7 @@ async fn detached_box_recoverable_after_restart() {
 
 #[tokio::test]
 async fn multiple_detached_boxes_each_have_pid_file() {
-    let ctx = TestContext::new();
+    let ctx = common::WarmRuntime::new();
     let mut box_ids = Vec::new();
 
     // Create 3 detached boxes
@@ -528,11 +441,9 @@ async fn multiple_detached_boxes_each_have_pid_file() {
         let handle = ctx
             .runtime
             .create(
-                BoxOptions {
-                    rootfs: RootfsSpec::Image("alpine:latest".into()),
+                boxlite::runtime::options::BoxOptions {
                     detach: true,
-                    auto_remove: false,
-                    ..Default::default()
+                    ..common::alpine_opts()
                 },
                 None,
             )
@@ -546,9 +457,9 @@ async fn multiple_detached_boxes_each_have_pid_file() {
     // Verify each has unique PID file with different PID
     let mut pids = std::collections::HashSet::new();
     for box_id in &box_ids {
-        let pid_file = ctx.pid_file_path(box_id);
-        assert!(pid_file.exists(), "Box {} should have PID file", box_id);
-        let pid = read_pid_file(&pid_file).unwrap();
+        let pf = pid_file_path(ctx.home_dir, box_id);
+        assert!(pf.exists(), "Box {} should have PID file", box_id);
+        let pid = read_pid_file(&pf).unwrap();
         assert!(
             pids.insert(pid),
             "Each box should have unique PID, but {} is duplicate",
@@ -583,11 +494,9 @@ async fn recovery_with_live_process() {
 
         let handle = runtime
             .create(
-                BoxOptions {
-                    rootfs: RootfsSpec::Image("alpine:latest".into()),
+                boxlite::runtime::options::BoxOptions {
                     detach: true,
-                    auto_remove: false,
-                    ..Default::default()
+                    ..common::alpine_opts()
                 },
                 None,
             )
@@ -597,8 +506,8 @@ async fn recovery_with_live_process() {
         let _ = handle.exec(BoxCommand::new("sleep").args(["300"])).await;
         box_id = handle.id().to_string();
 
-        let pid_file = home_dir.join("boxes").join(&box_id).join("shim.pid");
-        original_pid = read_pid_file(&pid_file).unwrap();
+        let pf = pid_file_path(&home_dir, &box_id);
+        original_pid = read_pid_file(&pf).unwrap();
     }
 
     // New runtime should recover
@@ -640,11 +549,9 @@ async fn recovery_with_dead_process() {
 
         let handle = runtime
             .create(
-                BoxOptions {
-                    rootfs: RootfsSpec::Image("alpine:latest".into()),
+                boxlite::runtime::options::BoxOptions {
                     detach: true,
-                    auto_remove: false,
-                    ..Default::default()
+                    ..common::alpine_opts()
                 },
                 None,
             )
@@ -654,8 +561,8 @@ async fn recovery_with_dead_process() {
         let _ = handle.exec(BoxCommand::new("sleep").args(["300"])).await;
         box_id = handle.id().to_string();
 
-        let pid_file = home_dir.join("boxes").join(&box_id).join("shim.pid");
-        original_pid = read_pid_file(&pid_file).unwrap();
+        let pf = pid_file_path(&home_dir, &box_id);
+        original_pid = read_pid_file(&pf).unwrap();
 
         // Kill process directly (simulate crash)
         unsafe {
@@ -688,9 +595,9 @@ async fn recovery_with_dead_process() {
         assert!(info.pid.is_none(), "Stopped box should have no PID");
 
         // PID file should be deleted
-        let pid_file = home_dir.join("boxes").join(&box_id).join("shim.pid");
+        let pf = pid_file_path(&home_dir, &box_id);
         assert!(
-            !pid_file.exists(),
+            !pf.exists(),
             "Stale PID file should be deleted during recovery"
         );
 
@@ -715,11 +622,9 @@ async fn recovery_with_missing_pid_file() {
 
         let handle = runtime
             .create(
-                BoxOptions {
-                    rootfs: RootfsSpec::Image("alpine:latest".into()),
+                boxlite::runtime::options::BoxOptions {
                     detach: true,
-                    auto_remove: false,
-                    ..Default::default()
+                    ..common::alpine_opts()
                 },
                 None,
             )
@@ -730,8 +635,8 @@ async fn recovery_with_missing_pid_file() {
         box_id = handle.id().to_string();
 
         // Manually delete PID file
-        let pid_file = home_dir.join("boxes").join(&box_id).join("shim.pid");
-        std::fs::remove_file(&pid_file).unwrap();
+        let pf = pid_file_path(&home_dir, &box_id);
+        std::fs::remove_file(&pf).unwrap();
     }
 
     // New runtime should handle missing PID file gracefully
@@ -775,11 +680,9 @@ async fn recovery_with_corrupted_pid_file() {
 
         let handle = runtime
             .create(
-                BoxOptions {
-                    rootfs: RootfsSpec::Image("alpine:latest".into()),
+                boxlite::runtime::options::BoxOptions {
                     detach: true,
-                    auto_remove: false,
-                    ..Default::default()
+                    ..common::alpine_opts()
                 },
                 None,
             )
@@ -790,8 +693,8 @@ async fn recovery_with_corrupted_pid_file() {
         box_id = handle.id().to_string();
 
         // Corrupt PID file
-        let pid_file = home_dir.join("boxes").join(&box_id).join("shim.pid");
-        std::fs::write(&pid_file, "not-a-valid-pid").unwrap();
+        let pf = pid_file_path(&home_dir, &box_id);
+        std::fs::write(&pf, "not-a-valid-pid").unwrap();
     }
 
     // New runtime should handle corrupted PID file gracefully
@@ -815,8 +718,8 @@ async fn recovery_with_corrupted_pid_file() {
         );
 
         // Corrupted PID file should be deleted
-        let pid_file = home_dir.join("boxes").join(&box_id).join("shim.pid");
-        assert!(!pid_file.exists(), "Corrupted PID file should be deleted");
+        let pf = pid_file_path(&home_dir, &box_id);
+        assert!(!pf.exists(), "Corrupted PID file should be deleted");
 
         // Cleanup
         runtime.remove(&box_id, true).await.unwrap();
@@ -837,17 +740,7 @@ async fn recovery_preserves_stopped_boxes() {
         })
         .unwrap();
 
-        let handle = runtime
-            .create(
-                BoxOptions {
-                    rootfs: RootfsSpec::Image("alpine:latest".into()),
-                    auto_remove: false,
-                    ..Default::default()
-                },
-                None,
-            )
-            .await
-            .unwrap();
+        let handle = runtime.create(common::alpine_opts(), None).await.unwrap();
 
         let _ = handle.exec(BoxCommand::new("true")).await;
         box_id = handle.id().to_string();
@@ -856,8 +749,8 @@ async fn recovery_preserves_stopped_boxes() {
         handle.stop().await.unwrap();
 
         // Verify PID file is gone
-        let pid_file = home_dir.join("boxes").join(&box_id).join("shim.pid");
-        assert!(!pid_file.exists());
+        let pf = pid_file_path(&home_dir, &box_id);
+        assert!(!pf.exists());
     }
 
     // New runtime should see stopped box
@@ -952,48 +845,31 @@ fn read_pid_file_overflow_rejected() {
 
 #[tokio::test]
 async fn force_remove_deletes_pid_file() {
-    let ctx = TestContext::new();
+    let ctx = common::WarmRuntime::new();
     let handle = ctx
         .runtime
-        .create(
-            BoxOptions {
-                rootfs: RootfsSpec::Image("alpine:latest".into()),
-                auto_remove: false,
-                ..Default::default()
-            },
-            None,
-        )
+        .create(common::alpine_opts(), None)
         .await
         .unwrap();
 
     let _ = handle.exec(BoxCommand::new("sleep").args(["300"])).await;
     let box_id = handle.id().to_string();
 
-    let pid_file = ctx.pid_file_path(&box_id);
-    assert!(pid_file.exists());
+    let pf = pid_file_path(ctx.home_dir, &box_id);
+    assert!(pf.exists());
 
     // Force remove while running
     ctx.runtime.remove(&box_id, true).await.unwrap();
 
-    assert!(
-        !pid_file.exists(),
-        "PID file should be deleted on force remove"
-    );
+    assert!(!pf.exists(), "PID file should be deleted on force remove");
 }
 
 #[tokio::test]
 async fn box_directory_cleanup_includes_pid_file() {
-    let ctx = TestContext::new();
+    let ctx = common::WarmRuntime::new();
     let handle = ctx
         .runtime
-        .create(
-            BoxOptions {
-                rootfs: RootfsSpec::Image("alpine:latest".into()),
-                auto_remove: false,
-                ..Default::default()
-            },
-            None,
-        )
+        .create(common::alpine_opts(), None)
         .await
         .unwrap();
 
@@ -1014,24 +890,17 @@ async fn box_directory_cleanup_includes_pid_file() {
 
 #[tokio::test]
 async fn is_same_process_validates_boxlite_shim() {
-    let ctx = TestContext::new();
+    let ctx = common::WarmRuntime::new();
     let handle = ctx
         .runtime
-        .create(
-            BoxOptions {
-                rootfs: RootfsSpec::Image("alpine:latest".into()),
-                auto_remove: false,
-                ..Default::default()
-            },
-            None,
-        )
+        .create(common::alpine_opts(), None)
         .await
         .unwrap();
 
     let _ = handle.exec(BoxCommand::new("sleep").args(["30"])).await;
 
-    let pid_file = ctx.pid_file_path(handle.id().as_str());
-    let pid = read_pid_file(&pid_file).unwrap();
+    let pf = pid_file_path(ctx.home_dir, handle.id().as_str());
+    let pid = read_pid_file(&pf).unwrap();
 
     // Should be true for actual shim
     assert!(

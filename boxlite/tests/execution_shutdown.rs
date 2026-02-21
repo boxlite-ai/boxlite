@@ -3,47 +3,11 @@
 //! These tests document current behavior and verify assumptions about
 //! how wait(), streams, and shutdown interact.
 
+mod common;
+
 use boxlite::BoxCommand;
-use boxlite::BoxliteRuntime;
-use boxlite::runtime::options::{BoxOptions, BoxliteOptions, RootfsSpec};
 use boxlite_shared::BoxliteError;
 use std::time::Duration;
-use tempfile::TempDir;
-
-// ============================================================================
-// TEST FIXTURES
-// ============================================================================
-
-/// Test context with isolated runtime and automatic cleanup.
-struct TestContext {
-    runtime: BoxliteRuntime,
-    _temp_dir: TempDir,
-}
-
-impl TestContext {
-    fn new() -> Self {
-        // Use /tmp directly to avoid macOS's long temp paths that exceed SUN_LEN
-        // for Unix socket paths (limited to ~104 chars)
-        let temp_dir = TempDir::new_in("/tmp").expect("Failed to create temp dir");
-        let options = BoxliteOptions {
-            home_dir: temp_dir.path().to_path_buf(),
-            image_registries: vec![],
-        };
-        let runtime = BoxliteRuntime::new(options).expect("Failed to create runtime");
-        Self {
-            runtime,
-            _temp_dir: temp_dir,
-        }
-    }
-}
-
-fn default_box_options() -> BoxOptions {
-    BoxOptions {
-        rootfs: RootfsSpec::Image("alpine:latest".into()),
-        auto_remove: false,
-        ..Default::default()
-    }
-}
 
 // ============================================================================
 // BEHAVIOR VERIFICATION TESTS
@@ -55,10 +19,10 @@ fn default_box_options() -> BoxOptions {
 /// because the guest process exits when box stops.
 #[tokio::test]
 async fn test_wait_behavior_on_box_stop() {
-    let ctx = TestContext::new();
+    let ctx = common::WarmRuntime::new();
     let handle = ctx
         .runtime
-        .create(default_box_options(), None)
+        .create(common::alpine_opts(), None)
         .await
         .unwrap();
     handle.start().await.unwrap();
@@ -78,7 +42,7 @@ async fn test_wait_behavior_on_box_stop() {
     });
 
     // Give exec time to start
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
 
     // Stop the box
     let stop_start = std::time::Instant::now();
@@ -120,6 +84,7 @@ async fn test_wait_behavior_on_box_stop() {
 
     // Cleanup
     let _ = ctx.runtime.remove(handle.id().as_str(), true).await;
+    ctx.cleanup().await;
 }
 
 /// Test 2: What happens to wait() when runtime.shutdown() is called?
@@ -128,10 +93,10 @@ async fn test_wait_behavior_on_box_stop() {
 /// because shutdown stops all boxes concurrently.
 #[tokio::test]
 async fn test_wait_behavior_on_runtime_shutdown() {
-    let ctx = TestContext::new();
+    let ctx = common::WarmRuntime::new();
     let handle = ctx
         .runtime
-        .create(default_box_options(), None)
+        .create(common::alpine_opts(), None)
         .await
         .unwrap();
     handle.start().await.unwrap();
@@ -151,7 +116,7 @@ async fn test_wait_behavior_on_runtime_shutdown() {
     });
 
     // Give exec time to start
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
 
     // Shutdown runtime
     let shutdown_start = std::time::Instant::now();
@@ -200,10 +165,10 @@ async fn test_wait_behavior_on_runtime_shutdown() {
 async fn test_stdout_stream_on_box_stop() {
     use futures::StreamExt;
 
-    let ctx = TestContext::new();
+    let ctx = common::WarmRuntime::new();
     let handle = ctx
         .runtime
-        .create(default_box_options(), None)
+        .create(common::alpine_opts(), None)
         .await
         .unwrap();
     handle.start().await.unwrap();
@@ -236,7 +201,7 @@ async fn test_stdout_stream_on_box_stop() {
     });
 
     // Give some time to read lines
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
 
     // Stop the box
     handle.stop().await.unwrap();
@@ -250,6 +215,7 @@ async fn test_stdout_stream_on_box_stop() {
 
     // Cleanup
     let _ = ctx.runtime.remove(handle.id().as_str(), true).await;
+    ctx.cleanup().await;
 }
 
 /// Test 4: Can we call exec() on a stopped box?
@@ -257,10 +223,10 @@ async fn test_stdout_stream_on_box_stop() {
 /// Assumption: Should return an error (InvalidState or Stopped).
 #[tokio::test]
 async fn test_exec_on_stopped_box() {
-    let ctx = TestContext::new();
+    let ctx = common::WarmRuntime::new();
     let handle = ctx
         .runtime
-        .create(default_box_options(), None)
+        .create(common::alpine_opts(), None)
         .await
         .unwrap();
     handle.start().await.unwrap();
@@ -304,6 +270,7 @@ async fn test_exec_on_stopped_box() {
 
     // Cleanup
     let _ = ctx.runtime.remove(handle.id().as_str(), true).await;
+    ctx.cleanup().await;
 }
 
 /// Test 5: What happens to existing Execution when box is stopped?
@@ -312,10 +279,10 @@ async fn test_exec_on_stopped_box() {
 /// then box.stop() is called from elsewhere.
 #[tokio::test]
 async fn test_existing_execution_after_box_stop() {
-    let ctx = TestContext::new();
+    let ctx = common::WarmRuntime::new();
     let handle = ctx
         .runtime
-        .create(default_box_options(), None)
+        .create(common::alpine_opts(), None)
         .await
         .unwrap();
     handle.start().await.unwrap();
@@ -346,15 +313,16 @@ async fn test_existing_execution_after_box_stop() {
 
     // Cleanup
     let _ = ctx.runtime.remove(handle.id().as_str(), true).await;
+    ctx.cleanup().await;
 }
 
 /// Test 6: Measure actual timing - how long does wait() block after stop?
 #[tokio::test]
 async fn test_wait_timing_after_stop() {
-    let ctx = TestContext::new();
+    let ctx = common::WarmRuntime::new();
     let handle = ctx
         .runtime
-        .create(default_box_options(), None)
+        .create(common::alpine_opts(), None)
         .await
         .unwrap();
     handle.start().await.unwrap();
@@ -365,7 +333,7 @@ async fn test_wait_timing_after_stop() {
         .await
         .unwrap();
 
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
 
     let wait_handle = tokio::spawn(async move {
         let start = std::time::Instant::now();
@@ -390,9 +358,6 @@ async fn test_wait_timing_after_stop() {
             println!();
             println!("Key question: Did wait() return immediately when stop() completed,");
             println!("or did it wait for the full process termination?");
-
-            // If wait_elapsed is close to stop_elapsed, wait() returned promptly
-            // If wait_elapsed >> stop_elapsed, there's a delay issue
         }
         Ok(Err(e)) => {
             println!("wait() task panicked: {:?}", e);
@@ -404,6 +369,7 @@ async fn test_wait_timing_after_stop() {
 
     // Cleanup
     let _ = ctx.runtime.remove(handle.id().as_str(), true).await;
+    ctx.cleanup().await;
 }
 
 /// Test 7: Multiple concurrent executions when box stops
@@ -411,10 +377,10 @@ async fn test_wait_timing_after_stop() {
 /// Tests that all pending wait() calls return when box stops.
 #[tokio::test]
 async fn test_multiple_executions_on_box_stop() {
-    let ctx = TestContext::new();
+    let ctx = common::WarmRuntime::new();
     let handle = ctx
         .runtime
-        .create(default_box_options(), None)
+        .create(common::alpine_opts(), None)
         .await
         .unwrap();
     handle.start().await.unwrap();
@@ -450,7 +416,7 @@ async fn test_multiple_executions_on_box_stop() {
         (3, result, start.elapsed())
     });
 
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
 
     // Stop the box
     let stop_start = std::time::Instant::now();
@@ -490,6 +456,7 @@ async fn test_multiple_executions_on_box_stop() {
 
     // Cleanup
     let _ = ctx.runtime.remove(handle.id().as_str(), true).await;
+    ctx.cleanup().await;
 }
 
 // ============================================================================
@@ -497,15 +464,12 @@ async fn test_multiple_executions_on_box_stop() {
 // ============================================================================
 
 /// Test that running a command returns Stopped error after box.stop().
-///
-/// This verifies the CancellationToken is properly wired and
-/// checked before attempting to run commands.
 #[tokio::test]
 async fn test_run_command_returns_stopped_error() {
-    let ctx = TestContext::new();
+    let ctx = common::WarmRuntime::new();
     let handle = ctx
         .runtime
-        .create(default_box_options(), None)
+        .create(common::alpine_opts(), None)
         .await
         .unwrap();
     handle.start().await.unwrap();
@@ -527,7 +491,7 @@ async fn test_run_command_returns_stopped_error() {
     println!("=== test_run_command_returns_stopped_error ===");
     match &result {
         Err(BoxliteError::Stopped(msg)) => {
-            println!("✓ Got expected Stopped error: {}", msg);
+            println!("Got expected Stopped error: {}", msg);
         }
         Err(e) => {
             panic!("Expected Stopped error, got: {:?}", e);
@@ -541,15 +505,16 @@ async fn test_run_command_returns_stopped_error() {
 
     // Cleanup
     let _ = ctx.runtime.remove(handle.id().as_str(), true).await;
+    ctx.cleanup().await;
 }
 
 /// Test that start() returns Stopped error after box.stop().
 #[tokio::test]
 async fn test_start_returns_stopped_error() {
-    let ctx = TestContext::new();
+    let ctx = common::WarmRuntime::new();
     let handle = ctx
         .runtime
-        .create(default_box_options(), None)
+        .create(common::alpine_opts(), None)
         .await
         .unwrap();
     handle.start().await.unwrap();
@@ -563,7 +528,7 @@ async fn test_start_returns_stopped_error() {
     println!("=== test_start_returns_stopped_error ===");
     match &result {
         Err(BoxliteError::Stopped(msg)) => {
-            println!("✓ Got expected Stopped error: {}", msg);
+            println!("Got expected Stopped error: {}", msg);
         }
         Err(e) => {
             panic!("Expected Stopped error, got: {:?}", e);
@@ -577,15 +542,16 @@ async fn test_start_returns_stopped_error() {
 
     // Cleanup
     let _ = ctx.runtime.remove(handle.id().as_str(), true).await;
+    ctx.cleanup().await;
 }
 
 /// Test that metrics() returns Stopped error after box.stop().
 #[tokio::test]
 async fn test_metrics_returns_stopped_error() {
-    let ctx = TestContext::new();
+    let ctx = common::WarmRuntime::new();
     let handle = ctx
         .runtime
-        .create(default_box_options(), None)
+        .create(common::alpine_opts(), None)
         .await
         .unwrap();
     handle.start().await.unwrap();
@@ -599,7 +565,7 @@ async fn test_metrics_returns_stopped_error() {
     println!("=== test_metrics_returns_stopped_error ===");
     match &result {
         Err(BoxliteError::Stopped(msg)) => {
-            println!("✓ Got expected Stopped error: {}", msg);
+            println!("Got expected Stopped error: {}", msg);
         }
         Err(e) => {
             panic!("Expected Stopped error, got: {:?}", e);
@@ -613,23 +579,24 @@ async fn test_metrics_returns_stopped_error() {
 
     // Cleanup
     let _ = ctx.runtime.remove(handle.id().as_str(), true).await;
+    ctx.cleanup().await;
 }
 
 /// Test that create() returns Stopped error after runtime.shutdown().
 #[tokio::test]
 async fn test_create_after_shutdown_returns_stopped() {
-    let ctx = TestContext::new();
+    let ctx = common::WarmRuntime::new();
 
     // Shutdown runtime
     ctx.runtime.shutdown(Some(5)).await.unwrap();
 
     // Attempt to create box after shutdown
-    let result = ctx.runtime.create(default_box_options(), None).await;
+    let result = ctx.runtime.create(common::alpine_opts(), None).await;
 
     println!("=== test_create_after_shutdown_returns_stopped ===");
     match &result {
         Err(BoxliteError::Stopped(msg)) => {
-            println!("✓ Got expected Stopped error: {}", msg);
+            println!("Got expected Stopped error: {}", msg);
         }
         Err(e) => {
             panic!("Expected Stopped error, got: {:?}", e);
@@ -643,16 +610,12 @@ async fn test_create_after_shutdown_returns_stopped() {
 }
 
 /// Test that wait() returns promptly when box is stopped.
-///
-/// This is the key test for the cancellation token implementation.
-/// Before the fix, wait() could hang indefinitely.
-/// After the fix, wait() should return within a reasonable time.
 #[tokio::test]
 async fn test_wait_returns_promptly_on_stop() {
-    let ctx = TestContext::new();
+    let ctx = common::WarmRuntime::new();
     let handle = ctx
         .runtime
-        .create(default_box_options(), None)
+        .create(common::alpine_opts(), None)
         .await
         .unwrap();
     handle.start().await.unwrap();
@@ -671,7 +634,7 @@ async fn test_wait_returns_promptly_on_stop() {
     });
 
     // Give command time to start
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
 
     // Stop the box - this should trigger cancellation
     let stop_start = std::time::Instant::now();
@@ -689,14 +652,12 @@ async fn test_wait_returns_promptly_on_stop() {
             println!("wait() took: {:?}", wait_elapsed);
             println!("wait() result: {:?}", result);
 
-            // Key assertion: wait() should return reasonably quickly after stop
-            // We allow up to 5 seconds, but it should typically be much faster
             assert!(
                 wait_elapsed < Duration::from_secs(5),
                 "wait() took too long: {:?}",
                 wait_elapsed
             );
-            println!("✓ wait() returned promptly after box.stop()");
+            println!("wait() returned promptly after box.stop()");
         }
         Ok(Err(e)) => {
             panic!("wait() task panicked: {:?}", e);
@@ -708,18 +669,16 @@ async fn test_wait_returns_promptly_on_stop() {
 
     // Cleanup
     let _ = ctx.runtime.remove(handle.id().as_str(), true).await;
+    ctx.cleanup().await;
 }
 
 /// Test that all concurrent wait() calls return when box is stopped.
-///
-/// This tests that the cancellation token properly fans out to all
-/// pending operations.
 #[tokio::test]
 async fn test_all_waits_return_on_stop() {
-    let ctx = TestContext::new();
+    let ctx = common::WarmRuntime::new();
     let handle = ctx
         .runtime
-        .create(default_box_options(), None)
+        .create(common::alpine_opts(), None)
         .await
         .unwrap();
     handle.start().await.unwrap();
@@ -747,7 +706,7 @@ async fn test_all_waits_return_on_stop() {
     });
 
     // Give commands time to start
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
 
     // Stop the box
     handle.stop().await.unwrap();
@@ -773,7 +732,6 @@ async fn test_all_waits_return_on_stop() {
                             "run{} wait() returned at {:?}, result: {:?}",
                             id, elapsed, run_result
                         );
-                        // All waits should return within reasonable time after stop
                         assert!(elapsed < Duration::from_secs(6), "wait{} took too long", id);
                     }
                     Err(e) => {
@@ -783,7 +741,7 @@ async fn test_all_waits_return_on_stop() {
                 }
             }
             assert!(all_returned, "All wait tasks should complete");
-            println!("✓ All wait() calls returned after box.stop()");
+            println!("All wait() calls returned after box.stop()");
         }
         Err(_) => {
             panic!("TIMEOUT: Some wait() calls did not return within 5s");
@@ -792,22 +750,23 @@ async fn test_all_waits_return_on_stop() {
 
     // Cleanup
     let _ = ctx.runtime.remove(handle.id().as_str(), true).await;
+    ctx.cleanup().await;
 }
 
 /// Test that runtime shutdown stops all boxes and their commands.
 #[tokio::test]
 async fn test_runtime_shutdown_stops_all_boxes() {
-    let ctx = TestContext::new();
+    let ctx = common::WarmRuntime::new();
 
     // Create multiple boxes
     let handle1 = ctx
         .runtime
-        .create(default_box_options(), Some("box1".into()))
+        .create(common::alpine_opts(), Some("box1".into()))
         .await
         .unwrap();
     let handle2 = ctx
         .runtime
-        .create(default_box_options(), Some("box2".into()))
+        .create(common::alpine_opts(), Some("box2".into()))
         .await
         .unwrap();
 
@@ -837,7 +796,7 @@ async fn test_runtime_shutdown_stops_all_boxes() {
     });
 
     // Give commands time to start
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
 
     // Shutdown runtime (should cancel all boxes)
     let shutdown_result = ctx.runtime.shutdown(Some(5)).await;
@@ -871,7 +830,7 @@ async fn test_runtime_shutdown_stops_all_boxes() {
                     }
                 }
             }
-            println!("✓ All boxes stopped during runtime shutdown");
+            println!("All boxes stopped during runtime shutdown");
         }
         Err(_) => {
             panic!("TIMEOUT: Some wait() calls did not return within 10s");
@@ -882,21 +841,14 @@ async fn test_runtime_shutdown_stops_all_boxes() {
 // ============================================================================
 // ECHILD FIX + SENDINPUT SHUTDOWN TESTS
 // ============================================================================
-// These tests cover:
-// - ECHILD fix: guest uses std::process::Command (no Tokio SIGCHLD race)
-// - SendInput fix: spawn_stdin uses shutdown_token for clean cancellation
-// - Exit code preservation after the ECHILD safety net
 
 /// Exec completes normally, then runtime shutdown — should be clean.
-///
-/// Before fix: spawn_stdin hit transport error during shutdown (WARN log).
-/// After fix: spawn_stdin cancelled cleanly via shutdown_token.
 #[tokio::test]
 async fn test_exec_completes_then_shutdown_is_clean() {
-    let ctx = TestContext::new();
+    let ctx = common::WarmRuntime::new();
     let handle = ctx
         .runtime
-        .create(default_box_options(), None)
+        .create(common::alpine_opts(), None)
         .await
         .unwrap();
     handle.start().await.unwrap();
@@ -914,15 +866,12 @@ async fn test_exec_completes_then_shutdown_is_clean() {
 }
 
 /// Sequential exec on same box should both succeed.
-///
-/// This tests the original bug: transport error on second exec.
-/// Root cause was Tokio's orphan reaper racing with waitpid in the guest.
 #[tokio::test]
 async fn test_sequential_exec_same_box() {
-    let ctx = TestContext::new();
+    let ctx = common::WarmRuntime::new();
     let handle = ctx
         .runtime
-        .create(default_box_options(), None)
+        .create(common::alpine_opts(), None)
         .await
         .unwrap();
     handle.start().await.unwrap();
@@ -945,18 +894,16 @@ async fn test_sequential_exec_same_box() {
 
     // Cleanup
     let _ = ctx.runtime.remove(handle.id().as_str(), true).await;
+    ctx.cleanup().await;
 }
 
 /// Exit codes should be correctly preserved.
-///
-/// Before ECHILD fix: could return -1 due to waitpid race.
-/// After fix: std::process::Command avoids the race entirely.
 #[tokio::test]
 async fn test_exec_exit_code_preserved() {
-    let ctx = TestContext::new();
+    let ctx = common::WarmRuntime::new();
     let handle = ctx
         .runtime
-        .create(default_box_options(), None)
+        .create(common::alpine_opts(), None)
         .await
         .unwrap();
     handle.start().await.unwrap();
@@ -978,18 +925,16 @@ async fn test_exec_exit_code_preserved() {
 
     // Cleanup
     let _ = ctx.runtime.remove(handle.id().as_str(), true).await;
+    ctx.cleanup().await;
 }
 
 /// Multiple sequential execs followed by shutdown — the full CLI workflow.
-///
-/// This is the exact scenario that triggered the original bug:
-/// run several commands, then shutdown cleanly.
 #[tokio::test]
 async fn test_exec_then_shutdown_sequential() {
-    let ctx = TestContext::new();
+    let ctx = common::WarmRuntime::new();
     let handle = ctx
         .runtime
-        .create(default_box_options(), None)
+        .create(common::alpine_opts(), None)
         .await
         .unwrap();
     handle.start().await.unwrap();

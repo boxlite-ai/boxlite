@@ -10,35 +10,20 @@
 //! cargo test -p boxlite --test sigstop_quiesce -- --ignored
 //! ```
 
+mod common;
+
 use std::time::Duration;
 
-use boxlite::runtime::options::{BoxOptions, BoxliteOptions, RootfsSpec};
-use boxlite::{BoxCommand, BoxliteRuntime};
-use tempfile::TempDir;
-
-fn test_runtime() -> (BoxliteRuntime, TempDir) {
-    // Use /tmp for shorter paths — macOS default TempDir paths exceed SUN_LEN for Unix sockets.
-    let temp_dir = TempDir::new_in("/tmp").expect("Failed to create temp dir");
-    let options = BoxliteOptions {
-        home_dir: temp_dir.path().to_path_buf(),
-        image_registries: vec![],
-    };
-    let runtime = BoxliteRuntime::new(options).expect("Failed to create runtime");
-    (runtime, temp_dir)
-}
+use boxlite::BoxCommand;
 
 #[tokio::test]
 #[ignore] // Requires VM runtime
 async fn test_sigstop_sigcont_preserves_vm() {
-    let (runtime, _dir) = test_runtime();
+    let ctx = common::WarmRuntime::new();
 
-    let options = BoxOptions {
-        rootfs: RootfsSpec::Image("alpine:latest".to_string()),
-        ..Default::default()
-    };
-
-    let litebox = runtime
-        .create(options, Some("sigstop-test".to_string()))
+    let litebox = ctx
+        .runtime
+        .create(common::alpine_opts(), Some("sigstop-test".to_string()))
         .await
         .expect("Failed to create box");
 
@@ -88,6 +73,8 @@ async fn test_sigstop_sigcont_preserves_vm() {
 
     // Clean shutdown
     litebox.stop().await.expect("Failed to stop box");
+
+    ctx.cleanup().await;
 }
 
 /// Check if a process is in stopped (T) state.

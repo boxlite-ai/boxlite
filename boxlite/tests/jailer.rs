@@ -6,15 +6,15 @@
 //! 3. Explicitly disabling the jailer still works
 //! 4. On Linux: bwrap creates isolated mount/user namespaces
 
+mod common;
+
 use boxlite::BoxCommand;
-use boxlite::BoxliteRuntime;
 use boxlite::runtime::advanced_options::{AdvancedBoxOptions, SecurityOptions};
-use boxlite::runtime::options::{BoxOptions, BoxliteOptions, RootfsSpec};
+use boxlite::runtime::options::BoxOptions;
 use std::path::PathBuf;
-use tempfile::TempDir;
 
 // ============================================================================
-// TEST FIXTURES
+// JAILER-SPECIFIC HELPERS
 // ============================================================================
 
 #[cfg(target_os = "macos")]
@@ -46,49 +46,33 @@ fn assert_macos_socket_path_budget(home_dir: &std::path::Path) {
     );
 }
 
-struct TestContext {
-    runtime: BoxliteRuntime,
-    #[allow(dead_code)]
-    home_dir: PathBuf,
-    _temp_dir: TempDir,
-}
+/// Create an IsolatedRuntime under `~/.boxlite-it` with macOS socket path validation.
+fn jailer_runtime() -> common::IsolatedRuntime {
+    let base = jailer_test_home_base_dir();
+    std::fs::create_dir_all(&base).expect("Failed to create jailer test home base");
 
-impl TestContext {
-    fn new() -> Self {
-        let base_dir = jailer_test_home_base_dir();
-        std::fs::create_dir_all(&base_dir).expect("Failed to create jailer test home base");
+    let ctx = common::IsolatedRuntime::new_in(base.to_str().expect("base path should be UTF-8"));
 
-        let temp_dir = TempDir::new_in(&base_dir).expect("Failed to create temp dir");
-        let home_dir = temp_dir.path().to_path_buf();
-        #[cfg(target_os = "macos")]
-        assert_macos_socket_path_budget(&home_dir);
-        #[cfg(target_os = "macos")]
-        {
-            let canonical_home = home_dir.canonicalize().unwrap_or_else(|_| home_dir.clone());
-            assert!(
-                !canonical_home.starts_with("/private/tmp"),
-                "jailer integration tests must not use /private/tmp as home_dir: {}",
-                canonical_home.display()
-            );
-        }
-
-        let options = BoxliteOptions {
-            home_dir: home_dir.clone(),
-            image_registries: vec![],
-        };
-        let runtime = BoxliteRuntime::new(options).expect("Failed to create runtime");
-        Self {
-            runtime,
-            home_dir,
-            _temp_dir: temp_dir,
-        }
+    #[cfg(target_os = "macos")]
+    assert_macos_socket_path_budget(&ctx.home_dir);
+    #[cfg(target_os = "macos")]
+    {
+        let canonical_home = ctx
+            .home_dir
+            .canonicalize()
+            .unwrap_or_else(|_| ctx.home_dir.clone());
+        assert!(
+            !canonical_home.starts_with("/private/tmp"),
+            "jailer integration tests must not use /private/tmp as home_dir: {}",
+            canonical_home.display()
+        );
     }
+
+    ctx
 }
 
 fn jailer_enabled_options() -> BoxOptions {
     BoxOptions {
-        rootfs: RootfsSpec::Image("alpine:latest".into()),
-        auto_remove: false,
         advanced: AdvancedBoxOptions {
             security: SecurityOptions {
                 jailer_enabled: true,
@@ -96,14 +80,12 @@ fn jailer_enabled_options() -> BoxOptions {
             },
             ..Default::default()
         },
-        ..Default::default()
+        ..common::alpine_opts()
     }
 }
 
 fn jailer_disabled_options() -> BoxOptions {
     BoxOptions {
-        rootfs: RootfsSpec::Image("alpine:latest".into()),
-        auto_remove: false,
         advanced: AdvancedBoxOptions {
             security: SecurityOptions {
                 jailer_enabled: false,
@@ -111,7 +93,7 @@ fn jailer_disabled_options() -> BoxOptions {
             },
             ..Default::default()
         },
-        ..Default::default()
+        ..common::alpine_opts()
     }
 }
 
@@ -219,12 +201,9 @@ fn standard_mode_enables_jailer() {
 // ============================================================================
 
 /// Box with jailer enabled starts and executes commands successfully.
-///
-/// This is the primary regression guard: changing the jailer default must not
-/// break basic box operation.
 #[tokio::test]
 async fn jailer_enabled_box_starts_and_executes() {
-    let ctx = TestContext::new();
+    let ctx = jailer_runtime();
     let handle = ctx
         .runtime
         .create(jailer_enabled_options(), None)
@@ -253,7 +232,7 @@ async fn jailer_enabled_box_starts_and_executes() {
 /// Box with jailer explicitly disabled still works (development mode).
 #[tokio::test]
 async fn jailer_disabled_box_starts_and_executes() {
-    let ctx = TestContext::new();
+    let ctx = jailer_runtime();
     let handle = ctx
         .runtime
         .create(jailer_disabled_options(), None)
@@ -287,7 +266,7 @@ async fn jailer_enabled_custom_profile_deny_boxes_subpath_blocks_start() {
         return;
     }
 
-    let ctx = TestContext::new();
+    let ctx = jailer_runtime();
     let profile_path = write_deny_boxes_profile(&ctx.home_dir);
     let handle = ctx
         .runtime
@@ -353,7 +332,7 @@ async fn jailer_disabled_with_same_profile_still_starts() {
         return;
     }
 
-    let ctx = TestContext::new();
+    let ctx = jailer_runtime();
     let profile_path = write_deny_boxes_profile(&ctx.home_dir);
     let handle = ctx
         .runtime
@@ -385,13 +364,10 @@ async fn jailer_disabled_with_same_profile_still_starts() {
 // ============================================================================
 
 /// On Linux, verify bwrap creates an isolated mount namespace for the shim.
-///
-/// Reads the shim's PID and compares `/proc/{pid}/ns/mnt` against the test
-/// process's own mount namespace. Different namespaces prove bwrap isolation.
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn jailer_creates_isolated_mount_namespace() {
-    let ctx = TestContext::new();
+    let ctx = jailer_runtime();
     let handle = ctx
         .runtime
         .create(jailer_enabled_options(), None)

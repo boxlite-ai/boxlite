@@ -1,0 +1,123 @@
+# BoxLite test runner configuration for cargo-nextest
+#
+# Test groups ensure VM/CLI integration tests run serially (resource contention)
+# while unit tests and non-VM integration tests run in parallel.
+#
+# Profiles:
+#   default  — local development (balanced speed + reliability)
+#   ci       — GitHub Actions (unit tests only, stricter timeouts)
+#   vm       — integration tests that boot real VMs (generous timeouts)
+
+[store]
+dir = "target/nextest"
+
+# =============================================================================
+# DEFAULT PROFILE (local development)
+# =============================================================================
+[profile.default]
+# Tests marked slow after 60s, terminated after 120s (2 * 60s)
+slow-timeout = { period = "60s", terminate-after = 2 }
+retries = 1
+fail-fast = true
+status-level = "slow"
+final-status-level = "flaky"
+
+# =============================================================================
+# CI PROFILE (unit tests only, no VM access)
+# =============================================================================
+[profile.ci]
+# Tests marked slow after 30s, terminated after 90s (3 * 30s)
+slow-timeout = { period = "30s", terminate-after = 3 }
+retries = 2
+fail-fast = false
+
+# =============================================================================
+# VM PROFILE (integration/E2E tests that boot real VMs)
+# =============================================================================
+[profile.vm]
+# Tests marked slow after 120s, terminated after 600s (5 * 120s)
+slow-timeout = { period = "120s", terminate-after = 5 }
+retries = 0
+fail-fast = false
+
+# =============================================================================
+# TEST GROUP OVERRIDES
+# =============================================================================
+# NOTE: Overrides are evaluated top-to-bottom, first match wins.
+# More specific filters must come BEFORE catch-all filters.
+
+# Non-VM integration tests — never boot VMs, safe to parallelize.
+# runtime.rs: sync tests (locking, config)
+# shutdown.rs: IsolatedRuntime only (no VM boot)
+# network.rs: pure network config tests
+[[profile.default.overrides]]
+filter = "package(boxlite) & kind(test) & (binary(~runtime) | binary(~shutdown) | binary(~network))"
+test-group = "integration-no-vm"
+
+[[profile.vm.overrides]]
+filter = "package(boxlite) & kind(test) & (binary(~runtime) | binary(~shutdown) | binary(~network))"
+test-group = "integration-no-vm"
+
+# VM integration tests (boxlite/tests/*.rs) — MUST be serial.
+# These boot real VMs via KVM/Hypervisor.framework.
+# Includes: lifecycle, execution_shutdown, pid_file, jailer,
+#           clone_export_import, sigstop_quiesce, rest_integration
+[[profile.default.overrides]]
+filter = "package(boxlite) & kind(test)"
+test-group = "serial-vm"
+
+[[profile.vm.overrides]]
+filter = "package(boxlite) & kind(test)"
+test-group = "serial-vm"
+
+# CLI completion tests — pure parsing, no runtime needed.
+[[profile.default.overrides]]
+filter = "package(boxlite-cli) & kind(test) & binary(~completion)"
+test-group = "cli-no-vm"
+
+# CLI integration tests (boxlite-cli/tests/*.rs) — MUST be serial.
+# Shares /tmp/bl home directory via OnceLock + Mutex.
+[[profile.default.overrides]]
+filter = "package(boxlite-cli) & kind(test)"
+test-group = "serial-cli"
+
+# boxlite unit tests (lib) — moderate parallelism.
+# Uses tempfile/SQLite but no VMs. Process isolation makes this safe.
+[[profile.default.overrides]]
+filter = "package(boxlite) & kind(lib)"
+test-group = "boxlite-unit"
+
+[[profile.ci.overrides]]
+filter = "package(boxlite) & kind(lib)"
+test-group = "boxlite-unit"
+
+# boxlite-shared, boxlite-ffi — pure logic, fully parallel.
+[[profile.default.overrides]]
+filter = "package(boxlite-shared) | package(boxlite-ffi)"
+test-group = "shared-unit"
+
+[[profile.ci.overrides]]
+filter = "package(boxlite-shared) | package(boxlite-ffi)"
+test-group = "shared-unit"
+
+# -----------------------------------------------------------------------------
+# Group definitions
+# -----------------------------------------------------------------------------
+
+[test-groups.serial-vm]
+max-threads = 1
+
+[test-groups.serial-cli]
+max-threads = 1
+
+[test-groups.integration-no-vm]
+max-threads = 4
+
+[test-groups.cli-no-vm]
+max-threads = "num-cpus"
+
+[test-groups.boxlite-unit]
+max-threads = 4
+
+[test-groups.shared-unit]
+max-threads = "num-cpus"

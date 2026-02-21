@@ -1,4 +1,4 @@
-.PHONY: help clean setup package dev\:python dev\:node dist dist\:python dist\:node test test\:rust test\:python test\:node test\:cli fmt fmt-check guest runtime runtime-debug cli skillbox-image
+.PHONY: help clean setup package dev\:python dev\:node dist dist\:python dist\:node test test\:rust test\:python test\:node test\:cli test\:warm-cache test\:integration test\:all fmt fmt-check guest runtime runtime-debug cli skillbox-image coverage coverage\:lcov coverage\:integration
 
 # Ensure cargo is in PATH (source ~/.cargo/env if it exists and cargo is not found)
 SHELL := /bin/bash
@@ -27,14 +27,21 @@ help:
 	@echo "    make guest          - Build the guest binary (cross-compile for VM)"
 	@echo "    make skillbox-image - Build SkillBox Docker image (APT_SOURCE=mirrors.aliyun.com for China)"
 	@echo ""
-	@echo "  Testing:"
-	@echo "    make test           - Run all unit tests (Rust + Python + Node.js)"
-	@echo "    make test:rust      - Run Rust unit tests"
-	@echo "    make test:ffi       - Run BoxLite FFI unit tests"
-	@echo "    make test:python    - Run Python SDK unit tests"
-	@echo "    make test:node      - Run Node.js SDK unit tests"
-	@echo "    make test:cli       - Run CLI integration tests (prepares runtime first)"
-	@echo "    make test:integration - Run Rust integration tests (requires VM environment)"
+	@echo "  Testing (uses cargo-nextest when available):"
+	@echo "    make test              - Run all unit tests (Rust + Python + Node.js)"
+	@echo "    make test:rust         - Run Rust unit tests (parallel via nextest)"
+	@echo "    make test:ffi          - Run BoxLite FFI unit tests"
+	@echo "    make test:python       - Run Python SDK unit tests"
+	@echo "    make test:node         - Run Node.js SDK unit tests"
+	@echo "    make test:cli          - Run CLI integration tests (prepares runtime first)"
+	@echo "    make test:warm-cache   - Pre-warm integration test image cache"
+	@echo "    make test:integration  - Run Rust integration tests (requires VM environment)"
+	@echo "    make test:all          - Run ALL tests (unit + CLI + integration)"
+	@echo ""
+	@echo "  Coverage:"
+	@echo "    make coverage              - Generate HTML coverage report (unit tests)"
+	@echo "    make coverage:lcov         - Generate LCOV output for CI upload"
+	@echo "    make coverage:integration  - Generate coverage for integration tests"
 	@echo ""
 	@echo "  Local Development:"
 	@echo "    make dev:python     - Build and install Python SDK locally (debug mode)"
@@ -181,20 +188,28 @@ test:
 	@$(MAKE) test:ffi
 	@$(MAKE) test:python
 	@$(MAKE) test:node
-	@$(MAKE) test:c
-	@echo "✅ All tests passed"
+	@echo "✅ All unit tests passed"
 
-# Run Rust unit tests (single-threaded, without gvproxy to avoid Go runtime issues)
+# Run Rust unit tests (parallel via nextest, fallback to serial cargo test)
+# --no-default-features disables gvproxy-backend to avoid Go runtime link issues
 test\:rust:
 	@echo "🧪 Running Rust unit tests..."
-	@cargo test -p boxlite --no-default-features --lib -- --test-threads=1
-	@cargo test -p boxlite-shared --lib -- --test-threads=1
+	@if command -v cargo-nextest >/dev/null 2>&1; then \
+		cargo nextest run -p boxlite --no-default-features --lib; \
+		cargo nextest run -p boxlite-shared --lib; \
+	else \
+		cargo test -p boxlite --no-default-features --lib -- --test-threads=1; \
+		cargo test -p boxlite-shared --lib -- --test-threads=1; \
+	fi
 
 # Run BoxLite FFI unit tests
 test\:ffi:
 	@echo "🧪 Running BoxLite FFI unit tests..."
-	@cargo test -p boxlite-ffi
-
+	@if command -v cargo-nextest >/dev/null 2>&1; then \
+		cargo nextest run -p boxlite-ffi; \
+	else \
+		cargo test -p boxlite-ffi; \
+	fi
 
 # Run Python SDK unit tests (excludes integration tests)
 test\:python:
@@ -207,15 +222,68 @@ test\:node:
 	@cd sdks/node && npm test
 
 # Run CLI integration tests (requires runtime environment)
+# Serial via nextest test group (serial-cli) or --test-threads=1 fallback
 test\:cli: runtime-debug
 	@echo "🧪 Running CLI integration tests..."
-	@cargo test -p boxlite-cli --tests --no-fail-fast -- --test-threads=1
+	@if command -v cargo-nextest >/dev/null 2>&1; then \
+		cargo nextest run -p boxlite-cli --tests --no-fail-fast; \
+	else \
+		cargo test -p boxlite-cli --tests --no-fail-fast -- --test-threads=1; \
+	fi
+
+# Pre-warm integration test image cache (avoids cold-pull per test)
+test\:warm-cache: runtime-debug
+	@echo "🔥 Warming integration test image cache..."
+	@mkdir -p /tmp/boxlite-test
+	@BOXLITE_RUNTIME_DIR=$(PROJECT_ROOT)/target/boxlite-runtime \
+		./target/debug/boxlite --home /tmp/boxlite-test pull alpine:latest 2>/dev/null || \
+		echo "  ⚠ Pre-warm skipped (pull failed, tests will pull on-demand)"
+	@echo "✅ Image cache ready"
 
 # Run Rust integration tests (requires VM environment)
-test\:integration: runtime-debug
+# Serial via nextest test group (serial-vm) or --test-threads=1 fallback
+test\:integration: runtime-debug test\:warm-cache
 	@echo "🧪 Running Rust integration tests (requires VM)..."
+	@if command -v cargo-nextest >/dev/null 2>&1; then \
+		BOXLITE_RUNTIME_DIR=$(PROJECT_ROOT)/target/boxlite-runtime \
+			cargo nextest run -p boxlite --test '*' --no-fail-fast --profile vm; \
+	else \
+		BOXLITE_RUNTIME_DIR=$(PROJECT_ROOT)/target/boxlite-runtime \
+			cargo test -p boxlite --test '*' --no-fail-fast -- --test-threads=1 --nocapture; \
+	fi
+
+# Run ALL tests (unit + CLI + integration, requires VM environment)
+test\:all: runtime-debug
+	@$(MAKE) test
+	@$(MAKE) test:cli
+	@$(MAKE) test:integration
+	@echo "✅ All tests passed (including integration)"
+
+# Generate HTML coverage report (unit tests only)
+coverage:
+	@echo "📊 Generating code coverage report..."
+	@cargo llvm-cov nextest --no-report -p boxlite --no-default-features --lib
+	@cargo llvm-cov nextest --no-report -p boxlite-shared --lib
+	@cargo llvm-cov report --html --output-dir target/coverage
+	@echo "✅ Coverage report: target/coverage/html/index.html"
+
+# Generate LCOV output for CI upload
+coverage\:lcov:
+	@echo "📊 Generating LCOV coverage..."
+	@cargo llvm-cov nextest \
+		-p boxlite-shared --lib \
+		--lcov --output-path target/coverage/lcov.info
+	@echo "✅ LCOV output: target/coverage/lcov.info"
+
+# Generate coverage for integration tests (requires VM environment)
+coverage\:integration: runtime-debug
+	@echo "📊 Generating integration test coverage..."
 	@BOXLITE_RUNTIME_DIR=$(PROJECT_ROOT)/target/boxlite-runtime \
-		cargo test -p boxlite --test '*' --no-fail-fast -- --test-threads=1 --nocapture
+		cargo llvm-cov nextest \
+		-p boxlite --test '*' \
+		--profile vm \
+		--html --output-dir target/coverage-integration
+	@echo "✅ Coverage report: target/coverage-integration/html/index.html"
 
 # Format all Rust code
 fmt:
