@@ -84,6 +84,8 @@ jobs:
       matrix:
         platform: ${{ fromJson(needs.config.outputs.platforms) }}
 
+    permissions:
+      id-token: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -117,10 +119,11 @@ jobs:
         run: cargo llvm-cov nextest -p boxlite-shared --lib --profile ci --lcov --output-path lcov.info
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v5
         with:
           file: lcov.info
           flags: rust-shared
+          use_oidc: true
           fail_ci_if_error: false
 
   # cli unit tests (integration tests in tests/ are ignored - require VM)

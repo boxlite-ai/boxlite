@@ -1,0 +1,23 @@
+# Codecov configuration for BoxLite
+# Docs: https://docs.codecov.io/docs/codecov-yaml
+
+coverage:
+  status:
+    project:
+      default:
+        target: auto    # Track against historical baseline
+        threshold: 2%   # Allow 2% drop before failing
+    patch:
+      default:
+        target: 70%     # New code in PRs must be 70% covered
+
+comment:
+  layout: "condensed_header, diff, flags, components"
+  behavior: default
+  require_changes: true   # Only comment if coverage changed
+
+ignore:
+  - "boxlite/deps/**"     # Vendored dependencies
+  - "**/tests/**"         # Test files themselves
+  - "guest/**"            # Guest agent (tested separately)
+  - "sdks/**"             # SDKs (have their own test suites)

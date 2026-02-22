@@ -3,6 +3,7 @@
 [![GitHub stars](https://img.shields.io/github/stars/boxlite-ai/boxlite?style=social)](https://github.com/boxlite-ai/boxlite)
 [![Build](https://github.com/boxlite-ai/boxlite/actions/workflows/build-wheels.yml/badge.svg)](https://github.com/boxlite-ai/boxlite/actions/workflows/build-wheels.yml)
 [![Lint](https://github.com/boxlite-ai/boxlite/actions/workflows/lint.yml/badge.svg)](https://github.com/boxlite-ai/boxlite/actions/workflows/lint.yml)
+[![codecov](https://codecov.io/gh/boxlite-ai/boxlite/branch/main/graph/badge.svg)](https://codecov.io/gh/boxlite-ai/boxlite)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 Local-first micro-VM sandbox for **AI agents** — stateful, lightweight,
