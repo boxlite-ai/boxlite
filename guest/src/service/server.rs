@@ -98,6 +98,11 @@ impl GuestServer {
                     ))
                 })?;
                 info!("Listening on vsock://{}:{}", VMADDR_CID_ANY, port);
+                eprintln!(
+                    "[guest] T+{}ms: server bound (vsock:{})",
+                    crate::boot_elapsed_ms(),
+                    port
+                );
 
                 let incoming = listener.incoming();
 
@@ -134,6 +139,10 @@ impl GuestServer {
                 info!("Binding to Unix socket: {}", socket_path.display());
                 let listener = tokio::net::UnixListener::bind(&socket_path)?;
                 info!("Listening on unix://{}", socket_path.display());
+                eprintln!(
+                    "[guest] T+{}ms: server bound (unix)",
+                    crate::boot_elapsed_ms()
+                );
 
                 let incoming = UnixListenerStream::new(listener);
 
@@ -161,6 +170,11 @@ impl GuestServer {
                 info!("Binding to TCP address: {}", addr);
                 let listener = tokio::net::TcpListener::bind(&addr).await?;
                 info!("Listening on tcp://{}", addr);
+                eprintln!(
+                    "[guest] T+{}ms: server bound (tcp:{})",
+                    crate::boot_elapsed_ms(),
+                    port
+                );
 
                 let incoming = TcpListenerStream::new(listener);
 
@@ -217,6 +231,11 @@ async fn notify_host_ready(notify_uri: Option<String>) -> BoxliteResult<()> {
                     e
                 ))
             })?;
+            eprintln!(
+                "[guest] T+{}ms: host notified (vsock:{})",
+                crate::boot_elapsed_ms(),
+                port
+            );
             info!("Host notified successfully");
             // Connection itself signals readiness, drop immediately
         }
@@ -230,6 +249,10 @@ async fn notify_host_ready(notify_uri: Option<String>) -> BoxliteResult<()> {
                         e
                     ))
                 })?;
+            eprintln!(
+                "[guest] T+{}ms: host notified (unix)",
+                crate::boot_elapsed_ms()
+            );
             info!("Host notified successfully");
         }
         Transport::Tcp { port } => {
@@ -242,6 +265,11 @@ async fn notify_host_ready(notify_uri: Option<String>) -> BoxliteResult<()> {
                         e
                     ))
                 })?;
+            eprintln!(
+                "[guest] T+{}ms: host notified (tcp:{})",
+                crate::boot_elapsed_ms(),
+                port
+            );
             info!("Host notified successfully");
         }
     }

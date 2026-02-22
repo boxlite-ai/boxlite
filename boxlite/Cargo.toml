@@ -104,3 +104,4 @@ seccompiler = { version = "0.4", features = ["json"] }  # Compile JSON filters t
 bincode = "2.0"  # Serialize compiled BPF filters
 
 [dev-dependencies]
+proptest = "1.4"

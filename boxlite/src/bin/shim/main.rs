@@ -16,7 +16,7 @@ mod crash_capture;
 
 use std::path::Path;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use boxlite::{
     util,
@@ -81,6 +81,12 @@ fn init_logging(box_dir: &Path) -> tracing_appender::non_blocking::WorkerGuard {
 }
 
 fn main() -> BoxliteResult<()> {
+    let t0 = Instant::now();
+    let timing = |msg: &str| eprintln!("[shim] T+{}ms: {msg}", t0.elapsed().as_millis());
+
+    let wall = chrono::Utc::now().format("%H:%M:%S%.6f");
+    eprintln!("[shim] {wall} T+0ms: main() entered");
+
     // Parse command line arguments with clap
     // VmmKind parsed via FromStr trait automatically
     let args = ShimArgs::parse();
@@ -88,6 +94,7 @@ fn main() -> BoxliteResult<()> {
     // Parse InstanceSpec from JSON
     let config: InstanceSpec = serde_json::from_str(&args.config)
         .map_err(|e| BoxliteError::Engine(format!("Failed to parse config JSON: {}", e)))?;
+    timing("config parsed");
 
     // Initialize logging using box_dir derived from exit_file path.
     // Logs go to box_dir/logs/ so the sandbox only needs write access to box_dir.
@@ -97,6 +104,7 @@ fn main() -> BoxliteResult<()> {
         .unwrap_or(Path::new("."))
         .to_path_buf();
     let _log_guard = init_logging(&box_dir);
+    timing("logging initialized");
 
     // Install crash capture (panic hook, signal handlers).
     // Note: stderr is already redirected to file by parent process (spawn.rs).
@@ -113,7 +121,7 @@ fn main() -> BoxliteResult<()> {
     let exit_file = config.exit_file.clone();
 
     // Run the shim and handle errors
-    run_shim(args, config).inspect_err(|e| {
+    run_shim(args, config, timing).inspect_err(|e| {
         let info = ExitInfo::Error {
             exit_code: 1,
             message: e.to_string(),
@@ -125,7 +133,7 @@ fn main() -> BoxliteResult<()> {
     })
 }
 
-fn run_shim(args: ShimArgs, mut config: InstanceSpec) -> BoxliteResult<()> {
+fn run_shim(args: ShimArgs, mut config: InstanceSpec, timing: impl Fn(&str)) -> BoxliteResult<()> {
     tracing::debug!(
         shares = ?config.fs_shares.shares(),
         "Filesystem shares configured"
@@ -153,6 +161,7 @@ fn run_shim(args: ShimArgs, mut config: InstanceSpec) -> BoxliteResult<()> {
         // Create gvproxy instance with caller-provided socket path
         let gvproxy =
             GvproxyInstance::new(net_config.socket_path.clone(), &net_config.port_mappings)?;
+        timing("gvproxy created");
 
         tracing::info!(
             socket_path = ?net_config.socket_path,
@@ -225,6 +234,7 @@ fn run_shim(args: ShimArgs, mut config: InstanceSpec) -> BoxliteResult<()> {
     // Create engine using inventory pattern (no match statement needed!)
     // Engines auto-register themselves at compile time
     let mut engine = vmm::create_engine(args.engine, options)?;
+    timing("engine created");
 
     tracing::info!("Engine created, creating Box instance");
 
@@ -236,6 +246,7 @@ fn run_shim(args: ShimArgs, mut config: InstanceSpec) -> BoxliteResult<()> {
             return Err(e);
         }
     };
+    timing("instance created (krun FFI calls done)");
 
     tracing::info!("Box instance created, handing over process control to Box");
 
@@ -256,6 +267,7 @@ fn run_shim(args: ShimArgs, mut config: InstanceSpec) -> BoxliteResult<()> {
 
     // Hand over process control to Box instance
     // This may never return (process takeover)
+    timing("entering VM (krun_start_enter)");
     match instance.enter() {
         Ok(()) => {
             tracing::info!("Box execution completed successfully");

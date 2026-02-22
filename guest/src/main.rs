@@ -25,7 +25,21 @@ use clap::Parser;
 #[cfg(target_os = "linux")]
 use service::server::GuestServer;
 #[cfg(target_os = "linux")]
+use std::sync::OnceLock;
+#[cfg(target_os = "linux")]
+use std::time::Instant;
+#[cfg(target_os = "linux")]
 use tracing::info;
+
+/// Boot timestamp, set once at guest agent startup.
+#[cfg(target_os = "linux")]
+static BOOT_T0: OnceLock<Instant> = OnceLock::new();
+
+/// Milliseconds elapsed since guest agent startup.
+#[cfg(target_os = "linux")]
+pub(crate) fn boot_elapsed_ms() -> u128 {
+    BOOT_T0.get().map(|t| t.elapsed().as_millis()).unwrap_or(0)
+}
 
 /// BoxLite Guest Agent - runs inside the isolated Box to execute containers
 #[cfg(target_os = "linux")]
@@ -54,16 +68,17 @@ struct GuestArgs {
 #[cfg(target_os = "linux")]
 #[tokio::main]
 async fn main() -> BoxliteResult<()> {
+    let t0 = Instant::now();
+    BOOT_T0.set(t0).expect("BOOT_T0 already initialized");
+
     // Early diagnostic - visible even if tracing fails
-    eprintln!("[BOOT] BoxLite guest agent starting");
+    eprintln!("[guest] T+0ms: agent starting");
 
     // Set panic hook to ensure we see panics
     std::panic::set_hook(Box::new(|panic_info| {
         eprintln!("[PANIC] Guest agent panicked: {}", panic_info);
         std::process::exit(1);
     }));
-
-    eprintln!("[BOOT] Initializing tracing");
 
     // Initialize tracing subscriber - respects RUST_LOG env var
     // Default to "info" level if RUST_LOG is not set (for visibility)
@@ -79,12 +94,14 @@ async fn main() -> BoxliteResult<()> {
         eprintln!("[ERROR] Failed to initialize tracing: {}", e);
         // Continue anyway - logging failure shouldn't stop the server
     }
+    eprintln!("[guest] T+{}ms: tracing initialized", boot_elapsed_ms());
 
     info!("BoxLite Guest Agent starting");
 
     // Mount essential tmpfs directories early
     // Needed because virtio-fs doesn't support open-unlink-fstat pattern
     mounts::mount_essential_tmpfs()?;
+    eprintln!("[guest] T+{}ms: tmpfs mounted", boot_elapsed_ms());
 
     // Parse command-line arguments with clap
     let args = GuestArgs::parse();

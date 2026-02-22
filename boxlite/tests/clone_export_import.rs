@@ -52,7 +52,7 @@ async fn create_running_box(runtime: &BoxliteRuntime, name: &str) -> LiteBox {
 #[tokio::test]
 #[ignore] // Requires VM runtime
 async fn test_clone_produces_independent_box() {
-    let ctx = common::WarmRuntime::new();
+    let ctx = common::ParallelRuntime::new();
     let source = create_stopped_box(&ctx.runtime).await;
 
     let cloned = source
@@ -71,13 +71,13 @@ async fn test_clone_produces_independent_box() {
     cloned.start().await.expect("Failed to start cloned box");
     cloned.stop().await.expect("Failed to stop cloned box");
 
-    ctx.cleanup().await;
+    ctx.shutdown().await;
 }
 
 #[tokio::test]
 #[ignore] // Requires VM runtime
 async fn test_export_import_roundtrip() {
-    let ctx = common::WarmRuntime::new();
+    let ctx = common::ParallelRuntime::new();
     let source = create_stopped_box(&ctx.runtime).await;
 
     let export_dir = TempDir::new_in("/tmp").unwrap();
@@ -108,13 +108,13 @@ async fn test_export_import_roundtrip() {
         .expect("Failed to start imported box");
     imported.stop().await.expect("Failed to stop imported box");
 
-    ctx.cleanup().await;
+    ctx.shutdown().await;
 }
 
 #[tokio::test]
 #[ignore] // Requires VM runtime
 async fn test_export_import_preserves_box_options() {
-    let ctx = common::WarmRuntime::new();
+    let ctx = common::ParallelRuntime::new();
 
     let source = ctx
         .runtime
@@ -138,7 +138,7 @@ async fn test_export_import_preserves_box_options() {
     let imported_info = imported.info();
     assert_eq!(imported_info.status, BoxStatus::Stopped);
 
-    ctx.cleanup().await;
+    ctx.shutdown().await;
 }
 
 // ============================================================================
@@ -148,7 +148,7 @@ async fn test_export_import_preserves_box_options() {
 #[tokio::test]
 #[ignore] // Requires VM runtime
 async fn test_clone_running_box() {
-    let ctx = common::WarmRuntime::new();
+    let ctx = common::ParallelRuntime::new();
     let source = create_running_box(&ctx.runtime, "clone-src").await;
 
     // Clone while source is running — should succeed without stopping
@@ -182,13 +182,13 @@ async fn test_clone_running_box() {
 
     source.stop().await.expect("Stop source box");
 
-    ctx.cleanup().await;
+    ctx.shutdown().await;
 }
 
 #[tokio::test]
 #[ignore] // Requires VM runtime
 async fn test_export_running_box() {
-    let ctx = common::WarmRuntime::new();
+    let ctx = common::ParallelRuntime::new();
     let source = create_running_box(&ctx.runtime, "export-running").await;
 
     let export_dir = TempDir::new_in("/tmp").unwrap();
@@ -225,13 +225,13 @@ async fn test_export_running_box() {
 
     source.stop().await.expect("Stop source box");
 
-    ctx.cleanup().await;
+    ctx.shutdown().await;
 }
 
 #[tokio::test]
 #[ignore] // Requires VM runtime
 async fn test_export_import_running_box_roundtrip() {
-    let ctx = common::WarmRuntime::new();
+    let ctx = common::ParallelRuntime::new();
     let source = create_running_box(&ctx.runtime, "roundtrip-running").await;
 
     // Write a marker file inside the running VM
@@ -272,7 +272,7 @@ async fn test_export_import_running_box_roundtrip() {
     imported.stop().await.expect("Stop imported box");
     source.stop().await.expect("Stop source box");
 
-    ctx.cleanup().await;
+    ctx.shutdown().await;
 }
 
 // ============================================================================
@@ -282,7 +282,7 @@ async fn test_export_import_running_box_roundtrip() {
 #[tokio::test]
 #[ignore] // Requires VM runtime
 async fn test_export_under_write_pressure() {
-    let ctx = common::WarmRuntime::new();
+    let ctx = common::ParallelRuntime::new();
     let source = create_running_box(&ctx.runtime, "write-stress").await;
 
     // Start a background process that continuously writes random 4KB blocks
@@ -335,5 +335,5 @@ async fn test_export_under_write_pressure() {
     imported.stop().await.expect("Stop imported box");
     source.stop().await.expect("Stop source box");
 
-    ctx.cleanup().await;
+    ctx.shutdown().await;
 }

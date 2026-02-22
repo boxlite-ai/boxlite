@@ -549,9 +549,23 @@ impl KrunContext {
     }
 
     pub unsafe fn start_enter(&self) -> i32 {
+        let t = std::time::Instant::now();
+        let now = chrono::Utc::now().format("%H:%M:%S%.6f");
         tracing::trace!(ctx_id = self.ctx_id, "Calling krun_start_enter");
+        eprintln!("[krun] {now} krun_start_enter called");
         let status = unsafe { krun_start_enter(self.ctx_id) };
-        tracing::trace!(status, "krun_start_enter returned");
+        let now = chrono::Utc::now().format("%H:%M:%S%.6f");
+        tracing::trace!(
+            ctx_id = self.ctx_id,
+            status,
+            elapsed_ms = t.elapsed().as_millis() as u64,
+            "krun_start_enter returned"
+        );
+        eprintln!(
+            "[krun] {now} krun_start_enter returned (status={}, elapsed={}ms)",
+            status,
+            t.elapsed().as_millis()
+        );
         if status < 0 {
             tracing::error!(status, "krun_start_enter failed");
         }

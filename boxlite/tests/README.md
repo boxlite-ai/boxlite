@@ -1,6 +1,6 @@
 # BoxLite Integration Tests
 
-This directory contains integration tests for the BoxLite runtime. These tests require a real VM environment and are **not run in CI** due to infrastructure requirements.
+This directory contains integration tests for the BoxLite runtime. Tests run concurrently via per-test isolation (`TempDir` + symlinked image cache). VM-based tests are **not run in CI** due to infrastructure requirements.
 
 ## Prerequisites
 
@@ -10,26 +10,25 @@ This directory contains integration tests for the BoxLite runtime. These tests r
    make runtime-debug
    ```
 
-2. **Set environment variable** (optional): By default, tests use temporary home directories. For debugging, you can specify a persistent runtime artifact directory:
-
-   ```bash
-   export BOXLITE_RUNTIME_DIR=/path/to/runtime/dir
-   ```
-
-3. **Platform requirements**:
+2. **Platform requirements**:
    - **macOS**: Apple Silicon (M1/M2/M3) with Hypervisor.framework
    - **Linux**: KVM support (`/dev/kvm` accessible)
 
 ## Test Files
 
-| File | Description |
-|------|-------------|
-| `lifecycle.rs` | Box lifecycle tests (create, start, stop, remove) |
-| `runtime.rs` | Runtime initialization and configuration tests |
-| `network.rs` | Network configuration and connectivity tests |
-| `pid_file.rs` | PID file management and process tracking tests |
-| `execution_shutdown.rs` | Execution behavior during shutdown scenarios |
-| `jailer.rs` | Jailer default behavior and macOS seatbelt deny lifecycle tests |
+| File | VM Required | Description |
+|------|:-----------:|-------------|
+| `lifecycle.rs` | Yes | Box lifecycle tests (create, start, stop, remove) |
+| `execution_shutdown.rs` | Yes | Execution behavior during shutdown scenarios |
+| `pid_file.rs` | Yes | PID file management and process tracking tests |
+| `jailer.rs` | Yes | Jailer default behavior and macOS seatbelt deny lifecycle tests |
+| `clone_export_import.rs` | Yes | Clone, export, and import operations |
+| `sigstop_quiesce.rs` | Yes | SIGSTOP-based quiesce for snapshot operations |
+| `rest_integration.rs` | Yes | REST API integration tests |
+| `timing_profile.rs` | Yes | Boot latency profiling |
+| `network.rs` | No | Network configuration tests |
+| `runtime.rs` | No | Runtime initialization and configuration tests |
+| `shutdown.rs` | No | Shutdown behavior (`IsolatedRuntime`, no VM) |
 
 ### macOS Seatbelt deny lifecycle tests
 
@@ -44,55 +43,76 @@ This directory contains integration tests for the BoxLite runtime. These tests r
 
 ## Running Tests
 
-### All Integration Tests
+### With nextest (recommended)
 
 ```bash
-# Using Makefile (recommended)
+# VM integration tests (uses vm profile with generous timeouts)
+cargo nextest run -p boxlite --tests --profile vm
+
+# Non-VM integration tests only
+cargo nextest run -p boxlite --test runtime --test shutdown --test network
+
+# Specific test file
+cargo nextest run -p boxlite --test lifecycle --profile vm
+
+# Single test
+cargo nextest run -p boxlite --test execution_shutdown -E 'test(test_wait_behavior_on_box_stop)' --profile vm
+```
+
+### With Makefile
+
+```bash
 make test:integration
-
-# Manual cargo command
-BOXLITE_RUNTIME_DIR=$(pwd)/target/boxlite-runtime \
-  cargo test -p boxlite --tests --no-fail-fast -- --test-threads=1 --nocapture
 ```
 
-### Specific Test File
+## Test Infrastructure
 
-```bash
-# Run all tests in a file
-cargo test -p boxlite --test lifecycle -- --nocapture
+All test files use shared infrastructure from `common/mod.rs`. Three runtime flavors provide per-test isolation for concurrent execution:
 
-# Run execution shutdown tests
-cargo test -p boxlite --test execution_shutdown -- --nocapture
-```
+### `ParallelRuntime` — VM integration tests
 
-### Single Test
-
-```bash
-cargo test -p boxlite --test execution_shutdown test_wait_behavior_on_box_stop -- --nocapture
-```
-
-## Test Patterns
-
-### TestContext Pattern
-
-All test files use a common `TestContext` pattern for isolation:
+Per-test `TempDir` with symlinked image cache from `target/boxlite-test/`. On first use, a cross-process `flock` serializes the initial image pull and guest rootfs warmup. Subsequent tests reuse the cached artifacts.
 
 ```rust
-struct TestContext {
-    runtime: BoxliteRuntime,
-    _temp_dir: TempDir,  // Dropped after test, cleaning up
-}
+use crate::common::ParallelRuntime;
 
-impl TestContext {
-    fn new() -> Self {
-        let temp_dir = TempDir::new().expect("Failed to create temp dir");
-        let options = BoxliteOptions {
-            home_dir: temp_dir.path().to_path_buf(),
-            image_registries: vec![],
-        };
-        let runtime = BoxliteRuntime::new(options).expect("Failed to create runtime");
-        Self { runtime, _temp_dir: temp_dir }
-    }
+#[tokio::test]
+async fn test_box_lifecycle() {
+    let ctx = ParallelRuntime::new();
+    let handle = ctx.runtime.create(alpine_opts(), None).await.unwrap();
+    handle.start().await.unwrap();
+    // ... test logic ...
+    handle.stop().await.unwrap();
+    ctx.shutdown().await;
+}
+```
+
+### `IsolatedRuntime` — non-VM tests
+
+Per-test `TempDir` with no image cache. For tests that don't boot VMs: locking behavior, shutdown idempotency, config validation.
+
+```rust
+use crate::common::IsolatedRuntime;
+
+#[tokio::test]
+async fn test_shutdown_idempotent() {
+    let ctx = IsolatedRuntime::new();
+    // ... test logic using ctx.runtime ...
+}
+```
+
+### `warm_temp_dir()` — recovery tests
+
+Raw `TempDir` + symlinked image cache. For tests that create and drop multiple runtimes manually (e.g., crash recovery, state persistence across restarts).
+
+```rust
+use crate::common::warm_temp_dir;
+
+#[tokio::test]
+async fn test_recovery_after_crash() {
+    let (temp_dir, home_dir) = warm_temp_dir();
+    // Create first runtime, do work, drop it
+    // Create second runtime with same home_dir, verify recovery
 }
 ```
 
@@ -105,7 +125,7 @@ macOS has a ~104 character limit on Unix socket paths (`SUN_LEN`).
 
 ## CI Exclusion
 
-These tests are excluded from CI because:
+VM-based tests are excluded from CI because:
 
 1. They require actual VM infrastructure (KVM or Hypervisor.framework)
 2. They take significant time to run (VM boot, image pulls)

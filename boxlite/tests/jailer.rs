@@ -51,7 +51,7 @@ fn jailer_runtime() -> common::IsolatedRuntime {
     let base = jailer_test_home_base_dir();
     std::fs::create_dir_all(&base).expect("Failed to create jailer test home base");
 
-    let ctx = common::IsolatedRuntime::new_in(base.to_str().expect("base path should be UTF-8"));
+    let ctx = common::IsolatedRuntime::new_warm(base.to_str().expect("base path should be UTF-8"));
 
     #[cfg(target_os = "macos")]
     assert_macos_socket_path_budget(&ctx.home_dir);

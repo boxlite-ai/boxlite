@@ -34,7 +34,7 @@ fn pid_file_path(home_dir: &Path, box_id: &str) -> PathBuf {
 
 #[tokio::test]
 async fn pid_file_created_on_box_start() {
-    let ctx = common::WarmRuntime::new();
+    let ctx = common::ParallelRuntime::new();
     let handle = ctx
         .runtime
         .create(common::alpine_opts(), None)
@@ -45,7 +45,7 @@ async fn pid_file_created_on_box_start() {
     let _ = handle.exec(BoxCommand::new("true")).await;
 
     // Verify PID file exists
-    let pf = pid_file_path(ctx.home_dir, handle.id().as_str());
+    let pf = pid_file_path(&ctx.home_dir, handle.id().as_str());
     assert!(pf.exists(), "PID file should exist after run");
 
     // Cleanup
@@ -58,7 +58,7 @@ async fn pid_file_created_on_box_start() {
 
 #[tokio::test]
 async fn pid_file_contains_correct_pid() {
-    let ctx = common::WarmRuntime::new();
+    let ctx = common::ParallelRuntime::new();
     let handle = ctx
         .runtime
         .create(common::alpine_opts(), None)
@@ -68,7 +68,7 @@ async fn pid_file_contains_correct_pid() {
     // Start a long-running command
     let _ = handle.exec(BoxCommand::new("sleep").args(["30"])).await;
 
-    let pf = pid_file_path(ctx.home_dir, handle.id().as_str());
+    let pf = pid_file_path(&ctx.home_dir, handle.id().as_str());
     let pid_from_file = read_pid_file(&pf).expect("Should read PID file");
 
     // Verify process is actually running
@@ -96,7 +96,7 @@ async fn pid_file_contains_correct_pid() {
 
 #[tokio::test]
 async fn pid_file_deleted_on_normal_stop() {
-    let ctx = common::WarmRuntime::new();
+    let ctx = common::ParallelRuntime::new();
     let handle = ctx
         .runtime
         .create(common::alpine_opts(), None)
@@ -105,7 +105,7 @@ async fn pid_file_deleted_on_normal_stop() {
 
     let _ = handle.exec(BoxCommand::new("sleep").args(["30"])).await;
 
-    let pf = pid_file_path(ctx.home_dir, handle.id().as_str());
+    let pf = pid_file_path(&ctx.home_dir, handle.id().as_str());
     assert!(pf.exists(), "PID file should exist before stop");
 
     handle.stop().await.unwrap();
@@ -121,7 +121,7 @@ async fn pid_file_deleted_on_normal_stop() {
 
 #[tokio::test]
 async fn pid_matches_box_info() {
-    let ctx = common::WarmRuntime::new();
+    let ctx = common::ParallelRuntime::new();
     let handle = ctx
         .runtime
         .create(common::alpine_opts(), None)
@@ -130,7 +130,7 @@ async fn pid_matches_box_info() {
 
     let _ = handle.exec(BoxCommand::new("sleep").args(["30"])).await;
 
-    let pf = pid_file_path(ctx.home_dir, handle.id().as_str());
+    let pf = pid_file_path(&ctx.home_dir, handle.id().as_str());
     let pid_from_file = read_pid_file(&pf).expect("Should read PID file");
 
     let info = ctx
@@ -156,7 +156,7 @@ async fn pid_matches_box_info() {
 
 #[tokio::test]
 async fn pid_available_immediately_after_run() {
-    let ctx = common::WarmRuntime::new();
+    let ctx = common::ParallelRuntime::new();
 
     // Create and start box
     let handle = ctx
@@ -182,7 +182,7 @@ async fn pid_available_immediately_after_run() {
     assert_eq!(info.status, BoxStatus::Running, "Status should be Running");
 
     // PID file should also exist immediately
-    let pf = pid_file_path(ctx.home_dir, handle.id().as_str());
+    let pf = pid_file_path(&ctx.home_dir, handle.id().as_str());
     assert!(pf.exists(), "PID file should exist immediately");
 
     // Cleanup
@@ -195,7 +195,7 @@ async fn pid_available_immediately_after_run() {
 
 #[tokio::test]
 async fn pid_file_path_is_correct() {
-    let ctx = common::WarmRuntime::new();
+    let ctx = common::ParallelRuntime::new();
     let handle = ctx
         .runtime
         .create(common::alpine_opts(), None)
@@ -205,7 +205,7 @@ async fn pid_file_path_is_correct() {
     let _ = handle.exec(BoxCommand::new("true")).await;
 
     // Expected path: {home}/boxes/{box_id}/shim.pid
-    let expected = pid_file_path(ctx.home_dir, handle.id().as_str());
+    let expected = pid_file_path(&ctx.home_dir, handle.id().as_str());
     assert!(expected.exists(), "PID file should be at expected path");
 
     // Verify no PID file in wrong locations
@@ -228,7 +228,7 @@ async fn pid_file_path_is_correct() {
 
 #[tokio::test]
 async fn detached_box_creates_pid_file() {
-    let ctx = common::WarmRuntime::new();
+    let ctx = common::ParallelRuntime::new();
     let handle = ctx
         .runtime
         .create(
@@ -243,7 +243,7 @@ async fn detached_box_creates_pid_file() {
 
     let _ = handle.exec(BoxCommand::new("sleep").args(["300"])).await;
 
-    let pf = pid_file_path(ctx.home_dir, handle.id().as_str());
+    let pf = pid_file_path(&ctx.home_dir, handle.id().as_str());
     assert!(pf.exists(), "Detached box should have PID file");
 
     // Cleanup
@@ -255,8 +255,7 @@ async fn detached_box_creates_pid_file() {
 
 #[tokio::test]
 async fn detached_box_survives_runtime_drop() {
-    let temp_dir = TempDir::new().unwrap();
-    let home_dir = temp_dir.path().to_path_buf();
+    let (_temp_dir, home_dir) = common::warm_temp_dir();
     let box_id: String;
     let original_pid: u32;
 
@@ -317,6 +316,7 @@ async fn non_detached_box_exits_on_runtime_drop() {
     // Use /tmp for shorter paths — macOS default TempDir paths exceed SUN_LEN for Unix sockets.
     let temp_dir = TempDir::new_in("/tmp").unwrap();
     let home_dir = temp_dir.path().to_path_buf();
+    common::warm_dir(&home_dir);
     let original_pid: u32;
 
     // Create non-detached box
@@ -366,8 +366,7 @@ async fn non_detached_box_exits_on_runtime_drop() {
 
 #[tokio::test]
 async fn detached_box_recoverable_after_restart() {
-    let temp_dir = TempDir::new().unwrap();
-    let home_dir = temp_dir.path().to_path_buf();
+    let (_temp_dir, home_dir) = common::warm_temp_dir();
     let box_id: String;
 
     // Create and run detached box
@@ -433,7 +432,7 @@ async fn detached_box_recoverable_after_restart() {
 
 #[tokio::test]
 async fn multiple_detached_boxes_each_have_pid_file() {
-    let ctx = common::WarmRuntime::new();
+    let ctx = common::ParallelRuntime::new();
     let mut box_ids = Vec::new();
 
     // Create 3 detached boxes
@@ -457,7 +456,7 @@ async fn multiple_detached_boxes_each_have_pid_file() {
     // Verify each has unique PID file with different PID
     let mut pids = std::collections::HashSet::new();
     for box_id in &box_ids {
-        let pf = pid_file_path(ctx.home_dir, box_id);
+        let pf = pid_file_path(&ctx.home_dir, box_id);
         assert!(pf.exists(), "Box {} should have PID file", box_id);
         let pid = read_pid_file(&pf).unwrap();
         assert!(
@@ -479,8 +478,7 @@ async fn multiple_detached_boxes_each_have_pid_file() {
 
 #[tokio::test]
 async fn recovery_with_live_process() {
-    let temp_dir = TempDir::new().unwrap();
-    let home_dir = temp_dir.path().to_path_buf();
+    let (_temp_dir, home_dir) = common::warm_temp_dir();
     let box_id: String;
     let original_pid: u32;
 
@@ -534,8 +532,7 @@ async fn recovery_with_live_process() {
 
 #[tokio::test]
 async fn recovery_with_dead_process() {
-    let temp_dir = TempDir::new().unwrap();
-    let home_dir = temp_dir.path().to_path_buf();
+    let (_temp_dir, home_dir) = common::warm_temp_dir();
     let box_id: String;
     let original_pid: u32;
 
@@ -608,8 +605,7 @@ async fn recovery_with_dead_process() {
 
 #[tokio::test]
 async fn recovery_with_missing_pid_file() {
-    let temp_dir = TempDir::new().unwrap();
-    let home_dir = temp_dir.path().to_path_buf();
+    let (_temp_dir, home_dir) = common::warm_temp_dir();
     let box_id: String;
 
     // Create box and delete PID file
@@ -666,8 +662,7 @@ async fn recovery_with_missing_pid_file() {
 
 #[tokio::test]
 async fn recovery_with_corrupted_pid_file() {
-    let temp_dir = TempDir::new().unwrap();
-    let home_dir = temp_dir.path().to_path_buf();
+    let (_temp_dir, home_dir) = common::warm_temp_dir();
     let box_id: String;
 
     // Create box and corrupt PID file
@@ -728,8 +723,7 @@ async fn recovery_with_corrupted_pid_file() {
 
 #[tokio::test]
 async fn recovery_preserves_stopped_boxes() {
-    let temp_dir = TempDir::new().unwrap();
-    let home_dir = temp_dir.path().to_path_buf();
+    let (_temp_dir, home_dir) = common::warm_temp_dir();
     let box_id: String;
 
     // Create and stop box normally
@@ -845,7 +839,7 @@ fn read_pid_file_overflow_rejected() {
 
 #[tokio::test]
 async fn force_remove_deletes_pid_file() {
-    let ctx = common::WarmRuntime::new();
+    let ctx = common::ParallelRuntime::new();
     let handle = ctx
         .runtime
         .create(common::alpine_opts(), None)
@@ -855,7 +849,7 @@ async fn force_remove_deletes_pid_file() {
     let _ = handle.exec(BoxCommand::new("sleep").args(["300"])).await;
     let box_id = handle.id().to_string();
 
-    let pf = pid_file_path(ctx.home_dir, &box_id);
+    let pf = pid_file_path(&ctx.home_dir, &box_id);
     assert!(pf.exists());
 
     // Force remove while running
@@ -866,7 +860,7 @@ async fn force_remove_deletes_pid_file() {
 
 #[tokio::test]
 async fn box_directory_cleanup_includes_pid_file() {
-    let ctx = common::WarmRuntime::new();
+    let ctx = common::ParallelRuntime::new();
     let handle = ctx
         .runtime
         .create(common::alpine_opts(), None)
@@ -890,7 +884,7 @@ async fn box_directory_cleanup_includes_pid_file() {
 
 #[tokio::test]
 async fn is_same_process_validates_boxlite_shim() {
-    let ctx = common::WarmRuntime::new();
+    let ctx = common::ParallelRuntime::new();
     let handle = ctx
         .runtime
         .create(common::alpine_opts(), None)
@@ -899,7 +893,7 @@ async fn is_same_process_validates_boxlite_shim() {
 
     let _ = handle.exec(BoxCommand::new("sleep").args(["30"])).await;
 
-    let pf = pid_file_path(ctx.home_dir, handle.id().as_str());
+    let pf = pid_file_path(&ctx.home_dir, handle.id().as_str());
     let pid = read_pid_file(&pf).unwrap();
 
     // Should be true for actual shim

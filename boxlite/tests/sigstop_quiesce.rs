@@ -19,7 +19,7 @@ use boxlite::BoxCommand;
 #[tokio::test]
 #[ignore] // Requires VM runtime
 async fn test_sigstop_sigcont_preserves_vm() {
-    let ctx = common::WarmRuntime::new();
+    let ctx = common::ParallelRuntime::new();
 
     let litebox = ctx
         .runtime
@@ -74,7 +74,7 @@ async fn test_sigstop_sigcont_preserves_vm() {
     // Clean shutdown
     litebox.stop().await.expect("Failed to stop box");
 
-    ctx.cleanup().await;
+    ctx.shutdown().await;
 }
 
 /// Check if a process is in stopped (T) state.

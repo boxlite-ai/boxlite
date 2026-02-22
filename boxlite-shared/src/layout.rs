@@ -215,6 +215,7 @@ impl SharedGuestLayout {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     // ========================================================================
     // SharedContainerLayout tests
@@ -288,5 +289,59 @@ mod tests {
         let host_rel = host_rootfs_dir.strip_prefix(host.base()).unwrap();
         let guest_rel = guest_rootfs_dir.strip_prefix(guest.base()).unwrap();
         assert_eq!(host_rel, guest_rel);
+    }
+
+    // ========================================================================
+    // Property-based tests
+    // ========================================================================
+
+    proptest! {
+        #[test]
+        fn prop_all_container_paths_under_root(
+            base in "[a-z/]{1,30}",
+            cid in "[a-zA-Z0-9]{1,20}"
+        ) {
+            let layout = SharedGuestLayout::new(&base);
+            let container = layout.container(&cid);
+
+            // Every generated path must be a child of the container root
+            let root = container.root().to_path_buf();
+            prop_assert!(container.overlayfs_dir().starts_with(&root));
+            prop_assert!(container.upper_dir().starts_with(&root));
+            prop_assert!(container.work_dir().starts_with(&root));
+            prop_assert!(container.diff_dir().starts_with(&root));
+            prop_assert!(container.rootfs_dir().starts_with(&root));
+            prop_assert!(container.volumes_dir().starts_with(&root));
+            prop_assert!(container.layers_dir().starts_with(&root));
+        }
+
+        #[test]
+        fn prop_volume_dir_under_volumes(
+            base in "[a-z/]{1,30}",
+            cid in "[a-zA-Z0-9]{1,20}",
+            vol in "[a-zA-Z0-9_-]{1,20}"
+        ) {
+            let layout = SharedGuestLayout::new(&base);
+            let container = layout.container(&cid);
+            let volume_path = container.volume_dir(&vol);
+            prop_assert!(volume_path.starts_with(container.volumes_dir()));
+        }
+
+        #[test]
+        fn prop_host_guest_relative_paths_identical(
+            host_base in "/[a-z]{1,10}(/[a-z]{1,10}){0,3}",
+            guest_base in "/[a-z]{1,10}(/[a-z]{1,10}){0,3}",
+            cid in "[a-zA-Z0-9]{1,10}"
+        ) {
+            let host = SharedGuestLayout::new(&host_base);
+            let guest = SharedGuestLayout::new(&guest_base);
+
+            let host_rootfs = host.container(&cid).rootfs_dir();
+            let guest_rootfs = guest.container(&cid).rootfs_dir();
+
+            let host_rel = host_rootfs.strip_prefix(host.base()).unwrap();
+            let guest_rel = guest_rootfs.strip_prefix(guest.base()).unwrap();
+            prop_assert_eq!(host_rel, guest_rel);
+        }
     }
 }

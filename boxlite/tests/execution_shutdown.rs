@@ -19,7 +19,7 @@ use std::time::Duration;
 /// because the guest process exits when box stops.
 #[tokio::test]
 async fn test_wait_behavior_on_box_stop() {
-    let ctx = common::WarmRuntime::new();
+    let ctx = common::ParallelRuntime::new();
     let handle = ctx
         .runtime
         .create(common::alpine_opts(), None)
@@ -84,7 +84,7 @@ async fn test_wait_behavior_on_box_stop() {
 
     // Cleanup
     let _ = ctx.runtime.remove(handle.id().as_str(), true).await;
-    ctx.cleanup().await;
+    ctx.shutdown().await;
 }
 
 /// Test 2: What happens to wait() when runtime.shutdown() is called?
@@ -93,7 +93,7 @@ async fn test_wait_behavior_on_box_stop() {
 /// because shutdown stops all boxes concurrently.
 #[tokio::test]
 async fn test_wait_behavior_on_runtime_shutdown() {
-    let ctx = common::WarmRuntime::new();
+    let ctx = common::ParallelRuntime::new();
     let handle = ctx
         .runtime
         .create(common::alpine_opts(), None)
@@ -120,7 +120,10 @@ async fn test_wait_behavior_on_runtime_shutdown() {
 
     // Shutdown runtime
     let shutdown_start = std::time::Instant::now();
-    let shutdown_result = ctx.runtime.shutdown(Some(5)).await; // 5s timeout
+    let shutdown_result = ctx
+        .runtime
+        .shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT))
+        .await;
     let shutdown_elapsed = shutdown_start.elapsed();
 
     // Wait for wait() to return (with timeout)
@@ -165,7 +168,7 @@ async fn test_wait_behavior_on_runtime_shutdown() {
 async fn test_stdout_stream_on_box_stop() {
     use futures::StreamExt;
 
-    let ctx = common::WarmRuntime::new();
+    let ctx = common::ParallelRuntime::new();
     let handle = ctx
         .runtime
         .create(common::alpine_opts(), None)
@@ -215,7 +218,7 @@ async fn test_stdout_stream_on_box_stop() {
 
     // Cleanup
     let _ = ctx.runtime.remove(handle.id().as_str(), true).await;
-    ctx.cleanup().await;
+    ctx.shutdown().await;
 }
 
 /// Test 4: Can we call exec() on a stopped box?
@@ -223,7 +226,7 @@ async fn test_stdout_stream_on_box_stop() {
 /// Assumption: Should return an error (InvalidState or Stopped).
 #[tokio::test]
 async fn test_exec_on_stopped_box() {
-    let ctx = common::WarmRuntime::new();
+    let ctx = common::ParallelRuntime::new();
     let handle = ctx
         .runtime
         .create(common::alpine_opts(), None)
@@ -270,7 +273,7 @@ async fn test_exec_on_stopped_box() {
 
     // Cleanup
     let _ = ctx.runtime.remove(handle.id().as_str(), true).await;
-    ctx.cleanup().await;
+    ctx.shutdown().await;
 }
 
 /// Test 5: What happens to existing Execution when box is stopped?
@@ -279,7 +282,7 @@ async fn test_exec_on_stopped_box() {
 /// then box.stop() is called from elsewhere.
 #[tokio::test]
 async fn test_existing_execution_after_box_stop() {
-    let ctx = common::WarmRuntime::new();
+    let ctx = common::ParallelRuntime::new();
     let handle = ctx
         .runtime
         .create(common::alpine_opts(), None)
@@ -313,13 +316,13 @@ async fn test_existing_execution_after_box_stop() {
 
     // Cleanup
     let _ = ctx.runtime.remove(handle.id().as_str(), true).await;
-    ctx.cleanup().await;
+    ctx.shutdown().await;
 }
 
 /// Test 6: Measure actual timing - how long does wait() block after stop?
 #[tokio::test]
 async fn test_wait_timing_after_stop() {
-    let ctx = common::WarmRuntime::new();
+    let ctx = common::ParallelRuntime::new();
     let handle = ctx
         .runtime
         .create(common::alpine_opts(), None)
@@ -369,7 +372,7 @@ async fn test_wait_timing_after_stop() {
 
     // Cleanup
     let _ = ctx.runtime.remove(handle.id().as_str(), true).await;
-    ctx.cleanup().await;
+    ctx.shutdown().await;
 }
 
 /// Test 7: Multiple concurrent executions when box stops
@@ -377,7 +380,7 @@ async fn test_wait_timing_after_stop() {
 /// Tests that all pending wait() calls return when box stops.
 #[tokio::test]
 async fn test_multiple_executions_on_box_stop() {
-    let ctx = common::WarmRuntime::new();
+    let ctx = common::ParallelRuntime::new();
     let handle = ctx
         .runtime
         .create(common::alpine_opts(), None)
@@ -456,7 +459,7 @@ async fn test_multiple_executions_on_box_stop() {
 
     // Cleanup
     let _ = ctx.runtime.remove(handle.id().as_str(), true).await;
-    ctx.cleanup().await;
+    ctx.shutdown().await;
 }
 
 // ============================================================================
@@ -466,7 +469,7 @@ async fn test_multiple_executions_on_box_stop() {
 /// Test that running a command returns Stopped error after box.stop().
 #[tokio::test]
 async fn test_run_command_returns_stopped_error() {
-    let ctx = common::WarmRuntime::new();
+    let ctx = common::ParallelRuntime::new();
     let handle = ctx
         .runtime
         .create(common::alpine_opts(), None)
@@ -505,13 +508,13 @@ async fn test_run_command_returns_stopped_error() {
 
     // Cleanup
     let _ = ctx.runtime.remove(handle.id().as_str(), true).await;
-    ctx.cleanup().await;
+    ctx.shutdown().await;
 }
 
 /// Test that start() returns Stopped error after box.stop().
 #[tokio::test]
 async fn test_start_returns_stopped_error() {
-    let ctx = common::WarmRuntime::new();
+    let ctx = common::ParallelRuntime::new();
     let handle = ctx
         .runtime
         .create(common::alpine_opts(), None)
@@ -542,13 +545,13 @@ async fn test_start_returns_stopped_error() {
 
     // Cleanup
     let _ = ctx.runtime.remove(handle.id().as_str(), true).await;
-    ctx.cleanup().await;
+    ctx.shutdown().await;
 }
 
 /// Test that metrics() returns Stopped error after box.stop().
 #[tokio::test]
 async fn test_metrics_returns_stopped_error() {
-    let ctx = common::WarmRuntime::new();
+    let ctx = common::ParallelRuntime::new();
     let handle = ctx
         .runtime
         .create(common::alpine_opts(), None)
@@ -579,16 +582,19 @@ async fn test_metrics_returns_stopped_error() {
 
     // Cleanup
     let _ = ctx.runtime.remove(handle.id().as_str(), true).await;
-    ctx.cleanup().await;
+    ctx.shutdown().await;
 }
 
 /// Test that create() returns Stopped error after runtime.shutdown().
 #[tokio::test]
 async fn test_create_after_shutdown_returns_stopped() {
-    let ctx = common::WarmRuntime::new();
+    let ctx = common::ParallelRuntime::new();
 
     // Shutdown runtime
-    ctx.runtime.shutdown(Some(5)).await.unwrap();
+    ctx.runtime
+        .shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT))
+        .await
+        .unwrap();
 
     // Attempt to create box after shutdown
     let result = ctx.runtime.create(common::alpine_opts(), None).await;
@@ -612,7 +618,7 @@ async fn test_create_after_shutdown_returns_stopped() {
 /// Test that wait() returns promptly when box is stopped.
 #[tokio::test]
 async fn test_wait_returns_promptly_on_stop() {
-    let ctx = common::WarmRuntime::new();
+    let ctx = common::ParallelRuntime::new();
     let handle = ctx
         .runtime
         .create(common::alpine_opts(), None)
@@ -669,13 +675,13 @@ async fn test_wait_returns_promptly_on_stop() {
 
     // Cleanup
     let _ = ctx.runtime.remove(handle.id().as_str(), true).await;
-    ctx.cleanup().await;
+    ctx.shutdown().await;
 }
 
 /// Test that all concurrent wait() calls return when box is stopped.
 #[tokio::test]
 async fn test_all_waits_return_on_stop() {
-    let ctx = common::WarmRuntime::new();
+    let ctx = common::ParallelRuntime::new();
     let handle = ctx
         .runtime
         .create(common::alpine_opts(), None)
@@ -750,13 +756,13 @@ async fn test_all_waits_return_on_stop() {
 
     // Cleanup
     let _ = ctx.runtime.remove(handle.id().as_str(), true).await;
-    ctx.cleanup().await;
+    ctx.shutdown().await;
 }
 
 /// Test that runtime shutdown stops all boxes and their commands.
 #[tokio::test]
 async fn test_runtime_shutdown_stops_all_boxes() {
-    let ctx = common::WarmRuntime::new();
+    let ctx = common::ParallelRuntime::new();
 
     // Create multiple boxes
     let handle1 = ctx
@@ -799,7 +805,10 @@ async fn test_runtime_shutdown_stops_all_boxes() {
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     // Shutdown runtime (should cancel all boxes)
-    let shutdown_result = ctx.runtime.shutdown(Some(5)).await;
+    let shutdown_result = ctx
+        .runtime
+        .shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT))
+        .await;
     let shutdown_elapsed = start_time.elapsed();
 
     // Wait for all with timeout
@@ -845,7 +854,7 @@ async fn test_runtime_shutdown_stops_all_boxes() {
 /// Exec completes normally, then runtime shutdown — should be clean.
 #[tokio::test]
 async fn test_exec_completes_then_shutdown_is_clean() {
-    let ctx = common::WarmRuntime::new();
+    let ctx = common::ParallelRuntime::new();
     let handle = ctx
         .runtime
         .create(common::alpine_opts(), None)
@@ -861,14 +870,17 @@ async fn test_exec_completes_then_shutdown_is_clean() {
     assert_eq!(result.exit_code, 0);
 
     // Shutdown after exec completes — should not produce transport errors
-    let shutdown_result = ctx.runtime.shutdown(Some(5)).await;
+    let shutdown_result = ctx
+        .runtime
+        .shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT))
+        .await;
     assert!(shutdown_result.is_ok());
 }
 
 /// Sequential exec on same box should both succeed.
 #[tokio::test]
 async fn test_sequential_exec_same_box() {
-    let ctx = common::WarmRuntime::new();
+    let ctx = common::ParallelRuntime::new();
     let handle = ctx
         .runtime
         .create(common::alpine_opts(), None)
@@ -894,13 +906,13 @@ async fn test_sequential_exec_same_box() {
 
     // Cleanup
     let _ = ctx.runtime.remove(handle.id().as_str(), true).await;
-    ctx.cleanup().await;
+    ctx.shutdown().await;
 }
 
 /// Exit codes should be correctly preserved.
 #[tokio::test]
 async fn test_exec_exit_code_preserved() {
-    let ctx = common::WarmRuntime::new();
+    let ctx = common::ParallelRuntime::new();
     let handle = ctx
         .runtime
         .create(common::alpine_opts(), None)
@@ -925,13 +937,13 @@ async fn test_exec_exit_code_preserved() {
 
     // Cleanup
     let _ = ctx.runtime.remove(handle.id().as_str(), true).await;
-    ctx.cleanup().await;
+    ctx.shutdown().await;
 }
 
 /// Multiple sequential execs followed by shutdown — the full CLI workflow.
 #[tokio::test]
 async fn test_exec_then_shutdown_sequential() {
-    let ctx = common::WarmRuntime::new();
+    let ctx = common::ParallelRuntime::new();
     let handle = ctx
         .runtime
         .create(common::alpine_opts(), None)
@@ -950,6 +962,9 @@ async fn test_exec_then_shutdown_sequential() {
     }
 
     // Shutdown after all commands complete
-    let shutdown_result = ctx.runtime.shutdown(Some(5)).await;
+    let shutdown_result = ctx
+        .runtime
+        .shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT))
+        .await;
     assert!(shutdown_result.is_ok());
 }

@@ -133,6 +133,7 @@ impl BoxIDMint {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
     use std::collections::HashSet;
 
     #[test]
@@ -215,5 +216,63 @@ mod tests {
         let id = BoxID::parse("aB3cD4eF5gH6").unwrap();
         assert!(id.starts_with("aB3"));
         assert!(!id.starts_with("xyz"));
+    }
+
+    // ========================================================================
+    // Property-based tests
+    // ========================================================================
+
+    proptest! {
+        #[test]
+        fn prop_mint_always_valid(_seed in any::<u64>()) {
+            let id = BoxIDMint::mint();
+            prop_assert!(BoxID::is_valid(id.as_str()));
+            prop_assert_eq!(id.as_str().len(), BoxID::FULL_LENGTH);
+        }
+
+        #[test]
+        fn prop_parse_roundtrip_12(s in "[0-9A-Za-z]{12}") {
+            let id = BoxID::parse(&s).unwrap();
+            prop_assert_eq!(id.as_str(), s.as_str());
+        }
+
+        #[test]
+        fn prop_parse_roundtrip_26(s in "[0-9A-Za-z]{26}") {
+            let id = BoxID::parse(&s).unwrap();
+            prop_assert_eq!(id.as_str(), s.as_str());
+        }
+
+        #[test]
+        fn prop_parse_rejects_wrong_length(s in "[0-9A-Za-z]{1,50}") {
+            prop_assume!(s.len() != BoxID::FULL_LENGTH && s.len() != BoxID::LEGACY_LENGTH);
+            prop_assert!(BoxID::parse(&s).is_none());
+        }
+
+        #[test]
+        fn prop_parse_rejects_non_alphanumeric(s in ".{12}") {
+            prop_assume!(s.bytes().any(|b| !b.is_ascii_alphanumeric()));
+            prop_assert!(BoxID::parse(&s).is_none());
+        }
+
+        #[test]
+        fn prop_short_is_prefix_of_full(s in "[0-9A-Za-z]{12}") {
+            let id = BoxID::parse(&s).unwrap();
+            prop_assert!(id.as_str().starts_with(id.short()));
+            prop_assert_eq!(id.short().len(), BoxID::SHORT_LENGTH);
+        }
+
+        #[test]
+        fn prop_display_matches_as_str(s in "[0-9A-Za-z]{12}") {
+            let id = BoxID::parse(&s).unwrap();
+            prop_assert_eq!(format!("{id}"), id.as_str());
+        }
+
+        #[test]
+        fn prop_serde_roundtrip(s in "[0-9A-Za-z]{12}") {
+            let id = BoxID::parse(&s).unwrap();
+            let json = serde_json::to_string(&id).unwrap();
+            let back: BoxID = serde_json::from_str(&json).unwrap();
+            prop_assert_eq!(id, back);
+        }
     }
 }

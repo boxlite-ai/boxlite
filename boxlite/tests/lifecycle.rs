@@ -23,7 +23,7 @@ async fn runtime_initialization_creates_empty_list() {
 // ============================================================================
 
 #[tokio::test]
-async fn create_generates_unique_ulid_ids() {
+async fn create_generates_unique_ids() {
     let ctx = common::IsolatedRuntime::new();
     let box1 = ctx
         .runtime
@@ -39,9 +39,9 @@ async fn create_generates_unique_ulid_ids() {
     // IDs should be unique
     assert_ne!(box1.id(), box2.id());
 
-    // IDs should be 26 characters (ULID format)
-    assert_eq!(box1.id().as_str().len(), 26);
-    assert_eq!(box2.id().as_str().len(), 26);
+    // IDs should be 12-char Base62 format
+    assert_eq!(box1.id().as_str().len(), BoxID::FULL_LENGTH);
+    assert_eq!(box2.id().as_str().len(), BoxID::FULL_LENGTH);
 
     // Cleanup
     box1.stop().await.unwrap();
@@ -259,7 +259,7 @@ async fn remove_stopped_box_succeeds() {
 
 #[tokio::test]
 async fn remove_active_without_force_fails() {
-    let ctx = common::WarmRuntime::new();
+    let ctx = common::ParallelRuntime::new();
     let handle = ctx
         .runtime
         .create(common::alpine_opts_auto(), None)
@@ -294,12 +294,12 @@ async fn remove_active_without_force_fails() {
 
     // Cleanup with force
     ctx.runtime.remove(box_id.as_str(), true).await.unwrap();
-    ctx.cleanup().await;
+    ctx.shutdown().await;
 }
 
 #[tokio::test]
 async fn remove_active_with_force_stops_and_removes() {
-    let ctx = common::WarmRuntime::new();
+    let ctx = common::ParallelRuntime::new();
     let handle = ctx
         .runtime
         .create(common::alpine_opts_auto(), None)
@@ -324,7 +324,7 @@ async fn remove_active_with_force_stops_and_removes() {
 
     // Box should no longer exist
     assert!(!ctx.runtime.exists(box_id.as_str()).await.unwrap());
-    ctx.cleanup().await;
+    ctx.shutdown().await;
 }
 
 #[tokio::test]
@@ -353,7 +353,7 @@ async fn remove_deletes_box_from_database() {
 
 #[tokio::test]
 async fn stop_marks_box_as_stopped() {
-    let ctx = common::WarmRuntime::new();
+    let ctx = common::ParallelRuntime::new();
     let handle = ctx
         .runtime
         .create(common::alpine_opts(), None)
@@ -378,7 +378,7 @@ async fn stop_marks_box_as_stopped() {
 
     // Cleanup
     ctx.runtime.remove(box_id.as_str(), false).await.unwrap();
-    ctx.cleanup().await;
+    ctx.shutdown().await;
 }
 
 // ============================================================================
@@ -449,9 +449,9 @@ async fn multiple_runtimes_are_isolated() {
 
 #[tokio::test]
 async fn boxes_persist_across_runtime_restart() {
-    // Persistence tests need their own home_dir to test restart behavior
-    let temp_dir = TempDir::new().expect("Failed to create temp dir");
-    let home_dir = temp_dir.path().to_path_buf();
+    // Persistence tests need their own home_dir to test restart behavior.
+    // Use warm_temp_dir() so the image cache is available for start().
+    let (_temp_dir, home_dir) = common::warm_temp_dir();
 
     let box_id: BoxID;
 
@@ -498,9 +498,9 @@ async fn boxes_persist_across_runtime_restart() {
 #[tokio::test]
 async fn multiple_boxes_persist_and_recover_without_lock_errors() {
     // Test that multiple boxes can be created, persisted, and recovered
-    // without lock allocation errors during recovery
-    let temp_dir = TempDir::new().expect("Failed to create temp dir");
-    let home_dir = temp_dir.path().to_path_buf();
+    // without lock allocation errors during recovery.
+    // Use warm_temp_dir() so the image cache is available for start().
+    let (_temp_dir, home_dir) = common::warm_temp_dir();
 
     let box_ids: Vec<BoxID>;
 
@@ -613,7 +613,7 @@ async fn auto_remove_true_removes_box_on_stop() {
 
 #[tokio::test]
 async fn auto_remove_false_preserves_box_on_stop() {
-    let ctx = common::WarmRuntime::new();
+    let ctx = common::ParallelRuntime::new();
     let handle = ctx
         .runtime
         .create(common::alpine_opts(), None)
@@ -644,7 +644,7 @@ async fn auto_remove_false_preserves_box_on_stop() {
 
     // Cleanup manually
     ctx.runtime.remove(box_id.as_str(), false).await.unwrap();
-    ctx.cleanup().await;
+    ctx.shutdown().await;
 }
 
 // ============================================================================
@@ -764,9 +764,9 @@ async fn recovery_removes_auto_remove_true_boxes() {
 #[tokio::test]
 async fn recovery_removes_orphaned_stopped_boxes_without_directory() {
     // Test that stopped boxes without directories are KEPT during recovery
-    // (They might have been created but never started, which is valid)
-    let temp_dir = TempDir::new().expect("Failed to create temp dir");
-    let home_dir = temp_dir.path().to_path_buf();
+    // (They might have been created but never started, which is valid).
+    // Use warm_temp_dir() so the image cache is available for start().
+    let (_temp_dir, home_dir) = common::warm_temp_dir();
 
     let box_id: BoxID;
     let box_home: std::path::PathBuf;

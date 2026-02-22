@@ -5,7 +5,7 @@
 # tests that require actual VMs.
 #
 # Test coverage:
-# - Rust: cargo test (unit tests only)
+# - Rust: cargo-nextest (unit tests only, with llvm-cov coverage)
 # - Python: pytest with -m "not integration"
 # - Node.js: vitest (all tests are unit tests)
 name: Test
@@ -101,14 +101,27 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install protobuf
 
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: boxlite-test
 
-      - name: Run Rust unit tests
+      - name: Run Rust unit tests with coverage
         # Only test boxlite-shared - boxlite requires libkrun/libgvproxy not available in CI
-        run: cargo test -p boxlite-shared --lib
+        run: cargo llvm-cov nextest -p boxlite-shared --lib --profile ci --lcov --output-path lcov.info
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          file: lcov.info
+          flags: rust-shared
+          fail_ci_if_error: false
 
   # cli unit tests (integration tests in tests/ are ignored - require VM)
   cli:
@@ -138,6 +151,9 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install protobuf
 
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
@@ -147,7 +163,7 @@ jobs:
         # Only run tests in src/ (name contains "::tests::"); skip integration tests in tests/ (require VM)
         env:
           BOXLITE_DEPS_STUB: "1"
-        run: cargo test -p boxlite-cli -- "::tests::"
+        run: cargo nextest run -p boxlite-cli --profile ci -E 'test(::tests::)'
 
   # Python SDK unit tests
   python:
