@@ -54,7 +54,7 @@ void test_streaming_stdout() {
   // Reset counters
   stdout_count = 0;
   stderr_count = 0;
-  memset(last_output, 0, sizeof(last_output));
+  last_output[0] = '\0';
 
   // Execute command that produces stdout
   const char *args = "[\"hello world\"]";
@@ -212,7 +212,6 @@ void test_streaming_with_context() {
 
   // User context to accumulate output
   UserContext ctx = {0};
-  memset(ctx.buffer, 0, sizeof(ctx.buffer));
 
   const char *args = "[\"line1\\nline2\\nline3\"]";
   int exit_code = 0;

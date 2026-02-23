@@ -106,6 +106,7 @@ sdks/python/libkrun_dist/
 sdks/c/target/
 sdks/c/Cargo.lock
 sdks/c/dist/
+sdks/c/tests/build/
 
 # Node SDK
 sdks/node/native/build/
