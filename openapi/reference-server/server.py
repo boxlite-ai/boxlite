@@ -7,6 +7,7 @@
 #     "sse-starlette>=2.0",
 #     "PyJWT>=2.8",
 #     "python-multipart>=0.0.9",
+#     "python-dotenv>=1.0",
 # ]
 # ///
 """
@@ -20,18 +21,18 @@ NOT production-ready — no persistence, no real auth, single-tenant.
 
 Usage:
     make dev:python  # build boxlite SDK
-    uv run --active server.py --port 8080
+    uv run --active server.py
 """
 
 from __future__ import annotations
 
-import argparse
 import asyncio
 import base64
 import io
 import json
 import logging
 import os
+import sys
 import tarfile
 import tempfile
 import time
@@ -59,18 +60,24 @@ from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse, ServerSentEvent
 
 import boxlite
+from config import (
+    DEFAULT_ENV_FILE_PATH,
+    ServerConfig,
+    RuntimeConfig,
+    build_main_parser,
+    load_env_file,
+    load_runtime_config_from_env,
+    load_server_config_from_env,
+    logging_level_from_name,
+    normalize_log_level,
+    parse_bootstrap_env_file,
+)
 
 # ============================================================================
 # Configuration
 # ============================================================================
 
-JWT_SECRET = "boxlite-reference-server-secret"  # NOT for production
 JWT_ALGORITHM = "HS256"
-JWT_EXPIRY_SECONDS = 3600
-
-# Hardcoded test credentials
-TEST_CLIENT_ID = "test-client"
-TEST_CLIENT_SECRET = "test-secret"
 
 logger = logging.getLogger("boxlite-server")
 
@@ -165,10 +172,20 @@ class ActiveExecution:
 class AppState:
     def __init__(self):
         self.runtime: Optional[boxlite.Boxlite] = None
+        self.server_config: Optional[ServerConfig] = None
+        self.runtime_config: Optional[RuntimeConfig] = None
         self.active_executions: dict[str, ActiveExecution] = {}
+        self.active_boxes_by_id: dict[str, Any] = {}
+        self.active_boxes_lock = asyncio.Lock()
 
 
 state = AppState()
+
+
+def get_server_config() -> ServerConfig:
+    if state.server_config is None:
+        raise RuntimeError("server configuration not initialized")
+    return state.server_config
 
 # ============================================================================
 # Error Mapping
@@ -220,19 +237,20 @@ bearer_scheme = HTTPBearer(auto_error=False)
 
 
 def create_token(client_id: str, scopes: str = "") -> dict:
+    config = get_server_config()
     now = time.time()
     payload = {
         "sub": client_id,
         "iat": now,
-        "exp": now + JWT_EXPIRY_SECONDS,
+        "exp": now + config.jwt_expiry_seconds,
         "scope": scopes
         or "boxes:read boxes:write boxes:exec images:read images:write runtime:admin",
     }
-    token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    token = jwt.encode(payload, config.jwt_secret, algorithm=JWT_ALGORITHM)
     return {
         "access_token": token,
         "token_type": "bearer",
-        "expires_in": JWT_EXPIRY_SECONDS,
+        "expires_in": config.jwt_expiry_seconds,
         "scope": payload["scope"],
     }
 
@@ -252,8 +270,9 @@ async def require_auth(
             },
         )
     try:
+        config = get_server_config()
         payload = jwt.decode(
-            credentials.credentials, JWT_SECRET, algorithms=[JWT_ALGORITHM]
+            credentials.credentials, config.jwt_secret, algorithms=[JWT_ALGORITHM]
         )
         return payload
     except jwt.ExpiredSignatureError:
@@ -360,7 +379,33 @@ def snapshot_info_to_dict(info) -> dict:
     }
 
 
+async def cache_box_handle(box_handle: Any) -> str:
+    box_id = box_handle.info().id
+    async with state.active_boxes_lock:
+        state.active_boxes_by_id[box_id] = box_handle
+    return box_id
+
+
+async def get_cached_box_handle(box_id: str) -> Optional[Any]:
+    async with state.active_boxes_lock:
+        return state.active_boxes_by_id.get(box_id)
+
+
+async def evict_cached_box_by_id(box_id: str) -> None:
+    async with state.active_boxes_lock:
+        state.active_boxes_by_id.pop(box_id, None)
+
+
+async def clear_cached_box_handles() -> None:
+    async with state.active_boxes_lock:
+        state.active_boxes_by_id.clear()
+
+
 async def get_box_or_404(box_id: str):
+    cached = await get_cached_box_handle(box_id)
+    if cached is not None:
+        return cached
+
     box_handle = await state.runtime.get(box_id)
     if box_handle is None:
         raise HTTPException(
@@ -373,6 +418,7 @@ async def get_box_or_404(box_id: str):
                 }
             },
         )
+    await cache_box_handle(box_handle)
     return box_handle
 
 
@@ -399,15 +445,28 @@ def get_active_execution_or_404(exec_id: str) -> ActiveExecution:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Prefer a public mirror first to avoid Docker Hub unauthenticated pull limits.
-    options = boxlite.Options(image_registries=["mirror.gcr.io", "docker.io"])
+    runtime_config = state.runtime_config
+    if runtime_config is None:
+        raise RuntimeError("runtime configuration not initialized")
+
+    options = boxlite.Options(
+        home_dir=runtime_config.home_dir,
+        image_registries=runtime_config.image_registries,
+    )
     state.runtime = boxlite.Boxlite(options)
-    logger.info("BoxLite runtime initialized")
+    logger.info(
+        "BoxLite runtime initialized (home_dir=%s, image_registries=%s)",
+        runtime_config.home_dir,
+        ",".join(runtime_config.image_registries),
+    )
     yield
+    await clear_cached_box_handles()
     try:
         await state.runtime.shutdown(timeout=10)
     except Exception as e:
         logger.warning("Shutdown error: %s", e)
+    finally:
+        await clear_cached_box_handles()
 
 
 app = FastAPI(
@@ -462,6 +521,7 @@ async def get_config():
 
 @app.post("/v1/oauth/tokens")
 async def get_token(request: Request):
+    config = get_server_config()
     body = await request.form()
     grant_type = body.get("grant_type")
     client_id = body.get("client_id")
@@ -471,7 +531,7 @@ async def get_token(request: Request):
     if grant_type != "client_credentials":
         return error_response(400, "unsupported grant_type", "InvalidArgumentError")
 
-    if client_id != TEST_CLIENT_ID or client_secret != TEST_CLIENT_SECRET:
+    if client_id != config.client_id or client_secret != config.client_secret:
         return error_response(401, "invalid client credentials", "UnauthorizedError")
 
     return create_token(client_id, scope)
@@ -490,6 +550,7 @@ async def create_box(
 ):
     options = build_box_options(req)
     box_handle = await state.runtime.create(options, req.name)
+    await cache_box_handle(box_handle)
     info = box_handle.info()
     data = box_info_to_dict(info)
     return JSONResponse(
@@ -545,7 +606,10 @@ async def remove_box(
     force: bool = Query(False),
     _auth: dict = Depends(require_auth),
 ):
+    info = await state.runtime.get_info(box_id)
     await state.runtime.remove(box_id, force=force)
+    if info is not None:
+        await evict_cached_box_by_id(info.id)
     return Response(status_code=204)
 
 
@@ -557,6 +621,7 @@ async def start_box(
 ):
     box_handle = await get_box_or_404(box_id)
     await box_handle.start()
+    await cache_box_handle(box_handle)
     info = box_handle.info()
     return box_info_to_dict(info)
 
@@ -571,6 +636,7 @@ async def stop_box(
     box_handle = await get_box_or_404(box_id)
     await box_handle.stop()
     info = box_handle.info()
+    await evict_cached_box_by_id(info.id)
     return box_info_to_dict(info)
 
 
@@ -651,6 +717,7 @@ async def clone_box(
     box_handle = await get_box_or_404(box_id)
     opts = boxlite.CloneOptions()
     cloned = await box_handle.clone(req.name, opts)
+    await cache_box_handle(cloned)
     info = cloned.info()
     return JSONResponse(
         status_code=201,
@@ -695,6 +762,7 @@ async def import_box(
 
         imported = await state.runtime.import_box(archive_path, name=name)
 
+    await cache_box_handle(imported)
     info = imported.info()
     return JSONResponse(
         status_code=201,
@@ -1065,20 +1133,46 @@ async def get_box_metrics(
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="BoxLite REST API Reference Server"
-    )
-    parser.add_argument("--host", default="0.0.0.0", help="Bind address")
-    parser.add_argument("--port", type=int, default=8080, help="Bind port")
-    parser.add_argument("--log-level", default="info", help="Log level")
+    env_file_arg = parse_bootstrap_env_file(sys.argv[1:])
+    try:
+        loaded_env_path = load_env_file(env_file_arg)
+        env_server_config = load_server_config_from_env()
+        runtime_config = load_runtime_config_from_env()
+    except ValueError as err:
+        raise SystemExit(f"configuration error: {err}")
+
+    parser = build_main_parser(env_server_config)
     args = parser.parse_args()
 
+    server_config = ServerConfig(
+        host=args.host,
+        port=args.port,
+        log_level=normalize_log_level(args.log_level),
+        jwt_secret=env_server_config.jwt_secret,
+        jwt_expiry_seconds=env_server_config.jwt_expiry_seconds,
+        client_id=env_server_config.client_id,
+        client_secret=env_server_config.client_secret,
+    )
+
+    state.server_config = server_config
+    state.runtime_config = runtime_config
+
     logging.basicConfig(
-        level=getattr(logging, args.log_level.upper()),
+        level=logging_level_from_name(server_config.log_level),
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
 
-    uvicorn.run(app, host=args.host, port=args.port, log_level=args.log_level)
+    if loaded_env_path is not None:
+        logger.info("Loaded environment from %s", loaded_env_path)
+    elif env_file_arg is None:
+        logger.info("No .env file found at %s", DEFAULT_ENV_FILE_PATH)
+
+    uvicorn.run(
+        app,
+        host=server_config.host,
+        port=server_config.port,
+        log_level=server_config.log_level,
+    )
 
 
 if __name__ == "__main__":

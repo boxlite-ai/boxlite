@@ -21,12 +21,26 @@ Start the reference server before running any example:
 
 ```bash
 make dev:python
+
+# Optional: copy server defaults for local development
+cp openapi/reference-server/.env.example openapi/reference-server/.env
+
 cd openapi/reference-server
-uv run --active server.py --port 8080
+uv run --active server.py
 ```
 
 Then run examples from this directory:
 
 ```bash
 python connect_and_list.py
+```
+
+For env-based client configuration (`use_env_config.py`), set:
+
+```bash
+BOXLITE_REST_URL=http://localhost:8080
+BOXLITE_REST_CLIENT_ID=test-client
+BOXLITE_REST_CLIENT_SECRET=test-secret
+# Optional (default in SDK is v1):
+BOXLITE_REST_PREFIX=v1
 ```

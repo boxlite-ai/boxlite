@@ -80,6 +80,7 @@ yarn-error.log*
 *.mobileprovision
 .env
 .env.*
+!/openapi/reference-server/.env.example
 
 # ============================================================================
 # Project Specific

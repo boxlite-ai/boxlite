@@ -10,7 +10,7 @@ Environment variables:
     BOXLITE_REST_URL          Server URL (required)
     BOXLITE_REST_CLIENT_ID    OAuth2 client ID
     BOXLITE_REST_CLIENT_SECRET OAuth2 client secret
-    BOXLITE_REST_PREFIX       API path prefix (default: /v1/demo)
+    BOXLITE_REST_PREFIX       API version prefix (default: v1)
 
 Usage:
     BOXLITE_REST_URL=http://localhost:8080 \

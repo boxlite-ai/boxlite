@@ -3,7 +3,7 @@
 Reference implementation of the [BoxLite Cloud Sandbox REST API](../rest-sandbox-open-api.yaml).
 Use this to validate client implementations against the spec.
 
-**Not production-ready** — no persistence, hardcoded auth, single-tenant.
+**Not production-ready** — no persistence, single-tenant.
 
 ## Setup
 
@@ -11,9 +11,12 @@ Use this to validate client implementations against the spec.
 # 1. Build the BoxLite Python SDK (installs into project .venv)
 make dev:python
 
-# 2. Start the server (uv installs server deps, --active uses the project .venv)
+# 2. (Optional) Copy server defaults for local development
+cp openapi/reference-server/.env.example openapi/reference-server/.env
+
+# 3. Start the server (uv installs server deps, --active uses the project .venv)
 cd openapi/reference-server
-uv run --active server.py --port 8080
+uv run --active server.py
 ```
 
 ## Test Credentials
@@ -98,5 +101,37 @@ curl -s -X DELETE http://localhost:8080/v1/demo/boxes/$BOX_ID \
 ## CLI Options
 
 ```
-uv run --active server.py [--host 0.0.0.0] [--port 8080] [--log-level info]
+uv run --active server.py [--env-file /path/to/.env] [--host 0.0.0.0] [--port 8080] [--log-level info]
 ```
+
+## Environment Configuration
+
+The server supports `openapi/reference-server/.env` by default.
+Use `--env-file` to load a different file.
+
+### Server Settings (`BOXLITE_SERVER_*`)
+
+| Variable | Default |
+|----------|---------|
+| `BOXLITE_SERVER_HOST` | `0.0.0.0` |
+| `BOXLITE_SERVER_PORT` | `8080` |
+| `BOXLITE_SERVER_LOG_LEVEL` | `info` |
+| `BOXLITE_SERVER_JWT_SECRET` | `boxlite-reference-server-secret` |
+| `BOXLITE_SERVER_JWT_EXPIRY_SECONDS` | `3600` |
+| `BOXLITE_SERVER_CLIENT_ID` | `test-client` |
+| `BOXLITE_SERVER_CLIENT_SECRET` | `test-secret` |
+
+### Runtime Settings (`BOXLITE_RUNTIME_*`)
+
+| Variable | Default |
+|----------|---------|
+| `BOXLITE_RUNTIME_HOME_DIR` | `~/.boxlite` |
+| `BOXLITE_RUNTIME_IMAGE_REGISTRIES` | `mirror.gcr.io,docker.io` |
+
+### Precedence
+
+For `host`, `port`, and `log-level`:
+
+1. CLI args (`--host`, `--port`, `--log-level`)
+2. Environment (`BOXLITE_SERVER_*`)
+3. Built-in defaults
