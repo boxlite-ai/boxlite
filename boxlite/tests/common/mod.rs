@@ -105,10 +105,16 @@ fn warm_home() -> &'static PathBuf {
         std::fs::create_dir_all(&cache_images).expect("create target/boxlite-test/images");
         let cache_rootfs = cache_dir().join("rootfs");
         std::fs::create_dir_all(&cache_rootfs).expect("create target/boxlite-test/rootfs");
+        let cache_tmp = cache_dir().join("tmp");
+        std::fs::create_dir_all(&cache_tmp).expect("create target/boxlite-test/tmp");
 
-        // Symlink /tmp/boxlite-test/{images,rootfs} → target/boxlite-test/{images,rootfs}.
+        // Symlink /tmp/boxlite-test/{images,rootfs,tmp} → target/boxlite-test/{images,rootfs,tmp}.
         // Multiple processes may race here; symlink_or_exists handles AlreadyExists.
-        for (target, name) in [(&cache_images, "images"), (&cache_rootfs, "rootfs")] {
+        for (target, name) in [
+            (&cache_images, "images"),
+            (&cache_rootfs, "rootfs"),
+            (&cache_tmp, "tmp"),
+        ] {
             symlink_or_exists(target, &home.join(name), name);
         }
 
@@ -288,9 +294,10 @@ impl IsolatedRuntime {
 pub fn warm_dir(home_dir: &std::path::Path) {
     let warm = warm_home();
 
-    // Symlink images + rootfs → target/ cache (shared across tests).
+    // Symlink images, rootfs, tmp → target/ cache (shared across tests).
     // Images: read-only layer data. Rootfs: guest rootfs disk (built on first start).
-    for name in ["images", "rootfs"] {
+    // Tmp: must be on the same filesystem as rootfs for atomic rename (Linux tmpfs workaround).
+    for name in ["images", "rootfs", "tmp"] {
         let link = home_dir.join(name);
         if !link.exists() {
             let warm_target = warm.join(name);
