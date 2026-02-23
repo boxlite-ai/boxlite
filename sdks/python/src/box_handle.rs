@@ -40,7 +40,7 @@ impl PyBox {
         }
     }
 
-    #[pyo3(signature = (command, args=None, env=None, tty=false))]
+    #[pyo3(signature = (command, args=None, env=None, tty=false, user=None))]
     fn exec<'a>(
         &self,
         py: Python<'a>,
@@ -48,6 +48,7 @@ impl PyBox {
         args: Option<Vec<String>>,
         env: Option<Vec<(String, String)>>,
         tty: bool,
+        user: Option<String>,
     ) -> PyResult<Bound<'a, PyAny>> {
         let handle = Arc::clone(&self.handle);
 
@@ -63,6 +64,9 @@ impl PyBox {
             }
             if tty {
                 cmd = cmd.tty(true);
+            }
+            if let Some(user) = user {
+                cmd = cmd.user(user);
             }
 
             let execution = handle.exec(cmd).await.map_err(map_err)?;

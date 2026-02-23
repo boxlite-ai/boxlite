@@ -262,6 +262,7 @@ message ExecRequest {
   string workdir = 5;
   uint64 timeout_ms = 6;
   optional TtyConfig tty = 7;  // If set, use PTY instead of pipes
+  optional string user = 8;    // User override (format: <name|uid>[:<group|gid>])
 }
 
 // TTY configuration for interactive sessions

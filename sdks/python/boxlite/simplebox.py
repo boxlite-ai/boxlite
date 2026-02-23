@@ -176,6 +176,7 @@ class SimpleBox:
         cmd: str,
         *args: str,
         env: Optional[dict[str, str]] = None,
+        user: Optional[str] = None,
     ) -> ExecResult:
         """
         Execute a command in the box and return the result.
@@ -184,6 +185,8 @@ class SimpleBox:
             cmd: Command to execute (e.g., 'ls', 'python')
             *args: Arguments to the command (e.g., '-l', '-a')
             env: Environment variables (default: guest's default environment)
+            user: User to run as (format: <name|uid>[:<group|gid>], like docker exec --user).
+                  If None, uses the container's default user from image config.
 
         Returns:
             ExecResult with exit_code and output
@@ -192,14 +195,10 @@ class SimpleBox:
             Simple execution::
 
                 result = await box.exec('ls', '-l', '-a')
-                print(f"Exit code: {result.exit_code}")
-                print(f"Stdout: {result.stdout}")
-                print(f"Stderr: {result.stderr}")
 
-            With environment variables::
+            Run as a specific user::
 
-                result = await box.exec('env', env={'FOO': 'bar'})
-                print(result.stdout)
+                result = await box.exec('whoami', user='nobody')
         """
         if not self._started:
             raise RuntimeError(
@@ -212,7 +211,7 @@ class SimpleBox:
         env_list = list(env.items()) if env else None
 
         # Execute via Rust (returns PyExecution)
-        execution = await self._box.exec(cmd, arg_list, env_list)
+        execution = await self._box.exec(cmd, arg_list, env_list, user=user)
 
         # Get streams from Rust execution
         try:

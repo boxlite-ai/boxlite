@@ -234,6 +234,7 @@ impl Container {
             self.state_root.clone(),
             self.env.clone(),
             self.user,
+            self.bundle_path.join("rootfs"),
         )
     }
 

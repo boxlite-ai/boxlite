@@ -220,6 +220,7 @@ impl ExecProtocol {
             } else {
                 None
             },
+            user: command.user.clone(),
         }
     }
 
