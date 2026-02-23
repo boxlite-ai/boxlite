@@ -326,7 +326,12 @@ void test_box_prefix_lookup() {
 
   // Extract prefix (first 8 characters)
   char prefix[9] = {0};
-  strncpy(prefix, full_id, 8);
+  size_t prefix_len = strlen(full_id);
+  if (prefix_len > 8) {
+    prefix_len = 8;
+  }
+  memcpy(prefix, full_id, prefix_len);
+  prefix[prefix_len] = '\0';
   printf("  Full ID: %s\n", full_id);
   printf("  Prefix:  %s\n", prefix);
 
