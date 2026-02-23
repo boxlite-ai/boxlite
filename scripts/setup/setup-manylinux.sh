@@ -249,6 +249,8 @@ main() {
     detect_guest_target
     check_rust_target "$GUEST_TARGET"
 
+    install_cargo_nextest
+
     print_header "Setup Complete"
 }
 

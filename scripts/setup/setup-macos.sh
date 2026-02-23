@@ -211,6 +211,8 @@ main() {
 
     setup_rust_target
 
+    install_cargo_nextest
+
     install_musl_cross
 
     install_dtc
