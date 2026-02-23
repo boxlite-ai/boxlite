@@ -209,6 +209,10 @@ pub struct ProcessFlags {
     /// Working directory inside the box
     #[arg(short = 'w', long = "workdir")]
     pub workdir: Option<String>,
+
+    /// User to run the command as (format: <name|uid>[:<group|gid>])
+    #[arg(short = 'u', long = "user")]
+    pub user: Option<String>,
 }
 
 impl ProcessFlags {
@@ -253,6 +257,10 @@ impl ProcessFlags {
 
         if self.tty {
             cmd = cmd.tty(true);
+        }
+
+        if let Some(ref user) = self.user {
+            cmd = cmd.user(user);
         }
 
         cmd

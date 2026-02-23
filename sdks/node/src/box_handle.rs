@@ -95,6 +95,7 @@ impl JsBox {
         args: Option<Vec<String>>,
         env: Option<Vec<Vec<String>>>,
         tty: Option<bool>,
+        user: Option<String>,
     ) -> Result<JsExecution> {
         let handle = Arc::clone(&self.handle);
 
@@ -116,6 +117,10 @@ impl JsBox {
 
         if tty {
             cmd = cmd.tty(true);
+        }
+
+        if let Some(user) = user {
+            cmd = cmd.user(user);
         }
 
         let execution = handle.exec(cmd).await.map_err(map_err)?;

@@ -65,6 +65,19 @@ init_submodules() {
     fi
 }
 
+# Install cargo-nextest
+install_cargo_nextest() {
+    print_step "Checking for cargo-nextest... "
+    if cargo nextest --version &>/dev/null; then
+        print_success "Already installed"
+    else
+        echo -e "${YELLOW}Installing...${NC}"
+        cargo install cargo-nextest --locked
+        print_success "cargo-nextest installed"
+    fi
+    echo ""
+}
+
 # Detect guest target architecture
 detect_guest_target() {
     source "$SCRIPT_DIR/util.sh"

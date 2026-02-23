@@ -52,6 +52,13 @@ pub struct ContainerCommand {
     /// Resolved (uid, gid) from container init, propagated to exec processes.
     user: (u32, u32),
 
+    /// User override string (format: <name|uid>[:<group|gid>]).
+    /// When set, resolved at spawn time via resolve_user().
+    user_override: Option<String>,
+
+    /// Rootfs path for resolving user overrides from /etc/passwd.
+    rootfs: Option<PathBuf>,
+
     /// Working directory (None = use default "/")
     cwd: Option<String>,
 
@@ -72,12 +79,15 @@ impl ContainerCommand {
         state_root: PathBuf,
         env: HashMap<String, String>,
         user: (u32, u32),
+        rootfs: PathBuf,
     ) -> Self {
         Self {
             program: None,
             args: Vec::new(),
             env,
             user,
+            user_override: None,
+            rootfs: Some(rootfs),
             cwd: None,
             console_socket: None,
             pty_config: None,
@@ -93,6 +103,15 @@ impl ContainerCommand {
     pub fn with_pty(mut self, config: PtyConfig) -> Self {
         // Store config for spawn() to use
         self.pty_config = Some(config);
+        self
+    }
+
+    /// Set user override for this exec.
+    ///
+    /// Format: `<name|uid>[:<group|gid>]` (same as `docker exec --user`).
+    /// Resolved at spawn time from the container's /etc/passwd.
+    pub fn with_user(mut self, user: String) -> Self {
+        self.user_override = Some(user);
         self
     }
 
@@ -297,6 +316,28 @@ impl ContainerCommand {
         create_pty_child(pid, pty_master, config)
     }
 
+    /// Resolve the effective (uid, gid) for this exec.
+    ///
+    /// If `user_override` is set, resolves it against the container's /etc/passwd.
+    /// Otherwise, returns the init default `self.user`.
+    fn resolve_exec_user(&self) -> BoxliteResult<(u32, u32)> {
+        match self.user_override {
+            Some(ref spec) => {
+                let rootfs_str =
+                    self.rootfs
+                        .as_ref()
+                        .and_then(|p| p.to_str())
+                        .ok_or_else(|| {
+                            BoxliteError::Internal(
+                                "Missing rootfs path for user resolution".to_string(),
+                            )
+                        })?;
+                super::spec::resolve_user(rootfs_str, spec)
+            }
+            None => Ok(self.user),
+        }
+    }
+
     /// Build and spawn process using libcontainer.
     async fn build_and_spawn(
         &self,
@@ -353,7 +394,7 @@ impl ContainerCommand {
             );
         }
 
-        let (uid, gid) = self.user;
+        let (uid, gid) = self.resolve_exec_user()?;
 
         let pid = builder
             .as_tenant()
@@ -480,4 +521,38 @@ fn pty_master_to_file(pty_master: OwnedFd) -> std::fs::File {
     let fd = pty_master.as_raw_fd();
     std::mem::forget(pty_master); // Transfer ownership, don't close
     unsafe { std::fs::File::from_raw_fd(fd) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_cmd() -> ContainerCommand {
+        ContainerCommand::new(
+            "test-container".to_string(),
+            PathBuf::from("/tmp/state"),
+            HashMap::new(),
+            (0, 0),
+            PathBuf::from("/tmp/rootfs"),
+        )
+    }
+
+    #[test]
+    fn test_with_user_override_sets_field() {
+        let cmd = make_cmd().with_user("abc:staff".to_string());
+        assert_eq!(cmd.user_override, Some("abc:staff".to_string()));
+    }
+
+    #[test]
+    fn test_without_user_uses_default() {
+        let cmd = make_cmd();
+        assert_eq!(cmd.user_override, None);
+        assert_eq!(cmd.user, (0, 0));
+    }
+
+    #[test]
+    fn test_with_user_numeric() {
+        let cmd = make_cmd().with_user("1000:1000".to_string());
+        assert_eq!(cmd.user_override, Some("1000:1000".to_string()));
+    }
 }

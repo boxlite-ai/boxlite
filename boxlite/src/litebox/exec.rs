@@ -34,6 +34,7 @@ pub struct BoxCommand {
     pub(crate) timeout: Option<Duration>,
     pub(crate) working_dir: Option<String>,
     pub(crate) tty: bool,
+    pub(crate) user: Option<String>,
 }
 
 impl BoxCommand {
@@ -46,6 +47,7 @@ impl BoxCommand {
             timeout: None,
             working_dir: None,
             tty: false,
+            user: None,
         }
     }
 
@@ -90,6 +92,16 @@ impl BoxCommand {
     /// Terminal size is auto-detected from the current terminal.
     pub fn tty(mut self, enable: bool) -> Self {
         self.tty = enable;
+        self
+    }
+
+    /// Set the user to run the command as.
+    ///
+    /// Format: `<name|uid>[:<group|gid>]` (same as `docker exec --user`).
+    /// If not set, uses the container's default user from image config.
+    pub fn user(mut self, spec: impl Into<String>) -> Self {
+        let s = spec.into();
+        self.user = if s.trim().is_empty() { None } else { Some(s) };
         self
     }
 }
@@ -341,5 +353,40 @@ impl Stream for ExecStderr {
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.receiver.poll_recv(cx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_box_command_user_builder() {
+        let cmd = BoxCommand::new("whoami").user("abc:staff");
+        assert_eq!(cmd.user, Some("abc:staff".to_string()));
+    }
+
+    #[test]
+    fn test_box_command_default_no_user() {
+        let cmd = BoxCommand::new("ls");
+        assert_eq!(cmd.user, None);
+    }
+
+    #[test]
+    fn test_box_command_user_numeric() {
+        let cmd = BoxCommand::new("id").user("1000:1000");
+        assert_eq!(cmd.user, Some("1000:1000".to_string()));
+    }
+
+    #[test]
+    fn test_box_command_user_empty_string_becomes_none() {
+        let cmd = BoxCommand::new("id").user("");
+        assert_eq!(cmd.user, None);
+    }
+
+    #[test]
+    fn test_box_command_user_whitespace_only_becomes_none() {
+        let cmd = BoxCommand::new("id").user("  ");
+        assert_eq!(cmd.user, None);
     }
 }

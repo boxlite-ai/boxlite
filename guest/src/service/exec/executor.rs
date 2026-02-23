@@ -61,6 +61,10 @@ impl Executor for ContainerExecutor {
                 });
             }
 
+            if let Some(ref user) = req.user {
+                cmd = cmd.with_user(user.clone());
+            }
+
             cmd
         }; // Release container lock before spawn
 
