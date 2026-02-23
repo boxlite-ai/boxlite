@@ -7,10 +7,15 @@ on:
       - '**/*.rs'
       - '**/*.py'
       - '**/*.ts'
+      - '**/*.c'
+      - '**/*.h'
       - '**/Cargo.toml'
       - 'Cargo.lock'
       - 'sdks/python/**'
       - 'sdks/node/**'
+      - 'sdks/c/**'
+      - 'make/quality.mk'
+      - '.pre-commit-config.yaml'
       - '.github/workflows/lint.yml'
       - '.github/workflows/config.yml'
   pull_request:
@@ -19,19 +24,22 @@ on:
       - '**/*.rs'
       - '**/*.py'
       - '**/*.ts'
+      - '**/*.c'
+      - '**/*.h'
       - '**/Cargo.toml'
       - 'Cargo.lock'
       - 'sdks/python/**'
       - 'sdks/node/**'
+      - 'sdks/c/**'
+      - 'make/quality.mk'
+      - '.pre-commit-config.yaml'
       - '.github/workflows/lint.yml'
       - '.github/workflows/config.yml'
 
 jobs:
-  # Load shared configuration
   config:
     uses: ./.github/workflows/config.yml
 
-  # Detect which files changed to conditionally run linters
   changes:
     runs-on: ubuntu-latest
     permissions:
@@ -40,6 +48,8 @@ jobs:
       rust: ${{ steps.filter.outputs.rust }}
       python: ${{ steps.filter.outputs.python }}
       node: ${{ steps.filter.outputs.node }}
+      c: ${{ steps.filter.outputs.c }}
+      quality: ${{ steps.filter.outputs.quality }}
     steps:
       - uses: actions/checkout@v5
       - uses: dorny/paths-filter@v3
@@ -52,13 +62,24 @@ jobs:
               - 'Cargo.lock'
             python:
               - 'sdks/python/**/*.py'
+              - 'sdks/python/pyproject.toml'
             node:
               - 'sdks/node/**/*.ts'
+              - 'sdks/node/package.json'
+              - 'sdks/node/tsconfig.json'
+            c:
+              - 'sdks/c/**/*.c'
+              - 'sdks/c/**/*.h'
+              - 'sdks/c/tests/CMakeLists.txt'
+            quality:
+              - 'make/quality.mk'
+              - '.pre-commit-config.yaml'
+              - '.github/workflows/lint.yml'
 
   rustfmt:
     name: Check Rust formatting
     needs: changes
-    if: ${{ needs.changes.outputs.rust == 'true' }}
+    if: ${{ needs.changes.outputs.rust == 'true' || needs.changes.outputs.quality == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -71,12 +92,12 @@ jobs:
           components: rustfmt
 
       - name: Check formatting
-        run: cargo fmt --all -- --check
+        run: make fmt:check:rust
 
   clippy:
     name: Run Clippy on ${{ matrix.os }}
     needs: [config, changes]
-    if: ${{ needs.changes.outputs.rust == 'true' }}
+    if: ${{ needs.changes.outputs.rust == 'true' || needs.changes.outputs.quality == 'true' }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: true
@@ -92,6 +113,10 @@ jobs:
           toolchain: stable
           components: clippy
 
+      - name: Install guest cross target (macOS)
+        if: runner.os == 'macOS'
+        run: rustup target add $(bash scripts/util.sh --target)
+
       - name: Install system dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -102,22 +127,13 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install protobuf
 
-      - name: Run Clippy (Linux)
-        if: runner.os == 'Linux'
-        env:
-          BOXLITE_DEPS_STUB: "1"
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-
-      - name: Run Clippy (macOS)
-        if: runner.os == 'macOS'
-        env:
-          BOXLITE_DEPS_STUB: "1"
-        run: cargo clippy --workspace --all-targets --all-features --exclude boxlite-guest -- -D warnings
+      - name: Run clippy checks
+        run: make clippy
 
   python:
-    name: Python Lint
+    name: Python lint and format checks
     needs: changes
-    if: ${{ needs.changes.outputs.python == 'true' }}
+    if: ${{ needs.changes.outputs.python == 'true' || needs.changes.outputs.quality == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -131,34 +147,16 @@ jobs:
       - name: Install ruff
         run: pip install ruff
 
-      - name: Run ruff check
-        working-directory: sdks/python
-        run: ruff check .
+      - name: Run Python lint
+        run: make lint:python
 
-      - name: Run ruff format check
-        working-directory: sdks/python
-        run: ruff format --check .
-
-      - name: Check no required dependencies
-        working-directory: sdks/python
-        run: |
-          # Ensure core package has no required dependencies (optional deps OK)
-          python -c "
-          import tomllib
-          with open('pyproject.toml', 'rb') as f:
-              config = tomllib.load(f)
-          deps = config.get('project', {}).get('dependencies', [])
-          if deps:
-              print(f'ERROR: pyproject.toml has required dependencies: {deps}')
-              print('Move dependencies to [project.optional-dependencies] instead.')
-              exit(1)
-          print('✓ No required dependencies')
-          "
+      - name: Check Python formatting
+        run: make fmt:check:python
 
   node:
-    name: Node.js Lint
+    name: Node.js lint and format checks
     needs: changes
-    if: ${{ needs.changes.outputs.node == 'true' }}
+    if: ${{ needs.changes.outputs.node == 'true' || needs.changes.outputs.quality == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -173,6 +171,28 @@ jobs:
         working-directory: sdks/node
         run: npm install
 
-      - name: Type check
-        working-directory: sdks/node
-        run: npx tsc --noEmit
+      - name: Run Node lint
+        run: make lint:node
+
+      - name: Check Node formatting
+        run: make fmt:check:node
+
+  c:
+    name: C SDK lint and format checks
+    needs: changes
+    if: ${{ needs.changes.outputs.c == 'true' || needs.changes.outputs.quality == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Install clang tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-format clang-tidy
+
+      - name: Run C lint
+        run: make lint:c
+
+      - name: Check C formatting
+        run: make fmt:check:c

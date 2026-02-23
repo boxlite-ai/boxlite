@@ -15,7 +15,7 @@
 export class BoxliteError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = 'BoxliteError';
+    this.name = "BoxliteError";
     // Maintain proper stack trace for where our error was thrown (V8 only)
     if (Error.captureStackTrace) {
       Error.captureStackTrace(this, BoxliteError);
@@ -49,10 +49,10 @@ export class ExecError extends BoxliteError {
   constructor(
     public readonly command: string,
     public readonly exitCode: number,
-    public readonly stderr: string
+    public readonly stderr: string,
   ) {
     super(`Command '${command}' failed with exit code ${exitCode}: ${stderr}`);
-    this.name = 'ExecError';
+    this.name = "ExecError";
     if (Error.captureStackTrace) {
       Error.captureStackTrace(this, ExecError);
     }
@@ -76,7 +76,7 @@ export class ExecError extends BoxliteError {
 export class TimeoutError extends BoxliteError {
   constructor(message: string) {
     super(message);
-    this.name = 'TimeoutError';
+    this.name = "TimeoutError";
     if (Error.captureStackTrace) {
       Error.captureStackTrace(this, TimeoutError);
     }
@@ -102,7 +102,7 @@ export class TimeoutError extends BoxliteError {
 export class ParseError extends BoxliteError {
   constructor(message: string) {
     super(message);
-    this.name = 'ParseError';
+    this.name = "ParseError";
     if (Error.captureStackTrace) {
       Error.captureStackTrace(this, ParseError);
     }

@@ -26,10 +26,10 @@ The release binary is at `./target/release/boxlite`.
 
 ## Testing
 
-### `make test` vs `make test:cli`
+### `make test` vs `make test:integration:cli`
 
-- **`make test`** runs Rust library tests, Python SDK tests, and Node.js SDK tests. It does **not** run CLI tests.
-- **`make test:cli`** runs the CLI integration tests. It depends on `runtime-debug` and then:
+- **`make test`** runs the strict full matrix (unit + integration) across core and SDK suites.
+- **`make test:integration:cli`** runs only the CLI integration tests. It depends on `runtime-debug` and then:
 
   ```bash
   cargo test -p boxlite-cli --tests --no-fail-fast -- --test-threads=1
@@ -39,7 +39,7 @@ When working on the CLI, run both as needed:
 
 ```bash
 make test
-make test:cli
+make test:integration:cli
 ```
 
 CLI tests are integration tests: they pull images, create boxes, and run real commands. They require a working VM environment (KVM on Linux or Hypervisor.framework on macOS). Tests use a shared test home (`/tmp/bl`), a global lock to avoid concurrent use, and pre-pulled images (`alpine:latest`, `python:alpine`) to reduce rate limits.
@@ -77,17 +77,18 @@ fn test_run_exit_code_success() {
 1. Add a new variant to `Commands` in `src/cli.rs` and the corresponding `Args` type (or reuse existing flags).
 2. In `src/commands/mod.rs`, add the new module and export the `execute` function.
 3. In `src/main.rs`, add a branch in `run_cli` that calls the new command’s `execute`.
-4. Add tests in `boxlite-cli/tests/<command>.rs` and run `make test:cli`.
+4. Add tests in `boxlite-cli/tests/<command>.rs` and run `make test:integration:cli`.
 
 ## Command reference
 
 | Command        | Description |
 |----------------|-------------|
 | `make cli`     | Build the CLI (after building the debug runtime). |
-| `make test:cli`| Run CLI integration tests (single-threaded). |
-| `make test`    | Run Rust, Python, and Node unit tests (no CLI tests). |
-| `make fmt`     | Format all Rust code. |
-| `cargo clippy -p boxlite-cli` | Lint the CLI crate. |
+| `make test:integration:cli` | Run CLI integration tests (single-threaded). |
+| `make test`    | Run strict full matrix (unit + integration across core + SDK). |
+| `make test:integration:core` | Run core integration suites (Rust + CLI). |
+| `make fmt`     | Format all supported language surfaces. |
+| `make lint:rust` | Run Rust lint checks (clippy). |
 
 ## See also
 

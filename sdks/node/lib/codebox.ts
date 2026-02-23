@@ -4,13 +4,13 @@
  * Provides a simple, secure environment for running untrusted Python code.
  */
 
-import { SimpleBox, type SimpleBoxOptions } from './simplebox.js';
-import { ExecError } from './errors.js';
+import { SimpleBox, type SimpleBoxOptions } from "./simplebox.js";
+import { ExecError } from "./errors.js";
 
 /**
  * Options for creating a CodeBox.
  */
-export interface CodeBoxOptions extends Omit<SimpleBoxOptions, 'image'> {
+export interface CodeBoxOptions extends Omit<SimpleBoxOptions, "image"> {
   /** Container image with Python (default: 'python:slim') */
   image?: string;
 }
@@ -59,7 +59,7 @@ export class CodeBox extends SimpleBox {
   constructor(options: CodeBoxOptions = {}) {
     super({
       ...options,
-      image: options.image ?? 'python:slim',
+      image: options.image ?? "python:slim",
     });
   }
 
@@ -90,9 +90,9 @@ export class CodeBox extends SimpleBox {
    * ```
    */
   async run(code: string): Promise<string> {
-    const result = await this.exec('/usr/local/bin/python', '-c', code);
+    const result = await this.exec("/usr/local/bin/python", "-c", code);
     if (result.exitCode !== 0) {
-      throw new ExecError('run()', result.exitCode, result.stderr);
+      throw new ExecError("run()", result.exitCode, result.stderr);
     }
     return result.stdout;
   }
@@ -116,8 +116,8 @@ export class CodeBox extends SimpleBox {
    * ```
    */
   async runScript(scriptPath: string): Promise<string> {
-    const fs = await import('fs/promises');
-    const code = await fs.readFile(scriptPath, 'utf-8');
+    const fs = await import("fs/promises");
+    const code = await fs.readFile(scriptPath, "utf-8");
     return this.run(code);
   }
 
@@ -142,9 +142,13 @@ export class CodeBox extends SimpleBox {
    * ```
    */
   async installPackage(packageName: string): Promise<string> {
-    const result = await this.exec('pip', 'install', packageName);
+    const result = await this.exec("pip", "install", packageName);
     if (result.exitCode !== 0) {
-      throw new ExecError(`installPackage('${packageName}')`, result.exitCode, result.stderr);
+      throw new ExecError(
+        `installPackage('${packageName}')`,
+        result.exitCode,
+        result.stderr,
+      );
     }
     return result.stdout;
   }
@@ -169,9 +173,13 @@ export class CodeBox extends SimpleBox {
    * ```
    */
   async installPackages(...packages: string[]): Promise<string> {
-    const result = await this.exec('pip', 'install', ...packages);
+    const result = await this.exec("pip", "install", ...packages);
     if (result.exitCode !== 0) {
-      throw new ExecError(`installPackages(${packages.join(', ')})`, result.exitCode, result.stderr);
+      throw new ExecError(
+        `installPackages(${packages.join(", ")})`,
+        result.exitCode,
+        result.stderr,
+      );
     }
     return result.stdout;
   }

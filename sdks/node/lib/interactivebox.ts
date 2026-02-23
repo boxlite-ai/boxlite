@@ -4,7 +4,7 @@
  * Provides automatic PTY-based interactive sessions, similar to `docker exec -it`.
  */
 
-import { SimpleBox, SimpleBoxOptions } from './simplebox.js';
+import { SimpleBox, SimpleBoxOptions } from "./simplebox.js";
 
 // Import types from native module (will be available after build)
 type Execution = any;
@@ -89,7 +89,7 @@ export class InteractiveBox extends SimpleBox {
    */
   constructor(options: InteractiveBoxOptions) {
     // Extract InteractiveBox-specific options before passing to parent
-    const { shell = '/bin/sh', tty, ...baseOptions } = options;
+    const { shell = "/bin/sh", tty, ...baseOptions } = options;
 
     // Call parent constructor (handles runtime, lazy box creation)
     super(baseOptions);
@@ -123,7 +123,9 @@ export class InteractiveBox extends SimpleBox {
 
     // Convert env to array format if provided
     const envArray = this._interactiveEnv
-      ? Object.entries(this._interactiveEnv).map(([k, v]) => [k, v] as [string, string])
+      ? Object.entries(this._interactiveEnv).map(
+          ([k, v]) => [k, v] as [string, string],
+        )
       : undefined;
 
     // Start shell with PTY (box.exec runs command inside container, not on host)
@@ -159,7 +161,7 @@ export class InteractiveBox extends SimpleBox {
         this._forwardStdin(),
         this._forwardOutput(),
         this._forwardStderr(),
-        this._waitForExit()
+        this._waitForExit(),
       );
     } else {
       // No I/O forwarding, just wait for execution
@@ -204,12 +206,14 @@ export class InteractiveBox extends SimpleBox {
       try {
         await Promise.race([
           Promise.all(this._ioTasks),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 3000))
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error("Timeout")), 3000),
+          ),
         ]);
       } catch (err) {
         // Timeout or error - continue with shutdown
       }
-      this._ioTasks = [];  // Clear tasks
+      this._ioTasks = []; // Clear tasks
     }
 
     // 3. Call parent's stop() to shut down the box
@@ -239,7 +243,7 @@ export class InteractiveBox extends SimpleBox {
     if (!this._stdin) return;
 
     try {
-      process.stdin.on('data', async (data: Buffer) => {
+      process.stdin.on("data", async (data: Buffer) => {
         if (!this._exited && this._stdin) {
           try {
             await this._stdin.write(data);
@@ -275,7 +279,7 @@ export class InteractiveBox extends SimpleBox {
         if (chunk === null) break;
 
         // Write to stdout
-        if (typeof chunk === 'string') {
+        if (typeof chunk === "string") {
           process.stdout.write(chunk);
         } else {
           process.stdout.write(chunk);
@@ -298,7 +302,7 @@ export class InteractiveBox extends SimpleBox {
         if (chunk === null) break;
 
         // Write to stderr
-        if (typeof chunk === 'string') {
+        if (typeof chunk === "string") {
           process.stderr.write(chunk);
         } else {
           process.stderr.write(chunk);

@@ -26,6 +26,8 @@
   },
   "scripts": {
     "build": "tsc",
+    "format": "prettier --write \"lib/**/*.ts\" \"tests/**/*.ts\" \"vitest.config.ts\" \"package.json\" \"tsconfig.json\"",
+    "format:check": "prettier --check \"lib/**/*.ts\" \"tests/**/*.ts\" \"vitest.config.ts\" \"package.json\" \"tsconfig.json\"",
     "build:native": "mkdir -p native && napi build --platform --js boxlite.js --esm --output-dir native",
     "artifacts": "napi create-npm-dirs --npm-dir npm && napi artifacts --output-dir native --npm-dir npm && node -e \"const{readdirSync,rmSync}=require('fs');readdirSync('npm').forEach(p=>{if(!readdirSync('npm/'+p).some(f=>f.endsWith('.node')))rmSync('npm/'+p,{recursive:true})})\"",
     "bundle:runtime": "node -e \"const{cpSync,readdirSync,readFileSync,writeFileSync}=require('fs');readdirSync('npm').forEach(p=>{cpSync('../../target/boxlite-runtime','npm/'+p+'/runtime',{recursive:true});const f='npm/'+p+'/package.json',pkg=JSON.parse(readFileSync(f));pkg.files.includes('runtime')||pkg.files.push('runtime');writeFileSync(f,JSON.stringify(pkg,null,2)+'\\n')})\"",
@@ -38,6 +40,7 @@
     "@napi-rs/cli": "^3.0.0-alpha.62",
     "@types/node": "^22.0.0",
     "playwright-core": "1.58.0",
+    "prettier": "^3.6.2",
     "typescript": "^5.2.0",
     "vitest": "^2.0.0"
   },

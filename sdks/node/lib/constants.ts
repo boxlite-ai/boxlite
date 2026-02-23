@@ -5,10 +5,10 @@
  */
 
 // ComputerBox (Desktop Automation) defaults
-export const COMPUTERBOX_IMAGE = 'lscr.io/linuxserver/webtop:ubuntu-xfce';
+export const COMPUTERBOX_IMAGE = "lscr.io/linuxserver/webtop:ubuntu-xfce";
 export const COMPUTERBOX_CPUS = 2;
 export const COMPUTERBOX_MEMORY_MIB = 2048;
-export const COMPUTERBOX_DISPLAY_NUMBER = ':1';
+export const COMPUTERBOX_DISPLAY_NUMBER = ":1";
 export const COMPUTERBOX_DISPLAY_WIDTH = 1024;
 export const COMPUTERBOX_DISPLAY_HEIGHT = 768;
 export const COMPUTERBOX_GUI_HTTP_PORT = 3000;
@@ -27,4 +27,4 @@ export const DEFAULT_CPUS = 1;
 export const DEFAULT_MEMORY_MIB = 512;
 
 // Network constants (must match boxlite/src/net/constants.rs)
-export const GUEST_IP = '192.168.127.2';
+export const GUEST_IP = "192.168.127.2";

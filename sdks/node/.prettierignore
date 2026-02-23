@@ -1,0 +1,5 @@
+dist/
+native/
+node_modules/
+npm/
+packages/

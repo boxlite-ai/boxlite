@@ -8,8 +8,8 @@
  * 3. Try/finally cleanup patterns
  */
 
-import type { ExecResult } from './exec.js';
-import { getJsBoxlite } from './native.js';
+import type { ExecResult } from "./exec.js";
+import { getJsBoxlite } from "./native.js";
 
 // Import types from native module (will be available after build)
 type Boxlite = any;
@@ -61,21 +61,30 @@ export interface SecurityOptions {
 
 const MAX_SAFE_U64_NUMBER = Number.MAX_SAFE_INTEGER;
 
-function normalizeU64Limit(value: number | undefined, field: string): number | undefined {
+function normalizeU64Limit(
+  value: number | undefined,
+  field: string,
+): number | undefined {
   if (value === undefined) {
     return undefined;
   }
 
   if (!Number.isFinite(value)) {
-    throw new TypeError(`Invalid security option \`${field}\`: number must be finite`);
+    throw new TypeError(
+      `Invalid security option \`${field}\`: number must be finite`,
+    );
   }
 
   if (!Number.isInteger(value)) {
-    throw new TypeError(`Invalid security option \`${field}\`: number must be an integer`);
+    throw new TypeError(
+      `Invalid security option \`${field}\`: number must be an integer`,
+    );
   }
 
   if (value < 0) {
-    throw new TypeError(`Invalid security option \`${field}\`: number must be >= 0`);
+    throw new TypeError(
+      `Invalid security option \`${field}\`: number must be >= 0`,
+    );
   }
 
   if (!Number.isSafeInteger(value) || value > MAX_SAFE_U64_NUMBER) {
@@ -87,7 +96,9 @@ function normalizeU64Limit(value: number | undefined, field: string): number | u
   return value;
 }
 
-function normalizeSecurityOptions(security: SecurityOptions | undefined): SecurityOptions | undefined {
+function normalizeSecurityOptions(
+  security: SecurityOptions | undefined,
+): SecurityOptions | undefined {
   if (!security) {
     return undefined;
   }
@@ -95,11 +106,20 @@ function normalizeSecurityOptions(security: SecurityOptions | undefined): Securi
   return {
     jailerEnabled: security.jailerEnabled,
     seccompEnabled: security.seccompEnabled,
-    maxOpenFiles: normalizeU64Limit(security.maxOpenFiles, 'security.maxOpenFiles'),
-    maxFileSize: normalizeU64Limit(security.maxFileSize, 'security.maxFileSize'),
-    maxProcesses: normalizeU64Limit(security.maxProcesses, 'security.maxProcesses'),
-    maxMemory: normalizeU64Limit(security.maxMemory, 'security.maxMemory'),
-    maxCpuTime: normalizeU64Limit(security.maxCpuTime, 'security.maxCpuTime'),
+    maxOpenFiles: normalizeU64Limit(
+      security.maxOpenFiles,
+      "security.maxOpenFiles",
+    ),
+    maxFileSize: normalizeU64Limit(
+      security.maxFileSize,
+      "security.maxFileSize",
+    ),
+    maxProcesses: normalizeU64Limit(
+      security.maxProcesses,
+      "security.maxProcesses",
+    ),
+    maxMemory: normalizeU64Limit(security.maxMemory, "security.maxMemory"),
+    maxCpuTime: normalizeU64Limit(security.maxCpuTime, "security.maxCpuTime"),
     networkEnabled: security.networkEnabled,
     closeFds: security.closeFds,
   };
@@ -308,7 +328,10 @@ export class SimpleBox {
     if (!this._boxPromise) {
       this._boxPromise = (async () => {
         if (this._reuseExisting) {
-          const result = await this._runtime.getOrCreate(this._boxOpts, this._name);
+          const result = await this._runtime.getOrCreate(
+            this._boxOpts,
+            this._name,
+          );
           this._created = result.created;
           return result.box;
         } else {
@@ -329,7 +352,9 @@ export class SimpleBox {
    */
   get id(): string {
     if (!this._box) {
-      throw new Error('Box not yet created. Call exec() first or use getId() async method.');
+      throw new Error(
+        "Box not yet created. Call exec() first or use getId() async method.",
+      );
     }
     return this._box.id;
   }
@@ -365,7 +390,7 @@ export class SimpleBox {
    */
   info() {
     if (!this._box) {
-      throw new Error('Box not yet created. Call exec() first.');
+      throw new Error("Box not yet created. Call exec() first.");
     }
     return this._box.info();
   }
@@ -408,7 +433,11 @@ export class SimpleBox {
    * ```
    */
   async exec(cmd: string, ...args: string[]): Promise<ExecResult>;
-  async exec(cmd: string, args: string[], env: Record<string, string>): Promise<ExecResult>;
+  async exec(
+    cmd: string,
+    args: string[],
+    env: Record<string, string>,
+  ): Promise<ExecResult>;
   async exec(
     cmd: string,
     argsOrFirstArg?: string | string[],
@@ -430,16 +459,18 @@ export class SimpleBox {
         argsOrFirstArg,
         envOrSecondArg,
         ...restArgs,
-      ].filter(a => a !== undefined);
+      ].filter((a) => a !== undefined);
 
       // Check if last arg is env object (before filtering to strings)
       const lastArg = allArgs[allArgs.length - 1];
-      if (lastArg && typeof lastArg === 'object' && !Array.isArray(lastArg)) {
+      if (lastArg && typeof lastArg === "object" && !Array.isArray(lastArg)) {
         env = lastArg as Record<string, string>;
-        args = allArgs.slice(0, -1).filter((a): a is string => typeof a === 'string');
+        args = allArgs
+          .slice(0, -1)
+          .filter((a): a is string => typeof a === "string");
       } else {
         env = undefined;
-        args = allArgs.filter((a): a is string => typeof a === 'string');
+        args = allArgs.filter((a): a is string => typeof a === "string");
       }
     }
 
@@ -505,8 +536,8 @@ export class SimpleBox {
 
     return {
       exitCode: result.exitCode,
-      stdout: stdoutLines.join(''),
-      stderr: stderrLines.join(''),
+      stdout: stdoutLines.join(""),
+      stderr: stderrLines.join(""),
     };
   }
 

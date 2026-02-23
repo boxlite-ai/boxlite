@@ -119,8 +119,11 @@ Runs code quality checks.
 - Pull requests
 
 **Jobs:**
-1. `rustfmt` - Check Rust formatting
-2. `clippy` - Run Clippy linter on all platforms
+1. `rustfmt` - Check Rust formatting via `make fmt:check:rust`
+2. `clippy` - Run Clippy linter via `make clippy` on all platforms
+3. `python` - Run Python lint and format checks via `make lint:python` and `make fmt:check:python`
+4. `node` - Run Node lint and format checks via `make lint:node` and `make fmt:check:node`
+5. `c` - Run C SDK lint and format checks via `make lint:c` and `make fmt:check:c`
 
 ## Trigger Behavior
 

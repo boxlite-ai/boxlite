@@ -145,3 +145,85 @@ require_musl() {
         fi
     fi
 }
+
+# Resolve PREK_VERSION from environment with a stable default.
+setup_prek_version() {
+    if [ -z "${PREK_VERSION:-}" ]; then
+        export PREK_VERSION="0.3.3"
+    fi
+}
+
+# Install pinned prek in best-effort mode.
+install_prek_best_effort() {
+    if [ "${CI:-}" = "true" ]; then
+        print_info "CI detected, skipping prek installation"
+        return 0
+    fi
+
+    setup_prek_version
+
+    # Source cargo env if available to make freshly installed cargo visible.
+    if [ -f "${CARGO_HOME:-$HOME/.cargo}/env" ]; then
+        source "${CARGO_HOME:-$HOME/.cargo}/env"
+    fi
+
+    if ! command_exists cargo; then
+        print_warning "cargo not found; skipping prek installation"
+        return 0
+    fi
+
+    local current_prek_version
+    current_prek_version=$(prek --version 2>/dev/null | awk '{print $2}')
+
+    if [ "$current_prek_version" = "$PREK_VERSION" ]; then
+        print_success "prek $PREK_VERSION already installed"
+        return 0
+    fi
+
+    print_step "Installing prek $PREK_VERSION... "
+    if cargo install --locked prek --version "$PREK_VERSION"; then
+        print_success "installed"
+    else
+        print_warning "Failed to install prek $PREK_VERSION; continuing without hook bootstrap"
+    fi
+}
+
+# Install repository git hooks in best-effort mode.
+install_git_hooks_best_effort() {
+    if [ "${CI:-}" = "true" ]; then
+        print_info "CI detected, skipping git hook installation"
+        return 0
+    fi
+
+    local root_dir="${PROJECT_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+    local git_dir="$root_dir/.git"
+    local config_path="$root_dir/.pre-commit-config.yaml"
+
+    if [ ! -d "$git_dir" ]; then
+        print_warning ".git directory not found at $git_dir; skipping hook installation"
+        return 0
+    fi
+
+    if [ ! -f "$config_path" ]; then
+        print_warning ".pre-commit-config.yaml not found at $config_path; skipping hook installation"
+        return 0
+    fi
+
+    if ! command_exists prek; then
+        print_warning "prek not available; skipping hook installation"
+        return 0
+    fi
+
+    print_step "Installing pre-commit and pre-push hooks... "
+    if (cd "$root_dir" && prek install -t pre-commit -t pre-push --overwrite); then
+        print_success "installed"
+    else
+        print_warning "Hook installation failed; continuing setup"
+    fi
+}
+
+# Bootstrap prek and hooks as non-fatal setup steps.
+bootstrap_prek_and_hooks() {
+    install_prek_best_effort
+    install_git_hooks_best_effort
+}

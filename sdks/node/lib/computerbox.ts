@@ -5,14 +5,17 @@
  * that can be viewed from a browser, with full GUI automation support.
  */
 
-import { SimpleBox, type SimpleBoxOptions } from './simplebox.js';
-import { ExecError, TimeoutError, ParseError } from './errors.js';
-import * as constants from './constants.js';
+import { SimpleBox, type SimpleBoxOptions } from "./simplebox.js";
+import { ExecError, TimeoutError, ParseError } from "./errors.js";
+import * as constants from "./constants.js";
 
 /**
  * Options for creating a ComputerBox.
  */
-export interface ComputerBoxOptions extends Omit<SimpleBoxOptions, 'image' | 'cpus' | 'memoryMib'> {
+export interface ComputerBoxOptions extends Omit<
+  SimpleBoxOptions,
+  "image" | "cpus" | "memoryMib"
+> {
   /** Number of CPU cores (default: 2) */
   cpus?: number;
 
@@ -40,7 +43,7 @@ export interface Screenshot {
   height: number;
 
   /** Image format (always 'png') */
-  format: 'png';
+  format: "png";
 }
 
 /**
@@ -115,13 +118,16 @@ export class ComputerBox extends SimpleBox {
       DISPLAY_SIZEH: constants.COMPUTERBOX_DISPLAY_HEIGHT.toString(),
       SELKIES_MANUAL_WIDTH: constants.COMPUTERBOX_DISPLAY_WIDTH.toString(),
       SELKIES_MANUAL_HEIGHT: constants.COMPUTERBOX_DISPLAY_HEIGHT.toString(),
-      SELKIES_UI_SHOW_SIDEBAR: 'false',
+      SELKIES_UI_SHOW_SIDEBAR: "false",
     };
 
     // Merge default and user ports
     const defaultPorts = [
       { hostPort: guiHttpPort, guestPort: constants.COMPUTERBOX_GUI_HTTP_PORT },
-      { hostPort: guiHttpsPort, guestPort: constants.COMPUTERBOX_GUI_HTTPS_PORT },
+      {
+        hostPort: guiHttpsPort,
+        guestPort: constants.COMPUTERBOX_GUI_HTTPS_PORT,
+      },
     ];
 
     super({
@@ -143,7 +149,11 @@ export class ComputerBox extends SimpleBox {
    * @returns The execution result (for methods that need to parse output)
    * @throws {ExecError} If command exits with non-zero code
    */
-  private async execOrThrow(label: string, cmd: string, ...args: string[]): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+  private async execOrThrow(
+    label: string,
+    cmd: string,
+    ...args: string[]
+  ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
     const result = await this.exec(cmd, ...args);
     if (result.exitCode !== 0) {
       throw new ExecError(label, result.exitCode, result.stderr);
@@ -169,28 +179,39 @@ export class ComputerBox extends SimpleBox {
    * }
    * ```
    */
-  async waitUntilReady(timeout: number = constants.DESKTOP_READY_TIMEOUT): Promise<void> {
+  async waitUntilReady(
+    timeout: number = constants.DESKTOP_READY_TIMEOUT,
+  ): Promise<void> {
     const startTime = Date.now();
 
     while (true) {
       const elapsed = (Date.now() - startTime) / 1000;
       if (elapsed > timeout) {
-        throw new TimeoutError(`Desktop did not become ready within ${timeout} seconds`);
+        throw new TimeoutError(
+          `Desktop did not become ready within ${timeout} seconds`,
+        );
       }
 
       try {
-        const result = await this.exec('xwininfo', '-tree', '-root');
+        const result = await this.exec("xwininfo", "-tree", "-root");
         const expectedSize = `${constants.COMPUTERBOX_DISPLAY_WIDTH}x${constants.COMPUTERBOX_DISPLAY_HEIGHT}`;
 
-        if (result.stdout.includes('xfdesktop') && result.stdout.includes(expectedSize)) {
+        if (
+          result.stdout.includes("xfdesktop") &&
+          result.stdout.includes(expectedSize)
+        ) {
           return;
         }
 
         // Wait before retrying
-        await new Promise(resolve => setTimeout(resolve, constants.DESKTOP_READY_RETRY_DELAY * 1000));
+        await new Promise((resolve) =>
+          setTimeout(resolve, constants.DESKTOP_READY_RETRY_DELAY * 1000),
+        );
       } catch (error) {
         // Desktop not ready yet, retry
-        await new Promise(resolve => setTimeout(resolve, constants.DESKTOP_READY_RETRY_DELAY * 1000));
+        await new Promise((resolve) =>
+          setTimeout(resolve, constants.DESKTOP_READY_RETRY_DELAY * 1000),
+        );
       }
     }
   }
@@ -224,13 +245,18 @@ img.save(buffer, format="PNG")
 print(base64.b64encode(buffer.getvalue()).decode("utf-8"))
 `.trim();
 
-    const result = await this.execOrThrow('screenshot()', 'python3', '-c', pythonCode);
+    const result = await this.execOrThrow(
+      "screenshot()",
+      "python3",
+      "-c",
+      pythonCode,
+    );
 
     return {
       data: result.stdout.trim(),
       width: constants.COMPUTERBOX_DISPLAY_WIDTH,
       height: constants.COMPUTERBOX_DISPLAY_HEIGHT,
-      format: 'png',
+      format: "png",
     };
   }
 
@@ -246,7 +272,13 @@ print(base64.b64encode(buffer.getvalue()).decode("utf-8"))
    * ```
    */
   async mouseMove(x: number, y: number): Promise<void> {
-    await this.execOrThrow(`mouseMove(${x}, ${y})`, 'xdotool', 'mousemove', x.toString(), y.toString());
+    await this.execOrThrow(
+      `mouseMove(${x}, ${y})`,
+      "xdotool",
+      "mousemove",
+      x.toString(),
+      y.toString(),
+    );
   }
 
   /**
@@ -258,7 +290,7 @@ print(base64.b64encode(buffer.getvalue()).decode("utf-8"))
    * ```
    */
   async leftClick(): Promise<void> {
-    await this.execOrThrow('leftClick()', 'xdotool', 'click', '1');
+    await this.execOrThrow("leftClick()", "xdotool", "click", "1");
   }
 
   /**
@@ -270,7 +302,7 @@ print(base64.b64encode(buffer.getvalue()).decode("utf-8"))
    * ```
    */
   async rightClick(): Promise<void> {
-    await this.execOrThrow('rightClick()', 'xdotool', 'click', '3');
+    await this.execOrThrow("rightClick()", "xdotool", "click", "3");
   }
 
   /**
@@ -282,7 +314,7 @@ print(base64.b64encode(buffer.getvalue()).decode("utf-8"))
    * ```
    */
   async middleClick(): Promise<void> {
-    await this.execOrThrow('middleClick()', 'xdotool', 'click', '2');
+    await this.execOrThrow("middleClick()", "xdotool", "click", "2");
   }
 
   /**
@@ -294,7 +326,16 @@ print(base64.b64encode(buffer.getvalue()).decode("utf-8"))
    * ```
    */
   async doubleClick(): Promise<void> {
-    await this.execOrThrow('doubleClick()', 'xdotool', 'click', '--repeat', '2', '--delay', '100', '1');
+    await this.execOrThrow(
+      "doubleClick()",
+      "xdotool",
+      "click",
+      "--repeat",
+      "2",
+      "--delay",
+      "100",
+      "1",
+    );
   }
 
   /**
@@ -306,7 +347,16 @@ print(base64.b64encode(buffer.getvalue()).decode("utf-8"))
    * ```
    */
   async tripleClick(): Promise<void> {
-    await this.execOrThrow('tripleClick()', 'xdotool', 'click', '--repeat', '3', '--delay', '100', '1');
+    await this.execOrThrow(
+      "tripleClick()",
+      "xdotool",
+      "click",
+      "--repeat",
+      "3",
+      "--delay",
+      "100",
+      "1",
+    );
   }
 
   /**
@@ -322,16 +372,29 @@ print(base64.b64encode(buffer.getvalue()).decode("utf-8"))
    * await desktop.leftClickDrag(100, 100, 200, 200);
    * ```
    */
-  async leftClickDrag(startX: number, startY: number, endX: number, endY: number): Promise<void> {
+  async leftClickDrag(
+    startX: number,
+    startY: number,
+    endX: number,
+    endY: number,
+  ): Promise<void> {
     await this.execOrThrow(
-      'leftClickDrag()',
-      'xdotool',
-      'mousemove', startX.toString(), startY.toString(),
-      'mousedown', '1',
-      'sleep', '0.1',
-      'mousemove', endX.toString(), endY.toString(),
-      'sleep', '0.1',
-      'mouseup', '1'
+      "leftClickDrag()",
+      "xdotool",
+      "mousemove",
+      startX.toString(),
+      startY.toString(),
+      "mousedown",
+      "1",
+      "sleep",
+      "0.1",
+      "mousemove",
+      endX.toString(),
+      endY.toString(),
+      "sleep",
+      "0.1",
+      "mouseup",
+      "1",
     );
   }
 
@@ -347,16 +410,21 @@ print(base64.b64encode(buffer.getvalue()).decode("utf-8"))
    * ```
    */
   async cursorPosition(): Promise<[number, number]> {
-    const result = await this.execOrThrow('cursorPosition()', 'xdotool', 'getmouselocation', '--shell');
+    const result = await this.execOrThrow(
+      "cursorPosition()",
+      "xdotool",
+      "getmouselocation",
+      "--shell",
+    );
 
     let x: number | undefined;
     let y: number | undefined;
 
-    for (const line of result.stdout.split('\n')) {
+    for (const line of result.stdout.split("\n")) {
       const trimmed = line.trim();
-      if (trimmed.startsWith('X=')) {
+      if (trimmed.startsWith("X=")) {
         x = parseInt(trimmed.slice(2), 10);
-      } else if (trimmed.startsWith('Y=')) {
+      } else if (trimmed.startsWith("Y=")) {
         y = parseInt(trimmed.slice(2), 10);
       }
     }
@@ -365,7 +433,7 @@ print(base64.b64encode(buffer.getvalue()).decode("utf-8"))
       return [x, y];
     }
 
-    throw new ParseError('Failed to parse cursor position from xdotool output');
+    throw new ParseError("Failed to parse cursor position from xdotool output");
   }
 
   /**
@@ -379,7 +447,7 @@ print(base64.b64encode(buffer.getvalue()).decode("utf-8"))
    * ```
    */
   async type(text: string): Promise<void> {
-    await this.execOrThrow('type()', 'xdotool', 'type', '--', text);
+    await this.execOrThrow("type()", "xdotool", "type", "--", text);
   }
 
   /**
@@ -395,7 +463,7 @@ print(base64.b64encode(buffer.getvalue()).decode("utf-8"))
    * ```
    */
   async key(keySequence: string): Promise<void> {
-    await this.execOrThrow('key()', 'xdotool', 'key', keySequence);
+    await this.execOrThrow("key()", "xdotool", "key", keySequence);
   }
 
   /**
@@ -411,12 +479,17 @@ print(base64.b64encode(buffer.getvalue()).decode("utf-8"))
    * await desktop.scroll(500, 300, 'down', 5);
    * ```
    */
-  async scroll(x: number, y: number, direction: 'up' | 'down' | 'left' | 'right', amount: number = 3): Promise<void> {
+  async scroll(
+    x: number,
+    y: number,
+    direction: "up" | "down" | "left" | "right",
+    amount: number = 3,
+  ): Promise<void> {
     const directionMap: Record<string, string> = {
-      up: '4',
-      down: '5',
-      left: '6',
-      right: '7',
+      up: "4",
+      down: "5",
+      left: "6",
+      right: "7",
     };
 
     const button = directionMap[direction.toLowerCase()];
@@ -425,8 +498,15 @@ print(base64.b64encode(buffer.getvalue()).decode("utf-8"))
     }
 
     await this.execOrThrow(
-      'scroll()',
-      'xdotool', 'mousemove', x.toString(), y.toString(), 'click', '--repeat', amount.toString(), button
+      "scroll()",
+      "xdotool",
+      "mousemove",
+      x.toString(),
+      y.toString(),
+      "click",
+      "--repeat",
+      amount.toString(),
+      button,
     );
   }
 
@@ -442,13 +522,17 @@ print(base64.b64encode(buffer.getvalue()).decode("utf-8"))
    * ```
    */
   async getScreenSize(): Promise<[number, number]> {
-    const result = await this.execOrThrow('getScreenSize()', 'xdotool', 'getdisplaygeometry');
+    const result = await this.execOrThrow(
+      "getScreenSize()",
+      "xdotool",
+      "getdisplaygeometry",
+    );
 
     const parts = result.stdout.trim().split(/\s+/);
     if (parts.length === 2) {
       return [parseInt(parts[0], 10), parseInt(parts[1], 10)];
     }
 
-    throw new ParseError('Failed to parse screen size from xdotool output');
+    throw new ParseError("Failed to parse screen size from xdotool output");
   }
 }

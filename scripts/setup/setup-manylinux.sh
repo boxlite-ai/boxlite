@@ -249,6 +249,9 @@ main() {
     detect_guest_target
     check_rust_target "$GUEST_TARGET"
 
+    # Rust/cargo is guaranteed above; bootstrap prek and install hooks best-effort.
+    bootstrap_prek_and_hooks
+
     print_header "Setup Complete"
 }
 

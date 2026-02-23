@@ -30,8 +30,16 @@ For detailed build instructions, see [docs/guides](./docs/guides/README.md#build
 ### Running Tests
 
 ```bash
-cargo test
+make test
 ```
+
+Key test entry points:
+
+- `make test` / `make test:all` - full test matrix (unit + integration)
+- `make test:unit` - all unit suites
+- `make test:integration` - all integration suites
+- `make test:all:python` - Python unit + integration suites
+- `make test:all:c` - C SDK suite via CMake/CTest
 
 ## How to Contribute
 
@@ -46,19 +54,21 @@ cargo test
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/my-feature`)
 3. Make your changes
-4. Run tests and formatting (`cargo test && cargo fmt`)
+4. Run quality and tests (`make lint && make fmt:check && make test`)
 5. Commit with clear messages
 6. Open a Pull Request
 
 ### Code Style
 
 Follow the [Rust Style Guide](./docs/development/rust-style.md) which includes:
+
 - [Microsoft Rust Guidelines](https://microsoft.github.io/rust-guidelines)
 - BoxLite-specific patterns (async-first, centralized errors, thread-safe types)
 
 **Quick reference:**
-- `cargo fmt` for formatting (enforced in CI)
-- `cargo clippy` for linting
+
+- `make fmt` / `make fmt:check` for formatting checks
+- `make lint` / `make lint:fix` for lint checks and safe autofix
 - Keep functions focused (single responsibility)
 - Add tests for new functionality
 - Update documentation as needed
