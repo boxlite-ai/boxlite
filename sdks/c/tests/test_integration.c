@@ -330,7 +330,9 @@ void test_box_prefix_lookup() {
   if (prefix_len > 8) {
     prefix_len = 8;
   }
-  memcpy(prefix, full_id, prefix_len);
+  for (size_t i = 0; i < prefix_len; ++i) {
+    prefix[i] = full_id[i];
+  }
   prefix[prefix_len] = '\0';
   printf("  Full ID: %s\n", full_id);
   printf("  Prefix:  %s\n", prefix);

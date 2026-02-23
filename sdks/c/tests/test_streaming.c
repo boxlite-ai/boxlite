@@ -20,7 +20,17 @@ void counting_callback(const char *text, int is_stderr, void *user_data) {
   } else {
     stdout_count++;
   }
-  strncpy(last_output, text, sizeof(last_output) - 1);
+  if (text == NULL) {
+    last_output[0] = '\0';
+    return;
+  }
+
+  size_t i = 0;
+  while (i < sizeof(last_output) - 1 && text[i] != '\0') {
+    last_output[i] = text[i];
+    ++i;
+  }
+  last_output[i] = '\0';
 }
 
 void test_streaming_stdout() {
