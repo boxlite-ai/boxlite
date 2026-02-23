@@ -11,15 +11,29 @@
 #include <stdlib.h>
 #include <string.h>
 
+static const char *cleanup_temp_dirs[10] = {
+    "/tmp/boxlite-test-memory-cleanup-0", "/tmp/boxlite-test-memory-cleanup-1",
+    "/tmp/boxlite-test-memory-cleanup-2", "/tmp/boxlite-test-memory-cleanup-3",
+    "/tmp/boxlite-test-memory-cleanup-4", "/tmp/boxlite-test-memory-cleanup-5",
+    "/tmp/boxlite-test-memory-cleanup-6", "/tmp/boxlite-test-memory-cleanup-7",
+    "/tmp/boxlite-test-memory-cleanup-8", "/tmp/boxlite-test-memory-cleanup-9",
+};
+
+static const char *error_temp_dirs[10] = {
+    "/tmp/boxlite-test-memory-error-0", "/tmp/boxlite-test-memory-error-1",
+    "/tmp/boxlite-test-memory-error-2", "/tmp/boxlite-test-memory-error-3",
+    "/tmp/boxlite-test-memory-error-4", "/tmp/boxlite-test-memory-error-5",
+    "/tmp/boxlite-test-memory-error-6", "/tmp/boxlite-test-memory-error-7",
+    "/tmp/boxlite-test-memory-error-8", "/tmp/boxlite-test-memory-error-9",
+};
+
 void test_runtime_cleanup() {
   printf("\nTEST: Runtime memory cleanup\n");
 
   for (int i = 0; i < 10; i++) {
     CBoxliteRuntime *runtime = NULL;
     CBoxliteError error = {0};
-    char temp_dir[256];
-    snprintf(temp_dir, sizeof(temp_dir), "/tmp/boxlite-test-memory-cleanup-%d",
-             i);
+    const char *temp_dir = cleanup_temp_dirs[i];
     BoxliteErrorCode code =
         boxlite_runtime_new(temp_dir, NULL, &runtime, &error);
     assert(code == Ok);
@@ -36,9 +50,7 @@ void test_error_string_cleanup() {
   for (int i = 0; i < 10; i++) {
     CBoxliteRuntime *runtime = NULL;
     CBoxliteError error = {0};
-    char temp_dir[256];
-    snprintf(temp_dir, sizeof(temp_dir), "/tmp/boxlite-test-memory-error-%d",
-             i);
+    const char *temp_dir = error_temp_dirs[i];
     const char *bad_json = "{invalid}";
     BoxliteErrorCode code =
         boxlite_runtime_new(temp_dir, bad_json, &runtime, &error);

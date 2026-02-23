@@ -168,7 +168,28 @@ typedef struct {
 void accumulating_callback(const char *text, int is_stderr, void *user_data) {
   UserContext *ctx = (UserContext *)user_data;
   ctx->count++;
-  strncat(ctx->buffer, text, sizeof(ctx->buffer) - strlen(ctx->buffer) - 1);
+  if (text == NULL) {
+    return;
+  }
+
+  size_t current_len = 0;
+  while (current_len < sizeof(ctx->buffer) &&
+         ctx->buffer[current_len] != '\0') {
+    current_len++;
+  }
+
+  if (current_len >= sizeof(ctx->buffer)) {
+    ctx->buffer[sizeof(ctx->buffer) - 1] = '\0';
+    return;
+  }
+
+  size_t i = 0;
+  while (text[i] != '\0' && current_len < sizeof(ctx->buffer) - 1) {
+    ctx->buffer[current_len] = text[i];
+    current_len++;
+    i++;
+  }
+  ctx->buffer[current_len] = '\0';
 }
 
 void test_streaming_with_context() {
