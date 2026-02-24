@@ -5,6 +5,8 @@ Provides a synchronous API for box operations.
 API mirrors async SimpleBox exactly.
 """
 
+import asyncio
+import logging
 from typing import TYPE_CHECKING, Dict, Optional
 
 from ..exec import ExecResult
@@ -12,6 +14,8 @@ from ..exec import ExecResult
 if TYPE_CHECKING:
     from ._boxlite import SyncBoxlite
     from ._box import SyncBox
+
+logger = logging.getLogger("boxlite.sync_simplebox")
 
 __all__ = ["SyncSimpleBox"]
 
@@ -170,38 +174,77 @@ class SyncSimpleBox:
             print(f"Exit code: {result.exit_code}")
             print(f"Output: {result.stdout}")
         """
-        # Convert args to list format expected by SyncBox
+        # Run the entire exec+collect as a single async operation through
+        # the greenlet bridge. This avoids the deadlock that occurs with
+        # sequential sync iteration (stdout then stderr), where filling one
+        # pipe buffer blocks the process while we're reading the other.
         arg_list = list(args) if args else None
         env_list = list(env.items()) if env else None
 
-        # SyncBox.exec() returns SyncExecution - already sync!
-        execution = self._box.exec(cmd, arg_list, env_list)
+        # Access the underlying async Box directly
+        async_box = self._box._box
 
-        # Collect stdout (sync iteration)
-        stdout_lines = []
-        for line in execution.stdout():
-            if isinstance(line, bytes):
-                stdout_lines.append(line.decode("utf-8", errors="replace"))
-            else:
-                stdout_lines.append(line)
+        async def _exec_and_collect():
+            execution = await async_box.exec(cmd, arg_list, env_list)
 
-        # Collect stderr (sync iteration)
-        stderr_lines = []
-        for line in execution.stderr():
-            if isinstance(line, bytes):
-                stderr_lines.append(line.decode("utf-8", errors="replace"))
-            else:
-                stderr_lines.append(line)
+            stdout_lines = []
+            stderr_lines = []
 
-        # Wait for completion (sync)
-        result = execution.wait()
+            try:
+                stdout_stream = execution.stdout()
+            except Exception as e:
+                logger.error(f"take stdout err: {e}")
+                stdout_stream = None
 
-        return ExecResult(
-            exit_code=result.exit_code,
-            stdout="".join(stdout_lines),
-            stderr="".join(stderr_lines),
-            error_message=result.error_message,
-        )
+            try:
+                stderr_stream = execution.stderr()
+            except Exception as e:
+                logger.error(f"take stderr err: {e}")
+                stderr_stream = None
+
+            async def collect_stdout():
+                if not stdout_stream:
+                    return
+                try:
+                    async for line in stdout_stream:
+                        if isinstance(line, bytes):
+                            stdout_lines.append(line.decode("utf-8", errors="replace"))
+                        else:
+                            stdout_lines.append(line)
+                except Exception as e:
+                    logger.error(f"collecting stdout err: {e}")
+
+            async def collect_stderr():
+                if not stderr_stream:
+                    return
+                try:
+                    async for line in stderr_stream:
+                        if isinstance(line, bytes):
+                            stderr_lines.append(line.decode("utf-8", errors="replace"))
+                        else:
+                            stderr_lines.append(line)
+                except Exception as e:
+                    logger.error(f"collecting stderr err: {e}")
+
+            await asyncio.gather(collect_stdout(), collect_stderr())
+
+            error_message = None
+            try:
+                exec_result = await execution.wait()
+                exit_code = exec_result.exit_code
+                error_message = exec_result.error_message
+            except Exception as e:
+                logger.error(f"failed to wait execution: {e}")
+                exit_code = -1
+
+            return ExecResult(
+                exit_code=exit_code,
+                stdout="".join(stdout_lines),
+                stderr="".join(stderr_lines),
+                error_message=error_message,
+            )
+
+        return self._runtime._sync(_exec_and_collect())
 
     def stop(self) -> None:
         """Stop the box (preserves state for restart)."""

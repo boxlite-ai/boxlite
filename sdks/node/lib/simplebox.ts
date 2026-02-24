@@ -505,31 +505,35 @@ export class SimpleBox {
       stderr = null;
     }
 
-    // Read stdout
-    if (stdout) {
-      try {
-        while (true) {
-          const line = await stdout.next();
-          if (line === null) break;
-          stdoutLines.push(line);
+    // Read stdout and stderr concurrently to avoid deadlock.
+    // Sequential reads can deadlock when a process fills one pipe buffer
+    // while the SDK is blocked reading the other.
+    await Promise.all([
+      (async () => {
+        if (!stdout) return;
+        try {
+          while (true) {
+            const line = await stdout.next();
+            if (line === null) break;
+            stdoutLines.push(line);
+          }
+        } catch {
+          // Stream ended or error occurred
         }
-      } catch (err) {
-        // Stream ended or error occurred
-      }
-    }
-
-    // Read stderr
-    if (stderr) {
-      try {
-        while (true) {
-          const line = await stderr.next();
-          if (line === null) break;
-          stderrLines.push(line);
+      })(),
+      (async () => {
+        if (!stderr) return;
+        try {
+          while (true) {
+            const line = await stderr.next();
+            if (line === null) break;
+            stderrLines.push(line);
+          }
+        } catch {
+          // Stream ended or error occurred
         }
-      } catch (err) {
-        // Stream ended or error occurred
-      }
-    }
+      })(),
+    ]);
 
     // Wait for completion
     const result = await execution.wait();
