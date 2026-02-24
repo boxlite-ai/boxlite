@@ -50,6 +50,20 @@ pub fn alpine_opts_auto() -> BoxOptions {
 
 const TEST_IMAGES: &[&str] = &["alpine:latest", "debian:bookworm-slim"];
 
+/// Docker Hub mirror registries for reliable image pulls.
+/// Mirrors are tried first; `docker.io` is the final fallback.
+const TEST_REGISTRIES: &[&str] = &[
+    "docker.m.daocloud.io",
+    "docker.xuanyuan.me",
+    "docker.1ms.run",
+    "docker.io",
+];
+
+/// Convert `TEST_REGISTRIES` to `Vec<String>` for `BoxliteOptions::image_registries`.
+pub fn test_registries() -> Vec<String> {
+    TEST_REGISTRIES.iter().map(|s| s.to_string()).collect()
+}
+
 // ============================================================================
 // SHARED HELPERS
 // ============================================================================
@@ -145,7 +159,7 @@ fn warm_home() -> &'static PathBuf {
                 rt.block_on(async {
                     let runtime = BoxliteRuntime::new(BoxliteOptions {
                         home_dir: home.clone(),
-                        image_registries: vec![],
+                        image_registries: test_registries(),
                     })
                     .unwrap();
                     let images = runtime.images().unwrap();
@@ -174,6 +188,14 @@ fn warm_home() -> &'static PathBuf {
                     handle.start().await.unwrap();
                     handle.stop().await.unwrap();
                     let _ = runtime.remove(handle.id().as_str(), false).await;
+
+                    // Force-remove any stale boxes from previous incomplete warm-ups.
+                    // Only image index records should survive into the cached DB.
+                    let all_boxes = runtime.list_info().await.unwrap_or_default();
+                    for info in &all_boxes {
+                        let _ = runtime.remove(info.id.as_str(), true).await;
+                    }
+
                     eprintln!("[test] Guest rootfs pipeline warm.");
 
                     let _ = runtime.shutdown(Some(TEST_SHUTDOWN_TIMEOUT)).await;
@@ -211,7 +233,7 @@ impl ParallelRuntime {
         let (temp_dir, home_dir) = warm_temp_dir();
         let runtime = BoxliteRuntime::new(BoxliteOptions {
             home_dir: home_dir.clone(),
-            image_registries: vec![],
+            image_registries: test_registries(),
         })
         .expect("create parallel runtime");
         Self {
@@ -270,7 +292,7 @@ impl IsolatedRuntime {
         }
         let runtime = BoxliteRuntime::new(BoxliteOptions {
             home_dir: home_dir.clone(),
-            image_registries: vec![],
+            image_registries: test_registries(),
         })
         .expect("create isolated runtime");
         Self {

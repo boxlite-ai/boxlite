@@ -459,7 +459,7 @@ async fn boxes_persist_across_runtime_restart() {
     {
         let options = BoxliteOptions {
             home_dir: home_dir.clone(),
-            image_registries: vec![],
+            image_registries: common::test_registries(),
         };
         let runtime = BoxliteRuntime::new(options).expect("Failed to create runtime");
         let litebox = runtime.create(common::alpine_opts(), None).await.unwrap();
@@ -478,7 +478,7 @@ async fn boxes_persist_across_runtime_restart() {
     {
         let options = BoxliteOptions {
             home_dir,
-            image_registries: vec![],
+            image_registries: common::test_registries(),
         };
         let runtime = BoxliteRuntime::new(options).expect("Failed to create runtime");
 
@@ -508,7 +508,7 @@ async fn multiple_boxes_persist_and_recover_without_lock_errors() {
     {
         let options = BoxliteOptions {
             home_dir: home_dir.clone(),
-            image_registries: vec![],
+            image_registries: common::test_registries(),
         };
         let runtime = BoxliteRuntime::new(options).expect("Failed to create runtime");
 
@@ -541,7 +541,7 @@ async fn multiple_boxes_persist_and_recover_without_lock_errors() {
     {
         let options = BoxliteOptions {
             home_dir,
-            image_registries: vec![],
+            image_registries: common::test_registries(),
         };
         let runtime = BoxliteRuntime::new(options).expect("Failed to create runtime after restart");
 
@@ -704,7 +704,7 @@ async fn recovery_removes_auto_remove_true_boxes() {
     {
         let options = BoxliteOptions {
             home_dir: home_dir.clone(),
-            image_registries: vec![],
+            image_registries: common::test_registries(),
         };
         let runtime = BoxliteRuntime::new(options).expect("Failed to create runtime");
 
@@ -736,7 +736,7 @@ async fn recovery_removes_auto_remove_true_boxes() {
     {
         let options = BoxliteOptions {
             home_dir,
-            image_registries: vec![],
+            image_registries: common::test_registries(),
         };
         let runtime = BoxliteRuntime::new(options).expect("Failed to create runtime after restart");
 
@@ -775,7 +775,7 @@ async fn recovery_removes_orphaned_stopped_boxes_without_directory() {
     {
         let options = BoxliteOptions {
             home_dir: home_dir.clone(),
-            image_registries: vec![],
+            image_registries: common::test_registries(),
         };
         let runtime = BoxliteRuntime::new(options).expect("Failed to create runtime");
 
@@ -802,7 +802,7 @@ async fn recovery_removes_orphaned_stopped_boxes_without_directory() {
     {
         let options = BoxliteOptions {
             home_dir,
-            image_registries: vec![],
+            image_registries: common::test_registries(),
         };
         let runtime = BoxliteRuntime::new(options).expect("Failed to create runtime after restart");
 

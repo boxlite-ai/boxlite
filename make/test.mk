@@ -64,7 +64,12 @@ test\:warm-cache\:rust: runtime-debug
 	@echo "🔥 Warming Rust integration test image cache..."
 	@mkdir -p /tmp/boxlite-test
 	@BOXLITE_RUNTIME_DIR=$(PROJECT_ROOT)/target/boxlite-runtime \
-		./target/debug/boxlite --home /tmp/boxlite-test pull alpine:latest 2>/dev/null || \
+		./target/debug/boxlite --home /tmp/boxlite-test \
+		--registry docker.m.daocloud.io \
+		--registry docker.xuanyuan.me \
+		--registry docker.1ms.run \
+		--registry docker.io \
+		pull alpine:latest 2>/dev/null || \
 		echo "  ⚠️ Pre-warm skipped (pull failed, tests will pull on-demand)"
 	@echo "✅ Rust integration image cache ready"
 

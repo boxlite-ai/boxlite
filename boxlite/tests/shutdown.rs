@@ -95,7 +95,7 @@ fn drop_releases_lock() {
     {
         let options = BoxliteOptions {
             home_dir: dir_path.clone(),
-            image_registries: vec![],
+            image_registries: common::test_registries(),
         };
         let _rt = BoxliteRuntime::new(options).unwrap();
     } // Drop fires here
@@ -103,7 +103,7 @@ fn drop_releases_lock() {
     // Should be able to create a new runtime on the same directory
     let options2 = BoxliteOptions {
         home_dir: dir_path,
-        image_registries: vec![],
+        image_registries: common::test_registries(),
     };
     let _rt2 = BoxliteRuntime::new(options2).unwrap();
 }
