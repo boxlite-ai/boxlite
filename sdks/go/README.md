@@ -1,54 +1,103 @@
 # BoxLite Go SDK
 
-Official Go SDK for BoxLite - a lightweight, embeddable virtual machine runtime for secure code execution.
+Go SDK for BoxLite - an embeddable virtual machine runtime for secure, isolated code execution environments.
 
-> **Status**: 🛠 Under Development (Phase 1 Completed)
+## Requirements
 
-## Features
+- Go 1.21 or later
+- Rust toolchain (for building the native library)
 
-- [x] **Phase 1: Foundation**
-    - [x] Rust Bridge with internal Tokio Runtime
-    - [x] CGO binding infrastructure
-    - [x] Thread-local error propagation mechanism
-- [ ] **Phase 2: Lifecycle Management**
-    - [ ] Create Box (Image pulling, Rootfs preparation)
-    - [ ] Start / Stop / Restart
-    - [ ] List / Get Info
-    - [ ] Remove Box
-- [ ] **Phase 3: Interaction**
-    - [ ] Exec command (Sync)
-    - [ ] Streaming I/O (Stdout/Stderr/Stdin)
-    - [ ] Reference CLI implementation
-- [ ] **Phase 4: Polishing**
-    - [ ] Resource Metrics
-    - [ ] File Copy (Cp)
-    - [ ] CI/CD integration
+## Building
 
-## Architecture
-
-The Go SDK uses a **Self-contained Embedded Bridge** architecture:
-1.  **Rust Core**: The heavy lifting is done by the `boxlite` Rust crate.
-2.  **Rust Bridge (`rust/`)**: A C-ABI wrapper around the core, managing its own Tokio runtime.
-3.  **Go Binding (`internal/binding/`)**: CGO layer that handles the FFI (Foreign Function Interface) calls.
-4.  **Go Client (`pkg/client/`)**: Idiomatic Go API for application developers.
-
-## Development
-
-### Prerequisites
-
-- Rust (latest stable)
-- Go (1.21+)
-- Make
-
-### Building & Testing
+### Build the Rust library first
 
 ```bash
-# Build the Rust bridge and run tests
-make test
-
-# Run the example
-make run
+cd ../..
+make runtime-debug
 ```
+
+### Build the Go SDK
+
+```bash
+# From the project root
+make go-build
+
+# Or from this directory
+go build ./...
+```
+
+## Testing
+
+### Run Go SDK tests
+
+```bash
+# From the project root
+make test:go
+
+# Or from this directory
+go test ./... -v
+```
+
+**Note:** Tests that require the Rust library will be skipped if the library is not built.
+
+### Run all tests
+
+```bash
+make test
+```
+
+This runs tests for all SDKs (Rust, Python, Node.js, Go, and C).
+
+## Usage Example
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+
+    "github.com/boxlite-ai/boxlite/sdks/go/pkg/client"
+)
+
+func main() {
+    // Create runtime
+    runtime, err := client.NewRuntime(nil)
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer runtime.Close()
+
+    // Create a box
+    ctx := context.Background()
+    box, err := runtime.CreateBox(ctx,
+        client.NewBoxOptions("alpine:latest").
+            WithCPUs(1).
+            WithMemoryMB(512).
+            WithEnvVar("KEY", "value"),
+        "my-box",
+    )
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    // Start the box
+    if err := box.Start(); err != nil {
+        log.Fatal(err)
+    }
+
+    fmt.Println("Box started successfully!")
+}
+```
+
+## API Documentation
+
+See the Go package documentation for detailed API reference:
+
+- `client.Runtime` - Main entry point for the SDK
+- `client.Box` - Handle to a running or configured box
+- `client.BoxOptions` - Configuration options for creating boxes
 
 ## License
 

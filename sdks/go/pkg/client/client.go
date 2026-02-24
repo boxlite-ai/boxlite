@@ -6,70 +6,122 @@ import (
 	"github.com/boxlite-ai/boxlite/sdks/go/internal/binding"
 )
 
-// Client is the main entry point for the BoxLite SDK.
-type Client struct{}
-
-// NewClient creates a new BoxLite client instance.
-func NewClient() (*Client, error) {
-	// Verify bridge is working
-	if !binding.Ping() {
-		return nil, ErrBridgeNotReady
-	}
-	return &Client{}, nil
+// boxProvider abstracts the underlying Box handle.
+type boxProvider interface {
+	Start() error
+	Stop() error
+	Info() (binding.BoxInfo, error)
+	Free()
 }
 
-// CreateBox creates a new box with the given options.
-func (c *Client) CreateBox(ctx context.Context, opts BoxOptions, name string) (*Box, error) {
-	bindingOpts := binding.BoxOptions{
+// runtimeProvider abstracts the underlying BoxLite runtime.
+type runtimeProvider interface {
+	CreateBox(name string, opts binding.BoxOptions) (string, error)
+	GetBox(idOrName string) (boxProvider, string, error)
+	ListBoxes() ([]binding.BoxInfo, error)
+	RemoveBox(idOrName string, force bool) error
+	Free()
+}
+
+// defaultRuntimeProvider wraps the CGo *binding.Runtime to implement runtimeProvider.
+type defaultRuntimeProvider struct {
+	rt *binding.Runtime
+}
+
+func (p *defaultRuntimeProvider) CreateBox(name string, opts binding.BoxOptions) (string, error) {
+	return p.rt.CreateBox(name, opts)
+}
+
+func (p *defaultRuntimeProvider) GetBox(idOrName string) (boxProvider, string, error) {
+	box, id, err := p.rt.GetBox(idOrName)
+	if box == nil {
+		return nil, id, err
+	}
+	return box, id, err
+}
+
+func (p *defaultRuntimeProvider) ListBoxes() ([]binding.BoxInfo, error) {
+	return p.rt.ListBoxes()
+}
+
+func (p *defaultRuntimeProvider) RemoveBox(idOrName string, force bool) error {
+	return p.rt.RemoveBox(idOrName, force)
+}
+
+func (p *defaultRuntimeProvider) Free() {
+	p.rt.Free()
+}
+
+// Runtime wraps a runtimeProvider and exposes a high-level API.
+type Runtime struct {
+	runtime runtimeProvider
+}
+
+// NewRuntime creates a new BoxLite Runtime instance.
+func NewRuntime(opts *RuntimeOptions) (*Runtime, error) {
+	bindingOpts := &binding.RuntimeOptions{}
+	if opts != nil {
+		bindingOpts.HomeDir = opts.HomeDir
+		bindingOpts.ImageRegistries = opts.ImageRegistries
+	}
+	runtime, err := binding.NewRuntime(bindingOpts)
+	if err != nil {
+		return nil, err
+	}
+	return &Runtime{runtime: &defaultRuntimeProvider{rt: runtime}}, nil
+}
+
+// newRuntimeWith creates a Runtime backed by the given runtimeProvider implementation.
+// Intended for use in tests to inject a custom or mock implementation.
+func newRuntimeWith(p runtimeProvider) *Runtime {
+	return &Runtime{runtime: p}
+}
+
+// Close releases the runtime and all associated resources.
+func (r *Runtime) Close() {
+	if r.runtime != nil {
+		r.runtime.Free()
+		r.runtime = nil
+	}
+}
+
+// CreateBox creates a new box with the given options and optional name.
+func (r *Runtime) CreateBox(ctx context.Context, name string, opts BoxOptions) (*Box, error) {
+	id, err := r.runtime.CreateBox(name, binding.BoxOptions{
 		Image:      opts.Image,
 		CPUs:       opts.CPUs,
 		MemoryMB:   opts.MemoryMB,
 		Env:        opts.Env,
 		WorkingDir: opts.WorkingDir,
-	}
-
-	id, err := binding.CreateBox(bindingOpts, name)
+	})
 	if err != nil {
 		return nil, err
 	}
-
-	// Get the handle for the created box
-	handle, _, err := binding.GetBox(id)
+	handle, _, err := r.runtime.GetBox(id)
 	if err != nil {
 		return nil, err
 	}
-
-	return &Box{
-		handle: handle,
-		id:     id,
-		name:   name,
-	}, nil
+	return &Box{handle: handle, id: id, name: name, runtime: r}, nil
 }
 
-// GetBox retrieves a box by ID or name.
-// Returns nil if the box is not found (not an error).
-func (c *Client) GetBox(ctx context.Context, idOrName string) (*Box, error) {
-	handle, id, err := binding.GetBox(idOrName)
+// GetBox retrieves a box by ID or name. Returns nil (not an error) if the box does not exist.
+func (r *Runtime) GetBox(ctx context.Context, idOrName string) (*Box, error) {
+	handle, id, err := r.runtime.GetBox(idOrName)
 	if err != nil {
 		return nil, err
 	}
 	if handle == nil {
-		return nil, nil // Not found
+		return nil, nil
 	}
-
-	return &Box{
-		handle: handle,
-		id:     id,
-	}, nil
+	return &Box{handle: handle, id: id, runtime: r}, nil
 }
 
-// ListBoxes returns information about all boxes.
-func (c *Client) ListBoxes(ctx context.Context) ([]BoxInfo, error) {
-	infos, err := binding.ListBoxes()
+// ListBoxes returns information about all boxes managed by this runtime.
+func (r *Runtime) ListBoxes(ctx context.Context) ([]BoxInfo, error) {
+	infos, err := r.runtime.ListBoxes()
 	if err != nil {
 		return nil, err
 	}
-
 	result := make([]BoxInfo, len(infos))
 	for i, info := range infos {
 		result[i] = BoxInfo{
@@ -83,8 +135,7 @@ func (c *Client) ListBoxes(ctx context.Context) ([]BoxInfo, error) {
 	return result, nil
 }
 
-// RemoveBox removes a box by ID or name.
-// If force is true, the box will be stopped first if running.
-func (c *Client) RemoveBox(ctx context.Context, idOrName string, force bool) error {
-	return binding.RemoveBox(idOrName, force)
+// RemoveBox removes the box identified by ID or name.
+func (r *Runtime) RemoveBox(ctx context.Context, idOrName string, force bool) error {
+	return r.runtime.RemoveBox(idOrName, force)
 }

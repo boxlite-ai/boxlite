@@ -63,6 +63,13 @@ else
 	go test -v ./...
 endif
 
+# 3.1 Test (Stub Mode)
+.PHONY: test-stub
+test-stub: build-rust
+	@echo "🧪 Running Go tests (Stub Mode - Compile Only)..."
+	go vet ./...
+	go build ./...
+
 # 4. Lint and Format
 .PHONY: fmt
 fmt:

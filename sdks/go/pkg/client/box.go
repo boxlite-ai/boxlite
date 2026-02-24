@@ -1,46 +1,35 @@
 package client
 
-import (
-	"unsafe"
+import "github.com/boxlite-ai/boxlite/sdks/go/internal/binding"
 
-	"github.com/boxlite-ai/boxlite/sdks/go/internal/binding"
-)
-
-// Box represents a handle to a running or configured box.
+// Box is a handle to a running or stopped BoxLite box.
+// Closing the handle does not remove the box; the box continues to exist in the runtime.
 type Box struct {
-	handle unsafe.Pointer
-	id     string
-	name   string
+	handle  boxProvider
+	id      string
+	name    string
+	runtime *Runtime
 }
 
 // ID returns the unique identifier of the box.
-func (b *Box) ID() string {
-	return b.id
-}
+func (b *Box) ID() string { return b.id }
 
-// Name returns the user-defined name of the box, if any.
-func (b *Box) Name() string {
-	return b.name
-}
+// Name returns the user-defined name of the box.
+func (b *Box) Name() string { return b.name }
 
-// Start starts the box (initializes the VM).
-// This is idempotent - calling Start on a running box is a no-op.
-func (b *Box) Start() error {
-	return binding.BoxStart(b.handle)
-}
+// Start starts the box. The operation is idempotent.
+func (b *Box) Start() error { return b.handle.Start() }
 
 // Stop stops the box.
-func (b *Box) Stop() error {
-	return binding.BoxStop(b.handle)
-}
+func (b *Box) Stop() error { return b.handle.Stop() }
 
-// Info returns current information about the box.
-func (b *Box) Info() (*BoxInfo, error) {
-	info, err := binding.GetBoxInfo(b.handle)
+// Info returns the current state and metadata of the box.
+func (b *Box) Info() (binding.BoxInfo, error) {
+	info, err := b.handle.Info()
 	if err != nil {
-		return nil, err
+		return binding.BoxInfo{}, err
 	}
-	return &BoxInfo{
+	return binding.BoxInfo{
 		ID:        info.ID,
 		Name:      info.Name,
 		Image:     info.Image,
@@ -49,11 +38,10 @@ func (b *Box) Info() (*BoxInfo, error) {
 	}, nil
 }
 
-// Close releases the box handle.
-// The box itself continues to exist; this just releases the Go-side handle.
+// Close releases the box handle. The box itself is not removed from the runtime.
 func (b *Box) Close() {
 	if b.handle != nil {
-		binding.BoxFree(b.handle)
+		b.handle.Free()
 		b.handle = nil
 	}
 }

@@ -54,6 +54,7 @@ jobs:
       cli: ${{ steps.filter.outputs.boxlite_cli }}
       python: ${{ steps.filter.outputs.python }}
       node: ${{ steps.filter.outputs.node }}
+      go: ${{ steps.filter.outputs.go }}
     steps:
       - uses: actions/checkout@v5
       - uses: dorny/paths-filter@v3
@@ -72,6 +73,8 @@ jobs:
               - 'sdks/python/**'
             node:
               - 'sdks/node/**'
+            go:
+              - 'sdks/go/**'
 
   # Rust unit tests (boxlite-shared only - boxlite requires native libs not available in CI)
   rust:
@@ -226,3 +229,47 @@ jobs:
       - name: Run Node.js unit tests
         working-directory: sdks/node
         run: npm run test
+
+  # Go SDK unit tests
+  go:
+    name: Go Tests (${{ matrix.platform.target }})
+    needs: [config, changes]
+    if: ${{ needs.changes.outputs.go == 'true' }}
+    runs-on: ${{ matrix.platform.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: ${{ fromJson(needs.config.outputs.platforms) }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: ${{ needs.config.outputs.rust-toolchain }}
+
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Install system dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install protobuf
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: boxlite-test
+
+      - name: Run Go unit tests (stub mode)
+        working-directory: sdks/go
+        env:
+          BOXLITE_DEPS_STUB: "1"
+        run: make test-stub
