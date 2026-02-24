@@ -8,6 +8,7 @@
  * 3. Try/finally cleanup patterns
  */
 
+import type { CopyOptions } from "./copy.js";
 import type { ExecResult } from "./exec.js";
 import { getJsBoxlite } from "./native.js";
 
@@ -539,6 +540,42 @@ export class SimpleBox {
       stdout: stdoutLines.join(""),
       stderr: stderrLines.join(""),
     };
+  }
+
+  /**
+   * Copy a file or directory from the host into the container.
+   *
+   * **Note:** Destinations under tmpfs mounts (e.g. `/tmp`, `/dev/shm`) will
+   * silently fail — files land behind the mount and are invisible to the
+   * container. Use a non-tmpfs path like `/root/` instead.
+   *
+   * @param hostPath - Absolute path on the host
+   * @param containerDest - Absolute path inside the container
+   * @param options - Copy options (recursive, overwrite, etc.)
+   */
+  async copyIn(
+    hostPath: string,
+    containerDest: string,
+    options?: CopyOptions,
+  ): Promise<void> {
+    const box = await this._ensureBox();
+    await box.copyIn(hostPath, containerDest, options);
+  }
+
+  /**
+   * Copy a file or directory from the container to the host.
+   *
+   * @param containerSrc - Absolute path inside the container
+   * @param hostDest - Absolute path on the host
+   * @param options - Copy options (recursive, overwrite, etc.)
+   */
+  async copyOut(
+    containerSrc: string,
+    hostDest: string,
+    options?: CopyOptions,
+  ): Promise<void> {
+    const box = await this._ensureBox();
+    await box.copyOut(containerSrc, hostDest, options);
   }
 
   /**

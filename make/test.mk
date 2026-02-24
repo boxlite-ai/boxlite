@@ -3,7 +3,8 @@ PHONY_TARGETS += test\:unit\:core test\:integration\:core test\:unit\:sdk test\:
 PHONY_TARGETS += test\:unit\:rust test\:warm-cache\:rust test\:integration\:rust
 PHONY_TARGETS += test\:unit\:ffi test\:integration\:cli
 PHONY_TARGETS += test\:unit\:python test\:integration\:python test\:all\:python
-PHONY_TARGETS += test\:unit\:node test\:all\:c
+PHONY_TARGETS += test\:unit\:node test\:integration\:node test\:all\:node
+PHONY_TARGETS += test\:all\:c
 
 # Default test target now runs the strict full matrix.
 test:
@@ -42,9 +43,10 @@ test\:unit\:sdk:
 	@$(MAKE) test:unit:python
 	@$(MAKE) test:unit:node
 
-# SDK integration suites: Python integration + C SDK test suite.
+# SDK integration suites: Python integration + Node integration + C SDK test suite.
 test\:integration\:sdk:
 	@$(MAKE) test:integration:python
+	@$(MAKE) test:integration:node
 	@$(MAKE) test:all:c
 
 # Rust unit tests (parallel via nextest, fallback to serial cargo test).
@@ -74,14 +76,17 @@ test\:warm-cache\:rust: runtime-debug
 	@echo "✅ Rust integration image cache ready"
 
 # Rust integration tests (requires VM environment).
+# Pass FILTER=<pattern> to run a subset, e.g. make test:integration:rust FILTER=copy
 test\:integration\:rust: runtime-debug test\:warm-cache\:rust
 	@echo "🧪 Running Rust integration tests (requires VM)..."
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
 		BOXLITE_RUNTIME_DIR=$(PROJECT_ROOT)/target/boxlite-runtime \
-			cargo nextest run -p boxlite --test '*' --no-fail-fast --profile vm; \
+			cargo nextest run -p boxlite --test '*' --no-fail-fast --profile vm \
+			$(if $(FILTER),-E 'test(~$(FILTER))',); \
 	else \
 		BOXLITE_RUNTIME_DIR=$(PROJECT_ROOT)/target/boxlite-runtime \
-			cargo test -p boxlite --test '*' --no-fail-fast -- --test-threads=1 --nocapture; \
+			cargo test -p boxlite --test '*' --no-fail-fast -- --test-threads=1 --nocapture \
+			$(if $(FILTER),$(FILTER),); \
 	fi
 
 # BoxLite FFI unit tests.
@@ -94,12 +99,15 @@ test\:unit\:ffi:
 	fi
 
 # CLI integration tests.
+# Pass FILTER=<pattern> to run a subset.
 test\:integration\:cli: runtime-debug
 	@echo "🧪 Running CLI integration tests..."
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
-		cargo nextest run -p boxlite-cli --tests --no-fail-fast; \
+		cargo nextest run -p boxlite-cli --tests --no-fail-fast \
+		$(if $(FILTER),-E 'test($(FILTER))',); \
 	else \
-		cargo test -p boxlite-cli --tests --no-fail-fast -- --test-threads=1; \
+		cargo test -p boxlite-cli --tests --no-fail-fast -- --test-threads=1 \
+		$(if $(FILTER),$(FILTER),); \
 	fi
 
 # Python SDK unit tests.
@@ -121,6 +129,17 @@ test\:all\:python:
 test\:unit\:node:
 	@echo "🧪 Running Node.js SDK unit tests..."
 	@cd sdks/node && npm test
+
+# Node.js SDK integration tests (requires VM environment).
+test\:integration\:node:
+	@$(MAKE) dev:node
+	@echo "🧪 Running Node.js SDK integration tests (requires VM)..."
+	@cd sdks/node && npm run test:integration
+
+# Node.js SDK full suite.
+test\:all\:node:
+	@$(MAKE) test:unit:node
+	@$(MAKE) test:integration:node
 
 # C SDK test suite (CMake + CTest).
 test\:all\:c: runtime

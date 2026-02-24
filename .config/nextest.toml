@@ -33,6 +33,8 @@ fail-fast = false
 slow-timeout = { period = "120s", terminate-after = 5 }
 retries = 0
 fail-fast = false
+failure-output = "immediate"
+success-output = "immediate"
 
 # =============================================================================
 # TEST GROUP OVERRIDES

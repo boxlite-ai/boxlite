@@ -1,10 +1,10 @@
 //! Integration tests for clone, export, and import operations.
 //!
-//! These tests require a real VM runtime (alpine:latest image) and are
-//! marked `#[ignore]` for CI. Run with:
+//! These tests require a real VM runtime (alpine:latest image).
+//! Run with:
 //!
 //! ```sh
-//! cargo test -p boxlite --test clone_export_import -- --ignored
+//! cargo test -p boxlite --test clone_export_import
 //! ```
 
 mod common;
@@ -50,7 +50,6 @@ async fn create_running_box(runtime: &BoxliteRuntime, name: &str) -> LiteBox {
 // ============================================================================
 
 #[tokio::test]
-#[ignore] // Requires VM runtime
 async fn test_clone_produces_independent_box() {
     let ctx = common::ParallelRuntime::new();
     let source = create_stopped_box(&ctx.runtime).await;
@@ -75,7 +74,6 @@ async fn test_clone_produces_independent_box() {
 }
 
 #[tokio::test]
-#[ignore] // Requires VM runtime
 async fn test_export_import_roundtrip() {
     let ctx = common::ParallelRuntime::new();
     let source = create_stopped_box(&ctx.runtime).await;
@@ -112,7 +110,6 @@ async fn test_export_import_roundtrip() {
 }
 
 #[tokio::test]
-#[ignore] // Requires VM runtime
 async fn test_export_import_preserves_box_options() {
     let ctx = common::ParallelRuntime::new();
 
@@ -146,7 +143,6 @@ async fn test_export_import_preserves_box_options() {
 // ============================================================================
 
 #[tokio::test]
-#[ignore] // Requires VM runtime
 async fn test_clone_running_box() {
     let ctx = common::ParallelRuntime::new();
     let source = create_running_box(&ctx.runtime, "clone-src").await;
@@ -186,7 +182,6 @@ async fn test_clone_running_box() {
 }
 
 #[tokio::test]
-#[ignore] // Requires VM runtime
 async fn test_export_running_box() {
     let ctx = common::ParallelRuntime::new();
     let source = create_running_box(&ctx.runtime, "export-running").await;
@@ -229,7 +224,6 @@ async fn test_export_running_box() {
 }
 
 #[tokio::test]
-#[ignore] // Requires VM runtime
 async fn test_export_import_running_box_roundtrip() {
     let ctx = common::ParallelRuntime::new();
     let source = create_running_box(&ctx.runtime, "roundtrip-running").await;
@@ -280,7 +274,6 @@ async fn test_export_import_running_box_roundtrip() {
 // ============================================================================
 
 #[tokio::test]
-#[ignore] // Requires VM runtime
 async fn test_export_under_write_pressure() {
     let ctx = common::ParallelRuntime::new();
     let source = create_running_box(&ctx.runtime, "write-stress").await;

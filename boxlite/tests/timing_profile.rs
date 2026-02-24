@@ -8,7 +8,7 @@
 //!
 //! Run manually with:
 //! ```sh
-//! cargo test -p boxlite --test timing_profile -- --ignored --nocapture
+//! cargo test -p boxlite --test timing_profile -- --nocapture
 //! ```
 
 mod common;
@@ -39,7 +39,6 @@ fn print_timing_lines(content: &str) -> (usize, usize, usize) {
 }
 
 #[tokio::test]
-#[ignore]
 async fn boot_timing_profile() {
     let ctx = common::ParallelRuntime::new();
 
@@ -173,7 +172,6 @@ async fn boot_timing_profile() {
 
 /// Same profile but with jailer disabled — isolates sandbox-exec overhead.
 #[tokio::test]
-#[ignore]
 async fn boot_timing_profile_no_jailer() {
     let ctx = common::ParallelRuntime::new();
 
