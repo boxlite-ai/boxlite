@@ -13,6 +13,8 @@ mod info;
 mod metrics;
 mod options;
 mod runtime;
+mod snapshot_options;
+mod snapshots;
 mod util;
 
 // Re-export all public types
@@ -22,5 +24,9 @@ pub use copy::JsCopyOptions;
 pub use exec::{JsExecResult, JsExecStderr, JsExecStdin, JsExecStdout, JsExecution};
 pub use info::JsBoxInfo;
 pub use metrics::{JsBoxMetrics, JsRuntimeMetrics};
-pub use options::{JsBoxOptions, JsEnvVar, JsOptions, JsPortSpec, JsVolumeSpec};
+pub use options::{
+    JsBoxOptions, JsBoxliteRestOptions, JsEnvVar, JsOptions, JsPortSpec, JsVolumeSpec,
+};
 pub use runtime::JsBoxlite; // re-export for dist bundling
+pub use snapshot_options::{JsCloneOptions, JsExportOptions, JsSnapshotOptions};
+pub use snapshots::{JsSnapshotHandle, JsSnapshotInfo};

@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use boxlite::BoxliteRestOptions;
 use boxlite::runtime::advanced_options::{AdvancedBoxOptions, SecurityOptions};
 use boxlite::runtime::constants::images;
 use boxlite::runtime::options::{
@@ -243,5 +244,66 @@ impl From<JsBoxOptions> for BoxOptions {
             cmd: js_opts.cmd,
             user: js_opts.user,
         }
+    }
+}
+
+/// REST backend configuration options.
+#[napi(object)]
+#[derive(Clone, Debug)]
+pub struct JsBoxliteRestOptions {
+    /// REST API base URL.
+    pub url: String,
+    /// OAuth2 client ID (optional).
+    #[napi(js_name = "clientId")]
+    pub client_id: Option<String>,
+    /// OAuth2 client secret (optional).
+    #[napi(js_name = "clientSecret")]
+    pub client_secret: Option<String>,
+    /// URL path prefix (optional).
+    pub prefix: Option<String>,
+}
+
+impl From<JsBoxliteRestOptions> for BoxliteRestOptions {
+    fn from(js_opts: JsBoxliteRestOptions) -> Self {
+        let mut opts = BoxliteRestOptions::new(js_opts.url);
+        opts.client_id = js_opts.client_id;
+        opts.client_secret = js_opts.client_secret;
+        opts.prefix = js_opts.prefix;
+        opts
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rest_options_from_js_all_fields() {
+        let js = JsBoxliteRestOptions {
+            url: "https://api.example.com".into(),
+            client_id: Some("cid".into()),
+            client_secret: Some("csec".into()),
+            prefix: Some("/v1".into()),
+        };
+        let opts: BoxliteRestOptions = js.into();
+        assert_eq!(opts.url, "https://api.example.com");
+        assert_eq!(opts.client_id.as_deref(), Some("cid"));
+        assert_eq!(opts.client_secret.as_deref(), Some("csec"));
+        assert_eq!(opts.prefix.as_deref(), Some("/v1"));
+    }
+
+    #[test]
+    fn rest_options_from_js_url_only() {
+        let js = JsBoxliteRestOptions {
+            url: "https://api.example.com".into(),
+            client_id: None,
+            client_secret: None,
+            prefix: None,
+        };
+        let opts: BoxliteRestOptions = js.into();
+        assert_eq!(opts.url, "https://api.example.com");
+        assert!(opts.client_id.is_none());
+        assert!(opts.client_secret.is_none());
+        assert!(opts.prefix.is_none());
     }
 }

@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
-use boxlite::BoxliteRuntime;
+use boxlite::{BoxArchive, BoxliteRuntime};
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
 use crate::box_handle::JsBox;
 use crate::info::JsBoxInfo;
 use crate::metrics::JsRuntimeMetrics;
-use crate::options::{JsBoxOptions, JsOptions};
+use crate::options::{JsBoxOptions, JsBoxliteRestOptions, JsOptions};
 use crate::util::map_err;
 
 /// BoxLite runtime instance.
@@ -73,6 +73,26 @@ impl JsBoxlite {
     #[napi]
     pub fn init_default(options: JsOptions) -> Result<()> {
         BoxliteRuntime::init_default_runtime(options.into()).map_err(map_err)
+    }
+
+    /// Create a runtime that connects to a remote BoxLite REST backend.
+    #[napi(factory)]
+    pub fn rest(options: JsBoxliteRestOptions) -> Result<Self> {
+        let runtime = BoxliteRuntime::rest(options.into()).map_err(map_err)?;
+        Ok(Self {
+            runtime: Arc::new(runtime),
+        })
+    }
+
+    /// Import a box from a `.boxlite` archive.
+    #[napi(js_name = "importBox")]
+    pub async fn import_box(&self, archive_path: String, name: Option<String>) -> Result<JsBox> {
+        let runtime = Arc::clone(&self.runtime);
+        let archive = BoxArchive::new(archive_path);
+        let handle = runtime.import_box(archive, name).await.map_err(map_err)?;
+        Ok(JsBox {
+            handle: Arc::new(handle),
+        })
     }
 
     /// Create a new box.

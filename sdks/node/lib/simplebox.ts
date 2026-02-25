@@ -583,6 +583,16 @@ export class SimpleBox {
   }
 
   /**
+   * Get box metrics (CPU, memory, network stats, etc.).
+   *
+   * @returns Promise resolving to box metrics
+   */
+  async metrics() {
+    const box = await this._ensureBox();
+    return box.metrics();
+  }
+
+  /**
    * Stop the box.
    *
    * Sends a graceful shutdown signal to the VM. If `autoRemove` is true

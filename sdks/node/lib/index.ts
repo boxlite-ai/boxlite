@@ -54,3 +54,4 @@ export {
   InteractiveBox,
   type InteractiveBoxOptions,
 } from "./interactivebox.js";
+export { SkillBox, type SkillBoxOptions } from "./skillbox.js";
