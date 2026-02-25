@@ -215,7 +215,7 @@ For details, see [Architecture](./docs/architecture/).
 ## Getting Help
 
 - [GitHub Issues](https://github.com/boxlite-ai/boxlite/issues) — Bug reports and feature requests
-- [Discord](https://discord.gg/bCmaK4Ce) — Questions and community support
+- [Discord](https://go.boxlite.ai/discord) — Questions and community support
 
 ## Contributing
 
