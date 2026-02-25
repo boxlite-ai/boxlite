@@ -163,6 +163,8 @@ setup_python() {
         brew install python@3.11
         print_success "Python installed"
     fi
+
+    install_python_dev_tools
     echo ""
 }
 
@@ -230,6 +232,8 @@ main() {
     setup_go
 
     install_nodejs
+
+    install_node_sdk_deps
 
     # Rust/cargo is guaranteed above; bootstrap prek and install hooks best-effort.
     bootstrap_prek_and_hooks

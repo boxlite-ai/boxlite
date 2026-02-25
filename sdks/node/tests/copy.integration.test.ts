@@ -60,8 +60,12 @@ describe("copyIn / copyOut integration", { timeout: 120_000 }, () => {
     // copyOut also wraps under dir-in/ by default
     await box.copyOut("/root/dir-in", dirDst, { recursive: true });
 
-    expect(fs.readFileSync(path.join(dirDst, "dir-in", "a.txt"), "utf-8")).toBe("aaa\n");
-    expect(fs.readFileSync(path.join(dirDst, "dir-in", "b.txt"), "utf-8")).toBe("bbb\n");
+    expect(fs.readFileSync(path.join(dirDst, "dir-in", "a.txt"), "utf-8")).toBe(
+      "aaa\n",
+    );
+    expect(fs.readFileSync(path.join(dirDst, "dir-in", "b.txt"), "utf-8")).toBe(
+      "bbb\n",
+    );
   });
 
   test("overwrite existing file", async () => {

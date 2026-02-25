@@ -113,6 +113,18 @@ check_python() {
     fi
 }
 
+# Install Python dev tools (linting/formatting)
+install_python_dev_tools() {
+    print_step "Checking for ruff... "
+    if command_exists ruff; then
+        print_success "Already installed"
+    else
+        echo -e "${YELLOW}Installing...${NC}"
+        python3 -m pip install --quiet --user ruff
+        print_success "ruff installed"
+    fi
+}
+
 # Check Go installation
 check_go() {
     print_step "Checking for Go... "
@@ -232,6 +244,21 @@ install_git_hooks_best_effort() {
         print_success "installed"
     else
         print_warning "Hook installation failed; continuing setup"
+    fi
+}
+
+# Install Node SDK dev dependencies (prettier, etc.)
+install_node_sdk_deps() {
+    local sdk_dir="${PROJECT_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}/sdks/node"
+    if [ ! -d "$sdk_dir" ]; then
+        return 0
+    fi
+    print_step "Installing Node SDK dependencies... "
+    if [ -d "$sdk_dir/node_modules" ]; then
+        print_success "Already installed"
+    else
+        (cd "$sdk_dir" && npm install --silent)
+        print_success "Installed"
     fi
 }
 

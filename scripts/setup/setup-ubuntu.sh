@@ -111,6 +111,13 @@ install_system_deps() {
     echo ""
 }
 
+# Setup Python dev tools
+setup_python() {
+    print_section "🐍 Setting up Python dev tools..."
+    install_python_dev_tools
+    echo ""
+}
+
 # Install Node.js
 install_nodejs() {
     if [ "${SKIP_INSTALL_NODEJS:-}" = "1" ]; then
@@ -171,7 +178,11 @@ main() {
 
     install_system_deps
 
+    setup_python
+
     install_nodejs
+
+    install_node_sdk_deps
 
     install_linuxdeploy
 
