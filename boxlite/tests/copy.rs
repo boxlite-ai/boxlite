@@ -463,7 +463,7 @@ async fn copy_in_creates_intermediate_dirs(bx: &LiteBox, tmp: &Path) {
 
     bx.copy_into(
         &src,
-        "/tmp/deep/new/path/mkdirs.txt",
+        "/root/deep/new/path/mkdirs.txt",
         CopyOptions::default(),
     )
     .await
@@ -471,7 +471,7 @@ async fn copy_in_creates_intermediate_dirs(bx: &LiteBox, tmp: &Path) {
 
     let out = exec_stdout(
         bx,
-        BoxCommand::new("cat").args(["/tmp/deep/new/path/mkdirs.txt"]),
+        BoxCommand::new("cat").args(["/root/deep/new/path/mkdirs.txt"]),
     )
     .await;
     assert_eq!(out, "nested\n");
@@ -499,7 +499,7 @@ async fn concurrent_copy_roundtrip(bx: &LiteBox, tmp: &Path) {
             let src = tmp.join(format!("conc-in-{}.txt", i));
             std::fs::write(&src, &content).unwrap();
 
-            let container_path = format!("/tmp/conc-{}/file.txt", i);
+            let container_path = format!("/root/conc-{}/file.txt", i);
             bx.copy_into(&src, &container_path, CopyOptions::default())
                 .await
                 .unwrap_or_else(|e| panic!("copy_into {} failed: {}", i, e));
