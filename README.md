@@ -211,7 +211,6 @@ For details, see [Architecture](./docs/architecture/).
 | macOS          | Apple Silicon, macOS 12+                       |
 | Linux          | KVM enabled (`/dev/kvm` accessible)            |
 | Windows (WSL2) | WSL2 with KVM support, user in `kvm` group     |
-| Python         | 3.10+                                          |
 
 ## Getting Help
 
