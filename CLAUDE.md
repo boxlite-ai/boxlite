@@ -148,6 +148,9 @@ Key guidelines to internalize:
 - **gRPC communication**: Host-guest communication via vsock (not TCP)
 - **~/.boxlite directory**: All runtime data stored here (images, boxes, db)
 
+**Git workflow:**
+- **NEVER use `--no-verify`** to bypass git hooks without explicit user permission. If hooks fail, fix the root cause or ask the user for guidance.
+
 **When writing code:**
 - All I/O is async (Tokio runtime)
 - Errors use centralized `BoxliteError` enum (see `boxlite-shared/src/errors.rs`)

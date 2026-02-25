@@ -163,8 +163,6 @@ setup_python() {
         brew install python@3.11
         print_success "Python installed"
     fi
-
-    install_python_dev_tools
     echo ""
 }
 
@@ -229,6 +227,8 @@ main() {
 
     setup_python
 
+    install_python_sdk_deps
+
     setup_go
 
     install_nodejs
@@ -239,8 +239,6 @@ main() {
     bootstrap_prek_and_hooks
 
     print_header "Setup Complete"
-    echo ""
-    echo "Note: libkrun and libkrunfw will be built from source during cargo build."
 }
 
 main "$@"

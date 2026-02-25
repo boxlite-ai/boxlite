@@ -130,6 +130,7 @@ install_python_deps() {
         pip3 install -q meson
         print_success "meson installed"
     fi
+
     echo ""
 }
 
@@ -232,6 +233,8 @@ main() {
     install_system_deps
 
     install_python_deps
+
+    install_python_sdk_deps
 
     install_protoc
 

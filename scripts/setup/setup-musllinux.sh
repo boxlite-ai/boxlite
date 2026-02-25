@@ -113,6 +113,7 @@ install_python_deps() {
         pip3 install --quiet pyelftools
         print_success "pyelftools installed"
     fi
+
     echo ""
 }
 
@@ -177,6 +178,8 @@ main() {
     install_system_deps
 
     install_python_deps
+
+    install_python_sdk_deps
 
     install_protoc
 

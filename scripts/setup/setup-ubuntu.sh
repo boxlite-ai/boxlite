@@ -113,8 +113,8 @@ install_system_deps() {
 
 # Setup Python dev tools
 setup_python() {
-    print_section "🐍 Setting up Python dev tools..."
-    install_python_dev_tools
+    print_section "🐍 Checking Python..."
+    check_python
     echo ""
 }
 
@@ -179,6 +179,8 @@ main() {
     install_system_deps
 
     setup_python
+
+    install_python_sdk_deps
 
     install_nodejs
 
