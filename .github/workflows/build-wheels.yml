@@ -56,8 +56,9 @@ jobs:
           mkdir -p ".cache/$GUEST_TARGET/release"
           cp "target/$GUEST_TARGET/release/boxlite-guest" ".cache/$GUEST_TARGET/release/"
 
-          # Clean up to save disk space
+          # Clean up to save disk space (keep target/ dir for rust-cache post-step)
           rm -rf target ~/.rustup ~/.cargo
+          mkdir -p target
 
       - name: Build wheels
         uses: pypa/cibuildwheel@v3.2.0

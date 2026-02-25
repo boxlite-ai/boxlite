@@ -81,8 +81,9 @@ jobs:
           mkdir -p ".cache/$GUEST_TARGET/release"
           cp "target/$GUEST_TARGET/release/boxlite-guest" ".cache/$GUEST_TARGET/release/"
 
-          # Clean up to save disk space
+          # Clean up to save disk space (keep target/ dir for rust-cache post-step)
           rm -rf target ~/.rustup ~/.cargo
+          mkdir -p target
 
       # Cache cargo registry for manylinux container.
       # Swatinem/rust-cache can't run inside Docker, so we use actions/cache

@@ -438,6 +438,7 @@ name = "boxlite-go-bridge"
 version = "0.1.0"
 dependencies = [
  "boxlite",
+ "boxlite-ffi",
  "boxlite-shared",
  "libc",
  "once_cell",
