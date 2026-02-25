@@ -227,8 +227,6 @@ main() {
 
     setup_python
 
-    install_python_sdk_deps
-
     setup_go
 
     install_nodejs

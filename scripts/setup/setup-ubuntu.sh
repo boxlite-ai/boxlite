@@ -180,8 +180,6 @@ main() {
 
     setup_python
 
-    install_python_sdk_deps
-
     install_nodejs
 
     install_node_sdk_deps

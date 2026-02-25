@@ -1,22 +1,22 @@
-PHONY_TARGETS += dev\:python dev\:c dev\:node
+PHONY_TARGETS += venv\:python dev\:python dev\:c dev\:node
+
+# Ensure Python venv exists with dev dependencies (lightweight, no runtime build).
+venv\:python:
+	@if [ ! -d .venv ]; then \
+		echo "📦 Creating virtual environment..."; \
+		python3 -m venv .venv || { echo "❌ Failed to create virtual environment"; exit 1; }; \
+	fi
+	@. .venv/bin/activate && pip install -q -e "sdks/python[dev,sync]"
 
 # Build wheel locally with maturin + platform-specific repair tool
 dev\:python: runtime-debug
-	@echo "📦 Building wheel locally with maturin..."
-	@if [ ! -d .venv ]; then \
-		echo "📦 Creating virtual environment..."; \
-		python3 -m venv .venv; \
-	fi
-
-	echo "📦 Installing maturin..."; \
-	. .venv/bin/activate && pip install -q maturin; \
-
+	@$(MAKE) venv:python
 	@echo "📦 Copying runtime to Python module..."
 	@rm -rf $(CURDIR)/sdks/python/boxlite/runtime
 	@cp -a $(CURDIR)/target/boxlite-runtime $(CURDIR)/sdks/python/boxlite/runtime
 
 	@echo "🔨 Building wheel with maturin..."
-	@. .venv/bin/activate && cd sdks/python && maturin develop
+	@. .venv/bin/activate && pip install -q maturin && cd sdks/python && maturin develop
 
 dev\:c: runtime
 	@if [ "$$(uname)" = "Darwin" ]; then \

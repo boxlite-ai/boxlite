@@ -137,13 +137,15 @@ test\:integration\:cli: runtime-debug
 
 # Python SDK unit tests.
 test\:unit\:python:
+	@$(MAKE) venv:python
 	@echo "🧪 Running Python SDK unit tests..."
-	@cd sdks/python && python -m pytest tests/ -v -m "not integration"
+	@. .venv/bin/activate && cd sdks/python && python -m pytest tests/ -v -m "not integration"
 
 # Python SDK integration tests.
 test\:integration\:python:
+	@$(MAKE) dev:python
 	@echo "🧪 Running Python SDK integration tests..."
-	@cd sdks/python && python -m pytest tests/ -v -m "integration"
+	@. .venv/bin/activate && cd sdks/python && python -m pytest tests/ -v -m "integration"
 
 # Python SDK full suite.
 test\:all\:python:

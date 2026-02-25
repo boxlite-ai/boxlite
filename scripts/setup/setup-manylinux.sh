@@ -234,8 +234,6 @@ main() {
 
     install_python_deps
 
-    install_python_sdk_deps
-
     install_protoc
 
     install_nodejs

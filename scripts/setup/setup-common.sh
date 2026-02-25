@@ -235,29 +235,6 @@ install_git_hooks_best_effort() {
     fi
 }
 
-# Install Python SDK dev dependencies (ruff, pytest, pytest-asyncio)
-install_python_sdk_deps() {
-    local sdk_dir="${PROJECT_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}/sdks/python"
-
-    print_step "Installing Python SDK dev dependencies... "
-
-    # ruff (linting/formatting) — needed even without the SDK directory
-    if command_exists ruff; then
-        print_success "ruff already installed"
-    else
-        python3 -m pip install --quiet --user ruff
-        print_success "ruff installed"
-    fi
-
-    # pytest + pytest-asyncio from SDK dev extras
-    if [ ! -d "$sdk_dir" ]; then
-        return 0
-    fi
-
-    (cd "$sdk_dir" && python3 -m pip install --quiet --user -e ".[dev]")
-    print_success "Python SDK dev dependencies installed"
-}
-
 # Install Node SDK dev dependencies (prettier, etc.)
 install_node_sdk_deps() {
     local sdk_dir="${PROJECT_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}/sdks/node"
