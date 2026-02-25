@@ -317,7 +317,7 @@ dependencies = [
 
 [[package]]
 name = "boxlite"
-version = "0.5.14"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -383,7 +383,7 @@ dependencies = [
 
 [[package]]
 name = "boxlite-c"
-version = "0.5.14"
+version = "0.6.0"
 dependencies = [
  "boxlite-ffi",
  "cbindgen",
@@ -422,7 +422,7 @@ dependencies = [
 
 [[package]]
 name = "boxlite-ffi"
-version = "0.5.14"
+version = "0.6.0"
 dependencies = [
  "boxlite",
  "futures",
@@ -433,7 +433,7 @@ dependencies = [
 
 [[package]]
 name = "boxlite-guest"
-version = "0.5.14"
+version = "0.6.0"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -462,7 +462,7 @@ dependencies = [
 
 [[package]]
 name = "boxlite-node"
-version = "0.5.14"
+version = "0.6.0"
 dependencies = [
  "boxlite",
  "boxlite-shared",
@@ -476,7 +476,7 @@ dependencies = [
 
 [[package]]
 name = "boxlite-python"
-version = "0.5.14"
+version = "0.6.0"
 dependencies = [
  "boxlite",
  "futures",
@@ -489,7 +489,7 @@ dependencies = [
 
 [[package]]
 name = "boxlite-shared"
-version = "0.5.14"
+version = "0.6.0"
 dependencies = [
  "proptest",
  "prost",
@@ -516,7 +516,7 @@ dependencies = [
 
 [[package]]
 name = "bubblewrap-sys"
-version = "0.5.14"
+version = "0.6.0"
 dependencies = [
  "num_cpus",
 ]
@@ -993,7 +993,7 @@ checksum = "f678cf4a922c215c63e0de95eb1ff08a958a81d47e485cf9da1e27bf6305cfa5"
 
 [[package]]
 name = "e2fsprogs-sys"
-version = "0.5.14"
+version = "0.6.0"
 dependencies = [
  "num_cpus",
 ]
@@ -1913,14 +1913,14 @@ dependencies = [
 
 [[package]]
 name = "libgvproxy-sys"
-version = "0.5.14"
+version = "0.6.0"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "libkrun-sys"
-version = "0.5.14"
+version = "0.6.0"
 dependencies = [
  "libc",
  "num_cpus",
