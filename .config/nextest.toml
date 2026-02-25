@@ -40,11 +40,4 @@ success-output = "immediate"
 # TEST GROUP OVERRIDES
 # =============================================================================
 
-# CLI integration tests (boxlite-cli/tests/*.rs) — MUST be serial.
-# Shares /tmp/bl home directory via OnceLock + Mutex.
-[[profile.default.overrides]]
-filter = "package(boxlite-cli) & kind(test) & not binary(~completion)"
-test-group = "serial-cli"
-
-[test-groups.serial-cli]
-max-threads = 1
+# CLI integration tests now use per-test TempDir (parallel-safe).

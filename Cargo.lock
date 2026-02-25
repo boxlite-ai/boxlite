@@ -325,6 +325,7 @@ dependencies = [
  "base64 0.22.1",
  "bincode 2.0.1",
  "boxlite-shared",
+ "boxlite-test-utils",
  "bubblewrap-sys",
  "caps",
  "chrono",
@@ -396,6 +397,7 @@ dependencies = [
  "anyhow",
  "assert_cmd",
  "boxlite",
+ "boxlite-test-utils",
  "chrono",
  "clap",
  "clap_complete",
@@ -501,6 +503,16 @@ dependencies = [
  "tokio",
  "tonic",
  "tonic-build",
+]
+
+[[package]]
+name = "boxlite-test-utils"
+version = "0.1.0"
+dependencies = [
+ "boxlite",
+ "libc",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]

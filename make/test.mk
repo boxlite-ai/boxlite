@@ -131,7 +131,7 @@ test\:integration\:cli: runtime-debug
 		cargo nextest run -p boxlite-cli --tests --no-fail-fast \
 		$(if $(FILTER),-E 'test($(FILTER))',); \
 	else \
-		cargo test -p boxlite-cli --tests --no-fail-fast -- --test-threads=1 \
+		cargo test -p boxlite-cli --tests --no-fail-fast -- \
 		$(if $(FILTER),$(FILTER),); \
 	fi
 

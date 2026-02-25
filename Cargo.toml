@@ -12,6 +12,7 @@ members = [
     "sdks/c",
     "sdks/python",
     "sdks/node",
+    "boxlite-test-utils",
 ]
 exclude = ["build/tmp", "target", ".venv", "examples/*/.venv"]
 

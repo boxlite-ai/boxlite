@@ -1,0 +1,11 @@
+[package]
+name = "boxlite-test-utils"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+[dependencies]
+boxlite = { path = "../boxlite" }
+tempfile = "3"
+tokio = { version = "1", features = ["rt", "rt-multi-thread"] }
+libc = "0.2"

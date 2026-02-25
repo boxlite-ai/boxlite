@@ -10,7 +10,7 @@ fn test_create_basic() {
         .arg("alpine:latest")
         .assert()
         .success()
-        .stdout(predicate::str::is_match(r"^[0-9A-HJ-NP-Z]{26}\n$").unwrap());
+        .stdout(predicate::str::is_match(r"^[0-9A-Za-z]{12}\n$").unwrap());
 }
 
 #[test]
@@ -24,7 +24,7 @@ fn test_create_named() {
         .arg("alpine:latest")
         .assert()
         .success()
-        .stdout(predicate::str::is_match(r"^[0-9A-HJ-NP-Z]{26}\n$").unwrap());
+        .stdout(predicate::str::is_match(r"^[0-9A-Za-z]{12}\n$").unwrap());
 
     ctx.new_cmd()
         .arg("create")
@@ -82,7 +82,7 @@ fn test_create_with_publish_success() {
         ])
         .assert()
         .success()
-        .stdout(predicate::str::is_match(r"^[0-9A-HJ-NP-Z]{26}\n$").unwrap());
+        .stdout(predicate::str::is_match(r"^[0-9A-Za-z]{12}\n$").unwrap());
 
     ctx.cleanup_box(name);
 }
@@ -119,7 +119,7 @@ fn test_create_with_volume_success() {
         ])
         .assert()
         .success()
-        .stdout(predicate::str::is_match(r"^[0-9A-HJ-NP-Z]{26}\n$").unwrap());
+        .stdout(predicate::str::is_match(r"^[0-9A-Za-z]{12}\n$").unwrap());
 
     ctx.cleanup_box(name);
 }
