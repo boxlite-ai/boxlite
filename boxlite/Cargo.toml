@@ -29,11 +29,11 @@ gvproxy-backend = ["dep:libgvproxy-sys"]   # Uses libgvproxy CGO shared library,
 rest = ["dep:reqwest", "dep:urlencoding"]  # REST API client backend
 
 [dependencies]
-boxlite-shared = { path = "../boxlite-shared", version = "0.5.11" }
+boxlite-shared.workspace = true
 
-e2fsprogs-sys = { path = "deps/e2fsprogs-sys", version = "0.5.11" }
-libgvproxy-sys = { path = "deps/libgvproxy-sys", version = "0.5.11", optional = true }
-libkrun-sys = { path = "deps/libkrun-sys", version = "0.5.11" }
+e2fsprogs-sys.workspace = true
+libgvproxy-sys = { workspace = true, optional = true }
+libkrun-sys.workspace = true
 
 thiserror = "1.0"
 async-trait = "0.1"
@@ -87,7 +87,7 @@ urlencoding = { version = "2.1", optional = true }
 
 # Linux-specific dependencies for bind mount support
 [target.'cfg(target_os = "linux")'.dependencies]
-bubblewrap-sys = { path = "deps/bubblewrap-sys", version = "0.5.11" }  # Bundled bwrap for sandbox isolation
+bubblewrap-sys.workspace = true  # Bundled bwrap for sandbox isolation
 caps = "0.5"
 fuse-backend-rs = { version = "0.12", features = ["fusedev"] }
 seccompiler = "0.4"  # Generate seccomp BPF filters for jailer
@@ -104,4 +104,5 @@ seccompiler = { version = "0.4", features = ["json"] }  # Compile JSON filters t
 bincode = "2.0"  # Serialize compiled BPF filters
 
 [dev-dependencies]
+boxlite-test-utils = { path = "../boxlite-test-utils" }
 proptest = "1.4"

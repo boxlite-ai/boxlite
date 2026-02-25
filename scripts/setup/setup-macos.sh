@@ -231,12 +231,12 @@ main() {
 
     install_nodejs
 
+    install_node_sdk_deps
+
     # Rust/cargo is guaranteed above; bootstrap prek and install hooks best-effort.
     bootstrap_prek_and_hooks
 
     print_header "Setup Complete"
-    echo ""
-    echo "Note: libkrun and libkrunfw will be built from source during cargo build."
 }
 
 main "$@"

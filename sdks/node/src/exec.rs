@@ -262,18 +262,23 @@ impl JsExecution {
     }
 
     /// Kill the running command (send SIGKILL).
-    ///
-    /// Forcefully terminates the process. Unlike stop(), this doesn't
-    /// wait for graceful shutdown.
-    ///
-    /// # Example
-    /// ```javascript
-    /// await execution.kill();
-    /// console.log('Command killed');
-    /// ```
     #[napi]
     pub async fn kill(&self) -> Result<()> {
         let mut guard = self.execution.lock().await;
         guard.kill().await.map_err(map_err)
+    }
+
+    /// Resize the TTY window (only works for TTY-enabled executions).
+    #[napi(js_name = "resizeTty")]
+    pub async fn resize_tty(&self, rows: u32, cols: u32) -> Result<()> {
+        let guard = self.execution.lock().await;
+        guard.resize_tty(rows, cols).await.map_err(map_err)
+    }
+
+    /// Send a signal to the running process.
+    #[napi]
+    pub async fn signal(&self, signal: i32) -> Result<()> {
+        let guard = self.execution.lock().await;
+        guard.signal(signal).await.map_err(map_err)
     }
 }

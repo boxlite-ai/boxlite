@@ -6,6 +6,7 @@
 pub mod constants;
 pub mod errors;
 pub mod layout;
+pub mod tar;
 pub mod transport;
 
 // Generated protobuf types

@@ -113,6 +113,7 @@ install_python_deps() {
         pip3 install --quiet pyelftools
         print_success "pyelftools installed"
     fi
+
     echo ""
 }
 

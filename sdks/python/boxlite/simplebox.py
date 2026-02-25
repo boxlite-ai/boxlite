@@ -4,6 +4,7 @@ SimpleBox - Foundation for specialized container types.
 Provides common functionality for all specialized boxes (CodeBox, BrowserBox, etc.)
 """
 
+import asyncio
 import logging
 from enum import IntEnum
 from typing import Optional, TYPE_CHECKING
@@ -226,12 +227,15 @@ class SimpleBox:
             logger.error(f"take stderr err: {e}")
             stderr = None
 
-        # Collect stdout and stderr separately
+        # Collect stdout and stderr concurrently to avoid deadlock.
+        # Sequential reads can deadlock when a process fills one pipe buffer
+        # while the SDK is blocked reading the other.
         stdout_lines = []
         stderr_lines = []
 
-        # Read stdout
-        if stdout:
+        async def collect_stdout():
+            if not stdout:
+                return
             logger.debug("collecting stdout")
             try:
                 async for line in stdout:
@@ -241,10 +245,10 @@ class SimpleBox:
                         stdout_lines.append(line)
             except Exception as e:
                 logger.error(f"collecting stdout err: {e}")
-                pass
 
-        # Read stderr
-        if stderr:
+        async def collect_stderr():
+            if not stderr:
+                return
             logger.debug("collecting stderr")
             try:
                 async for line in stderr:
@@ -254,9 +258,9 @@ class SimpleBox:
                         stderr_lines.append(line)
             except Exception as e:
                 logger.error(f"collecting stderr err: {e}")
-                pass
 
-        # Combine lines
+        await asyncio.gather(collect_stdout(), collect_stderr())
+
         stdout = "".join(stdout_lines)
         stderr = "".join(stderr_lines)
 

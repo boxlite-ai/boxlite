@@ -211,33 +211,44 @@ fn build_path_access(layout: &BoxFilesystemLayout, volumes: &[VolumeSpec]) -> Ve
     // ~/.boxlite/images/disk-images/*.ext4). Under deny-default seatbelt, those
     // backing files must be explicitly granted as read-only or libkrun fails
     // virtio-blk setup with EINVAL.
+    //
+    // Cloned boxes have multi-level backing chains (clone → source → base image),
+    // so we traverse the full chain to grant access to every backing file.
     for qcow2 in [layout.disk_path(), layout.guest_rootfs_disk_path()] {
         if !qcow2.exists() {
             continue;
         }
-        match read_backing_file_path(&qcow2) {
-            Ok(Some(backing)) => {
-                let backing_path = PathBuf::from(backing);
-                if backing_path.exists() {
-                    if let Some(parent) = backing_path.parent().filter(|p| p.exists()) {
+        let mut current = qcow2;
+        // Walk the backing chain (max 8 levels as safety bound)
+        for _ in 0..8 {
+            match read_backing_file_path(&current) {
+                Ok(Some(backing)) => {
+                    let backing_path = PathBuf::from(backing);
+                    if backing_path.exists() {
+                        if let Some(parent) = backing_path.parent().filter(|p| p.exists()) {
+                            paths.push(PathAccess {
+                                path: parent.to_path_buf(),
+                                writable: false,
+                            });
+                        }
                         paths.push(PathAccess {
-                            path: parent.to_path_buf(),
+                            path: backing_path.clone(),
                             writable: false,
                         });
+                        current = backing_path;
+                    } else {
+                        break;
                     }
-                    paths.push(PathAccess {
-                        path: backing_path,
-                        writable: false,
-                    });
                 }
-            }
-            Ok(None) => {}
-            Err(e) => {
-                tracing::debug!(
-                    qcow2 = %qcow2.display(),
-                    error = %e,
-                    "Failed to read qcow2 backing path while building sandbox access"
-                );
+                Ok(None) => break,
+                Err(e) => {
+                    tracing::debug!(
+                        qcow2 = %current.display(),
+                        error = %e,
+                        "Failed to read qcow2 backing path while building sandbox access"
+                    );
+                    break;
+                }
             }
         }
     }

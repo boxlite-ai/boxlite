@@ -7,7 +7,7 @@
 //! Requires a real VM runtime (alpine:latest image). Run with:
 //!
 //! ```sh
-//! cargo test -p boxlite --test sigstop_quiesce -- --ignored
+//! cargo test -p boxlite --test sigstop_quiesce
 //! ```
 
 mod common;
@@ -17,7 +17,6 @@ use std::time::Duration;
 use boxlite::BoxCommand;
 
 #[tokio::test]
-#[ignore] // Requires VM runtime
 async fn test_sigstop_sigcont_preserves_vm() {
     let ctx = common::ParallelRuntime::new();
 

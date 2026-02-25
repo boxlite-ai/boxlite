@@ -263,7 +263,7 @@ async fn detached_box_survives_runtime_drop() {
     {
         let runtime = BoxliteRuntime::new(BoxliteOptions {
             home_dir: home_dir.clone(),
-            image_registries: vec![],
+            image_registries: common::test_registries(),
         })
         .unwrap();
 
@@ -300,7 +300,7 @@ async fn detached_box_survives_runtime_drop() {
     // Cleanup
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir,
-        image_registries: vec![],
+        image_registries: common::test_registries(),
     })
     .unwrap();
     runtime.remove(&box_id, true).await.unwrap();
@@ -323,7 +323,7 @@ async fn non_detached_box_exits_on_runtime_drop() {
     {
         let runtime = BoxliteRuntime::new(BoxliteOptions {
             home_dir: home_dir.clone(),
-            image_registries: vec![],
+            image_registries: common::test_registries(),
         })
         .unwrap();
 
@@ -373,7 +373,7 @@ async fn detached_box_recoverable_after_restart() {
     {
         let runtime = BoxliteRuntime::new(BoxliteOptions {
             home_dir: home_dir.clone(),
-            image_registries: vec![],
+            image_registries: common::test_registries(),
         })
         .unwrap();
 
@@ -396,7 +396,7 @@ async fn detached_box_recoverable_after_restart() {
     {
         let runtime = BoxliteRuntime::new(BoxliteOptions {
             home_dir,
-            image_registries: vec![],
+            image_registries: common::test_registries(),
         })
         .unwrap();
 
@@ -486,7 +486,7 @@ async fn recovery_with_live_process() {
     {
         let runtime = BoxliteRuntime::new(BoxliteOptions {
             home_dir: home_dir.clone(),
-            image_registries: vec![],
+            image_registries: common::test_registries(),
         })
         .unwrap();
 
@@ -512,7 +512,7 @@ async fn recovery_with_live_process() {
     {
         let runtime = BoxliteRuntime::new(BoxliteOptions {
             home_dir,
-            image_registries: vec![],
+            image_registries: common::test_registries(),
         })
         .unwrap();
 
@@ -540,7 +540,7 @@ async fn recovery_with_dead_process() {
     {
         let runtime = BoxliteRuntime::new(BoxliteOptions {
             home_dir: home_dir.clone(),
-            image_registries: vec![],
+            image_registries: common::test_registries(),
         })
         .unwrap();
 
@@ -574,7 +574,7 @@ async fn recovery_with_dead_process() {
     {
         let runtime = BoxliteRuntime::new(BoxliteOptions {
             home_dir: home_dir.clone(),
-            image_registries: vec![],
+            image_registries: common::test_registries(),
         })
         .unwrap();
 
@@ -612,7 +612,7 @@ async fn recovery_with_missing_pid_file() {
     {
         let runtime = BoxliteRuntime::new(BoxliteOptions {
             home_dir: home_dir.clone(),
-            image_registries: vec![],
+            image_registries: common::test_registries(),
         })
         .unwrap();
 
@@ -639,7 +639,7 @@ async fn recovery_with_missing_pid_file() {
     {
         let runtime = BoxliteRuntime::new(BoxliteOptions {
             home_dir,
-            image_registries: vec![],
+            image_registries: common::test_registries(),
         })
         .unwrap();
 
@@ -669,7 +669,7 @@ async fn recovery_with_corrupted_pid_file() {
     {
         let runtime = BoxliteRuntime::new(BoxliteOptions {
             home_dir: home_dir.clone(),
-            image_registries: vec![],
+            image_registries: common::test_registries(),
         })
         .unwrap();
 
@@ -696,7 +696,7 @@ async fn recovery_with_corrupted_pid_file() {
     {
         let runtime = BoxliteRuntime::new(BoxliteOptions {
             home_dir: home_dir.clone(),
-            image_registries: vec![],
+            image_registries: common::test_registries(),
         })
         .unwrap();
 
@@ -730,7 +730,7 @@ async fn recovery_preserves_stopped_boxes() {
     {
         let runtime = BoxliteRuntime::new(BoxliteOptions {
             home_dir: home_dir.clone(),
-            image_registries: vec![],
+            image_registries: common::test_registries(),
         })
         .unwrap();
 
@@ -751,7 +751,7 @@ async fn recovery_preserves_stopped_boxes() {
     {
         let runtime = BoxliteRuntime::new(BoxliteOptions {
             home_dir,
-            image_registries: vec![],
+            image_registries: common::test_registries(),
         })
         .unwrap();
 

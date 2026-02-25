@@ -37,10 +37,18 @@ fmt\:check\:python:
 
 fmt\:node:
 	@echo "🔧 Formatting Node SDK..."
+	@if [ ! -x sdks/node/node_modules/.bin/prettier ]; then \
+		echo "❌ prettier not found. Run 'npm install' in sdks/node/ or run 'make setup'."; \
+		exit 1; \
+	fi
 	@cd sdks/node && npm run format
 
 fmt\:check\:node:
 	@echo "🔍 Checking Node SDK formatting..."
+	@if [ ! -x sdks/node/node_modules/.bin/prettier ]; then \
+		echo "❌ prettier not found. Run 'npm install' in sdks/node/ or run 'make setup'."; \
+		exit 1; \
+	fi
 	@cd sdks/node && npm run format:check
 
 fmt\:c:
@@ -93,6 +101,10 @@ lint\:python:
 
 lint\:node:
 	@echo "🔍 Linting Node SDK (TypeScript type check)..."
+	@if [ ! -d sdks/node/node_modules ]; then \
+		echo "❌ Node SDK dependencies not installed. Run 'npm install' in sdks/node/ or run 'make setup'."; \
+		exit 1; \
+	fi
 	@cd sdks/node && npx tsc --noEmit
 
 lint\:c:

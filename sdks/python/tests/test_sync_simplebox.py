@@ -101,6 +101,59 @@ class TestSyncSimpleBox:
             assert "MY_VAR=my_value" in result.stdout
 
 
+class TestSyncSimpleBoxConcurrentStreams:
+    """Test that stdout and stderr are read concurrently in sync API.
+
+    Sequential reads deadlock when a process writes enough to both streams:
+    the kernel pipe buffer (~64KB) fills on the unread stream, blocking the
+    process, which prevents the read stream from reaching EOF.
+    """
+
+    def test_concurrent_stdout_stderr_heavy(self, shared_sync_runtime):
+        """Concurrent reads prevent deadlock with heavy interleaved output."""
+        import signal
+
+        # Write ALL stderr first, then ALL stdout. With sequential reads (stdout
+        # first), the SDK would wait on an empty stdout channel while ~250KB of
+        # stderr accumulates in an unbounded buffer. Concurrent reads consume
+        # stderr as it arrives, avoiding unbounded memory growth.
+        cmd = (
+            "i=0; while [ $i -lt 5000 ]; do "
+            'echo "stderr line $i padding to increase size" >&2; '
+            "i=$((i+1)); done; "
+            "i=0; while [ $i -lt 5000 ]; do "
+            'echo "stdout line $i padding to increase size"; '
+            "i=$((i+1)); done"
+        )
+
+        # Use SIGALRM as a timeout mechanism for the sync call.
+        # A deadlock would hang forever; 60s is generous but safe.
+        def timeout_handler(signum, frame):
+            raise TimeoutError(
+                "Deadlock detected: concurrent stream reading likely broken"
+            )
+
+        old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(60)
+        try:
+            with SyncSimpleBox(
+                image="alpine:latest", runtime=shared_sync_runtime
+            ) as box:
+                result = box.exec("sh", "-c", cmd)
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old_handler)
+
+        assert result.exit_code == 0
+        assert "stdout line 0" in result.stdout
+        assert "stderr line 0" in result.stderr
+        assert "stdout line 4999" in result.stdout
+        assert "stderr line 4999" in result.stderr
+        # Verify we got all lines (stderr may include runtime warnings)
+        assert result.stdout.count("\n") == 5000
+        assert result.stderr.count("\n") >= 5000
+
+
 class TestSyncSimpleBoxReuseExisting:
     """Tests for SyncSimpleBox reuse_existing flag."""
 

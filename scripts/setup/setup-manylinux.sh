@@ -130,6 +130,7 @@ install_python_deps() {
         pip3 install -q meson
         print_success "meson installed"
     fi
+
     echo ""
 }
 

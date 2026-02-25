@@ -299,6 +299,51 @@ class TestSimpleBoxReuseExisting:
                     pass  # Should not reach here
 
 
+class TestSimpleBoxConcurrentStreams:
+    """Test that stdout and stderr are read concurrently, not sequentially.
+
+    Sequential reads deadlock when a process writes enough to both streams:
+    the kernel pipe buffer (~64KB) fills on the unread stream, blocking the
+    process, which prevents the read stream from reaching EOF.
+    """
+
+    @pytest.mark.asyncio
+    async def test_concurrent_stdout_stderr_heavy(self, shared_runtime):
+        """Concurrent reads prevent deadlock with heavy interleaved output.
+
+        Writes ~250KB to each stream by interleaving stdout/stderr lines.
+        With sequential reads, stderr buffer fills → process blocks → deadlock.
+        """
+        import asyncio
+
+        # Write ALL stderr first, then ALL stdout. With sequential reads (stdout
+        # first), the SDK would wait on an empty stdout channel while ~250KB of
+        # stderr accumulates in an unbounded buffer. Concurrent reads consume
+        # stderr as it arrives, avoiding unbounded memory growth.
+        cmd = (
+            "i=0; while [ $i -lt 5000 ]; do "
+            'echo "stderr line $i padding to increase size" >&2; '
+            "i=$((i+1)); done; "
+            "i=0; while [ $i -lt 5000 ]; do "
+            'echo "stdout line $i padding to increase size"; '
+            "i=$((i+1)); done"
+        )
+        async with boxlite.SimpleBox(
+            image="alpine:latest", runtime=shared_runtime
+        ) as box:
+            # Timeout: if concurrent reading works, this finishes in seconds.
+            # A deadlock would hang forever, so 60s is generous but safe.
+            result = await asyncio.wait_for(box.exec("sh", "-c", cmd), timeout=60)
+            assert result.exit_code == 0
+            assert "stdout line 0" in result.stdout
+            assert "stderr line 0" in result.stderr
+            assert "stdout line 4999" in result.stdout
+            assert "stderr line 4999" in result.stderr
+            # Verify we got all lines (stderr may include runtime warnings)
+            assert result.stdout.count("\n") == 5000
+            assert result.stderr.count("\n") >= 5000
+
+
 class TestSimpleBoxExports:
     """Test SimpleBox module exports."""
 

@@ -235,6 +235,21 @@ install_git_hooks_best_effort() {
     fi
 }
 
+# Install Node SDK dev dependencies (prettier, etc.)
+install_node_sdk_deps() {
+    local sdk_dir="${PROJECT_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}/sdks/node"
+    if [ ! -d "$sdk_dir" ]; then
+        return 0
+    fi
+    print_step "Installing Node SDK dependencies... "
+    if [ -d "$sdk_dir/node_modules" ]; then
+        print_success "Already installed"
+    else
+        (cd "$sdk_dir" && npm install --silent)
+        print_success "Installed"
+    fi
+}
+
 # Bootstrap prek and hooks as non-fatal setup steps.
 bootstrap_prek_and_hooks() {
     install_prek_best_effort

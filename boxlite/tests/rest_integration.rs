@@ -3,12 +3,11 @@
 //! These tests require:
 //! 1. The `rest` feature enabled: `--features rest`
 //! 2. A running reference server: `python openapi/reference-server/server.py --port 8080`
-//! 3. The `--ignored` flag: tests are marked `#[ignore]` by default
 //!
 //! Run with:
 //! ```bash
 //! BOXLITE_REST_URL=http://localhost:8080 \
-//!   cargo test -p boxlite --features rest --test rest_integration -- --ignored
+//!   cargo test -p boxlite --features rest --test rest_integration
 //! ```
 
 #![cfg(feature = "rest")]
@@ -29,7 +28,6 @@ fn rest_runtime() -> BoxliteRuntime {
 // ── Auth ────────────────────────────────────────────────────────────────
 
 #[tokio::test]
-#[ignore]
 async fn test_rest_auth() {
     // Simply creating the runtime and listing boxes exercises the OAuth2 flow.
     let rt = rest_runtime();
@@ -44,7 +42,6 @@ async fn test_rest_auth() {
 // ── Box CRUD ────────────────────────────────────────────────────────────
 
 #[tokio::test]
-#[ignore]
 async fn test_rest_create_and_get_box() {
     let rt = rest_runtime();
     let opts = BoxOptions::default(); // alpine:latest
@@ -70,7 +67,6 @@ async fn test_rest_create_and_get_box() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn test_rest_list_boxes() {
     let rt = rest_runtime();
     let opts = BoxOptions::default();
@@ -91,7 +87,6 @@ async fn test_rest_list_boxes() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn test_rest_box_exists() {
     let rt = rest_runtime();
     let opts = BoxOptions::default();
@@ -120,7 +115,6 @@ async fn test_rest_box_exists() {
 // ── Lifecycle ───────────────────────────────────────────────────────────
 
 #[tokio::test]
-#[ignore]
 async fn test_rest_start_stop_box() {
     let rt = rest_runtime();
     let opts = BoxOptions {
@@ -160,7 +154,6 @@ async fn test_rest_start_stop_box() {
 // ── Command Execution & SSE Streaming ───────────────────────────────────
 
 #[tokio::test]
-#[ignore]
 async fn test_rest_run_command_and_stream() {
     let rt = rest_runtime();
     let opts = BoxOptions::default();
@@ -202,7 +195,6 @@ async fn test_rest_run_command_and_stream() {
 // ── Remove ──────────────────────────────────────────────────────────────
 
 #[tokio::test]
-#[ignore]
 async fn test_rest_remove_box() {
     let rt = rest_runtime();
     let opts = BoxOptions::default();
@@ -223,7 +215,6 @@ async fn test_rest_remove_box() {
 // ── Metrics ─────────────────────────────────────────────────────────────
 
 #[tokio::test]
-#[ignore]
 async fn test_rest_runtime_metrics() {
     let rt = rest_runtime();
 
@@ -237,7 +228,6 @@ async fn test_rest_runtime_metrics() {
 // ── Not Found ───────────────────────────────────────────────────────────
 
 #[tokio::test]
-#[ignore]
 async fn test_rest_not_found() {
     let rt = rest_runtime();
 
@@ -252,7 +242,6 @@ async fn test_rest_not_found() {
 // ── Snapshot / Clone / Export ─────────────────────────────────────────────
 
 #[tokio::test]
-#[ignore]
 async fn test_rest_snapshot_lifecycle() {
     let rt = rest_runtime();
     let opts = BoxOptions {
@@ -313,7 +302,6 @@ async fn test_rest_snapshot_lifecycle() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn test_rest_clone_from_snapshot() {
     let rt = rest_runtime();
     let opts = BoxOptions {
@@ -348,7 +336,6 @@ async fn test_rest_clone_from_snapshot() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn test_rest_export_box() {
     let rt = rest_runtime();
     let opts = BoxOptions {

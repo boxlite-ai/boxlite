@@ -534,9 +534,6 @@ fn main() {
             fs::create_dir_all(&runtime_dir)
                 .unwrap_or_else(|e| panic!("Failed to create runtime directory: {}", e));
             download_prebuilt_runtime(&runtime_dir);
-            // -sys crates emit rustc-link-lib in STUB mode.
-            // Tell the linker where to find the prebuilt libraries.
-            println!("cargo:rustc-link-search=native={}", runtime_dir.display());
             // Embed runtime directory for compile-time fallback by RuntimeBinaryFinder.
             // Runtime override remains BOXLITE_RUNTIME_DIR (read via std::env::var).
             // Compile-time embed is only needed in prebuilt mode.
@@ -556,6 +553,10 @@ fn main() {
             }
         }
     }
+
+    // -sys crates emit rustc-link-lib in STUB mode.
+    // Tell the linker where to find the prebuilt libraries.
+    println!("cargo:rustc-link-search=native={}", runtime_dir.display());
 
     // Expose the runtime directory to downstream crates (e.g., Python SDK)
     println!("cargo:runtime_dir={}", runtime_dir.display());

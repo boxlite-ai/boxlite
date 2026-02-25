@@ -13,13 +13,21 @@ members = [
     "sdks/python",
     "sdks/node",
     "sdks/go/rust",
+    "boxlite-test-utils",
 ]
 exclude = ["build/tmp", "target", ".venv", "examples/*/.venv"]
 
 resolver = "2"
 
+[workspace.dependencies]
+boxlite-shared = { path = "boxlite-shared", version = "0.6.0" }
+bubblewrap-sys = { path = "boxlite/deps/bubblewrap-sys", version = "0.6.0" }
+e2fsprogs-sys = { path = "boxlite/deps/e2fsprogs-sys", version = "0.6.0" }
+libgvproxy-sys = { path = "boxlite/deps/libgvproxy-sys", version = "0.6.0" }
+libkrun-sys = { path = "boxlite/deps/libkrun-sys", version = "0.6.0" }
+
 [workspace.package]
-version = "0.5.14"
+version = "0.6.0"
 edition = "2024"
 authors = ["Dorian Zheng <https://github.com/dorianzheng>"]
 license = "Apache-2.0"
