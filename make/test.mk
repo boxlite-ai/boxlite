@@ -12,42 +12,67 @@ test:
 
 # Full matrix: all unit suites + all integration suites.
 test\:all:
-	@$(MAKE) test:unit
-	@$(MAKE) test:integration
+	@echo "📋 Running full test matrix (unit → integration)"
+	@echo ""
+	$(MAKE) test:unit
+	@echo ""
+	$(MAKE) test:integration
+	@echo ""
 	@echo "✅ All tests passed (full matrix)"
 
 # Unit matrix.
 test\:unit:
-	@$(MAKE) test:unit:core
-	@$(MAKE) test:unit:sdk
+	@echo "── Unit tests (core, sdk) ──"
+	@echo ""
+	$(MAKE) test:unit:core
+	@echo ""
+	$(MAKE) test:unit:sdk
+	@echo ""
 	@echo "✅ Unit test matrix passed"
 
 # Integration matrix.
 test\:integration:
-	@$(MAKE) test:integration:core
-	@$(MAKE) test:integration:sdk
+	@echo "── Integration tests (core, sdk) ──"
+	@echo ""
+	$(MAKE) test:integration:core
+	@echo ""
+	$(MAKE) test:integration:sdk
+	@echo ""
 	@echo "✅ Integration test matrix passed"
 
 # Core unit suites: Rust unit + FFI unit.
 test\:unit\:core:
-	@$(MAKE) test:unit:rust
-	@$(MAKE) test:unit:ffi
+	@echo "── Core unit suites (rust, ffi) ──"
+	@echo ""
+	$(MAKE) test:unit:rust
+	@echo ""
+	$(MAKE) test:unit:ffi
 
 # Core integration suites: Rust integration + CLI integration.
 test\:integration\:core:
-	@$(MAKE) test:integration:rust
-	@$(MAKE) test:integration:cli
+	@echo "── Core integration suites (rust, cli) ──"
+	@echo ""
+	$(MAKE) test:integration:rust
+	@echo ""
+	$(MAKE) test:integration:cli
 
 # SDK unit suites: Python unit + Node unit.
 test\:unit\:sdk:
-	@$(MAKE) test:unit:python
-	@$(MAKE) test:unit:node
+	@echo "── SDK unit suites (python, node) ──"
+	@echo ""
+	$(MAKE) test:unit:python
+	@echo ""
+	$(MAKE) test:unit:node
 
 # SDK integration suites: Python integration + Node integration + C SDK test suite.
 test\:integration\:sdk:
-	@$(MAKE) test:integration:python
-	@$(MAKE) test:integration:node
-	@$(MAKE) test:all:c
+	@echo "── SDK integration suites (python, node, c) ──"
+	@echo ""
+	$(MAKE) test:integration:python
+	@echo ""
+	$(MAKE) test:integration:node
+	@echo ""
+	$(MAKE) test:all:c
 
 # Rust unit tests (parallel via nextest, fallback to serial cargo test).
 # --no-default-features disables gvproxy-backend to avoid Go runtime link issues.
