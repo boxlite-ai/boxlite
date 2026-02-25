@@ -316,10 +316,8 @@ impl IsolatedRuntime {
 pub fn warm_dir(home_dir: &std::path::Path) {
     let warm = warm_home();
 
-    // Symlink images, rootfs, tmp → target/ cache (shared across tests).
-    // Images: read-only layer data. Rootfs: guest rootfs disk (built on first start).
-    // Tmp: must be on the same filesystem as rootfs for atomic rename (Linux tmpfs workaround).
-    for name in ["images", "rootfs", "tmp"] {
+    // Symlink images, rootfs → target/ cache (shared across tests, read-only).
+    for name in ["images", "rootfs"] {
         let link = home_dir.join(name);
         if !link.exists() {
             let warm_target = warm.join(name);
@@ -330,6 +328,14 @@ pub fn warm_dir(home_dir: &std::path::Path) {
             }
         }
     }
+
+    // Per-test tmp: unique subdir on same device as rootfs, avoids cross-test cleanup race
+    // when BoxliteRuntime::new() wipes temp_dir contents on startup.
+    let cache_tmp = cache_dir().join("tmp");
+    std::fs::create_dir_all(&cache_tmp).unwrap_or_default();
+    let per_test_tmp = tempfile::tempdir_in(&cache_tmp).expect("create per-test tmp dir");
+    let per_test_tmp_path = per_test_tmp.keep();
+    symlink_or_exists(&per_test_tmp_path, &home_dir.join("tmp"), "tmp");
 
     // Copy DB from target/ cache so the runtime finds cached image records.
     // Each test gets its own DB copy — no SQLite locking conflicts.
