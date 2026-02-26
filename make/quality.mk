@@ -1,18 +1,40 @@
-PHONY_TARGETS += fmt fmt\:check
+PHONY_TARGETS += fmt fmt\:all fmt\:check fmt\:check\:all
 PHONY_TARGETS += fmt\:rust fmt\:python fmt\:node fmt\:c
 PHONY_TARGETS += fmt\:check\:rust fmt\:check\:python fmt\:check\:node fmt\:check\:c
-PHONY_TARGETS += lint lint\:fix lint\:rust lint\:python lint\:node lint\:c clippy
+PHONY_TARGETS += lint lint\:all lint\:fix lint\:rust lint\:python lint\:node lint\:c clippy
 
-# Format all supported language surfaces.
+# Smart format: only format changed components.
 fmt:
+ifeq ($(FMT_COMPONENTS),)
+	@echo "📋 No changed components — skipping formatting."
+	@echo "   (Use 'make fmt:all' to format everything)"
+else
+	@echo "📋 Formatting changed components: $(FMT_COMPONENTS)"
+	@$(foreach comp,$(FMT_COMPONENTS),$(MAKE) fmt:$(comp) &&) true
+	@echo "✅ Formatting complete"
+endif
+
+# Format all supported language surfaces unconditionally.
+fmt\:all:
 	@$(MAKE) fmt:rust
 	@$(MAKE) fmt:python
 	@$(MAKE) fmt:node
 	@$(MAKE) fmt:c
 	@echo "✅ Formatting complete"
 
-# Check formatting for all supported language surfaces.
+# Smart format check: only check changed components.
 fmt\:check:
+ifeq ($(FMT_COMPONENTS),)
+	@echo "📋 No changed components — skipping format checks."
+	@echo "   (Use 'make fmt:check:all' to check everything)"
+else
+	@echo "📋 Checking formatting for changed components: $(FMT_COMPONENTS)"
+	@$(foreach comp,$(FMT_COMPONENTS),$(MAKE) fmt:check:$(comp) &&) true
+	@echo "✅ Formatting checks passed"
+endif
+
+# Check formatting for all supported language surfaces unconditionally.
+fmt\:check\:all:
 	@$(MAKE) fmt:check:rust
 	@$(MAKE) fmt:check:python
 	@$(MAKE) fmt:check:node
@@ -75,8 +97,19 @@ fmt\:check\:c:
 	fi; \
 	"$$CLANG_FORMAT" --dry-run --Werror sdks/c/include/boxlite.h sdks/c/tests/*.c
 
-# Lint checks are non-mutating by default.
+# Smart lint: only lint changed components.
 lint:
+ifeq ($(FMT_COMPONENTS),)
+	@echo "📋 No changed components — skipping lint checks."
+	@echo "   (Use 'make lint:all' to lint everything)"
+else
+	@echo "📋 Linting changed components: $(FMT_COMPONENTS)"
+	@$(foreach comp,$(FMT_COMPONENTS),$(MAKE) lint:$(comp) &&) true
+	@echo "✅ Lint checks passed"
+endif
+
+# Lint all supported language surfaces unconditionally.
+lint\:all:
 	@$(MAKE) lint:rust
 	@$(MAKE) lint:python
 	@$(MAKE) lint:node
@@ -86,8 +119,10 @@ lint:
 # Safe autofix path: format first, fix Python lint, then verify all lint checks.
 lint\:fix:
 	@$(MAKE) fmt
-	@echo "🔧 Autofixing Python SDK lint issues..."
-	@cd sdks/python && python3 -m ruff check --fix .
+	@if echo "$(FMT_COMPONENTS)" | grep -q 'python'; then \
+		echo "🔧 Autofixing Python SDK lint issues..."; \
+		cd sdks/python && python3 -m ruff check --fix .; \
+	fi
 	@$(MAKE) lint
 
 lint\:rust:
