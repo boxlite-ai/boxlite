@@ -1,4 +1,6 @@
-PHONY_TARGETS += test test\:all test\:unit test\:integration
+PHONY_TARGETS += test test\:changed test\:all test\:unit test\:integration
+PHONY_TARGETS += test\:changed\:rust test\:changed\:cli test\:changed\:ffi
+PHONY_TARGETS += test\:changed\:python test\:changed\:node test\:changed\:c
 PHONY_TARGETS += test\:unit\:core test\:integration\:core test\:unit\:sdk test\:integration\:sdk
 PHONY_TARGETS += test\:unit\:rust test\:warm-cache\:rust test\:integration\:rust
 PHONY_TARGETS += test\:unit\:ffi test\:integration\:cli
@@ -6,9 +8,71 @@ PHONY_TARGETS += test\:unit\:python test\:integration\:python test\:all\:python
 PHONY_TARGETS += test\:unit\:node test\:integration\:node test\:all\:node
 PHONY_TARGETS += test\:all\:c
 
-# Default test target now runs the strict full matrix.
+# Detect changed components by diffing against main (or HEAD~1 if on main).
+# Returns a space-separated list of component tags: rust cli ffi python node c
+define detect_changes
+$(shell \
+  BRANCH=$$(git rev-parse --abbrev-ref HEAD 2>/dev/null); \
+  if [ "$$BRANCH" = "main" ] || [ "$$BRANCH" = "master" ]; then \
+    BASE=HEAD~1; \
+  else \
+    BASE=$$(git merge-base HEAD main 2>/dev/null || git merge-base HEAD master 2>/dev/null || echo HEAD~1); \
+  fi; \
+  CHANGED=$$(git diff --name-only $$BASE HEAD 2>/dev/null; git diff --name-only 2>/dev/null; git diff --cached --name-only 2>/dev/null); \
+  if [ -z "$$CHANGED" ]; then exit 0; fi; \
+  echo "$$CHANGED" | grep -q '^boxlite/' && printf 'rust '; \
+  echo "$$CHANGED" | grep -q '^boxlite-shared/' && printf 'rust '; \
+  echo "$$CHANGED" | grep -q '^guest/' && printf 'rust '; \
+  echo "$$CHANGED" | grep -q '^boxlite-cli/' && printf 'cli '; \
+  echo "$$CHANGED" | grep -q '^boxlite-ffi/' && printf 'ffi '; \
+  echo "$$CHANGED" | grep -q '^sdks/python/' && printf 'python '; \
+  echo "$$CHANGED" | grep -q '^sdks/node/' && printf 'node '; \
+  echo "$$CHANGED" | grep -q '^sdks/c/' && printf 'c '; \
+  echo "$$CHANGED" | grep -q 'Cargo\.toml$$' && printf 'rust cli ffi '; \
+  echo "$$CHANGED" | grep -q '^Cargo\.lock$$' && printf 'rust cli ffi '; \
+)
+endef
+
+CHANGED_COMPONENTS := $(sort $(detect_changes))
+
+# Default test target runs only changed components.
 test:
-	@$(MAKE) test:all
+	@$(MAKE) test:changed
+
+# Smart test: only test components with changes, fall back to full matrix.
+test\:changed:
+ifeq ($(CHANGED_COMPONENTS),)
+	@echo "📋 No changed components detected — skipping tests."
+	@echo "   (Use 'make test:all' to run the full test matrix)"
+else
+	@echo "📋 Changed components: $(CHANGED_COMPONENTS)"
+	@echo ""
+	@$(foreach comp,$(sort $(CHANGED_COMPONENTS)), \
+		$(MAKE) test:changed:$(comp) && \
+	) true
+	@echo ""
+	@echo "✅ All changed-component tests passed"
+endif
+
+# Per-component test dispatch targets (map component tag → existing test targets).
+test\:changed\:rust:
+	@$(MAKE) test:unit:rust
+	@$(MAKE) test:integration:rust
+
+test\:changed\:cli:
+	@$(MAKE) test:integration:cli
+
+test\:changed\:ffi:
+	@$(MAKE) test:unit:ffi
+
+test\:changed\:python:
+	@$(MAKE) test:all:python
+
+test\:changed\:node:
+	@$(MAKE) test:all:node
+
+test\:changed\:c:
+	@$(MAKE) test:all:c
 
 # Full matrix: all unit suites + all integration suites.
 test\:all:
