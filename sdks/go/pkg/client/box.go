@@ -1,6 +1,8 @@
 package client
 
-import "github.com/boxlite-ai/boxlite/sdks/go/internal/binding"
+import (
+	"github.com/boxlite-ai/boxlite/sdks/go/internal/binding"
+)
 
 // Box is a handle to a running or stopped BoxLite box.
 // Closing the handle does not remove the box; the box continues to exist in the runtime.
@@ -35,6 +37,33 @@ func (b *Box) Info() (binding.BoxInfo, error) {
 		Image:     info.Image,
 		State:     info.State,
 		CreatedAt: info.CreatedAt,
+	}, nil
+}
+
+// Exec executes a command inside the box and returns the result.
+// If opts is nil, the command is executed with default options.
+func (b *Box) Exec(command string, opts *ExecOptions) (*ExecResult, error) {
+	bindOpts := binding.ExecOptions{}
+	if opts != nil {
+		bindOpts.Args = opts.Args
+		bindOpts.Env = opts.Env
+		bindOpts.TTY = opts.TTY
+		bindOpts.User = opts.User
+		bindOpts.WorkingDir = opts.WorkingDir
+		if opts.Timeout > 0 {
+			bindOpts.TimeoutSec = opts.Timeout.Seconds()
+		}
+	}
+
+	result, err := b.handle.Exec(command, bindOpts)
+	if err != nil {
+		return nil, err
+	}
+
+	return &ExecResult{
+		ExitCode: result.ExitCode,
+		Stdout:   result.Stdout,
+		Stderr:   result.Stderr,
 	}, nil
 }
 

@@ -11,6 +11,7 @@ type boxProvider interface {
 	Start() error
 	Stop() error
 	Info() (binding.BoxInfo, error)
+	Exec(command string, opts binding.ExecOptions) (binding.ExecResult, error)
 	Free()
 }
 

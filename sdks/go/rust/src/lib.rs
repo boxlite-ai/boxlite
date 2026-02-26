@@ -2,22 +2,26 @@
 //
 // 将 boxlite-ffi 的内部实现暴露为 Go CGo 可调用的 C ABI 函数。
 
-use std::ffi::CString;
+use std::collections::HashMap;
+use std::ffi::{CString, c_void};
 use std::os::raw::{c_char, c_int};
 use std::ptr;
+use std::time::Duration;
 
 use boxlite_ffi::error::{BoxliteErrorCode, FFIError};
 use boxlite_ffi::ops::{
     box_attach, box_create, box_free, box_id, box_inspect_handle, box_list, box_remove, box_start,
-    box_stop, error_free,
+    box_stop, error_free, OutputCallback,
 };
 use boxlite_ffi::runtime::RuntimeHandle;
 
 // Import from boxlite core
+use boxlite::BoxCommand;
 use boxlite::BoxliteOptions;
 use boxlite::BoxliteRuntime;
 use boxlite_ffi::runtime::create_tokio_runtime;
 use boxlite_ffi::runtime::BoxHandle;
+use futures::StreamExt;
 use std::path::PathBuf;
 
 // ============================================================================
@@ -374,5 +378,162 @@ pub unsafe extern "C" fn boxlite_go_box_id(handle: *mut BoxHandle) -> *mut c_cha
 pub unsafe extern "C" fn boxlite_go_box_free(handle: *mut BoxHandle) {
     if !handle.is_null() {
         unsafe { box_free(handle) };
+    }
+}
+
+// ============================================================================
+// BOX EXEC
+// ============================================================================
+
+/// JSON schema for exec options passed from Go.
+#[derive(serde::Deserialize, Default)]
+struct ExecOptsJson {
+    #[serde(default)]
+    args: Vec<String>,
+    #[serde(default)]
+    env: Option<HashMap<String, String>>,
+    #[serde(default)]
+    tty: bool,
+    #[serde(default)]
+    user: Option<String>,
+    #[serde(default)]
+    timeout_secs: Option<f64>,
+    #[serde(default)]
+    working_dir: Option<String>,
+}
+
+/// Execute a command in a box.
+///
+/// Blocks until the command completes. stdout/stderr are streamed
+/// via the callback function during execution.
+///
+/// # Parameters
+/// * `handle` — BoxHandle pointer
+/// * `command` — C string, command to execute
+/// * `opts_json` — JSON string with optional fields:
+///   `{"args":[], "env":{}, "tty":false, "user":"", "timeout_secs":0, "working_dir":""}`
+/// * `callback` — optional output callback: fn(text, stream_type, user_data)
+///   stream_type: 0 = stdout, 1 = stderr
+/// * `user_data` — passed to callback
+/// * `out_exit_code` — output exit code
+/// * `out_err` — output error string (caller must free with boxlite_go_free_string)
+///
+/// Returns 0 on success, -1 on failure.
+///
+/// # Safety
+/// All pointer parameters must be valid or null as described.
+#[no_mangle]
+pub unsafe extern "C" fn boxlite_go_box_exec(
+    handle: *mut BoxHandle,
+    command: *const c_char,
+    opts_json: *const c_char,
+    callback: Option<OutputCallback>,
+    user_data: *mut c_void,
+    out_exit_code: *mut c_int,
+    out_err: *mut *mut c_char,
+) -> c_int {
+    if handle.is_null() {
+        set_error(out_err, "handle is null");
+        return -1;
+    }
+    if out_exit_code.is_null() {
+        set_error(out_err, "out_exit_code is null");
+        return -1;
+    }
+
+    let handle_ref = unsafe { &mut *handle };
+
+    // Parse command
+    let cmd_str = match unsafe { c_str_to_string(command) } {
+        Ok(s) => s,
+        Err(e) => {
+            set_error(out_err, &format!("invalid command: {}", e));
+            return -1;
+        }
+    };
+
+    // Parse opts_json
+    let opts: ExecOptsJson = if !opts_json.is_null() {
+        match unsafe { c_str_to_string(opts_json) } {
+            Ok(json_str) => match serde_json::from_str(&json_str) {
+                Ok(o) => o,
+                Err(e) => {
+                    set_error(out_err, &format!("invalid opts_json: {}", e));
+                    return -1;
+                }
+            },
+            Err(e) => {
+                set_error(out_err, &format!("invalid opts_json string: {}", e));
+                return -1;
+            }
+        }
+    } else {
+        ExecOptsJson::default()
+    };
+
+    // Build BoxCommand
+    let mut cmd = BoxCommand::new(&cmd_str).args(opts.args).tty(opts.tty);
+
+    if let Some(env_map) = opts.env {
+        for (k, v) in env_map {
+            cmd = cmd.env(k, v);
+        }
+    }
+    if let Some(user) = opts.user {
+        cmd = cmd.user(user);
+    }
+    if let Some(secs) = opts.timeout_secs {
+        cmd = cmd.timeout(Duration::from_secs_f64(secs));
+    }
+    if let Some(dir) = opts.working_dir {
+        cmd = cmd.working_dir(dir);
+    }
+
+    // Execute
+    let result = handle_ref.tokio_rt.block_on(async {
+        let mut execution = handle_ref.handle.exec(cmd).await?;
+
+        if let Some(cb) = callback {
+            let mut stdout = execution.stdout();
+            let mut stderr = execution.stderr();
+
+            loop {
+                tokio::select! {
+                    Some(line) = async {
+                        match &mut stdout {
+                            Some(s) => s.next().await,
+                            None => None,
+                        }
+                    } => {
+                        let c_text = CString::new(line).unwrap_or_default();
+                        cb(c_text.as_ptr(), 0, user_data);
+                    }
+                    Some(line) = async {
+                        match &mut stderr {
+                            Some(s) => s.next().await,
+                            None => None,
+                        }
+                    } => {
+                        let c_text = CString::new(line).unwrap_or_default();
+                        cb(c_text.as_ptr(), 1, user_data);
+                    }
+                    else => break,
+                }
+            }
+        }
+
+        let status = execution.wait().await?;
+        Ok::<i32, boxlite::BoxliteError>(status.exit_code)
+    });
+
+    match result {
+        Ok(exit_code) => {
+            unsafe { *out_exit_code = exit_code };
+            0
+        }
+        Err(e) => {
+            set_error(out_err, &format!("{}", e));
+            -1
+        }
     }
 }
