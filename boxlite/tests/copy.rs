@@ -9,6 +9,8 @@
 
 mod common;
 
+use boxlite::BoxliteRuntime;
+use boxlite::runtime::options::BoxliteOptions;
 use boxlite::{BoxCommand, CopyOptions, LiteBox};
 use std::path::Path;
 use tempfile::TempDir;
@@ -48,9 +50,13 @@ async fn exec_exit_code(bx: &LiteBox, cmd: BoxCommand) -> i32 {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn copy_integration() {
-    let ctx = common::ParallelRuntime::new();
-    let bx = ctx
-        .runtime
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+    let bx = runtime
         .create(common::alpine_opts(), None)
         .await
         .expect("create box");
@@ -80,7 +86,7 @@ async fn copy_integration() {
     copy_out_nonexistent_errors(&bx, tmp.path()).await;
     concurrent_copy_roundtrip(&bx, tmp.path()).await;
 
-    ctx.shutdown().await;
+    let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 }
 
 // ============================================================================

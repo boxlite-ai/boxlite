@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use parking_lot::RwLock;
 use tokio::sync::OnceCell;
@@ -307,9 +307,17 @@ impl BoxImpl {
 
         // Only try to stop VM if LiveState exists
         if let Some(live) = self.live.get() {
-            // Gracefully shut down guest
-            if let Ok(mut guest) = live.guest_session.guest().await {
-                let _ = guest.shutdown().await;
+            // Gracefully shut down guest (with timeout to avoid hanging on unresponsive guests)
+            let guest_shutdown = async {
+                if let Ok(mut guest) = live.guest_session.guest().await {
+                    let _ = guest.shutdown().await;
+                }
+            };
+            if tokio::time::timeout(Duration::from_secs(10), guest_shutdown)
+                .await
+                .is_err()
+            {
+                tracing::warn!(box_id = %self.config.id, "Guest shutdown timed out after 10s");
             }
 
             // Stop handler

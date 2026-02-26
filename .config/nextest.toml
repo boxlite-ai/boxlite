@@ -30,6 +30,7 @@ fail-fast = false
 # VM PROFILE (integration/E2E tests that boot real VMs)
 # =============================================================================
 [profile.vm]
+test-threads = 4
 slow-timeout = { period = "120s", terminate-after = 5 }
 retries = 0
 fail-fast = false

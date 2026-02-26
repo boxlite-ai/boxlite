@@ -2,9 +2,11 @@
 //!
 //! Converts Transport to tonic Channel with lazy initialization.
 
+use std::sync::Arc;
+use std::time::Duration;
+
 use boxlite_shared::{BoxliteError, BoxliteResult, Transport};
 use hyper_util::rt::TokioIo;
-use std::sync::Arc;
 use tokio::sync::OnceCell;
 use tonic::transport::{Channel, Endpoint, Uri};
 use tower::service_fn;
@@ -60,6 +62,7 @@ async fn connect_unix(socket_path: &std::path::Path) -> BoxliteResult<Channel> {
     let socket_path = socket_path.to_path_buf();
 
     let channel = Endpoint::try_from("http://[::]:50051")?
+        .connect_timeout(Duration::from_secs(30))
         .connect_with_connector(service_fn(move |_: Uri| {
             let socket_path = socket_path.clone();
             async move {
@@ -75,7 +78,10 @@ async fn connect_unix(socket_path: &std::path::Path) -> BoxliteResult<Channel> {
 
 async fn connect_tcp(port: u16) -> BoxliteResult<Channel> {
     let addr = format!("http://127.0.0.1:{}", port);
-    let channel = Endpoint::try_from(addr)?.connect().await?;
+    let channel = Endpoint::try_from(addr)?
+        .connect_timeout(Duration::from_secs(30))
+        .connect()
+        .await?;
 
     tracing::debug!("Connected via TCP");
     Ok(channel)

@@ -13,7 +13,8 @@
 
 mod common;
 
-use boxlite::runtime::options::BoxOptions;
+use boxlite::BoxliteRuntime;
+use boxlite::runtime::options::{BoxOptions, BoxliteOptions};
 use std::time::Instant;
 
 /// Print timing lines from shim.stderr, returning counts per prefix.
@@ -40,13 +41,14 @@ fn print_timing_lines(content: &str) -> (usize, usize, usize) {
 
 #[tokio::test]
 async fn boot_timing_profile() {
-    let ctx = common::ParallelRuntime::new();
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
 
-    let handle = ctx
-        .runtime
-        .create(common::alpine_opts(), None)
-        .await
-        .unwrap();
+    let handle = runtime.create(common::alpine_opts(), None).await.unwrap();
     let box_id = handle.id().clone();
 
     // Measure handle.start() — this includes the full guest_connect wait
@@ -54,8 +56,8 @@ async fn boot_timing_profile() {
     handle.start().await.unwrap();
     let start_elapsed = start.elapsed();
 
-    let stderr_path = ctx
-        .home_dir
+    let stderr_path = home
+        .path
         .join("boxes")
         .join(box_id.as_str())
         .join("shim.stderr");
@@ -65,8 +67,8 @@ async fn boot_timing_profile() {
     println!("============================================================");
     println!("handle.start() total: {:?}\n", start_elapsed);
 
-    let console_log_path = ctx
-        .home_dir
+    let console_log_path = home
+        .path
         .join("boxes")
         .join(box_id.as_str())
         .join("logs")
@@ -166,14 +168,19 @@ async fn boot_timing_profile() {
     println!("============================================================\n");
 
     // Cleanup
-    ctx.runtime.remove(box_id.as_str(), false).await.unwrap();
-    ctx.shutdown().await;
+    runtime.remove(box_id.as_str(), false).await.unwrap();
+    let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 }
 
 /// Same profile but with jailer disabled — isolates sandbox-exec overhead.
 #[tokio::test]
 async fn boot_timing_profile_no_jailer() {
-    let ctx = common::ParallelRuntime::new();
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
 
     let opts = BoxOptions {
         rootfs: boxlite::runtime::options::RootfsSpec::Image("alpine:latest".into()),
@@ -188,15 +195,15 @@ async fn boot_timing_profile_no_jailer() {
         ..Default::default()
     };
 
-    let handle = ctx.runtime.create(opts, None).await.unwrap();
+    let handle = runtime.create(opts, None).await.unwrap();
     let box_id = handle.id().clone();
 
     let start = Instant::now();
     handle.start().await.unwrap();
     let start_elapsed = start.elapsed();
 
-    let stderr_path = ctx
-        .home_dir
+    let stderr_path = home
+        .path
         .join("boxes")
         .join(box_id.as_str())
         .join("shim.stderr");
@@ -229,6 +236,6 @@ async fn boot_timing_profile_no_jailer() {
     println!("============================================================\n");
 
     handle.stop().await.unwrap();
-    ctx.runtime.remove(box_id.as_str(), false).await.unwrap();
-    ctx.shutdown().await;
+    runtime.remove(box_id.as_str(), false).await.unwrap();
+    let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 }

@@ -9,7 +9,7 @@
 
 mod common;
 
-use boxlite::runtime::options::{CloneOptions, ExportOptions};
+use boxlite::runtime::options::{BoxliteOptions, CloneOptions, ExportOptions};
 use boxlite::runtime::types::BoxStatus;
 use boxlite::{BoxCommand, BoxliteRuntime, LiteBox};
 use tempfile::TempDir;
@@ -51,8 +51,13 @@ async fn create_running_box(runtime: &BoxliteRuntime, name: &str) -> LiteBox {
 
 #[tokio::test]
 async fn test_clone_produces_independent_box() {
-    let ctx = common::ParallelRuntime::new();
-    let source = create_stopped_box(&ctx.runtime).await;
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+    let source = create_stopped_box(&runtime).await;
 
     let cloned = source
         .clone_box(CloneOptions::default(), Some("cloned-box".to_string()))
@@ -70,13 +75,18 @@ async fn test_clone_produces_independent_box() {
     cloned.start().await.expect("Failed to start cloned box");
     cloned.stop().await.expect("Failed to stop cloned box");
 
-    ctx.shutdown().await;
+    let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 }
 
 #[tokio::test]
 async fn test_export_import_roundtrip() {
-    let ctx = common::ParallelRuntime::new();
-    let source = create_stopped_box(&ctx.runtime).await;
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+    let source = create_stopped_box(&runtime).await;
 
     let export_dir = TempDir::new_in("/tmp").unwrap();
     let export_path = export_dir.path();
@@ -89,8 +99,7 @@ async fn test_export_import_roundtrip() {
     assert!(archive.path().exists());
     assert!(archive.path().extension().is_some_and(|e| e == "boxlite"));
 
-    let imported = ctx
-        .runtime
+    let imported = runtime
         .import_box(archive, Some("imported-box".to_string()))
         .await
         .expect("Failed to import box");
@@ -106,15 +115,19 @@ async fn test_export_import_roundtrip() {
         .expect("Failed to start imported box");
     imported.stop().await.expect("Failed to stop imported box");
 
-    ctx.shutdown().await;
+    let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 }
 
 #[tokio::test]
 async fn test_export_import_preserves_box_options() {
-    let ctx = common::ParallelRuntime::new();
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
 
-    let source = ctx
-        .runtime
+    let source = runtime
         .create(common::alpine_opts(), Some("options-test".to_string()))
         .await
         .expect("Failed to create box");
@@ -130,12 +143,12 @@ async fn test_export_import_preserves_box_options() {
         .await
         .expect("export");
 
-    let imported = ctx.runtime.import_box(archive, None).await.expect("import");
+    let imported = runtime.import_box(archive, None).await.expect("import");
 
     let imported_info = imported.info();
     assert_eq!(imported_info.status, BoxStatus::Stopped);
 
-    ctx.shutdown().await;
+    let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 }
 
 // ============================================================================
@@ -144,8 +157,13 @@ async fn test_export_import_preserves_box_options() {
 
 #[tokio::test]
 async fn test_clone_running_box() {
-    let ctx = common::ParallelRuntime::new();
-    let source = create_running_box(&ctx.runtime, "clone-src").await;
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+    let source = create_running_box(&runtime, "clone-src").await;
 
     // Clone while source is running — should succeed without stopping
     let cloned = source
@@ -178,13 +196,18 @@ async fn test_clone_running_box() {
 
     source.stop().await.expect("Stop source box");
 
-    ctx.shutdown().await;
+    let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 }
 
 #[tokio::test]
 async fn test_export_running_box() {
-    let ctx = common::ParallelRuntime::new();
-    let source = create_running_box(&ctx.runtime, "export-running").await;
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+    let source = create_running_box(&runtime, "export-running").await;
 
     let export_dir = TempDir::new_in("/tmp").unwrap();
     let export_path = export_dir.path();
@@ -209,8 +232,7 @@ async fn test_export_running_box() {
     assert_eq!(result.exit_code, 0);
 
     // Archived box can be imported and started
-    let imported = ctx
-        .runtime
+    let imported = runtime
         .import_box(archive, Some("imported-running".to_string()))
         .await
         .expect("Import should succeed");
@@ -220,13 +242,18 @@ async fn test_export_running_box() {
 
     source.stop().await.expect("Stop source box");
 
-    ctx.shutdown().await;
+    let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 }
 
 #[tokio::test]
 async fn test_export_import_running_box_roundtrip() {
-    let ctx = common::ParallelRuntime::new();
-    let source = create_running_box(&ctx.runtime, "roundtrip-running").await;
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+    let source = create_running_box(&runtime, "roundtrip-running").await;
 
     // Write a marker file inside the running VM
     let cmd = BoxCommand::new("sh").args(["-c", "echo boxlite-test-data > /root/marker.txt"]);
@@ -247,8 +274,7 @@ async fn test_export_import_running_box_roundtrip() {
     assert_eq!(source.info().status, BoxStatus::Running);
 
     // Import and verify the marker file is preserved
-    let imported = ctx
-        .runtime
+    let imported = runtime
         .import_box(archive, Some("imported-roundtrip".to_string()))
         .await
         .expect("Import should succeed");
@@ -266,7 +292,7 @@ async fn test_export_import_running_box_roundtrip() {
     imported.stop().await.expect("Stop imported box");
     source.stop().await.expect("Stop source box");
 
-    ctx.shutdown().await;
+    let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 }
 
 // ============================================================================
@@ -275,8 +301,13 @@ async fn test_export_import_running_box_roundtrip() {
 
 #[tokio::test]
 async fn test_export_under_write_pressure() {
-    let ctx = common::ParallelRuntime::new();
-    let source = create_running_box(&ctx.runtime, "write-stress").await;
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+    let source = create_running_box(&runtime, "write-stress").await;
 
     // Start a background process that continuously writes random 4KB blocks
     // to a file at random offsets. This simulates active I/O during export.
@@ -305,8 +336,7 @@ async fn test_export_under_write_pressure() {
     assert_eq!(source.info().status, BoxStatus::Running);
 
     // Import the archive and verify the filesystem is intact (bootable)
-    let imported = ctx
-        .runtime
+    let imported = runtime
         .import_box(archive, Some("imported-stress".to_string()))
         .await
         .expect("Import should succeed");
@@ -328,5 +358,5 @@ async fn test_export_under_write_pressure() {
     imported.stop().await.expect("Stop imported box");
     source.stop().await.expect("Stop source box");
 
-    ctx.shutdown().await;
+    let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 }

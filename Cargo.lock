@@ -527,7 +527,10 @@ name = "boxlite-test-utils"
 version = "0.1.0"
 dependencies = [
  "boxlite",
+ "futures",
  "libc",
+ "parking_lot",
+ "paste",
  "tempfile",
  "tokio",
 ]

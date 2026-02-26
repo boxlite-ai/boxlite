@@ -9,8 +9,9 @@
 mod common;
 
 use boxlite::BoxCommand;
+use boxlite::BoxliteRuntime;
 use boxlite::runtime::advanced_options::{AdvancedBoxOptions, SecurityOptions};
-use boxlite::runtime::options::BoxOptions;
+use boxlite::runtime::options::{BoxOptions, BoxliteOptions};
 use std::path::PathBuf;
 
 // ============================================================================
@@ -46,21 +47,29 @@ fn assert_macos_socket_path_budget(home_dir: &std::path::Path) {
     );
 }
 
-/// Create an IsolatedRuntime under `~/.boxlite-it` with macOS socket path validation.
-fn jailer_runtime() -> common::IsolatedRuntime {
+/// Per-test runtime context for jailer tests.
+struct JailerTestCtx {
+    runtime: BoxliteRuntime,
+    home_dir: PathBuf,
+    _home: boxlite_test_utils::home::PerTestBoxHome,
+}
+
+/// Create a runtime under `~/.boxlite-it` with macOS socket path validation.
+fn jailer_runtime() -> JailerTestCtx {
     let base = jailer_test_home_base_dir();
     std::fs::create_dir_all(&base).expect("Failed to create jailer test home base");
 
-    let ctx = common::IsolatedRuntime::new_warm(base.to_str().expect("base path should be UTF-8"));
+    let home =
+        boxlite_test_utils::home::PerTestBoxHome::new_in(base.to_str().expect("base path UTF-8"));
 
     #[cfg(target_os = "macos")]
-    assert_macos_socket_path_budget(&ctx.home_dir);
+    assert_macos_socket_path_budget(&home.path);
     #[cfg(target_os = "macos")]
     {
-        let canonical_home = ctx
-            .home_dir
+        let canonical_home = home
+            .path
             .canonicalize()
-            .unwrap_or_else(|_| ctx.home_dir.clone());
+            .unwrap_or_else(|_| home.path.clone());
         assert!(
             !canonical_home.starts_with("/private/tmp"),
             "jailer integration tests must not use /private/tmp as home_dir: {}",
@@ -68,7 +77,18 @@ fn jailer_runtime() -> common::IsolatedRuntime {
         );
     }
 
-    ctx
+    let home_dir = home.path.clone();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create jailer runtime");
+
+    JailerTestCtx {
+        runtime,
+        home_dir,
+        _home: home,
+    }
 }
 
 fn jailer_enabled_options() -> BoxOptions {

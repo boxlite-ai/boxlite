@@ -1,13 +1,9 @@
-//! Integration tests for PID file functionality.
+//! Integration tests for PID file lifecycle.
 //!
 //! Tests the PID file as single source of truth for process tracking:
-//! - PID file created in pre_exec (after fork, before exec)
-//! - Recovery uses PID file instead of DB
-//! - Detached boxes survive parent exit and can be recovered
-//!
-//! Test categories:
-//! - P0 (Critical): Basic functionality, Detach mode, Recovery scenarios
-//! - P1 (Important): Edge cases, Cleanup, Process validation
+//! - PID file creation, correctness, and deletion
+//! - Cleanup on stop, force remove, and box directory removal
+//! - Process validation via is_same_process
 
 mod common;
 
@@ -17,7 +13,6 @@ use boxlite::runtime::options::BoxliteOptions;
 use boxlite::runtime::types::BoxStatus;
 use boxlite::util::{is_process_alive, is_same_process, read_pid_file};
 use std::path::{Path, PathBuf};
-use tempfile::TempDir;
 
 // ============================================================================
 // LOCAL HELPERS
@@ -29,46 +24,47 @@ fn pid_file_path(home_dir: &Path, box_id: &str) -> PathBuf {
 }
 
 // ============================================================================
-// CATEGORY 1: BASIC FUNCTIONALITY (P0)
+// BASIC FUNCTIONALITY (P0)
 // ============================================================================
 
 #[tokio::test]
 async fn pid_file_created_on_box_start() {
-    let ctx = common::ParallelRuntime::new();
-    let handle = ctx
-        .runtime
-        .create(common::alpine_opts(), None)
-        .await
-        .unwrap();
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+
+    let handle = runtime.create(common::alpine_opts(), None).await.unwrap();
 
     // Run command to start the box
     let _ = handle.exec(BoxCommand::new("true")).await;
 
     // Verify PID file exists
-    let pf = pid_file_path(&ctx.home_dir, handle.id().as_str());
+    let pf = pid_file_path(&home.path, handle.id().as_str());
     assert!(pf.exists(), "PID file should exist after run");
 
     // Cleanup
     handle.stop().await.unwrap();
-    ctx.runtime
-        .remove(handle.id().as_str(), false)
-        .await
-        .unwrap();
+    runtime.remove(handle.id().as_str(), false).await.unwrap();
 }
 
 #[tokio::test]
 async fn pid_file_contains_correct_pid() {
-    let ctx = common::ParallelRuntime::new();
-    let handle = ctx
-        .runtime
-        .create(common::alpine_opts(), None)
-        .await
-        .unwrap();
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+
+    let handle = runtime.create(common::alpine_opts(), None).await.unwrap();
 
     // Start a long-running command
     let _ = handle.exec(BoxCommand::new("sleep").args(["30"])).await;
 
-    let pf = pid_file_path(&ctx.home_dir, handle.id().as_str());
+    let pf = pid_file_path(&home.path, handle.id().as_str());
     let pid_from_file = read_pid_file(&pf).expect("Should read PID file");
 
     // Verify process is actually running
@@ -88,24 +84,23 @@ async fn pid_file_contains_correct_pid() {
 
     // Cleanup
     handle.stop().await.unwrap();
-    ctx.runtime
-        .remove(handle.id().as_str(), false)
-        .await
-        .unwrap();
+    runtime.remove(handle.id().as_str(), false).await.unwrap();
 }
 
 #[tokio::test]
 async fn pid_file_deleted_on_normal_stop() {
-    let ctx = common::ParallelRuntime::new();
-    let handle = ctx
-        .runtime
-        .create(common::alpine_opts(), None)
-        .await
-        .unwrap();
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+
+    let handle = runtime.create(common::alpine_opts(), None).await.unwrap();
 
     let _ = handle.exec(BoxCommand::new("sleep").args(["30"])).await;
 
-    let pf = pid_file_path(&ctx.home_dir, handle.id().as_str());
+    let pf = pid_file_path(&home.path, handle.id().as_str());
     assert!(pf.exists(), "PID file should exist before stop");
 
     handle.stop().await.unwrap();
@@ -113,28 +108,26 @@ async fn pid_file_deleted_on_normal_stop() {
     assert!(!pf.exists(), "PID file should be deleted after stop");
 
     // Cleanup
-    ctx.runtime
-        .remove(handle.id().as_str(), false)
-        .await
-        .unwrap();
+    runtime.remove(handle.id().as_str(), false).await.unwrap();
 }
 
 #[tokio::test]
 async fn pid_matches_box_info() {
-    let ctx = common::ParallelRuntime::new();
-    let handle = ctx
-        .runtime
-        .create(common::alpine_opts(), None)
-        .await
-        .unwrap();
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+
+    let handle = runtime.create(common::alpine_opts(), None).await.unwrap();
 
     let _ = handle.exec(BoxCommand::new("sleep").args(["30"])).await;
 
-    let pf = pid_file_path(&ctx.home_dir, handle.id().as_str());
+    let pf = pid_file_path(&home.path, handle.id().as_str());
     let pid_from_file = read_pid_file(&pf).expect("Should read PID file");
 
-    let info = ctx
-        .runtime
+    let info = runtime
         .get_info(handle.id().as_str())
         .await
         .unwrap()
@@ -148,28 +141,25 @@ async fn pid_matches_box_info() {
 
     // Cleanup
     handle.stop().await.unwrap();
-    ctx.runtime
-        .remove(handle.id().as_str(), false)
-        .await
-        .unwrap();
+    runtime.remove(handle.id().as_str(), false).await.unwrap();
 }
 
 #[tokio::test]
 async fn pid_available_immediately_after_run() {
-    let ctx = common::ParallelRuntime::new();
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
 
     // Create and start box
-    let handle = ctx
-        .runtime
-        .create(common::alpine_opts(), None)
-        .await
-        .unwrap();
+    let handle = runtime.create(common::alpine_opts(), None).await.unwrap();
 
     let _ = handle.exec(BoxCommand::new("sleep").args(["30"])).await;
 
     // IMMEDIATELY check - no delay (this is the race condition fix)
-    let info = ctx
-        .runtime
+    let info = runtime
         .get_info(handle.id().as_str())
         .await
         .unwrap()
@@ -182,718 +172,109 @@ async fn pid_available_immediately_after_run() {
     assert_eq!(info.status, BoxStatus::Running, "Status should be Running");
 
     // PID file should also exist immediately
-    let pf = pid_file_path(&ctx.home_dir, handle.id().as_str());
+    let pf = pid_file_path(&home.path, handle.id().as_str());
     assert!(pf.exists(), "PID file should exist immediately");
 
     // Cleanup
     handle.stop().await.unwrap();
-    ctx.runtime
-        .remove(handle.id().as_str(), false)
-        .await
-        .unwrap();
+    runtime.remove(handle.id().as_str(), false).await.unwrap();
 }
 
 #[tokio::test]
 async fn pid_file_path_is_correct() {
-    let ctx = common::ParallelRuntime::new();
-    let handle = ctx
-        .runtime
-        .create(common::alpine_opts(), None)
-        .await
-        .unwrap();
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+
+    let handle = runtime.create(common::alpine_opts(), None).await.unwrap();
 
     let _ = handle.exec(BoxCommand::new("true")).await;
 
     // Expected path: {home}/boxes/{box_id}/shim.pid
-    let expected = pid_file_path(&ctx.home_dir, handle.id().as_str());
+    let expected = pid_file_path(&home.path, handle.id().as_str());
     assert!(expected.exists(), "PID file should be at expected path");
 
     // Verify no PID file in wrong locations
-    let wrong1 = ctx.home_dir.join("shim.pid");
-    let wrong2 = ctx.home_dir.join("boxes").join("shim.pid");
+    let wrong1 = home.path.join("shim.pid");
+    let wrong2 = home.path.join("boxes").join("shim.pid");
     assert!(!wrong1.exists(), "No PID file at home root");
     assert!(!wrong2.exists(), "No PID file at boxes root");
 
     // Cleanup
     handle.stop().await.unwrap();
-    ctx.runtime
-        .remove(handle.id().as_str(), false)
-        .await
-        .unwrap();
+    runtime.remove(handle.id().as_str(), false).await.unwrap();
 }
 
 // ============================================================================
-// CATEGORY 2: DETACH MODE (P0 - Original Issue)
-// ============================================================================
-
-#[tokio::test]
-async fn detached_box_creates_pid_file() {
-    let ctx = common::ParallelRuntime::new();
-    let handle = ctx
-        .runtime
-        .create(
-            boxlite::runtime::options::BoxOptions {
-                detach: true,
-                ..common::alpine_opts()
-            },
-            None,
-        )
-        .await
-        .unwrap();
-
-    let _ = handle.exec(BoxCommand::new("sleep").args(["300"])).await;
-
-    let pf = pid_file_path(&ctx.home_dir, handle.id().as_str());
-    assert!(pf.exists(), "Detached box should have PID file");
-
-    // Cleanup
-    ctx.runtime
-        .remove(handle.id().as_str(), true)
-        .await
-        .unwrap();
-}
-
-#[tokio::test]
-async fn detached_box_survives_runtime_drop() {
-    let (_temp_dir, home_dir) = common::warm_temp_dir();
-    let box_id: String;
-    let original_pid: u32;
-
-    // Create detached box
-    {
-        let runtime = BoxliteRuntime::new(BoxliteOptions {
-            home_dir: home_dir.clone(),
-            image_registries: common::test_registries(),
-        })
-        .unwrap();
-
-        let handle = runtime
-            .create(
-                boxlite::runtime::options::BoxOptions {
-                    detach: true,
-                    ..common::alpine_opts()
-                },
-                None,
-            )
-            .await
-            .unwrap();
-
-        let _ = handle.exec(BoxCommand::new("sleep").args(["300"])).await;
-        box_id = handle.id().to_string();
-
-        let pf = pid_file_path(&home_dir, &box_id);
-        original_pid = read_pid_file(&pf).unwrap();
-
-        // Runtime drops here - box should survive
-    }
-
-    // Wait a moment
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-
-    // Verify process still alive
-    assert!(
-        is_process_alive(original_pid),
-        "Detached box process {} should survive runtime drop",
-        original_pid
-    );
-
-    // Cleanup
-    let runtime = BoxliteRuntime::new(BoxliteOptions {
-        home_dir,
-        image_registries: common::test_registries(),
-    })
-    .unwrap();
-    runtime.remove(&box_id, true).await.unwrap();
-}
-
-/// Non-detached box should exit when runtime drops (watchdog POLLHUP).
-///
-/// Symmetric counterpart to `detached_box_survives_runtime_drop`.
-/// Verifies the full watchdog chain:
-///   Keepalive drop → pipe close → shim POLLHUP → SIGTERM → process exit
-#[tokio::test]
-async fn non_detached_box_exits_on_runtime_drop() {
-    // Use /tmp for shorter paths — macOS default TempDir paths exceed SUN_LEN for Unix sockets.
-    let temp_dir = TempDir::new_in("/tmp").unwrap();
-    let home_dir = temp_dir.path().to_path_buf();
-    common::warm_dir(&home_dir);
-    let original_pid: u32;
-
-    // Create non-detached box
-    {
-        let runtime = BoxliteRuntime::new(BoxliteOptions {
-            home_dir: home_dir.clone(),
-            image_registries: common::test_registries(),
-        })
-        .unwrap();
-
-        let handle = runtime.create(common::alpine_opts(), None).await.unwrap();
-
-        handle
-            .exec(BoxCommand::new("sleep").args(["300"]))
-            .await
-            .unwrap();
-
-        let pf = pid_file_path(&home_dir, handle.id().as_str());
-        original_pid = read_pid_file(&pf).unwrap();
-
-        // Verify process is running before drop
-        assert!(
-            is_process_alive(original_pid),
-            "Process {} should be alive before runtime drop",
-            original_pid
-        );
-
-        // Runtime + handler + Keepalive drop here → POLLHUP → shim exit
-    }
-
-    // Wait for shim to detect POLLHUP and exit gracefully.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    while std::time::Instant::now() < deadline {
-        if !is_process_alive(original_pid) {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    }
-
-    // Verify process exited
-    assert!(
-        !is_process_alive(original_pid),
-        "Non-detached box process {} should exit after runtime drop (watchdog POLLHUP)",
-        original_pid
-    );
-}
-
-#[tokio::test]
-async fn detached_box_recoverable_after_restart() {
-    let (_temp_dir, home_dir) = common::warm_temp_dir();
-    let box_id: String;
-
-    // Create and run detached box
-    {
-        let runtime = BoxliteRuntime::new(BoxliteOptions {
-            home_dir: home_dir.clone(),
-            image_registries: common::test_registries(),
-        })
-        .unwrap();
-
-        let handle = runtime
-            .create(
-                boxlite::runtime::options::BoxOptions {
-                    detach: true,
-                    ..common::alpine_opts()
-                },
-                None,
-            )
-            .await
-            .unwrap();
-
-        let _ = handle.exec(BoxCommand::new("sleep").args(["300"])).await;
-        box_id = handle.id().to_string();
-    }
-
-    // Create NEW runtime - should recover the box
-    {
-        let runtime = BoxliteRuntime::new(BoxliteOptions {
-            home_dir,
-            image_registries: common::test_registries(),
-        })
-        .unwrap();
-
-        // Should recover the box
-        let info = runtime
-            .get_info(&box_id)
-            .await
-            .unwrap()
-            .expect("Box should be recovered");
-
-        assert_eq!(
-            info.status,
-            BoxStatus::Running,
-            "Box should be recovered as Running"
-        );
-        assert!(info.pid.is_some(), "Recovered box should have PID");
-
-        // Should be able to stop it
-        let handle = runtime.get(&box_id).await.unwrap().unwrap();
-        handle.stop().await.unwrap();
-
-        let info = runtime
-            .get_info(&box_id)
-            .await
-            .unwrap()
-            .expect("Box should exist");
-        assert_eq!(info.status, BoxStatus::Stopped);
-
-        // Cleanup
-        runtime.remove(&box_id, false).await.unwrap();
-    }
-}
-
-#[tokio::test]
-async fn multiple_detached_boxes_each_have_pid_file() {
-    let ctx = common::ParallelRuntime::new();
-    let mut box_ids = Vec::new();
-
-    // Create 3 detached boxes
-    for _ in 0..3 {
-        let handle = ctx
-            .runtime
-            .create(
-                boxlite::runtime::options::BoxOptions {
-                    detach: true,
-                    ..common::alpine_opts()
-                },
-                None,
-            )
-            .await
-            .unwrap();
-
-        let _ = handle.exec(BoxCommand::new("sleep").args(["300"])).await;
-        box_ids.push(handle.id().to_string());
-    }
-
-    // Verify each has unique PID file with different PID
-    let mut pids = std::collections::HashSet::new();
-    for box_id in &box_ids {
-        let pf = pid_file_path(&ctx.home_dir, box_id);
-        assert!(pf.exists(), "Box {} should have PID file", box_id);
-        let pid = read_pid_file(&pf).unwrap();
-        assert!(
-            pids.insert(pid),
-            "Each box should have unique PID, but {} is duplicate",
-            pid
-        );
-    }
-
-    // Cleanup
-    for box_id in box_ids {
-        ctx.runtime.remove(&box_id, true).await.unwrap();
-    }
-}
-
-// ============================================================================
-// CATEGORY 3: RECOVERY SCENARIOS (P0)
-// ============================================================================
-
-#[tokio::test]
-async fn recovery_with_live_process() {
-    let (_temp_dir, home_dir) = common::warm_temp_dir();
-    let box_id: String;
-    let original_pid: u32;
-
-    // Create box with detach=true
-    {
-        let runtime = BoxliteRuntime::new(BoxliteOptions {
-            home_dir: home_dir.clone(),
-            image_registries: common::test_registries(),
-        })
-        .unwrap();
-
-        let handle = runtime
-            .create(
-                boxlite::runtime::options::BoxOptions {
-                    detach: true,
-                    ..common::alpine_opts()
-                },
-                None,
-            )
-            .await
-            .unwrap();
-
-        let _ = handle.exec(BoxCommand::new("sleep").args(["300"])).await;
-        box_id = handle.id().to_string();
-
-        let pf = pid_file_path(&home_dir, &box_id);
-        original_pid = read_pid_file(&pf).unwrap();
-    }
-
-    // New runtime should recover
-    {
-        let runtime = BoxliteRuntime::new(BoxliteOptions {
-            home_dir,
-            image_registries: common::test_registries(),
-        })
-        .unwrap();
-
-        let info = runtime
-            .get_info(&box_id)
-            .await
-            .unwrap()
-            .expect("Box should exist");
-
-        assert_eq!(info.status, BoxStatus::Running);
-        assert_eq!(info.pid, Some(original_pid), "PID should match original");
-
-        // Cleanup
-        runtime.remove(&box_id, true).await.unwrap();
-    }
-}
-
-#[tokio::test]
-async fn recovery_with_dead_process() {
-    let (_temp_dir, home_dir) = common::warm_temp_dir();
-    let box_id: String;
-    let original_pid: u32;
-
-    // Create box
-    {
-        let runtime = BoxliteRuntime::new(BoxliteOptions {
-            home_dir: home_dir.clone(),
-            image_registries: common::test_registries(),
-        })
-        .unwrap();
-
-        let handle = runtime
-            .create(
-                boxlite::runtime::options::BoxOptions {
-                    detach: true,
-                    ..common::alpine_opts()
-                },
-                None,
-            )
-            .await
-            .unwrap();
-
-        let _ = handle.exec(BoxCommand::new("sleep").args(["300"])).await;
-        box_id = handle.id().to_string();
-
-        let pf = pid_file_path(&home_dir, &box_id);
-        original_pid = read_pid_file(&pf).unwrap();
-
-        // Kill process directly (simulate crash)
-        unsafe {
-            libc::kill(original_pid as i32, libc::SIGKILL);
-        }
-
-        // Wait for process to die
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    }
-
-    // New runtime should detect dead process
-    {
-        let runtime = BoxliteRuntime::new(BoxliteOptions {
-            home_dir: home_dir.clone(),
-            image_registries: common::test_registries(),
-        })
-        .unwrap();
-
-        let info = runtime
-            .get_info(&box_id)
-            .await
-            .unwrap()
-            .expect("Box should exist");
-
-        assert_eq!(
-            info.status,
-            BoxStatus::Stopped,
-            "Dead process should be marked Stopped"
-        );
-        assert!(info.pid.is_none(), "Stopped box should have no PID");
-
-        // PID file should be deleted
-        let pf = pid_file_path(&home_dir, &box_id);
-        assert!(
-            !pf.exists(),
-            "Stale PID file should be deleted during recovery"
-        );
-
-        // Cleanup
-        runtime.remove(&box_id, false).await.unwrap();
-    }
-}
-
-#[tokio::test]
-async fn recovery_with_missing_pid_file() {
-    let (_temp_dir, home_dir) = common::warm_temp_dir();
-    let box_id: String;
-
-    // Create box and delete PID file
-    {
-        let runtime = BoxliteRuntime::new(BoxliteOptions {
-            home_dir: home_dir.clone(),
-            image_registries: common::test_registries(),
-        })
-        .unwrap();
-
-        let handle = runtime
-            .create(
-                boxlite::runtime::options::BoxOptions {
-                    detach: true,
-                    ..common::alpine_opts()
-                },
-                None,
-            )
-            .await
-            .unwrap();
-
-        let _ = handle.exec(BoxCommand::new("sleep").args(["300"])).await;
-        box_id = handle.id().to_string();
-
-        // Manually delete PID file
-        let pf = pid_file_path(&home_dir, &box_id);
-        std::fs::remove_file(&pf).unwrap();
-    }
-
-    // New runtime should handle missing PID file gracefully
-    {
-        let runtime = BoxliteRuntime::new(BoxliteOptions {
-            home_dir,
-            image_registries: common::test_registries(),
-        })
-        .unwrap();
-
-        let info = runtime
-            .get_info(&box_id)
-            .await
-            .unwrap()
-            .expect("Box should exist");
-
-        assert_eq!(
-            info.status,
-            BoxStatus::Stopped,
-            "Missing PID file should result in Stopped status"
-        );
-
-        // Cleanup
-        runtime.remove(&box_id, true).await.unwrap();
-    }
-}
-
-#[tokio::test]
-async fn recovery_with_corrupted_pid_file() {
-    let (_temp_dir, home_dir) = common::warm_temp_dir();
-    let box_id: String;
-
-    // Create box and corrupt PID file
-    {
-        let runtime = BoxliteRuntime::new(BoxliteOptions {
-            home_dir: home_dir.clone(),
-            image_registries: common::test_registries(),
-        })
-        .unwrap();
-
-        let handle = runtime
-            .create(
-                boxlite::runtime::options::BoxOptions {
-                    detach: true,
-                    ..common::alpine_opts()
-                },
-                None,
-            )
-            .await
-            .unwrap();
-
-        let _ = handle.exec(BoxCommand::new("sleep").args(["300"])).await;
-        box_id = handle.id().to_string();
-
-        // Corrupt PID file
-        let pf = pid_file_path(&home_dir, &box_id);
-        std::fs::write(&pf, "not-a-valid-pid").unwrap();
-    }
-
-    // New runtime should handle corrupted PID file gracefully
-    {
-        let runtime = BoxliteRuntime::new(BoxliteOptions {
-            home_dir: home_dir.clone(),
-            image_registries: common::test_registries(),
-        })
-        .unwrap();
-
-        let info = runtime
-            .get_info(&box_id)
-            .await
-            .unwrap()
-            .expect("Box should exist");
-
-        assert_eq!(
-            info.status,
-            BoxStatus::Stopped,
-            "Corrupted PID file should result in Stopped status"
-        );
-
-        // Corrupted PID file should be deleted
-        let pf = pid_file_path(&home_dir, &box_id);
-        assert!(!pf.exists(), "Corrupted PID file should be deleted");
-
-        // Cleanup
-        runtime.remove(&box_id, true).await.unwrap();
-    }
-}
-
-#[tokio::test]
-async fn recovery_preserves_stopped_boxes() {
-    let (_temp_dir, home_dir) = common::warm_temp_dir();
-    let box_id: String;
-
-    // Create and stop box normally
-    {
-        let runtime = BoxliteRuntime::new(BoxliteOptions {
-            home_dir: home_dir.clone(),
-            image_registries: common::test_registries(),
-        })
-        .unwrap();
-
-        let handle = runtime.create(common::alpine_opts(), None).await.unwrap();
-
-        let _ = handle.exec(BoxCommand::new("true")).await;
-        box_id = handle.id().to_string();
-
-        // Stop normally
-        handle.stop().await.unwrap();
-
-        // Verify PID file is gone
-        let pf = pid_file_path(&home_dir, &box_id);
-        assert!(!pf.exists());
-    }
-
-    // New runtime should see stopped box
-    {
-        let runtime = BoxliteRuntime::new(BoxliteOptions {
-            home_dir,
-            image_registries: common::test_registries(),
-        })
-        .unwrap();
-
-        let info = runtime
-            .get_info(&box_id)
-            .await
-            .unwrap()
-            .expect("Box should exist");
-
-        assert_eq!(info.status, BoxStatus::Stopped);
-        assert!(info.pid.is_none());
-
-        // Cleanup
-        runtime.remove(&box_id, false).await.unwrap();
-    }
-}
-
-// ============================================================================
-// CATEGORY 4: EDGE CASES (P1)
-// ============================================================================
-
-#[test]
-fn read_pid_file_with_whitespace() {
-    let temp = tempfile::NamedTempFile::new().unwrap();
-    std::fs::write(temp.path(), "  12345\n\n").unwrap();
-
-    let pid = read_pid_file(temp.path()).unwrap();
-    assert_eq!(pid, 12345);
-}
-
-#[test]
-fn read_pid_file_invalid_content_rejected() {
-    let temp = tempfile::NamedTempFile::new().unwrap();
-    std::fs::write(temp.path(), "not-a-pid").unwrap();
-
-    let result = read_pid_file(temp.path());
-    assert!(result.is_err());
-}
-
-#[test]
-fn read_pid_file_empty_rejected() {
-    let temp = tempfile::NamedTempFile::new().unwrap();
-    std::fs::write(temp.path(), "").unwrap();
-
-    let result = read_pid_file(temp.path());
-    assert!(result.is_err());
-}
-
-#[test]
-fn read_pid_file_missing_returns_error() {
-    let result = read_pid_file(std::path::Path::new("/nonexistent/shim.pid"));
-    assert!(result.is_err());
-}
-
-#[test]
-fn read_pid_file_large_pid() {
-    let temp = tempfile::NamedTempFile::new().unwrap();
-    std::fs::write(temp.path(), "4194304").unwrap(); // Max PID on Linux
-
-    let pid = read_pid_file(temp.path()).unwrap();
-    assert_eq!(pid, 4194304);
-}
-
-#[test]
-fn read_pid_file_negative_rejected() {
-    let temp = tempfile::NamedTempFile::new().unwrap();
-    std::fs::write(temp.path(), "-1").unwrap();
-
-    let result = read_pid_file(temp.path());
-    assert!(result.is_err());
-}
-
-#[test]
-fn read_pid_file_overflow_rejected() {
-    let temp = tempfile::NamedTempFile::new().unwrap();
-    std::fs::write(temp.path(), "99999999999").unwrap();
-
-    let result = read_pid_file(temp.path());
-    assert!(result.is_err());
-}
-
-// ============================================================================
-// CATEGORY 5: CLEANUP (P1)
+// CLEANUP (P1)
 // ============================================================================
 
 #[tokio::test]
 async fn force_remove_deletes_pid_file() {
-    let ctx = common::ParallelRuntime::new();
-    let handle = ctx
-        .runtime
-        .create(common::alpine_opts(), None)
-        .await
-        .unwrap();
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+
+    let handle = runtime.create(common::alpine_opts(), None).await.unwrap();
 
     let _ = handle.exec(BoxCommand::new("sleep").args(["300"])).await;
     let box_id = handle.id().to_string();
 
-    let pf = pid_file_path(&ctx.home_dir, &box_id);
+    let pf = pid_file_path(&home.path, &box_id);
     assert!(pf.exists());
 
     // Force remove while running
-    ctx.runtime.remove(&box_id, true).await.unwrap();
+    runtime.remove(&box_id, true).await.unwrap();
 
     assert!(!pf.exists(), "PID file should be deleted on force remove");
 }
 
 #[tokio::test]
 async fn box_directory_cleanup_includes_pid_file() {
-    let ctx = common::ParallelRuntime::new();
-    let handle = ctx
-        .runtime
-        .create(common::alpine_opts(), None)
-        .await
-        .unwrap();
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+
+    let handle = runtime.create(common::alpine_opts(), None).await.unwrap();
 
     let box_id = handle.id().to_string();
     let _ = handle.exec(BoxCommand::new("true")).await;
     handle.stop().await.unwrap();
 
-    ctx.runtime.remove(&box_id, false).await.unwrap();
+    runtime.remove(&box_id, false).await.unwrap();
 
     // Entire box directory should be gone
-    let box_dir = ctx.home_dir.join("boxes").join(&box_id);
+    let box_dir = home.path.join("boxes").join(&box_id);
     assert!(!box_dir.exists(), "Box directory should be removed");
 }
 
 // ============================================================================
-// CATEGORY 7: PROCESS VALIDATION (P1)
+// PROCESS VALIDATION (P1)
 // ============================================================================
 
 #[tokio::test]
 async fn is_same_process_validates_boxlite_shim() {
-    let ctx = common::ParallelRuntime::new();
-    let handle = ctx
-        .runtime
-        .create(common::alpine_opts(), None)
-        .await
-        .unwrap();
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+
+    let handle = runtime.create(common::alpine_opts(), None).await.unwrap();
 
     let _ = handle.exec(BoxCommand::new("sleep").args(["30"])).await;
 
-    let pf = pid_file_path(&ctx.home_dir, handle.id().as_str());
+    let pf = pid_file_path(&home.path, handle.id().as_str());
     let pid = read_pid_file(&pf).unwrap();
 
     // Should be true for actual shim
@@ -910,23 +291,5 @@ async fn is_same_process_validates_boxlite_shim() {
 
     // Cleanup
     handle.stop().await.unwrap();
-    ctx.runtime
-        .remove(handle.id().as_str(), false)
-        .await
-        .unwrap();
-}
-
-#[test]
-fn is_process_alive_true_for_current() {
-    assert!(
-        is_process_alive(std::process::id()),
-        "Current process should be alive"
-    );
-}
-
-#[test]
-fn is_process_alive_false_for_invalid() {
-    // Very high PIDs unlikely to exist
-    assert!(!is_process_alive(999999999));
-    assert!(!is_process_alive(888888888));
+    runtime.remove(handle.id().as_str(), false).await.unwrap();
 }

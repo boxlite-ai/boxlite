@@ -12,7 +12,6 @@ mod common;
 
 use boxlite::BoxliteRuntime;
 use boxlite::runtime::options::{BoxOptions, BoxliteOptions, RootfsSpec};
-use tempfile::TempDir;
 
 // ============================================================================
 // SHUTDOWN IDEMPOTENCY
@@ -21,30 +20,45 @@ use tempfile::TempDir;
 /// Calling shutdown() twice should succeed (second call is no-op).
 #[tokio::test]
 async fn shutdown_is_idempotent() {
-    let ctx = common::IsolatedRuntime::new_in("/tmp");
+    let home = boxlite_test_utils::home::PerTestBoxHome::isolated_in("/tmp");
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
 
-    let result1 = ctx.runtime.shutdown(None).await;
+    let result1 = runtime.shutdown(None).await;
     assert!(result1.is_ok());
 
-    let result2 = ctx.runtime.shutdown(None).await;
+    let result2 = runtime.shutdown(None).await;
     assert!(result2.is_ok());
 }
 
 /// Shutdown with explicit timeout should succeed.
 #[tokio::test]
 async fn shutdown_with_timeout() {
-    let ctx = common::IsolatedRuntime::new_in("/tmp");
+    let home = boxlite_test_utils::home::PerTestBoxHome::isolated_in("/tmp");
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
 
-    let result = ctx.runtime.shutdown(Some(5)).await;
+    let result = runtime.shutdown(Some(5)).await;
     assert!(result.is_ok());
 }
 
 /// Shutdown with no boxes should complete immediately.
 #[tokio::test]
 async fn shutdown_empty_runtime() {
-    let ctx = common::IsolatedRuntime::new_in("/tmp");
+    let home = boxlite_test_utils::home::PerTestBoxHome::isolated_in("/tmp");
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
 
-    let result = ctx.runtime.shutdown(None).await;
+    let result = runtime.shutdown(None).await;
     assert!(result.is_ok());
 }
 
@@ -55,14 +69,25 @@ async fn shutdown_empty_runtime() {
 /// Shutting down one runtime should not affect another.
 #[tokio::test]
 async fn shutdown_does_not_affect_other_runtimes() {
-    let ctx1 = common::IsolatedRuntime::new_in("/tmp");
-    let ctx2 = common::IsolatedRuntime::new_in("/tmp");
+    let home1 = boxlite_test_utils::home::PerTestBoxHome::isolated_in("/tmp");
+    let runtime1 = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home1.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+
+    let home2 = boxlite_test_utils::home::PerTestBoxHome::isolated_in("/tmp");
+    let runtime2 = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home2.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
 
     // Shutdown runtime 1
-    ctx1.runtime.shutdown(None).await.unwrap();
+    runtime1.shutdown(None).await.unwrap();
 
     // Runtime 2 should still be operational (list_info works)
-    let result = ctx2.runtime.list_info().await;
+    let result = runtime2.list_info().await;
     assert!(result.is_ok());
     assert!(result.unwrap().is_empty());
 }
@@ -71,12 +96,17 @@ async fn shutdown_does_not_affect_other_runtimes() {
 /// Only box creation/start should fail.
 #[tokio::test]
 async fn read_operations_work_after_shutdown() {
-    let ctx = common::IsolatedRuntime::new_in("/tmp");
+    let home = boxlite_test_utils::home::PerTestBoxHome::isolated_in("/tmp");
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
 
-    ctx.runtime.shutdown(None).await.unwrap();
+    runtime.shutdown(None).await.unwrap();
 
     // list_info is a read-only query — should still work
-    let result = ctx.runtime.list_info().await;
+    let result = runtime.list_info().await;
     assert!(result.is_ok());
     assert!(result.unwrap().is_empty());
 }
@@ -88,13 +118,12 @@ async fn read_operations_work_after_shutdown() {
 /// Runtime drop releases the lock, allowing a new runtime on the same directory.
 #[test]
 fn drop_releases_lock() {
-    let temp_dir = TempDir::new_in("/tmp").expect("Failed to create temp dir");
-    let dir_path = temp_dir.path().to_path_buf();
+    let home = boxlite_test_utils::home::PerTestBoxHome::isolated_in("/tmp");
 
     // Create and drop a runtime
     {
         let options = BoxliteOptions {
-            home_dir: dir_path.clone(),
+            home_dir: home.path.clone(),
             image_registries: common::test_registries(),
         };
         let _rt = BoxliteRuntime::new(options).unwrap();
@@ -102,7 +131,7 @@ fn drop_releases_lock() {
 
     // Should be able to create a new runtime on the same directory
     let options2 = BoxliteOptions {
-        home_dir: dir_path,
+        home_dir: home.path.clone(),
         image_registries: common::test_registries(),
     };
     let _rt2 = BoxliteRuntime::new(options2).unwrap();
@@ -112,14 +141,19 @@ fn drop_releases_lock() {
 /// Both see the same shutdown token, so double-shutdown via clone is safe.
 #[tokio::test]
 async fn cloned_runtime_shares_shutdown_state() {
-    let ctx = common::IsolatedRuntime::new_in("/tmp");
-    let clone = ctx.runtime.clone();
+    let home = boxlite_test_utils::home::PerTestBoxHome::isolated_in("/tmp");
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+    let clone = runtime.clone();
 
     // Shutdown via clone
     clone.shutdown(None).await.unwrap();
 
     // Second shutdown via original should be a no-op
-    let result = ctx.runtime.shutdown(None).await;
+    let result = runtime.shutdown(None).await;
     assert!(
         result.is_ok(),
         "Second shutdown via original should succeed as no-op"
@@ -134,20 +168,40 @@ async fn cloned_runtime_shares_shutdown_state() {
 #[tokio::test]
 async fn shutdown_timeout_edge_values() {
     // Some(0) — zero timeout
-    let ctx = common::IsolatedRuntime::new_in("/tmp");
-    assert!(ctx.runtime.shutdown(Some(0)).await.is_ok());
+    let home = boxlite_test_utils::home::PerTestBoxHome::isolated_in("/tmp");
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+    assert!(runtime.shutdown(Some(0)).await.is_ok());
 
     // Some(-1) — infinite timeout
-    let ctx = common::IsolatedRuntime::new_in("/tmp");
-    assert!(ctx.runtime.shutdown(Some(-1)).await.is_ok());
+    let home = boxlite_test_utils::home::PerTestBoxHome::isolated_in("/tmp");
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+    assert!(runtime.shutdown(Some(-1)).await.is_ok());
 
     // Some(30) — explicit 30s
-    let ctx = common::IsolatedRuntime::new_in("/tmp");
-    assert!(ctx.runtime.shutdown(Some(30)).await.is_ok());
+    let home = boxlite_test_utils::home::PerTestBoxHome::isolated_in("/tmp");
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+    assert!(runtime.shutdown(Some(30)).await.is_ok());
 
     // Some(-5) — negative value
-    let ctx = common::IsolatedRuntime::new_in("/tmp");
-    assert!(ctx.runtime.shutdown(Some(-5)).await.is_ok());
+    let home = boxlite_test_utils::home::PerTestBoxHome::isolated_in("/tmp");
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+    assert!(runtime.shutdown(Some(-5)).await.is_ok());
 }
 
 // ============================================================================
@@ -157,12 +211,17 @@ async fn shutdown_timeout_edge_values() {
 /// Multiple concurrent shutdown() calls should all succeed without panic or deadlock.
 #[tokio::test]
 async fn concurrent_shutdown_is_safe() {
-    let ctx = common::IsolatedRuntime::new_in("/tmp");
+    let home = boxlite_test_utils::home::PerTestBoxHome::isolated_in("/tmp");
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
 
     // Clone runtime 4 times and call shutdown concurrently
     let handles: Vec<_> = (0..4)
         .map(|_| {
-            let rt = ctx.runtime.clone();
+            let rt = runtime.clone();
             tokio::spawn(async move { rt.shutdown(None).await })
         })
         .collect();
@@ -183,12 +242,16 @@ async fn concurrent_shutdown_is_safe() {
 /// Creating a box after shutdown should fail with a clear error.
 #[tokio::test]
 async fn create_after_shutdown_is_rejected() {
-    let ctx = common::IsolatedRuntime::new_in("/tmp");
+    let home = boxlite_test_utils::home::PerTestBoxHome::isolated_in("/tmp");
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
 
-    ctx.runtime.shutdown(None).await.unwrap();
+    runtime.shutdown(None).await.unwrap();
 
-    let result = ctx
-        .runtime
+    let result = runtime
         .create(
             BoxOptions {
                 rootfs: RootfsSpec::Image("test:latest".into()),
