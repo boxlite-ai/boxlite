@@ -91,18 +91,22 @@ class TestBoxManagement:
         box = runtime.create_box()
         assert hasattr(box, "id")
         assert box.id is not None
-        assert len(box.id) == 26  # ULID format
+        assert len(box.id) == 12  # Base62 format
 
     def test_box_ids_are_unique(self, runtime):
         box1 = runtime.create_box()
         box2 = runtime.create_box()
         assert box1.id != box2.id
 
-    def test_box_ids_are_sortable(self, runtime):
+    def test_box_ids_are_unique_strings(self, runtime):
+        """IDs are unique 12-char Base62 strings (not time-sortable)."""
         box1 = runtime.create_box()
-        time.sleep(0.01)  # Small delay to ensure different timestamps
         box2 = runtime.create_box()
-        assert box2.id > box1.id
+        assert isinstance(box1.id, str)
+        assert isinstance(box2.id, str)
+        assert len(box1.id) == 12
+        assert len(box2.id) == 12
+        assert box1.id != box2.id
 
     def test_box_info(self, runtime):
         box = runtime.create_box(image="python:3.11", cpus=4, memory_mib=1024)
@@ -165,6 +169,9 @@ class TestBoxManagement:
         box = runtime._runtime.create(opts)
         runtime._boxes.append(box)
         assert runtime.get_info(box.id).state.status in {"configured", "running"}
+        # Ensure box is running before stopping (configured → running → stopped)
+        result = box.exec("echo", ["ready"])
+        result.wait()
         box.stop()
         state_after_shutdown = runtime.get_info(box.id)
         assert state_after_shutdown is not None
