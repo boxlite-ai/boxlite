@@ -56,6 +56,14 @@ impl BoxTestBase {
     /// Returns a **created-but-not-started** box. Call `bx.start().await` when ready.
     pub async fn with_options(options: BoxOptions) -> Self {
         let home = PerTestBoxHome::new();
+        Self::with_home(home, options).await
+    }
+
+    /// Create a test fixture with a pre-built home directory and custom options.
+    ///
+    /// Useful for tests that need a custom home (e.g., short path for macOS socket limits).
+    /// Returns a **created-but-not-started** box. Call `bx.start().await` when ready.
+    pub async fn with_home(home: PerTestBoxHome, options: BoxOptions) -> Self {
         let runtime = BoxliteRuntime::new(BoxliteOptions {
             home_dir: home.path.clone(),
             image_registries: test_registries(),
@@ -100,6 +108,11 @@ impl BoxTestBase {
             bx,
             _home: home,
         }
+    }
+
+    /// Path to this test's home directory.
+    pub fn home_dir(&self) -> &std::path::Path {
+        &self._home.path
     }
 
     // ────────────────────────────────────────────────────────────────────────

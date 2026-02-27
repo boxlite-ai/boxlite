@@ -8,10 +8,9 @@
 
 mod common;
 
-use boxlite::BoxCommand;
-use boxlite::BoxliteRuntime;
 use boxlite::runtime::advanced_options::{AdvancedBoxOptions, SecurityOptions};
-use boxlite::runtime::options::{BoxOptions, BoxliteOptions};
+use boxlite::runtime::options::BoxOptions;
+use common::box_test::BoxTestBase;
 use std::path::PathBuf;
 
 // ============================================================================
@@ -47,47 +46,40 @@ fn assert_macos_socket_path_budget(home_dir: &std::path::Path) {
     );
 }
 
-/// Per-test runtime context for jailer tests.
-struct JailerTestCtx {
-    runtime: BoxliteRuntime,
-    home_dir: PathBuf,
-    _home: boxlite_test_utils::home::PerTestBoxHome,
+/// Per-test home for jailer tests under `~/.boxlite-it`.
+///
+/// Uses a short base path to satisfy macOS 104-char Unix socket path limit.
+/// Cleanup: `PerTestBoxHome` (owned by `BoxTestBase` after `.home` is moved)
+/// handles per-test TempDir removal via Drop. The base dir `~/.boxlite-it`
+/// is left in place (shared across test runs).
+struct JailerHome {
+    home: boxlite_test_utils::home::PerTestBoxHome,
 }
 
-/// Create a runtime under `~/.boxlite-it` with macOS socket path validation.
-fn jailer_runtime() -> JailerTestCtx {
-    let base = jailer_test_home_base_dir();
-    std::fs::create_dir_all(&base).expect("Failed to create jailer test home base");
-
-    let home =
-        boxlite_test_utils::home::PerTestBoxHome::new_in(base.to_str().expect("base path UTF-8"));
-
-    #[cfg(target_os = "macos")]
-    assert_macos_socket_path_budget(&home.path);
-    #[cfg(target_os = "macos")]
-    {
-        let canonical_home = home
-            .path
-            .canonicalize()
-            .unwrap_or_else(|_| home.path.clone());
-        assert!(
-            !canonical_home.starts_with("/private/tmp"),
-            "jailer integration tests must not use /private/tmp as home_dir: {}",
-            canonical_home.display()
+impl JailerHome {
+    fn new() -> Self {
+        let base = jailer_test_home_base_dir();
+        std::fs::create_dir_all(&base).expect("create jailer test home base");
+        let home = boxlite_test_utils::home::PerTestBoxHome::new_in(
+            base.to_str().expect("base path UTF-8"),
         );
-    }
 
-    let home_dir = home.path.clone();
-    let runtime = BoxliteRuntime::new(BoxliteOptions {
-        home_dir: home.path.clone(),
-        image_registries: common::test_registries(),
-    })
-    .expect("create jailer runtime");
+        #[cfg(target_os = "macos")]
+        assert_macos_socket_path_budget(&home.path);
+        #[cfg(target_os = "macos")]
+        {
+            let canonical = home
+                .path
+                .canonicalize()
+                .unwrap_or_else(|_| home.path.clone());
+            assert!(
+                !canonical.starts_with("/private/tmp"),
+                "jailer tests must not use /private/tmp as home_dir: {}",
+                canonical.display()
+            );
+        }
 
-    JailerTestCtx {
-        runtime,
-        home_dir,
-        _home: home,
+        Self { home }
     }
 }
 
@@ -223,59 +215,29 @@ fn standard_mode_enables_jailer() {
 /// Box with jailer enabled starts and executes commands successfully.
 #[tokio::test]
 async fn jailer_enabled_box_starts_and_executes() {
-    let ctx = jailer_runtime();
-    let handle = ctx
-        .runtime
-        .create(jailer_enabled_options(), None)
-        .await
-        .unwrap();
-    handle.start().await.unwrap();
+    let jh = JailerHome::new();
+    let t = BoxTestBase::with_home(jh.home, jailer_enabled_options()).await;
+    t.bx.start().await.unwrap();
 
-    let mut execution = handle
-        .exec(BoxCommand::new("echo").arg("jailer-test"))
-        .await
-        .unwrap();
-
-    let result = execution.wait().await.unwrap();
-    assert_eq!(
-        result.exit_code, 0,
+    let out = t.exec_stdout("echo", &["jailer-test"]).await;
+    assert!(
+        out.contains("jailer-test"),
         "Command should succeed with jailer enabled"
     );
-
-    handle.stop().await.unwrap();
-    ctx.runtime
-        .remove(handle.id().as_str(), false)
-        .await
-        .unwrap();
 }
 
 /// Box with jailer explicitly disabled still works (development mode).
 #[tokio::test]
 async fn jailer_disabled_box_starts_and_executes() {
-    let ctx = jailer_runtime();
-    let handle = ctx
-        .runtime
-        .create(jailer_disabled_options(), None)
-        .await
-        .unwrap();
-    handle.start().await.unwrap();
+    let jh = JailerHome::new();
+    let t = BoxTestBase::with_home(jh.home, jailer_disabled_options()).await;
+    t.bx.start().await.unwrap();
 
-    let mut execution = handle
-        .exec(BoxCommand::new("echo").arg("no-jailer-test"))
-        .await
-        .unwrap();
-
-    let result = execution.wait().await.unwrap();
-    assert_eq!(
-        result.exit_code, 0,
+    let out = t.exec_stdout("echo", &["no-jailer-test"]).await;
+    assert!(
+        out.contains("no-jailer-test"),
         "Command should succeed with jailer disabled"
     );
-
-    handle.stop().await.unwrap();
-    ctx.runtime
-        .remove(handle.id().as_str(), false)
-        .await
-        .unwrap();
 }
 
 #[cfg(target_os = "macos")]
@@ -286,35 +248,31 @@ async fn jailer_enabled_custom_profile_deny_boxes_subpath_blocks_start() {
         return;
     }
 
-    let ctx = jailer_runtime();
-    let profile_path = write_deny_boxes_profile(&ctx.home_dir);
-    let handle = ctx
-        .runtime
-        .create(
-            with_sandbox_profile(jailer_enabled_options(), profile_path),
-            None,
-        )
-        .await
-        .unwrap();
+    let jh = JailerHome::new();
+    let profile_path = write_deny_boxes_profile(&jh.home.path);
+    let t = BoxTestBase::with_home(
+        jh.home,
+        with_sandbox_profile(jailer_enabled_options(), profile_path),
+    )
+    .await;
 
-    let box_id = handle.id().clone();
-    let mut start_task = tokio::spawn(async move { handle.start().await });
+    let box_id = t.bx.id().clone();
     let start_result =
-        match tokio::time::timeout(std::time::Duration::from_secs(600), &mut start_task).await {
-            Ok(join_result) => join_result.expect("start task panicked"),
-            Err(_) => {
-                start_task.abort();
-                let _ = ctx.runtime.remove(box_id.as_str(), true).await;
-                panic!("start() timed out while waiting for sandbox denial");
-            }
-        };
+        tokio::time::timeout(std::time::Duration::from_secs(600), t.bx.start()).await;
+
+    let start_result = match start_result {
+        Ok(result) => result,
+        Err(_) => {
+            panic!("start() timed out while waiting for sandbox denial");
+        }
+    };
     assert!(
         start_result.is_err(),
         "Expected start to fail with deny profile for boxes subpath"
     );
 
-    let stderr_path = ctx
-        .home_dir
+    let stderr_path = t
+        .home_dir()
         .join("boxes")
         .join(box_id.as_str())
         .join("shim.stderr");
@@ -326,22 +284,21 @@ async fn jailer_enabled_custom_profile_deny_boxes_subpath_blocks_start() {
 
     let stderr = std::fs::read_to_string(&stderr_path).expect("Should read shim.stderr");
     let stderr_lower = stderr.to_lowercase();
+    // "file exists" is valid deny evidence: when the sandbox blocks stat() on a
+    // pre-created directory, Rust's create_dir_all can't verify the existing path
+    // is a directory and surfaces the original EEXIST from mkdir instead of Ok(()).
+    // Without the sandbox, create_dir_all handles existing directories gracefully.
     let has_deny_evidence = stderr_lower.contains("operation not permitted")
         || stderr_lower.contains("sandbox")
-        || stderr_lower.contains("deny");
+        || stderr_lower.contains("deny")
+        || stderr_lower.contains("file exists");
     assert!(
         has_deny_evidence,
         "Expected sandbox deny evidence in shim.stderr, got:\n{}",
         stderr
     );
-
-    match ctx.runtime.remove(box_id.as_str(), true).await {
-        Ok(()) => {}
-        Err(boxlite::BoxliteError::NotFound(_)) => {
-            // Startup failure cleanup may already remove the box from runtime state.
-        }
-        Err(e) => panic!("Cleanup should succeed after denied startup: {}", e),
-    }
+    // Drop: BoxTestBase -> RuntimeImpl::Drop stops non-detached boxes,
+    //        PerTestBoxHome -> TempDir cleans up per-test dir.
 }
 
 #[cfg(target_os = "macos")]
@@ -352,31 +309,22 @@ async fn jailer_disabled_with_same_profile_still_starts() {
         return;
     }
 
-    let ctx = jailer_runtime();
-    let profile_path = write_deny_boxes_profile(&ctx.home_dir);
-    let handle = ctx
-        .runtime
-        .create(
-            with_sandbox_profile(jailer_disabled_options(), profile_path),
-            None,
-        )
-        .await
-        .unwrap();
+    let jh = JailerHome::new();
+    let profile_path = write_deny_boxes_profile(&jh.home.path);
+    let t = BoxTestBase::with_home(
+        jh.home,
+        with_sandbox_profile(jailer_disabled_options(), profile_path),
+    )
+    .await;
+    t.bx.start().await.unwrap();
 
-    handle.start().await.unwrap();
-
-    let mut execution = handle
-        .exec(BoxCommand::new("echo").arg("profile-ignored-with-jailer-disabled"))
-        .await
-        .unwrap();
-    let result = execution.wait().await.unwrap();
-    assert_eq!(result.exit_code, 0, "Control case should start and execute");
-
-    handle.stop().await.unwrap();
-    ctx.runtime
-        .remove(handle.id().as_str(), false)
-        .await
-        .unwrap();
+    let out = t
+        .exec_stdout("echo", &["profile-ignored-with-jailer-disabled"])
+        .await;
+    assert!(
+        out.contains("profile-ignored-with-jailer-disabled"),
+        "Control case should start and execute"
+    );
 }
 
 // ============================================================================
@@ -387,25 +335,21 @@ async fn jailer_disabled_with_same_profile_still_starts() {
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn jailer_creates_isolated_mount_namespace() {
-    let ctx = jailer_runtime();
-    let handle = ctx
-        .runtime
-        .create(jailer_enabled_options(), None)
-        .await
-        .unwrap();
-    handle.start().await.unwrap();
+    let jh = JailerHome::new();
+    let t = BoxTestBase::with_home(jh.home, jailer_enabled_options()).await;
+    t.bx.start().await.unwrap();
 
     // Start a long-running command so the shim stays alive
-    let _execution = handle
-        .exec(BoxCommand::new("sleep").arg("30"))
-        .await
-        .unwrap();
+    let _execution =
+        t.bx.exec(boxlite::BoxCommand::new("sleep").arg("30"))
+            .await
+            .unwrap();
 
     // Read the shim's PID
-    let pid_file = ctx
-        .home_dir
+    let pid_file = t
+        .home_dir()
         .join("boxes")
-        .join(handle.id().as_str())
+        .join(t.bx.id().as_str())
         .join("shim.pid");
     let shim_pid = boxlite::util::read_pid_file(&pid_file).expect("Should read shim PID file");
 
@@ -418,10 +362,4 @@ async fn jailer_creates_isolated_mount_namespace() {
         self_mnt_ns, shim_mnt_ns,
         "Shim should be in a different mount namespace (bwrap isolation active)"
     );
-
-    handle.stop().await.unwrap();
-    ctx.runtime
-        .remove(handle.id().as_str(), false)
-        .await
-        .unwrap();
 }
