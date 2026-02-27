@@ -190,6 +190,7 @@ pub struct BoxState {
     /// Used to retrieve the lock across process restarts.
     pub lock_id: Option<LockId>,
     /// Health status.
+    #[serde(default)]
     pub health_status: HealthStatus,
 }
 
@@ -843,5 +844,23 @@ mod tests {
         let state = BoxState::new();
         assert_eq!(state.health_status.state, HealthState::None);
         assert_eq!(state.health_status.failures, 0);
+    }
+
+    #[test]
+    fn deserialize_box_state_without_health_status() {
+        // JSON from before PR #266 (no health_status field).
+        // Old database rows lack this field; serde(default) must fill it in.
+        let old_json = r#"{
+            "status": "configured",
+            "pid": null,
+            "container_id": null,
+            "last_updated": "2026-02-26T00:00:00Z",
+            "lock_id": null
+        }"#;
+        let state: BoxState = serde_json::from_str(old_json).unwrap();
+        assert_eq!(state.status, BoxStatus::Configured);
+        assert_eq!(state.health_status.state, HealthState::None);
+        assert_eq!(state.health_status.failures, 0);
+        assert!(state.health_status.last_check.is_none());
     }
 }

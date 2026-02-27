@@ -3,12 +3,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// Builds libgvproxy from Go sources using cgo.
+/// Builds libgvproxy from Go sources as a C static archive.
 ///
 /// Steps:
 /// 1. Downloads Go module dependencies
-/// 2. Compiles Go code as a C shared library
-/// 3. Fixes the install_name for proper loading
+/// 2. Compiles Go code as a C archive (static library)
 fn build_gvproxy(source_dir: &Path, output_path: &Path) {
     println!("cargo:warning=Building libgvproxy from Go sources...");
 
@@ -23,13 +22,9 @@ fn build_gvproxy(source_dir: &Path, output_path: &Path) {
         panic!("Failed to download Go module dependencies");
     }
 
-    // Build as C shared library
+    // Build as C archive (static library)
     let mut build_cmd = Command::new("go");
-    build_cmd.args(["build", "-buildmode=c-shared"]);
-
-    // macOS: Reserve space for install_name_tool to modify paths later
-    #[cfg(target_os = "macos")]
-    build_cmd.arg("-ldflags=-extldflags=-headerpad_max_install_names");
+    build_cmd.args(["build", "-buildmode=c-archive"]);
 
     build_cmd.args([
         "-o",
@@ -48,53 +43,6 @@ fn build_gvproxy(source_dir: &Path, output_path: &Path) {
     }
 
     println!("cargo:warning=Successfully built libgvproxy");
-}
-
-/// Fixes the install_name on macOS to use an absolute path.
-/// This allows install_name_tool to modify the library path during wheel repair.
-#[cfg(target_os = "macos")]
-fn fix_install_name(lib_name: &str, lib_path: &Path) {
-    let lib_path_str = lib_path.to_str().expect("Invalid library path");
-
-    let status = Command::new("install_name_tool")
-        .args(["-id", &format!("@rpath/{}", lib_name), lib_path_str])
-        .status()
-        .expect("Failed to execute install_name_tool");
-
-    if !status.success() {
-        panic!("Failed to set install_name for libgvproxy");
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn fix_install_name(lib_name: &str, lib_path: &Path) {
-    let lib_path_str = lib_path.to_str().expect("Invalid library path");
-
-    let status = Command::new("patchelf")
-        .args([
-            "--set-soname",
-            lib_name, // On Linux, SONAME is just the library name, not @rpath/name
-            lib_path_str,
-        ])
-        .status()
-        .expect("Failed to execute patchelf");
-
-    if !status.success() {
-        panic!("Failed to set install_name for libgvproxy");
-    }
-}
-
-/// Determines the library filename based on the target platform.
-fn get_library_name() -> &'static str {
-    if cfg!(target_os = "macos") {
-        "libgvproxy.dylib"
-    } else if cfg!(target_os = "linux") {
-        "libgvproxy.so"
-    } else if cfg!(target_os = "windows") {
-        "libgvproxy.dll"
-    } else {
-        panic!("Unsupported platform for libgvproxy");
-    }
 }
 
 /// Auto-set BOXLITE_DEPS_STUB=2 when downloaded from a registry (crates.io).
@@ -121,7 +69,7 @@ fn main() {
     // Set BOXLITE_DEPS_STUB=1 to skip building and emit stub link directives
     if env::var("BOXLITE_DEPS_STUB").is_ok() {
         println!("cargo:warning=BOXLITE_DEPS_STUB mode: skipping libgvproxy build");
-        println!("cargo:rustc-link-lib=dylib=gvproxy");
+        println!("cargo:rustc-link-lib=static=gvproxy");
         println!("cargo:LIBGVPROXY_BOXLITE_DEP=/nonexistent");
         return;
     }
@@ -130,14 +78,12 @@ fn main() {
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set");
 
     let source_dir = Path::new(&manifest_dir).join("gvproxy-bridge");
-    let lib_name = get_library_name();
-    let lib_output = Path::new(&out_dir).join(lib_name);
+    let lib_output = Path::new(&out_dir).join("libgvproxy.a");
 
     // Build libgvproxy from Go sources
     // Note: cargo only re-runs this script when rerun-if-changed files change,
     // so no extra caching is needed here.
     build_gvproxy(&source_dir, &lib_output);
-    fix_install_name(lib_name, &lib_output);
 
     // Copy header file for downstream C/C++ usage (optional)
     let header_src = source_dir.join("libgvproxy.h");
@@ -148,7 +94,15 @@ fn main() {
 
     // Tell Cargo where to find the library
     println!("cargo:rustc-link-search=native={}", out_dir);
-    println!("cargo:rustc-link-lib=dylib=gvproxy");
+    println!("cargo:rustc-link-lib=static=gvproxy");
+
+    // Transitive dependencies from the Go runtime (embedded in the c-archive)
+    #[cfg(target_os = "macos")]
+    {
+        println!("cargo:rustc-link-lib=framework=CoreFoundation");
+        println!("cargo:rustc-link-lib=framework=Security");
+        println!("cargo:rustc-link-lib=resolv");
+    }
 
     // Expose library directory to downstream crates (used by boxlite/build.rs)
     // Convention: {LIBNAME}_BOXLITE_DEP=<path> for auto-discovery

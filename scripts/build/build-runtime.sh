@@ -12,11 +12,9 @@
 #   --profile PROFILE   Build profile: release or debug (default: release)
 #
 # The runtime directory will contain:
-#   - boxlite-shim      VM subprocess runner
+#   - boxlite-shim      VM subprocess runner (statically links libkrun + libgvproxy)
 #   - boxlite-guest     Guest agent (Linux binary)
-#   - libkrun.*         libkrun library
-#   - libkrunfw.*       libkrunfw library
-#   - libgvproxy.*      gvproxy library (if gvproxy-backend feature enabled)
+#   - libkrunfw.*       libkrunfw library (dlopen'd at runtime)
 
 set -e
 
@@ -43,11 +41,9 @@ Options:
   --help, -h          Show this help message
 
 The runtime directory will contain:
-  - boxlite-shim      VM subprocess runner
+  - boxlite-shim      VM subprocess runner (statically links libkrun + libgvproxy)
   - boxlite-guest     Guest agent (Linux binary)
-  - libkrun.*         libkrun library
-  - libkrunfw.*       libkrunfw library
-  - libgvproxy.*      gvproxy library (if available)
+  - libkrunfw.*       libkrunfw library (dlopen'd at runtime)
 
 Examples:
   # Build release runtime in default location
@@ -147,7 +143,16 @@ build_shim() {
     # Always build to ensure freshness (Cargo handles incremental compilation)
     bash "$SCRIPT_BUILD_DIR/build-shim.sh" --profile "$PROFILE"
 
-    local shim_path="$PROJECT_ROOT/target/$PROFILE/boxlite-shim"
+    # Compute shim binary path (matches build-shim.sh's compute_shim_target logic)
+    local shim_path
+    if [ "$OS" = "linux" ]; then
+        local arch
+        arch=$(uname -m)
+        shim_path="$PROJECT_ROOT/target/${arch}-unknown-linux-musl/$PROFILE/boxlite-shim"
+    else
+        shim_path="$PROJECT_ROOT/target/$PROFILE/boxlite-shim"
+    fi
+
     if [ -f "$shim_path" ]; then
         SHIM_BINARY="$shim_path"
         print_success "Built: $shim_path"

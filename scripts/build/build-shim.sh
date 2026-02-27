@@ -9,6 +9,7 @@
 #   --profile PROFILE   Build profile: release or debug (default: release)
 #
 # Note: On macOS, the binary is automatically signed with hypervisor entitlements
+# Note: On Linux, the binary is built with musl for a fully static executable
 
 set -e
 
@@ -70,6 +71,21 @@ parse_args "$@"
 OS=$(detect_os)
 print_header "🚀 Building boxlite-shim on $OS..."
 
+# Compute the Rust target triple and binary path for the current platform
+compute_shim_target() {
+    if [ "$OS" = "linux" ]; then
+        local arch
+        arch=$(uname -m)
+        SHIM_TARGET="${arch}-unknown-linux-musl"
+        SHIM_BINARY_PATH="$PROJECT_ROOT/target/$SHIM_TARGET/$PROFILE/boxlite-shim"
+    else
+        SHIM_TARGET=""
+        SHIM_BINARY_PATH="$PROJECT_ROOT/target/$PROFILE/boxlite-shim"
+    fi
+}
+
+compute_shim_target
+
 # Build the shim binary
 build_shim_binary() {
     cd "$PROJECT_ROOT"
@@ -78,7 +94,13 @@ build_shim_binary() {
     if [ "$PROFILE" = "release" ]; then
         build_flag="--release"
     fi
-    cargo build $build_flag --bin boxlite-shim
+
+    if [ -n "$SHIM_TARGET" ]; then
+        echo "🎯 Target: $SHIM_TARGET (static musl binary)"
+        cargo build $build_flag --bin boxlite-shim --target "$SHIM_TARGET"
+    else
+        cargo build $build_flag --bin boxlite-shim
+    fi
 }
 
 # Sign the binary (macOS only, automatic)
@@ -107,7 +129,7 @@ sign_binary() {
 copy_to_destination() {
     if [ -z "$DEST_DIR" ]; then
         echo "✅ Shim binary built successfully (no destination specified)"
-        echo "Binary location: $PROJECT_ROOT/target/$PROFILE/boxlite-shim"
+        echo "Binary location: $SHIM_BINARY_PATH"
         return 0
     fi
 
@@ -115,7 +137,7 @@ copy_to_destination() {
     # Absolute paths are used as-is
     echo "📦 Copying to destination: $DEST_DIR"
     mkdir -p "$DEST_DIR"
-    cp "$PROJECT_ROOT/target/$PROFILE/boxlite-shim" "$DEST_DIR/"
+    cp "$SHIM_BINARY_PATH" "$DEST_DIR/"
 
     echo "✅ Shim binary built and copied to $DEST_DIR"
     echo "Binary info:"
