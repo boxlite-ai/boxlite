@@ -39,17 +39,21 @@ pub struct BoxTestBase {
 impl BoxTestBase {
     /// Create a new test fixture with `alpine:latest` and default options.
     ///
-    /// Triggers shared cache initialization on first call (image pull, rootfs build).
+    /// Returns a **running** box. Triggers shared cache initialization on first call.
     pub async fn new() -> Self {
-        Self::with_options(BoxOptions {
+        let t = Self::with_options(BoxOptions {
             rootfs: RootfsSpec::Image("alpine:latest".into()),
             auto_remove: false,
             ..Default::default()
         })
-        .await
+        .await;
+        t.bx.start().await.expect("start BoxTestBase box");
+        t
     }
 
     /// Create a new test fixture with custom `BoxOptions`.
+    ///
+    /// Returns a **created-but-not-started** box. Call `bx.start().await` when ready.
     pub async fn with_options(options: BoxOptions) -> Self {
         let home = PerTestBoxHome::new();
         let runtime = BoxliteRuntime::new(BoxliteOptions {
@@ -62,7 +66,6 @@ impl BoxTestBase {
             .create(options, None)
             .await
             .expect("create BoxTestBase box");
-        bx.start().await.expect("start BoxTestBase box");
 
         Self {
             runtime,

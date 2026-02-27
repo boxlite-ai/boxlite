@@ -18,7 +18,7 @@
 use std::path::PathBuf;
 use tempfile::TempDir;
 
-use crate::cache::SharedResources;
+use crate::cache::{LinkedCache, SharedResources};
 
 /// Per-test home directory with shared cache linked in.
 ///
@@ -29,6 +29,9 @@ pub struct PerTestBoxHome {
     /// Path to this test's home directory.
     pub path: PathBuf,
     _temp: TempDir,
+    /// Cleanup handle for per-test cache resources (tmp dir under `target/boxlite-test/tmp/`).
+    /// `None` for isolated homes that don't use shared cache.
+    _cache: Option<LinkedCache>,
 }
 
 impl Default for PerTestBoxHome {
@@ -46,8 +49,12 @@ impl PerTestBoxHome {
         let cache = SharedResources::global();
         let temp = TempDir::new_in("/tmp").expect("create temp dir");
         let path = temp.path().to_path_buf();
-        cache.link_into(&path);
-        Self { path, _temp: temp }
+        let linked = cache.link_into(&path);
+        Self {
+            path,
+            _temp: temp,
+            _cache: Some(linked),
+        }
     }
 
     /// Create a per-test home without warm cache.
@@ -57,7 +64,11 @@ impl PerTestBoxHome {
     pub fn isolated() -> Self {
         let temp = TempDir::new_in("/tmp").expect("create temp dir");
         let path = temp.path().to_path_buf();
-        Self { path, _temp: temp }
+        Self {
+            path,
+            _temp: temp,
+            _cache: None,
+        }
     }
 
     /// Create a per-test home under a specific base directory.
@@ -67,15 +78,23 @@ impl PerTestBoxHome {
         let cache = SharedResources::global();
         let temp = TempDir::new_in(base).expect("create temp dir");
         let path = temp.path().to_path_buf();
-        cache.link_into(&path);
-        Self { path, _temp: temp }
+        let linked = cache.link_into(&path);
+        Self {
+            path,
+            _temp: temp,
+            _cache: Some(linked),
+        }
     }
 
     /// Create an isolated home under a specific base directory.
     pub fn isolated_in(base: &str) -> Self {
         let temp = TempDir::new_in(base).expect("create temp dir");
         let path = temp.path().to_path_buf();
-        Self { path, _temp: temp }
+        Self {
+            path,
+            _temp: temp,
+            _cache: None,
+        }
     }
 }
 
@@ -104,5 +123,15 @@ mod tests {
         }
         // After drop, temp dir should be cleaned up
         assert!(!path.exists(), "temp dir should be cleaned up after drop");
+    }
+
+    #[test]
+    fn isolated_home_has_no_tmp_symlink() {
+        let home = PerTestBoxHome::isolated();
+        let tmp_link = home.path.join("tmp");
+        assert!(
+            !tmp_link.exists(),
+            "isolated home should not have a tmp symlink"
+        );
     }
 }

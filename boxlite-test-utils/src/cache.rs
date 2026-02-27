@@ -19,7 +19,17 @@ use std::sync::OnceLock;
 use boxlite::BoxliteRuntime;
 use boxlite::runtime::options::{BoxOptions, BoxliteOptions, RootfsSpec};
 
+use tempfile::TempDir;
+
 use crate::{TEST_IMAGES, TEST_SHUTDOWN_TIMEOUT, test_registries};
+
+/// Cleanup handle for per-test resources linked into a home directory.
+///
+/// Owns the per-test tmp directory under `target/boxlite-test/tmp/`.
+/// Dropping this removes it automatically via [`TempDir`]'s RAII cleanup.
+pub struct LinkedCache {
+    _per_test_tmp: TempDir,
+}
 
 static SHARED_RESOURCES: OnceLock<SharedResources> = OnceLock::new();
 
@@ -30,8 +40,6 @@ static SHARED_RESOURCES: OnceLock<SharedResources> = OnceLock::new();
 pub struct SharedResources {
     /// Root of the persistent cache: `target/boxlite-test/`.
     dir: PathBuf,
-    /// Warm home directory in `/tmp/` (short paths for Unix sockets).
-    warm_home: PathBuf,
 }
 
 impl SharedResources {
@@ -70,16 +78,14 @@ impl SharedResources {
     /// - `home/rootfs → target/boxlite-test/rootfs/` (symlink, read-only)
     /// - `home/tmp → target/boxlite-test/tmp/<unique>/` (symlink, per-test)
     /// - `home/db/boxlite.db` (copy, per-test writable)
-    pub fn link_into(&self, home_dir: &Path) {
-        // Symlink images, rootfs → cache (shared, read-only)
+    pub fn link_into(&self, home_dir: &Path) -> LinkedCache {
+        // Symlink images, rootfs → cache dir (shared, read-only)
         for name in ["images", "rootfs"] {
             let link = home_dir.join(name);
             if !link.exists() {
-                let target = self.warm_home.join(name);
+                let target = self.dir.join(name);
                 if target.exists() {
-                    let real_dir =
-                        std::fs::canonicalize(&target).unwrap_or_else(|_| target.clone());
-                    symlink_or_exists(&real_dir, &link, name);
+                    symlink_or_exists(&target, &link, name);
                 }
             }
         }
@@ -89,8 +95,7 @@ impl SharedResources {
         let cache_tmp = self.tmp_dir();
         std::fs::create_dir_all(&cache_tmp).unwrap_or_default();
         let per_test_tmp = tempfile::tempdir_in(&cache_tmp).expect("create per-test tmp dir");
-        let per_test_tmp_path = per_test_tmp.keep();
-        symlink_or_exists(&per_test_tmp_path, &home_dir.join("tmp"), "tmp");
+        symlink_or_exists(per_test_tmp.path(), &home_dir.join("tmp"), "tmp");
 
         // Copy DB from cache — each test gets its own writable copy.
         let cached_db = self.db_snapshot();
@@ -101,6 +106,10 @@ impl SharedResources {
                 eprintln!("[test] warn: failed to copy cached DB: {e}");
             }
         }
+
+        LinkedCache {
+            _per_test_tmp: per_test_tmp,
+        }
     }
 
     // ────────────────────────────────────────────────────────────────────────
@@ -109,21 +118,14 @@ impl SharedResources {
 
     fn init() -> Self {
         let dir = cache_dir();
-        let warm_home = PathBuf::from("/tmp/boxlite-test");
 
-        let resources = Self {
-            dir: dir.clone(),
-            warm_home: warm_home.clone(),
-        };
-
-        // Create directories
-        resources.ensure_dirs(&warm_home);
-
-        // Symlink warm_home/{images,rootfs,tmp} → cache
-        for name in ["images", "rootfs", "tmp"] {
-            let target = dir.join(name);
-            symlink_or_exists(&target, &warm_home.join(name), name);
+        // Create persistent cache directories
+        for subdir in ["images", "rootfs", "tmp"] {
+            std::fs::create_dir_all(dir.join(subdir))
+                .unwrap_or_else(|e| panic!("create cache/{subdir}: {e}"));
         }
+
+        let resources = Self { dir: dir.clone() };
 
         // Fast path: cache already warm
         if resources.is_warm() {
@@ -140,21 +142,21 @@ impl SharedResources {
             return resources;
         }
 
+        // Ephemeral short-path home for warm-up runtime (macOS 104-char socket limit).
+        // Symlinks {images,rootfs,tmp} → target/boxlite-test/ so data persists.
+        let warm_home = TempDir::new_in("/tmp").expect("create warm home");
+        for name in ["images", "rootfs", "tmp"] {
+            symlink_or_exists(&dir.join(name), &warm_home.path().join(name), name);
+        }
+
         // Pull images and warm rootfs on a dedicated thread.
         // #[tokio::test] already has a Tokio runtime; creating another inside
         // the same thread panics ("Cannot start a runtime from within a runtime").
-        resources.warm_on_thread(&warm_home);
-        resources.snapshot_db(&warm_home);
+        resources.warm_on_thread(warm_home.path());
+        resources.snapshot_db(warm_home.path());
+        // warm_home dropped here — cleaned up automatically
 
         resources
-    }
-
-    fn ensure_dirs(&self, warm_home: &Path) {
-        std::fs::create_dir_all(warm_home).expect("create /tmp/boxlite-test");
-        for subdir in ["images", "rootfs", "tmp"] {
-            std::fs::create_dir_all(self.dir.join(subdir))
-                .unwrap_or_else(|e| panic!("create cache/{subdir}: {e}"));
-        }
     }
 
     fn is_warm(&self) -> bool {
@@ -278,7 +280,6 @@ mod tests {
         // Test path construction without triggering full init
         let resources = SharedResources {
             dir: PathBuf::from("/test/cache"),
-            warm_home: PathBuf::from("/tmp/boxlite-test"),
         };
         assert_eq!(resources.images_dir(), PathBuf::from("/test/cache/images"));
         assert_eq!(resources.rootfs_dir(), PathBuf::from("/test/cache/rootfs"));
@@ -286,6 +287,67 @@ mod tests {
         assert_eq!(
             resources.db_snapshot(),
             PathBuf::from("/test/cache/db/boxlite.db")
+        );
+    }
+
+    #[test]
+    fn linked_cache_cleans_per_test_tmp_on_drop() {
+        let base = tempfile::tempdir().expect("create base temp dir");
+        let cache_dir = base.path().join("cache");
+        for sub in ["images", "rootfs", "tmp"] {
+            std::fs::create_dir_all(cache_dir.join(sub)).unwrap();
+        }
+
+        let resources = SharedResources {
+            dir: cache_dir.clone(),
+        };
+
+        // Create a per-test home and link into it
+        let home = tempfile::tempdir().expect("create home temp dir");
+        let linked = resources.link_into(home.path());
+
+        // The per-test tmp dir should exist under cache/tmp/
+        let tmp_entries: Vec<_> = std::fs::read_dir(cache_dir.join("tmp"))
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .collect();
+        assert_eq!(tmp_entries.len(), 1, "should have one per-test tmp dir");
+        let per_test_tmp_path = tmp_entries[0].path();
+        assert!(per_test_tmp_path.exists());
+
+        // Drop the LinkedCache — per-test tmp should be cleaned up
+        drop(linked);
+        assert!(
+            !per_test_tmp_path.exists(),
+            "per-test tmp dir should be removed after LinkedCache drop"
+        );
+    }
+
+    #[test]
+    fn link_into_creates_tmp_symlink() {
+        let base = tempfile::tempdir().expect("create base temp dir");
+        let cache_dir = base.path().join("cache");
+        for sub in ["images", "rootfs", "tmp"] {
+            std::fs::create_dir_all(cache_dir.join(sub)).unwrap();
+        }
+
+        let resources = SharedResources { dir: cache_dir };
+
+        let home = tempfile::tempdir().expect("create home temp dir");
+        let _linked = resources.link_into(home.path());
+
+        let tmp_link = home.path().join("tmp");
+        assert!(
+            tmp_link
+                .symlink_metadata()
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "home/tmp should be a symlink"
+        );
+        assert!(
+            tmp_link.exists(),
+            "symlink target should exist while LinkedCache is alive"
         );
     }
 }
