@@ -194,7 +194,7 @@ fn do_export_finalize(
     box_id_str: &str,
     dest: &std::path::Path,
 ) -> BoxliteResult<crate::runtime::options::BoxArchive> {
-    use crate::archive::{
+    use super::archive::{
         ARCHIVE_VERSION, ArchiveManifest, MANIFEST_FILENAME, build_zstd_tar_archive, sha256_file,
     };
 
