@@ -64,22 +64,24 @@ jobs:
           shared-key: "boxlite"
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      # Build guest on host BEFORE manylinux container because:
+      # Build guest and shim on host BEFORE manylinux container because:
       # - manylinux (AlmaLinux/RHEL) doesn't have musl packages in repos
       # - Building musl-cross-make from source takes ~15 minutes
       # - Ubuntu host has musl-tools via apt (~30 seconds)
-      # - Guest is static musl binary, doesn't need manylinux glibc compatibility
-      # - Shim/libkrun must be built IN container (needs glibc 2.28 for manylinux)
-      - name: Build guest binary (Linux only)
+      # - Guest and shim are static musl binaries, don't need manylinux glibc compatibility
+      - name: Build guest and shim binaries (Linux only)
         if: runner.os == 'Linux'
         run: |
-          make setup guest
+          make setup guest shim
 
-          # Cache only the final binary (11MB), not entire target dir (2.3GB)
-          # Guest is not rebuilt in container (SKIP_GUEST_BUILD=1), so no incremental compilation needed
+          # Cache binaries for container (cibuildwheel's tar excludes target/)
           GUEST_TARGET=$(scripts/util.sh --target)
           mkdir -p ".cache/$GUEST_TARGET/release"
           cp "target/$GUEST_TARGET/release/boxlite-guest" ".cache/$GUEST_TARGET/release/"
+
+          SHIM_ARCH=$(uname -m)
+          mkdir -p ".cache/${SHIM_ARCH}-unknown-linux-musl/release"
+          cp "target/${SHIM_ARCH}-unknown-linux-musl/release/boxlite-shim" ".cache/${SHIM_ARCH}-unknown-linux-musl/release/"
 
           # Clean up to save disk space (keep target/ dir for rust-cache post-step)
           rm -rf target ~/.rustup ~/.cargo
@@ -113,7 +115,15 @@ jobs:
             cp -a ".cache/$GUEST_TARGET" "target/$GUEST_TARGET"
           fi
 
+          SHIM_ARCH=$(uname -m)
+          if [ -d ".cache/${SHIM_ARCH}-unknown-linux-musl" ]; then
+            echo "Restoring shim from .cache/${SHIM_ARCH}-unknown-linux-musl"
+            mkdir -p target
+            cp -a ".cache/${SHIM_ARCH}-unknown-linux-musl" "target/${SHIM_ARCH}-unknown-linux-musl"
+          fi
+
           export SKIP_GUEST_BUILD=1
+          export SKIP_SHIM_BUILD=1
           export PATH="$CARGO_HOME/bin:$PATH"
           make setup runtime
           CONTAINER_SCRIPT
@@ -131,7 +141,14 @@ jobs:
         run: make setup runtime
 
       - name: Package runtime
-        run: tar czf boxlite-runtime-${{ matrix.target }}.tar.gz -C target boxlite-runtime/
+        run: |
+          TARGET_DIR=$(cargo metadata --format-version 1 --no-deps 2>/dev/null | \
+            grep -o '"target_directory":"[^"]*"' | cut -d'"' -f4)
+          RUNTIME_DIR=$(ls -dt "$TARGET_DIR"/release/build/boxlite-*/out/runtime 2>/dev/null | head -1)
+          [ -n "$RUNTIME_DIR" ] || { echo "ERROR: Runtime directory not found under $TARGET_DIR"; exit 1; }
+          cp -a "$RUNTIME_DIR" boxlite-runtime
+          tar czf boxlite-runtime-${{ matrix.target }}.tar.gz boxlite-runtime/
+          rm -rf boxlite-runtime
 
       - name: Upload runtime artifact
         uses: actions/upload-artifact@v4

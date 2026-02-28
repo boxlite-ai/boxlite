@@ -13,16 +13,6 @@ use cli::Cli;
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 fn main() {
-    // Set default BOXLITE_RUNTIME_DIR from compile-time value if not already set
-    // This MUST be done before starting tokio runtime and spawning threads
-    if std::env::var("BOXLITE_RUNTIME_DIR").is_err()
-        && let Some(runtime_dir) = option_env!("BOXLITE_RUNTIME_DIR")
-    {
-        unsafe {
-            std::env::set_var("BOXLITE_RUNTIME_DIR", runtime_dir);
-        }
-    }
-
     let cli = Cli::parse();
 
     // Handle shell completion before starting tokio or tracing

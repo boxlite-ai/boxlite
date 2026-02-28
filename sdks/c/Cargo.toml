@@ -15,6 +15,7 @@ crate-type = ["cdylib", "staticlib"]
 default = []
 gvproxy-backend = ["boxlite-ffi/gvproxy-backend"]
 libslirp-backend = ["boxlite-ffi/libslirp-backend"]
+embedded-runtime = ["boxlite-ffi/embedded-runtime"]
 
 [dependencies]
 boxlite-ffi = { path = "../boxlite-ffi" }

@@ -23,10 +23,11 @@ name = "boxlite-shim"
 path = "src/bin/shim/main.rs"
 
 [features]
-default = ["gvproxy-backend"]
+default = ["gvproxy-backend", "embedded-runtime"]
 libslirp-backend = []  # Uses external libslirp-helper binary, no Rust crate needed
 gvproxy-backend = ["dep:libgvproxy-sys"]   # Uses libgvproxy CGO shared library, links via FFI
 rest = ["dep:reqwest", "dep:urlencoding"]  # REST API client backend
+embedded-runtime = []  # Embed runtime binaries via include_bytes! for self-contained SDKs
 
 [dependencies]
 boxlite-shared.workspace = true

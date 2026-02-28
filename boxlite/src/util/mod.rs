@@ -84,38 +84,50 @@ impl LibraryLoadPath {
 /// Configure dynamic library search paths for the Box runner command.
 ///
 /// This ensures engine libraries bundled alongside the runner are
-/// discoverable when the subprocess starts.
+/// discoverable when the subprocess starts. Adds paths from both
+/// dladdr-based detection and the embedded runtime cache.
 pub fn configure_library_env(cmd: &mut Command, addr: *const libc::c_void) {
-    if let Some(runner_dir) = LibraryLoadPath::get(Some(addr)) {
-        let dylibs_path = runner_dir.parent();
-        tracing::debug!("dylibs_path: {:?}", dylibs_path);
+    // Collect all library directories to add to search path
+    let mut lib_dirs: Vec<PathBuf> = Vec::new();
 
-        if let Some(dylibs) = dylibs_path
-            && dylibs.exists()
-        {
-            #[cfg(target_os = "macos")]
-            {
-                let fallback_path =
-                    if let Ok(existing) = std::env::var("DYLD_FALLBACK_LIBRARY_PATH") {
-                        format!("{}:{}", dylibs.display(), existing)
-                    } else {
-                        dylibs.display().to_string()
-                    };
-                cmd.env("DYLD_FALLBACK_LIBRARY_PATH", fallback_path);
-                tracing::debug!(dylibs = %dylibs.display(), "Set DYLD_FALLBACK_LIBRARY_PATH for bundled libraries");
-            }
+    // 1. dladdr-based detection (libraries alongside the running binary)
+    if let Some(runner_dir) = LibraryLoadPath::get(Some(addr))
+        && let Some(dylibs) = runner_dir.parent()
+        && dylibs.exists()
+    {
+        lib_dirs.push(dylibs.to_path_buf());
+    }
 
-            #[cfg(target_os = "linux")]
-            {
-                let lib_path = if let Ok(existing) = std::env::var("LD_LIBRARY_PATH") {
-                    format!("{}:{}", dylibs.display(), existing)
-                } else {
-                    dylibs.display().to_string()
-                };
-                cmd.env("LD_LIBRARY_PATH", lib_path);
-                tracing::debug!(dylibs = %dylibs.display(), "Set LD_LIBRARY_PATH for bundled libraries");
-            }
+    // 2. Embedded runtime cache (extracted include_bytes! binaries)
+    #[cfg(feature = "embedded-runtime")]
+    if let Some(runtime) = crate::runtime::embedded::EmbeddedRuntime::get() {
+        lib_dirs.push(runtime.dir().to_path_buf());
+    }
+
+    if lib_dirs.is_empty() {
+        return;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let mut paths: Vec<String> = lib_dirs.iter().map(|d| d.display().to_string()).collect();
+        if let Ok(existing) = std::env::var("DYLD_FALLBACK_LIBRARY_PATH") {
+            paths.push(existing);
         }
+        let fallback_path = paths.join(":");
+        cmd.env("DYLD_FALLBACK_LIBRARY_PATH", &fallback_path);
+        tracing::debug!(path = %fallback_path, "Set DYLD_FALLBACK_LIBRARY_PATH");
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let mut paths: Vec<String> = lib_dirs.iter().map(|d| d.display().to_string()).collect();
+        if let Ok(existing) = std::env::var("LD_LIBRARY_PATH") {
+            paths.push(existing);
+        }
+        let lib_path = paths.join(":");
+        cmd.env("LD_LIBRARY_PATH", &lib_path);
+        tracing::debug!(path = %lib_path, "Set LD_LIBRARY_PATH");
     }
 }
 

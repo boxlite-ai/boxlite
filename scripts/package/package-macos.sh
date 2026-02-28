@@ -72,7 +72,6 @@ main() {
     copy_libboxlite
     configure_libboxlite
 
-    copy_boxlite_runtime "$PACKAGE_DIR"
     copy_header "$PACKAGE_DIR"
 
     generate_pkgconfig "$PACKAGE_DIR" "$VERSION"

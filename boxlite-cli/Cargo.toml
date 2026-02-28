@@ -39,7 +39,6 @@ comfy-table = "7.2.1"
 gtmpl = "0.7"
 gtmpl_value = "0.5"
 [build-dependencies]
-dirs = "6.0"
 
 [dev-dependencies]
 boxlite-test-utils = { path = "../boxlite-test-utils" }

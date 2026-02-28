@@ -8,7 +8,7 @@
 #   ./build-runtime.sh [--dest-dir DIR] [--profile PROFILE]
 #
 # Options:
-#   --dest-dir DIR      Destination directory (default: target/release/boxlite-runtime)
+#   --dest-dir DIR      Destination directory (default: cargo OUT_DIR/runtime)
 #   --profile PROFILE   Build profile: release or debug (default: release)
 #
 # The runtime directory will contain:
@@ -35,7 +35,7 @@ Usage: build-runtime.sh [OPTIONS]
 Build boxlite-runtime directory with all binaries and libraries.
 
 Options:
-  --dest-dir DIR      Destination directory (default: target/boxlite-runtime)
+  --dest-dir DIR      Destination directory (default: cargo OUT_DIR/runtime)
   --profile PROFILE   Build profile: release or debug (default: release)
   --libs-dir DIR      Directory containing FFI libraries (if not provided, will build and collect)
   --help, -h          Show this help message
@@ -105,9 +105,9 @@ parse_args() {
         exit 1
     fi
 
-    # Set default destination if not provided
+    # Set destination if provided (otherwise resolved after collect_libraries)
     if [ -z "$DEST_DIR_ARG" ]; then
-        DEST_DIR="$PROJECT_ROOT/target/boxlite-runtime"
+        DEST_DIR=""
     else
         # Resolve destination path to absolute path
         if [[ "$DEST_DIR_ARG" != /* ]]; then
@@ -140,9 +140,6 @@ build_shim() {
     echo ""
     print_section "Building boxlite-shim binary..."
 
-    # Always build to ensure freshness (Cargo handles incremental compilation)
-    bash "$SCRIPT_BUILD_DIR/build-shim.sh" --profile "$PROFILE"
-
     # Compute shim binary path (matches build-shim.sh's compute_shim_target logic)
     local shim_path
     if [ "$OS" = "linux" ]; then
@@ -152,6 +149,22 @@ build_shim() {
     else
         shim_path="$PROJECT_ROOT/target/$PROFILE/boxlite-shim"
     fi
+
+    # Skip build if SKIP_SHIM_BUILD=1 and binary exists
+    # Used in CI when shim is pre-built on Ubuntu host
+    if [ "${SKIP_SHIM_BUILD:-0}" = "1" ]; then
+        if [ -f "$shim_path" ] && [ -x "$shim_path" ]; then
+            SHIM_BINARY="$shim_path"
+            print_success "Using pre-built: $shim_path (SKIP_SHIM_BUILD=1)"
+            return 0
+        else
+            print_error "SKIP_SHIM_BUILD=1 but shim binary not found at $shim_path"
+            exit 1
+        fi
+    fi
+
+    # Always build to ensure freshness (Cargo handles incremental compilation)
+    bash "$SCRIPT_BUILD_DIR/build-shim.sh" --profile "$PROFILE"
 
     if [ -f "$shim_path" ]; then
         SHIM_BINARY="$shim_path"
@@ -267,23 +280,36 @@ assemble_runtime() {
     echo ""
     print_section "Assembling runtime directory..."
 
-    # Clean and create destination directory to prevent stale files
-    rm -rf "$DEST_DIR"
-    mkdir -p "$DEST_DIR"
+    if [ "$DEST_DIR" = "$RUNTIME_LIBS_DIR" ]; then
+        # Outputting to cargo OUT_DIR/runtime — libs are already there, just add binaries
+        mkdir -p "$DEST_DIR"
 
-    # Copy binaries
-    print_step "Copying boxlite-shim... "
-    cp "$SHIM_BINARY" "$DEST_DIR/"
-    echo "✓"
+        print_step "Copying boxlite-shim... "
+        cp "$SHIM_BINARY" "$DEST_DIR/"
+        echo "✓"
 
-    print_step "Copying boxlite-guest... "
-    cp "$GUEST_BINARY" "$DEST_DIR/"
-    echo "✓"
+        print_step "Copying boxlite-guest... "
+        cp "$GUEST_BINARY" "$DEST_DIR/"
+        echo "✓"
+    else
+        # Separate destination — full copy
+        rm -rf "$DEST_DIR"
+        mkdir -p "$DEST_DIR"
 
-    # Copy all libraries (preserve symlinks)
-    print_step "Copying libraries... "
-    cp -P "$RUNTIME_LIBS_DIR"/* "$DEST_DIR/" 2>/dev/null || true
-    echo "✓"
+        # Copy binaries
+        print_step "Copying boxlite-shim... "
+        cp "$SHIM_BINARY" "$DEST_DIR/"
+        echo "✓"
+
+        print_step "Copying boxlite-guest... "
+        cp "$GUEST_BINARY" "$DEST_DIR/"
+        echo "✓"
+
+        # Copy all libraries (preserve symlinks)
+        print_step "Copying libraries... "
+        cp -P "$RUNTIME_LIBS_DIR"/* "$DEST_DIR/" 2>/dev/null || true
+        echo "✓"
+    fi
 
     # Sign shim on macOS (always, to ensure proper entitlements)
     if [ "$OS" = "macos" ] && [ -f "$DEST_DIR/boxlite-shim" ]; then
@@ -327,13 +353,19 @@ main() {
 
     print_header "🔨 BoxLite Runtime Preparation"
     echo "Profile: $PROFILE"
-    echo "Destination: $DEST_DIR"
     echo ""
 
     detect_platform
     build_shim
     build_guest
     collect_libraries
+
+    # Resolve default destination after collect_libraries discovers RUNTIME_LIBS_DIR
+    if [ -z "$DEST_DIR" ]; then
+        DEST_DIR="$RUNTIME_LIBS_DIR"
+    fi
+    echo "Destination: $DEST_DIR"
+
     assemble_runtime
     show_summary
 

@@ -26,15 +26,15 @@ This directory contains GitHub Actions workflows for building and publishing Box
 
 ## Key Design: Cache-Based Separation
 
-Instead of artifacts (which only work within a single workflow), we use **`actions/cache`** to share runtime builds across workflows:
+Instead of artifacts (which only work within a single workflow), we use **`actions/cache`** to share build caches across workflows:
 
 ```yaml
 # build-runtime.yml saves:
-key: boxlite-runtime-{platform}-{hash of core files}
+key: boxlite-build-{platform}-{hash of core files}
 
 # build-wheels.yml / build-node.yml restore:
-key: boxlite-runtime-{platform}-{hash of core files}
-restore-keys: boxlite-runtime-{platform}-  # fallback to latest
+key: boxlite-build-{platform}-{hash of core files}
+restore-keys: boxlite-build-{platform}-  # fallback to latest
 ```
 
 **Benefits:**
@@ -139,7 +139,7 @@ Runs code quality checks.
 ### Runtime Cache
 
 ```yaml
-key: boxlite-runtime-{platform}-{hashFiles('boxlite/**', 'Cargo.lock', ...)}
+key: boxlite-build-{platform}-{hashFiles('boxlite/**', 'Cargo.lock', ...)}
 ```
 
 - **Same core code** → Cache hit → Skip rebuild (~8 min saved)

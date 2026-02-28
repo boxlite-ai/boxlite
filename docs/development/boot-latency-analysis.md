@@ -198,14 +198,12 @@ The following `eprintln!` instrumentation was added during this investigation:
 
 ```bash
 # Rebuild shim with instrumentation
-./scripts/build/build-shim.sh --dest-dir target/boxlite-runtime
+./scripts/build/build-shim.sh
 
 # Run timing profile tests
-BOXLITE_RUNTIME_DIR=$(pwd)/target/boxlite-runtime \
-  cargo test -p boxlite --test timing_profile -- --nocapture
+cargo test -p boxlite --test timing_profile -- --nocapture
 
 # Run jailer-only test (no parallel contention)
-BOXLITE_RUNTIME_DIR=$(pwd)/target/boxlite-runtime \
-  cargo test -p boxlite --test timing_profile boot_timing_profile \
+cargo test -p boxlite --test timing_profile boot_timing_profile \
   -- --exact --nocapture
 ```

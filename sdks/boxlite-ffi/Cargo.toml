@@ -14,6 +14,7 @@ crate-type = ["rlib"]
 default = []
 gvproxy-backend = ["boxlite/gvproxy-backend"]
 libslirp-backend = ["boxlite/libslirp-backend"]
+embedded-runtime = ["boxlite/embedded-runtime"]
 
 [dependencies]
 boxlite = { path = "../../boxlite" }

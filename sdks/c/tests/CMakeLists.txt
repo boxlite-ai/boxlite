@@ -64,12 +64,10 @@ endforeach()
 enable_testing()
 
 # Auto-discover runtime directory
-# Priority: BOXLITE_RUNTIME_DIR env > target/boxlite-runtime (from `make runtime`)
+# Priority: BOXLITE_RUNTIME_DIR env > cargo OUT_DIR/runtime (from build.rs)
 # The runtime directory contains: boxlite-guest, mke2fs, debugfs, libkrun, libgvproxy, etc.
 if(DEFINED ENV{BOXLITE_RUNTIME_DIR})
     set(BOXLITE_RUNTIME_DIR "$ENV{BOXLITE_RUNTIME_DIR}")
-elseif(EXISTS "${BOXLITE_ROOT}/target/boxlite-runtime")
-    set(BOXLITE_RUNTIME_DIR "${BOXLITE_ROOT}/target/boxlite-runtime")
 else()
     # Fallback: try to find the build output from boxlite crate
     file(GLOB _RUNTIME_CANDIDATES "${BOXLITE_ROOT}/target/release/build/boxlite-*/out/runtime")

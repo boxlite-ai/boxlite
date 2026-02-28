@@ -24,9 +24,9 @@ OUTPUT_DIR="$PROJECT_ROOT/sdks/c/dist"
 ENABLE_GVPROXY=false
 ENABLE_LIBSLIRP=false
 
-# Get version from Cargo.toml
+# Get version from workspace (handles version.workspace = true)
 get_version() {
-    grep '^version' boxlite/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/'
+    cargo pkgid -p boxlite-c -q --manifest-path "$PROJECT_ROOT/Cargo.toml" | sed 's/.*boxlite-c@//'
 }
 
 # Show usage (platform name passed as argument)
@@ -128,7 +128,7 @@ create_package_structure() {
     local package_dir="$1"
 
     rm -rf "$package_dir"
-    mkdir -p "$package_dir"/{lib,boxlite-runtime,include,lib/pkgconfig}
+    mkdir -p "$package_dir"/{lib,include,lib/pkgconfig}
 }
 
 # Build libboxlite library
@@ -155,21 +155,13 @@ prefix=\${pcfiledir}/../..
 exec_prefix=\${prefix}
 libdir=\${exec_prefix}/lib
 includedir=\${prefix}/include
-runtimedir=\${exec_prefix}/boxlite-runtime
 
 Name: BoxLite
 Description: Lightweight VM-based containerization runtime
 Version: $version
-Libs: -L\${libdir} -lboxlite -Wl,-rpath,\${runtimedir}
+Libs: -L\${libdir} -lboxlite
 Cflags: -I\${includedir}
 EOF
-}
-
-# Copy boxlite-runtime
-copy_boxlite_runtime() {
-    print_section "📦 Copying boxlite-runtime..."
-    local package_dir="$1"
-    cp -a "$PROJECT_ROOT"/target/boxlite-runtime "$package_dir"/boxlite-runtime
 }
 
 # Copy C header
@@ -199,7 +191,6 @@ print_package_summary() {
     echo ""
     echo "Package contents:"
     echo "  lib/libboxlite.$lib_ext           - Main library"
-    echo "  boxlite-runtime/               - Runtime components"
     echo "  include/boxlite.h              - C header"
     echo "  lib/pkgconfig/boxlite.pc       - pkg-config metadata"
 }

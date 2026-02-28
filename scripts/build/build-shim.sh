@@ -95,11 +95,15 @@ build_shim_binary() {
         build_flag="--release"
     fi
 
+    # Shim doesn't use embedded-runtime (it IS the binary that gets embedded).
+    # Disable it to avoid the chicken-and-egg: can't embed shim while building shim.
+    local features="--no-default-features --features gvproxy-backend"
+
     if [ -n "$SHIM_TARGET" ]; then
         echo "🎯 Target: $SHIM_TARGET (static musl binary)"
-        cargo build $build_flag --bin boxlite-shim --target "$SHIM_TARGET"
+        cargo build $build_flag --bin boxlite-shim --target "$SHIM_TARGET" $features
     else
-        cargo build $build_flag --bin boxlite-shim
+        cargo build $build_flag --bin boxlite-shim $features
     fi
 }
 
@@ -110,19 +114,14 @@ sign_binary() {
         return 0
     fi
 
-    if [ -z "$DEST_DIR" ]; then
-        echo "⏭️  Signing skipped (no destination, binary not copied)"
-        return 0
-    fi
-
-    local BINARY_PATH="$DEST_DIR/boxlite-shim"
-    if [ ! -f "$BINARY_PATH" ]; then
-        echo "❌ ERROR: Binary not found at $BINARY_PATH"
-        exit 1
-    fi
-
+    # Always sign the build output (cargo produces unsigned binaries)
     echo "📦 Signing boxlite-shim with hypervisor entitlements..."
-    "$SCRIPT_BUILD_DIR/sign.sh" "$BINARY_PATH"
+    "$SCRIPT_BUILD_DIR/sign.sh" "$SHIM_BINARY_PATH"
+
+    # Also sign the destination copy if it exists (cp strips entitlements)
+    if [ -n "$DEST_DIR" ] && [ -f "$DEST_DIR/boxlite-shim" ]; then
+        "$SCRIPT_BUILD_DIR/sign.sh" "$DEST_DIR/boxlite-shim"
+    fi
 }
 
 # Copy binary to destination
