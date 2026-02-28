@@ -49,28 +49,20 @@ fmt\:check\:rust:
 	@echo "🔍 Checking Rust formatting..."
 	@cargo fmt --all -- --check
 
-fmt\:python:
+fmt\:python: _ensure-python-deps
 	@echo "🔧 Formatting Python SDK..."
-	@cd sdks/python && python3 -m ruff format .
+	@. .venv/bin/activate && cd sdks/python && ruff format .
 
-fmt\:check\:python:
+fmt\:check\:python: _ensure-python-deps
 	@echo "🔍 Checking Python SDK formatting..."
-	@cd sdks/python && python3 -m ruff format --check .
+	@. .venv/bin/activate && cd sdks/python && ruff format --check .
 
-fmt\:node:
+fmt\:node: _ensure-node-deps
 	@echo "🔧 Formatting Node SDK..."
-	@if [ ! -x sdks/node/node_modules/.bin/prettier ]; then \
-		echo "❌ prettier not found. Run 'npm install' in sdks/node/ or run 'make setup'."; \
-		exit 1; \
-	fi
 	@cd sdks/node && npm run format
 
-fmt\:check\:node:
+fmt\:check\:node: _ensure-node-deps
 	@echo "🔍 Checking Node SDK formatting..."
-	@if [ ! -x sdks/node/node_modules/.bin/prettier ]; then \
-		echo "❌ prettier not found. Run 'npm install' in sdks/node/ or run 'make setup'."; \
-		exit 1; \
-	fi
 	@cd sdks/node && npm run format:check
 
 fmt\:c:
@@ -121,25 +113,21 @@ lint\:fix:
 	@$(MAKE) fmt
 	@if echo "$(FMT_COMPONENTS)" | grep -q 'python'; then \
 		echo "🔧 Autofixing Python SDK lint issues..."; \
-		cd sdks/python && python3 -m ruff check --fix .; \
+		. .venv/bin/activate && cd sdks/python && ruff check --fix .; \
 	fi
 	@$(MAKE) lint
 
 lint\:rust:
 	@$(MAKE) clippy
 
-lint\:python:
+lint\:python: _ensure-python-deps
 	@echo "🔍 Linting Python SDK..."
-	@cd sdks/python && python3 -m ruff check .
+	@. .venv/bin/activate && cd sdks/python && ruff check .
 	@echo "🔍 Checking Python SDK dependency policy..."
-	@cd sdks/python && python -c "import tomllib; config=tomllib.load(open('pyproject.toml','rb')); deps=config.get('project',{}).get('dependencies',[]); import sys; (print(f'ERROR: pyproject.toml has required dependencies: {deps}') or print('Move dependencies to [project.optional-dependencies] instead.') or sys.exit(1)) if deps else print('✓ No required dependencies')"
+	@. .venv/bin/activate && cd sdks/python && python -c "import tomllib; config=tomllib.load(open('pyproject.toml','rb')); deps=config.get('project',{}).get('dependencies',[]); import sys; (print(f'ERROR: pyproject.toml has required dependencies: {deps}') or print('Move dependencies to [project.optional-dependencies] instead.') or sys.exit(1)) if deps else print('✓ No required dependencies')"
 
-lint\:node:
+lint\:node: _ensure-node-deps
 	@echo "🔍 Linting Node SDK (TypeScript type check)..."
-	@if [ ! -d sdks/node/node_modules ]; then \
-		echo "❌ Node SDK dependencies not installed. Run 'npm install' in sdks/node/ or run 'make setup'."; \
-		exit 1; \
-	fi
 	@cd sdks/node && npx tsc --noEmit
 
 lint\:c:
@@ -156,10 +144,10 @@ lint\:c:
 		"$$CLANG_TIDY" --warnings-as-errors='*' "$$file" -- -std=c11 -Isdks/c/include || exit 1; \
 	done
 
-clippy:
+clippy: _ensure-python-deps
 	@echo "🔍 Running Rust clippy checks..."
 	@if [ "$$(uname)" = "Darwin" ]; then \
-		BOXLITE_DEPS_STUB=1 cargo clippy --workspace --all-targets --all-features --exclude boxlite-guest -- -D warnings; \
+		BOXLITE_DEPS_STUB=1 cargo clippy --workspace --all-targets --all-features --exclude boxlite-guest -- -D warnings && \
 		BOXLITE_DEPS_STUB=1 cargo clippy -p boxlite-guest --target "$$(bash scripts/util.sh --target)" --all-targets --all-features -- -D warnings; \
 	else \
 		BOXLITE_DEPS_STUB=1 cargo clippy --workspace --all-targets --all-features -- -D warnings; \

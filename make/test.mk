@@ -127,8 +127,7 @@ test\:unit\:rust:
 test\:warm-cache\:rust: runtime-debug
 	@echo "🔥 Warming Rust integration test image cache..."
 	@mkdir -p /tmp/boxlite-test
-	@BOXLITE_RUNTIME_DIR=$(PROJECT_ROOT)/target/boxlite-runtime \
-		./target/debug/boxlite --home /tmp/boxlite-test \
+	@./target/debug/boxlite --home /tmp/boxlite-test \
 		--registry docker.m.daocloud.io \
 		--registry docker.xuanyuan.me \
 		--registry docker.1ms.run \
@@ -142,12 +141,10 @@ test\:warm-cache\:rust: runtime-debug
 test\:integration\:rust: runtime-debug test\:warm-cache\:rust
 	@echo "🧪 Running Rust integration tests (requires VM)..."
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
-		BOXLITE_RUNTIME_DIR=$(PROJECT_ROOT)/target/boxlite-runtime \
-			cargo nextest run -p boxlite --test '*' --no-fail-fast --profile vm \
+		cargo nextest run -p boxlite --test '*' --no-fail-fast --profile vm \
 			$(if $(FILTER),-E 'test(~$(FILTER))',); \
 	else \
-		BOXLITE_RUNTIME_DIR=$(PROJECT_ROOT)/target/boxlite-runtime \
-			cargo test -p boxlite --test '*' --no-fail-fast -- --test-threads=1 --nocapture \
+		cargo test -p boxlite --test '*' --no-fail-fast -- --test-threads=1 --nocapture \
 			$(if $(FILTER),$(FILTER),); \
 	fi
 
@@ -173,8 +170,7 @@ test\:integration\:cli: runtime-debug
 	fi
 
 # Python SDK unit tests.
-test\:unit\:python:
-	@$(MAKE) venv:python
+test\:unit\:python: _ensure-python-deps
 	@echo "🧪 Running Python SDK unit tests..."
 	@. .venv/bin/activate && cd sdks/python && python -m pytest tests/ -v -m "not integration"
 
@@ -190,7 +186,7 @@ test\:all\:python:
 	@$(MAKE) test:integration:python
 
 # Node.js SDK unit tests.
-test\:unit\:node:
+test\:unit\:node: _ensure-node-deps
 	@echo "🧪 Running Node.js SDK unit tests..."
 	@cd sdks/node && npm test
 

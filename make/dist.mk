@@ -1,11 +1,6 @@
 PHONY_TARGETS += dist\:python dist\:c dist\:node package
 
-dist\:python:
-	@if [ ! -d .venv ]; then \
-		echo "📦 Creating virtual environment..."; \
-		python3 -m venv .venv; \
-	fi
-
+dist\:python: _ensure-python-deps
 	@echo "📦 Installing cibuildwheel..."
 	@. .venv/bin/activate && pip install -q cibuildwheel
 

@@ -1,7 +1,10 @@
-PHONY_TARGETS += guest runtime runtime-debug cli skillbox-image
+PHONY_TARGETS += guest shim runtime runtime-debug cli skillbox-image
 
 guest:
 	@bash $(SCRIPT_DIR)/build/build-guest.sh
+
+shim:
+	@bash $(SCRIPT_DIR)/build/build-shim.sh
 
 runtime:
 	@bash $(SCRIPT_DIR)/build/build-runtime.sh --profile release
