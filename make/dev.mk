@@ -6,7 +6,7 @@ _ensure-python-deps:
 		echo "📦 Creating virtual environment..."; \
 		python3 -m venv .venv || { echo "❌ Failed to create virtual environment"; exit 1; }; \
 	fi
-	@. .venv/bin/activate && pip install -q -e "sdks/python[dev,sync]"
+	@. .venv/bin/activate && pip install -q uv && (cd sdks/python && uv pip install --group dev --group sync)
 
 # Ensure Node SDK dependencies are installed (lightweight, no build).
 _ensure-node-deps:
