@@ -9,9 +9,8 @@
 #   --profile PROFILE   Build profile: release or debug (default: release)
 #
 # Note: On macOS, the binary is automatically signed with hypervisor entitlements
-# Note: On Linux, the binary is statically linked using glibc (gnu target + crt-static).
+# Note: On Linux, the binary is statically linked using glibc (crt-static).
 #       Go c-archive is incompatible with musl TLS, so we use glibc static linking instead.
-#       --target is required so RUSTFLAGS don't affect proc-macro compilation.
 
 set -e
 
@@ -73,21 +72,7 @@ parse_args "$@"
 OS=$(detect_os)
 print_header "🚀 Building boxlite-shim on $OS..."
 
-# Compute shim target and binary path
-# Linux needs --target to isolate RUSTFLAGS from proc-macro compilation
-compute_shim_target() {
-    if [ "$OS" = "linux" ]; then
-        local arch
-        arch=$(uname -m)
-        SHIM_TARGET="${arch}-unknown-linux-gnu"
-        SHIM_BINARY_PATH="$PROJECT_ROOT/target/$SHIM_TARGET/$PROFILE/boxlite-shim"
-    else
-        SHIM_TARGET=""
-        SHIM_BINARY_PATH="$PROJECT_ROOT/target/$PROFILE/boxlite-shim"
-    fi
-}
-
-compute_shim_target
+SHIM_BINARY_PATH="$PROJECT_ROOT/target/$PROFILE/boxlite-shim"
 
 # Build the shim binary
 build_shim_binary() {
@@ -103,13 +88,20 @@ build_shim_binary() {
     # link-krun: statically link libkrun.a (only shim needs this, not boxlite-cli)
     local features="--no-default-features --features gvproxy-backend,link-krun"
 
-    if [ -n "$SHIM_TARGET" ]; then
-        echo "🎯 Target: $SHIM_TARGET (static glibc binary)"
+    if [ "$OS" = "linux" ]; then
         # Go c-archive crashes with musl TLS; use glibc + crt-static instead.
         # relocation-model=static avoids static-pie which is incompatible with Go c-archive relocations.
-        # --target is required so these flags don't affect proc-macro compilation.
+        # --target is required so RUSTFLAGS (crt-static, relocation-model) don't leak into
+        # proc-macro compilation — proc-macros are dylibs and can't use crt-static.
+        # The downside is cargo outputs to target/<triple>/$PROFILE/ instead of target/$PROFILE/,
+        # so we copy the binary back to the canonical path after building.
+        local arch
+        arch=$(uname -m)
+        local target="${arch}-unknown-linux-gnu"
         export RUSTFLAGS="-C target-feature=+crt-static -C relocation-model=static -C link-arg=-Wl,-z,stack-size=2097152 -C link-arg=-Wl,--allow-multiple-definition"
-        cargo build $build_flag --bin boxlite-shim --target "$SHIM_TARGET" $features
+        echo "🎯 Static glibc binary (crt-static + relocation-model=static)"
+        cargo build $build_flag --bin boxlite-shim --target "$target" $features
+        cp "$PROJECT_ROOT/target/$target/$PROFILE/boxlite-shim" "$SHIM_BINARY_PATH"
     else
         cargo build $build_flag --bin boxlite-shim $features
     fi
