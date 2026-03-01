@@ -26,6 +26,17 @@ fn build_gvproxy(source_dir: &Path, output_path: &Path) {
     let mut build_cmd = Command::new("go");
     build_cmd.args(["build", "-buildmode=c-archive"]);
 
+    // When cross-compiling for musl, tell CGO to use the musl C compiler.
+    // Without this, Go uses the system's gcc (glibc), producing objects that
+    // reference glibc-specific symbols (__fprintf_chk, etc.) which musl lacks.
+    let target = env::var("TARGET").unwrap_or_default();
+    if target.contains("musl") {
+        let arch = target.split('-').next().unwrap_or("x86_64");
+        let musl_cc = format!("{}-linux-musl-gcc", arch);
+        build_cmd.env("CC", &musl_cc);
+        build_cmd.env("CGO_ENABLED", "1");
+    }
+
     build_cmd.args([
         "-o",
         output_path.to_str().expect("Invalid output path"),

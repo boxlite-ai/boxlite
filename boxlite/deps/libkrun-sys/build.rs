@@ -400,6 +400,12 @@ impl LibBuilder {
             println!("cargo:rustc-link-lib=framework=Hypervisor");
         }
 
+        // libkrun.a is a Rust staticlib that bundles its own std. When linked into
+        // another Rust binary, std symbols (rust_eh_personality, etc.) are duplicated.
+        // Tell the linker to use the first definition.
+        #[cfg(target_os = "linux")]
+        println!("cargo:rustc-link-arg=-Wl,--allow-multiple-definition");
+
         // Expose library directories to downstream crates (used by boxlite/build.rs)
         // Convention: {LIBNAME}_BOXLITE_DEP=<path> for auto-discovery
         // Note: LIBKRUN dir now contains .a (not bundled at runtime), but the path
@@ -790,6 +796,73 @@ impl MacToolchain {
     }
 }
 
+// ── Musl libc fixup ──────────────────────────────────────────────────────
+
+/// Enables musl `statx` support in the libc crate when building for musl targets.
+///
+/// Two things are needed for `libc::statx` on musl:
+///
+/// 1. **libc >= 0.2.175** — older versions (e.g., 0.2.172 pinned in the submodule)
+///    only define `statx` for `target_env = "gnu"`. Newer versions add a
+///    `musl_v1_2_3` cfg gate that also enables it for musl.
+///
+/// 2. **`RUST_LIBC_UNSTABLE_MUSL_V1_2_3=1`** — the libc crate's build.rs reads
+///    this env var to activate the `musl_v1_2_3` cfg flag, which in turn exposes
+///    `statx`, `STATX_BASIC_STATS`, and `STATX_MNT_ID` for musl targets.
+///
+/// We update the submodule's Cargo.lock at build time (not committed) and set the
+/// env var process-wide so the nested `cargo rustc` inherits it.
+#[cfg(target_os = "linux")]
+fn enable_musl_statx_support(libkrun_src: &Path) {
+    let target = env::var("TARGET").unwrap_or_default();
+    if !target.contains("musl") {
+        return;
+    }
+
+    // Step 1: Ensure libc is recent enough to have the musl_v1_2_3 cfg gate
+    let cargo_lock = libkrun_src.join("Cargo.lock");
+    let content = fs::read_to_string(&cargo_lock).unwrap_or_default();
+
+    if !is_libc_version_sufficient(&content, 175) {
+        println!("cargo:warning=Updating libc in vendored libkrun for musl statx support...");
+        run_command(
+            Command::new("cargo")
+                .args(["update", "-p", "libc"])
+                .current_dir(libkrun_src)
+                .stdout(Stdio::inherit())
+                .stderr(Stdio::inherit()),
+            "cargo update -p libc (musl statx fix)",
+        );
+    }
+
+    // Step 2: Enable the musl_v1_2_3 cfg flag via env var
+    println!("cargo:warning=Enabling musl statx support (RUST_LIBC_UNSTABLE_MUSL_V1_2_3=1)");
+    env::set_var("RUST_LIBC_UNSTABLE_MUSL_V1_2_3", "1");
+}
+
+/// Checks if libc version in Cargo.lock content has patch version >= min_patch.
+/// Expects format: name = "libc"\nversion = "0.2.XXX"
+#[cfg(target_os = "linux")]
+fn is_libc_version_sufficient(lock_content: &str, min_patch: u32) -> bool {
+    let Some(pos) = lock_content.find("name = \"libc\"") else {
+        return false;
+    };
+    let rest = &lock_content[pos..];
+    for line in rest.lines().skip(1).take(1) {
+        if let Some(ver) = line
+            .strip_prefix("version = \"")
+            .and_then(|s| s.strip_suffix('"'))
+        {
+            if let Some(patch_str) = ver.strip_prefix("0.2.") {
+                if let Ok(patch) = patch_str.parse::<u32>() {
+                    return patch >= min_patch;
+                }
+            }
+        }
+    }
+    false
+}
+
 // ── Platform build orchestration ─────────────────────────────────────────────
 
 /// macOS: Build libkrunfw (dylib, dlopen'd at runtime) and libkrun (static archive)
@@ -873,6 +946,9 @@ fn build() {
     }
 
     let libkrun_src = manifest_dir.join("vendor/libkrun");
+
+    // Enable statx support in the libc crate for musl targets
+    enable_musl_statx_support(&libkrun_src);
 
     // Build libkrun (init binary → static library → linking)
     LibBuilder::build(
