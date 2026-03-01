@@ -1,7 +1,18 @@
+# libkrun.a (Rust staticlib) bundles its own std, duplicating symbols
+# (rust_eh_personality, etc.) with the outer binary's std.
+# --allow-multiple-definition tells the linker to use the first definition.
+# This applies to all Linux targets because any binary linking libkrun-sys
+# (boxlite-shim, boxlite-cli, tests) hits this issue.
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "link-arg=-Wl,--allow-multiple-definition"]
+
+[target.aarch64-unknown-linux-gnu]
+rustflags = ["-C", "link-arg=-Wl,--allow-multiple-definition"]
+
 [target.aarch64-unknown-linux-musl]
 linker = "aarch64-linux-musl-gcc"
-rustflags = ["-C", "target-feature=+crt-static", "-C", "link-arg=-Wl,-z,stack-size=2097152"]
+rustflags = ["-C", "target-feature=+crt-static", "-C", "link-arg=-Wl,-z,stack-size=2097152", "-C", "link-arg=-Wl,--allow-multiple-definition"]
 
 [target.x86_64-unknown-linux-musl]
 linker = "x86_64-linux-musl-gcc"
-rustflags = ["-C", "target-feature=+crt-static", "-C", "link-arg=-Wl,-z,stack-size=2097152"]
+rustflags = ["-C", "target-feature=+crt-static", "-C", "link-arg=-Wl,-z,stack-size=2097152", "-C", "link-arg=-Wl,--allow-multiple-definition"]
