@@ -70,25 +70,22 @@ jobs:
           shared-key: "boxlite"
           save-if: false
 
-      # Build guest and shim on host BEFORE manylinux container because:
+      # Build guest on host BEFORE manylinux container because:
       # - manylinux (AlmaLinux/RHEL) doesn't have musl packages in repos
       # - Building musl-cross-make from source takes ~15 minutes
       # - Ubuntu host has musl-tools via apt (~30 seconds)
-      # - Guest and shim are static musl binaries, don't need manylinux glibc compatibility
-      # - Both binaries are embedded via include_bytes! (embedded-runtime feature)
-      - name: Build guest and shim binaries (Linux only)
+      # - Guest is static musl binary, doesn't need manylinux glibc compatibility
+      # - Shim/libkrun must be built IN container (needs glibc 2.28 for manylinux)
+      - name: Build guest binary (Linux only)
         if: runner.os == 'Linux'
         run: |
-          make setup guest shim
+          make setup guest
 
-          # Cache binaries for container (cibuildwheel's tar excludes target/)
+          # Cache only the final binary (11MB), not entire target dir (2.3GB)
+          # Guest is not rebuilt in container (SKIP_GUEST_BUILD=1), so no incremental compilation needed
           GUEST_TARGET=$(scripts/util.sh --target)
           mkdir -p ".cache/$GUEST_TARGET/release"
           cp "target/$GUEST_TARGET/release/boxlite-guest" ".cache/$GUEST_TARGET/release/"
-
-          SHIM_ARCH=$(uname -m)
-          mkdir -p ".cache/${SHIM_ARCH}-unknown-linux-musl/release"
-          cp "target/${SHIM_ARCH}-unknown-linux-musl/release/boxlite-shim" ".cache/${SHIM_ARCH}-unknown-linux-musl/release/"
 
           # Clean up to save disk space (keep target/ dir for rust-cache post-step)
           rm -rf target ~/.rustup ~/.cargo
@@ -122,17 +119,9 @@ jobs:
             cp -a ".cache/$GUEST_TARGET" "target/$GUEST_TARGET"
           fi
 
-          SHIM_ARCH=$(uname -m)
-          if [ -d ".cache/${SHIM_ARCH}-unknown-linux-musl" ]; then
-            echo "Restoring shim from .cache/${SHIM_ARCH}-unknown-linux-musl"
-            mkdir -p target
-            cp -a ".cache/${SHIM_ARCH}-unknown-linux-musl" "target/${SHIM_ARCH}-unknown-linux-musl"
-          fi
-
           export SKIP_GUEST_BUILD=1
-          export SKIP_SHIM_BUILD=1
           export PATH="$CARGO_HOME/bin:$PATH"
-          make setup shim guest
+          make setup runtime
 
           export PATH="$HOME/.cargo/bin:$PATH"
           cd sdks/node
@@ -152,7 +141,7 @@ jobs:
       - name: Build Node.js package (macOS)
         if: runner.os == 'macOS'
         run: |
-          make setup shim guest
+          make setup runtime
 
           # Build Node.js artifacts (no pack - CI uploads raw artifacts)
           cd sdks/node

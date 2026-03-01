@@ -61,20 +61,20 @@ skip = [
 ]
 
 
-# Build shim and guest binaries before building wheels (runs once per platform).
-# Runtime binaries are embedded via include_bytes! (embedded-runtime feature),
-# so no runtime directory assembly or copy is needed.
-#
+# Build BoxLite runtime before building wheels (runs once per platform)
 # Linux build strategy:
 # - Guest binary: Built on Ubuntu host BEFORE container (manylinux lacks musl packages)
-# - Shim binary: Built IN container (static musl, needs musl-tools)
-# - Libraries: Built IN container from source (libkrun, libkrunfw, etc.)
+# - Shim binary: Built IN container (needs glibc 2.28 for manylinux compatibility)
+# - Libraries: Built IN container (libkrun, libkrunfw from source)
 before-all = ["""
-    set -ex
+    set -ex  # Exit on error, print commands
 
+    # cibuildwheel runs from repository root
     BOXLITE_ROOT=$(pwd)
 
-    # Restore pre-built binaries if available (from Ubuntu host)
+    # Restore pre-built guest target directory if available (from Ubuntu host)
+    # This is needed because cibuildwheel's tar excludes target/ (.gitignore)
+    # We restore the full cache (not just binary) for cargo incremental compilation
     GUEST_TARGET=$(scripts/util.sh --target)
     if [ -d ".cache/$GUEST_TARGET" ]; then
         echo "Restoring guest cargo cache from .cache/$GUEST_TARGET"
@@ -82,20 +82,13 @@ before-all = ["""
         cp -a ".cache/$GUEST_TARGET" "target/$GUEST_TARGET"
     fi
 
-    SHIM_ARCH=$(uname -m)
-    if [ -d ".cache/${SHIM_ARCH}-unknown-linux-musl" ]; then
-        echo "Restoring shim cargo cache from .cache/${SHIM_ARCH}-unknown-linux-musl"
-        mkdir -p target
-        cp -a ".cache/${SHIM_ARCH}-unknown-linux-musl" "target/${SHIM_ARCH}-unknown-linux-musl"
-    fi
-
+    # Run setup script (installs dependencies, such as Rust, Make, etc.)
     make setup
 
+    # Source cargo env (Rust may have just been installed)
     [ -f "$HOME/.cargo/env" ] && source "$HOME/.cargo/env"
 
-    # Build shim and guest (skip if pre-built via SKIP_*_BUILD)
-    # No 'make runtime' needed — embedded-runtime feature handles everything
-    make shim guest
+    make runtime
     """]
 
 # Test the built wheel (optional, add tests later)
@@ -115,8 +108,7 @@ repair-wheel-command = ""  # Skip auditwheel repair
 
 # Set Rust and library paths
 # SKIP_GUEST_BUILD=1: Use pre-built guest from Ubuntu host (manylinux lacks musl packages)
-# SKIP_SHIM_BUILD=1: Use pre-built shim from Ubuntu host
-environment = { SKIP_GUEST_BUILD = "1", SKIP_SHIM_BUILD = "1", PATH = "$HOME/.cargo/bin:/usr/local/bin:$PATH", PKG_CONFIG_PATH = "/usr/local/lib64/pkgconfig:/usr/local/lib/pkgconfig", LD_LIBRARY_PATH = "/usr/local/lib64:/usr/local/lib" }
+environment = { SKIP_GUEST_BUILD = "1", PATH = "$HOME/.cargo/bin:/usr/local/bin:$PATH", PKG_CONFIG_PATH = "/usr/local/lib64/pkgconfig:/usr/local/lib/pkgconfig", LD_LIBRARY_PATH = "/usr/local/lib64:/usr/local/lib" }
 
 # Retag wheel for PyPI compliance without bundling libs (we handle runtime deps ourselves)
 # Uses 'wheel tags' to change linux_x86_64 -> manylinux_2_28_x86_64

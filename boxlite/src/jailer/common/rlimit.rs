@@ -10,11 +10,10 @@ use crate::runtime::advanced_options::ResourceLimits;
 use std::io;
 
 /// Resource type alias for cross-platform compatibility.
-/// On Linux glibc, RLIMIT_* use `__rlimit_resource_t` (c_uint).
-/// On Linux musl and macOS, they use c_int.
-#[cfg(all(target_os = "linux", target_env = "gnu"))]
+/// On Linux glibc, RLIMIT_* are u32; on macOS they're i32.
+#[cfg(target_os = "linux")]
 type RlimitResource = libc::__rlimit_resource_t;
-#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+#[cfg(not(target_os = "linux"))]
 type RlimitResource = libc::c_int;
 
 /// Get current value of a resource limit.

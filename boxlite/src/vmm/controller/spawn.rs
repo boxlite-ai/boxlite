@@ -11,7 +11,6 @@ use crate::runtime::options::BoxOptions;
 use crate::util::configure_library_env;
 use crate::vmm::VmmKind;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
-use libkrun_sys::krun_create_ctx;
 
 use super::watchdog;
 
@@ -154,8 +153,8 @@ impl<'a> ShimSpawner<'a> {
             cmd.env("TEMP", &tmp_dir);
         }
 
-        // Set library search paths for bundled dependencies
-        configure_library_env(cmd, krun_create_ctx as *const libc::c_void);
+        // Set library search paths for bundled dependencies (e.g., libkrunfw.so)
+        configure_library_env(cmd, std::ptr::null());
     }
 
     fn create_stderr_file(&self) -> BoxliteResult<std::fs::File> {

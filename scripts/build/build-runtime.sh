@@ -145,26 +145,10 @@ build_shim() {
     if [ "$OS" = "linux" ]; then
         local arch
         arch=$(uname -m)
-        shim_path="$PROJECT_ROOT/target/${arch}-unknown-linux-musl/$PROFILE/boxlite-shim"
+        shim_path="$PROJECT_ROOT/target/${arch}-unknown-linux-gnu/$PROFILE/boxlite-shim"
     else
         shim_path="$PROJECT_ROOT/target/$PROFILE/boxlite-shim"
     fi
-
-    # Skip build if SKIP_SHIM_BUILD=1 and binary exists
-    # Used in CI when shim is pre-built on Ubuntu host
-    if [ "${SKIP_SHIM_BUILD:-0}" = "1" ]; then
-        if [ -f "$shim_path" ] && [ -x "$shim_path" ]; then
-            SHIM_BINARY="$shim_path"
-            print_success "Using pre-built: $shim_path (SKIP_SHIM_BUILD=1)"
-            return 0
-        else
-            print_error "SKIP_SHIM_BUILD=1 but shim binary not found at $shim_path"
-            exit 1
-        fi
-    fi
-
-    # Always build to ensure freshness (Cargo handles incremental compilation)
-    bash "$SCRIPT_BUILD_DIR/build-shim.sh" --profile "$PROFILE"
 
     if [ -f "$shim_path" ]; then
         SHIM_BINARY="$shim_path"

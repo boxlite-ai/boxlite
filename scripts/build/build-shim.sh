@@ -9,7 +9,9 @@
 #   --profile PROFILE   Build profile: release or debug (default: release)
 #
 # Note: On macOS, the binary is automatically signed with hypervisor entitlements
-# Note: On Linux, the binary is built with musl for a fully static executable
+# Note: On Linux, the binary is statically linked using glibc (gnu target + crt-static).
+#       Go c-archive is incompatible with musl TLS, so we use glibc static linking instead.
+#       --target is required so RUSTFLAGS don't affect proc-macro compilation.
 
 set -e
 
@@ -71,12 +73,13 @@ parse_args "$@"
 OS=$(detect_os)
 print_header "🚀 Building boxlite-shim on $OS..."
 
-# Compute the Rust target triple and binary path for the current platform
+# Compute shim target and binary path
+# Linux needs --target to isolate RUSTFLAGS from proc-macro compilation
 compute_shim_target() {
     if [ "$OS" = "linux" ]; then
         local arch
         arch=$(uname -m)
-        SHIM_TARGET="${arch}-unknown-linux-musl"
+        SHIM_TARGET="${arch}-unknown-linux-gnu"
         SHIM_BINARY_PATH="$PROJECT_ROOT/target/$SHIM_TARGET/$PROFILE/boxlite-shim"
     else
         SHIM_TARGET=""
@@ -97,10 +100,15 @@ build_shim_binary() {
 
     # Shim doesn't use embedded-runtime (it IS the binary that gets embedded).
     # Disable it to avoid the chicken-and-egg: can't embed shim while building shim.
-    local features="--no-default-features --features gvproxy-backend"
+    # link-krun: statically link libkrun.a (only shim needs this, not boxlite-cli)
+    local features="--no-default-features --features gvproxy-backend,link-krun"
 
     if [ -n "$SHIM_TARGET" ]; then
-        echo "🎯 Target: $SHIM_TARGET (static musl binary)"
+        echo "🎯 Target: $SHIM_TARGET (static glibc binary)"
+        # Go c-archive crashes with musl TLS; use glibc + crt-static instead.
+        # relocation-model=static avoids static-pie which is incompatible with Go c-archive relocations.
+        # --target is required so these flags don't affect proc-macro compilation.
+        export RUSTFLAGS="-C target-feature=+crt-static -C relocation-model=static -C link-arg=-Wl,-z,stack-size=2097152 -C link-arg=-Wl,--allow-multiple-definition"
         cargo build $build_flag --bin boxlite-shim --target "$SHIM_TARGET" $features
     else
         cargo build $build_flag --bin boxlite-shim $features
