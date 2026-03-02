@@ -132,10 +132,8 @@ jobs:
 
       - name: Package runtime
         run: |
-          TARGET_DIR=$(cargo metadata --format-version 1 --no-deps 2>/dev/null | \
-            grep -o '"target_directory":"[^"]*"' | cut -d'"' -f4)
-          RUNTIME_DIR=$(ls -dt "$TARGET_DIR"/release/build/boxlite-*/out/runtime 2>/dev/null | head -1)
-          [ -n "$RUNTIME_DIR" ] || { echo "ERROR: Runtime directory not found under $TARGET_DIR"; exit 1; }
+          RUNTIME_DIR=$(ls -dt target/release/build/boxlite-*/out/runtime 2>/dev/null | head -1)
+          [ -n "$RUNTIME_DIR" ] || { echo "ERROR: Runtime directory not found under target/"; exit 1; }
           cp -a "$RUNTIME_DIR" boxlite-runtime
           tar czf boxlite-runtime-${{ matrix.target }}.tar.gz boxlite-runtime/
           rm -rf boxlite-runtime
