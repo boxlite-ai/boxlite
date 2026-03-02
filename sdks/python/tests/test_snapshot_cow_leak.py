@@ -26,7 +26,17 @@ from pathlib import Path
 import boxlite
 import pytest
 
-pytestmark = pytest.mark.integration
+try:
+    from boxlite import SyncBoxlite  # noqa: F401
+
+    SYNC_AVAILABLE = True
+except ImportError:
+    SYNC_AVAILABLE = False
+
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(not SYNC_AVAILABLE, reason="greenlet not installed"),
+]
 
 BOXLITE_HOME = Path.home() / ".boxlite"
 IMAGE = "alpine:latest"
