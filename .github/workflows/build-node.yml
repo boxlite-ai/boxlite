@@ -89,7 +89,7 @@ jobs:
       - name: Build guest binary (Linux only)
         if: runner.os == 'Linux'
         run: |
-          make setup guest
+          make setup:build guest
 
           # Cache only the final binary (11MB), not entire target dir (2.3GB)
           # Guest is not rebuilt in container (SKIP_GUEST_BUILD=1), so no incremental compilation needed
@@ -123,7 +123,7 @@ jobs:
 
           export SKIP_GUEST_BUILD=1
           export PATH="$CARGO_HOME/bin:$PATH"
-          make setup runtime
+          make setup:build runtime
 
           export PATH="$HOME/.cargo/bin:$PATH"
           cd sdks/node
@@ -153,7 +153,7 @@ jobs:
       - name: Build Node.js package (macOS)
         if: runner.os == 'macOS'
         run: |
-          make setup runtime
+          make setup:build runtime
 
           # Build Node.js artifacts (no pack - CI uploads raw artifacts)
           cd sdks/node

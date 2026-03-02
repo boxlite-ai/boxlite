@@ -58,7 +58,7 @@ jobs:
       - name: Build guest binary (Linux only)
         if: runner.os == 'Linux'
         run: |
-          make setup guest
+          make setup:build guest
 
           # Cache only the final binary (11MB), not entire target dir (2.3GB)
           # Guest is not rebuilt in container (SKIP_GUEST_BUILD=1), so no incremental compilation needed
