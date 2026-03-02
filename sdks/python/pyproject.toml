@@ -69,6 +69,18 @@ skip = [
 before-all = ["""
     set -ex  # Exit on error, print commands
 
+    # Install sccache for compilation caching (CI uses GHA cache backend)
+    pip install sccache 2>/dev/null || true
+    # Verify sccache works; create pass-through shim if not to prevent build failures.
+    # When RUSTC_WRAPPER=sccache is set (via environment-pass), cargo calls
+    # `sccache /path/to/rustc <args>`. The shim just runs `exec "$@"` which
+    # executes `/path/to/rustc <args>` directly — a no-op wrapper.
+    if ! command -v sccache &>/dev/null; then
+        echo "WARNING: sccache not available, creating pass-through shim"
+        printf '#!/bin/sh\nexec "$@"\n' > /usr/local/bin/sccache
+        chmod +x /usr/local/bin/sccache
+    fi
+
     # cibuildwheel runs from repository root
     BOXLITE_ROOT=$(pwd)
 
@@ -109,6 +121,10 @@ repair-wheel-command = ""  # Skip auditwheel repair
 # Set Rust and library paths
 # SKIP_GUEST_BUILD=1: Use pre-built guest from Ubuntu host (manylinux lacks musl packages)
 environment = { SKIP_GUEST_BUILD = "1", PATH = "$HOME/.cargo/bin:/usr/local/bin:$PATH", PKG_CONFIG_PATH = "/usr/local/lib64/pkgconfig:/usr/local/lib/pkgconfig", LD_LIBRARY_PATH = "/usr/local/lib64:/usr/local/lib" }
+
+# Pass sccache env vars from host into cibuildwheel's manylinux container
+# These enable sccache to use the GHA cache API for compilation caching
+environment-pass = ["ACTIONS_RESULTS_URL", "ACTIONS_RUNTIME_TOKEN", "SCCACHE_GHA_ENABLED", "RUSTC_WRAPPER"]
 
 # Retag wheel for PyPI compliance without bundling libs (we handle runtime deps ourselves)
 # Uses 'wheel tags' to change linux_x86_64 -> manylinux_2_28_x86_64

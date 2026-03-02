@@ -64,6 +64,22 @@ jobs:
           shared-key: "boxlite"
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
+      # sccache caches individual compilation units via GHA cache API.
+      # Works inside Docker containers (unlike Swatinem/rust-cache).
+      # Cache is pre-warmed by the Warm Caches workflow on push to main.
+      - name: Setup sccache
+        if: runner.os == 'Linux'
+        uses: mozilla-actions/sccache-action@v0.0.9
+        continue-on-error: true
+
+      - name: Export GHA cache env vars
+        if: runner.os == 'Linux'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            core.exportVariable('ACTIONS_RESULTS_URL', process.env.ACTIONS_RESULTS_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
       # Build guest on host BEFORE manylinux container because:
       # - manylinux (AlmaLinux/RHEL) doesn't have musl packages in repos
       # - Building musl-cross-make from source takes ~15 minutes
@@ -85,26 +101,18 @@ jobs:
           rm -rf target ~/.rustup ~/.cargo
           mkdir -p target
 
-      # Cache cargo registry for manylinux container.
-      # Swatinem/rust-cache can't run inside Docker, so we use actions/cache
-      # with CARGO_HOME redirected to a host-mounted path.
-      - name: Cache manylinux cargo registry
-        if: runner.os == 'Linux'
-        uses: actions/cache@v4
-        with:
-          path: |
-            .cargo-manylinux/registry
-            .cargo-manylinux/git
-          key: manylinux-cargo-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            manylinux-cargo-${{ matrix.target }}-
-
       - name: Build runtime (Linux)
         if: runner.os == 'Linux'
         run: |
           cat > "$RUNNER_TEMP/build.sh" << 'CONTAINER_SCRIPT'
           set -ex
           git config --global --add safe.directory /work
+
+          # sccache fallback: if not available, disable wrapper for normal compilation
+          if [ -n "${RUSTC_WRAPPER:-}" ] && ! command -v "$RUSTC_WRAPPER" &>/dev/null; then
+            echo "::warning::sccache not available in container, falling back to normal compilation"
+            unset RUSTC_WRAPPER
+          fi
 
           GUEST_TARGET=$(scripts/util.sh --target)
           if [ -d ".cache/$GUEST_TARGET" ]; then
@@ -116,11 +124,21 @@ jobs:
           export SKIP_GUEST_BUILD=1
           export PATH="$CARGO_HOME/bin:$PATH"
           make setup runtime
+
+          command -v sccache &>/dev/null && sccache --show-stats || true
           CONTAINER_SCRIPT
+
+          # Conditionally mount sccache binary and pass env vars into Docker.
+          # If sccache-action failed or binary is missing, build proceeds without caching.
+          SCCACHE_DOCKER_ARGS=""
+          if command -v sccache &>/dev/null; then
+            SCCACHE_DOCKER_ARGS="-v $(which sccache):/usr/local/bin/sccache:ro -e SCCACHE_GHA_ENABLED=true -e RUSTC_WRAPPER=sccache -e ACTIONS_RESULTS_URL -e ACTIONS_RUNTIME_TOKEN"
+          fi
 
           docker run --rm \
             -v ${{ github.workspace }}:/work \
             -v "$RUNNER_TEMP/build.sh:/tmp/build.sh:ro" \
+            $SCCACHE_DOCKER_ARGS \
             -w /work \
             -e CARGO_HOME=/work/.cargo-manylinux \
             quay.io/pypa/manylinux_2_28_${{ contains(matrix.target, 'arm64') && 'aarch64' || 'x86_64' }} \

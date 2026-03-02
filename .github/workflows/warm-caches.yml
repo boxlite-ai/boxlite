@@ -1,0 +1,115 @@
+# Pre-warm sccache for all workflows that build Rust inside manylinux Docker containers.
+#
+# Problem: Three workflows (build-runtime, build-node, build-wheels) independently
+# compile the same Rust code inside Docker, where Swatinem/rust-cache can't reach.
+# This results in ~20 min cold compiles per workflow on every run.
+#
+# Solution: sccache caches individual compilation units via the GHA cache API,
+# which works inside Docker containers. This workflow warms the cache on push to
+# main so that subsequent workflow runs get cache hits.
+#
+# Pattern inspired by Bevy's cache warmup workflow.
+name: Warm Caches
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'boxlite/**'
+      - 'boxlite-shared/**'
+      - 'guest/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/warm-caches.yml'
+  schedule:
+    - cron: '0 1 * * 1'  # Weekly Monday 1 AM UTC (prevents 7-day GHA cache eviction)
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: '0'  # sccache and incremental compilation are incompatible
+  SKIP_INSTALL_NODEJS: '1'
+  SCCACHE_GHA_ENABLED: 'true'
+  RUSTC_WRAPPER: 'sccache'
+
+jobs:
+  config:
+    uses: ./.github/workflows/config.yml
+
+  warm:
+    name: Warm sccache
+    needs: config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: ${{ needs.config.outputs.rust-toolchain }}
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Export GHA cache env vars
+        uses: actions/github-script@v7
+        with:
+          script: |
+            core.exportVariable('ACTIONS_RESULTS_URL', process.env.ACTIONS_RESULTS_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+      # Guest build on host WITH sccache — warms cache for all workflows' guest builds
+      - name: Build guest binary
+        run: |
+          make setup guest
+          sccache --show-stats
+          GUEST_TARGET=$(scripts/util.sh --target)
+          mkdir -p ".cache/$GUEST_TARGET/release"
+          cp "target/$GUEST_TARGET/release/boxlite-guest" ".cache/$GUEST_TARGET/release/"
+          rm -rf target ~/.rustup ~/.cargo
+          mkdir -p target
+
+      # Docker build WITH sccache — warms cache for all workflows' manylinux builds
+      - name: Build runtime in manylinux (warm sccache)
+        run: |
+          cat > "$RUNNER_TEMP/build.sh" << 'CONTAINER_SCRIPT'
+          set -ex
+          git config --global --add safe.directory /work
+
+          # sccache fallback: if not available, disable wrapper for normal compilation
+          if [ -n "${RUSTC_WRAPPER:-}" ] && ! command -v "$RUSTC_WRAPPER" &>/dev/null; then
+            echo "::warning::sccache not available in container, falling back to normal compilation"
+            unset RUSTC_WRAPPER
+          fi
+
+          GUEST_TARGET=$(scripts/util.sh --target)
+          if [ -d ".cache/$GUEST_TARGET" ]; then
+            echo "Restoring guest from .cache/$GUEST_TARGET"
+            mkdir -p target
+            cp -a ".cache/$GUEST_TARGET" "target/$GUEST_TARGET"
+          fi
+
+          export SKIP_GUEST_BUILD=1
+          export PATH="$CARGO_HOME/bin:$PATH"
+          make setup runtime
+
+          command -v sccache &>/dev/null && sccache --show-stats || true
+          CONTAINER_SCRIPT
+
+          # Conditionally mount sccache binary and pass env vars into Docker.
+          # If sccache-action failed or binary is missing, build proceeds without caching.
+          SCCACHE_DOCKER_ARGS=""
+          if command -v sccache &>/dev/null; then
+            SCCACHE_DOCKER_ARGS="-v $(which sccache):/usr/local/bin/sccache:ro -e SCCACHE_GHA_ENABLED=true -e RUSTC_WRAPPER=sccache -e ACTIONS_RESULTS_URL -e ACTIONS_RUNTIME_TOKEN"
+          fi
+
+          docker run --rm \
+            -v ${{ github.workspace }}:/work \
+            -v "$RUNNER_TEMP/build.sh:/tmp/build.sh:ro" \
+            $SCCACHE_DOCKER_ARGS \
+            -w /work \
+            -e CARGO_HOME=/work/.cargo-manylinux \
+            quay.io/pypa/manylinux_2_28_x86_64 \
+            bash /tmp/build.sh

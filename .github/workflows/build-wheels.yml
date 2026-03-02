@@ -39,6 +39,24 @@ jobs:
           shared-key: "boxlite"
           save-if: false  # Workflow deletes cache after guest build
 
+      # sccache caches individual compilation units via GHA cache API.
+      # Works inside cibuildwheel's manylinux containers via environment-pass.
+      # Cache is pre-warmed by the Warm Caches workflow on push to main.
+      - name: Setup sccache
+        if: runner.os == 'Linux'
+        uses: mozilla-actions/sccache-action@v0.0.9
+        continue-on-error: true
+
+      - name: Export GHA cache env vars
+        if: runner.os == 'Linux'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            core.exportVariable('ACTIONS_RESULTS_URL', process.env.ACTIONS_RESULTS_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+            core.exportVariable('SCCACHE_GHA_ENABLED', 'true');
+            core.exportVariable('RUSTC_WRAPPER', 'sccache');
+
       # Build guest on host BEFORE cibuildwheel container because:
       # - manylinux (AlmaLinux/RHEL) doesn't have musl packages in repos
       # - Building musl-cross-make from source takes ~15 minutes
