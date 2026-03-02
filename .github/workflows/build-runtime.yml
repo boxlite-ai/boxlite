@@ -1,7 +1,7 @@
 # Build BoxLite core runtime, upload artifacts, and publish to crates.io.
 #
 # This workflow builds the Rust runtime and populates the shared cache.
-# On push to main: builds and caches (existing behavior).
+# On push to main: chains after Warm Caches workflow for sccache hits.
 # On release: builds, uploads runtime tarballs to GitHub Release, and publishes
 #   Rust crates to crates.io (requires CARGO_REGISTRY_TOKEN secret).
 #
@@ -16,22 +16,17 @@
 name: Build Runtime
 
 on:
-  push:
+  workflow_run:
+    workflows: ["Warm Caches"]
+    types: [completed]
     branches: [main]
-    paths:
-      - 'boxlite/**'
-      - 'boxlite-shared/**'
-      - 'guest/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - '.github/workflows/build-runtime.yml'
-      - '.github/workflows/config.yml'
   release:
     types: [published]
   workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: '0'
   SKIP_INSTALL_NODEJS: '1'
 
 jobs:
@@ -41,6 +36,9 @@ jobs:
   build:
     name: Build Runtime (${{ matrix.target }})
     needs: config
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.conclusion == 'success'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -57,23 +55,14 @@ jobs:
         with:
           toolchain: ${{ needs.config.outputs.rust-toolchain }}
 
-      # Cache Rust dependencies (used by guest build on Linux, full build on macOS)
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "boxlite"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-
       # sccache caches individual compilation units via GHA cache API.
-      # Works inside Docker containers (unlike Swatinem/rust-cache).
+      # Works on host and inside Docker containers.
       # Cache is pre-warmed by the Warm Caches workflow on push to main.
       - name: Setup sccache
-        if: runner.os == 'Linux'
         uses: mozilla-actions/sccache-action@v0.0.9
         continue-on-error: true
 
       - name: Export GHA cache env vars
-        if: runner.os == 'Linux'
         uses: actions/github-script@v7
         with:
           script: |
@@ -98,7 +87,7 @@ jobs:
           mkdir -p ".cache/$GUEST_TARGET/release"
           cp "target/$GUEST_TARGET/release/boxlite-guest" ".cache/$GUEST_TARGET/release/"
 
-          # Clean up to save disk space (keep target/ dir for rust-cache post-step)
+          # Clean up to save disk space (sccache stores compilation cache separately)
           rm -rf target ~/.rustup ~/.cargo
           mkdir -p target
 

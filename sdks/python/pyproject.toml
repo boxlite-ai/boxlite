@@ -108,7 +108,7 @@ test-command = "python -c 'import boxlite; print(boxlite.__version__)'"
 
 [tool.cibuildwheel.macos]
 # Fix "libkrunfw.4.dylib has a minimum target of 14.0" error
-environment = { MACOSX_DEPLOYMENT_TARGET = "14.0", _PYTHON_HOST_PLATFORM = "macosx_14_0_arm64", PATH = "$HOME/.cargo/bin:$PATH" }
+environment = { MACOSX_DEPLOYMENT_TARGET = "14.0", _PYTHON_HOST_PLATFORM = "macosx_14_0_arm64", PATH = "$HOME/.cargo/bin:$PATH", CARGO_INCREMENTAL = "0" }
 
 repair-wheel-command = ""  # Skip auditwheel repair
 

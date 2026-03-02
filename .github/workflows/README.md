@@ -13,34 +13,38 @@ This directory contains GitHub Actions workflows for building and publishing Box
         ┌───────────────────────┼───────────────────────┐
         ↓                       ↓                       ↓
 ┌───────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│build-runtime  │     │build-wheels     │     │build-node       │
+│warm-caches    │     │build-wheels     │     │build-node       │
 │               │     │                 │     │                 │
 │ Triggers:     │     │ Triggers:       │     │ Triggers:       │
-│ - boxlite/*   │────→│ - release       │     │ - release       │
-│ - Cargo.*     │     │ - manual        │     │ - manual        │
+│ - push main   │     │ - release       │     │ - release       │
+│ - weekly      │     │ - manual        │     │ - manual        │
 │               │     │                 │     │                 │
-│ Saves to:     │     │ Restores from:  │     │ Restores from:  │
-│ actions/cache │     │ actions/cache   │     │ actions/cache   │
-└───────────────┘     └─────────────────┘     └─────────────────┘
+│ Warms sccache │     │ Uses sccache    │     │ Uses sccache    │
+└───────┬───────┘     └─────────────────┘     └─────────────────┘
+        │ [completed]
+        ↓
+┌───────────────┐
+│build-runtime  │
+│               │
+│ Triggers:     │
+│ - warm-caches │
+│ - release     │
+│ - manual      │
+│               │
+│ Uses sccache  │
+└───────────────┘
 ```
 
-## Key Design: Cache-Based Separation
+## Key Design: sccache Compilation Caching
 
-Instead of artifacts (which only work within a single workflow), we use **`actions/cache`** to share build caches across workflows:
+All Rust compilation is cached via **sccache** using the GHA cache API:
 
-```yaml
-# build-runtime.yml saves:
-key: boxlite-build-{platform}-{hash of core files}
-
-# build-wheels.yml / build-node.yml restore:
-key: boxlite-build-{platform}-{hash of core files}
-restore-keys: boxlite-build-{platform}-  # fallback to latest
-```
-
-**Benefits:**
-- SDK workflows only rebuild runtime on cache miss
-- Same core code = same cache key = instant restore
-- Core changes = different hash = new build
+- Caches individual compilation units (object files) by content hash
+- Works on host runners and inside Docker/manylinux containers
+- Pre-warmed by `warm-caches.yml` on push to main
+- `build-runtime.yml` chains after warm-caches via `workflow_run` for cache hits
+- Requires `CARGO_INCREMENTAL=0` (sccache and incremental compilation are incompatible)
+- Graceful fallback: if sccache fails to set up, builds proceed without caching
 
 ## Workflows
 
@@ -61,7 +65,7 @@ Shared configuration loaded by all workflows.
 Builds BoxLite runtime, uploads to GitHub Release, and publishes Rust crates to crates.io.
 
 **Triggers:**
-- Push to `main` with changes in `boxlite/**`, `Cargo.*`, etc.
+- After `Warm Caches` workflow completes on `main` (via `workflow_run`)
 - Release published
 - Manual dispatch
 
@@ -127,33 +131,24 @@ Runs code quality checks.
 
 ## Trigger Behavior
 
-| Change | build-runtime | build-wheels | build-node |
-|--------|---------------|--------------|------------|
-| `boxlite/**` | ✅ Runs | ❌ Skips | ❌ Skips |
-| `sdks/python/**` | ❌ Skips | ❌ Skips | ❌ Skips |
-| `sdks/node/**` | ❌ Skips | ❌ Skips | ❌ Skips |
-| Release published | ✅ Runs (build + upload + publish crates) | ✅ Runs | ✅ Runs |
+| Change | warm-caches | build-runtime | build-wheels | build-node |
+|--------|-------------|---------------|--------------|------------|
+| `boxlite/**` | ✅ Runs | ✅ Chains after warm-caches | ❌ Skips | ❌ Skips |
+| `sdks/python/**` | ❌ Skips | ❌ Skips | ❌ Skips | ❌ Skips |
+| `sdks/node/**` | ❌ Skips | ❌ Skips | ❌ Skips | ❌ Skips |
+| Release published | ❌ Skips | ✅ Runs directly | ✅ Runs | ✅ Runs |
 
 ## Cache Strategy
 
-### Runtime Cache
+### Compilation Cache (sccache)
 
-```yaml
-key: boxlite-build-{platform}-{hashFiles('boxlite/**', 'Cargo.lock', ...)}
-```
+All Rust compilation is cached via sccache using the GHA cache API:
 
-- **Same core code** → Cache hit → Skip rebuild (~8 min saved)
-- **Core changed** → Cache miss → Rebuild runtime
-
-### Rust Dependencies Cache (Swatinem/rust-cache)
-
-```yaml
-shared-key: "boxlite"  # Shared across all workflows
-```
-
-- Caches `~/.cargo` and `./target` directories
-- Shared across workflow runs
-- Invalidates on Cargo.lock changes
+- Caches individual compilation units (object files)
+- Works on host runners and inside Docker containers
+- Pre-warmed by the `warm-caches.yml` workflow on push to main
+- Requires `CARGO_INCREMENTAL=0` (sccache and incremental compilation are incompatible)
+- Graceful fallback: if sccache fails to set up, builds proceed without caching
 
 ## Platform Matrix
 
@@ -203,14 +198,14 @@ make dev:node
 ## Troubleshooting
 
 **Cache miss when expected hit:**
-- Check if core files changed (hash is different)
-- Caches expire after 7 days of non-use
+- sccache caches expire after 7 days of non-use (weekly warm-caches schedule prevents this)
 - Branch-based cache isolation may apply
+- Check sccache stats in build logs for hit/miss rates
 
-**Runtime binaries missing:**
-- Fallback build runs automatically on cache miss
-- Check logs for "Runtime cache miss - building runtime"
-- Verify submodules initialized
+**Build taking too long:**
+- Check sccache stats — low hit rate means cache is cold
+- Verify warm-caches workflow completed successfully before build-runtime
+- Check GHA cache usage (Settings > Actions > Caches) for eviction
 
 **Node.js package install fails:**
 - Platform package must be installed before main package
@@ -218,7 +213,6 @@ make dev:node
 
 ## References
 
-- [GitHub Actions Cache](https://github.com/actions/cache)
-- [Swatinem/rust-cache](https://github.com/Swatinem/rust-cache)
+- [mozilla-actions/sccache-action](https://github.com/mozilla-actions/sccache-action)
 - [cibuildwheel](https://cibuildwheel.readthedocs.io/)
 - [napi-rs](https://napi.rs/)
