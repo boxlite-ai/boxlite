@@ -124,7 +124,7 @@ environment = { SKIP_GUEST_BUILD = "1", PATH = "$HOME/.cargo/bin:/usr/local/bin:
 
 # Pass sccache env vars from host into cibuildwheel's manylinux container
 # These enable sccache to use the GHA cache API for compilation caching
-environment-pass = ["ACTIONS_RESULTS_URL", "ACTIONS_RUNTIME_TOKEN", "SCCACHE_GHA_ENABLED", "RUSTC_WRAPPER"]
+environment-pass = ["ACTIONS_RESULTS_URL", "ACTIONS_RUNTIME_TOKEN", "ACTIONS_CACHE_SERVICE_V2", "SCCACHE_GHA_ENABLED", "RUSTC_WRAPPER"]
 
 # Retag wheel for PyPI compliance without bundling libs (we handle runtime deps ourselves)
 # Uses 'wheel tags' to change linux_x86_64 -> manylinux_2_28_x86_64
