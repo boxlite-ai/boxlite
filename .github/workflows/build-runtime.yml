@@ -136,7 +136,9 @@ jobs:
 
       - name: Build runtime (macOS)
         if: runner.os == 'macOS'
-        run: make setup runtime
+        run: |
+          make setup runtime
+          command -v sccache &>/dev/null && sccache --show-stats || true
 
       - name: Package runtime
         run: |

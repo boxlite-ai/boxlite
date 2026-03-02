@@ -1,11 +1,15 @@
-# Pre-warm sccache for all workflows that build Rust code.
+# Pre-warm sccache for all platforms that build Rust code.
 #
 # Problem: Three workflows (build-runtime, build-node, build-wheels) independently
-# compile the same Rust code. Without a warm cache, each faces ~20 min cold compiles.
+# compile the same Rust code on both Linux and macOS. Without a warm cache, each
+# faces ~8-20 min cold compiles per platform.
 #
 # Solution: sccache caches individual compilation units via the GHA cache API,
 # which works on host runners and inside Docker containers. This workflow warms
 # the cache on push to main so that subsequent workflow runs get cache hits.
+#
+# sccache entries are scoped by target triple and runner OS — Linux entries cannot
+# serve macOS builds. Both platforms need their own warmup job.
 #
 # Pattern inspired by Bevy's cache warmup workflow.
 name: Warm Caches
@@ -38,9 +42,13 @@ jobs:
     uses: ./.github/workflows/config.yml
 
   warm:
-    name: Warm sccache
+    name: Warm sccache (${{ matrix.target }})
     needs: config
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.config.outputs.platforms) }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -64,6 +72,7 @@ jobs:
 
       # Guest build on host WITH sccache — warms cache for all workflows' guest builds
       - name: Build guest binary
+        if: runner.os == 'Linux'
         run: |
           make setup guest
           sccache --show-stats
@@ -75,6 +84,7 @@ jobs:
 
       # Docker build WITH sccache — warms cache for all workflows' manylinux builds
       - name: Build runtime in manylinux (warm sccache)
+        if: runner.os == 'Linux'
         run: |
           cat > "$RUNNER_TEMP/build.sh" << 'CONTAINER_SCRIPT'
           set -ex
@@ -115,3 +125,10 @@ jobs:
             -e CARGO_HOME=/work/.cargo-manylinux \
             quay.io/pypa/manylinux_2_28_x86_64 \
             bash /tmp/build.sh
+
+      # macOS build — warms cache for all workflows' darwin-arm64 builds
+      - name: Build runtime (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          make setup runtime
+          sccache --show-stats
