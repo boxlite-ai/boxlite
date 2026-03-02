@@ -245,56 +245,19 @@ impl LocalSnapshotBackend {
             BoxliteError::Storage(format!("Failed to move container disk to snapshot: {}", e))
         })?;
 
-        if let Err(e) = Qcow2Helper::create_cow_child_disk(
+        match Qcow2Helper::create_cow_child_disk(
             &snap_container,
             BackingFormat::Qcow2,
             container_disk,
             container_virtual_size,
         ) {
-            let mut rollback_errors = Vec::new();
-            if let Err(re) = std::fs::rename(&snap_container, container_disk) {
-                rollback_errors.push(format!("restore container disk: {}", re));
+            Ok(disk) => {
+                disk.leak();
             }
-            if let Err(re) = std::fs::remove_dir_all(&snapshot_dir) {
-                rollback_errors.push(format!("remove snapshot dir: {}", re));
-            }
-            if !rollback_errors.is_empty() {
-                tracing::error!(
-                    box_id = %self.inner.id(),
-                    rollback_errors = ?rollback_errors,
-                    "Snapshot rollback partially failed"
-                );
-                return Err(BoxliteError::Storage(format!(
-                    "Snapshot failed AND rollback partially failed: {}. Original error: {}. Box may need manual recovery.",
-                    rollback_errors.join("; "),
-                    e
-                )));
-            }
-            let _ = std::fs::remove_file(&pending_marker);
-            return Err(e);
-        }
-
-        if guest_disk.exists() {
-            let snap_guest = snapshot_dir.join(disk_filenames::GUEST_ROOTFS_DISK);
-            std::fs::rename(guest_disk, &snap_guest).map_err(|e| {
-                BoxliteError::Storage(format!("Failed to move guest disk to snapshot: {}", e))
-            })?;
-
-            if let Err(e) = Qcow2Helper::create_cow_child_disk(
-                &snap_guest,
-                BackingFormat::Qcow2,
-                guest_disk,
-                guest_virtual_size,
-            ) {
+            Err(e) => {
                 let mut rollback_errors = Vec::new();
-                if let Err(re) = std::fs::remove_file(container_disk) {
-                    rollback_errors.push(format!("remove container COW child: {}", re));
-                }
                 if let Err(re) = std::fs::rename(&snap_container, container_disk) {
                     rollback_errors.push(format!("restore container disk: {}", re));
-                }
-                if let Err(re) = std::fs::rename(&snap_guest, guest_disk) {
-                    rollback_errors.push(format!("restore guest disk: {}", re));
                 }
                 if let Err(re) = std::fs::remove_dir_all(&snapshot_dir) {
                     rollback_errors.push(format!("remove snapshot dir: {}", re));
@@ -313,6 +276,53 @@ impl LocalSnapshotBackend {
                 }
                 let _ = std::fs::remove_file(&pending_marker);
                 return Err(e);
+            }
+        }
+
+        if guest_disk.exists() {
+            let snap_guest = snapshot_dir.join(disk_filenames::GUEST_ROOTFS_DISK);
+            std::fs::rename(guest_disk, &snap_guest).map_err(|e| {
+                BoxliteError::Storage(format!("Failed to move guest disk to snapshot: {}", e))
+            })?;
+
+            match Qcow2Helper::create_cow_child_disk(
+                &snap_guest,
+                BackingFormat::Qcow2,
+                guest_disk,
+                guest_virtual_size,
+            ) {
+                Ok(disk) => {
+                    disk.leak();
+                }
+                Err(e) => {
+                    let mut rollback_errors = Vec::new();
+                    if let Err(re) = std::fs::remove_file(container_disk) {
+                        rollback_errors.push(format!("remove container COW child: {}", re));
+                    }
+                    if let Err(re) = std::fs::rename(&snap_container, container_disk) {
+                        rollback_errors.push(format!("restore container disk: {}", re));
+                    }
+                    if let Err(re) = std::fs::rename(&snap_guest, guest_disk) {
+                        rollback_errors.push(format!("restore guest disk: {}", re));
+                    }
+                    if let Err(re) = std::fs::remove_dir_all(&snapshot_dir) {
+                        rollback_errors.push(format!("remove snapshot dir: {}", re));
+                    }
+                    if !rollback_errors.is_empty() {
+                        tracing::error!(
+                            box_id = %self.inner.id(),
+                            rollback_errors = ?rollback_errors,
+                            "Snapshot rollback partially failed"
+                        );
+                        return Err(BoxliteError::Storage(format!(
+                            "Snapshot failed AND rollback partially failed: {}. Original error: {}. Box may need manual recovery.",
+                            rollback_errors.join("; "),
+                            e
+                        )));
+                    }
+                    let _ = std::fs::remove_file(&pending_marker);
+                    return Err(e);
+                }
             }
         }
 
@@ -367,7 +377,8 @@ impl LocalSnapshotBackend {
             BackingFormat::Qcow2,
             &container_disk,
             info.container_disk_bytes,
-        )?;
+        )?
+        .leak();
 
         let guest_disk = box_home.join(disk_filenames::GUEST_ROOTFS_DISK);
         let snap_guest = snapshot_dir.join(disk_filenames::GUEST_ROOTFS_DISK);
@@ -384,7 +395,8 @@ impl LocalSnapshotBackend {
                 BackingFormat::Qcow2,
                 &guest_disk,
                 info.guest_disk_bytes,
-            )?;
+            )?
+            .leak();
         }
 
         tracing::info!(
