@@ -83,13 +83,15 @@ fn main() {
     println!("cargo:rustc-link-search=native={}", out_dir);
     println!("cargo:rustc-link-lib=static=gvproxy");
 
-    // Transitive dependencies from the Go runtime (embedded in the c-archive)
+    // Transitive dependencies from the Go runtime (embedded in the c-archive).
+    // Go's net package uses the CGO resolver by default, which calls res_search
+    // from libresolv for DNS lookups on both macOS and Linux.
     #[cfg(target_os = "macos")]
     {
         println!("cargo:rustc-link-lib=framework=CoreFoundation");
         println!("cargo:rustc-link-lib=framework=Security");
-        println!("cargo:rustc-link-lib=resolv");
     }
+    println!("cargo:rustc-link-lib=resolv");
 
     // Expose library directory to downstream crates (used by boxlite/build.rs)
     // Convention: {LIBNAME}_BOXLITE_DEP=<path> for auto-discovery
