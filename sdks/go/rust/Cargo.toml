@@ -14,7 +14,7 @@ embedded-runtime = ["boxlite-ffi/embedded-runtime"]
 # Internal dependencies
 boxlite = { path = "../../../boxlite", optional = true }
 boxlite-shared = { path = "../../../boxlite-shared" }
-boxlite-ffi = { path = "../../boxlite-ffi", default-features = false }
+boxlite-ffi = { path = "../../../ffi", default-features = false }
 
 # Async runtime - must include "full" for multi-threaded scheduling
 tokio = { version = "1", features = ["full"] }

@@ -41,7 +41,7 @@ gtmpl_value = "0.5"
 [build-dependencies]
 
 [dev-dependencies]
-boxlite-test-utils = { path = "../boxlite-test-utils" }
+boxlite-test-utils = { path = "../test-utils" }
 assert_cmd = "2.1.1"
 predicates = "3.1.3"
 rstest = "0.21"

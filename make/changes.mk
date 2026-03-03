@@ -14,7 +14,7 @@ $(shell \
   echo "$$CHANGED" | grep -q '^boxlite-shared/' && printf 'rust '; \
   echo "$$CHANGED" | grep -q '^guest/' && printf 'rust '; \
   echo "$$CHANGED" | grep -q '^boxlite-cli/' && printf 'cli '; \
-  echo "$$CHANGED" | grep -q '^boxlite-ffi/' && printf 'ffi '; \
+  echo "$$CHANGED" | grep -q '^ffi/' && printf 'ffi '; \
   echo "$$CHANGED" | grep -q '^sdks/python/' && printf 'python '; \
   echo "$$CHANGED" | grep -q '^sdks/node/' && printf 'node '; \
   echo "$$CHANGED" | grep -q '^sdks/c/' && printf 'c '; \

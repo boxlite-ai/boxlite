@@ -106,5 +106,5 @@ seccompiler = { version = "0.4", features = ["json"] }  # Compile JSON filters t
 bincode = "2.0"  # Serialize compiled BPF filters
 
 [dev-dependencies]
-boxlite-test-utils = { path = "../boxlite-test-utils" }
+boxlite-test-utils = { path = "../test-utils" }
 proptest = "1.4"

@@ -18,7 +18,7 @@ libslirp-backend = ["boxlite-ffi/libslirp-backend"]
 embedded-runtime = ["boxlite-ffi/embedded-runtime"]
 
 [dependencies]
-boxlite-ffi = { path = "../boxlite-ffi" }
+boxlite-ffi = { path = "../../ffi" }
 
 [build-dependencies]
 cbindgen = "0.29"

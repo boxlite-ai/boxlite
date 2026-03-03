@@ -8,12 +8,12 @@ members = [
     "boxlite/deps/libkrun-sys",
     "boxlite-shared",
     "guest",
-    "sdks/boxlite-ffi",
+    "ffi",
     "sdks/c",
     "sdks/python",
     "sdks/node",
     "sdks/go/rust",
-    "boxlite-test-utils",
+    "test-utils",
 ]
 exclude = ["build/tmp", "target", ".venv", "examples/*/.venv"]
 
