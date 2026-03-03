@@ -5,7 +5,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 publish = false
-description = "C SDK for Boxlite runtime"
+description = "C SDK for BoxLite"
 
 [lib]
 name = "boxlite"
@@ -13,9 +13,6 @@ crate-type = ["cdylib", "staticlib"]
 
 [features]
 default = []
-gvproxy-backend = ["boxlite-ffi/gvproxy-backend"]
-libslirp-backend = ["boxlite-ffi/libslirp-backend"]
-embedded-runtime = ["boxlite-ffi/embedded-runtime"]
 
 [dependencies]
 boxlite-ffi = { path = "../../ffi" }

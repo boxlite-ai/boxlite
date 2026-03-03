@@ -1,4 +1,4 @@
-PHONY_TARGETS += dist\:python dist\:c dist\:node package
+PHONY_TARGETS += dist\:python dist\:c dist\:node
 
 dist\:python: _ensure-python-deps
 	@echo "📦 Installing cibuildwheel..."
@@ -16,19 +16,22 @@ dist\:python: _ensure-python-deps
 		exit 1; \
 	fi
 
-dist\:c: runtime
+dist\:c:
+	@echo "🔨 Building C SDK (release)..."
+	@cargo build --release -p boxlite-c
+	@mkdir -p sdks/c/dist/lib sdks/c/dist/include
+	@cp sdks/c/include/boxlite.h sdks/c/dist/include/
 	@if [ "$$(uname)" = "Darwin" ]; then \
-		bash $(SCRIPT_DIR)/package/package-macos.sh $(ARGS); \
+		cp target/release/libboxlite.dylib sdks/c/dist/lib/; \
+		cp target/release/libboxlite.a sdks/c/dist/lib/; \
 	elif [ "$$(uname)" = "Linux" ]; then \
-		bash $(SCRIPT_DIR)/package/package-linux.sh $(ARGS); \
-	else \
-		echo "❌ Unsupported platform: $$(uname)"; \
-		exit 1; \
+		cp target/release/libboxlite.so sdks/c/dist/lib/; \
+		cp target/release/libboxlite.a sdks/c/dist/lib/; \
 	fi
+	@echo "✅ C SDK staged in sdks/c/dist/"
+	@echo "   sdks/c/dist/lib/     - Libraries"
+	@echo "   sdks/c/dist/include/ - Header"
 
 # Build Node.js distribution packages (local use)
 dist\:node: runtime
 	@cd sdks/node && npm install --silent && npm run build:native -- --release && npm run build && npm run artifacts && npm run bundle:runtime && npm run pack:all
-
-package:
-	@$(MAKE) dist:c

@@ -202,9 +202,9 @@ test\:all\:node:
 	@$(MAKE) test:integration:node
 
 # C SDK test suite (CMake + CTest).
-test\:all\:c: runtime
+test\:all\:c:
 	@echo "🧪 Running C SDK tests (CMake/CTest)..."
-	@cargo build --release -p boxlite-c
+	@$(MAKE) dev:c
 	@mkdir -p sdks/c/tests/build
 	@cd sdks/c/tests/build && cmake ..
 	@cd sdks/c/tests/build && cmake --build . -j

@@ -8,7 +8,6 @@ crate-type = ["staticlib"]
 
 [features]
 default = ["boxlite"]
-embedded-runtime = ["boxlite-ffi/embedded-runtime"]
 
 [dependencies]
 # Internal dependencies

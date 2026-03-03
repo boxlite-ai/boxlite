@@ -334,9 +334,9 @@ fn build_inject_commands(host_file_str: &str, guest_path: &str) -> String {
         }
     }
 
-    // Write host file into ext4 image
+    // Write host file into ext4 image (quote source path for spaces, e.g. macOS "Application Support")
     let ext4_dest = format!("/{}", guest_path);
-    commands.push_str(&format!("write {} {}\n", host_file_str, ext4_dest));
+    commands.push_str(&format!("write \"{}\" {}\n", host_file_str, ext4_dest));
 
     // Set ownership (uid=0, gid=0) and mode (0555 = r-xr-xr-x)
     commands.push_str(&format!("sif {} uid 0\n", ext4_dest));
@@ -369,8 +369,8 @@ mod tests {
         assert!(cmds.contains("mkdir /boxlite\n"));
         assert!(cmds.contains("mkdir /boxlite/bin\n"));
 
-        // Should write the file
-        assert!(cmds.contains("write /host/boxlite-guest /boxlite/bin/boxlite-guest\n"));
+        // Should write the file (source path quoted for spaces)
+        assert!(cmds.contains("write \"/host/boxlite-guest\" /boxlite/bin/boxlite-guest\n"));
 
         // Should set file permissions
         assert!(cmds.contains("sif /boxlite/bin/boxlite-guest uid 0\n"));
@@ -389,7 +389,7 @@ mod tests {
         let cmds = build_inject_commands("/host/file", "dir/file");
 
         assert!(cmds.contains("mkdir /dir\n"));
-        assert!(cmds.contains("write /host/file /dir/file\n"));
+        assert!(cmds.contains("write \"/host/file\" /dir/file\n"));
         assert!(cmds.contains("sif /dir uid 0\n"));
         assert!(cmds.contains("sif /dir gid 0\n"));
     }
@@ -402,7 +402,7 @@ mod tests {
         assert!(!cmds.contains("mkdir"));
 
         // Should still write and set permissions
-        assert!(cmds.contains("write /host/file /file\n"));
+        assert!(cmds.contains("write \"/host/file\" /file\n"));
         assert!(cmds.contains("sif /file uid 0\n"));
         assert!(cmds.contains("sif /file gid 0\n"));
         assert!(cmds.contains("sif /file mode 0100555\n"));
@@ -416,6 +416,19 @@ mod tests {
         assert!(cmds.contains("mkdir /a/b\n"));
         assert!(cmds.contains("mkdir /a/b/c\n"));
         assert!(cmds.contains("mkdir /a/b/c/d\n"));
-        assert!(cmds.contains("write /src/bin /a/b/c/d/bin\n"));
+        assert!(cmds.contains("write \"/src/bin\" /a/b/c/d/bin\n"));
+    }
+
+    #[test]
+    fn test_build_inject_commands_path_with_spaces() {
+        let cmds = build_inject_commands(
+            "/Users/user/Library/Application Support/boxlite/runtimes/v0.6.0/boxlite-guest",
+            "boxlite/bin/boxlite-guest",
+        );
+
+        // Source path must be quoted so debugfs handles the space correctly
+        assert!(cmds.contains(
+            "write \"/Users/user/Library/Application Support/boxlite/runtimes/v0.6.0/boxlite-guest\" /boxlite/bin/boxlite-guest\n"
+        ));
     }
 }

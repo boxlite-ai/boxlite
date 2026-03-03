@@ -20,15 +20,12 @@ dev\:python: runtime-debug _ensure-python-deps
 	@echo "🔨 Building wheel with maturin (embedded-runtime)..."
 	@. .venv/bin/activate && pip install -q maturin && cd sdks/python && maturin develop
 
-dev\:c: runtime
-	@if [ "$$(uname)" = "Darwin" ]; then \
-		bash $(SCRIPT_DIR)/package/package-macos.sh $(ARGS); \
-	elif [ "$$(uname)" = "Linux" ]; then \
-		bash $(SCRIPT_DIR)/package/package-linux.sh $(ARGS); \
-	else \
-		echo "❌ Unsupported platform: $$(uname)"; \
-		exit 1; \
-	fi
+dev\:c:
+	@echo "🔨 Building C SDK (debug)..."
+	@cargo build -p boxlite-c
+	@echo "✅ C SDK built:"
+	@echo "   Library: target/debug/libboxlite.{dylib,so,a}"
+	@echo "   Header:  sdks/c/include/boxlite.h"
 
 # Build Node.js SDK locally with napi-rs (debug mode)
 dev\:node: runtime-debug
