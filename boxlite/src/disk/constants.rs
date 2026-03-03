@@ -14,6 +14,7 @@ pub mod filenames {
 /// Directory names within a box home.
 pub mod dirs {
     /// Snapshots subdirectory: `~/.boxlite/boxes/{box_id}/snapshots/`
+    #[allow(dead_code)] // Used by snapshot operations (not yet wired)
     pub const SNAPSHOTS_DIR: &str = "snapshots";
 }
 

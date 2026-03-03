@@ -17,12 +17,17 @@ pub enum DiskFormat {
 /// RAII-managed disk image.
 ///
 /// Automatically deletes the disk file when dropped (unless persistent=true).
+/// Optionally carries size metadata (virtual + on-disk) for fork operations.
 pub struct Disk {
     path: PathBuf,
     #[allow(dead_code)]
     format: DiskFormat,
     /// If true, disk will NOT be deleted on drop (used for base disks)
     persistent: bool,
+    /// Logical capacity in bytes (e.g., qcow2 virtual size).
+    virtual_size: u64,
+    /// Actual bytes on disk (sparse file size).
+    on_disk_size: u64,
 }
 
 impl Disk {
@@ -37,6 +42,27 @@ impl Disk {
             path,
             format,
             persistent,
+            virtual_size: 0,
+            on_disk_size: 0,
+        }
+    }
+
+    /// Create a new Disk with size metadata.
+    ///
+    /// Used by fork operations that know the disk sizes at creation time.
+    pub fn with_sizes(
+        path: PathBuf,
+        format: DiskFormat,
+        persistent: bool,
+        virtual_size: u64,
+        on_disk_size: u64,
+    ) -> Self {
+        Self {
+            path,
+            format,
+            persistent,
+            virtual_size,
+            on_disk_size,
         }
     }
 
@@ -49,6 +75,16 @@ impl Disk {
     #[allow(dead_code)]
     pub fn format(&self) -> DiskFormat {
         self.format
+    }
+
+    /// Logical capacity in bytes (e.g., qcow2 virtual size).
+    pub fn virtual_size(&self) -> u64 {
+        self.virtual_size
+    }
+
+    /// Actual bytes on disk (sparse file size).
+    pub fn on_disk_size(&self) -> u64 {
+        self.on_disk_size
     }
 
     /// Consume and leak the disk (prevent cleanup).

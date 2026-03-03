@@ -6,6 +6,9 @@ use std::time::Instant;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use super::box_impl::BoxImpl;
+use crate::disk::BaseDiskKind;
+use crate::disk::constants::filenames as disk_filenames;
+use crate::disk::{BackingFormat, Qcow2Helper};
 use crate::runtime::types::BoxStatus;
 
 // ============================================================================
@@ -15,17 +18,48 @@ use crate::runtime::types::BoxStatus;
 impl BoxImpl {
     pub(crate) async fn clone_box(
         &self,
-        _options: crate::runtime::options::CloneOptions,
+        options: crate::runtime::options::CloneOptions,
         name: Option<String>,
     ) -> BoxliteResult<crate::LiteBox> {
+        // Single clone delegates to batch clone with count=1.
+        let names = match name {
+            Some(n) => vec![n],
+            None => Vec::new(),
+        };
+        let mut clones = self.clone_boxes(options, 1, names).await?;
+        Ok(clones.remove(0))
+    }
+
+    /// Batch clone: create N clones sharing a single base disk layer.
+    ///
+    /// Three-phase flow (snapshot-as-base):
+    ///   A. Inside quiesce bracket (VM paused): create disk layer (rename + COW child).
+    ///   B. Outside quiesce bracket (VM resumed): create N thin overlay headers.
+    ///   C. Provision each clone and increment layer ref count.
+    pub(crate) async fn clone_boxes(
+        &self,
+        _options: crate::runtime::options::CloneOptions,
+        count: usize,
+        names: Vec<String>,
+    ) -> BoxliteResult<Vec<crate::LiteBox>> {
+        if count == 0 {
+            return Ok(Vec::new());
+        }
+
+        if !names.is_empty() && names.len() != count {
+            return Err(BoxliteError::Config(format!(
+                "names length ({}) must match count ({})",
+                names.len(),
+                count
+            )));
+        }
+
         let t0 = Instant::now();
         let _lock = self.disk_ops.lock().await;
 
         let rt = Arc::clone(&self.runtime);
-        let src_home = self.config.box_home.clone();
-
-        let src_container = src_home.join(crate::disk::constants::filenames::CONTAINER_DISK);
-        let src_guest = src_home.join(crate::disk::constants::filenames::GUEST_ROOTFS_DISK);
+        let src_disks = self.config.box_home.join("disks");
+        let src_container = src_disks.join(disk_filenames::CONTAINER_DISK);
 
         if !src_container.exists() {
             return Err(BoxliteError::Storage(format!(
@@ -34,49 +68,106 @@ impl BoxImpl {
             )));
         }
 
-        // Create a temporary box_home directory for the clone.
-        // provision_box will take ownership; we clean up on disk-copy failure.
-        let temp_box_home = tempfile::tempdir_in(rt.layout.boxes_dir()).map_err(|e| {
-            BoxliteError::Storage(format!("Failed to create temp box directory: {}", e))
-        })?;
-        #[allow(deprecated)] // into_path renamed to keep() in newer tempfile
-        let box_home = temp_box_home.into_path();
+        // Phase A: Create shared base layer inside quiesce bracket (VM paused).
+        // This is the same operation as snapshot creation: rename + COW child.
+        let source_box_id = self.id().to_string();
+        let layer = {
+            let src_disks = src_disks.clone();
+            let source_box_id = source_box_id.clone();
 
-        // Quiesce the VM during disk copy for point-in-time consistency.
-        let dst_container = box_home.join(crate::disk::constants::filenames::CONTAINER_DISK);
-        let clone_result = self
-            .with_quiesce_async(async {
-                crate::disk::Qcow2Helper::clone_disk_pair(
-                    &src_container,
-                    &dst_container,
-                    &src_guest,
-                    &box_home,
+            self.with_quiesce_async(async {
+                rt.base_disk_mgr.create_base_disk(
+                    &src_disks,
+                    BaseDiskKind::CloneBase,
+                    None,
+                    &source_box_id,
                 )
             })
-            .await;
+            .await?
+        };
 
-        if let Err(e) = clone_result {
-            let _ = std::fs::remove_dir_all(&box_home);
-            return Err(e);
+        // base_path is a flat file (e.g., bases/{nanoid}.qcow2)
+        let shared_container = layer.disk_info.to_path_buf();
+
+        // Read virtual size from the shared base for overlay creation.
+        let container_vsize = Qcow2Helper::qcow2_virtual_size(&shared_container)?;
+
+        // Phase B: Create N container overlay headers (VM is resumed, fast).
+        // Guest rootfs is NOT cloned — each clone creates its own on first start.
+        let mut staging_dirs = Vec::with_capacity(count);
+        for _ in 0..count {
+            let temp = tempfile::tempdir_in(rt.layout.boxes_dir()).map_err(|e| {
+                BoxliteError::Storage(format!("Failed to create temp box directory: {}", e))
+            })?;
+            #[allow(deprecated)]
+            let staging = temp.into_path();
+
+            let staging_disks = staging.join("disks");
+            std::fs::create_dir_all(&staging_disks).map_err(|e| {
+                BoxliteError::Storage(format!("Failed to create staging disks dir: {}", e))
+            })?;
+
+            // Container overlay → shared base (qcow2 backing qcow2)
+            // leak() prevents the Disk RAII guard from deleting the file on drop —
+            // the child is the clone's persistent disk and must outlive this function.
+            Qcow2Helper::create_cow_child_disk(
+                &shared_container,
+                BackingFormat::Qcow2,
+                &staging_disks.join(disk_filenames::CONTAINER_DISK),
+                container_vsize,
+            )?
+            .leak();
+
+            staging_dirs.push(staging);
         }
 
-        let litebox = rt
-            .provision_box(
-                box_home,
-                name,
-                self.config.options.clone(),
-                BoxStatus::Stopped,
-            )
-            .await?;
+        // Phase C: Provision each clone and record base disk refs.
+        let mut clones = Vec::with_capacity(count);
+        for (i, staging) in staging_dirs.into_iter().enumerate() {
+            let litebox = match rt
+                .provision_box(
+                    staging.clone(),
+                    names.get(i).cloned(),
+                    self.config.options.clone(),
+                    BoxStatus::Stopped,
+                )
+                .await
+            {
+                Ok(lb) => lb,
+                Err(e) => {
+                    // Cleanup remaining staging dirs on failure.
+                    let _ = std::fs::remove_dir_all(&staging);
+                    // Don't clean up already-provisioned clones; they're valid boxes.
+                    return Err(e);
+                }
+            };
+
+            // Record that this clone depends on the shared base disk.
+            if let Err(e) = rt
+                .base_disk_mgr
+                .store()
+                .add_ref(&layer.id, litebox.id().as_ref())
+            {
+                tracing::warn!(
+                    clone_id = %litebox.id(),
+                    base_disk_id = %layer.id,
+                    error = %e,
+                    "Failed to record base disk ref for clone"
+                );
+            }
+
+            clones.push(litebox);
+        }
 
         tracing::info!(
-            box_id = %litebox.id(),
             source_id = %self.id(),
+            base_disk_id = %layer.id,
+            count = clones.len(),
             elapsed_ms = t0.elapsed().as_millis() as u64,
-            "Cloned box (COW)"
+            "Batch cloned boxes (shared base disk)"
         );
 
-        Ok(litebox)
+        Ok(clones)
     }
 
     pub(crate) async fn export_box(
@@ -151,8 +242,9 @@ fn do_export_flatten(
     use crate::disk::Qcow2Helper;
     use crate::disk::constants::filenames as disk_filenames;
 
-    let container_disk = box_home.join(disk_filenames::CONTAINER_DISK);
-    let guest_disk = box_home.join(disk_filenames::GUEST_ROOTFS_DISK);
+    let disks_dir = box_home.join("disks");
+    let container_disk = disks_dir.join(disk_filenames::CONTAINER_DISK);
+    let guest_disk = disks_dir.join(disk_filenames::GUEST_ROOTFS_DISK);
 
     if !container_disk.exists() {
         return Err(BoxliteError::Storage(format!(

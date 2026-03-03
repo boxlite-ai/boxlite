@@ -807,6 +807,7 @@ impl Qcow2Helper {
     /// Each child is backed by the source disk and starts empty — all reads go
     /// to the source, writes go to the child. The returned `Disk` handles are
     /// leaked so they persist beyond this call.
+    #[allow(dead_code)] // Used by clone operations (not yet wired)
     pub fn clone_disk_pair(
         src_container: &Path,
         dst_container: &Path,
@@ -906,6 +907,36 @@ pub fn read_backing_file_path(path: &Path) -> BoxliteResult<Option<String>> {
     })?;
 
     Ok(Some(backing_path))
+}
+
+/// Maximum depth for backing chain walks (prevents infinite loops from circular refs).
+const MAX_BACKING_CHAIN_DEPTH: usize = 8;
+
+/// Walk a qcow2 backing chain, returning all backing file paths.
+///
+/// Follows backing references from `path` until: no backing, file missing,
+/// read error, or depth limit. Returns partial results on error.
+/// Does NOT include `path` itself.
+pub fn read_backing_chain(path: &Path) -> Vec<PathBuf> {
+    let mut chain = Vec::new();
+    let mut current = path.to_path_buf();
+
+    for _ in 0..MAX_BACKING_CHAIN_DEPTH {
+        match read_backing_file_path(&current) {
+            Ok(Some(backing)) => {
+                let backing_path = PathBuf::from(backing);
+                if !backing_path.exists() {
+                    break;
+                }
+                chain.push(backing_path.clone());
+                current = backing_path;
+            }
+            Ok(None) => break,
+            Err(_) => break,
+        }
+    }
+
+    chain
 }
 
 /// QCOW2 magic number: "QFI\xfb".

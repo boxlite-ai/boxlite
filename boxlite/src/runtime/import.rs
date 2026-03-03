@@ -131,7 +131,7 @@ fn extract_and_validate(
     Ok((manifest, temp_dir))
 }
 
-/// Validate disk security and move disks into box_home.
+/// Validate disk security and move disks into box_home/disks/.
 fn install_disks(temp_dir: &Path, box_home: &Path) -> BoxliteResult<()> {
     // Security: Reject imported disks that reference backing files.
     // A crafted archive could include a qcow2 with a backing reference to
@@ -144,23 +144,24 @@ fn install_disks(temp_dir: &Path, box_home: &Path) -> BoxliteResult<()> {
         validate_no_backing_references(&extracted_guest)?;
     }
 
-    std::fs::create_dir_all(box_home).map_err(|e| {
+    let disks_dir = box_home.join("disks");
+    std::fs::create_dir_all(&disks_dir).map_err(|e| {
         BoxliteError::Storage(format!(
-            "Failed to create box directory {}: {}",
-            box_home.display(),
+            "Failed to create disks directory {}: {}",
+            disks_dir.display(),
             e
         ))
     })?;
 
     move_file(
         &extracted_container,
-        &box_home.join(disk_filenames::CONTAINER_DISK),
+        &disks_dir.join(disk_filenames::CONTAINER_DISK),
     )?;
 
     if extracted_guest.exists() {
         move_file(
             &extracted_guest,
-            &box_home.join(disk_filenames::GUEST_ROOTFS_DISK),
+            &disks_dir.join(disk_filenames::GUEST_ROOTFS_DISK),
         )?;
     }
 

@@ -8,6 +8,7 @@ mod v2_to_v3;
 mod v3_to_v4;
 mod v4_to_v5;
 mod v5_to_v6;
+mod v6_to_v7;
 
 use std::path::Path;
 
@@ -75,5 +76,6 @@ fn all_migrations() -> Vec<Box<dyn Migration>> {
         Box::new(v3_to_v4::AddImageIndex),
         Box::new(v4_to_v5::AddSnapshots),
         Box::new(v5_to_v6::ReplaceSnapshots),
+        Box::new(v6_to_v7::MoveDisksAndAddBaseDisk),
     ]
 }

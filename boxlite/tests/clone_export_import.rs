@@ -270,6 +270,105 @@ async fn test_export_import_running_box_roundtrip() {
 }
 
 // ============================================================================
+// Snapshot isolation (stopped source)
+// ============================================================================
+
+/// Verify that cloning a stopped box preserves the source's disk state.
+///
+/// NOTE: Live write isolation (writes to running source don't leak to clones)
+/// requires hypervisor-level block device swapping (e.g., QEMU blockdev-snapshot).
+/// libkrun's fd-based disk access means post-quiesce writes to a running source
+/// go to the shared base inode. This test uses a stopped source to verify
+/// the COW fork point works correctly without live-fd complications.
+#[tokio::test]
+async fn test_clone_snapshot_isolation() {
+    let ctx = common::ParallelRuntime::new();
+    let source = create_running_box(&ctx.runtime, "isolation-src").await;
+
+    // Write a marker to the source box
+    let cmd = BoxCommand::new("sh").args(["-c", "echo snapshot-data > /root/marker.txt"]);
+    let mut exec = source.exec(cmd).await.expect("Write marker");
+    let result = exec.wait().await.expect("Wait for marker write");
+    assert_eq!(result.exit_code, 0);
+
+    // Stop source, then clone from stopped state (clean fork point)
+    source.stop().await.expect("Stop source");
+
+    let cloned = source
+        .clone_box(CloneOptions::default(), Some("isolation-clone".to_string()))
+        .await
+        .expect("Clone should succeed");
+
+    // Start clone and verify it sees the marker written before the fork
+    cloned.start().await.expect("Start cloned box");
+    let cmd = BoxCommand::new("cat").args(["/root/marker.txt"]);
+    let mut exec = cloned.exec(cmd).await.expect("Read marker in clone");
+
+    let mut stdout_output = String::new();
+    if let Some(mut stdout) = exec.stdout() {
+        use futures::StreamExt;
+        while let Some(chunk) = stdout.next().await {
+            stdout_output.push_str(&chunk);
+        }
+    }
+    let result = exec.wait().await.expect("Wait for clone read");
+    assert_eq!(result.exit_code, 0);
+
+    assert_eq!(
+        stdout_output.trim(),
+        "snapshot-data",
+        "Clone must see source's pre-fork data"
+    );
+
+    cloned.stop().await.expect("Stop cloned box");
+
+    ctx.shutdown().await;
+}
+
+// ============================================================================
+// Benchmarks
+// ============================================================================
+
+#[tokio::test]
+async fn test_clone_10x_benchmark() {
+    use std::time::Instant;
+
+    let ctx = common::ParallelRuntime::new();
+    let source = create_stopped_box(&ctx.runtime).await;
+
+    const N: usize = 10;
+    let mut durations = Vec::with_capacity(N);
+
+    let total_start = Instant::now();
+
+    for i in 0..N {
+        let start = Instant::now();
+        let cloned = source
+            .clone_box(CloneOptions::default(), Some(format!("clone-bench-{}", i)))
+            .await
+            .expect("Clone should succeed");
+        let elapsed = start.elapsed();
+        durations.push(elapsed);
+
+        eprintln!("Clone {}/{}: {:?}", i + 1, N, elapsed);
+
+        // Verify clone is valid
+        assert_eq!(cloned.info().status, BoxStatus::Stopped);
+        assert_ne!(cloned.info().id, source.info().id);
+    }
+
+    let total = total_start.elapsed();
+    let avg = total / N as u32;
+
+    eprintln!("─────────────────────────────────");
+    eprintln!("Total ({N} clones): {total:?}");
+    eprintln!("Average per clone:  {avg:?}");
+    eprintln!("─────────────────────────────────");
+
+    ctx.shutdown().await;
+}
+
+// ============================================================================
 // Stress tests
 // ============================================================================
 

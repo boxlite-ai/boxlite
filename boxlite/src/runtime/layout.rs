@@ -80,6 +80,37 @@ impl FsLayoutConfig {
 // FILESYSTEM LAYOUT (home directory)
 // ============================================================================
 
+/// Filesystem layout for the BoxLite home directory.
+///
+/// All runtime data lives under a single home directory (`~/.boxlite/` by default,
+/// overridable via `BOXLITE_HOME`). This layout manages the top-level structure
+/// and delegates per-box and per-image layouts to their respective types.
+///
+/// # Directory Structure
+///
+/// ```text
+/// ~/.boxlite/                              # Home directory (BOXLITE_HOME)
+/// ├── db/                                  # SQLite databases
+/// ├── images/                              # OCI image cache (ImageFilesystemLayout)
+/// │   ├── layers/                              # Downloaded layer tarballs
+/// │   ├── extracted/                           # Extracted layer directories
+/// │   ├── disk-images/                         # Cached ext4 disk images for COW
+/// │   ├── manifests/                           # Image manifests
+/// │   ├── configs/                             # Image configs
+/// │   └── local/                               # Local OCI bundle cache
+/// │       └── {path_hash}-{manifest_short}/
+/// ├── boxes/                               # Per-box directories (BoxFilesystemLayout)
+/// │   └── {box_id}/                            # See BoxFilesystemLayout
+/// ├── bases/                               # Flat backing files (nanoid-named)
+/// │   ├── {nanoid}.qcow2                       # Snapshot / clone base container disk
+/// │   └── {nanoid}.ext4                        # Guest rootfs cache
+/// ├── locks/                               # Per-entity lock files
+/// ├── logs/                                # Home-level logs
+/// └── tmp/                                 # Transient temp files (same-fs for rename)
+/// ```
+///
+/// The `tmp/`, `bases/`, and `images/disk-images/` directories **must** reside on the
+/// same filesystem to allow atomic `rename(2)` during staged install operations.
 #[derive(Clone, Debug)]
 pub struct FilesystemLayout {
     home_dir: PathBuf,
@@ -123,6 +154,14 @@ impl FilesystemLayout {
         self.home_dir.join(dirs::BOXES_DIR)
     }
 
+    /// Bases directory: ~/.boxlite/bases
+    ///
+    /// Flat directory of immutable backing files (snapshots, clone bases, rootfs cache).
+    /// Each file is named with a nanoid(8) identifier and tracked in the `base_disk` table.
+    pub fn bases_dir(&self) -> PathBuf {
+        self.home_dir.join("bases")
+    }
+
     /// Per-entity locks directory: ~/.boxlite/locks
     ///
     /// Contains lock files managed by FileLockManager for multiprocess-safe
@@ -138,14 +177,6 @@ impl FilesystemLayout {
         self.home_dir.join("tmp")
     }
 
-    /// Versioned guest rootfs cache directory: ~/.boxlite/rootfs
-    ///
-    /// Contains guest rootfs disks (image + injected boxlite-guest binary),
-    /// versioned by image digest and guest binary hash.
-    pub fn guest_rootfs_dir(&self) -> PathBuf {
-        self.home_dir.join("rootfs")
-    }
-
     /// Initialize the filesystem structure.
     ///
     /// Creates necessary directories (home_dir, sockets, images, etc.).
@@ -156,11 +187,11 @@ impl FilesystemLayout {
         std::fs::create_dir_all(self.boxes_dir())
             .map_err(|e| BoxliteError::Storage(format!("failed to create boxes dir: {e}")))?;
 
+        std::fs::create_dir_all(self.bases_dir())
+            .map_err(|e| BoxliteError::Storage(format!("failed to create bases dir: {e}")))?;
+
         std::fs::create_dir_all(self.temp_dir())
             .map_err(|e| BoxliteError::Storage(format!("failed to create temp dir: {e}")))?;
-
-        std::fs::create_dir_all(self.guest_rootfs_dir())
-            .map_err(|e| BoxliteError::Storage(format!("failed to create rootfs dir: {e}")))?;
 
         std::fs::create_dir_all(self.image_layers_dir())
             .map_err(|e| BoxliteError::Storage(format!("failed to create layers dir: {e}")))?;
@@ -176,7 +207,7 @@ impl FilesystemLayout {
         Ok(())
     }
 
-    /// Validate that temp, rootfs, and disk-images directories are on the same filesystem.
+    /// Validate that temp, bases, and disk-images directories are on the same filesystem.
     ///
     /// This is required for atomic `rename(2)` in staged install operations.
     /// Refuse to start if directories span multiple filesystems.
@@ -193,11 +224,11 @@ impl FilesystemLayout {
             })?
             .dev();
 
-        let rootfs_dev = std::fs::metadata(self.guest_rootfs_dir())
+        let bases_dev = std::fs::metadata(self.bases_dir())
             .map_err(|e| {
                 BoxliteError::Storage(format!(
-                    "Failed to stat rootfs dir {}: {}",
-                    self.guest_rootfs_dir().display(),
+                    "Failed to stat bases dir {}: {}",
+                    self.bases_dir().display(),
                     e
                 ))
             })?
@@ -213,12 +244,12 @@ impl FilesystemLayout {
             })?
             .dev();
 
-        if temp_dev != rootfs_dev || temp_dev != images_dev {
+        if temp_dev != bases_dev || temp_dev != images_dev {
             return Err(BoxliteError::Storage(format!(
-                "tmp, rootfs, and disk-images directories must be on the same filesystem \
-                 for atomic rename. Found devices: tmp={}, rootfs={}, disk-images={}. \
+                "tmp, bases, and disk-images directories must be on the same filesystem \
+                 for atomic rename. Found devices: tmp={}, bases={}, disk-images={}. \
                  Check your BOXLITE_HOME configuration.",
-                temp_dev, rootfs_dev, images_dev
+                temp_dev, bases_dev, images_dev
             )));
         }
 
@@ -292,8 +323,9 @@ impl FilesystemLayout {
 /// ├── logs/               # Per-box logging
 /// │   ├── boxlite-shim.log  # Shim tracing output
 /// │   └── console.log       # Kernel/init output
-/// ├── disk.qcow2          # Data disk (container rootfs COW disk)
-/// └── guest-rootfs.qcow2  # Guest rootfs COW overlay
+/// └── disks/              # Disk images
+///     ├── disk.qcow2          # Data disk (container rootfs COW disk)
+///     └── guest-rootfs.qcow2  # Guest rootfs COW overlay
 /// ```
 #[derive(Clone, Debug)]
 pub struct BoxFilesystemLayout {
@@ -395,21 +427,6 @@ impl BoxFilesystemLayout {
         self.box_dir.join(shared_dirs::SHARED)
     }
 
-    // ========================================================================
-    // SNAPSHOTS
-    // ========================================================================
-
-    /// Snapshots directory: ~/.boxlite/boxes/{box_id}/snapshots
-    pub fn snapshots_dir(&self) -> PathBuf {
-        self.box_dir
-            .join(crate::disk::constants::dirs::SNAPSHOTS_DIR)
-    }
-
-    /// Named snapshot directory: ~/.boxlite/boxes/{box_id}/snapshots/{name}
-    pub fn snapshot_dir(&self, name: &str) -> PathBuf {
-        self.snapshots_dir().join(name)
-    }
-
     // BIN AND LOGS (jailer isolation)
     // ========================================================================
 
@@ -441,15 +458,20 @@ impl BoxFilesystemLayout {
     // DISK AND CONSOLE
     // ========================================================================
 
-    /// Virtual disk path: ~/.boxlite/boxes/{box_id}/disk.qcow2
+    /// Disks directory: ~/.boxlite/boxes/{box_id}/disks
+    pub fn disks_dir(&self) -> PathBuf {
+        self.box_dir.join(dirs::DISKS_DIR)
+    }
+
+    /// Virtual disk path: ~/.boxlite/boxes/{box_id}/disks/disk.qcow2
     pub fn disk_path(&self) -> PathBuf {
-        self.box_dir
+        self.disks_dir()
             .join(crate::disk::constants::filenames::CONTAINER_DISK)
     }
 
-    /// Guest rootfs disk path: ~/.boxlite/boxes/{box_id}/guest-rootfs.qcow2
+    /// Guest rootfs disk path: ~/.boxlite/boxes/{box_id}/disks/guest-rootfs.qcow2
     pub fn guest_rootfs_disk_path(&self) -> PathBuf {
-        self.box_dir
+        self.disks_dir()
             .join(crate::disk::constants::filenames::GUEST_ROOTFS_DISK)
     }
 
@@ -459,16 +481,6 @@ impl BoxFilesystemLayout {
     /// Lives inside `logs/` so the sandbox grants it via the `logs/` [RW subpath].
     pub fn console_output_path(&self) -> PathBuf {
         self.logs_dir().join("console.log")
-    }
-
-    /// Reflinked rootfs base: ~/.boxlite/boxes/{box_id}/rootfs-base
-    ///
-    /// When the filesystem supports reflink (APFS, btrfs, xfs), the base
-    /// rootfs is cloned here so the sandbox doesn't need access to
-    /// `~/.boxlite/rootfs/`. On ext4 (no reflink), this file won't exist
-    /// and the qcow2 overlay references the shared rootfs directly.
-    pub fn rootfs_base_path(&self) -> PathBuf {
-        self.box_dir.join("rootfs-base")
     }
 
     /// PID file path: ~/.boxlite/boxes/{box_id}/shim.pid
@@ -520,6 +532,9 @@ impl BoxFilesystemLayout {
         std::fs::create_dir_all(self.tmp_dir())
             .map_err(|e| BoxliteError::Storage(format!("failed to create tmp dir: {e}")))?;
 
+        std::fs::create_dir_all(self.disks_dir())
+            .map_err(|e| BoxliteError::Storage(format!("failed to create disks dir: {e}")))?;
+
         std::fs::create_dir_all(self.mounts_dir())
             .map_err(|e| BoxliteError::Storage(format!("failed to create mounts dir: {e}")))?;
 
@@ -546,12 +561,22 @@ impl BoxFilesystemLayout {
 
 /// Filesystem layout for OCI images storage.
 ///
-/// Contains:
-/// - layers/: Downloaded layer tarballs
-/// - extracted/: Extracted layer directories
-/// - disk-images/: Cached disk images for COW
-/// - manifests/: Image manifests
-/// - configs/: Image configs
+/// Manages the `~/.boxlite/images/` subtree where all OCI image data is cached.
+/// Layer tarballs, extracted directories, and pre-built disk images are stored
+/// here to avoid re-downloading and re-building on subsequent box creation.
+///
+/// # Directory Structure
+///
+/// ```text
+/// ~/.boxlite/images/
+/// ├── layers/                      # Downloaded layer tarballs (sha256-named)
+/// ├── extracted/                   # Extracted layer directories
+/// ├── disk-images/                 # Cached ext4 disk images for COW overlays
+/// ├── manifests/                   # Image manifest JSON files
+/// ├── configs/                     # Image config JSON files
+/// └── local/                       # Local OCI bundle cache
+///     └── {path_hash}-{manifest_short}/  # Per-bundle isolated cache
+/// ```
 #[derive(Clone, Debug)]
 pub struct ImageFilesystemLayout {
     images_dir: PathBuf,
@@ -792,19 +817,19 @@ mod tests {
     }
 
     #[test]
-    fn test_guest_rootfs_dir() {
+    fn test_bases_dir() {
         let layout = FilesystemLayout::new(
             PathBuf::from("/home/user/.boxlite"),
             FsLayoutConfig::without_bind_mount(),
         );
         assert_eq!(
-            layout.guest_rootfs_dir(),
-            PathBuf::from("/home/user/.boxlite/rootfs")
+            layout.bases_dir(),
+            PathBuf::from("/home/user/.boxlite/bases")
         );
     }
 
     #[test]
-    fn test_prepare_creates_guest_rootfs_dir() {
+    fn test_prepare_creates_bases_dir() {
         let dir = tempfile::TempDir::new().unwrap();
         let layout = FilesystemLayout::new(
             dir.path().to_path_buf(),
@@ -812,7 +837,7 @@ mod tests {
         );
         layout.prepare().unwrap();
 
-        assert!(layout.guest_rootfs_dir().exists());
+        assert!(layout.bases_dir().exists());
         assert!(layout.temp_dir().exists());
         assert!(layout.boxes_dir().exists());
     }
@@ -875,16 +900,25 @@ mod tests {
         let layout = test_box_layout("/home/.boxlite/boxes/mybox");
         assert_eq!(
             layout.guest_rootfs_disk_path(),
-            PathBuf::from("/home/.boxlite/boxes/mybox/guest-rootfs.qcow2")
+            PathBuf::from("/home/.boxlite/boxes/mybox/disks/guest-rootfs.qcow2")
         );
     }
 
     #[test]
-    fn test_box_layout_rootfs_base_path() {
+    fn test_box_layout_disks_dir() {
         let layout = test_box_layout("/home/.boxlite/boxes/mybox");
         assert_eq!(
-            layout.rootfs_base_path(),
-            PathBuf::from("/home/.boxlite/boxes/mybox/rootfs-base")
+            layout.disks_dir(),
+            PathBuf::from("/home/.boxlite/boxes/mybox/disks")
+        );
+    }
+
+    #[test]
+    fn test_box_layout_disk_path() {
+        let layout = test_box_layout("/home/.boxlite/boxes/mybox");
+        assert_eq!(
+            layout.disk_path(),
+            PathBuf::from("/home/.boxlite/boxes/mybox/disks/disk.qcow2")
         );
     }
 
@@ -901,7 +935,6 @@ mod tests {
             layout.sockets_dir(),
             layout.tmp_dir(),
             layout.guest_rootfs_disk_path(),
-            layout.rootfs_base_path(),
             layout.exit_file_path(),
             layout.console_output_path(),
             layout.disk_path(),

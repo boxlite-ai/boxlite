@@ -11,8 +11,8 @@ use tokio::sync::mpsc;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use crate::BoxInfo;
-use crate::db::snapshots::SnapshotInfo;
 use crate::litebox::copy::CopyOptions;
+use crate::litebox::snapshot_mgr::SnapshotInfo;
 use crate::litebox::{BoxCommand, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execution};
 use crate::metrics::BoxMetrics;
 use crate::runtime::backend::{BoxBackend, SnapshotBackend};
@@ -246,6 +246,21 @@ impl BoxBackend for RestBox {
         let box_backend: Arc<dyn BoxBackend> = rest_box.clone();
         let snapshot_backend: Arc<dyn SnapshotBackend> = rest_box;
         Ok(crate::LiteBox::new(box_backend, snapshot_backend))
+    }
+
+    async fn clone_boxes(
+        &self,
+        options: CloneOptions,
+        count: usize,
+        names: Vec<String>,
+    ) -> BoxliteResult<Vec<crate::LiteBox>> {
+        let mut results = Vec::with_capacity(count);
+        for i in 0..count {
+            let name = names.get(i).cloned();
+            let litebox = self.clone_box(options.clone(), name).await?;
+            results.push(litebox);
+        }
+        Ok(results)
     }
 
     async fn export_box(

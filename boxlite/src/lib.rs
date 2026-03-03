@@ -35,8 +35,9 @@ pub use runtime::{BoxliteRuntime, ImageHandle};
 
 pub use archive::ArchiveManifest;
 pub use boxlite_shared::errors::{BoxliteError, BoxliteResult};
-pub use db::snapshots::SnapshotInfo;
+pub use disk::DiskInfo;
 pub use litebox::SnapshotHandle;
+pub use litebox::snapshot_mgr::SnapshotInfo;
 pub use litebox::{
     BoxCommand, CopyOptions, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execution, ExecutionId,
 };

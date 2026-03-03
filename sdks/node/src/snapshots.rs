@@ -19,8 +19,6 @@ pub struct JsSnapshotInfo {
     pub name: String,
     #[napi(js_name = "createdAt")]
     pub created_at: i64,
-    #[napi(js_name = "guestDiskBytes")]
-    pub guest_disk_bytes: i64,
     #[napi(js_name = "containerDiskBytes")]
     pub container_disk_bytes: i64,
     #[napi(js_name = "sizeBytes")]
@@ -34,9 +32,8 @@ impl From<SnapshotInfo> for JsSnapshotInfo {
             box_id: r.box_id,
             name: r.name,
             created_at: r.created_at,
-            guest_disk_bytes: r.guest_disk_bytes as i64,
-            container_disk_bytes: r.container_disk_bytes as i64,
-            size_bytes: r.size_bytes as i64,
+            container_disk_bytes: r.disk_info.container_disk_bytes as i64,
+            size_bytes: r.disk_info.size_bytes as i64,
         }
     }
 }
@@ -110,17 +107,17 @@ mod tests {
             box_id: "box-id".into(),
             name: "my-snap".into(),
             created_at: 1700000000,
-            snapshot_dir: "/tmp/snap".into(),
-            guest_disk_bytes: 1024,
-            container_disk_bytes: 2048,
-            size_bytes: 3072,
+            disk_info: boxlite::DiskInfo {
+                base_path: "/bases/snap-1.qcow2".into(),
+                container_disk_bytes: 2048,
+                size_bytes: 3072,
+            },
         };
         let js: JsSnapshotInfo = core.into();
         assert_eq!(js.id, "snap-id");
         assert_eq!(js.box_id, "box-id");
         assert_eq!(js.name, "my-snap");
         assert_eq!(js.created_at, 1700000000);
-        assert_eq!(js.guest_disk_bytes, 1024);
         assert_eq!(js.container_disk_bytes, 2048);
         assert_eq!(js.size_bytes, 3072);
     }
@@ -132,14 +129,14 @@ mod tests {
             box_id: "bid".into(),
             name: "n".into(),
             created_at: 0,
-            snapshot_dir: "/tmp".into(),
-            guest_disk_bytes: u64::MAX,
-            container_disk_bytes: u64::MAX,
-            size_bytes: u64::MAX,
+            disk_info: boxlite::DiskInfo {
+                base_path: String::new(),
+                container_disk_bytes: u64::MAX,
+                size_bytes: u64::MAX,
+            },
         };
         let js: JsSnapshotInfo = core.into();
         // u64::MAX as i64 wraps to -1
-        assert_eq!(js.guest_disk_bytes, -1);
         assert_eq!(js.container_disk_bytes, -1);
         assert_eq!(js.size_bytes, -1);
     }

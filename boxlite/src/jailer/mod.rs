@@ -140,7 +140,7 @@ pub trait Jail: Send + Sync {
 // Jailer<S: Sandbox> — implements Jail
 // ============================================================================
 
-use crate::disk::read_backing_file_path;
+use crate::disk::read_backing_chain;
 use crate::runtime::layout::BoxFilesystemLayout;
 use std::path::PathBuf;
 
@@ -159,21 +159,22 @@ use std::path::PathBuf;
 /// {box_dir}/                          # NOT granted wholesale
 /// ├── bin/                        [RO]  # copied shim binary + bundled libs
 /// ├── shared/                     [RW]  # guest-visible virtio-fs share root
-/// ├── rootfs-base                 [RO]  # reflinked rootfs backing file for guest-rootfs.qcow2
 /// ├── sockets/                    [RW]  # libkrun vsock/unix sockets
 /// ├── tmp/                        [RW]  # shim/libkrun transient temp files
 /// ├── logs/                       [RW]  # shim logging + VM console output
 /// │   ├── boxlite-shim.log                # tracing_appender daily log
 /// │   └── console.log                     # libkrun serial console (krun_set_console_output)
 /// ├── exit                        [RW]  # crash_capture ExitInfo JSON
-/// ├── disk.qcow2                  [RW]  # VM/container root disk image
-/// ├── guest-rootfs.qcow2          [RW]  # guest rootfs COW overlay
+/// ├── disks/                      [RW]  # disk images
+/// │   ├── disk.qcow2                      # VM/container root disk image
+/// │   └── guest-rootfs.qcow2              # guest rootfs COW overlay
 /// ├── mounts/                     [--]  # EXCLUDED: host writes, shim reads via shared/
 /// ├── shim.pid                    [--]  # EXCLUDED: written by pre_exec (before sandbox)
 /// └── shim.stderr                 [--]  # EXCLUDED: host creates before spawn
 ///
-/// Fallback (when reflink unavailable):
-/// ~/.boxlite/rootfs/              [RO]  # external rootfs backing directory
+/// External read-only paths:
+/// ~/.boxlite/rootfs/              [RO]  # shared guest rootfs backing directory
+/// ~/.boxlite/layers/              [RO]  # disk fork points (snapshot/clone bases)
 ///
 /// User volumes:
 /// {host_path}                     [per VolumeSpec.read_only]
@@ -218,38 +219,17 @@ fn build_path_access(layout: &BoxFilesystemLayout, volumes: &[VolumeSpec]) -> Ve
         if !qcow2.exists() {
             continue;
         }
-        let mut current = qcow2;
-        // Walk the backing chain (max 8 levels as safety bound)
-        for _ in 0..8 {
-            match read_backing_file_path(&current) {
-                Ok(Some(backing)) => {
-                    let backing_path = PathBuf::from(backing);
-                    if backing_path.exists() {
-                        if let Some(parent) = backing_path.parent().filter(|p| p.exists()) {
-                            paths.push(PathAccess {
-                                path: parent.to_path_buf(),
-                                writable: false,
-                            });
-                        }
-                        paths.push(PathAccess {
-                            path: backing_path.clone(),
-                            writable: false,
-                        });
-                        current = backing_path;
-                    } else {
-                        break;
-                    }
-                }
-                Ok(None) => break,
-                Err(e) => {
-                    tracing::debug!(
-                        qcow2 = %current.display(),
-                        error = %e,
-                        "Failed to read qcow2 backing path while building sandbox access"
-                    );
-                    break;
-                }
+        for backing_path in read_backing_chain(&qcow2) {
+            if let Some(parent) = backing_path.parent().filter(|p| p.exists()) {
+                paths.push(PathAccess {
+                    path: parent.to_path_buf(),
+                    writable: false,
+                });
             }
+            paths.push(PathAccess {
+                path: backing_path,
+                writable: false,
+            });
         }
     }
 
@@ -273,22 +253,18 @@ fn build_path_access(layout: &BoxFilesystemLayout, volumes: &[VolumeSpec]) -> Ve
         });
     }
 
-    // Rootfs backing file: prefer box-local reflink, fallback to home_dir/rootfs/
-    let local_base = layout.rootfs_base_path();
-    if local_base.exists() {
-        paths.push(PathAccess {
-            path: local_base,
-            writable: false,
-        });
-    } else if let Some(rootfs_dir) = layout
+    // Bases directory: shared backing files (snapshots, clone bases, rootfs cache).
+    // The qcow2 overlay references backing files in bases/ directly.
+    // Disk images are data (read by the hypervisor, not executed on the host).
+    if let Some(bases_dir) = layout
         .root()
         .parent()
         .and_then(|boxes| boxes.parent())
-        .map(|home| home.join("rootfs"))
+        .map(|home| home.join("bases"))
         .filter(|p| p.exists())
     {
         paths.push(PathAccess {
-            path: rootfs_dir,
+            path: bases_dir,
             writable: false,
         });
     }
@@ -595,26 +571,7 @@ mod tests {
     }
 
     #[test]
-    fn test_build_path_access_reflinked_rootfs_base() {
-        let dir = tempdir().unwrap();
-        let box_dir = dir.path().to_path_buf();
-        let layout = test_layout(box_dir.clone());
-
-        // Simulate reflinked rootfs base inside box_dir
-        std::fs::write(layout.rootfs_base_path(), "fake-rootfs").unwrap();
-
-        let paths = build_path_access(&layout, &[]);
-
-        let rootfs_paths: Vec<_> = paths
-            .iter()
-            .filter(|p| p.path == layout.rootfs_base_path())
-            .collect();
-        assert_eq!(rootfs_paths.len(), 1, "Should have rootfs base path");
-        assert!(!rootfs_paths[0].writable, "Rootfs base should be read-only");
-    }
-
-    #[test]
-    fn test_build_path_access_fallback_rootfs_dir() {
+    fn test_build_path_access_shared_bases_dir() {
         // Simulate the home_dir/boxes/{id} structure
         let dir = tempdir().unwrap();
         let home_dir = dir.path().to_path_buf();
@@ -622,17 +579,17 @@ mod tests {
         let box_dir = boxes_dir.join("test-box");
         std::fs::create_dir_all(&box_dir).unwrap();
 
-        // Create home_dir/rootfs/ (the fallback)
-        let rootfs_dir = home_dir.join("rootfs");
-        std::fs::create_dir_all(&rootfs_dir).unwrap();
+        // Create home_dir/bases/ (shared backing files)
+        let bases_dir = home_dir.join("bases");
+        std::fs::create_dir_all(&bases_dir).unwrap();
 
         let layout = test_layout(box_dir);
 
         let paths = build_path_access(&layout, &[]);
 
-        let rootfs_paths: Vec<_> = paths.iter().filter(|p| p.path == rootfs_dir).collect();
-        assert_eq!(rootfs_paths.len(), 1, "Should fallback to home_dir/rootfs/");
-        assert!(!rootfs_paths[0].writable);
+        let bases_paths: Vec<_> = paths.iter().filter(|p| p.path == bases_dir).collect();
+        assert_eq!(bases_paths.len(), 1, "Should include home_dir/bases/");
+        assert!(!bases_paths[0].writable);
     }
 
     #[test]
