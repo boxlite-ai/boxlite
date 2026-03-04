@@ -1,12 +1,13 @@
-//! Shim binary copy utility (Firecracker pattern).
+//! Shim binary and libkrunfw copy utility (Firecracker pattern).
 //!
 //! This module implements Firecracker's security isolation pattern:
 //! copy (not hard-link) the shim binary into the jail directory to ensure
 //! complete memory isolation between boxes.
 //!
-//! Bundled libraries (libkrunfw, libgvproxy) are **symlinked** (not copied)
-//! into `bin/` so that `dlopen` can find them via the shim's rpath without
-//! duplicating multi-MB files per box.
+//! `libkrunfw` is also copied because libkrun loads it via `dlopen` at
+//! runtime, and the shim's rpath resolves to `bin/`.  Other bundled
+//! libraries (libkrun, libgvproxy) are **not** copied — libkrun is
+//! statically linked on macOS, and libgvproxy is a separate process.
 //!
 //! # Why Copy Instead of Hard-Link?
 //!
@@ -30,24 +31,20 @@ use crate::jailer::common::fs::copy_if_newer;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use std::path::{Path, PathBuf};
 
-/// Library file name prefixes to symlink alongside the shim binary.
+/// Library file name prefixes to copy alongside the shim binary.
 ///
-/// On macOS, libkrun is statically linked so only libkrunfw (dlopen'd at
-/// runtime) and libgvproxy need to be present.  On Linux all three are
-/// dynamically linked.
-#[cfg(target_os = "linux")]
-const BUNDLED_LIB_PREFIXES: &[&str] = &["libkrun.", "libkrunfw.", "libgvproxy."];
+/// Only `libkrunfw` is needed: libkrun `dlopen`s it at runtime and the
+/// shim's rpath resolves to `bin/`.  On Linux, `libkrunfw` is also
+/// dynamically loaded via `dlopen`.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+const LIBKRUNFW_PREFIX: &str = "libkrunfw.";
 
-#[cfg(target_os = "macos")]
-const BUNDLED_LIB_PREFIXES: &[&str] = &["libkrunfw.", "libgvproxy."];
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-const BUNDLED_LIB_PREFIXES: &[&str] = &[];
-
-/// Copy shim binary to box directory for jail isolation.
+/// Copy shim binary and libkrunfw to box directory for jail isolation.
 ///
 /// This follows Firecracker's approach: copy (not hard-link) the shim binary
 /// into the jail directory to ensure complete memory isolation between boxes.
+/// `libkrunfw` is also copied so that libkrun's `dlopen` can find it via
+/// the shim's rpath.
 ///
 /// # Arguments
 ///
@@ -63,6 +60,7 @@ const BUNDLED_LIB_PREFIXES: &[&str] = &[];
 /// Returns [`BoxliteError::Storage`] if:
 /// - Failed to create the `bin/` directory
 /// - Failed to copy the shim binary
+/// - Failed to copy libkrunfw
 ///
 /// # Example
 ///
@@ -101,30 +99,30 @@ pub fn copy_shim_to_box(shim_path: &Path, box_dir: &Path) -> BoxliteResult<PathB
         );
     }
 
-    // Symlink bundled libraries so dlopen can find them via the shim's rpath.
-    // Symlinks are near-zero cost compared to copying multi-MB dylibs.
+    // Copy libkrunfw so dlopen can find it via the shim's rpath.
     if let Some(shim_dir) = shim_path.parent() {
-        symlink_bundled_libraries(shim_dir, &bin_dir)?;
+        copy_libkrunfw(shim_dir, &bin_dir)?;
     }
 
     Ok(dest_shim)
 }
 
-/// Create symlinks for bundled libraries (libkrunfw, libgvproxy) in `dest_dir`.
+/// Copy libkrunfw from the shim's directory to `dest_dir`.
 ///
-/// Unlike the shim binary (which is copied for memory isolation), libraries
-/// are symlinked because:
-/// - They are loaded via `dlopen`, not `exec` — no `.text` sharing concern
-/// - Symlinks avoid duplicating multi-MB files per box
-/// - The shim's rpath resolves symlinks transparently
-fn symlink_bundled_libraries(src_dir: &Path, dest_dir: &Path) -> BoxliteResult<()> {
+/// libkrun loads libkrunfw via `dlopen` at runtime.  On macOS the shim's
+/// rpath resolves to its own directory (`bin/`), and `DYLD_*` env vars are
+/// stripped by SIP when going through `sandbox-exec`.  Copying the library
+/// into `bin/` ensures `dlopen` can always find it.
+///
+/// Uses copy-if-newer to avoid unnecessary copies on subsequent starts.
+fn copy_libkrunfw(src_dir: &Path, dest_dir: &Path) -> BoxliteResult<()> {
     let entries = match std::fs::read_dir(src_dir) {
         Ok(entries) => entries,
         Err(e) => {
             tracing::warn!(
                 src_dir = %src_dir.display(),
                 error = %e,
-                "Could not read source directory for bundled libraries"
+                "Could not read source directory for libkrunfw"
             );
             return Ok(());
         }
@@ -134,31 +132,26 @@ fn symlink_bundled_libraries(src_dir: &Path, dest_dir: &Path) -> BoxliteResult<(
         let name = entry.file_name();
         let name_str = name.to_string_lossy();
 
-        if BUNDLED_LIB_PREFIXES.iter().any(|p| name_str.starts_with(p)) {
+        if name_str.starts_with(LIBKRUNFW_PREFIX) {
             let src_path = entry.path();
             let dest_path = dest_dir.join(&name);
 
-            // Remove stale symlink or file before creating a fresh one
-            if dest_path.exists() || dest_path.symlink_metadata().is_ok() {
-                let _ = std::fs::remove_file(&dest_path);
-            }
-
-            #[cfg(unix)]
-            std::os::unix::fs::symlink(&src_path, &dest_path).map_err(|e| {
+            let copied = copy_if_newer(&src_path, &dest_path).map_err(|e| {
                 BoxliteError::Storage(format!(
-                    "Failed to symlink library {} -> {}: {}",
-                    dest_path.display(),
+                    "Failed to copy libkrunfw {} to {}: {}",
                     src_path.display(),
+                    dest_path.display(),
                     e
                 ))
             })?;
 
-            tracing::debug!(
-                lib = %name_str,
-                src = %src_path.display(),
-                dst = %dest_path.display(),
-                "Symlinked bundled library to box directory"
-            );
+            if copied {
+                tracing::debug!(
+                    lib = %name_str,
+                    dst = %dest_path.display(),
+                    "Copied libkrunfw to box directory"
+                );
+            }
         }
     }
 

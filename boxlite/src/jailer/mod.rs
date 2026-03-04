@@ -157,7 +157,7 @@ use std::path::PathBuf;
 ///
 /// ```text
 /// {box_dir}/                          # NOT granted wholesale
-/// ├── bin/                        [RO]  # copied shim binary + symlinked libs
+/// ├── bin/                        [RO]  # copied shim binary + libkrunfw
 /// ├── shared/                     [RW]  # guest-visible virtio-fs share root
 /// ├── sockets/                    [RW]  # libkrun vsock/unix sockets
 /// ├── tmp/                        [RW]  # shim/libkrun transient temp files
@@ -233,7 +233,7 @@ fn build_path_access(layout: &BoxFilesystemLayout, volumes: &[VolumeSpec]) -> Ve
         }
     }
 
-    // Read-only directory (copied shim binary + symlinked libs)
+    // Read-only directory (copied shim binary + libkrunfw)
     let bin_dir = layout.bin_dir();
     if bin_dir.exists() {
         paths.push(PathAccess {
