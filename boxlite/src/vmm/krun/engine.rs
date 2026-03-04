@@ -379,7 +379,7 @@ impl Vmm for Krun {
             }
 
             // Configure root filesystem based on guest rootfs strategy
-            if let crate::runtime::guest_rootfs::Strategy::Disk {
+            if let crate::rootfs::guest::Strategy::Disk {
                 device_path: Some(device_path),
                 ..
             } = &config.guest_rootfs.strategy

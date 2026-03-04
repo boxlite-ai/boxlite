@@ -15,7 +15,7 @@ pub mod krun;
 pub mod registry;
 
 use crate::jailer::SecurityOptions;
-use crate::runtime::guest_rootfs::GuestRootfs;
+use crate::rootfs::guest::GuestRootfs;
 pub use engine::{Vmm, VmmConfig, VmmInstance};
 pub use exit_info::ExitInfo;
 pub use factory::VmmFactory;

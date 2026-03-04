@@ -5,6 +5,7 @@
 mod builder;
 mod copy_mount;
 mod dns;
+pub(crate) mod guest;
 pub(crate) mod operations;
 
 pub use builder::RootfsBuilder;
