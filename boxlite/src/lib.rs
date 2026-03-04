@@ -52,7 +52,7 @@ pub use runtime::options::{
 };
 /// Boxlite library version (from CARGO_PKG_VERSION at compile time).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
-pub use runtime::id::{BoxID, BoxIDMint};
+pub use runtime::id::{BaseDiskID, BaseDiskIDMint, BoxID, BoxIDMint};
 pub use runtime::types::ContainerID;
 pub use runtime::types::{BoxInfo, BoxState, BoxStateInfo, BoxStatus};
 

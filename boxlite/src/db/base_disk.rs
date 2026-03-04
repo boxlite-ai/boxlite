@@ -14,6 +14,7 @@ use rusqlite::OptionalExtension;
 
 use super::{Database, db_err};
 use crate::disk::base_disk::{BaseDisk, BaseDiskKind};
+use crate::runtime::id::BaseDiskID;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 /// Full database record wrapping a `BaseDisk`.
@@ -27,7 +28,7 @@ pub struct BaseDiskInfo {
 // Convenience accessors to avoid `.disk.field` everywhere.
 #[allow(dead_code)]
 impl BaseDiskInfo {
-    pub fn id(&self) -> &str {
+    pub fn id(&self) -> &BaseDiskID {
         &self.disk.id
     }
     pub fn source_box_id(&self) -> &str {
@@ -98,11 +99,11 @@ impl BaseDiskStore {
              (id, source_box_id, name, kind, base_path, created_at, json) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             rusqlite::params![
-                disk.id,
-                disk.source_box_id,
-                disk.name,
+                &disk.id,
+                &disk.source_box_id,
+                &disk.name,
                 disk.kind.as_str(),
-                disk.disk_info.base_path,
+                &disk.disk_info.base_path,
                 disk.created_at,
                 json,
             ],
@@ -112,7 +113,7 @@ impl BaseDiskStore {
 
     /// Find a base disk by its ID.
     #[allow(dead_code)] // used in lineage.rs tests
-    pub(crate) fn find_by_id(&self, id: &str) -> BoxliteResult<Option<BaseDiskInfo>> {
+    pub(crate) fn find_by_id(&self, id: &BaseDiskID) -> BoxliteResult<Option<BaseDiskInfo>> {
         let conn = self.db.conn();
         let result = db_err!(
             conn.query_row(
@@ -203,7 +204,7 @@ impl BaseDiskStore {
     }
 
     /// Delete a base disk record by ID.
-    pub(crate) fn delete(&self, id: &str) -> BoxliteResult<()> {
+    pub(crate) fn delete(&self, id: &BaseDiskID) -> BoxliteResult<()> {
         let conn = self.db.conn();
         db_err!(conn.execute("DELETE FROM base_disk WHERE id = ?1", rusqlite::params![id],))?;
         Ok(())
@@ -227,7 +228,7 @@ impl BaseDiskStore {
     /// Record that `box_id` depends on `base_disk_id`.
     ///
     /// Idempotent: INSERT OR IGNORE on the composite primary key.
-    pub(crate) fn add_ref(&self, base_disk_id: &str, box_id: &str) -> BoxliteResult<()> {
+    pub(crate) fn add_ref(&self, base_disk_id: &BaseDiskID, box_id: &str) -> BoxliteResult<()> {
         let conn = self.db.conn();
         db_err!(conn.execute(
             "INSERT OR IGNORE INTO base_disk_ref (base_disk_id, box_id) VALUES (?1, ?2)",
@@ -239,16 +240,24 @@ impl BaseDiskStore {
     /// Remove all refs for a box and return the affected base_disk_ids.
     ///
     /// Used during box deletion to know which bases may become orphaned.
-    pub(crate) fn remove_all_refs_for_box(&self, box_id: &str) -> BoxliteResult<Vec<String>> {
+    pub(crate) fn remove_all_refs_for_box(&self, box_id: &str) -> BoxliteResult<Vec<BaseDiskID>> {
         let conn = self.db.conn();
 
         // Collect affected base_disk_ids BEFORE deleting.
         let mut stmt =
             db_err!(conn.prepare("SELECT base_disk_id FROM base_disk_ref WHERE box_id = ?1"))?;
-        let ids: Vec<String> =
-            db_err!(stmt.query_map(rusqlite::params![box_id], |row| { row.get(0) }))?
-                .filter_map(|r| r.ok())
-                .collect();
+        let rows = db_err!(stmt.query_map(rusqlite::params![box_id], |row| { row.get(0) }))?;
+        let mut ids = Vec::new();
+        for row in rows {
+            let id_str: String = db_err!(row)?;
+            let id = BaseDiskID::parse(&id_str).ok_or_else(|| {
+                BoxliteError::Database(format!(
+                    "Invalid base_disk_id in base_disk_ref table: {}",
+                    id_str
+                ))
+            })?;
+            ids.push(id);
+        }
 
         db_err!(conn.execute(
             "DELETE FROM base_disk_ref WHERE box_id = ?1",
@@ -259,7 +268,7 @@ impl BaseDiskStore {
     }
 
     /// Check if any box depends on `base_disk_id`.
-    pub(crate) fn has_dependents(&self, base_disk_id: &str) -> BoxliteResult<bool> {
+    pub(crate) fn has_dependents(&self, base_disk_id: &BaseDiskID) -> BoxliteResult<bool> {
         let conn = self.db.conn();
         let exists: bool = db_err!(conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM base_disk_ref WHERE base_disk_id = ?1)",
@@ -270,7 +279,7 @@ impl BaseDiskStore {
     }
 
     /// List all box IDs that depend on `base_disk_id`.
-    pub(crate) fn dependent_boxes(&self, base_disk_id: &str) -> BoxliteResult<Vec<String>> {
+    pub(crate) fn dependent_boxes(&self, base_disk_id: &BaseDiskID) -> BoxliteResult<Vec<String>> {
         let conn = self.db.conn();
         let mut stmt =
             db_err!(conn.prepare("SELECT box_id FROM base_disk_ref WHERE base_disk_id = ?1"))?;
@@ -293,6 +302,10 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    fn id(s: &str) -> BaseDiskID {
+        BaseDiskID::parse(s).expect("test ID must be valid Base62 length-8")
+    }
+
     fn test_db() -> Database {
         let dir = TempDir::new().unwrap();
         let db_path = dir.keep().join("test.db");
@@ -300,14 +313,14 @@ mod tests {
     }
 
     fn make_disk(
-        id: &str,
+        disk_id: &str,
         source_box_id: &str,
         name: Option<&str>,
         kind: BaseDiskKind,
         base_path: &str,
     ) -> BaseDisk {
         BaseDisk {
-            id: id.to_string(),
+            id: id(disk_id),
             source_box_id: source_box_id.to_string(),
             name: name.map(|s| s.to_string()),
             kind,
@@ -326,16 +339,16 @@ mod tests {
         let store = BaseDiskStore::new(db);
 
         let disk = make_disk(
-            "base-1",
+            "base0001",
             "src-box",
             None,
             BaseDiskKind::CloneBase,
-            "/bases/base-1",
+            "/bases/base0001",
         );
         store.insert(&disk).unwrap();
 
-        let found = store.find_by_base_path("/bases/base-1").unwrap().unwrap();
-        assert_eq!(found.id(), "base-1");
+        let found = store.find_by_base_path("/bases/base0001").unwrap().unwrap();
+        assert_eq!(found.id().as_str(), "base0001");
         assert_eq!(found.source_box_id(), "src-box");
         assert_eq!(found.kind(), BaseDiskKind::CloneBase);
         assert!(found.name().is_none());
@@ -347,16 +360,16 @@ mod tests {
         let store = BaseDiskStore::new(db);
 
         let disk = make_disk(
-            "snap-1",
+            "snap0001",
             "box-1",
             Some("my-snap"),
             BaseDiskKind::Snapshot,
-            "/bases/snap-1",
+            "/bases/snap0001",
         );
         store.insert(&disk).unwrap();
 
         let found = store.find_by_name("box-1", "my-snap").unwrap().unwrap();
-        assert_eq!(found.id(), "snap-1");
+        assert_eq!(found.id().as_str(), "snap0001");
         assert_eq!(found.kind(), BaseDiskKind::Snapshot);
         assert_eq!(found.name(), Some("my-snap"));
     }
@@ -367,7 +380,7 @@ mod tests {
         let store = BaseDiskStore::new(db);
 
         let disk = make_disk(
-            "layer-42",
+            "layer042",
             "box-1",
             None,
             BaseDiskKind::CloneBase,
@@ -375,10 +388,10 @@ mod tests {
         );
         store.insert(&disk).unwrap();
 
-        let found = store.find_by_id("layer-42").unwrap().unwrap();
+        let found = store.find_by_id(&id("layer042")).unwrap().unwrap();
         assert_eq!(found.base_path(), "/bases/42");
 
-        assert!(store.find_by_id("nonexistent").unwrap().is_none());
+        assert!(store.find_by_id(&id("AbCd1234")).unwrap().is_none());
     }
 
     #[test]
@@ -387,17 +400,17 @@ mod tests {
         let store = BaseDiskStore::new(db);
 
         let disk = make_disk(
-            "base-1",
+            "base0001",
             "src-box",
             None,
             BaseDiskKind::CloneBase,
-            "/bases/base-1",
+            "/bases/base0001",
         );
         store.insert(&disk).unwrap();
 
-        assert!(store.find_by_id("base-1").unwrap().is_some());
-        store.delete("base-1").unwrap();
-        assert!(store.find_by_id("base-1").unwrap().is_none());
+        assert!(store.find_by_id(&id("base0001")).unwrap().is_some());
+        store.delete(&id("base0001")).unwrap();
+        assert!(store.find_by_id(&id("base0001")).unwrap().is_none());
     }
 
     #[test]
@@ -406,14 +419,14 @@ mod tests {
         let store = BaseDiskStore::new(db);
 
         let snap = make_disk(
-            "snap-1",
+            "snap0001",
             "box-1",
             Some("snap-a"),
             BaseDiskKind::Snapshot,
             "/bases/s1",
         );
         let base = make_disk(
-            "base-1",
+            "base0001",
             "box-1",
             None,
             BaseDiskKind::CloneBase,
@@ -426,13 +439,13 @@ mod tests {
             .list_by_box("box-1", Some(BaseDiskKind::Snapshot))
             .unwrap();
         assert_eq!(snapshots.len(), 1);
-        assert_eq!(snapshots[0].id(), "snap-1");
+        assert_eq!(snapshots[0].id().as_str(), "snap0001");
 
         let bases = store
             .list_by_box("box-1", Some(BaseDiskKind::CloneBase))
             .unwrap();
         assert_eq!(bases.len(), 1);
-        assert_eq!(bases[0].id(), "base-1");
+        assert_eq!(bases[0].id().as_str(), "base0001");
 
         let all = store.list_by_box("box-1", None).unwrap();
         assert_eq!(all.len(), 2);
@@ -444,21 +457,21 @@ mod tests {
         let store = BaseDiskStore::new(db);
 
         let s1 = make_disk(
-            "s1",
+            "snap0001",
             "box-1",
             Some("snap-a"),
             BaseDiskKind::Snapshot,
             "/bases/s1",
         );
         let s2 = make_disk(
-            "s2",
+            "snap0002",
             "box-1",
             Some("snap-b"),
             BaseDiskKind::Snapshot,
             "/bases/s2",
         );
         let s3 = make_disk(
-            "s3",
+            "snap0003",
             "box-2",
             Some("snap-c"),
             BaseDiskKind::Snapshot,
@@ -471,9 +484,9 @@ mod tests {
         let removed = store.delete_all_for_box("box-1").unwrap();
         assert_eq!(removed, 2);
 
-        assert!(store.find_by_id("s1").unwrap().is_none());
-        assert!(store.find_by_id("s2").unwrap().is_none());
-        assert!(store.find_by_id("s3").unwrap().is_some()); // box-2's record preserved
+        assert!(store.find_by_id(&id("snap0001")).unwrap().is_none());
+        assert!(store.find_by_id(&id("snap0002")).unwrap().is_none());
+        assert!(store.find_by_id(&id("snap0003")).unwrap().is_some()); // box-2's record preserved
     }
 
     #[test]
@@ -482,11 +495,11 @@ mod tests {
         let store = BaseDiskStore::new(db);
 
         let disk = make_disk(
-            "rf-1",
+            "root0001",
             "__global__",
             Some("alpine-3.19-abc123"),
             BaseDiskKind::Rootfs,
-            "/bases/rf-1.ext4",
+            "/bases/root0001.ext4",
         );
         store.insert(&disk).unwrap();
 
@@ -494,9 +507,9 @@ mod tests {
             .find_by_name("__global__", "alpine-3.19-abc123")
             .unwrap()
             .unwrap();
-        assert_eq!(found.id(), "rf-1");
+        assert_eq!(found.id().as_str(), "root0001");
         assert_eq!(found.kind(), BaseDiskKind::Rootfs);
-        assert_eq!(found.base_path(), "/bases/rf-1.ext4");
+        assert_eq!(found.base_path(), "/bases/root0001.ext4");
     }
 
     #[test]
@@ -505,7 +518,7 @@ mod tests {
         let store = BaseDiskStore::new(db);
 
         let s1 = make_disk(
-            "s1",
+            "uniq0001",
             "box-1",
             Some("snap-a"),
             BaseDiskKind::Snapshot,
@@ -515,7 +528,7 @@ mod tests {
 
         // Same name for same box should fail
         let s2 = make_disk(
-            "s2",
+            "uniq0002",
             "box-1",
             Some("snap-a"),
             BaseDiskKind::Snapshot,
@@ -526,7 +539,7 @@ mod tests {
 
         // Same name for different box should succeed
         let s3 = make_disk(
-            "s3",
+            "uniq0003",
             "box-2",
             Some("snap-a"),
             BaseDiskKind::Snapshot,
@@ -542,9 +555,27 @@ mod tests {
 
         // Multiple clone_bases with NULL name for the same box should succeed.
         // SQLite treats NULLs as distinct in UNIQUE constraints.
-        let b1 = make_disk("b1", "box-1", None, BaseDiskKind::CloneBase, "/bases/b1");
-        let b2 = make_disk("b2", "box-1", None, BaseDiskKind::CloneBase, "/bases/b2");
-        let b3 = make_disk("b3", "box-1", None, BaseDiskKind::CloneBase, "/bases/b3");
+        let b1 = make_disk(
+            "null0001",
+            "box-1",
+            None,
+            BaseDiskKind::CloneBase,
+            "/bases/b1",
+        );
+        let b2 = make_disk(
+            "null0002",
+            "box-1",
+            None,
+            BaseDiskKind::CloneBase,
+            "/bases/b2",
+        );
+        let b3 = make_disk(
+            "null0003",
+            "box-1",
+            None,
+            BaseDiskKind::CloneBase,
+            "/bases/b3",
+        );
 
         store.insert(&b1).unwrap();
         store.insert(&b2).unwrap();
@@ -561,7 +592,7 @@ mod tests {
         let db = test_db();
         let store = BaseDiskStore::new(db);
 
-        assert!(store.find_by_id("nope").unwrap().is_none());
+        assert!(store.find_by_id(&id("miss0001")).unwrap().is_none());
         assert!(store.find_by_base_path("/nope").unwrap().is_none());
         assert!(store.find_by_name("box", "nope").unwrap().is_none());
     }
@@ -575,9 +606,9 @@ mod tests {
         let db = test_db();
         let store = BaseDiskStore::new(db);
 
-        store.add_ref("base-1", "box-1").unwrap();
-        store.add_ref("base-1", "box-1").unwrap(); // duplicate — should not error
-        let deps = store.dependent_boxes("base-1").unwrap();
+        store.add_ref(&id("base0001"), "box-1").unwrap();
+        store.add_ref(&id("base0001"), "box-1").unwrap(); // duplicate — should not error
+        let deps = store.dependent_boxes(&id("base0001")).unwrap();
         assert_eq!(deps, vec!["box-1"]);
     }
 
@@ -586,10 +617,10 @@ mod tests {
         let db = test_db();
         let store = BaseDiskStore::new(db);
 
-        assert!(!store.has_dependents("base-1").unwrap());
+        assert!(!store.has_dependents(&id("base0001")).unwrap());
 
-        store.add_ref("base-1", "box-1").unwrap();
-        assert!(store.has_dependents("base-1").unwrap());
+        store.add_ref(&id("base0001"), "box-1").unwrap();
+        assert!(store.has_dependents(&id("base0001")).unwrap());
     }
 
     #[test]
@@ -597,15 +628,15 @@ mod tests {
         let db = test_db();
         let store = BaseDiskStore::new(db);
 
-        store.add_ref("base-1", "box-1").unwrap();
-        store.add_ref("base-1", "box-2").unwrap();
-        store.add_ref("base-2", "box-2").unwrap();
+        store.add_ref(&id("base0001"), "box-1").unwrap();
+        store.add_ref(&id("base0001"), "box-2").unwrap();
+        store.add_ref(&id("base0002"), "box-2").unwrap();
 
-        let mut deps = store.dependent_boxes("base-1").unwrap();
+        let mut deps = store.dependent_boxes(&id("base0001")).unwrap();
         deps.sort();
         assert_eq!(deps, vec!["box-1", "box-2"]);
 
-        let deps2 = store.dependent_boxes("base-2").unwrap();
+        let deps2 = store.dependent_boxes(&id("base0002")).unwrap();
         assert_eq!(deps2, vec!["box-2"]);
     }
 
@@ -614,19 +645,19 @@ mod tests {
         let db = test_db();
         let store = BaseDiskStore::new(db);
 
-        store.add_ref("base-1", "box-1").unwrap();
-        store.add_ref("base-2", "box-1").unwrap();
-        store.add_ref("base-1", "box-2").unwrap();
+        store.add_ref(&id("base0001"), "box-1").unwrap();
+        store.add_ref(&id("base0002"), "box-1").unwrap();
+        store.add_ref(&id("base0001"), "box-2").unwrap();
 
         let mut affected = store.remove_all_refs_for_box("box-1").unwrap();
-        affected.sort();
-        assert_eq!(affected, vec!["base-1", "base-2"]);
+        affected.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+        assert_eq!(affected, vec![id("base0001"), id("base0002")]);
 
         // box-1 refs gone, box-2 ref remains
-        assert!(store.has_dependents("base-1").unwrap());
-        assert!(!store.has_dependents("base-2").unwrap());
+        assert!(store.has_dependents(&id("base0001")).unwrap());
+        assert!(!store.has_dependents(&id("base0002")).unwrap());
 
-        let deps = store.dependent_boxes("base-1").unwrap();
+        let deps = store.dependent_boxes(&id("base0001")).unwrap();
         assert_eq!(deps, vec!["box-2"]);
     }
 
@@ -645,12 +676,12 @@ mod tests {
         let store = BaseDiskStore::new(db);
 
         let disk = BaseDisk {
-            id: "rt-1".to_string(),
+            id: id("roundt01"),
             source_box_id: "box-99".to_string(),
             name: Some("roundtrip-test".to_string()),
             kind: BaseDiskKind::Snapshot,
             disk_info: crate::disk::DiskInfo {
-                base_path: "/bases/rt-1.qcow2".to_string(),
+                base_path: "/bases/roundt01.qcow2".to_string(),
                 container_disk_bytes: 42 * 1024 * 1024 * 1024,
                 size_bytes: 1024,
             },
@@ -658,12 +689,12 @@ mod tests {
         };
         store.insert(&disk).unwrap();
 
-        let found = store.find_by_id("rt-1").unwrap().unwrap();
-        assert_eq!(found.disk.id, "rt-1");
+        let found = store.find_by_id(&id("roundt01")).unwrap().unwrap();
+        assert_eq!(found.disk.id, id("roundt01"));
         assert_eq!(found.disk.source_box_id, "box-99");
         assert_eq!(found.disk.name.as_deref(), Some("roundtrip-test"));
         assert_eq!(found.disk.kind, BaseDiskKind::Snapshot);
-        assert_eq!(found.disk.disk_info.base_path, "/bases/rt-1.qcow2");
+        assert_eq!(found.disk.disk_info.base_path, "/bases/roundt01.qcow2");
         assert_eq!(
             found.disk.disk_info.container_disk_bytes,
             42 * 1024 * 1024 * 1024

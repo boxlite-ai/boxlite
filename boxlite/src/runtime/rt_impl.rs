@@ -2266,7 +2266,7 @@ mod tests {
         // Simulate a clone dependency: create a base_disk record from A,
         // then add a ref from B to that base (B is a clone of A).
         let base_disk = crate::disk::BaseDisk {
-            id: "test-base".to_string(),
+            id: crate::BaseDiskID::parse("testB001").unwrap(),
             source_box_id: config_a.id.to_string(),
             name: None,
             kind: crate::disk::BaseDiskKind::CloneBase,
@@ -2281,7 +2281,10 @@ mod tests {
         runtime
             .base_disk_mgr
             .store()
-            .add_ref("test-base", config_b.id.as_ref())
+            .add_ref(
+                &crate::BaseDiskID::parse("testB001").unwrap(),
+                config_b.id.as_ref(),
+            )
             .unwrap();
 
         // Try to remove box A (non-force) — should fail.
@@ -2338,7 +2341,7 @@ mod tests {
 
         // Simulate clone dependency via DB refs (B depends on base from A).
         let base_disk = crate::disk::BaseDisk {
-            id: "test-base-force".to_string(),
+            id: crate::BaseDiskID::parse("testB002").unwrap(),
             source_box_id: config_a.id.to_string(),
             name: None,
             kind: crate::disk::BaseDiskKind::CloneBase,
@@ -2353,7 +2356,10 @@ mod tests {
         runtime
             .base_disk_mgr
             .store()
-            .add_ref("test-base-force", config_b.id.as_ref())
+            .add_ref(
+                &crate::BaseDiskID::parse("testB002").unwrap(),
+                config_b.id.as_ref(),
+            )
             .unwrap();
 
         // Force remove should succeed despite dependency.

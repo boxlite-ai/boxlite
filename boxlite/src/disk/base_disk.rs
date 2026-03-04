@@ -6,8 +6,8 @@
 //!
 //! # Flat File Layout
 //!
-//! All backing files live as flat files in `bases/` with nanoid(8) names:
-//! - `bases/{nanoid}.qcow2` — clone base container disk
+//! All backing files live as flat files in `bases/` with Base62 8-char IDs:
+//! - `bases/{base_disk_id}.qcow2` — clone base container disk
 //!
 //! # DB-Based Ref Tracking
 //!
@@ -22,6 +22,7 @@ use boxlite_shared::errors::BoxliteResult;
 use serde::{Deserialize, Serialize};
 
 use crate::db::base_disk::BaseDiskStore;
+use crate::runtime::id::{BaseDiskID, BaseDiskIDMint};
 
 // ============================================================================
 // Domain Types
@@ -52,7 +53,7 @@ impl BaseDiskKind {
 /// Base disk data (serialized to JSON blob in the database).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BaseDisk {
-    pub id: String,
+    pub id: BaseDiskID,
     pub source_box_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -65,7 +66,7 @@ use crate::disk::constants::filenames as disk_filenames;
 
 /// Manages the lifecycle of clone base disks.
 ///
-/// All base disks are flat files under `bases_dir/` named by nanoid(8).
+/// All base disks are flat files under `bases_dir/` named by `BaseDiskID`.
 /// Clone operations use `create_base_disk()` for the rename-and-COW operation.
 ///
 /// Cleanup uses DB-based ref tracking: `try_gc_base()` queries the
@@ -99,7 +100,7 @@ impl BaseDiskManager {
 
     /// Core operation: create a base disk from a box's live container disk.
     ///
-    /// 1. Move container disk → `bases/{nanoid}.qcow2` (makes it immutable)
+    /// 1. Move container disk → `bases/{base_disk_id}.qcow2` (makes it immutable)
     /// 2. Create COW child at original path (so the source box keeps running)
     /// 3. Insert DB record (with JSON blob)
     ///
@@ -111,7 +112,7 @@ impl BaseDiskManager {
         name: Option<&str>,
         source_box_id: &str,
     ) -> BoxliteResult<BaseDisk> {
-        let base_disk_id = nanoid::nanoid!(8);
+        let base_disk_id = BaseDiskIDMint::mint();
 
         let container = source_disks_dir.join(disk_filenames::CONTAINER_DISK);
 
@@ -143,7 +144,7 @@ impl BaseDiskManager {
     ///
     /// Queries the `base_disk_ref` table for dependents. If none exist,
     /// deletes the base (DB record + file) and cascades to the parent base.
-    pub(crate) fn try_gc_base(&self, base_disk_id: &str) {
+    pub(crate) fn try_gc_base(&self, base_disk_id: &BaseDiskID) {
         let record = match self.store.find_by_id(base_disk_id) {
             Ok(Some(r)) => r,
             _ => return,
@@ -228,6 +229,10 @@ mod tests {
     use crate::db::Database;
     use crate::disk::DiskInfo;
     use tempfile::TempDir;
+
+    fn base_id(id: &str) -> BaseDiskID {
+        BaseDiskID::parse(id).expect("test ID must be valid Base62 length-8")
+    }
 
     fn setup() -> (TempDir, BaseDiskManager) {
         let dir = TempDir::new().unwrap();
@@ -318,7 +323,7 @@ mod tests {
     }
 
     #[test]
-    fn test_create_base_disk_uses_nanoid() {
+    fn test_create_base_disk_uses_base_disk_id() {
         let (dir, mgr) = setup();
 
         let box_disks = dir.path().join("boxes").join("box-1").join("disks");
@@ -329,8 +334,8 @@ mod tests {
             .create_base_disk(&box_disks, BaseDiskKind::Snapshot, Some("snap-1"), "box-1")
             .unwrap();
 
-        // ID should be 8 characters (nanoid length)
-        assert_eq!(disk.id.len(), 8);
+        // ID should be 8 characters (BaseDiskID length)
+        assert_eq!(disk.id.as_str().len(), BaseDiskID::FULL_LENGTH);
 
         // base_path should end with {id}.qcow2
         assert!(
@@ -418,11 +423,11 @@ mod tests {
     fn test_try_gc_base_single_level() {
         let (_dir, mgr) = setup();
 
-        let base_file = mgr.bases_dir.join("base-1.qcow2");
+        let base_file = mgr.bases_dir.join("base0001.qcow2");
         write_qcow2_with_backing(&base_file, None);
 
         let disk = BaseDisk {
-            id: "base-1".to_string(),
+            id: base_id("base0001"),
             source_box_id: "src".to_string(),
             name: None,
             kind: BaseDiskKind::CloneBase,
@@ -436,13 +441,20 @@ mod tests {
         mgr.store().insert(&disk).unwrap();
 
         // Add a ref, then remove it (simulating box deletion)
-        mgr.store().add_ref("base-1", "clone-1").unwrap();
+        mgr.store()
+            .add_ref(&base_id("base0001"), "clone-1")
+            .unwrap();
         mgr.store().remove_all_refs_for_box("clone-1").unwrap();
 
         // GC should delete the base (no dependents)
-        mgr.try_gc_base("base-1");
+        mgr.try_gc_base(&base_id("base0001"));
 
-        assert!(mgr.store().find_by_id("base-1").unwrap().is_none());
+        assert!(
+            mgr.store()
+                .find_by_id(&base_id("base0001"))
+                .unwrap()
+                .is_none()
+        );
         assert!(!base_file.exists());
     }
 
@@ -451,10 +463,10 @@ mod tests {
         let (_dir, mgr) = setup();
 
         // Create base-1 (no parent)
-        let base1_file = mgr.bases_dir.join("base-1.qcow2");
+        let base1_file = mgr.bases_dir.join("base0001.qcow2");
         write_qcow2_with_backing(&base1_file, None);
         let bd1 = BaseDisk {
-            id: "base-1".to_string(),
+            id: base_id("base0001"),
             source_box_id: "src".to_string(),
             name: None,
             kind: BaseDiskKind::CloneBase,
@@ -468,10 +480,10 @@ mod tests {
         mgr.store().insert(&bd1).unwrap();
 
         // Create base-2 with backing pointing to base-1
-        let base2_file = mgr.bases_dir.join("base-2.qcow2");
+        let base2_file = mgr.bases_dir.join("base0002.qcow2");
         write_qcow2_with_backing(&base2_file, Some(&base1_file.to_string_lossy()));
         let bd2 = BaseDisk {
-            id: "base-2".to_string(),
+            id: base_id("base0002"),
             source_box_id: "clone-of-src".to_string(),
             name: None,
             kind: BaseDiskKind::CloneBase,
@@ -485,16 +497,22 @@ mod tests {
         mgr.store().insert(&bd2).unwrap();
 
         // No refs → GC base-2 → cascades to base-1
-        mgr.try_gc_base("base-2");
+        mgr.try_gc_base(&base_id("base0002"));
 
         assert!(
-            mgr.store().find_by_id("base-2").unwrap().is_none(),
+            mgr.store()
+                .find_by_id(&base_id("base0002"))
+                .unwrap()
+                .is_none(),
             "base-2 should be deleted"
         );
         assert!(!base2_file.exists(), "base-2 file should be removed");
 
         assert!(
-            mgr.store().find_by_id("base-1").unwrap().is_none(),
+            mgr.store()
+                .find_by_id(&base_id("base0001"))
+                .unwrap()
+                .is_none(),
             "base-1 should cascade-delete"
         );
         assert!(!base1_file.exists(), "base-1 file should be removed");
@@ -504,11 +522,11 @@ mod tests {
     fn test_try_gc_base_skips_snapshots() {
         let (_dir, mgr) = setup();
 
-        let base_file = mgr.bases_dir.join("snap-1.qcow2");
+        let base_file = mgr.bases_dir.join("snap0001.qcow2");
         write_qcow2_with_backing(&base_file, None);
 
         let disk = BaseDisk {
-            id: "snap-1".to_string(),
+            id: base_id("snap0001"),
             source_box_id: "box-1".to_string(),
             name: Some("my-snapshot".to_string()),
             kind: BaseDiskKind::Snapshot,
@@ -522,10 +540,13 @@ mod tests {
         mgr.store().insert(&disk).unwrap();
 
         // GC should NOT delete the snapshot (kind=Snapshot is excluded from GC)
-        mgr.try_gc_base("snap-1");
+        mgr.try_gc_base(&base_id("snap0001"));
 
         assert!(
-            mgr.store().find_by_id("snap-1").unwrap().is_some(),
+            mgr.store()
+                .find_by_id(&base_id("snap0001"))
+                .unwrap()
+                .is_some(),
             "Snapshot should NOT be auto-deleted"
         );
         assert!(base_file.exists(), "Snapshot file should still exist");
@@ -535,11 +556,11 @@ mod tests {
     fn test_try_gc_base_preserves_with_dependents() {
         let (_dir, mgr) = setup();
 
-        let base_file = mgr.bases_dir.join("shared-base.qcow2");
+        let base_file = mgr.bases_dir.join("shared01.qcow2");
         write_qcow2_with_backing(&base_file, None);
 
         let disk = BaseDisk {
-            id: "shared-base".to_string(),
+            id: base_id("shared01"),
             source_box_id: "src".to_string(),
             name: None,
             kind: BaseDiskKind::CloneBase,
@@ -553,25 +574,35 @@ mod tests {
         mgr.store().insert(&disk).unwrap();
 
         // Two boxes referencing the same base
-        mgr.store().add_ref("shared-base", "clone-1").unwrap();
-        mgr.store().add_ref("shared-base", "clone-2").unwrap();
+        mgr.store()
+            .add_ref(&base_id("shared01"), "clone-1")
+            .unwrap();
+        mgr.store()
+            .add_ref(&base_id("shared01"), "clone-2")
+            .unwrap();
 
         // Remove clone-1's ref: base should survive (clone-2 still depends)
         mgr.store().remove_all_refs_for_box("clone-1").unwrap();
-        mgr.try_gc_base("shared-base");
+        mgr.try_gc_base(&base_id("shared01"));
 
         assert!(
-            mgr.store().find_by_id("shared-base").unwrap().is_some(),
+            mgr.store()
+                .find_by_id(&base_id("shared01"))
+                .unwrap()
+                .is_some(),
             "Base should survive (clone-2 still depends on it)"
         );
         assert!(base_file.exists());
 
         // Remove clone-2's ref: now base should be GC'd
         mgr.store().remove_all_refs_for_box("clone-2").unwrap();
-        mgr.try_gc_base("shared-base");
+        mgr.try_gc_base(&base_id("shared01"));
 
         assert!(
-            mgr.store().find_by_id("shared-base").unwrap().is_none(),
+            mgr.store()
+                .find_by_id(&base_id("shared01"))
+                .unwrap()
+                .is_none(),
             "Base should be deleted (no more dependents)"
         );
         assert!(!base_file.exists());

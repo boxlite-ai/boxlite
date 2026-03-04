@@ -14,6 +14,9 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use super::{Migration, db_err};
 use crate::db::schema;
+#[cfg(test)]
+use crate::runtime::id::BaseDiskID;
+use crate::runtime::id::BaseDiskIDMint;
 
 pub(crate) struct MoveDisksAndAddBaseDisk;
 
@@ -211,8 +214,8 @@ fn migrate_rootfs_base(
 
     if let Some(rootfs_base_path) = rootfs_base {
         // CoW filesystem case: rootfs-base exists.
-        // Move it to bases/{nanoid}.ext4 and rebase the qcow2.
-        let base_id = nanoid::nanoid!(8);
+        // Move it to bases/{base_disk_id}.ext4 and rebase the qcow2.
+        let base_id = BaseDiskIDMint::mint();
         let new_path = bases_dir.join(format!("{}.ext4", base_id));
 
         if std::fs::rename(&rootfs_base_path, &new_path).is_err() {
@@ -359,6 +362,13 @@ mod tests {
             base_file.file_name().to_string_lossy().ends_with(".ext4"),
             "base file should have .ext4 extension"
         );
+        let base_path = base_file.path();
+        let stem = base_path.file_stem().unwrap().to_string_lossy();
+        assert!(
+            BaseDiskID::parse(&stem).is_some(),
+            "base file stem should be a valid BaseDiskID: {}",
+            stem
+        );
         assert_eq!(
             std::fs::read(base_file.path()).unwrap(),
             b"rootfs-base-data"
@@ -476,6 +486,12 @@ mod tests {
             base_path.contains("bases/"),
             "base_path should be in bases/ directory: {}",
             base_path
+        );
+        let stem = Path::new(&base_path).file_stem().unwrap().to_string_lossy();
+        assert!(
+            BaseDiskID::parse(&stem).is_some(),
+            "base_path filename stem should be valid BaseDiskID: {}",
+            stem
         );
     }
 

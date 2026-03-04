@@ -12,6 +12,9 @@ use crate::disk::{
     read_backing_file_path,
 };
 use crate::images::{ImageDiskManager, ImageObject};
+#[cfg(test)]
+use crate::runtime::id::BaseDiskID;
+use crate::runtime::id::BaseDiskIDMint;
 use crate::util;
 
 /// A fully resolved and ready-to-use guest rootfs.
@@ -252,7 +255,7 @@ impl GuestRootfs {
 ///
 /// Cache location: `~/.boxlite/bases/`
 ///
-/// Rootfs entries use nanoid filenames (e.g., `bases/a7Kx9mPq.ext4`) and are
+/// Rootfs entries use `BaseDiskID` filenames (e.g., `bases/a7Kx9mPq.ext4`) and are
 /// tracked in the `base_disk` table with `kind = 'rootfs'` and
 /// `source_box_id = "__global__"`. The `name` field stores the version key
 /// for content-addressable lookup.
@@ -475,7 +478,7 @@ impl GuestRootfsManager {
 
     /// Atomically install a staged guest rootfs to the bases directory.
     ///
-    /// Generates a nanoid filename and inserts a DB record for tracking.
+    /// Generates a `BaseDiskID` filename and inserts a DB record for tracking.
     fn install(&self, version_key: &str, staged_disk: Disk) -> BoxliteResult<Disk> {
         // Defensive: another process may have installed while we were building.
         if let Some(disk) = self.find(version_key) {
@@ -492,7 +495,7 @@ impl GuestRootfsManager {
             ))
         })?;
 
-        let layer_id = nanoid::nanoid!(8);
+        let layer_id = BaseDiskIDMint::mint();
         let target = bases_dir.join(format!("{}.ext4", layer_id));
         let source = staged_disk.path().to_path_buf();
 
@@ -775,6 +778,10 @@ mod tests {
     use crate::db::Database;
     use crate::db::base_disk::BaseDiskStore;
 
+    fn id(s: &str) -> BaseDiskID {
+        BaseDiskID::parse(s).expect("test ID must be valid Base62 length-8")
+    }
+
     fn test_store() -> BaseDiskStore {
         let dir = tempfile::TempDir::new().unwrap();
         let db_path = dir.keep().join("test.db");
@@ -788,10 +795,10 @@ mod tests {
     }
 
     /// Insert a rootfs record directly for test setup.
-    fn insert_rootfs_record(store: &BaseDiskStore, id: &str, version_key: &str, path: &str) {
+    fn insert_rootfs_record(store: &BaseDiskStore, rootfs_id: &str, version_key: &str, path: &str) {
         store
             .insert(&BaseDisk {
-                id: id.to_string(),
+                id: id(rootfs_id),
                 source_box_id: GLOBAL_SOURCE.to_string(),
                 name: Some(version_key.to_string()),
                 kind: BaseDiskKind::Rootfs,
@@ -840,7 +847,7 @@ mod tests {
         let bases_dir = dir.path().to_path_buf();
         let store = test_store();
 
-        // Create a fake cached file with nanoid name
+        // Create a fake cached file with BaseDiskID name
         let cached = bases_dir.join("aB3xQ9mP.ext4");
         std::fs::write(&cached, "fake disk").unwrap();
 
@@ -899,10 +906,15 @@ mod tests {
 
         let result = mgr.install("ver-key", staged_disk).unwrap();
 
-        // File should be in bases/ with .ext4 extension (nanoid name)
+        // File should be in bases/ with .ext4 extension (BaseDiskID name)
         assert!(result.path().starts_with(&bases_dir));
         assert_eq!(result.path().extension().unwrap(), "ext4");
         assert!(result.path().exists());
+        let stem = result.path().file_stem().unwrap().to_string_lossy();
+        assert!(
+            BaseDiskID::parse(&stem).is_some(),
+            "rootfs filename should be valid BaseDiskID"
+        );
 
         // DB record should exist
         let record = store.find_by_name(GLOBAL_SOURCE, "ver-key").unwrap();
