@@ -223,9 +223,9 @@ jobs:
         run: make fmt:check:c
 
   go:
-    name: Go Lint
-    needs: changes
-    if: ${{ needs.changes.outputs.go == 'true' }}
+    name: Go lint and format checks
+    needs: [config, changes]
+    if: ${{ needs.changes.outputs.go == 'true' || needs.changes.outputs.quality == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -235,6 +235,40 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.24'
+
+      - name: Check Go formatting
+        run: make fmt:check:go
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: ${{ needs.config.outputs.rust-toolchain }}
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler llvm
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+        continue-on-error: true
+
+      - name: Export GHA cache env vars
+        uses: actions/github-script@v7
+        with:
+          script: |
+            core.exportVariable('ACTIONS_RESULTS_URL', process.env.ACTIONS_RESULTS_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+            core.exportVariable('ACTIONS_CACHE_SERVICE_V2', process.env.ACTIONS_CACHE_SERVICE_V2 || '');
+            core.exportVariable('CARGO_INCREMENTAL', '0');
+
+      - name: Build libboxlite for CGo (stub mode)
+        env:
+          BOXLITE_DEPS_STUB: "1"
+        run: |
+          cargo build -p boxlite-c
+          bash scripts/build/fix-go-symbols.sh target/debug/libboxlite.a
+
+      - name: Run Go vet
+        run: make lint:go
 
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v6
