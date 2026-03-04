@@ -95,6 +95,22 @@ fn create_or_reuse_cow_disk(
     let guest_rootfs_disk_path = layout.guest_rootfs_disk_path();
 
     if reuse_rootfs && guest_rootfs_disk_path.exists() {
+        // Validate backing chain is intact before reusing.
+        // A broken chain (e.g. from a failed migration or deleted cache) would cause
+        // a cryptic hypervisor failure — catch it early with a clear error.
+        if let Ok(Some(backing)) =
+            crate::disk::qcow2::read_backing_file_path(&guest_rootfs_disk_path)
+            && !std::path::Path::new(&backing).exists()
+        {
+            return Err(BoxliteError::Storage(format!(
+                "Guest rootfs {} has missing backing file: {}. \
+                 This may indicate a broken migration or deleted cache file. \
+                 The box cannot start until the backing file is restored.",
+                guest_rootfs_disk_path.display(),
+                backing
+            )));
+        }
+
         // Restart: reuse existing COW disk
         tracing::info!(
             disk_path = %guest_rootfs_disk_path.display(),
