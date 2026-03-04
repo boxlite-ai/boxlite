@@ -7,8 +7,8 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::db::snapshots::SnapshotInfo;
 use crate::litebox::BoxStatus;
+use crate::litebox::snapshot_mgr::SnapshotInfo;
 use crate::runtime::options::{CloneOptions, ExportOptions, SnapshotOptions};
 
 // ============================================================================
@@ -216,7 +216,6 @@ pub(crate) struct SnapshotResponse {
     pub box_id: String,
     pub name: String,
     pub created_at: i64,
-    pub guest_disk_bytes: u64,
     pub container_disk_bytes: u64,
     pub size_bytes: u64,
 }
@@ -228,10 +227,11 @@ impl SnapshotResponse {
             box_id: self.box_id.clone(),
             name: self.name.clone(),
             created_at: self.created_at,
-            snapshot_dir: String::new(),
-            guest_disk_bytes: self.guest_disk_bytes,
-            container_disk_bytes: self.container_disk_bytes,
-            size_bytes: self.size_bytes,
+            disk_info: crate::disk::DiskInfo {
+                base_path: String::new(),
+                container_disk_bytes: self.container_disk_bytes,
+                size_bytes: self.size_bytes,
+            },
         }
     }
 }
@@ -563,14 +563,13 @@ mod tests {
             box_id: "01J0000000000000000000000A".to_string(),
             name: "snap1".to_string(),
             created_at: 1_700_000_000,
-            guest_disk_bytes: 1024,
             container_disk_bytes: 2048,
             size_bytes: 4096,
         };
 
         let info = resp.to_snapshot_info();
         assert_eq!(info.name, "snap1");
-        assert_eq!(info.snapshot_dir, "");
-        assert_eq!(info.size_bytes, 4096);
+        assert_eq!(info.disk_info.base_path, "");
+        assert_eq!(info.disk_info.size_bytes, 4096);
     }
 }

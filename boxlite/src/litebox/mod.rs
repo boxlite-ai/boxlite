@@ -13,6 +13,7 @@ mod init;
 pub(crate) mod local_snapshot;
 mod manager;
 mod snapshot;
+pub(crate) mod snapshot_mgr;
 mod state;
 
 pub use copy::CopyOptions;
@@ -141,6 +142,19 @@ impl LiteBox {
         name: Option<String>,
     ) -> BoxliteResult<LiteBox> {
         self.box_backend.clone_box(options, name).await
+    }
+
+    /// Batch clone: create N clones sharing a single base disk copy.
+    ///
+    /// More efficient than calling `clone_box` N times: source disks are copied
+    /// once into a shared base, then each clone gets a thin overlay (~64KB).
+    pub async fn clone_boxes(
+        &self,
+        options: CloneOptions,
+        count: usize,
+        names: Vec<String>,
+    ) -> BoxliteResult<Vec<LiteBox>> {
+        self.box_backend.clone_boxes(options, count, names).await
     }
 
     /// Export this box as a portable `.boxlite` archive.

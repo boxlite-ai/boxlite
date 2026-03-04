@@ -343,6 +343,7 @@ dependencies = [
  "libc",
  "libgvproxy-sys",
  "libkrun-sys",
+ "nanoid",
  "nix 0.30.1",
  "oci-client",
  "oci-spec 0.8.4",
@@ -2119,6 +2120,15 @@ name = "multimap"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d87ecb2933e8aeadb3e3a02b828fed80a7528047e68b4f424523a0981a3a084"
+
+[[package]]
+name = "nanoid"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3ffa00dec017b5b1a8b7cf5e2c008bfda1aa7e0697ac1508b491fdf2622fb4d8"
+dependencies = [
+ "rand 0.8.5",
+]
 
 [[package]]
 name = "napi"

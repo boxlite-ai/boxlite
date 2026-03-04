@@ -7,7 +7,7 @@
 //! Each table has queryable columns for efficient filtering + JSON blob for full data.
 
 /// Current schema version.
-pub const SCHEMA_VERSION: i32 = 6;
+pub const SCHEMA_VERSION: i32 = 7;
 
 /// Schema version tracking table.
 pub const SCHEMA_VERSION_TABLE: &str = r#"
@@ -100,6 +100,56 @@ CREATE TABLE IF NOT EXISTS box_snapshot (
 );
 "#;
 
+/// Base disk table (added in v7).
+///
+/// Stores immutable COW fork points (clone bases, snapshots, rootfs cache).
+/// Queryable columns for indexed lookups + JSON blob for full `BaseDisk` struct.
+/// `UNIQUE(source_box_id, name)` enforces one snapshot name per box;
+/// SQLite treats NULLs as distinct so clone bases (name=NULL) don't collide.
+pub const BASE_DISK_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS base_disk (
+    id TEXT PRIMARY KEY NOT NULL,
+    source_box_id TEXT NOT NULL,
+    name TEXT,
+    kind TEXT NOT NULL CHECK(kind IN ('snapshot', 'clone_base', 'rootfs')),
+    base_path TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    json TEXT NOT NULL,
+    UNIQUE(source_box_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_base_disk_source ON base_disk(source_box_id);
+CREATE INDEX IF NOT EXISTS idx_base_disk_kind ON base_disk(kind);
+CREATE INDEX IF NOT EXISTS idx_base_disk_path ON base_disk(base_path);
+"#;
+
+/// Base disk reference table (added in v7).
+///
+/// Tracks box→base_disk dependencies for GC.
+/// When no rows reference a base_disk, it can be garbage-collected.
+pub const BASE_DISK_REF_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS base_disk_ref (
+    base_disk_id TEXT NOT NULL,
+    box_id TEXT NOT NULL,
+    PRIMARY KEY (base_disk_id, box_id)
+);
+"#;
+
+/// Snapshot table with JSON blob pattern (added in v7, replaces box_snapshot).
+///
+/// Per-box snapshots stored as JSON blobs (like BoxConfig pattern).
+/// Queryable columns: id, box_id, name, created_at.
+pub const SNAPSHOT_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS snapshot (
+    id TEXT PRIMARY KEY NOT NULL,
+    box_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    json TEXT NOT NULL,
+    UNIQUE(box_id, name)
+);
+CREATE INDEX IF NOT EXISTS idx_snapshot_box ON snapshot(box_id);
+"#;
+
 /// Get all schema creation statements.
 pub fn all_schemas() -> Vec<&'static str> {
     vec![
@@ -108,6 +158,8 @@ pub fn all_schemas() -> Vec<&'static str> {
         BOX_STATE_TABLE,
         ALIVE_TABLE,
         IMAGE_INDEX_TABLE,
-        BOX_SNAPSHOT_TABLE,
+        BASE_DISK_TABLE,
+        BASE_DISK_REF_TABLE,
+        SNAPSHOT_TABLE,
     ]
 }

@@ -237,11 +237,11 @@ fn build_sandbox_policy(paths: &[PathAccess], binary_path: &Path, network_enable
 fn build_dynamic_read_paths(binary_path: &Path, paths: &[PathAccess]) -> String {
     let mut policy = String::from("; Dynamic readable paths\n(allow file-read*\n");
 
-    // Add binary's parent directory (contains bundled .dylibs)
+    // Add binary's parent directory (copied shim + libkrunfw)
     if let Some(bin_dir) = binary_path.parent() {
         let bin_dir = canonicalize_or_original(bin_dir);
         policy.push_str(&format!(
-            "    (subpath \"{}\")  ; shim binary + bundled libs\n",
+            "    (subpath \"{}\")  ; shim binary + libkrunfw\n",
             bin_dir.display()
         ));
     } else {

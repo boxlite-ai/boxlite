@@ -205,12 +205,27 @@ void test_box_metrics() {
   // Execute some commands
   const char *args = "[\"test\"]";
   int exit_code = 0;
-  boxlite_execute(box, "/bin/echo", args, NULL, NULL, &exit_code, &error);
-  boxlite_execute(box, "/bin/echo", args, NULL, NULL, &exit_code, &error);
+  code =
+      boxlite_execute(box, "/bin/echo", args, NULL, NULL, &exit_code, &error);
+  if (code != Ok) {
+    printf("  ✗ Execute 1 failed: code=%d, message=%s\n", code,
+           error.message ? error.message : "(null)");
+  }
+  code =
+      boxlite_execute(box, "/bin/echo", args, NULL, NULL, &exit_code, &error);
+  if (code != Ok) {
+    printf("  ✗ Execute 2 failed: code=%d, message=%s\n", code,
+           error.message ? error.message : "(null)");
+  }
 
   // Get box metrics
   char *json = NULL;
   code = boxlite_box_metrics(box, &json, &error);
+  if (code != Ok) {
+    printf("  ✗ Box metrics failed: code=%d, message=%s\n", code,
+           error.message ? error.message : "(null)");
+    fflush(stdout);
+  }
   assert(code == Ok);
   assert(json != NULL);
   printf("  ✓ Box metrics: %s\n", json);

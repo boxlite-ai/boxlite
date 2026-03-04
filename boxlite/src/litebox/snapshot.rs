@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use boxlite_shared::errors::BoxliteResult;
 
-use crate::db::snapshots::SnapshotInfo;
+use crate::litebox::snapshot_mgr::SnapshotInfo;
 use crate::runtime::backend::SnapshotBackend;
 use crate::runtime::options::SnapshotOptions;
 

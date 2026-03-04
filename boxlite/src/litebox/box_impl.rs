@@ -1081,6 +1081,15 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
         BoxImpl::clone_box(self, options, name).await
     }
 
+    async fn clone_boxes(
+        &self,
+        options: crate::runtime::options::CloneOptions,
+        count: usize,
+        names: Vec<String>,
+    ) -> BoxliteResult<Vec<crate::LiteBox>> {
+        BoxImpl::clone_boxes(self, options, count, names).await
+    }
+
     async fn export_box(
         &self,
         options: crate::runtime::options::ExportOptions,

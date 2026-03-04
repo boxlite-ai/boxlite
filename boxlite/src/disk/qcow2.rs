@@ -807,6 +807,7 @@ impl Qcow2Helper {
     /// Each child is backed by the source disk and starts empty — all reads go
     /// to the source, writes go to the child. The returned `Disk` handles are
     /// leaked so they persist beyond this call.
+    #[allow(dead_code)] // Used by clone operations (not yet wired)
     pub fn clone_disk_pair(
         src_container: &Path,
         dst_container: &Path,
@@ -906,6 +907,154 @@ pub fn read_backing_file_path(path: &Path) -> BoxliteResult<Option<String>> {
     })?;
 
     Ok(Some(backing_path))
+}
+
+/// Overwrite the backing file path in a qcow2 header.
+///
+/// Updates the backing file reference to point at `new_backing`. The file at
+/// `new_backing` must exist (its path is canonicalized before writing).
+///
+/// This is a lightweight "rebase" that only patches the header — it does NOT
+/// re-read data from the new backing file. Use this when the backing data is
+/// identical but stored at a different path (e.g., after moving a rootfs-base
+/// file to a new location).
+///
+/// # Errors
+/// - `qcow2_path` is not a valid qcow2 file
+/// - The qcow2 has no existing backing file reference (offset is 0)
+/// - `new_backing` does not exist (cannot canonicalize)
+pub fn set_backing_file_path(qcow2_path: &Path, new_backing: &Path) -> BoxliteResult<()> {
+    use std::io::{Read, Seek, SeekFrom, Write};
+
+    let new_backing_str = new_backing
+        .canonicalize()
+        .map_err(|e| {
+            BoxliteError::Storage(format!(
+                "Failed to canonicalize new backing path {}: {}",
+                new_backing.display(),
+                e
+            ))
+        })?
+        .to_string_lossy()
+        .to_string();
+    let new_backing_bytes = new_backing_str.as_bytes();
+
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(qcow2_path)
+        .map_err(|e| {
+            BoxliteError::Storage(format!(
+                "Failed to open qcow2 for rebase {}: {}",
+                qcow2_path.display(),
+                e
+            ))
+        })?;
+
+    // Read header: magic (4) + version (4) + backing_file_offset (8) + backing_file_size (4)
+    let mut header = [0u8; 20];
+    file.read_exact(&mut header).map_err(|e| {
+        BoxliteError::Storage(format!(
+            "Failed to read qcow2 header from {}: {}",
+            qcow2_path.display(),
+            e
+        ))
+    })?;
+
+    // Verify magic
+    let magic = u32::from_be_bytes([header[0], header[1], header[2], header[3]]);
+    if magic != 0x514649fb {
+        return Err(BoxliteError::Storage(format!(
+            "Invalid qcow2 magic in {}: 0x{:08x}",
+            qcow2_path.display(),
+            magic
+        )));
+    }
+
+    let backing_offset = u64::from_be_bytes(header[8..16].try_into().unwrap());
+    let old_backing_size = u32::from_be_bytes(header[16..20].try_into().unwrap());
+
+    if backing_offset == 0 {
+        return Err(BoxliteError::Storage(format!(
+            "Cannot rebase {}: no existing backing file reference",
+            qcow2_path.display()
+        )));
+    }
+
+    // Write new backing_file_size
+    let new_size = new_backing_bytes.len() as u32;
+    file.seek(SeekFrom::Start(16)).map_err(|e| {
+        BoxliteError::Storage(format!("Failed to seek in {}: {}", qcow2_path.display(), e))
+    })?;
+    file.write_all(&new_size.to_be_bytes()).map_err(|e| {
+        BoxliteError::Storage(format!(
+            "Failed to write backing size in {}: {}",
+            qcow2_path.display(),
+            e
+        ))
+    })?;
+
+    // Write new backing file path at the stored offset
+    file.seek(SeekFrom::Start(backing_offset)).map_err(|e| {
+        BoxliteError::Storage(format!("Failed to seek in {}: {}", qcow2_path.display(), e))
+    })?;
+    file.write_all(new_backing_bytes).map_err(|e| {
+        BoxliteError::Storage(format!(
+            "Failed to write backing path in {}: {}",
+            qcow2_path.display(),
+            e
+        ))
+    })?;
+
+    // Zero out leftover bytes from the old (possibly longer) path
+    if old_backing_size > new_size {
+        let zeros = vec![0u8; (old_backing_size - new_size) as usize];
+        file.write_all(&zeros).map_err(|e| {
+            BoxliteError::Storage(format!(
+                "Failed to zero old backing bytes in {}: {}",
+                qcow2_path.display(),
+                e
+            ))
+        })?;
+    }
+
+    tracing::info!(
+        qcow2 = %qcow2_path.display(),
+        new_backing = %new_backing_str,
+        "Rebased qcow2 backing file path"
+    );
+
+    Ok(())
+}
+
+/// Maximum depth for backing chain walks (prevents infinite loops from circular refs).
+const MAX_BACKING_CHAIN_DEPTH: usize = 8;
+
+/// Walk a qcow2 backing chain, returning all backing file paths.
+///
+/// Follows backing references from `path` until: no backing, file missing,
+/// read error, or depth limit. Returns partial results on error.
+/// Does NOT include `path` itself.
+pub fn read_backing_chain(path: &Path) -> Vec<PathBuf> {
+    let mut chain = Vec::new();
+    let mut current = path.to_path_buf();
+
+    for _ in 0..MAX_BACKING_CHAIN_DEPTH {
+        match read_backing_file_path(&current) {
+            Ok(Some(backing)) => {
+                let backing_path = PathBuf::from(backing);
+                if !backing_path.exists() {
+                    break;
+                }
+                chain.push(backing_path.clone());
+                current = backing_path;
+            }
+            Ok(None) => break,
+            Err(_) => break,
+        }
+    }
+
+    chain
 }
 
 /// QCOW2 magic number: "QFI\xfb".
@@ -1228,6 +1377,129 @@ mod tests {
     fn test_backing_format_as_str() {
         assert_eq!(BackingFormat::Raw.as_str(), "raw");
         assert_eq!(BackingFormat::Qcow2.as_str(), "qcow2");
+    }
+
+    // ── set_backing_file_path tests ────────────────────────────────────
+
+    #[test]
+    fn test_set_backing_file_path_roundtrip() {
+        let dir = TempDir::new().unwrap();
+        let qcow2_path = dir.path().join("test.qcow2");
+
+        // Create a backing file and a qcow2 referencing it
+        let old_backing = dir.path().join("old_backing.raw");
+        std::fs::write(&old_backing, vec![0u8; 1024]).unwrap();
+        write_qcow2_with_backing(&qcow2_path, Some(&old_backing.to_string_lossy()));
+
+        // Verify initial backing path
+        let initial = read_backing_file_path(&qcow2_path).unwrap();
+        assert!(initial.is_some());
+
+        // Create new backing file and rebase
+        let new_backing = dir.path().join("new_backing.raw");
+        std::fs::write(&new_backing, vec![0u8; 1024]).unwrap();
+        set_backing_file_path(&qcow2_path, &new_backing).unwrap();
+
+        // Read back — should be the canonicalized new path
+        let result = read_backing_file_path(&qcow2_path).unwrap().unwrap();
+        assert_eq!(
+            result,
+            new_backing.canonicalize().unwrap().to_string_lossy()
+        );
+    }
+
+    #[test]
+    fn test_set_backing_file_path_shorter_path() {
+        let dir = TempDir::new().unwrap();
+        let qcow2_path = dir.path().join("test.qcow2");
+
+        // Create initial backing with a long path
+        let subdir = dir.path().join("very").join("deeply").join("nested");
+        std::fs::create_dir_all(&subdir).unwrap();
+        let long_backing = subdir.join("original_backing_file.raw");
+        std::fs::write(&long_backing, vec![0u8; 512]).unwrap();
+        write_qcow2_with_backing(&qcow2_path, Some(&long_backing.to_string_lossy()));
+
+        // Rebase to a shorter path
+        let short_backing = dir.path().join("b.raw");
+        std::fs::write(&short_backing, vec![0u8; 512]).unwrap();
+        set_backing_file_path(&qcow2_path, &short_backing).unwrap();
+
+        let result = read_backing_file_path(&qcow2_path).unwrap().unwrap();
+        assert_eq!(
+            result,
+            short_backing.canonicalize().unwrap().to_string_lossy()
+        );
+    }
+
+    #[test]
+    fn test_set_backing_file_path_longer_path() {
+        let dir = TempDir::new().unwrap();
+        let qcow2_path = dir.path().join("test.qcow2");
+
+        // Create initial backing with a short path
+        let short_backing = dir.path().join("a.raw");
+        std::fs::write(&short_backing, vec![0u8; 512]).unwrap();
+        write_qcow2_with_backing(&qcow2_path, Some(&short_backing.to_string_lossy()));
+
+        // Rebase to a longer path
+        let subdir = dir.path().join("some").join("longer").join("directory");
+        std::fs::create_dir_all(&subdir).unwrap();
+        let long_backing = subdir.join("new_long_backing_file.raw");
+        std::fs::write(&long_backing, vec![0u8; 512]).unwrap();
+        set_backing_file_path(&qcow2_path, &long_backing).unwrap();
+
+        let result = read_backing_file_path(&qcow2_path).unwrap().unwrap();
+        assert_eq!(
+            result,
+            long_backing.canonicalize().unwrap().to_string_lossy()
+        );
+    }
+
+    #[test]
+    fn test_set_backing_file_path_no_existing_backing() {
+        let dir = TempDir::new().unwrap();
+        let qcow2_path = dir.path().join("no_backing.qcow2");
+
+        // Create qcow2 without backing file
+        write_qcow2_with_backing(&qcow2_path, None);
+
+        let new_backing = dir.path().join("new.raw");
+        std::fs::write(&new_backing, vec![0u8; 512]).unwrap();
+
+        let result = set_backing_file_path(&qcow2_path, &new_backing);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("no existing backing file reference"));
+    }
+
+    #[test]
+    fn test_set_backing_file_path_nonexistent_new_backing() {
+        let dir = TempDir::new().unwrap();
+        let qcow2_path = dir.path().join("test.qcow2");
+        let old_backing = dir.path().join("old.raw");
+        std::fs::write(&old_backing, vec![0u8; 512]).unwrap();
+        write_qcow2_with_backing(&qcow2_path, Some(&old_backing.to_string_lossy()));
+
+        let result = set_backing_file_path(&qcow2_path, Path::new("/nonexistent/path.raw"));
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("canonicalize"));
+    }
+
+    #[test]
+    fn test_set_backing_file_path_invalid_qcow2() {
+        let dir = TempDir::new().unwrap();
+        let bad_file = dir.path().join("not_qcow2.bin");
+        std::fs::write(&bad_file, vec![0u8; 64]).unwrap();
+
+        let new_backing = dir.path().join("new.raw");
+        std::fs::write(&new_backing, vec![0u8; 512]).unwrap();
+
+        let result = set_backing_file_path(&bad_file, &new_backing);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Invalid qcow2 magic"));
     }
 
     // ── Flatten tests ──────────────────────────────────────────────────

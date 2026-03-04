@@ -4,8 +4,8 @@ use std::path::Path;
 
 use async_trait::async_trait;
 
-use crate::db::snapshots::SnapshotInfo;
 use crate::litebox::copy::CopyOptions;
+use crate::litebox::snapshot_mgr::SnapshotInfo;
 use crate::litebox::{BoxCommand, Execution, LiteBox};
 use crate::metrics::{BoxMetrics, RuntimeMetrics};
 use crate::runtime::options::{
@@ -101,6 +101,13 @@ pub(crate) trait BoxBackend: Send + Sync {
         options: CloneOptions,
         name: Option<String>,
     ) -> BoxliteResult<LiteBox>;
+
+    async fn clone_boxes(
+        &self,
+        options: CloneOptions,
+        count: usize,
+        names: Vec<String>,
+    ) -> BoxliteResult<Vec<LiteBox>>;
 
     async fn export_box(&self, options: ExportOptions, dest: &Path) -> BoxliteResult<BoxArchive>;
 }

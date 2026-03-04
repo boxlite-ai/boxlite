@@ -6,11 +6,12 @@
 //!
 //! Uses JSON blob pattern for flexibility with queryable columns for performance.
 
+pub(crate) mod base_disk;
 mod boxes;
 mod images;
 pub(crate) mod migration;
 mod schema;
-pub(crate) mod snapshots;
+pub(crate) mod snapshot;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -21,9 +22,10 @@ use rusqlite::{Connection, OptionalExtension};
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
+pub(crate) use base_disk::BaseDiskStore;
 pub use boxes::BoxStore;
 pub use images::{CachedImage, ImageIndexStore};
-pub use snapshots::SnapshotStore;
+pub(crate) use snapshot::SnapshotStore;
 
 /// Helper macro to convert rusqlite errors to BoxliteError.
 macro_rules! db_err {
@@ -193,11 +195,13 @@ mod tests {
         assert!(tables.contains(&"box_state".to_string()));
         assert!(tables.contains(&"alive".to_string()));
         assert!(tables.contains(&"image_index".to_string()));
-        assert!(tables.contains(&"box_snapshot".to_string()));
+        assert!(tables.contains(&"base_disk".to_string()));
+        assert!(tables.contains(&"base_disk_ref".to_string()));
+        assert!(tables.contains(&"snapshot".to_string()));
     }
 
     #[test]
-    fn test_db_migration_v4_to_v6() {
+    fn test_db_migration_v4_to_v7() {
         let temp_dir = TempDir::new().unwrap();
         let db_path = temp_dir.path().join("test.db");
 
@@ -218,7 +222,7 @@ mod tests {
             .unwrap();
         }
 
-        // Open with current code - should auto-migrate to v6
+        // Open with current code - should auto-migrate to v7
         let db = Database::open(&db_path).unwrap();
         let conn = db.conn();
 
@@ -232,8 +236,20 @@ mod tests {
             .unwrap();
         assert_eq!(version, schema::SCHEMA_VERSION);
 
-        // Verify box_snapshot table exists
-        let table_exists: bool = conn
+        // Verify v7 tables exist
+        for table in ["base_disk", "base_disk_ref", "snapshot"] {
+            let exists: bool = conn
+                .query_row(
+                    "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name=?1",
+                    rusqlite::params![table],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(exists, "{table} table should exist after migration");
+        }
+
+        // box_snapshot should be dropped by v6→v7 migration
+        let old_exists: bool = conn
             .query_row(
                 "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='box_snapshot'",
                 [],
@@ -241,26 +257,13 @@ mod tests {
             )
             .unwrap();
         assert!(
-            table_exists,
-            "box_snapshot table should exist after migration"
-        );
-
-        // Verify old snapshots table is gone
-        let old_exists: bool = conn
-            .query_row(
-                "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='snapshots'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert!(
             !old_exists,
-            "old snapshots table should be dropped after migration"
+            "box_snapshot table should be dropped after v6→v7 migration"
         );
     }
 
     #[test]
-    fn test_db_migration_v5_to_v6() {
+    fn test_db_migration_v5_to_v7() {
         let temp_dir = TempDir::new().unwrap();
         let db_path = temp_dir.path().join("test.db");
 
@@ -294,7 +297,7 @@ mod tests {
             .unwrap();
         }
 
-        // Open with current code - should auto-migrate to v6
+        // Open with current code - should auto-migrate to v7
         let db = Database::open(&db_path).unwrap();
         let conn = db.conn();
 
@@ -307,15 +310,17 @@ mod tests {
             .unwrap();
         assert_eq!(version, schema::SCHEMA_VERSION);
 
-        // box_snapshot should exist
-        let table_exists: bool = conn
-            .query_row(
-                "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='box_snapshot'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert!(table_exists);
+        // v7 tables should exist
+        for table in ["base_disk", "base_disk_ref", "snapshot"] {
+            let exists: bool = conn
+                .query_row(
+                    "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name=?1",
+                    rusqlite::params![table],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(exists, "{table} table should exist after migration");
+        }
     }
 
     #[test]

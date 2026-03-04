@@ -70,6 +70,12 @@ pub struct RuntimeImpl {
     /// Runtime-wide metrics (AtomicU64 based, lock-free)
     pub(crate) runtime_metrics: RuntimeMetricsStorage,
 
+    /// Base disk manager for clone base lifecycle and ref-count tracking.
+    pub(crate) base_disk_mgr: crate::disk::BaseDiskManager,
+
+    /// Snapshot manager for per-box snapshot lifecycle (create, remove, restore).
+    pub(crate) snapshot_mgr: crate::litebox::snapshot_mgr::SnapshotManager,
+
     /// Per-entity lock manager for multiprocess-safe locking.
     ///
     /// Provides locks for individual entities (boxes, volumes, etc.) that work
@@ -185,6 +191,11 @@ impl RuntimeImpl {
                 },
             )?;
 
+        let base_disk_store = crate::db::BaseDiskStore::new(db.clone());
+        let base_disk_mgr =
+            crate::disk::BaseDiskManager::new(layout.bases_dir(), base_disk_store.clone());
+        let snapshot_store = crate::db::SnapshotStore::new(db.clone());
+        let snapshot_mgr = crate::litebox::snapshot_mgr::SnapshotManager::new(snapshot_store);
         let box_store = BoxStore::new(db);
 
         // Initialize lock manager for per-entity multiprocess-safe locking
@@ -204,8 +215,7 @@ impl RuntimeImpl {
 
         let image_disk_mgr =
             ImageDiskManager::new(layout.image_layout().disk_images_dir(), layout.temp_dir());
-        let guest_rootfs_mgr =
-            GuestRootfsManager::new(layout.guest_rootfs_dir(), layout.temp_dir());
+        let guest_rootfs_mgr = GuestRootfsManager::new(base_disk_mgr.clone(), layout.temp_dir());
 
         let inner = Arc::new(Self {
             sync_state: RwLock::new(SynchronizedState {
@@ -219,6 +229,8 @@ impl RuntimeImpl {
             guest_rootfs_mgr,
             guest_rootfs: Arc::new(OnceCell::new()),
             runtime_metrics: RuntimeMetricsStorage::new(),
+            base_disk_mgr,
+            snapshot_mgr,
             lock_manager,
             _runtime_lock: runtime_lock,
             shutdown_token: CancellationToken::new(),
@@ -792,7 +804,7 @@ impl RuntimeImpl {
 
             // Check if other boxes depend on this box's disks (COW backing references).
             if !force {
-                let dependents = find_boxes_depending_on(self, &config.box_home)?;
+                let dependents = find_boxes_depending_on(self, id.as_ref())?;
                 if !dependents.is_empty() {
                     return Err(BoxliteError::InvalidState(format!(
                         "Cannot remove box: boxes [{}] have clone dependencies on it. \
@@ -821,6 +833,27 @@ impl RuntimeImpl {
                         "Freed lock for removed box"
                     );
                 }
+            }
+
+            // 1. Remove all base disk refs for this box (returns affected base IDs for GC)
+            let affected_base_ids = self
+                .base_disk_mgr
+                .store()
+                .remove_all_refs_for_box(id.as_ref())
+                .unwrap_or_default();
+
+            // 2. Delete container disk file
+            let disks_dir = config.box_home.join("disks");
+            let container = disks_dir.join(crate::disk::constants::filenames::CONTAINER_DISK);
+            let _ = std::fs::remove_file(&container);
+
+            // 3. Remove all snapshots for this box (files + DB records).
+            self.snapshot_mgr
+                .remove_all_for_box(id.as_ref(), &config.box_home);
+
+            // 4. GC each affected base (may cascade to parents)
+            for base_id in affected_base_ids {
+                self.base_disk_mgr.try_gc_base(&base_id);
             }
 
             // Delete box directory
@@ -861,6 +894,27 @@ impl RuntimeImpl {
                 )));
             }
             drop(state);
+
+            // 1. Remove all base disk refs for this box (returns affected base IDs for GC)
+            let affected_base_ids = self
+                .base_disk_mgr
+                .store()
+                .remove_all_refs_for_box(id.as_ref())
+                .unwrap_or_default();
+
+            // 2. Delete container disk file
+            let disks_dir = box_impl.config.box_home.join("disks");
+            let container = disks_dir.join(crate::disk::constants::filenames::CONTAINER_DISK);
+            let _ = std::fs::remove_file(&container);
+
+            // 3. Remove all snapshots for this box (files + DB records).
+            self.snapshot_mgr
+                .remove_all_for_box(id.as_ref(), &box_impl.config.box_home);
+
+            // 4. GC each affected base (may cascade to parents)
+            for base_id in affected_base_ids {
+                self.base_disk_mgr.try_gc_base(&base_id);
+            }
 
             // Invalidate cache (removes from in-memory maps)
             self.invalidate_box_impl(id, box_impl.config.name.as_deref());
@@ -1368,48 +1422,26 @@ impl RuntimeImpl {
     }
 }
 
-/// Find boxes whose disks have backing file references pointing into `box_home`.
+/// Find boxes that depend on bases created from this box.
+///
+/// Uses the `base_disk_ref` table: looks up bases where `source_box_id` matches,
+/// then finds other boxes that reference those bases.
 ///
 /// Used to prevent removing a box that other boxes depend on (COW clones).
-fn find_boxes_depending_on(
-    runtime: &RuntimeImpl,
-    box_home: &std::path::Path,
-) -> BoxliteResult<Vec<String>> {
-    use crate::disk::constants::filenames as disk_filenames;
+fn find_boxes_depending_on(runtime: &RuntimeImpl, box_id: &str) -> BoxliteResult<Vec<String>> {
+    use std::collections::HashSet;
 
-    let canonical_home = box_home
-        .canonicalize()
-        .unwrap_or_else(|_| box_home.to_path_buf());
+    let bases = runtime.base_disk_mgr.store().list_by_box(box_id, None)?;
 
-    let all_boxes = runtime.box_manager.all_boxes(true)?;
-    let mut dependents = Vec::new();
-
-    for (config, _state) in &all_boxes {
-        // Skip the box being removed.
-        if config.box_home == box_home {
-            continue;
-        }
-
-        for disk_name in [
-            disk_filenames::CONTAINER_DISK,
-            disk_filenames::GUEST_ROOTFS_DISK,
-        ] {
-            let disk_path = config.box_home.join(disk_name);
-            if !disk_path.exists() {
-                continue;
-            }
-            if let Ok(Some(backing)) = crate::disk::read_backing_file_path(&disk_path) {
-                let backing_path = std::path::PathBuf::from(&backing);
-                let canonical_backing = backing_path.canonicalize().unwrap_or(backing_path);
-                if canonical_backing.starts_with(&canonical_home) {
-                    dependents.push(config.id.to_string());
-                    break; // One match per box is enough.
-                }
+    let mut dependents = HashSet::new();
+    for base in &bases {
+        for dep_box_id in runtime.base_disk_mgr.store().dependent_boxes(base.id())? {
+            if dep_box_id != box_id {
+                dependents.insert(dep_box_id);
             }
         }
     }
-
-    Ok(dependents)
+    Ok(dependents.into_iter().collect())
 }
 
 /// Reject qcow2 disks that contain backing file references.
@@ -2212,23 +2244,46 @@ mod tests {
         // Create box A with a disk.
         let config_a = test_box_config_in_layout(false, &runtime);
         let state_a = BoxState::new();
-        std::fs::create_dir_all(&config_a.box_home).unwrap();
+        let disks_a = config_a.box_home.join("disks");
+        std::fs::create_dir_all(&disks_a).unwrap();
 
         // Create a standalone qcow2 for box A.
-        let disk_a = config_a.box_home.join("disk.qcow2");
+        let disk_a = disks_a.join("disk.qcow2");
         crate::disk::qcow2::write_test_qcow2(&disk_a, None);
 
         runtime.box_manager.add_box(&config_a, &state_a).unwrap();
 
-        // Create box B whose disk has a backing reference into A's directory.
+        // Create box B.
         let config_b = test_box_config_in_layout(false, &runtime);
         let state_b = BoxState::new();
-        std::fs::create_dir_all(&config_b.box_home).unwrap();
+        let disks_b = config_b.box_home.join("disks");
+        std::fs::create_dir_all(&disks_b).unwrap();
 
-        let disk_b = config_b.box_home.join("disk.qcow2");
-        crate::disk::qcow2::write_test_qcow2(&disk_b, Some(disk_a.to_str().unwrap()));
+        let disk_b = disks_b.join("disk.qcow2");
+        crate::disk::qcow2::write_test_qcow2(&disk_b, None);
 
         runtime.box_manager.add_box(&config_b, &state_b).unwrap();
+
+        // Simulate a clone dependency: create a base_disk record from A,
+        // then add a ref from B to that base (B is a clone of A).
+        let base_disk = crate::disk::BaseDisk {
+            id: "test-base".to_string(),
+            source_box_id: config_a.id.to_string(),
+            name: None,
+            kind: crate::disk::BaseDiskKind::CloneBase,
+            disk_info: crate::disk::DiskInfo {
+                base_path: disk_a.to_string_lossy().to_string(),
+                container_disk_bytes: 0,
+                size_bytes: 0,
+            },
+            created_at: 0,
+        };
+        runtime.base_disk_mgr.store().insert(&base_disk).unwrap();
+        runtime
+            .base_disk_mgr
+            .store()
+            .add_ref("test-base", config_b.id.as_ref())
+            .unwrap();
 
         // Try to remove box A (non-force) — should fail.
         let result = runtime.remove_box(&config_a.id, false);
@@ -2247,10 +2302,11 @@ mod tests {
 
         let config = test_box_config_in_layout(false, &runtime);
         let state = BoxState::new();
-        std::fs::create_dir_all(&config.box_home).unwrap();
+        let disks_dir = config.box_home.join("disks");
+        std::fs::create_dir_all(&disks_dir).unwrap();
 
         // Standalone disk (no backing).
-        let disk = config.box_home.join("disk.qcow2");
+        let disk = disks_dir.join("disk.qcow2");
         crate::disk::qcow2::write_test_qcow2(&disk, None);
 
         runtime.box_manager.add_box(&config, &state).unwrap();
@@ -2266,18 +2322,40 @@ mod tests {
         // Create box A.
         let config_a = test_box_config_in_layout(false, &runtime);
         let state_a = BoxState::new();
-        std::fs::create_dir_all(&config_a.box_home).unwrap();
-        let disk_a = config_a.box_home.join("disk.qcow2");
+        let disks_a = config_a.box_home.join("disks");
+        std::fs::create_dir_all(&disks_a).unwrap();
+        let disk_a = disks_a.join("disk.qcow2");
         crate::disk::qcow2::write_test_qcow2(&disk_a, None);
         runtime.box_manager.add_box(&config_a, &state_a).unwrap();
 
-        // Create box B depending on A.
+        // Create box B.
         let config_b = test_box_config_in_layout(false, &runtime);
         let state_b = BoxState::new();
-        std::fs::create_dir_all(&config_b.box_home).unwrap();
-        let disk_b = config_b.box_home.join("disk.qcow2");
-        crate::disk::qcow2::write_test_qcow2(&disk_b, Some(disk_a.to_str().unwrap()));
+        let disks_b = config_b.box_home.join("disks");
+        std::fs::create_dir_all(&disks_b).unwrap();
+        let disk_b = disks_b.join("disk.qcow2");
+        crate::disk::qcow2::write_test_qcow2(&disk_b, None);
         runtime.box_manager.add_box(&config_b, &state_b).unwrap();
+
+        // Simulate clone dependency via DB refs (B depends on base from A).
+        let base_disk = crate::disk::BaseDisk {
+            id: "test-base-force".to_string(),
+            source_box_id: config_a.id.to_string(),
+            name: None,
+            kind: crate::disk::BaseDiskKind::CloneBase,
+            disk_info: crate::disk::DiskInfo {
+                base_path: disk_a.to_string_lossy().to_string(),
+                container_disk_bytes: 0,
+                size_bytes: 0,
+            },
+            created_at: 0,
+        };
+        runtime.base_disk_mgr.store().insert(&base_disk).unwrap();
+        runtime
+            .base_disk_mgr
+            .store()
+            .add_ref("test-base-force", config_b.id.as_ref())
+            .unwrap();
 
         // Force remove should succeed despite dependency.
         let result = runtime.remove_box(&config_a.id, true);

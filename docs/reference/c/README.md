@@ -184,6 +184,9 @@ typedef enum BoxliteErrorCode {
     Database = 14,        // Database error
     Portal = 15,          // Portal/communication error
     Rpc = 16,             // RPC error
+    RpcTransport = 17,    // RPC transport error
+    Metadata = 18,        // Metadata error
+    UnsupportedEngine = 19, // Unsupported engine error
 } BoxliteErrorCode;
 ```
 
@@ -595,6 +598,18 @@ char* boxlite_box_id(CBoxHandle* handle);
 
 ---
 
+#### boxlite_box_free
+
+Free a box handle.
+
+```c
+void boxlite_box_free(CBoxHandle* handle);
+```
+
+Safe to call with NULL. Use when you need to release a box handle without freeing the entire runtime.
+
+---
+
 ### Command Execution
 
 #### boxlite_execute
@@ -824,6 +839,18 @@ void boxlite_error_free(CBoxliteError* error);
 
 ---
 
+#### boxlite_box_free
+
+Free a box handle.
+
+```c
+void boxlite_box_free(CBoxHandle* handle);
+```
+
+Safe to call with NULL.
+
+---
+
 ## JSON Schema Reference
 
 ### BoxOptions Schema
@@ -1038,6 +1065,7 @@ if (code != Ok) {
 | `boxlite_remove()` | Remove box |
 | `boxlite_get()` | Reattach to box |
 | `boxlite_box_id()` | Get box ID |
+| `boxlite_box_free()` | Free box handle |
 | `boxlite_box_info()` | Get box info |
 | `boxlite_box_metrics()` | Get box metrics |
 | `boxlite_execute()` | Execute command |
@@ -1049,6 +1077,124 @@ if (code != Ok) {
 | `boxlite_result_free()` | Free exec result |
 | `boxlite_free_string()` | Free string |
 | `boxlite_error_free()` | Free error |
+
+---
+
+## Common Patterns
+
+### Streaming Output
+
+```c
+void output_callback(const char* text, int is_stderr, void* user_data) {
+    FILE* stream = is_stderr ? stderr : stdout;
+    fprintf(stream, "%s", text);
+}
+
+int exit_code = 0;
+boxlite_execute(box, "python", args, output_callback, NULL, &exit_code, &error);
+```
+
+### Reattach to Box
+
+```c
+// Get box ID
+char* box_id = boxlite_box_id(box);
+
+// Later, in different process:
+CBoxHandle* box2 = NULL;
+boxlite_get(runtime, box_id, &box2, &error);
+
+boxlite_free_string(box_id);
+```
+
+### Get Box Info
+
+```c
+char* json = NULL;
+if (boxlite_box_info(box, &json, &error) == Ok) {
+    printf("Box info: %s\n", json);
+    boxlite_free_string(json);
+}
+```
+
+---
+
+## Common Mistakes
+
+### Uninitialized error struct
+
+```c
+CBoxliteError error;       // Wrong: uninitialized
+CBoxliteError error = {0}; // Correct: zero-initialized
+```
+
+### Forgetting to free error
+
+```c
+if (code != Ok) {
+    printf("Error: %s\n", error.message);
+    return 1;                       // Wrong: memory leak
+}
+
+if (code != Ok) {
+    printf("Error: %s\n", error.message);
+    boxlite_error_free(&error);     // Correct
+    return 1;
+}
+```
+
+### Forgetting to free JSON strings
+
+```c
+char* json;
+boxlite_list_info(runtime, &json, &error);
+// Wrong: forgot to free
+
+char* json;
+boxlite_list_info(runtime, &json, &error);
+boxlite_free_string(json);  // Correct
+```
+
+---
+
+## Build & Link
+
+### CMake
+
+```cmake
+cmake_minimum_required(VERSION 3.15)
+project(my_app)
+
+set(BOXLITE_INCLUDE "/path/to/boxlite/sdks/c/include")
+set(BOXLITE_LIB_DIR "/path/to/boxlite/target/release")
+
+include_directories(${BOXLITE_INCLUDE})
+
+add_executable(my_app main.c)
+target_link_libraries(my_app ${BOXLITE_LIB_DIR}/libboxlite.dylib)
+```
+
+### Direct Compilation
+
+```bash
+# macOS
+gcc -o myapp myapp.c \
+    -I/path/to/boxlite/sdks/c/include \
+    -L/path/to/boxlite/target/release \
+    -lboxlite
+
+export DYLD_LIBRARY_PATH=/path/to/boxlite/target/release:$DYLD_LIBRARY_PATH
+./myapp
+
+# Linux
+gcc -o myapp myapp.c \
+    -I/path/to/boxlite/sdks/c/include \
+    -L/path/to/boxlite/target/release \
+    -lboxlite
+
+export LD_LIBRARY_PATH=/path/to/boxlite/target/release:$LD_LIBRARY_PATH
+./myapp
+```
 
 ---
 
