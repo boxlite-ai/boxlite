@@ -1,340 +1,288 @@
-package client
+package boxlite
 
 import (
-	"context"
 	"errors"
 	"testing"
 )
 
-// newTestRuntime is a test helper that creates a Runtime backed by a mock.
-func newTestRuntime(m *mockRuntimeProvider) *Runtime {
-	return newRuntimeWith(m)
+// ============================================================================
+// Error types
+// ============================================================================
+
+func TestError_Error(t *testing.T) {
+	e := &Error{Code: ErrNotFound, Message: "box not found"}
+	got := e.Error()
+	if got != "boxlite: box not found (code=2)" {
+		t.Errorf("Error(): got %q", got)
+	}
 }
 
-// ============================================================================
-// Runtime lifecycle
-// ============================================================================
+func TestIsNotFound(t *testing.T) {
+	err := &Error{Code: ErrNotFound, Message: "missing"}
+	if !IsNotFound(err) {
+		t.Error("expected IsNotFound to return true")
+	}
+	if IsNotFound(errors.New("other")) {
+		t.Error("expected IsNotFound to return false for non-Error")
+	}
+	if IsNotFound(&Error{Code: ErrInternal, Message: "internal"}) {
+		t.Error("expected IsNotFound to return false for different code")
+	}
+}
 
-func TestRuntime_Close_Idempotent(t *testing.T) {
-	m := newMockRuntimeProvider()
-	r := newTestRuntime(m)
+func TestIsAlreadyExists(t *testing.T) {
+	err := &Error{Code: ErrAlreadyExists, Message: "exists"}
+	if !IsAlreadyExists(err) {
+		t.Error("expected IsAlreadyExists to return true")
+	}
+	if IsAlreadyExists(errors.New("other")) {
+		t.Error("expected IsAlreadyExists to return false for non-Error")
+	}
+}
 
-	r.Close()
-	r.Close() // second Close must not panic
+func TestIsInvalidState(t *testing.T) {
+	err := &Error{Code: ErrInvalidState, Message: "bad state"}
+	if !IsInvalidState(err) {
+		t.Error("expected IsInvalidState to return true")
+	}
+	if IsInvalidState(errors.New("other")) {
+		t.Error("expected IsInvalidState to return false for non-Error")
+	}
+}
 
-	if !m.freed {
-		t.Error("expected Free() to be called on the mock runtime")
+func TestError_Unwrap(t *testing.T) {
+	err := &Error{Code: ErrNotFound, Message: "test"}
+	var target *Error
+	if !errors.As(err, &target) {
+		t.Error("errors.As should match *Error")
+	}
+	if target.Code != ErrNotFound {
+		t.Errorf("Code: got %d, want %d", target.Code, ErrNotFound)
 	}
 }
 
 // ============================================================================
-// CreateBox
+// Options
 // ============================================================================
 
-func TestCreateBox(t *testing.T) {
+func TestBoxOptions(t *testing.T) {
+	cfg := &boxConfig{}
+	WithName("test-box")(cfg)
+	WithCPUs(4)(cfg)
+	WithMemory(1024)(cfg)
+	WithEnv("FOO", "bar")(cfg)
+	WithVolume("/host", "/guest")(cfg)
+	WithVolumeReadOnly("/ro-host", "/ro-guest")(cfg)
+	WithWorkDir("/app")(cfg)
+	WithEntrypoint("/bin/sh")(cfg)
+	WithCmd("-c", "echo hi")(cfg)
+
+	if cfg.name != "test-box" {
+		t.Errorf("name: got %q", cfg.name)
+	}
+	if cfg.cpus != 4 {
+		t.Errorf("cpus: got %d", cfg.cpus)
+	}
+	if cfg.memoryMiB != 1024 {
+		t.Errorf("memoryMiB: got %d", cfg.memoryMiB)
+	}
+	if len(cfg.env) != 1 || cfg.env[0] != [2]string{"FOO", "bar"} {
+		t.Errorf("env: got %v", cfg.env)
+	}
+	if len(cfg.volumes) != 2 {
+		t.Fatalf("volumes: got %d", len(cfg.volumes))
+	}
+	if cfg.volumes[0].readOnly {
+		t.Error("first volume should be read-write")
+	}
+	if !cfg.volumes[1].readOnly {
+		t.Error("second volume should be read-only")
+	}
+	if cfg.workDir != "/app" {
+		t.Errorf("workDir: got %q", cfg.workDir)
+	}
+}
+
+func TestRuntimeOptions(t *testing.T) {
+	cfg := &runtimeConfig{}
+	WithHomeDir("/custom")(cfg)
+	WithRegistries("ghcr.io", "docker.io")(cfg)
+
+	if cfg.homeDir != "/custom" {
+		t.Errorf("homeDir: got %q", cfg.homeDir)
+	}
+	if len(cfg.registries) != 2 {
+		t.Errorf("registries: got %v", cfg.registries)
+	}
+}
+
+// ============================================================================
+// Wire types
+// ============================================================================
+
+func TestBuildOptionsJSON(t *testing.T) {
+	cfg := &boxConfig{}
+	WithCPUs(2)(cfg)
+	WithMemory(512)(cfg)
+	WithEnv("KEY", "VAL")(cfg)
+	WithVolume("/src", "/dst")(cfg)
+	WithWorkDir("/work")(cfg)
+
+	wire := buildOptionsJSON("alpine:latest", cfg)
+
+	rootfs, ok := wire.Rootfs.(wireRootfsImage)
+	if !ok {
+		t.Fatalf("Rootfs type: got %T", wire.Rootfs)
+	}
+	if rootfs.Image != "alpine:latest" {
+		t.Errorf("Rootfs.Image: got %q", rootfs.Image)
+	}
+	if wire.CPUs == nil || *wire.CPUs != 2 {
+		t.Error("CPUs not set")
+	}
+	if wire.MemoryMiB == nil || *wire.MemoryMiB != 512 {
+		t.Error("MemoryMiB not set")
+	}
+	if len(wire.Env) != 1 {
+		t.Errorf("Env length: got %d", len(wire.Env))
+	}
+	if len(wire.Volumes) != 1 {
+		t.Errorf("Volumes length: got %d", len(wire.Volumes))
+	}
+	if wire.WorkDir != "/work" {
+		t.Errorf("WorkDir: got %q", wire.WorkDir)
+	}
+	if wire.Network != "Isolated" {
+		t.Errorf("Network: got %q", wire.Network)
+	}
+}
+
+func TestBuildOptionsJSON_Defaults(t *testing.T) {
+	cfg := &boxConfig{}
+	wire := buildOptionsJSON("ubuntu:22.04", cfg)
+
+	if wire.CPUs != nil {
+		t.Error("CPUs should be nil by default")
+	}
+	if wire.MemoryMiB != nil {
+		t.Error("MemoryMiB should be nil by default")
+	}
+	if wire.Env == nil {
+		t.Error("Env should be non-nil empty slice")
+	}
+	if wire.Volumes == nil {
+		t.Error("Volumes should be non-nil empty slice")
+	}
+	if wire.Ports == nil {
+		t.Error("Ports should be non-nil empty slice")
+	}
+}
+
+func TestBoxInfoWire_ToBoxInfo(t *testing.T) {
+	pid := 42
+	info := boxInfoWire{
+		ID:   "abc-123",
+		Name: "test-box",
+		State: wireStateInfo{
+			Status:  "running",
+			Running: true,
+			PID:     &pid,
+		},
+		Image:     "alpine:latest",
+		CPUs:      2,
+		MemoryMiB: 512,
+	}
+
+	boxInfo := info.toBoxInfo()
+	if boxInfo.ID != "abc-123" {
+		t.Errorf("ID: got %q", boxInfo.ID)
+	}
+	if boxInfo.State != StateRunning {
+		t.Errorf("State: got %q", boxInfo.State)
+	}
+	if !boxInfo.Running {
+		t.Error("Running should be true")
+	}
+	if boxInfo.PID != 42 {
+		t.Errorf("PID: got %d", boxInfo.PID)
+	}
+	if boxInfo.CPUs != 2 {
+		t.Errorf("CPUs: got %d", boxInfo.CPUs)
+	}
+	if boxInfo.Image != "alpine:latest" {
+		t.Errorf("Image: got %q", boxInfo.Image)
+	}
+}
+
+func TestBoxInfoWire_ToBoxInfo_NilPID(t *testing.T) {
+	info := boxInfoWire{
+		State: wireStateInfo{
+			Status:  "configured",
+			Running: false,
+			PID:     nil,
+		},
+	}
+
+	boxInfo := info.toBoxInfo()
+	if boxInfo.PID != 0 {
+		t.Errorf("PID: got %d, want 0", boxInfo.PID)
+	}
+	if boxInfo.Running {
+		t.Error("Running should be false")
+	}
+}
+
+// ============================================================================
+// State constants
+// ============================================================================
+
+func TestStateConstants(t *testing.T) {
 	tests := []struct {
-		name       string
-		setup      func(*mockRuntimeProvider)
-		boxName    string
-		wantErr    string
-		wantName   string
-		wantNonNil bool
+		state State
+		want  string
 	}{
-		{
-			name:       "success",
-			boxName:    "my-box",
-			wantNonNil: true,
-			wantName:   "my-box",
-		},
-		{
-			name:    "propagates_create_error",
-			setup:   func(m *mockRuntimeProvider) { m.SetCreateError(errors.New("image pull failed")) },
-			wantErr: "image pull failed",
-		},
+		{StateConfigured, "configured"},
+		{StateRunning, "running"},
+		{StateStopping, "stopping"},
+		{StateStopped, "stopped"},
 	}
-
 	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			m := newMockRuntimeProvider()
-			if tc.setup != nil {
-				tc.setup(m)
-			}
-			r := newTestRuntime(m)
-			box, err := r.CreateBox(context.Background(), tc.boxName, NewBoxOptions("alpine:latest"))
-
-			if tc.wantErr != "" {
-				if err == nil {
-					t.Fatal("expected error, got nil")
-				}
-				if err.Error() != tc.wantErr {
-					t.Errorf("error: got %q, want %q", err.Error(), tc.wantErr)
-				}
-				return
-			}
-
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if tc.wantNonNil && box == nil {
-				t.Fatal("expected non-nil box")
-			}
-			if box.ID() == "" {
-				t.Error("box ID must not be empty")
-			}
-			if tc.wantName != "" && box.Name() != tc.wantName {
-				t.Errorf("Name: got %q, want %q", box.Name(), tc.wantName)
-			}
-		})
-	}
-}
-
-// ============================================================================
-// GetBox
-// ============================================================================
-
-func TestGetBox(t *testing.T) {
-	tests := []struct {
-		name    string
-		setup   func(*mockRuntimeProvider)
-		query   string
-		wantNil bool
-		wantErr bool
-	}{
-		{
-			name:  "found",
-			setup: func(m *mockRuntimeProvider) { m.AddBox("box-001", "alpine:latest") },
-			query: "box-001",
-		},
-		{
-			name:    "not_found_returns_nil_no_error",
-			query:   "nonexistent",
-			wantNil: true,
-		},
-		{
-			name:    "propagates_get_error",
-			setup:   func(m *mockRuntimeProvider) { m.SetGetError(errors.New("storage error")) },
-			query:   "any-box",
-			wantErr: true,
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			m := newMockRuntimeProvider()
-			if tc.setup != nil {
-				tc.setup(m)
-			}
-			r := newTestRuntime(m)
-			box, err := r.GetBox(context.Background(), tc.query)
-
-			if tc.wantErr {
-				if err == nil {
-					t.Fatal("expected error, got nil")
-				}
-				return
-			}
-
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if tc.wantNil && box != nil {
-				t.Error("expected nil box")
-			}
-			if !tc.wantNil && box == nil {
-				t.Error("expected non-nil box")
-			}
-		})
-	}
-}
-
-// ============================================================================
-// ListBoxes
-// ============================================================================
-
-func TestListBoxes(t *testing.T) {
-	tests := []struct {
-		name      string
-		setup     func(*mockRuntimeProvider)
-		wantCount int
-		wantErr   bool
-	}{
-		{
-			name:      "empty",
-			wantCount: 0,
-		},
-		{
-			name: "multiple",
-			setup: func(m *mockRuntimeProvider) {
-				m.AddBox("box-001", "alpine:latest")
-				m.AddBox("box-002", "ubuntu:22.04")
-				m.AddBox("box-003", "debian:bookworm")
-			},
-			wantCount: 3,
-		},
-		{
-			name:    "propagates_list_error",
-			setup:   func(m *mockRuntimeProvider) { m.SetListError(errors.New("db connection lost")) },
-			wantErr: true,
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			m := newMockRuntimeProvider()
-			if tc.setup != nil {
-				tc.setup(m)
-			}
-			r := newTestRuntime(m)
-			boxes, err := r.ListBoxes(context.Background())
-
-			if tc.wantErr {
-				if err == nil {
-					t.Fatal("expected error, got nil")
-				}
-				return
-			}
-
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if len(boxes) != tc.wantCount {
-				t.Errorf("box count: got %d, want %d", len(boxes), tc.wantCount)
-			}
-		})
-	}
-}
-
-// ============================================================================
-// RemoveBox
-// ============================================================================
-
-func TestRemoveBox(t *testing.T) {
-	tests := []struct {
-		name    string
-		setup   func(*mockRuntimeProvider)
-		target  string
-		wantErr bool
-	}{
-		{
-			name:   "success",
-			setup:  func(m *mockRuntimeProvider) { m.AddBox("box-001", "alpine:latest") },
-			target: "box-001",
-		},
-		{
-			name:    "not_found_returns_error",
-			target:  "nonexistent",
-			wantErr: true,
-		},
-		{
-			name:    "propagates_remove_error",
-			setup:   func(m *mockRuntimeProvider) { m.SetRemoveError(errors.New("permission denied")) },
-			target:  "any-box",
-			wantErr: true,
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			m := newMockRuntimeProvider()
-			if tc.setup != nil {
-				tc.setup(m)
-			}
-			r := newTestRuntime(m)
-			err := r.RemoveBox(context.Background(), tc.target, false)
-
-			if tc.wantErr {
-				if err == nil {
-					t.Fatal("expected error, got nil")
-				}
-				return
-			}
-
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			boxes, _ := r.ListBoxes(context.Background())
-			if len(boxes) != 0 {
-				t.Errorf("expected empty list after removal, got %d boxes", len(boxes))
-			}
-		})
-	}
-}
-
-// ============================================================================
-// Box operations
-// ============================================================================
-
-func TestBox_Start(t *testing.T) {
-	tests := []struct {
-		name      string
-		setup     func(*mockRuntimeProvider)
-		wantErr   bool
-		wantState string
-	}{
-		{
-			name:      "success_transitions_to_running",
-			wantState: "running",
-		},
-		{
-			name:    "propagates_start_error",
-			setup:   func(m *mockRuntimeProvider) { m.boxes["box-001"].startErr = errors.New("vm boot failed") },
-			wantErr: true,
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			m := newMockRuntimeProvider()
-			m.AddBox("box-001", "alpine:latest")
-			if tc.setup != nil {
-				tc.setup(m)
-			}
-			r := newTestRuntime(m)
-
-			box, err := r.GetBox(context.Background(), "box-001")
-			if err != nil || box == nil {
-				t.Fatalf("GetBox: unexpected error or nil box: %v", err)
-			}
-
-			err = box.Start()
-			if tc.wantErr {
-				if err == nil {
-					t.Fatal("expected error, got nil")
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if tc.wantState != "" {
-				info, _ := box.Info()
-				if info.State != tc.wantState {
-					t.Errorf("state: got %q, want %q", info.State, tc.wantState)
-				}
-			}
-		})
-	}
-}
-
-func TestBox_Stop(t *testing.T) {
-	t.Run("propagates_stop_error", func(t *testing.T) {
-		m := newMockRuntimeProvider()
-		mockB := m.AddBox("box-001", "alpine:latest")
-		mockB.stopErr = errors.New("vm stop timeout")
-		r := newTestRuntime(m)
-
-		box, _ := r.GetBox(context.Background(), "box-001")
-		if err := box.Stop(); err == nil {
-			t.Fatal("expected error, got nil")
+		if string(tc.state) != tc.want {
+			t.Errorf("State %v: got %q, want %q", tc.state, string(tc.state), tc.want)
 		}
-	})
+	}
 }
 
-func TestBox_Close_Idempotent(t *testing.T) {
-	m := newMockRuntimeProvider()
-	r := newTestRuntime(m)
+// ============================================================================
+// AutoRemove / Detach options
+// ============================================================================
 
-	box, _ := r.CreateBox(context.Background(), "", NewBoxOptions("alpine:latest"))
-	box.Close()
-	box.Close() // second Close must not panic
+func TestWithAutoRemove(t *testing.T) {
+	cfg := &boxConfig{}
+	WithAutoRemove(false)(cfg)
+	if cfg.autoRemove == nil || *cfg.autoRemove != false {
+		t.Error("autoRemove should be false")
+	}
+}
+
+func TestWithDetach(t *testing.T) {
+	cfg := &boxConfig{}
+	WithDetach(true)(cfg)
+	if cfg.detach == nil || *cfg.detach != true {
+		t.Error("detach should be true")
+	}
+}
+
+func TestBuildOptionsJSON_AutoRemoveDetach(t *testing.T) {
+	cfg := &boxConfig{}
+	WithAutoRemove(false)(cfg)
+	WithDetach(true)(cfg)
+
+	wire := buildOptionsJSON("alpine:latest", cfg)
+	if wire.AutoRemove == nil || *wire.AutoRemove != false {
+		t.Error("AutoRemove should be false in wire")
+	}
+	if wire.Detach == nil || *wire.Detach != true {
+		t.Error("Detach should be true in wire")
+	}
 }

@@ -1,4 +1,4 @@
-PHONY_TARGETS += dist\:python dist\:c dist\:node
+PHONY_TARGETS += dist\:python dist\:c dist\:node dist\:go
 
 dist\:python: _ensure-python-deps
 	@echo "📦 Installing cibuildwheel..."
@@ -35,3 +35,9 @@ dist\:c:
 # Build Node.js distribution packages (local use)
 dist\:node: runtime
 	@cd sdks/node && npm install --silent && npm run build:native -- --release && npm run build && npm run artifacts && npm run bundle:runtime && npm run pack:all
+
+dist\:go:
+	@echo "📦 Building Go SDK (release)..."
+	@cargo build --release -p boxlite-c
+	@bash $(SCRIPT_DIR)/build/fix-go-symbols.sh target/release/libboxlite.a
+	@echo "✅ Go SDK release built"

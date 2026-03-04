@@ -1,7 +1,7 @@
 PHONY_TARGETS += fmt fmt\:all fmt\:check fmt\:check\:all
-PHONY_TARGETS += fmt\:rust fmt\:python fmt\:node fmt\:c
-PHONY_TARGETS += fmt\:check\:rust fmt\:check\:python fmt\:check\:node fmt\:check\:c
-PHONY_TARGETS += lint lint\:all lint\:fix lint\:rust lint\:python lint\:node lint\:c clippy
+PHONY_TARGETS += fmt\:rust fmt\:python fmt\:node fmt\:c fmt\:go
+PHONY_TARGETS += fmt\:check\:rust fmt\:check\:python fmt\:check\:node fmt\:check\:c fmt\:check\:go
+PHONY_TARGETS += lint lint\:all lint\:fix lint\:rust lint\:python lint\:node lint\:c lint\:go clippy
 
 # Smart format: only format changed components.
 fmt:
@@ -20,6 +20,7 @@ fmt\:all:
 	@$(MAKE) fmt:python
 	@$(MAKE) fmt:node
 	@$(MAKE) fmt:c
+	@$(MAKE) fmt:go
 	@echo "✅ Formatting complete"
 
 # Smart format check: only check changed components.
@@ -39,6 +40,7 @@ fmt\:check\:all:
 	@$(MAKE) fmt:check:python
 	@$(MAKE) fmt:check:node
 	@$(MAKE) fmt:check:c
+	@$(MAKE) fmt:check:go
 	@echo "✅ Formatting checks passed"
 
 fmt\:rust:
@@ -106,6 +108,7 @@ lint\:all:
 	@$(MAKE) lint:python
 	@$(MAKE) lint:node
 	@$(MAKE) lint:c
+	@$(MAKE) lint:go
 	@echo "✅ Lint checks passed"
 
 # Safe autofix path: format first, fix Python lint, then verify all lint checks.
@@ -143,6 +146,18 @@ lint\:c:
 	for file in sdks/c/tests/*.c; do \
 		"$$CLANG_TIDY" --warnings-as-errors='*' "$$file" -- -std=c11 -Isdks/c/include || exit 1; \
 	done
+
+fmt\:go:
+	@echo "🔧 Formatting Go SDK..."
+	@cd sdks/go && go fmt ./...
+
+fmt\:check\:go:
+	@echo "🔍 Checking Go SDK formatting..."
+	@cd sdks/go && test -z "$$(gofmt -l .)" || (gofmt -l . && exit 1)
+
+lint\:go:
+	@echo "🔍 Linting Go SDK (vet)..."
+	@cd sdks/go && go vet ./...
 
 clippy: _ensure-python-deps
 	@echo "🔍 Running Rust clippy checks..."

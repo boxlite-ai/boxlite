@@ -1,12 +1,13 @@
 PHONY_TARGETS += test test\:changed test\:all test\:unit test\:integration
 PHONY_TARGETS += test\:changed\:rust test\:changed\:cli test\:changed\:ffi
-PHONY_TARGETS += test\:changed\:python test\:changed\:node test\:changed\:c
+PHONY_TARGETS += test\:changed\:python test\:changed\:node test\:changed\:c test\:changed\:go
 PHONY_TARGETS += test\:unit\:core test\:integration\:core test\:unit\:sdk test\:integration\:sdk
 PHONY_TARGETS += test\:unit\:rust test\:warm-cache\:rust test\:integration\:rust
 PHONY_TARGETS += test\:unit\:ffi test\:integration\:cli
 PHONY_TARGETS += test\:unit\:python test\:integration\:python test\:all\:python
 PHONY_TARGETS += test\:unit\:node test\:integration\:node test\:all\:node
 PHONY_TARGETS += test\:all\:c
+PHONY_TARGETS += test\:unit\:go test\:all\:go
 
 # Default test target runs only changed components.
 test:
@@ -46,6 +47,9 @@ test\:changed\:node:
 
 test\:changed\:c:
 	@$(MAKE) test:all:c
+
+test\:changed\:go:
+	@$(MAKE) test:unit:go
 
 # Full matrix: all unit suites + all integration suites.
 test\:all:
@@ -93,13 +97,15 @@ test\:integration\:core:
 	@echo ""
 	$(MAKE) test:integration:cli
 
-# SDK unit suites: Python unit + Node unit.
+# SDK unit suites: Python unit + Node unit + Go unit.
 test\:unit\:sdk:
-	@echo "── SDK unit suites (python, node) ──"
+	@echo "── SDK unit suites (python, node, go) ──"
 	@echo ""
 	$(MAKE) test:unit:python
 	@echo ""
 	$(MAKE) test:unit:node
+	@echo ""
+	$(MAKE) test:unit:go
 
 # SDK integration suites: Python integration + Node integration + C SDK test suite.
 test\:integration\:sdk:
@@ -209,3 +215,13 @@ test\:all\:c:
 	@cd sdks/c/tests/build && cmake ..
 	@cd sdks/c/tests/build && cmake --build . -j
 	@cd sdks/c/tests/build && ctest --verbose --output-on-failure
+
+# Go SDK unit tests.
+test\:unit\:go:
+	@echo "🧪 Running Go SDK unit tests..."
+	@$(MAKE) dev:go
+	@cd sdks/go && go test -v ./...
+
+# Go SDK full suite.
+test\:all\:go:
+	@$(MAKE) test:unit:go

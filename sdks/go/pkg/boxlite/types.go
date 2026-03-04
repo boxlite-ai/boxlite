@@ -1,151 +1,58 @@
-package client
+package boxlite
 
-import (
-	"time"
-)
+import "time"
 
-// BoxOptions configures a new box.
-type BoxOptions struct {
-	// Image is the OCI image to use (e.g., "alpine:latest").
-	Image string `json:"image"`
-
-	// CPUs is the number of virtual CPUs (default: 1).
-	CPUs int `json:"cpus,omitempty"`
-
-	// MemoryMB is the memory limit in megabytes (default: 512).
-	MemoryMB int `json:"memory_mb,omitempty"`
-
-	// Env is a map of environment variables.
-	Env map[string]string `json:"env,omitempty"`
-
-	// WorkingDir is the working directory inside the container.
-	WorkingDir string `json:"working_dir,omitempty"`
-
-	// Command overrides the default command of the image.
-	Command []string `json:"command,omitempty"`
-
-	// Entrypoint overrides the default entrypoint of the image.
-	Entrypoint []string `json:"entrypoint,omitempty"`
-
-	// Mounts are volume mounts for the box.
-	Mounts []Mount `json:"mounts,omitempty"`
-}
-
-// BoxOption is a functional option for configuring a Box.
-type BoxOption func(*BoxOptions)
-
-// Mount represents a volume mount.
-type Mount struct {
-	// Source is the path on the host.
-	Source string `json:"source"`
-
-	// Target is the path in the container.
-	Target string `json:"target"`
-
-	// Type is the mount type (e.g., "bind", "volume").
-	Type string `json:"type,omitempty"`
-
-	// ReadOnly makes the mount read-only.
-	ReadOnly bool `json:"read_only,omitempty"`
-}
-
-// BoxInfo contains information about a box.
-type BoxInfo struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name,omitempty"`
-	Image     string    `json:"image"`
-	State     string    `json:"state"`
-	CreatedAt time.Time `json:"created_at"`
-}
-
-// BoxState represents the state of a box.
-type BoxState string
+// State represents the lifecycle state of a box.
+type State string
 
 const (
-	BoxStateConfigured BoxState = "configured"
-	BoxStateRunning    BoxState = "running"
-	BoxStateStopped    BoxState = "stopped"
-	BoxStateError      BoxState = "error"
+	StateConfigured State = "configured"
+	StateRunning    State = "running"
+	StateStopping   State = "stopping"
+	StateStopped    State = "stopped"
 )
 
-// RuntimeOptions represents configuration options for creating a Runtime.
-type RuntimeOptions struct {
-	// HomeDir is the directory where BoxLite stores its data.
-	// If empty, uses the default location (~/.boxlite).
-	HomeDir string
-
-	// ImageRegistries is a list of OCI registries to use for image pulls.
-	ImageRegistries []string
+// BoxInfo holds information about a box.
+type BoxInfo struct {
+	ID        string
+	Name      string
+	Image     string
+	State     State
+	Running   bool
+	PID       int
+	CPUs      int
+	MemoryMiB int
+	CreatedAt time.Time
 }
 
-// WithImage sets the image for the box.
-func WithImage(image string) BoxOption {
-	return func(o *BoxOptions) { o.Image = image }
+// ExecResult contains the result of a buffered command execution.
+type ExecResult struct {
+	ExitCode int
+	Stdout   string
+	Stderr   string
 }
 
-// WithCPUs sets the number of CPUs for the box.
-func WithCPUs(cpus int) BoxOption {
-	return func(o *BoxOptions) { o.CPUs = cpus }
+// RuntimeMetrics holds aggregate runtime metrics.
+type RuntimeMetrics struct {
+	BoxesCreatedTotal     int `json:"boxes_created_total"`
+	BoxesFailedTotal      int `json:"boxes_failed_total"`
+	RunningBoxes          int `json:"num_running_boxes"`
+	TotalCommandsExecuted int `json:"total_commands_executed"`
+	TotalExecErrors       int `json:"total_exec_errors"`
 }
 
-// WithMemoryMB sets the memory limit in MB for the box.
-func WithMemoryMB(memoryMB int) BoxOption {
-	return func(o *BoxOptions) { o.MemoryMB = memoryMB }
-}
-
-// WithEnv sets environment variables for the box.
-func WithEnv(env map[string]string) BoxOption {
-	return func(o *BoxOptions) { o.Env = env }
-}
-
-// WithEnvVar adds a single environment variable to the box.
-func WithEnvVar(key, value string) BoxOption {
-	return func(o *BoxOptions) {
-		if o.Env == nil {
-			o.Env = make(map[string]string)
-		}
-		o.Env[key] = value
-	}
-}
-
-// WithWorkingDir sets the working directory for the box.
-func WithWorkingDir(workingDir string) BoxOption {
-	return func(o *BoxOptions) { o.WorkingDir = workingDir }
-}
-
-// WithCommand sets the command for the box.
-func WithCommand(command ...string) BoxOption {
-	return func(o *BoxOptions) { o.Command = command }
-}
-
-// WithEntrypoint sets the entrypoint for the box.
-func WithEntrypoint(entrypoint ...string) BoxOption {
-	return func(o *BoxOptions) { o.Entrypoint = entrypoint }
-}
-
-// WithMounts sets the mounts for the box.
-func WithMounts(mounts ...Mount) BoxOption {
-	return func(o *BoxOptions) { o.Mounts = mounts }
-}
-
-// WithMount adds a single mount to the box.
-func WithMount(source, target string, readOnly bool) BoxOption {
-	return func(o *BoxOptions) {
-		mount := Mount{
-			Source:   source,
-			Target:   target,
-			Type:     "bind",
-			ReadOnly: readOnly,
-		}
-		o.Mounts = append(o.Mounts, mount)
-	}
-}
-
-// NewBoxOptions creates a new BoxOptions with the given image and optional configurations.
-func NewBoxOptions(image string, opts ...BoxOption) BoxOptions {
-	o := BoxOptions{Image: image}
-	for _, opt := range opts {
-		opt(&o)
-	}
-	return o
+// BoxMetrics holds per-box metrics.
+type BoxMetrics struct {
+	CPUPercent           float64 `json:"cpu_percent"`
+	MemoryBytes          int64   `json:"memory_bytes"`
+	CommandsExecuted     int     `json:"commands_executed_total"`
+	ExecErrors           int     `json:"exec_errors_total"`
+	BytesSent            int64   `json:"bytes_sent_total"`
+	BytesReceived        int64   `json:"bytes_received_total"`
+	CreateDurationMs     int64   `json:"total_create_duration_ms"`
+	BootDurationMs       int64   `json:"guest_boot_duration_ms"`
+	NetworkBytesSent     int64   `json:"network_bytes_sent"`
+	NetworkBytesReceived int64   `json:"network_bytes_received"`
+	NetworkTCPConns      int     `json:"network_tcp_connections"`
+	NetworkTCPErrors     int     `json:"network_tcp_errors"`
 }

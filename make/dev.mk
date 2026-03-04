@@ -1,4 +1,4 @@
-PHONY_TARGETS += _ensure-python-deps dev\:python dev\:c dev\:node _ensure-node-deps
+PHONY_TARGETS += _ensure-python-deps _ensure-node-deps dev\:python dev\:c dev\:node dev\:go
 
 # Ensure Python venv exists (lightweight, no package install).
 _ensure-python-deps:
@@ -33,3 +33,11 @@ dev\:node: runtime-debug
 	@echo "📦 Linking SDK to examples..."
 	@cd examples/node && npm install --silent
 	@echo "✅ Node.js SDK built and linked to examples"
+
+# Build Go SDK locally (debug mode, static linking)
+dev\:go:
+	@echo "🔨 Building Go SDK (debug)..."
+	@cargo build -p boxlite-c
+	@bash $(SCRIPT_DIR)/build/fix-go-symbols.sh target/debug/libboxlite.a
+	@cd sdks/go && go build ./...
+	@echo "✅ Go SDK built. You can now run: cd sdks/go && go test -v ./..."

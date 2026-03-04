@@ -1,141 +1,219 @@
-package client
+// Package boxlite provides an idiomatic Go SDK for the BoxLite runtime.
+//
+// BoxLite is an embeddable virtual machine runtime for secure, isolated code
+// execution. Think "SQLite for sandboxing".
+//
+// # Quick Start
+//
+//	rt, err := boxlite.NewRuntime()
+//	if err != nil { log.Fatal(err) }
+//	defer rt.Close()
+//
+//	box, err := rt.Create(ctx, "alpine:latest", boxlite.WithName("my-box"))
+//	if err != nil { log.Fatal(err) }
+//	defer box.Close()
+//
+//	result, err := box.Exec(ctx, "echo", "hello")
+//	fmt.Println(result.Stdout) // "hello\n"
+package boxlite
 
+/*
+#include "boxlite.h"
+#include <stdlib.h>
+*/
+import "C"
 import (
 	"context"
-
-	"github.com/boxlite-ai/boxlite/sdks/go/internal/binding"
+	"encoding/json"
+	"time"
+	"unsafe"
 )
 
-// boxProvider abstracts the underlying Box handle.
-type boxProvider interface {
-	Start() error
-	Stop() error
-	Info() (binding.BoxInfo, error)
-	Free()
+// Version returns the BoxLite library version string.
+func Version() string {
+	return C.GoString(C.boxlite_version())
 }
 
-// runtimeProvider abstracts the underlying BoxLite runtime.
-type runtimeProvider interface {
-	CreateBox(name string, opts binding.BoxOptions) (string, error)
-	GetBox(idOrName string) (boxProvider, string, error)
-	ListBoxes() ([]binding.BoxInfo, error)
-	RemoveBox(idOrName string, force bool) error
-	Free()
-}
-
-// defaultRuntimeProvider wraps the CGo *binding.Runtime to implement runtimeProvider.
-type defaultRuntimeProvider struct {
-	rt *binding.Runtime
-}
-
-func (p *defaultRuntimeProvider) CreateBox(name string, opts binding.BoxOptions) (string, error) {
-	return p.rt.CreateBox(name, opts)
-}
-
-func (p *defaultRuntimeProvider) GetBox(idOrName string) (boxProvider, string, error) {
-	box, id, err := p.rt.GetBox(idOrName)
-	if box == nil {
-		return nil, id, err
-	}
-	return box, id, err
-}
-
-func (p *defaultRuntimeProvider) ListBoxes() ([]binding.BoxInfo, error) {
-	return p.rt.ListBoxes()
-}
-
-func (p *defaultRuntimeProvider) RemoveBox(idOrName string, force bool) error {
-	return p.rt.RemoveBox(idOrName, force)
-}
-
-func (p *defaultRuntimeProvider) Free() {
-	p.rt.Free()
-}
-
-// Runtime wraps a runtimeProvider and exposes a high-level API.
+// Runtime manages BoxLite boxes. Create one with NewRuntime.
 type Runtime struct {
-	runtime runtimeProvider
+	handle *C.CBoxliteRuntime
 }
 
-// NewRuntime creates a new BoxLite Runtime instance.
-func NewRuntime(opts *RuntimeOptions) (*Runtime, error) {
-	bindingOpts := &binding.RuntimeOptions{}
-	if opts != nil {
-		bindingOpts.HomeDir = opts.HomeDir
-		bindingOpts.ImageRegistries = opts.ImageRegistries
+// NewRuntime creates a new BoxLite runtime.
+func NewRuntime(opts ...RuntimeOption) (*Runtime, error) {
+	cfg := &runtimeConfig{}
+	for _, o := range opts {
+		o(cfg)
 	}
-	runtime, err := binding.NewRuntime(bindingOpts)
-	if err != nil {
-		return nil, err
-	}
-	return &Runtime{runtime: &defaultRuntimeProvider{rt: runtime}}, nil
-}
 
-// newRuntimeWith creates a Runtime backed by the given runtimeProvider implementation.
-// Intended for use in tests to inject a custom or mock implementation.
-func newRuntimeWith(p runtimeProvider) *Runtime {
-	return &Runtime{runtime: p}
-}
+	var homeDir *C.char
+	if cfg.homeDir != "" {
+		homeDir = toCString(cfg.homeDir)
+		defer C.free(unsafe.Pointer(homeDir))
+	}
 
-// Close releases the runtime and all associated resources.
-func (r *Runtime) Close() {
-	if r.runtime != nil {
-		r.runtime.Free()
-		r.runtime = nil
-	}
-}
-
-// CreateBox creates a new box with the given options and optional name.
-func (r *Runtime) CreateBox(ctx context.Context, name string, opts BoxOptions) (*Box, error) {
-	id, err := r.runtime.CreateBox(name, binding.BoxOptions{
-		Image:      opts.Image,
-		CPUs:       opts.CPUs,
-		MemoryMB:   opts.MemoryMB,
-		Env:        opts.Env,
-		WorkingDir: opts.WorkingDir,
-	})
-	if err != nil {
-		return nil, err
-	}
-	handle, _, err := r.runtime.GetBox(id)
-	if err != nil {
-		return nil, err
-	}
-	return &Box{handle: handle, id: id, name: name, runtime: r}, nil
-}
-
-// GetBox retrieves a box by ID or name. Returns nil (not an error) if the box does not exist.
-func (r *Runtime) GetBox(ctx context.Context, idOrName string) (*Box, error) {
-	handle, id, err := r.runtime.GetBox(idOrName)
-	if err != nil {
-		return nil, err
-	}
-	if handle == nil {
-		return nil, nil
-	}
-	return &Box{handle: handle, id: id, runtime: r}, nil
-}
-
-// ListBoxes returns information about all boxes managed by this runtime.
-func (r *Runtime) ListBoxes(ctx context.Context) ([]BoxInfo, error) {
-	infos, err := r.runtime.ListBoxes()
-	if err != nil {
-		return nil, err
-	}
-	result := make([]BoxInfo, len(infos))
-	for i, info := range infos {
-		result[i] = BoxInfo{
-			ID:        info.ID,
-			Name:      info.Name,
-			Image:     info.Image,
-			State:     info.State,
-			CreatedAt: info.CreatedAt,
+	var registriesJSON *C.char
+	if len(cfg.registries) > 0 {
+		data, err := json.Marshal(cfg.registries)
+		if err != nil {
+			return nil, err
 		}
+		registriesJSON = toCString(string(data))
+		defer C.free(unsafe.Pointer(registriesJSON))
+	}
+
+	var handle *C.CBoxliteRuntime
+	var cerr C.CBoxliteError
+	code := C.boxlite_runtime_new(homeDir, registriesJSON, &handle, &cerr)
+	if code != C.Ok {
+		return nil, freeError(&cerr)
+	}
+
+	return &Runtime{handle: handle}, nil
+}
+
+// Close releases the runtime. Implements io.Closer.
+func (r *Runtime) Close() error {
+	if r.handle != nil {
+		C.boxlite_runtime_free(r.handle)
+		r.handle = nil
+	}
+	return nil
+}
+
+// Shutdown gracefully stops all boxes in this runtime.
+func (r *Runtime) Shutdown(_ context.Context, timeout time.Duration) error {
+	secs := int(timeout.Seconds())
+	if secs <= 0 {
+		secs = 0 // 0 = use default (10s)
+	}
+	var cerr C.CBoxliteError
+	code := C.boxlite_runtime_shutdown(r.handle, C.int(secs), &cerr)
+	if code != C.Ok {
+		return freeError(&cerr)
+	}
+	return nil
+}
+
+// Create creates and returns a new box.
+func (r *Runtime) Create(_ context.Context, image string, opts ...BoxOption) (*Box, error) {
+	cfg := &boxConfig{}
+	for _, o := range opts {
+		o(cfg)
+	}
+
+	wire := buildOptionsJSON(image, cfg)
+	optsJSON, err := json.Marshal(wire)
+	if err != nil {
+		return nil, err
+	}
+
+	cOptsJSON := toCString(string(optsJSON))
+	defer C.free(unsafe.Pointer(cOptsJSON))
+
+	var boxHandle *C.CBoxHandle
+	var cerr C.CBoxliteError
+	code := C.boxlite_create_box(r.handle, cOptsJSON, &boxHandle, &cerr)
+	if code != C.Ok {
+		return nil, freeError(&cerr)
+	}
+
+	// Read back the assigned ID.
+	cID := C.boxlite_box_id(boxHandle)
+	id := ""
+	if cID != nil {
+		id = C.GoString(cID)
+		freeBoxliteString(cID)
+	}
+
+	return &Box{handle: boxHandle, id: id, name: cfg.name}, nil
+}
+
+// Get retrieves an existing box by ID or name.
+func (r *Runtime) Get(_ context.Context, idOrName string) (*Box, error) {
+	cID := toCString(idOrName)
+	defer C.free(unsafe.Pointer(cID))
+
+	var boxHandle *C.CBoxHandle
+	var cerr C.CBoxliteError
+	code := C.boxlite_get(r.handle, cID, &boxHandle, &cerr)
+	if code != C.Ok {
+		return nil, freeError(&cerr)
+	}
+
+	cBoxID := C.boxlite_box_id(boxHandle)
+	id := ""
+	if cBoxID != nil {
+		id = C.GoString(cBoxID)
+		freeBoxliteString(cBoxID)
+	}
+
+	return &Box{handle: boxHandle, id: id}, nil
+}
+
+// ListInfo lists all boxes.
+func (r *Runtime) ListInfo(_ context.Context) ([]BoxInfo, error) {
+	var cJSON *C.char
+	var cerr C.CBoxliteError
+	code := C.boxlite_list_info(r.handle, &cJSON, &cerr)
+	if code != C.Ok {
+		return nil, freeError(&cerr)
+	}
+	jsonStr := C.GoString(cJSON)
+	freeBoxliteString(cJSON)
+
+	var wireInfos []boxInfoWire
+	if err := json.Unmarshal([]byte(jsonStr), &wireInfos); err != nil {
+		return nil, err
+	}
+
+	result := make([]BoxInfo, len(wireInfos))
+	for i := range wireInfos {
+		result[i] = wireInfos[i].toBoxInfo()
 	}
 	return result, nil
 }
 
-// RemoveBox removes the box identified by ID or name.
-func (r *Runtime) RemoveBox(ctx context.Context, idOrName string, force bool) error {
-	return r.runtime.RemoveBox(idOrName, force)
+// Remove removes a box by ID or name.
+func (r *Runtime) Remove(_ context.Context, idOrName string) error {
+	cID := toCString(idOrName)
+	defer C.free(unsafe.Pointer(cID))
+
+	var cerr C.CBoxliteError
+	code := C.boxlite_remove(r.handle, cID, 0, &cerr)
+	if code != C.Ok {
+		return freeError(&cerr)
+	}
+	return nil
+}
+
+// ForceRemove forcefully removes a box (stops it first if running).
+func (r *Runtime) ForceRemove(_ context.Context, idOrName string) error {
+	cID := toCString(idOrName)
+	defer C.free(unsafe.Pointer(cID))
+
+	var cerr C.CBoxliteError
+	code := C.boxlite_remove(r.handle, cID, 1, &cerr)
+	if code != C.Ok {
+		return freeError(&cerr)
+	}
+	return nil
+}
+
+// Metrics returns aggregate runtime metrics.
+func (r *Runtime) Metrics(_ context.Context) (*RuntimeMetrics, error) {
+	var cJSON *C.char
+	var cerr C.CBoxliteError
+	code := C.boxlite_runtime_metrics(r.handle, &cJSON, &cerr)
+	if code != C.Ok {
+		return nil, freeError(&cerr)
+	}
+	jsonStr := C.GoString(cJSON)
+	freeBoxliteString(cJSON)
+
+	var m RuntimeMetrics
+	if err := json.Unmarshal([]byte(jsonStr), &m); err != nil {
+		return nil, err
+	}
+	return &m, nil
 }

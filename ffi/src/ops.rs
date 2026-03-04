@@ -280,7 +280,7 @@ pub unsafe fn box_stop(handle: *mut BoxHandle, out_error: *mut FFIError) -> Boxl
             return BoxliteErrorCode::InvalidArgument;
         }
 
-        let handle_ref = Box::from_raw(handle);
+        let handle_ref = &*handle;
 
         // Block on async stop using the stored tokio runtime
         let result = handle_ref.tokio_rt.block_on(handle_ref.handle.stop());
@@ -685,8 +685,6 @@ pub unsafe fn box_exec(
 
             // Stream output to callback if provided
             if let Some(cb) = callback {
-                use futures::StreamExt;
-
                 // Take stdout and stderr
                 let mut stdout = execution.stdout();
                 let mut stderr = execution.stderr();

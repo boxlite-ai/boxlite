@@ -18,6 +18,7 @@ $(shell \
   echo "$$CHANGED" | grep -q '^sdks/python/' && printf 'python '; \
   echo "$$CHANGED" | grep -q '^sdks/node/' && printf 'node '; \
   echo "$$CHANGED" | grep -q '^sdks/c/' && printf 'c '; \
+  echo "$$CHANGED" | grep -q '^sdks/go/' && printf 'go '; \
   echo "$$CHANGED" | grep -q 'Cargo\.toml$$' && printf 'rust cli ffi '; \
   echo "$$CHANGED" | grep -q '^Cargo\.lock$$' && printf 'rust cli ffi '; \
 )
