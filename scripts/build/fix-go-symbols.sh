@@ -25,17 +25,14 @@ if [ ! -f "$LIB" ]; then
     exit 1
 fi
 
-# Resolve llvm-objcopy and platform-specific symbol prefix.
-# Mach-O adds a leading underscore to C symbols; ELF does not.
+# Resolve llvm-objcopy per platform.
 OS=$(detect_os)
 case "$OS" in
     macos)
         OBJCOPY="${LLVM_OBJCOPY:-$(/opt/homebrew/bin/brew --prefix llvm 2>/dev/null || echo /opt/homebrew/opt/llvm)/bin/llvm-objcopy}"
-        P="_"
         ;;
     linux)
         OBJCOPY="${LLVM_OBJCOPY:-llvm-objcopy}"
-        P=""
         ;;
     *)
         print_error "Unsupported platform: $(uname -s)"
@@ -45,29 +42,35 @@ esac
 
 require_command "$OBJCOPY" "Install LLVM (brew install llvm on macOS)"
 
-# 20 CGo bridge symbols from embedded libgvproxy that conflict with
-# the Go SDK binary's own runtime. Making them local resolves the conflict.
-"$OBJCOPY" \
-    --localize-symbol="${P}_cgo_panic" \
-    --localize-symbol="${P}_cgo_topofstack" \
-    --localize-symbol="${P}crosscall2" \
-    --localize-symbol="${P}_cgo_release_context" \
-    --localize-symbol="${P}_cgo_sys_thread_start" \
-    --localize-symbol="${P}x_cgo_init" \
-    --localize-symbol="${P}_cgo_get_context_function" \
-    --localize-symbol="${P}_cgo_set_stacklo" \
-    --localize-symbol="${P}_cgo_try_pthread_create" \
-    --localize-symbol="${P}_cgo_wait_runtime_init_done" \
-    --localize-symbol="${P}x_cgo_bindm" \
-    --localize-symbol="${P}x_cgo_notify_runtime_init_done" \
-    --localize-symbol="${P}x_cgo_set_context_function" \
-    --localize-symbol="${P}x_cgo_sys_thread_create" \
-    --localize-symbol="${P}x_cgo_setenv" \
-    --localize-symbol="${P}x_cgo_unsetenv" \
-    --localize-symbol="${P}x_cgo_getstackbound" \
-    --localize-symbol="${P}x_cgo_callers" \
-    --localize-symbol="${P}x_cgo_thread_start" \
-    --localize-symbol="${P}crosscall1" \
-    "$LIB"
+# CGo bridge symbols from embedded libgvproxy conflict with the Go SDK
+# binary's own runtime. Localizing them lets the binary's runtime win.
+#
+# We use --wildcard with [a-z] character classes to match Go runtime symbols
+# (_cgo_panic, x_cgo_init, crosscall2, etc.) while preserving package-specific
+# CGo function bridges (_cgo_<hash>_Cfunc_*) which start with a hex digit.
+#
+# On Linux ELF, the embedded Go c-archive also has .init_array constructors
+# that try to start a second Go runtime, causing a segfault. Removing the
+# section prevents double-init while the main binary's runtime handles
+# everything (same Go version, same ABI).
+case "$OS" in
+    linux)
+        "$OBJCOPY" \
+            --remove-section .init_array \
+            --wildcard \
+            --localize-symbol='_cgo_[a-z]*' \
+            --localize-symbol='x_cgo_*' \
+            --localize-symbol='crosscall*' \
+            "$LIB"
+        ;;
+    macos)
+        "$OBJCOPY" \
+            --wildcard \
+            --localize-symbol='__cgo_[a-z]*' \
+            --localize-symbol='_x_cgo_*' \
+            --localize-symbol='_crosscall*' \
+            "$LIB"
+        ;;
+esac
 
 print_success "Go symbols fixed in $(basename "$LIB")"

@@ -23,11 +23,11 @@ func goBoxliteOutputCallback(text *C.char, isStderr C.int, userData unsafe.Point
 	goText := C.GoString(text)
 	if isStderr != 0 {
 		if w.stderr != nil {
-			w.stderr.Write([]byte(goText))
+			_, _ = w.stderr.Write([]byte(goText))
 		}
 	} else {
 		if w.stdout != nil {
-			w.stdout.Write([]byte(goText))
+			_, _ = w.stdout.Write([]byte(goText))
 		}
 	}
 }
