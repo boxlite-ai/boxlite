@@ -308,8 +308,13 @@ async fn test_export_import_running_box_roundtrip() {
 /// the COW fork point works correctly without live-fd complications.
 #[tokio::test]
 async fn test_clone_snapshot_isolation() {
-    let ctx = common::ParallelRuntime::new();
-    let source = create_running_box(&ctx.runtime, "isolation-src").await;
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+    let source = create_running_box(&runtime, "isolation-src").await;
 
     // Write a marker to the source box
     let cmd = BoxCommand::new("sh").args(["-c", "echo snapshot-data > /root/marker.txt"]);
@@ -348,7 +353,7 @@ async fn test_clone_snapshot_isolation() {
 
     cloned.stop().await.expect("Stop cloned box");
 
-    ctx.shutdown().await;
+    let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 }
 
 // ============================================================================
@@ -359,8 +364,13 @@ async fn test_clone_snapshot_isolation() {
 async fn test_clone_10x_benchmark() {
     use std::time::Instant;
 
-    let ctx = common::ParallelRuntime::new();
-    let source = create_stopped_box(&ctx.runtime).await;
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+    let source = create_stopped_box(&runtime).await;
 
     const N: usize = 10;
     let mut durations = Vec::with_capacity(N);
@@ -391,7 +401,7 @@ async fn test_clone_10x_benchmark() {
     eprintln!("Average per clone:  {avg:?}");
     eprintln!("─────────────────────────────────");
 
-    ctx.shutdown().await;
+    let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 }
 
 // ============================================================================

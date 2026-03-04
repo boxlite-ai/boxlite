@@ -157,7 +157,7 @@ use std::path::PathBuf;
 ///
 /// ```text
 /// {box_dir}/                          # NOT granted wholesale
-/// ├── bin/                        [RO]  # copied shim binary + bundled libs
+/// ├── bin/                        [RO]  # copied shim binary
 /// ├── shared/                     [RW]  # guest-visible virtio-fs share root
 /// ├── sockets/                    [RW]  # libkrun vsock/unix sockets
 /// ├── tmp/                        [RW]  # shim/libkrun transient temp files
@@ -233,7 +233,7 @@ fn build_path_access(layout: &BoxFilesystemLayout, volumes: &[VolumeSpec]) -> Ve
         }
     }
 
-    // Read-only directory (shim binary + bundled dylibs)
+    // Read-only directory (copied shim binary)
     let bin_dir = layout.bin_dir();
     if bin_dir.exists() {
         paths.push(PathAccess {
@@ -343,27 +343,38 @@ impl<S: Sandbox> Jail for Jailer<S> {
             }
         }
 
-        let ctx = self.context();
+        let mut ctx = self.context();
+
+        // Grant read access to original binary's library directory so the
+        // dynamic linker can load libraries from the original location.
+        #[allow(clippy::collapsible_if)]
+        if self.security.jailer_enabled {
+            if let Some(lib_dir) = binary.parent().filter(|d| d.exists()) {
+                ctx.paths.push(PathAccess {
+                    path: lib_dir.to_path_buf(),
+                    writable: false,
+                });
+            }
+        }
 
         // Shim copy (Firecracker pattern) — shared for both platforms
-        let (effective_binary, bin_dir) = if self.security.jailer_enabled {
+        let effective_binary = if self.security.jailer_enabled {
             match shim_copy::copy_shim_to_box(binary, self.layout.root()) {
                 Ok(copied) => {
-                    let dir = copied.parent().unwrap_or(self.layout.root()).to_path_buf();
                     tracing::info!(
                         original = %binary.display(),
                         copied = %copied.display(),
                         "Using copied shim binary (Firecracker pattern)"
                     );
-                    (copied, Some(dir))
+                    copied
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "Failed to copy shim, using original");
-                    (binary.to_path_buf(), None)
+                    binary.to_path_buf()
                 }
             }
         } else {
-            (binary.to_path_buf(), None)
+            binary.to_path_buf()
         };
 
         let mut cmd = if self.security.jailer_enabled && self.sandbox.is_available() {
@@ -379,11 +390,6 @@ impl<S: Sandbox> Jail for Jailer<S> {
             cmd.args(args);
             cmd
         };
-
-        // LD_LIBRARY_PATH for copied libraries (shared for both platforms)
-        if let Some(ref dir) = bin_dir {
-            cmd.env("LD_LIBRARY_PATH", dir);
-        }
 
         // Pre-exec hook: FD preservation, FD cleanup, rlimits, cgroup join, PID file
         let resource_limits = self.security.resource_limits.clone();

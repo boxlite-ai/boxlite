@@ -440,6 +440,7 @@ dependencies = [
  "boxlite",
  "boxlite-ffi",
  "boxlite-shared",
+ "futures",
  "libc",
  "once_cell",
  "serde",

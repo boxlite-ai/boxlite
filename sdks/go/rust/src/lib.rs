@@ -3,7 +3,7 @@
 // 将 boxlite-ffi 的内部实现暴露为 Go CGo 可调用的 C ABI 函数。
 
 use std::collections::HashMap;
-use std::ffi::{CString, c_void};
+use std::ffi::{c_void, CString};
 use std::os::raw::{c_char, c_int};
 use std::ptr;
 use std::time::Duration;
