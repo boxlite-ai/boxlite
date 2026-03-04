@@ -182,8 +182,6 @@ main() {
 
     install_nodejs
 
-    install_node_sdk_deps
-
     install_linuxdeploy
 
     init_submodules
@@ -198,10 +196,7 @@ main() {
     detect_guest_target
     check_rust_target "$GUEST_TARGET"
 
-    install_cargo_nextest
-
-    # Rust/cargo is guaranteed above; bootstrap prek and install hooks best-effort.
-    bootstrap_prek_and_hooks
+    run_dev_extras
 
     print_header "Setup Complete"
 }

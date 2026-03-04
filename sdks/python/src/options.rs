@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use boxlite::BoxliteRestOptions;
-use boxlite::CopyOptions;
-use boxlite::runtime::advanced_options::SecurityOptions;
+use boxlite::litebox::copy::CopyOptions;
+use boxlite::runtime::advanced_options::{HealthCheckOptions, SecurityOptions};
 use boxlite::runtime::constants::images;
 use boxlite::runtime::options::{
     BoxOptions, BoxliteOptions, NetworkSpec, PortProtocol, PortSpec, RootfsSpec, VolumeSpec,
@@ -148,7 +148,8 @@ pub(crate) struct PyBoxOptions {
     /// If None, uses the image's USER directive (defaults to root).
     #[pyo3(get, set)]
     pub(crate) user: Option<String>,
-    /// Advanced options for expert users (security, mount isolation).
+
+    /// Advanced options for expert users (security, mount isolation, health check).
     #[pyo3(get, set)]
     pub(crate) advanced: Option<PyAdvancedBoxOptions>,
 }
@@ -276,10 +277,13 @@ impl From<PyBoxOptions> for BoxOptions {
             opts.detach = detach;
         }
 
-        if let Some(advanced) = py_opts.advanced
-            && let Some(security) = advanced.security
-        {
-            opts.advanced.security = SecurityOptions::from(security);
+        if let Some(advanced) = py_opts.advanced {
+            if let Some(security) = advanced.security {
+                opts.advanced.security = SecurityOptions::from(security);
+            }
+            if let Some(health_check) = advanced.health_check {
+                opts.advanced.health_check = Some(HealthCheckOptions::from(health_check));
+            }
         }
 
         opts

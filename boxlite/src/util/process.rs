@@ -524,6 +524,68 @@ mod tests {
         }
     }
 
+    // ========================================================================
+    // read_pid_file edge cases
+    // ========================================================================
+
+    #[test]
+    fn test_read_pid_file_with_whitespace() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let mut file = NamedTempFile::new().unwrap();
+        write!(file, "  12345\n\n").unwrap();
+
+        let pid = read_pid_file(file.path()).expect("Should parse PID with whitespace");
+        assert_eq!(pid, 12345);
+    }
+
+    #[test]
+    fn test_read_pid_file_empty_rejected() {
+        use tempfile::NamedTempFile;
+
+        // NamedTempFile::new() creates an empty file
+        let file = NamedTempFile::new().unwrap();
+        let result = read_pid_file(file.path());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_read_pid_file_large_pid() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let mut file = NamedTempFile::new().unwrap();
+        write!(file, "4194304").unwrap(); // Max PID on Linux
+
+        let pid = read_pid_file(file.path()).expect("Should parse max Linux PID");
+        assert_eq!(pid, 4194304);
+    }
+
+    #[test]
+    fn test_read_pid_file_negative_rejected() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let mut file = NamedTempFile::new().unwrap();
+        write!(file, "-1").unwrap();
+
+        let result = read_pid_file(file.path());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_read_pid_file_overflow_rejected() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let mut file = NamedTempFile::new().unwrap();
+        write!(file, "99999999999").unwrap();
+
+        let result = read_pid_file(file.path());
+        assert!(result.is_err());
+    }
+
     #[test]
     fn test_process_exit_equality() {
         assert_eq!(ProcessExit::Code(0), ProcessExit::Code(0));

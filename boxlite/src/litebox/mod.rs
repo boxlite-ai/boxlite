@@ -2,6 +2,7 @@
 //!
 //! Provides lazy initialization and execution capabilities for isolated boxes.
 
+pub(crate) mod archive;
 pub(crate) mod box_impl;
 mod clone_export;
 pub(crate) mod config;
@@ -20,7 +21,7 @@ pub(crate) use crash_report::CrashReport;
 pub use exec::{BoxCommand, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execution, ExecutionId};
 pub(crate) use manager::BoxManager;
 pub use snapshot::SnapshotHandle;
-pub use state::{BoxState, BoxStatus};
+pub use state::{BoxState, BoxStatus, HealthState, HealthStatus};
 
 pub(crate) use box_impl::SharedBoxImpl;
 pub(crate) use init::BoxBuilder;

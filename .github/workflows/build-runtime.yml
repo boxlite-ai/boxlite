@@ -1,7 +1,7 @@
 # Build BoxLite core runtime, upload artifacts, and publish to crates.io.
 #
 # This workflow builds the Rust runtime and populates the shared cache.
-# On push to main: builds and caches (existing behavior).
+# On push to main: chains after Warm Caches workflow for sccache hits.
 # On release: builds, uploads runtime tarballs to GitHub Release, and publishes
 #   Rust crates to crates.io (requires CARGO_REGISTRY_TOKEN secret).
 #
@@ -16,22 +16,17 @@
 name: Build Runtime
 
 on:
-  push:
+  workflow_run:
+    workflows: ["Warm Caches"]
+    types: [completed]
     branches: [main]
-    paths:
-      - 'boxlite/**'
-      - 'boxlite-shared/**'
-      - 'guest/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - '.github/workflows/build-runtime.yml'
-      - '.github/workflows/config.yml'
   release:
     types: [published]
   workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: '0'
   SKIP_INSTALL_NODEJS: '1'
 
 jobs:
@@ -41,6 +36,9 @@ jobs:
   build:
     name: Build Runtime (${{ matrix.target }})
     needs: config
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.conclusion == 'success'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -57,12 +55,20 @@ jobs:
         with:
           toolchain: ${{ needs.config.outputs.rust-toolchain }}
 
-      # Cache Rust dependencies (used by guest build on Linux, full build on macOS)
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
+      # sccache caches individual compilation units via GHA cache API.
+      # Works on host and inside Docker containers.
+      # Cache is pre-warmed by the Warm Caches workflow on push to main.
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+        continue-on-error: true
+
+      - name: Export GHA cache env vars
+        uses: actions/github-script@v7
         with:
-          shared-key: "boxlite"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          script: |
+            core.exportVariable('ACTIONS_RESULTS_URL', process.env.ACTIONS_RESULTS_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+            core.exportVariable('ACTIONS_CACHE_SERVICE_V2', process.env.ACTIONS_CACHE_SERVICE_V2 || '');
 
       # Build guest on host BEFORE manylinux container because:
       # - manylinux (AlmaLinux/RHEL) doesn't have musl packages in repos
@@ -73,7 +79,7 @@ jobs:
       - name: Build guest binary (Linux only)
         if: runner.os == 'Linux'
         run: |
-          make setup guest
+          make setup:build guest
 
           # Cache only the final binary (11MB), not entire target dir (2.3GB)
           # Guest is not rebuilt in container (SKIP_GUEST_BUILD=1), so no incremental compilation needed
@@ -81,22 +87,9 @@ jobs:
           mkdir -p ".cache/$GUEST_TARGET/release"
           cp "target/$GUEST_TARGET/release/boxlite-guest" ".cache/$GUEST_TARGET/release/"
 
-          # Clean up to save disk space
+          # Clean up to save disk space (sccache stores compilation cache separately)
           rm -rf target ~/.rustup ~/.cargo
-
-      # Cache cargo registry for manylinux container.
-      # Swatinem/rust-cache can't run inside Docker, so we use actions/cache
-      # with CARGO_HOME redirected to a host-mounted path.
-      - name: Cache manylinux cargo registry
-        if: runner.os == 'Linux'
-        uses: actions/cache@v4
-        with:
-          path: |
-            .cargo-manylinux/registry
-            .cargo-manylinux/git
-          key: manylinux-cargo-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            manylinux-cargo-${{ matrix.target }}-
+          mkdir -p target
 
       - name: Build runtime (Linux)
         if: runner.os == 'Linux'
@@ -104,6 +97,12 @@ jobs:
           cat > "$RUNNER_TEMP/build.sh" << 'CONTAINER_SCRIPT'
           set -ex
           git config --global --add safe.directory /work
+
+          # sccache fallback: if not available, disable wrapper for normal compilation
+          if [ -n "${RUSTC_WRAPPER:-}" ] && ! command -v "$RUSTC_WRAPPER" &>/dev/null; then
+            echo "::warning::sccache not available in container, falling back to normal compilation"
+            unset RUSTC_WRAPPER
+          fi
 
           GUEST_TARGET=$(scripts/util.sh --target)
           if [ -d ".cache/$GUEST_TARGET" ]; then
@@ -114,12 +113,22 @@ jobs:
 
           export SKIP_GUEST_BUILD=1
           export PATH="$CARGO_HOME/bin:$PATH"
-          make setup runtime
+          make setup:build runtime
+
+          command -v sccache &>/dev/null && sccache --show-stats || true
           CONTAINER_SCRIPT
+
+          # Conditionally mount sccache binary and pass env vars into Docker.
+          # If sccache-action failed or binary is missing, build proceeds without caching.
+          SCCACHE_DOCKER_ARGS=""
+          if command -v sccache &>/dev/null; then
+            SCCACHE_DOCKER_ARGS="-v $(which sccache):/usr/local/bin/sccache:ro -e SCCACHE_GHA_ENABLED=true -e RUSTC_WRAPPER=sccache -e ACTIONS_CACHE_SERVICE_V2 -e ACTIONS_RESULTS_URL -e ACTIONS_RUNTIME_TOKEN"
+          fi
 
           docker run --rm \
             -v ${{ github.workspace }}:/work \
             -v "$RUNNER_TEMP/build.sh:/tmp/build.sh:ro" \
+            $SCCACHE_DOCKER_ARGS \
             -w /work \
             -e CARGO_HOME=/work/.cargo-manylinux \
             quay.io/pypa/manylinux_2_28_${{ contains(matrix.target, 'arm64') && 'aarch64' || 'x86_64' }} \
@@ -127,10 +136,17 @@ jobs:
 
       - name: Build runtime (macOS)
         if: runner.os == 'macOS'
-        run: make setup runtime
+        run: |
+          make setup:build runtime
+          command -v sccache &>/dev/null && sccache --show-stats || true
 
       - name: Package runtime
-        run: tar czf boxlite-runtime-${{ matrix.target }}.tar.gz -C target boxlite-runtime/
+        run: |
+          RUNTIME_DIR=$(ls -dt target/release/build/boxlite-*/out/runtime 2>/dev/null | head -1)
+          [ -n "$RUNTIME_DIR" ] || { echo "ERROR: Runtime directory not found under target/"; exit 1; }
+          cp -a "$RUNTIME_DIR" boxlite-runtime
+          tar czf boxlite-runtime-${{ matrix.target }}.tar.gz boxlite-runtime/
+          rm -rf boxlite-runtime
 
       - name: Upload runtime artifact
         uses: actions/upload-artifact@v4

@@ -5,12 +5,12 @@ use std::sync::Arc;
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
-use crate::archive::{
+use crate::disk::constants::filenames as disk_filenames;
+use crate::litebox::LiteBox;
+use crate::litebox::archive::{
     ArchiveManifest, MANIFEST_FILENAME, MAX_SUPPORTED_VERSION, extract_archive, move_file,
     sha256_file,
 };
-use crate::disk::constants::filenames as disk_filenames;
-use crate::litebox::LiteBox;
 use crate::runtime::options::{BoxArchive, BoxOptions, RootfsSpec};
 use crate::runtime::rt_impl::RuntimeImpl;
 use crate::runtime::types::BoxStatus;

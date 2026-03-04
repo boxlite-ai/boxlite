@@ -9,6 +9,8 @@
 #   --profile PROFILE   Build profile: release or debug (default: release)
 #
 # Note: On macOS, the binary is automatically signed with hypervisor entitlements
+# Note: On Linux, the binary is statically linked using glibc (crt-static).
+#       Go c-archive is incompatible with musl TLS, so we use glibc static linking instead.
 
 set -e
 
@@ -70,6 +72,8 @@ parse_args "$@"
 OS=$(detect_os)
 print_header "🚀 Building boxlite-shim on $OS..."
 
+SHIM_BINARY_PATH="$PROJECT_ROOT/target/$PROFILE/boxlite-shim"
+
 # Build the shim binary
 build_shim_binary() {
     cd "$PROJECT_ROOT"
@@ -78,7 +82,29 @@ build_shim_binary() {
     if [ "$PROFILE" = "release" ]; then
         build_flag="--release"
     fi
-    cargo build $build_flag --bin boxlite-shim
+
+    # Shim doesn't use embedded-runtime (it IS the binary that gets embedded).
+    # Disable it to avoid the chicken-and-egg: can't embed shim while building shim.
+    # link-krun: statically link libkrun.a (only shim needs this, not boxlite-cli)
+    local features="--no-default-features --features gvproxy-backend,link-krun"
+
+    if [ "$OS" = "linux" ]; then
+        # Go c-archive crashes with musl TLS; use glibc + crt-static instead.
+        # relocation-model=static avoids static-pie which is incompatible with Go c-archive relocations.
+        # --target is required so RUSTFLAGS (crt-static, relocation-model) don't leak into
+        # proc-macro compilation — proc-macros are dylibs and can't use crt-static.
+        # The downside is cargo outputs to target/<triple>/$PROFILE/ instead of target/$PROFILE/,
+        # so we copy the binary back to the canonical path after building.
+        local arch
+        arch=$(uname -m)
+        local target="${arch}-unknown-linux-gnu"
+        export RUSTFLAGS="-C target-feature=+crt-static -C relocation-model=static -C link-arg=-Wl,-z,stack-size=2097152 -C link-arg=-Wl,--allow-multiple-definition"
+        echo "🎯 Static glibc binary (crt-static + relocation-model=static)"
+        cargo build $build_flag --bin boxlite-shim --target "$target" $features
+        cp "$PROJECT_ROOT/target/$target/$PROFILE/boxlite-shim" "$SHIM_BINARY_PATH"
+    else
+        cargo build $build_flag --bin boxlite-shim $features
+    fi
 }
 
 # Sign the binary (macOS only, automatic)
@@ -88,26 +114,21 @@ sign_binary() {
         return 0
     fi
 
-    if [ -z "$DEST_DIR" ]; then
-        echo "⏭️  Signing skipped (no destination, binary not copied)"
-        return 0
-    fi
-
-    local BINARY_PATH="$DEST_DIR/boxlite-shim"
-    if [ ! -f "$BINARY_PATH" ]; then
-        echo "❌ ERROR: Binary not found at $BINARY_PATH"
-        exit 1
-    fi
-
+    # Always sign the build output (cargo produces unsigned binaries)
     echo "📦 Signing boxlite-shim with hypervisor entitlements..."
-    "$SCRIPT_BUILD_DIR/sign.sh" "$BINARY_PATH"
+    "$SCRIPT_BUILD_DIR/sign.sh" "$SHIM_BINARY_PATH"
+
+    # Also sign the destination copy if it exists (cp strips entitlements)
+    if [ -n "$DEST_DIR" ] && [ -f "$DEST_DIR/boxlite-shim" ]; then
+        "$SCRIPT_BUILD_DIR/sign.sh" "$DEST_DIR/boxlite-shim"
+    fi
 }
 
 # Copy binary to destination
 copy_to_destination() {
     if [ -z "$DEST_DIR" ]; then
         echo "✅ Shim binary built successfully (no destination specified)"
-        echo "Binary location: $PROJECT_ROOT/target/$PROFILE/boxlite-shim"
+        echo "Binary location: $SHIM_BINARY_PATH"
         return 0
     fi
 
@@ -115,7 +136,7 @@ copy_to_destination() {
     # Absolute paths are used as-is
     echo "📦 Copying to destination: $DEST_DIR"
     mkdir -p "$DEST_DIR"
-    cp "$PROJECT_ROOT/target/$PROFILE/boxlite-shim" "$DEST_DIR/"
+    cp "$SHIM_BINARY_PATH" "$DEST_DIR/"
 
     echo "✅ Shim binary built and copied to $DEST_DIR"
     echo "Binary info:"

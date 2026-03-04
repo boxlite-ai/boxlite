@@ -115,8 +115,7 @@ clean_dist() {
 
 clean_runtime() {
     print_section "Cleaning runtime artifacts..."
-    rm -rf target/boxlite-runtime \
-           target/release/boxlite-shim \
+    rm -rf target/release/boxlite-shim \
            target/debug/boxlite-shim
     if [ -z "${KEEP_GUEST_BIN:-}" ]; then
         rm -rf target/$GUEST_TARGET/release/boxlite-guest \

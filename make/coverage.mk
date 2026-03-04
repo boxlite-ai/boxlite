@@ -19,8 +19,7 @@ coverage\:lcov:
 # Generate coverage for Rust integration tests (requires VM environment).
 coverage\:integration: runtime-debug
 	@echo "📊 Generating integration test coverage..."
-	@BOXLITE_RUNTIME_DIR=$(PROJECT_ROOT)/target/boxlite-runtime \
-		cargo llvm-cov nextest \
+	@cargo llvm-cov nextest \
 		-p boxlite --test '*' \
 		--profile vm \
 		--html --output-dir target/coverage-integration

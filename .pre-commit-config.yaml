@@ -11,14 +11,41 @@ repos:
         entry: make lint:fix
         language: system
         pass_filenames: false
-        always_run: true
         stages: [pre-commit]
+        # Only run when source files change (mirrors CI dorny/paths-filter).
+        files: >-
+          (?x)^(
+            .*\.rs|
+            .*\.py|
+            .*\.ts|
+            .*\.js|
+            .*\.c|
+            .*\.h|
+            .*\.go|
+            .*/Cargo\.toml|
+            Cargo\.lock|
+            sdks/python/pyproject\.toml|
+            sdks/node/package\.json|
+            make/quality\.mk|
+            \.pre-commit-config\.yaml
+          )$
 
       - id: full-test-matrix
-        name: Full test matrix
+        name: Smart test matrix (changed components only)
         entry: make test
         language: system
         pass_filenames: false
-        always_run: true
         verbose: true
         stages: [pre-push]
+        # Only run when source/test files change (mirrors CI dorny/paths-filter).
+        files: >-
+          (?x)^(
+            boxlite/|
+            boxlite-shared/|
+            boxlite-cli/|
+            boxlite-ffi/|
+            guest/|
+            sdks/|
+            .*/Cargo\.toml$|
+            Cargo\.lock$
+          )

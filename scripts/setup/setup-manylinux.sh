@@ -97,12 +97,15 @@ install_system_deps() {
         fi
     done
 
-    # Try to install glibc-static if available (not critical, not available on all arches)
-    print_step "Checking for glibc-static (optional)... "
-    if yum install -y -q glibc-static 2>/dev/null; then
-        print_success "Installed"
+    # glibc-static is required for boxlite-shim (built with +crt-static).
+    # Provides libc.a and libresolv.a needed for static glibc linking.
+    print_step "Checking for glibc-static... "
+    if yum_installed glibc-static; then
+        print_success "Already installed"
     else
-        echo -e "${YELLOW}Not available (not required)${NC}"
+        echo -e "${YELLOW}Installing...${NC}"
+        yum install -y -q glibc-static
+        print_success "glibc-static installed"
     fi
 
     echo ""
@@ -250,10 +253,7 @@ main() {
     detect_guest_target
     check_rust_target "$GUEST_TARGET"
 
-    install_cargo_nextest
-
-    # Rust/cargo is guaranteed above; bootstrap prek and install hooks best-effort.
-    bootstrap_prek_and_hooks
+    run_dev_extras
 
     print_header "Setup Complete"
 }

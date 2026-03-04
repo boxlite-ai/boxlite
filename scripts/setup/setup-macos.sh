@@ -211,8 +211,6 @@ main() {
 
     setup_rust_target
 
-    install_cargo_nextest
-
     install_musl_cross
 
     install_dtc
@@ -231,10 +229,7 @@ main() {
 
     install_nodejs
 
-    install_node_sdk_deps
-
-    # Rust/cargo is guaranteed above; bootstrap prek and install hooks best-effort.
-    bootstrap_prek_and_hooks
+    run_dev_extras
 
     print_header "Setup Complete"
 }

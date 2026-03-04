@@ -20,6 +20,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: '0'
 
 jobs:
   config:
@@ -39,7 +40,6 @@ jobs:
   # Outputs artifacts containing:
   # - native/boxlite.js (JS loader)
   # - npm/<platform>/boxlite.<platform>.node (native binary)
-  # - npm/<platform>/runtime/* (boxlite-shim, boxlite-guest, libkrun, etc.)
   # ============================================================================
   build:
     name: Build (${{ matrix.target }})
@@ -65,11 +65,20 @@ jobs:
         with:
           toolchain: ${{ needs.config.outputs.rust-toolchain }}
 
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
+      # sccache caches individual compilation units via GHA cache API.
+      # Works on host and inside Docker containers.
+      # Cache is pre-warmed by the Warm Caches workflow on push to main.
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+        continue-on-error: true
+
+      - name: Export GHA cache env vars
+        uses: actions/github-script@v7
         with:
-          shared-key: "boxlite"
-          save-if: false
+          script: |
+            core.exportVariable('ACTIONS_RESULTS_URL', process.env.ACTIONS_RESULTS_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+            core.exportVariable('ACTIONS_CACHE_SERVICE_V2', process.env.ACTIONS_CACHE_SERVICE_V2 || '');
 
       # Build guest on host BEFORE manylinux container because:
       # - manylinux (AlmaLinux/RHEL) doesn't have musl packages in repos
@@ -80,7 +89,7 @@ jobs:
       - name: Build guest binary (Linux only)
         if: runner.os == 'Linux'
         run: |
-          make setup guest
+          make setup:build guest
 
           # Cache only the final binary (11MB), not entire target dir (2.3GB)
           # Guest is not rebuilt in container (SKIP_GUEST_BUILD=1), so no incremental compilation needed
@@ -88,22 +97,9 @@ jobs:
           mkdir -p ".cache/$GUEST_TARGET/release"
           cp "target/$GUEST_TARGET/release/boxlite-guest" ".cache/$GUEST_TARGET/release/"
 
-          # Clean up to save disk space
+          # Clean up to save disk space (sccache stores compilation cache separately)
           rm -rf target ~/.rustup ~/.cargo
-
-      # Cache cargo registry for manylinux container.
-      # Swatinem/rust-cache can't run inside Docker, so we use actions/cache
-      # with CARGO_HOME redirected to a host-mounted path.
-      - name: Cache manylinux cargo registry
-        if: runner.os == 'Linux'
-        uses: actions/cache@v4
-        with:
-          path: |
-            .cargo-manylinux/registry
-            .cargo-manylinux/git
-          key: manylinux-cargo-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            manylinux-cargo-${{ matrix.target }}-
+          mkdir -p target
 
       - name: Build Node.js package (Linux)
         if: runner.os == 'Linux'
@@ -111,6 +107,12 @@ jobs:
           cat > "$RUNNER_TEMP/build.sh" << 'CONTAINER_SCRIPT'
           set -ex
           git config --global --add safe.directory /work
+
+          # sccache fallback: if not available, disable wrapper for normal compilation
+          if [ -n "${RUSTC_WRAPPER:-}" ] && ! command -v "$RUSTC_WRAPPER" &>/dev/null; then
+            echo "::warning::sccache not available in container, falling back to normal compilation"
+            unset RUSTC_WRAPPER
+          fi
 
           GUEST_TARGET=$(scripts/util.sh --target)
           if [ -d ".cache/$GUEST_TARGET" ]; then
@@ -121,19 +123,28 @@ jobs:
 
           export SKIP_GUEST_BUILD=1
           export PATH="$CARGO_HOME/bin:$PATH"
-          make setup runtime
+          make setup:build runtime
 
           export PATH="$HOME/.cargo/bin:$PATH"
           cd sdks/node
           npm install --silent
           npm run build:native -- --release
           npm run artifacts
-          npm run bundle:runtime
+
+          command -v sccache &>/dev/null && sccache --show-stats || true
           CONTAINER_SCRIPT
+
+          # Conditionally mount sccache binary and pass env vars into Docker.
+          # If sccache-action failed or binary is missing, build proceeds without caching.
+          SCCACHE_DOCKER_ARGS=""
+          if command -v sccache &>/dev/null; then
+            SCCACHE_DOCKER_ARGS="-v $(which sccache):/usr/local/bin/sccache:ro -e SCCACHE_GHA_ENABLED=true -e RUSTC_WRAPPER=sccache -e ACTIONS_CACHE_SERVICE_V2 -e ACTIONS_RESULTS_URL -e ACTIONS_RUNTIME_TOKEN"
+          fi
 
           docker run --rm \
             -v ${{ github.workspace }}:/work \
             -v "$RUNNER_TEMP/build.sh:/tmp/build.sh:ro" \
+            $SCCACHE_DOCKER_ARGS \
             -w /work \
             -e CARGO_HOME=/work/.cargo-manylinux \
             quay.io/pypa/manylinux_2_28_${{ contains(matrix.target, 'arm64') && 'aarch64' || 'x86_64' }} \
@@ -142,14 +153,15 @@ jobs:
       - name: Build Node.js package (macOS)
         if: runner.os == 'macOS'
         run: |
-          make setup runtime
+          make setup:build runtime
 
           # Build Node.js artifacts (no pack - CI uploads raw artifacts)
           cd sdks/node
           npm install --silent
           npm run build:native -- --release
           npm run artifacts
-          npm run bundle:runtime
+
+          command -v sccache &>/dev/null && sccache --show-stats || true
 
       # Create tar archive to preserve Unix file permissions (especially execute bits).
       # GitHub Actions upload-artifact uses ZIP which doesn't preserve permissions.
@@ -281,7 +293,6 @@ jobs:
         run: |
           ls -la sdks/node/native/
           ls -la sdks/node/npm/
-          ls -la sdks/node/npm/*/runtime/ || true
 
       # -------------------------------------------------------------------------
       # NPM PUBLISH (Trusted Publishing via OIDC - no NPM_TOKEN needed)

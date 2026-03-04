@@ -1,5 +1,51 @@
-use boxlite::runtime::types::{BoxInfo, BoxStatus};
+use boxlite::litebox::HealthState as CoreHealthState;
+use boxlite::runtime::types::{BoxInfo, BoxStateInfo, BoxStatus};
 use napi_derive::napi;
+
+// ============================================================================
+// HealthState - Health check state enumeration
+// ============================================================================
+
+/// Health state of a box.
+#[napi(string_enum)]
+#[derive(Clone, Debug)]
+pub enum JsHealthState {
+    /// No health check configured
+    None,
+    /// Within start_period, not yet checked
+    Starting,
+    /// Last health check passed
+    Healthy,
+    /// Failed retries consecutive checks
+    Unhealthy,
+}
+
+fn health_state_to_js(state: &CoreHealthState) -> JsHealthState {
+    match state {
+        CoreHealthState::None => JsHealthState::None,
+        CoreHealthState::Starting => JsHealthState::Starting,
+        CoreHealthState::Healthy => JsHealthState::Healthy,
+        CoreHealthState::Unhealthy => JsHealthState::Unhealthy,
+    }
+}
+
+// ============================================================================
+// HealthStatus - Health check status
+// ============================================================================
+
+/// Health status of a box with health check enabled.
+///
+/// Tracks the current health state and consecutive failure count.
+#[napi(object)]
+#[derive(Clone, Debug)]
+pub struct JsHealthStatus {
+    /// Current health state
+    pub state: JsHealthState,
+    /// Consecutive health check failures
+    pub failures: u32,
+    /// Last health check timestamp (ISO 8601 format)
+    pub last_check: Option<String>,
+}
 
 // ============================================================================
 // BoxStateInfo - Runtime state (Docker-like State object)
@@ -34,6 +80,16 @@ fn status_to_string(status: BoxStatus) -> String {
     .to_string()
 }
 
+impl From<BoxStateInfo> for JsBoxStateInfo {
+    fn from(state_info: BoxStateInfo) -> Self {
+        Self {
+            status: status_to_string(state_info.status),
+            running: state_info.running,
+            pid: state_info.pid,
+        }
+    }
+}
+
 // ============================================================================
 // BoxInfo - Container info with nested state
 // ============================================================================
@@ -65,14 +121,19 @@ pub struct JsBoxInfo {
 
     /// Allocated memory in MiB
     pub memory_mib: u32,
+
+    /// Health status
+    pub health_status: JsHealthStatus,
 }
 
 impl From<BoxInfo> for JsBoxInfo {
     fn from(info: BoxInfo) -> Self {
-        let state = JsBoxStateInfo {
-            status: status_to_string(info.status),
-            running: info.status.is_running(),
-            pid: info.pid,
+        let state_info = BoxStateInfo::from(&info);
+        let state = JsBoxStateInfo::from(state_info);
+        let health_status = JsHealthStatus {
+            state: health_state_to_js(&info.health_status.state),
+            failures: info.health_status.failures,
+            last_check: info.health_status.last_check.map(|dt| dt.to_rfc3339()),
         };
 
         Self {
@@ -83,6 +144,7 @@ impl From<BoxInfo> for JsBoxInfo {
             image: info.image,
             cpus: info.cpus,
             memory_mib: info.memory_mib,
+            health_status,
         }
     }
 }

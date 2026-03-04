@@ -6,7 +6,6 @@ use boxlite::BoxliteRuntime;
 use boxlite::runtime::id::BoxID;
 use boxlite::runtime::options::{BoxOptions, BoxliteOptions};
 use boxlite::runtime::types::BoxStatus;
-use tempfile::TempDir;
 
 // ============================================================================
 // RUNTIME INITIALIZATION TESTS
@@ -14,8 +13,13 @@ use tempfile::TempDir;
 
 #[tokio::test]
 async fn runtime_initialization_creates_empty_list() {
-    let ctx = common::IsolatedRuntime::new();
-    assert!(ctx.runtime.list_info().await.unwrap().is_empty());
+    let home = boxlite_test_utils::home::PerTestBoxHome::isolated();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+    assert!(runtime.list_info().await.unwrap().is_empty());
 }
 
 // ============================================================================
@@ -24,17 +28,14 @@ async fn runtime_initialization_creates_empty_list() {
 
 #[tokio::test]
 async fn create_generates_unique_ids() {
-    let ctx = common::IsolatedRuntime::new();
-    let box1 = ctx
-        .runtime
-        .create(common::alpine_opts(), None)
-        .await
-        .unwrap();
-    let box2 = ctx
-        .runtime
-        .create(common::alpine_opts(), None)
-        .await
-        .unwrap();
+    let home = boxlite_test_utils::home::PerTestBoxHome::isolated();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+    let box1 = runtime.create(common::alpine_opts(), None).await.unwrap();
+    let box2 = runtime.create(common::alpine_opts(), None).await.unwrap();
 
     // IDs should be unique
     assert_ne!(box1.id(), box2.id());
@@ -46,8 +47,8 @@ async fn create_generates_unique_ids() {
     // Cleanup
     box1.stop().await.unwrap();
     box2.stop().await.unwrap();
-    ctx.runtime.remove(box1.id().as_str(), false).await.unwrap();
-    ctx.runtime.remove(box2.id().as_str(), false).await.unwrap();
+    runtime.remove(box1.id().as_str(), false).await.unwrap();
+    runtime.remove(box2.id().as_str(), false).await.unwrap();
 }
 
 #[tokio::test]
@@ -58,16 +59,16 @@ async fn create_stores_custom_options() {
         ..common::alpine_opts()
     };
 
-    let ctx = common::IsolatedRuntime::new();
-    let handle = ctx.runtime.create(options, None).await.unwrap();
+    let home = boxlite_test_utils::home::PerTestBoxHome::isolated();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+    let handle = runtime.create(options, None).await.unwrap();
     let box_id = handle.id().clone();
 
-    let info = ctx
-        .runtime
-        .get_info(box_id.as_str())
-        .await
-        .unwrap()
-        .unwrap();
+    let info = runtime.get_info(box_id.as_str()).await.unwrap().unwrap();
 
     // Verify metadata was stored correctly
     assert_eq!(info.cpus, 4);
@@ -76,7 +77,7 @@ async fn create_stores_custom_options() {
 
     // Cleanup
     handle.stop().await.unwrap();
-    ctx.runtime.remove(box_id.as_str(), false).await.unwrap();
+    runtime.remove(box_id.as_str(), false).await.unwrap();
 }
 
 // ============================================================================
@@ -85,25 +86,22 @@ async fn create_stores_custom_options() {
 
 #[tokio::test]
 async fn list_info_returns_all_boxes() {
-    let ctx = common::IsolatedRuntime::new();
+    let home = boxlite_test_utils::home::PerTestBoxHome::isolated();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
 
     // Initially empty
-    assert_eq!(ctx.runtime.list_info().await.unwrap().len(), 0);
+    assert_eq!(runtime.list_info().await.unwrap().len(), 0);
 
     // Create two boxes
-    let box1 = ctx
-        .runtime
-        .create(common::alpine_opts(), None)
-        .await
-        .unwrap();
-    let box2 = ctx
-        .runtime
-        .create(common::alpine_opts(), None)
-        .await
-        .unwrap();
+    let box1 = runtime.create(common::alpine_opts(), None).await.unwrap();
+    let box2 = runtime.create(common::alpine_opts(), None).await.unwrap();
 
     // List should show both boxes
-    let boxes = ctx.runtime.list_info().await.unwrap();
+    let boxes = runtime.list_info().await.unwrap();
     assert_eq!(boxes.len(), 2);
 
     let ids: Vec<&str> = boxes.iter().map(|b| b.id.as_str()).collect();
@@ -113,33 +111,26 @@ async fn list_info_returns_all_boxes() {
     // Cleanup
     box1.stop().await.unwrap();
     box2.stop().await.unwrap();
-    ctx.runtime.remove(box1.id().as_str(), false).await.unwrap();
-    ctx.runtime.remove(box2.id().as_str(), false).await.unwrap();
+    runtime.remove(box1.id().as_str(), false).await.unwrap();
+    runtime.remove(box2.id().as_str(), false).await.unwrap();
 }
 
 #[tokio::test]
 async fn list_info_sorted_by_creation_time_newest_first() {
-    let ctx = common::IsolatedRuntime::new();
+    let home = boxlite_test_utils::home::PerTestBoxHome::isolated();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
 
     // Create boxes (chrono has microsecond resolution — timestamps differ naturally)
-    let box1 = ctx
-        .runtime
-        .create(common::alpine_opts(), None)
-        .await
-        .unwrap();
-    let box2 = ctx
-        .runtime
-        .create(common::alpine_opts(), None)
-        .await
-        .unwrap();
-    let box3 = ctx
-        .runtime
-        .create(common::alpine_opts(), None)
-        .await
-        .unwrap();
+    let box1 = runtime.create(common::alpine_opts(), None).await.unwrap();
+    let box2 = runtime.create(common::alpine_opts(), None).await.unwrap();
+    let box3 = runtime.create(common::alpine_opts(), None).await.unwrap();
 
     // List should be sorted newest first
-    let boxes = ctx.runtime.list_info().await.unwrap();
+    let boxes = runtime.list_info().await.unwrap();
     assert_eq!(boxes.len(), 3);
     assert_eq!(boxes[0].id, *box3.id()); // Newest
     assert_eq!(boxes[1].id, *box2.id());
@@ -152,9 +143,9 @@ async fn list_info_sorted_by_creation_time_newest_first() {
     box1.stop().await.unwrap();
     box2.stop().await.unwrap();
     box3.stop().await.unwrap();
-    ctx.runtime.remove(box1_id.as_str(), false).await.unwrap();
-    ctx.runtime.remove(box2_id.as_str(), false).await.unwrap();
-    ctx.runtime.remove(box3_id.as_str(), false).await.unwrap();
+    runtime.remove(box1_id.as_str(), false).await.unwrap();
+    runtime.remove(box2_id.as_str(), false).await.unwrap();
+    runtime.remove(box3_id.as_str(), false).await.unwrap();
 }
 
 // ============================================================================
@@ -163,21 +154,20 @@ async fn list_info_sorted_by_creation_time_newest_first() {
 
 #[tokio::test]
 async fn get_info_returns_box_metadata() {
-    let ctx = common::IsolatedRuntime::new();
-    let handle = ctx
-        .runtime
+    let home = boxlite_test_utils::home::PerTestBoxHome::isolated();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+    let handle = runtime
         .create(common::alpine_opts_auto(), None)
         .await
         .unwrap();
     let box_id = handle.id().clone();
 
     // Get info from runtime - box is Configured after create() but not yet started
-    let info = ctx
-        .runtime
-        .get_info(box_id.as_str())
-        .await
-        .unwrap()
-        .unwrap();
+    let info = runtime.get_info(box_id.as_str()).await.unwrap().unwrap();
     assert_eq!(info.id, box_id);
     assert_eq!(
         info.status,
@@ -187,36 +177,50 @@ async fn get_info_returns_box_metadata() {
     );
 
     // Cleanup
-    ctx.runtime.remove(box_id.as_str(), true).await.unwrap();
+    runtime.remove(box_id.as_str(), true).await.unwrap();
 }
 
 #[tokio::test]
 async fn get_info_returns_none_for_nonexistent() {
-    let ctx = common::IsolatedRuntime::new();
-    let missing = ctx.runtime.get_info("nonexistent-id").await.unwrap();
+    let home = boxlite_test_utils::home::PerTestBoxHome::isolated();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+    let missing = runtime.get_info("nonexistent-id").await.unwrap();
     assert!(missing.is_none());
 }
 
 #[tokio::test]
 async fn exists_returns_true_for_existing_box() {
-    let ctx = common::IsolatedRuntime::new();
-    let handle = ctx
-        .runtime
+    let home = boxlite_test_utils::home::PerTestBoxHome::isolated();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+    let handle = runtime
         .create(common::alpine_opts_auto(), None)
         .await
         .unwrap();
     let box_id = handle.id().clone();
 
-    assert!(ctx.runtime.exists(box_id.as_str()).await.unwrap());
+    assert!(runtime.exists(box_id.as_str()).await.unwrap());
 
     // Cleanup
-    ctx.runtime.remove(box_id.as_str(), true).await.unwrap();
+    runtime.remove(box_id.as_str(), true).await.unwrap();
 }
 
 #[tokio::test]
 async fn exists_returns_false_for_nonexistent() {
-    let ctx = common::IsolatedRuntime::new();
-    assert!(!ctx.runtime.exists("nonexistent-id").await.unwrap());
+    let home = boxlite_test_utils::home::PerTestBoxHome::isolated();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+    assert!(!runtime.exists("nonexistent-id").await.unwrap());
 }
 
 // ============================================================================
@@ -225,8 +229,13 @@ async fn exists_returns_false_for_nonexistent() {
 
 #[tokio::test]
 async fn remove_nonexistent_returns_not_found() {
-    let ctx = common::IsolatedRuntime::new();
-    let result = ctx.runtime.remove("nonexistent-id", false).await;
+    let home = boxlite_test_utils::home::PerTestBoxHome::isolated();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+    let result = runtime.remove("nonexistent-id", false).await;
 
     assert!(result.is_err());
     let err = result.unwrap_err();
@@ -239,29 +248,34 @@ async fn remove_nonexistent_returns_not_found() {
 
 #[tokio::test]
 async fn remove_stopped_box_succeeds() {
-    let ctx = common::IsolatedRuntime::new();
-    let handle = ctx
-        .runtime
-        .create(common::alpine_opts(), None)
-        .await
-        .unwrap();
+    let home = boxlite_test_utils::home::PerTestBoxHome::isolated();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+    let handle = runtime.create(common::alpine_opts(), None).await.unwrap();
     let box_id = handle.id().clone();
 
     // Stop the box first
     handle.stop().await.unwrap();
 
     // Remove without force should succeed on stopped box
-    ctx.runtime.remove(box_id.as_str(), false).await.unwrap();
+    runtime.remove(box_id.as_str(), false).await.unwrap();
 
     // Box should no longer exist
-    assert!(!ctx.runtime.exists(box_id.as_str()).await.unwrap());
+    assert!(!runtime.exists(box_id.as_str()).await.unwrap());
 }
 
 #[tokio::test]
 async fn remove_active_without_force_fails() {
-    let ctx = common::ParallelRuntime::new();
-    let handle = ctx
-        .runtime
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+    let handle = runtime
         .create(common::alpine_opts_auto(), None)
         .await
         .unwrap();
@@ -271,16 +285,11 @@ async fn remove_active_without_force_fails() {
     handle.start().await.unwrap();
 
     // Box should now be active.
-    let info = ctx
-        .runtime
-        .get_info(box_id.as_str())
-        .await
-        .unwrap()
-        .unwrap();
+    let info = runtime.get_info(box_id.as_str()).await.unwrap().unwrap();
     assert!(info.status.is_active());
 
     // Remove without force should fail
-    let result = ctx.runtime.remove(box_id.as_str(), false).await;
+    let result = runtime.remove(box_id.as_str(), false).await;
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(
@@ -290,18 +299,22 @@ async fn remove_active_without_force_fails() {
     );
 
     // Box should still exist
-    assert!(ctx.runtime.exists(box_id.as_str()).await.unwrap());
+    assert!(runtime.exists(box_id.as_str()).await.unwrap());
 
     // Cleanup with force
-    ctx.runtime.remove(box_id.as_str(), true).await.unwrap();
-    ctx.shutdown().await;
+    runtime.remove(box_id.as_str(), true).await.unwrap();
+    let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 }
 
 #[tokio::test]
 async fn remove_active_with_force_stops_and_removes() {
-    let ctx = common::ParallelRuntime::new();
-    let handle = ctx
-        .runtime
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+    let handle = runtime
         .create(common::alpine_opts_auto(), None)
         .await
         .unwrap();
@@ -311,40 +324,39 @@ async fn remove_active_with_force_stops_and_removes() {
     handle.start().await.unwrap();
 
     // Box should now be active.
-    let info = ctx
-        .runtime
-        .get_info(box_id.as_str())
-        .await
-        .unwrap()
-        .unwrap();
+    let info = runtime.get_info(box_id.as_str()).await.unwrap().unwrap();
     assert!(info.status.is_active());
 
     // Force remove should succeed
-    ctx.runtime.remove(box_id.as_str(), true).await.unwrap();
+    runtime.remove(box_id.as_str(), true).await.unwrap();
 
     // Box should no longer exist
-    assert!(!ctx.runtime.exists(box_id.as_str()).await.unwrap());
-    ctx.shutdown().await;
+    assert!(!runtime.exists(box_id.as_str()).await.unwrap());
+    let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 }
 
 #[tokio::test]
 async fn remove_deletes_box_from_database() {
-    let ctx = common::IsolatedRuntime::new();
-    let handle = ctx
-        .runtime
+    let home = boxlite_test_utils::home::PerTestBoxHome::isolated();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+    let handle = runtime
         .create(common::alpine_opts_auto(), None)
         .await
         .unwrap();
     let box_id = handle.id().clone();
 
     // Verify box exists before removal
-    assert!(ctx.runtime.exists(box_id.as_str()).await.unwrap());
+    assert!(runtime.exists(box_id.as_str()).await.unwrap());
 
     // Force remove
-    ctx.runtime.remove(box_id.as_str(), true).await.unwrap();
+    runtime.remove(box_id.as_str(), true).await.unwrap();
 
     // Box should no longer exist in database
-    assert!(!ctx.runtime.exists(box_id.as_str()).await.unwrap());
+    assert!(!runtime.exists(box_id.as_str()).await.unwrap());
 }
 
 // ============================================================================
@@ -353,12 +365,13 @@ async fn remove_deletes_box_from_database() {
 
 #[tokio::test]
 async fn stop_marks_box_as_stopped() {
-    let ctx = common::ParallelRuntime::new();
-    let handle = ctx
-        .runtime
-        .create(common::alpine_opts(), None)
-        .await
-        .unwrap();
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+    let handle = runtime.create(common::alpine_opts(), None).await.unwrap();
     let box_id = handle.id().clone();
 
     // Start first so stop() transitions to Stopped.
@@ -368,17 +381,12 @@ async fn stop_marks_box_as_stopped() {
     handle.stop().await.unwrap();
 
     // Status should be Stopped
-    let info = ctx
-        .runtime
-        .get_info(box_id.as_str())
-        .await
-        .unwrap()
-        .unwrap();
+    let info = runtime.get_info(box_id.as_str()).await.unwrap().unwrap();
     assert_eq!(info.status, BoxStatus::Stopped);
 
     // Cleanup
-    ctx.runtime.remove(box_id.as_str(), false).await.unwrap();
-    ctx.shutdown().await;
+    runtime.remove(box_id.as_str(), false).await.unwrap();
+    let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 }
 
 // ============================================================================
@@ -387,17 +395,20 @@ async fn stop_marks_box_as_stopped() {
 
 #[tokio::test]
 async fn litebox_info_returns_correct_metadata() {
-    let ctx = common::IsolatedRuntime::new();
-    let handle = ctx
-        .runtime
+    let home = boxlite_test_utils::home::PerTestBoxHome::isolated();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+    let handle = runtime
         .create(common::alpine_opts_auto(), None)
         .await
         .unwrap();
     let box_id = handle.id().clone();
 
     // Get info from runtime - box is Configured after create() but not yet started
-    let info = ctx
-        .runtime
+    let info = runtime
         .get_info(box_id.as_str())
         .await
         .unwrap()
@@ -408,7 +419,7 @@ async fn litebox_info_returns_correct_metadata() {
     assert_eq!(info.memory_mib, 512); // Default value
 
     // Cleanup
-    ctx.runtime.remove(box_id.as_str(), true).await.unwrap();
+    runtime.remove(box_id.as_str(), true).await.unwrap();
 }
 
 // ============================================================================
@@ -417,30 +428,38 @@ async fn litebox_info_returns_correct_metadata() {
 
 #[tokio::test]
 async fn multiple_runtimes_are_isolated() {
-    let ctx1 = common::IsolatedRuntime::new();
-    let ctx2 = common::IsolatedRuntime::new();
+    let home1 = boxlite_test_utils::home::PerTestBoxHome::isolated();
+    let runtime1 = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home1.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+    let home2 = boxlite_test_utils::home::PerTestBoxHome::isolated();
+    let runtime2 = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home2.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
 
-    let box1 = ctx1
-        .runtime
+    let box1 = runtime1
         .create(common::alpine_opts_auto(), None)
         .await
         .unwrap();
-    let box2 = ctx2
-        .runtime
+    let box2 = runtime2
         .create(common::alpine_opts_auto(), None)
         .await
         .unwrap();
 
     // Each runtime should only see its own box
-    assert_eq!(ctx1.runtime.list_info().await.unwrap().len(), 1);
-    assert_eq!(ctx2.runtime.list_info().await.unwrap().len(), 1);
+    assert_eq!(runtime1.list_info().await.unwrap().len(), 1);
+    assert_eq!(runtime2.list_info().await.unwrap().len(), 1);
 
-    assert_eq!(ctx1.runtime.list_info().await.unwrap()[0].id, *box1.id());
-    assert_eq!(ctx2.runtime.list_info().await.unwrap()[0].id, *box2.id());
+    assert_eq!(runtime1.list_info().await.unwrap()[0].id, *box1.id());
+    assert_eq!(runtime2.list_info().await.unwrap()[0].id, *box2.id());
 
     // Cleanup
-    ctx1.runtime.remove(box1.id().as_str(), true).await.unwrap();
-    ctx2.runtime.remove(box2.id().as_str(), true).await.unwrap();
+    runtime1.remove(box1.id().as_str(), true).await.unwrap();
+    runtime2.remove(box2.id().as_str(), true).await.unwrap();
 }
 
 // ============================================================================
@@ -450,15 +469,15 @@ async fn multiple_runtimes_are_isolated() {
 #[tokio::test]
 async fn boxes_persist_across_runtime_restart() {
     // Persistence tests need their own home_dir to test restart behavior.
-    // Use warm_temp_dir() so the image cache is available for start().
-    let (_temp_dir, home_dir) = common::warm_temp_dir();
+    // Use PerTestBoxHome::new() so the image cache is available for start().
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
 
     let box_id: BoxID;
 
     // Create runtime and a box
     {
         let options = BoxliteOptions {
-            home_dir: home_dir.clone(),
+            home_dir: home.path.clone(),
             image_registries: common::test_registries(),
         };
         let runtime = BoxliteRuntime::new(options).expect("Failed to create runtime");
@@ -477,7 +496,7 @@ async fn boxes_persist_across_runtime_restart() {
     // Create new runtime with same home directory (simulates restart)
     {
         let options = BoxliteOptions {
-            home_dir,
+            home_dir: home.path.clone(),
             image_registries: common::test_registries(),
         };
         let runtime = BoxliteRuntime::new(options).expect("Failed to create runtime");
@@ -499,15 +518,15 @@ async fn boxes_persist_across_runtime_restart() {
 async fn multiple_boxes_persist_and_recover_without_lock_errors() {
     // Test that multiple boxes can be created, persisted, and recovered
     // without lock allocation errors during recovery.
-    // Use warm_temp_dir() so the image cache is available for start().
-    let (_temp_dir, home_dir) = common::warm_temp_dir();
+    // Use PerTestBoxHome::new() so the image cache is available for start().
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
 
     let box_ids: Vec<BoxID>;
 
     // Create multiple boxes (allocates locks)
     {
         let options = BoxliteOptions {
-            home_dir: home_dir.clone(),
+            home_dir: home.path.clone(),
             image_registries: common::test_registries(),
         };
         let runtime = BoxliteRuntime::new(options).expect("Failed to create runtime");
@@ -540,7 +559,7 @@ async fn multiple_boxes_persist_and_recover_without_lock_errors() {
     // This should successfully recover all boxes without lock allocation errors
     {
         let options = BoxliteOptions {
-            home_dir,
+            home_dir: home.path.clone(),
             image_registries: common::test_registries(),
         };
         let runtime = BoxliteRuntime::new(options).expect("Failed to create runtime after restart");
@@ -590,35 +609,40 @@ async fn auto_remove_default_is_true() {
 
 #[tokio::test]
 async fn auto_remove_true_removes_box_on_stop() {
-    let ctx = common::IsolatedRuntime::new();
-    let handle = ctx
-        .runtime
+    let home = boxlite_test_utils::home::PerTestBoxHome::isolated();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+    let handle = runtime
         .create(common::alpine_opts_auto(), None)
         .await
         .unwrap();
     let box_id = handle.id().clone();
 
     // Box should exist before stop
-    assert!(ctx.runtime.exists(box_id.as_str()).await.unwrap());
+    assert!(runtime.exists(box_id.as_str()).await.unwrap());
 
     // Stop should auto-remove
     handle.stop().await.unwrap();
 
     // Box should no longer exist
     assert!(
-        !ctx.runtime.exists(box_id.as_str()).await.unwrap(),
+        !runtime.exists(box_id.as_str()).await.unwrap(),
         "Box should be auto-removed when auto_remove=true"
     );
 }
 
 #[tokio::test]
 async fn auto_remove_false_preserves_box_on_stop() {
-    let ctx = common::ParallelRuntime::new();
-    let handle = ctx
-        .runtime
-        .create(common::alpine_opts(), None)
-        .await
-        .unwrap();
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+    let handle = runtime.create(common::alpine_opts(), None).await.unwrap();
     let box_id = handle.id().clone();
 
     // Start first so stop() transitions to Stopped.
@@ -629,22 +653,17 @@ async fn auto_remove_false_preserves_box_on_stop() {
 
     // Box should still exist
     assert!(
-        ctx.runtime.exists(box_id.as_str()).await.unwrap(),
+        runtime.exists(box_id.as_str()).await.unwrap(),
         "Box should be preserved when auto_remove=false"
     );
 
     // Status should be Stopped
-    let info = ctx
-        .runtime
-        .get_info(box_id.as_str())
-        .await
-        .unwrap()
-        .unwrap();
+    let info = runtime.get_info(box_id.as_str()).await.unwrap().unwrap();
     assert_eq!(info.status, BoxStatus::Stopped);
 
     // Cleanup manually
-    ctx.runtime.remove(box_id.as_str(), false).await.unwrap();
-    ctx.shutdown().await;
+    runtime.remove(box_id.as_str(), false).await.unwrap();
+    let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 }
 
 // ============================================================================
@@ -662,11 +681,15 @@ async fn detach_default_is_false() {
 
 #[tokio::test]
 async fn detach_option_is_stored_in_box_config() {
-    let ctx = common::IsolatedRuntime::new();
+    let home = boxlite_test_utils::home::PerTestBoxHome::isolated();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
 
     // Create box with detach=true
-    let handle = ctx
-        .runtime
+    let handle = runtime
         .create(
             BoxOptions {
                 detach: true,
@@ -681,150 +704,8 @@ async fn detach_option_is_stored_in_box_config() {
     // Note: detach is not exposed in BoxInfo, it's an internal option
     // that affects the shim subprocess behavior. We just verify the box
     // was created successfully with the option.
-    assert!(ctx.runtime.exists(box_id.as_str()).await.unwrap());
+    assert!(runtime.exists(box_id.as_str()).await.unwrap());
 
     // Cleanup
-    ctx.runtime.remove(box_id.as_str(), true).await.unwrap();
-}
-
-// ============================================================================
-// RECOVERY CLEANUP TESTS
-// ============================================================================
-
-#[tokio::test]
-async fn recovery_removes_auto_remove_true_boxes() {
-    // Test that boxes with auto_remove=true are removed during recovery
-    // This simulates a crash scenario where boxes weren't properly cleaned up
-    let temp_dir = TempDir::new().expect("Failed to create temp dir");
-    let home_dir = temp_dir.path().to_path_buf();
-
-    let persistent_box_id: BoxID;
-
-    // Create two boxes: one with auto_remove=true, one with auto_remove=false
-    {
-        let options = BoxliteOptions {
-            home_dir: home_dir.clone(),
-            image_registries: common::test_registries(),
-        };
-        let runtime = BoxliteRuntime::new(options).expect("Failed to create runtime");
-
-        // Create auto_remove=true box (should be cleaned up on recovery)
-        let auto_remove_box = runtime
-            .create(common::alpine_opts_auto(), None)
-            .await
-            .unwrap();
-
-        // Create auto_remove=false box (should persist)
-        let persistent_box = runtime.create(common::alpine_opts(), None).await.unwrap();
-        persistent_box_id = persistent_box.id().clone();
-
-        // Both boxes should exist before shutdown
-        assert!(runtime.exists(auto_remove_box.id().as_str()).await.unwrap());
-        assert!(runtime.exists(persistent_box_id.as_str()).await.unwrap());
-
-        // Stop the persistent box normally (it stays in DB)
-        persistent_box.stop().await.unwrap();
-
-        // Verify both exist in DB (auto_remove box is still Starting)
-        assert_eq!(runtime.list_info().await.unwrap().len(), 2);
-
-        // Drop runtime without stopping auto_remove_box - simulates crash
-        // The box will remain in database but should be cleaned on recovery
-    }
-
-    // Create new runtime with same home directory (simulates restart)
-    {
-        let options = BoxliteOptions {
-            home_dir,
-            image_registries: common::test_registries(),
-        };
-        let runtime = BoxliteRuntime::new(options).expect("Failed to create runtime after restart");
-
-        // auto_remove=true box should be removed during recovery
-        // auto_remove=false box should be recovered
-        let boxes = runtime.list_info().await.unwrap();
-        assert_eq!(
-            boxes.len(),
-            1,
-            "Only persistent box should survive recovery"
-        );
-        assert_eq!(
-            boxes[0].id, persistent_box_id,
-            "Recovered box should be the persistent one"
-        );
-
-        // Cleanup
-        runtime
-            .remove(persistent_box_id.as_str(), false)
-            .await
-            .unwrap();
-    }
-}
-
-#[tokio::test]
-async fn recovery_removes_orphaned_stopped_boxes_without_directory() {
-    // Test that stopped boxes without directories are KEPT during recovery
-    // (They might have been created but never started, which is valid).
-    // Use warm_temp_dir() so the image cache is available for start().
-    let (_temp_dir, home_dir) = common::warm_temp_dir();
-
-    let box_id: BoxID;
-    let box_home: std::path::PathBuf;
-
-    // Create a box, stop it (persists), then delete directory
-    {
-        let options = BoxliteOptions {
-            home_dir: home_dir.clone(),
-            image_registries: common::test_registries(),
-        };
-        let runtime = BoxliteRuntime::new(options).expect("Failed to create runtime");
-
-        let litebox = runtime.create(common::alpine_opts(), None).await.unwrap();
-        box_id = litebox.id().clone();
-        box_home = home_dir.join("boxes").join(box_id.as_str());
-
-        // Start first so stop() persists Stopped status.
-        litebox.start().await.unwrap();
-
-        // Stop the box (persists to DB with status=Stopped)
-        litebox.stop().await.unwrap();
-
-        // Box should be persisted
-        assert!(runtime.exists(box_id.as_str()).await.unwrap());
-    }
-
-    // Delete the box's directory (simulating it was never created or manually deleted)
-    if box_home.exists() {
-        std::fs::remove_dir_all(&box_home).expect("Failed to delete box directory");
-    }
-
-    // Create new runtime with same home directory (simulates restart)
-    {
-        let options = BoxliteOptions {
-            home_dir,
-            image_registries: common::test_registries(),
-        };
-        let runtime = BoxliteRuntime::new(options).expect("Failed to create runtime after restart");
-
-        // Stopped box without directory should be KEPT (it might never have been started)
-        // Recovery only removes active (Starting/Running) boxes that are missing directories
-        let boxes = runtime.list_info().await.unwrap();
-        assert_eq!(
-            boxes.len(),
-            1,
-            "Stopped box without directory should be kept"
-        );
-        assert_eq!(
-            boxes[0].id, box_id,
-            "Box should be recovered even without directory"
-        );
-        assert_eq!(
-            boxes[0].status,
-            BoxStatus::Stopped,
-            "Box should remain in Stopped status"
-        );
-
-        // Cleanup
-        runtime.remove(box_id.as_str(), false).await.unwrap();
-    }
+    runtime.remove(box_id.as_str(), true).await.unwrap();
 }

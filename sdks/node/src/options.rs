@@ -1,7 +1,8 @@
 use std::path::PathBuf;
+use std::time::Duration;
 
 use boxlite::BoxliteRestOptions;
-use boxlite::runtime::advanced_options::{AdvancedBoxOptions, SecurityOptions};
+use boxlite::runtime::advanced_options::{AdvancedBoxOptions, HealthCheckOptions, SecurityOptions};
 use boxlite::runtime::constants::images;
 use boxlite::runtime::options::{
     BoxOptions, BoxliteOptions, NetworkSpec, PortProtocol, PortSpec, RootfsSpec, VolumeSpec,
@@ -9,6 +10,42 @@ use boxlite::runtime::options::{
 use napi_derive::napi;
 
 use crate::advanced_options::JsSecurityOptions;
+
+/// Health check options for boxes.
+///
+/// Defines how to periodically check if a box's guest agent is responsive.
+/// Similar to Docker's HEALTHCHECK directive.
+///
+/// This is an advanced option - most users should rely on the defaults.
+#[napi(object)]
+#[derive(Clone, Debug)]
+pub struct JsHealthCheckOptions {
+    /// Time between health checks (seconds)
+    #[napi(js_name = "interval")]
+    pub interval_seconds: f64,
+
+    /// Time to wait before considering the check failed (seconds)
+    #[napi(js_name = "timeout")]
+    pub timeout_seconds: f64,
+
+    /// Number of consecutive failures before marking as unhealthy
+    pub retries: u32,
+
+    /// Startup period before health checks count toward failures (seconds)
+    #[napi(js_name = "startPeriod")]
+    pub start_period_seconds: f64,
+}
+
+impl From<JsHealthCheckOptions> for HealthCheckOptions {
+    fn from(js_config: JsHealthCheckOptions) -> Self {
+        Self {
+            interval: Duration::from_secs(js_config.interval_seconds as u64),
+            timeout: Duration::from_secs(js_config.timeout_seconds as u64),
+            retries: js_config.retries,
+            start_period: Duration::from_secs(js_config.start_period_seconds as u64),
+        }
+    }
+}
 
 /// Runtime configuration options.
 ///
@@ -101,6 +138,10 @@ pub struct JsBoxOptions {
 
     /// Security isolation options for the box.
     pub security: Option<JsSecurityOptions>,
+
+    /// Health check options for the box.
+    #[napi(js_name = "healthCheck")]
+    pub health_check: Option<JsHealthCheckOptions>,
 }
 
 /// Environment variable specification.
@@ -224,6 +265,8 @@ impl From<JsBoxOptions> for BoxOptions {
             .map(SecurityOptions::from)
             .unwrap_or_default();
 
+        let health_check = js_opts.health_check.map(HealthCheckOptions::from);
+
         BoxOptions {
             cpus: js_opts.cpus,
             memory_mib: js_opts.memory_mib,
@@ -236,6 +279,7 @@ impl From<JsBoxOptions> for BoxOptions {
             ports,
             advanced: AdvancedBoxOptions {
                 security,
+                health_check,
                 ..Default::default()
             },
             auto_remove: js_opts.auto_remove.unwrap_or(false),

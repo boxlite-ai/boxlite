@@ -1,5 +1,67 @@
-use boxlite::runtime::advanced_options::{ResourceLimits, SecurityOptions};
+use boxlite::runtime::advanced_options::{HealthCheckOptions, ResourceLimits, SecurityOptions};
 use pyo3::prelude::*;
+
+// ============================================================================
+// Health Check Options
+// ============================================================================
+
+/// Health check options for boxes.
+///
+/// Defines how to periodically check if a box's guest agent is responsive.
+/// Similar to Docker's HEALTHCHECK directive.
+///
+/// This is an advanced option - most users should rely on the defaults.
+#[pyclass(name = "HealthCheckOptions")]
+#[derive(Clone, Debug)]
+pub struct PyHealthCheckOptions {
+    /// Time between health checks (seconds).
+    #[pyo3(get, set)]
+    pub interval: u64,
+
+    /// Time to wait before considering the check failed (seconds).
+    #[pyo3(get, set)]
+    pub timeout: u64,
+
+    /// Number of consecutive failures before marking as unhealthy.
+    #[pyo3(get, set)]
+    pub retries: u32,
+
+    /// Startup period before health checks count toward failures (seconds).
+    #[pyo3(get, set)]
+    pub start_period: u64,
+}
+
+#[pymethods]
+impl PyHealthCheckOptions {
+    #[new]
+    #[pyo3(signature = (interval=30, timeout=10, retries=3, start_period=60))]
+    fn new(interval: u64, timeout: u64, retries: u32, start_period: u64) -> Self {
+        Self {
+            interval,
+            timeout,
+            retries,
+            start_period,
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "HealthCheckOptions(interval={}s, timeout={}s, retries={}, start_period={}s)",
+            self.interval, self.timeout, self.retries, self.start_period
+        )
+    }
+}
+
+impl From<PyHealthCheckOptions> for HealthCheckOptions {
+    fn from(py_opts: PyHealthCheckOptions) -> Self {
+        Self {
+            interval: std::time::Duration::from_secs(py_opts.interval),
+            timeout: std::time::Duration::from_secs(py_opts.timeout),
+            retries: py_opts.retries,
+            start_period: std::time::Duration::from_secs(py_opts.start_period),
+        }
+    }
+}
 
 // ============================================================================
 // Security Options
@@ -200,13 +262,23 @@ pub struct PyAdvancedBoxOptions {
     /// Security isolation options.
     #[pyo3(get, set)]
     pub security: Option<PySecurityOptions>,
+
+    /// Health check options.
+    #[pyo3(get, set)]
+    pub health_check: Option<PyHealthCheckOptions>,
 }
 
 #[pymethods]
 impl PyAdvancedBoxOptions {
     #[new]
-    #[pyo3(signature = (security=None))]
-    fn new(security: Option<PySecurityOptions>) -> Self {
-        Self { security }
+    #[pyo3(signature = (security=None, health_check=None))]
+    fn new(
+        security: Option<PySecurityOptions>,
+        health_check: Option<PyHealthCheckOptions>,
+    ) -> Self {
+        Self {
+            security,
+            health_check,
+        }
     }
 }

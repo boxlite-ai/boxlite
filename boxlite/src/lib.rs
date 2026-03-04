@@ -18,7 +18,6 @@ pub mod runtime;
 pub mod util;
 pub mod vmm;
 
-mod archive;
 mod db;
 mod disk;
 mod fs;
@@ -33,16 +32,19 @@ pub use litebox::LiteBox;
 pub use portal::GuestSession;
 pub use runtime::{BoxliteRuntime, ImageHandle};
 
-pub use archive::ArchiveManifest;
 pub use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 pub use disk::DiskInfo;
 pub use litebox::SnapshotHandle;
 pub use litebox::snapshot_mgr::SnapshotInfo;
+pub use litebox::archive::ArchiveManifest;
 pub use litebox::{
     BoxCommand, CopyOptions, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execution, ExecutionId,
+    HealthState, HealthStatus,
 };
 pub use metrics::{BoxMetrics, RuntimeMetrics};
-pub use runtime::advanced_options::{AdvancedBoxOptions, ResourceLimits, SecurityOptions};
+pub use runtime::advanced_options::{
+    AdvancedBoxOptions, HealthCheckOptions, ResourceLimits, SecurityOptions,
+};
 use runtime::layout::FilesystemLayout;
 pub use runtime::options::{
     BoxArchive, BoxOptions, BoxliteOptions, CloneOptions, ExportOptions, RootfsSpec,

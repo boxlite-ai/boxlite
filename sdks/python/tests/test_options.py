@@ -88,6 +88,10 @@ class TestAutoRemoveBehavior:
         )
         box_id = box.id
 
+        # Ensure box is running before stopping
+        execution = box.exec("echo", ["ready"])
+        execution.wait()
+
         # Stop the box
         box.stop()
 
@@ -136,23 +140,20 @@ class TestDetachOption:
         runtime.remove(box.id)
 
 
-class TestInvalidCombinations:
-    """Test that invalid option combinations are rejected."""
+class TestOptionCombinations:
+    """Test option combinations that were previously invalid."""
 
-    @pytest.mark.skip(
-        reason="API behavior may have changed - combination no longer rejected"
-    )
-    def test_auto_remove_true_detach_true_rejected(self, runtime):
-        """Test that auto_remove=True + detach=True is rejected."""
-        with pytest.raises(RuntimeError) as exc_info:
-            runtime.create(
-                boxlite.BoxOptions(
-                    image="alpine:latest",
-                    auto_remove=True,
-                    detach=True,
-                )
+    def test_auto_remove_true_detach_true_accepted(self, runtime):
+        """Test that auto_remove=True + detach=True is now accepted."""
+        box = runtime.create(
+            boxlite.BoxOptions(
+                image="alpine:latest",
+                auto_remove=True,
+                detach=True,
             )
-        assert "incompatible" in str(exc_info.value).lower()
+        )
+        assert box is not None
+        box.stop()
 
 
 class TestCombinedOptions:
@@ -188,6 +189,10 @@ class TestCombinedOptions:
             )
         )
         box_id = box.id
+
+        # Ensure box is running before stopping
+        execution = box.exec("echo", ["ready"])
+        execution.wait()
 
         # Stop - should preserve
         box.stop()
@@ -312,14 +317,16 @@ class TestCmdIntegration:
         sandbox = runtime.create(
             boxlite.BoxOptions(
                 image="alpine:latest",
-                cmd=["cat", "/etc/hostname"],
+                cmd=["sleep", "infinity"],
             )
         )
         try:
-            # Run a command to verify the box started with cmd
-            result = sandbox.run("echo cmd-override-works")
+            # Run a command to verify the box started successfully with cmd
+            execution = sandbox.exec("echo", ["cmd-override-works"])
+            stdout_lines = list(execution.stdout())
+            result = execution.wait()
             assert result.exit_code == 0
-            assert "cmd-override-works" in result.stdout
+            assert any("cmd-override-works" in line for line in stdout_lines)
         finally:
             sandbox.stop()
 
@@ -336,9 +343,11 @@ class TestUserIntegration:
             )
         )
         try:
-            result = sandbox.run("id -u")
+            execution = sandbox.exec("id", ["-u"])
+            stdout_lines = list(execution.stdout())
+            result = execution.wait()
             assert result.exit_code == 0
-            assert "1000" in result.stdout
+            assert any("1000" in line for line in stdout_lines)
         finally:
             sandbox.stop()
 

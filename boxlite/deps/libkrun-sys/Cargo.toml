@@ -19,3 +19,4 @@ libc = "0.2"
 
 [features]
 default = []
+link-static = []  # Emit rustc-link-lib to statically link libkrun.a into the binary

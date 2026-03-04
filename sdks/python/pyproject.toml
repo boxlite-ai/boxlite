@@ -31,9 +31,13 @@ Repository = "https://github.com/boxlite-ai/boxlite"
 Issues = "https://github.com/boxlite-ai/boxlite/issues"
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0", "pytest-asyncio>=0.21"]
+dev = ["pytest>=7.0", "pytest-asyncio>=0.21", "ruff>=0.4"]
 sync = ["greenlet>=3.0.0"]
 orchestration = ["cloudpickle>=3.0"]
+
+[dependency-groups]
+dev = ["pytest>=7.0", "pytest-asyncio>=0.21", "ruff>=0.4"]
+sync = ["greenlet>=3.0.0"]
 
 [build-system]
 requires = ["maturin>=1.4,<2.0"]
@@ -42,7 +46,6 @@ build-backend = "maturin"
 [tool.maturin]
 bindings = "pyo3"
 module-name = "boxlite"
-include = [{ path = "boxlite/runtime/**/*", format = "wheel" }]
 
 [tool.cibuildwheel]
 # https://cibuildwheel.pypa.io/en/stable/options/#archs
@@ -66,6 +69,18 @@ skip = [
 before-all = ["""
     set -ex  # Exit on error, print commands
 
+    # Install sccache for compilation caching (CI uses GHA cache backend)
+    pip install sccache 2>/dev/null || true
+    # Verify sccache works; create pass-through shim if not to prevent build failures.
+    # When RUSTC_WRAPPER=sccache is set (via environment-pass), cargo calls
+    # `sccache /path/to/rustc <args>`. The shim just runs `exec "$@"` which
+    # executes `/path/to/rustc <args>` directly — a no-op wrapper.
+    if ! command -v sccache &>/dev/null; then
+        echo "WARNING: sccache not available, creating pass-through shim"
+        printf '#!/bin/sh\nexec "$@"\n' > /usr/local/bin/sccache
+        chmod +x /usr/local/bin/sccache
+    fi
+
     # cibuildwheel runs from repository root
     BOXLITE_ROOT=$(pwd)
 
@@ -86,10 +101,6 @@ before-all = ["""
     [ -f "$HOME/.cargo/env" ] && source "$HOME/.cargo/env"
 
     make runtime
-
-    # Copy runtime to Python module for wheel packaging (preserve symlinks)
-    rm -rf $BOXLITE_ROOT/sdks/python/boxlite/runtime
-    cp -a $BOXLITE_ROOT/target/boxlite-runtime $BOXLITE_ROOT/sdks/python/boxlite/runtime
     """]
 
 # Test the built wheel (optional, add tests later)
@@ -97,7 +108,7 @@ test-command = "python -c 'import boxlite; print(boxlite.__version__)'"
 
 [tool.cibuildwheel.macos]
 # Fix "libkrunfw.4.dylib has a minimum target of 14.0" error
-environment = { MACOSX_DEPLOYMENT_TARGET = "14.0", _PYTHON_HOST_PLATFORM = "macosx_14_0_arm64", PATH = "$HOME/.cargo/bin:$PATH" }
+environment = { MACOSX_DEPLOYMENT_TARGET = "14.0", _PYTHON_HOST_PLATFORM = "macosx_14_0_arm64", PATH = "$HOME/.cargo/bin:$PATH", CARGO_INCREMENTAL = "0" }
 
 repair-wheel-command = ""  # Skip auditwheel repair
 
@@ -110,6 +121,10 @@ repair-wheel-command = ""  # Skip auditwheel repair
 # Set Rust and library paths
 # SKIP_GUEST_BUILD=1: Use pre-built guest from Ubuntu host (manylinux lacks musl packages)
 environment = { SKIP_GUEST_BUILD = "1", PATH = "$HOME/.cargo/bin:/usr/local/bin:$PATH", PKG_CONFIG_PATH = "/usr/local/lib64/pkgconfig:/usr/local/lib/pkgconfig", LD_LIBRARY_PATH = "/usr/local/lib64:/usr/local/lib" }
+
+# Pass sccache env vars from host into cibuildwheel's manylinux container
+# These enable sccache to use the GHA cache API for compilation caching
+environment-pass = ["ACTIONS_RESULTS_URL", "ACTIONS_RUNTIME_TOKEN", "ACTIONS_CACHE_SERVICE_V2", "SCCACHE_GHA_ENABLED", "RUSTC_WRAPPER"]
 
 # Retag wheel for PyPI compliance without bundling libs (we handle runtime deps ourselves)
 # Uses 'wheel tags' to change linux_x86_64 -> manylinux_2_28_x86_64

@@ -22,10 +22,11 @@ pub use advanced_options::JsSecurityOptions;
 pub use box_handle::JsBox;
 pub use copy::JsCopyOptions;
 pub use exec::{JsExecResult, JsExecStderr, JsExecStdin, JsExecStdout, JsExecution};
-pub use info::JsBoxInfo;
+pub use info::{JsBoxInfo, JsBoxStateInfo, JsHealthState, JsHealthStatus};
 pub use metrics::{JsBoxMetrics, JsRuntimeMetrics};
 pub use options::{
-    JsBoxOptions, JsBoxliteRestOptions, JsEnvVar, JsOptions, JsPortSpec, JsVolumeSpec,
+    JsBoxOptions, JsBoxliteRestOptions, JsEnvVar, JsHealthCheckOptions, JsOptions, JsPortSpec,
+    JsVolumeSpec,
 };
 pub use runtime::JsBoxlite; // re-export for dist bundling
 pub use snapshot_options::{JsCloneOptions, JsExportOptions, JsSnapshotOptions};

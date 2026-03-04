@@ -13,7 +13,7 @@ default = ["boxlite"]
 # Internal dependencies
 boxlite = { path = "../../../boxlite", optional = true }
 boxlite-shared = { path = "../../../boxlite-shared" }
-boxlite-ffi = { path = "../../boxlite-ffi", default-features = false }
+boxlite-ffi = { path = "../../../ffi", default-features = false }
 
 # Async runtime - must include "full" for multi-threaded scheduling
 tokio = { version = "1", features = ["full"] }
@@ -26,6 +26,9 @@ tracing-subscriber = "0.3"
 # Serialization (for passing JSON via FFI)
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# Async stream utilities
+futures = "0.3"
 
 # FFI helpers
 libc = "0.2"

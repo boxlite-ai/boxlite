@@ -11,10 +11,10 @@ mod snapshot_options;
 mod snapshots;
 mod util;
 
-use crate::advanced_options::{PyAdvancedBoxOptions, PySecurityOptions};
+use crate::advanced_options::{PyAdvancedBoxOptions, PyHealthCheckOptions, PySecurityOptions};
 use crate::box_handle::PyBox;
 use crate::exec::{PyExecStderr, PyExecStdin, PyExecStdout, PyExecution};
-use crate::info::{PyBoxInfo, PyBoxStateInfo};
+use crate::info::{PyBoxInfo, PyBoxStateInfo, PyHealthState, PyHealthStatus};
 use crate::metrics::{PyBoxMetrics, PyRuntimeMetrics};
 use crate::options::{PyBoxOptions, PyBoxliteRestOptions, PyCopyOptions, PyOptions};
 use crate::runtime::PyBoxlite;
@@ -27,6 +27,7 @@ fn boxlite_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyOptions>()?;
     m.add_class::<PyBoxOptions>()?;
     m.add_class::<PySecurityOptions>()?;
+    m.add_class::<PyHealthCheckOptions>()?;
     m.add_class::<PyAdvancedBoxOptions>()?;
     m.add_class::<PyBoxlite>()?;
     m.add_class::<PyBox>()?;
@@ -36,6 +37,8 @@ fn boxlite_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyExecStderr>()?;
     m.add_class::<PyBoxInfo>()?;
     m.add_class::<PyBoxStateInfo>()?;
+    m.add_class::<PyHealthState>()?;
+    m.add_class::<PyHealthStatus>()?;
     m.add_class::<PyRuntimeMetrics>()?;
     m.add_class::<PyBoxMetrics>()?;
     m.add_class::<PyCopyOptions>()?;
@@ -44,6 +47,7 @@ fn boxlite_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PySnapshotOptions>()?;
     m.add_class::<PyExportOptions>()?;
     m.add_class::<PyCloneOptions>()?;
+    m.add_class::<PyHealthCheckOptions>()?;
     m.add_class::<PyBoxliteRestOptions>()?;
 
     Ok(())

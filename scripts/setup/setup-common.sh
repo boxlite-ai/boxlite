@@ -255,3 +255,23 @@ bootstrap_prek_and_hooks() {
     install_prek_best_effort
     install_git_hooks_best_effort
 }
+
+# True when running in build-only mode.
+is_build_mode() {
+    [ "${BOXLITE_SETUP_MODE:-dev}" = "build" ]
+}
+
+# Run dev/test-only steps (no-op in build-only mode).
+run_dev_extras() {
+    if is_build_mode; then
+        return 0
+    fi
+
+    install_cargo_nextest
+
+    if command_exists npm; then
+        install_node_sdk_deps
+    fi
+
+    bootstrap_prek_and_hooks
+}

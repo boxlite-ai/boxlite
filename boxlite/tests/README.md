@@ -28,7 +28,7 @@ This directory contains integration tests for the BoxLite runtime. Tests run con
 | `timing_profile.rs` | Yes | Boot latency profiling |
 | `network.rs` | No | Network configuration tests |
 | `runtime.rs` | No | Runtime initialization and configuration tests |
-| `shutdown.rs` | No | Shutdown behavior (`IsolatedRuntime`, no VM) |
+| `shutdown.rs` | No | Shutdown behavior (isolated home, no VM) |
 
 ### macOS Seatbelt deny lifecycle tests
 
@@ -67,54 +67,52 @@ make test:integration
 
 ## Test Infrastructure
 
-All test files use shared infrastructure from `common/mod.rs`. Three runtime flavors provide per-test isolation for concurrent execution:
+All test files use shared infrastructure from `boxlite-test-utils` and `common/mod.rs`. Per-test isolation is achieved via `PerTestBoxHome` which creates a temporary directory with optional symlinked image cache.
 
-### `ParallelRuntime` — VM integration tests
+### `PerTestBoxHome::new()` — VM integration tests
 
 Per-test `TempDir` with symlinked image cache from `target/boxlite-test/`. On first use, a cross-process `flock` serializes the initial image pull and guest rootfs warmup. Subsequent tests reuse the cached artifacts.
 
 ```rust
-use crate::common::ParallelRuntime;
+use boxlite_test_utils::home::PerTestBoxHome;
 
 #[tokio::test]
 async fn test_box_lifecycle() {
-    let ctx = ParallelRuntime::new();
-    let handle = ctx.runtime.create(alpine_opts(), None).await.unwrap();
+    let home = PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    }).expect("create runtime");
+    let handle = runtime.create(alpine_opts(), None).await.unwrap();
     handle.start().await.unwrap();
     // ... test logic ...
     handle.stop().await.unwrap();
-    ctx.shutdown().await;
+    let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 }
 ```
 
-### `IsolatedRuntime` — non-VM tests
+### `PerTestBoxHome::isolated()` — non-VM tests
 
 Per-test `TempDir` with no image cache. For tests that don't boot VMs: locking behavior, shutdown idempotency, config validation.
 
 ```rust
-use crate::common::IsolatedRuntime;
+use boxlite_test_utils::home::PerTestBoxHome;
 
 #[tokio::test]
 async fn test_shutdown_idempotent() {
-    let ctx = IsolatedRuntime::new();
-    // ... test logic using ctx.runtime ...
+    let home = PerTestBoxHome::isolated();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    }).expect("create runtime");
+    // ... test logic using runtime ...
 }
 ```
 
-### `warm_temp_dir()` — recovery tests
+### Other `PerTestBoxHome` constructors
 
-Raw `TempDir` + symlinked image cache. For tests that create and drop multiple runtimes manually (e.g., crash recovery, state persistence across restarts).
-
-```rust
-use crate::common::warm_temp_dir;
-
-#[tokio::test]
-async fn test_recovery_after_crash() {
-    let (temp_dir, home_dir) = warm_temp_dir();
-    // Create first runtime, do work, drop it
-    // Create second runtime with same home_dir, verify recovery
-}
-```
+- `PerTestBoxHome::new_in(base)` — warm cache under a custom base directory (e.g., `~/.boxlite-it` for short socket paths)
+- `PerTestBoxHome::isolated_in(base)` — no cache under a custom base directory
 
 ### macOS Socket Path Limits
 
@@ -150,7 +148,7 @@ If you see errors about socket paths, ensure the test home base path is short:
 
 ```rust
 let base = dirs::home_dir().unwrap().join(".boxlite-it");
-let temp_dir = TempDir::new_in(base).expect("Failed to create temp dir");
+let home = PerTestBoxHome::new_in(base.to_str().unwrap());
 ```
 
 ### Tests Hang

@@ -1,4 +1,6 @@
-PHONY_TARGETS += test test\:all test\:unit test\:integration
+PHONY_TARGETS += test test\:changed test\:all test\:unit test\:integration
+PHONY_TARGETS += test\:changed\:rust test\:changed\:cli test\:changed\:ffi
+PHONY_TARGETS += test\:changed\:python test\:changed\:node test\:changed\:c
 PHONY_TARGETS += test\:unit\:core test\:integration\:core test\:unit\:sdk test\:integration\:sdk
 PHONY_TARGETS += test\:unit\:rust test\:warm-cache\:rust test\:integration\:rust
 PHONY_TARGETS += test\:unit\:ffi test\:integration\:cli
@@ -6,9 +8,44 @@ PHONY_TARGETS += test\:unit\:python test\:integration\:python test\:all\:python
 PHONY_TARGETS += test\:unit\:node test\:integration\:node test\:all\:node
 PHONY_TARGETS += test\:all\:c
 
-# Default test target now runs the strict full matrix.
+# Default test target runs only changed components.
 test:
-	@$(MAKE) test:all
+	@$(MAKE) test:changed
+
+# Smart test: only test components with changes, fall back to full matrix.
+test\:changed:
+ifeq ($(CHANGED_COMPONENTS),)
+	@echo "📋 No changed components detected — skipping tests."
+	@echo "   (Use 'make test:all' to run the full test matrix)"
+else
+	@echo "📋 Changed components: $(CHANGED_COMPONENTS)"
+	@echo ""
+	@$(foreach comp,$(sort $(CHANGED_COMPONENTS)), \
+		$(MAKE) test:changed:$(comp) && \
+	) true
+	@echo ""
+	@echo "✅ All changed-component tests passed"
+endif
+
+# Per-component test dispatch targets (map component tag → existing test targets).
+test\:changed\:rust:
+	@$(MAKE) test:unit:rust
+	@$(MAKE) test:integration:rust
+
+test\:changed\:cli:
+	@$(MAKE) test:integration:cli
+
+test\:changed\:ffi:
+	@$(MAKE) test:unit:ffi
+
+test\:changed\:python:
+	@$(MAKE) test:all:python
+
+test\:changed\:node:
+	@$(MAKE) test:all:node
+
+test\:changed\:c:
+	@$(MAKE) test:all:c
 
 # Full matrix: all unit suites + all integration suites.
 test\:all:
@@ -90,8 +127,7 @@ test\:unit\:rust:
 test\:warm-cache\:rust: runtime-debug
 	@echo "🔥 Warming Rust integration test image cache..."
 	@mkdir -p /tmp/boxlite-test
-	@BOXLITE_RUNTIME_DIR=$(PROJECT_ROOT)/target/boxlite-runtime \
-		./target/debug/boxlite --home /tmp/boxlite-test \
+	@./target/debug/boxlite --home /tmp/boxlite-test \
 		--registry docker.m.daocloud.io \
 		--registry docker.xuanyuan.me \
 		--registry docker.1ms.run \
@@ -105,12 +141,10 @@ test\:warm-cache\:rust: runtime-debug
 test\:integration\:rust: runtime-debug test\:warm-cache\:rust
 	@echo "🧪 Running Rust integration tests (requires VM)..."
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
-		BOXLITE_RUNTIME_DIR=$(PROJECT_ROOT)/target/boxlite-runtime \
-			cargo nextest run -p boxlite --test '*' --no-fail-fast --profile vm \
+		cargo nextest run -p boxlite --test '*' --no-fail-fast --profile vm \
 			$(if $(FILTER),-E 'test(~$(FILTER))',); \
 	else \
-		BOXLITE_RUNTIME_DIR=$(PROJECT_ROOT)/target/boxlite-runtime \
-			cargo test -p boxlite --test '*' --no-fail-fast -- --test-threads=1 --nocapture \
+		cargo test -p boxlite --test '*' --no-fail-fast -- --test-threads=1 --nocapture \
 			$(if $(FILTER),$(FILTER),); \
 	fi
 
@@ -136,8 +170,7 @@ test\:integration\:cli: runtime-debug
 	fi
 
 # Python SDK unit tests.
-test\:unit\:python:
-	@$(MAKE) venv:python
+test\:unit\:python: _ensure-python-deps
 	@echo "🧪 Running Python SDK unit tests..."
 	@. .venv/bin/activate && cd sdks/python && python -m pytest tests/ -v -m "not integration"
 
@@ -153,7 +186,7 @@ test\:all\:python:
 	@$(MAKE) test:integration:python
 
 # Node.js SDK unit tests.
-test\:unit\:node:
+test\:unit\:node: _ensure-node-deps
 	@echo "🧪 Running Node.js SDK unit tests..."
 	@cd sdks/node && npm test
 
@@ -169,9 +202,9 @@ test\:all\:node:
 	@$(MAKE) test:integration:node
 
 # C SDK test suite (CMake + CTest).
-test\:all\:c: runtime
+test\:all\:c:
 	@echo "🧪 Running C SDK tests (CMake/CTest)..."
-	@cargo build --release -p boxlite-c
+	@$(MAKE) dev:c
 	@mkdir -p sdks/c/tests/build
 	@cd sdks/c/tests/build && cmake ..
 	@cd sdks/c/tests/build && cmake --build . -j

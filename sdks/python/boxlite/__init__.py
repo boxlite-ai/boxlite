@@ -9,25 +9,29 @@ import warnings
 # Import core Rust API
 try:
     from .boxlite import (
-        Options,
-        BoxOptions,
-        BoxliteRestOptions,
-        Boxlite,
         Box,
-        Execution,
-        ExecStdout,
-        ExecStderr,
         BoxInfo,
-        BoxStateInfo,
-        RuntimeMetrics,
+        Boxlite,
+        BoxliteRestOptions,
         BoxMetrics,
+        BoxOptions,
+        BoxStateInfo,
+        CloneOptions,
         CopyOptions,
+        ExecStderr,
+        ExecStdout,
+        Execution,
+        ExportOptions,
+        HealthCheckOptions,
+        HealthState,
+        HealthStatus,
+        Options,
+        RootfsSpec,
+        RuntimeMetrics,
         SecurityOptions,
         SnapshotHandle,
         SnapshotInfo,
         SnapshotOptions,
-        CloneOptions,
-        ExportOptions,
     )
 
     __all__ = [
@@ -42,9 +46,13 @@ try:
         "ExecStderr",
         "BoxInfo",
         "BoxStateInfo",
+        "HealthState",
+        "HealthStatus",
         "RuntimeMetrics",
         "BoxMetrics",
         "CopyOptions",
+        "HealthCheckOptions",
+        "RootfsSpec",
         "SecurityOptions",
         "SnapshotHandle",
         "SnapshotInfo",
@@ -58,10 +66,10 @@ except ImportError as e:
 
 # Import Python convenience wrappers (re-exported via __all__)
 try:
-    from .simplebox import SimpleBox  # noqa: F401
-    from .exec import ExecResult  # noqa: F401
     from .codebox import CodeBox  # noqa: F401
-    from .errors import BoxliteError, ExecError, TimeoutError, ParseError  # noqa: F401
+    from .errors import BoxliteError, ExecError, ParseError, TimeoutError  # noqa: F401
+    from .exec import ExecResult  # noqa: F401
+    from .simplebox import SimpleBox  # noqa: F401
 
     __all__.extend(
         [
@@ -110,7 +118,7 @@ except ImportError:
 
 # Multi-box orchestration (guest-initiated messaging)
 try:
-    from .orchestration import BoxRuntime, ManagedBox, BoxGroup  # noqa: F401
+    from .orchestration import BoxGroup, BoxRuntime, ManagedBox  # noqa: F401
 
     __all__.extend(["BoxRuntime", "ManagedBox", "BoxGroup"])
 except ImportError:
@@ -120,13 +128,13 @@ except ImportError:
 # Requires greenlet: pip install boxlite[sync]
 try:
     from .sync_api import (  # noqa: F401
-        SyncBoxlite,
         SyncBox,
-        SyncExecution,
-        SyncExecStdout,
-        SyncExecStderr,
-        SyncSimpleBox,
+        SyncBoxlite,
         SyncCodeBox,
+        SyncExecStderr,
+        SyncExecStdout,
+        SyncExecution,
+        SyncSimpleBox,
         SyncSkillBox,
     )
 
@@ -148,7 +156,7 @@ except ImportError:
 
 # Get version from package metadata
 try:
-    from importlib.metadata import version, PackageNotFoundError
+    from importlib.metadata import PackageNotFoundError, version
 
     __version__ = version("boxlite")
 except PackageNotFoundError:

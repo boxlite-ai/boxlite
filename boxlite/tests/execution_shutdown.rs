@@ -6,6 +6,8 @@
 mod common;
 
 use boxlite::BoxCommand;
+use boxlite::BoxliteRuntime;
+use boxlite::runtime::options::BoxliteOptions;
 use boxlite_shared::BoxliteError;
 use std::time::Duration;
 
@@ -19,12 +21,13 @@ use std::time::Duration;
 /// because the guest process exits when box stops.
 #[tokio::test]
 async fn test_wait_behavior_on_box_stop() {
-    let ctx = common::ParallelRuntime::new();
-    let handle = ctx
-        .runtime
-        .create(common::alpine_opts(), None)
-        .await
-        .unwrap();
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+    let handle = runtime.create(common::alpine_opts(), None).await.unwrap();
     handle.start().await.unwrap();
 
     // Start a long-running command
@@ -83,8 +86,8 @@ async fn test_wait_behavior_on_box_stop() {
     }
 
     // Cleanup
-    let _ = ctx.runtime.remove(handle.id().as_str(), true).await;
-    ctx.shutdown().await;
+    let _ = runtime.remove(handle.id().as_str(), true).await;
+    let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 }
 
 /// Test 2: What happens to wait() when runtime.shutdown() is called?
@@ -93,12 +96,13 @@ async fn test_wait_behavior_on_box_stop() {
 /// because shutdown stops all boxes concurrently.
 #[tokio::test]
 async fn test_wait_behavior_on_runtime_shutdown() {
-    let ctx = common::ParallelRuntime::new();
-    let handle = ctx
-        .runtime
-        .create(common::alpine_opts(), None)
-        .await
-        .unwrap();
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+    let handle = runtime.create(common::alpine_opts(), None).await.unwrap();
     handle.start().await.unwrap();
 
     // Start a long-running command
@@ -120,10 +124,7 @@ async fn test_wait_behavior_on_runtime_shutdown() {
 
     // Shutdown runtime
     let shutdown_start = std::time::Instant::now();
-    let shutdown_result = ctx
-        .runtime
-        .shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT))
-        .await;
+    let shutdown_result = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
     let shutdown_elapsed = shutdown_start.elapsed();
 
     // Wait for wait() to return (with timeout)
@@ -168,12 +169,13 @@ async fn test_wait_behavior_on_runtime_shutdown() {
 async fn test_stdout_stream_on_box_stop() {
     use futures::StreamExt;
 
-    let ctx = common::ParallelRuntime::new();
-    let handle = ctx
-        .runtime
-        .create(common::alpine_opts(), None)
-        .await
-        .unwrap();
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+    let handle = runtime.create(common::alpine_opts(), None).await.unwrap();
     handle.start().await.unwrap();
 
     // Start a command that produces continuous output
@@ -217,8 +219,8 @@ async fn test_stdout_stream_on_box_stop() {
     // None = EOF, Some(...) = got more data, Timeout = stream hung
 
     // Cleanup
-    let _ = ctx.runtime.remove(handle.id().as_str(), true).await;
-    ctx.shutdown().await;
+    let _ = runtime.remove(handle.id().as_str(), true).await;
+    let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 }
 
 /// Test 4: Can we call exec() on a stopped box?
@@ -226,12 +228,13 @@ async fn test_stdout_stream_on_box_stop() {
 /// Assumption: Should return an error (InvalidState or Stopped).
 #[tokio::test]
 async fn test_exec_on_stopped_box() {
-    let ctx = common::ParallelRuntime::new();
-    let handle = ctx
-        .runtime
-        .create(common::alpine_opts(), None)
-        .await
-        .unwrap();
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+    let handle = runtime.create(common::alpine_opts(), None).await.unwrap();
     handle.start().await.unwrap();
 
     // Run a quick command first to ensure box is working
@@ -272,8 +275,8 @@ async fn test_exec_on_stopped_box() {
     assert!(result.is_err());
 
     // Cleanup
-    let _ = ctx.runtime.remove(handle.id().as_str(), true).await;
-    ctx.shutdown().await;
+    let _ = runtime.remove(handle.id().as_str(), true).await;
+    let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 }
 
 /// Test 5: What happens to existing Execution when box is stopped?
@@ -282,12 +285,13 @@ async fn test_exec_on_stopped_box() {
 /// then box.stop() is called from elsewhere.
 #[tokio::test]
 async fn test_existing_execution_after_box_stop() {
-    let ctx = common::ParallelRuntime::new();
-    let handle = ctx
-        .runtime
-        .create(common::alpine_opts(), None)
-        .await
-        .unwrap();
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+    let handle = runtime.create(common::alpine_opts(), None).await.unwrap();
     handle.start().await.unwrap();
 
     // Start a quick command and get execution
@@ -315,19 +319,20 @@ async fn test_existing_execution_after_box_stop() {
     assert_eq!(result1.unwrap().exit_code, result2.unwrap().exit_code);
 
     // Cleanup
-    let _ = ctx.runtime.remove(handle.id().as_str(), true).await;
-    ctx.shutdown().await;
+    let _ = runtime.remove(handle.id().as_str(), true).await;
+    let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 }
 
 /// Test 6: Measure actual timing - how long does wait() block after stop?
 #[tokio::test]
 async fn test_wait_timing_after_stop() {
-    let ctx = common::ParallelRuntime::new();
-    let handle = ctx
-        .runtime
-        .create(common::alpine_opts(), None)
-        .await
-        .unwrap();
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+    let handle = runtime.create(common::alpine_opts(), None).await.unwrap();
     handle.start().await.unwrap();
 
     // Start command that ignores SIGTERM (to test worst case)
@@ -371,8 +376,8 @@ async fn test_wait_timing_after_stop() {
     }
 
     // Cleanup
-    let _ = ctx.runtime.remove(handle.id().as_str(), true).await;
-    ctx.shutdown().await;
+    let _ = runtime.remove(handle.id().as_str(), true).await;
+    let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 }
 
 /// Test 7: Multiple concurrent executions when box stops
@@ -380,12 +385,13 @@ async fn test_wait_timing_after_stop() {
 /// Tests that all pending wait() calls return when box stops.
 #[tokio::test]
 async fn test_multiple_executions_on_box_stop() {
-    let ctx = common::ParallelRuntime::new();
-    let handle = ctx
-        .runtime
-        .create(common::alpine_opts(), None)
-        .await
-        .unwrap();
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+    let handle = runtime.create(common::alpine_opts(), None).await.unwrap();
     handle.start().await.unwrap();
 
     // Start multiple long-running commands
@@ -458,8 +464,8 @@ async fn test_multiple_executions_on_box_stop() {
     }
 
     // Cleanup
-    let _ = ctx.runtime.remove(handle.id().as_str(), true).await;
-    ctx.shutdown().await;
+    let _ = runtime.remove(handle.id().as_str(), true).await;
+    let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 }
 
 // ============================================================================
@@ -469,12 +475,13 @@ async fn test_multiple_executions_on_box_stop() {
 /// Test that running a command returns Stopped error after box.stop().
 #[tokio::test]
 async fn test_run_command_returns_stopped_error() {
-    let ctx = common::ParallelRuntime::new();
-    let handle = ctx
-        .runtime
-        .create(common::alpine_opts(), None)
-        .await
-        .unwrap();
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+    let handle = runtime.create(common::alpine_opts(), None).await.unwrap();
     handle.start().await.unwrap();
 
     // Run a quick command to verify box works
@@ -507,19 +514,20 @@ async fn test_run_command_returns_stopped_error() {
     assert!(matches!(result, Err(BoxliteError::Stopped(_))));
 
     // Cleanup
-    let _ = ctx.runtime.remove(handle.id().as_str(), true).await;
-    ctx.shutdown().await;
+    let _ = runtime.remove(handle.id().as_str(), true).await;
+    let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 }
 
 /// Test that start() returns Stopped error after box.stop().
 #[tokio::test]
 async fn test_start_returns_stopped_error() {
-    let ctx = common::ParallelRuntime::new();
-    let handle = ctx
-        .runtime
-        .create(common::alpine_opts(), None)
-        .await
-        .unwrap();
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+    let handle = runtime.create(common::alpine_opts(), None).await.unwrap();
     handle.start().await.unwrap();
 
     // Stop the box
@@ -544,19 +552,20 @@ async fn test_start_returns_stopped_error() {
     assert!(matches!(result, Err(BoxliteError::Stopped(_))));
 
     // Cleanup
-    let _ = ctx.runtime.remove(handle.id().as_str(), true).await;
-    ctx.shutdown().await;
+    let _ = runtime.remove(handle.id().as_str(), true).await;
+    let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 }
 
 /// Test that metrics() returns Stopped error after box.stop().
 #[tokio::test]
 async fn test_metrics_returns_stopped_error() {
-    let ctx = common::ParallelRuntime::new();
-    let handle = ctx
-        .runtime
-        .create(common::alpine_opts(), None)
-        .await
-        .unwrap();
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+    let handle = runtime.create(common::alpine_opts(), None).await.unwrap();
     handle.start().await.unwrap();
 
     // Stop the box
@@ -581,23 +590,28 @@ async fn test_metrics_returns_stopped_error() {
     assert!(matches!(result, Err(BoxliteError::Stopped(_))));
 
     // Cleanup
-    let _ = ctx.runtime.remove(handle.id().as_str(), true).await;
-    ctx.shutdown().await;
+    let _ = runtime.remove(handle.id().as_str(), true).await;
+    let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 }
 
 /// Test that create() returns Stopped error after runtime.shutdown().
 #[tokio::test]
 async fn test_create_after_shutdown_returns_stopped() {
-    let ctx = common::ParallelRuntime::new();
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
 
     // Shutdown runtime
-    ctx.runtime
+    runtime
         .shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT))
         .await
         .unwrap();
 
     // Attempt to create box after shutdown
-    let result = ctx.runtime.create(common::alpine_opts(), None).await;
+    let result = runtime.create(common::alpine_opts(), None).await;
 
     println!("=== test_create_after_shutdown_returns_stopped ===");
     match &result {
@@ -618,12 +632,13 @@ async fn test_create_after_shutdown_returns_stopped() {
 /// Test that wait() returns promptly when box is stopped.
 #[tokio::test]
 async fn test_wait_returns_promptly_on_stop() {
-    let ctx = common::ParallelRuntime::new();
-    let handle = ctx
-        .runtime
-        .create(common::alpine_opts(), None)
-        .await
-        .unwrap();
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+    let handle = runtime.create(common::alpine_opts(), None).await.unwrap();
     handle.start().await.unwrap();
 
     // Start a long-running command
@@ -674,19 +689,20 @@ async fn test_wait_returns_promptly_on_stop() {
     }
 
     // Cleanup
-    let _ = ctx.runtime.remove(handle.id().as_str(), true).await;
-    ctx.shutdown().await;
+    let _ = runtime.remove(handle.id().as_str(), true).await;
+    let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 }
 
 /// Test that all concurrent wait() calls return when box is stopped.
 #[tokio::test]
 async fn test_all_waits_return_on_stop() {
-    let ctx = common::ParallelRuntime::new();
-    let handle = ctx
-        .runtime
-        .create(common::alpine_opts(), None)
-        .await
-        .unwrap();
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+    let handle = runtime.create(common::alpine_opts(), None).await.unwrap();
     handle.start().await.unwrap();
 
     // Start multiple long-running commands
@@ -755,23 +771,26 @@ async fn test_all_waits_return_on_stop() {
     }
 
     // Cleanup
-    let _ = ctx.runtime.remove(handle.id().as_str(), true).await;
-    ctx.shutdown().await;
+    let _ = runtime.remove(handle.id().as_str(), true).await;
+    let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 }
 
 /// Test that runtime shutdown stops all boxes and their commands.
 #[tokio::test]
 async fn test_runtime_shutdown_stops_all_boxes() {
-    let ctx = common::ParallelRuntime::new();
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
 
     // Create multiple boxes
-    let handle1 = ctx
-        .runtime
+    let handle1 = runtime
         .create(common::alpine_opts(), Some("box1".into()))
         .await
         .unwrap();
-    let handle2 = ctx
-        .runtime
+    let handle2 = runtime
         .create(common::alpine_opts(), Some("box2".into()))
         .await
         .unwrap();
@@ -805,10 +824,7 @@ async fn test_runtime_shutdown_stops_all_boxes() {
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     // Shutdown runtime (should cancel all boxes)
-    let shutdown_result = ctx
-        .runtime
-        .shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT))
-        .await;
+    let shutdown_result = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
     let shutdown_elapsed = start_time.elapsed();
 
     // Wait for all with timeout
@@ -854,12 +870,13 @@ async fn test_runtime_shutdown_stops_all_boxes() {
 /// Exec completes normally, then runtime shutdown — should be clean.
 #[tokio::test]
 async fn test_exec_completes_then_shutdown_is_clean() {
-    let ctx = common::ParallelRuntime::new();
-    let handle = ctx
-        .runtime
-        .create(common::alpine_opts(), None)
-        .await
-        .unwrap();
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+    let handle = runtime.create(common::alpine_opts(), None).await.unwrap();
     handle.start().await.unwrap();
 
     let mut execution = handle
@@ -870,22 +887,20 @@ async fn test_exec_completes_then_shutdown_is_clean() {
     assert_eq!(result.exit_code, 0);
 
     // Shutdown after exec completes — should not produce transport errors
-    let shutdown_result = ctx
-        .runtime
-        .shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT))
-        .await;
+    let shutdown_result = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
     assert!(shutdown_result.is_ok());
 }
 
 /// Sequential exec on same box should both succeed.
 #[tokio::test]
 async fn test_sequential_exec_same_box() {
-    let ctx = common::ParallelRuntime::new();
-    let handle = ctx
-        .runtime
-        .create(common::alpine_opts(), None)
-        .await
-        .unwrap();
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+    let handle = runtime.create(common::alpine_opts(), None).await.unwrap();
     handle.start().await.unwrap();
 
     // First exec
@@ -905,19 +920,20 @@ async fn test_sequential_exec_same_box() {
     assert_eq!(result2.exit_code, 0);
 
     // Cleanup
-    let _ = ctx.runtime.remove(handle.id().as_str(), true).await;
-    ctx.shutdown().await;
+    let _ = runtime.remove(handle.id().as_str(), true).await;
+    let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 }
 
 /// Exit codes should be correctly preserved.
 #[tokio::test]
 async fn test_exec_exit_code_preserved() {
-    let ctx = common::ParallelRuntime::new();
-    let handle = ctx
-        .runtime
-        .create(common::alpine_opts(), None)
-        .await
-        .unwrap();
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+    let handle = runtime.create(common::alpine_opts(), None).await.unwrap();
     handle.start().await.unwrap();
 
     // Success (exit 0)
@@ -936,19 +952,20 @@ async fn test_exec_exit_code_preserved() {
     assert_eq!(exec42.wait().await.unwrap().exit_code, 42);
 
     // Cleanup
-    let _ = ctx.runtime.remove(handle.id().as_str(), true).await;
-    ctx.shutdown().await;
+    let _ = runtime.remove(handle.id().as_str(), true).await;
+    let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 }
 
 /// Multiple sequential execs followed by shutdown — the full CLI workflow.
 #[tokio::test]
 async fn test_exec_then_shutdown_sequential() {
-    let ctx = common::ParallelRuntime::new();
-    let handle = ctx
-        .runtime
-        .create(common::alpine_opts(), None)
-        .await
-        .unwrap();
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
+    let handle = runtime.create(common::alpine_opts(), None).await.unwrap();
     handle.start().await.unwrap();
 
     // Run 3 commands sequentially
@@ -962,9 +979,6 @@ async fn test_exec_then_shutdown_sequential() {
     }
 
     // Shutdown after all commands complete
-    let shutdown_result = ctx
-        .runtime
-        .shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT))
-        .await;
+    let shutdown_result = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
     assert!(shutdown_result.is_ok());
 }

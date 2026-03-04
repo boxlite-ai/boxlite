@@ -4,10 +4,9 @@
 //! bundled with BoxLite. The search follows a priority order:
 //!
 //! 1. `BOXLITE_RUNTIME_DIR` - Explicit override (highest priority)
-//! 2. Workspace runtime (`target/boxlite-runtime`) - Local dev/test default
+//! 2. Embedded runtime cache (e.g., `~/.local/share/boxlite/runtimes/v{VERSION}-{HASH}/`) - Self-contained SDKs
 //! 3. `DYLD_LIBRARY_PATH` (macOS) / `LD_LIBRARY_PATH` (Linux) - User-specified runtime location
 //! 4. dladdr-based detection - For packaged/installed scenarios
-//! 5. `option_env!("BOXLITE_RUNTIME_DIR")` - Compile-time fallback (prebuilt mode only)
 
 use std::path::PathBuf;
 
@@ -71,10 +70,9 @@ impl RuntimeBinaryFinder {
     ///
     /// Search priority:
     /// 1. `BOXLITE_RUNTIME_DIR` (explicit override)
-    /// 2. workspace `target/boxlite-runtime` (local dev/test)
+    /// 2. Embedded runtime cache
     /// 3. `DYLD_LIBRARY_PATH` / `LD_LIBRARY_PATH` (user-specified runtime location)
     /// 4. dladdr-based detection (for packaged scenarios)
-    /// 5. compile-time `BOXLITE_RUNTIME_DIR` fallback (only when build.rs emitted it)
     pub fn from_env() -> Self {
         let mut builder = Self::builder();
 
@@ -85,13 +83,10 @@ impl RuntimeBinaryFinder {
             }
         }
 
-        // 2. Workspace fallback for local development and integration tests.
-        // Runtime bundles are produced at <workspace>/target/boxlite-runtime.
-        if let Some(workspace_root) = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent() {
-            let runtime_dir = workspace_root.join("target/boxlite-runtime");
-            if runtime_dir.exists() {
-                builder = builder.with_path(runtime_dir);
-            }
+        // 2. Embedded runtime cache (self-contained SDK packaging)
+        #[cfg(feature = "embedded-runtime")]
+        if let Some(runtime) = crate::runtime::embedded::EmbeddedRuntime::get() {
+            builder = builder.with_path(runtime.dir());
         }
 
         // 3. Library path environment variables
@@ -126,16 +121,6 @@ impl RuntimeBinaryFinder {
             builder = builder.with_path(&lib_dir);
             // Runtime subdirectory (e.g., packaged installations)
             builder = builder.with_path(lib_dir.join("runtime"));
-        }
-
-        // 5. Compile-time fallback: build.rs emits this in prebuilt mode.
-        // Same name as the runtime env var; runtime lookup (above) still takes priority.
-        // Only used if the embedded directory still exists (won't survive cargo clean).
-        if let Some(dir) = option_env!("BOXLITE_RUNTIME_DIR") {
-            let path = std::path::Path::new(dir);
-            if path.exists() {
-                builder = builder.with_path(path);
-            }
         }
 
         builder.build()

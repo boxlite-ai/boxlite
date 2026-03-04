@@ -64,6 +64,7 @@ pub struct VmmInstance {
 
 impl VmmInstance {
     /// Create a new VmmInstance from an engine-specific implementation.
+    #[allow(dead_code)] // Used by engine implementations (e.g., krun) behind feature gates
     pub(crate) fn new(inner: Box<dyn VmmInstanceImpl>) -> Self {
         Self { inner }
     }

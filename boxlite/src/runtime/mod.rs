@@ -12,6 +12,8 @@ pub(crate) mod signal_handler;
 pub mod types;
 
 mod core;
+#[cfg(feature = "embedded-runtime")]
+pub(crate) mod embedded;
 mod import;
 pub(crate) mod rt_impl;
 

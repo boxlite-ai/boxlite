@@ -189,6 +189,93 @@ pub struct BoxState {
     /// Allocated when the box is first initialized (not at creation time).
     /// Used to retrieve the lock across process restarts.
     pub lock_id: Option<LockId>,
+    /// Health status.
+    #[serde(default)]
+    pub health_status: HealthStatus,
+}
+
+/// Health status of a box.
+///
+/// Tracks the current health state and consecutive failure count.
+/// Similar to Docker's health check status.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HealthStatus {
+    /// Current health state.
+    pub state: HealthState,
+    /// Consecutive health check failures.
+    pub failures: u32,
+    /// Last health check timestamp.
+    pub last_check: Option<DateTime<Utc>>,
+}
+
+impl HealthStatus {
+    /// Create a new health status with no health check configured.
+    pub fn new() -> Self {
+        Self {
+            state: HealthState::None,
+            failures: 0,
+            last_check: None,
+        }
+    }
+
+    /// Initialize health status (called when box starts with health check configured).
+    pub fn init(&mut self) {
+        self.state = HealthState::Starting;
+        self.failures = 0;
+        self.last_check = Some(Utc::now());
+    }
+
+    /// Update health status after a successful check.
+    pub fn mark_success(&mut self) {
+        self.state = HealthState::Healthy;
+        self.failures = 0;
+        self.last_check = Some(Utc::now());
+    }
+
+    /// Update health status after a failed check.
+    /// Returns true if the box should be marked unhealthy.
+    pub fn mark_failure(&mut self, retries: u32) -> bool {
+        self.failures += 1;
+        self.last_check = Some(Utc::now());
+
+        if self.failures >= retries {
+            self.state = HealthState::Unhealthy;
+            return true;
+        }
+        false
+    }
+
+    /// Clear health status (called when box stops).
+    pub fn clear(&mut self) {
+        self.state = HealthState::None;
+        self.failures = 0;
+        self.last_check = None;
+    }
+}
+
+impl Default for HealthStatus {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Health state of a box.
+///
+/// Docker-compatible health states:
+/// - None: No health check configured
+/// - Starting: Within start_period, not yet checked
+/// - Healthy: Last health check passed
+/// - Unhealthy: Failed `retries` consecutive checks
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HealthState {
+    /// No health check configured.
+    None,
+    /// Within start_period, not yet checked.
+    Starting,
+    /// Last health check passed.
+    Healthy,
+    /// Failed retries consecutive checks.
+    Unhealthy,
 }
 
 impl BoxState {
@@ -201,6 +288,7 @@ impl BoxState {
             container_id: None,
             last_updated: Utc::now(),
             lock_id: None,
+            health_status: HealthStatus::new(),
         }
     }
 
@@ -263,6 +351,32 @@ impl BoxState {
             self.status = BoxStatus::Stopped;
         }
         self.pid = None;
+        self.last_updated = Utc::now();
+    }
+
+    /// Initialize health status (called when box starts with health check configured).
+    pub fn init_health_status(&mut self) {
+        self.health_status.init();
+        self.last_updated = Utc::now();
+    }
+
+    /// Update health status after a successful check.
+    pub fn mark_health_check_success(&mut self) {
+        self.health_status.mark_success();
+        self.last_updated = Utc::now();
+    }
+
+    /// Update health status after a failed check.
+    /// Returns true if the box should be marked unhealthy.
+    pub fn mark_health_check_failure(&mut self, retries: u32) -> bool {
+        let became_unhealthy = self.health_status.mark_failure(retries);
+        self.last_updated = Utc::now();
+        became_unhealthy
+    }
+
+    /// Clear health status (called when box stops).
+    pub fn clear_health_status(&mut self) {
+        self.health_status.clear();
         self.last_updated = Utc::now();
     }
 }
@@ -458,5 +572,295 @@ mod tests {
         assert_eq!("exporting".parse(), Ok(BoxStatus::Stopped));
         assert_eq!("cloning".parse(), Ok(BoxStatus::Stopped));
         assert!("invalid".parse::<BoxStatus>().is_err());
+    }
+
+    // ========================================================================
+    // HealthStatus Tests
+    // ========================================================================
+
+    #[test]
+    fn test_health_status_new() {
+        let status = HealthStatus::new();
+        assert_eq!(status.state, HealthState::None);
+        assert_eq!(status.failures, 0);
+        assert!(status.last_check.is_none());
+    }
+
+    #[test]
+    fn test_health_status_init() {
+        let mut status = HealthStatus::new();
+        status.init();
+
+        assert_eq!(status.state, HealthState::Starting);
+        assert_eq!(status.failures, 0);
+        assert!(status.last_check.is_some());
+
+        // Verify timestamp is recent (within last second)
+        let elapsed = Utc::now() - status.last_check.unwrap();
+        assert!(elapsed.num_seconds() <= 1);
+    }
+
+    #[test]
+    fn test_health_status_mark_success() {
+        let mut status = HealthStatus::new();
+        status.init();
+
+        // After success, should be Healthy with zero failures
+        status.mark_success();
+
+        assert_eq!(status.state, HealthState::Healthy);
+        assert_eq!(status.failures, 0);
+        assert!(status.last_check.is_some());
+    }
+
+    #[test]
+    fn test_health_status_mark_failure_within_retries() {
+        let mut status = HealthStatus::new();
+        status.init();
+        status.mark_success(); // Transition to Healthy first
+
+        // First failure (retries=3)
+        let became_unhealthy = status.mark_failure(3);
+
+        assert!(!became_unhealthy);
+        assert_eq!(status.state, HealthState::Healthy); // Still healthy
+        assert_eq!(status.failures, 1);
+    }
+
+    #[test]
+    fn test_health_status_mark_failure_at_threshold() {
+        let mut status = HealthStatus::new();
+        status.mark_success(); // Start from Healthy state
+
+        // Failures up to threshold (retries=3)
+        assert!(!status.mark_failure(3)); // failure 1
+        assert_eq!(status.failures, 1);
+
+        assert!(!status.mark_failure(3)); // failure 2
+        assert_eq!(status.failures, 2);
+
+        let became_unhealthy = status.mark_failure(3); // failure 3
+        assert!(became_unhealthy);
+        assert_eq!(status.state, HealthState::Unhealthy);
+        assert_eq!(status.failures, 3);
+    }
+
+    #[test]
+    fn test_health_status_mark_failure_exceeds_threshold() {
+        let mut status = HealthStatus::new();
+        status.mark_success();
+
+        // Exceed threshold (retries=3, but fail 4 times)
+        status.mark_failure(3); // failure 1
+        status.mark_failure(3); // failure 2
+        status.mark_failure(3); // failure 3 → becomes unhealthy
+        status.mark_failure(3); // failure 4 → already unhealthy
+
+        assert_eq!(status.state, HealthState::Unhealthy);
+        assert_eq!(status.failures, 4);
+    }
+
+    #[test]
+    fn test_health_status_zero_retries() {
+        let mut status = HealthStatus::new();
+        status.init();
+
+        // With retries=0, first failure should mark unhealthy immediately
+        let became_unhealthy = status.mark_failure(0);
+        assert!(became_unhealthy);
+        assert_eq!(status.state, HealthState::Unhealthy);
+        assert_eq!(status.failures, 1);
+    }
+
+    #[test]
+    fn test_health_status_one_retry() {
+        let mut status = HealthStatus::new();
+        status.mark_success();
+
+        // With retries=1, first failure marks unhealthy
+        let became_unhealthy = status.mark_failure(1);
+        assert!(became_unhealthy);
+        assert_eq!(status.state, HealthState::Unhealthy);
+        assert_eq!(status.failures, 1);
+    }
+
+    #[test]
+    fn test_health_status_clear() {
+        let mut status = HealthStatus::new();
+        status.init();
+        status.mark_success();
+
+        // Clear should reset to initial state
+        status.clear();
+
+        assert_eq!(status.state, HealthState::None);
+        assert_eq!(status.failures, 0);
+        assert!(status.last_check.is_none());
+    }
+
+    #[test]
+    fn test_health_status_recovery_after_failure() {
+        let mut status = HealthStatus::new();
+        status.mark_success();
+
+        // Fail twice (below threshold of 3)
+        status.mark_failure(3);
+        status.mark_failure(3);
+        assert_eq!(status.failures, 2);
+        assert_eq!(status.state, HealthState::Healthy);
+
+        // Successful check resets failures
+        status.mark_success();
+        assert_eq!(status.failures, 0);
+        assert_eq!(status.state, HealthState::Healthy);
+
+        // New failures start from 0 again
+        status.mark_failure(3);
+        assert_eq!(status.failures, 1);
+        assert_eq!(status.state, HealthState::Healthy);
+    }
+
+    #[test]
+    fn test_health_status_full_lifecycle() {
+        let mut status = HealthStatus::new();
+
+        // 1. Initial state
+        assert_eq!(status.state, HealthState::None);
+
+        // 2. Box starts with health check
+        status.init();
+        assert_eq!(status.state, HealthState::Starting);
+
+        // 3. First successful check
+        status.mark_success();
+        assert_eq!(status.state, HealthState::Healthy);
+
+        // 4. Health check fails (but within retries)
+        status.mark_failure(3);
+        assert_eq!(status.state, HealthState::Healthy);
+        assert_eq!(status.failures, 1);
+
+        // 5. More failures push it over threshold
+        status.mark_failure(3);
+        status.mark_failure(3);
+        assert_eq!(status.state, HealthState::Unhealthy);
+        assert_eq!(status.failures, 3);
+
+        // 6. Box stops
+        status.clear();
+        assert_eq!(status.state, HealthState::None);
+        assert_eq!(status.failures, 0);
+    }
+
+    #[test]
+    fn test_health_status_default() {
+        let status = HealthStatus::default();
+        assert_eq!(status.state, HealthState::None);
+        assert_eq!(status.failures, 0);
+        assert!(status.last_check.is_none());
+    }
+
+    #[test]
+    fn test_health_state_equality() {
+        let status1 = HealthStatus::new();
+        let status2 = HealthStatus::new();
+
+        // Two new instances should be equal
+        assert_eq!(status1, status2);
+
+        // After different state changes, they should not be equal
+        let mut status3 = HealthStatus::new();
+        let mut status4 = HealthStatus::new();
+        status3.init();
+        status4.mark_success();
+
+        assert_ne!(status3, status4);
+        assert_eq!(status3.state, HealthState::Starting);
+        assert_eq!(status4.state, HealthState::Healthy);
+    }
+
+    // ========================================================================
+    // BoxState Health Check Integration Tests
+    // ========================================================================
+
+    #[test]
+    fn test_box_state_init_health_status() {
+        let mut state = BoxState::new();
+
+        state.init_health_status();
+
+        assert_eq!(state.health_status.state, HealthState::Starting);
+        assert_eq!(state.health_status.failures, 0);
+        assert!(state.health_status.last_check.is_some());
+        assert!(state.last_updated > Utc::now() - chrono::Duration::seconds(1));
+    }
+
+    #[test]
+    fn test_box_state_mark_health_check_success() {
+        let mut state = BoxState::new();
+        state.init_health_status();
+
+        state.mark_health_check_success();
+
+        assert_eq!(state.health_status.state, HealthState::Healthy);
+        assert_eq!(state.health_status.failures, 0);
+    }
+
+    #[test]
+    fn test_box_state_mark_health_check_failure() {
+        let mut state = BoxState::new();
+        state.init_health_status();
+        state.mark_health_check_success(); // Start from healthy
+
+        // First failure (within retries)
+        let should_mark_unhealthy = state.mark_health_check_failure(3);
+        assert!(!should_mark_unhealthy);
+        assert_eq!(state.health_status.failures, 1);
+
+        // More failures to cross threshold
+        state.mark_health_check_failure(3);
+        let should_mark_unhealthy = state.mark_health_check_failure(3);
+
+        assert!(should_mark_unhealthy);
+        assert_eq!(state.health_status.state, HealthState::Unhealthy);
+        assert_eq!(state.health_status.failures, 3);
+    }
+
+    #[test]
+    fn test_box_state_clear_health_status() {
+        let mut state = BoxState::new();
+        state.init_health_status();
+        state.mark_health_check_success();
+
+        state.clear_health_status();
+
+        assert_eq!(state.health_status.state, HealthState::None);
+        assert_eq!(state.health_status.failures, 0);
+        assert!(state.health_status.last_check.is_none());
+    }
+
+    #[test]
+    fn test_box_state_new_has_default_health_status() {
+        let state = BoxState::new();
+        assert_eq!(state.health_status.state, HealthState::None);
+        assert_eq!(state.health_status.failures, 0);
+    }
+
+    #[test]
+    fn deserialize_box_state_without_health_status() {
+        // JSON from before PR #266 (no health_status field).
+        // Old database rows lack this field; serde(default) must fill it in.
+        let old_json = r#"{
+            "status": "configured",
+            "pid": null,
+            "container_id": null,
+            "last_updated": "2026-02-26T00:00:00Z",
+            "lock_id": null
+        }"#;
+        let state: BoxState = serde_json::from_str(old_json).unwrap();
+        assert_eq!(state.status, BoxStatus::Configured);
+        assert_eq!(state.health_status.state, HealthState::None);
+        assert_eq!(state.health_status.failures, 0);
+        assert!(state.health_status.last_check.is_none());
     }
 }

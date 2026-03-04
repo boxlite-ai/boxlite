@@ -23,10 +23,12 @@ name = "boxlite-shim"
 path = "src/bin/shim/main.rs"
 
 [features]
-default = ["gvproxy-backend"]
+default = ["gvproxy-backend", "embedded-runtime"]
 libslirp-backend = []  # Uses external libslirp-helper binary, no Rust crate needed
 gvproxy-backend = ["dep:libgvproxy-sys"]   # Uses libgvproxy CGO shared library, links via FFI
+link-krun = ["libkrun-sys/link-static"]    # Statically link libkrun.a (only for boxlite-shim)
 rest = ["dep:reqwest", "dep:urlencoding"]  # REST API client backend
+embedded-runtime = []  # Embed runtime binaries via include_bytes! for self-contained SDKs
 
 [dependencies]
 boxlite-shared.workspace = true
@@ -105,5 +107,5 @@ seccompiler = { version = "0.4", features = ["json"] }  # Compile JSON filters t
 bincode = "2.0"  # Serialize compiled BPF filters
 
 [dev-dependencies]
-boxlite-test-utils = { path = "../boxlite-test-utils" }
+boxlite-test-utils = { path = "../test-utils" }
 proptest = "1.4"

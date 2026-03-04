@@ -1,10 +1,10 @@
 #![allow(dead_code)]
 
 use assert_cmd::Command;
-use boxlite_test_utils::{TEST_REGISTRIES, warm_temp_dir};
+use boxlite_test_utils::TEST_REGISTRIES;
+use boxlite_test_utils::home::PerTestBoxHome;
 use std::path::PathBuf;
 use std::time::Duration;
-use tempfile::TempDir;
 
 fn apply_registries(cmd: &mut Command) {
     for reg in TEST_REGISTRIES {
@@ -15,7 +15,7 @@ fn apply_registries(cmd: &mut Command) {
 pub struct TestContext {
     pub cmd: Command,
     pub home: PathBuf,
-    _tmp_dir: TempDir,
+    _home: PerTestBoxHome,
 }
 
 impl TestContext {
@@ -45,7 +45,8 @@ impl TestContext {
 /// Create a TestContext without default registries.
 /// Use this when the test needs full control over which registries are used.
 pub fn boxlite_bare() -> TestContext {
-    let (tmp_dir, home) = warm_temp_dir();
+    let home_dir = PerTestBoxHome::new();
+    let home = home_dir.path.clone();
     let bin_path = env!("CARGO_BIN_EXE_boxlite");
     let mut cmd = Command::new(bin_path);
     cmd.timeout(Duration::from_secs(60));
@@ -54,12 +55,13 @@ pub fn boxlite_bare() -> TestContext {
     TestContext {
         cmd,
         home,
-        _tmp_dir: tmp_dir,
+        _home: home_dir,
     }
 }
 
 pub fn boxlite() -> TestContext {
-    let (tmp_dir, home) = warm_temp_dir();
+    let home_dir = PerTestBoxHome::new();
+    let home = home_dir.path.clone();
     let bin_path = env!("CARGO_BIN_EXE_boxlite");
     let mut cmd = Command::new(bin_path);
     cmd.timeout(Duration::from_secs(60));
@@ -69,6 +71,6 @@ pub fn boxlite() -> TestContext {
     TestContext {
         cmd,
         home,
-        _tmp_dir: tmp_dir,
+        _home: home_dir,
     }
 }

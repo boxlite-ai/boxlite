@@ -181,6 +181,7 @@ impl BoxResponse {
             cpus: self.cpus,
             memory_mib: self.memory_mib,
             labels: self.labels.clone(),
+            health_status: crate::litebox::HealthStatus::new(), // REST API doesn't provide health status
         }
     }
 }

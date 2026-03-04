@@ -7,6 +7,7 @@ on:
 
 env:
   SKIP_INSTALL_NODEJS: '1'
+  CARGO_INCREMENTAL: '0'
 
 jobs:
   # Load shared configuration
@@ -33,11 +34,20 @@ jobs:
         with:
           toolchain: ${{ needs.config.outputs.rust-toolchain }}
 
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
+      # sccache caches individual compilation units via GHA cache API.
+      # Works on host and inside cibuildwheel's manylinux containers.
+      # Cache is pre-warmed by the Warm Caches workflow on push to main.
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+        continue-on-error: true
+
+      - name: Export GHA cache env vars
+        uses: actions/github-script@v7
         with:
-          shared-key: "boxlite"
-          save-if: false  # Workflow deletes cache after guest build
+          script: |
+            core.exportVariable('ACTIONS_RESULTS_URL', process.env.ACTIONS_RESULTS_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+            core.exportVariable('ACTIONS_CACHE_SERVICE_V2', process.env.ACTIONS_CACHE_SERVICE_V2 || '');
 
       # Build guest on host BEFORE cibuildwheel container because:
       # - manylinux (AlmaLinux/RHEL) doesn't have musl packages in repos
@@ -48,7 +58,7 @@ jobs:
       - name: Build guest binary (Linux only)
         if: runner.os == 'Linux'
         run: |
-          make setup guest
+          make setup:build guest
 
           # Cache only the final binary (11MB), not entire target dir (2.3GB)
           # Guest is not rebuilt in container (SKIP_GUEST_BUILD=1), so no incremental compilation needed
@@ -56,8 +66,9 @@ jobs:
           mkdir -p ".cache/$GUEST_TARGET/release"
           cp "target/$GUEST_TARGET/release/boxlite-guest" ".cache/$GUEST_TARGET/release/"
 
-          # Clean up to save disk space
+          # Clean up to save disk space (sccache stores compilation cache separately)
           rm -rf target ~/.rustup ~/.cargo
+          mkdir -p target
 
       - name: Build wheels
         uses: pypa/cibuildwheel@v3.2.0

@@ -58,6 +58,39 @@ type BoxInfo struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// ExecOptions holds options for executing a command in a box.
+type ExecOptions struct {
+	// Args is the argument list for the command.
+	Args []string
+
+	// Env is a map of environment variables to set.
+	Env map[string]string
+
+	// TTY enables pseudo-terminal allocation.
+	TTY bool
+
+	// User specifies the user to run the command as (e.g., "root", "1000:1000").
+	User string
+
+	// Timeout is the maximum duration for the command. Zero means no timeout.
+	Timeout time.Duration
+
+	// WorkingDir overrides the working directory for the command.
+	WorkingDir string
+}
+
+// ExecResult holds the result of a command execution.
+type ExecResult struct {
+	// ExitCode is the process exit code.
+	ExitCode int
+
+	// Stdout contains the lines captured from standard output.
+	Stdout []string
+
+	// Stderr contains the lines captured from standard error.
+	Stderr []string
+}
+
 // BoxState represents the state of a box.
 type BoxState string
 

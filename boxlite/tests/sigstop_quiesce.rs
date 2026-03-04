@@ -15,13 +15,19 @@ mod common;
 use std::time::Duration;
 
 use boxlite::BoxCommand;
+use boxlite::BoxliteRuntime;
+use boxlite::runtime::options::BoxliteOptions;
 
 #[tokio::test]
 async fn test_sigstop_sigcont_preserves_vm() {
-    let ctx = common::ParallelRuntime::new();
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .expect("create runtime");
 
-    let litebox = ctx
-        .runtime
+    let litebox = runtime
         .create(common::alpine_opts(), Some("sigstop-test".to_string()))
         .await
         .expect("Failed to create box");
@@ -73,7 +79,7 @@ async fn test_sigstop_sigcont_preserves_vm() {
     // Clean shutdown
     litebox.stop().await.expect("Failed to stop box");
 
-    ctx.shutdown().await;
+    let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 }
 
 /// Check if a process is in stopped (T) state.

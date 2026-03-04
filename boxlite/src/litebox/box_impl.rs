@@ -6,10 +6,12 @@
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use parking_lot::RwLock;
 use tokio::sync::OnceCell;
+use tokio::task::JoinHandle;
+use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
@@ -24,10 +26,11 @@ use crate::litebox::copy::CopyOptions;
 use crate::lock::LockGuard;
 use crate::metrics::{BoxMetrics, BoxMetricsStorage};
 use crate::portal::GuestSession;
+use crate::portal::interfaces::GuestInterface;
 use crate::runtime::rt_impl::SharedRuntimeImpl;
 use crate::runtime::types::BoxStatus;
 use crate::vmm::controller::VmmHandler;
-use crate::{BoxID, BoxInfo};
+use crate::{BoxID, BoxInfo, HealthCheckOptions, HealthState};
 
 // ============================================================================
 // TYPE ALIASES
@@ -95,7 +98,7 @@ impl LiveState {
 pub(crate) struct BoxImpl {
     // --- Always available ---
     pub(crate) config: BoxConfig,
-    pub(crate) state: RwLock<BoxState>,
+    pub(crate) state: Arc<RwLock<BoxState>>,
     pub(crate) runtime: SharedRuntimeImpl,
     /// Cancellation token for this box (child of runtime's token).
     /// When cancelled (via stop() or runtime shutdown), all operations abort gracefully.
@@ -106,6 +109,8 @@ pub(crate) struct BoxImpl {
 
     // --- Lazily initialized ---
     live: OnceCell<LiveState>,
+
+    health_check_task: RwLock<Option<JoinHandle<()>>>,
 }
 
 impl BoxImpl {
@@ -130,11 +135,12 @@ impl BoxImpl {
     ) -> Self {
         Self {
             config,
-            state: RwLock::new(state),
+            state: Arc::new(RwLock::new(state)),
             runtime,
             shutdown_token,
             disk_ops: tokio::sync::Mutex::new(()),
             live: OnceCell::new(),
+            health_check_task: RwLock::new(None),
         }
     }
 
@@ -302,14 +308,38 @@ impl BoxImpl {
             return Ok(());
         }
 
+        // Cancel health check task first (if running)
+        // This prevents the task from continuing after stop() completes
+        if let Some(task) = self.health_check_task.write().take() {
+            tracing::debug!(
+                box_id = %self.config.id,
+                "Aborting health check task"
+            );
+            task.abort();
+        }
+
+        // Clear health status (box is no longer running)
+        {
+            let mut state = self.state.write();
+            state.clear_health_status();
+        }
+
         // Cancel the token - signals all in-flight operations to abort
         self.shutdown_token.cancel();
 
         // Only try to stop VM if LiveState exists
         if let Some(live) = self.live.get() {
-            // Gracefully shut down guest
-            if let Ok(mut guest) = live.guest_session.guest().await {
-                let _ = guest.shutdown().await;
+            // Gracefully shut down guest (with timeout to avoid hanging on unresponsive guests)
+            let guest_shutdown = async {
+                if let Ok(mut guest) = live.guest_session.guest().await {
+                    let _ = guest.shutdown().await;
+                }
+            };
+            if tokio::time::timeout(Duration::from_secs(10), guest_shutdown)
+                .await
+                .is_err()
+            {
+                tracing::warn!(box_id = %self.config.id, "Guest shutdown timed out after 10s");
             }
 
             // Stop handler
@@ -608,6 +638,11 @@ impl BoxImpl {
             state.set_pid(Some(pid));
             state.set_status(BoxStatus::Running);
 
+            // Initialize health status if health check is configured
+            if self.config.options.advanced.health_check.is_some() {
+                state.init_health_status();
+            }
+
             // Save to DB (cache for queries and recovery)
             self.runtime.box_manager.save_box(&self.config.id, &state)?;
 
@@ -621,14 +656,201 @@ impl BoxImpl {
         // All operations succeeded - disarm the cleanup guard
         cleanup_guard.disarm();
 
+        // Start health check task if configured
+        if let Some(ref health_config) = self.config.options.advanced.health_check {
+            // Get guest interface from session
+            let guest = live_state.guest_session.guest().await?;
+
+            // Spawn health check task
+            let health_task = self.spawn_health_check(
+                Arc::clone(&self.state),
+                self.config.id.clone(),
+                health_config.to_owned(),
+                guest,
+                self.shutdown_token.child_token(),
+                Arc::clone(&self.runtime),
+            );
+            *self.health_check_task.write() = Some(health_task);
+        }
+
         tracing::info!(
             box_id = %self.config.id,
             "Box started successfully (first_start={})",
             is_first_start
         );
-
         // Lock is automatically released when _guard drops
         Ok(live_state)
+    }
+
+    pub fn spawn_health_check(
+        &self,
+        state: Arc<RwLock<BoxState>>,
+        box_id: BoxID,
+        health_config: HealthCheckOptions,
+        mut guest: GuestInterface,
+        shutdown_token: CancellationToken,
+        runtime: SharedRuntimeImpl,
+    ) -> JoinHandle<()> {
+        let interval = health_config.interval;
+        let check_timeout = health_config.timeout;
+        let retries = health_config.retries;
+        let start_period = health_config.start_period;
+
+        tokio::spawn(async move {
+            let start_time = Instant::now();
+            let mut last_health_state = state.read().health_status;
+
+            tracing::info!(
+                box_id = %box_id,
+                interval_secs = interval.as_secs(),
+                timeout_secs = check_timeout.as_secs(),
+                retries,
+                start_period_secs = start_period.as_secs(),
+                "Health check task started"
+            );
+
+            loop {
+                tokio::select! {
+                    _ = tokio::time::sleep(interval) => {},
+                    _ = shutdown_token.cancelled() => {
+                        tracing::debug!(
+                            box_id = %box_id,
+                            "Health check task received shutdown signal during sleep"
+                        );
+                        break;
+                    }
+                }
+
+                let elapsed = start_time.elapsed();
+                let result = if elapsed < start_period {
+                    tracing::debug!(
+                        box_id = %box_id,
+                        elapsed_ms = elapsed.as_millis(),
+                        start_period_ms = start_period.as_millis(),
+                        "In start period, skipping health check"
+                    );
+
+                    Ok(())
+                } else {
+                    let ping_result = timeout(check_timeout, guest.ping()).await;
+
+                    match ping_result {
+                        Ok(Ok(_)) => {
+                            // Calculate new state
+                            let new_state = HealthState::Healthy;
+                            let new_failures = 0;
+
+                            // Only update if state actually changed
+                            if last_health_state.state != new_state
+                                || last_health_state.failures != new_failures
+                            {
+                                let mut state_guard = state.write();
+                                state_guard.mark_health_check_success();
+
+                                if let Err(e) = runtime.box_manager.save_box(&box_id, &state_guard)
+                                {
+                                    tracing::error!(
+                                        box_id = %box_id,
+                                        error = %e,
+                                        "Failed to persist health check success to database"
+                                    );
+                                }
+
+                                // Update cache
+                                last_health_state = state_guard.health_status;
+                            }
+
+                            Ok(())
+                        }
+                        Ok(Err(e)) => Err(e),
+                        Err(_) => Err(BoxliteError::Internal(format!(
+                            "Health check timed out after {}s",
+                            check_timeout.as_secs()
+                        ))),
+                    }
+                };
+
+                // Update health status on failure and check if shim died
+                if let Err(e) = result {
+                    tracing::warn!(
+                        box_id = %box_id,
+                        error = %e,
+                        "Health check failed"
+                    );
+
+                    // Step 1: Read pid (brief read lock)
+                    let pid = state.read().pid;
+
+                    // Step 2: Check if shim is alive (without holding lock)
+                    let shim_died = if let Some(pid) = pid
+                        && !crate::util::is_process_alive(pid)
+                    {
+                        tracing::error!(
+                            box_id = %box_id,
+                            pid,
+                            "Shim process died, marking box as Stopped and Unhealthy"
+                        );
+                        true
+                    } else {
+                        false
+                    };
+
+                    // If shim died, mark as Unhealthy and stop health check immediately
+                    if shim_died {
+                        let mut state_guard = state.write();
+                        state_guard.force_status(crate::litebox::BoxStatus::Stopped);
+                        state_guard.set_pid(None);
+                        state_guard.health_status.state = crate::litebox::HealthState::Unhealthy;
+
+                        if let Err(db_err) = runtime.box_manager.save_box(&box_id, &state_guard) {
+                            tracing::error!(
+                                box_id = %box_id,
+                                error = %db_err,
+                                "Failed to persist health check state to database"
+                            );
+                        }
+                        break;
+                    }
+
+                    // Step 3: Calculate new state (shim is still alive)
+                    let new_failures = last_health_state.failures + 1;
+                    let new_state = if new_failures >= retries {
+                        HealthState::Unhealthy
+                    } else {
+                        last_health_state.state
+                    };
+
+                    // Step 4: Only update if state would actually change
+                    if last_health_state.state != new_state
+                        || last_health_state.failures != new_failures
+                    {
+                        let mut state_guard = state.write();
+                        let became_unhealthy = state_guard.mark_health_check_failure(retries);
+
+                        if let Err(db_err) = runtime.box_manager.save_box(&box_id, &state.read()) {
+                            tracing::error!(
+                                box_id = %box_id,
+                                error = %db_err,
+                                "Failed to persist health check state to database"
+                            );
+                        }
+
+                        // Update cache
+                        last_health_state = state_guard.health_status;
+
+                        // Step 5: Stop health check task if became unhealthy
+                        if became_unhealthy {
+                            break;
+                        }
+                    }
+                }
+            }
+
+            tracing::debug!(
+                box_id = %box_id,
+                "Health check task stopped"
+            );
+        })
     }
 }
 

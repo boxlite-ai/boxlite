@@ -4,6 +4,7 @@ package binding
 
 /*
 #cgo LDFLAGS: -L${SRCDIR}/../../../../target/debug -lboxlite_go_bridge -Wl,-rpath,${SRCDIR}/../../../../target/debug
+#cgo darwin LDFLAGS: -framework CoreFoundation -framework IOKit -framework DiskArbitration
 
 #include <stdlib.h>
 #include <stdbool.h>

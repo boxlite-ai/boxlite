@@ -12,9 +12,11 @@ import (
 // ===========================================================================
 
 type mockBoxProvider struct {
-	startErr error
-	stopErr  error
-	info     binding.BoxInfo
+	startErr   error
+	stopErr    error
+	execResult binding.ExecResult
+	execErr    error
+	info       binding.BoxInfo
 }
 
 func newMockBoxProvider(id, image string) *mockBoxProvider {
@@ -46,6 +48,13 @@ func (b *mockBoxProvider) Stop() error {
 
 func (b *mockBoxProvider) Info() (binding.BoxInfo, error) {
 	return b.info, nil
+}
+
+func (b *mockBoxProvider) Exec(_ string, _ binding.ExecOptions) (binding.ExecResult, error) {
+	if b.execErr != nil {
+		return binding.ExecResult{}, b.execErr
+	}
+	return b.execResult, nil
 }
 
 func (b *mockBoxProvider) Free() {}

@@ -6,6 +6,74 @@
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::time::Duration;
+
+// ============================================================================
+// Health Check Options
+// ============================================================================
+
+/// Health check options for boxes.
+///
+/// Defines how to periodically check if a box's guest agent is responsive.
+/// Similar to Docker's HEALTHCHECK directive.
+///
+/// This is an advanced option - most users should rely on the defaults.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct HealthCheckOptions {
+    /// Time between health checks.
+    ///
+    /// Default: 30 seconds
+    #[serde(default = "default_health_interval")]
+    pub interval: Duration,
+
+    /// Time to wait before considering the check failed.
+    ///
+    /// Default: 10 seconds
+    #[serde(default = "default_health_timeout")]
+    pub timeout: Duration,
+
+    /// Number of consecutive failures before marking as unhealthy.
+    ///
+    /// Default: 3
+    #[serde(default = "default_health_retries")]
+    pub retries: u32,
+
+    /// Startup period before health checks count toward failures.
+    ///
+    /// During this period, failures don't count toward the retry limit.
+    /// This gives the box time to boot up before being marked unhealthy.
+    ///
+    /// Default: 60 seconds
+    #[serde(default = "default_health_start_period")]
+    pub start_period: Duration,
+}
+
+fn default_health_interval() -> Duration {
+    Duration::from_secs(30)
+}
+
+fn default_health_timeout() -> Duration {
+    Duration::from_secs(10)
+}
+
+fn default_health_retries() -> u32 {
+    3
+}
+
+fn default_health_start_period() -> Duration {
+    Duration::from_secs(60)
+}
+
+impl Default for HealthCheckOptions {
+    fn default() -> Self {
+        Self {
+            interval: default_health_interval(),
+            timeout: default_health_timeout(),
+            retries: default_health_retries(),
+            start_period: default_health_start_period(),
+        }
+    }
+}
 
 // ============================================================================
 // Security Options
@@ -523,4 +591,14 @@ pub struct AdvancedBoxOptions {
     /// Defaults to false.
     #[serde(default)]
     pub isolate_mounts: bool,
+
+    /// Health check options.
+    ///
+    /// When set, a background task will periodically ping the guest agent
+    /// to verify the box is healthy. Unhealthy boxes are marked and can
+    /// trigger automatic recovery.
+    ///
+    /// Most users should rely on the defaults.
+    #[serde(default)]
+    pub health_check: Option<HealthCheckOptions>,
 }

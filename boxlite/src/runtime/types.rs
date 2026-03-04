@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::hash::Hash;
 
-pub use crate::litebox::{BoxState, BoxStatus};
+pub use crate::litebox::{BoxState, BoxStatus, HealthStatus};
 use crate::runtime::id::BoxID;
 
 // ============================================================================
@@ -312,6 +312,9 @@ pub struct BoxInfo {
 
     /// User-defined labels for filtering and organization.
     pub labels: HashMap<String, String>,
+
+    /// Health status.
+    pub health_status: HealthStatus,
 }
 
 impl BoxInfo {
@@ -333,6 +336,7 @@ impl BoxInfo {
             cpus: config.options.cpus.unwrap_or(2),
             memory_mib: config.options.memory_mib.unwrap_or(512),
             labels: HashMap::new(),
+            health_status: state.health_status,
         }
     }
 }
@@ -347,6 +351,7 @@ impl PartialEq for BoxInfo {
             && self.cpus == other.cpus
             && self.memory_mib == other.memory_mib
             && self.labels == other.labels
+            && self.health_status == other.health_status
     }
 }
 
