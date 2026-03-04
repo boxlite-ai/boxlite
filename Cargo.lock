@@ -433,23 +433,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "boxlite-go-bridge"
-version = "0.1.0"
-dependencies = [
- "boxlite",
- "boxlite-ffi",
- "boxlite-shared",
- "libc",
- "once_cell",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "boxlite-guest"
 version = "0.6.0"
 dependencies = [
