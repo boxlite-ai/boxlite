@@ -230,8 +230,6 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
-        with:
-          submodules: recursive
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -246,8 +244,8 @@ jobs:
         with:
           toolchain: ${{ needs.config.outputs.rust-toolchain }}
 
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler llvm
+      - name: Install build dependencies
+        run: make setup:build
 
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@v0.0.9
