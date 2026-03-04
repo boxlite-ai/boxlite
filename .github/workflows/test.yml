@@ -260,11 +260,11 @@ jobs:
 
       - name: Install system dependencies (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler llvm
 
       - name: Install system dependencies (macOS)
         if: runner.os == 'macOS'
-        run: brew install protobuf
+        run: brew install protobuf llvm
 
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@v0.0.9
@@ -278,15 +278,5 @@ jobs:
             core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
             core.exportVariable('ACTIONS_CACHE_SERVICE_V2', process.env.ACTIONS_CACHE_SERVICE_V2 || '');
 
-      - name: Install LLVM (Linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get install -y llvm
-
-      - name: Install LLVM (macOS)
-        if: runner.os == 'macOS'
-        run: brew install llvm
-
-      - name: Run Go unit tests (stub mode)
-        env:
-          BOXLITE_DEPS_STUB: "1"
+      - name: Run Go unit tests
         run: make test:unit:go

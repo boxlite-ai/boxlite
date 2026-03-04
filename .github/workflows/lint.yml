@@ -260,12 +260,8 @@ jobs:
             core.exportVariable('ACTIONS_CACHE_SERVICE_V2', process.env.ACTIONS_CACHE_SERVICE_V2 || '');
             core.exportVariable('CARGO_INCREMENTAL', '0');
 
-      - name: Build libboxlite for CGo (stub mode)
-        env:
-          BOXLITE_DEPS_STUB: "1"
-        run: |
-          cargo build -p boxlite-c
-          bash scripts/build/fix-go-symbols.sh target/debug/libboxlite.a
+      - name: Build Go SDK
+        run: make dev:go
 
       - name: Run Go vet
         run: make lint:go
