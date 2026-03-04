@@ -134,6 +134,57 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 </details>
 
 
+## Go Quick Start
+
+<details>
+<summary>View guide</summary>
+
+### Install
+
+```bash
+go get github.com/boxlite-ai/boxlite/sdks/go
+```
+
+Requires Go 1.21+ and the BoxLite native library (see [Building](./sdks/go/README.md#building)).
+
+### Run
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	"github.com/boxlite-ai/boxlite/sdks/go/pkg/boxlite"
+)
+
+func main() {
+	rt, err := boxlite.NewRuntime()
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer rt.Close()
+
+	ctx := context.Background()
+	box, err := rt.Create(ctx, "alpine:latest", boxlite.WithName("my-box"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer box.Close()
+
+	result, err := box.Exec(ctx, "echo", "Hello from BoxLite!")
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Print(result.Stdout)
+}
+```
+
+</details>
+
+
 ## Next steps
 
 - Run more real-world scenarios in [Examples](./examples/)
@@ -147,7 +198,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 - **Images**: OCI pull + caching, custom rootfs support
 - **Security**: hardware isolation (KVM/HVF), OS sandboxing (seccomp/sandbox-exec), resource limits
 - **Image Registry Configuration**: Configure custom registries via config file (`--config`), CLI flags (`--registry`), or SDK options. See the [configuration guide](./docs/guides/image-registry-configuration.md).
-- **SDKs**: Rust (Rust 1.88+), Python (Python 3.10+), C (C11-compatible compiler), Node.js (Node.js 18+); Go coming soon
+- **SDKs**: Rust (Rust 1.88+), Python (Python 3.10+), C (C11-compatible compiler), Node.js (Node.js 18+), Go (Go 1.21+)
 
 ## Architecture
 
