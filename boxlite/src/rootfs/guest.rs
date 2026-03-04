@@ -377,8 +377,9 @@ impl GuestRootfsManager {
             tracing::warn!(
                 version_key = %version_key,
                 base_path = %record.base_path(),
-                "DB record exists but file missing, treating as cache miss"
+                "DB record exists but file missing, removing stale record"
             );
+            let _ = self.base_disk_mgr.store().delete(record.id());
             None
         }
     }
@@ -870,9 +871,17 @@ mod tests {
             dir.path().join("ghost.ext4").to_str().unwrap(),
         );
 
-        let base_disk_mgr = BaseDiskManager::new(dir.path().to_path_buf(), store);
+        let base_disk_mgr = BaseDiskManager::new(dir.path().to_path_buf(), store.clone());
         let mgr = GuestRootfsManager::new(base_disk_mgr, dir.path().to_path_buf());
         assert!(mgr.find("ghost-key").is_none());
+
+        // Stale DB record should have been deleted
+        assert!(
+            store
+                .find_by_name(GLOBAL_SOURCE, "ghost-key")
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

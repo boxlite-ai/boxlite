@@ -27,10 +27,16 @@ use tokio_stream::StreamExt;
 const CONTAINER_DISK: &str = "disk.qcow2";
 const GUEST_ROOTFS_DISK: &str = "guest-rootfs.qcow2";
 const SNAPSHOTS_DIR: &str = "snapshots";
+const DISKS_DIR: &str = "disks";
 
 /// Return the box directory path: `{home}/boxes/{box_id}`.
 fn box_dir(home: &Path, box_id: &str) -> PathBuf {
     home.join("boxes").join(box_id)
+}
+
+/// Return the disks directory path: `{home}/boxes/{box_id}/disks`.
+fn disks_dir(home: &Path, box_id: &str) -> PathBuf {
+    box_dir(home, box_id).join(DISKS_DIR)
 }
 
 /// Return the snapshot directory path: `{home}/boxes/{box_id}/snapshots/{name}`.
@@ -54,7 +60,9 @@ async fn exec_stdout(handle: &LiteBox, cmd: BoxCommand) -> String {
     stdout
 }
 
-/// Create a box from alpine:latest, start it, stop it, return it ready for snapshot operations.
+/// Create a box from alpine:latest, start it, stop it, return a fresh handle ready for snapshot
+/// operations. After `stop()` the original handle's shutdown token is cancelled, so we must
+/// obtain a new handle via `runtime.get()` to allow subsequent `start()` calls.
 async fn create_stopped_box(runtime: &BoxliteRuntime) -> LiteBox {
     let litebox = runtime
         .create(common::alpine_opts(), Some("test-box".to_string()))
@@ -65,7 +73,12 @@ async fn create_stopped_box(runtime: &BoxliteRuntime) -> LiteBox {
     litebox.start().await.expect("Failed to start box");
     litebox.stop().await.expect("Failed to stop box");
 
-    litebox
+    // stop() invalidates the handle (cancels shutdown_token); get a fresh one.
+    runtime
+        .get("test-box")
+        .await
+        .expect("get failed")
+        .expect("box not found")
 }
 
 // ============================================================================
@@ -84,13 +97,13 @@ async fn test_cow_child_disks_exist_after_snapshot_create() {
     let box_id = litebox.id().to_string();
 
     // Precondition: disks exist before snapshot.
-    let bdir = box_dir(&home.path, &box_id);
+    let ddir = disks_dir(&home.path, &box_id);
     assert!(
-        bdir.join(CONTAINER_DISK).exists(),
+        ddir.join(CONTAINER_DISK).exists(),
         "container disk missing before snapshot"
     );
     assert!(
-        bdir.join(GUEST_ROOTFS_DISK).exists(),
+        ddir.join(GUEST_ROOTFS_DISK).exists(),
         "guest disk missing before snapshot"
     );
 
@@ -102,26 +115,20 @@ async fn test_cow_child_disks_exist_after_snapshot_create() {
     assert_eq!(info.name, "ckpt1");
 
     // Snapshot copies must exist in the snapshot directory.
+    // Note: only the container disk is forked into the snapshot; guest rootfs is
+    // recreated from cache on start, so it is not part of the snapshot.
     let sdir = snapshot_dir(&home.path, &box_id, "ckpt1");
     assert!(
         sdir.join(CONTAINER_DISK).exists(),
         "snapshot container disk missing"
-    );
-    assert!(
-        sdir.join(GUEST_ROOTFS_DISK).exists(),
-        "snapshot guest disk missing"
     );
 
     // COW child disks in the box directory must still exist.
     // Bug: create_cow_child_disk() returns Disk(persistent=false); if the caller
     // does not call .leak(), Disk::Drop deletes the newly created file.
     assert!(
-        bdir.join(CONTAINER_DISK).exists(),
+        ddir.join(CONTAINER_DISK).exists(),
         "COW child disk.qcow2 deleted by Disk::Drop (missing .leak() in local_snapshot.rs)"
-    );
-    assert!(
-        bdir.join(GUEST_ROOTFS_DISK).exists(),
-        "COW child guest-rootfs.qcow2 deleted by Disk::Drop (missing .leak() in local_snapshot.rs)"
     );
 
     let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
@@ -193,15 +200,16 @@ async fn test_cow_child_disks_exist_after_snapshot_restore() {
         .await
         .expect("snapshot restore failed");
 
-    // COW child disks in the box directory must exist after restore.
-    let bdir = box_dir(&home.path, &box_id);
+    // COW child container disk must exist after restore.
+    let ddir = disks_dir(&home.path, &box_id);
     assert!(
-        bdir.join(CONTAINER_DISK).exists(),
+        ddir.join(CONTAINER_DISK).exists(),
         "COW child disk.qcow2 deleted by Disk::Drop after restore (missing .leak())"
     );
+    // Guest rootfs is intentionally deleted by restore so the next start recreates it fresh.
     assert!(
-        bdir.join(GUEST_ROOTFS_DISK).exists(),
-        "COW child guest-rootfs.qcow2 deleted by Disk::Drop after restore (missing .leak())"
+        !ddir.join(GUEST_ROOTFS_DISK).exists(),
+        "guest-rootfs.qcow2 should be deleted after restore (recreated on next start)"
     );
 
     let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
@@ -227,6 +235,13 @@ async fn test_box_startable_after_snapshot_restore() {
     let mut exec = litebox.exec(cmd).await.expect("exec failed");
     exec.wait().await.expect("wait failed");
     litebox.stop().await.expect("stop failed");
+
+    // stop() invalidates the handle; get a fresh one for snapshot + restart.
+    let litebox = runtime
+        .get("test-box")
+        .await
+        .expect("get failed")
+        .expect("box not found");
 
     litebox
         .snapshots()

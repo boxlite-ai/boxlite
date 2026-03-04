@@ -147,10 +147,10 @@ test\:warm-cache\:rust: runtime-debug
 test\:integration\:rust: runtime-debug test\:warm-cache\:rust
 	@echo "🧪 Running Rust integration tests (requires VM)..."
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
-		cargo nextest run -p boxlite --test '*' --no-fail-fast --profile vm \
+		cargo nextest run -p boxlite --features link-krun --test '*' --no-fail-fast --profile vm \
 			$(if $(FILTER),-E 'test(~$(FILTER))',); \
 	else \
-		cargo test -p boxlite --test '*' --no-fail-fast -- --test-threads=1 --nocapture \
+		cargo test -p boxlite --features link-krun --test '*' --no-fail-fast -- --test-threads=1 --nocapture \
 			$(if $(FILTER),$(FILTER),); \
 	fi
 
