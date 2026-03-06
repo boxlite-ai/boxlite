@@ -1,13 +1,4 @@
-PHONY_TARGETS += test test\:changed test\:all test\:unit test\:integration
-PHONY_TARGETS += test\:changed\:rust test\:changed\:cli test\:changed\:ffi
-PHONY_TARGETS += test\:changed\:python test\:changed\:node test\:changed\:c test\:changed\:go
-PHONY_TARGETS += test\:unit\:core test\:integration\:core test\:unit\:sdk test\:integration\:sdk
-PHONY_TARGETS += test\:unit\:rust test\:warm-cache\:rust test\:integration\:rust
-PHONY_TARGETS += test\:unit\:ffi test\:integration\:cli
-PHONY_TARGETS += test\:unit\:python test\:integration\:python test\:all\:python
-PHONY_TARGETS += test\:unit\:node test\:integration\:node test\:all\:node
-PHONY_TARGETS += test\:all\:c
-PHONY_TARGETS += test\:unit\:go test\:all\:go
+PHONY_TARGETS += test
 
 # Default test target runs only changed components.
 test:

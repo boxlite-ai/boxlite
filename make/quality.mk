@@ -1,7 +1,4 @@
-PHONY_TARGETS += fmt fmt\:all fmt\:check fmt\:check\:all
-PHONY_TARGETS += fmt\:rust fmt\:python fmt\:node fmt\:c fmt\:go
-PHONY_TARGETS += fmt\:check\:rust fmt\:check\:python fmt\:check\:node fmt\:check\:c fmt\:check\:go
-PHONY_TARGETS += lint lint\:all lint\:fix lint\:rust lint\:python lint\:node lint\:c lint\:go clippy
+PHONY_TARGETS += fmt lint clippy
 
 # Smart format: only format changed components.
 fmt:

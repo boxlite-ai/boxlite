@@ -1,4 +1,4 @@
-PHONY_TARGETS += clean clean\:dist
+PHONY_TARGETS += clean
 
 clean:
 	@$(SCRIPT_DIR)/clean.sh --mode all

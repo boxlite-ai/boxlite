@@ -1,4 +1,4 @@
-PHONY_TARGETS += coverage coverage\:lcov coverage\:integration
+PHONY_TARGETS += coverage
 
 # Generate HTML coverage report (unit tests only).
 coverage:

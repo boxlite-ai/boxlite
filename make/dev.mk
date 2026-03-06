@@ -1,4 +1,4 @@
-PHONY_TARGETS += _ensure-python-deps _ensure-node-deps dev\:python dev\:c dev\:node dev\:go
+PHONY_TARGETS += _ensure-python-deps _ensure-node-deps
 
 # Ensure Python venv exists (lightweight, no package install).
 _ensure-python-deps:

@@ -1,5 +1,3 @@
-PHONY_TARGETS += dist\:python dist\:c dist\:node dist\:go
-
 dist\:python: _ensure-python-deps
 	@echo "📦 Installing cibuildwheel..."
 	@. .venv/bin/activate && pip install -q cibuildwheel

@@ -1,4 +1,4 @@
-PHONY_TARGETS += setup setup\:build setup\:test setup\:dev
+PHONY_TARGETS += setup
 
 # Local-dev default: same as before (build + test/dev extras)
 setup: setup\:dev
