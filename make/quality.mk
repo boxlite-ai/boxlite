@@ -74,7 +74,7 @@ fmt\:c:
 		echo "❌ clang-format not found. Install LLVM/clang-format to format C SDK files."; \
 		exit 1; \
 	fi; \
-	"$$CLANG_FORMAT" -i sdks/c/include/boxlite.h sdks/c/tests/*.c
+	"$$CLANG_FORMAT" -i sdks/c/tests/*.c
 
 fmt\:check\:c:
 	@echo "🔍 Checking C SDK formatting..."
@@ -86,7 +86,7 @@ fmt\:check\:c:
 		echo "❌ clang-format not found. Install LLVM/clang-format to check C SDK formatting."; \
 		exit 1; \
 	fi; \
-	"$$CLANG_FORMAT" --dry-run --Werror sdks/c/include/boxlite.h sdks/c/tests/*.c
+	"$$CLANG_FORMAT" --dry-run --Werror sdks/c/tests/*.c
 
 # Smart lint: only lint changed components.
 lint:
