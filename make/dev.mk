@@ -16,7 +16,7 @@ _ensure-node-deps:
 	fi
 
 # Build wheel locally with maturin + embedded runtime
-dev\:python: runtime-debug _ensure-python-deps
+dev\:python: runtime\:debug _ensure-python-deps
 	@echo "🔨 Building wheel with maturin (embedded-runtime)..."
 	@. .venv/bin/activate && pip install -q maturin && cd sdks/python && maturin develop
 
@@ -28,7 +28,7 @@ dev\:c:
 	@echo "   Header:  sdks/c/include/boxlite.h"
 
 # Build Node.js SDK locally with napi-rs (debug mode)
-dev\:node: runtime-debug
+dev\:node: runtime\:debug
 	@cd sdks/node && npm install --silent && npm run build:native && npm run build
 	@echo "📦 Linking SDK to examples..."
 	@cd examples/node && npm install --silent

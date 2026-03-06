@@ -1,4 +1,4 @@
-PHONY_TARGETS += guest shim runtime runtime-debug cli skillbox-image
+PHONY_TARGETS += guest shim runtime cli skillbox-image
 
 guest:
 	@bash $(SCRIPT_DIR)/build/build-guest.sh
@@ -9,10 +9,10 @@ shim:
 runtime:
 	@bash $(SCRIPT_DIR)/build/build-runtime.sh --profile release
 
-runtime-debug:
+runtime\:debug:
 	@bash $(SCRIPT_DIR)/build/build-runtime.sh --profile debug
 
-cli: runtime-debug
+cli: runtime\:debug
 	@echo "🔨 Building boxlite CLI..."
 	@cargo build -p boxlite-cli
 	@echo "✅ CLI built: ./target/debug/boxlite"

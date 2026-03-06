@@ -830,7 +830,7 @@ fn main() {
 ///
 /// Search order:
 /// 1. `runtime_dir` (OUT_DIR/runtime/ — for prebuilt mode)
-/// 2. `target/boxlite-runtime/boxlite-guest` (assembled by `make runtime-debug`)
+/// 2. `target/boxlite-runtime/boxlite-guest` (assembled by `make runtime:debug`)
 ///
 /// If the binary isn't found, silently skips — runtime will compute the hash as fallback.
 fn compute_guest_hash(runtime_dir: &Path) {

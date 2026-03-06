@@ -24,7 +24,7 @@ help:
 	@echo "    make cli            - Build the CLI (boxlite command)"
 	@echo "    make guest          - Build the guest binary (cross-compile for VM)"
 	@echo "    make runtime        - Build runtime artifacts (release)"
-	@echo "    make runtime-debug  - Build runtime artifacts (debug)"
+	@echo "    make runtime:debug  - Build runtime artifacts (debug)"
 	@echo "    make skillbox-image - Build SkillBox Docker image (APT_SOURCE=mirrors.aliyun.com for China)"
 	@echo ""
 	@echo "  Testing (strict full-matrix default):"

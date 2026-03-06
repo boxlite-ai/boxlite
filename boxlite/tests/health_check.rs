@@ -3,7 +3,7 @@
 //! # Prerequisites
 //!
 //! These tests require a real VM environment:
-//! 1. Build the runtime: `make runtime-debug`
+//! 1. Build the runtime: `make runtime:debug`
 //! 2. Run with: `cargo test -p boxlite --test health_check -- --test-threads=1`
 
 mod common;
