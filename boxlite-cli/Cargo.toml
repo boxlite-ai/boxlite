@@ -24,6 +24,12 @@ anyhow = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 
+# HTTP server (serve subcommand)
+async-stream = "0.3"
+axum = { version = "0.8", features = ["macros"] }
+base64 = "0.22"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+
 # Serialization (aligned with core boxlite)
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
