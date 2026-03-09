@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
 use boxlite::{BoxCommand, BoxInfo, BoxOptions, BoxliteRuntime, Execution, LiteBox, RootfsSpec};
+use boxlite::runtime::options::VolumeSpec;
 
 use crate::cli::GlobalFlags;
 
@@ -90,9 +91,19 @@ struct CreateBoxRequest {
     #[serde(default)]
     user: Option<String>,
     #[serde(default)]
+    volumes: Vec<VolumeRequest>,
+    #[serde(default)]
     auto_remove: Option<bool>,
     #[serde(default)]
     detach: Option<bool>,
+}
+
+#[derive(Deserialize, Default)]
+struct VolumeRequest {
+    host_path: String,
+    guest_path: String,
+    #[serde(default)]
+    read_only: bool,
 }
 
 #[derive(Serialize)]
@@ -203,6 +214,11 @@ fn build_box_options(req: &CreateBoxRequest) -> BoxOptions {
         entrypoint: req.entrypoint.clone(),
         cmd: req.cmd.clone(),
         user: req.user.clone(),
+        volumes: req.volumes.iter().map(|v| VolumeSpec {
+            host_path: v.host_path.clone(),
+            guest_path: v.guest_path.clone(),
+            read_only: v.read_only,
+        }).collect(),
         auto_remove: req.auto_remove.unwrap_or(false),
         detach: req.detach.unwrap_or(true),
         ..Default::default()

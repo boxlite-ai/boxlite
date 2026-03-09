@@ -98,10 +98,14 @@ async fn main() -> BoxliteResult<()> {
 
     info!("BoxLite Guest Agent starting");
 
-    // Mount essential tmpfs directories early
-    // Needed because virtio-fs doesn't support open-unlink-fstat pattern
-    mounts::mount_essential_tmpfs()?;
-    eprintln!("[guest] T+{}ms: tmpfs mounted", boot_elapsed_ms());
+    // Mount essential filesystems early (devtmpfs + tmpfs).
+    // devtmpfs populates /dev with block device nodes (vda, vdb, …).
+    // tmpfs is needed because virtio-fs doesn't support open-unlink-fstat.
+    mounts::mount_essential_filesystems()?;
+    eprintln!(
+        "[guest] T+{}ms: essential filesystems mounted",
+        boot_elapsed_ms()
+    );
 
     // Parse command-line arguments with clap
     let args = GuestArgs::parse();

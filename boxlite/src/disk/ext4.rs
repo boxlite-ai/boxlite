@@ -336,7 +336,7 @@ fn build_inject_commands(host_file_str: &str, guest_path: &str) -> String {
 
     // Write host file into ext4 image
     let ext4_dest = format!("/{}", guest_path);
-    commands.push_str(&format!("write {} {}\n", host_file_str, ext4_dest));
+    commands.push_str(&format!("write \"{}\" {}\n", host_file_str, ext4_dest));
 
     // Set ownership (uid=0, gid=0) and mode (0555 = r-xr-xr-x)
     commands.push_str(&format!("sif {} uid 0\n", ext4_dest));

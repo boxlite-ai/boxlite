@@ -1,7 +1,9 @@
-//! Essential tmpfs mounts for guest filesystem
+//! Essential filesystem mounts for guest init.
 //!
-//! Mounts tmpfs on directories that require local filesystem semantics
-//! (e.g., open-unlink-fstat pattern) which virtio-fs doesn't support.
+//! Mounts devtmpfs at /dev so the kernel auto-populates block device nodes
+//! (e.g., /dev/vda, /dev/vdb), and mounts tmpfs on directories that require
+//! local filesystem semantics (open-unlink-fstat pattern) which virtio-fs
+//! doesn't support.
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use nix::mount::{mount, MsFlags};
@@ -31,13 +33,18 @@ const TMPFS_MOUNTS: &[TmpfsMount] = &[
     },
 ];
 
-/// Mount essential tmpfs directories
+/// Mount essential filesystems for guest boot.
 ///
-/// Called early in guest startup, before gRPC server starts.
-/// These mounts are needed because virtio-fs doesn't support the
-/// open-unlink-fstat pattern used by apt and other tools.
-pub fn mount_essential_tmpfs() -> BoxliteResult<()> {
-    tracing::info!("Mounting essential tmpfs directories");
+/// Called early in guest startup, before the gRPC server starts.
+///
+/// 1. **devtmpfs at /dev** — the kernel auto-populates block device nodes
+///    (vda, vdb, …) so that later volume-mount RPCs can find them.
+/// 2. **tmpfs on /tmp, /var/tmp, /run** — needed because virtio-fs doesn't
+///    support the open-unlink-fstat pattern used by apt and other tools.
+pub fn mount_essential_filesystems() -> BoxliteResult<()> {
+    tracing::info!("Mounting essential guest filesystems");
+
+    mount_devtmpfs()?;
 
     for mount_cfg in TMPFS_MOUNTS {
         mount_tmpfs(mount_cfg)?;
@@ -46,11 +53,48 @@ pub fn mount_essential_tmpfs() -> BoxliteResult<()> {
     Ok(())
 }
 
+/// Mount devtmpfs at /dev so the kernel populates block device nodes.
+///
+/// Without this, /dev/vdb (container disk) doesn't exist even though the
+/// kernel sees the disk in /proc/partitions.  Container.Init then fails to
+/// mount the 10 GB container disk and writes fall back to the tiny 256 MB
+/// guest rootfs on /dev/vda.
+fn mount_devtmpfs() -> BoxliteResult<()> {
+    let dev_path = Path::new("/dev");
+
+    // Skip if /dev is already a devtmpfs mount
+    if is_mounted(dev_path, "devtmpfs")? {
+        tracing::debug!("/dev is already devtmpfs, skipping");
+        return Ok(());
+    }
+
+    if !dev_path.exists() {
+        fs::create_dir_all(dev_path)
+            .map_err(|e| BoxliteError::Internal(format!("Failed to create /dev: {}", e)))?;
+    }
+
+    tracing::debug!("Mounting devtmpfs on /dev");
+    mount(
+        Some("devtmpfs"),
+        dev_path,
+        Some("devtmpfs"),
+        MsFlags::MS_NOSUID,
+        Some("mode=0755"),
+    )
+    .map_err(|e| {
+        tracing::error!("Failed to mount devtmpfs on /dev: {} (errno: {:?})", e, e);
+        BoxliteError::Internal(format!("Failed to mount devtmpfs on /dev: {}", e))
+    })?;
+
+    tracing::info!("Mounted devtmpfs on /dev");
+    Ok(())
+}
+
 fn mount_tmpfs(cfg: &TmpfsMount) -> BoxliteResult<()> {
     let path = Path::new(cfg.path);
 
     // Skip if already mounted as tmpfs
-    if is_tmpfs(path)? {
+    if is_mounted(path, "tmpfs")? {
         tracing::debug!("{} is already tmpfs, skipping", cfg.path);
         return Ok(());
     }
@@ -95,7 +139,8 @@ fn mount_tmpfs(cfg: &TmpfsMount) -> BoxliteResult<()> {
     Ok(())
 }
 
-fn is_tmpfs(path: &Path) -> BoxliteResult<bool> {
+/// Check whether `path` is already mounted with the given filesystem type.
+fn is_mounted(path: &Path, fstype: &str) -> BoxliteResult<bool> {
     let mounts = match fs::read_to_string("/proc/mounts") {
         Ok(content) => content,
         Err(_) => return Ok(false), // /proc may not be mounted yet
@@ -105,7 +150,7 @@ fn is_tmpfs(path: &Path) -> BoxliteResult<bool> {
 
     for line in mounts.lines() {
         let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() >= 3 && parts[1] == path_str && parts[2] == "tmpfs" {
+        if parts.len() >= 3 && parts[1] == path_str && parts[2] == fstype {
             return Ok(true);
         }
     }
