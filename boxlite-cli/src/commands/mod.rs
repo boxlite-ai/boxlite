@@ -10,6 +10,7 @@ pub mod pull;
 pub mod restart;
 pub mod rm;
 pub mod run;
+pub mod serve;
 pub mod start;
 pub mod stats;
 pub mod stop;
