@@ -54,6 +54,10 @@ pub(crate) struct PyBoxMetrics {
     #[pyo3(get)]
     pub(crate) bytes_received_total: u64,
     #[pyo3(get)]
+    pub(crate) exec_duration_total_ms: u64,
+    #[pyo3(get)]
+    pub(crate) exec_max_duration_ms: u64,
+    #[pyo3(get)]
     pub(crate) total_create_duration_ms: Option<u128>,
     #[pyo3(get)]
     pub(crate) guest_boot_duration_ms: Option<u128>,
@@ -106,6 +110,8 @@ impl From<BoxMetrics> for PyBoxMetrics {
             exec_errors_total: metrics.exec_errors_total(),
             bytes_sent_total: metrics.bytes_sent_total(),
             bytes_received_total: metrics.bytes_received_total(),
+            exec_duration_total_ms: metrics.exec_duration_total_ms(),
+            exec_max_duration_ms: metrics.exec_max_duration_ms(),
             total_create_duration_ms: metrics.total_create_duration_ms(),
             guest_boot_duration_ms: metrics.guest_boot_duration_ms(),
             cpu_percent: metrics.cpu_percent(),

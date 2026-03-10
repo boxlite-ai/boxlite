@@ -38,37 +38,45 @@ impl ContainerExecutor {
 #[async_trait]
 impl Executor for ContainerExecutor {
     async fn spawn(&self, req: &ExecRequest) -> BoxliteResult<ExecHandle> {
-        // Build the command while holding the lock
-        let cmd = {
-            let container = self.container.lock().await;
+        let start = std::time::Instant::now();
 
-            let mut cmd = container
-                .cmd()
-                .program(&req.program)
-                .args(&req.args)
-                .envs(req.env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+        // Serialize build+spawn: libcontainer's build() uses process-global
+        // chdir(). Concurrent builds corrupt each other's cwd, causing hangs
+        // in clone3/waitpid. Hold the lock through spawn to prevent this.
+        let container = self.container.lock().await;
 
-            if !req.workdir.is_empty() {
-                cmd = cmd.current_dir(&req.workdir);
-            }
+        let mut cmd = container
+            .cmd()
+            .program(&req.program)
+            .args(&req.args)
+            .envs(req.env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
 
-            if let Some(tty) = &req.tty {
-                cmd = cmd.with_pty(PtyConfig {
-                    rows: tty.rows as u16,
-                    cols: tty.cols as u16,
-                    x_pixels: tty.x_pixels as u16,
-                    y_pixels: tty.y_pixels as u16,
-                });
-            }
+        if !req.workdir.is_empty() {
+            cmd = cmd.current_dir(&req.workdir);
+        }
 
-            if let Some(ref user) = req.user {
-                cmd = cmd.with_user(user.clone());
-            }
+        if let Some(tty) = &req.tty {
+            cmd = cmd.with_pty(PtyConfig {
+                rows: tty.rows as u16,
+                cols: tty.cols as u16,
+                x_pixels: tty.x_pixels as u16,
+                y_pixels: tty.y_pixels as u16,
+            });
+        }
 
-            cmd
-        }; // Release container lock before spawn
+        if let Some(ref user) = req.user {
+            cmd = cmd.with_user(user.clone());
+        }
 
-        cmd.spawn().await
+        let result = cmd.spawn().await;
+
+        tracing::info!(
+            elapsed_ms = start.elapsed().as_millis() as u64,
+            program = %req.program,
+            "exec: spawn completed"
+        );
+
+        result
     }
 }
 

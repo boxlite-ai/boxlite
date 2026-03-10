@@ -106,6 +106,12 @@ impl EmbeddedRuntime {
             Self::set_permissions(&path, name)?;
         }
 
+        // macOS: sign shim with hypervisor entitlement after extraction.
+        // The embedded bytes are from an unsigned build artifact; the
+        // Hypervisor.framework requires com.apple.security.hypervisor.
+        #[cfg(target_os = "macos")]
+        Self::sign_shim(&tmp)?;
+
         // Stamp marks extraction as complete — checked by the fast path above.
         std::fs::write(tmp.join(".complete"), crate::VERSION)
             .map_err(|e| BoxliteError::Storage(format!("write stamp: {}", e)))?;
@@ -209,6 +215,59 @@ impl EmbeddedRuntime {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).map_err(|e| {
             BoxliteError::Storage(format!("chmod {:o} {}: {}", mode, path.display(), e))
         })
+    }
+
+    /// Sign boxlite-shim with hypervisor entitlement (macOS only).
+    ///
+    /// The embedded shim bytes come from an unsigned build artifact.
+    /// macOS Hypervisor.framework requires `com.apple.security.hypervisor`
+    /// entitlement, so we ad-hoc sign after extraction.
+    #[cfg(target_os = "macos")]
+    fn sign_shim(dir: &Path) -> BoxliteResult<()> {
+        let shim = dir.join("boxlite-shim");
+        if !shim.exists() {
+            return Ok(());
+        }
+
+        let entitlements = "\
+<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
+<plist version=\"1.0\">\n\
+<dict>\n\
+\t<key>com.apple.security.hypervisor</key>\n\
+\t<true/>\n\
+\t<key>com.apple.security.cs.disable-library-validation</key>\n\
+\t<true/>\n\
+</dict>\n\
+</plist>";
+
+        // Write entitlements to a temp file
+        let ent_path = dir.join(".entitlements.plist");
+        std::fs::write(&ent_path, entitlements)
+            .map_err(|e| BoxliteError::Storage(format!("write entitlements: {}", e)))?;
+
+        let output = std::process::Command::new("codesign")
+            .args(["-s", "-", "--force", "--entitlements"])
+            .arg(&ent_path)
+            .arg(&shim)
+            .output()
+            .map_err(|e| BoxliteError::Storage(format!("codesign: {}", e)))?;
+
+        // Clean up entitlements file
+        let _ = std::fs::remove_file(&ent_path);
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            tracing::warn!(
+                shim = %shim.display(),
+                stderr = %stderr,
+                "Failed to sign extracted shim (non-fatal on Linux)"
+            );
+        } else {
+            tracing::info!(shim = %shim.display(), "Signed extracted shim with hypervisor entitlement");
+        }
+
+        Ok(())
     }
 }
 

@@ -66,8 +66,7 @@ struct GuestArgs {
 }
 
 #[cfg(target_os = "linux")]
-#[tokio::main]
-async fn main() -> BoxliteResult<()> {
+fn main() -> BoxliteResult<()> {
     let t0 = Instant::now();
     BOOT_T0.set(t0).expect("BOOT_T0 already initialized");
 
@@ -98,6 +97,23 @@ async fn main() -> BoxliteResult<()> {
 
     info!("BoxLite Guest Agent starting");
 
+    // Start zygote BEFORE tokio creates any threads.
+    // The zygote handles all clone3() calls in a single-threaded context,
+    // avoiding musl's __malloc_lock deadlock. See docs/investigations/concurrent-exec-deadlock.md
+    use container::zygote::{Zygote, ZYGOTE};
+    let zygote = Zygote::start()?;
+    ZYGOTE.set(zygote).expect("zygote already initialized");
+    eprintln!("[guest] T+{}ms: zygote started", boot_elapsed_ms());
+
+    // Now start tokio runtime — threads are safe since clone3 goes through zygote
+    let rt = tokio::runtime::Runtime::new().map_err(|e| {
+        boxlite_shared::errors::BoxliteError::Internal(format!("tokio runtime: {e}"))
+    })?;
+    rt.block_on(async_main())
+}
+
+#[cfg(target_os = "linux")]
+async fn async_main() -> BoxliteResult<()> {
     // Mount essential tmpfs directories early
     // Needed because virtio-fs doesn't support open-unlink-fstat pattern
     mounts::mount_essential_tmpfs()?;

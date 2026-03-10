@@ -48,6 +48,10 @@ pub struct JsBoxMetrics {
     pub bytes_sent_total: f64,
     /// Bytes received from this box (via stdout/stderr)
     pub bytes_received_total: f64,
+    /// Sum of all command durations (milliseconds)
+    pub exec_duration_total_ms: f64,
+    /// Maximum single command duration (milliseconds)
+    pub exec_max_duration_ms: f64,
 
     // Lifecycle timing
     /// Total time from create() call to LiteBox ready (milliseconds)
@@ -94,6 +98,8 @@ impl From<BoxMetrics> for JsBoxMetrics {
             exec_errors_total: m.exec_errors_total as f64,
             bytes_sent_total: m.bytes_sent_total as f64,
             bytes_received_total: m.bytes_received_total as f64,
+            exec_duration_total_ms: m.exec_duration_total_ms as f64,
+            exec_max_duration_ms: m.exec_max_duration_ms as f64,
 
             // Lifecycle timing (convert u128 to f64 for JavaScript)
             total_create_duration_ms: m.total_create_duration_ms.map(|v| v as f64),

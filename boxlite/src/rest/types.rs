@@ -349,6 +349,10 @@ pub(crate) struct BoxMetricsResponse {
     pub bytes_sent_total: u64,
     #[serde(default)]
     pub bytes_received_total: u64,
+    #[serde(default)]
+    pub exec_duration_total_ms: Option<u64>,
+    #[serde(default)]
+    pub exec_max_duration_ms: Option<u64>,
     pub cpu_percent: Option<f32>,
     pub memory_bytes: Option<u64>,
     pub network_bytes_sent: Option<u64>,

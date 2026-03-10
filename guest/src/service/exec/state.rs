@@ -154,12 +154,26 @@ impl ExecutionState {
 
     /// Wait for process to exit.
     ///
-    /// Gets pid from handle and waits using waitpid.
+    /// Routes waitpid through the zygote because container processes are
+    /// children of the zygote, not this process. The zygote calls
+    /// waitpid(WNOHANG) and returns the result over IPC.
+    ///
+    /// Uses WNOHANG (non-blocking waitpid) to avoid holding the zygote's
+    /// Mutex for the entire lifetime of long-running processes. Without
+    /// WNOHANG, a `sleep 3600` would hold the Mutex for an hour, blocking
+    /// all other concurrent waits and builds. With WNOHANG, each IPC
+    /// round-trip holds the Mutex for ~microseconds.
+    ///
+    /// The trade-off is polling: we retry every 10ms until the process
+    /// exits. This is acceptable because:
+    /// - Exit code propagation doesn't need sub-millisecond precision
+    /// - 10ms polling uses negligible CPU (~100 syscalls/sec)
+    /// - The alternative (pidfd) requires kernel 5.3+ and protocol changes
     pub async fn wait_process(
         &self,
     ) -> Result<crate::service::exec::exec_handle::ExitStatus, Status> {
+        use crate::container::zygote;
         use crate::service::exec::exec_handle::ExitStatus;
-        use nix::sys::wait::{waitpid, WaitStatus};
 
         // Get pid from handle
         let pid = {
@@ -171,30 +185,34 @@ impl ExecutionState {
                 .pid()
         };
 
-        // Wait for process (blocking call in spawn_blocking)
-        let result = tokio::task::spawn_blocking(move || waitpid(pid, None))
+        // Poll the zygote with WNOHANG until the process exits.
+        // Each call holds the Mutex for just the IPC round-trip (~microseconds),
+        // allowing concurrent waits to interleave.
+        loop {
+            let result = tokio::task::spawn_blocking(move || {
+                zygote::ZYGOTE.get().expect("zygote not started").wait(pid)
+            })
             .await
-            .map_err(|e| Status::internal(format!("spawn_blocking failed: {}", e)))?;
+            .map_err(|e| Status::internal(format!("spawn_blocking failed: {e}")))?
+            .map_err(|e| Status::internal(format!("zygote wait failed: {e}")))?;
 
-        let result = match result {
-            Ok(status) => status,
-            Err(nix::errno::Errno::ECHILD) => {
-                // Child already reaped — process exited but exit code is lost.
-                // This can happen if another reaper (container init, signal handler)
-                // called waitpid() before us. Return 0 as best-effort.
-                tracing::debug!(pid = pid.as_raw(), "waitpid ECHILD: child already reaped");
-                return Ok(ExitStatus::Code(0));
+            match result {
+                zygote::WaitResult::StillAlive => {
+                    // Process hasn't exited yet — retry after a short delay.
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    continue;
+                }
+                zygote::WaitResult::Exited { code } => return Ok(ExitStatus::Code(code)),
+                zygote::WaitResult::Signaled { signal } => {
+                    return Ok(ExitStatus::Signal(
+                        nix::sys::signal::Signal::try_from(signal)
+                            .unwrap_or(nix::sys::signal::Signal::SIGKILL),
+                    ))
+                }
+                zygote::WaitResult::Failed { error } => {
+                    return Err(Status::internal(format!("wait failed: {error}")))
+                }
             }
-            Err(e) => return Err(Status::internal(format!("waitpid failed: {}", e))),
-        };
-
-        match result {
-            WaitStatus::Exited(_, code) => Ok(ExitStatus::Code(code)),
-            WaitStatus::Signaled(_, sig, _) => Ok(ExitStatus::Signal(sig)),
-            other => Err(Status::internal(format!(
-                "Unexpected wait status: {:?}",
-                other
-            ))),
         }
     }
 

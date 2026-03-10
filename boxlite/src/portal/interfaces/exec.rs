@@ -55,7 +55,7 @@ impl ExecutionInterface {
         // Build request
         let request = ExecProtocol::build_exec_request(&command);
 
-        tracing::debug!(?command, "Starting execution");
+        tracing::debug!(command = %command.command, "exec RPC: sending request");
 
         // Start execution
         let exec_response = self.client.exec(request).await?.into_inner();
@@ -67,6 +67,8 @@ impl ExecutionInterface {
         }
 
         let execution_id = exec_response.execution_id.clone();
+
+        tracing::debug!(execution_id = %execution_id, "spawning background streams");
 
         // Spawn stdin pump (cancellable — exits cleanly during shutdown)
         ExecProtocol::spawn_stdin(
@@ -257,7 +259,7 @@ impl ExecProtocol {
             let response = tokio::select! {
                 biased;
                 _ = shutdown_token.cancelled() => {
-                    tracing::debug!(execution_id = %execution_id, "Attach cancelled during connect");
+                    tracing::debug!(execution_id = %execution_id, "attach cancelled during connect");
                     return;
                 }
                 result = client.attach(request) => result,
@@ -265,7 +267,7 @@ impl ExecProtocol {
 
             match response {
                 Ok(response) => {
-                    tracing::debug!(execution_id = %execution_id, "Attach stream connected");
+                    tracing::debug!(execution_id = %execution_id, "attach stream connected");
                     let mut stream = response.into_inner();
                     let mut message_count = 0u64;
 
@@ -351,6 +353,8 @@ impl ExecProtocol {
                 execution_id: execution_id.clone(),
             };
 
+            tracing::debug!(execution_id = %execution_id, "wait: sending request");
+
             // Use select! to handle cancellation during wait
             let result = tokio::select! {
                 biased;
@@ -391,6 +395,7 @@ impl ExecProtocol {
         shutdown_token: CancellationToken,
     ) {
         tokio::spawn(async move {
+            tracing::debug!(execution_id = %execution_id, "stdin: starting stream");
             let (tx, rx) = mpsc::channel::<ExecStdin>(8);
 
             // Producer: forward stdin channel into tonic stream

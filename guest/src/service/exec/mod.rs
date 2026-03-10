@@ -48,12 +48,6 @@ impl Execution for GuestServer {
             .clone()
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
-        info!(
-            execution_id = %execution_id,
-            program = %req.program,
-            "exec request"
-        );
-
         // Validate: execution doesn't already exist
         if self.registry.exists(&execution_id).await {
             return Ok(Response::new(error_response(
@@ -64,7 +58,8 @@ impl Execution for GuestServer {
         }
 
         // Spawn execution
-        match spawn_execution(self, execution_id, req).await {
+        let result = spawn_execution(self, execution_id.clone(), req).await;
+        match result {
             Ok(resp) => Ok(Response::new(resp)),
             Err(err_resp) => Ok(Response::new(err_resp)),
         }
