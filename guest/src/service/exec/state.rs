@@ -154,40 +154,40 @@ impl ExecutionState {
 
     /// Wait for process to exit.
     ///
-    /// Routes waitpid through the zygote because container processes are
-    /// children of the zygote, not this process. The zygote calls
-    /// waitpid(WNOHANG) and returns the result over IPC.
-    ///
-    /// Uses WNOHANG (non-blocking waitpid) to avoid holding the zygote's
-    /// Mutex for the entire lifetime of long-running processes. Without
-    /// WNOHANG, a `sleep 3600` would hold the Mutex for an hour, blocking
-    /// all other concurrent waits and builds. With WNOHANG, each IPC
-    /// round-trip holds the Mutex for ~microseconds.
-    ///
-    /// The trade-off is polling: we retry every 10ms until the process
-    /// exits. This is acceptable because:
-    /// - Exit code propagation doesn't need sub-millisecond precision
-    /// - 10ms polling uses negligible CPU (~100 syscalls/sec)
-    /// - The alternative (pidfd) requires kernel 5.3+ and protocol changes
+    /// Routes to the correct wait mechanism based on executor type:
+    /// - Container processes (init_health.is_some()) → zygote IPC polling
+    /// - Guest processes (init_health.is_none()) → direct waitpid
     pub async fn wait_process(
         &self,
+    ) -> Result<crate::service::exec::exec_handle::ExitStatus, Status> {
+        let (pid, is_container) = {
+            let inner = self.inner.lock().await;
+            let pid = inner
+                .handle
+                .as_ref()
+                .ok_or_else(|| Status::failed_precondition("Handle not available"))?
+                .pid();
+            (pid, inner.init_health.is_some())
+        };
+
+        if is_container {
+            Self::wait_via_zygote(pid).await
+        } else {
+            Self::wait_direct(pid).await
+        }
+    }
+
+    /// Wait for a container process via zygote WNOHANG polling.
+    ///
+    /// Container processes are children of the zygote (created by clone3).
+    /// Uses WNOHANG to avoid holding the zygote Mutex for the process lifetime.
+    /// Retries every 10ms until the process exits.
+    async fn wait_via_zygote(
+        pid: nix::unistd::Pid,
     ) -> Result<crate::service::exec::exec_handle::ExitStatus, Status> {
         use crate::container::zygote;
         use crate::service::exec::exec_handle::ExitStatus;
 
-        // Get pid from handle
-        let pid = {
-            let inner = self.inner.lock().await;
-            inner
-                .handle
-                .as_ref()
-                .ok_or_else(|| Status::failed_precondition("Handle not available"))?
-                .pid()
-        };
-
-        // Poll the zygote with WNOHANG until the process exits.
-        // Each call holds the Mutex for just the IPC round-trip (~microseconds),
-        // allowing concurrent waits to interleave.
         loop {
             let result = tokio::task::spawn_blocking(move || {
                 zygote::ZYGOTE.get().expect("zygote not started").wait(pid)
@@ -198,7 +198,6 @@ impl ExecutionState {
 
             match result {
                 zygote::WaitResult::StillAlive => {
-                    // Process hasn't exited yet — retry after a short delay.
                     tokio::time::sleep(std::time::Duration::from_millis(10)).await;
                     continue;
                 }
@@ -214,6 +213,30 @@ impl ExecutionState {
                 }
             }
         }
+    }
+
+    /// Wait for a guest process via direct waitpid.
+    ///
+    /// Guest processes are spawned by std::process::Command and are direct
+    /// children of this process. Blocking waitpid is fine here since it
+    /// doesn't hold any shared mutex.
+    async fn wait_direct(
+        pid: nix::unistd::Pid,
+    ) -> Result<crate::service::exec::exec_handle::ExitStatus, Status> {
+        use crate::service::exec::exec_handle::ExitStatus;
+        use nix::sys::wait::{waitpid, WaitStatus};
+
+        #[allow(clippy::result_large_err)] // Status is the standard error type in this module
+        tokio::task::spawn_blocking(move || match waitpid(pid, None) {
+            Ok(WaitStatus::Exited(_, code)) => Ok(ExitStatus::Code(code)),
+            Ok(WaitStatus::Signaled(_, signal, _)) => Ok(ExitStatus::Signal(signal)),
+            Ok(other) => Err(Status::internal(format!(
+                "unexpected wait status: {other:?}"
+            ))),
+            Err(e) => Err(Status::internal(format!("waitpid({pid}) failed: {e}"))),
+        })
+        .await
+        .map_err(|e| Status::internal(format!("spawn_blocking failed: {e}")))?
     }
 
     /// Attach to execution output.

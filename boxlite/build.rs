@@ -720,7 +720,9 @@ impl EmbeddedManifest {
         }
 
         // Linux gnu (static glibc — Go c-archive is incompatible with musl TLS)
-        for arch in ["x86_64", "aarch64"] {
+        // Check matching architecture first to avoid picking wrong binary on
+        // multi-arch machines.
+        for arch in Self::preferred_arches() {
             let gnu = target_dir
                 .join(format!("{}-unknown-linux-gnu", arch))
                 .join(profile)
@@ -735,22 +737,36 @@ impl EmbeddedManifest {
 
     /// Find pre-built boxlite-guest binary for the given build profile.
     ///
-    /// Search order:
-    /// 1. `target/{target-triple}/{profile}/boxlite-guest` (direct build output)
+    /// Checks matching architecture first to avoid picking wrong binary on
+    /// multi-arch machines (e.g., x86_64 guest embedded into aarch64 build).
     fn find_prebuilt_guest(workspace_root: &Path, profile: &str) -> Option<PathBuf> {
         let target_dir = workspace_root.join("target");
 
-        // Direct build output for known guest targets
-        let guest_targets = ["x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl"];
-
-        for target in guest_targets {
-            let path = target_dir.join(target).join(profile).join("boxlite-guest");
+        // Check matching architecture first, then fall back to others
+        for arch in Self::preferred_arches() {
+            let path = target_dir
+                .join(format!("{}-unknown-linux-musl", arch))
+                .join(profile)
+                .join("boxlite-guest");
             if path.is_file() {
                 return Some(path);
             }
         }
 
         None
+    }
+
+    /// Return architecture list with the build target's arch first.
+    ///
+    /// On multi-arch machines with both x86_64 and aarch64 binaries built,
+    /// this ensures we pick the one matching the current build target.
+    fn preferred_arches() -> Vec<&'static str> {
+        let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
+        match arch.as_str() {
+            "aarch64" => vec!["aarch64", "x86_64"],
+            "x86_64" => vec!["x86_64", "aarch64"],
+            _ => vec!["x86_64", "aarch64"],
+        }
     }
 }
 

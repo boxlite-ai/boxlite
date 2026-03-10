@@ -304,8 +304,10 @@ fn do_wait(pid: i32) -> WaitResult {
 // IPC: SEQPACKET + SCM_RIGHTS
 // ============================================================================
 
-/// Maximum IPC message size. BuildSpec is typically < 4 KiB.
-const MAX_MSG_SIZE: usize = 65536;
+/// Maximum IPC message size. Typical BuildSpec is < 5 KiB; 1 MiB provides
+/// ample headroom for extreme cases (e.g., 1000+ environment variables).
+/// SEQPACKET delivers messages atomically — no framing needed.
+const MAX_MSG_SIZE: usize = 1_048_576;
 
 /// Send a ZygoteRequest to the zygote, optionally with pipe fds via SCM_RIGHTS.
 ///
@@ -318,6 +320,15 @@ fn send_request(
 ) -> BoxliteResult<()> {
     let json = serde_json::to_vec(request)
         .map_err(|e| BoxliteError::Internal(format!("serialize ZygoteRequest: {e}")))?;
+
+    if json.len() > MAX_MSG_SIZE {
+        return Err(BoxliteError::Internal(format!(
+            "ZygoteRequest too large: {} bytes (max {})",
+            json.len(),
+            MAX_MSG_SIZE
+        )));
+    }
+
     let iov = [IoSlice::new(&json)];
 
     if let Some(ref fds) = fds {
@@ -370,6 +381,15 @@ fn recv_request(sock: RawFd) -> BoxliteResult<(ZygoteRequest, Option<[RawFd; 3]>
 fn send_response(sock: RawFd, response: &ZygoteResponse) -> BoxliteResult<()> {
     let json = serde_json::to_vec(response)
         .map_err(|e| BoxliteError::Internal(format!("serialize ZygoteResponse: {e}")))?;
+
+    if json.len() > MAX_MSG_SIZE {
+        return Err(BoxliteError::Internal(format!(
+            "ZygoteResponse too large: {} bytes (max {})",
+            json.len(),
+            MAX_MSG_SIZE
+        )));
+    }
+
     let iov = [IoSlice::new(&json)];
 
     sendmsg::<()>(sock, &iov, &[], MsgFlags::empty(), None)
@@ -756,6 +776,66 @@ mod tests {
             other => panic!("expected Build request, got: {other:?}"),
         }
         assert!(fds.is_none());
+    }
+
+    #[test]
+    fn ipc_oversized_request_rejected() {
+        // Build a spec that exceeds MAX_MSG_SIZE (1 MiB)
+        let mut env = HashMap::new();
+        // Each env entry ~30 bytes; 50_000 entries ≈ 1.5 MiB
+        for i in 0..50_000 {
+            env.insert(format!("VAR_{i}"), format!("value_{i}"));
+        }
+
+        let spec = BuildSpec {
+            container_id: "oversized".to_string(),
+            state_root: PathBuf::from("/run"),
+            console_socket: None,
+            cwd: PathBuf::from("/"),
+            env,
+            args: vec![],
+            uid: 0,
+            gid: 0,
+        };
+
+        let (a, _b) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .unwrap();
+
+        let result = send_request(a.as_raw_fd(), &ZygoteRequest::Build(spec), None);
+        assert!(result.is_err(), "oversized request should be rejected");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("too large"),
+            "error should mention 'too large', got: {err}"
+        );
+    }
+
+    #[test]
+    fn ipc_oversized_response_rejected() {
+        let response = ZygoteResponse::Build(BuildResult::Failed {
+            error: "x".repeat(2 * 1024 * 1024), // 2 MiB error string
+        });
+
+        let (a, _b) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .unwrap();
+
+        let result = send_response(a.as_raw_fd(), &response);
+        assert!(result.is_err(), "oversized response should be rejected");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("too large"),
+            "error should mention 'too large', got: {err}"
+        );
     }
 
     // ========================================================================

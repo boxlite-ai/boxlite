@@ -224,17 +224,14 @@ impl ContainerCommand {
         self
     }
 
-    /// Spawn the process
+    /// Spawn the process.
     ///
     /// Creates a tenant process in the container with stdin/stdout/stderr pipes.
     /// Returns an [`ExecHandle`] for interacting with the running process.
     ///
-    /// # Errors
-    ///
-    /// - No program specified (must call `.cmd()` first)
-    /// - Failed to create pipes
-    /// - Failed to spawn process
-    /// - Invalid container state
+    /// For PTY mode, this includes the full console-socket handshake.
+    /// If you need to release the container mutex between the zygote build
+    /// and the PTY handshake, use [`spawn_build()`] + [`SpawnedPty::finish()`] instead.
     ///
     /// # Example
     ///
@@ -242,23 +239,33 @@ impl ContainerCommand {
     /// # use guest::container::Container;
     /// # use futures::StreamExt;
     /// # async fn example(container: &Container) -> Result<(), Box<dyn std::error::Error>> {
-    /// let mut child = container.exec().cmd("sh").arg("-c").arg("echo hello").spawn().await?;
-    ///
-    /// // Read output
-    /// while let Some(chunk) = child.output().next().await {
-    ///     println!("{}", String::from_utf8_lossy(&chunk.data));
-    /// }
-    ///
-    /// // Wait for exit
-    /// let status = child.wait().await?;
+    /// let child = container.cmd().program("sh").args(&["-c", "echo hello"]).spawn().await?;
     /// # Ok(())
     /// # }
     /// ```
+    #[allow(dead_code)] // Public API; ContainerExecutor uses spawn_build() for two-phase locking
     pub async fn spawn(self) -> BoxliteResult<ExecHandle> {
+        match self.spawn_build().await? {
+            SpawnResult::Ready(handle) => Ok(handle),
+            SpawnResult::PtyPending(pending) => pending.finish(),
+        }
+    }
+
+    /// Build phase only: zygote IPC without PTY handshake.
+    ///
+    /// Returns [`SpawnResult::Ready`] for non-PTY (handle ready immediately),
+    /// or [`SpawnResult::PtyPending`] for PTY (must call [`SpawnedPty::finish()`]
+    /// to complete the console-socket handshake).
+    ///
+    /// Use this instead of [`spawn()`] when you need to release the container
+    /// mutex between the zygote build and the PTY handshake. The build phase
+    /// serializes `chdir()` in libcontainer; the PTY handshake does not need it.
+    pub(crate) async fn spawn_build(self) -> BoxliteResult<SpawnResult> {
         if let Some(pty_config) = self.pty_config.clone() {
-            self.spawn_with_pty(pty_config).await
+            self.spawn_pty_build(pty_config).await
         } else {
-            self.spawn_with_pipes().await
+            let handle = self.spawn_with_pipes().await?;
+            Ok(SpawnResult::Ready(handle))
         }
     }
 
@@ -289,29 +296,31 @@ impl ContainerCommand {
         ))
     }
 
-    /// Spawn process with PTY (interactive mode).
-    async fn spawn_with_pty(mut self, config: PtyConfig) -> BoxliteResult<ExecHandle> {
+    /// Build phase of PTY spawn: zygote IPC only, no console-socket handshake.
+    ///
+    /// Creates the console socket, sends the build spec to the zygote, and
+    /// returns a [`SpawnedPty`] that captures the PID + socket for later
+    /// completion via [`SpawnedPty::finish()`].
+    async fn spawn_pty_build(mut self, config: PtyConfig) -> BoxliteResult<SpawnResult> {
         use super::console_socket::ConsoleSocket;
 
-        // Setup console socket
         let exec_id = uuid::Uuid::new_v4().to_string();
         let socket = ConsoleSocket::new(&exec_id)?;
 
         tracing::debug!(
             container_id = %self.id,
             console_socket = %socket.path(),
-            "spawning with PTY"
+            "spawning with PTY (build phase)"
         );
 
-        // Spawn process with console socket
         self.console_socket = Some(socket.path().to_string());
         let pid = self.build_and_spawn(None).await?;
 
-        // Receive PTY master FD (socket auto-cleanup on drop)
-        let pty_master = socket.receive_pty_master()?;
-
-        // Create child with PTY
-        create_pty_child(pid, pty_master, config)
+        Ok(SpawnResult::PtyPending(SpawnedPty {
+            pid,
+            socket,
+            config,
+        }))
     }
 
     /// Resolve the effective (uid, gid) for this exec.
@@ -416,6 +425,45 @@ impl ContainerCommand {
         );
 
         Ok(pid)
+    }
+}
+
+/// Result of [`ContainerCommand::spawn_build()`].
+///
+/// Non-PTY commands produce a ready [`ExecHandle`] immediately.
+/// PTY commands produce a [`SpawnedPty`] that must be completed
+/// via [`SpawnedPty::finish()`] after releasing the container mutex.
+pub(crate) enum SpawnResult {
+    /// Non-PTY: handle is ready immediately.
+    Ready(ExecHandle),
+    /// PTY: build is done, but the console-socket handshake is pending.
+    PtyPending(SpawnedPty),
+}
+
+/// Intermediate state between zygote build and PTY handshake.
+///
+/// Holds the PID (from `build_and_spawn`) and the console socket
+/// needed to receive the PTY master FD from libcontainer.
+///
+/// Call [`finish()`] to complete the handshake. This blocks on
+/// `accept()` + `recvmsg()` with a 30s timeout.
+pub(crate) struct SpawnedPty {
+    pid: Pid,
+    socket: super::console_socket::ConsoleSocket,
+    config: PtyConfig,
+}
+
+impl SpawnedPty {
+    /// Complete the PTY handshake and create the [`ExecHandle`].
+    ///
+    /// Blocks on the console-socket `accept()` + `recvmsg()` to receive
+    /// the PTY master FD from libcontainer. Has a 30s timeout.
+    ///
+    /// Call this AFTER releasing the container mutex — the handshake
+    /// does not need serialization.
+    pub(crate) fn finish(self) -> BoxliteResult<ExecHandle> {
+        let pty_master = self.socket.receive_pty_master()?;
+        create_pty_child(self.pid, pty_master, self.config)
     }
 }
 

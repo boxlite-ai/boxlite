@@ -17,12 +17,6 @@ pub struct BoxMetricsStorage {
     /// Bytes received from this box (via stdout/stderr)
     pub(crate) bytes_received: AtomicU64,
 
-    // Per-command timing metrics (monotonic, updated per command)
-    /// Sum of all command durations (milliseconds)
-    pub(crate) exec_duration_total_ms: AtomicU64,
-    /// Maximum single command duration (milliseconds)
-    pub(crate) exec_max_duration_ms: AtomicU64,
-
     // Timing metrics (set once, never change)
     /// Total time from create() call to LiteBox ready (includes all stages)
     pub(crate) total_create_duration_ms: Option<u128>,
@@ -51,10 +45,6 @@ impl Clone for BoxMetricsStorage {
             exec_errors: AtomicU64::new(self.exec_errors.load(Ordering::Relaxed)),
             bytes_sent: AtomicU64::new(self.bytes_sent.load(Ordering::Relaxed)),
             bytes_received: AtomicU64::new(self.bytes_received.load(Ordering::Relaxed)),
-            exec_duration_total_ms: AtomicU64::new(
-                self.exec_duration_total_ms.load(Ordering::Relaxed),
-            ),
-            exec_max_duration_ms: AtomicU64::new(self.exec_max_duration_ms.load(Ordering::Relaxed)),
             total_create_duration_ms: self.total_create_duration_ms,
             guest_boot_duration_ms: self.guest_boot_duration_ms,
             stage_filesystem_setup_ms: self.stage_filesystem_setup_ms,
@@ -138,27 +128,6 @@ impl BoxMetricsStorage {
     pub(crate) fn increment_exec_errors(&self) {
         self.exec_errors.fetch_add(1, Ordering::Relaxed);
     }
-
-    /// Add bytes sent to counter.
-    #[allow(dead_code)]
-    pub(crate) fn add_bytes_sent(&self, bytes: u64) {
-        self.bytes_sent.fetch_add(bytes, Ordering::Relaxed);
-    }
-
-    /// Add bytes received to counter.
-    #[allow(dead_code)]
-    pub(crate) fn add_bytes_received(&self, bytes: u64) {
-        self.bytes_received.fetch_add(bytes, Ordering::Relaxed);
-    }
-
-    /// Record a command duration: adds to total and updates max.
-    #[allow(dead_code)]
-    pub(crate) fn record_exec_duration(&self, duration_ms: u64) {
-        self.exec_duration_total_ms
-            .fetch_add(duration_ms, Ordering::Relaxed);
-        self.exec_max_duration_ms
-            .fetch_max(duration_ms, Ordering::Relaxed);
-    }
 }
 
 /// Handle for querying per-box metrics.
@@ -175,10 +144,6 @@ pub struct BoxMetrics {
     pub bytes_sent_total: u64,
     /// Bytes received from this box (via stdout/stderr)
     pub bytes_received_total: u64,
-    /// Sum of all command durations (milliseconds, monotonic)
-    pub exec_duration_total_ms: u64,
-    /// Maximum single command duration (milliseconds)
-    pub exec_max_duration_ms: u64,
     /// Total time from create() call to LiteBox ready (milliseconds)
     pub total_create_duration_ms: Option<u128>,
     /// Time from box subprocess spawn to guest agent ready (milliseconds)
@@ -227,8 +192,6 @@ impl BoxMetrics {
             exec_errors_total: storage.exec_errors.load(Ordering::Relaxed),
             bytes_sent_total: storage.bytes_sent.load(Ordering::Relaxed),
             bytes_received_total: storage.bytes_received.load(Ordering::Relaxed),
-            exec_duration_total_ms: storage.exec_duration_total_ms.load(Ordering::Relaxed),
-            exec_max_duration_ms: storage.exec_max_duration_ms.load(Ordering::Relaxed),
             total_create_duration_ms: storage.total_create_duration_ms,
             guest_boot_duration_ms: storage.guest_boot_duration_ms,
             cpu_percent,
@@ -274,20 +237,6 @@ impl BoxMetrics {
     /// Never decreases (monotonic counter).
     pub fn bytes_received_total(&self) -> u64 {
         self.bytes_received_total
-    }
-
-    /// Sum of all command durations (milliseconds).
-    ///
-    /// Never decreases (monotonic counter).
-    pub fn exec_duration_total_ms(&self) -> u64 {
-        self.exec_duration_total_ms
-    }
-
-    /// Maximum single command duration (milliseconds).
-    ///
-    /// Tracks worst-case exec latency.
-    pub fn exec_max_duration_ms(&self) -> u64 {
-        self.exec_max_duration_ms
     }
 
     /// Total time from create() call to box ready (milliseconds).

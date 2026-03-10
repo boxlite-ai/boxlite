@@ -8,6 +8,13 @@ use nix::sys::socket::{recvmsg, ControlMessageOwned, MsgFlags, UnixAddr};
 use std::io::IoSliceMut;
 use std::os::unix::io::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::net::UnixListener;
+use std::time::Duration;
+
+/// Timeout for the PTY console-socket handshake.
+///
+/// If libcontainer doesn't connect and send the PTY master fd within this
+/// window, the handshake fails instead of blocking forever.
+const PTY_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Console socket for receiving PTY master FD from libcontainer.
 ///
@@ -51,17 +58,33 @@ impl ConsoleSocket {
     /// Receive PTY master FD from libcontainer.
     ///
     /// Waits for libcontainer to connect and send the PTY master file descriptor
-    /// via SCM_RIGHTS ancillary message.
+    /// via SCM_RIGHTS ancillary message. Times out after [`PTY_HANDSHAKE_TIMEOUT`]
+    /// to prevent indefinite blocking if libcontainer crashes or hangs.
     pub fn receive_pty_master(self) -> BoxliteResult<OwnedFd> {
         tracing::debug!("Waiting for console socket connection");
 
-        // Accept connection
-        let (stream, _) = self
-            .listener
-            .accept()
-            .map_err(|e| BoxliteError::Internal(format!("Console socket accept failed: {}", e)))?;
+        // Set SO_RCVTIMEO on the listener so accept() doesn't block forever.
+        Self::set_socket_timeout(self.listener.as_raw_fd(), PTY_HANDSHAKE_TIMEOUT);
+
+        // Accept connection (bounded by timeout)
+        let (stream, _) = self.listener.accept().map_err(|e| {
+            if e.kind() == std::io::ErrorKind::WouldBlock
+                || e.kind() == std::io::ErrorKind::TimedOut
+            {
+                BoxliteError::Internal(format!(
+                    "Console socket accept timed out after {}s: \
+                     libcontainer did not complete PTY handshake",
+                    PTY_HANDSHAKE_TIMEOUT.as_secs()
+                ))
+            } else {
+                BoxliteError::Internal(format!("Console socket accept failed: {}", e))
+            }
+        })?;
 
         tracing::debug!("Connection accepted, receiving PTY master FD");
+
+        // Set timeout on the connected stream too
+        Self::set_socket_timeout(stream.as_raw_fd(), PTY_HANDSHAKE_TIMEOUT);
 
         // Receive PTY master FD via SCM_RIGHTS
         let mut buf = [0u8; 1024];
@@ -89,6 +112,26 @@ impl ConsoleSocket {
         Err(BoxliteError::Internal(
             "No PTY master FD received".to_string(),
         ))
+    }
+
+    /// Set `SO_RCVTIMEO` on a socket fd to bound blocking operations.
+    fn set_socket_timeout(fd: RawFd, timeout: Duration) {
+        let tv = nix::libc::timeval {
+            tv_sec: timeout.as_secs() as _,
+            tv_usec: 0,
+        };
+        // Best-effort: if setsockopt fails, the call proceeds without timeout
+        // (existing behavior). This is non-fatal because the timeout is a safety
+        // net, not a correctness requirement.
+        unsafe {
+            nix::libc::setsockopt(
+                fd,
+                nix::libc::SOL_SOCKET,
+                nix::libc::SO_RCVTIMEO,
+                &tv as *const _ as *const nix::libc::c_void,
+                std::mem::size_of::<nix::libc::timeval>() as nix::libc::socklen_t,
+            );
+        }
     }
 }
 

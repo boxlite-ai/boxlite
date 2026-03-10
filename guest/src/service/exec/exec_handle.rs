@@ -209,9 +209,6 @@ pub struct PtyConfig {
 ///     }
 /// });
 ///
-/// // Wait for exit
-/// let status = handle.wait().await?;
-/// assert!(status.success());
 /// # Ok(())
 /// # }
 /// ```
@@ -322,34 +319,9 @@ impl ExecHandle {
         self.stderr.take()
     }
 
-    /// Wait for process to complete
+    /// Kill process with signal.
     ///
-    /// This consumes the handle and blocks until the process exits.
-    ///
-    /// # Returns
-    ///
-    /// - `ExitStatus::Code(n)` if process exited normally
-    /// - `ExitStatus::Signal(sig)` if process was terminated by signal
-    #[allow(dead_code)] // API completeness
-    pub async fn wait(&self) -> BoxliteResult<ExitStatus> {
-        use nix::sys::wait::{waitpid, WaitStatus};
-
-        match waitpid(self.pid, None).map_err(|e| {
-            BoxliteError::Internal(format!("Failed to wait for process {}: {}", self.pid, e))
-        })? {
-            WaitStatus::Exited(_, code) => Ok(ExitStatus::Code(code)),
-            WaitStatus::Signaled(_, signal, _) => Ok(ExitStatus::Signal(signal)),
-            other => Err(BoxliteError::Internal(format!(
-                "Process {} exited with unexpected status: {:?}",
-                self.pid, other
-            ))),
-        }
-    }
-
-    /// Kill process with signal
-    ///
-    /// Sends a signal to the process. Does not consume the handle,
-    /// so you can still wait() afterward.
+    /// Sends a signal to the process.
     ///
     /// # Arguments
     ///

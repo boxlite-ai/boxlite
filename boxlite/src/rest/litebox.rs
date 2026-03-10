@@ -632,8 +632,6 @@ fn box_metrics_from_response(resp: &BoxMetricsResponse) -> BoxMetrics {
         exec_errors_total: resp.exec_errors_total,
         bytes_sent_total: resp.bytes_sent_total,
         bytes_received_total: resp.bytes_received_total,
-        exec_duration_total_ms: resp.exec_duration_total_ms.unwrap_or(0),
-        exec_max_duration_ms: resp.exec_max_duration_ms.unwrap_or(0),
         total_create_duration_ms: total_create_ms,
         guest_boot_duration_ms: guest_boot_ms,
         cpu_percent: resp.cpu_percent,

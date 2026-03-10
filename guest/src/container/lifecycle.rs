@@ -35,8 +35,7 @@ use std::path::{Path, PathBuf};
 /// )?;
 ///
 /// // Execute command
-/// let mut child = container.command("ls").args(&["-la"]).spawn().await?;
-/// let status = child.wait().await?;
+/// let child = container.command("ls").args(&["-la"]).spawn().await?;
 /// # Ok(())
 /// # }
 /// ```

@@ -86,6 +86,12 @@ impl EmbeddedRuntime {
         // Fast path: already extracted by this or a previous process.
         let stamp = dir.join(".complete");
         if stamp.exists() {
+            // Ensure the shim is signed even on cache hits — a previous build
+            // may have cached the runtime before signing was added.
+            // codesign --force is idempotent (re-signs if already signed).
+            #[cfg(target_os = "macos")]
+            Self::sign_shim(&dir)?;
+
             // Refresh mtime so stale cleanup measures "last used", not "first extracted"
             let now = filetime::FileTime::now();
             let _ = filetime::set_file_mtime(&stamp, now);
@@ -258,15 +264,15 @@ impl EmbeddedRuntime {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            tracing::warn!(
-                shim = %shim.display(),
-                stderr = %stderr,
-                "Failed to sign extracted shim (non-fatal on Linux)"
-            );
-        } else {
-            tracing::info!(shim = %shim.display(), "Signed extracted shim with hypervisor entitlement");
+            return Err(BoxliteError::Storage(format!(
+                "Failed to sign shim at {}: {}. \
+                 macOS Hypervisor.framework requires com.apple.security.hypervisor entitlement.",
+                shim.display(),
+                stderr.trim()
+            )));
         }
 
+        tracing::info!(shim = %shim.display(), "Signed extracted shim with hypervisor entitlement");
         Ok(())
     }
 }
