@@ -10,7 +10,7 @@ From the repository root:
 make cli
 ```
 
-This builds the debug runtime first (if needed) via `make runtime-debug`, then runs `cargo build -p boxlite-cli`. The binary is produced at:
+This builds the debug runtime first (if needed) via `make runtime:debug`, then runs `cargo build -p boxlite-cli`. The binary is produced at:
 
 ```
 ./target/debug/boxlite
@@ -29,7 +29,7 @@ The release binary is at `./target/release/boxlite`.
 ### `make test` vs `make test:integration:cli`
 
 - **`make test`** runs the strict full matrix (unit + integration) across core and SDK suites.
-- **`make test:integration:cli`** runs only the CLI integration tests. It depends on `runtime-debug` and then:
+- **`make test:integration:cli`** runs only the CLI integration tests. It depends on `runtime:debug` and then:
 
   ```bash
   cargo test -p boxlite-cli --tests --no-fail-fast -- --test-threads=1

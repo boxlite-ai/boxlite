@@ -1,13 +1,4 @@
-PHONY_TARGETS += test test\:changed test\:all test\:unit test\:integration
-PHONY_TARGETS += test\:changed\:rust test\:changed\:cli test\:changed\:ffi
-PHONY_TARGETS += test\:changed\:python test\:changed\:node test\:changed\:c test\:changed\:go
-PHONY_TARGETS += test\:unit\:core test\:integration\:core test\:unit\:sdk test\:integration\:sdk
-PHONY_TARGETS += test\:unit\:rust test\:warm-cache\:rust test\:integration\:rust
-PHONY_TARGETS += test\:unit\:ffi test\:integration\:cli
-PHONY_TARGETS += test\:unit\:python test\:integration\:python test\:all\:python
-PHONY_TARGETS += test\:unit\:node test\:integration\:node test\:all\:node
-PHONY_TARGETS += test\:all\:c
-PHONY_TARGETS += test\:unit\:go test\:all\:go
+PHONY_TARGETS += test
 
 # Default test target runs only changed components.
 test:
@@ -130,7 +121,7 @@ test\:unit\:rust:
 	fi
 
 # Pre-warm Rust integration test image cache (internal helper, still callable).
-test\:warm-cache\:rust: runtime-debug
+test\:warm-cache\:rust: runtime\:debug
 	@echo "🔥 Warming Rust integration test image cache..."
 	@mkdir -p /tmp/boxlite-test
 	@./target/debug/boxlite --home /tmp/boxlite-test \
@@ -144,7 +135,7 @@ test\:warm-cache\:rust: runtime-debug
 
 # Rust integration tests (requires VM environment).
 # Pass FILTER=<pattern> to run a subset, e.g. make test:integration:rust FILTER=copy
-test\:integration\:rust: runtime-debug test\:warm-cache\:rust
+test\:integration\:rust: runtime\:debug test\:warm-cache\:rust
 	@echo "🧪 Running Rust integration tests (requires VM)..."
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
 		cargo nextest run -p boxlite --features link-krun --test '*' --no-fail-fast --profile vm \
@@ -165,7 +156,7 @@ test\:unit\:ffi:
 
 # CLI integration tests.
 # Pass FILTER=<pattern> to run a subset.
-test\:integration\:cli: runtime-debug
+test\:integration\:cli: runtime\:debug
 	@echo "🧪 Running CLI integration tests..."
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
 		cargo nextest run -p boxlite-cli --tests --no-fail-fast \

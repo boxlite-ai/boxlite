@@ -60,7 +60,7 @@ tracing-appender = "0.2"
 sysinfo = "0.30"
 libc = "0.2"
 rayon = "1.10"
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
 parking_lot = "0.12"
 inventory = "0.3"
 clap = { version = "4.5", features = ["derive"] }

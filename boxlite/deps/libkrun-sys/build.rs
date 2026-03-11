@@ -362,6 +362,12 @@ impl LibBuilder {
         cmd.stdout(Stdio::inherit());
         cmd.stderr(Stdio::inherit());
 
+        // Prevent outer RUSTFLAGS from leaking into vendored libkrun build.
+        // CI tools (e.g., actions-rust-lang/setup-rust-toolchain) set RUSTFLAGS=-D warnings,
+        // which would promote warnings in vendored code to errors.
+        cmd.env_remove("RUSTFLAGS");
+        cmd.env_remove("CARGO_ENCODED_RUSTFLAGS");
+
         run_command(&mut cmd, "cargo rustc (libkrun staticlib)");
 
         // Determine output path (differs when --target is specified)

@@ -1,4 +1,4 @@
-PHONY_TARGETS += coverage coverage\:lcov coverage\:integration
+PHONY_TARGETS += coverage
 
 # Generate HTML coverage report (unit tests only).
 coverage:
@@ -17,7 +17,7 @@ coverage\:lcov:
 	@echo "✅ LCOV output: target/coverage/lcov.info"
 
 # Generate coverage for Rust integration tests (requires VM environment).
-coverage\:integration: runtime-debug
+coverage\:integration: runtime\:debug
 	@echo "📊 Generating integration test coverage..."
 	@cargo llvm-cov nextest \
 		-p boxlite --test '*' \

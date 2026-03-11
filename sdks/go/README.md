@@ -13,7 +13,7 @@ Go SDK for BoxLite - an embeddable virtual machine runtime for secure, isolated 
 
 ```bash
 cd ../..
-make runtime-debug
+make runtime:debug
 ```
 
 ### Build the Go SDK
