@@ -128,6 +128,18 @@ impl BoxMetricsStorage {
     pub(crate) fn increment_exec_errors(&self) {
         self.exec_errors.fetch_add(1, Ordering::Relaxed);
     }
+
+    /// Add bytes sent to counter.
+    #[allow(dead_code)]
+    pub(crate) fn add_bytes_sent(&self, bytes: u64) {
+        self.bytes_sent.fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    /// Add bytes received to counter.
+    #[allow(dead_code)]
+    pub(crate) fn add_bytes_received(&self, bytes: u64) {
+        self.bytes_received.fetch_add(bytes, Ordering::Relaxed);
+    }
 }
 
 /// Handle for querying per-box metrics.
