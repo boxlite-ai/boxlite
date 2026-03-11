@@ -388,11 +388,11 @@ async fn start_execution(
     };
 
     // Write stdin and close it before storing the execution
-    if let Some(ref data) = stdin_data {
-        if let Some(mut stdin) = execution.stdin() {
-            let _ = stdin.write_all(data.as_bytes()).await;
-            stdin.close();
-        }
+    if let Some(ref data) = stdin_data
+        && let Some(mut stdin) = execution.stdin()
+    {
+        let _ = stdin.write_all(data.as_bytes()).await;
+        stdin.close();
     }
 
     let exec_id = execution.id().clone();
