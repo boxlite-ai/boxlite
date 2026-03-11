@@ -102,7 +102,7 @@ impl<'a> StreamManager<'a> {
             if let Some(mut stream) = stdout_stream {
                 let mut stdout = tokio::io::stdout();
                 while let Some(chunk) = stream.next().await {
-                    if let Err(e) = stdout.write_all(chunk.as_bytes()).await {
+                    if let Err(e) = stdout.write_all(&chunk).await {
                         if e.kind() != std::io::ErrorKind::BrokenPipe {
                             tracing::debug!("stdout write error: {}", e);
                         }
@@ -123,9 +123,9 @@ impl<'a> StreamManager<'a> {
 
                 while let Some(chunk) = stream.next().await {
                     let res = if tty_mode {
-                        stdout.write_all(chunk.as_bytes()).await
+                        stdout.write_all(&chunk).await
                     } else {
-                        stderr.write_all(chunk.as_bytes()).await
+                        stderr.write_all(&chunk).await
                     };
 
                     if let Err(e) = res {

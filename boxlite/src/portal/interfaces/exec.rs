@@ -23,8 +23,8 @@ pub struct ExecutionInterface {
 pub struct ExecComponents {
     pub execution_id: String,
     pub stdin_tx: mpsc::UnboundedSender<Vec<u8>>,
-    pub stdout_rx: mpsc::UnboundedReceiver<String>,
-    pub stderr_rx: mpsc::UnboundedReceiver<String>,
+    pub stdout_rx: mpsc::UnboundedReceiver<Vec<u8>>,
+    pub stderr_rx: mpsc::UnboundedReceiver<Vec<u8>>,
     pub result_rx: mpsc::UnboundedReceiver<ExecResult>,
 }
 
@@ -48,8 +48,8 @@ impl ExecutionInterface {
     ) -> BoxliteResult<ExecComponents> {
         // Create channels
         let (stdin_tx, stdin_rx) = mpsc::unbounded_channel::<Vec<u8>>();
-        let (stdout_tx, stdout_rx) = mpsc::unbounded_channel::<String>();
-        let (stderr_tx, stderr_rx) = mpsc::unbounded_channel::<String>();
+        let (stdout_tx, stdout_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let (stderr_tx, stderr_rx) = mpsc::unbounded_channel::<Vec<u8>>();
         let (result_tx, result_rx) = mpsc::unbounded_channel();
 
         // Build request
@@ -244,8 +244,8 @@ impl ExecProtocol {
     fn spawn_attach(
         mut client: ExecutionClient<Channel>,
         execution_id: String,
-        stdout_tx: mpsc::UnboundedSender<String>,
-        stderr_tx: mpsc::UnboundedSender<String>,
+        stdout_tx: mpsc::UnboundedSender<Vec<u8>>,
+        stderr_tx: mpsc::UnboundedSender<Vec<u8>>,
         shutdown_token: CancellationToken,
     ) {
         tokio::spawn(async move {
@@ -296,7 +296,7 @@ impl ExecProtocol {
                                     message_count,
                                     "Attach stream error, breaking"
                                 );
-                                let _ = stderr_tx.send(format!("Attach stream error: {}", e));
+                                let _ = stderr_tx.send(format!("Attach stream error: {}", e).into_bytes());
                                 break;
                             }
                             None => {
@@ -314,7 +314,7 @@ impl ExecProtocol {
                 }
                 Err(e) => {
                     tracing::debug!(execution_id = %execution_id, error = %e, "Attach failed");
-                    let _ = stderr_tx.send(format!("Attach failed: {}", e));
+                    let _ = stderr_tx.send(format!("Attach failed: {}", e).into_bytes());
                 }
             }
         });
@@ -322,19 +322,17 @@ impl ExecProtocol {
 
     fn route_output(
         output: ExecOutput,
-        stdout_tx: &mpsc::UnboundedSender<String>,
-        stderr_tx: &mpsc::UnboundedSender<String>,
+        stdout_tx: &mpsc::UnboundedSender<Vec<u8>>,
+        stderr_tx: &mpsc::UnboundedSender<Vec<u8>>,
     ) {
         match output.event {
             Some(exec_output::Event::Stdout(chunk)) => {
-                let stdout_data = String::from_utf8_lossy(&chunk.data).to_string();
-                tracing::trace!(?stdout_data, "Received exec stdout");
-                let _ = stdout_tx.send(stdout_data);
+                tracing::trace!(len = chunk.data.len(), "Received exec stdout");
+                let _ = stdout_tx.send(chunk.data);
             }
             Some(exec_output::Event::Stderr(chunk)) => {
-                let stderr_data = String::from_utf8_lossy(&chunk.data).to_string();
-                tracing::trace!(?stderr_data, "Received exec stderr");
-                let _ = stderr_tx.send(stderr_data);
+                tracing::trace!(len = chunk.data.len(), "Received exec stderr");
+                let _ = stderr_tx.send(chunk.data);
             }
             None => {}
         }
@@ -601,8 +599,8 @@ mod tests {
     #[tokio::test]
     async fn test_spawn_attach_cancellation_exits() {
         let token = CancellationToken::new();
-        let (stdout_tx, _stdout_rx) = mpsc::unbounded_channel::<String>();
-        let (_stderr_tx, _stderr_rx) = mpsc::unbounded_channel::<String>();
+        let (stdout_tx, _stdout_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let (_stderr_tx, _stderr_rx) = mpsc::unbounded_channel::<Vec<u8>>();
 
         // Simulate spawn_attach's cancellation handling in streaming loop
         let token_clone = token.clone();
@@ -616,7 +614,7 @@ mod tests {
                     }
                     _ = tokio::time::sleep(Duration::from_millis(10)) => {
                         // Simulate receiving output
-                        let _ = stdout_tx.send("output".to_string());
+                        let _ = stdout_tx.send(b"output".to_vec());
                         iterations += 1;
                     }
                 }

@@ -463,7 +463,7 @@ async fn stream_execution_output(
         tokio::spawn(async move {
             let b64 = base64::engine::general_purpose::STANDARD;
             while let Some(line) = out.next().await {
-                let encoded = b64.encode(line.as_bytes());
+                let encoded = b64.encode(&line);
                 let data = serde_json::json!({"data": encoded}).to_string();
                 let event = Event::default().event("stdout").data(data);
                 if tx_out.send(SseItem::Event(event)).is_err() {
@@ -480,7 +480,7 @@ async fn stream_execution_output(
         tokio::spawn(async move {
             let b64 = base64::engine::general_purpose::STANDARD;
             while let Some(line) = err_stream.next().await {
-                let encoded = b64.encode(line.as_bytes());
+                let encoded = b64.encode(&line);
                 let data = serde_json::json!({"data": encoded}).to_string();
                 let event = Event::default().event("stderr").data(data);
                 if tx_err.send(SseItem::Event(event)).is_err() {
