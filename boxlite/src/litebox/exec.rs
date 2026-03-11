@@ -320,17 +320,17 @@ impl ExecStdin {
 
 /// Standard output stream (read-only).
 pub struct ExecStdout {
-    receiver: mpsc::UnboundedReceiver<String>,
+    receiver: mpsc::UnboundedReceiver<Vec<u8>>,
 }
 
 impl ExecStdout {
-    pub(crate) fn new(receiver: mpsc::UnboundedReceiver<String>) -> Self {
+    pub(crate) fn new(receiver: mpsc::UnboundedReceiver<Vec<u8>>) -> Self {
         Self { receiver }
     }
 }
 
 impl Stream for ExecStdout {
-    type Item = String;
+    type Item = Vec<u8>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.receiver.poll_recv(cx)
@@ -339,17 +339,17 @@ impl Stream for ExecStdout {
 
 /// Standard error stream (read-only).
 pub struct ExecStderr {
-    receiver: mpsc::UnboundedReceiver<String>,
+    receiver: mpsc::UnboundedReceiver<Vec<u8>>,
 }
 
 impl ExecStderr {
-    pub(crate) fn new(receiver: mpsc::UnboundedReceiver<String>) -> Self {
+    pub(crate) fn new(receiver: mpsc::UnboundedReceiver<Vec<u8>>) -> Self {
         Self { receiver }
     }
 }
 
 impl Stream for ExecStderr {
-    type Item = String;
+    type Item = Vec<u8>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.receiver.poll_recv(cx)
