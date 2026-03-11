@@ -100,6 +100,40 @@ class TestSyncSimpleBox:
             result = box.exec("env")
             assert "MY_VAR=my_value" in result.stdout
 
+    def test_exec_with_cwd(self, shared_sync_runtime):
+        """Per-exec cwd overrides working directory."""
+        with SyncSimpleBox(image="alpine:latest", runtime=shared_sync_runtime) as box:
+            result = box.exec("pwd", cwd="/tmp")
+            assert result.exit_code == 0
+            assert result.stdout.strip() == "/tmp"
+
+    def test_exec_with_user(self, shared_sync_runtime):
+        """Per-exec user overrides the execution user."""
+        with SyncSimpleBox(image="alpine:latest", runtime=shared_sync_runtime) as box:
+            result = box.exec("whoami", user="nobody")
+            assert result.exit_code == 0
+            assert "nobody" in result.stdout
+
+    def test_exec_with_timeout(self, shared_sync_runtime):
+        """Per-exec timeout kills long-running commands."""
+        with SyncSimpleBox(image="alpine:latest", runtime=shared_sync_runtime) as box:
+            result = box.exec("sleep", "60", timeout=2)
+            assert result.exit_code != 0
+
+    def test_exec_combined_options(self, shared_sync_runtime):
+        """Per-exec cwd and user can be combined."""
+        with SyncSimpleBox(image="alpine:latest", runtime=shared_sync_runtime) as box:
+            result = box.exec(
+                "sh",
+                "-c",
+                "echo dir=$(pwd) user=$(whoami)",
+                cwd="/tmp",
+                user="nobody",
+            )
+            assert result.exit_code == 0
+            assert "dir=/tmp" in result.stdout
+            assert "user=nobody" in result.stdout
+
 
 class TestSyncSimpleBoxConcurrentStreams:
     """Test that stdout and stderr are read concurrently in sync API.

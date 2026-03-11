@@ -293,8 +293,12 @@ Context manager for basic execution with automatic cleanup.
 
 **Methods:**
 
-- `exec(*args, **kwargs) -> ExecResult`
+- `exec(cmd, *args, env=None, user=None, timeout=None, cwd=None) -> ExecResult`
   Execute command and wait for result
+  - `env`: Dict of environment variables (e.g., `{"FOO": "bar"}`)
+  - `user`: Run as user (format: `name` or `uid:gid`, like `docker exec --user`)
+  - `timeout`: Timeout in seconds (default: no timeout)
+  - `cwd`: Working directory inside the container
 
 **Example:**
 
@@ -303,6 +307,13 @@ async with boxlite.SimpleBox(image="python:slim") as box:
     result = await box.exec("python", "-c", "print('Hello')")
     print(result.stdout)  # "Hello\n"
     print(result.exit_code)  # 0
+
+    # Run in a specific directory as a specific user
+    result = await box.exec("pwd", cwd="/tmp", user="nobody")
+    print(result.stdout)  # "/tmp\n"
+
+    # With a timeout
+    result = await box.exec("sleep", "60", timeout=5)
 ```
 
 #### `boxlite.CodeBox`

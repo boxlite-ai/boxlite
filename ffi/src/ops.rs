@@ -605,6 +605,26 @@ pub unsafe fn runtime_shutdown(
 
 pub type OutputCallback = extern "C" fn(*const c_char, c_int, *mut c_void);
 
+/// C-compatible command descriptor with all BoxCommand options.
+///
+/// All string fields are nullable — NULL means "use default".
+/// `timeout_secs` of 0.0 means no timeout.
+#[repr(C)]
+pub struct BoxliteCommand {
+    /// Command to execute (required, must not be NULL).
+    pub command: *const c_char,
+    /// JSON array of arguments (e.g., `["-c", "echo hello"]`). NULL = no args.
+    pub args_json: *const c_char,
+    /// JSON array of `["key","val"]` pairs (e.g., `[["FOO","bar"]]`). NULL = inherit env.
+    pub env_json: *const c_char,
+    /// Working directory inside the container. NULL = container default.
+    pub workdir: *const c_char,
+    /// User spec (e.g., "nobody", "1000:1000"). NULL = container default.
+    pub user: *const c_char,
+    /// Timeout in seconds. 0.0 = no timeout.
+    pub timeout_secs: f64,
+}
+
 /// Execute a command in a box
 ///
 /// # Parameters
@@ -715,6 +735,184 @@ pub unsafe fn box_exec(
                 }
             }
             // Now wait for completion (should not deadlock due to output backpressure)
+            let status = execution.wait().await?;
+            Ok::<i32, BoxliteError>(status.exit_code)
+        });
+
+        match result {
+            Ok(exit_code) => {
+                *out_exit_code = exit_code;
+                BoxliteErrorCode::Ok
+            }
+            Err(e) => {
+                let code = error_to_code(&e);
+                write_error(out_error, e);
+                code
+            }
+        }
+    }
+}
+
+/// Execute a command in a box using a BoxliteCommand struct.
+///
+/// This is the struct-based alternative to `box_exec()` that supports all BoxCommand
+/// options (env, user, timeout, workdir).
+///
+/// # Safety
+/// All pointer parameters must be valid or null. The `cmd` pointer must not be null.
+///
+pub unsafe fn box_exec_cmd(
+    handle: *mut BoxHandle,
+    cmd: *const BoxliteCommand,
+    callback: Option<OutputCallback>,
+    user_data: *mut c_void,
+    out_exit_code: *mut c_int,
+    out_error: *mut FFIError,
+) -> BoxliteErrorCode {
+    unsafe {
+        if handle.is_null() {
+            write_error(out_error, null_pointer_error("handle"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+
+        if cmd.is_null() {
+            write_error(out_error, null_pointer_error("cmd"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+
+        if out_exit_code.is_null() {
+            write_error(out_error, null_pointer_error("out_exit_code"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+
+        let handle_ref = &mut *handle;
+        let cmd_ref = &*cmd;
+
+        // Parse command (required)
+        let cmd_str = match c_str_to_string(cmd_ref.command) {
+            Ok(s) => s,
+            Err(e) => {
+                let code = error_to_code(&e);
+                write_error(out_error, e);
+                return code;
+            }
+        };
+
+        // Parse args
+        let args: Vec<String> = if !cmd_ref.args_json.is_null() {
+            match c_str_to_string(cmd_ref.args_json) {
+                Ok(json_str) => match serde_json::from_str(&json_str) {
+                    Ok(a) => a,
+                    Err(e) => {
+                        let err = BoxliteError::Internal(format!("Invalid args JSON: {}", e));
+                        write_error(out_error, err);
+                        return BoxliteErrorCode::InvalidArgument;
+                    }
+                },
+                Err(e) => {
+                    let code = error_to_code(&e);
+                    write_error(out_error, e);
+                    return code;
+                }
+            }
+        } else {
+            vec![]
+        };
+
+        let mut box_cmd = boxlite::BoxCommand::new(cmd_str);
+        box_cmd = box_cmd.args(args);
+
+        // Parse env: JSON array of ["key","val"] pairs
+        if !cmd_ref.env_json.is_null() {
+            match c_str_to_string(cmd_ref.env_json) {
+                Ok(json_str) => {
+                    let env_pairs: Vec<Vec<String>> = match serde_json::from_str(&json_str) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            let err = BoxliteError::Internal(format!("Invalid env JSON: {}", e));
+                            write_error(out_error, err);
+                            return BoxliteErrorCode::InvalidArgument;
+                        }
+                    };
+                    for pair in env_pairs {
+                        if pair.len() == 2 {
+                            box_cmd = box_cmd.env(pair[0].clone(), pair[1].clone());
+                        }
+                    }
+                }
+                Err(e) => {
+                    let code = error_to_code(&e);
+                    write_error(out_error, e);
+                    return code;
+                }
+            }
+        }
+
+        // Parse workdir
+        if !cmd_ref.workdir.is_null() {
+            match c_str_to_string(cmd_ref.workdir) {
+                Ok(dir) => {
+                    box_cmd = box_cmd.working_dir(dir);
+                }
+                Err(e) => {
+                    let code = error_to_code(&e);
+                    write_error(out_error, e);
+                    return code;
+                }
+            }
+        }
+
+        // Parse user
+        if !cmd_ref.user.is_null() {
+            match c_str_to_string(cmd_ref.user) {
+                Ok(u) => {
+                    box_cmd = box_cmd.user(u);
+                }
+                Err(e) => {
+                    let code = error_to_code(&e);
+                    write_error(out_error, e);
+                    return code;
+                }
+            }
+        }
+
+        // Parse timeout
+        if cmd_ref.timeout_secs > 0.0 {
+            box_cmd = box_cmd.timeout(std::time::Duration::from_secs_f64(cmd_ref.timeout_secs));
+        }
+
+        // Execute command
+        let result = handle_ref.tokio_rt.block_on(async {
+            let mut execution = handle_ref.handle.exec(box_cmd).await?;
+
+            if let Some(cb) = callback {
+                let mut stdout = execution.stdout();
+                let mut stderr = execution.stderr();
+
+                loop {
+                    tokio::select! {
+                        Some(line) = async {
+                            match &mut stdout {
+                                Some(s) => s.next().await,
+                                None => None,
+                            }
+                        } => {
+                            let c_text = CString::new(line).unwrap_or_default();
+                            cb(c_text.as_ptr(), 0, user_data);
+                        }
+                        Some(line) = async {
+                            match &mut stderr {
+                                Some(s) => s.next().await,
+                                None => None,
+                            }
+                        } => {
+                            let c_text = CString::new(line).unwrap_or_default();
+                            cb(c_text.as_ptr(), 1, user_data);
+                        }
+                        else => break,
+                    }
+                }
+            }
             let status = execution.wait().await?;
             Ok::<i32, BoxliteError>(status.exit_code)
         });

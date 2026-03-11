@@ -40,7 +40,8 @@ impl PyBox {
         }
     }
 
-    #[pyo3(signature = (command, args=None, env=None, tty=false, user=None))]
+    #[pyo3(signature = (command, args=None, env=None, tty=false, user=None, timeout_secs=None, cwd=None))]
+    #[allow(clippy::too_many_arguments)]
     fn exec<'a>(
         &self,
         py: Python<'a>,
@@ -49,6 +50,8 @@ impl PyBox {
         env: Option<Vec<(String, String)>>,
         tty: bool,
         user: Option<String>,
+        timeout_secs: Option<f64>,
+        cwd: Option<String>,
     ) -> PyResult<Bound<'a, PyAny>> {
         let handle = Arc::clone(&self.handle);
 
@@ -67,6 +70,12 @@ impl PyBox {
             }
             if let Some(user) = user {
                 cmd = cmd.user(user);
+            }
+            if let Some(secs) = timeout_secs {
+                cmd = cmd.timeout(std::time::Duration::from_secs_f64(secs));
+            }
+            if let Some(cwd) = cwd {
+                cmd = cmd.working_dir(cwd);
             }
 
             let execution = handle.exec(cmd).await.map_err(map_err)?;

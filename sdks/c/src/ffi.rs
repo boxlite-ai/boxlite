@@ -147,6 +147,49 @@ pub unsafe extern "C" fn boxlite_execute(
     )
 }
 
+/// C-compatible command descriptor with all BoxCommand options.
+pub type BoxliteCommand = boxlite_ffi::ops::BoxliteCommand;
+
+/// Execute a command in a box using a command struct.
+///
+/// This function supports all execution options: env, user, timeout, workdir.
+/// For simple commands without these options, use `boxlite_execute` instead.
+///
+/// # Arguments
+/// * `handle` - Box handle.
+/// * `cmd` - Pointer to a `BoxliteCommand` struct. Must not be NULL.
+/// * `callback` - Optional callback for streaming output.
+/// * `user_data` - User data passed to callback.
+/// * `out_exit_code` - Output parameter for command exit code.
+/// * `out_error` - Output parameter for error information.
+///
+/// # Example
+/// ```c
+/// BoxliteCommand cmd = {
+///     .command = "pwd",
+///     .args_json = NULL,
+///     .env_json = NULL,
+///     .workdir = "/tmp",
+///     .user = NULL,
+///     .timeout_secs = 0.0,
+/// };
+/// int exit_code;
+/// if (boxlite_execute_cmd(box, &cmd, NULL, NULL, &exit_code, error) == BOXLITE_OK) {
+///     printf("Exit code: %d\n", exit_code);
+/// }
+/// ```
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_execute_cmd(
+    handle: *mut CBoxHandle,
+    cmd: *const BoxliteCommand,
+    callback: Option<extern "C" fn(*const c_char, c_int, *mut c_void)>,
+    user_data: *mut c_void,
+    out_exit_code: *mut c_int,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    boxlite_ffi::ops::box_exec_cmd(handle, cmd, callback, user_data, out_exit_code, out_error)
+}
+
 /// Stop a box.
 ///
 /// # Arguments

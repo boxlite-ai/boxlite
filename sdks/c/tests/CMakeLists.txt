@@ -40,6 +40,7 @@ set(TEST_TARGETS
     test_streaming
     test_memory
     test_integration
+    test_execute_cmd
 )
 
 foreach(TARGET ${TEST_TARGETS})

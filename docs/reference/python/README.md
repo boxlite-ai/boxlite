@@ -306,7 +306,7 @@ SimpleBox(
 | Method | Signature | Description |
 |--------|-----------|-------------|
 | `start()` | `() -> Self` | Explicitly start the box (async) |
-| `exec()` | `(cmd, *args, env=None) -> ExecResult` | Execute command and wait (async) |
+| `exec()` | `(cmd, *args, env=None, user=None, timeout=None, cwd=None) -> ExecResult` | Execute command and wait (async) |
 | `info()` | `() -> BoxInfo` | Get box metadata |
 | `shutdown()` | `() -> None` | Shutdown and release resources |
 
@@ -317,6 +317,11 @@ async with SimpleBox(image="python:slim") as box:
     result = await box.exec("python", "-c", "print('Hello!')")
     print(result.stdout)   # "Hello!\n"
     print(result.exit_code)  # 0
+
+    # Per-command options
+    result = await box.exec("pwd", cwd="/tmp")         # working directory
+    result = await box.exec("whoami", user="nobody")    # run as user
+    result = await box.exec("sleep", "60", timeout=5)   # timeout in seconds
 ```
 
 ---

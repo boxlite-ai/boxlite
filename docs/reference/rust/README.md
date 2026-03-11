@@ -322,6 +322,7 @@ let cmd = BoxCommand::new("python3")
     .env("PYTHONPATH", "/app")
     .timeout(Duration::from_secs(30))
     .working_dir("/workspace")
+    .user("nobody")
     .tty(true);
 ```
 
@@ -335,6 +336,7 @@ let cmd = BoxCommand::new("python3")
 | `env` | `fn env(self, key: impl Into<String>, val: impl Into<String>) -> Self` | Set env var |
 | `timeout` | `fn timeout(self, timeout: Duration) -> Self` | Set run timeout |
 | `working_dir` | `fn working_dir(self, dir: impl Into<String>) -> Self` | Set working directory |
+| `user` | `fn user(self, user: impl Into<String>) -> Self` | Set execution user (e.g., `"nobody"`, `"1000:1000"`) |
 | `tty` | `fn tty(self, enable: bool) -> Self` | Enable pseudo-terminal |
 
 ### Execution

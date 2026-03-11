@@ -157,6 +157,9 @@ class SyncSimpleBox:
         cmd: str,
         *args: str,
         env: Optional[Dict[str, str]] = None,
+        user: Optional[str] = None,
+        timeout: Optional[float] = None,
+        cwd: Optional[str] = None,
     ) -> ExecResult:
         """
         Execute a command in the box synchronously.
@@ -165,6 +168,10 @@ class SyncSimpleBox:
             cmd: Command to run (e.g., "ls", "python")
             *args: Command arguments (e.g., "-l", "-a")
             env: Environment variables as dict
+            user: User to run as (format: <name|uid>[:<group|gid>], like docker exec --user).
+                  If None, uses the container's default user from image config.
+            timeout: Execution timeout in seconds (default: no timeout).
+            cwd: Working directory inside the container (default: container's configured workdir).
 
         Returns:
             ExecResult with exit_code, stdout, and stderr
@@ -185,7 +192,9 @@ class SyncSimpleBox:
         async_box = self._box._box
 
         async def _exec_and_collect():
-            execution = await async_box.exec(cmd, arg_list, env_list)
+            execution = await async_box.exec(
+                cmd, arg_list, env_list, user=user, timeout_secs=timeout, cwd=cwd
+            )
 
             stdout_lines = []
             stderr_lines = []

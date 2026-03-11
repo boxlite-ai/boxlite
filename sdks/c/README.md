@@ -285,7 +285,7 @@ void boxlite_simple_free(CBoxliteSimple* box);
 - ❌ Need streaming output callbacks
 - ❌ Custom volumes or networking
 - ❌ Multi-box orchestration
-- ❌ Advanced configuration (env vars, working dir, etc.)
+- ❌ Advanced configuration (custom JSON options)
 
 ### Native API
 
@@ -369,7 +369,7 @@ char* boxlite_box_id(CBoxHandle* handle);
 #### Command Execution
 
 ```c
-// Execute command with optional streaming callback
+// Simple: execute command with optional streaming callback
 BoxliteErrorCode boxlite_execute(
     CBoxHandle* handle,
     const char* command,
@@ -379,6 +379,40 @@ BoxliteErrorCode boxlite_execute(
     int* out_exit_code,
     CBoxliteError* out_error
 );
+
+// Structured: execute with full options (env, user, timeout, workdir)
+typedef struct BoxliteCommand {
+    const char* command;      // Required
+    const char* args_json;    // JSON array, or NULL
+    const char* env_json;     // JSON array of ["key","val"] pairs, or NULL
+    const char* workdir;      // Working directory, or NULL
+    const char* user;         // User spec (e.g., "nobody", "1000:1000"), or NULL
+    double timeout_secs;      // 0.0 = no timeout
+} BoxliteCommand;
+
+BoxliteErrorCode boxlite_execute_cmd(
+    CBoxHandle* handle,
+    const BoxliteCommand* cmd,
+    void (*callback)(const char* text, int is_stderr, void* user_data),
+    void* user_data,
+    int* out_exit_code,
+    CBoxliteError* out_error
+);
+```
+
+**Example: structured command with options**
+
+```c
+BoxliteCommand cmd = {
+    .command = "pwd",
+    .args_json = NULL,
+    .env_json = "[[\"MY_VAR\",\"hello\"]]",
+    .workdir = "/tmp",
+    .user = "nobody",
+    .timeout_secs = 30.0,
+};
+int exit_code;
+boxlite_execute_cmd(box, &cmd, my_callback, NULL, &exit_code, &error);
 ```
 
 #### Discovery & Introspection

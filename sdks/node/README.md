@@ -119,6 +119,14 @@ const box = new SimpleBox({
 const result = await box.exec('ls', '-la', '/');
 console.log(result.exitCode, result.stdout, result.stderr);
 
+// Execute with options (cwd, user, timeout)
+const pwdResult = await box.exec('pwd', [], undefined, {
+  cwd: '/tmp',
+  user: 'nobody',
+  timeoutSecs: 30,
+});
+console.log(pwdResult.stdout); // "/tmp\n"
+
 // Get box info
 console.log(box.id);    // ULID
 console.log(box.name);  // Optional name

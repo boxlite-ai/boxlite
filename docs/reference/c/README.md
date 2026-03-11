@@ -678,6 +678,54 @@ if (code == Ok) {
 
 ---
 
+#### boxlite_execute_cmd
+
+Execute a command using a structured command descriptor with all options (env, user, timeout, working directory).
+
+```c
+BoxliteErrorCode boxlite_execute_cmd(
+    CBoxHandle* handle,
+    const BoxliteCommand* cmd,
+    void (*callback)(const char* text, int is_stderr, void* user_data),
+    void* user_data,
+    int* out_exit_code,
+    CBoxliteError* out_error
+);
+```
+
+#### BoxliteCommand Structure
+
+```c
+typedef struct BoxliteCommand {
+    const char* command;      // Required: command to execute
+    const char* args_json;    // JSON array of arguments, or NULL
+    const char* env_json;     // JSON array of ["key","val"] pairs, or NULL
+    const char* workdir;      // Working directory, or NULL
+    const char* user;         // User spec (e.g., "nobody", "1000:1000"), or NULL
+    double timeout_secs;      // Timeout in seconds (0.0 = no timeout)
+} BoxliteCommand;
+```
+
+#### Example
+
+```c
+BoxliteCommand cmd = {
+    .command = "python",
+    .args_json = "[\"-c\", \"import os; print(os.getcwd())\"]",
+    .env_json = "[[\"MY_VAR\",\"hello\"]]",
+    .workdir = "/tmp",
+    .user = "nobody",
+    .timeout_secs = 30.0,
+};
+
+int exit_code = 0;
+BoxliteErrorCode code = boxlite_execute_cmd(
+    box, &cmd, output_handler, NULL, &exit_code, &error
+);
+```
+
+---
+
 ### Discovery & Introspection
 
 #### boxlite_list_info

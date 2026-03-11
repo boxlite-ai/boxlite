@@ -305,7 +305,8 @@ interface SimpleBoxOptions {
 |--------|-----------|-------------|
 | `getId()` | `() => Promise<string>` | Get box ID (async) |
 | `getInfo()` | `() => Promise<JsBoxInfo>` | Get box info (async) |
-| `exec()` | `(cmd, ...args) => Promise<ExecResult>` | Execute and wait |
+| `exec()` | `(cmd, ...args) => Promise<ExecResult>` | Execute and wait (variadic) |
+| `exec()` | `(cmd, args[], env?, options?) => Promise<ExecResult>` | Execute with options (array form) |
 | `stop()` | `() => Promise<void>` | Stop the box |
 | `[Symbol.asyncDispose]()` | `() => Promise<void>` | Async disposal |
 
@@ -322,10 +323,17 @@ const box = new SimpleBox({ image: 'alpine:latest' });
 try {
   const result = await box.exec('ls', '-la');
   console.log(result.stdout);
+
+  // Per-command options (array form)
+  const pwd = await box.exec('pwd', [], undefined, { cwd: '/tmp' });
+  const who = await box.exec('whoami', [], undefined, { user: 'nobody' });
+  const timed = await box.exec('sleep', ['60'], undefined, { timeoutSecs: 5 });
 } finally {
   await box.stop();
 }
 ```
+
+The `options` parameter accepts `{ cwd?: string; user?: string; timeoutSecs?: number }`.
 
 ---
 

@@ -441,24 +441,47 @@ export class SimpleBox {
   ): Promise<ExecResult>;
   async exec(
     cmd: string,
+    args: string[],
+    env: Record<string, string> | undefined,
+    options?: { cwd?: string; user?: string; timeoutSecs?: number },
+  ): Promise<ExecResult>;
+  async exec(
+    cmd: string,
     argsOrFirstArg?: string | string[],
     envOrSecondArg?: Record<string, string> | string,
+    optionsOrThirdArg?:
+      | { cwd?: string; user?: string; timeoutSecs?: number }
+      | string,
     ...restArgs: string[]
   ): Promise<ExecResult> {
     // Parse overloaded arguments
     let args: string[];
     let env: Record<string, string> | undefined;
+    let cwd: string | undefined;
+    let user: string | undefined;
+    let timeoutSecs: number | undefined;
 
     if (Array.isArray(argsOrFirstArg)) {
-      // exec(cmd, args[], env?)
+      // exec(cmd, args[], env?, options?)
       args = argsOrFirstArg;
       env = envOrSecondArg as Record<string, string> | undefined;
+      if (optionsOrThirdArg && typeof optionsOrThirdArg === "object") {
+        const opts = optionsOrThirdArg as {
+          cwd?: string;
+          user?: string;
+          timeoutSecs?: number;
+        };
+        cwd = opts.cwd;
+        user = opts.user;
+        timeoutSecs = opts.timeoutSecs;
+      }
     } else {
       // exec(cmd, ...args, env?)
       // Collect all arguments
       const allArgs: any[] = [
         argsOrFirstArg,
         envOrSecondArg,
+        optionsOrThirdArg,
         ...restArgs,
       ].filter((a) => a !== undefined);
 
@@ -482,7 +505,15 @@ export class SimpleBox {
 
     // Ensure box is created, then execute via Rust (returns Execution)
     const box = await this._ensureBox();
-    const execution: Execution = await box.exec(cmd, args, envArray, false);
+    const execution: Execution = await box.exec(
+      cmd,
+      args,
+      envArray,
+      false,
+      user,
+      timeoutSecs,
+      cwd,
+    );
 
     // Collect stdout and stderr
     const stdoutLines: string[] = [];
