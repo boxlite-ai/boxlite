@@ -48,6 +48,7 @@ pub struct JsBoxMetrics {
     pub bytes_sent_total: f64,
     /// Bytes received from this box (via stdout/stderr)
     pub bytes_received_total: f64,
+
     // Lifecycle timing
     /// Total time from create() call to LiteBox ready (milliseconds)
     pub total_create_duration_ms: Option<f64>,
