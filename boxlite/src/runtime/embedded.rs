@@ -31,14 +31,11 @@ include!(concat!(env!("OUT_DIR"), "/embedded_manifest.rs"));
 /// ```text
 /// EmbeddedRuntime::get()
 ///   ├─ manifest empty? → None
-///   ├─ .complete stamp exists? (fast path)
-///   │    └─ Ok(Self { dir })
-///   └─ slow path: extract to {dir}.extracting.{pid}/
-///      ├─ write all files
-///      ├─ macOS: sign_shim() [in private temp dir, before dir rename]
-///      ├─ write .complete stamp
+///   ├─ already extracted? → Ok(Self { dir })
+///   └─ extract to {dir}.extracting.{pid}/
+///      ├─ write all files + .complete stamp
 ///      ├─ atomic rename → dir
-///      ├─ cleanup stale versions (TTL 7d)
+///      ├─ cleanup stale versions (TTL 30d)
 ///      └─ Ok(Self { dir })
 /// ```
 pub struct EmbeddedRuntime {
@@ -87,8 +84,6 @@ impl EmbeddedRuntime {
         let dir = Self::versioned_dir()?;
 
         // Fast path: already extracted by this or a previous process.
-        // The shim is already signed — signing happens in the PID-scoped temp dir
-        // before the atomic rename, so any visible cache directory has a signed shim.
         let stamp = dir.join(".complete");
         if stamp.exists() {
             // Refresh mtime so stale cleanup measures "last used", not "first extracted"
@@ -110,14 +105,6 @@ impl EmbeddedRuntime {
             #[cfg(unix)]
             Self::set_permissions(&path, name)?;
         }
-
-        // macOS: sign shim with hypervisor entitlement after extraction.
-        // The embedded bytes are from an unsigned build artifact; the
-        // Hypervisor.framework requires com.apple.security.hypervisor.
-        // Signing happens in the PID-scoped temp dir before the atomic rename,
-        // so no concurrent reader can observe an unsigned binary.
-        #[cfg(target_os = "macos")]
-        Self::sign_shim(&tmp)?;
 
         // Stamp marks extraction as complete — checked by the fast path above.
         std::fs::write(tmp.join(".complete"), crate::VERSION)
@@ -222,63 +209,6 @@ impl EmbeddedRuntime {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).map_err(|e| {
             BoxliteError::Storage(format!("chmod {:o} {}: {}", mode, path.display(), e))
         })
-    }
-
-    /// Sign boxlite-shim with hypervisor entitlement (macOS only).
-    ///
-    /// The embedded shim bytes come from an unsigned build artifact.
-    /// macOS Hypervisor.framework requires `com.apple.security.hypervisor`
-    /// entitlement, so we ad-hoc sign after extraction.
-    ///
-    /// Called only from the slow path, in a PID-scoped temp dir that is
-    /// private to this process (before the atomic rename to the versioned dir).
-    /// No concurrent reader can observe the signing in progress.
-    #[cfg(target_os = "macos")]
-    fn sign_shim(dir: &Path) -> BoxliteResult<()> {
-        let shim = dir.join("boxlite-shim");
-        if !shim.exists() {
-            return Ok(());
-        }
-
-        let entitlements = "\
-<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
-<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
-<plist version=\"1.0\">\n\
-<dict>\n\
-\t<key>com.apple.security.hypervisor</key>\n\
-\t<true/>\n\
-\t<key>com.apple.security.cs.disable-library-validation</key>\n\
-\t<true/>\n\
-</dict>\n\
-</plist>";
-
-        // Write entitlements to a temp file
-        let ent_path = dir.join(".entitlements.plist");
-        std::fs::write(&ent_path, entitlements)
-            .map_err(|e| BoxliteError::Storage(format!("write entitlements: {}", e)))?;
-
-        let output = std::process::Command::new("codesign")
-            .args(["-s", "-", "--force", "--entitlements"])
-            .arg(&ent_path)
-            .arg(&shim)
-            .output()
-            .map_err(|e| BoxliteError::Storage(format!("codesign: {}", e)))?;
-
-        // Clean up entitlements file
-        let _ = std::fs::remove_file(&ent_path);
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(BoxliteError::Storage(format!(
-                "Failed to sign shim at {}: {}. \
-                 macOS Hypervisor.framework requires com.apple.security.hypervisor entitlement.",
-                shim.display(),
-                stderr.trim()
-            )));
-        }
-
-        tracing::info!(shim = %shim.display(), "Signed extracted shim with hypervisor entitlement");
-        Ok(())
     }
 }
 
