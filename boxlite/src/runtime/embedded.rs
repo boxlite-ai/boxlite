@@ -31,11 +31,15 @@ include!(concat!(env!("OUT_DIR"), "/embedded_manifest.rs"));
 /// ```text
 /// EmbeddedRuntime::get()
 ///   ├─ manifest empty? → None
-///   ├─ already extracted? → Ok(Self { dir })
-///   └─ extract to {dir}.extracting.{pid}/
-///      ├─ write all files + .complete stamp
+///   ├─ .complete stamp exists? (fast path)
+///   │    ├─ macOS: shim_needs_signing()? → sign_shim_atomic() [migration only]
+///   │    └─ Ok(Self { dir })
+///   └─ slow path: extract to {dir}.extracting.{pid}/
+///      ├─ write all files
+///      ├─ macOS: sign_shim_atomic() [in private temp dir, before dir rename]
+///      ├─ write .complete stamp
 ///      ├─ atomic rename → dir
-///      ├─ cleanup stale versions (TTL 30d)
+///      ├─ cleanup stale versions (TTL 7d)
 ///      └─ Ok(Self { dir })
 /// ```
 pub struct EmbeddedRuntime {
@@ -86,11 +90,14 @@ impl EmbeddedRuntime {
         // Fast path: already extracted by this or a previous process.
         let stamp = dir.join(".complete");
         if stamp.exists() {
-            // Ensure the shim is signed even on cache hits — a previous build
-            // may have cached the runtime before signing was added.
-            // codesign --force is idempotent (re-signs if already signed).
+            // Migration: sign the shim if a previous extraction cached it without
+            // the hypervisor entitlement (caches created before signing was added).
+            // Only runs when the entitlement is actually missing — skips the re-sign
+            // on all subsequent calls, eliminating the concurrent in-place-write race.
             #[cfg(target_os = "macos")]
-            Self::sign_shim(&dir)?;
+            if Self::shim_needs_signing(&dir) {
+                Self::sign_shim_atomic(&dir)?;
+            }
 
             // Refresh mtime so stale cleanup measures "last used", not "first extracted"
             let now = filetime::FileTime::now();
@@ -115,8 +122,10 @@ impl EmbeddedRuntime {
         // macOS: sign shim with hypervisor entitlement after extraction.
         // The embedded bytes are from an unsigned build artifact; the
         // Hypervisor.framework requires com.apple.security.hypervisor.
+        // Signing happens in the PID-scoped temp dir before the atomic rename,
+        // so no concurrent reader can observe an unsigned binary.
         #[cfg(target_os = "macos")]
-        Self::sign_shim(&tmp)?;
+        Self::sign_shim_atomic(&tmp)?;
 
         // Stamp marks extraction as complete — checked by the fast path above.
         std::fs::write(tmp.join(".complete"), crate::VERSION)
@@ -223,13 +232,52 @@ impl EmbeddedRuntime {
         })
     }
 
-    /// Sign boxlite-shim with hypervisor entitlement (macOS only).
+    /// Check whether boxlite-shim is missing the hypervisor entitlement (macOS only).
+    ///
+    /// Returns `true` if the shim exists but lacks `com.apple.security.hypervisor`,
+    /// indicating it was cached before signing was added. Returns `false` when the
+    /// shim is already properly signed (the common case after first extraction).
+    ///
+    /// This check avoids the concurrent in-place-write race: we only call
+    /// [`sign_shim_atomic`] when the entitlement is actually absent, not on every
+    /// process startup.
+    #[cfg(target_os = "macos")]
+    fn shim_needs_signing(dir: &Path) -> bool {
+        let shim = dir.join("boxlite-shim");
+        if !shim.exists() {
+            return false;
+        }
+        // `codesign --display --entitlements` exits 0 if signed, non-zero if not.
+        // We pipe through `grep` to check specifically for the hypervisor key.
+        let signed = std::process::Command::new("codesign")
+            .args(["--display", "--entitlements", "-", "--xml"])
+            .arg(&shim)
+            .output()
+            .is_ok_and(|out| {
+                out.status.success()
+                    && String::from_utf8_lossy(&out.stdout)
+                        .contains("com.apple.security.hypervisor")
+            });
+        !signed
+    }
+
+    /// Sign boxlite-shim with hypervisor entitlement using an atomic file replace (macOS only).
     ///
     /// The embedded shim bytes come from an unsigned build artifact.
-    /// macOS Hypervisor.framework requires `com.apple.security.hypervisor`
-    /// entitlement, so we ad-hoc sign after extraction.
+    /// macOS Hypervisor.framework requires `com.apple.security.hypervisor`.
+    ///
+    /// # Atomicity
+    ///
+    /// Unlike `codesign --force` in-place, this function signs to a PID-scoped
+    /// temporary file in the same directory, then atomically `rename()`s it over
+    /// the original. Concurrent readers always see either the old binary or the
+    /// new signed binary — never an intermediate invalid state.
+    ///
+    /// When called from the slow path (extraction to a PID-scoped temp dir before
+    /// the dir-level atomic rename), both `dir` and the shim are private to this
+    /// process, so the temp file avoidance is an extra layer of safety.
     #[cfg(target_os = "macos")]
-    fn sign_shim(dir: &Path) -> BoxliteResult<()> {
+    fn sign_shim_atomic(dir: &Path) -> BoxliteResult<()> {
         let shim = dir.join("boxlite-shim");
         if !shim.exists() {
             return Ok(());
@@ -247,22 +295,38 @@ impl EmbeddedRuntime {
 </dict>\n\
 </plist>";
 
-        // Write entitlements to a temp file
-        let ent_path = dir.join(".entitlements.plist");
+        // Use a PID-scoped temp name so concurrent processes don't collide.
+        let pid = std::process::id();
+        let ent_path = dir.join(format!(".entitlements.{pid}.plist"));
+        let signed_tmp = dir.join(format!("boxlite-shim.signing.{pid}"));
+
+        // Copy shim to temp path — codesign will sign this copy.
+        std::fs::copy(&shim, &signed_tmp).map_err(|e| {
+            BoxliteError::Storage(format!(
+                "copy shim for signing {} → {}: {}",
+                shim.display(),
+                signed_tmp.display(),
+                e
+            ))
+        })?;
+
+        // Write entitlements plist.
         std::fs::write(&ent_path, entitlements)
             .map_err(|e| BoxliteError::Storage(format!("write entitlements: {}", e)))?;
 
         let output = std::process::Command::new("codesign")
             .args(["-s", "-", "--force", "--entitlements"])
             .arg(&ent_path)
-            .arg(&shim)
+            .arg(&signed_tmp)
             .output()
-            .map_err(|e| BoxliteError::Storage(format!("codesign: {}", e)))?;
+            .map_err(|e| BoxliteError::Storage(format!("codesign: {}", e)));
 
-        // Clean up entitlements file
+        // Clean up entitlements file regardless of outcome.
         let _ = std::fs::remove_file(&ent_path);
 
+        let output = output?;
         if !output.status.success() {
+            let _ = std::fs::remove_file(&signed_tmp);
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(BoxliteError::Storage(format!(
                 "Failed to sign shim at {}: {}. \
@@ -272,7 +336,19 @@ impl EmbeddedRuntime {
             )));
         }
 
-        tracing::info!(shim = %shim.display(), "Signed extracted shim with hypervisor entitlement");
+        // Atomic replace: readers always see either the old or the new binary.
+        // On APFS and HFS+, rename() is atomic at the VFS layer.
+        std::fs::rename(&signed_tmp, &shim).map_err(|e| {
+            let _ = std::fs::remove_file(&signed_tmp);
+            BoxliteError::Storage(format!(
+                "atomic replace {} → {}: {}",
+                signed_tmp.display(),
+                shim.display(),
+                e
+            ))
+        })?;
+
+        tracing::info!(shim = %shim.display(), "Signed shim with hypervisor entitlement");
         Ok(())
     }
 }
@@ -334,5 +410,82 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// shim_needs_signing returns false when no shim binary exists.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn shim_needs_signing_returns_false_when_no_shim() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!EmbeddedRuntime::shim_needs_signing(dir.path()));
+    }
+
+    /// shim_needs_signing returns true for an unsigned binary (no code signature).
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn shim_needs_signing_returns_true_for_unsigned_binary() {
+        let dir = tempfile::tempdir().unwrap();
+        // Write the real shim binary (which is already signed with hypervisor entitlement)
+        // but use /bin/ls (a system binary without the hypervisor entitlement) as a stand-in
+        // for an unsigned/unentitled binary.
+        let shim = dir.path().join("boxlite-shim");
+        std::fs::copy("/bin/ls", &shim).unwrap();
+        // /bin/ls has a valid code signature but NOT com.apple.security.hypervisor
+        assert!(EmbeddedRuntime::shim_needs_signing(dir.path()));
+    }
+
+    /// sign_shim_atomic writes a properly signed binary and the original path is
+    /// replaced atomically — verified by reading entitlements after signing.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn sign_shim_atomic_produces_signed_binary_with_entitlement() {
+        let dir = tempfile::tempdir().unwrap();
+        let shim = dir.path().join("boxlite-shim");
+        // Start with /bin/ls which has no hypervisor entitlement.
+        std::fs::copy("/bin/ls", &shim).unwrap();
+
+        EmbeddedRuntime::sign_shim_atomic(dir.path()).unwrap();
+
+        // After signing, shim_needs_signing must return false.
+        assert!(
+            !EmbeddedRuntime::shim_needs_signing(dir.path()),
+            "shim_needs_signing should be false after sign_shim_atomic"
+        );
+
+        // Verify hypervisor entitlement is present via codesign.
+        let out = std::process::Command::new("codesign")
+            .args(["--display", "--entitlements", "-", "--xml"])
+            .arg(&shim)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "codesign should succeed");
+        let entitlements = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            entitlements.contains("com.apple.security.hypervisor"),
+            "Hypervisor entitlement should be present after signing"
+        );
+    }
+
+    /// sign_shim_atomic leaves no stray temp files (*.signing.PID) on success.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn sign_shim_atomic_cleans_up_temp_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let shim = dir.path().join("boxlite-shim");
+        std::fs::copy("/bin/ls", &shim).unwrap();
+
+        EmbeddedRuntime::sign_shim_atomic(dir.path()).unwrap();
+
+        // Only boxlite-shim should remain; no .signing.* or .entitlements.* files.
+        let entries: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .collect();
+        assert_eq!(entries.len(), 1, "Only boxlite-shim should remain");
+        assert_eq!(
+            entries[0].file_name(),
+            "boxlite-shim",
+            "Remaining file should be boxlite-shim"
+        );
     }
 }

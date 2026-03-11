@@ -99,12 +99,70 @@ pub fn copy_shim_to_box(shim_path: &Path, box_dir: &Path) -> BoxliteResult<PathB
         );
     }
 
+    // macOS: re-sign the copied shim with the hypervisor entitlement.
+    // File copy strips code signatures; Hypervisor.framework requires
+    // com.apple.security.hypervisor or the kernel kills the process (SIGKILL).
+    // `codesign --force` is idempotent — safe to call on already-signed binaries.
+    #[cfg(target_os = "macos")]
+    sign_copied_shim(&dest_shim)?;
+
     // Copy libkrunfw so dlopen can find it via the shim's rpath.
     if let Some(shim_dir) = shim_path.parent() {
         copy_libkrunfw(shim_dir, &bin_dir)?;
     }
 
     Ok(dest_shim)
+}
+
+/// Re-sign a copied shim binary with the hypervisor entitlement (macOS only).
+///
+/// macOS file copy (both `fs::copy` and reflink) strips code signatures.
+/// Hypervisor.framework requires `com.apple.security.hypervisor`, so the
+/// copied binary must be re-signed before it can create a VM.
+///
+/// Uses `codesign --force` which is idempotent (re-signs if already signed).
+#[cfg(target_os = "macos")]
+fn sign_copied_shim(shim_path: &Path) -> BoxliteResult<()> {
+    let entitlements = "\
+<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
+<plist version=\"1.0\">\n\
+<dict>\n\
+\t<key>com.apple.security.hypervisor</key>\n\
+\t<true/>\n\
+\t<key>com.apple.security.cs.disable-library-validation</key>\n\
+\t<true/>\n\
+</dict>\n\
+</plist>";
+
+    // Write entitlements to a temp file next to the shim.
+    let ent_path = shim_path.with_extension("entitlements.plist");
+    std::fs::write(&ent_path, entitlements)
+        .map_err(|e| BoxliteError::Storage(format!("write entitlements: {}", e)))?;
+
+    let output = std::process::Command::new("codesign")
+        .args(["-s", "-", "--force", "--entitlements"])
+        .arg(&ent_path)
+        .arg(shim_path)
+        .output()
+        .map_err(|e| BoxliteError::Storage(format!("codesign: {}", e)));
+
+    // Clean up entitlements file regardless of outcome.
+    let _ = std::fs::remove_file(&ent_path);
+
+    let output = output?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(BoxliteError::Storage(format!(
+            "Failed to sign copied shim at {}: {}. \
+             macOS Hypervisor.framework requires com.apple.security.hypervisor entitlement.",
+            shim_path.display(),
+            stderr.trim()
+        )));
+    }
+
+    tracing::debug!(shim = %shim_path.display(), "Re-signed copied shim with hypervisor entitlement");
+    Ok(())
 }
 
 /// Copy libkrunfw from the shim's directory to `dest_dir`.
