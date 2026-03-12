@@ -104,7 +104,7 @@ jobs:
           fi
 
           export SKIP_GUEST_BUILD=1
-          export PATH="$CARGO_HOME/bin:$PATH"
+          export PATH="/usr/local/go/bin:$CARGO_HOME/bin:$PATH"
           make setup:build runtime
 
           command -v sccache &>/dev/null && sccache --show-stats || true
