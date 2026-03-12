@@ -24,7 +24,8 @@ void test_runtime_creation() {
 
   CBoxliteRuntime *runtime = NULL;
   CBoxliteError error = {0};
-  BoxliteErrorCode code = boxlite_runtime_new(NULL, NULL, &runtime, &error);
+  BoxliteErrorCode code = boxlite_runtime_new("/tmp/boxlite-test-basic-create",
+                                              NULL, &runtime, &error);
 
   assert(code == Ok);
   assert(runtime != NULL);
@@ -57,8 +58,8 @@ void test_runtime_with_registries() {
   CBoxliteError error = {0};
   const char *registries = "[\"ghcr.io\", \"docker.io\"]";
 
-  BoxliteErrorCode code =
-      boxlite_runtime_new(NULL, registries, &runtime, &error);
+  BoxliteErrorCode code = boxlite_runtime_new(
+      "/tmp/boxlite-test-basic-registries", registries, &runtime, &error);
 
   assert(code == Ok);
   assert(runtime != NULL);
@@ -72,7 +73,8 @@ void test_runtime_shutdown() {
 
   CBoxliteRuntime *runtime = NULL;
   CBoxliteError error = {0};
-  BoxliteErrorCode code = boxlite_runtime_new(NULL, NULL, &runtime, &error);
+  BoxliteErrorCode code = boxlite_runtime_new(
+      "/tmp/boxlite-test-basic-shutdown", NULL, &runtime, &error);
   assert(code == Ok);
   assert(runtime != NULL);
 
@@ -92,8 +94,8 @@ void test_error_string_cleanup() {
   CBoxliteError error = {0};
   const char *invalid_json = "{invalid json";
 
-  BoxliteErrorCode code =
-      boxlite_runtime_new(NULL, invalid_json, &runtime, &error);
+  BoxliteErrorCode code = boxlite_runtime_new("/tmp/boxlite-test-basic-error",
+                                              invalid_json, &runtime, &error);
 
   assert(code != Ok);
   assert(runtime == NULL);
