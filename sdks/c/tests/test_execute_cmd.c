@@ -20,12 +20,12 @@ static void capture_stdout_callback(const char *text, int is_stderr,
                                     void *user_data) {
   (void)user_data;
   if (!is_stderr && text) {
-    int len = (int)strlen(text);
-    if (captured_stdout_len + len < (int)sizeof(captured_stdout) - 1) {
-      memcpy(captured_stdout + captured_stdout_len, text, len);
-      captured_stdout_len += len;
-      captured_stdout[captured_stdout_len] = '\0';
+    size_t i = 0;
+    while (text[i] != '\0' &&
+           captured_stdout_len < (int)sizeof(captured_stdout) - 1) {
+      captured_stdout[captured_stdout_len++] = text[i++];
     }
+    captured_stdout[captured_stdout_len] = '\0';
   }
 }
 
@@ -40,8 +40,18 @@ static void reset_capture(void) {
 static void setup_box(const char *test_name, CBoxliteRuntime **out_runtime,
                       CBoxHandle **out_box) {
   CBoxliteError error = {0};
+  const char *prefix = "/tmp/boxlite-test-cmd-";
   char temp_dir[256];
-  snprintf(temp_dir, sizeof(temp_dir), "/tmp/boxlite-test-cmd-%s", test_name);
+  size_t i = 0;
+  while (prefix[i] != '\0' && i < sizeof(temp_dir) - 1) {
+    temp_dir[i] = prefix[i];
+    i++;
+  }
+  size_t j = 0;
+  while (test_name[j] != '\0' && i < sizeof(temp_dir) - 1) {
+    temp_dir[i++] = test_name[j++];
+  }
+  temp_dir[i] = '\0';
 
   BoxliteErrorCode code =
       boxlite_runtime_new(temp_dir, NULL, out_runtime, &error);
