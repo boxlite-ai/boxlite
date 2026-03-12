@@ -45,6 +45,11 @@ static void setup_box(const char *test_name, CBoxliteRuntime **out_runtime,
 
   BoxliteErrorCode code =
       boxlite_runtime_new(temp_dir, NULL, out_runtime, &error);
+  if (code != Ok) {
+    printf("  ✗ Failed to create runtime: code=%d, message=%s\n", error.code,
+           error.message ? error.message : "(null)");
+    boxlite_error_free(&error);
+  }
   assert(code == Ok && "Failed to create runtime");
 
   const char *options =
@@ -52,6 +57,11 @@ static void setup_box(const char *test_name, CBoxliteRuntime **out_runtime,
       "\"network\":\"Isolated\",\"ports\":[],\"auto_remove\":false}";
 
   code = boxlite_create_box(*out_runtime, options, out_box, &error);
+  if (code != Ok) {
+    printf("  ✗ Failed to create box: code=%d, message=%s\n", error.code,
+           error.message ? error.message : "(null)");
+    boxlite_error_free(&error);
+  }
   assert(code == Ok && "Failed to create box");
 }
 
@@ -85,6 +95,11 @@ void test_execute_cmd_basic(void) {
   BoxliteErrorCode code = boxlite_execute_cmd(
       box, &cmd, capture_stdout_callback, NULL, &exit_code, &error);
 
+  if (code != Ok) {
+    printf("  ✗ Error executing command: code=%d, message=%s\n", error.code,
+           error.message ? error.message : "(null)");
+    boxlite_error_free(&error);
+  }
   assert(code == Ok);
   assert(exit_code == 0);
   assert(strstr(captured_stdout, "hello") != NULL);
@@ -114,6 +129,11 @@ void test_execute_cmd_with_workdir(void) {
   BoxliteErrorCode code = boxlite_execute_cmd(
       box, &cmd, capture_stdout_callback, NULL, &exit_code, &error);
 
+  if (code != Ok) {
+    printf("  ✗ Error executing command: code=%d, message=%s\n", error.code,
+           error.message ? error.message : "(null)");
+    boxlite_error_free(&error);
+  }
   assert(code == Ok);
   assert(exit_code == 0);
   assert(strstr(captured_stdout, "/tmp") != NULL);
@@ -142,6 +162,11 @@ void test_execute_cmd_with_env(void) {
   BoxliteErrorCode code = boxlite_execute_cmd(
       box, &cmd, capture_stdout_callback, NULL, &exit_code, &error);
 
+  if (code != Ok) {
+    printf("  ✗ Error executing command: code=%d, message=%s\n", error.code,
+           error.message ? error.message : "(null)");
+    boxlite_error_free(&error);
+  }
   assert(code == Ok);
   assert(exit_code == 0);
   assert(strstr(captured_stdout, "FOO=bar") != NULL);
@@ -170,6 +195,11 @@ void test_execute_cmd_with_user(void) {
   BoxliteErrorCode code = boxlite_execute_cmd(
       box, &cmd, capture_stdout_callback, NULL, &exit_code, &error);
 
+  if (code != Ok) {
+    printf("  ✗ Error executing command: code=%d, message=%s\n", error.code,
+           error.message ? error.message : "(null)");
+    boxlite_error_free(&error);
+  }
   assert(code == Ok);
   assert(exit_code == 0);
   assert(strstr(captured_stdout, "nobody") != NULL);
@@ -229,6 +259,11 @@ void test_execute_cmd_null_optional_fields(void) {
   BoxliteErrorCode code = boxlite_execute_cmd(
       box, &cmd, capture_stdout_callback, NULL, &exit_code, &error);
 
+  if (code != Ok) {
+    printf("  ✗ Error executing command: code=%d, message=%s\n", error.code,
+           error.message ? error.message : "(null)");
+    boxlite_error_free(&error);
+  }
   assert(code == Ok);
   assert(exit_code == 0);
   printf("  ✓ All-NULL optional fields works (exit code: %d)\n", exit_code);

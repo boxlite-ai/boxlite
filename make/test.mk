@@ -37,7 +37,8 @@ test\:changed\:node:
 	@$(MAKE) test:all:node
 
 test\:changed\:c:
-	@$(MAKE) test:all:c
+	@$(MAKE) test:unit:c
+	@$(MAKE) test:integration:c
 
 test\:changed\:go:
 	@$(MAKE) test:unit:go
@@ -88,13 +89,15 @@ test\:integration\:core:
 	@echo ""
 	$(MAKE) test:integration:cli
 
-# SDK unit suites: Python unit + Node unit + Go unit.
+# SDK unit suites: Python unit + Node unit + C unit + Go unit.
 test\:unit\:sdk:
-	@echo "── SDK unit suites (python, node, go) ──"
+	@echo "── SDK unit suites (python, node, c, go) ──"
 	@echo ""
 	$(MAKE) test:unit:python
 	@echo ""
 	$(MAKE) test:unit:node
+	@echo ""
+	$(MAKE) test:unit:c
 	@echo ""
 	$(MAKE) test:unit:go
 
@@ -106,7 +109,7 @@ test\:integration\:sdk:
 	@echo ""
 	$(MAKE) test:integration:node
 	@echo ""
-	$(MAKE) test:all:c
+	$(MAKE) test:integration:c
 
 # Rust unit tests (parallel via nextest, fallback to serial cargo test).
 # --no-default-features disables gvproxy-backend to avoid Go runtime link issues.
@@ -198,14 +201,28 @@ test\:all\:node:
 	@$(MAKE) test:unit:node
 	@$(MAKE) test:integration:node
 
-# C SDK test suite (CMake + CTest).
-test\:all\:c:
-	@echo "🧪 Running C SDK tests (CMake/CTest)..."
+# C SDK unit tests (no VM required).
+test\:unit\:c:
+	@echo "🧪 Running C SDK unit tests..."
 	@$(MAKE) dev:c
 	@mkdir -p sdks/c/tests/build
 	@cd sdks/c/tests/build && cmake ..
 	@cd sdks/c/tests/build && cmake --build . -j
-	@cd sdks/c/tests/build && ctest --verbose --output-on-failure
+	@cd sdks/c/tests/build && ctest --verbose --output-on-failure -L unit
+
+# C SDK integration tests (requires VM environment).
+test\:integration\:c:
+	@echo "🧪 Running C SDK integration tests (requires VM)..."
+	@$(MAKE) dev:c
+	@mkdir -p sdks/c/tests/build
+	@cd sdks/c/tests/build && cmake ..
+	@cd sdks/c/tests/build && cmake --build . -j
+	@cd sdks/c/tests/build && ctest --verbose --output-on-failure -L integration
+
+# C SDK full suite.
+test\:all\:c:
+	@$(MAKE) test:unit:c
+	@$(MAKE) test:integration:c
 
 # Go SDK unit tests.
 test\:unit\:go:
