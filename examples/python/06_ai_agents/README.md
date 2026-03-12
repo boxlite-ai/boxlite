@@ -4,7 +4,8 @@ Using BoxLite as a sandbox for AI agent workflows.
 
 | File | Description |
 |------|-------------|
-| `drive_box_with_llm.py` | Let an LLM drive a SimpleBox via tool-use loop |
+| `drive_box_with_llm.py` | Let an LLM drive a SimpleBox via tool-use loop (OpenAI) |
+| `drive_box_with_minimax.py` | Let MiniMax M2.5 drive a SimpleBox via tool-use loop |
 | `use_skillbox.py` | Run Claude Code CLI with skills inside a box |
 | `chat_with_claude.py` | Multi-turn Claude conversation via stdin JSON protocol |
 | `order_starbucks.py` | End-to-end agent: order Starbucks via browser automation |
