@@ -1,6 +1,6 @@
 [project]
 name = "boxlite"
-version = "0.6.0"
+version = "0.7.0"
 description = "Python bindings for Boxlite runtime"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -95,7 +95,7 @@ before-all = ["""
     fi
 
     # Run setup script (installs dependencies, such as Rust, Make, etc.)
-    make setup
+    make setup:build
 
     # Source cargo env (Rust may have just been installed)
     [ -f "$HOME/.cargo/env" ] && source "$HOME/.cargo/env"
