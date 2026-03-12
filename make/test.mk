@@ -178,7 +178,9 @@ test\:unit\:python: _ensure-python-deps
 test\:integration\:python:
 	@$(MAKE) dev:python
 	@echo "🧪 Running Python SDK integration tests..."
-	@. .venv/bin/activate && cd sdks/python && python -m pytest tests/ -v -m "integration"
+	@BOXLITE_HOME=$$(mktemp -d /tmp/boxlite-test-python-XXXXXX) && \
+	 trap "rm -rf $$BOXLITE_HOME" EXIT && \
+	 . .venv/bin/activate && cd sdks/python && BOXLITE_HOME=$$BOXLITE_HOME python -m pytest tests/ -v -m "integration"
 
 # Python SDK full suite.
 test\:all\:python:
