@@ -186,9 +186,24 @@ install_go_from_official() {
     # Ensure /usr/local/go/bin is in PATH for this session
     export PATH="/usr/local/go/bin:$PATH"
 
+    # Persist PATH for future shells
+    local path_line='export PATH="/usr/local/go/bin:$PATH"'
+    local actual_user="${SUDO_USER:-$USER}"
+    local user_home
+    user_home=$(eval echo "~$actual_user")
+
+    for profile in "$user_home/.profile" "$user_home/.bashrc"; do
+        if [ -f "$profile" ] && ! grep -q '/usr/local/go/bin' "$profile"; then
+            echo "" >> "$profile"
+            echo "# Added by boxlite setup — Go from go.dev" >> "$profile"
+            echo "$path_line" >> "$profile"
+        fi
+    done
+
     local installed_version
     installed_version=$(go version | awk '{print $3}' | sed 's/go//')
     print_success "Go $installed_version installed"
+    print_info "Run 'source ~/.profile' or open a new terminal to use Go everywhere"
 }
 
 # Setup Go with version validation.
