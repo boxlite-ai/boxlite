@@ -112,7 +112,7 @@ test\:integration\:sdk:
 	$(MAKE) test:integration:c
 
 # Rust unit tests (parallel via nextest, fallback to serial cargo test).
-# --no-default-features disables gvproxy-backend to avoid Go runtime link issues.
+# --no-default-features disables gvproxy to avoid Go runtime link issues.
 test\:unit\:rust:
 	@echo "🧪 Running Rust unit tests..."
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
@@ -141,10 +141,10 @@ test\:warm-cache\:rust: runtime\:debug
 test\:integration\:rust: runtime\:debug test\:warm-cache\:rust
 	@echo "🧪 Running Rust integration tests (requires VM)..."
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
-		cargo nextest run -p boxlite --features link-krun --test '*' --no-fail-fast --profile vm \
+		cargo nextest run -p boxlite --features krun,gvproxy --test '*' --no-fail-fast --profile vm \
 			$(if $(FILTER),-E 'test(~$(FILTER))',); \
 	else \
-		cargo test -p boxlite --features link-krun --test '*' --no-fail-fast -- --test-threads=1 --nocapture \
+		cargo test -p boxlite --features krun,gvproxy --test '*' --no-fail-fast -- --test-threads=1 --nocapture \
 			$(if $(FILTER),$(FILTER),); \
 	fi
 

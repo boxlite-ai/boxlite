@@ -11,7 +11,7 @@ pub mod exit_info;
 pub mod factory;
 pub mod guest_check;
 pub mod host_check;
-#[cfg(feature = "link-krun")]
+#[cfg(feature = "krun")]
 pub mod krun;
 pub mod registry;
 

@@ -12,16 +12,16 @@ use std::path::PathBuf;
 
 pub mod constants;
 
-#[cfg(feature = "libslirp-backend")]
+#[cfg(feature = "libslirp")]
 mod libslirp;
 
-#[cfg(feature = "gvproxy-backend")]
+#[cfg(feature = "gvproxy")]
 pub mod gvproxy;
 
-#[cfg(feature = "libslirp-backend")]
+#[cfg(feature = "libslirp")]
 pub use libslirp::LibslirpBackend;
 
-#[cfg(feature = "gvproxy-backend")]
+#[cfg(feature = "gvproxy")]
 pub use gvproxy::GvisorTapBackend;
 
 /// How the Box connects to the network backend.
@@ -124,15 +124,15 @@ impl NetworkBackendFactory {
     /// Create an appropriate network backend based on configuration.
     ///
     /// Backend selection (in priority order):
-    /// 1. gvisor-tap-vsock (when gvproxy-backend feature is enabled)
-    /// 2. libslirp (when libslirp-backend feature is enabled)
+    /// 1. gvisor-tap-vsock (when gvproxy feature is enabled)
+    /// 2. libslirp (when libslirp feature is enabled)
     /// 3. None (no backend features enabled)
     ///
     /// Returns None when no backend features are enabled, which means the
     /// engine will use its default net implementation.
     pub fn create(config: NetworkBackendConfig) -> BoxliteResult<Option<Box<dyn NetworkBackend>>> {
         // Priority 1: gvisor-tap-vsock
-        #[cfg(feature = "gvproxy-backend")]
+        #[cfg(feature = "gvproxy")]
         {
             tracing::info!("Using gvisor-tap-vsock backend");
             let backend = GvisorTapBackend::new(config)?;
@@ -140,7 +140,7 @@ impl NetworkBackendFactory {
         }
 
         // Priority 2: libslirp
-        #[cfg(all(feature = "libslirp-backend", not(feature = "gvproxy-backend")))]
+        #[cfg(all(feature = "libslirp", not(feature = "gvproxy")))]
         {
             tracing::info!("Using libslirp backend");
             let backend = LibslirpBackend::new(config)?;
@@ -148,7 +148,7 @@ impl NetworkBackendFactory {
         }
 
         // No backend: engine will use its default net
-        #[cfg(all(not(feature = "libslirp-backend"), not(feature = "gvproxy-backend")))]
+        #[cfg(all(not(feature = "libslirp"), not(feature = "gvproxy")))]
         {
             let _ = config; // Unused when no backend features enabled
             tracing::info!("No network backend - engine will use default net");

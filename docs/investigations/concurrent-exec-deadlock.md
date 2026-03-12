@@ -185,7 +185,7 @@ concurrent `exec("echo hello_N")` RPCs to the same VM and waits for all to compl
 
 ```bash
 for i in $(seq 1 10); do
-  cargo test -p boxlite --features link-krun \
+  cargo test -p boxlite --features krun \
     --test execution_shutdown test_concurrent_exec_high_concurrency \
     -- --nocapture 2>&1
 done

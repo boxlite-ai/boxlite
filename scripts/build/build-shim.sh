@@ -85,8 +85,8 @@ build_shim_binary() {
 
     # Shim doesn't use embedded-runtime (it IS the binary that gets embedded).
     # Disable it to avoid the chicken-and-egg: can't embed shim while building shim.
-    # link-krun: statically link libkrun.a (only shim needs this, not boxlite-cli)
-    local features="--no-default-features --features gvproxy-backend,link-krun"
+    # krun: statically link libkrun.a (only shim needs this, not boxlite-cli)
+    local features="--no-default-features --features gvproxy,krun"
 
     if [ "$OS" = "linux" ]; then
         # Go c-archive crashes with musl TLS; use glibc + crt-static instead.

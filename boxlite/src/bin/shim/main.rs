@@ -28,7 +28,7 @@ use crash_capture::CrashCapture;
 #[allow(unused_imports)]
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
-#[cfg(feature = "gvproxy-backend")]
+#[cfg(feature = "gvproxy")]
 use boxlite::net::{ConnectionType, NetworkBackendEndpoint, gvproxy::GvproxyInstance};
 
 /// Universal Box runner binary - subprocess that executes isolated Boxes
@@ -151,7 +151,7 @@ fn run_shim(args: ShimArgs, mut config: InstanceSpec, timing: impl Fn(&str)) -> 
     // gvproxy provides virtio-net (eth0) to the guest - required even without port mappings.
     // The gvproxy instance is leaked intentionally - it must live for the entire
     // duration of the VM. When the shim process exits, OS cleans up all resources.
-    #[cfg(feature = "gvproxy-backend")]
+    #[cfg(feature = "gvproxy")]
     if let Some(ref net_config) = config.network_config {
         tracing::info!(
             port_mappings = ?net_config.port_mappings,

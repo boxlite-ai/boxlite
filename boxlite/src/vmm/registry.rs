@@ -79,7 +79,7 @@ mod tests {
     use super::*;
 
     #[test]
-    #[cfg(feature = "link-krun")]
+    #[cfg(feature = "krun")]
     fn test_libkrun_registered() {
         // At minimum, libkrun should be registered
         assert!(is_registered(VmmKind::Libkrun));
@@ -101,7 +101,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "link-krun")]
+    #[cfg(feature = "krun")]
     fn test_create_libkrun_engine() {
         let options = VmmConfig::default();
         let result = create_engine(VmmKind::Libkrun, options);

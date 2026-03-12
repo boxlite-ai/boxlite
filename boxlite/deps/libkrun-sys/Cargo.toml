@@ -19,4 +19,5 @@ libc = "0.2"
 
 [features]
 default = []
-link-static = []  # Emit rustc-link-lib to statically link libkrun.a into the binary
+krun = []      # Build init binary + libkrun.a + emit link directives (was: link-static + build-libkrun)
+krunfw = []    # Download/build libkrunfw.dylib/.so (was: build-libkrunfw)

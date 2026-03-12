@@ -9,7 +9,7 @@ fn test_socket_path() -> PathBuf {
 }
 
 #[test]
-#[cfg(all(not(feature = "libslirp-backend"), not(feature = "gvproxy-backend")))]
+#[cfg(all(not(feature = "libslirp"), not(feature = "gvproxy")))]
 fn test_no_backend_when_no_features_enabled() {
     // When no backend features are enabled, factory should return None
     let config = NetworkBackendConfig::new(vec![], test_socket_path());
@@ -37,7 +37,7 @@ fn test_network_config_creation() {
 }
 
 #[tokio::test]
-#[cfg(any(feature = "libslirp-backend", feature = "gvproxy-backend"))]
+#[cfg(any(feature = "libslirp", feature = "gvproxy"))]
 async fn test_backend_trait_send_sync() {
     use boxlite::net::NetworkBackend;
 

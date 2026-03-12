@@ -283,7 +283,10 @@ fn build_with_make(
 struct LibBuilder;
 
 impl LibBuilder {
-    /// Builds libkrun end-to-end: init binary → static library → linking configuration.
+    /// Builds libkrun: init binary → static library.
+    ///
+    /// Link directives and DEP var metadata are emitted by the caller
+    /// (platform `build()` functions) so they can be gated on features.
     pub fn build(
         libkrun_src: &Path,
         libkrun_install: &Path,
@@ -293,9 +296,6 @@ impl LibBuilder {
     ) {
         Self::build_init_binary(libkrun_src, init_env, init_make_args);
         Self::build_libkrun_static(libkrun_src, libkrun_install, libkrunfw_install);
-        let libkrun_lib = libkrun_install.join(LIB_DIR);
-        let libkrunfw_lib = libkrunfw_install.join(LIB_DIR);
-        Self::configure_linking(&libkrun_lib, &libkrunfw_lib);
     }
 
     /// Builds only the init binary from the libkrun Makefile.
@@ -389,41 +389,6 @@ impl LibBuilder {
         });
 
         println!("cargo:warning=Built static libkrun at {}", dst.display());
-    }
-
-    /// Configure linking for libkrun (static) and expose library paths.
-    ///
-    /// Note: libkrunfw is NOT linked here — it's dlopened by libkrun at runtime.
-    /// We only expose the library directory so downstream crates can bundle it.
-    ///
-    /// Link directives (`rustc-link-lib`, `rustc-link-search`) are only emitted
-    /// when the `link-static` feature is enabled. This prevents downstream crates
-    /// that only need metadata (e.g., boxlite library for bundling) from linking
-    /// libkrun.a and hitting duplicate std symbol errors. Only boxlite-shim
-    /// (which actually calls libkrun functions) enables `link-static`.
-    fn configure_linking(libkrun_dir: &Path, libkrunfw_dir: &Path) {
-        // Only emit link directives when the binary actually needs to link libkrun.a.
-        // libkrun.a is a Rust staticlib that bundles its own std — linking it into
-        // another Rust binary causes duplicate symbol errors without --allow-multiple-definition.
-        #[cfg(feature = "link-static")]
-        {
-            println!("cargo:rustc-link-search=native={}", libkrun_dir.display());
-            println!("cargo:rustc-link-lib=static=krun");
-
-            // Transitive dependencies from libkrun (now statically linked, these were
-            // previously resolved by the dynamic linker inside libkrun.so/dylib)
-            #[cfg(target_os = "macos")]
-            {
-                println!("cargo:rustc-link-lib=framework=Hypervisor");
-            }
-        }
-
-        // Always expose library directories to downstream crates (used by boxlite/build.rs)
-        // Convention: {LIBNAME}_BOXLITE_DEP=<path> for auto-discovery
-        // Note: LIBKRUN dir now contains .a (not bundled at runtime), but the path
-        // is still exposed for consistency. Only LIBKRUNFW .so/.dylib gets bundled.
-        println!("cargo:LIBKRUN_BOXLITE_DEP={}", libkrun_dir.display());
-        println!("cargo:LIBKRUNFW_BOXLITE_DEP={}", libkrunfw_dir.display());
     }
 }
 
@@ -810,27 +775,25 @@ impl MacToolchain {
 
 // ── Platform build orchestration ─────────────────────────────────────────────
 
-/// macOS: Build libkrunfw (dylib, dlopen'd at runtime) and libkrun (static archive)
+/// macOS: Build libkrunfw and/or libkrun based on enabled features.
+///
+/// - `krunfw`: Download prebuilt kernel.c, compile to .dylib (fast)
+/// - `krun`:   Build init binary + libkrun.a static library (expensive)
+///
+/// `krun` implies libkrunfw download (needed for pkgconfig during build).
 #[cfg(target_os = "macos")]
 fn build() {
-    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
 
     let libkrunfw_install = out_dir.join("libkrunfw");
     let libkrun_install = out_dir.join("libkrun");
     let libkrunfw_lib = libkrunfw_install.join(LIB_DIR);
 
-    println!("cargo:warning=Building libkrun-sys for macOS (static libkrun)");
-
-    // Verify vendored libkrun source exists (libkrunfw is downloaded as prebuilt)
-    verify_vendored_sources(&manifest_dir, false);
-
-    let libkrun_src = manifest_dir.join("vendor/libkrun");
-
-    // 1. Download and extract prebuilt libkrunfw
+    // Step 1: Download and build libkrunfw dylib.
+    // Needed for both features: krunfw bundles the dylib,
+    // krun needs libkrunfw's pkgconfig for compilation.
+    println!("cargo:warning=Building libkrunfw for macOS...");
     let libkrunfw_src = download_libkrunfw_prebuilt(&out_dir);
-
-    // 2. Build libkrunfw (dylib — dlopen'd by libkrun at runtime)
     build_with_make(
         &libkrunfw_src,
         &libkrunfw_install,
@@ -838,44 +801,63 @@ fn build() {
         &HashMap::new(),
         &[],
     );
-
-    // 3. Build libkrun (init binary → static library → linking)
-    let (cc_linux_make_arg, env_overrides) =
-        MacToolchain::resolve().unwrap_or_else(|e| panic!("{}", e));
-    LibBuilder::build(
-        &libkrun_src,
-        &libkrun_install,
-        &libkrunfw_install,
-        &env_overrides,
-        &[cc_linux_make_arg],
-    );
-
-    // 4. Fix install names for libkrunfw only (it's still a .dylib)
     LibFixup::fix(&libkrunfw_lib, "libkrunfw")
         .unwrap_or_else(|e| panic!("Failed to fix libkrunfw: {}", e));
+
+    // Expose libkrunfw library directory for downstream bundling
+    println!("cargo:LIBKRUNFW_BOXLITE_DEP={}", libkrunfw_lib.display());
+
+    // Step 2: Build libkrun.a (expensive — only when krun feature is enabled)
+    if cfg!(feature = "krun") {
+        let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+        println!("cargo:warning=Building libkrun for macOS (static)...");
+        verify_vendored_sources(&manifest_dir, false);
+
+        let libkrun_src = manifest_dir.join("vendor/libkrun");
+        let (cc_linux_make_arg, env_overrides) =
+            MacToolchain::resolve().unwrap_or_else(|e| panic!("{}", e));
+        LibBuilder::build(
+            &libkrun_src,
+            &libkrun_install,
+            &libkrunfw_install,
+            &env_overrides,
+            &[cc_linux_make_arg],
+        );
+
+        let libkrun_lib = libkrun_install.join(LIB_DIR);
+        println!("cargo:LIBKRUN_BOXLITE_DEP={}", libkrun_lib.display());
+
+        println!("cargo:rustc-link-search=native={}", libkrun_lib.display());
+        println!("cargo:rustc-link-lib=static=krun");
+        println!("cargo:rustc-link-lib=framework=Hypervisor");
+    }
 }
 
-/// Linux: Build libkrun (static archive) with pre-compiled libkrunfw (.so, dlopen'd)
+/// Linux: Build libkrunfw and/or libkrun based on enabled features.
+///
+/// - `krunfw`: Download pre-compiled .so (fast) or build from source
+/// - `krun`:   Build init binary + libkrun.a static library (expensive)
+///
+/// `krun` implies libkrunfw download (needed for pkgconfig during build).
 #[cfg(target_os = "linux")]
 fn build() {
-    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
 
     let libkrunfw_install = out_dir.join("libkrunfw");
     let libkrun_install = out_dir.join("libkrun");
     let libkrunfw_lib_dir = libkrunfw_install.join(LIB_DIR);
 
-    // Check if user wants to build libkrunfw from source (slow, ~20 min)
+    // Step 1: Download/build libkrunfw.
+    // Needed for both features: krunfw bundles the .so,
+    // krun needs libkrunfw's pkgconfig for compilation.
     let build_from_source = env::var("BOXLITE_BUILD_LIBKRUNFW").is_ok();
 
     if build_from_source {
-        println!(
-            "cargo:warning=Building libkrun-sys for Linux (static, BOXLITE_BUILD_LIBKRUNFW=1)"
-        );
+        let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+        println!("cargo:warning=Building libkrunfw from source (BOXLITE_BUILD_LIBKRUNFW=1)");
         verify_vendored_sources(&manifest_dir, true);
 
         let libkrunfw_src = manifest_dir.join("vendor/libkrunfw");
-
         build_with_make(
             &libkrunfw_src,
             &libkrunfw_install,
@@ -884,26 +866,40 @@ fn build() {
             &[],
         );
     } else {
-        println!("cargo:warning=Building libkrun-sys for Linux (static, pre-compiled libkrunfw)");
-        verify_vendored_sources(&manifest_dir, false);
-
+        println!("cargo:warning=Downloading pre-compiled libkrunfw...");
         download_libkrunfw_so(&libkrunfw_install);
     }
 
-    let libkrun_src = manifest_dir.join("vendor/libkrun");
-
-    // Build libkrun (init binary → static library → linking)
-    LibBuilder::build(
-        &libkrun_src,
-        &libkrun_install,
-        &libkrunfw_install,
-        &HashMap::new(),
-        &[],
-    );
-
-    // Fix library names for libkrunfw (still a .so)
     LibFixup::fix(&libkrunfw_lib_dir, "libkrunfw")
         .unwrap_or_else(|e| panic!("Failed to fix libkrunfw: {}", e));
+
+    // Expose libkrunfw library directory for downstream bundling
+    println!(
+        "cargo:LIBKRUNFW_BOXLITE_DEP={}",
+        libkrunfw_lib_dir.display()
+    );
+
+    // Step 2: Build libkrun.a (expensive — only when krun feature is enabled)
+    if cfg!(feature = "krun") {
+        let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+        println!("cargo:warning=Building libkrun for Linux (static)...");
+        verify_vendored_sources(&manifest_dir, false);
+
+        let libkrun_src = manifest_dir.join("vendor/libkrun");
+        LibBuilder::build(
+            &libkrun_src,
+            &libkrun_install,
+            &libkrunfw_install,
+            &HashMap::new(),
+            &[],
+        );
+
+        let libkrun_lib = libkrun_install.join(LIB_DIR);
+        println!("cargo:LIBKRUN_BOXLITE_DEP={}", libkrun_lib.display());
+
+        println!("cargo:rustc-link-search=native={}", libkrun_lib.display());
+        println!("cargo:rustc-link-lib=static=krun");
+    }
 }
 
 // ── Entry point ──────────────────────────────────────────────────────────────
@@ -920,10 +916,19 @@ fn main() {
     // Set BOXLITE_DEPS_STUB=1 to skip building and emit stub link directives
     if env::var("BOXLITE_DEPS_STUB").is_ok() {
         println!("cargo:warning=BOXLITE_DEPS_STUB mode: skipping libkrun build");
-        #[cfg(feature = "link-static")]
-        println!("cargo:rustc-link-lib=static=krun");
+        if cfg!(feature = "krun") {
+            println!("cargo:rustc-link-lib=static=krun");
+        }
         println!("cargo:LIBKRUN_BOXLITE_DEP=/nonexistent");
         println!("cargo:LIBKRUNFW_BOXLITE_DEP=/nonexistent");
+        return;
+    }
+
+    // Skip native builds when no build features are enabled.
+    // FFI declarations in src/lib.rs remain available but nothing gets built/linked.
+    let need_build = cfg!(feature = "krunfw") || cfg!(feature = "krun");
+    if !need_build {
+        println!("cargo:warning=libkrun-sys: no build features enabled, skipping native builds");
         return;
     }
 
