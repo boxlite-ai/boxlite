@@ -14,3 +14,9 @@ Using BoxLite as a sandbox for AI agent workflows.
 Most examples require `CLAUDE_CODE_OAUTH_TOKEN` to be set.
 
 **Recommended first example:** `drive_box_with_llm.py`
+
+## AI Agent Integration
+
+BoxLite works with any LLM provider to create secure sandboxed environments for AI agents.
+The examples in this directory include ready-to-run integrations for
+OpenAI and [MiniMax](https://platform.minimax.io) (`MiniMax-M2.5`, `MiniMax-M2.5-highspeed`).

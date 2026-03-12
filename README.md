@@ -185,12 +185,6 @@ func main() {
 </details>
 
 
-## AI Agent Integration
-
-BoxLite works with any LLM provider to create secure sandboxed environments for AI agents.
-See [examples/python/06_ai_agents/](./examples/python/06_ai_agents/) for ready-to-run examples
-including OpenAI and [MiniMax](https://platform.minimax.io) (`MiniMax-M2.5`, `MiniMax-M2.5-highspeed`).
-
 ## Next steps
 
 - Run more real-world scenarios in [Examples](./examples/)
