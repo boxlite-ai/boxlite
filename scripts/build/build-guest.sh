@@ -153,7 +153,7 @@ copy_to_destination() {
 
 # Main execution
 main() {
-#    check_prerequisites
+    check_prerequisites
     setup_rust_target
     build_guest_binary
     copy_to_destination
