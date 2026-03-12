@@ -132,6 +132,18 @@ lint\:node: _ensure-node-deps
 
 lint\:c:
 	@echo "🔍 Linting C SDK..."
+	@# Banned unsafe C functions — platform-independent check.
+	@# macOS clang-tidy skips DeprecatedOrUnsafeBufferHandling (no Annex K),
+	@# so this grep catches memcpy/sprintf/strcpy etc. on all platforms.
+	@if grep -rn 'memcpy\|memmove\|sprintf\b\|strcat\|strcpy\|gets\b\|strtok' \
+		--include='*.c' sdks/c/tests/ sdks/c/src/ 2>/dev/null | \
+		grep -v '// NOLINT' ; then \
+		echo ""; \
+		echo "❌ Banned unsafe C functions found above."; \
+		echo "   Use bounded alternatives (char loops, strlcpy, snprintf)."; \
+		echo "   Add '// NOLINT' comment to suppress if intentional."; \
+		exit 1; \
+	fi
 	@CLANG_TIDY="$$(command -v clang-tidy || true)"; \
 	if [ -z "$$CLANG_TIDY" ] && [ -x "/opt/homebrew/opt/llvm/bin/clang-tidy" ]; then \
 		CLANG_TIDY="/opt/homebrew/opt/llvm/bin/clang-tidy"; \

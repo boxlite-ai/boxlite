@@ -1,0 +1,19 @@
+# BoxLite C SDK — clang-tidy configuration
+#
+# Standardizes checks across macOS and Linux environments.
+# Note: clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling
+# is a no-op on macOS (no Annex K in Apple libc). The banned-function grep
+# in make/quality.mk covers this gap.
+
+Checks: >
+  -*,
+  clang-analyzer-*,
+  bugprone-*,
+  cert-*,
+  -bugprone-easily-swappable-parameters,
+  -cert-dcl03-c,
+  -cert-err33-c
+
+WarningsAsErrors: '*'
+
+HeaderFilterRegex: '.*boxlite.*'
