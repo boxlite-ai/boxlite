@@ -166,13 +166,34 @@ setup_python() {
     echo ""
 }
 
-# Setup Go
+# Setup Go (with version validation)
 setup_go() {
-    if ! check_go; then
-        echo -e "${YELLOW}Installing...${NC}"
-        brew install go
-        print_success "Go installed"
+    if [ "${SKIP_INSTALL_GO:-}" = "1" ]; then
+        print_step "Skipping Go (SKIP_INSTALL_GO=1)"
+        echo ""
+        return 0
     fi
+
+    local status=0
+    check_go || status=$?
+
+    case "$status" in
+        0)
+            # Version OK
+            ;;
+        1)
+            # Missing
+            echo -e "${YELLOW}Installing...${NC}"
+            brew install go
+            print_success "Go installed"
+            ;;
+        2)
+            # Too old
+            echo -e "${YELLOW}Upgrading...${NC}"
+            brew upgrade go
+            print_success "Go upgraded"
+            ;;
+    esac
     echo ""
 }
 

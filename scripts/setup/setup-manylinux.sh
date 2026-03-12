@@ -74,8 +74,7 @@ install_system_deps() {
         rsync
         patch
 
-        # libgvproxy (Go network backend)
-        golang
+        # Note: Go is installed separately via setup_go (distro packages are too old)
 
         # bubblewrap build dependencies (jailer sandbox)
         ninja-build        # Ninja build backend
@@ -234,6 +233,8 @@ main() {
     update_yum
 
     install_system_deps
+
+    setup_go
 
     install_python_deps
 

@@ -113,17 +113,138 @@ check_python() {
     fi
 }
 
-# Check Go installation
+# Minimum Go version required by libgvproxy-sys go.mod
+GO_MIN_MAJOR=1
+GO_MIN_MINOR=24
+
+# Check Go installation and version.
+# Returns: 0 = OK, 1 = missing, 2 = too old
 check_go() {
-    print_step "Checking for Go... "
-    if command_exists go; then
-        local go_version=$(go version | awk '{print $3}' | sed 's/go//')
-        print_success "Found (version $go_version)"
-        return 0
-    else
+    print_step "Checking for Go >= ${GO_MIN_MAJOR}.${GO_MIN_MINOR}... "
+
+    if ! command_exists go; then
         print_error "Not found"
         return 1
     fi
+
+    local go_version
+    go_version=$(go version | awk '{print $3}' | sed 's/go//')
+
+    local major minor
+    major=$(echo "$go_version" | cut -d. -f1)
+    minor=$(echo "$go_version" | cut -d. -f2)
+
+    if [ "$major" -gt "$GO_MIN_MAJOR" ] 2>/dev/null ||
+       { [ "$major" -eq "$GO_MIN_MAJOR" ] 2>/dev/null && [ "$minor" -ge "$GO_MIN_MINOR" ] 2>/dev/null; }; then
+        print_success "Found (version $go_version)"
+        return 0
+    else
+        echo -e "${YELLOW}Found Go $go_version (too old, need >= ${GO_MIN_MAJOR}.${GO_MIN_MINOR})${NC}"
+        return 2
+    fi
+}
+
+# Install Go from official go.dev tarball (Linux only).
+install_go_from_official() {
+    local arch
+    arch=$(uname -m)
+    case "$arch" in
+        x86_64)  arch="amd64" ;;
+        aarch64) arch="arm64" ;;
+        *)
+            print_error "Unsupported architecture for Go: $arch"
+            return 1
+            ;;
+    esac
+
+    print_step "Fetching latest Go version... "
+    local go_version
+    go_version=$(curl -sL https://go.dev/VERSION?m=text | head -1)
+    if [ -z "$go_version" ]; then
+        print_error "Failed to fetch Go version from go.dev"
+        return 1
+    fi
+    print_success "$go_version"
+
+    local tarball="${go_version}.linux-${arch}.tar.gz"
+    local url="https://go.dev/dl/${tarball}"
+
+    print_step "Downloading ${tarball}... "
+    local tmpfile="/tmp/${tarball}"
+    if ! curl -sSL "$url" -o "$tmpfile"; then
+        print_error "Failed to download Go from $url"
+        return 1
+    fi
+    print_success "Done"
+
+    print_step "Installing to /usr/local/go... "
+    ${SUDO:-} rm -rf /usr/local/go
+    ${SUDO:-} tar -C /usr/local -xzf "$tmpfile"
+    rm -f "$tmpfile"
+    print_success "Installed"
+
+    # Ensure /usr/local/go/bin is in PATH for this session
+    export PATH="/usr/local/go/bin:$PATH"
+
+    local installed_version
+    installed_version=$(go version | awk '{print $3}' | sed 's/go//')
+    print_success "Go $installed_version installed"
+}
+
+# Setup Go with version validation.
+# On Linux: installs from go.dev if missing or too old.
+# Respects SKIP_INSTALL_GO=1 to skip entirely.
+setup_go() {
+    if [ "${SKIP_INSTALL_GO:-}" = "1" ]; then
+        print_step "Skipping Go (SKIP_INSTALL_GO=1)"
+        echo ""
+        return 0
+    fi
+
+    print_section "🐹 Checking Go..."
+
+    # Prefer /usr/local/go/bin if it exists (official install location)
+    if [ -d "/usr/local/go/bin" ]; then
+        export PATH="/usr/local/go/bin:$PATH"
+    fi
+
+    local status=0
+    check_go || status=$?
+
+    case "$status" in
+        0)
+            # Version OK
+            ;;
+        1)
+            # Missing — install automatically
+            install_go_from_official
+            ;;
+        2)
+            # Too old — ask user (auto-install in CI)
+            if [ "${CI:-}" = "true" ]; then
+                install_go_from_official
+            else
+                echo ""
+                echo "   libgvproxy requires Go >= ${GO_MIN_MAJOR}.${GO_MIN_MINOR}."
+                echo "   The build will fail without a compatible Go version."
+                echo ""
+                read -rp "   Upgrade Go from go.dev? [y/N] " answer
+                case "$answer" in
+                    [yY]|[yY][eE][sS])
+                        install_go_from_official
+                        ;;
+                    *)
+                        print_warning "Skipping Go upgrade. To upgrade manually:"
+                        echo "   sudo rm -rf /usr/local/go"
+                        echo "   wget https://go.dev/dl/go1.24.linux-\$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz"
+                        echo "   sudo tar -C /usr/local -xzf go1.24.*.tar.gz"
+                        echo "   export PATH=/usr/local/go/bin:\$PATH"
+                        ;;
+                esac
+            fi
+            ;;
+    esac
+    echo ""
 }
 
 # Check Node.js installation

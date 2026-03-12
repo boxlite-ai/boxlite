@@ -78,8 +78,7 @@ install_system_deps() {
         patch
         perl              # Required for kernel build
 
-        # libgvproxy (Go network backend)
-        go
+        # Note: Go is installed separately via setup_go (distro packages are too old)
 
         # Python
         python3
@@ -176,6 +175,8 @@ main() {
     update_apk
 
     install_system_deps
+
+    setup_go
 
     install_python_deps
 

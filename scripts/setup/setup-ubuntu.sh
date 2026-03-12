@@ -75,8 +75,7 @@ install_system_deps() {
         python3-pip
         python3-venv
 
-        # libgvproxy (Go network backend)
-        golang-go
+        # Note: Go is installed separately via setup_go (distro packages are too old)
 
         # libkrun build dependencies
         llvm               # llvm-config for clang-sys
@@ -177,6 +176,8 @@ main() {
     update_apt
 
     install_system_deps
+
+    setup_go
 
     setup_python
 
