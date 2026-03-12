@@ -428,6 +428,9 @@ impl GuestRootfsManager {
         let inject_start = std::time::Instant::now();
         let guest_bin = util::find_binary("boxlite-guest")?;
 
+        // Pre-flight: validate guest binary is a valid ELF for this architecture
+        crate::vmm::guest_check::validate_guest_binary(&guest_bin)?;
+
         // Verify the actual guest binary hash matches what we expected.
         // The compile-time hash (from build.rs) may be stale if the guest
         // binary was rebuilt after boxlite was compiled.

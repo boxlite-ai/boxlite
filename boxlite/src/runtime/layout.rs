@@ -519,6 +519,7 @@ impl BoxFilesystemLayout {
     /// - sockets/
     /// - tmp/
     /// - mounts/ (via SharedGuestLayout base)
+    /// - logs/
     ///
     /// Note: shared/ is NOT created here - it will be created as a bind mount
     /// (Linux) or symlink (macOS) in the filesystem stage.
@@ -537,6 +538,9 @@ impl BoxFilesystemLayout {
 
         std::fs::create_dir_all(self.mounts_dir())
             .map_err(|e| BoxliteError::Storage(format!("failed to create mounts dir: {e}")))?;
+
+        std::fs::create_dir_all(self.logs_dir())
+            .map_err(|e| BoxliteError::Storage(format!("failed to create logs dir: {e}")))?;
 
         // shared/ is created by create_bind_mount() - don't create it here
         // On Linux: bind mount from mounts/

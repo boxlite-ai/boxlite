@@ -104,6 +104,20 @@ build_guest_binary() {
     if [ "$PROFILE" = "release" ]; then
         build_flag="--release"
     fi
+
+    # macOS cross-compilation needs musl-cross linker.
+    # The project .cargo/config.toml is platform-agnostic (no linker).
+    # Set the linker via env var as fallback if ~/.cargo/config.toml isn't configured.
+    if [ "$OS" = "macos" ]; then
+        local arch_prefix
+        arch_prefix=$(echo "$GUEST_TARGET" | cut -d'-' -f1)
+        local env_var_name
+        env_var_name="CARGO_TARGET_$(echo "$GUEST_TARGET" | tr '[:lower:]-' '[:upper:]_')_LINKER"
+        if [ -z "${!env_var_name:-}" ]; then
+            export "$env_var_name=${arch_prefix}-linux-musl-gcc"
+        fi
+    fi
+
     cargo build $build_flag --target "$GUEST_TARGET" -p boxlite-guest
 
     # Verify guest binary is statically linked

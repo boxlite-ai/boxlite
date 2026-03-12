@@ -451,10 +451,7 @@ impl Vmm for Krun {
                         console_path.display()
                     ))
                 })?;
-                tracing::debug!(
-                    console_path = console_path_str,
-                    "Redirecting console output"
-                );
+                tracing::info!(console_path = console_path_str, "Console output configured");
                 ctx.set_console_output(console_path_str)?;
             }
 

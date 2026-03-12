@@ -9,6 +9,7 @@ pub mod controller;
 pub mod engine;
 pub mod exit_info;
 pub mod factory;
+pub mod guest_check;
 pub mod host_check;
 #[cfg(feature = "link-krun")]
 pub mod krun;

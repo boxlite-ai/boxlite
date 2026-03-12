@@ -85,6 +85,33 @@ install_musl_cross() {
     echo ""
 }
 
+# Configure musl cross-linker in user's cargo config
+#
+# The project .cargo/config.toml only has rustflags (platform-agnostic).
+# macOS needs the musl-cross linker for cross-compiling to Linux musl targets.
+# On Linux, Rust's default self-contained musl linking works without a custom linker.
+setup_musl_linker() {
+    local cargo_config="${CARGO_HOME:-$HOME/.cargo}/config.toml"
+
+    print_step "Configuring musl cross-linker in cargo config... "
+    if grep -q "x86_64-linux-musl-gcc\|aarch64-linux-musl-gcc" "$cargo_config" 2>/dev/null; then
+        print_success "Already configured"
+    else
+        mkdir -p "$(dirname "$cargo_config")"
+        cat >> "$cargo_config" << 'EOF'
+
+# BoxLite: musl cross-linker for building guest binary on macOS
+[target.x86_64-unknown-linux-musl]
+linker = "x86_64-linux-musl-gcc"
+
+[target.aarch64-unknown-linux-musl]
+linker = "aarch64-linux-musl-gcc"
+EOF
+        print_success "Configured"
+    fi
+    echo ""
+}
+
 # Install dtc (device tree compiler) - required for building libkrun
 install_dtc() {
     print_step "Checking for dtc... "
@@ -233,6 +260,8 @@ main() {
     setup_rust_target
 
     install_musl_cross
+
+    setup_musl_linker
 
     install_dtc
 

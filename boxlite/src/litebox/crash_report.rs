@@ -164,29 +164,57 @@ impl CrashReport {
     ) -> Self {
         let mut msg = format!("Box {box_id} failed to start\n\n");
 
+        let console_analysis = analyze_console_log(console_log);
+
         // Add exit code with signal interpretation
         match exit_code {
+            Some(0) => {
+                msg.push_str("Exit code: 0 (clean shutdown)\n\n");
+                msg.push_str(
+                    "The VM started but the guest agent exited immediately.\n\
+                     Common causes:\n\
+                     • Guest binary (boxlite-guest) crashed before producing output\n\
+                     • Guest binary not found inside the rootfs\n\
+                     • Rootfs disk image corrupted or unmountable\n",
+                );
+            }
+            Some(code) if code > 128 => {
+                let signal = code - 128;
+                let signal_name = match signal {
+                    6 => "SIGABRT",
+                    9 => "SIGKILL",
+                    11 => "SIGSEGV",
+                    15 => "SIGTERM",
+                    _ => "unknown signal",
+                };
+                msg.push_str(&format!("Exit code: {code} ({signal_name})\n"));
+            }
             Some(code) => {
-                msg.push_str(&format!("Exit code: {code}"));
-                if code > 128 {
-                    let signal = code - 128;
-                    let signal_name = match signal {
-                        6 => "SIGABRT",
-                        9 => "SIGKILL",
-                        11 => "SIGSEGV",
-                        15 => "SIGTERM",
-                        _ => "unknown signal",
-                    };
-                    msg.push_str(&format!(" ({signal_name})\n"));
-                } else {
-                    msg.push('\n');
-                }
+                msg.push_str(&format!("Exit code: {code}\n"));
             }
             None => {
                 msg.push_str("Exit code: unknown\n");
             }
         }
         msg.push('\n');
+
+        // Add console.log analysis
+        match console_analysis {
+            ConsoleAnalysis::Empty => {
+                msg.push_str("Console output: empty (no kernel or guest messages captured)\n\n");
+            }
+            ConsoleAnalysis::KernelOnly => {
+                msg.push_str(
+                    "Console output: kernel messages only (guest agent never started)\n\n",
+                );
+            }
+            ConsoleAnalysis::HasGuestOutput => {
+                // Guest started — console.log has useful info, don't add extra annotation
+            }
+            ConsoleAnalysis::Unreadable => {
+                // Can't read the file — skip annotation
+            }
+        }
 
         // Add stderr content if available (includes dyld errors)
         if !stderr_content.is_empty() {
@@ -199,7 +227,10 @@ impl CrashReport {
             "Debug files:\n\
              • Console: {}\n\
              • Stderr: {}\n\n\
-             System logs: dmesg (Linux), Console.app (macOS)",
+             Diagnostic commands:\n\
+             • RUST_LOG=debug boxlite run ...   (re-run with tracing)\n\
+             • dmesg | tail -50                 (kernel messages)\n\
+             • file $(which boxlite-guest)      (check binary arch)",
             console_log.display(),
             stderr_file.display()
         ));
@@ -208,6 +239,41 @@ impl CrashReport {
             user_message: msg,
             debug_info: stderr_content.to_string(),
         }
+    }
+}
+
+/// Result of analyzing the console.log file content.
+enum ConsoleAnalysis {
+    /// File is empty (0 bytes) — kernel never produced output.
+    Empty,
+    /// Has kernel messages but no guest agent output.
+    KernelOnly,
+    /// Guest agent produced output (contains `[guest]` marker).
+    HasGuestOutput,
+    /// File could not be read.
+    Unreadable,
+}
+
+/// Analyze console.log to determine what output was captured.
+fn analyze_console_log(path: &Path) -> ConsoleAnalysis {
+    let metadata = match std::fs::metadata(path) {
+        Ok(m) => m,
+        Err(_) => return ConsoleAnalysis::Unreadable,
+    };
+
+    if metadata.len() == 0 {
+        return ConsoleAnalysis::Empty;
+    }
+
+    match std::fs::read_to_string(path) {
+        Ok(content) => {
+            if content.contains("[guest]") {
+                ConsoleAnalysis::HasGuestOutput
+            } else {
+                ConsoleAnalysis::KernelOnly
+            }
+        }
+        Err(_) => ConsoleAnalysis::Unreadable,
     }
 }
 
@@ -248,7 +314,7 @@ mod tests {
         assert!(report.user_message.contains("test-box failed to start"));
         assert!(report.user_message.contains("Exit code: 1"));
         assert!(report.user_message.contains("dyld: Library not loaded"));
-        assert!(report.user_message.contains("System logs: dmesg"));
+        assert!(report.user_message.contains("Diagnostic commands"));
     }
 
     #[test]
@@ -420,5 +486,131 @@ mod tests {
             "line1\nline2\nline3\n... (2 more lines)"
         );
         assert_eq!(truncate_lines(content, 10), content);
+    }
+
+    #[test]
+    fn test_exit_code_zero_with_empty_console() {
+        let dir = tempfile::tempdir().unwrap();
+        let exit_file = dir.path().join("nonexistent");
+        let console_log = dir.path().join("console.log");
+        let stderr_file = dir.path().join("stderr");
+
+        // Empty console.log
+        std::fs::write(&console_log, "").unwrap();
+        std::fs::write(&stderr_file, "").unwrap();
+
+        let report = CrashReport::from_exit_file(
+            &exit_file,
+            &console_log,
+            &stderr_file,
+            "test-box",
+            Some(0),
+        );
+
+        assert!(
+            report
+                .user_message
+                .contains("Exit code: 0 (clean shutdown)")
+        );
+        assert!(
+            report
+                .user_message
+                .contains("guest agent exited immediately")
+        );
+        assert!(report.user_message.contains("Console output: empty"));
+        assert!(report.user_message.contains("Diagnostic commands"));
+    }
+
+    #[test]
+    fn test_exit_code_zero_with_kernel_only_console() {
+        let dir = tempfile::tempdir().unwrap();
+        let exit_file = dir.path().join("nonexistent");
+        let console_log = dir.path().join("console.log");
+        let stderr_file = dir.path().join("stderr");
+
+        std::fs::write(&console_log, "Linux version 6.8.0\nBooting kernel...\n").unwrap();
+        std::fs::write(&stderr_file, "").unwrap();
+
+        let report = CrashReport::from_exit_file(
+            &exit_file,
+            &console_log,
+            &stderr_file,
+            "test-box",
+            Some(0),
+        );
+
+        assert!(
+            report
+                .user_message
+                .contains("Exit code: 0 (clean shutdown)")
+        );
+        assert!(report.user_message.contains("kernel messages only"));
+    }
+
+    #[test]
+    fn test_exit_code_zero_with_guest_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let exit_file = dir.path().join("nonexistent");
+        let console_log = dir.path().join("console.log");
+        let stderr_file = dir.path().join("stderr");
+
+        std::fs::write(&console_log, "[guest] T+0ms: agent starting\n").unwrap();
+        std::fs::write(&stderr_file, "").unwrap();
+
+        let report = CrashReport::from_exit_file(
+            &exit_file,
+            &console_log,
+            &stderr_file,
+            "test-box",
+            Some(0),
+        );
+
+        assert!(
+            report
+                .user_message
+                .contains("Exit code: 0 (clean shutdown)")
+        );
+        // Should NOT contain the empty/kernel annotations
+        assert!(!report.user_message.contains("Console output:"));
+    }
+
+    #[test]
+    fn test_analyze_console_log_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("console.log");
+        std::fs::write(&path, "").unwrap();
+        assert!(matches!(analyze_console_log(&path), ConsoleAnalysis::Empty));
+    }
+
+    #[test]
+    fn test_analyze_console_log_kernel_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("console.log");
+        std::fs::write(&path, "Linux version 6.8.0\n").unwrap();
+        assert!(matches!(
+            analyze_console_log(&path),
+            ConsoleAnalysis::KernelOnly
+        ));
+    }
+
+    #[test]
+    fn test_analyze_console_log_has_guest() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("console.log");
+        std::fs::write(&path, "[guest] T+0ms: agent starting\n").unwrap();
+        assert!(matches!(
+            analyze_console_log(&path),
+            ConsoleAnalysis::HasGuestOutput
+        ));
+    }
+
+    #[test]
+    fn test_analyze_console_log_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nonexistent");
+        assert!(matches!(
+            analyze_console_log(&path),
+            ConsoleAnalysis::Unreadable
+        ));
     }
 }
