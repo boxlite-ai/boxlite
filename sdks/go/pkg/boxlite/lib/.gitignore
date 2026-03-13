@@ -1,0 +1,4 @@
+# Downloaded prebuilt libraries (not committed to git).
+# Populated by: go generate github.com/boxlite-ai/boxlite/sdks/go/pkg/boxlite
+*
+!.gitignore

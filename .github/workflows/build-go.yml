@@ -1,0 +1,213 @@
+# Test Go SDK and tag Go module for publishing.
+#
+# Tests the Go SDK using the prebuilt library path (default, no tags needed),
+# validating the same workflow that end users follow. The C SDK archives
+# (libboxlite.a, boxlite.h) are built and published by build-c.yml.
+#
+# On release, creates a Go module tag (sdks/go/vX.Y.Z) so the module is
+# available via: go get github.com/boxlite-ai/boxlite/sdks/go@vX.Y.Z
+#
+# Users install the prebuilt library first:
+#   go generate github.com/boxlite-ai/boxlite/sdks/go/pkg/boxlite
+#   go build ./...
+#
+# Triggers:
+# - release: When a GitHub release is published
+# - workflow_dispatch: Manual trigger for testing
+name: Build Go SDK
+
+on:
+  release:
+    types: [ published ]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: '0'
+
+jobs:
+  config:
+    uses: ./.github/workflows/config.yml
+
+  # ============================================================================
+  # BUILD & TEST
+  # ============================================================================
+  # Builds libboxlite.a, places it in the prebuilt library path, and runs
+  # Go unit tests — validating the same workflow end users follow.
+  #
+  # Platform-specific considerations:
+  # - Linux: Uses manylinux_2_28 container for glibc compatibility
+  #   - Guest binary built on host first (Ubuntu has musl-tools, manylinux doesn't)
+  #   - Runtime/libkrun built in container (needs glibc 2.28)
+  # - macOS: Builds directly on runner (ARM64 only)
+  # ============================================================================
+  build-and-test:
+    name: Build & Test (${{ matrix.target }})
+    needs: config
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.config.outputs.platforms) }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ needs.config.outputs.go-version }}
+
+      - name: Set up Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: ${{ needs.config.outputs.rust-toolchain }}
+
+      # sccache caches individual compilation units via GHA cache API.
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+        continue-on-error: true
+
+      - name: Export GHA cache env vars
+        uses: actions/github-script@v7
+        with:
+          script: |
+            core.exportVariable('ACTIONS_RESULTS_URL', process.env.ACTIONS_RESULTS_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+            core.exportVariable('ACTIONS_CACHE_SERVICE_V2', process.env.ACTIONS_CACHE_SERVICE_V2 || '');
+
+      # Build guest on host BEFORE manylinux container because:
+      # - manylinux doesn't have musl packages in repos
+      # - Ubuntu host has musl-tools via apt (~30 seconds)
+      - name: Build guest binary (Linux only)
+        if: runner.os == 'Linux'
+        run: |
+          make setup:build guest
+
+          GUEST_TARGET=$(scripts/util.sh --target)
+          mkdir -p ".cache/$GUEST_TARGET/release"
+          cp "target/$GUEST_TARGET/release/boxlite-guest" ".cache/$GUEST_TARGET/release/"
+
+          rm -rf target ~/.rustup ~/.cargo
+          mkdir -p target
+
+      - name: Build and test Go SDK (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cat > "$RUNNER_TEMP/build.sh" << 'CONTAINER_SCRIPT'
+          set -ex
+          git config --global --add safe.directory /work
+
+          if [ -n "${RUSTC_WRAPPER:-}" ] && ! command -v "$RUSTC_WRAPPER" &>/dev/null; then
+            echo "::warning::sccache not available in container, falling back to normal compilation"
+            unset RUSTC_WRAPPER
+          fi
+
+          GUEST_TARGET=$(scripts/util.sh --target)
+          if [ -d ".cache/$GUEST_TARGET" ]; then
+            echo "Restoring guest from .cache/$GUEST_TARGET"
+            mkdir -p target
+            cp -a ".cache/$GUEST_TARGET" "target/$GUEST_TARGET"
+          fi
+
+          export SKIP_GUEST_BUILD=1
+          export PATH="/usr/local/go/bin:$CARGO_HOME/bin:$PATH"
+          make setup:build runtime
+
+          cargo build --release -p boxlite-c
+          bash scripts/build/fix-go-symbols.sh target/release/libboxlite.a
+
+          # Install library to prebuilt path for Go SDK
+          PLATFORM="linux-x64-gnu"
+          LIB_DIR="sdks/go/pkg/boxlite/lib"
+          mkdir -p "${LIB_DIR}/${PLATFORM}" "${LIB_DIR}/include"
+          cp target/release/libboxlite.a "${LIB_DIR}/${PLATFORM}/"
+          cp sdks/c/include/boxlite.h "${LIB_DIR}/include/"
+
+          # Test Go SDK using the prebuilt library path
+          cd sdks/go
+          go build ./...
+          go test -v ./...
+
+          command -v sccache &>/dev/null && sccache --show-stats || true
+          CONTAINER_SCRIPT
+
+          SCCACHE_DOCKER_ARGS=""
+          if command -v sccache &>/dev/null; then
+            SCCACHE_DOCKER_ARGS="-v $(which sccache):/usr/local/bin/sccache:ro -e SCCACHE_GHA_ENABLED=true -e RUSTC_WRAPPER=sccache -e ACTIONS_CACHE_SERVICE_V2 -e ACTIONS_RESULTS_URL -e ACTIONS_RUNTIME_TOKEN"
+          fi
+
+          docker run --rm \
+            -v "${{ github.workspace }}":/work \
+            -v "$RUNNER_TEMP/build.sh:/tmp/build.sh:ro" \
+            $SCCACHE_DOCKER_ARGS \
+            -w /work \
+            -e CARGO_HOME=/work/.cargo-manylinux \
+            quay.io/pypa/manylinux_2_28_${{ contains(matrix.target, 'arm64') && 'aarch64' || 'x86_64' }} \
+            bash /tmp/build.sh
+
+      - name: Build and test Go SDK (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          make setup:build runtime
+
+          cargo build --release -p boxlite-c
+          bash scripts/build/fix-go-symbols.sh target/release/libboxlite.a
+
+          # Install library to prebuilt path for Go SDK
+          PLATFORM="darwin-arm64"
+          LIB_DIR="sdks/go/pkg/boxlite/lib"
+          mkdir -p "${LIB_DIR}/${PLATFORM}" "${LIB_DIR}/include"
+          cp target/release/libboxlite.a "${LIB_DIR}/${PLATFORM}/"
+          cp sdks/c/include/boxlite.h "${LIB_DIR}/include/"
+
+          # Test Go SDK using the prebuilt library path
+          cd sdks/go
+          go build ./...
+          go test -v ./...
+
+          command -v sccache &>/dev/null && sccache --show-stats || true
+
+  # ============================================================================
+  # TAG GO MODULE
+  # ============================================================================
+  # Creates a Go module tag (sdks/go/vX.Y.Z) so the module is available via:
+  #   go get github.com/boxlite-ai/boxlite/sdks/go@vX.Y.Z
+  #
+  # Go uses the tag format <module-path>/vX.Y.Z for modules that don't live
+  # at the repository root. pkg.go.dev indexes the module automatically.
+  #
+  # Users install the prebuilt library first via go generate, then use
+  # go build to compile.
+  # ============================================================================
+  tag-go-module:
+    name: Tag Go Module
+    needs: build-and-test
+    if: github.event_name == 'release' && github.event.action == 'published'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # Required to push tags
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create Go module tag
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          GO_TAG="sdks/go/${RELEASE_TAG}"
+          echo "Creating Go module tag: ${GO_TAG}"
+
+          # Skip if tag already exists (idempotent)
+          if git rev-parse "${GO_TAG}" >/dev/null 2>&1; then
+            echo "Tag ${GO_TAG} already exists, skipping"
+            exit 0
+          fi
+
+          git tag "${GO_TAG}"
+          git push origin "${GO_TAG}"
+          echo "Go module tag ${GO_TAG} pushed successfully"

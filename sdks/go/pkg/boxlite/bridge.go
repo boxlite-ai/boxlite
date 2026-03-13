@@ -1,18 +1,11 @@
 package boxlite
 
+// CGO library paths are in bridge_cgo_dev.go (local development) and
+// bridge_cgo_prebuilt.go (prebuilt library from GitHub Releases).
+// Default: uses prebuilt library from lib/{platform}/.
+// For local development: go build -tags boxlite_dev ./...
+
 /*
-#cgo CFLAGS: -I${SRCDIR}/../../../c/include
-
-// Static linking against libboxlite.a. The build step (make dev:go) runs
-// localize-go-symbols.sh to hide Go runtime symbols from embedded libgvproxy,
-// preventing duplicate symbol conflicts with the Go binary's own runtime.
-#cgo darwin LDFLAGS: ${SRCDIR}/../../../../target/debug/libboxlite.a
-#cgo darwin LDFLAGS: -framework CoreFoundation -framework Security -framework IOKit
-#cgo darwin LDFLAGS: -framework Hypervisor -framework vmnet -lresolv
-
-#cgo linux LDFLAGS: ${SRCDIR}/../../../../target/debug/libboxlite.a
-#cgo linux LDFLAGS: -lresolv -lpthread -ldl -lm
-
 #include "boxlite.h"
 #include <stdlib.h>
 */

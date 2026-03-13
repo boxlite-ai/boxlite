@@ -2,7 +2,7 @@
 #
 # This reusable workflow provides common values to avoid duplication:
 # - Build targets (2-platform matrix: ubuntu-latest, macos-15)
-# - Version configuration (Python, Node.js, Rust)
+# - Version configuration (Python, Node.js, Go, Rust)
 # - Artifact retention settings
 name: Config
 
@@ -24,6 +24,9 @@ on:
       node-build-version:
         description: 'Node.js version for building'
         value: ${{ jobs.config.outputs.node-build-version }}
+      go-version:
+        description: 'Go version for building and testing'
+        value: ${{ jobs.config.outputs.go-version }}
       rust-toolchain:
         description: 'Rust toolchain version'
         value: ${{ jobs.config.outputs.rust-toolchain }}
@@ -46,6 +49,7 @@ jobs:
       python-versions: '["3.10", "3.11", "3.12", "3.13"]'
       node-versions: '["18", "20", "22"]'
       node-build-version: '20'
+      go-version: '1.24'
       rust-toolchain: 'stable'
 
       # === Artifact Configuration ===

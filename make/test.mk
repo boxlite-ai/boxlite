@@ -230,7 +230,7 @@ test\:all\:c:
 test\:unit\:go:
 	@echo "🧪 Running Go SDK unit tests..."
 	@$(MAKE) dev:go
-	@cd sdks/go && go test -v ./...
+	@cd sdks/go && go test -tags boxlite_dev -v ./...
 
 # Go SDK full suite.
 test\:all\:go:

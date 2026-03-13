@@ -166,7 +166,7 @@ fmt\:check\:go:
 
 lint\:go:
 	@echo "🔍 Linting Go SDK (vet)..."
-	@cd sdks/go && go vet ./...
+	@cd sdks/go && go vet -tags boxlite_dev ./...
 
 clippy: _ensure-python-deps
 	@echo "🔍 Running Rust clippy checks..."

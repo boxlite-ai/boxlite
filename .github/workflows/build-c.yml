@@ -1,0 +1,221 @@
+# Build C SDK for all supported platforms.
+#
+# Self-contained workflow that builds libboxlite (static and shared libraries),
+# packages them with C headers, and uploads platform-specific archives to
+# GitHub Releases.
+#
+# Archive contents (per platform):
+# - lib/libboxlite.a (static library with Go symbols fixed)
+# - lib/libboxlite.dylib or lib/libboxlite.so (shared library)
+# - include/boxlite.h (C header)
+#
+# These archives are also used by the Go SDK (build-go.yml) which downloads
+# them via the auto-download tool.
+#
+# Triggers:
+# - release: When a GitHub release is published
+# - workflow_dispatch: Manual trigger for testing
+name: Build C SDK
+
+on:
+  release:
+    types: [ published ]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: '0'
+
+jobs:
+  config:
+    uses: ./.github/workflows/config.yml
+
+  # ============================================================================
+  # BUILD
+  # ============================================================================
+  # Builds libboxlite for each platform (static + shared) and packages with
+  # C headers.
+  #
+  # Platform-specific considerations:
+  # - Linux: Uses manylinux_2_28 container for glibc compatibility
+  #   - Guest binary built on host first (Ubuntu has musl-tools, manylinux doesn't)
+  #   - Runtime/libkrun built in container (needs glibc 2.28)
+  # - macOS: Builds directly on runner (ARM64 only)
+  #
+  # After building, fix-go-symbols.sh localizes Go runtime symbols from
+  # embedded libgvproxy in the static library, preventing conflicts when
+  # linked into a Go binary.
+  # ============================================================================
+  build:
+    name: Build (${{ matrix.target }})
+    needs: config
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.config.outputs.platforms) }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: ${{ needs.config.outputs.rust-toolchain }}
+
+      # sccache caches individual compilation units via GHA cache API.
+      # Works on host and inside Docker containers.
+      # Cache is pre-warmed by the Warm Caches workflow on push to main.
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+        continue-on-error: true
+
+      - name: Export GHA cache env vars
+        uses: actions/github-script@v7
+        with:
+          script: |
+            core.exportVariable('ACTIONS_RESULTS_URL', process.env.ACTIONS_RESULTS_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+            core.exportVariable('ACTIONS_CACHE_SERVICE_V2', process.env.ACTIONS_CACHE_SERVICE_V2 || '');
+
+      # Build guest on host BEFORE manylinux container because:
+      # - manylinux (AlmaLinux/RHEL) doesn't have musl packages in repos
+      # - Building musl-cross-make from source takes ~15 minutes
+      # - Ubuntu host has musl-tools via apt (~30 seconds)
+      # - Guest is static musl binary, doesn't need manylinux glibc compatibility
+      # - Shim/libkrun must be built IN container (needs glibc 2.28 for manylinux)
+      - name: Build guest binary (Linux only)
+        if: runner.os == 'Linux'
+        run: |
+          make setup:build guest
+
+          # Cache only the final binary (11MB), not entire target dir (2.3GB)
+          GUEST_TARGET=$(scripts/util.sh --target)
+          mkdir -p ".cache/$GUEST_TARGET/release"
+          cp "target/$GUEST_TARGET/release/boxlite-guest" ".cache/$GUEST_TARGET/release/"
+
+          # Clean up to save disk space (sccache stores compilation cache separately)
+          rm -rf target ~/.rustup ~/.cargo
+          mkdir -p target
+
+      - name: Build C SDK (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cat > "$RUNNER_TEMP/build.sh" << 'CONTAINER_SCRIPT'
+          set -ex
+          git config --global --add safe.directory /work
+
+          # sccache fallback: if not available, disable wrapper for normal compilation
+          if [ -n "${RUSTC_WRAPPER:-}" ] && ! command -v "$RUSTC_WRAPPER" &>/dev/null; then
+            echo "::warning::sccache not available in container, falling back to normal compilation"
+            unset RUSTC_WRAPPER
+          fi
+
+          GUEST_TARGET=$(scripts/util.sh --target)
+          if [ -d ".cache/$GUEST_TARGET" ]; then
+            echo "Restoring guest from .cache/$GUEST_TARGET"
+            mkdir -p target
+            cp -a ".cache/$GUEST_TARGET" "target/$GUEST_TARGET"
+          fi
+
+          export SKIP_GUEST_BUILD=1
+          export PATH="/usr/local/go/bin:$CARGO_HOME/bin:$PATH"
+          make setup:build runtime
+
+          # Build the C FFI library (static + shared)
+          cargo build --release -p boxlite-c
+
+          # Fix Go runtime symbol conflicts in the static library
+          bash scripts/build/fix-go-symbols.sh target/release/libboxlite.a
+
+          command -v sccache &>/dev/null && sccache --show-stats || true
+          CONTAINER_SCRIPT
+
+          # Conditionally mount sccache binary and pass env vars into Docker.
+          SCCACHE_DOCKER_ARGS=""
+          if command -v sccache &>/dev/null; then
+            SCCACHE_DOCKER_ARGS="-v $(which sccache):/usr/local/bin/sccache:ro -e SCCACHE_GHA_ENABLED=true -e RUSTC_WRAPPER=sccache -e ACTIONS_CACHE_SERVICE_V2 -e ACTIONS_RESULTS_URL -e ACTIONS_RUNTIME_TOKEN"
+          fi
+
+          docker run --rm \
+            -v "${{ github.workspace }}":/work \
+            -v "$RUNNER_TEMP/build.sh:/tmp/build.sh:ro" \
+            $SCCACHE_DOCKER_ARGS \
+            -w /work \
+            -e CARGO_HOME=/work/.cargo-manylinux \
+            quay.io/pypa/manylinux_2_28_${{ contains(matrix.target, 'arm64') && 'aarch64' || 'x86_64' }} \
+            bash /tmp/build.sh
+
+      - name: Build C SDK (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          make setup:build runtime
+
+          # Build the C FFI library (static + shared)
+          cargo build --release -p boxlite-c
+
+          # Fix Go runtime symbol conflicts in the static library
+          bash scripts/build/fix-go-symbols.sh target/release/libboxlite.a
+
+          command -v sccache &>/dev/null && sccache --show-stats || true
+
+      - name: Package C SDK archive
+        run: |
+          VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          ARCHIVE_DIR="boxlite-c-v${VERSION}-${{ matrix.target }}"
+
+          mkdir -p "${ARCHIVE_DIR}/lib" "${ARCHIVE_DIR}/include"
+          cp target/release/libboxlite.a "${ARCHIVE_DIR}/lib/"
+          cp sdks/c/include/boxlite.h "${ARCHIVE_DIR}/include/"
+
+          # Copy shared library (platform-specific extension)
+          if [ -f target/release/libboxlite.dylib ]; then
+            cp target/release/libboxlite.dylib "${ARCHIVE_DIR}/lib/"
+          elif [ -f target/release/libboxlite.so ]; then
+            cp target/release/libboxlite.so "${ARCHIVE_DIR}/lib/"
+          fi
+
+          tar czf "${ARCHIVE_DIR}.tar.gz" "${ARCHIVE_DIR}/"
+          rm -rf "${ARCHIVE_DIR}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: c-sdk-${{ matrix.target }}
+          path: boxlite-c-v*-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+          retention-days: ${{ needs.config.outputs.artifact-retention-days }}
+
+  # ============================================================================
+  # UPLOAD TO GITHUB RELEASE
+  # ============================================================================
+  # Uploads platform-specific C SDK archives to the GitHub Release.
+  #
+  # Users download the archive for their platform, which contains:
+  # - lib/libboxlite.a (static library)
+  # - lib/libboxlite.dylib or lib/libboxlite.so (shared library)
+  # - include/boxlite.h (C header)
+  # ============================================================================
+  upload-to-release:
+    name: Upload to GitHub Release
+    needs: [ config, build ]
+    if: github.event_name == 'release' && github.event.action == 'published'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # Required to upload assets to GitHub Release
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: c-sdk-*
+          merge-multiple: true
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/boxlite-c-v*.tar.gz
+          fail_on_unmatched_files: true

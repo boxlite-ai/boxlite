@@ -39,5 +39,5 @@ dev\:go:
 	@echo "🔨 Building Go SDK (debug)..."
 	@cargo build -p boxlite-c
 	@bash $(SCRIPT_DIR)/build/fix-go-symbols.sh target/debug/libboxlite.a
-	@cd sdks/go && go build ./...
-	@echo "✅ Go SDK built. You can now run: cd sdks/go && go test -v ./..."
+	@cd sdks/go && go build -tags boxlite_dev ./...
+	@echo "✅ Go SDK built. You can now run: cd sdks/go && go test -tags boxlite_dev -v ./..."
