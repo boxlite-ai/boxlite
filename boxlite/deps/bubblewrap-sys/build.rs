@@ -15,8 +15,18 @@ fn main() {
     println!("cargo:rerun-if-changed=vendor/bubblewrap");
     println!("cargo:rerun-if-env-changed=BOXLITE_DEPS_STUB");
 
-    // Check for stub mode (for CI linting without building)
-    // Set BOXLITE_DEPS_STUB=1 to skip building and emit stub directives
+    // Auto-detect crates.io download: Cargo injects .cargo_vcs_info.json into
+    // published packages. When present, enter stub mode since vendor sources are
+    // excluded from the package and building from source is not possible.
+    if env::var("BOXLITE_DEPS_STUB").is_err() {
+        let manifest_dir = std::path::PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+        if manifest_dir.join(".cargo_vcs_info.json").exists() {
+            // SAFETY: build.rs is single-threaded; no concurrent env var access.
+            unsafe { env::set_var("BOXLITE_DEPS_STUB", "1") };
+        }
+    }
+
+    // Check for stub mode (for CI linting or crates.io install)
     if env::var("BOXLITE_DEPS_STUB").is_ok() {
         println!("cargo:warning=BOXLITE_DEPS_STUB mode: skipping bubblewrap build");
         println!("cargo:bwrap_BOXLITE_DEP=/nonexistent");
