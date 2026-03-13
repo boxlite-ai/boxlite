@@ -19,6 +19,7 @@ exclude = ["build/tmp", "target", ".venv", "examples/*/.venv"]
 resolver = "2"
 
 [workspace.dependencies]
+boxlite = { path = "boxlite", version = "0.7.3" }
 boxlite-shared = { path = "boxlite-shared", version = "0.7.3" }
 bubblewrap-sys = { path = "boxlite/deps/bubblewrap-sys", version = "0.7.3" }
 e2fsprogs-sys = { path = "boxlite/deps/e2fsprogs-sys", version = "0.7.3" }

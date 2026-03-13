@@ -392,7 +392,7 @@ fn create_library_symlinks(dir: &Path) {
 /// Downloads prebuilt runtime binaries from GitHub Releases.
 ///
 /// Called when BOXLITE_DEPS_STUB is set (i.e., -sys crates skipped their builds).
-/// Downloads the full `boxlite-runtime-{target}.tar.gz` tarball which contains
+/// Downloads the full `boxlite-runtime-v{version}-{target}.tar.gz` tarball which contains
 /// all native libraries (libkrun, libgvproxy, etc.) and tool binaries.
 fn download_prebuilt_runtime(runtime_dir: &Path) {
     // Skip if already downloaded (check for any library file)
@@ -419,8 +419,7 @@ fn download_prebuilt_runtime(runtime_dir: &Path) {
 
     let version = env::var("CARGO_PKG_VERSION").unwrap();
     let default_url = format!(
-        "https://github.com/boxlite-ai/boxlite/releases/download/v{}/boxlite-runtime-{}.tar.gz",
-        version, target
+        "https://github.com/boxlite-ai/boxlite/releases/download/v{version}/boxlite-runtime-v{version}-{target}.tar.gz"
     );
 
     println!("cargo:rerun-if-env-changed=BOXLITE_RUNTIME_URL");

@@ -6,6 +6,7 @@ authors.workspace = true
 license.workspace = true
 description = "Embeddable virtual machine runtime for secure, isolated code execution"
 repository = "https://github.com/boxlite-ai/boxlite"
+readme = "../README.md"
 keywords = ["vm", "sandbox", "isolation", "container", "security"]
 categories = ["virtualization"]
 links = "boxlite"

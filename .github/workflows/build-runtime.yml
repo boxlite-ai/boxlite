@@ -115,6 +115,9 @@ jobs:
           export PATH="/usr/local/go/bin:$CARGO_HOME/bin:$PATH"
           make setup:build runtime
 
+          # Build CLI binary (reuses compiled boxlite crate artifacts)
+          cargo build -p boxlite-cli --release
+
           command -v sccache &>/dev/null && sccache --show-stats || true
           CONTAINER_SCRIPT
 
@@ -138,25 +141,41 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           make setup:build runtime
+          cargo build -p boxlite-cli --release
           command -v sccache &>/dev/null && sccache --show-stats || true
 
       - name: Package runtime
         run: |
+          VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
           RUNTIME_DIR=$(ls -dt target/release/build/boxlite-*/out/runtime 2>/dev/null | head -1)
           [ -n "$RUNTIME_DIR" ] || { echo "ERROR: Runtime directory not found under target/"; exit 1; }
           cp -a "$RUNTIME_DIR" boxlite-runtime
-          tar czf boxlite-runtime-${{ matrix.target }}.tar.gz boxlite-runtime/
+          tar czf "boxlite-runtime-v${VERSION}-${{ matrix.target }}.tar.gz" boxlite-runtime/
           rm -rf boxlite-runtime
 
       - name: Upload runtime artifact
         uses: actions/upload-artifact@v4
         with:
           name: runtime-${{ matrix.target }}
-          path: boxlite-runtime-${{ matrix.target }}.tar.gz
+          path: boxlite-runtime-v*-${{ matrix.target }}.tar.gz
+          retention-days: 7
+
+      - name: Package CLI binary
+        run: |
+          VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          CLI_BIN="target/release/boxlite"
+          [ -f "$CLI_BIN" ] || { echo "ERROR: CLI binary not found at $CLI_BIN"; exit 1; }
+          tar czf "boxlite-cli-v${VERSION}-${{ matrix.rust_target }}.tar.gz" -C target/release boxlite
+
+      - name: Upload CLI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-${{ matrix.target }}
+          path: boxlite-cli-v*-${{ matrix.rust_target }}.tar.gz
           retention-days: 7
 
   upload_to_release:
-    name: Upload runtime to GitHub Release
+    name: Upload to GitHub Release
     needs: build
     runs-on: ubuntu-latest
     if: github.event_name == 'release'
@@ -164,17 +183,18 @@ jobs:
       contents: write
 
     steps:
-      - name: Download all runtime artifacts
+      - name: Download all build artifacts
         uses: actions/download-artifact@v4
         with:
           path: dist
-          pattern: runtime-*
           merge-multiple: true
 
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/boxlite-runtime-*.tar.gz
+          files: |
+            dist/boxlite-runtime-*.tar.gz
+            dist/boxlite-cli-*.tar.gz
           fail_on_unmatched_files: true
 
   # Publish Rust crates to crates.io after runtime tarballs are on GitHub Release.
@@ -255,6 +275,30 @@ jobs:
               echo "boxlite already on crates.io, skipping"
             else
               echo "::error::Failed to publish boxlite"
+              exit 1
+            fi
+          fi
+          echo "::endgroup::"
+
+      - name: Wait for boxlite indexing
+        run: sleep 60
+
+      # boxlite-cli uses --no-verify because verification would download the
+      # prebuilt runtime from GitHub Releases (slow and unnecessary since the
+      # real build already succeeded in the build job above).
+      - name: Publish boxlite-cli (Tier 3)
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "::group::Publishing boxlite-cli"
+          if cargo publish -p boxlite-cli --no-verify 2>&1 | tee /tmp/publish-boxlite-cli.log; then
+            echo "boxlite-cli published successfully"
+          else
+            if grep -q "already uploaded" /tmp/publish-boxlite-cli.log; then
+              echo "boxlite-cli already on crates.io, skipping"
+            else
+              echo "::error::Failed to publish boxlite-cli"
               exit 1
             fi
           fi

@@ -6,7 +6,6 @@ Command-line interface for BoxLite — use BoxLite without writing code, with a 
 For CLI development (build, test, adding commands), see [CLI Development Guide](../docs/development/cli.md).
 
 
-**Version:** 0.2.0  
 **Platforms:** macOS (Apple Silicon), Linux (x86_64, ARM64)
 
 ## Overview
@@ -28,7 +27,21 @@ The BoxLite CLI (`boxlite`) lets you create, run, and manage BoxLite boxes from 
 
 ## Installation
 
-The CLI is built from the BoxLite repository.
+### cargo install (from source)
+
+```bash
+cargo install boxlite-cli
+```
+
+### cargo binstall (prebuilt binary)
+
+```bash
+cargo binstall boxlite-cli
+```
+
+### Homebrew
+
+Coming soon
 
 ### Build from Source
 
@@ -45,14 +58,6 @@ cargo build --release -p boxlite-cli
 
 # Binary: target/release/boxlite
 ```
-
-
-### homebrew
-Coming soon
-
-
-### Crate.io
-Coming soon
 
 
 
