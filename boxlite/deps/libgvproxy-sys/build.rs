@@ -56,7 +56,6 @@ fn main() {
     // Set BOXLITE_DEPS_STUB=1 to skip building and emit stub link directives
     if env::var("BOXLITE_DEPS_STUB").is_ok() {
         println!("cargo:warning=BOXLITE_DEPS_STUB mode: skipping libgvproxy build");
-        println!("cargo:rustc-link-lib=static=gvproxy");
         println!("cargo:LIBGVPROXY_BOXLITE_DEP=/nonexistent");
         return;
     }

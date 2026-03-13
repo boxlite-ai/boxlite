@@ -916,9 +916,6 @@ fn main() {
     // Set BOXLITE_DEPS_STUB=1 to skip building and emit stub link directives
     if env::var("BOXLITE_DEPS_STUB").is_ok() {
         println!("cargo:warning=BOXLITE_DEPS_STUB mode: skipping libkrun build");
-        if cfg!(feature = "krun") {
-            println!("cargo:rustc-link-lib=static=krun");
-        }
         println!("cargo:LIBKRUN_BOXLITE_DEP=/nonexistent");
         println!("cargo:LIBKRUNFW_BOXLITE_DEP=/nonexistent");
         return;
