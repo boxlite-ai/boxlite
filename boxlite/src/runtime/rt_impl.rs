@@ -678,7 +678,7 @@ impl RuntimeImpl {
         let boxes = match self.box_manager.all_boxes(true) {
             Ok(b) => b,
             Err(e) => {
-                tracing::warn!("Failed to query boxes during sync shutdown: {e}");
+                eprintln!("[boxlite] Failed to query boxes during sync shutdown: {e}");
                 return;
             }
         };
@@ -692,7 +692,10 @@ impl RuntimeImpl {
                 continue;
             }
 
-            tracing::info!(box_id = %config.id, pid, "Auto-stopping non-detached box");
+            eprintln!(
+                "[boxlite] Auto-stopping non-detached box: id={}, pid={pid}",
+                config.id
+            );
 
             // SIGTERM triggers shim's graceful shutdown handler (Guest.Shutdown RPC)
             unsafe {
@@ -707,7 +710,10 @@ impl RuntimeImpl {
                     break;
                 }
                 if start.elapsed() > timeout {
-                    tracing::warn!(box_id = %config.id, pid, "Shim didn't exit after SIGTERM, force killing");
+                    eprintln!(
+                        "[boxlite] Shim didn't exit after SIGTERM, force killing: id={}, pid={pid}",
+                        config.id
+                    );
                     crate::util::kill_process(pid);
                     break;
                 }
