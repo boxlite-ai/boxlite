@@ -98,9 +98,8 @@ main();
 
 ### Install
 
-```toml
-[dependencies]
-boxlite = { git = "https://github.com/boxlite-ai/boxlite" }
+```bash
+cargo add boxlite
 ```
 
 ### Run

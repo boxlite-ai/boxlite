@@ -6,13 +6,11 @@ Get up and running with BoxLite Rust crate in 5 minutes.
 
 **Requirements:** Rust 1.88 or later
 
-Add BoxLite to your `Cargo.toml`:
+Add BoxLite to your project:
 
-```toml
-[dependencies]
-boxlite = { git = "https://github.com/boxlite-labs/boxlite" }
-tokio = { version = "1", features = ["full"] }
-futures = "0.3"
+```bash
+cargo add boxlite tokio --features tokio/full
+cargo add futures
 ```
 
 ## Basic Execution
