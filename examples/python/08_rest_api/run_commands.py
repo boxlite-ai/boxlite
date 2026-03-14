@@ -19,7 +19,7 @@ import asyncio
 from boxlite import Boxlite, BoxOptions, BoxliteRestOptions
 
 
-SERVER_URL = "http://localhost:8080"
+SERVER_URL = "http://localhost:8100"
 
 
 def connect() -> Boxlite:

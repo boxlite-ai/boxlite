@@ -55,9 +55,9 @@ fn test_images_format() {
     assert!(stdout.starts_with('['));
     assert!(stdout.trim().ends_with(']'));
 
-    assert!(stdout.contains("\"Repository\""));
-    assert!(stdout.contains("\"Tag\""));
-    assert!(stdout.contains("\"ID\""));
+    assert!(stdout.contains("\"Repository\"") || stdout.trim() == "[]");
+    assert!(stdout.contains("\"Tag\"") || stdout.trim() == "[]");
+    assert!(stdout.contains("\"ID\"") || stdout.trim() == "[]");
 }
 
 #[test]

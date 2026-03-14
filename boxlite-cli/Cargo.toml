@@ -15,7 +15,7 @@ name = "boxlite"
 path = "src/main.rs"
 
 [dependencies]
-boxlite.workspace = true
+boxlite = { workspace = true, features = ["rest"] }
 clap = { version = "4.5", features = ["derive", "env"] }
 clap_complete = "4.5"
 tokio = { version = "1.37", features = ["rt", "rt-multi-thread", "macros", "signal"] }
@@ -31,6 +31,8 @@ tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 async-stream = "0.3"
 axum = { version = "0.8", features = ["macros"] }
 base64 = "0.22"
+tar = "0.4"
+tempfile = "3"
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 
 # Serialization (aligned with core boxlite)

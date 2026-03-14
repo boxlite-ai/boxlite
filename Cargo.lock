@@ -470,6 +470,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "tabled",
+ "tar",
  "tempfile",
  "term_size",
  "tokio",

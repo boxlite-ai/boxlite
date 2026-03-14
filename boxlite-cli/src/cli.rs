@@ -3,7 +3,7 @@
 //! subcommands, and flag definitions.
 
 use boxlite::runtime::options::{PortProtocol, PortSpec, VolumeSpec};
-use boxlite::{BoxCommand, BoxOptions, BoxliteOptions, BoxliteRuntime};
+use boxlite::{BoxCommand, BoxOptions, BoxliteOptions, BoxliteRestOptions, BoxliteRuntime};
 use clap::{Args, Command, Parser, Subcommand, ValueEnum};
 use clap_complete::shells::{Bash, Fish, Zsh};
 use std::io::{IsTerminal, Write};
@@ -150,6 +150,10 @@ pub struct GlobalFlags {
     /// If not provided, uses default options (no config file is loaded from $BOXLITE_HOME).
     #[arg(long, global = true)]
     pub config: Option<String>,
+
+    /// Connect to a remote BoxLite REST API server instead of local runtime.
+    #[arg(long, global = true, env = "BOXLITE_REST_URL")]
+    pub url: Option<String>,
 }
 
 impl GlobalFlags {
@@ -186,6 +190,10 @@ impl GlobalFlags {
     }
 
     pub fn create_runtime(&self) -> anyhow::Result<BoxliteRuntime> {
+        if let Some(ref url) = self.url {
+            let opts = BoxliteRestOptions::new(url);
+            return BoxliteRuntime::rest(opts).map_err(Into::into);
+        }
         let options = self.resolve_runtime_options()?;
         self.create_runtime_with_options(options)
     }
