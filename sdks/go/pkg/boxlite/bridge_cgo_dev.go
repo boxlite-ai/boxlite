@@ -13,6 +13,6 @@ package boxlite
 #cgo darwin LDFLAGS: -framework Hypervisor -framework vmnet -lresolv
 
 #cgo linux LDFLAGS: ${SRCDIR}/../../../../target/debug/libboxlite.a
-#cgo linux LDFLAGS: -lresolv -lpthread -ldl -lm
+#cgo linux LDFLAGS: -lresolv -lpthread -ldl -lrt -lm
 */
 import "C"
