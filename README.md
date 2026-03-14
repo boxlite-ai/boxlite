@@ -185,6 +185,48 @@ func main() {
 </details>
 
 
+## REST API Quick Start
+
+<details>
+<summary>View guide</summary>
+
+### Install
+
+```bash
+cargo install boxlite-cli
+```
+
+### Start the server
+
+```bash
+boxlite serve
+# Listening on 0.0.0.0:8100
+```
+
+### Use it
+
+```bash
+# Create a box
+curl -s -X POST http://localhost:8100/v1/default/boxes \
+  -H 'Content-Type: application/json' \
+  -d '{"image": "alpine:latest"}'
+
+# Run a command (replace BOX_ID from the response above)
+curl -s -X POST http://localhost:8100/v1/default/boxes/BOX_ID/exec \
+  -H 'Content-Type: application/json' \
+  -d '{"command": "echo", "args": ["Hello from BoxLite!"]}'
+```
+
+All CLI commands also work against a running server:
+
+```bash
+boxlite --url http://localhost:8100 list
+boxlite --url http://localhost:8100 exec BOX_ID -- echo "Hello!"
+```
+
+</details>
+
+
 ## Next steps
 
 - Run more real-world scenarios in [Examples](./examples/)
@@ -199,6 +241,7 @@ func main() {
 - **Security**: hardware isolation (KVM/HVF), OS sandboxing (seccomp/sandbox-exec), resource limits
 - **Image Registry Configuration**: Configure custom registries via config file (`--config`), CLI flags (`--registry`), or SDK options. See the [configuration guide](./docs/guides/image-registry-configuration.md).
 - **SDKs**: Rust (Rust 1.88+), Python (Python 3.10+), C (C11-compatible compiler), Node.js (Node.js 18+), Go (Go 1.24+)
+- **REST API**: built-in HTTP server (`boxlite serve`) — use BoxLite from any language or tool via curl
 
 ## Architecture
 
