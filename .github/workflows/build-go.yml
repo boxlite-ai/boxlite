@@ -12,13 +12,15 @@
 #   go build ./...
 #
 # Triggers:
-# - release: When a GitHub release is published
+# - workflow_run: After Build C SDK completes (ensures archives are uploaded
+#   before tagging the Go module, so go generate works immediately)
 # - workflow_dispatch: Manual trigger for testing
 name: Build Go SDK
 
 on:
-  release:
-    types: [ published ]
+  workflow_run:
+    workflows: ["Build C SDK"]
+    types: [completed]
   workflow_dispatch:
 
 env:
@@ -44,6 +46,9 @@ jobs:
   build-and-test:
     name: Build & Test (${{ matrix.target }})
     needs: config
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.conclusion == 'success'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -185,7 +190,7 @@ jobs:
   tag-go-module:
     name: Tag Go Module
     needs: build-and-test
-    if: github.event_name == 'release' && github.event.action == 'published'
+    if: github.event_name == 'workflow_run' && github.event.workflow_run.event == 'release'
     runs-on: ubuntu-latest
     permissions:
       contents: write   # Required to push tags
@@ -196,10 +201,9 @@ jobs:
           fetch-depth: 0
 
       - name: Create Go module tag
-        env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
-          GO_TAG="sdks/go/${RELEASE_TAG}"
+          VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          GO_TAG="sdks/go/v${VERSION}"
           echo "Creating Go module tag: ${GO_TAG}"
 
           # Skip if tag already exists (idempotent)
