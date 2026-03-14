@@ -1,103 +1,66 @@
 # BoxLite Go SDK
 
-Go SDK for BoxLite - an embeddable virtual machine runtime for secure, isolated code execution environments.
+Go SDK for BoxLite — an embeddable virtual machine runtime for secure, isolated code execution.
 
-## Requirements
-
-- Go 1.21 or later
-- Rust toolchain (for building the native library)
-
-## Building
-
-### Build the Rust library first
+## Install
 
 ```bash
-cd ../..
-make runtime:debug
+go get github.com/boxlite-ai/boxlite/sdks/go
+go generate github.com/boxlite-ai/boxlite/sdks/go
 ```
 
-### Build the Go SDK
+The `go generate` step downloads the prebuilt native library (`libboxlite.a`) for your platform from GitHub Releases.
 
-```bash
-# From the project root
-make go-build
-
-# Or from this directory
-go build ./...
-```
-
-## Testing
-
-### Run Go SDK tests
-
-```bash
-# From the project root
-make test:go
-
-# Or from this directory
-go test ./... -v
-```
-
-**Note:** Tests that require the Rust library will be skipped if the library is not built.
-
-### Run all tests
-
-```bash
-make test
-```
-
-This runs tests for all SDKs (Rust, Python, Node.js, Go, and C).
-
-## Usage Example
+## Usage
 
 ```go
 package main
 
 import (
-    "context"
-    "fmt"
-    "log"
+	"context"
+	"fmt"
+	"log"
 
-    "github.com/boxlite-ai/boxlite/sdks/go/pkg/client"
+	boxlite "github.com/boxlite-ai/boxlite/sdks/go"
 )
 
 func main() {
-    // Create runtime
-    runtime, err := client.NewRuntime(nil)
-    if err != nil {
-        log.Fatal(err)
-    }
-    defer runtime.Close()
+	rt, err := boxlite.NewRuntime()
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer rt.Close()
 
-    // Create a box
-    ctx := context.Background()
-    box, err := runtime.CreateBox(ctx,
-        client.NewBoxOptions("alpine:latest").
-            WithCPUs(1).
-            WithMemoryMB(512).
-            WithEnvVar("KEY", "value"),
-        "my-box",
-    )
-    if err != nil {
-        log.Fatal(err)
-    }
+	ctx := context.Background()
+	box, err := rt.CreateBox(ctx,
+		boxlite.NewBoxOptions("alpine:latest").
+			WithCPUs(1).
+			WithMemoryMB(512),
+		"my-box",
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
 
-    // Start the box
-    if err := box.Start(); err != nil {
-        log.Fatal(err)
-    }
+	if err := box.Start(); err != nil {
+		log.Fatal(err)
+	}
 
-    fmt.Println("Box started successfully!")
+	fmt.Println("Box started successfully!")
 }
 ```
 
-## API Documentation
+## Development
 
-See the Go package documentation for detailed API reference:
+Build from source (requires Rust toolchain):
 
-- `client.Runtime` - Main entry point for the SDK
-- `client.Box` - Handle to a running or configured box
-- `client.BoxOptions` - Configuration options for creating boxes
+```bash
+# From the project root
+make dev:go
+
+# Run tests
+cd sdks/go && go test -tags boxlite_dev -v ./...
+```
 
 ## License
 

@@ -5,7 +5,7 @@ package boxlite
 // Default CGO directives — links against prebuilt libboxlite.a in lib/.
 // Install the library first:
 //
-//	go generate github.com/boxlite-ai/boxlite/sdks/go/pkg/boxlite
+//	go generate github.com/boxlite-ai/boxlite/sdks/go
 
 /*
 #cgo CFLAGS: -I${SRCDIR}/lib/include

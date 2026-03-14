@@ -142,9 +142,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ```bash
 go get github.com/boxlite-ai/boxlite/sdks/go
+go generate github.com/boxlite-ai/boxlite/sdks/go
 ```
 
-Requires Go 1.21+ and the BoxLite native library (see [Building](./sdks/go/README.md#building)).
+Requires Go 1.24+. The `go generate` step downloads the prebuilt native library for your platform.
 
 ### Run
 
@@ -156,7 +157,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/boxlite-ai/boxlite/sdks/go/pkg/boxlite"
+	boxlite "github.com/boxlite-ai/boxlite/sdks/go"
 )
 
 func main() {
@@ -197,7 +198,7 @@ func main() {
 - **Images**: OCI pull + caching, custom rootfs support
 - **Security**: hardware isolation (KVM/HVF), OS sandboxing (seccomp/sandbox-exec), resource limits
 - **Image Registry Configuration**: Configure custom registries via config file (`--config`), CLI flags (`--registry`), or SDK options. See the [configuration guide](./docs/guides/image-registry-configuration.md).
-- **SDKs**: Rust (Rust 1.88+), Python (Python 3.10+), C (C11-compatible compiler), Node.js (Node.js 18+), Go (Go 1.21+)
+- **SDKs**: Rust (Rust 1.88+), Python (Python 3.10+), C (C11-compatible compiler), Node.js (Node.js 18+), Go (Go 1.24+)
 
 ## Architecture
 

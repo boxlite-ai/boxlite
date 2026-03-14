@@ -1,7 +1,7 @@
 // Download prebuilt libboxlite from GitHub Releases.
 //
 // This tool downloads the correct platform-specific archive from the BoxLite
-// GitHub Releases and extracts it to pkg/boxlite/lib/{platform}/.
+// GitHub Releases and extracts it to lib/{platform}/.
 //
 // Usage:
 //
@@ -80,10 +80,8 @@ func detectPlatform() string {
 	}
 }
 
-// findLibDir locates the lib directory inside pkg/boxlite/.
-// Works whether run from the repo root or from sdks/go/.
+// findLibDir locates the lib directory at the module root.
 func findLibDir() string {
-	// Try to find go.mod to locate the module root
 	dir, err := os.Getwd()
 	if err != nil {
 		fatalf("cannot get working directory: %v", err)
@@ -91,7 +89,7 @@ func findLibDir() string {
 
 	for {
 		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			return filepath.Join(dir, "pkg", "boxlite", "lib")
+			return filepath.Join(dir, "lib")
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
