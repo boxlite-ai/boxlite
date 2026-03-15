@@ -142,10 +142,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ```bash
 go get github.com/boxlite-ai/boxlite/sdks/go
-go generate github.com/boxlite-ai/boxlite/sdks/go
+go run github.com/boxlite-ai/boxlite/sdks/go/cmd/setup
 ```
 
-Requires Go 1.24+. The `go generate` step downloads the prebuilt native library for your platform.
+Requires Go 1.24+ with CGO enabled. The setup step downloads the prebuilt native library (one-time).
 
 ### Run
 

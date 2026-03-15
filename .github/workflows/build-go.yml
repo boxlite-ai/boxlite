@@ -1,19 +1,15 @@
 # Test Go SDK and tag Go module for publishing.
 #
-# Downloads the prebuilt C SDK archive from GitHub Releases via go generate,
-# then runs Go tests — validating the exact workflow that end users follow.
-#
-# On release, creates a Go module tag (sdks/go/vX.Y.Z) so the module is
-# available via: go get github.com/boxlite-ai/boxlite/sdks/go@vX.Y.Z
+# Downloads the prebuilt native library from GitHub Releases, then builds
+# and tests the Go SDK — validating the same workflow that end users follow.
 #
 # User workflow:
 #   go get github.com/boxlite-ai/boxlite/sdks/go
-#   go generate github.com/boxlite-ai/boxlite/sdks/go
+#   go run github.com/boxlite-ai/boxlite/sdks/go/cmd/setup
 #   go build ./...
 #
 # Triggers:
-# - workflow_run: After Build C SDK completes (ensures archives are uploaded
-#   before tagging the Go module, so go generate works immediately)
+# - workflow_run: After Build C SDK completes (ensures archives are uploaded)
 # - workflow_dispatch: Manual trigger for testing
 name: Build Go SDK
 
@@ -27,12 +23,6 @@ jobs:
   config:
     uses: ./.github/workflows/config.yml
 
-  # ============================================================================
-  # TEST
-  # ============================================================================
-  # Runs `go generate` to download the prebuilt C SDK archive, then builds
-  # and tests the Go SDK — validating the exact end-user workflow.
-  # ============================================================================
   test:
     name: Test (${{ matrix.target }})
     needs: config
@@ -55,8 +45,13 @@ jobs:
 
       - name: Download prebuilt library
         run: |
-          cd sdks/go
-          go generate .
+          VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          PLATFORM="${{ matrix.target }}"
+          ARCHIVE="boxlite-c-v${VERSION}-${PLATFORM}.tar.gz"
+          URL="https://github.com/boxlite-ai/boxlite/releases/download/v${VERSION}/${ARCHIVE}"
+          echo "Downloading: ${URL}"
+          curl -sL "${URL}" | tar xz -C /tmp/
+          cp "/tmp/boxlite-c-v${VERSION}-${PLATFORM}/lib/libboxlite.a" sdks/go/
 
       - name: Test Go SDK
         run: |
@@ -64,22 +59,13 @@ jobs:
           go build ./...
           go test -v ./...
 
-  # ============================================================================
-  # TAG GO MODULE
-  # ============================================================================
-  # Creates a Go module tag (sdks/go/vX.Y.Z) so the module is available via:
-  #   go get github.com/boxlite-ai/boxlite/sdks/go@vX.Y.Z
-  #
-  # Go uses the tag format <module-path>/vX.Y.Z for modules that don't live
-  # at the repository root. pkg.go.dev indexes the module automatically.
-  # ============================================================================
   tag-go-module:
     name: Tag Go Module
     needs: test
     if: github.event_name == 'workflow_run' && github.event.workflow_run.event == 'release'
     runs-on: ubuntu-latest
     permissions:
-      contents: write   # Required to push tags
+      contents: write
 
     steps:
       - uses: actions/checkout@v4
@@ -89,15 +75,13 @@ jobs:
       - name: Create Go module tag
         run: |
           VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
-          GO_TAG="sdks/go/v${VERSION}"
-          echo "Creating Go module tag: ${GO_TAG}"
+          TAG="sdks/go/v${VERSION}"
+          echo "Creating tag: ${TAG}"
 
-          # Skip if tag already exists (idempotent)
-          if git rev-parse "${GO_TAG}" >/dev/null 2>&1; then
-            echo "Tag ${GO_TAG} already exists, skipping"
+          if git rev-parse "${TAG}" >/dev/null 2>&1; then
+            echo "Tag ${TAG} already exists, skipping"
             exit 0
           fi
 
-          git tag "${GO_TAG}"
-          git push origin "${GO_TAG}"
-          echo "Go module tag ${GO_TAG} pushed successfully"
+          git tag "${TAG}"
+          git push origin "${TAG}"
