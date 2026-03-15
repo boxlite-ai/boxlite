@@ -32,17 +32,16 @@ func main() {
 	defer rt.Close()
 
 	ctx := context.Background()
-	box, err := rt.CreateBox(ctx,
-		boxlite.NewBoxOptions("alpine:latest").
-			WithCPUs(1).
-			WithMemoryMB(512),
-		"my-box",
+	box, err := rt.Create(ctx, "alpine:latest",
+		boxlite.WithName("my-box"),
+		boxlite.WithCPUs(1),
+		boxlite.WithMemory(512),
 	)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	if err := box.Start(); err != nil {
+	if err := box.Start(ctx); err != nil {
 		log.Fatal(err)
 	}
 
