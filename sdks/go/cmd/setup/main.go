@@ -162,7 +162,7 @@ func downloadToModCache(url, destDir string) error {
 	if err := os.Chmod(destDir, 0o755); err != nil {
 		return fmt.Errorf("chmod writable %s: %w (try running with appropriate permissions)", destDir, err)
 	}
-	defer os.Chmod(destDir, 0o555)
+	defer func() { _ = os.Chmod(destDir, 0o555) }()
 
 	tr := tar.NewReader(gz)
 	extracted := false
