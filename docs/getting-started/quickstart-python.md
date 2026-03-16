@@ -69,6 +69,8 @@ print(response.text)
 """
 
     async with boxlite.CodeBox() as codebox:
+        # Install packages explicitly before use
+        await codebox.install_package("requests")
         result = await codebox.run(code)
         print(result)
 
@@ -83,10 +85,11 @@ python codebox.py
 ```
 
 **What's happening:**
-1. CodeBox automatically installs required packages (requests)
-2. Executes the code in complete isolation
-3. Returns the output
-4. Your host system remains completely safe
+1. CodeBox executes the code in complete isolation
+2. Returns the output
+3. Your host system remains completely safe
+
+**Note:** Each `run()` call executes in a fresh Python process. Variables, imports, and state do not persist between calls. To share state, combine code into a single `run()` call.
 
 ## Running Examples
 

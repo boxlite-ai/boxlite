@@ -79,7 +79,8 @@ print(response.text)
 """
 
     async with boxlite.CodeBox() as codebox:
-        # CodeBox automatically installs packages
+        # Install packages explicitly before use
+        await codebox.install_package("requests")
         result = await codebox.run(code)
         print(result)
 
