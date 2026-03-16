@@ -1050,11 +1050,42 @@ pub fn read_backing_chain(path: &Path) -> Vec<PathBuf> {
                 current = backing_path;
             }
             Ok(None) => break,
-            Err(_) => break,
+            Err(e) => {
+                tracing::warn!(
+                    path = %current.display(),
+                    error = %e,
+                    "Failed to read qcow2 backing path — returning partial chain"
+                );
+                break;
+            }
         }
     }
 
     chain
+}
+
+/// Check if `target` appears in the backing chain of `chain_root`.
+///
+/// Walks the full qcow2 backing chain from `chain_root` and returns `true`
+/// if `target` (canonicalized) matches any file in the chain.
+///
+/// Used by snapshot removal to ensure no other disk depends on the snapshot
+/// being deleted — including other snapshot disks, clone bases, and the
+/// box's current container disk.
+pub fn is_backing_dependency(target: &Path, chain_root: &Path) -> bool {
+    let target_canonical = match target.canonicalize() {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
+
+    for backing in read_backing_chain(chain_root) {
+        if let Ok(canonical) = backing.canonicalize()
+            && canonical == target_canonical
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// QCOW2 magic number: "QFI\xfb".

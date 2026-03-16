@@ -190,12 +190,18 @@ impl SnapshotManager {
         Ok(info)
     }
 
-    /// Remove a snapshot. Refuses if the box's current disk depends on it.
+    /// Remove a snapshot. Refuses if any disk in the system depends on it.
+    ///
+    /// Walks full qcow2 backing chains to detect dependencies:
+    /// 1. Box's current container disk
+    /// 2. Other snapshot disks for this box
+    /// 3. Clone base disks in `bases/`
     pub(crate) fn remove(
         &self,
         box_id: &str,
         name: &str,
         container_disk: &Path,
+        bases_dir: &Path,
     ) -> BoxliteResult<()> {
         let info = self.store.find(box_id, name)?.ok_or_else(|| {
             BoxliteError::NotFound(format!(
@@ -204,15 +210,15 @@ impl SnapshotManager {
             ))
         })?;
 
-        // Safety: refuse if the box's current disk backs into this snapshot.
         let snap_disk = info.disk_info.to_path_buf();
-        if container_disk.exists()
-            && snap_disk.exists()
-            && let (Ok(Some(backing)), Ok(snap_canonical)) = (
-                crate::disk::read_backing_file_path(container_disk),
-                snap_disk.canonicalize(),
-            )
-            && Path::new(&backing) == snap_canonical
+        if !snap_disk.exists() {
+            // Snapshot disk already gone — just clean up DB record.
+            self.store.delete(&info.id)?;
+            return Ok(());
+        }
+
+        // Check 1: Box's current container disk depends on this snapshot.
+        if container_disk.exists() && crate::disk::is_backing_dependency(&snap_disk, container_disk)
         {
             return Err(BoxliteError::InvalidState(
                 "Cannot remove snapshot: current disk depends on this snapshot. \
@@ -221,19 +227,57 @@ impl SnapshotManager {
             ));
         }
 
-        // Delete snapshot directory (contains the immutable disk file).
-        let snap_dir = snap_disk.parent().unwrap_or(Path::new(""));
-        if snap_dir.exists() {
-            std::fs::remove_dir_all(snap_dir).map_err(|e| {
-                BoxliteError::Storage(format!(
-                    "Failed to remove snapshot directory {}: {}",
-                    snap_dir.display(),
-                    e
-                ))
-            })?;
+        // Check 2: Other snapshot disks for this box depend on this snapshot.
+        let all_snapshots = self.store.list(box_id)?;
+        for other in &all_snapshots {
+            if other.id == info.id {
+                continue; // Skip self.
+            }
+            let other_disk = other.disk_info.to_path_buf();
+            if other_disk.exists() && crate::disk::is_backing_dependency(&snap_disk, &other_disk) {
+                return Err(BoxliteError::InvalidState(format!(
+                    "Cannot remove snapshot '{}': snapshot '{}' depends on it via backing chain",
+                    name, other.name
+                )));
+            }
         }
 
+        // Check 3: Clone base disks in bases/ depend on this snapshot.
+        if bases_dir.exists()
+            && let Ok(entries) = std::fs::read_dir(bases_dir)
+        {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().is_some_and(|ext| ext == "qcow2")
+                    && crate::disk::is_backing_dependency(&snap_disk, &path)
+                {
+                    return Err(BoxliteError::InvalidState(format!(
+                        "Cannot remove snapshot '{}': a clone base disk ({}) depends on it",
+                        name,
+                        path.file_name().unwrap_or_default().to_string_lossy()
+                    )));
+                }
+            }
+        }
+
+        // All checks passed — safe to delete.
+        // Delete DB record first (authoritative metadata), then filesystem.
+        // If crash occurs between the two, orphaned files are harmless and
+        // cleaned up by remove_all_for_box() during box deletion.
         self.store.delete(&info.id)?;
+
+        let snap_dir = snap_disk.parent().unwrap_or(Path::new(""));
+        if snap_dir.exists()
+            && let Err(e) = std::fs::remove_dir_all(snap_dir)
+        {
+            tracing::warn!(
+                snapshot = %name,
+                dir = %snap_dir.display(),
+                error = %e,
+                "Failed to remove snapshot directory (DB record already deleted)"
+            );
+        }
+
         Ok(())
     }
 

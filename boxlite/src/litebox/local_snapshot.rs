@@ -101,11 +101,12 @@ impl LocalSnapshotBackend {
             .box_home
             .join("disks")
             .join(disk_filenames::CONTAINER_DISK);
+        let bases_dir = self.inner.runtime.layout.bases_dir();
 
         self.inner
             .runtime
             .snapshot_mgr
-            .remove(box_id, name, &container_disk)?;
+            .remove(box_id, name, &container_disk, &bases_dir)?;
 
         tracing::info!(
             box_id = %self.inner.id(),
@@ -224,10 +225,13 @@ pub(crate) fn recover_pending_snapshot(box_home: &Path) {
         let container_path = PathBuf::from(container_path);
 
         if let Some(snap_dir_str) = snapshot_dir {
-            // Current-style: snapshot_dir based recovery
+            // Current-style: snapshot_dir based recovery.
             let snap_dir = PathBuf::from(snap_dir_str);
             let snap_container = snap_dir.join(disk_filenames::CONTAINER_DISK);
+
             if !container_path.exists() && snap_container.exists() {
+                // Crash happened after rename but before COW child creation.
+                // The snapshot is incomplete — move the disk back to restore the box.
                 match std::fs::rename(&snap_container, &container_path) {
                     Ok(()) => {
                         tracing::info!(
@@ -243,10 +247,46 @@ pub(crate) fn recover_pending_snapshot(box_home: &Path) {
                         );
                     }
                 }
+                // Incomplete snapshot — clean up its directory.
+                if snap_dir.exists() {
+                    let _ = std::fs::remove_dir_all(&snap_dir);
+                }
+            } else if container_path.exists() && snap_container.exists() {
+                // Both exist: crash happened after COW child was created but before
+                // the marker was deleted. Validate that the COW child actually backs
+                // to the expected snapshot disk before declaring success.
+                let backing_ok = crate::disk::read_backing_file_path(&container_path)
+                    .ok()
+                    .flatten()
+                    .and_then(|bp| {
+                        let backing = PathBuf::from(bp);
+                        let expected = snap_container.canonicalize().ok()?;
+                        let actual = backing.canonicalize().ok()?;
+                        Some(actual == expected)
+                    })
+                    .unwrap_or(false);
+
+                if backing_ok {
+                    tracing::info!(
+                        "Snapshot completed successfully before crash. Keeping snapshot dir: {}",
+                        snap_dir.display()
+                    );
+                } else {
+                    tracing::warn!(
+                        snap_dir = %snap_dir.display(),
+                        "Container disk does not back to expected snapshot. \
+                         Preserving both files for manual inspection."
+                    );
+                }
+            } else if !container_path.exists() && !snap_container.exists() {
+                // Neither disk exists — unrecoverable state. Clean up snapshot dir.
+                if snap_dir.exists() {
+                    let _ = std::fs::remove_dir_all(&snap_dir);
+                }
             }
-            if snap_dir.exists() {
-                let _ = std::fs::remove_dir_all(&snap_dir);
-            }
+            // else: container_path exists but snap_container doesn't — snapshot
+            // was never created (marker written but rename never happened). Just
+            // clean up marker (done below).
         } else if let Some(bases_dir_str) = bases_dir {
             // Legacy-style: find the most recently created .qcow2 file in bases/
             if !container_path.exists() {
@@ -354,6 +394,44 @@ mod tests {
         recover_pending_snapshot(box_home);
 
         // Marker should be deleted despite being corrupt.
+        assert!(!box_home.join(".snapshot_pending").exists());
+    }
+
+    #[test]
+    fn test_recover_pending_snapshot_preserves_completed_snapshot() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let box_home = dir.path();
+
+        // Simulate successful snapshot: both container disk AND snapshot disk exist.
+        // This means the crash happened after COW child creation but before
+        // the marker was deleted. The snapshot is valid.
+        let snap_dir = box_home.join("snapshots").join("completed-snap");
+        std::fs::create_dir_all(&snap_dir).unwrap();
+
+        let disks_dir = box_home.join("disks");
+        std::fs::create_dir_all(&disks_dir).unwrap();
+
+        let container_disk = disks_dir.join(disk_filenames::CONTAINER_DISK);
+        let snap_container = snap_dir.join(disk_filenames::CONTAINER_DISK);
+
+        // Both files exist (snapshot completed successfully before crash).
+        std::fs::write(&container_disk, b"cow-child").unwrap();
+        std::fs::write(&snap_container, b"snapshot-base").unwrap();
+
+        let marker = serde_json::json!({
+            "snapshot_dir": snap_dir.to_string_lossy(),
+            "container_disk": container_disk.to_string_lossy(),
+        });
+        std::fs::write(box_home.join(".snapshot_pending"), marker.to_string()).unwrap();
+
+        recover_pending_snapshot(box_home);
+
+        // Both disks should still exist.
+        assert!(container_disk.exists(), "COW child should be preserved");
+        assert!(snap_container.exists(), "Snapshot disk should be preserved");
+        // Snapshot directory should NOT be deleted (BUG 3 fix).
+        assert!(snap_dir.exists(), "Snapshot dir should be preserved");
+        // Marker should be gone.
         assert!(!box_home.join(".snapshot_pending").exists());
     }
 }
