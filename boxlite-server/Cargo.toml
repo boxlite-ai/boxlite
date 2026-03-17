@@ -1,0 +1,59 @@
+[package]
+name = "boxlite-server"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Distributed server for BoxLite with coordinator and worker roles"
+
+[[bin]]
+name = "boxlite-server"
+path = "src/main.rs"
+
+[dependencies]
+boxlite = { path = "../boxlite" }
+boxlite-shared = { path = "../boxlite-shared" }
+
+# gRPC
+tonic = "0.12"
+prost = "0.13"
+
+# HTTP (coordinator REST API)
+axum = { version = "0.8", features = ["macros"] }
+
+# Async runtime
+tokio = { version = "1.37", features = ["rt", "rt-multi-thread", "macros", "sync", "net", "time", "signal"] }
+
+# Database
+rusqlite = { version = "0.37", features = ["bundled"] }
+parking_lot = "0.12"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# HTTP proxy (coordinator → worker)
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+futures = "0.3"
+base64 = "0.22"
+async-stream = "0.3"
+tokio-stream = "0.1"
+bytes = "1"
+
+# OpenAPI / Swagger UI
+utoipa = { version = "5", features = ["axum_extras"] }
+utoipa-swagger-ui = { version = "9", features = ["axum"] }
+
+# Utilities
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4.5", features = ["derive", "env"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+thiserror = "2.0"
+async-trait = "0.1"
+anyhow = "1.0"
+dirs = "6.0"
+rand = "0.9"
+
+[build-dependencies]
+tonic-build = "0.12"

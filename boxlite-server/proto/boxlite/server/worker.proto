@@ -1,0 +1,194 @@
+syntax = "proto3";
+
+package boxlite.server;
+
+// WorkerService defines the gRPC interface between coordinator and worker nodes.
+// Workers implement this service; the coordinator calls it to manage boxes remotely.
+service WorkerService {
+  // ── Box Lifecycle ──
+
+  rpc CreateBox(CreateBoxRequest) returns (BoxResponse);
+  rpc GetBox(GetBoxRequest) returns (BoxResponse);
+  rpc ListBoxes(ListBoxesRequest) returns (ListBoxesResponse);
+  rpc RemoveBox(RemoveBoxRequest) returns (RemoveBoxResponse);
+  rpc StartBox(StartBoxRequest) returns (BoxResponse);
+  rpc StopBox(StopBoxRequest) returns (BoxResponse);
+
+  // ── Execution ──
+
+  rpc Exec(ExecRequest) returns (ExecResponse);
+  rpc StreamOutput(StreamOutputRequest) returns (stream OutputChunk);
+  rpc SendInput(SendInputRequest) returns (SendInputResponse);
+  rpc SendSignal(SendSignalRequest) returns (SendSignalResponse);
+  rpc ResizeTty(ResizeTtyRequest) returns (ResizeTtyResponse);
+
+  // ── Health & Metrics ──
+
+  rpc GetMetrics(GetMetricsRequest) returns (MetricsResponse);
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+}
+
+// ============================================================================
+// Box Messages
+// ============================================================================
+
+message CreateBoxRequest {
+  optional string name = 1;
+  optional string image = 2;
+  optional string rootfs_path = 3;
+  optional uint32 cpus = 4;
+  optional uint32 memory_mib = 5;
+  optional uint64 disk_size_gb = 6;
+  optional string working_dir = 7;
+  map<string, string> env = 8;
+  repeated string entrypoint = 9;
+  repeated string cmd = 10;
+  optional string user = 11;
+  bool auto_remove = 12;
+  bool detach = 13;
+}
+
+message BoxResponse {
+  string box_id = 1;
+  optional string name = 2;
+  string status = 3;
+  string created_at = 4;
+  string updated_at = 5;
+  optional uint32 pid = 6;
+  string image = 7;
+  uint32 cpus = 8;
+  uint32 memory_mib = 9;
+  map<string, string> labels = 10;
+}
+
+message GetBoxRequest {
+  string box_id = 1;
+}
+
+message ListBoxesRequest {}
+
+message ListBoxesResponse {
+  repeated BoxResponse boxes = 1;
+}
+
+message RemoveBoxRequest {
+  string box_id = 1;
+  bool force = 2;
+}
+
+message RemoveBoxResponse {}
+
+message StartBoxRequest {
+  string box_id = 1;
+}
+
+message StopBoxRequest {
+  string box_id = 1;
+}
+
+// ============================================================================
+// Execution Messages
+// ============================================================================
+
+message ExecRequest {
+  string box_id = 1;
+  string command = 2;
+  repeated string args = 3;
+  map<string, string> env = 4;
+  optional string working_dir = 5;
+  bool tty = 6;
+  optional double timeout_seconds = 7;
+}
+
+message ExecResponse {
+  string execution_id = 1;
+}
+
+message StreamOutputRequest {
+  string box_id = 1;
+  string execution_id = 2;
+}
+
+message OutputChunk {
+  OutputType output_type = 1;
+  bytes data = 2;
+  bool done = 3;
+  optional int32 exit_code = 4;
+}
+
+enum OutputType {
+  OUTPUT_TYPE_STDOUT = 0;
+  OUTPUT_TYPE_STDERR = 1;
+}
+
+message SendInputRequest {
+  string box_id = 1;
+  string execution_id = 2;
+  bytes data = 3;
+}
+
+message SendInputResponse {}
+
+message SendSignalRequest {
+  string box_id = 1;
+  string execution_id = 2;
+  int32 signal = 3;
+}
+
+message SendSignalResponse {}
+
+message ResizeTtyRequest {
+  string box_id = 1;
+  string execution_id = 2;
+  uint32 cols = 3;
+  uint32 rows = 4;
+}
+
+message ResizeTtyResponse {}
+
+// ============================================================================
+// Health & Metrics Messages
+// ============================================================================
+
+message GetMetricsRequest {
+  optional string box_id = 1;
+}
+
+message MetricsResponse {
+  uint64 boxes_created_total = 1;
+  uint64 boxes_failed_total = 2;
+  uint64 boxes_stopped_total = 3;
+  uint64 num_running_boxes = 4;
+  uint64 total_commands_executed = 5;
+  uint64 total_exec_errors = 6;
+  optional BoxMetrics box_metrics = 10;
+}
+
+message BoxMetrics {
+  uint64 commands_executed_total = 1;
+  uint64 exec_errors_total = 2;
+  uint64 bytes_sent_total = 3;
+  uint64 bytes_received_total = 4;
+  optional float cpu_percent = 5;
+  optional uint64 memory_bytes = 6;
+  optional uint64 network_bytes_sent = 7;
+  optional uint64 network_bytes_received = 8;
+  optional uint64 network_tcp_connections = 9;
+  optional uint64 network_tcp_errors = 10;
+}
+
+message HeartbeatRequest {
+  string worker_id = 1;
+  WorkerCapacity capacity = 2;
+}
+
+message HeartbeatResponse {
+  bool accepted = 1;
+}
+
+message WorkerCapacity {
+  uint32 max_boxes = 1;
+  uint32 available_cpus = 2;
+  uint64 available_memory_mib = 3;
+  uint32 running_boxes = 4;
+}
