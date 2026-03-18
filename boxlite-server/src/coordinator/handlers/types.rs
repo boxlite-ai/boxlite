@@ -322,6 +322,29 @@ pub struct RemoveQuery {
     pub force: Option<bool>,
 }
 
+/// Query parameters for import_box.
+#[derive(Debug, Deserialize)]
+pub struct ImportQuery {
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+/// Query parameters for file upload.
+#[derive(Debug, Deserialize)]
+pub struct UploadFilesQuery {
+    pub path: String,
+    #[serde(default)]
+    pub overwrite: Option<bool>,
+}
+
+/// Query parameters for file download.
+#[derive(Debug, Deserialize)]
+pub struct DownloadFilesQuery {
+    pub path: String,
+    #[serde(default)]
+    pub follow_symlinks: Option<bool>,
+}
+
 // ============================================================================
 // Metrics
 // ============================================================================

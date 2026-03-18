@@ -14,9 +14,35 @@ service WorkerService {
   rpc StartBox(StartBoxRequest) returns (BoxResponse);
   rpc StopBox(StopBoxRequest) returns (BoxResponse);
 
+  // ── Snapshots ──
+
+  rpc CreateSnapshot(CreateSnapshotRequest) returns (SnapshotResponse);
+  rpc ListSnapshots(ListSnapshotsRequest) returns (ListSnapshotsResponse);
+  rpc GetSnapshot(GetSnapshotRequest) returns (SnapshotResponse);
+  rpc RemoveSnapshot(RemoveSnapshotRequest) returns (RemoveSnapshotResponse);
+  rpc RestoreSnapshot(RestoreSnapshotRequest) returns (RestoreSnapshotResponse);
+
+  // ── Clone / Export / Import ──
+
+  rpc CloneBox(CloneBoxProtoRequest) returns (BoxResponse);
+  rpc ExportBox(ExportBoxProtoRequest) returns (stream ExportChunk);
+  rpc ImportBox(stream ImportChunk) returns (BoxResponse);
+
+  // ── File Transfer ──
+
+  rpc UploadFiles(stream FileChunk) returns (UploadFilesResponse);
+  rpc DownloadFiles(DownloadFilesRequest) returns (stream FileChunk);
+
+  // ── Images ──
+
+  rpc PullImage(PullImageProtoRequest) returns (ImageProtoResponse);
+  rpc ListImages(ListImagesProtoRequest) returns (ListImagesProtoResponse);
+  rpc GetImage(GetImageRequest) returns (ImageProtoResponse);
+
   // ── Execution ──
 
   rpc Exec(ExecRequest) returns (ExecResponse);
+  rpc GetExecution(GetExecutionRequest) returns (ExecutionProtoResponse);
   rpc StreamOutput(StreamOutputRequest) returns (stream OutputChunk);
   rpc SendInput(SendInputRequest) returns (SendInputResponse);
   rpc SendSignal(SendSignalRequest) returns (SendSignalResponse);
@@ -87,6 +113,120 @@ message StopBoxRequest {
 }
 
 // ============================================================================
+// Snapshot Messages
+// ============================================================================
+
+message CreateSnapshotRequest {
+  string box_id = 1;
+  string name = 2;
+}
+
+message SnapshotResponse {
+  string id = 1;
+  string box_id = 2;
+  string name = 3;
+  int64 created_at = 4;
+  uint64 container_disk_bytes = 5;
+  uint64 size_bytes = 6;
+}
+
+message ListSnapshotsRequest {
+  string box_id = 1;
+}
+
+message ListSnapshotsResponse {
+  repeated SnapshotResponse snapshots = 1;
+}
+
+message GetSnapshotRequest {
+  string box_id = 1;
+  string name = 2;
+}
+
+message RemoveSnapshotRequest {
+  string box_id = 1;
+  string name = 2;
+}
+
+message RemoveSnapshotResponse {}
+
+message RestoreSnapshotRequest {
+  string box_id = 1;
+  string name = 2;
+}
+
+message RestoreSnapshotResponse {}
+
+// ============================================================================
+// Clone / Export / Import Messages
+// ============================================================================
+
+message CloneBoxProtoRequest {
+  string box_id = 1;
+  optional string name = 2;
+}
+
+message ExportBoxProtoRequest {
+  string box_id = 1;
+}
+
+message ExportChunk {
+  bytes data = 1;
+  bool done = 2;
+}
+
+message ImportChunk {
+  bytes data = 1;
+  bool done = 2;
+  optional string name = 3;
+}
+
+// ============================================================================
+// File Transfer Messages
+// ============================================================================
+
+message FileChunk {
+  bytes data = 1;
+  bool done = 2;
+  optional string box_id = 3;
+  optional string path = 4;
+}
+
+message UploadFilesResponse {}
+
+message DownloadFilesRequest {
+  string box_id = 1;
+  string path = 2;
+}
+
+// ============================================================================
+// Image Messages
+// ============================================================================
+
+message PullImageProtoRequest {
+  string reference = 1;
+}
+
+message ImageProtoResponse {
+  string reference = 1;
+  string repository = 2;
+  string tag = 3;
+  string id = 4;
+  string cached_at = 5;
+  optional uint64 size_bytes = 6;
+}
+
+message ListImagesProtoRequest {}
+
+message ListImagesProtoResponse {
+  repeated ImageProtoResponse images = 1;
+}
+
+message GetImageRequest {
+  string id = 1;
+}
+
+// ============================================================================
 // Execution Messages
 // ============================================================================
 
@@ -102,6 +242,20 @@ message ExecRequest {
 
 message ExecResponse {
   string execution_id = 1;
+}
+
+message GetExecutionRequest {
+  string box_id = 1;
+  string execution_id = 2;
+}
+
+message ExecutionProtoResponse {
+  string execution_id = 1;
+  string status = 2;
+  optional int32 exit_code = 3;
+  optional string started_at = 4;
+  optional uint64 duration_ms = 5;
+  optional string error_message = 6;
 }
 
 message StreamOutputRequest {

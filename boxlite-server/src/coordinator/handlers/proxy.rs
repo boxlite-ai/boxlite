@@ -4,10 +4,10 @@ use std::sync::Arc;
 
 use super::error::{error_response, grpc_to_http_error};
 use super::types::{
-    self, BoxMetrics, CreateBoxRequest, CreateSnapshotRequest, ExecutionInfo, ListBoxesResponse,
-    ListImagesResponse, ListSnapshotsResponse, PullImageRequest, RemoveQuery, ResizeRequest,
-    RestBoxResponse, RestExecRequest, RestExecResponse, RuntimeMetrics, SandboxCapabilities,
-    SandboxConfig, SignalRequest, Snapshot, TokenResponse,
+    self, BoxMetrics, CreateBoxRequest, CreateSnapshotRequest, DownloadFilesQuery, ExecutionInfo,
+    ImportQuery, ListBoxesResponse, ListImagesResponse, ListSnapshotsResponse, PullImageRequest,
+    RemoveQuery, ResizeRequest, RestBoxResponse, RestExecRequest, RestExecResponse, RuntimeMetrics,
+    SandboxCapabilities, SandboxConfig, SignalRequest, Snapshot, TokenResponse, UploadFilesQuery,
 };
 use axum::Json;
 use axum::extract::{Path, State};
@@ -91,6 +91,30 @@ async fn client_for_box(
         ));
     }
 
+    grpc_client(&worker.url).await
+}
+
+/// Get a gRPC client to any active worker (for non-box-scoped operations like images/import).
+async fn any_active_worker_client(
+    state: &CoordinatorState,
+) -> Result<WorkerServiceClient<tonic::transport::Channel>, Response> {
+    let workers = state.store.list_workers().await.map_err(|e| {
+        error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            e.to_string(),
+            "InternalError",
+        )
+    })?;
+    let worker = workers
+        .iter()
+        .find(|w| w.status == WorkerStatus::Active)
+        .ok_or_else(|| {
+            error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "No active workers available",
+                "NoWorkersAvailable",
+            )
+        })?;
     grpc_client(&worker.url).await
 }
 
@@ -514,15 +538,39 @@ pub async fn stop_box(
     tag = "Boxes",
 )]
 pub async fn create_snapshot(
-    State(_state): State<Arc<CoordinatorState>>,
-    Path((_prefix, _box_id)): Path<(String, String)>,
-    Json(_req): Json<CreateSnapshotRequest>,
+    State(state): State<Arc<CoordinatorState>>,
+    Path((_prefix, box_id)): Path<(String, String)>,
+    Json(req): Json<CreateSnapshotRequest>,
 ) -> Response {
-    error_response(
-        StatusCode::NOT_IMPLEMENTED,
-        "Snapshots not yet implemented via coordinator",
-        "UnsupportedError",
-    )
+    let mut client = match client_for_box(&state, &box_id).await {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+    match client
+        .create_snapshot(proto::CreateSnapshotRequest {
+            box_id: box_id.clone(),
+            name: req.name,
+        })
+        .await
+    {
+        Ok(resp) => {
+            let s = resp.into_inner();
+            (
+                StatusCode::CREATED,
+                Json(Snapshot {
+                    id: s.id,
+                    box_id: s.box_id,
+                    name: s.name,
+                    created_at: s.created_at,
+                    guest_disk_bytes: s.container_disk_bytes as i64,
+                    container_disk_bytes: s.container_disk_bytes as i64,
+                    size_bytes: s.size_bytes as i64,
+                }),
+            )
+                .into_response()
+        }
+        Err(status) => grpc_to_http_error(status),
+    }
 }
 
 /// List snapshots for a box.
@@ -540,14 +588,40 @@ pub async fn create_snapshot(
     tag = "Boxes",
 )]
 pub async fn list_snapshots(
-    State(_state): State<Arc<CoordinatorState>>,
-    Path((_prefix, _box_id)): Path<(String, String)>,
+    State(state): State<Arc<CoordinatorState>>,
+    Path((_prefix, box_id)): Path<(String, String)>,
 ) -> Response {
-    error_response(
-        StatusCode::NOT_IMPLEMENTED,
-        "Snapshots not yet implemented via coordinator",
-        "UnsupportedError",
-    )
+    let mut client = match client_for_box(&state, &box_id).await {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+    match client
+        .list_snapshots(proto::ListSnapshotsRequest {
+            box_id: box_id.clone(),
+        })
+        .await
+    {
+        Ok(resp) => {
+            let r = resp.into_inner();
+            Json(ListSnapshotsResponse {
+                snapshots: r
+                    .snapshots
+                    .into_iter()
+                    .map(|s| Snapshot {
+                        id: s.id,
+                        box_id: s.box_id,
+                        name: s.name,
+                        created_at: s.created_at,
+                        guest_disk_bytes: s.container_disk_bytes as i64,
+                        container_disk_bytes: s.container_disk_bytes as i64,
+                        size_bytes: s.size_bytes as i64,
+                    })
+                    .collect(),
+            })
+            .into_response()
+        }
+        Err(status) => grpc_to_http_error(status),
+    }
 }
 
 /// Get snapshot details.
@@ -566,14 +640,35 @@ pub async fn list_snapshots(
     tag = "Boxes",
 )]
 pub async fn get_snapshot(
-    State(_state): State<Arc<CoordinatorState>>,
-    Path((_prefix, _box_id, _snapshot_name)): Path<(String, String, String)>,
+    State(state): State<Arc<CoordinatorState>>,
+    Path((_prefix, box_id, snapshot_name)): Path<(String, String, String)>,
 ) -> Response {
-    error_response(
-        StatusCode::NOT_IMPLEMENTED,
-        "Snapshots not yet implemented via coordinator",
-        "UnsupportedError",
-    )
+    let mut client = match client_for_box(&state, &box_id).await {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+    match client
+        .get_snapshot(proto::GetSnapshotRequest {
+            box_id: box_id.clone(),
+            name: snapshot_name,
+        })
+        .await
+    {
+        Ok(resp) => {
+            let s = resp.into_inner();
+            Json(Snapshot {
+                id: s.id,
+                box_id: s.box_id,
+                name: s.name,
+                created_at: s.created_at,
+                guest_disk_bytes: s.container_disk_bytes as i64,
+                container_disk_bytes: s.container_disk_bytes as i64,
+                size_bytes: s.size_bytes as i64,
+            })
+            .into_response()
+        }
+        Err(status) => grpc_to_http_error(status),
+    }
 }
 
 /// Remove a snapshot.
@@ -593,14 +688,23 @@ pub async fn get_snapshot(
     tag = "Boxes",
 )]
 pub async fn remove_snapshot(
-    State(_state): State<Arc<CoordinatorState>>,
-    Path((_prefix, _box_id, _snapshot_name)): Path<(String, String, String)>,
+    State(state): State<Arc<CoordinatorState>>,
+    Path((_prefix, box_id, snapshot_name)): Path<(String, String, String)>,
 ) -> Response {
-    error_response(
-        StatusCode::NOT_IMPLEMENTED,
-        "Snapshots not yet implemented via coordinator",
-        "UnsupportedError",
-    )
+    let mut client = match client_for_box(&state, &box_id).await {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+    match client
+        .remove_snapshot(proto::RemoveSnapshotRequest {
+            box_id: box_id.clone(),
+            name: snapshot_name,
+        })
+        .await
+    {
+        Ok(_) => StatusCode::NO_CONTENT.into_response(),
+        Err(status) => grpc_to_http_error(status),
+    }
 }
 
 /// Restore a snapshot.
@@ -620,14 +724,23 @@ pub async fn remove_snapshot(
     tag = "Boxes",
 )]
 pub async fn restore_snapshot(
-    State(_state): State<Arc<CoordinatorState>>,
-    Path((_prefix, _box_id, _snapshot_name)): Path<(String, String, String)>,
+    State(state): State<Arc<CoordinatorState>>,
+    Path((_prefix, box_id, snapshot_name)): Path<(String, String, String)>,
 ) -> Response {
-    error_response(
-        StatusCode::NOT_IMPLEMENTED,
-        "Snapshots not yet implemented via coordinator",
-        "UnsupportedError",
-    )
+    let mut client = match client_for_box(&state, &box_id).await {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+    match client
+        .restore_snapshot(proto::RestoreSnapshotRequest {
+            box_id: box_id.clone(),
+            name: snapshot_name,
+        })
+        .await
+    {
+        Ok(_) => StatusCode::NO_CONTENT.into_response(),
+        Err(status) => grpc_to_http_error(status),
+    }
 }
 
 /// Clone a box.
@@ -647,15 +760,41 @@ pub async fn restore_snapshot(
     tag = "Boxes",
 )]
 pub async fn clone_box(
-    State(_state): State<Arc<CoordinatorState>>,
-    Path((_prefix, _box_id)): Path<(String, String)>,
-    Json(_req): Json<types::CloneBoxRequest>,
+    State(state): State<Arc<CoordinatorState>>,
+    Path((prefix, box_id)): Path<(String, String)>,
+    Json(req): Json<types::CloneBoxRequest>,
 ) -> Response {
-    error_response(
-        StatusCode::NOT_IMPLEMENTED,
-        "Clone not yet implemented via coordinator",
-        "UnsupportedError",
-    )
+    let mut client = match client_for_box(&state, &box_id).await {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+    // Look up the worker for the source box to register the clone mapping on the same worker
+    let source_mapping = state.store.get_box_mapping(&box_id).await.ok().flatten();
+    match client
+        .clone_box(proto::CloneBoxProtoRequest {
+            box_id: box_id.clone(),
+            name: req.name,
+        })
+        .await
+    {
+        Ok(resp) => {
+            let resp = resp.into_inner();
+            // Register the cloned box mapping on the same worker as the source
+            if let Some(source) = source_mapping {
+                let mapping = BoxMapping {
+                    box_id: resp.box_id.clone(),
+                    worker_id: source.worker_id,
+                    namespace: prefix.clone(),
+                    created_at: chrono::Utc::now(),
+                };
+                if let Err(e) = state.store.insert_box_mapping(&mapping).await {
+                    tracing::error!("Failed to record clone box mapping: {e}");
+                }
+            }
+            (StatusCode::CREATED, Json(proto_to_rest(resp))).into_response()
+        }
+        Err(status) => grpc_to_http_error(status),
+    }
 }
 
 /// Export a box.
@@ -673,14 +812,35 @@ pub async fn clone_box(
     tag = "Boxes",
 )]
 pub async fn export_box(
-    State(_state): State<Arc<CoordinatorState>>,
-    Path((_prefix, _box_id)): Path<(String, String)>,
+    State(state): State<Arc<CoordinatorState>>,
+    Path((_prefix, box_id)): Path<(String, String)>,
 ) -> Response {
-    error_response(
-        StatusCode::NOT_IMPLEMENTED,
-        "Export not yet implemented via coordinator",
-        "UnsupportedError",
-    )
+    let mut client = match client_for_box(&state, &box_id).await {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+    match client
+        .export_box(proto::ExportBoxProtoRequest {
+            box_id: box_id.clone(),
+        })
+        .await
+    {
+        Ok(resp) => {
+            let grpc_stream = resp.into_inner();
+            let byte_stream = grpc_stream.map(|chunk_result| {
+                chunk_result
+                    .map(|chunk| axum::body::Bytes::from(chunk.data))
+                    .map_err(std::io::Error::other)
+            });
+            let body = axum::body::Body::from_stream(byte_stream);
+            axum::response::Response::builder()
+                .header("content-type", "application/octet-stream")
+                .body(body)
+                .unwrap()
+                .into_response()
+        }
+        Err(status) => grpc_to_http_error(status),
+    }
 }
 
 /// Import a box from an archive.
@@ -699,14 +859,68 @@ pub async fn export_box(
     tag = "Boxes",
 )]
 pub async fn import_box(
-    State(_state): State<Arc<CoordinatorState>>,
-    Path(_prefix): Path<String>,
+    State(state): State<Arc<CoordinatorState>>,
+    Path(prefix): Path<String>,
+    axum::extract::Query(query): axum::extract::Query<ImportQuery>,
+    body: axum::body::Bytes,
 ) -> Response {
-    error_response(
-        StatusCode::NOT_IMPLEMENTED,
-        "Import not yet implemented via coordinator",
-        "UnsupportedError",
-    )
+    // Import needs a worker but has no box_id — use scheduler like create_box
+    let schedule_req = ScheduleRequest {
+        cpus: None,
+        memory_mib: None,
+    };
+    let worker = match state
+        .scheduler
+        .select_worker(state.store.as_ref(), &schedule_req)
+        .await
+    {
+        Ok(w) => w,
+        Err(e) => {
+            return error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                e.to_string(),
+                "NoWorkersAvailable",
+            );
+        }
+    };
+    let mut client = match grpc_client(&worker.url).await {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+
+    // Stream the archive bytes to the worker
+    let name = query.name.clone();
+    let chunks: Vec<proto::ImportChunk> = body
+        .chunks(65536)
+        .enumerate()
+        .map(|(i, chunk)| proto::ImportChunk {
+            data: chunk.to_vec(),
+            done: false,
+            name: if i == 0 { name.clone() } else { None },
+        })
+        .chain(std::iter::once(proto::ImportChunk {
+            data: Vec::new(),
+            done: true,
+            name: None,
+        }))
+        .collect();
+
+    match client.import_box(futures::stream::iter(chunks)).await {
+        Ok(resp) => {
+            let resp = resp.into_inner();
+            let mapping = BoxMapping {
+                box_id: resp.box_id.clone(),
+                worker_id: worker.id.clone(),
+                namespace: prefix.clone(),
+                created_at: chrono::Utc::now(),
+            };
+            if let Err(e) = state.store.insert_box_mapping(&mapping).await {
+                tracing::error!("Failed to record import box mapping: {e}");
+            }
+            (StatusCode::CREATED, Json(proto_to_rest(resp))).into_response()
+        }
+        Err(status) => grpc_to_http_error(status),
+    }
 }
 
 // ============================================================================
@@ -808,18 +1022,34 @@ pub async fn exec_tty(
     tag = "Execution",
 )]
 pub async fn get_execution(
-    State(_state): State<Arc<CoordinatorState>>,
-    Path((_prefix, _box_id, exec_id)): Path<(String, String, String)>,
+    State(state): State<Arc<CoordinatorState>>,
+    Path((_prefix, box_id, exec_id)): Path<(String, String, String)>,
 ) -> Response {
-    Json(ExecutionInfo {
-        execution_id: exec_id,
-        status: "running".to_string(),
-        exit_code: None,
-        started_at: None,
-        duration_ms: None,
-        error_message: None,
-    })
-    .into_response()
+    let mut client = match client_for_box(&state, &box_id).await {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+    match client
+        .get_execution(proto::GetExecutionRequest {
+            box_id: box_id.clone(),
+            execution_id: exec_id,
+        })
+        .await
+    {
+        Ok(resp) => {
+            let r = resp.into_inner();
+            Json(ExecutionInfo {
+                execution_id: r.execution_id,
+                status: r.status,
+                exit_code: r.exit_code,
+                started_at: r.started_at,
+                duration_ms: r.duration_ms,
+                error_message: r.error_message,
+            })
+            .into_response()
+        }
+        Err(status) => grpc_to_http_error(status),
+    }
 }
 
 /// Stream execution output via SSE.
@@ -1036,14 +1266,40 @@ pub async fn resize_tty(
     tag = "Files",
 )]
 pub async fn upload_files(
-    State(_state): State<Arc<CoordinatorState>>,
-    Path((_prefix, _box_id)): Path<(String, String)>,
+    State(state): State<Arc<CoordinatorState>>,
+    Path((_prefix, box_id)): Path<(String, String)>,
+    axum::extract::Query(query): axum::extract::Query<UploadFilesQuery>,
+    body: axum::body::Bytes,
 ) -> Response {
-    error_response(
-        StatusCode::NOT_IMPLEMENTED,
-        "File transfer not yet implemented via coordinator",
-        "UnsupportedError",
-    )
+    let mut client = match client_for_box(&state, &box_id).await {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+    let dest_path = query.path.clone();
+    let chunks: Vec<proto::FileChunk> = body
+        .chunks(65536)
+        .enumerate()
+        .map(|(i, chunk)| proto::FileChunk {
+            data: chunk.to_vec(),
+            done: false,
+            box_id: if i == 0 { Some(box_id.clone()) } else { None },
+            path: if i == 0 {
+                Some(dest_path.clone())
+            } else {
+                None
+            },
+        })
+        .chain(std::iter::once(proto::FileChunk {
+            data: Vec::new(),
+            done: true,
+            box_id: None,
+            path: None,
+        }))
+        .collect();
+    match client.upload_files(futures::stream::iter(chunks)).await {
+        Ok(_) => StatusCode::NO_CONTENT.into_response(),
+        Err(status) => grpc_to_http_error(status),
+    }
 }
 
 /// Download files from a box.
@@ -1064,14 +1320,37 @@ pub async fn upload_files(
     tag = "Files",
 )]
 pub async fn download_files(
-    State(_state): State<Arc<CoordinatorState>>,
-    Path((_prefix, _box_id)): Path<(String, String)>,
+    State(state): State<Arc<CoordinatorState>>,
+    Path((_prefix, box_id)): Path<(String, String)>,
+    axum::extract::Query(query): axum::extract::Query<DownloadFilesQuery>,
 ) -> Response {
-    error_response(
-        StatusCode::NOT_IMPLEMENTED,
-        "File transfer not yet implemented via coordinator",
-        "UnsupportedError",
-    )
+    let mut client = match client_for_box(&state, &box_id).await {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+    match client
+        .download_files(proto::DownloadFilesRequest {
+            box_id: box_id.clone(),
+            path: query.path,
+        })
+        .await
+    {
+        Ok(resp) => {
+            let grpc_stream = resp.into_inner();
+            let byte_stream = grpc_stream.map(|chunk_result| {
+                chunk_result
+                    .map(|chunk| axum::body::Bytes::from(chunk.data))
+                    .map_err(std::io::Error::other)
+            });
+            let body = axum::body::Body::from_stream(byte_stream);
+            axum::response::Response::builder()
+                .header("content-type", "application/x-tar")
+                .body(body)
+                .unwrap()
+                .into_response()
+        }
+        Err(status) => grpc_to_http_error(status),
+    }
 }
 
 // ============================================================================
@@ -1212,15 +1491,34 @@ pub async fn get_box_metrics(
     tag = "Images",
 )]
 pub async fn pull_image(
-    State(_state): State<Arc<CoordinatorState>>,
+    State(state): State<Arc<CoordinatorState>>,
     Path(_prefix): Path<String>,
-    Json(_req): Json<PullImageRequest>,
+    Json(req): Json<PullImageRequest>,
 ) -> Response {
-    error_response(
-        StatusCode::NOT_IMPLEMENTED,
-        "Image management not yet implemented via coordinator",
-        "UnsupportedError",
-    )
+    let mut client = match any_active_worker_client(&state).await {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+    match client
+        .pull_image(proto::PullImageProtoRequest {
+            reference: req.reference,
+        })
+        .await
+    {
+        Ok(resp) => {
+            let r = resp.into_inner();
+            Json(types::ImageInfo {
+                reference: r.reference,
+                repository: r.repository,
+                tag: r.tag,
+                id: r.id,
+                cached_at: r.cached_at,
+                size_bytes: r.size_bytes,
+            })
+            .into_response()
+        }
+        Err(status) => grpc_to_http_error(status),
+    }
 }
 
 /// List cached images.
@@ -1238,14 +1536,35 @@ pub async fn pull_image(
     tag = "Images",
 )]
 pub async fn list_images(
-    State(_state): State<Arc<CoordinatorState>>,
+    State(state): State<Arc<CoordinatorState>>,
     Path(_prefix): Path<String>,
 ) -> Response {
-    error_response(
-        StatusCode::NOT_IMPLEMENTED,
-        "Image management not yet implemented via coordinator",
-        "UnsupportedError",
-    )
+    let mut client = match any_active_worker_client(&state).await {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+    match client.list_images(proto::ListImagesProtoRequest {}).await {
+        Ok(resp) => {
+            let r = resp.into_inner();
+            Json(ListImagesResponse {
+                images: r
+                    .images
+                    .into_iter()
+                    .map(|i| types::ImageInfo {
+                        reference: i.reference,
+                        repository: i.repository,
+                        tag: i.tag,
+                        id: i.id,
+                        cached_at: i.cached_at,
+                        size_bytes: i.size_bytes,
+                    })
+                    .collect(),
+                next_page_token: None,
+            })
+            .into_response()
+        }
+        Err(status) => grpc_to_http_error(status),
+    }
 }
 
 /// Get image details.
@@ -1263,14 +1582,31 @@ pub async fn list_images(
     tag = "Images",
 )]
 pub async fn get_image(
-    State(_state): State<Arc<CoordinatorState>>,
-    Path((_prefix, _image_id)): Path<(String, String)>,
+    State(state): State<Arc<CoordinatorState>>,
+    Path((_prefix, image_id)): Path<(String, String)>,
 ) -> Response {
-    error_response(
-        StatusCode::NOT_IMPLEMENTED,
-        "Image management not yet implemented via coordinator",
-        "UnsupportedError",
-    )
+    let mut client = match any_active_worker_client(&state).await {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+    match client
+        .get_image(proto::GetImageRequest { id: image_id })
+        .await
+    {
+        Ok(resp) => {
+            let r = resp.into_inner();
+            Json(types::ImageInfo {
+                reference: r.reference,
+                repository: r.repository,
+                tag: r.tag,
+                id: r.id,
+                cached_at: r.cached_at,
+                size_bytes: r.size_bytes,
+            })
+            .into_response()
+        }
+        Err(status) => grpc_to_http_error(status),
+    }
 }
 
 /// Check if an image is cached.
@@ -1288,14 +1624,20 @@ pub async fn get_image(
     tag = "Images",
 )]
 pub async fn image_exists(
-    State(_state): State<Arc<CoordinatorState>>,
-    Path((_prefix, _image_id)): Path<(String, String)>,
+    State(state): State<Arc<CoordinatorState>>,
+    Path((_prefix, image_id)): Path<(String, String)>,
 ) -> Response {
-    error_response(
-        StatusCode::NOT_IMPLEMENTED,
-        "Image management not yet implemented via coordinator",
-        "UnsupportedError",
-    )
+    let mut client = match any_active_worker_client(&state).await {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+    match client
+        .get_image(proto::GetImageRequest { id: image_id })
+        .await
+    {
+        Ok(_) => StatusCode::NO_CONTENT.into_response(),
+        Err(_) => StatusCode::NOT_FOUND.into_response(),
+    }
 }
 
 #[cfg(test)]

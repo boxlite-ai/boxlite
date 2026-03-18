@@ -44,6 +44,10 @@ bytes = "1"
 utoipa = { version = "5", features = ["axum_extras"] }
 utoipa-swagger-ui = { version = "9", features = ["axum"] }
 
+# File transfer
+tar = "0.4"
+tempfile = "3"
+
 # Utilities
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4.5", features = ["derive", "env"] }

@@ -375,155 +375,223 @@ async fn test_openapi_spec_accessible() {
 }
 
 // ============================================================================
-// Stub endpoints return 501 with correct error format
+// Snapshot error paths (box not found → 404)
 // ============================================================================
 
-/// Helper to verify a stub returns 501 with UnsupportedError body.
-async fn assert_stub_501(app: &axum::Router, method: &str, uri: &str) {
-    assert_stub_501_with_body(app, method, uri, None).await;
-}
-
-/// Helper to verify a stub returns 501, with an optional custom JSON body.
-async fn assert_stub_501_with_body(
-    app: &axum::Router,
-    method: &str,
-    uri: &str,
-    json_body: Option<&str>,
-) {
-    let mut builder = Request::builder().method(method).uri(uri);
-    if method == "POST" || method == "PUT" {
-        builder = builder.header("content-type", "application/json");
-    }
-    let body = if let Some(b) = json_body {
-        Body::from(b.to_string())
-    } else if method == "POST" || method == "PUT" {
-        Body::from("{}")
-    } else {
-        Body::empty()
-    };
-    let req = builder.body(body).unwrap();
-
-    let response = app.clone().oneshot(req).await.unwrap();
-    let status = response.status();
-    assert_eq!(
-        status,
-        StatusCode::NOT_IMPLEMENTED,
-        "{method} {uri}: expected 501, got {status}"
-    );
-
-    if method != "HEAD" {
-        let bytes = response.into_body().collect().await.unwrap().to_bytes();
-        let json: Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(json["error"]["type"], "UnsupportedError");
-        assert_eq!(json["error"]["code"], 501);
-    }
+#[tokio::test]
+async fn test_create_snapshot_box_not_found() {
+    let (app, _tmp) = test_app();
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/default/boxes/nonexistent/snapshots")
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"name": "snap1"}"#))
+        .unwrap();
+    let (status, body) = send_json(&app, req).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"]["type"], "NotFoundError");
 }
 
 #[tokio::test]
-async fn test_stub_create_snapshot_returns_501() {
+async fn test_list_snapshots_box_not_found() {
     let (app, _tmp) = test_app();
-    assert_stub_501_with_body(
-        &app,
-        "POST",
-        "/v1/default/boxes/box1/snapshots",
-        Some(r#"{"name": "snap1"}"#),
-    )
-    .await;
+    let req = Request::builder()
+        .method("GET")
+        .uri("/v1/default/boxes/nonexistent/snapshots")
+        .body(Body::empty())
+        .unwrap();
+    let (status, body) = send_json(&app, req).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"]["type"], "NotFoundError");
 }
 
 #[tokio::test]
-async fn test_stub_list_snapshots_returns_501() {
+async fn test_get_snapshot_box_not_found() {
     let (app, _tmp) = test_app();
-    assert_stub_501(&app, "GET", "/v1/default/boxes/box1/snapshots").await;
+    let req = Request::builder()
+        .method("GET")
+        .uri("/v1/default/boxes/nonexistent/snapshots/snap1")
+        .body(Body::empty())
+        .unwrap();
+    let (status, body) = send_json(&app, req).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"]["type"], "NotFoundError");
 }
 
 #[tokio::test]
-async fn test_stub_get_snapshot_returns_501() {
+async fn test_remove_snapshot_box_not_found() {
     let (app, _tmp) = test_app();
-    assert_stub_501(&app, "GET", "/v1/default/boxes/box1/snapshots/snap1").await;
+    let req = Request::builder()
+        .method("DELETE")
+        .uri("/v1/default/boxes/nonexistent/snapshots/snap1")
+        .body(Body::empty())
+        .unwrap();
+    let (status, body) = send_json(&app, req).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"]["type"], "NotFoundError");
 }
 
 #[tokio::test]
-async fn test_stub_remove_snapshot_returns_501() {
+async fn test_restore_snapshot_box_not_found() {
     let (app, _tmp) = test_app();
-    assert_stub_501(&app, "DELETE", "/v1/default/boxes/box1/snapshots/snap1").await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/default/boxes/nonexistent/snapshots/snap1/restore")
+        .body(Body::empty())
+        .unwrap();
+    let (status, body) = send_json(&app, req).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"]["type"], "NotFoundError");
+}
+
+// ============================================================================
+// Clone / Export error paths (box not found → 404)
+// ============================================================================
+
+#[tokio::test]
+async fn test_clone_box_not_found() {
+    let (app, _tmp) = test_app();
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/default/boxes/nonexistent/clone")
+        .header("content-type", "application/json")
+        .body(Body::from("{}"))
+        .unwrap();
+    let (status, body) = send_json(&app, req).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"]["type"], "NotFoundError");
 }
 
 #[tokio::test]
-async fn test_stub_restore_snapshot_returns_501() {
+async fn test_export_box_not_found() {
     let (app, _tmp) = test_app();
-    assert_stub_501(
-        &app,
-        "POST",
-        "/v1/default/boxes/box1/snapshots/snap1/restore",
-    )
-    .await;
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/default/boxes/nonexistent/export")
+        .body(Body::empty())
+        .unwrap();
+    let (status, body) = send_json(&app, req).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"]["type"], "NotFoundError");
+}
+
+// ============================================================================
+// Import error path (no workers → 503)
+// ============================================================================
+
+#[tokio::test]
+async fn test_import_box_no_workers() {
+    let (app, _tmp) = test_app();
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/default/boxes/import")
+        .header("content-type", "application/octet-stream")
+        .body(Body::from(vec![0u8; 100]))
+        .unwrap();
+    let (status, body) = send_json(&app, req).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert!(body["error"]["message"].is_string());
+}
+
+// ============================================================================
+// File transfer error paths (box not found → 404)
+// ============================================================================
+
+#[tokio::test]
+async fn test_upload_files_box_not_found() {
+    let (app, _tmp) = test_app();
+    let req = Request::builder()
+        .method("PUT")
+        .uri("/v1/default/boxes/nonexistent/files?path=/tmp")
+        .header("content-type", "application/x-tar")
+        .body(Body::from(vec![0u8; 10]))
+        .unwrap();
+    let (status, body) = send_json(&app, req).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"]["type"], "NotFoundError");
 }
 
 #[tokio::test]
-async fn test_stub_clone_box_returns_501() {
+async fn test_download_files_box_not_found() {
     let (app, _tmp) = test_app();
-    assert_stub_501(&app, "POST", "/v1/default/boxes/box1/clone").await;
+    let req = Request::builder()
+        .method("GET")
+        .uri("/v1/default/boxes/nonexistent/files?path=/tmp")
+        .body(Body::empty())
+        .unwrap();
+    let (status, body) = send_json(&app, req).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"]["type"], "NotFoundError");
 }
 
-#[tokio::test]
-async fn test_stub_export_box_returns_501() {
-    let (app, _tmp) = test_app();
-    assert_stub_501(&app, "POST", "/v1/default/boxes/box1/export").await;
-}
-
-#[tokio::test]
-async fn test_stub_import_box_returns_501() {
-    let (app, _tmp) = test_app();
-    assert_stub_501(&app, "POST", "/v1/default/boxes/import").await;
-}
-
-#[tokio::test]
-async fn test_stub_upload_files_returns_501() {
-    let (app, _tmp) = test_app();
-    assert_stub_501(&app, "PUT", "/v1/default/boxes/box1/files").await;
-}
-
-#[tokio::test]
-async fn test_stub_download_files_returns_501() {
-    let (app, _tmp) = test_app();
-    assert_stub_501(&app, "GET", "/v1/default/boxes/box1/files").await;
-}
+// ============================================================================
+// TTY WebSocket stub (only remaining 501)
+// ============================================================================
 
 #[tokio::test]
 async fn test_stub_exec_tty_returns_501() {
     let (app, _tmp) = test_app();
-    assert_stub_501(&app, "GET", "/v1/default/boxes/box1/exec/tty").await;
+    let req = Request::builder()
+        .method("GET")
+        .uri("/v1/default/boxes/box1/exec/tty")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+}
+
+// ============================================================================
+// Image error paths (no workers → 503)
+// ============================================================================
+
+#[tokio::test]
+async fn test_pull_image_no_workers() {
+    let (app, _tmp) = test_app();
+    let req = Request::builder()
+        .method("POST")
+        .uri("/v1/default/images/pull")
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"reference": "alpine:latest"}"#))
+        .unwrap();
+    let (status, body) = send_json(&app, req).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert!(body["error"]["message"].is_string());
 }
 
 #[tokio::test]
-async fn test_stub_pull_image_returns_501() {
+async fn test_list_images_no_workers() {
     let (app, _tmp) = test_app();
-    assert_stub_501_with_body(
-        &app,
-        "POST",
-        "/v1/default/images/pull",
-        Some(r#"{"reference": "alpine:latest"}"#),
-    )
-    .await;
+    let req = Request::builder()
+        .method("GET")
+        .uri("/v1/default/images")
+        .body(Body::empty())
+        .unwrap();
+    let (status, _) = send_json(&app, req).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
 }
 
 #[tokio::test]
-async fn test_stub_list_images_returns_501() {
+async fn test_get_image_no_workers() {
     let (app, _tmp) = test_app();
-    assert_stub_501(&app, "GET", "/v1/default/images").await;
+    let req = Request::builder()
+        .method("GET")
+        .uri("/v1/default/images/sha256:abc")
+        .body(Body::empty())
+        .unwrap();
+    let (status, _) = send_json(&app, req).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
 }
 
 #[tokio::test]
-async fn test_stub_get_image_returns_501() {
+async fn test_image_exists_no_workers() {
     let (app, _tmp) = test_app();
-    assert_stub_501(&app, "GET", "/v1/default/images/sha256:abc").await;
-}
-
-#[tokio::test]
-async fn test_stub_image_exists_returns_501() {
-    let (app, _tmp) = test_app();
-    assert_stub_501(&app, "HEAD", "/v1/default/images/sha256:abc").await;
+    let req = Request::builder()
+        .method("HEAD")
+        .uri("/v1/default/images/sha256:abc")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
 }
 
 // ============================================================================
@@ -644,19 +712,18 @@ async fn test_create_box_no_workers_error_format() {
 // ============================================================================
 
 #[tokio::test]
-async fn test_get_execution_stub_response() {
+async fn test_get_execution_box_not_found() {
     let (app, _tmp) = test_app();
 
     let req = Request::builder()
         .method("GET")
-        .uri("/v1/default/boxes/anybox/executions/exec-123")
+        .uri("/v1/default/boxes/nonexistent/executions/exec-123")
         .body(Body::empty())
         .unwrap();
 
     let (status, body) = send_json(&app, req).await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["execution_id"], "exec-123");
-    assert_eq!(body["status"], "running");
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"]["type"], "NotFoundError");
 }
 
 #[tokio::test]
@@ -808,45 +875,6 @@ async fn test_oauth_token_response_shape() {
     assert!(body["expires_in"].as_u64().unwrap() > 0);
 }
 
-// ============================================================================
-// Route existence (new routes are wired, not 404)
-// ============================================================================
-
-#[tokio::test]
-async fn test_new_routes_are_wired() {
-    let (app, _tmp) = test_app();
-
-    // These routes should return 501 (stub handlers), verifying they are wired.
-    // Routes that proxy to workers (e.g., box metrics) return 404 from the handler
-    // when the box doesn't exist — that's tested separately.
-    let routes = [
-        ("GET", "/v1/default/boxes/box1/snapshots"),
-        ("POST", "/v1/default/boxes/box1/clone"),
-        ("POST", "/v1/default/boxes/box1/export"),
-        ("POST", "/v1/default/boxes/import"),
-        ("PUT", "/v1/default/boxes/box1/files"),
-        ("GET", "/v1/default/boxes/box1/files"),
-        ("GET", "/v1/default/boxes/box1/exec/tty"),
-        ("GET", "/v1/default/images"),
-    ];
-
-    for (method, uri) in routes {
-        let mut builder = Request::builder().method(method).uri(uri);
-        if method == "POST" || method == "PUT" {
-            builder = builder.header("content-type", "application/json");
-        }
-        let body = if method == "POST" || method == "PUT" {
-            Body::from("{}")
-        } else {
-            Body::empty()
-        };
-        let req = builder.body(body).unwrap();
-
-        let response = app.clone().oneshot(req).await.unwrap();
-        assert_ne!(
-            response.status(),
-            StatusCode::NOT_FOUND,
-            "Route {method} {uri} returned 404 — not wired in router"
-        );
-    }
-}
+// Route wiring is validated by the individual error-path tests above —
+// each endpoint returns proper error responses (404, 503) rather than
+// the Axum default 404 for unmatched routes.
