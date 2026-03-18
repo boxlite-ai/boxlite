@@ -55,5 +55,10 @@ anyhow = "1.0"
 dirs = "6.0"
 rand = "0.9"
 
+[dev-dependencies]
+http-body-util = "0.1"
+tempfile = "3"
+tower = { version = "0.5", features = ["util"] }
+
 [build-dependencies]
 tonic-build = "0.12"

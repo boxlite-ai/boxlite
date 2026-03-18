@@ -20,7 +20,7 @@ use crate::proto::worker_service_server::WorkerService;
 pub struct WorkerServiceImpl {
     pub runtime: BoxliteRuntime,
     boxes: RwLock<HashMap<String, Arc<LiteBox>>>,
-    executions: RwLock<HashMap<String, ActiveExecution>>,
+    executions: Arc<RwLock<HashMap<String, ActiveExecution>>>,
 }
 
 struct ActiveExecution {
@@ -35,7 +35,7 @@ impl WorkerServiceImpl {
         Self {
             runtime,
             boxes: RwLock::new(HashMap::new()),
-            executions: RwLock::new(HashMap::new()),
+            executions: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -256,16 +256,17 @@ impl WorkerService for WorkerServiceImpl {
         request: Request<proto::StreamOutputRequest>,
     ) -> GrpcResult<Self::StreamOutputStream> {
         let req = request.into_inner();
-        let active = self
-            .executions
-            .write()
-            .await
-            .remove(&req.execution_id)
-            .ok_or_else(|| {
+
+        // Clone the execution instead of removing it from the HashMap.
+        // This keeps stdin/signal/resize accessible for interactive TTY sessions.
+        let mut execution = {
+            let executions = self.executions.read().await;
+            let active = executions.get(&req.execution_id).ok_or_else(|| {
                 Status::not_found(format!("execution not found: {}", req.execution_id))
             })?;
+            active.execution.clone()
+        };
 
-        let mut execution = active.execution;
         let stdout = execution.stdout();
         let stderr = execution.stderr();
 
@@ -305,7 +306,9 @@ impl WorkerService for WorkerServiceImpl {
             });
         }
 
-        // Wait for exit and send final chunk
+        // Wait for exit, send final chunk, then clean up
+        let executions_ref = Arc::clone(&self.executions);
+        let exec_id = req.execution_id.clone();
         tokio::spawn(async move {
             let result = execution.wait().await;
             let exit_code = match result {
@@ -320,6 +323,9 @@ impl WorkerService for WorkerServiceImpl {
                     exit_code: Some(exit_code),
                 }))
                 .await;
+
+            // Remove execution after process exits
+            executions_ref.write().await.remove(&exec_id);
         });
 
         let stream = tokio_stream::wrappers::ReceiverStream::new(rx);

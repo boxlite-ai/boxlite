@@ -1,5 +1,5 @@
 # Detect changed components by diffing against main (or HEAD~1 if on main).
-# Returns a space-separated list of component tags: rust cli ffi python node c
+# Returns a space-separated list of component tags: rust server cli ffi python node c
 define detect_changes
 $(shell \
   BRANCH=$$(git rev-parse --abbrev-ref HEAD 2>/dev/null); \
@@ -13,19 +13,20 @@ $(shell \
   echo "$$CHANGED" | grep -q '^boxlite/' && printf 'rust '; \
   echo "$$CHANGED" | grep -q '^boxlite-shared/' && printf 'rust '; \
   echo "$$CHANGED" | grep -q '^guest/' && printf 'rust '; \
+  echo "$$CHANGED" | grep -q '^boxlite-server/' && printf 'server '; \
   echo "$$CHANGED" | grep -q '^boxlite-cli/' && printf 'cli '; \
   echo "$$CHANGED" | grep -q '^ffi/' && printf 'ffi '; \
   echo "$$CHANGED" | grep -q '^sdks/python/' && printf 'python '; \
   echo "$$CHANGED" | grep -q '^sdks/node/' && printf 'node '; \
   echo "$$CHANGED" | grep -q '^sdks/c/' && printf 'c '; \
   echo "$$CHANGED" | grep -q '^sdks/go/' && printf 'go '; \
-  echo "$$CHANGED" | grep -q 'Cargo\.toml$$' && printf 'rust cli ffi '; \
-  echo "$$CHANGED" | grep -q '^Cargo\.lock$$' && printf 'rust cli ffi '; \
+  echo "$$CHANGED" | grep -q 'Cargo\.toml$$' && printf 'rust cli ffi server '; \
+  echo "$$CHANGED" | grep -q '^Cargo\.lock$$' && printf 'rust cli ffi server '; \
 )
 endef
 
 CHANGED_COMPONENTS := $(sort $(detect_changes))
 
 # Map test components to format/lint surfaces.
-# cli/ffi don't need separate formatters — cargo fmt --all and clippy --workspace cover them.
-FMT_COMPONENTS := $(sort $(subst cli,rust,$(subst ffi,rust,$(CHANGED_COMPONENTS))))
+# server/cli/ffi don't need separate formatters — cargo fmt --all and clippy --workspace cover them.
+FMT_COMPONENTS := $(sort $(subst server,rust,$(subst cli,rust,$(subst ffi,rust,$(CHANGED_COMPONENTS)))))

@@ -24,6 +24,9 @@ test\:changed\:rust:
 	@$(MAKE) test:unit:rust
 	@$(MAKE) test:integration:rust
 
+test\:changed\:server:
+	@$(MAKE) test:unit:server
+
 test\:changed\:cli:
 	@$(MAKE) test:integration:cli
 
@@ -118,9 +121,20 @@ test\:unit\:rust:
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
 		cargo nextest run -p boxlite --no-default-features --lib; \
 		cargo nextest run -p boxlite-shared --lib; \
+		cargo nextest run -p boxlite-server --lib; \
 	else \
 		cargo test -p boxlite --no-default-features --lib -- --test-threads=1; \
 		cargo test -p boxlite-shared --lib -- --test-threads=1; \
+		cargo test -p boxlite-server --lib -- --test-threads=1; \
+	fi
+
+# BoxLite server unit tests.
+test\:unit\:server:
+	@echo "🧪 Running boxlite-server unit tests..."
+	@if command -v cargo-nextest >/dev/null 2>&1; then \
+		cargo nextest run -p boxlite-server; \
+	else \
+		cargo test -p boxlite-server; \
 	fi
 
 # Pre-warm Rust integration test image cache (internal helper, still callable).
