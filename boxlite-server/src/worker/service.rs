@@ -254,7 +254,13 @@ impl WorkerService for WorkerServiceImpl {
             .stop()
             .await
             .map_err(|e| Status::internal(e.to_string()))?;
-        Ok(Response::new(box_info_to_proto(&litebox.info())))
+        // Remove stale handle from cache so next start gets a fresh one
+        self.boxes.write().await.remove(box_id);
+        // Return fresh info from runtime
+        match self.runtime.get_info(box_id).await {
+            Ok(Some(info)) => Ok(Response::new(box_info_to_proto(&info))),
+            _ => Ok(Response::new(box_info_to_proto(&litebox.info()))),
+        }
     }
 
     // ========================================================================
