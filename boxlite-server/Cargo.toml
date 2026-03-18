@@ -57,6 +57,7 @@ rand = "0.9"
 
 [dev-dependencies]
 http-body-util = "0.1"
+serde_yaml = "0.9"
 tempfile = "3"
 tower = { version = "0.5", features = ["util"] }
 

@@ -3,6 +3,12 @@
 use std::sync::Arc;
 
 use super::error::{error_response, grpc_to_http_error};
+use super::types::{
+    self, BoxMetrics, CreateBoxRequest, CreateSnapshotRequest, ExecutionInfo, ListBoxesResponse,
+    ListImagesResponse, ListSnapshotsResponse, PullImageRequest, RemoveQuery, ResizeRequest,
+    RestBoxResponse, RestExecRequest, RestExecResponse, RuntimeMetrics, SandboxCapabilities,
+    SandboxConfig, SignalRequest, Snapshot, TokenResponse,
+};
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -10,7 +16,6 @@ use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use base64::Engine;
 use futures::StreamExt;
-use serde::{Deserialize, Serialize};
 
 use crate::coordinator::state::CoordinatorState;
 use crate::proto;
@@ -90,96 +95,6 @@ async fn client_for_box(
 }
 
 // ============================================================================
-// Wire Types (REST JSON)
-// ============================================================================
-
-#[derive(Deserialize)]
-pub struct CreateBoxRequest {
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default)]
-    image: Option<String>,
-    #[serde(default)]
-    rootfs_path: Option<String>,
-    #[serde(default)]
-    cpus: Option<u8>,
-    #[serde(default)]
-    memory_mib: Option<u32>,
-    #[serde(default)]
-    disk_size_gb: Option<u64>,
-    #[serde(default)]
-    working_dir: Option<String>,
-    #[serde(default)]
-    env: Option<std::collections::HashMap<String, String>>,
-    #[serde(default)]
-    entrypoint: Option<Vec<String>>,
-    #[serde(default)]
-    cmd: Option<Vec<String>>,
-    #[serde(default)]
-    user: Option<String>,
-    #[serde(default)]
-    auto_remove: Option<bool>,
-    #[serde(default)]
-    detach: Option<bool>,
-}
-
-#[derive(Serialize)]
-struct RestBoxResponse {
-    box_id: String,
-    name: Option<String>,
-    status: String,
-    created_at: String,
-    updated_at: String,
-    pid: Option<u32>,
-    image: String,
-    cpus: u32,
-    memory_mib: u32,
-    labels: std::collections::HashMap<String, String>,
-}
-
-#[derive(Serialize)]
-struct ListBoxesResponse {
-    boxes: Vec<RestBoxResponse>,
-}
-
-#[derive(Deserialize)]
-pub struct RestExecRequest {
-    command: String,
-    #[serde(default)]
-    args: Vec<String>,
-    #[serde(default)]
-    env: Option<std::collections::HashMap<String, String>>,
-    #[serde(default)]
-    timeout_seconds: Option<f64>,
-    #[serde(default)]
-    working_dir: Option<String>,
-    #[serde(default)]
-    tty: bool,
-}
-
-#[derive(Serialize)]
-struct RestExecResponse {
-    execution_id: String,
-}
-
-#[derive(Deserialize)]
-pub struct RemoveQuery {
-    #[serde(default)]
-    force: Option<bool>,
-}
-
-#[derive(Deserialize)]
-pub struct SignalRequest {
-    signal: i32,
-}
-
-#[derive(Deserialize)]
-pub struct ResizeRequest {
-    cols: u32,
-    rows: u32,
-}
-
-// ============================================================================
 // Helpers
 // ============================================================================
 
@@ -199,15 +114,91 @@ fn proto_to_rest(resp: proto::BoxResponse) -> RestBoxResponse {
 }
 
 // ============================================================================
+// Auth, Config (local)
+// ============================================================================
+
+/// Exchange client credentials for an access token.
+#[utoipa::path(
+    post,
+    path = "/v1/oauth/tokens",
+    request_body = types::TokenRequest,
+    responses(
+        (status = 200, description = "Token issued", body = TokenResponse),
+        (status = 401, description = "Invalid credentials", body = super::error::ErrorResponse),
+    ),
+    tag = "Authentication",
+    security()
+)]
+pub async fn oauth_token() -> Response {
+    Json(TokenResponse {
+        access_token: "boxlite-coordinator-token".to_string(),
+        token_type: "bearer".to_string(),
+        expires_in: 86400,
+        scope: None,
+    })
+    .into_response()
+}
+
+/// Get server configuration and capabilities.
+#[utoipa::path(
+    get,
+    path = "/v1/config",
+    responses(
+        (status = 200, description = "Server configuration", body = SandboxConfig),
+    ),
+    tag = "Configuration",
+    security()
+)]
+pub async fn get_config() -> Response {
+    Json(SandboxConfig {
+        defaults: None,
+        overrides: None,
+        capabilities: Some(SandboxCapabilities {
+            max_cpus: None,
+            max_memory_mib: None,
+            max_disk_size_gb: None,
+            max_boxes_per_prefix: None,
+            max_concurrent_executions: None,
+            file_transfer_max_bytes: None,
+            exec_timeout_max_seconds: None,
+            tty_enabled: Some(true),
+            streaming_enabled: Some(true),
+            snapshots_enabled: Some(true),
+            clone_enabled: Some(true),
+            export_enabled: Some(true),
+            supported_security_presets: None,
+            idempotency_key_lifetime: None,
+        }),
+    })
+    .into_response()
+}
+
+// ============================================================================
 // Box Handlers (REST -> gRPC)
 // ============================================================================
 
+/// Create a new sandbox box.
+#[utoipa::path(
+    post,
+    path = "/v1/{prefix}/boxes",
+    params(
+        ("prefix" = String, Path, description = "Organization or workspace identifier"),
+    ),
+    request_body = CreateBoxRequest,
+    responses(
+        (status = 201, description = "Box created", body = types::RestBoxResponse),
+        (status = 400, description = "Invalid request", body = super::error::ErrorResponse),
+        (status = 409, description = "Conflict", body = super::error::ErrorResponse),
+        (status = 422, description = "Unprocessable entity", body = super::error::ErrorResponse),
+    ),
+    tag = "Boxes",
+)]
 pub async fn create_box(
     State(state): State<Arc<CoordinatorState>>,
-    Path(namespace): Path<String>,
+    Path(prefix): Path<String>,
     Json(req): Json<CreateBoxRequest>,
 ) -> Response {
-    tracing::info!(namespace = %namespace, "Creating box in namespace");
+    tracing::info!(prefix = %prefix, "Creating box");
     let schedule_req = ScheduleRequest {
         cpus: req.cpus,
         memory_mib: req.memory_mib,
@@ -255,7 +246,7 @@ pub async fn create_box(
             let mapping = BoxMapping {
                 box_id: resp.box_id.clone(),
                 worker_id: worker.id.clone(),
-                namespace: namespace.clone(),
+                namespace: prefix.clone(),
                 created_at: chrono::Utc::now(),
             };
             if let Err(e) = state.store.insert_box_mapping(&mapping).await {
@@ -268,14 +259,28 @@ pub async fn create_box(
     }
 }
 
+/// List boxes in a namespace.
+#[utoipa::path(
+    get,
+    path = "/v1/{prefix}/boxes",
+    params(
+        ("prefix" = String, Path, description = "Organization or workspace identifier"),
+        ("pageSize" = Option<u32>, Query, description = "Maximum number of results per page"),
+        ("pageToken" = Option<String>, Query, description = "Opaque pagination token"),
+        ("status" = Option<String>, Query, description = "Filter by box status"),
+    ),
+    responses(
+        (status = 200, description = "List of boxes", body = ListBoxesResponse),
+    ),
+    tag = "Boxes",
+)]
 pub async fn list_boxes(
     State(state): State<Arc<CoordinatorState>>,
-    Path(namespace): Path<String>,
+    Path(prefix): Path<String>,
 ) -> Response {
-    tracing::info!(namespace = %namespace, "Listing boxes in namespace");
+    tracing::info!(prefix = %prefix, "Listing boxes");
 
-    // Get box IDs that belong to this namespace
-    let namespace_mappings = match state.store.list_box_mappings_by_namespace(&namespace).await {
+    let namespace_mappings = match state.store.list_box_mappings_by_namespace(&prefix).await {
         Ok(m) => m,
         Err(e) => {
             return error_response(
@@ -316,14 +321,32 @@ pub async fn list_boxes(
         }
     }
 
-    Json(ListBoxesResponse { boxes: all_boxes }).into_response()
+    Json(ListBoxesResponse {
+        boxes: all_boxes,
+        next_page_token: None,
+    })
+    .into_response()
 }
 
+/// Get box details.
+#[utoipa::path(
+    get,
+    path = "/v1/{prefix}/boxes/{box_id}",
+    params(
+        ("prefix" = String, Path, description = "Organization or workspace identifier"),
+        ("box_id" = String, Path, description = "Box identifier (ULID or name)"),
+    ),
+    responses(
+        (status = 200, description = "Box details", body = types::RestBoxResponse),
+        (status = 404, description = "Box not found", body = super::error::ErrorResponse),
+    ),
+    tag = "Boxes",
+)]
 pub async fn get_box(
     State(state): State<Arc<CoordinatorState>>,
-    Path((namespace, box_id)): Path<(String, String)>,
+    Path((prefix, box_id)): Path<(String, String)>,
 ) -> Response {
-    tracing::debug!(namespace = %namespace, box_id = %box_id, "Getting box");
+    tracing::debug!(prefix = %prefix, box_id = %box_id, "Getting box");
     let mut client = match client_for_box(&state, &box_id).await {
         Ok(c) => c,
         Err(resp) => return resp,
@@ -339,11 +362,25 @@ pub async fn get_box(
     }
 }
 
+/// Check if a box exists.
+#[utoipa::path(
+    head,
+    path = "/v1/{prefix}/boxes/{box_id}",
+    params(
+        ("prefix" = String, Path, description = "Organization or workspace identifier"),
+        ("box_id" = String, Path, description = "Box identifier (ULID or name)"),
+    ),
+    responses(
+        (status = 204, description = "Box exists"),
+        (status = 404, description = "Box not found"),
+    ),
+    tag = "Boxes",
+)]
 pub async fn head_box(
     State(state): State<Arc<CoordinatorState>>,
-    Path((namespace, box_id)): Path<(String, String)>,
+    Path((prefix, box_id)): Path<(String, String)>,
 ) -> Response {
-    tracing::debug!(namespace = %namespace, box_id = %box_id, "Head box");
+    tracing::debug!(prefix = %prefix, box_id = %box_id, "Head box");
     let mut client = match client_for_box(&state, &box_id).await {
         Ok(c) => c,
         Err(_) => return StatusCode::NOT_FOUND.into_response(),
@@ -354,12 +391,28 @@ pub async fn head_box(
     }
 }
 
+/// Remove a box.
+#[utoipa::path(
+    delete,
+    path = "/v1/{prefix}/boxes/{box_id}",
+    params(
+        ("prefix" = String, Path, description = "Organization or workspace identifier"),
+        ("box_id" = String, Path, description = "Box identifier (ULID or name)"),
+        ("force" = Option<bool>, Query, description = "Force removal even if running"),
+    ),
+    responses(
+        (status = 204, description = "Box removed"),
+        (status = 404, description = "Box not found", body = super::error::ErrorResponse),
+        (status = 409, description = "Box state conflict", body = super::error::ErrorResponse),
+    ),
+    tag = "Boxes",
+)]
 pub async fn remove_box(
     State(state): State<Arc<CoordinatorState>>,
-    Path((namespace, box_id)): Path<(String, String)>,
+    Path((prefix, box_id)): Path<(String, String)>,
     axum::extract::Query(query): axum::extract::Query<RemoveQuery>,
 ) -> Response {
-    tracing::info!(namespace = %namespace, box_id = %box_id, "Removing box");
+    tracing::info!(prefix = %prefix, box_id = %box_id, "Removing box");
     let mut client = match client_for_box(&state, &box_id).await {
         Ok(c) => c,
         Err(resp) => return resp,
@@ -379,11 +432,26 @@ pub async fn remove_box(
     }
 }
 
+/// Start a box.
+#[utoipa::path(
+    post,
+    path = "/v1/{prefix}/boxes/{box_id}/start",
+    params(
+        ("prefix" = String, Path, description = "Organization or workspace identifier"),
+        ("box_id" = String, Path, description = "Box identifier (ULID or name)"),
+    ),
+    responses(
+        (status = 200, description = "Box started", body = types::RestBoxResponse),
+        (status = 404, description = "Box not found", body = super::error::ErrorResponse),
+        (status = 409, description = "Box state conflict", body = super::error::ErrorResponse),
+    ),
+    tag = "Boxes",
+)]
 pub async fn start_box(
     State(state): State<Arc<CoordinatorState>>,
-    Path((namespace, box_id)): Path<(String, String)>,
+    Path((prefix, box_id)): Path<(String, String)>,
 ) -> Response {
-    tracing::info!(namespace = %namespace, box_id = %box_id, "Starting box");
+    tracing::info!(prefix = %prefix, box_id = %box_id, "Starting box");
     let mut client = match client_for_box(&state, &box_id).await {
         Ok(c) => c,
         Err(resp) => return resp,
@@ -394,11 +462,27 @@ pub async fn start_box(
     }
 }
 
+/// Stop a box.
+#[utoipa::path(
+    post,
+    path = "/v1/{prefix}/boxes/{box_id}/stop",
+    params(
+        ("prefix" = String, Path, description = "Organization or workspace identifier"),
+        ("box_id" = String, Path, description = "Box identifier (ULID or name)"),
+    ),
+    request_body(content = Option<types::StopBoxRequest>, description = "Optional stop parameters"),
+    responses(
+        (status = 200, description = "Box stopped", body = types::RestBoxResponse),
+        (status = 404, description = "Box not found", body = super::error::ErrorResponse),
+        (status = 409, description = "Box state conflict", body = super::error::ErrorResponse),
+    ),
+    tag = "Boxes",
+)]
 pub async fn stop_box(
     State(state): State<Arc<CoordinatorState>>,
-    Path((namespace, box_id)): Path<(String, String)>,
+    Path((prefix, box_id)): Path<(String, String)>,
 ) -> Response {
-    tracing::info!(namespace = %namespace, box_id = %box_id, "Stopping box");
+    tracing::info!(prefix = %prefix, box_id = %box_id, "Stopping box");
     let mut client = match client_for_box(&state, &box_id).await {
         Ok(c) => c,
         Err(resp) => return resp,
@@ -410,15 +494,248 @@ pub async fn stop_box(
 }
 
 // ============================================================================
+// Snapshot / Clone / Export / Import Stubs
+// ============================================================================
+
+/// Create a snapshot.
+#[utoipa::path(
+    post,
+    path = "/v1/{prefix}/boxes/{box_id}/snapshots",
+    params(
+        ("prefix" = String, Path, description = "Organization or workspace identifier"),
+        ("box_id" = String, Path, description = "Box identifier"),
+    ),
+    request_body = CreateSnapshotRequest,
+    responses(
+        (status = 201, description = "Snapshot created", body = Snapshot),
+        (status = 404, description = "Box not found", body = super::error::ErrorResponse),
+        (status = 409, description = "Box state conflict", body = super::error::ErrorResponse),
+    ),
+    tag = "Boxes",
+)]
+pub async fn create_snapshot(
+    State(_state): State<Arc<CoordinatorState>>,
+    Path((_prefix, _box_id)): Path<(String, String)>,
+    Json(_req): Json<CreateSnapshotRequest>,
+) -> Response {
+    error_response(
+        StatusCode::NOT_IMPLEMENTED,
+        "Snapshots not yet implemented via coordinator",
+        "UnsupportedError",
+    )
+}
+
+/// List snapshots for a box.
+#[utoipa::path(
+    get,
+    path = "/v1/{prefix}/boxes/{box_id}/snapshots",
+    params(
+        ("prefix" = String, Path, description = "Organization or workspace identifier"),
+        ("box_id" = String, Path, description = "Box identifier"),
+    ),
+    responses(
+        (status = 200, description = "List of snapshots", body = ListSnapshotsResponse),
+        (status = 404, description = "Box not found", body = super::error::ErrorResponse),
+    ),
+    tag = "Boxes",
+)]
+pub async fn list_snapshots(
+    State(_state): State<Arc<CoordinatorState>>,
+    Path((_prefix, _box_id)): Path<(String, String)>,
+) -> Response {
+    error_response(
+        StatusCode::NOT_IMPLEMENTED,
+        "Snapshots not yet implemented via coordinator",
+        "UnsupportedError",
+    )
+}
+
+/// Get snapshot details.
+#[utoipa::path(
+    get,
+    path = "/v1/{prefix}/boxes/{box_id}/snapshots/{snapshot_name}",
+    params(
+        ("prefix" = String, Path, description = "Organization or workspace identifier"),
+        ("box_id" = String, Path, description = "Box identifier"),
+        ("snapshot_name" = String, Path, description = "Snapshot name"),
+    ),
+    responses(
+        (status = 200, description = "Snapshot details", body = Snapshot),
+        (status = 404, description = "Not found", body = super::error::ErrorResponse),
+    ),
+    tag = "Boxes",
+)]
+pub async fn get_snapshot(
+    State(_state): State<Arc<CoordinatorState>>,
+    Path((_prefix, _box_id, _snapshot_name)): Path<(String, String, String)>,
+) -> Response {
+    error_response(
+        StatusCode::NOT_IMPLEMENTED,
+        "Snapshots not yet implemented via coordinator",
+        "UnsupportedError",
+    )
+}
+
+/// Remove a snapshot.
+#[utoipa::path(
+    delete,
+    path = "/v1/{prefix}/boxes/{box_id}/snapshots/{snapshot_name}",
+    params(
+        ("prefix" = String, Path, description = "Organization or workspace identifier"),
+        ("box_id" = String, Path, description = "Box identifier"),
+        ("snapshot_name" = String, Path, description = "Snapshot name"),
+    ),
+    responses(
+        (status = 204, description = "Snapshot removed"),
+        (status = 404, description = "Not found", body = super::error::ErrorResponse),
+        (status = 409, description = "State conflict", body = super::error::ErrorResponse),
+    ),
+    tag = "Boxes",
+)]
+pub async fn remove_snapshot(
+    State(_state): State<Arc<CoordinatorState>>,
+    Path((_prefix, _box_id, _snapshot_name)): Path<(String, String, String)>,
+) -> Response {
+    error_response(
+        StatusCode::NOT_IMPLEMENTED,
+        "Snapshots not yet implemented via coordinator",
+        "UnsupportedError",
+    )
+}
+
+/// Restore a snapshot.
+#[utoipa::path(
+    post,
+    path = "/v1/{prefix}/boxes/{box_id}/snapshots/{snapshot_name}/restore",
+    params(
+        ("prefix" = String, Path, description = "Organization or workspace identifier"),
+        ("box_id" = String, Path, description = "Box identifier"),
+        ("snapshot_name" = String, Path, description = "Snapshot name"),
+    ),
+    responses(
+        (status = 204, description = "Snapshot restored"),
+        (status = 404, description = "Not found", body = super::error::ErrorResponse),
+        (status = 409, description = "State conflict", body = super::error::ErrorResponse),
+    ),
+    tag = "Boxes",
+)]
+pub async fn restore_snapshot(
+    State(_state): State<Arc<CoordinatorState>>,
+    Path((_prefix, _box_id, _snapshot_name)): Path<(String, String, String)>,
+) -> Response {
+    error_response(
+        StatusCode::NOT_IMPLEMENTED,
+        "Snapshots not yet implemented via coordinator",
+        "UnsupportedError",
+    )
+}
+
+/// Clone a box.
+#[utoipa::path(
+    post,
+    path = "/v1/{prefix}/boxes/{box_id}/clone",
+    params(
+        ("prefix" = String, Path, description = "Organization or workspace identifier"),
+        ("box_id" = String, Path, description = "Box identifier"),
+    ),
+    request_body = types::CloneBoxRequest,
+    responses(
+        (status = 201, description = "Box cloned", body = types::RestBoxResponse),
+        (status = 404, description = "Box not found", body = super::error::ErrorResponse),
+        (status = 409, description = "State conflict", body = super::error::ErrorResponse),
+    ),
+    tag = "Boxes",
+)]
+pub async fn clone_box(
+    State(_state): State<Arc<CoordinatorState>>,
+    Path((_prefix, _box_id)): Path<(String, String)>,
+    Json(_req): Json<types::CloneBoxRequest>,
+) -> Response {
+    error_response(
+        StatusCode::NOT_IMPLEMENTED,
+        "Clone not yet implemented via coordinator",
+        "UnsupportedError",
+    )
+}
+
+/// Export a box.
+#[utoipa::path(
+    post,
+    path = "/v1/{prefix}/boxes/{box_id}/export",
+    params(
+        ("prefix" = String, Path, description = "Organization or workspace identifier"),
+        ("box_id" = String, Path, description = "Box identifier"),
+    ),
+    responses(
+        (status = 200, description = "Box archive (binary)", content_type = "application/octet-stream"),
+        (status = 404, description = "Box not found", body = super::error::ErrorResponse),
+    ),
+    tag = "Boxes",
+)]
+pub async fn export_box(
+    State(_state): State<Arc<CoordinatorState>>,
+    Path((_prefix, _box_id)): Path<(String, String)>,
+) -> Response {
+    error_response(
+        StatusCode::NOT_IMPLEMENTED,
+        "Export not yet implemented via coordinator",
+        "UnsupportedError",
+    )
+}
+
+/// Import a box from an archive.
+#[utoipa::path(
+    post,
+    path = "/v1/{prefix}/boxes/import",
+    params(
+        ("prefix" = String, Path, description = "Organization or workspace identifier"),
+        ("name" = Option<String>, Query, description = "Name for the imported box"),
+    ),
+    request_body(content = Vec<u8>, content_type = "application/octet-stream"),
+    responses(
+        (status = 201, description = "Box imported", body = types::RestBoxResponse),
+        (status = 400, description = "Invalid archive", body = super::error::ErrorResponse),
+    ),
+    tag = "Boxes",
+)]
+pub async fn import_box(
+    State(_state): State<Arc<CoordinatorState>>,
+    Path(_prefix): Path<String>,
+) -> Response {
+    error_response(
+        StatusCode::NOT_IMPLEMENTED,
+        "Import not yet implemented via coordinator",
+        "UnsupportedError",
+    )
+}
+
+// ============================================================================
 // Execution Handlers (REST -> gRPC)
 // ============================================================================
 
+/// Start a command execution.
+#[utoipa::path(
+    post,
+    path = "/v1/{prefix}/boxes/{box_id}/exec",
+    params(
+        ("prefix" = String, Path, description = "Organization or workspace identifier"),
+        ("box_id" = String, Path, description = "Box identifier"),
+    ),
+    request_body = types::RestExecRequest,
+    responses(
+        (status = 201, description = "Execution started", body = types::RestExecResponse),
+        (status = 400, description = "Invalid request", body = super::error::ErrorResponse),
+        (status = 404, description = "Box not found", body = super::error::ErrorResponse),
+        (status = 409, description = "Box not running", body = super::error::ErrorResponse),
+    ),
+    tag = "Execution",
+)]
 pub async fn start_execution(
     State(state): State<Arc<CoordinatorState>>,
-    Path((namespace, box_id)): Path<(String, String)>,
+    Path((prefix, box_id)): Path<(String, String)>,
     Json(req): Json<RestExecRequest>,
 ) -> Response {
-    tracing::debug!(namespace = %namespace, box_id = %box_id, "Starting execution");
+    tracing::debug!(prefix = %prefix, box_id = %box_id, "Starting execution");
     let mut client = match client_for_box(&state, &box_id).await {
         Ok(c) => c,
         Err(resp) => return resp,
@@ -446,17 +763,83 @@ pub async fn start_execution(
     }
 }
 
-pub async fn get_execution(
+/// Interactive TTY session via WebSocket.
+#[utoipa::path(
+    get,
+    path = "/v1/{prefix}/boxes/{box_id}/exec/tty",
+    params(
+        ("prefix" = String, Path, description = "Organization or workspace identifier"),
+        ("box_id" = String, Path, description = "Box identifier"),
+        ("command" = String, Query, description = "Command to run"),
+        ("args" = Option<Vec<String>>, Query, description = "Command arguments"),
+        ("cols" = Option<u32>, Query, description = "Terminal columns"),
+        ("rows" = Option<u32>, Query, description = "Terminal rows"),
+    ),
+    responses(
+        (status = 101, description = "WebSocket upgrade"),
+        (status = 404, description = "Box not found", body = super::error::ErrorResponse),
+    ),
+    tag = "Execution",
+)]
+pub async fn exec_tty(
     State(_state): State<Arc<CoordinatorState>>,
-    Path((_namespace, _box_id, exec_id)): Path<(String, String, String)>,
+    Path((_prefix, _box_id)): Path<(String, String)>,
 ) -> Response {
-    Json(serde_json::json!({"execution_id": exec_id, "status": "running"})).into_response()
+    error_response(
+        StatusCode::NOT_IMPLEMENTED,
+        "TTY WebSocket not yet implemented via coordinator",
+        "UnsupportedError",
+    )
 }
 
-/// GET .../output — gRPC server-stream -> SSE
+/// Get execution status.
+#[utoipa::path(
+    get,
+    path = "/v1/{prefix}/boxes/{box_id}/executions/{exec_id}",
+    params(
+        ("prefix" = String, Path, description = "Organization or workspace identifier"),
+        ("box_id" = String, Path, description = "Box identifier"),
+        ("exec_id" = String, Path, description = "Execution identifier"),
+    ),
+    responses(
+        (status = 200, description = "Execution status", body = ExecutionInfo),
+        (status = 404, description = "Not found", body = super::error::ErrorResponse),
+    ),
+    tag = "Execution",
+)]
+pub async fn get_execution(
+    State(_state): State<Arc<CoordinatorState>>,
+    Path((_prefix, _box_id, exec_id)): Path<(String, String, String)>,
+) -> Response {
+    Json(ExecutionInfo {
+        execution_id: exec_id,
+        status: "running".to_string(),
+        exit_code: None,
+        started_at: None,
+        duration_ms: None,
+        error_message: None,
+    })
+    .into_response()
+}
+
+/// Stream execution output via SSE.
+#[utoipa::path(
+    get,
+    path = "/v1/{prefix}/boxes/{box_id}/executions/{exec_id}/output",
+    params(
+        ("prefix" = String, Path, description = "Organization or workspace identifier"),
+        ("box_id" = String, Path, description = "Box identifier"),
+        ("exec_id" = String, Path, description = "Execution identifier"),
+    ),
+    responses(
+        (status = 200, description = "SSE event stream", content_type = "text/event-stream"),
+        (status = 404, description = "Not found", body = super::error::ErrorResponse),
+    ),
+    tag = "Execution",
+)]
 pub async fn stream_output(
     State(state): State<Arc<CoordinatorState>>,
-    Path((_namespace, box_id, exec_id)): Path<(String, String, String)>,
+    Path((_prefix, box_id, exec_id)): Path<(String, String, String)>,
 ) -> Response {
     let mut client = match client_for_box(&state, &box_id).await {
         Ok(c) => c,
@@ -512,9 +895,26 @@ pub async fn stream_output(
         .into_response()
 }
 
+/// Send stdin data to an execution.
+#[utoipa::path(
+    post,
+    path = "/v1/{prefix}/boxes/{box_id}/executions/{exec_id}/input",
+    params(
+        ("prefix" = String, Path, description = "Organization or workspace identifier"),
+        ("box_id" = String, Path, description = "Box identifier"),
+        ("exec_id" = String, Path, description = "Execution identifier"),
+    ),
+    request_body(content = Vec<u8>, content_type = "application/octet-stream"),
+    responses(
+        (status = 204, description = "Input sent"),
+        (status = 404, description = "Not found", body = super::error::ErrorResponse),
+        (status = 409, description = "Execution not running", body = super::error::ErrorResponse),
+    ),
+    tag = "Execution",
+)]
 pub async fn send_input(
     State(state): State<Arc<CoordinatorState>>,
-    Path((_namespace, box_id, exec_id)): Path<(String, String, String)>,
+    Path((_prefix, box_id, exec_id)): Path<(String, String, String)>,
     body: axum::body::Bytes,
 ) -> Response {
     let mut client = match client_for_box(&state, &box_id).await {
@@ -534,9 +934,26 @@ pub async fn send_input(
     }
 }
 
+/// Send a signal to an execution.
+#[utoipa::path(
+    post,
+    path = "/v1/{prefix}/boxes/{box_id}/executions/{exec_id}/signal",
+    params(
+        ("prefix" = String, Path, description = "Organization or workspace identifier"),
+        ("box_id" = String, Path, description = "Box identifier"),
+        ("exec_id" = String, Path, description = "Execution identifier"),
+    ),
+    request_body = SignalRequest,
+    responses(
+        (status = 204, description = "Signal sent"),
+        (status = 404, description = "Not found", body = super::error::ErrorResponse),
+        (status = 409, description = "Execution not running", body = super::error::ErrorResponse),
+    ),
+    tag = "Execution",
+)]
 pub async fn send_signal(
     State(state): State<Arc<CoordinatorState>>,
-    Path((_namespace, box_id, exec_id)): Path<(String, String, String)>,
+    Path((_prefix, box_id, exec_id)): Path<(String, String, String)>,
     Json(req): Json<SignalRequest>,
 ) -> Response {
     let mut client = match client_for_box(&state, &box_id).await {
@@ -556,9 +973,26 @@ pub async fn send_signal(
     }
 }
 
+/// Resize a TTY execution.
+#[utoipa::path(
+    post,
+    path = "/v1/{prefix}/boxes/{box_id}/executions/{exec_id}/resize",
+    params(
+        ("prefix" = String, Path, description = "Organization or workspace identifier"),
+        ("box_id" = String, Path, description = "Box identifier"),
+        ("exec_id" = String, Path, description = "Execution identifier"),
+    ),
+    request_body = ResizeRequest,
+    responses(
+        (status = 204, description = "Resized"),
+        (status = 404, description = "Not found", body = super::error::ErrorResponse),
+        (status = 409, description = "Execution not running", body = super::error::ErrorResponse),
+    ),
+    tag = "Execution",
+)]
 pub async fn resize_tty(
     State(state): State<Arc<CoordinatorState>>,
-    Path((_namespace, box_id, exec_id)): Path<(String, String, String)>,
+    Path((_prefix, box_id, exec_id)): Path<(String, String, String)>,
     Json(req): Json<ResizeRequest>,
 ) -> Response {
     let mut client = match client_for_box(&state, &box_id).await {
@@ -580,35 +1014,87 @@ pub async fn resize_tty(
 }
 
 // ============================================================================
-// Auth, Config, Metrics (local or aggregated)
+// Files Stubs
 // ============================================================================
 
-pub async fn oauth_token() -> Response {
-    Json(serde_json::json!({
-        "access_token": "boxlite-coordinator-token",
-        "token_type": "Bearer",
-        "expires_in": 86400
-    }))
-    .into_response()
+/// Upload files to a box.
+#[utoipa::path(
+    put,
+    path = "/v1/{prefix}/boxes/{box_id}/files",
+    params(
+        ("prefix" = String, Path, description = "Organization or workspace identifier"),
+        ("box_id" = String, Path, description = "Box identifier"),
+        ("path" = String, Query, description = "Destination path inside the box"),
+        ("overwrite" = Option<bool>, Query, description = "Overwrite existing files"),
+    ),
+    request_body(content = Vec<u8>, content_type = "application/x-tar"),
+    responses(
+        (status = 204, description = "Files uploaded"),
+        (status = 404, description = "Box not found", body = super::error::ErrorResponse),
+        (status = 409, description = "Box not running", body = super::error::ErrorResponse),
+    ),
+    tag = "Files",
+)]
+pub async fn upload_files(
+    State(_state): State<Arc<CoordinatorState>>,
+    Path((_prefix, _box_id)): Path<(String, String)>,
+) -> Response {
+    error_response(
+        StatusCode::NOT_IMPLEMENTED,
+        "File transfer not yet implemented via coordinator",
+        "UnsupportedError",
+    )
 }
 
-pub async fn get_config() -> Response {
-    Json(serde_json::json!({
-        "capabilities": {
-            "snapshots_enabled": true,
-            "clone_enabled": true,
-            "export_enabled": true,
-            "import_enabled": true
-        }
-    }))
-    .into_response()
+/// Download files from a box.
+#[utoipa::path(
+    get,
+    path = "/v1/{prefix}/boxes/{box_id}/files",
+    params(
+        ("prefix" = String, Path, description = "Organization or workspace identifier"),
+        ("box_id" = String, Path, description = "Box identifier"),
+        ("path" = String, Query, description = "Path inside the box to download"),
+        ("follow_symlinks" = Option<bool>, Query, description = "Follow symbolic links"),
+    ),
+    responses(
+        (status = 200, description = "File archive (tar)", content_type = "application/x-tar"),
+        (status = 404, description = "Not found", body = super::error::ErrorResponse),
+        (status = 409, description = "Box not running", body = super::error::ErrorResponse),
+    ),
+    tag = "Files",
+)]
+pub async fn download_files(
+    State(_state): State<Arc<CoordinatorState>>,
+    Path((_prefix, _box_id)): Path<(String, String)>,
+) -> Response {
+    error_response(
+        StatusCode::NOT_IMPLEMENTED,
+        "File transfer not yet implemented via coordinator",
+        "UnsupportedError",
+    )
 }
 
+// ============================================================================
+// Metrics
+// ============================================================================
+
+/// Get aggregate runtime metrics.
+#[utoipa::path(
+    get,
+    path = "/v1/{prefix}/metrics",
+    params(
+        ("prefix" = String, Path, description = "Organization or workspace identifier"),
+    ),
+    responses(
+        (status = 200, description = "Runtime metrics", body = RuntimeMetrics),
+    ),
+    tag = "Metrics",
+)]
 pub async fn runtime_metrics(
     State(state): State<Arc<CoordinatorState>>,
-    Path(namespace): Path<String>,
+    Path(prefix): Path<String>,
 ) -> Response {
-    tracing::debug!(namespace = %namespace, "Fetching runtime metrics");
+    tracing::debug!(prefix = %prefix, "Fetching runtime metrics");
     let workers = match state.store.list_workers().await {
         Ok(w) => w,
         Err(e) => {
@@ -620,14 +1106,14 @@ pub async fn runtime_metrics(
         }
     };
 
-    let mut total = serde_json::json!({
-        "boxes_created_total": 0u64,
-        "boxes_failed_total": 0u64,
-        "boxes_stopped_total": 0u64,
-        "num_running_boxes": 0u64,
-        "total_commands_executed": 0u64,
-        "total_exec_errors": 0u64,
-    });
+    let mut total = RuntimeMetrics {
+        boxes_created_total: 0,
+        boxes_failed_total: 0,
+        boxes_stopped_total: 0,
+        num_running_boxes: 0,
+        total_commands_executed: 0,
+        total_exec_errors: 0,
+    };
 
     for worker in workers.iter().filter(|w| w.status == WorkerStatus::Active) {
         match grpc_client(&worker.url).await {
@@ -638,18 +1124,12 @@ pub async fn runtime_metrics(
                 {
                     Ok(resp) => {
                         let m = resp.into_inner();
-                        for (key, val) in [
-                            ("boxes_created_total", m.boxes_created_total),
-                            ("boxes_failed_total", m.boxes_failed_total),
-                            ("boxes_stopped_total", m.boxes_stopped_total),
-                            ("num_running_boxes", m.num_running_boxes),
-                            ("total_commands_executed", m.total_commands_executed),
-                            ("total_exec_errors", m.total_exec_errors),
-                        ] {
-                            if let Some(t) = total[key].as_u64() {
-                                total[key] = serde_json::json!(t + val);
-                            }
-                        }
+                        total.boxes_created_total += m.boxes_created_total;
+                        total.boxes_failed_total += m.boxes_failed_total;
+                        total.boxes_stopped_total += m.boxes_stopped_total;
+                        total.num_running_boxes += m.num_running_boxes;
+                        total.total_commands_executed += m.total_commands_executed;
+                        total.total_exec_errors += m.total_exec_errors;
                     }
                     Err(e) => tracing::warn!(worker_id = %worker.id, "Failed to get metrics: {e}"),
                 }
@@ -659,4 +1139,228 @@ pub async fn runtime_metrics(
     }
 
     Json(total).into_response()
+}
+
+/// Get per-box metrics.
+#[utoipa::path(
+    get,
+    path = "/v1/{prefix}/boxes/{box_id}/metrics",
+    params(
+        ("prefix" = String, Path, description = "Organization or workspace identifier"),
+        ("box_id" = String, Path, description = "Box identifier"),
+    ),
+    responses(
+        (status = 200, description = "Box metrics", body = BoxMetrics),
+        (status = 404, description = "Box not found", body = super::error::ErrorResponse),
+    ),
+    tag = "Metrics",
+)]
+pub async fn get_box_metrics(
+    State(state): State<Arc<CoordinatorState>>,
+    Path((_prefix, box_id)): Path<(String, String)>,
+) -> Response {
+    let mut client = match client_for_box(&state, &box_id).await {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+    match client
+        .get_metrics(proto::GetMetricsRequest {
+            box_id: Some(box_id),
+        })
+        .await
+    {
+        Ok(resp) => {
+            let m = resp.into_inner();
+            // Proto BoxMetrics doesn't carry boot_timing yet; populate from
+            // the optional box_metrics field when present.
+            let bm = m.box_metrics.unwrap_or_default();
+            Json(BoxMetrics {
+                commands_executed_total: bm.commands_executed_total,
+                exec_errors_total: bm.exec_errors_total,
+                bytes_sent_total: bm.bytes_sent_total,
+                bytes_received_total: bm.bytes_received_total,
+                cpu_percent: bm.cpu_percent,
+                memory_bytes: bm.memory_bytes,
+                network_bytes_sent: bm.network_bytes_sent,
+                network_bytes_received: bm.network_bytes_received,
+                network_tcp_connections: bm.network_tcp_connections,
+                network_tcp_errors: bm.network_tcp_errors,
+                boot_timing: None,
+            })
+            .into_response()
+        }
+        Err(status) => grpc_to_http_error(status),
+    }
+}
+
+// ============================================================================
+// Images Stubs
+// ============================================================================
+
+/// Pull an image from a registry.
+#[utoipa::path(
+    post,
+    path = "/v1/{prefix}/images/pull",
+    params(
+        ("prefix" = String, Path, description = "Organization or workspace identifier"),
+    ),
+    request_body = PullImageRequest,
+    responses(
+        (status = 200, description = "Image pulled", body = types::ImageInfo),
+        (status = 422, description = "Pull failed", body = super::error::ErrorResponse),
+    ),
+    tag = "Images",
+)]
+pub async fn pull_image(
+    State(_state): State<Arc<CoordinatorState>>,
+    Path(_prefix): Path<String>,
+    Json(_req): Json<PullImageRequest>,
+) -> Response {
+    error_response(
+        StatusCode::NOT_IMPLEMENTED,
+        "Image management not yet implemented via coordinator",
+        "UnsupportedError",
+    )
+}
+
+/// List cached images.
+#[utoipa::path(
+    get,
+    path = "/v1/{prefix}/images",
+    params(
+        ("prefix" = String, Path, description = "Organization or workspace identifier"),
+        ("pageSize" = Option<u32>, Query, description = "Maximum number of results per page"),
+        ("pageToken" = Option<String>, Query, description = "Opaque pagination token"),
+    ),
+    responses(
+        (status = 200, description = "List of images", body = ListImagesResponse),
+    ),
+    tag = "Images",
+)]
+pub async fn list_images(
+    State(_state): State<Arc<CoordinatorState>>,
+    Path(_prefix): Path<String>,
+) -> Response {
+    error_response(
+        StatusCode::NOT_IMPLEMENTED,
+        "Image management not yet implemented via coordinator",
+        "UnsupportedError",
+    )
+}
+
+/// Get image details.
+#[utoipa::path(
+    get,
+    path = "/v1/{prefix}/images/{image_id}",
+    params(
+        ("prefix" = String, Path, description = "Organization or workspace identifier"),
+        ("image_id" = String, Path, description = "Image manifest digest"),
+    ),
+    responses(
+        (status = 200, description = "Image details", body = types::ImageInfo),
+        (status = 404, description = "Image not found", body = super::error::ErrorResponse),
+    ),
+    tag = "Images",
+)]
+pub async fn get_image(
+    State(_state): State<Arc<CoordinatorState>>,
+    Path((_prefix, _image_id)): Path<(String, String)>,
+) -> Response {
+    error_response(
+        StatusCode::NOT_IMPLEMENTED,
+        "Image management not yet implemented via coordinator",
+        "UnsupportedError",
+    )
+}
+
+/// Check if an image is cached.
+#[utoipa::path(
+    head,
+    path = "/v1/{prefix}/images/{image_id}",
+    params(
+        ("prefix" = String, Path, description = "Organization or workspace identifier"),
+        ("image_id" = String, Path, description = "Image manifest digest"),
+    ),
+    responses(
+        (status = 204, description = "Image exists"),
+        (status = 404, description = "Image not found"),
+    ),
+    tag = "Images",
+)]
+pub async fn image_exists(
+    State(_state): State<Arc<CoordinatorState>>,
+    Path((_prefix, _image_id)): Path<(String, String)>,
+) -> Response {
+    error_response(
+        StatusCode::NOT_IMPLEMENTED,
+        "Image management not yet implemented via coordinator",
+        "UnsupportedError",
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn test_proto_to_rest_full_fields() {
+        let proto_resp = proto::BoxResponse {
+            box_id: "01ABC".into(),
+            name: Some("mybox".into()),
+            status: "running".into(),
+            created_at: "2024-01-01T00:00:00Z".into(),
+            updated_at: "2024-01-01T00:01:00Z".into(),
+            pid: Some(1234),
+            image: "python:3.11".into(),
+            cpus: 4,
+            memory_mib: 1024,
+            labels: HashMap::from([("env".into(), "prod".into())]),
+        };
+        let rest = proto_to_rest(proto_resp);
+        assert_eq!(rest.box_id, "01ABC");
+        assert_eq!(rest.name.as_deref(), Some("mybox"));
+        assert_eq!(rest.status, "running");
+        assert_eq!(rest.pid, Some(1234));
+        assert_eq!(rest.cpus, 4);
+        assert_eq!(rest.memory_mib, 1024);
+        assert_eq!(rest.labels["env"], "prod");
+    }
+
+    #[test]
+    fn test_proto_to_rest_optional_none() {
+        let proto_resp = proto::BoxResponse {
+            box_id: "01XYZ".into(),
+            name: None,
+            status: "stopped".into(),
+            created_at: "2024-01-01T00:00:00Z".into(),
+            updated_at: "2024-01-01T00:00:00Z".into(),
+            pid: None,
+            image: "alpine".into(),
+            cpus: 1,
+            memory_mib: 128,
+            labels: HashMap::new(),
+        };
+        let rest = proto_to_rest(proto_resp);
+        assert!(rest.name.is_none());
+        assert!(rest.pid.is_none());
+    }
+
+    #[test]
+    fn test_proto_to_rest_empty_labels() {
+        let proto_resp = proto::BoxResponse {
+            box_id: "01".into(),
+            name: None,
+            status: "configured".into(),
+            created_at: String::new(),
+            updated_at: String::new(),
+            pid: None,
+            image: "alpine".into(),
+            cpus: 1,
+            memory_mib: 128,
+            labels: HashMap::new(),
+        };
+        let rest = proto_to_rest(proto_resp);
+        assert!(rest.labels.is_empty());
+    }
 }
