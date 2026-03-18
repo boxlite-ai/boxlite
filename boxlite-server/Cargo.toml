@@ -19,7 +19,7 @@ tonic = "0.12"
 prost = "0.13"
 
 # HTTP (coordinator REST API)
-axum = { version = "0.8", features = ["macros"] }
+axum = { version = "0.8", features = ["macros", "ws"] }
 
 # Async runtime
 tokio = { version = "1.37", features = ["rt", "rt-multi-thread", "macros", "sync", "net", "time", "signal"] }

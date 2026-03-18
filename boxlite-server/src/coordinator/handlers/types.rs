@@ -345,6 +345,31 @@ pub struct DownloadFilesQuery {
     pub follow_symlinks: Option<bool>,
 }
 
+/// Query parameters for TTY WebSocket session.
+#[derive(Debug, Deserialize)]
+pub struct TtyQuery {
+    #[serde(default = "default_tty_command")]
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default = "default_cols")]
+    pub cols: u32,
+    #[serde(default = "default_rows")]
+    pub rows: u32,
+}
+
+fn default_tty_command() -> String {
+    "bash".into()
+}
+
+fn default_cols() -> u32 {
+    80
+}
+
+fn default_rows() -> u32 {
+    24
+}
+
 // ============================================================================
 // Metrics
 // ============================================================================
@@ -978,5 +1003,30 @@ mod tests {
         assert_eq!(port.guest_port, 8080);
         assert!(port.host_port.is_none());
         assert!(port.protocol.is_none());
+    }
+
+    // ====================================================================
+    // TTY Query
+    // ====================================================================
+
+    #[test]
+    fn test_tty_query_defaults() {
+        let q: TtyQuery = serde_json::from_str("{}").unwrap();
+        assert_eq!(q.command, "bash");
+        assert!(q.args.is_empty());
+        assert_eq!(q.cols, 80);
+        assert_eq!(q.rows, 24);
+    }
+
+    #[test]
+    fn test_tty_query_custom() {
+        let q: TtyQuery = serde_json::from_str(
+            r#"{"command": "sh", "args": ["-c", "ls"], "cols": 120, "rows": 40}"#,
+        )
+        .unwrap();
+        assert_eq!(q.command, "sh");
+        assert_eq!(q.args, vec!["-c", "ls"]);
+        assert_eq!(q.cols, 120);
+        assert_eq!(q.rows, 40);
     }
 }

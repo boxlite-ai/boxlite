@@ -525,19 +525,37 @@ async fn test_download_files_box_not_found() {
 }
 
 // ============================================================================
-// TTY WebSocket stub (only remaining 501)
+// TTY WebSocket
 // ============================================================================
 
 #[tokio::test]
-async fn test_stub_exec_tty_returns_501() {
+async fn test_exec_tty_requires_websocket_upgrade() {
     let (app, _tmp) = test_app();
+    // A non-WebSocket GET to the TTY endpoint returns 400 because axum's
+    // WebSocketUpgrade extractor rejects requests without upgrade headers.
     let req = Request::builder()
         .method("GET")
-        .uri("/v1/default/boxes/box1/exec/tty")
+        .uri("/v1/default/boxes/anybox/exec/tty")
         .body(Body::empty())
         .unwrap();
     let response = app.clone().oneshot(req).await.unwrap();
-    assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+    // 400 = "WebSocket upgrade required" (axum rejects non-WS requests)
+    // This confirms the route is wired and the handler requires WebSocket.
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn test_exec_tty_route_accepts_query_params() {
+    let (app, _tmp) = test_app();
+    // Verify query params don't cause routing errors — the handler still
+    // returns 400 because no WebSocket upgrade headers are present.
+    let req = Request::builder()
+        .method("GET")
+        .uri("/v1/default/boxes/anybox/exec/tty?command=sh&cols=120&rows=40")
+        .body(Body::empty())
+        .unwrap();
+    let response = app.clone().oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
 // ============================================================================

@@ -7,7 +7,8 @@ use super::types::{
     self, BoxMetrics, CreateBoxRequest, CreateSnapshotRequest, DownloadFilesQuery, ExecutionInfo,
     ImportQuery, ListBoxesResponse, ListImagesResponse, ListSnapshotsResponse, PullImageRequest,
     RemoveQuery, ResizeRequest, RestBoxResponse, RestExecRequest, RestExecResponse, RuntimeMetrics,
-    SandboxCapabilities, SandboxConfig, SignalRequest, Snapshot, TokenResponse, UploadFilesQuery,
+    SandboxCapabilities, SandboxConfig, SignalRequest, Snapshot, TokenResponse, TtyQuery,
+    UploadFilesQuery,
 };
 use axum::Json;
 use axum::extract::{Path, State};
@@ -996,14 +997,167 @@ pub async fn start_execution(
     tag = "Execution",
 )]
 pub async fn exec_tty(
-    State(_state): State<Arc<CoordinatorState>>,
-    Path((_prefix, _box_id)): Path<(String, String)>,
+    State(state): State<Arc<CoordinatorState>>,
+    Path((_prefix, box_id)): Path<(String, String)>,
+    axum::extract::Query(query): axum::extract::Query<TtyQuery>,
+    ws: axum::extract::ws::WebSocketUpgrade,
 ) -> Response {
-    error_response(
-        StatusCode::NOT_IMPLEMENTED,
-        "TTY WebSocket not yet implemented via coordinator",
-        "UnsupportedError",
-    )
+    // Pre-upgrade validation: ensure box exists and worker is reachable.
+    // Note: axum rejects non-WebSocket requests with 400 before reaching this handler.
+    let client = match client_for_box(&state, &box_id).await {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+
+    ws.on_upgrade(move |socket| handle_tty_session(socket, client, box_id, query))
+}
+
+/// Handle a WebSocket TTY session after upgrade.
+///
+/// Wire protocol:
+/// - Client → Server binary frame: raw stdin bytes
+/// - Server → Client binary frame: raw PTY output
+/// - Client → Server text frame: `{"type":"resize","cols":120,"rows":40}`
+/// - Server → Client text frame: `{"type":"exit","exit_code":0}`
+async fn handle_tty_session(
+    socket: axum::extract::ws::WebSocket,
+    mut client: WorkerServiceClient<tonic::transport::Channel>,
+    box_id: String,
+    query: TtyQuery,
+) {
+    use axum::extract::ws::Message;
+    use futures::SinkExt;
+
+    // 1. Start execution with tty=true
+    let exec_resp = match client
+        .exec(proto::ExecRequest {
+            box_id: box_id.clone(),
+            command: query.command,
+            args: query.args,
+            env: Default::default(),
+            working_dir: None,
+            tty: true,
+            timeout_seconds: None,
+        })
+        .await
+    {
+        Ok(r) => r.into_inner(),
+        Err(e) => {
+            tracing::error!("TTY exec failed: {e}");
+            return;
+        }
+    };
+    let exec_id = exec_resp.execution_id;
+
+    // 2. Initial resize
+    let _ = client
+        .resize_tty(proto::ResizeTtyRequest {
+            box_id: box_id.clone(),
+            execution_id: exec_id.clone(),
+            cols: query.cols,
+            rows: query.rows,
+        })
+        .await;
+
+    // 3. Start output stream
+    let output_stream = match client
+        .stream_output(proto::StreamOutputRequest {
+            box_id: box_id.clone(),
+            execution_id: exec_id.clone(),
+        })
+        .await
+    {
+        Ok(r) => r.into_inner(),
+        Err(e) => {
+            tracing::error!("TTY stream_output failed: {e}");
+            return;
+        }
+    };
+
+    // 4. Split WebSocket
+    let (mut ws_sender, mut ws_receiver) = socket.split();
+
+    // Clone client for the reader task
+    let mut reader_client = client.clone();
+    let reader_box_id = box_id.clone();
+    let reader_exec_id = exec_id.clone();
+
+    // 5. Writer: gRPC output → WebSocket frames
+    let writer = tokio::spawn(async move {
+        let mut stream = output_stream;
+        while let Some(result) = stream.next().await {
+            match result {
+                Ok(chunk) => {
+                    if chunk.done {
+                        let exit_msg = serde_json::json!({
+                            "type": "exit",
+                            "exit_code": chunk.exit_code.unwrap_or(-1)
+                        });
+                        let _ = ws_sender
+                            .send(Message::Text(exit_msg.to_string().into()))
+                            .await;
+                        break;
+                    }
+                    if !chunk.data.is_empty()
+                        && ws_sender
+                            .send(Message::Binary(chunk.data.into()))
+                            .await
+                            .is_err()
+                    {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("TTY gRPC stream error: {e}");
+                    break;
+                }
+            }
+        }
+        let _ = ws_sender.close().await;
+    });
+
+    // 6. Reader: WebSocket frames → gRPC calls
+    let reader = tokio::spawn(async move {
+        while let Some(Ok(msg)) = ws_receiver.next().await {
+            match msg {
+                Message::Binary(data) => {
+                    // Stdin data
+                    let _ = reader_client
+                        .send_input(proto::SendInputRequest {
+                            box_id: reader_box_id.clone(),
+                            execution_id: reader_exec_id.clone(),
+                            data: data.to_vec(),
+                        })
+                        .await;
+                }
+                Message::Text(text) => {
+                    // Control message (resize)
+                    if let Ok(ctrl) = serde_json::from_str::<serde_json::Value>(text.as_ref())
+                        && ctrl.get("type").and_then(|t| t.as_str()) == Some("resize")
+                    {
+                        let cols = ctrl.get("cols").and_then(|v| v.as_u64()).unwrap_or(80) as u32;
+                        let rows = ctrl.get("rows").and_then(|v| v.as_u64()).unwrap_or(24) as u32;
+                        let _ = reader_client
+                            .resize_tty(proto::ResizeTtyRequest {
+                                box_id: reader_box_id.clone(),
+                                execution_id: reader_exec_id.clone(),
+                                cols,
+                                rows,
+                            })
+                            .await;
+                    }
+                }
+                Message::Close(_) => break,
+                _ => {}
+            }
+        }
+    });
+
+    // 7. Wait for either side to finish
+    tokio::select! {
+        _ = writer => {},
+        _ = reader => {},
+    }
 }
 
 /// Get execution status.
