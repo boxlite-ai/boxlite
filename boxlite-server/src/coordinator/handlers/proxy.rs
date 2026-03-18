@@ -989,9 +989,11 @@ pub async fn start_execution(
         ("args" = Option<Vec<String>>, Query, description = "Command arguments"),
         ("cols" = Option<u32>, Query, description = "Terminal columns"),
         ("rows" = Option<u32>, Query, description = "Terminal rows"),
+        ("token" = Option<String>, Query, description = "JWT authentication token"),
     ),
     responses(
         (status = 101, description = "WebSocket upgrade"),
+        (status = 401, description = "Unauthorized – invalid or missing JWT token", body = super::error::ErrorResponse),
         (status = 404, description = "Box not found", body = super::error::ErrorResponse),
     ),
     tag = "Execution",
@@ -1002,6 +1004,55 @@ pub async fn exec_tty(
     axum::extract::Query(query): axum::extract::Query<TtyQuery>,
     ws: axum::extract::ws::WebSocketUpgrade,
 ) -> Response {
+    // JWT validation (if BOXLITE_TTY_SECRET is configured).
+    if let Ok(secret) = std::env::var("BOXLITE_TTY_SECRET") {
+        let token = match &query.token {
+            Some(t) => t,
+            None => {
+                return error_response(
+                    StatusCode::UNAUTHORIZED,
+                    "Missing token query parameter",
+                    "Unauthorized",
+                );
+            }
+        };
+
+        #[derive(Debug, serde::Serialize, serde::Deserialize)]
+        struct TtyClaims {
+            box_id: String,
+            namespace: String,
+            exp: usize,
+        }
+
+        let key = jsonwebtoken::DecodingKey::from_secret(secret.as_bytes());
+        let mut validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS256);
+        // We validate exp ourselves via the standard jsonwebtoken exp check.
+        validation.set_required_spec_claims(&["exp"]);
+
+        match jsonwebtoken::decode::<TtyClaims>(token, &key, &validation) {
+            Ok(data) => {
+                if data.claims.box_id != box_id {
+                    return error_response(
+                        StatusCode::UNAUTHORIZED,
+                        format!(
+                            "Token box_id '{}' does not match path box_id '{}'",
+                            data.claims.box_id, box_id
+                        ),
+                        "Unauthorized",
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::warn!("TTY JWT validation failed: {e}");
+                return error_response(
+                    StatusCode::UNAUTHORIZED,
+                    format!("Invalid token: {e}"),
+                    "Unauthorized",
+                );
+            }
+        }
+    }
+
     // Pre-upgrade validation: ensure box exists and worker is reachable.
     // Note: axum rejects non-WebSocket requests with 400 before reaching this handler.
     let client = match client_for_box(&state, &box_id).await {

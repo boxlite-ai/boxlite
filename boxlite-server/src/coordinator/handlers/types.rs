@@ -356,6 +356,9 @@ pub struct TtyQuery {
     pub cols: u32,
     #[serde(default = "default_rows")]
     pub rows: u32,
+    /// Optional JWT token for authentication.
+    #[serde(default)]
+    pub token: Option<String>,
 }
 
 fn default_tty_command() -> String {
