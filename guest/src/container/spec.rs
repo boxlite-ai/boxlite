@@ -21,6 +21,10 @@ pub struct UserMount {
     pub destination: String,
     /// Read-only mount
     pub read_only: bool,
+    /// Owner UID of host directory (for auto-idmap)
+    pub owner_uid: u32,
+    /// Owner GID of host directory (for auto-idmap)
+    pub owner_gid: u32,
 }
 
 /// Create OCI runtime specification with default configuration

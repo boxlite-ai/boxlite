@@ -119,6 +119,47 @@ impl Container {
             .ok_or_else(|| BoxliteError::Internal("Invalid rootfs path".to_string()))?;
         let (uid, gid) = spec::resolve_user(rootfs_str, user)?;
 
+        // Auto-idmap: remap volume UIDs when host owner differs from container user.
+        // Runs before OCI bundle creation so the mount point has correct ownership.
+        if uid != 0 {
+            for mount in &user_mounts {
+                if mount.read_only || mount.owner_uid == uid {
+                    continue;
+                }
+                let mount_path = std::path::Path::new(&mount.source);
+                match crate::storage::idmap::remap_mount(
+                    mount_path,
+                    &[crate::storage::idmap::IdMapping {
+                        host_id: mount.owner_uid,
+                        container_id: uid,
+                        count: 1,
+                    }],
+                    &[crate::storage::idmap::IdMapping {
+                        host_id: mount.owner_gid,
+                        container_id: gid,
+                        count: 1,
+                    }],
+                ) {
+                    Ok(true) => tracing::info!(
+                        "Auto-idmap: {}:{} → {}:{} on {}",
+                        mount.owner_uid,
+                        mount.owner_gid,
+                        uid,
+                        gid,
+                        mount.source
+                    ),
+                    Ok(false) => {
+                        tracing::debug!("Auto-idmap not supported for {}, skipping", mount.source)
+                    }
+                    Err(e) => tracing::warn!(
+                        "Auto-idmap failed for {}: {}, continuing without",
+                        mount.source,
+                        e
+                    ),
+                }
+            }
+        }
+
         // Create OCI bundle at /run/boxlite/containers/{cid}/
         // create_oci_bundle creates bundle_root/{cid}/, so pass containers_dir
         let bundle_path = start::create_oci_bundle(

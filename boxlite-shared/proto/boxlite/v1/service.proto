@@ -217,6 +217,11 @@ message BindMount {
   string destination = 2;
   // Read-only mount
   bool read_only = 3;
+  // Owner UID/GID of host directory (from stat on host).
+  // Guest uses these for auto-idmap: when owner differs from container USER,
+  // guest applies mount_setattr(MOUNT_ATTR_IDMAP) to remap transparently.
+  uint32 owner_uid = 4;
+  uint32 owner_gid = 5;
 }
 
 message ContainerInitResponse {

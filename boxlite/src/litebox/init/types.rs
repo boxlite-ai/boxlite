@@ -37,6 +37,10 @@ pub struct ResolvedVolume {
     pub host_path: PathBuf,
     pub guest_path: String,
     pub read_only: bool,
+    /// Owner UID of host directory (for auto-idmap in guest).
+    pub owner_uid: u32,
+    /// Owner GID of host directory (for auto-idmap in guest).
+    pub owner_gid: u32,
 }
 
 pub fn resolve_user_volumes(volumes: &[VolumeSpec]) -> BoxliteResult<Vec<ResolvedVolume>> {
@@ -68,11 +72,26 @@ pub fn resolve_user_volumes(volumes: &[VolumeSpec]) -> BoxliteResult<Vec<Resolve
 
         let tag = format!("uservol{}", i);
 
+        // Stat host path to get owner UID/GID for auto-idmap in guest
+        let (owner_uid, owner_gid) = {
+            use std::os::unix::fs::MetadataExt;
+            let meta = std::fs::metadata(&resolved_path).map_err(|e| {
+                BoxliteError::Config(format!(
+                    "Failed to stat volume path '{}': {}",
+                    resolved_path.display(),
+                    e
+                ))
+            })?;
+            (meta.uid(), meta.gid())
+        };
+
         tracing::debug!(
             tag = %tag,
             host_path = %resolved_path.display(),
             guest_path = %vol.guest_path,
             read_only = vol.read_only,
+            owner_uid,
+            owner_gid,
             "Resolved user volume"
         );
 
@@ -81,6 +100,8 @@ pub fn resolve_user_volumes(volumes: &[VolumeSpec]) -> BoxliteResult<Vec<Resolve
             host_path: resolved_path,
             guest_path: vol.guest_path.clone(),
             read_only: vol.read_only,
+            owner_uid,
+            owner_gid,
         });
     }
 
@@ -256,5 +277,59 @@ impl InitPipelineContext {
             #[cfg(target_os = "linux")]
             bind_mount: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::options::VolumeSpec;
+
+    #[test]
+    fn resolve_volume_gets_owner_uid() {
+        let tmp = tempfile::tempdir().unwrap();
+        let volumes = vec![VolumeSpec {
+            host_path: tmp.path().to_str().unwrap().to_string(),
+            guest_path: "/data".to_string(),
+            read_only: false,
+        }];
+
+        let resolved = resolve_user_volumes(&volumes).unwrap();
+        assert_eq!(resolved.len(), 1);
+
+        // owner_uid should be the current user's UID
+        use std::os::unix::fs::MetadataExt;
+        let expected_uid = std::fs::metadata(tmp.path()).unwrap().uid();
+        let expected_gid = std::fs::metadata(tmp.path()).unwrap().gid();
+
+        assert_eq!(resolved[0].owner_uid, expected_uid);
+        assert_eq!(resolved[0].owner_gid, expected_gid);
+        assert_eq!(resolved[0].tag, "uservol0");
+    }
+
+    #[test]
+    fn resolve_volume_nonexistent_path_errors() {
+        let volumes = vec![VolumeSpec {
+            host_path: "/nonexistent/path/12345".to_string(),
+            guest_path: "/data".to_string(),
+            read_only: false,
+        }];
+
+        let result = resolve_user_volumes(&volumes);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn resolve_volume_file_not_dir_errors() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let volumes = vec![VolumeSpec {
+            host_path: tmp.path().to_str().unwrap().to_string(),
+            guest_path: "/data".to_string(),
+            read_only: false,
+        }];
+
+        let result = resolve_user_volumes(&volumes);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not a directory"));
     }
 }

@@ -8,6 +8,7 @@ pub mod block_device;
 #[allow(dead_code)]
 mod copy;
 pub mod fsfreeze;
+pub mod idmap;
 mod perms;
 mod virtiofs;
 mod volume;

@@ -23,6 +23,10 @@ pub struct ContainerMount {
     pub destination: String,
     /// Read-only mount
     pub read_only: bool,
+    /// Owner UID of host directory (for auto-idmap in guest)
+    pub owner_uid: u32,
+    /// Owner GID of host directory (for auto-idmap in guest)
+    pub owner_gid: u32,
 }
 
 /// Manages container-level volume configuration.
@@ -61,6 +65,7 @@ impl<'a> ContainerVolumeManager<'a> {
     /// * `host_path` - Path on host to share
     /// * `container_path` - Mount point in container (user-specified)
     /// * `read_only` - Whether the mount is read-only
+    #[allow(clippy::too_many_arguments)]
     pub fn add_volume(
         &mut self,
         container_id: &str,
@@ -69,6 +74,8 @@ impl<'a> ContainerVolumeManager<'a> {
         host_path: PathBuf,
         container_path: &str,
         read_only: bool,
+        owner_uid: u32,
+        owner_gid: u32,
     ) {
         // Add virtiofs share to guest with container_id
         // Guest will mount at convention path: /run/boxlite/shared/containers/{container_id}/volumes/{tag}
@@ -85,6 +92,8 @@ impl<'a> ContainerVolumeManager<'a> {
             volume_name: volume_name.to_string(),
             destination: container_path.to_string(),
             read_only,
+            owner_uid,
+            owner_gid,
         });
     }
 
@@ -97,6 +106,8 @@ impl<'a> ContainerVolumeManager<'a> {
             volume_name: volume_name.to_string(),
             destination: container_path.to_string(),
             read_only,
+            owner_uid: 0,
+            owner_gid: 0,
         });
     }
 

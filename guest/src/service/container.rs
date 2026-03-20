@@ -201,6 +201,8 @@ impl ContainerService for GuestServer {
                     source: source.to_string_lossy().to_string(),
                     destination: m.destination.clone(),
                     read_only: m.read_only,
+                    owner_uid: m.owner_uid,
+                    owner_gid: m.owner_gid,
                 }
             })
             .collect();

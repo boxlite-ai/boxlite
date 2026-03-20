@@ -114,6 +114,8 @@ impl ContainerInterface {
                 volume_name: m.volume_name,
                 destination: m.destination,
                 read_only: m.read_only,
+                owner_uid: m.owner_uid,
+                owner_gid: m.owner_gid,
             })
             .collect();
 

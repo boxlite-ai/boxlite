@@ -176,6 +176,8 @@ async fn build_config(
             vol.host_path.clone(),
             &vol.guest_path,
             vol.read_only,
+            vol.owner_uid,
+            vol.owner_gid,
         );
     }
     let container_mounts = container_mgr.build_container_mounts();
