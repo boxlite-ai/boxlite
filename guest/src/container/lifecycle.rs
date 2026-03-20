@@ -120,43 +120,34 @@ impl Container {
         let (uid, gid) = spec::resolve_user(rootfs_str, user)?;
 
         // Auto-idmap: remap volume UIDs when host owner differs from container user.
-        // Runs before OCI bundle creation so the mount point has correct ownership.
-        if uid != 0 {
-            for mount in &user_mounts {
-                if mount.read_only || mount.owner_uid == uid {
-                    continue;
+        // Uses a full-range swap mapping so all UIDs remain valid (no overflow).
+        for mount in &user_mounts {
+            if mount.read_only || mount.owner_uid == uid {
+                continue;
+            }
+            let uid_mappings =
+                crate::storage::idmap::build_swap_mapping(mount.owner_uid, uid, 65536);
+            let gid_mappings =
+                crate::storage::idmap::build_swap_mapping(mount.owner_gid, gid, 65536);
+
+            let mount_path = std::path::Path::new(&mount.source);
+            match crate::storage::idmap::remap_mount(mount_path, &uid_mappings, &gid_mappings) {
+                Ok(true) => tracing::info!(
+                    "Auto-idmap: {}:{} → {}:{} on {}",
+                    mount.owner_uid,
+                    mount.owner_gid,
+                    uid,
+                    gid,
+                    mount.source
+                ),
+                Ok(false) => {
+                    tracing::debug!("Auto-idmap not supported for {}, skipping", mount.source)
                 }
-                let mount_path = std::path::Path::new(&mount.source);
-                match crate::storage::idmap::remap_mount(
-                    mount_path,
-                    &[crate::storage::idmap::IdMapping {
-                        host_id: mount.owner_uid,
-                        container_id: uid,
-                        count: 1,
-                    }],
-                    &[crate::storage::idmap::IdMapping {
-                        host_id: mount.owner_gid,
-                        container_id: gid,
-                        count: 1,
-                    }],
-                ) {
-                    Ok(true) => tracing::info!(
-                        "Auto-idmap: {}:{} → {}:{} on {}",
-                        mount.owner_uid,
-                        mount.owner_gid,
-                        uid,
-                        gid,
-                        mount.source
-                    ),
-                    Ok(false) => {
-                        tracing::debug!("Auto-idmap not supported for {}, skipping", mount.source)
-                    }
-                    Err(e) => tracing::warn!(
-                        "Auto-idmap failed for {}: {}, continuing without",
-                        mount.source,
-                        e
-                    ),
-                }
+                Err(e) => tracing::warn!(
+                    "Auto-idmap failed for {}: {}, continuing without",
+                    mount.source,
+                    e
+                ),
             }
         }
 

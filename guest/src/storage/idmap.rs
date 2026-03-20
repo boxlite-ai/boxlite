@@ -26,6 +26,75 @@ pub struct IdMapping {
     pub count: u32,
 }
 
+/// Build a full-range swap mapping between two IDs.
+///
+/// Generates uid_map entries that swap `from_id` and `to_id` while
+/// identity-mapping all other IDs in `[0, total_range)`.
+///
+/// Example: `build_swap_mapping(501, 0, 65536)` produces:
+/// ```text
+///   0    501   1       # ns 0 → host 501
+///   1    1     500     # ns 1-500 → host 1-500 (identity)
+///   501  0     1       # ns 501 → host 0
+///   502  502   65034   # ns 502-65535 → host 502-65535 (identity)
+/// ```
+pub fn build_swap_mapping(from_id: u32, to_id: u32, total_range: u32) -> Vec<IdMapping> {
+    if from_id == to_id {
+        return vec![];
+    }
+
+    let (lo, hi) = if from_id < to_id {
+        (from_id, to_id)
+    } else {
+        (to_id, from_id)
+    };
+
+    let mut mappings = Vec::with_capacity(4);
+
+    // [0..lo) identity
+    if lo > 0 {
+        mappings.push(IdMapping {
+            container_id: 0,
+            host_id: 0,
+            count: lo,
+        });
+    }
+
+    // lo → swap target
+    mappings.push(IdMapping {
+        container_id: lo,
+        host_id: hi,
+        count: 1,
+    });
+
+    // (lo..hi) identity
+    if hi - lo > 1 {
+        mappings.push(IdMapping {
+            container_id: lo + 1,
+            host_id: lo + 1,
+            count: hi - lo - 1,
+        });
+    }
+
+    // hi → swap target
+    mappings.push(IdMapping {
+        container_id: hi,
+        host_id: lo,
+        count: 1,
+    });
+
+    // (hi..total_range) identity
+    if hi + 1 < total_range {
+        mappings.push(IdMapping {
+            container_id: hi + 1,
+            host_id: hi + 1,
+            count: total_range - hi - 1,
+        });
+    }
+
+    mappings
+}
+
 /// Apply ID mapping to an existing mount point in-place.
 ///
 /// Clones the mount at `path`, applies the UID/GID mappings, then
@@ -390,5 +459,97 @@ mod tests {
             "error should mention null byte: {}",
             err
         );
+    }
+
+    #[test]
+    fn swap_mapping_same_id_returns_empty() {
+        let mappings = build_swap_mapping(501, 501, 65536);
+        assert!(mappings.is_empty());
+    }
+
+    #[test]
+    fn swap_mapping_covers_full_range() {
+        // Swap 501 ↔ 0 across 65536
+        let mappings = build_swap_mapping(501, 0, 65536);
+
+        // Total coverage should be 65536
+        let total: u32 = mappings.iter().map(|m| m.count).sum();
+        assert_eq!(total, 65536, "mapping must cover full range");
+
+        // Check the swap entries
+        // lo=0, hi=501
+        // Entry for 0: container_id=0, host_id=501 (swap)
+        assert_eq!(mappings[0].container_id, 0);
+        assert_eq!(mappings[0].host_id, 501);
+        assert_eq!(mappings[0].count, 1);
+
+        // Entry for 1..500: identity
+        assert_eq!(mappings[1].container_id, 1);
+        assert_eq!(mappings[1].host_id, 1);
+        assert_eq!(mappings[1].count, 500);
+
+        // Entry for 501: container_id=501, host_id=0 (reverse swap)
+        assert_eq!(mappings[2].container_id, 501);
+        assert_eq!(mappings[2].host_id, 0);
+        assert_eq!(mappings[2].count, 1);
+
+        // Entry for 502..65535: identity
+        assert_eq!(mappings[3].container_id, 502);
+        assert_eq!(mappings[3].host_id, 502);
+        assert_eq!(mappings[3].count, 65034);
+    }
+
+    #[test]
+    fn swap_mapping_adjacent_ids() {
+        // Swap 0 ↔ 1 — no gap between them
+        let mappings = build_swap_mapping(0, 1, 100);
+
+        let total: u32 = mappings.iter().map(|m| m.count).sum();
+        assert_eq!(total, 100);
+
+        // lo=0 → host=1 (swap)
+        assert_eq!(mappings[0].container_id, 0);
+        assert_eq!(mappings[0].host_id, 1);
+        assert_eq!(mappings[0].count, 1);
+
+        // No gap between 0 and 1, so no identity range here
+
+        // hi=1 → host=0 (reverse swap)
+        assert_eq!(mappings[1].container_id, 1);
+        assert_eq!(mappings[1].host_id, 0);
+        assert_eq!(mappings[1].count, 1);
+
+        // 2..99 identity
+        assert_eq!(mappings[2].container_id, 2);
+        assert_eq!(mappings[2].host_id, 2);
+        assert_eq!(mappings[2].count, 98);
+    }
+
+    #[test]
+    fn swap_mapping_reversed_order() {
+        // build_swap_mapping(1000, 501, ...) should produce same result as (501, 1000, ...)
+        let m1 = build_swap_mapping(501, 1000, 65536);
+        let m2 = build_swap_mapping(1000, 501, 65536);
+
+        assert_eq!(m1.len(), m2.len());
+        for (a, b) in m1.iter().zip(m2.iter()) {
+            assert_eq!(a.container_id, b.container_id);
+            assert_eq!(a.host_id, b.host_id);
+            assert_eq!(a.count, b.count);
+        }
+    }
+
+    #[test]
+    fn swap_mapping_generates_valid_uid_map_content() {
+        let mappings = build_swap_mapping(501, 0, 65536);
+        let content = format_id_map(&mappings);
+
+        // Should have 4 lines (swap at 0, identity 1-500, swap at 501, identity 502+)
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines.len(), 4);
+        assert_eq!(lines[0], "0 501 1");
+        assert_eq!(lines[1], "1 1 500");
+        assert_eq!(lines[2], "501 0 1");
+        assert_eq!(lines[3], "502 502 65034");
     }
 }
