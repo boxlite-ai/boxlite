@@ -11,6 +11,7 @@ use boxlite_shared::errors::BoxliteResult;
 use std::path::PathBuf;
 
 pub mod constants;
+pub mod socket_path;
 
 #[cfg(feature = "libslirp")]
 mod libslirp;
