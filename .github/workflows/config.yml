@@ -43,7 +43,7 @@ jobs:
     outputs:
       # === Platform/Matrix Configuration ===
       # Note: Using macos-15 for libkrun bottle compatibility (arm64_tahoe)
-      platforms: '[{"os":"macos-15","target":"darwin-arm64","rust_target":"aarch64-apple-darwin"},{"os":"ubuntu-latest","target":"linux-x64-gnu","rust_target":"x86_64-unknown-linux-gnu"}]'
+      platforms: '[{"os":"macos-15","target":"darwin-arm64","rust_target":"aarch64-apple-darwin"},{"os":"ubuntu-latest","target":"linux-x64-gnu","rust_target":"x86_64-unknown-linux-gnu"},{"os":"ubuntu-24.04-arm","target":"linux-arm64-gnu","rust_target":"aarch64-unknown-linux-gnu"}]'
 
       # === Version Configuration ===
       python-versions: '["3.10", "3.11", "3.12", "3.13"]'

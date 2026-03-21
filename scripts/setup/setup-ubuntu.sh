@@ -142,25 +142,6 @@ install_nodejs() {
     echo ""
 }
 
-# Install linuxdeploy
-install_linuxdeploy() {
-    print_section "📦 Installing linuxdeploy..."
-
-    local linuxdeploy_url="https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage"
-    local install_dir="/usr/local/bin"
-    local linuxdeploy_bin="$install_dir/linuxdeploy"
-
-    print_step "Checking for linuxdeploy... "
-    if [ -f "$linuxdeploy_bin" ]; then
-        print_success "Already installed"
-    else
-        echo -e "${YELLOW}Downloading...${NC}"
-        $SUDO wget -q "$linuxdeploy_url" -O "$linuxdeploy_bin"
-        $SUDO chmod +x "$linuxdeploy_bin"
-        print_success "linuxdeploy installed"
-    fi
-    echo ""
-}
 
 # Main installation flow
 main() {
@@ -182,8 +163,6 @@ main() {
     setup_python
 
     install_nodejs
-
-    install_linuxdeploy
 
     init_submodules
 
