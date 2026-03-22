@@ -4,6 +4,7 @@ use std::path::Path;
 
 use async_trait::async_trait;
 
+use crate::audit::AuditEvent;
 use crate::litebox::copy::CopyOptions;
 use crate::litebox::snapshot_mgr::SnapshotInfo;
 use crate::litebox::{BoxCommand, Execution, LiteBox};
@@ -110,6 +111,9 @@ pub(crate) trait BoxBackend: Send + Sync {
     ) -> BoxliteResult<Vec<LiteBox>>;
 
     async fn export_box(&self, options: ExportOptions, dest: &Path) -> BoxliteResult<BoxArchive>;
+
+    /// Return audit events recorded for this box.
+    async fn audit_log(&self) -> BoxliteResult<Vec<AuditEvent>>;
 }
 
 /// Backend abstraction for snapshot lifecycle operations on a box.

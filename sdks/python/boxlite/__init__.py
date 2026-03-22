@@ -25,8 +25,10 @@ try:
         HealthCheckOptions,
         HealthState,
         HealthStatus,
+        NetworkPolicy,
         Options,
         RuntimeMetrics,
+        SecretSpec,
         SecurityOptions,
         SnapshotHandle,
         SnapshotInfo,
@@ -57,6 +59,8 @@ try:
         "SnapshotOptions",
         "CloneOptions",
         "ExportOptions",
+        "SecretSpec",
+        "NetworkPolicy",
     ]
 except ImportError as e:
     warnings.warn(f"BoxLite native extension not available: {e}", ImportWarning)

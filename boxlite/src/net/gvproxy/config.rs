@@ -69,6 +69,22 @@ pub struct GvproxyConfig {
     /// Set via config or BOXLITE_NET_CAPTURE_FILE environment variable
     #[serde(skip_serializing_if = "Option::is_none")]
     pub capture_file: Option<String>,
+
+    /// Network allowlist for outbound filtering.
+    /// When non-empty, only connections to these destinations are allowed.
+    /// Empty list = all outbound blocked. Absent = no filtering.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allow_net: Vec<String>,
+
+    /// Secrets for transparent MITM substitution.
+    /// Each entry: name → { hosts: [...], placeholder: "...", value: "..." }
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub secrets: Vec<super::super::SecretNetConfig>,
+
+    /// Unix socket path for the Rust proxy.
+    /// When set, gvproxy routes outbound connections through this proxy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy_socket: Option<String>,
 }
 
 /// Create a config with network defaults for the given socket path.
@@ -88,6 +104,9 @@ fn defaults_with_socket_path(socket_path: PathBuf) -> GvproxyConfig {
         dns_search_domains: DNS_SEARCH_DOMAINS.iter().map(|s| s.to_string()).collect(),
         debug: false,
         capture_file: None,
+        allow_net: Vec::new(),
+        secrets: Vec::new(),
+        proxy_socket: None,
     }
 }
 
@@ -165,6 +184,18 @@ impl GvproxyConfig {
     /// ```
     pub fn with_capture_file(mut self, capture_file: String) -> Self {
         self.capture_file = Some(capture_file);
+        self
+    }
+
+    /// Set network allowlist for outbound filtering.
+    pub fn with_allow_net(mut self, allow_net: Vec<String>) -> Self {
+        self.allow_net = allow_net;
+        self
+    }
+
+    /// Set secrets for transparent MITM substitution.
+    pub fn with_secrets(mut self, secrets: Vec<super::super::SecretNetConfig>) -> Self {
+        self.secrets = secrets;
         self
     }
 }

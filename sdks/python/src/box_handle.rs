@@ -106,6 +106,21 @@ impl PyBox {
         })
     }
 
+    /// Return audit events recorded for this box.
+    fn audit_log<'a>(&self, py: Python<'a>) -> PyResult<Bound<'a, PyAny>> {
+        let handle = Arc::clone(&self.handle);
+
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let events = handle.audit_log().await.map_err(map_err)?;
+            // Convert to JSON-serializable list of dicts
+            let json_events: Vec<String> = events
+                .iter()
+                .filter_map(|e| serde_json::to_string(e).ok())
+                .collect();
+            Ok(json_events)
+        })
+    }
+
     fn metrics<'a>(&self, py: Python<'a>) -> PyResult<Bound<'a, PyAny>> {
         let handle = Arc::clone(&self.handle);
 

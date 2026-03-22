@@ -133,6 +133,7 @@ fn main() -> BoxliteResult<()> {
     })
 }
 
+#[allow(unused_mut)] // mut needed when gvproxy feature is enabled (sets network_backend_endpoint)
 fn run_shim(args: ShimArgs, mut config: InstanceSpec, timing: impl Fn(&str)) -> BoxliteResult<()> {
     tracing::debug!(
         shares = ?config.fs_shares.shares(),
@@ -158,9 +159,32 @@ fn run_shim(args: ShimArgs, mut config: InstanceSpec, timing: impl Fn(&str)) -> 
             "Creating network backend (gvproxy) from config"
         );
 
-        // Create gvproxy instance with caller-provided socket path
-        let gvproxy =
-            GvproxyInstance::new(net_config.socket_path.clone(), &net_config.port_mappings)?;
+        // Determine proxy socket path (if filtering/secrets enabled)
+        let proxy_socket = if !net_config.allow_net.is_empty() || !net_config.secrets.is_empty() {
+            let proxy_path = net_config
+                .socket_path
+                .parent()
+                .unwrap_or(std::path::Path::new("/tmp"))
+                .join("proxy.sock");
+            Some(proxy_path.to_string_lossy().to_string())
+        } else {
+            None
+        };
+
+        // TODO: Start Rust proxy on proxy_socket before gvproxy
+        // (proxy must be listening before gvproxy starts dialing through it)
+        if let Some(ref path) = proxy_socket {
+            tracing::info!(proxy_socket = %path, "Proxy socket configured (proxy start pending)");
+        }
+
+        // Create gvproxy instance with caller-provided socket path + network policy
+        let gvproxy = GvproxyInstance::new_with_policy(
+            net_config.socket_path.clone(),
+            &net_config.port_mappings,
+            net_config.allow_net.clone(),
+            net_config.secrets.clone(),
+            proxy_socket,
+        )?;
         timing("gvproxy created");
 
         tracing::info!(

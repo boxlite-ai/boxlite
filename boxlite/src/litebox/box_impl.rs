@@ -19,6 +19,7 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use super::config::BoxConfig;
 use super::exec::{BoxCommand, ExecStderr, ExecStdin, ExecStdout, Execution};
 use super::state::BoxState;
+use crate::audit::{AuditEvent, AuditEventKind, AuditRecorder};
 use crate::disk::Disk;
 #[cfg(target_os = "linux")]
 use crate::fs::BindMountHandle;
@@ -107,6 +108,9 @@ pub(crate) struct BoxImpl {
     /// Prevents concurrent disk mutations (rename, delete, flatten) from racing.
     pub(crate) disk_ops: tokio::sync::Mutex<()>,
 
+    /// Audit event recorder for this box.
+    pub(crate) audit: AuditRecorder,
+
     // --- Lazily initialized ---
     live: OnceCell<LiveState>,
 
@@ -139,6 +143,7 @@ impl BoxImpl {
             runtime,
             shutdown_token,
             disk_ops: tokio::sync::Mutex::new(()),
+            audit: AuditRecorder::new(),
             live: OnceCell::new(),
             health_check_task: RwLock::new(None),
         }
@@ -200,6 +205,11 @@ impl BoxImpl {
         // Trigger lazy initialization (this does the actual work)
         let _ = self.live_state().await?;
 
+        self.audit.record(AuditEvent::now(
+            self.config.id.clone(),
+            AuditEventKind::BoxStarted,
+        ));
+
         tracing::info!(
             box_id = %self.config.id,
             elapsed_ms = t0.elapsed().as_millis() as u64,
@@ -240,6 +250,15 @@ impl BoxImpl {
             (None, Some(dir)) => command.working_dir(dir),
             _ => command,
         };
+
+        self.audit.record(AuditEvent::now(
+            self.config.id.clone(),
+            AuditEventKind::ExecStarted {
+                command: command.command.clone(),
+                args: command.args.clone(),
+                exec_id: String::new(),
+            },
+        ));
 
         let mut exec_interface = live.guest_session.execution().await?;
         let result = exec_interface
@@ -405,6 +424,11 @@ impl BoxImpl {
         self.runtime
             .invalidate_box_impl(self.id(), self.config.name.as_deref());
 
+        self.audit.record(AuditEvent::now(
+            self.config.id.clone(),
+            AuditEventKind::BoxStopped { exit_code: None },
+        ));
+
         tracing::info!(
             box_id = %self.config.id,
             elapsed_ms = t0.elapsed().as_millis() as u64,
@@ -493,6 +517,14 @@ impl BoxImpl {
 
         let _ = tokio::fs::remove_file(&temp_tar).await;
 
+        self.audit.record(AuditEvent::now(
+            self.config.id.clone(),
+            AuditEventKind::FileCopiedIn {
+                host_src: host_src.display().to_string(),
+                container_dst: container_dst.to_string(),
+            },
+        ));
+
         tracing::info!(
             box_id = %self.config.id,
             elapsed_ms = t0.elapsed().as_millis() as u64,
@@ -553,6 +585,14 @@ impl BoxImpl {
         )
         .await?;
         let _ = tokio::fs::remove_file(&temp_tar).await;
+
+        self.audit.record(AuditEvent::now(
+            self.config.id.clone(),
+            AuditEventKind::FileCopiedOut {
+                container_src: container_src.to_string(),
+                host_dst: host_dst.display().to_string(),
+            },
+        ));
 
         tracing::info!(
             box_id = %self.config.id,
@@ -1096,5 +1136,9 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
         dest: &std::path::Path,
     ) -> BoxliteResult<crate::runtime::options::BoxArchive> {
         BoxImpl::export_box(self, options, dest).await
+    }
+
+    async fn audit_log(&self) -> BoxliteResult<Vec<AuditEvent>> {
+        Ok(self.audit.events())
     }
 }

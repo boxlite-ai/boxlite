@@ -8,6 +8,7 @@ use tracing_subscriber::EnvFilter;
 // Global guard for tracing-appender to keep the writer thread alive
 static LOG_GUARD: OnceLock<tracing_appender::non_blocking::WorkerGuard> = OnceLock::new();
 
+pub mod audit;
 pub mod jailer;
 pub mod litebox;
 pub mod lock;
@@ -32,6 +33,7 @@ pub use litebox::LiteBox;
 pub use portal::GuestSession;
 pub use runtime::{BoxliteRuntime, ImageHandle};
 
+pub use audit::{AuditEvent, AuditEventKind};
 pub use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 pub use disk::DiskInfo;
 pub use litebox::SnapshotHandle;
@@ -47,8 +49,8 @@ pub use runtime::advanced_options::{
 };
 use runtime::layout::FilesystemLayout;
 pub use runtime::options::{
-    BoxArchive, BoxOptions, BoxliteOptions, CloneOptions, ExportOptions, RootfsSpec,
-    SnapshotOptions,
+    BoxArchive, BoxOptions, BoxliteOptions, CloneOptions, ExportOptions, NetworkPolicy,
+    NetworkSpec, RootfsSpec, SecretSpec, SnapshotOptions,
 };
 /// Boxlite library version (from CARGO_PKG_VERSION at compile time).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

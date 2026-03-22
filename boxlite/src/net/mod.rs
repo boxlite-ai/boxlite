@@ -54,6 +54,27 @@ pub struct NetworkBackendConfig {
     /// Unix socket path for the network backend.
     /// Each box must have its own unique path to prevent collisions.
     pub socket_path: PathBuf,
+    /// Network allowlist for outbound filtering.
+    /// When non-empty, only connections to these destinations are allowed.
+    #[serde(default)]
+    pub allow_net: Vec<String>,
+    /// Secrets for transparent MITM substitution on outbound HTTPS.
+    #[serde(default)]
+    pub secrets: Vec<SecretNetConfig>,
+}
+
+/// Secret configuration for network-level substitution.
+/// Serialized to JSON and passed to the gvproxy Go bridge.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SecretNetConfig {
+    /// Secret name (e.g., "OPENAI_API_KEY")
+    pub name: String,
+    /// Hosts where this secret is substituted
+    pub hosts: Vec<String>,
+    /// Placeholder string that appears in env vars and HTTP headers
+    pub placeholder: String,
+    /// Real secret value (substituted by MITM proxy)
+    pub value: String,
 }
 
 impl NetworkBackendConfig {
@@ -61,6 +82,8 @@ impl NetworkBackendConfig {
         Self {
             port_mappings,
             socket_path,
+            allow_net: Vec::new(),
+            secrets: Vec::new(),
         }
     }
 }

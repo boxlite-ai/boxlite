@@ -302,6 +302,12 @@ impl BoxBackend for RestBox {
 
         Ok(crate::runtime::options::BoxArchive::new(output_path))
     }
+
+    async fn audit_log(&self) -> BoxliteResult<Vec<crate::audit::AuditEvent>> {
+        // REST backend: audit logs are not yet supported via REST API.
+        // Will be added when the REST server implements the audit endpoint.
+        Ok(Vec::new())
+    }
 }
 
 #[async_trait]

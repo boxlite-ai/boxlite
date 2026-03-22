@@ -30,6 +30,7 @@ pub(crate) use local_snapshot::LocalSnapshotBackend;
 use std::path::Path;
 use std::sync::Arc;
 
+use crate::audit::AuditEvent;
 use crate::metrics::BoxMetrics;
 use crate::runtime::backend::{BoxBackend, SnapshotBackend};
 use crate::runtime::options::{BoxArchive, CloneOptions, ExportOptions};
@@ -160,6 +161,15 @@ impl LiteBox {
     /// Export this box as a portable `.boxlite` archive.
     pub async fn export(&self, options: ExportOptions, dest: &Path) -> BoxliteResult<BoxArchive> {
         self.box_backend.export_box(options, dest).await
+    }
+
+    /// Return audit events recorded for this box.
+    ///
+    /// Returns a snapshot of all recorded events, ordered by timestamp.
+    /// The audit log is bounded (default 1000 events) — oldest events
+    /// are evicted when the buffer is full.
+    pub async fn audit_log(&self) -> BoxliteResult<Vec<AuditEvent>> {
+        self.box_backend.audit_log().await
     }
 }
 

@@ -1,13 +1,16 @@
 //! Configuration for Boxlite.
 
-use crate::runtime::constants::envs as const_envs;
-use crate::runtime::layout::dirs as const_dirs;
-use boxlite_shared::errors::BoxliteResult;
-use dirs::home_dir;
-use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use dirs::home_dir;
+use serde::{Deserialize, Serialize};
+
+use boxlite_shared::errors::BoxliteResult;
+
 use crate::runtime::advanced_options::{AdvancedBoxOptions, SecurityOptions};
+use crate::runtime::constants::envs as const_envs;
+use crate::runtime::layout::dirs as const_dirs;
 
 // ============================================================================
 // Runtime Options
@@ -137,6 +140,29 @@ pub struct BoxOptions {
     /// If None, uses the image's USER directive (defaults to root).
     #[serde(default)]
     pub user: Option<String>,
+
+    /// Secrets for transparent substitution on outbound HTTPS requests.
+    ///
+    /// Each entry maps a secret name to its spec (approved hosts + value).
+    /// Inside the box, env vars show placeholder `<BOXLITE_SECRET:name>`.
+    /// The real value is substituted by gvproxy when the box makes HTTPS
+    /// requests to a host in the secret's `hosts` list.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// BoxOptions {
+    ///     secrets: HashMap::from([
+    ///         ("OPENAI_API_KEY".into(), SecretSpec {
+    ///             hosts: vec!["api.openai.com".into()],
+    ///             value: "sk-...".into(),
+    ///         }),
+    ///     ]),
+    ///     ..Default::default()
+    /// }
+    /// ```
+    #[serde(default)]
+    pub secrets: HashMap<String, SecretSpec>,
 }
 
 fn default_auto_remove() -> bool {
@@ -165,6 +191,7 @@ impl Default for BoxOptions {
             entrypoint: None,
             cmd: None,
             user: None,
+            secrets: HashMap::new(),
         }
     }
 }
@@ -229,12 +256,62 @@ pub struct VolumeSpec {
 }
 
 /// Network isolation options.
+///
+/// Controls outbound network access from the box.
+///
+/// - `Isolated` (default): Full network access, no filtering.
+/// - `Restricted(NetworkPolicy)`: Default-deny with allowlist.
+///   Matches Deno Sandbox's `allowNet` semantics.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub enum NetworkSpec {
+    /// Full network access (no outbound filtering).
     #[default]
     Isolated,
-    // Host,
-    // Custom(String),
+
+    /// Allowlist-based outbound filtering (default-deny).
+    ///
+    /// Only connections to hosts/IPs in `allow_net` are permitted.
+    /// DNS queries for non-allowed hosts return NXDOMAIN.
+    /// TCP connections to non-allowed IPs are RST'd.
+    Restricted(NetworkPolicy),
+}
+
+/// Network allowlist policy.
+///
+/// Follows Deno Sandbox's `allowNet` semantics:
+/// - Empty `allow_net` → ALL outbound blocked.
+/// - Entries specify allowed destinations.
+///
+/// # Supported patterns
+///
+/// - `"api.github.com"` — exact hostname, any port
+/// - `"api.github.com:443"` — hostname with specific port
+/// - `"*.example.com"` — wildcard subdomain match
+/// - `"192.0.2.1"` — exact IPv4 address
+/// - `"10.0.0.0/8"` — CIDR range
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct NetworkPolicy {
+    pub allow_net: Vec<String>,
+}
+
+/// Secret specification for transparent substitution.
+///
+/// Secrets are never exposed as environment variables inside the box.
+/// Instead, env vars show a placeholder `<BOXLITE_SECRET:name>`.
+/// The real value is substituted transparently on outbound HTTPS
+/// requests to approved hosts (via host-side TLS MITM at gvproxy).
+///
+/// Follows Deno Sandbox's `secrets` model:
+/// ```javascript
+/// secrets: { OPENAI_API_KEY: { hosts: ["api.openai.com"], value: "sk-..." } }
+/// ```
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct SecretSpec {
+    /// Outbound hosts where this secret is substituted.
+    /// MITM only activates for HTTPS connections to these hosts.
+    pub hosts: Vec<String>,
+    /// The actual secret value. Never logged, never in guest env vars.
+    pub value: String,
 }
 
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]

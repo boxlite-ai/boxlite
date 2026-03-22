@@ -279,12 +279,20 @@ fn build_guest_entrypoint(
         builder.with_env("RUST_BACKTRACE", &v);
     }
 
-    // FILO order: image → user (later overrides earlier)
+    // FILO order: image → user → secret placeholders (later overrides earlier)
     for (key, value) in &guest_rootfs.env {
         builder.with_env(key, value);
     }
     for (key, value) in &options.env {
         builder.with_env(key, value);
+    }
+
+    // Inject secret placeholders (never the real value)
+    // Guest sees: OPENAI_API_KEY=<BOXLITE_SECRET:OPENAI_API_KEY>
+    // Real value is substituted by gvproxy MITM on outbound HTTPS
+    for name in options.secrets.keys() {
+        let placeholder = format!("<BOXLITE_SECRET:{}>", name);
+        builder.with_env(name, &placeholder);
     }
 
     Ok(builder.build())
@@ -326,11 +334,29 @@ fn build_network_config(
             .count()
     );
 
+    // Build network policy from BoxOptions
+    let allow_net = match &options.network {
+        crate::runtime::options::NetworkSpec::Restricted(policy) => policy.allow_net.clone(),
+        crate::runtime::options::NetworkSpec::Isolated => Vec::new(),
+    };
+
+    // Build secrets config for gvproxy MITM
+    let secrets: Vec<crate::net::SecretNetConfig> = options
+        .secrets
+        .iter()
+        .map(|(name, spec)| crate::net::SecretNetConfig {
+            name: name.clone(),
+            hosts: spec.hosts.clone(),
+            placeholder: format!("<BOXLITE_SECRET:{}>", name),
+            value: spec.value.clone(),
+        })
+        .collect();
+
     // Always return Some - gvproxy provides virtio-net (eth0) even without port mappings
-    Some(NetworkBackendConfig::new(
-        final_mappings,
-        layout.net_backend_socket_path(),
-    ))
+    let mut config = NetworkBackendConfig::new(final_mappings, layout.net_backend_socket_path());
+    config.allow_net = allow_net;
+    config.secrets = secrets;
+    Some(config)
 }
 
 /// Spawn VM subprocess and return handler.

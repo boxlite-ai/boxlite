@@ -11,26 +11,33 @@ use std::process::Command;
 fn build_gvproxy(source_dir: &Path, output_path: &Path) {
     println!("cargo:warning=Building libgvproxy from Go sources...");
 
-    // Download Go dependencies
-    let download_status = Command::new("go")
-        .args(["mod", "download"])
-        .current_dir(source_dir)
-        .status()
-        .expect("Failed to run 'go mod download' - ensure Go is installed");
+    // Skip go mod download when using vendor directory
+    let has_vendor = source_dir.join("vendor").exists();
+    if !has_vendor {
+        let download_status = Command::new("go")
+            .args(["mod", "download"])
+            .current_dir(source_dir)
+            .status()
+            .expect("Failed to run 'go mod download' - ensure Go is installed");
 
-    if !download_status.success() {
-        panic!("Failed to download Go module dependencies");
+        if !download_status.success() {
+            panic!("Failed to download Go module dependencies");
+        }
     }
 
     // Build as C archive (static library)
     let mut build_cmd = Command::new("go");
     build_cmd.args(["build", "-buildmode=c-archive"]);
 
+    // Use vendor directory if present (for patched deps), otherwise normal module mode
+    if source_dir.join("vendor").exists() {
+        build_cmd.args(["-mod=vendor"]);
+    }
+
     build_cmd.args([
         "-o",
         output_path.to_str().expect("Invalid output path"),
-        "main.go",
-        "stats.go",
+        ".",
     ]);
 
     let build_status = build_cmd
@@ -49,6 +56,8 @@ fn main() {
     // Rebuild if Go sources change
     println!("cargo:rerun-if-changed=gvproxy-bridge/main.go");
     println!("cargo:rerun-if-changed=gvproxy-bridge/stats.go");
+    println!("cargo:rerun-if-changed=gvproxy-bridge/dial_proxy.go");
+    println!("cargo:rerun-if-changed=gvproxy-bridge/dns_filter.go");
     println!("cargo:rerun-if-changed=gvproxy-bridge/go.mod");
     println!("cargo:rerun-if-env-changed=BOXLITE_DEPS_STUB");
 

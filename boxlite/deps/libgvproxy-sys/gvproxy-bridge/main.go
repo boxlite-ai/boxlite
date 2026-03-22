@@ -172,20 +172,31 @@ type DNSZone struct {
 	DefaultIP string `json:"default_ip"` // Default IP for unmatched queries in this zone
 }
 
+// SecretConfig represents a secret for transparent MITM substitution
+type SecretConfig struct {
+	Name        string   `json:"name"`        // Secret name (e.g., "OPENAI_API_KEY")
+	Hosts       []string `json:"hosts"`       // Hosts where this secret is substituted
+	Placeholder string   `json:"placeholder"` // Placeholder string in env vars/headers
+	Value       string   `json:"value"`       // Real secret value
+}
+
 // GvproxyConfig matches the Rust structure (must stay in sync!)
 type GvproxyConfig struct {
-	SocketPath       string        `json:"socket_path"`
-	Subnet           string        `json:"subnet"`
-	GatewayIP        string        `json:"gateway_ip"`
-	GatewayMac       string        `json:"gateway_mac"`
-	GuestIP          string        `json:"guest_ip"`
-	GuestMac         string        `json:"guest_mac"`
-	MTU              uint16        `json:"mtu"`
-	PortMappings     []PortMapping `json:"port_mappings"`
-	DNSZones         []DNSZone     `json:"dns_zones"`
-	DNSSearchDomains []string      `json:"dns_search_domains"`
-	Debug            bool          `json:"debug"`
-	CaptureFile      *string       `json:"capture_file,omitempty"`
+	SocketPath       string         `json:"socket_path"`
+	Subnet           string         `json:"subnet"`
+	GatewayIP        string         `json:"gateway_ip"`
+	GatewayMac       string         `json:"gateway_mac"`
+	GuestIP          string         `json:"guest_ip"`
+	GuestMac         string         `json:"guest_mac"`
+	MTU              uint16         `json:"mtu"`
+	PortMappings     []PortMapping  `json:"port_mappings"`
+	DNSZones         []DNSZone      `json:"dns_zones"`
+	DNSSearchDomains []string       `json:"dns_search_domains"`
+	Debug            bool           `json:"debug"`
+	CaptureFile      *string        `json:"capture_file,omitempty"`
+	AllowNet         []string       `json:"allow_net,omitempty"`
+	Secrets          []SecretConfig `json:"secrets,omitempty"`
+	ProxySocket      string         `json:"proxy_socket,omitempty"`
 }
 
 // GvproxyInstance tracks a running gvisor-tap-vsock instance
@@ -250,6 +261,17 @@ func gvproxy_create(configJSON *C.char) C.longlong {
 			DefaultIP: net.ParseIP(zone.DefaultIP),
 		}
 	}
+
+	// Build DNS allowlist zones when AllowNet is configured
+	if len(config.AllowNet) > 0 {
+		allowNetZones := buildAllowNetDNSZones(config.AllowNet)
+		// Prepend allowNet zones before user zones (specific before catch-all)
+		dnsZones = append(allowNetZones, dnsZones...)
+		logrus.WithField("rules", len(config.AllowNet)).Info("Network allowlist enabled (DNS filtering)")
+	}
+
+	// MITM proxy is now handled by the Rust boxlite-proxy crate.
+	// Secrets are passed through to the proxy via the DialFunc mechanism.
 
 	// Create gvisor-tap-vsock configuration from provided config
 	tapConfig := &types.Configuration{
@@ -361,6 +383,16 @@ func gvproxy_create(configJSON *C.char) C.longlong {
 		if err != nil {
 			logrus.WithFields(logrus.Fields{"error": err, "id": id}).Error("Failed to create virtual network")
 			return
+		}
+
+		// Override TCP handler with proxy routing (if configured)
+		if config.ProxySocket != "" {
+			dialFn := proxyDialFunc(config.ProxySocket)
+			if err := OverrideTCPHandler(vn, tapConfig, dialFn); err != nil {
+				logrus.WithError(err).Error("Failed to override TCP handler for proxy")
+			} else {
+				logrus.WithField("proxy_socket", config.ProxySocket).Info("TCP handler overridden for proxy routing")
+			}
 		}
 
 		// Store VirtualNetwork reference for stats collection
@@ -511,6 +543,8 @@ func gvproxy_get_version() *C.char {
 
 	return C.CString("unknown")
 }
+
+// CA cert generation moved to Rust (boxlite-proxy crate, cert.rs)
 
 func main() {
 	// CGO library, no main needed

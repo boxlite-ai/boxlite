@@ -1,0 +1,17 @@
+[package]
+name = "boxlite-proxy"
+version.workspace = true
+edition = "2024"
+description = "Network proxy for BoxLite sandbox security (filtering + MITM + secret substitution)"
+
+[dependencies]
+tokio = { version = "1", features = ["net", "io-util", "rt", "macros", "sync"] }
+tokio-rustls = "0.26"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+webpki-roots = "0.26"
+rcgen = "0.13"
+tracing = "0.1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+tempfile = "3"

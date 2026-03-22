@@ -5,7 +5,8 @@ use boxlite::litebox::copy::CopyOptions;
 use boxlite::runtime::advanced_options::{HealthCheckOptions, SecurityOptions};
 use boxlite::runtime::constants::images;
 use boxlite::runtime::options::{
-    BoxOptions, BoxliteOptions, NetworkSpec, PortProtocol, PortSpec, RootfsSpec, VolumeSpec,
+    BoxOptions, BoxliteOptions, NetworkPolicy, NetworkSpec, PortProtocol, PortSpec, RootfsSpec,
+    SecretSpec, VolumeSpec,
 };
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
@@ -107,6 +108,86 @@ impl From<PyCopyOptions> for CopyOptions {
 }
 
 // ============================================================================
+// Secret Spec
+// ============================================================================
+
+/// Secret for transparent MITM substitution on outbound HTTPS.
+///
+/// Inside the box, the env var shows a placeholder.
+/// The real value is substituted by gvproxy when making HTTPS
+/// requests to the specified hosts.
+#[pyclass(name = "SecretSpec")]
+#[derive(Clone, Debug)]
+pub(crate) struct PySecretSpec {
+    /// Hosts where this secret is substituted (e.g., ["api.openai.com"])
+    #[pyo3(get, set)]
+    pub(crate) hosts: Vec<String>,
+    /// The actual secret value (never exposed inside the box)
+    #[pyo3(get, set)]
+    pub(crate) value: String,
+}
+
+#[pymethods]
+impl PySecretSpec {
+    #[new]
+    #[pyo3(signature = (hosts, value))]
+    fn new(hosts: Vec<String>, value: String) -> Self {
+        Self { hosts, value }
+    }
+
+    fn __repr__(&self) -> String {
+        format!("SecretSpec(hosts={:?}, value=***)", self.hosts)
+    }
+}
+
+impl From<PySecretSpec> for SecretSpec {
+    fn from(py: PySecretSpec) -> Self {
+        Self {
+            hosts: py.hosts,
+            value: py.value,
+        }
+    }
+}
+
+// ============================================================================
+// Network Policy
+// ============================================================================
+
+/// Network allowlist policy for outbound filtering.
+///
+/// When applied via `NetworkSpec.Restricted(policy)`, only connections
+/// to hosts/IPs in `allow_net` are permitted.
+#[pyclass(name = "NetworkPolicy")]
+#[derive(Clone, Debug)]
+pub(crate) struct PyNetworkPolicy {
+    /// Allowed outbound destinations.
+    /// Patterns: "hostname", "host:port", "*.wildcard.com", "IP", "CIDR"
+    #[pyo3(get, set)]
+    pub(crate) allow_net: Vec<String>,
+}
+
+#[pymethods]
+impl PyNetworkPolicy {
+    #[new]
+    #[pyo3(signature = (allow_net=vec![]))]
+    fn new(allow_net: Vec<String>) -> Self {
+        Self { allow_net }
+    }
+
+    fn __repr__(&self) -> String {
+        format!("NetworkPolicy(allow_net={:?})", self.allow_net)
+    }
+}
+
+impl From<PyNetworkPolicy> for NetworkPolicy {
+    fn from(py: PyNetworkPolicy) -> Self {
+        Self {
+            allow_net: py.allow_net,
+        }
+    }
+}
+
+// ============================================================================
 // Box Options
 // ============================================================================
 
@@ -152,6 +233,14 @@ pub(crate) struct PyBoxOptions {
     /// Advanced options for expert users (security, mount isolation, health check).
     #[pyo3(get, set)]
     pub(crate) advanced: Option<PyAdvancedBoxOptions>,
+
+    /// Secrets for transparent MITM substitution.
+    /// Dict mapping secret name to SecretSpec.
+    pub(crate) secrets: std::collections::HashMap<String, PySecretSpec>,
+
+    /// Network policy for restricted mode.
+    /// When set, overrides the `network` string field.
+    pub(crate) network_policy: Option<PyNetworkPolicy>,
 }
 
 #[pymethods]
@@ -174,6 +263,8 @@ impl PyBoxOptions {
         cmd=None,
         user=None,
         advanced=None,
+        secrets=std::collections::HashMap::new(),
+        network_policy=None,
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -193,6 +284,8 @@ impl PyBoxOptions {
         cmd: Option<Vec<String>>,
         user: Option<String>,
         advanced: Option<PyAdvancedBoxOptions>,
+        secrets: std::collections::HashMap<String, PySecretSpec>,
+        network_policy: Option<PyNetworkPolicy>,
     ) -> Self {
         Self {
             image,
@@ -211,6 +304,8 @@ impl PyBoxOptions {
             cmd,
             user,
             advanced,
+            secrets,
+            network_policy,
         }
     }
 
@@ -230,12 +325,22 @@ impl From<PyBoxOptions> for BoxOptions {
     fn from(py_opts: PyBoxOptions) -> Self {
         let volumes = py_opts.volumes.into_iter().map(VolumeSpec::from).collect();
 
-        let network = match py_opts.network {
-            // Some(ref s) if s.eq_ignore_ascii_case("host") => NetworkSpec::Host,
-            Some(ref s) if s.eq_ignore_ascii_case("isolated") => NetworkSpec::Isolated,
-            // Some(s) if !s.is_empty() => NetworkSpec::Custom(s),
-            _ => NetworkSpec::Isolated,
+        // Network policy takes precedence over string network field
+        let network = if let Some(policy) = py_opts.network_policy {
+            NetworkSpec::Restricted(NetworkPolicy::from(policy))
+        } else {
+            match py_opts.network {
+                Some(ref s) if s.eq_ignore_ascii_case("isolated") => NetworkSpec::Isolated,
+                _ => NetworkSpec::Isolated,
+            }
         };
+
+        // Convert secrets
+        let secrets: std::collections::HashMap<String, SecretSpec> = py_opts
+            .secrets
+            .into_iter()
+            .map(|(name, spec)| (name, SecretSpec::from(spec)))
+            .collect();
 
         let ports = py_opts.ports.into_iter().map(PortSpec::from).collect();
 
@@ -264,6 +369,7 @@ impl From<PyBoxOptions> for BoxOptions {
             entrypoint: py_opts.entrypoint,
             cmd: py_opts.cmd,
             user: py_opts.user,
+            secrets,
             ..Default::default()
         };
 
