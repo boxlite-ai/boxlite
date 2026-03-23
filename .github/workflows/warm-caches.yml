@@ -123,7 +123,7 @@ jobs:
             $SCCACHE_DOCKER_ARGS \
             -w /work \
             -e CARGO_HOME=/work/.cargo-manylinux \
-            quay.io/pypa/manylinux_2_28_x86_64 \
+            quay.io/pypa/manylinux_2_28_${{ contains(matrix.target, 'arm64') && 'aarch64' || 'x86_64' }} \
             bash /tmp/build.sh
 
       # macOS build — warms cache for all workflows' darwin-arm64 builds
