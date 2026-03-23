@@ -54,6 +54,10 @@ pub struct NetworkBackendConfig {
     /// Unix socket path for the network backend.
     /// Each box must have its own unique path to prevent collisions.
     pub socket_path: PathBuf,
+    /// Network allowlist for outbound filtering.
+    /// When non-empty, only connections to these destinations are allowed.
+    #[serde(default)]
+    pub allow_net: Vec<String>,
 }
 
 impl NetworkBackendConfig {
@@ -61,6 +65,7 @@ impl NetworkBackendConfig {
         Self {
             port_mappings,
             socket_path,
+            allow_net: Vec::new(),
         }
     }
 }

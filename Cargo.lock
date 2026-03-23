@@ -546,6 +546,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "boxlite-proxy"
+version = "0.7.5"
+dependencies = [
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "boxlite-python"
 version = "0.7.5"
 dependencies = [

@@ -1481,9 +1481,9 @@ components:
         network:
           type: string
           description: |
-            Network isolation mode. Currently supported: `isolated`.
-            Additional modes may be added in future versions.
-          default: isolated
+            Network mode. Supported: `enabled` (full access, default), `disabled` (no network).
+            When enabled, use `allow_net` to restrict outbound traffic.
+          default: enabled
         auto_remove:
           type: boolean
           description: Automatically remove box when stopped

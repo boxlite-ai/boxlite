@@ -159,9 +159,31 @@ fn run_shim(args: ShimArgs, mut config: InstanceSpec, timing: impl Fn(&str)) -> 
             "Creating network backend (gvproxy) from config"
         );
 
-        // Create gvproxy instance with caller-provided socket path
-        let gvproxy =
-            GvproxyInstance::new(net_config.socket_path.clone(), &net_config.port_mappings)?;
+        // Determine proxy socket path (if filtering enabled)
+        let proxy_socket = if !net_config.allow_net.is_empty() {
+            let proxy_path = net_config
+                .socket_path
+                .parent()
+                .unwrap_or(std::path::Path::new("/tmp"))
+                .join("proxy.sock");
+            // WIP: Proxy startup not yet implemented.
+            // DNS sinkhole filtering is active; TCP-level proxy filtering pending.
+            tracing::warn!(
+                proxy_socket = %proxy_path.display(),
+                "Network proxy configured but not yet started (WIP)"
+            );
+            Some(proxy_path.to_string_lossy().to_string())
+        } else {
+            None
+        };
+
+        // Create gvproxy instance with network policy
+        let gvproxy = GvproxyInstance::new_with_policy(
+            net_config.socket_path.clone(),
+            &net_config.port_mappings,
+            net_config.allow_net.clone(),
+            proxy_socket,
+        )?;
         timing("gvproxy created");
 
         tracing::info!(

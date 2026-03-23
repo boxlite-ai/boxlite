@@ -107,7 +107,7 @@ pub struct JsBoxOptions {
     /// Volume mounts as array of volume specs
     pub volumes: Option<Vec<JsVolumeSpec>>,
 
-    /// Network mode ("isolated" - only option currently)
+    /// Network mode: "enabled" (default, full access) or "disabled" (no network)
     pub network: Option<String>,
 
     /// Port mappings as array of port specs
@@ -228,8 +228,8 @@ impl From<JsBoxOptions> for BoxOptions {
 
         // Convert network spec
         let network = match js_opts.network.as_deref() {
-            Some(s) if s.eq_ignore_ascii_case("isolated") => NetworkSpec::Isolated,
-            _ => NetworkSpec::Isolated,
+            Some(s) if s.eq_ignore_ascii_case("disabled") => NetworkSpec::Disabled,
+            _ => NetworkSpec::default(),
         };
 
         // Convert ports

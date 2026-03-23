@@ -68,14 +68,24 @@ impl GvproxyInstance {
     /// * `socket_path` - Caller-provided Unix socket path (must be unique per box)
     /// * `port_mappings` - List of (host_port, guest_port) tuples for port forwarding
     pub fn new(socket_path: PathBuf, port_mappings: &[(u16, u16)]) -> BoxliteResult<Self> {
+        Self::new_with_policy(socket_path, port_mappings, Vec::new(), None)
+    }
+
+    /// Create with network policy (allow_net filtering).
+    pub fn new_with_policy(
+        socket_path: PathBuf,
+        port_mappings: &[(u16, u16)],
+        allow_net: Vec<String>,
+        proxy_socket: Option<String>,
+    ) -> BoxliteResult<Self> {
         // Initialize logging callback (one-time setup)
-        // This ensures all gvproxy logs are routed to Rust's tracing system
         logging::init_logging();
 
-        // Create config with caller-provided socket path + port mappings
-        let config = super::config::GvproxyConfig::new(socket_path.clone(), port_mappings.to_vec());
+        let mut config =
+            super::config::GvproxyConfig::new(socket_path.clone(), port_mappings.to_vec())
+                .with_allow_net(allow_net);
+        config.proxy_socket = proxy_socket;
 
-        // Create instance via FFI with full config
         let id = ffi::create_instance(&config)?;
 
         tracing::info!(id, ?socket_path, "Created GvproxyInstance");

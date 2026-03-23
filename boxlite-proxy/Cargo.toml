@@ -1,0 +1,13 @@
+[package]
+name = "boxlite-proxy"
+version.workspace = true
+edition = "2024"
+description = "Network proxy for BoxLite sandbox security (filtering + secret substitution)"
+
+[dependencies]
+tokio = { version = "1", features = ["net", "io-util", "rt", "macros", "sync"] }
+tracing = "0.1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+tempfile = "3"
