@@ -8,6 +8,7 @@ use tracing_subscriber::EnvFilter;
 // Global guard for tracing-appender to keep the writer thread alive
 static LOG_GUARD: OnceLock<tracing_appender::non_blocking::WorkerGuard> = OnceLock::new();
 
+pub mod event_listener;
 pub mod jailer;
 pub mod litebox;
 pub mod lock;
@@ -34,6 +35,7 @@ pub use runtime::{BoxliteRuntime, ImageHandle};
 
 pub use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 pub use disk::DiskInfo;
+pub use event_listener::{AuditEvent, AuditEventKind, AuditEventListener, EventListener};
 pub use litebox::SnapshotHandle;
 pub use litebox::archive::ArchiveManifest;
 pub use litebox::snapshot_mgr::SnapshotInfo;

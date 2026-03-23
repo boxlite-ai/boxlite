@@ -20,6 +20,7 @@ use super::config::BoxConfig;
 use super::exec::{BoxCommand, ExecStderr, ExecStdin, ExecStdout, Execution};
 use super::state::BoxState;
 use crate::disk::Disk;
+use crate::event_listener::EventListener;
 #[cfg(target_os = "linux")]
 use crate::fs::BindMountHandle;
 use crate::litebox::copy::CopyOptions;
@@ -107,6 +108,9 @@ pub(crate) struct BoxImpl {
     /// Prevents concurrent disk mutations (rename, delete, flatten) from racing.
     pub(crate) disk_ops: tokio::sync::Mutex<()>,
 
+    /// Event listeners (from runtime options).
+    pub(crate) event_listeners: Vec<std::sync::Arc<dyn EventListener>>,
+
     // --- Lazily initialized ---
     live: OnceCell<LiveState>,
 
@@ -139,6 +143,7 @@ impl BoxImpl {
             runtime,
             shutdown_token,
             disk_ops: tokio::sync::Mutex::new(()),
+            event_listeners: Vec::new(), // populated from runtime options
             live: OnceCell::new(),
             health_check_task: RwLock::new(None),
         }
@@ -200,6 +205,10 @@ impl BoxImpl {
         // Trigger lazy initialization (this does the actual work)
         let _ = self.live_state().await?;
 
+        for listener in &self.event_listeners {
+            listener.on_box_started(&self.config.id);
+        }
+
         tracing::info!(
             box_id = %self.config.id,
             elapsed_ms = t0.elapsed().as_millis() as u64,
@@ -240,6 +249,10 @@ impl BoxImpl {
             (None, Some(dir)) => command.working_dir(dir),
             _ => command,
         };
+
+        for listener in &self.event_listeners {
+            listener.on_exec_started(&self.config.id, &command.command, &command.args);
+        }
 
         let mut exec_interface = live.guest_session.execution().await?;
         let result = exec_interface
@@ -405,6 +418,10 @@ impl BoxImpl {
         self.runtime
             .invalidate_box_impl(self.id(), self.config.name.as_deref());
 
+        for listener in &self.event_listeners {
+            listener.on_box_stopped(&self.config.id, None);
+        }
+
         tracing::info!(
             box_id = %self.config.id,
             elapsed_ms = t0.elapsed().as_millis() as u64,
@@ -493,6 +510,14 @@ impl BoxImpl {
 
         let _ = tokio::fs::remove_file(&temp_tar).await;
 
+        for listener in &self.event_listeners {
+            listener.on_file_copied_in(
+                &self.config.id,
+                &host_src.display().to_string(),
+                container_dst,
+            );
+        }
+
         tracing::info!(
             box_id = %self.config.id,
             elapsed_ms = t0.elapsed().as_millis() as u64,
@@ -553,6 +578,14 @@ impl BoxImpl {
         )
         .await?;
         let _ = tokio::fs::remove_file(&temp_tar).await;
+
+        for listener in &self.event_listeners {
+            listener.on_file_copied_out(
+                &self.config.id,
+                container_src,
+                &host_dst.display().to_string(),
+            );
+        }
 
         tracing::info!(
             box_id = %self.config.id,

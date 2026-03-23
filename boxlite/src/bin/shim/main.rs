@@ -133,6 +133,7 @@ fn main() -> BoxliteResult<()> {
     })
 }
 
+#[allow(unused_mut)]
 fn run_shim(args: ShimArgs, mut config: InstanceSpec, timing: impl Fn(&str)) -> BoxliteResult<()> {
     tracing::debug!(
         shares = ?config.fs_shares.shares(),
