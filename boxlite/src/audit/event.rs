@@ -41,17 +41,12 @@ pub enum AuditEventKind {
 
     // ── Execution ───────────────────────────────────────────────────────
     /// Command execution started.
-    ExecStarted {
-        command: String,
-        args: Vec<String>,
-        exec_id: String,
-    },
+    ExecStarted { command: String, args: Vec<String> },
 
     /// Command execution completed.
     ExecCompleted {
         command: String,
         exit_code: i32,
-        exec_id: String,
         duration: Duration,
     },
 

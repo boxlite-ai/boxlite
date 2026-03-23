@@ -171,10 +171,15 @@ fn run_shim(args: ShimArgs, mut config: InstanceSpec, timing: impl Fn(&str)) -> 
             None
         };
 
-        // TODO: Start Rust proxy on proxy_socket before gvproxy
-        // (proxy must be listening before gvproxy starts dialing through it)
+        // WIP: Rust proxy startup not yet implemented.
+        // When ready, proxy must be listening BEFORE gvproxy starts dialing through it.
+        // For now, DNS sinkhole filtering is active; TCP-level proxy filtering is pending.
         if let Some(ref path) = proxy_socket {
-            tracing::info!(proxy_socket = %path, "Proxy socket configured (proxy start pending)");
+            tracing::warn!(
+                proxy_socket = %path,
+                "Network proxy configured but not yet started (WIP). \
+                 DNS sinkhole filtering is active. TCP-level filtering pending."
+            );
         }
 
         // Create gvproxy instance with caller-provided socket path + network policy

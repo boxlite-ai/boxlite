@@ -256,7 +256,6 @@ impl BoxImpl {
             AuditEventKind::ExecStarted {
                 command: command.command.clone(),
                 args: command.args.clone(),
-                exec_id: String::new(),
             },
         ));
 

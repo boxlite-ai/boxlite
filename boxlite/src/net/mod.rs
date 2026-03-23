@@ -65,7 +65,7 @@ pub struct NetworkBackendConfig {
 
 /// Secret configuration for network-level substitution.
 /// Serialized to JSON and passed to the gvproxy Go bridge.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct SecretNetConfig {
     /// Secret name (e.g., "OPENAI_API_KEY")
     pub name: String,
@@ -75,6 +75,18 @@ pub struct SecretNetConfig {
     pub placeholder: String,
     /// Real secret value (substituted by MITM proxy)
     pub value: String,
+}
+
+// Custom Debug: redact secret value
+impl std::fmt::Debug for SecretNetConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SecretNetConfig")
+            .field("name", &self.name)
+            .field("hosts", &self.hosts)
+            .field("placeholder", &self.placeholder)
+            .field("value", &"***")
+            .finish()
+    }
 }
 
 impl NetworkBackendConfig {

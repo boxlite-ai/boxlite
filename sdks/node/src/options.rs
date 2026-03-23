@@ -287,6 +287,7 @@ impl From<JsBoxOptions> for BoxOptions {
             entrypoint: js_opts.entrypoint,
             cmd: js_opts.cmd,
             user: js_opts.user,
+            // TODO: Expose SecretSpec and NetworkPolicy bindings to Node SDK
             secrets: std::collections::HashMap::new(),
         }
     }

@@ -28,8 +28,10 @@ impl AuditRecorder {
 
     /// Create a new recorder with the specified maximum event count.
     pub fn with_capacity(max_events: usize) -> Self {
+        // Pre-allocate up to DEFAULT_MAX_EVENTS to avoid unbounded allocation
+        let alloc_capacity = max_events.min(DEFAULT_MAX_EVENTS);
         Self {
-            events: Mutex::new(VecDeque::with_capacity(max_events.min(DEFAULT_MAX_EVENTS))),
+            events: Mutex::new(VecDeque::with_capacity(alloc_capacity)),
             max_events,
         }
     }
@@ -120,7 +122,6 @@ mod tests {
             recorder.record(make_event(AuditEventKind::ExecStarted {
                 command: format!("cmd-{i}"),
                 args: vec![],
-                exec_id: format!("exec-{i}"),
             }));
         }
 
@@ -179,7 +180,6 @@ mod tests {
                     rec.record(make_event(AuditEventKind::ExecStarted {
                         command: format!("thread-{i}-cmd-{j}"),
                         args: vec![],
-                        exec_id: format!("exec-{i}-{j}"),
                     }));
                 }
             }));
@@ -200,7 +200,6 @@ mod tests {
             recorder.record(make_event(AuditEventKind::ExecStarted {
                 command: format!("cmd-{i}"),
                 args: vec![],
-                exec_id: format!("exec-{i}"),
             }));
         }
 
@@ -230,7 +229,6 @@ mod tests {
         let event = make_event(AuditEventKind::ExecCompleted {
             command: "echo".into(),
             exit_code: 0,
-            exec_id: "exec-1".into(),
             duration: std::time::Duration::from_secs(1),
         });
 

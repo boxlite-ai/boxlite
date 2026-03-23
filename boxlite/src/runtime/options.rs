@@ -305,13 +305,23 @@ pub struct NetworkPolicy {
 /// ```javascript
 /// secrets: { OPENAI_API_KEY: { hosts: ["api.openai.com"], value: "sk-..." } }
 /// ```
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct SecretSpec {
     /// Outbound hosts where this secret is substituted.
     /// MITM only activates for HTTPS connections to these hosts.
     pub hosts: Vec<String>,
     /// The actual secret value. Never logged, never in guest env vars.
     pub value: String,
+}
+
+// Custom Debug: redact secret value to prevent accidental logging
+impl std::fmt::Debug for SecretSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SecretSpec")
+            .field("hosts", &self.hosts)
+            .field("value", &"***")
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]

@@ -80,14 +80,14 @@ async def main():
         ),
     )
 
-    box = await runtime.create_box("alpine:latest", opts)
-    await box.start()
+    sandbox = await runtime.create_box("alpine:latest", opts)
+    await sandbox.start()
 
-    print(f"\nBox created: {box.id()}")
+    print(f"\nBox created: {sandbox.id()}")
 
     # Demonstrate: env var shows placeholder, not real value
     print("\n--- Env var check ---")
-    result = await box.run(
+    result = await sandbox.run(
         boxlite.BoxCommand.new("sh").args(["-c", "echo $CLAUDE_CODE_OAUTH_TOKEN"])
     )
     run_result = await result.wait()
@@ -98,14 +98,14 @@ async def main():
     print("\n--- Network allowlist ---")
 
     # This should work (allowed host)
-    result = await box.run(
+    result = await sandbox.run(
         boxlite.BoxCommand.new("sh").args(["-c", "nslookup claude.ai 2>&1 | head -5"])
     )
     run_result = await result.wait()
     print(f"nslookup claude.ai: {run_result.stdout.strip()}")
 
     # This should fail (blocked host)
-    result = await box.run(
+    result = await sandbox.run(
         boxlite.BoxCommand.new("sh").args(["-c", "nslookup evil.com 2>&1 | head -5"])
     )
     run_result = await result.wait()
@@ -114,11 +114,11 @@ async def main():
 
     # Demonstrate: audit log captures everything
     print("\n--- Audit log ---")
-    events = await box.audit_log()
+    events = await sandbox.audit_log()
     for event in events:
         print(f"  [{event.timestamp}] {event.kind}")
 
-    await box.stop()
+    await sandbox.stop()
 
     print("\n" + "=" * 60)
     print("Security model summary:")

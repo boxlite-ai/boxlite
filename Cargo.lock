@@ -571,6 +571,10 @@ dependencies = [
 name = "boxlite-proxy"
 version = "0.7.5"
 dependencies = [
+ "bytes",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "rcgen",
  "rustls",
  "tempfile",
