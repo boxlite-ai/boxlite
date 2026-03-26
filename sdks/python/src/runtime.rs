@@ -8,7 +8,7 @@ use crate::images::PyImageHandle;
 use crate::info::PyBoxInfo;
 use crate::metrics::PyRuntimeMetrics;
 use crate::options::{PyBoxOptions, PyBoxliteRestOptions, PyOptions};
-use crate::util::map_err;
+use crate::util::map_boxlite_err;
 
 #[pyclass(name = "Boxlite")]
 pub(crate) struct PyBoxlite {
@@ -19,7 +19,7 @@ pub(crate) struct PyBoxlite {
 impl PyBoxlite {
     #[new]
     fn new(options: PyOptions) -> PyResult<Self> {
-        let runtime = BoxliteRuntime::new(options.into()).map_err(map_err)?;
+        let runtime = BoxliteRuntime::new(options.into()).map_err(map_boxlite_err)?;
 
         Ok(Self {
             runtime: Arc::new(runtime),
@@ -48,7 +48,7 @@ impl PyBoxlite {
     ///     runtime = boxlite.Boxlite.rest(opts)
     #[staticmethod]
     fn rest(options: PyBoxliteRestOptions) -> PyResult<Self> {
-        let runtime = BoxliteRuntime::rest(options.into()).map_err(map_err)?;
+        let runtime = BoxliteRuntime::rest(options.into()).map_err(map_boxlite_err)?;
         Ok(Self {
             runtime: Arc::new(runtime),
         })
@@ -56,7 +56,7 @@ impl PyBoxlite {
 
     #[staticmethod]
     fn init_default(options: PyOptions) -> PyResult<()> {
-        BoxliteRuntime::init_default_runtime(options.into()).map_err(map_err)
+        BoxliteRuntime::init_default_runtime(options.into()).map_err(map_boxlite_err)
     }
 
     #[pyo3(signature = (options, name=None))]
@@ -69,7 +69,7 @@ impl PyBoxlite {
         let runtime = Arc::clone(&self.runtime);
         let opts = BoxOptions::try_from(options).map_err(map_err)?;
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let handle = runtime.create(opts, name).await.map_err(map_err)?;
+            let handle = runtime.create(opts, name).await.map_err(map_boxlite_err)?;
             Ok(PyBox {
                 handle: Arc::new(handle),
             })
@@ -84,7 +84,7 @@ impl PyBoxlite {
     ) -> PyResult<Bound<'py, PyAny>> {
         let runtime = Arc::clone(&self.runtime);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let infos = runtime.list_info().await.map_err(map_err)?;
+            let infos = runtime.list_info().await.map_err(map_boxlite_err)?;
             Ok(infos.into_iter().map(PyBoxInfo::from).collect::<Vec<_>>())
         })
     }
@@ -96,7 +96,7 @@ impl PyBoxlite {
             Ok(runtime
                 .get_info(&id_or_name)
                 .await
-                .map_err(map_err)?
+                .map_err(map_boxlite_err)?
                 .map(PyBoxInfo::from))
         })
     }
@@ -107,7 +107,7 @@ impl PyBoxlite {
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             tracing::trace!("Python get() called with id_or_name={}", id_or_name);
 
-            let result = runtime.get(&id_or_name).await.map_err(map_err)?;
+            let result = runtime.get(&id_or_name).await.map_err(map_boxlite_err)?;
 
             tracing::trace!("Rust get() returned: is_some={}", result.is_some());
 
@@ -134,7 +134,10 @@ impl PyBoxlite {
         let runtime = Arc::clone(&self.runtime);
         let opts = BoxOptions::try_from(options).map_err(map_err)?;
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let (handle, created) = runtime.get_or_create(opts, name).await.map_err(map_err)?;
+            let (handle, created) = runtime
+                .get_or_create(opts, name)
+                .await
+                .map_err(map_boxlite_err)?;
             Ok((
                 PyBox {
                     handle: Arc::new(handle),
@@ -147,7 +150,7 @@ impl PyBoxlite {
     fn metrics<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let runtime = Arc::clone(&self.runtime);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let metrics = runtime.metrics().await.map_err(map_err)?;
+            let metrics = runtime.metrics().await.map_err(map_boxlite_err)?;
             Ok(PyRuntimeMetrics::from(metrics))
         })
     }
@@ -170,7 +173,10 @@ impl PyBoxlite {
     ) -> PyResult<Bound<'py, PyAny>> {
         let runtime = Arc::clone(&self.runtime);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            runtime.remove(&id_or_name, force).await.map_err(map_err)?;
+            runtime
+                .remove(&id_or_name, force)
+                .await
+                .map_err(map_boxlite_err)?;
             Ok(())
         })
     }
@@ -184,7 +190,7 @@ impl PyBoxlite {
     fn shutdown<'py>(&self, py: Python<'py>, timeout: Option<i32>) -> PyResult<Bound<'py, PyAny>> {
         let runtime = Arc::clone(&self.runtime);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            runtime.shutdown(timeout).await.map_err(map_err)?;
+            runtime.shutdown(timeout).await.map_err(map_boxlite_err)?;
             Ok(())
         })
     }
@@ -207,7 +213,10 @@ impl PyBoxlite {
         let runtime = Arc::clone(&self.runtime);
         let archive = BoxArchive::new(archive_path);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let handle = runtime.import_box(archive, name).await.map_err(map_err)?;
+            let handle = runtime
+                .import_box(archive, name)
+                .await
+                .map_err(map_boxlite_err)?;
             Ok(PyBox {
                 handle: Arc::new(handle),
             })

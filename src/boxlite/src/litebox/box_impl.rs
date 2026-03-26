@@ -136,6 +136,7 @@ impl BoxImpl {
         state: BoxState,
         runtime: SharedRuntimeImpl,
         shutdown_token: CancellationToken,
+        event_listeners: Vec<std::sync::Arc<dyn EventListener>>,
     ) -> Self {
         Self {
             config,
@@ -143,7 +144,7 @@ impl BoxImpl {
             runtime,
             shutdown_token,
             disk_ops: tokio::sync::Mutex::new(()),
-            event_listeners: Vec::new(), // populated from runtime options
+            event_listeners,
             live: OnceCell::new(),
             health_check_task: RwLock::new(None),
         }

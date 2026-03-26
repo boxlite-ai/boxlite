@@ -75,7 +75,27 @@ except ImportError as e:
 # Import Python convenience wrappers (re-exported via __all__)
 try:
     from .codebox import CodeBox  # noqa: F401
-    from .errors import BoxliteError, ExecError, ParseError, TimeoutError  # noqa: F401
+    from .errors import (  # noqa: F401
+        AlreadyExistsError,
+        BoxliteError,
+        ConfigError,
+        DatabaseError,
+        EngineError,
+        ExecError,
+        ExecutionError,
+        ImageError,
+        InternalError,
+        InvalidArgumentError,
+        InvalidStateError,
+        NetworkError,
+        NotFoundError,
+        ParseError,
+        PortalError,
+        RpcError,
+        StoppedError,
+        StorageError,
+        TimeoutError,
+    )
     from .exec import ExecResult  # noqa: F401
     from .simplebox import SimpleBox  # noqa: F401
 
@@ -85,8 +105,25 @@ try:
             "SimpleBox",
             "CodeBox",
             "ExecResult",
-            # Error types
+            # Error types (base)
             "BoxliteError",
+            # Error types (mapped from Rust)
+            "EngineError",
+            "ConfigError",
+            "StorageError",
+            "ImageError",
+            "PortalError",
+            "NetworkError",
+            "RpcError",
+            "InternalError",
+            "ExecutionError",
+            "NotFoundError",
+            "AlreadyExistsError",
+            "InvalidStateError",
+            "DatabaseError",
+            "InvalidArgumentError",
+            "StoppedError",
+            # Error types (Python convenience)
             "ExecError",
             "TimeoutError",
             "ParseError",

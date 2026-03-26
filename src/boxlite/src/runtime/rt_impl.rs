@@ -93,6 +93,10 @@ pub struct RuntimeImpl {
     /// Use `.is_cancelled()` for sync checks, `.cancelled()` for async select!.
     /// Child tokens are passed to each box via `.child_token()`.
     pub(crate) shutdown_token: CancellationToken,
+
+    /// Event listeners registered at runtime level.
+    /// Cloned into each BoxImpl on construction.
+    pub(crate) event_listeners: Vec<Arc<dyn crate::event_listener::EventListener>>,
 }
 
 /// Synchronized state protected by RwLock.
@@ -226,6 +230,7 @@ impl RuntimeImpl {
             lock_manager,
             _runtime_lock: runtime_lock,
             shutdown_token: CancellationToken::new(),
+            event_listeners: options.event_listeners,
         });
 
         tracing::debug!("initialized runtime");
@@ -1379,7 +1384,13 @@ impl RuntimeImpl {
         // Create new BoxImpl and cache in both maps
         // Pass a child token so box can be cancelled independently or via runtime shutdown
         let box_token = self.shutdown_token.child_token();
-        let box_impl = Arc::new(BoxImpl::new(config, state, Arc::clone(self), box_token));
+        let box_impl = Arc::new(BoxImpl::new(
+            config,
+            state,
+            Arc::clone(self),
+            box_token,
+            self.event_listeners.clone(),
+        ));
         let weak = Arc::downgrade(&box_impl);
 
         sync.active_boxes_by_id.insert(box_id.clone(), weak.clone());
@@ -1579,6 +1590,7 @@ mod tests {
         let options = BoxliteOptions {
             home_dir: temp_dir.path().to_path_buf(),
             image_registries: vec![],
+            ..Default::default()
         };
         let runtime = RuntimeImpl::new(options).expect("Failed to create runtime");
         (runtime, temp_dir)
@@ -2417,5 +2429,71 @@ mod tests {
         // Force remove should succeed despite dependency.
         let result = runtime.remove_box(&config_a.id, true);
         assert!(result.is_ok());
+    }
+
+    // ====================================================================
+    // event_listeners plumbing tests
+    // ====================================================================
+
+    #[test]
+    fn test_runtime_stores_event_listeners() {
+        use crate::event_listener::EventListener;
+
+        struct TestListener;
+        impl EventListener for TestListener {}
+
+        let temp_dir = TempDir::new_in("/tmp").expect("Failed to create temp dir");
+        let options = BoxliteOptions {
+            home_dir: temp_dir.path().to_path_buf(),
+            image_registries: vec![],
+            event_listeners: vec![std::sync::Arc::new(TestListener)],
+        };
+        let runtime = RuntimeImpl::new(options).expect("Failed to create runtime");
+        assert_eq!(
+            runtime.event_listeners.len(),
+            1,
+            "Runtime should store event listeners from options"
+        );
+    }
+
+    #[test]
+    fn test_runtime_passes_listeners_to_box_impl() {
+        use crate::event_listener::EventListener;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        static CALL_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+        struct CountingListener;
+        impl EventListener for CountingListener {
+            fn on_box_created(&self, _box_id: &BoxID) {
+                CALL_COUNT.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        CALL_COUNT.store(0, Ordering::SeqCst);
+
+        let temp_dir = TempDir::new_in("/tmp").expect("Failed to create temp dir");
+        let options = BoxliteOptions {
+            home_dir: temp_dir.path().to_path_buf(),
+            image_registries: vec![],
+            event_listeners: vec![std::sync::Arc::new(CountingListener)],
+        };
+        let runtime = RuntimeImpl::new(options).expect("Failed to create runtime");
+
+        // Create a BoxImpl via get_or_create_box_impl — listeners should be cloned
+        let config = test_box_config(false);
+        let box_id = config.id.clone();
+        let state = BoxState::new();
+        let (box_impl, _created) = runtime.get_or_create_box_impl(config, state);
+
+        assert_eq!(
+            box_impl.event_listeners.len(),
+            1,
+            "BoxImpl should have listeners from runtime"
+        );
+
+        // Invoke the listener directly to verify it works
+        box_impl.event_listeners[0].on_box_created(&box_id);
+        assert_eq!(CALL_COUNT.load(Ordering::SeqCst), 1);
     }
 }

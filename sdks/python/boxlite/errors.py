@@ -1,16 +1,133 @@
 """
 BoxLite error types.
 
-Provides a hierarchy of exceptions for different failure modes.
+Provides a hierarchy of exceptions matching the Rust BoxliteError variants.
 """
 
-__all__ = ["BoxliteError", "ExecError", "TimeoutError", "ParseError"]
+__all__ = [
+    "BoxliteError",
+    "EngineError",
+    "ConfigError",
+    "StorageError",
+    "ImageError",
+    "PortalError",
+    "NetworkError",
+    "RpcError",
+    "InternalError",
+    "ExecutionError",
+    "NotFoundError",
+    "AlreadyExistsError",
+    "InvalidStateError",
+    "DatabaseError",
+    "InvalidArgumentError",
+    "StoppedError",
+    # Convenience aliases
+    "ExecError",
+    "TimeoutError",
+    "ParseError",
+]
 
 
 class BoxliteError(Exception):
     """Base exception for all boxlite errors."""
 
     pass
+
+
+# ── Mapped from Rust BoxliteError variants ───────────────────────────────
+
+
+class EngineError(BoxliteError):
+    """Raised when the VM engine reports an error."""
+
+    pass
+
+
+class ConfigError(BoxliteError):
+    """Raised for configuration errors (invalid options, incompatible settings)."""
+
+    pass
+
+
+class StorageError(BoxliteError):
+    """Raised when a filesystem or storage operation fails."""
+
+    pass
+
+
+class ImageError(BoxliteError):
+    """Raised when image pull, resolution, or extraction fails."""
+
+    pass
+
+
+class PortalError(BoxliteError):
+    """Raised when host-guest communication (gRPC portal) fails."""
+
+    pass
+
+
+class NetworkError(BoxliteError):
+    """Raised when a networking operation fails."""
+
+    pass
+
+
+class RpcError(BoxliteError):
+    """Raised when a gRPC or transport-level error occurs."""
+
+    pass
+
+
+class InternalError(BoxliteError):
+    """Raised for unexpected internal errors."""
+
+    pass
+
+
+class ExecutionError(BoxliteError):
+    """Raised when command execution fails at the runtime level."""
+
+    pass
+
+
+class NotFoundError(BoxliteError):
+    """Raised when a box or resource is not found."""
+
+    pass
+
+
+class AlreadyExistsError(BoxliteError):
+    """Raised when a box or resource already exists."""
+
+    pass
+
+
+class InvalidStateError(BoxliteError):
+    """Raised when a box is in the wrong state for the requested operation."""
+
+    pass
+
+
+class DatabaseError(BoxliteError):
+    """Raised when a database operation fails."""
+
+    pass
+
+
+class InvalidArgumentError(BoxliteError):
+    """Raised when an invalid argument is provided."""
+
+    pass
+
+
+class StoppedError(BoxliteError):
+    """Raised when operating on a stopped box or shutdown runtime."""
+
+    pass
+
+
+# ── Convenience exceptions (Python-side only) ────────────────────────────
 
 
 class ExecError(BoxliteError):

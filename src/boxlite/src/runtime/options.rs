@@ -1,11 +1,13 @@
 //! Configuration for Boxlite.
 
+use crate::event_listener::EventListener;
 use crate::runtime::constants::envs as const_envs;
 use crate::runtime::layout::dirs as const_dirs;
 use boxlite_shared::errors::BoxliteResult;
 use dirs::home_dir;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::runtime::advanced_options::{AdvancedBoxOptions, SecurityOptions};
 
@@ -15,7 +17,7 @@ use crate::runtime::advanced_options::{AdvancedBoxOptions, SecurityOptions};
 /// Configuration options for BoxliteRuntime.
 ///
 /// Users can create it with defaults and modify fields as needed.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct BoxliteOptions {
     #[serde(default = "default_home_dir")]
     pub home_dir: PathBuf,
@@ -42,6 +44,46 @@ pub struct BoxliteOptions {
     /// ```
     #[serde(default)]
     pub image_registries: Vec<String>,
+
+    /// Event listeners for box lifecycle notifications.
+    ///
+    /// Listeners receive callbacks when boxes are created, started, stopped,
+    /// removed, and when commands are executed or files are copied.
+    ///
+    /// All callbacks default to no-op — implement only what you need.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use boxlite::event_listener::EventListener;
+    ///
+    /// struct Logger;
+    /// impl EventListener for Logger {
+    ///     fn on_box_started(&self, box_id: &BoxID) {
+    ///         println!("Box {} started", box_id);
+    ///     }
+    /// }
+    ///
+    /// let opts = BoxliteOptions {
+    ///     event_listeners: vec![Arc::new(Logger)],
+    ///     ..Default::default()
+    /// };
+    /// ```
+    #[serde(skip, default)]
+    pub event_listeners: Vec<Arc<dyn EventListener>>,
+}
+
+impl std::fmt::Debug for BoxliteOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BoxliteOptions")
+            .field("home_dir", &self.home_dir)
+            .field("image_registries", &self.image_registries)
+            .field(
+                "event_listeners",
+                &format_args!("[{} listeners]", self.event_listeners.len()),
+            )
+            .finish()
+    }
 }
 
 fn default_home_dir() -> PathBuf {
@@ -59,6 +101,7 @@ impl Default for BoxliteOptions {
         Self {
             home_dir: default_home_dir(),
             image_registries: Vec::new(),
+            event_listeners: Vec::new(),
         }
     }
 }
@@ -1018,5 +1061,87 @@ mod tests {
         // Only opts2 should have max_processes
         assert!(opts1.resource_limits.max_processes.is_none());
         assert_eq!(opts2.resource_limits.max_processes, Some(50));
+    }
+
+    // ========================================================================
+    // event_listeners tests
+    // ========================================================================
+
+    #[test]
+    fn test_boxlite_options_default_has_no_listeners() {
+        let opts = BoxliteOptions::default();
+        assert!(
+            opts.event_listeners.is_empty(),
+            "Default options should have no event listeners"
+        );
+    }
+
+    #[test]
+    fn test_boxlite_options_with_event_listeners() {
+        use crate::event_listener::EventListener;
+
+        struct TestListener;
+        impl EventListener for TestListener {}
+
+        let opts = BoxliteOptions {
+            event_listeners: vec![Arc::new(TestListener)],
+            ..Default::default()
+        };
+        assert_eq!(opts.event_listeners.len(), 1);
+    }
+
+    #[test]
+    fn test_boxlite_options_clone_preserves_listeners() {
+        use crate::event_listener::EventListener;
+
+        struct TestListener;
+        impl EventListener for TestListener {}
+
+        let opts = BoxliteOptions {
+            event_listeners: vec![Arc::new(TestListener), Arc::new(TestListener)],
+            ..Default::default()
+        };
+        let cloned = opts.clone();
+        assert_eq!(cloned.event_listeners.len(), 2);
+    }
+
+    #[test]
+    fn test_boxlite_options_serde_skips_listeners() {
+        use crate::event_listener::EventListener;
+
+        struct TestListener;
+        impl EventListener for TestListener {}
+
+        let opts = BoxliteOptions {
+            event_listeners: vec![Arc::new(TestListener)],
+            ..Default::default()
+        };
+
+        // Serialization should succeed (event_listeners skipped)
+        let json = serde_json::to_string(&opts).unwrap();
+        assert!(!json.contains("event_listeners"));
+
+        // Deserialization should default to empty vec
+        let deserialized: BoxliteOptions = serde_json::from_str(&json).unwrap();
+        assert!(deserialized.event_listeners.is_empty());
+    }
+
+    #[test]
+    fn test_boxlite_options_debug_shows_listener_count() {
+        use crate::event_listener::EventListener;
+
+        struct TestListener;
+        impl EventListener for TestListener {}
+
+        let opts = BoxliteOptions {
+            event_listeners: vec![Arc::new(TestListener), Arc::new(TestListener)],
+            ..Default::default()
+        };
+        let debug_str = format!("{:?}", opts);
+        assert!(
+            debug_str.contains("[2 listeners]"),
+            "Debug should show listener count, got: {}",
+            debug_str
+        );
     }
 }

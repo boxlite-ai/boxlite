@@ -5,7 +5,7 @@ use crate::info::PyBoxInfo;
 use crate::metrics::PyBoxMetrics;
 use crate::snapshot_options::{PyCloneOptions, PyExportOptions};
 use crate::snapshots::PySnapshotHandle;
-use crate::util::map_err;
+use crate::util::map_boxlite_err;
 use boxlite::{BoxCommand, CloneOptions, ExportOptions, LiteBox};
 use pyo3::prelude::*;
 
@@ -78,7 +78,7 @@ impl PyBox {
                 cmd = cmd.working_dir(cwd);
             }
 
-            let execution = handle.exec(cmd).await.map_err(map_err)?;
+            let execution = handle.exec(cmd).await.map_err(map_boxlite_err)?;
 
             Ok(PyExecution {
                 execution: Arc::new(execution),
@@ -91,7 +91,7 @@ impl PyBox {
         let handle = Arc::clone(&self.handle);
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            handle.start().await.map_err(map_err)?;
+            handle.start().await.map_err(map_boxlite_err)?;
             Ok(())
         })
     }
@@ -101,7 +101,7 @@ impl PyBox {
         let handle = Arc::clone(&self.handle);
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            handle.stop().await.map_err(map_err)?;
+            handle.stop().await.map_err(map_boxlite_err)?;
             Ok(())
         })
     }
@@ -110,7 +110,7 @@ impl PyBox {
         let handle = Arc::clone(&self.handle);
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let metrics = handle.metrics().await.map_err(map_err)?;
+            let metrics = handle.metrics().await.map_err(map_boxlite_err)?;
             Ok(PyBoxMetrics::from(metrics))
         })
     }
@@ -129,7 +129,7 @@ impl PyBox {
             let archive = handle
                 .export(options, std::path::Path::new(&dest))
                 .await
-                .map_err(map_err)?;
+                .map_err(map_boxlite_err)?;
             Ok(archive.path().to_string_lossy().to_string())
         })
     }
@@ -145,7 +145,10 @@ impl PyBox {
         let handle = Arc::clone(&self.handle);
         let options: CloneOptions = options.map(Into::into).unwrap_or_default();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let cloned = handle.clone_box(options, name).await.map_err(map_err)?;
+            let cloned = handle
+                .clone_box(options, name)
+                .await
+                .map_err(map_boxlite_err)?;
             Ok(PyBox {
                 handle: Arc::new(cloned),
             })
@@ -169,7 +172,7 @@ impl PyBox {
             handle
                 .copy_into(std::path::Path::new(&host_path), &container_dest, opts)
                 .await
-                .map_err(map_err)?;
+                .map_err(map_boxlite_err)?;
             Ok(())
         })
     }
@@ -191,7 +194,7 @@ impl PyBox {
             handle
                 .copy_out(&container_src, std::path::Path::new(&host_dest), opts)
                 .await
-                .map_err(map_err)?;
+                .map_err(map_boxlite_err)?;
             Ok(())
         })
     }
@@ -202,7 +205,7 @@ impl PyBox {
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             // Auto-start on context entry
-            handle.start().await.map_err(map_err)?;
+            handle.start().await.map_err(map_boxlite_err)?;
             Ok(PyBox { handle })
         })
     }
@@ -218,7 +221,7 @@ impl PyBox {
         let handle = Arc::clone(&slf.handle);
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            handle.stop().await.map_err(map_err)?;
+            handle.stop().await.map_err(map_boxlite_err)?;
             Ok(())
         })
     }
