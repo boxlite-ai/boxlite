@@ -228,13 +228,37 @@ pub struct VolumeSpec {
     pub read_only: bool,
 }
 
-/// Network isolation options.
-#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+/// Network configuration for a box.
+///
+/// Controls whether the box has network access and what hosts it can reach.
+///
+/// - `Enabled { allow_net: [] }` — full internet access (default)
+/// - `Enabled { allow_net: ["api.openai.com"] }` — only listed hosts reachable
+/// - `Disabled` — no network interface at all
+///
+/// Supported `allow_net` patterns:
+/// - `"api.openai.com"` — exact hostname
+/// - `"*.example.com"` — wildcard subdomain
+/// - `"192.168.1.1"` — exact IP
+/// - `"10.0.0.0/8"` — CIDR range
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum NetworkSpec {
-    #[default]
-    Isolated,
-    // Host,
-    // Custom(String),
+    /// Network enabled. Empty `allow_net` = full access.
+    /// Non-empty = only listed hosts/IPs allowed (DNS sinkhole for others).
+    Enabled {
+        #[serde(default)]
+        allow_net: Vec<String>,
+    },
+    /// No network — gvproxy is not started, guest has no eth0.
+    Disabled,
+}
+
+impl Default for NetworkSpec {
+    fn default() -> Self {
+        Self::Enabled {
+            allow_net: Vec::new(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
@@ -312,7 +336,7 @@ mod tests {
             "rootfs": {"Image": "alpine:latest"},
             "env": [],
             "volumes": [],
-            "network": "Isolated",
+            "network": {"Enabled": {"allow_net": []}},
             "ports": []
         }"#;
         let opts: BoxOptions = serde_json::from_str(json).unwrap();
@@ -329,7 +353,7 @@ mod tests {
             "rootfs": {"Image": "alpine"},
             "env": [],
             "volumes": [],
-            "network": "Isolated",
+            "network": {"Enabled": {"allow_net": []}},
             "ports": [],
             "auto_remove": false,
             "detach": true
@@ -528,7 +552,7 @@ mod tests {
             "rootfs": {"Image": "alpine:latest"},
             "env": [],
             "volumes": [],
-            "network": "Isolated",
+            "network": {"Enabled": {"allow_net": []}},
             "ports": []
         }"#;
         let opts: BoxOptions = serde_json::from_str(json).unwrap();
@@ -548,7 +572,7 @@ mod tests {
             "rootfs": {"Image": "docker:dind"},
             "env": [],
             "volumes": [],
-            "network": "Isolated",
+            "network": {"Enabled": {"allow_net": []}},
             "ports": [],
             "cmd": ["--iptables=false"],
             "user": "1000:1000"
@@ -585,7 +609,7 @@ mod tests {
             "rootfs": {"Image": "alpine:latest"},
             "env": [],
             "volumes": [],
-            "network": "Isolated",
+            "network": {"Enabled": {"allow_net": []}},
             "ports": []
         }"#;
         let opts: BoxOptions = serde_json::from_str(json).unwrap();
@@ -601,7 +625,7 @@ mod tests {
             "rootfs": {"Image": "docker:dind"},
             "env": [],
             "volumes": [],
-            "network": "Isolated",
+            "network": {"Enabled": {"allow_net": []}},
             "ports": [],
             "entrypoint": ["dockerd"],
             "cmd": ["--iptables=false"]

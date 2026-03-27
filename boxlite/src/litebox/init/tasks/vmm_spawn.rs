@@ -328,11 +328,15 @@ fn build_network_config(
             .count()
     );
 
-    // Always return Some - gvproxy provides virtio-net (eth0) even without port mappings
-    Some(NetworkBackendConfig::new(
-        final_mappings,
-        layout.net_backend_socket_path(),
-    ))
+    // Extract allow_net from NetworkSpec; Disabled = no network at all
+    let allow_net = match &options.network {
+        crate::runtime::options::NetworkSpec::Enabled { allow_net } => allow_net.clone(),
+        crate::runtime::options::NetworkSpec::Disabled => return None,
+    };
+
+    let mut config = NetworkBackendConfig::new(final_mappings, layout.net_backend_socket_path());
+    config.allow_net = allow_net;
+    Some(config)
 }
 
 /// Spawn VM subprocess and return handler.

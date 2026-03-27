@@ -231,10 +231,8 @@ impl From<PyBoxOptions> for BoxOptions {
         let volumes = py_opts.volumes.into_iter().map(VolumeSpec::from).collect();
 
         let network = match py_opts.network {
-            // Some(ref s) if s.eq_ignore_ascii_case("host") => NetworkSpec::Host,
-            Some(ref s) if s.eq_ignore_ascii_case("isolated") => NetworkSpec::Isolated,
-            // Some(s) if !s.is_empty() => NetworkSpec::Custom(s),
-            _ => NetworkSpec::Isolated,
+            Some(ref s) if s.eq_ignore_ascii_case("disabled") => NetworkSpec::Disabled,
+            _ => NetworkSpec::default(),
         };
 
         let ports = py_opts.ports.into_iter().map(PortSpec::from).collect();

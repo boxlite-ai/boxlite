@@ -652,7 +652,7 @@ mod tests {
             "user": "1000:1000",
             "volumes": [{"host_path": "/tmp", "guest_path": "/mnt", "read_only": true}],
             "ports": [{"guest_port": 8080, "protocol": "tcp"}],
-            "network": "isolated",
+            "network": {"Enabled": {"allow_net": []}},
             "auto_remove": false,
             "detach": true,
             "security": "maximum"

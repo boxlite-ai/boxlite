@@ -44,7 +44,7 @@ use super::stats::NetworkStats;
 ///
 /// // Create instance with caller-provided socket path
 /// let socket_path = PathBuf::from("/tmp/my-box/net.sock");
-/// let instance = GvproxyInstance::new(socket_path, &[(8080, 80), (8443, 443)])?;
+/// let instance = GvproxyInstance::new(socket_path, &[(8080, 80), (8443, 443)], vec![])?;
 ///
 /// // Socket path is known from creation — no FFI call needed
 /// println!("Socket: {:?}", instance.socket_path());
@@ -67,15 +67,17 @@ impl GvproxyInstance {
     ///
     /// * `socket_path` - Caller-provided Unix socket path (must be unique per box)
     /// * `port_mappings` - List of (host_port, guest_port) tuples for port forwarding
-    pub fn new(socket_path: PathBuf, port_mappings: &[(u16, u16)]) -> BoxliteResult<Self> {
+    pub fn new(
+        socket_path: PathBuf,
+        port_mappings: &[(u16, u16)],
+        allow_net: Vec<String>,
+    ) -> BoxliteResult<Self> {
         // Initialize logging callback (one-time setup)
-        // This ensures all gvproxy logs are routed to Rust's tracing system
         logging::init_logging();
 
-        // Create config with caller-provided socket path + port mappings
-        let config = super::config::GvproxyConfig::new(socket_path.clone(), port_mappings.to_vec());
+        let config = super::config::GvproxyConfig::new(socket_path.clone(), port_mappings.to_vec())
+            .with_allow_net(allow_net);
 
-        // Create instance via FFI with full config
         let id = ffi::create_instance(&config)?;
 
         tracing::info!(id, ?socket_path, "Created GvproxyInstance");
@@ -107,7 +109,7 @@ impl GvproxyInstance {
     /// ```no_run
     /// use boxlite::net::gvproxy::GvproxyInstance;
     ///
-    /// let instance = GvproxyInstance::new(&[(8080, 80)])?;
+    /// let instance = GvproxyInstance::new(path, &[(8080, 80)], vec![])?;
     /// let stats = instance.get_stats()?;
     ///
     /// // Check for packet drops due to maxInFlight limit
@@ -266,7 +268,8 @@ mod tests {
     fn test_gvproxy_create_destroy() {
         let socket_path = PathBuf::from("/tmp/test-gvproxy-instance.sock");
         let instance =
-            GvproxyInstance::new(socket_path.clone(), &[(8080, 80), (8443, 443)]).unwrap();
+            GvproxyInstance::new(socket_path.clone(), &[(8080, 80), (8443, 443)], Vec::new())
+                .unwrap();
 
         // Socket path matches what we provided
         assert_eq!(instance.socket_path(), socket_path);
@@ -280,8 +283,8 @@ mod tests {
         let path1 = PathBuf::from("/tmp/test-gvproxy-1.sock");
         let path2 = PathBuf::from("/tmp/test-gvproxy-2.sock");
 
-        let instance1 = GvproxyInstance::new(path1.clone(), &[(8080, 80)]).unwrap();
-        let instance2 = GvproxyInstance::new(path2.clone(), &[(9090, 90)]).unwrap();
+        let instance1 = GvproxyInstance::new(path1.clone(), &[(8080, 80)], Vec::new()).unwrap();
+        let instance2 = GvproxyInstance::new(path2.clone(), &[(9090, 90)], Vec::new()).unwrap();
 
         assert_ne!(instance1.id(), instance2.id());
         assert_ne!(instance1.socket_path(), instance2.socket_path());

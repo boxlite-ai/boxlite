@@ -184,8 +184,9 @@ type GvproxyConfig struct {
 	PortMappings     []PortMapping `json:"port_mappings"`
 	DNSZones         []DNSZone     `json:"dns_zones"`
 	DNSSearchDomains []string      `json:"dns_search_domains"`
-	Debug            bool          `json:"debug"`
-	CaptureFile      *string       `json:"capture_file,omitempty"`
+	Debug       bool     `json:"debug"`
+	CaptureFile *string  `json:"capture_file,omitempty"`
+	AllowNet    []string `json:"allow_net,omitempty"`
 }
 
 // GvproxyInstance tracks a running gvisor-tap-vsock instance
@@ -249,6 +250,13 @@ func gvproxy_create(configJSON *C.char) C.longlong {
 			Name:      zone.Name,
 			DefaultIP: net.ParseIP(zone.DefaultIP),
 		}
+	}
+
+	// Build DNS allowlist zones when AllowNet is configured
+	if len(config.AllowNet) > 0 {
+		allowNetZones := buildAllowNetDNSZones(config.AllowNet)
+		dnsZones = append(allowNetZones, dnsZones...)
+		logrus.WithField("rules", len(config.AllowNet)).Info("Network allowlist enabled (DNS sinkhole)")
 	}
 
 	// Create gvisor-tap-vsock configuration from provided config

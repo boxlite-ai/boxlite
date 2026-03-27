@@ -49,7 +49,7 @@ pub use runtime::advanced_options::{
 };
 use runtime::layout::FilesystemLayout;
 pub use runtime::options::{
-    BoxArchive, BoxOptions, BoxliteOptions, CloneOptions, ExportOptions, RootfsSpec,
+    BoxArchive, BoxOptions, BoxliteOptions, CloneOptions, ExportOptions, NetworkSpec, RootfsSpec,
     SnapshotOptions,
 };
 /// Boxlite library version (from CARGO_PKG_VERSION at compile time).

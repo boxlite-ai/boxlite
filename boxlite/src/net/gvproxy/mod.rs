@@ -149,6 +149,7 @@ impl GvisorTapBackend {
         let instance = Arc::new(GvproxyInstance::new(
             config.socket_path.clone(),
             &config.port_mappings,
+            config.allow_net.clone(),
         )?);
 
         // Start background stats logging thread

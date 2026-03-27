@@ -26,11 +26,15 @@ fn build_gvproxy(source_dir: &Path, output_path: &Path) {
     let mut build_cmd = Command::new("go");
     build_cmd.args(["build", "-buildmode=c-archive"]);
 
+    // Use vendor directory if present
+    if source_dir.join("vendor").exists() {
+        build_cmd.args(["-mod=vendor"]);
+    }
+
     build_cmd.args([
         "-o",
         output_path.to_str().expect("Invalid output path"),
-        "main.go",
-        "stats.go",
+        ".",
     ]);
 
     let build_status = build_cmd
@@ -49,6 +53,7 @@ fn main() {
     // Rebuild if Go sources change
     println!("cargo:rerun-if-changed=gvproxy-bridge/main.go");
     println!("cargo:rerun-if-changed=gvproxy-bridge/stats.go");
+    println!("cargo:rerun-if-changed=gvproxy-bridge/dns_filter.go");
     println!("cargo:rerun-if-changed=gvproxy-bridge/go.mod");
     println!("cargo:rerun-if-env-changed=BOXLITE_DEPS_STUB");
 
