@@ -116,6 +116,14 @@ impl EventListener for AuditEventListener {
         ));
     }
 
+    fn on_box_paused(&self, box_id: &BoxID) {
+        self.record(AuditEvent::now(box_id.clone(), AuditEventKind::BoxPaused));
+    }
+
+    fn on_box_resumed(&self, box_id: &BoxID) {
+        self.record(AuditEvent::now(box_id.clone(), AuditEventKind::BoxResumed));
+    }
+
     fn on_box_removed(&self, box_id: &BoxID) {
         self.record(AuditEvent::now(box_id.clone(), AuditEventKind::BoxRemoved));
     }
@@ -227,6 +235,46 @@ mod tests {
         }
 
         assert_eq!(listener.len(), 1000);
+    }
+
+    #[test]
+    fn records_pause_resume_events() {
+        let listener = AuditEventListener::new();
+        let id = test_box_id();
+
+        listener.on_box_started(&id);
+        listener.on_box_paused(&id);
+        listener.on_box_resumed(&id);
+        listener.on_box_stopped(&id, None);
+
+        let events = listener.events();
+        assert_eq!(events.len(), 4);
+        assert!(matches!(events[0].kind, AuditEventKind::BoxStarted));
+        assert!(matches!(events[1].kind, AuditEventKind::BoxPaused));
+        assert!(matches!(events[2].kind, AuditEventKind::BoxResumed));
+        assert!(matches!(events[3].kind, AuditEventKind::BoxStopped { .. }));
+    }
+
+    #[test]
+    fn records_multiple_pause_resume_cycles() {
+        let listener = AuditEventListener::new();
+        let id = test_box_id();
+
+        listener.on_box_started(&id);
+        // Cycle 1
+        listener.on_box_paused(&id);
+        listener.on_box_resumed(&id);
+        // Cycle 2
+        listener.on_box_paused(&id);
+        listener.on_box_resumed(&id);
+        listener.on_box_stopped(&id, Some(0));
+
+        let events = listener.events();
+        assert_eq!(events.len(), 6);
+        // Verify all events have the same box_id
+        for event in &events {
+            assert_eq!(event.box_id, id);
+        }
     }
 
     #[test]

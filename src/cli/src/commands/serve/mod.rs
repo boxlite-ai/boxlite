@@ -252,6 +252,14 @@ fn build_router(state: Arc<AppState>) -> Router {
             "/v1/default/boxes/{box_id}/stop",
             post(boxes::stop_box),
         )
+        .route(
+            "/v1/default/boxes/{box_id}/pause",
+            post(boxes::pause_box),
+        )
+        .route(
+            "/v1/default/boxes/{box_id}/resume",
+            post(boxes::resume_box),
+        )
         // Box metrics
         .route(
             "/v1/default/boxes/{box_id}/metrics",

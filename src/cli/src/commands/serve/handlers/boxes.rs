@@ -121,6 +121,42 @@ pub(in crate::commands::serve) async fn stop_box(
     Json(box_info_to_response(&info)).into_response()
 }
 
+pub(in crate::commands::serve) async fn pause_box(
+    State(state): State<Arc<AppState>>,
+    Path(box_id): Path<String>,
+) -> Response {
+    let litebox = match get_or_fetch_box(&state, &box_id).await {
+        Ok(b) => b,
+        Err(resp) => return resp,
+    };
+
+    if let Err(e) = litebox.pause().await {
+        let (status, etype) = classify_boxlite_error(&e);
+        return error_response(status, e.to_string(), etype);
+    }
+
+    let info = litebox.info();
+    Json(box_info_to_response(&info)).into_response()
+}
+
+pub(in crate::commands::serve) async fn resume_box(
+    State(state): State<Arc<AppState>>,
+    Path(box_id): Path<String>,
+) -> Response {
+    let litebox = match get_or_fetch_box(&state, &box_id).await {
+        Ok(b) => b,
+        Err(resp) => return resp,
+    };
+
+    if let Err(e) = litebox.resume().await {
+        let (status, etype) = classify_boxlite_error(&e);
+        return error_response(status, e.to_string(), etype);
+    }
+
+    let info = litebox.info();
+    Json(box_info_to_response(&info)).into_response()
+}
+
 pub(in crate::commands::serve) async fn remove_box(
     State(state): State<Arc<AppState>>,
     Path(box_id): Path<String>,

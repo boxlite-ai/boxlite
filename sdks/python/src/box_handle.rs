@@ -106,6 +106,26 @@ impl PyBox {
         })
     }
 
+    /// Pause the box (freeze VM, zero CPU, state preserved).
+    fn pause<'a>(&self, py: Python<'a>) -> PyResult<Bound<'a, PyAny>> {
+        let handle = Arc::clone(&self.handle);
+
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            handle.pause().await.map_err(map_err)?;
+            Ok(())
+        })
+    }
+
+    /// Resume the box from paused state.
+    fn resume<'a>(&self, py: Python<'a>) -> PyResult<Bound<'a, PyAny>> {
+        let handle = Arc::clone(&self.handle);
+
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            handle.resume().await.map_err(map_err)?;
+            Ok(())
+        })
+    }
+
     fn metrics<'a>(&self, py: Python<'a>) -> PyResult<Bound<'a, PyAny>> {
         let handle = Arc::clone(&self.handle);
 
