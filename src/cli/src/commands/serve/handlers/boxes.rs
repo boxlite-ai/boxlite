@@ -185,6 +185,46 @@ pub(in crate::commands::serve) async fn stop_box(
     Json(state.box_response(&info).await).into_response()
 }
 
+pub(in crate::commands::serve) async fn pause_box(
+    State(state): State<Arc<AppState>>,
+    Path(box_id): Path<String>,
+) -> Response {
+    let litebox = match get_or_fetch_box(&state, &box_id).await {
+        Ok(b) => b,
+        Err(resp) => return resp,
+    };
+
+    if let Err(e) = litebox.pause().await {
+        return error_from_boxlite(&e);
+    }
+
+    let info = match litebox.info().await {
+        Ok(info) => info,
+        Err(e) => return error_from_boxlite(&e),
+    };
+    Json(state.box_response(&info).await).into_response()
+}
+
+pub(in crate::commands::serve) async fn resume_box(
+    State(state): State<Arc<AppState>>,
+    Path(box_id): Path<String>,
+) -> Response {
+    let litebox = match get_or_fetch_box(&state, &box_id).await {
+        Ok(b) => b,
+        Err(resp) => return resp,
+    };
+
+    if let Err(e) = litebox.resume().await {
+        return error_from_boxlite(&e);
+    }
+
+    let info = match litebox.info().await {
+        Ok(info) => info,
+        Err(e) => return error_from_boxlite(&e),
+    };
+    Json(state.box_response(&info).await).into_response()
+}
+
 pub(in crate::commands::serve) async fn remove_box(
     State(state): State<Arc<AppState>>,
     Path(box_id): Path<String>,

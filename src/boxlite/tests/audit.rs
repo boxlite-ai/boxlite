@@ -49,3 +49,36 @@ fn multiple_listeners_all_receive_events() {
     assert_eq!(l1.events().len(), 1);
     assert_eq!(l2.events().len(), 1);
 }
+
+#[test]
+fn audit_event_listener_records_pause_resume() {
+    let listener = AuditEventListener::new();
+    let id = BoxIDMint::mint();
+
+    listener.on_box_created(&id);
+    listener.on_box_started(&id);
+    listener.on_box_paused(&id);
+    listener.on_box_resumed(&id);
+    listener.on_box_stopped(&id, Some(0));
+
+    let events = listener.events();
+    assert_eq!(events.len(), 5);
+    assert!(matches!(events[0].kind, AuditEventKind::BoxCreated));
+    assert!(matches!(events[1].kind, AuditEventKind::BoxStarted));
+    assert!(matches!(events[2].kind, AuditEventKind::BoxPaused));
+    assert!(matches!(events[3].kind, AuditEventKind::BoxResumed));
+    assert!(matches!(
+        events[4].kind,
+        AuditEventKind::BoxStopped { exit_code: Some(0) }
+    ));
+}
+
+#[test]
+fn pause_resume_via_trait_object() {
+    let listener: Arc<dyn EventListener> = Arc::new(AuditEventListener::new());
+    let id = BoxIDMint::mint();
+
+    // Verify pause/resume work through dyn trait object
+    listener.on_box_paused(&id);
+    listener.on_box_resumed(&id);
+}

@@ -251,6 +251,13 @@ impl BoxWatcher {
     async fn on_health_tick(&mut self) -> std::ops::ControlFlow<()> {
         use std::ops::ControlFlow::{Break, Continue};
 
+        // Skip the ping while paused — a SIGSTOP'd shim can't answer gRPC. A shim
+        // that dies while paused is still caught by the exit arm.
+        if self.state.read().status.is_paused() {
+            tracing::debug!(box_id = %self.box_id, "Box is paused, skipping health probe");
+            return Continue(());
+        }
+
         // `check()` borrows the probe across its await; take the outcome and the
         // config we need by value, then work on the box state with no live borrow.
         let outcome = match self.health.as_mut() {

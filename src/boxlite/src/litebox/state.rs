@@ -105,6 +105,18 @@ impl BoxStatus {
         )
     }
 
+    /// Check if pause() can be called from this state.
+    /// Only Running boxes can be paused.
+    pub fn can_pause(&self) -> bool {
+        matches!(self, BoxStatus::Running)
+    }
+
+    /// Check if resume() can be called from this state.
+    /// Only Paused boxes can be resumed.
+    pub fn can_resume(&self) -> bool {
+        matches!(self, BoxStatus::Paused)
+    }
+
     /// Whether an operation that needs a live VM (`exec`, `attach`, `cp`,
     /// `metrics`) may run from this state, booting the box first if it is not up.
     ///
@@ -1133,5 +1145,91 @@ mod tests {
                 "{name} must leave the box inactive"
             );
         }
+    }
+
+    // ========================================================================
+    // Pause/Resume State Tests
+    // ========================================================================
+
+    #[test]
+    fn test_status_can_pause() {
+        assert!(!BoxStatus::Configured.can_pause());
+        assert!(BoxStatus::Running.can_pause());
+        assert!(!BoxStatus::Stopping.can_pause());
+        assert!(!BoxStatus::Stopped.can_pause());
+        assert!(!BoxStatus::Paused.can_pause());
+        assert!(!BoxStatus::Unknown.can_pause());
+    }
+
+    #[test]
+    fn test_status_can_resume() {
+        assert!(!BoxStatus::Configured.can_resume());
+        assert!(!BoxStatus::Running.can_resume());
+        assert!(!BoxStatus::Stopping.can_resume());
+        assert!(!BoxStatus::Stopped.can_resume());
+        assert!(BoxStatus::Paused.can_resume());
+        assert!(!BoxStatus::Unknown.can_resume());
+    }
+
+    #[test]
+    fn test_pause_resume_cycle() {
+        let mut state = BoxState::new();
+
+        // Configured → Running
+        assert!(state.transition_to(BoxStatus::Running).is_ok());
+        assert_eq!(state.status, BoxStatus::Running);
+
+        // Running → Paused
+        assert!(state.transition_to(BoxStatus::Paused).is_ok());
+        assert_eq!(state.status, BoxStatus::Paused);
+
+        // Paused → Running (resume)
+        assert!(state.transition_to(BoxStatus::Running).is_ok());
+        assert_eq!(state.status, BoxStatus::Running);
+
+        // Running → Paused → Running (second cycle)
+        assert!(state.transition_to(BoxStatus::Paused).is_ok());
+        assert!(state.transition_to(BoxStatus::Running).is_ok());
+        assert_eq!(state.status, BoxStatus::Running);
+    }
+
+    #[test]
+    fn test_paused_to_stopped() {
+        let mut state = BoxState::new();
+        state.force_status(BoxStatus::Paused);
+
+        // Paused → Stopped (stop while paused)
+        assert!(state.transition_to(BoxStatus::Stopped).is_ok());
+        assert_eq!(state.status, BoxStatus::Stopped);
+    }
+
+    #[test]
+    fn test_stopped_cannot_pause() {
+        // Stopped boxes cannot be paused — must start first
+        assert!(!BoxStatus::Stopped.can_transition_to(BoxStatus::Paused));
+    }
+
+    #[test]
+    fn test_configured_cannot_pause() {
+        // Configured boxes cannot be paused — must start first
+        assert!(!BoxStatus::Configured.can_transition_to(BoxStatus::Paused));
+    }
+
+    #[test]
+    fn test_paused_cannot_exec() {
+        // Exec is blocked while paused
+        assert!(!BoxStatus::Paused.can_exec());
+    }
+
+    #[test]
+    fn test_paused_can_stop() {
+        // Stop is allowed from Paused state
+        assert!(BoxStatus::Paused.can_stop());
+    }
+
+    #[test]
+    fn test_paused_cannot_start() {
+        // Start is not allowed from Paused state (use resume instead)
+        assert!(!BoxStatus::Paused.can_start());
     }
 }
