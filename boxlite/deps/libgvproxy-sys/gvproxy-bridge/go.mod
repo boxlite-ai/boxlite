@@ -7,6 +7,7 @@ toolchain go1.24.6
 require (
 	github.com/containers/gvisor-tap-vsock v0.8.7
 	github.com/sirupsen/logrus v1.9.3
+	gvisor.dev/gvisor v0.0.0-20240916094835-a174eb65023f
 )
 
 require (
@@ -29,5 +30,4 @@ require (
 	golang.org/x/sys v0.37.0 // indirect
 	golang.org/x/time v0.12.0 // indirect
 	golang.org/x/tools v0.37.0 // indirect
-	gvisor.dev/gvisor v0.0.0-20240916094835-a174eb65023f // indirect
 )

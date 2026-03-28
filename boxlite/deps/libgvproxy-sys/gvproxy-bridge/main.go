@@ -371,6 +371,16 @@ func gvproxy_create(configJSON *C.char) C.longlong {
 			return
 		}
 
+		// Override TCP handler with AllowNet filter (SNI/Host inspection)
+		if len(config.AllowNet) > 0 {
+			tcpFilter := NewTCPFilter(config.AllowNet, config.GatewayIP, config.GuestIP)
+			if tcpFilter != nil {
+				if err := OverrideTCPHandler(vn, tapConfig, tapConfig.Ec2MetadataAccess, tcpFilter); err != nil {
+					logrus.WithError(err).Error("allowNet TCP: failed to override handler")
+				}
+			}
+		}
+
 		// Store VirtualNetwork reference for stats collection
 		instance.vnMu.Lock()
 		instance.vn = vn

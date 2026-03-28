@@ -211,3 +211,74 @@ async fn empty_allowlist_allows_all() {
 
     litebox.stop().await.unwrap();
 }
+
+#[tokio::test]
+#[ignore = "requires VM runtime (run with make test)"]
+async fn tcp_filter_blocks_direct_ip_connection() {
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .unwrap();
+
+    // Allow only example.com — direct IP connections should be blocked
+    let opts = BoxOptions {
+        network: NetworkSpec::Enabled {
+            allow_net: vec!["example.com".into()],
+        },
+        ..common::alpine_opts()
+    };
+
+    let litebox = runtime.create(opts, None).await.unwrap();
+    litebox.start().await.unwrap();
+
+    // Direct IP connection to Google DNS (8.8.8.8) should be blocked by TCP filter
+    let out = run_stdout(
+        &litebox,
+        "wget",
+        &["-q", "-O-", "--timeout=3", "http://8.8.8.8/"],
+    )
+    .await;
+    assert!(
+        out.is_empty() || out.contains("error") || out.contains("timed out"),
+        "direct IP should be blocked by TCP filter, got: {out}"
+    );
+
+    litebox.stop().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires VM runtime (run with make test)"]
+async fn tcp_filter_sni_allows_https_to_allowed_host() {
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .unwrap();
+
+    let opts = BoxOptions {
+        network: NetworkSpec::Enabled {
+            allow_net: vec!["example.com".into()],
+        },
+        ..common::alpine_opts()
+    };
+
+    let litebox = runtime.create(opts, None).await.unwrap();
+    litebox.start().await.unwrap();
+
+    // HTTPS to allowed host should work (SNI matches allowlist)
+    let out = run_stdout(
+        &litebox,
+        "wget",
+        &["-q", "-O-", "--timeout=5", "https://example.com/"],
+    )
+    .await;
+    assert!(
+        !out.is_empty(),
+        "HTTPS to allowed host should work via SNI match, got empty output"
+    );
+
+    litebox.stop().await.unwrap();
+}
