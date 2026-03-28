@@ -162,8 +162,9 @@ impl BoxStatus {
             (Stopped, Running) |
             (Stopped, Failed) |
             (Stopped, Unknown) |
-            // Paused → Running (SIGCONT resume) or Stopped (killed while paused)
+            // Paused → Running (SIGCONT resume), Stopping (graceful stop), or Stopped (killed while paused)
             (Paused, Running) |
+            (Paused, Stopping) |
             (Paused, Stopped) |
             (Paused, Unknown) |
             // Failed → Running (control-plane retry), Stopped (manual reset), or Unknown (recovery)
@@ -1231,5 +1232,21 @@ mod tests {
     fn test_paused_cannot_start() {
         // Start is not allowed from Paused state (use resume instead)
         assert!(!BoxStatus::Paused.can_start());
+    }
+
+    #[test]
+    fn test_paused_to_stopping() {
+        // Paused → Stopping is valid (graceful stop from paused state)
+        assert!(BoxStatus::Paused.can_transition_to(BoxStatus::Stopping));
+        let mut state = BoxState::new();
+        state.force_status(BoxStatus::Paused);
+        assert!(state.transition_to(BoxStatus::Stopping).is_ok());
+        assert_eq!(state.status, BoxStatus::Stopping);
+    }
+
+    #[test]
+    fn test_paused_cannot_remove() {
+        // Paused boxes cannot be removed (must stop first)
+        assert!(!BoxStatus::Paused.can_remove());
     }
 }
