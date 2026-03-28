@@ -149,6 +149,22 @@ impl JsBox {
         self.handle.stop().await.map_err(map_err)
     }
 
+    /// Pause the box (freeze VM, zero CPU, state preserved).
+    ///
+    /// Idempotent: calling pause() on a Paused box is a no-op.
+    #[napi]
+    pub async fn pause(&self) -> Result<()> {
+        self.handle.pause().await.map_err(map_err)
+    }
+
+    /// Resume the box from paused state.
+    ///
+    /// Idempotent: calling resume() on a Running box is a no-op.
+    #[napi]
+    pub async fn resume(&self) -> Result<()> {
+        self.handle.resume().await.map_err(map_err)
+    }
+
     /// Get box metrics.
     #[napi]
     pub async fn metrics(&self) -> Result<JsBoxMetrics> {

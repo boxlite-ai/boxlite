@@ -362,6 +362,16 @@ impl BoxImpl {
         // Phase 1: Freeze guest I/O (best-effort, 5s timeout)
         let frozen = self.guest_quiesce().await;
 
+        // Re-check shutdown token after async quiesce — stop() may have raced.
+        if self.shutdown_token.is_cancelled() {
+            if frozen {
+                self.guest_thaw().await;
+            }
+            return Err(BoxliteError::Stopped(
+                "Handle invalidated after stop(). Use runtime.get() to get a new handle.".into(),
+            ));
+        }
+
         // Phase 2: SIGSTOP — pause vCPUs
         // SAFETY: sending SIGSTOP to a known valid PID that we own (shim process).
         let ret = unsafe { libc::kill(pid, libc::SIGSTOP) };
@@ -379,8 +389,13 @@ impl BoxImpl {
         // Update state
         {
             let mut state = self.state.write();
-            state.force_status(BoxStatus::Paused);
-            let _ = self.runtime.box_manager.save_box(self.id(), &state);
+            if let Err(e) = state.transition_to(BoxStatus::Paused) {
+                tracing::warn!(box_id = %self.config.id, error = %e, "State transition to Paused failed (race?)");
+                state.force_status(BoxStatus::Paused);
+            }
+            if let Err(e) = self.runtime.box_manager.save_box(self.id(), &state) {
+                tracing::warn!(box_id = %self.config.id, error = %e, "Failed to persist Paused state");
+            }
         }
 
         for listener in &self.event_listeners {
@@ -454,8 +469,13 @@ impl BoxImpl {
         // Update state
         {
             let mut state = self.state.write();
-            state.force_status(BoxStatus::Running);
-            let _ = self.runtime.box_manager.save_box(self.id(), &state);
+            if let Err(e) = state.transition_to(BoxStatus::Running) {
+                tracing::warn!(box_id = %self.config.id, error = %e, "State transition to Running failed (race?)");
+                state.force_status(BoxStatus::Running);
+            }
+            if let Err(e) = self.runtime.box_manager.save_box(self.id(), &state) {
+                tracing::warn!(box_id = %self.config.id, error = %e, "Failed to persist Running state");
+            }
         }
 
         // Phase 2: Thaw guest I/O (best-effort)
@@ -955,9 +975,12 @@ impl BoxImpl {
 
                 // Skip gRPC ping if box is paused — shim can't respond while SIGSTOP'd.
                 // But verify the process is still alive to detect death during pause.
-                if state.read().status.is_paused() {
-                    let pid = state.read().pid;
-                    if let Some(pid) = pid
+                let (is_paused, paused_pid) = {
+                    let s = state.read();
+                    (s.status.is_paused(), s.pid)
+                };
+                if is_paused {
+                    if let Some(pid) = paused_pid
                         && !crate::util::is_process_alive(pid)
                     {
                         tracing::error!(
