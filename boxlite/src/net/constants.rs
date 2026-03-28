@@ -13,6 +13,12 @@ pub const GATEWAY_IP: &str = "192.168.127.1";
 /// Guest IP address (assigned via DHCP static lease)
 pub const GUEST_IP: &str = "192.168.127.2";
 
+/// Guest IP with subnet prefix (for static IP assignment in guest)
+pub const GUEST_CIDR: &str = "192.168.127.2/24";
+
+/// Guest network interface name (created by virtio-net)
+pub const GUEST_INTERFACE: &str = "eth0";
+
 /// Gateway MAC address
 ///
 /// This MAC is used by gvproxy's virtual network interface.

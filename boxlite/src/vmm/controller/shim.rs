@@ -291,6 +291,7 @@ impl VmmController for ShimController {
             guest_rootfs: config.guest_rootfs.clone(),
             network_config: config.network_config.clone(), // Pass port mappings to subprocess (shim creates gvproxy)
             network_backend_endpoint: None, // Will be populated by shim (not serialized)
+            disable_network: config.disable_network,
             home_dir: config.home_dir.clone(),
             console_output: config.console_output.clone(),
             exit_file: config.exit_file.clone(),

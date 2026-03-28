@@ -293,6 +293,19 @@ impl Vmm for Krun {
                         tracing::debug!("Successfully configured Unix socket net");
                     }
                 }
+            } else if config.disable_network {
+                // Dead socket trick: add a non-functional network interface to prevent
+                // libkrun's TSI from auto-enabling. TSI checks net.list.is_empty().
+                use std::os::unix::io::AsRawFd;
+                let (ours, _theirs) = std::os::unix::net::UnixStream::pair().map_err(|e| {
+                    BoxliteError::Network(format!("failed to create dead socket pair: {e}"))
+                })?;
+                drop(_theirs);
+                // SAFETY: ours is a valid open fd from UnixStream::pair()
+                ctx.add_net_fd(ours.as_raw_fd(), 0, [0u8; 6])?;
+                // Keep `ours` alive until krun_start_enter takes over the process
+                std::mem::forget(ours);
+                tracing::info!("Network disabled: added dead interface to prevent TSI");
             } else {
                 // No network connection specified - use libkrun's built-in TSI net
                 tracing::debug!("No network backend - using libkrun's built-in TSI net");

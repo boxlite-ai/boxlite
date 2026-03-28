@@ -72,8 +72,9 @@ func buildAllowNetDNSZones(allowNet []string) []types.Zone {
 	var zones []types.Zone
 	for zoneName, records := range zoneRecords {
 		zones = append(zones, types.Zone{
-			Name:    zoneName,
-			Records: records,
+			Name:      zoneName,
+			Records:   records,
+			DefaultIP: net.IPv4(0, 0, 0, 0), // Sinkhole non-allowed hosts in this TLD
 		})
 		logrus.WithFields(logrus.Fields{
 			"zone":    zoneName,

@@ -4,7 +4,9 @@ Network Allowlist Example — DNS Sinkhole Filtering
 
 Demonstrates NetworkSpec for controlling outbound network access:
   1. Default (Enabled, empty allow_net): full internet access
-  2. Disabled: no network interface at all
+  2. Allowlist: only allowed hosts resolve; others sinkholed to 0.0.0.0
+  3. Disabled: no network interface at all
+  4. Explicitly enabled: same as default
 
 Usage:
     make dev:python && python examples/python/02_features/network_allowlist.py
@@ -36,46 +38,60 @@ async def test_default_full_access():
     print("  PASS")
 
 
+async def test_allowlist_filtering():
+    """Test 2: Allowlist = only listed hosts resolve, others sinkholed."""
+    print("\n--- Test 2: Allowlist (allow_net=[example.com]) ---")
+
+    async with boxlite.SimpleBox(
+        image="alpine:latest", allow_net=["example.com"]
+    ) as sandbox:
+        # Allowed host should resolve to real IP
+        result = await sandbox.exec("nslookup", "example.com")
+        print(f"  nslookup example.com: exit={result.exit_code}")
+        assert result.exit_code == 0, f"allowed host should resolve, got exit={result.exit_code}"
+        assert "0.0.0.0" not in result.stdout, "allowed host should NOT be sinkholed"
+        print("  result: resolved to real IP (allowed)")
+
+        # Non-allowed host should be sinkholed to 0.0.0.0
+        result = await sandbox.exec("nslookup", "github.com")
+        print(f"  nslookup github.com: exit={result.exit_code}")
+        print(f"  stdout: {result.stdout.strip()[:200]}")
+        # Sinkholed hosts resolve to 0.0.0.0
+        assert "0.0.0.0" in result.stdout, f"non-allowed host should be sinkholed to 0.0.0.0"
+        print("  result: sinkholed to 0.0.0.0 (blocked)")
+
+    print("  PASS")
+
+
 async def test_disabled_no_network():
-    """Test 2: Disabled = no network at all."""
-    print("\n--- Test 2: Disabled (no network) ---")
+    """Test 3: Disabled = no network at all."""
+    print("\n--- Test 3: Disabled (no network) ---")
 
-    try:
-        async with boxlite.SimpleBox(image="alpine:latest", network="disabled") as sandbox:
-            # If we get here, guest started without network — test non-network ops
-            print("  box started without network")
+    async with boxlite.SimpleBox(image="alpine:latest", network="disabled") as sandbox:
+        print("  box started without network")
 
-            # Basic command should still work (no network needed)
-            result = await sandbox.exec("echo", "hello from no-network box")
-            print(f"  echo: exit={result.exit_code}, stdout={result.stdout.strip()}")
-            assert result.exit_code == 0, "echo should work without network"
-            assert "hello" in result.stdout
+        # Basic command should still work (no network needed)
+        result = await sandbox.exec("echo", "hello from no-network box")
+        print(f"  echo: exit={result.exit_code}, stdout={result.stdout.strip()}")
+        assert result.exit_code == 0, "echo should work without network"
+        assert "hello" in result.stdout
 
-            # File operations should work
-            result = await sandbox.exec("ls", "/")
-            print(f"  ls /: exit={result.exit_code}")
-            assert result.exit_code == 0, "ls should work without network"
+        # File operations should work
+        result = await sandbox.exec("ls", "/")
+        print(f"  ls /: exit={result.exit_code}")
+        assert result.exit_code == 0, "ls should work without network"
 
-            # DNS should fail (no network)
-            result = await sandbox.exec("nslookup", "example.com")
-            print(f"  nslookup: exit={result.exit_code} (expected failure)")
+        # DNS should fail (no network interface)
+        result = await sandbox.exec("nslookup", "example.com")
+        print(f"  nslookup: exit={result.exit_code} (expected failure)")
+        assert result.exit_code != 0, "nslookup should fail without network"
 
-            print("  PASS: non-network operations work without network")
-
-    except RuntimeError as e:
-        # Guest agent currently fails if eth0 doesn't exist.
-        # This is a known limitation — guest needs update to skip network setup.
-        if "eth0" in str(e) or "No such device" in str(e):
-            print(f"  KNOWN ISSUE: guest agent fails without eth0")
-            print(f"  Error: {str(e)[:100]}...")
-            print("  TODO: guest agent should skip network setup when interface missing")
-        else:
-            raise
+    print("  PASS")
 
 
 async def test_enabled_explicit():
-    """Test 3: Explicitly enabled."""
-    print("\n--- Test 3: Explicitly enabled ---")
+    """Test 4: Explicitly enabled."""
+    print("\n--- Test 4: Explicitly enabled ---")
 
     async with boxlite.SimpleBox(image="alpine:latest", network="enabled") as sandbox:
         result = await sandbox.exec("nslookup", "example.com")
@@ -97,14 +113,12 @@ async def main():
     print("  Disabled                        -> no network at all")
 
     await test_default_full_access()
+    await test_allowlist_filtering()
     await test_disabled_no_network()
     await test_enabled_explicit()
 
     print("\n" + "=" * 60)
     print("All tests passed!")
-    print()
-    print("DNS sinkhole allow_net filtering verified by:")
-    print("  cargo test -p boxlite --test network_spec -- --include-ignored")
     print("=" * 60)
 
 

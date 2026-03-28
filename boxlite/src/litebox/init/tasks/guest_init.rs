@@ -5,9 +5,11 @@
 
 use super::{InitCtx, log_task_error, task_start};
 use crate::images::ContainerImageConfig;
+use crate::net::constants::{GATEWAY_IP, GUEST_CIDR, GUEST_INTERFACE};
 use crate::pipeline::PipelineTask;
 use crate::portal::GuestSession;
 use crate::portal::interfaces::{ContainerRootfsInitConfig, GuestInitConfig, NetworkInitConfig};
+use crate::runtime::options::NetworkSpec;
 use crate::runtime::types::ContainerID;
 use crate::volumes::{ContainerMount, GuestVolumeManager};
 use async_trait::async_trait;
@@ -28,6 +30,7 @@ impl PipelineTask<InitCtx> for GuestInitTask {
             volume_mgr,
             rootfs_init,
             container_mounts,
+            network_spec,
         ) =
             {
                 let mut ctx = ctx.lock().await;
@@ -48,6 +51,7 @@ impl PipelineTask<InitCtx> for GuestInitTask {
                 let container_mounts = ctx.container_mounts.take().ok_or_else(|| {
                     BoxliteError::Internal("vmm_spawn task must run first".into())
                 })?;
+                let network_spec = ctx.config.options.network.clone();
                 (
                     guest_session,
                     container_image_config,
@@ -55,6 +59,7 @@ impl PipelineTask<InitCtx> for GuestInitTask {
                     volume_mgr,
                     rootfs_init,
                     container_mounts,
+                    network_spec,
                 )
             };
 
@@ -65,6 +70,7 @@ impl PipelineTask<InitCtx> for GuestInitTask {
             &volume_mgr,
             &rootfs_init,
             &container_mounts,
+            &network_spec,
         )
         .await
         .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
@@ -91,19 +97,25 @@ async fn run_guest_init(
     volume_mgr: &GuestVolumeManager,
     rootfs_init: &ContainerRootfsInitConfig,
     container_mounts: &[ContainerMount],
+    network_spec: &NetworkSpec,
 ) -> BoxliteResult<()> {
     let container_id_str = container_id.as_str();
 
     // Build guest volumes from volume manager
     let guest_volumes = volume_mgr.build_guest_mounts();
 
+    let network = match network_spec {
+        NetworkSpec::Enabled { .. } => Some(NetworkInitConfig {
+            interface: GUEST_INTERFACE.to_string(),
+            ip: Some(GUEST_CIDR.to_string()),
+            gateway: Some(GATEWAY_IP.to_string()),
+        }),
+        NetworkSpec::Disabled => None,
+    };
+
     let guest_init_config = GuestInitConfig {
         volumes: guest_volumes,
-        network: Some(NetworkInitConfig {
-            interface: "eth0".to_string(),
-            ip: Some("192.168.127.2/24".to_string()),
-            gateway: Some("192.168.127.1".to_string()),
-        }),
+        network,
     };
 
     // Step 1: Guest Init (volumes + network)

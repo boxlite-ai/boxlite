@@ -218,6 +218,10 @@ async fn build_config(
         guest_rootfs,
         network_config,
         network_backend_endpoint: None,
+        disable_network: matches!(
+            options.network,
+            crate::runtime::options::NetworkSpec::Disabled
+        ),
         home_dir: runtime.layout.home_dir().to_path_buf(),
         // Diagnostic files in box_dir (preserved on crash)
         console_output: Some(layout.console_output_path()),

@@ -26,6 +26,23 @@ func TestBuildAllowNetDNSZones(t *testing.T) {
 	}
 }
 
+func TestBuildAllowNetDNSZones_PerTLDZonesHaveSinkholeDefaultIP(t *testing.T) {
+	zones := buildAllowNetDNSZones([]string{"example.com"})
+
+	// Should have 2 zones: "com." (per-TLD) + "" (root catch-all)
+	if len(zones) != 2 {
+		t.Fatalf("expected 2 zones, got %d", len(zones))
+	}
+
+	// Per-TLD zone must have DefaultIP 0.0.0.0 so non-allowed hosts
+	// in the same TLD get sinkholed (not NXDOMAIN which triggers DNS fallback)
+	for _, zone := range zones {
+		if !zone.DefaultIP.Equal(net.IPv4(0, 0, 0, 0)) {
+			t.Errorf("zone %q should have DefaultIP 0.0.0.0, got %v", zone.Name, zone.DefaultIP)
+		}
+	}
+}
+
 func TestBuildAllowNetDNSZones_EmptyList(t *testing.T) {
 	zones := buildAllowNetDNSZones([]string{})
 

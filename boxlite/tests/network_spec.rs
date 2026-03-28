@@ -78,6 +78,37 @@ async fn disabled_network_returns_no_network_config() {
     assert!(!litebox.id().as_str().is_empty());
 }
 
+#[tokio::test]
+#[ignore = "requires VM runtime (run with make test)"]
+async fn disabled_network_runs_without_eth0() {
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .unwrap();
+
+    let opts = BoxOptions {
+        network: NetworkSpec::Disabled,
+        ..common::alpine_opts()
+    };
+
+    let litebox = runtime.create(opts, None).await.unwrap();
+    litebox.start().await.unwrap();
+
+    // Non-network commands should work fine
+    let out = run_stdout(&litebox, "echo", &["hello-no-network"]).await;
+    assert!(
+        out.contains("hello-no-network"),
+        "echo should work without network, got: {out}"
+    );
+
+    let out = run_stdout(&litebox, "ls", &["/"]).await;
+    assert!(!out.is_empty(), "ls should work without network");
+
+    litebox.stop().await.unwrap();
+}
+
 /// Helper: run a command and collect stdout.
 async fn run_stdout(litebox: &boxlite::LiteBox, cmd: &str, args: &[&str]) -> String {
     let mut ex = litebox

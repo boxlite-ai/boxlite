@@ -130,6 +130,8 @@ pub(crate) struct PyBoxOptions {
     pub(crate) volumes: Vec<PyVolumeSpec>,
     #[pyo3(get, set)]
     pub(crate) network: Option<String>,
+    #[pyo3(get, set)]
+    pub(crate) allow_net: Vec<String>,
     pub(crate) ports: Vec<PyPortSpec>,
     #[pyo3(get, set)]
     pub(crate) auto_remove: Option<bool>,
@@ -167,6 +169,7 @@ impl PyBoxOptions {
         env=vec![],
         volumes=vec![],
         network=None,
+        allow_net=vec![],
         ports=vec![],
         auto_remove=None,
         detach=None,
@@ -186,6 +189,7 @@ impl PyBoxOptions {
         env: Vec<(String, String)>,
         volumes: Vec<PyVolumeSpec>,
         network: Option<String>,
+        allow_net: Vec<String>,
         ports: Vec<PyPortSpec>,
         auto_remove: Option<bool>,
         detach: Option<bool>,
@@ -204,6 +208,7 @@ impl PyBoxOptions {
             env,
             volumes,
             network,
+            allow_net,
             ports,
             auto_remove,
             detach,
@@ -232,7 +237,9 @@ impl From<PyBoxOptions> for BoxOptions {
 
         let network = match py_opts.network {
             Some(ref s) if s.eq_ignore_ascii_case("disabled") => NetworkSpec::Disabled,
-            _ => NetworkSpec::default(),
+            _ => NetworkSpec::Enabled {
+                allow_net: py_opts.allow_net,
+            },
         };
 
         let ports = py_opts.ports.into_iter().map(PortSpec::from).collect();

@@ -415,6 +415,33 @@ impl KrunContext {
         }
     }
 
+    /// Add a network interface using a raw file descriptor.
+    ///
+    /// Used by the dead socket trick to prevent TSI auto-enable:
+    /// pass a half-closed UnixStream fd so `net.list` is non-empty
+    /// but the interface can't actually communicate.
+    ///
+    /// # Safety
+    /// `fd` must be a valid open file descriptor.
+    pub unsafe fn add_net_fd(
+        &self,
+        fd: i32,
+        features: u32,
+        mac_address: [u8; 6],
+    ) -> BoxliteResult<()> {
+        tracing::debug!(fd, "Adding dead network interface via fd");
+        check_status("krun_add_net_unixstream", unsafe {
+            krun_add_net_unixstream(
+                self.ctx_id,
+                std::ptr::null(), // c_path: null (use fd instead)
+                fd,               // fd: valid fd from UnixStream::pair()
+                mac_address.as_ptr(),
+                features,
+                0,
+            )
+        })
+    }
+
     /// Add a virtiofs mount, sharing a host directory with the guest.
     ///
     /// # Arguments
