@@ -109,18 +109,6 @@ impl Container {
             }
         }
 
-        // Inject SSL trust env vars if MITM CA cert was installed in the guest.
-        // The CA cert is written to the guest root filesystem by ca_trust::install_ca_from_env().
-        // Since containers share the guest's /etc/ssl/certs via rootfs, they also trust the CA.
-        // We check for SSL_CERT_FILE in the guest agent's env (set by install_ca_from_env).
-        if std::env::var("SSL_CERT_FILE").is_ok() {
-            for (key, value) in crate::ca_trust::SSL_TRUST_VARS {
-                env_map
-                    .entry(key.to_string())
-                    .or_insert_with(|| value.to_string());
-            }
-        }
-
         // State at /run/boxlite/containers/{cid}/state/
         let state_root = layout.container_state_dir(container_id);
 

@@ -105,7 +105,7 @@ func (ca *BoxCA) GenerateHostCert(hostname string) (*tls.Certificate, error) {
 	template := &x509.Certificate{
 		SerialNumber:          serial,
 		NotBefore:             now.Add(-1 * time.Minute),
-		NotAfter:              now.Add(1 * time.Hour),
+		NotAfter:              now.Add(24 * time.Hour),
 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
@@ -186,6 +186,13 @@ func NewSecretHostMatcher(secrets []SecretConfig) *SecretHostMatcher {
 	return m
 }
 
+// matchesWildcard checks if hostname matches a wildcard suffix (e.g., ".foo.com").
+// Only single-level subdomains match: "bar.foo.com" matches but "sub.bar.foo.com" doesn't.
+func matchesWildcard(hostname, suffix string) bool {
+	return strings.HasSuffix(hostname, suffix) &&
+		!strings.Contains(hostname[:len(hostname)-len(suffix)], ".")
+}
+
 // Matches returns true if hostname has associated secrets.
 func (m *SecretHostMatcher) Matches(hostname string) bool {
 	h := strings.ToLower(hostname)
@@ -193,8 +200,7 @@ func (m *SecretHostMatcher) Matches(hostname string) bool {
 		return true
 	}
 	for _, suffix := range m.wildcardSuffixes {
-		// Wildcard *.foo.com matches "bar.foo.com" but not "sub.bar.foo.com"
-		if strings.HasSuffix(h, suffix) && !strings.Contains(h[:len(h)-len(suffix)], ".") {
+		if matchesWildcard(h, suffix) {
 			return true
 		}
 	}
@@ -212,12 +218,9 @@ func (m *SecretHostMatcher) SecretsForHost(hostname string) []SecretConfig {
 				result = append(result, s)
 				break
 			}
-			if strings.HasPrefix(host, "*.") {
-				suffix := host[1:]
-				if strings.HasSuffix(h, suffix) && !strings.Contains(h[:len(h)-len(suffix)], ".") {
-					result = append(result, s)
-					break
-				}
+			if strings.HasPrefix(host, "*.") && matchesWildcard(h, host[1:]) {
+				result = append(result, s)
+				break
 			}
 		}
 	}
