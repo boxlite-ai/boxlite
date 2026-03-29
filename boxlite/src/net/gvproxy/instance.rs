@@ -56,6 +56,8 @@ use super::stats::NetworkStats;
 pub struct GvproxyInstance {
     id: i64,
     socket_path: PathBuf,
+    /// CA cert PEM generated in Rust (stored for rootfs injection, no FFI needed).
+    ca_cert_pem: Option<String>,
 }
 
 impl GvproxyInstance {
@@ -76,15 +78,31 @@ impl GvproxyInstance {
         // Initialize logging callback (one-time setup)
         logging::init_logging();
 
-        let config = super::config::GvproxyConfig::new(socket_path.clone(), port_mappings.to_vec())
-            .with_allow_net(allow_net)
-            .with_secrets(secrets);
+        let mut config =
+            super::config::GvproxyConfig::new(socket_path.clone(), port_mappings.to_vec())
+                .with_allow_net(allow_net)
+                .with_secrets(secrets.clone());
+
+        // Generate MITM CA in Rust when secrets are configured.
+        // The cert+key PEM are passed to Go via JSON config.
+        let ca_cert_pem = if !secrets.is_empty() {
+            let ca = super::ca::generate()?;
+            config = config.with_ca(ca.cert_pem.clone(), ca.key_pem);
+            tracing::info!("MITM: generated ephemeral CA");
+            Some(ca.cert_pem)
+        } else {
+            None
+        };
 
         let id = ffi::create_instance(&config)?;
 
         tracing::info!(id, ?socket_path, "Created GvproxyInstance");
 
-        Ok(Self { id, socket_path })
+        Ok(Self {
+            id,
+            socket_path,
+            ca_cert_pem,
+        })
     }
 
     /// Unix socket path for the network tap interface.
@@ -96,10 +114,10 @@ impl GvproxyInstance {
 
     /// Get the MITM CA certificate PEM for this instance.
     ///
-    /// Returns the ephemeral CA cert generated for TLS MITM secret substitution.
-    /// Returns `None` if no secrets were configured.
-    pub fn ca_cert_pem(&self) -> Option<Vec<u8>> {
-        super::ffi::get_ca_cert(self.id)
+    /// Returns the ephemeral CA cert generated in Rust for TLS MITM secret substitution.
+    /// Returns `None` if no secrets were configured. No FFI call needed.
+    pub fn ca_cert_pem(&self) -> Option<&str> {
+        self.ca_cert_pem.as_deref()
     }
 
     /// Get network statistics from this gvproxy instance

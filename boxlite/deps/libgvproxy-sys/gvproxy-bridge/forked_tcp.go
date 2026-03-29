@@ -70,15 +70,22 @@ func TCPWithFilter(s *stack.Stack, nat map[tcpip.Address]tcpip.Address,
 			return
 		}
 
+		// Port 443 with secrets: MUST inspect SNI even if IP matches allowlist,
+		// because we need to know the hostname to decide MITM vs passthrough.
+		// The IP match alone can't tell us if it's a secret host.
+		if secretMatcher != nil && destPort == 443 {
+			inspectAndForward(r, destAddr, destPort, filter, ca, secretMatcher)
+			return
+		}
+
 		// IP/CIDR match: standard upstream flow (allowed)
 		if filter.MatchesIP(destIP) {
 			standardForward(r, destAddr)
 			return
 		}
 
-		// Port 443/80 with hostname rules or secrets: inspect SNI/Host
-		if (filter.HasHostnameRules() && (destPort == 443 || destPort == 80)) ||
-			(secretMatcher != nil && destPort == 443) {
+		// Port 443/80 with hostname rules: inspect SNI/Host
+		if filter.HasHostnameRules() && (destPort == 443 || destPort == 80) {
 			inspectAndForward(r, destAddr, destPort, filter, ca, secretMatcher)
 			return
 		}

@@ -198,7 +198,7 @@ fn run_shim(args: ShimArgs, mut config: InstanceSpec, timing: impl Fn(&str)) -> 
         // The guest init script decodes and installs it into the trust store.
         if let Some(ca_pem) = gvproxy.ca_cert_pem() {
             use base64::Engine as _;
-            let b64 = base64::engine::general_purpose::STANDARD.encode(&ca_pem);
+            let b64 = base64::engine::general_purpose::STANDARD.encode(ca_pem.as_bytes());
             config
                 .guest_entrypoint
                 .env

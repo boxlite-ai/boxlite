@@ -50,11 +50,8 @@ fn build_gvproxy(source_dir: &Path, output_path: &Path) {
 }
 
 fn main() {
-    // Rebuild if Go sources change
-    println!("cargo:rerun-if-changed=gvproxy-bridge/main.go");
-    println!("cargo:rerun-if-changed=gvproxy-bridge/stats.go");
-    println!("cargo:rerun-if-changed=gvproxy-bridge/dns_filter.go");
-    println!("cargo:rerun-if-changed=gvproxy-bridge/go.mod");
+    // Rebuild if any Go source in gvproxy-bridge changes
+    println!("cargo:rerun-if-changed=gvproxy-bridge");
     println!("cargo:rerun-if-env-changed=BOXLITE_DEPS_STUB");
 
     // Auto-detect crates.io download: Cargo injects .cargo_vcs_info.json into

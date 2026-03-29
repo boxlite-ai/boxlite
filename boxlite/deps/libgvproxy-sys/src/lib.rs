@@ -83,19 +83,6 @@ extern "C" {
     /// Pass NULL to restore default stderr logging.
     pub fn gvproxy_set_log_callback(callback: *const c_void);
 
-    /// Get the MITM CA certificate PEM for a gvproxy instance.
-    ///
-    /// Returns the ephemeral CA certificate used for TLS MITM secret substitution.
-    /// The CA is created when the instance has secrets configured.
-    ///
-    /// # Arguments
-    /// * `id` - Instance ID returned from gvproxy_create
-    ///
-    /// # Returns
-    /// Pointer to PEM string (must be freed with gvproxy_free_string), or NULL if:
-    /// - Instance doesn't exist
-    /// - No secrets configured (no CA was created)
-    pub fn gvproxy_get_ca_cert(id: c_longlong) -> *mut c_char;
 }
 
 #[cfg(test)]

@@ -9,8 +9,7 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use super::config::GvproxyConfig;
 use libgvproxy_sys::{
-    gvproxy_create, gvproxy_destroy, gvproxy_free_string, gvproxy_get_ca_cert, gvproxy_get_stats,
-    gvproxy_get_version,
+    gvproxy_create, gvproxy_destroy, gvproxy_free_string, gvproxy_get_stats, gvproxy_get_version,
 };
 
 /// Create a new gvproxy instance with full configuration
@@ -112,25 +111,6 @@ pub fn get_stats_json(id: i64) -> BoxliteResult<String> {
     unsafe { gvproxy_free_string(c_str) };
 
     Ok(json_str)
-}
-
-/// Get the MITM CA certificate PEM for a gvproxy instance.
-///
-/// Returns the ephemeral CA certificate generated when secrets are configured.
-/// Returns `None` if the instance has no secrets or doesn't exist.
-pub fn get_ca_cert(id: i64) -> Option<Vec<u8>> {
-    let c_str = unsafe { gvproxy_get_ca_cert(id) };
-
-    if c_str.is_null() {
-        return None;
-    }
-
-    let pem = unsafe { CStr::from_ptr(c_str) }.to_bytes().to_vec();
-
-    // Free the string returned by CGO
-    unsafe { gvproxy_free_string(c_str) };
-
-    Some(pem)
 }
 
 #[cfg(test)]

@@ -70,6 +70,7 @@
 //! # Ok::<(), boxlite_shared::errors::BoxliteError>(())
 //! ```
 
+pub(crate) mod ca;
 mod config;
 mod ffi;
 mod instance;
