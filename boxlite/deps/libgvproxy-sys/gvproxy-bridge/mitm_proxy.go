@@ -9,11 +9,13 @@ import (
 	"net/http/httputil"
 	"sync"
 
+	logrus "github.com/sirupsen/logrus"
 	"golang.org/x/net/http2"
 )
 
 // mitmAndForward handles a MITM'd connection: TLS termination, reverse proxy, secret substitution.
 func mitmAndForward(guestConn net.Conn, hostname string, destAddr string, ca *BoxCA, secrets []SecretConfig) {
+	logrus.WithFields(logrus.Fields{"hostname": hostname, "destAddr": destAddr, "secrets": len(secrets)}).Info("MITM: mitmAndForward called")
 	cert, err := ca.GenerateHostCert(hostname)
 	if err != nil {
 		log.Printf("mitm: failed to generate cert for %s: %v", hostname, err)
@@ -30,13 +32,22 @@ func mitmAndForward(guestConn net.Conn, hostname string, destAddr string, ca *Bo
 
 	tlsGuest := tls.Server(guestConn, tlsConfig)
 
-	// Transport for connecting to the real upstream
+	// Transport for connecting to the real upstream.
+	// Use hostname for both dial and TLS (not the raw dest IP) so the connection
+	// goes through system DNS and proxy if configured. This is correct because
+	// the MITM proxy acts as a forward proxy — it should connect to the upstream
+	// the same way any host process would.
+	log.Printf("[MITM] upstream: hostname=%s destAddr=%s", hostname, destAddr)
 	upstreamTransport := &http.Transport{
+		ForceAttemptHTTP2: true,
 		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: true, // upstream may use test certs
+			ServerName:         hostname,
+			InsecureSkipVerify: true,
 		},
+		// Route to the original dest IP from the gVisor stack.
+		// This is the same approach as standardForward (net.Dial to destAddr).
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			return net.Dial("tcp", destAddr)
+			return (&net.Dialer{}).DialContext(ctx, network, destAddr)
 		},
 	}
 
@@ -52,7 +63,7 @@ func mitmAndForward(guestConn net.Conn, hostname string, destAddr string, ca *Bo
 		},
 		FlushInterval: -1, // stream immediately
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-			log.Printf("mitm proxy error: %v", err)
+			log.Printf("ERROR hostname=%s path=%s destAddr=%s err=%v", hostname, r.URL.Path, destAddr, err)
 			w.WriteHeader(http.StatusBadGateway)
 		},
 	}

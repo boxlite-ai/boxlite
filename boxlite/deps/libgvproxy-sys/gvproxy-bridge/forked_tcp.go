@@ -60,6 +60,9 @@ func TCPWithFilter(s *stack.Stack, nat map[tcpip.Address]tcpip.Address,
 		destPort := r.ID().LocalPort
 		destAddr := fmt.Sprintf("%s:%d", localAddress, destPort)
 
+		logrus.Infof("TCPWithFilter: destIP=%s destPort=%d destAddr=%s filter=%v secretMatcher=%v",
+			destIP, destPort, destAddr, filter != nil, secretMatcher != nil)
+
 		// Secrets-only mode (no allowlist filter): MITM secret hosts, allow everything else
 		if filter == nil {
 			if secretMatcher != nil && destPort == 443 {
@@ -149,6 +152,10 @@ func inspectAndForward(r *tcp.ForwarderRequest, destAddr string, destPort uint16
 	} else {
 		hostname = peekHTTPHost(br)
 	}
+
+	// Debug: log routing decision
+	logrus.Infof("inspectAndForward: hostname=%q destAddr=%s destPort=%d filter=%v secretMatcher=%v",
+		hostname, destAddr, destPort, filter != nil, secretMatcher != nil)
 
 	// Step 3: Check for MITM secret substitution (HTTPS only, takes priority over allowlist)
 	if destPort == 443 && secretMatcher != nil && hostname != "" && secretMatcher.Matches(hostname) {
