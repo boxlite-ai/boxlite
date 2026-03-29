@@ -19,6 +19,13 @@ import pytest
 
 import boxlite
 
+# Skip entire module if Secret class is not available (e.g., cached wheel from prior version)
+if not hasattr(boxlite, "Secret"):
+    pytest.skip(
+        "boxlite.Secret not available (rebuild SDK with: make dev:python)",
+        allow_module_level=True,
+    )
+
 # =============================================================================
 # Unit tests (no VM required)
 # =============================================================================
