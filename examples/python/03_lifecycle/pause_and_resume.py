@@ -20,45 +20,54 @@ async def basic_pause_resume():
     print("\n=== Basic Pause/Resume ===")
 
     runtime = boxlite.Boxlite.default()
+    box = None
 
-    box = await runtime.create(boxlite.BoxOptions(
-        image="alpine:latest",
-        auto_remove=False,
-    ))
-    print(f"Created box: {box.id}")
+    try:
+        box = await runtime.create(boxlite.BoxOptions(
+            image="alpine:latest",
+            auto_remove=False,
+        ))
+        box_id = box.id
+        print(f"Created box: {box_id}")
 
-    # Run a command to verify box is working
-    execution = await box.exec("echo", ["Box is running"])
-    stdout = execution.stdout()
-    async for line in stdout:
-        print(f"  {line.strip()}")
-    await execution.wait()
+        # Run a command to verify box is working
+        execution = await box.exec("echo", ["Box is running"])
+        stdout = execution.stdout()
+        async for line in stdout:
+            print(f"  {line.strip()}")
+        await execution.wait()
 
-    info = box.info()
-    print(f"State: {info.state}")
+        info = box.info()
+        print(f"State: {info.state.status}")
 
-    # Pause — VM frozen, zero CPU usage
-    print("\nPausing box...")
-    await box.pause()
-    info = box.info()
-    print(f"State after pause: {info.state}")
+        # Pause — VM frozen, zero CPU usage
+        print("\nPausing box...")
+        await box.pause()
+        info = box.info()
+        print(f"State after pause: {info.state.status}")
 
-    # Resume — VM continues from exact point
-    print("\nResuming box...")
-    await box.resume()
-    info = box.info()
-    print(f"State after resume: {info.state}")
+        # Resume — VM continues from exact point
+        print("\nResuming box...")
+        await box.resume()
+        info = box.info()
+        print(f"State after resume: {info.state.status}")
 
-    # Verify box still works
-    execution = await box.exec("echo", ["Still alive after pause/resume!"])
-    stdout = execution.stdout()
-    async for line in stdout:
-        print(f"  {line.strip()}")
-    await execution.wait()
+        # Verify box still works
+        execution = await box.exec("echo", ["Still alive after pause/resume!"])
+        stdout = execution.stdout()
+        async for line in stdout:
+            print(f"  {line.strip()}")
+        await execution.wait()
 
-    await box.stop()
-    await runtime.remove(box.id, force=False)
-    print("\nBox stopped and removed")
+        await box.stop()
+        await runtime.remove(box_id, force=False)
+        print("\nBox stopped and removed")
+
+    except Exception as e:
+        print(f"\nError: {e}")
+        if box is not None:
+            await box.stop()
+            await runtime.remove(box.id, force=True)
 
 
 async def exec_blocked_while_paused():
@@ -66,39 +75,48 @@ async def exec_blocked_while_paused():
     print("\n\n=== Exec Blocked While Paused ===")
 
     runtime = boxlite.Boxlite.default()
+    box = None
 
-    box = await runtime.create(boxlite.BoxOptions(
-        image="alpine:latest",
-        auto_remove=False,
-    ))
-    print(f"Created box: {box.id}")
-
-    execution = await box.exec("echo", ["ready"])
-    await execution.wait()
-
-    await box.pause()
-    print("Box paused")
-
-    # Attempt exec while paused
-    print("Attempting exec while paused...")
     try:
-        await box.exec("echo", ["should fail"])
-        print("  Unexpected: exec succeeded")
+        box = await runtime.create(boxlite.BoxOptions(
+            image="alpine:latest",
+            auto_remove=False,
+        ))
+        box_id = box.id
+        print(f"Created box: {box_id}")
+
+        execution = await box.exec("echo", ["ready"])
+        await execution.wait()
+
+        await box.pause()
+        print("Box paused")
+
+        # Attempt exec while paused
+        print("Attempting exec while paused...")
+        try:
+            await box.exec("echo", ["should fail"])
+            print("  Unexpected: exec succeeded")
+        except Exception as e:
+            print(f"  Expected error: {e}")
+
+        # Resume and exec works again
+        await box.resume()
+        print("Box resumed")
+
+        execution = await box.exec("echo", ["works again!"])
+        stdout = execution.stdout()
+        async for line in stdout:
+            print(f"  {line.strip()}")
+        await execution.wait()
+
+        await box.stop()
+        await runtime.remove(box_id, force=False)
+
     except Exception as e:
-        print(f"  Expected error: {e}")
-
-    # Resume and exec works again
-    await box.resume()
-    print("Box resumed")
-
-    execution = await box.exec("echo", ["works again!"])
-    stdout = execution.stdout()
-    async for line in stdout:
-        print(f"  {line.strip()}")
-    await execution.wait()
-
-    await box.stop()
-    await runtime.remove(box.id, force=False)
+        print(f"\nError: {e}")
+        if box is not None:
+            await box.stop()
+            await runtime.remove(box.id, force=True)
 
 
 async def pause_resume_cycles():
@@ -106,32 +124,41 @@ async def pause_resume_cycles():
     print("\n\n=== Multiple Pause/Resume Cycles ===")
 
     runtime = boxlite.Boxlite.default()
+    box = None
 
-    box = await runtime.create(boxlite.BoxOptions(
-        image="alpine:latest",
-        auto_remove=False,
-    ))
-    print(f"Created box: {box.id}")
+    try:
+        box = await runtime.create(boxlite.BoxOptions(
+            image="alpine:latest",
+            auto_remove=False,
+        ))
+        box_id = box.id
+        print(f"Created box: {box_id}")
 
-    execution = await box.exec("echo", ["init"])
-    await execution.wait()
-
-    for i in range(3):
-        await box.pause()
-        info = box.info()
-        print(f"  Cycle {i}: paused (state={info.state})")
-
-        await box.resume()
-        execution = await box.exec("echo", [f"cycle-{i}"])
-        stdout = execution.stdout()
-        async for line in stdout:
-            print(f"  Cycle {i}: {line.strip()}")
+        execution = await box.exec("echo", ["init"])
         await execution.wait()
 
-    print("All cycles completed — VM integrity preserved")
+        for i in range(3):
+            await box.pause()
+            info = box.info()
+            print(f"  Cycle {i}: paused (status={info.state.status})")
 
-    await box.stop()
-    await runtime.remove(box.id, force=False)
+            await box.resume()
+            execution = await box.exec("echo", [f"cycle-{i}"])
+            stdout = execution.stdout()
+            async for line in stdout:
+                print(f"  Cycle {i}: {line.strip()}")
+            await execution.wait()
+
+        print("All cycles completed — VM integrity preserved")
+
+        await box.stop()
+        await runtime.remove(box_id, force=False)
+
+    except Exception as e:
+        print(f"\nError: {e}")
+        if box is not None:
+            await box.stop()
+            await runtime.remove(box.id, force=True)
 
 
 async def stop_from_paused():
@@ -139,30 +166,38 @@ async def stop_from_paused():
     print("\n\n=== Stop From Paused State ===")
 
     runtime = boxlite.Boxlite.default()
+    box = None
 
-    box = await runtime.create(boxlite.BoxOptions(
-        image="alpine:latest",
-        auto_remove=False,
-    ))
-    box_id = box.id
-    print(f"Created box: {box_id}")
+    try:
+        box = await runtime.create(boxlite.BoxOptions(
+            image="alpine:latest",
+            auto_remove=False,
+        ))
+        box_id = box.id
+        print(f"Created box: {box_id}")
 
-    execution = await box.exec("echo", ["running"])
-    await execution.wait()
+        execution = await box.exec("echo", ["running"])
+        await execution.wait()
 
-    await box.pause()
-    print(f"State: {box.info().state}")
+        await box.pause()
+        print(f"State: {box.info().state.status}")
 
-    # Stop directly from Paused — no resume needed
-    print("Stopping directly from paused state...")
-    await box.stop()
+        # Stop directly from Paused — no resume needed
+        print("Stopping directly from paused state...")
+        await box.stop()
 
-    info = await runtime.get_info(box_id)
-    if info:
-        print(f"State after stop: {info.state}")
+        info = await runtime.get_info(box_id)
+        if info:
+            print(f"State after stop: {info.state.status}")
 
-    await runtime.remove(box_id, force=False)
-    print("Box removed")
+        await runtime.remove(box_id, force=False)
+        print("Box removed")
+
+    except Exception as e:
+        print(f"\nError: {e}")
+        if box is not None:
+            await box.stop()
+            await runtime.remove(box.id, force=True)
 
 
 async def main():

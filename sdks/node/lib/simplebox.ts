@@ -677,20 +677,6 @@ export class SimpleBox {
   }
 
   /**
-   * Stop the box.
-   *
-   * Sends a graceful shutdown signal to the VM. If `autoRemove` is true
-   * (default), the box files will be deleted after stopping.
-   *
-   * Does nothing if the box was never created.
-   *
-   * @example
-   * ```typescript
-   * await box.stop();
-   * console.log('Box stopped');
-   * ```
-   */
-  /**
    * Pause the box (freeze VM, zero CPU, state preserved).
    *
    * Quiesces guest filesystems, then sends SIGSTOP to freeze all vCPUs.
@@ -739,6 +725,20 @@ export class SimpleBox {
     await this._box.resume();
   }
 
+  /**
+   * Stop the box.
+   *
+   * Sends a graceful shutdown signal to the VM. If `autoRemove` is true
+   * (default), the box files will be deleted after stopping.
+   *
+   * Does nothing if the box was never created.
+   *
+   * @example
+   * ```typescript
+   * await box.stop();
+   * console.log('Box stopped');
+   * ```
+   */
   async stop(): Promise<void> {
     if (!this._box) {
       // Box was never created, nothing to stop

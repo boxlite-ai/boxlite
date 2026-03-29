@@ -176,15 +176,17 @@ fn error_response(status: StatusCode, message: impl Into<String>, error_type: &s
 }
 
 fn classify_boxlite_error(err: &boxlite::BoxliteError) -> (StatusCode, &'static str) {
-    let msg = err.to_string().to_lowercase();
-    if msg.contains("not found") {
-        (StatusCode::NOT_FOUND, "NotFoundError")
-    } else if msg.contains("already") || msg.contains("conflict") {
-        (StatusCode::CONFLICT, "ConflictError")
-    } else if msg.contains("unsupported") {
-        (StatusCode::BAD_REQUEST, "UnsupportedError")
-    } else {
-        (StatusCode::INTERNAL_SERVER_ERROR, "InternalError")
+    use boxlite::BoxliteError;
+    match err {
+        BoxliteError::NotFound(_) => (StatusCode::NOT_FOUND, "NotFoundError"),
+        BoxliteError::AlreadyExists(_) => (StatusCode::CONFLICT, "ConflictError"),
+        BoxliteError::InvalidState(_) => (StatusCode::CONFLICT, "InvalidStateError"),
+        BoxliteError::InvalidArgument(_) => (StatusCode::BAD_REQUEST, "InvalidArgumentError"),
+        BoxliteError::Unsupported(_) | BoxliteError::UnsupportedEngine => {
+            (StatusCode::BAD_REQUEST, "UnsupportedError")
+        }
+        BoxliteError::Stopped(_) => (StatusCode::CONFLICT, "StoppedError"),
+        _ => (StatusCode::INTERNAL_SERVER_ERROR, "InternalError"),
     }
 }
 
