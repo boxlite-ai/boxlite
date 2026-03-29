@@ -44,21 +44,23 @@ pub fn install_ca_from_env() {
         }
     };
 
-    // Append CA cert to system bundle
+    // Try to append CA cert to guest's system bundle (may fail on small rootfs)
     if let Err(e) = append_to_ca_bundle(&pem) {
-        warn!("Failed to install MITM CA cert: {e}");
-        return;
+        warn!("Failed to write CA cert to guest rootfs (expected on small initramfs): {e}");
+        // Continue — the CA cert will be injected into the container rootfs
+        // by container.rs during Container.Init, reading BOXLITE_CA_PEM directly.
+    } else {
+        info!("MITM CA cert installed into {CA_BUNDLE_PATH}");
     }
 
-    // Set SSL trust env vars for this process and children
+    // Set SSL trust env vars for this process and children.
+    // These are also injected into container env by container_rootfs.rs on the host.
     for (key, value) in SSL_TRUST_VARS {
         std::env::set_var(key, value);
     }
 
-    // Remove the raw PEM env var — it's no longer needed and shouldn't leak
-    std::env::remove_var(CA_PEM_ENV);
-
-    info!("MITM CA cert installed into {CA_BUNDLE_PATH}");
+    // Keep BOXLITE_CA_PEM — container.rs needs it during Container.Init.
+    // It won't leak to user processes because container env is set explicitly.
 }
 
 /// Append PEM bytes to the system CA bundle file.

@@ -12,7 +12,7 @@ use boxlite_shared::{
 };
 use nix::mount::{mount, MsFlags};
 use tonic::{Request, Response, Status};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::container::{Container, UserMount};
 use crate::layout::GuestLayout;
@@ -185,6 +185,31 @@ impl ContainerService for GuestServer {
                     reason: format!("Failed to bind mount rootfs: {}", e),
                 })),
             }));
+        }
+
+        // Inject MITM CA cert into container rootfs (if secrets are configured).
+        // Read the CA PEM directly from the BOXLITE_CA_PEM env var (base64-encoded),
+        // decode it, and append to the container's CA bundle.
+        if let Ok(b64) = std::env::var("BOXLITE_CA_PEM") {
+            use base64::Engine;
+            if let Ok(pem) = base64::engine::general_purpose::STANDARD.decode(&b64) {
+                let container_ca_bundle = bundle_rootfs.join("etc/ssl/certs/ca-certificates.crt");
+                if container_ca_bundle.exists() {
+                    use std::io::Write;
+                    match std::fs::OpenOptions::new()
+                        .append(true)
+                        .open(&container_ca_bundle)
+                    {
+                        Ok(mut f) => {
+                            let _ = f.write_all(b"\n");
+                            let _ = f.write_all(&pem);
+                            let _ = f.write_all(b"\n");
+                            info!("MITM CA cert injected into container rootfs");
+                        }
+                        Err(e) => warn!("Failed to inject CA cert into container: {}", e),
+                    }
+                }
+            }
         }
 
         // Convert proto BindMount to UserMount for OCI spec
