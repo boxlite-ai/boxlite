@@ -293,6 +293,13 @@ fn build_guest_entrypoint(
         builder.with_env(key, value);
     }
 
+    // Inject secret placeholders as env vars.
+    // The guest sees "<BOXLITE_SECRET:openai>" — the MITM proxy substitutes the real value.
+    for secret in &options.secrets {
+        let env_key = format!("BOXLITE_SECRET_{}", secret.name.to_uppercase());
+        builder.with_env(&env_key, &secret.placeholder);
+    }
+
     Ok(builder.build())
 }
 
@@ -340,6 +347,7 @@ fn build_network_config(
 
     let mut config = NetworkBackendConfig::new(final_mappings, layout.net_backend_socket_path());
     config.allow_net = allow_net;
+    config.secrets = options.secrets.clone();
     Some(config)
 }
 

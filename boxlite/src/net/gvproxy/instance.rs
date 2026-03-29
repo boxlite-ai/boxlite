@@ -44,7 +44,7 @@ use super::stats::NetworkStats;
 ///
 /// // Create instance with caller-provided socket path
 /// let socket_path = PathBuf::from("/tmp/my-box/net.sock");
-/// let instance = GvproxyInstance::new(socket_path, &[(8080, 80), (8443, 443)], vec![])?;
+/// let instance = GvproxyInstance::new(socket_path, &[(8080, 80), (8443, 443)], vec![], vec![])?;
 ///
 /// // Socket path is known from creation — no FFI call needed
 /// println!("Socket: {:?}", instance.socket_path());
@@ -71,12 +71,14 @@ impl GvproxyInstance {
         socket_path: PathBuf,
         port_mappings: &[(u16, u16)],
         allow_net: Vec<String>,
+        secrets: Vec<super::config::GvproxySecretConfig>,
     ) -> BoxliteResult<Self> {
         // Initialize logging callback (one-time setup)
         logging::init_logging();
 
         let config = super::config::GvproxyConfig::new(socket_path.clone(), port_mappings.to_vec())
-            .with_allow_net(allow_net);
+            .with_allow_net(allow_net)
+            .with_secrets(secrets);
 
         let id = ffi::create_instance(&config)?;
 
@@ -90,6 +92,14 @@ impl GvproxyInstance {
     /// This is the caller-provided path passed at creation — no FFI call needed.
     pub fn socket_path(&self) -> &Path {
         &self.socket_path
+    }
+
+    /// Get the MITM CA certificate PEM for this instance.
+    ///
+    /// Returns the ephemeral CA cert generated for TLS MITM secret substitution.
+    /// Returns `None` if no secrets were configured.
+    pub fn ca_cert_pem(&self) -> Option<Vec<u8>> {
+        super::ffi::get_ca_cert(self.id)
     }
 
     /// Get network statistics from this gvproxy instance
@@ -109,7 +119,7 @@ impl GvproxyInstance {
     /// ```no_run
     /// use boxlite::net::gvproxy::GvproxyInstance;
     ///
-    /// let instance = GvproxyInstance::new(path, &[(8080, 80)], vec![])?;
+    /// let instance = GvproxyInstance::new(path, &[(8080, 80)], vec![], vec![])?;
     /// let stats = instance.get_stats()?;
     ///
     /// // Check for packet drops due to maxInFlight limit
@@ -267,9 +277,13 @@ mod tests {
     #[ignore] // Requires libgvproxy.dylib to be available
     fn test_gvproxy_create_destroy() {
         let socket_path = PathBuf::from("/tmp/test-gvproxy-instance.sock");
-        let instance =
-            GvproxyInstance::new(socket_path.clone(), &[(8080, 80), (8443, 443)], Vec::new())
-                .unwrap();
+        let instance = GvproxyInstance::new(
+            socket_path.clone(),
+            &[(8080, 80), (8443, 443)],
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap();
 
         // Socket path matches what we provided
         assert_eq!(instance.socket_path(), socket_path);
@@ -283,8 +297,10 @@ mod tests {
         let path1 = PathBuf::from("/tmp/test-gvproxy-1.sock");
         let path2 = PathBuf::from("/tmp/test-gvproxy-2.sock");
 
-        let instance1 = GvproxyInstance::new(path1.clone(), &[(8080, 80)], Vec::new()).unwrap();
-        let instance2 = GvproxyInstance::new(path2.clone(), &[(9090, 90)], Vec::new()).unwrap();
+        let instance1 =
+            GvproxyInstance::new(path1.clone(), &[(8080, 80)], Vec::new(), Vec::new()).unwrap();
+        let instance2 =
+            GvproxyInstance::new(path2.clone(), &[(9090, 90)], Vec::new(), Vec::new()).unwrap();
 
         assert_ne!(instance1.id(), instance2.id());
         assert_ne!(instance1.socket_path(), instance2.socket_path());

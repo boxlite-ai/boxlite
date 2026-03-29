@@ -73,6 +73,32 @@ pub struct GvproxyConfig {
     /// Network allowlist for DNS sinkhole filtering.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allow_net: Vec<String>,
+
+    /// Secrets for MITM proxy injection into outbound HTTP(S) requests.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub secrets: Vec<GvproxySecretConfig>,
+}
+
+/// Secret configuration for gvproxy MITM proxy.
+///
+/// JSON field names match the Go `SecretConfig` struct in gvproxy-bridge.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GvproxySecretConfig {
+    pub name: String,
+    pub hosts: Vec<String>,
+    pub placeholder: String,
+    pub value: String,
+}
+
+impl From<&crate::runtime::options::Secret> for GvproxySecretConfig {
+    fn from(s: &crate::runtime::options::Secret) -> Self {
+        Self {
+            name: s.name.clone(),
+            hosts: s.hosts.clone(),
+            placeholder: s.placeholder.clone(),
+            value: s.value.clone(),
+        }
+    }
 }
 
 /// Create a config with network defaults for the given socket path.
@@ -93,6 +119,7 @@ fn defaults_with_socket_path(socket_path: PathBuf) -> GvproxyConfig {
         debug: false,
         capture_file: None,
         allow_net: Vec::new(),
+        secrets: Vec::new(),
     }
 }
 
@@ -176,6 +203,12 @@ impl GvproxyConfig {
     /// Set network allowlist for DNS sinkhole filtering.
     pub fn with_allow_net(mut self, allow_net: Vec<String>) -> Self {
         self.allow_net = allow_net;
+        self
+    }
+
+    /// Set secrets for MITM proxy injection.
+    pub fn with_secrets(mut self, secrets: Vec<GvproxySecretConfig>) -> Self {
+        self.secrets = secrets;
         self
     }
 }
@@ -287,6 +320,83 @@ mod tests {
         // Verify round-trip
         let deserialized: GvproxyConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.socket_path, socket_path);
+    }
+
+    // ========================================================================
+    // Secret config tests
+    // ========================================================================
+
+    fn test_secret() -> crate::runtime::options::Secret {
+        crate::runtime::options::Secret {
+            name: "openai".to_string(),
+            hosts: vec!["api.openai.com".to_string()],
+            placeholder: "<BOXLITE_SECRET:openai>".to_string(),
+            value: "sk-test-super-secret-key-12345".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_gvproxy_secret_config_from_secret() {
+        let secret = test_secret();
+        let config = GvproxySecretConfig::from(&secret);
+        assert_eq!(config.name, "openai");
+        assert_eq!(config.hosts, vec!["api.openai.com"]);
+        assert_eq!(config.placeholder, "<BOXLITE_SECRET:openai>");
+        assert_eq!(config.value, "sk-test-super-secret-key-12345");
+    }
+
+    #[test]
+    fn test_gvproxy_config_with_secrets() {
+        let secret = test_secret();
+        let gvproxy_secret = GvproxySecretConfig::from(&secret);
+        let config = GvproxyConfig::new(test_socket_path(), vec![(8080, 80)])
+            .with_secrets(vec![gvproxy_secret]);
+        assert_eq!(config.secrets.len(), 1);
+        assert_eq!(config.secrets[0].name, "openai");
+    }
+
+    #[test]
+    fn test_gvproxy_config_secrets_serialization() {
+        let secret = test_secret();
+        let gvproxy_secret = GvproxySecretConfig::from(&secret);
+        let config =
+            GvproxyConfig::new(test_socket_path(), vec![]).with_secrets(vec![gvproxy_secret]);
+
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(json.contains("\"secrets\""));
+        assert!(json.contains("\"name\""));
+        assert!(json.contains("\"placeholder\""));
+
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let secrets = value.get("secrets").unwrap().as_array().unwrap();
+        assert_eq!(secrets.len(), 1);
+        assert_eq!(secrets[0]["name"], "openai");
+        assert_eq!(secrets[0]["placeholder"], "<BOXLITE_SECRET:openai>");
+        assert_eq!(secrets[0]["hosts"][0], "api.openai.com");
+    }
+
+    #[test]
+    fn test_gvproxy_config_no_secrets_default() {
+        let config = GvproxyConfig::new(test_socket_path(), vec![]);
+        assert!(config.secrets.is_empty());
+        let json = serde_json::to_string(&config).unwrap();
+        // secrets field is skipped when empty due to skip_serializing_if
+        assert!(
+            !json.contains("\"secrets\""),
+            "empty secrets should be omitted from JSON"
+        );
+    }
+
+    #[test]
+    fn test_gvproxy_secret_config_serde_roundtrip() {
+        let secret = test_secret();
+        let gvproxy_secret = GvproxySecretConfig::from(&secret);
+        let json = serde_json::to_string(&gvproxy_secret).unwrap();
+        let deserialized: GvproxySecretConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.name, gvproxy_secret.name);
+        assert_eq!(deserialized.hosts, gvproxy_secret.hosts);
+        assert_eq!(deserialized.placeholder, gvproxy_secret.placeholder);
+        assert_eq!(deserialized.value, gvproxy_secret.value);
     }
 
     #[test]

@@ -92,7 +92,8 @@ fn main() -> BoxliteResult<()> {
     let args = ShimArgs::parse();
 
     // Parse InstanceSpec from JSON
-    let config: InstanceSpec = serde_json::from_str(&args.config)
+    #[allow(unused_mut)]
+    let mut config: InstanceSpec = serde_json::from_str(&args.config)
         .map_err(|e| BoxliteError::Engine(format!("Failed to parse config JSON: {}", e)))?;
     timing("config parsed");
 
@@ -159,11 +160,13 @@ fn run_shim(args: ShimArgs, mut config: InstanceSpec, timing: impl Fn(&str)) -> 
             "Creating network backend (gvproxy) from config"
         );
 
-        // Create gvproxy instance with caller-provided socket path + allowlist
+        // Create gvproxy instance with caller-provided socket path + allowlist + secrets
+        let secrets = net_config.secrets.iter().map(Into::into).collect();
         let gvproxy = GvproxyInstance::new(
             net_config.socket_path.clone(),
             &net_config.port_mappings,
             net_config.allow_net.clone(),
+            secrets,
         )?;
         timing("gvproxy created");
 
@@ -190,6 +193,18 @@ fn run_shim(args: ShimArgs, mut config: InstanceSpec, timing: impl Fn(&str)) -> 
             connection_type,
             mac_address: GUEST_MAC,
         });
+
+        // Inject MITM CA cert as env var if secrets are configured.
+        // The guest init script decodes and installs it into the trust store.
+        if let Some(ca_pem) = gvproxy.ca_cert_pem() {
+            use base64::Engine as _;
+            let b64 = base64::engine::general_purpose::STANDARD.encode(&ca_pem);
+            config
+                .guest_entrypoint
+                .env
+                .push(("BOXLITE_CA_PEM".to_string(), b64));
+            tracing::info!("MITM: injected CA cert as BOXLITE_CA_PEM env var");
+        }
 
         // Leak the gvproxy instance to keep it alive for VM lifetime.
         // This is intentional - the VM needs networking for its entire life,

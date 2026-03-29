@@ -56,6 +56,9 @@ pub struct NetworkBackendConfig {
     /// Network allowlist. When non-empty, DNS sinkhole blocks unlisted hosts.
     #[serde(default)]
     pub allow_net: Vec<String>,
+    /// Secrets for MITM proxy injection. Passed through to gvproxy.
+    #[serde(default)]
+    pub secrets: Vec<crate::runtime::options::Secret>,
 }
 
 impl NetworkBackendConfig {
@@ -64,6 +67,7 @@ impl NetworkBackendConfig {
             port_mappings,
             socket_path,
             allow_net: Vec::new(),
+            secrets: Vec::new(),
         }
     }
 }

@@ -186,7 +186,8 @@ type GvproxyConfig struct {
 	DNSSearchDomains []string      `json:"dns_search_domains"`
 	Debug       bool     `json:"debug"`
 	CaptureFile *string  `json:"capture_file,omitempty"`
-	AllowNet    []string `json:"allow_net,omitempty"`
+	AllowNet    []string       `json:"allow_net,omitempty"`
+	Secrets     []SecretConfig `json:"secrets,omitempty"`
 }
 
 // GvproxyInstance tracks a running gvisor-tap-vsock instance
@@ -199,6 +200,8 @@ type GvproxyInstance struct {
 	listener   net.Listener                   // For Linux UnixStream (Qemu)
 	vn         *virtualnetwork.VirtualNetwork // Virtual network for stats collection
 	vnMu       sync.RWMutex                   // Protects vn field
+	ca            *BoxCA              // Ephemeral MITM CA (nil if no secrets)
+	secretMatcher *SecretHostMatcher  // Hostname→secrets lookup (nil if no secrets)
 }
 
 var (
@@ -333,6 +336,19 @@ func gvproxy_create(configJSON *C.char) C.longlong {
 		listener:   listener,
 	}
 
+	// Create MITM infrastructure when secrets are configured
+	if len(config.Secrets) > 0 {
+		ca, err := NewBoxCA()
+		if err != nil {
+			logrus.WithError(err).Error("MITM: failed to create ephemeral CA")
+			cancel()
+			return -1
+		}
+		instance.ca = ca
+		instance.secretMatcher = NewSecretHostMatcher(config.Secrets)
+		logrus.WithField("num_secrets", len(config.Secrets)).Info("MITM: created ephemeral CA for secret substitution")
+	}
+
 	instancesMu.Lock()
 	instances[id] = instance
 	instancesMu.Unlock()
@@ -371,13 +387,14 @@ func gvproxy_create(configJSON *C.char) C.longlong {
 			return
 		}
 
-		// Override TCP handler with AllowNet filter (SNI/Host inspection)
-		if len(config.AllowNet) > 0 {
-			tcpFilter := NewTCPFilter(config.AllowNet, config.GatewayIP, config.GuestIP)
-			if tcpFilter != nil {
-				if err := OverrideTCPHandler(vn, tapConfig, tapConfig.Ec2MetadataAccess, tcpFilter); err != nil {
-					logrus.WithError(err).Error("allowNet TCP: failed to override handler")
-				}
+		// Override TCP handler with AllowNet filter and/or MITM secret substitution
+		if len(config.AllowNet) > 0 || instance.secretMatcher != nil {
+			var tcpFilter *TCPFilter
+			if len(config.AllowNet) > 0 {
+				tcpFilter = NewTCPFilter(config.AllowNet, config.GatewayIP, config.GuestIP)
+			}
+			if err := OverrideTCPHandler(vn, tapConfig, tapConfig.Ec2MetadataAccess, tcpFilter, instance.ca, instance.secretMatcher); err != nil {
+				logrus.WithError(err).Error("TCP: failed to override handler")
 			}
 		}
 
@@ -528,6 +545,19 @@ func gvproxy_get_version() *C.char {
 	}
 
 	return C.CString("unknown")
+}
+
+//export gvproxy_get_ca_cert
+func gvproxy_get_ca_cert(id C.longlong) *C.char {
+	instancesMu.RLock()
+	instance, ok := instances[int64(id)]
+	instancesMu.RUnlock()
+
+	if !ok || instance.ca == nil {
+		return nil
+	}
+
+	return C.CString(string(instance.ca.CACertPEM()))
 }
 
 func main() {

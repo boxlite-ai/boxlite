@@ -4,6 +4,8 @@
 compile_error!("BoxLite guest is Linux-only; build with a Linux target");
 
 #[cfg(target_os = "linux")]
+mod ca_trust;
+#[cfg(target_os = "linux")]
 mod container;
 #[cfg(target_os = "linux")]
 mod layout;
@@ -118,6 +120,12 @@ async fn async_main() -> BoxliteResult<()> {
     // Needed because virtio-fs doesn't support open-unlink-fstat pattern
     mounts::mount_essential_tmpfs()?;
     eprintln!("[guest] T+{}ms: tmpfs mounted", boot_elapsed_ms());
+
+    // Install MITM CA certificate if present (for secret substitution).
+    // The host injects BOXLITE_CA_PEM (base64-encoded PEM) as an env var.
+    // We decode it and append to the system CA bundle so HTTPS clients trust it.
+    ca_trust::install_ca_from_env();
+    eprintln!("[guest] T+{}ms: CA trust checked", boot_elapsed_ms());
 
     // Parse command-line arguments with clap
     let args = GuestArgs::parse();

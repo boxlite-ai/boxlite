@@ -82,7 +82,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 // Re-export public API
-pub use config::{DnsZone, GvproxyConfig, PortMapping};
+pub use config::{DnsZone, GvproxyConfig, GvproxySecretConfig, PortMapping};
 pub use instance::GvproxyInstance;
 pub use logging::init_logging;
 pub use stats::{NetworkStats, TcpStats};
@@ -146,10 +146,13 @@ impl GvisorTapBackend {
         );
 
         // Create gvproxy instance with caller-provided socket path
+        let secrets: Vec<config::GvproxySecretConfig> =
+            config.secrets.iter().map(Into::into).collect();
         let instance = Arc::new(GvproxyInstance::new(
             config.socket_path.clone(),
             &config.port_mappings,
             config.allow_net.clone(),
+            secrets,
         )?);
 
         // Start background stats logging thread

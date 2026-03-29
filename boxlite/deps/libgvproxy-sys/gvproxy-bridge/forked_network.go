@@ -31,6 +31,8 @@ func OverrideTCPHandler(
 	config *types.Configuration,
 	ec2MetadataAccess bool,
 	filter *TCPFilter,
+	ca *BoxCA,
+	secretMatcher *SecretHostMatcher,
 ) error {
 	// Access private stack field via reflect
 	v := reflect.ValueOf(vn).Elem()
@@ -51,7 +53,7 @@ func OverrideTCPHandler(
 
 	// Replace TCP handler with our filtered version
 	var natLock sync.Mutex
-	tcpFwd := TCPWithFilter(s, nat, &natLock, ec2MetadataAccess, filter)
+	tcpFwd := TCPWithFilter(s, nat, &natLock, ec2MetadataAccess, filter, ca, secretMatcher)
 	s.SetTransportProtocolHandler(tcp.ProtocolNumber, tcpFwd.HandlePacket)
 
 	logrus.Info("allowNet TCP: handler overridden with SNI-inspecting forwarder")

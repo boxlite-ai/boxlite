@@ -137,6 +137,56 @@ pub struct BoxOptions {
     /// If None, uses the image's USER directive (defaults to root).
     #[serde(default)]
     pub user: Option<String>,
+
+    /// Secrets for MITM proxy injection into outbound HTTP(S) requests.
+    ///
+    /// Each secret maps a placeholder string to a real value. When the box
+    /// makes an HTTP(S) request to a matching host, placeholders in request
+    /// headers and body are replaced with the actual secret value.
+    ///
+    /// The placeholder (e.g., `<BOXLITE_SECRET:openai>`) is visible to the
+    /// guest; the real value never enters the VM.
+    #[serde(default)]
+    pub secrets: Vec<Secret>,
+}
+
+/// A secret for MITM proxy injection.
+///
+/// When the guest sends an HTTP(S) request to one of the listed hosts,
+/// the MITM proxy replaces `placeholder` with `value` in headers and body.
+/// The real `value` never enters the guest VM.
+#[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Secret {
+    /// Human-readable name for this secret (e.g., "openai_api_key").
+    pub name: String,
+    /// Hosts where this secret should be injected (e.g., ["api.openai.com"]).
+    /// Supports exact match and wildcard patterns (e.g., "*.example.com").
+    pub hosts: Vec<String>,
+    /// Placeholder string visible to the guest (e.g., "<BOXLITE_SECRET:openai>").
+    pub placeholder: String,
+    /// The actual secret value (e.g., "sk-..."). Never enters the VM.
+    pub value: String,
+}
+
+impl std::fmt::Debug for Secret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Secret")
+            .field("name", &self.name)
+            .field("hosts", &self.hosts)
+            .field("placeholder", &self.placeholder)
+            .field("value", &"[REDACTED]")
+            .finish()
+    }
+}
+
+impl std::fmt::Display for Secret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Secret{{name:{}, placeholder:{}, value:[REDACTED]}}",
+            self.name, self.placeholder
+        )
+    }
 }
 
 fn default_auto_remove() -> bool {
@@ -165,6 +215,7 @@ impl Default for BoxOptions {
             entrypoint: None,
             cmd: None,
             user: None,
+            secrets: Vec::new(),
         }
     }
 }
@@ -633,6 +684,128 @@ mod tests {
         let opts: BoxOptions = serde_json::from_str(json).unwrap();
         assert_eq!(opts.entrypoint, Some(vec!["dockerd".to_string()]));
         assert_eq!(opts.cmd, Some(vec!["--iptables=false".to_string()]));
+    }
+
+    // ========================================================================
+    // Secret tests
+    // ========================================================================
+
+    fn test_secret() -> Secret {
+        Secret {
+            name: "openai".to_string(),
+            hosts: vec!["api.openai.com".to_string()],
+            placeholder: "<BOXLITE_SECRET:openai>".to_string(),
+            value: "sk-test-super-secret-key-12345".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_secret_serde_roundtrip() {
+        let secret = test_secret();
+        let json = serde_json::to_string(&secret).unwrap();
+        let deserialized: Secret = serde_json::from_str(&json).unwrap();
+        assert_eq!(secret, deserialized);
+    }
+
+    #[test]
+    fn test_secret_debug_redacts_value() {
+        let secret = test_secret();
+        let debug_output = format!("{:?}", secret);
+        assert!(
+            !debug_output.contains("sk-test-super-secret-key-12345"),
+            "Debug output must not contain the secret value"
+        );
+        assert!(
+            debug_output.contains("[REDACTED]"),
+            "Debug output must contain [REDACTED]"
+        );
+        assert!(
+            debug_output.contains("openai"),
+            "Debug output should contain the secret name"
+        );
+    }
+
+    #[test]
+    fn test_secret_display_redacts_value() {
+        let secret = test_secret();
+        let display_output = format!("{}", secret);
+        assert!(
+            !display_output.contains("sk-test-super-secret-key-12345"),
+            "Display output must not contain the secret value"
+        );
+        assert!(
+            display_output.contains("[REDACTED]"),
+            "Display output must contain [REDACTED]"
+        );
+    }
+
+    #[test]
+    fn test_secret_serde_json_fields() {
+        let secret = test_secret();
+        let value = serde_json::to_value(&secret).unwrap();
+        assert!(value.get("name").unwrap().is_string());
+        assert!(value.get("hosts").unwrap().is_array());
+        assert!(value.get("placeholder").unwrap().is_string());
+        assert!(value.get("value").unwrap().is_string());
+        assert_eq!(value.get("hosts").unwrap().as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_box_options_with_secrets_default() {
+        let opts = BoxOptions::default();
+        assert!(opts.secrets.is_empty(), "secrets should default to empty");
+    }
+
+    #[test]
+    fn test_box_options_with_secrets_serde() {
+        let opts = BoxOptions {
+            secrets: vec![test_secret()],
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&opts).unwrap();
+        let deserialized: BoxOptions = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.secrets.len(), 1);
+        assert_eq!(deserialized.secrets[0], test_secret());
+    }
+
+    #[test]
+    fn test_box_options_secrets_in_json() {
+        let opts = BoxOptions {
+            secrets: vec![
+                test_secret(),
+                Secret {
+                    name: "anthropic".to_string(),
+                    hosts: vec!["api.anthropic.com".to_string()],
+                    placeholder: "<BOXLITE_SECRET:anthropic>".to_string(),
+                    value: "sk-ant-secret".to_string(),
+                },
+            ],
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&opts).unwrap();
+        assert!(
+            json.contains("\"secrets\""),
+            "JSON must contain secrets key"
+        );
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let secrets_arr = value.get("secrets").unwrap().as_array().unwrap();
+        assert_eq!(secrets_arr.len(), 2);
+    }
+
+    #[test]
+    fn test_box_options_secrets_missing_from_json_defaults_empty() {
+        let json = r#"{
+            "rootfs": {"Image": "alpine:latest"},
+            "env": [],
+            "volumes": [],
+            "network": {"Enabled": {"allow_net": []}},
+            "ports": []
+        }"#;
+        let opts: BoxOptions = serde_json::from_str(json).unwrap();
+        assert!(
+            opts.secrets.is_empty(),
+            "secrets should default to empty when missing from JSON"
+        );
     }
 
     #[test]

@@ -107,6 +107,81 @@ impl From<PyCopyOptions> for CopyOptions {
 }
 
 // ============================================================================
+// Secret
+// ============================================================================
+
+/// A secret to inject into outbound HTTPS requests via MITM proxy.
+///
+/// The guest code uses a placeholder string (e.g., ``<BOXLITE_SECRET:openai>``)
+/// in HTTP headers. The host-side proxy replaces the placeholder with the
+/// real secret value before forwarding the request. The actual secret never
+/// enters the guest VM.
+///
+/// Example::
+///
+///     from boxlite import Secret
+///
+///     secret = Secret(
+///         name="openai",
+///         value="sk-...",
+///         hosts=["api.openai.com"],
+///     )
+///     # Pass to BoxOptions:
+///     opts = BoxOptions(image="python:3.12", secrets=[secret])
+///
+#[pyclass(name = "Secret")]
+#[derive(Clone, Debug)]
+pub(crate) struct PySecret {
+    /// Human-readable name for the secret (e.g., "openai").
+    #[pyo3(get, set)]
+    pub(crate) name: String,
+
+    /// The real secret value (never sent to the guest).
+    #[pyo3(get, set)]
+    pub(crate) value: String,
+
+    /// Hostnames where this secret should be injected.
+    /// Supports exact matches ("api.openai.com") and wildcards ("*.openai.com").
+    #[pyo3(get, set)]
+    pub(crate) hosts: Vec<String>,
+
+    /// The placeholder string that appears in guest HTTP headers.
+    /// Defaults to ``<BOXLITE_SECRET:{name}>`` if not set explicitly.
+    #[pyo3(get, set)]
+    pub(crate) placeholder: Option<String>,
+}
+
+#[pymethods]
+impl PySecret {
+    #[new]
+    #[pyo3(signature = (name, value, hosts=vec![], placeholder=None))]
+    fn new(name: String, value: String, hosts: Vec<String>, placeholder: Option<String>) -> Self {
+        Self {
+            name,
+            value,
+            hosts,
+            placeholder,
+        }
+    }
+
+    /// Return the effective placeholder string.
+    fn get_placeholder(&self) -> String {
+        self.placeholder
+            .clone()
+            .unwrap_or_else(|| format!("<BOXLITE_SECRET:{}>", self.name))
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "Secret(name={:?}, hosts={:?}, placeholder={:?}, value=[REDACTED])",
+            self.name,
+            self.hosts,
+            self.get_placeholder(),
+        )
+    }
+}
+
+// ============================================================================
 // Box Options
 // ============================================================================
 
@@ -154,6 +229,10 @@ pub(crate) struct PyBoxOptions {
     /// Advanced options for expert users (security, mount isolation, health check).
     #[pyo3(get, set)]
     pub(crate) advanced: Option<PyAdvancedBoxOptions>,
+
+    /// Secrets to inject into outbound HTTPS requests via MITM proxy.
+    #[pyo3(get, set)]
+    pub(crate) secrets: Vec<PySecret>,
 }
 
 #[pymethods]
@@ -177,6 +256,7 @@ impl PyBoxOptions {
         cmd=None,
         user=None,
         advanced=None,
+        secrets=vec![],
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -197,6 +277,7 @@ impl PyBoxOptions {
         cmd: Option<Vec<String>>,
         user: Option<String>,
         advanced: Option<PyAdvancedBoxOptions>,
+        secrets: Vec<PySecret>,
     ) -> Self {
         Self {
             image,
@@ -216,6 +297,7 @@ impl PyBoxOptions {
             cmd,
             user,
             advanced,
+            secrets,
         }
     }
 
@@ -290,6 +372,20 @@ impl From<PyBoxOptions> for BoxOptions {
                 opts.advanced.health_check = Some(HealthCheckOptions::from(health_check));
             }
         }
+
+        // Convert Python secrets to Rust secrets
+        opts.secrets = py_opts
+            .secrets
+            .into_iter()
+            .map(|s| boxlite::runtime::options::Secret {
+                name: s.name.clone(),
+                hosts: s.hosts,
+                placeholder: s
+                    .placeholder
+                    .unwrap_or_else(|| format!("<BOXLITE_SECRET:{}>", s.name)),
+                value: s.value,
+            })
+            .collect();
 
         opts
     }

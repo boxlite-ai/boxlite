@@ -31,7 +31,8 @@ import (
 // outbound connections. For port 443/80 with hostname rules, it inspects
 // TLS SNI / HTTP Host headers to match against the allowlist.
 func TCPWithFilter(s *stack.Stack, nat map[tcpip.Address]tcpip.Address,
-	natLock *sync.Mutex, ec2MetadataAccess bool, filter *TCPFilter) *tcp.Forwarder {
+	natLock *sync.Mutex, ec2MetadataAccess bool, filter *TCPFilter,
+	ca *BoxCA, secretMatcher *SecretHostMatcher) *tcp.Forwarder {
 
 	return tcp.NewForwarder(s, 0, 10, func(r *tcp.ForwarderRequest) {
 		localAddress := r.ID().LocalAddress
@@ -59,8 +60,12 @@ func TCPWithFilter(s *stack.Stack, nat map[tcpip.Address]tcpip.Address,
 		destPort := r.ID().LocalPort
 		destAddr := fmt.Sprintf("%s:%d", localAddress, destPort)
 
-		// No filter: standard upstream flow
+		// Secrets-only mode (no allowlist filter): MITM secret hosts, allow everything else
 		if filter == nil {
+			if secretMatcher != nil && destPort == 443 {
+				inspectAndForward(r, destAddr, destPort, nil, ca, secretMatcher)
+				return
+			}
 			standardForward(r, destAddr)
 			return
 		}
@@ -71,9 +76,11 @@ func TCPWithFilter(s *stack.Stack, nat map[tcpip.Address]tcpip.Address,
 			return
 		}
 
-		// Port 443/80 with hostname rules: inspect SNI/Host
-		if filter.HasHostnameRules() && (destPort == 443 || destPort == 80) {
-			inspectAndForward(r, destAddr, destPort, filter)
+		// Port 443/80 with hostname rules or secrets: inspect SNI/Host
+		needsInspect := (filter.HasHostnameRules() && (destPort == 443 || destPort == 80)) ||
+			(secretMatcher != nil && destPort == 443)
+		if needsInspect {
+			inspectAndForward(r, destAddr, destPort, filter, ca, secretMatcher)
 			return
 		}
 
@@ -119,7 +126,7 @@ func standardForward(r *tcp.ForwarderRequest, destAddr string) {
 // inspectAndForward: Accept → Peek SNI/Host → check allowlist → Dial → relay.
 // The flow is reversed from upstream because we need to read from the guest
 // before deciding whether to connect to the upstream server.
-func inspectAndForward(r *tcp.ForwarderRequest, destAddr string, destPort uint16, filter *TCPFilter) {
+func inspectAndForward(r *tcp.ForwarderRequest, destAddr string, destPort uint16, filter *TCPFilter, ca *BoxCA, secretMatcher *SecretHostMatcher) {
 	// Step 1: Accept TCP from guest first (reversed from upstream)
 	var wq waiter.Queue
 	ep, tcpErr := r.CreateEndpoint(&wq)
@@ -143,8 +150,20 @@ func inspectAndForward(r *tcp.ForwarderRequest, destAddr string, destPort uint16
 		hostname = peekHTTPHost(br)
 	}
 
-	// Step 3: Check allowlist
-	if hostname == "" || !filter.MatchesHostname(hostname) {
+	// Step 3: Check for MITM secret substitution (HTTPS only, takes priority over allowlist)
+	if destPort == 443 && secretMatcher != nil && hostname != "" && secretMatcher.Matches(hostname) {
+		secrets := secretMatcher.SecretsForHost(hostname)
+		logrus.WithFields(logrus.Fields{
+			"hostname":    hostname,
+			"num_secrets": len(secrets),
+		}).Debug("MITM: intercepting for secret substitution")
+		bufferedGuest := &bufferedConn{Conn: guestConn, reader: br}
+		mitmAndForward(bufferedGuest, hostname, destAddr, ca, secrets)
+		return
+	}
+
+	// Step 4: Check allowlist (skip if no allowlist — secrets-only mode allows all traffic)
+	if filter != nil && (hostname == "" || !filter.MatchesHostname(hostname)) {
 		logrus.WithFields(logrus.Fields{
 			"dst":      destAddr,
 			"hostname": hostname,
@@ -158,7 +177,7 @@ func inspectAndForward(r *tcp.ForwarderRequest, destAddr string, destPort uint16
 		"hostname": hostname,
 	}).Debug("allowNet TCP: allowed by hostname")
 
-	// Step 4: Dial upstream
+	// Step 5: Dial upstream
 	outbound, err := net.Dial("tcp", destAddr)
 	if err != nil {
 		logrus.WithField("error", err).Trace("allowNet TCP: upstream dial failed")
