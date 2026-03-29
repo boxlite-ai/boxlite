@@ -17,11 +17,15 @@ use serde::{Deserialize, Serialize};
 /// ```text
 /// create()  → Configured (persisted to DB, no VM)
 /// start()   → Running (VM initialized)
-/// SIGSTOP   → Paused (VM frozen, used during export/snapshot)
-/// SIGCONT   → Running (VM resumed)
+/// pause()   → Paused (VM frozen via SIGSTOP — zero CPU, memory preserved)
+/// resume()  → Running (VM resumed via SIGCONT)
 /// stop()    → Stopped (VM terminated, can restart)
 /// init err  → Failed (record preserved with error_reason)
 /// ```
+///
+/// The Paused state is used both by the user-facing `pause()`/`resume()` API
+/// and internally by the quiesce bracket (`with_quiesce_async`) during
+/// export/snapshot/clone operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum BoxStatus {
@@ -43,7 +47,8 @@ pub enum BoxStatus {
     Stopped,
 
     /// Box VM is frozen via SIGSTOP (all vCPUs and virtio backends paused).
-    /// Used during export/snapshot for point-in-time consistency.
+    /// Used by user-facing `pause()`/`resume()` API and internally during
+    /// export/snapshot for point-in-time consistency.
     /// Equivalent to Docker's cgroup freezer pause.
     Paused,
 
@@ -267,6 +272,11 @@ pub struct BoxState {
     /// Serde default keeps existing DB rows readable without migration.
     #[serde(default)]
     pub started_at: Option<DateTime<Utc>>,
+    /// Whether guest I/O was successfully quiesced (FIFREEZE) during pause().
+    /// Runtime-only: not persisted to DB. Used by `with_quiesce_async` to decide
+    /// whether to skip its own quiesce when the box is already paused.
+    #[serde(skip)]
+    pub quiesced: bool,
 }
 
 /// Health status of a box.
@@ -367,6 +377,7 @@ impl BoxState {
             error_reason: None,
             exit_code: None,
             started_at: None,
+            quiesced: false,
         }
     }
 
@@ -440,6 +451,7 @@ impl BoxState {
     pub fn mark_stop(&mut self) {
         self.status = BoxStatus::Stopped;
         self.pid = None;
+        self.quiesced = false;
         self.last_updated = Utc::now();
     }
 
@@ -467,6 +479,7 @@ impl BoxState {
             self.status = BoxStatus::Stopped;
         }
         self.pid = None;
+        self.quiesced = false;
         self.last_updated = Utc::now();
     }
 
@@ -1248,5 +1261,25 @@ mod tests {
     fn test_paused_cannot_remove() {
         // Paused boxes cannot be removed (must stop first)
         assert!(!BoxStatus::Paused.can_remove());
+    }
+
+    #[test]
+    fn test_new_state_quiesced_is_false() {
+        let state = BoxState::new();
+        assert!(!state.quiesced);
+    }
+
+    #[test]
+    fn test_mark_stop_clears_quiesced() {
+        let mut state = BoxState::new();
+        state.status = BoxStatus::Paused;
+        state.pid = Some(123);
+        state.quiesced = true;
+
+        state.mark_stop();
+
+        assert!(!state.quiesced);
+        assert_eq!(state.status, BoxStatus::Stopped);
+        assert_eq!(state.pid, None);
     }
 }

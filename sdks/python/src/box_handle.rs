@@ -153,6 +153,8 @@ impl PyBox {
     }
 
     /// Pause the box (freeze VM, zero CPU, state preserved).
+    ///
+    /// Idempotent: calling pause() on a Paused box is a no-op.
     fn pause<'a>(&self, py: Python<'a>) -> PyResult<Bound<'a, PyAny>> {
         let handle = Arc::clone(&self.handle);
 
@@ -163,6 +165,9 @@ impl PyBox {
     }
 
     /// Resume the box from paused state.
+    ///
+    /// Sends SIGCONT to resume vCPUs and thaws guest filesystems.
+    /// Idempotent: calling resume() on a Running box is a no-op.
     fn resume<'a>(&self, py: Python<'a>) -> PyResult<Bound<'a, PyAny>> {
         let handle = Arc::clone(&self.handle);
 
