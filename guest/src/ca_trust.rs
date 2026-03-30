@@ -59,8 +59,9 @@ pub fn install_ca_from_env() {
         std::env::set_var(key, value);
     }
 
-    // Keep BOXLITE_CA_PEM — container.rs needs it during Container.Init.
-    // It won't leak to user processes because container env is set explicitly.
+    // Note: BOXLITE_CA_PEM is removed in container.rs after Container.Init
+    // reads it. It must persist until then because the container rootfs
+    // overlay also needs the CA cert.
 }
 
 /// Append PEM bytes to the system CA bundle file.

@@ -26,6 +26,7 @@ type BoxCA struct {
 }
 
 // NewBoxCA generates a new ephemeral CA.
+// Production uses NewBoxCAFromPEM (CA generated in Rust). This is for tests only.
 func NewBoxCA() (*BoxCA, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {

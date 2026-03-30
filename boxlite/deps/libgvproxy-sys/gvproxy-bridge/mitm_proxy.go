@@ -53,6 +53,8 @@ func mitmAndForward(guestConn net.Conn, hostname string, destAddr string, ca *Bo
 		Director: func(req *http.Request) {
 			req.URL.Scheme = "https"
 			req.URL.Host = hostname
+			req.Host = hostname // HTTP/1.1 Host header must match
+			// Headers substituted here; body substituted in secretTransport.RoundTrip
 			substituteHeaders(req, secrets)
 		},
 		Transport: &secretTransport{

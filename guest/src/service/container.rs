@@ -210,6 +210,9 @@ impl ContainerService for GuestServer {
                     }
                 }
             }
+            // Remove BOXLITE_CA_PEM from env — no longer needed, prevents leaking
+            // to container processes. The cert is now in the CA bundle file.
+            unsafe { std::env::remove_var("BOXLITE_CA_PEM") };
         }
 
         // Convert proto BindMount to UserMount for OCI spec

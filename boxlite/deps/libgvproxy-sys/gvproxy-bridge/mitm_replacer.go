@@ -79,41 +79,46 @@ func (s *streamingReplacer) Read(p []byte) (int, error) {
 		return 0, io.EOF
 	}
 
-	// Read into internal buffer
-	if !s.srcDone {
-		n, err := s.src.Read(s.buf[s.bufLen:])
-		s.bufLen += n
-		if err == io.EOF {
-			s.srcDone = true
-		} else if err != nil {
-			return 0, err
+	// Read from src until we have enough data to emit safely.
+	// Never return (0, nil) — that violates io.Reader expectations and
+	// causes io.ReadAll to spin.
+	for {
+		if !s.srcDone {
+			n, err := s.src.Read(s.buf[s.bufLen:])
+			s.bufLen += n
+			if err == io.EOF {
+				s.srcDone = true
+			} else if err != nil {
+				return 0, err
+			}
 		}
-	}
 
-	if s.bufLen == 0 {
-		return 0, io.EOF
-	}
-
-	if s.srcDone {
-		// Final chunk: replace and emit all
-		replaced := s.replacer.Replace(string(s.buf[:s.bufLen]))
-		s.bufLen = 0
-		n := copy(p, replaced)
-		if n < len(replaced) {
-			s.overflow = append(s.overflow[:0], replaced[n:]...)
-			s.overPos = 0
-		} else if len(s.overflow) == 0 {
-			return n, io.EOF
+		if s.bufLen == 0 {
+			return 0, io.EOF
 		}
-		return n, nil
+
+		if s.srcDone {
+			// Final chunk: replace and emit all
+			replaced := s.replacer.Replace(string(s.buf[:s.bufLen]))
+			s.bufLen = 0
+			n := copy(p, replaced)
+			if n < len(replaced) {
+				s.overflow = append(s.overflow[:0], replaced[n:]...)
+				s.overPos = 0
+			} else if len(s.overflow) == 0 {
+				return n, io.EOF
+			}
+			return n, nil
+		}
+
+		safeEnd := s.safeBoundary()
+		if safeEnd > 0 {
+			break // enough data — proceed to replacement
+		}
+		// Not enough data yet — loop to read more from src
 	}
 
 	safeEnd := s.safeBoundary()
-	if safeEnd == 0 {
-		// Not enough data — need to accumulate more. But io.ReadAll expects
-		// Read to not return (0, nil) indefinitely. Read more from src.
-		return 0, nil
-	}
 
 	safe := s.buf[:safeEnd]
 	var n int

@@ -36,7 +36,6 @@ pub struct SpawnedShim {
 /// are passed to [`spawn()`](Self::spawn).
 pub struct ShimSpawner<'a> {
     binary_path: &'a Path,
-    engine_type: VmmKind,
     layout: &'a BoxFilesystemLayout,
     box_id: &'a str,
     options: &'a BoxOptions,
@@ -45,14 +44,13 @@ pub struct ShimSpawner<'a> {
 impl<'a> ShimSpawner<'a> {
     pub fn new(
         binary_path: &'a Path,
-        engine_type: VmmKind,
+        _engine_type: VmmKind,
         layout: &'a BoxFilesystemLayout,
         box_id: &'a str,
         options: &'a BoxOptions,
     ) -> Self {
         Self {
             binary_path,
-            engine_type,
             layout,
             box_id,
             options,
@@ -91,21 +89,23 @@ impl<'a> ShimSpawner<'a> {
         // 3. Setup pre-spawn isolation (cgroups on Linux, no-op on macOS)
         jail.prepare()?;
 
-        // 4. Build isolated command (includes pre_exec hook)
-        let shim_args = self.build_shim_args(config_json)?;
-        let mut cmd = jail.command(self.binary_path, &shim_args);
+        // 4. Build isolated command — no CLI args, config sent via stdin pipe
+        let no_args: &[String] = &[];
+        let mut cmd = jail.command(self.binary_path, no_args);
 
         // 5. Configure environment
         self.configure_env(&mut cmd);
 
-        // 6. Configure stdio (stdin/stdout=null, stderr=file)
+        // 6. Configure stdio
+        // stdin=piped: config JSON is sent via stdin to avoid /proc/cmdline exposure
+        // (config contains CA private keys and secret values)
         let stderr_file = self.create_stderr_file()?;
-        cmd.stdin(Stdio::null());
+        cmd.stdin(Stdio::piped());
         cmd.stdout(Stdio::null());
         cmd.stderr(Stdio::from(stderr_file));
 
         // 7. Spawn
-        let child = cmd.spawn().map_err(|e| {
+        let mut child = cmd.spawn().map_err(|e| {
             let err_msg = format!(
                 "Failed to spawn VM subprocess at {}: {}",
                 self.binary_path.display(),
@@ -115,39 +115,22 @@ impl<'a> ShimSpawner<'a> {
             BoxliteError::Engine(err_msg)
         })?;
 
-        // 8. Close read end in parent (child inherited it via fork)
+        // 8. Write config to stdin, then close (shim reads until EOF).
+        // This is synchronous — safe because pipe buffer (16KB macOS, 64KB Linux)
+        // is always larger than the config (~2-5KB). If config ever exceeds the
+        // pipe buffer, write_all would block waiting for the shim to read.
+        if let Some(mut stdin) = child.stdin.take() {
+            use std::io::Write;
+            stdin.write_all(config_json.as_bytes()).map_err(|e| {
+                BoxliteError::Engine(format!("Failed to write config to shim stdin: {e}"))
+            })?;
+            drop(stdin); // close write end — shim sees EOF
+        }
+
+        // 9. Close read end in parent (child inherited it via fork)
         drop(child_setup);
 
         Ok(SpawnedShim { child, keepalive })
-    }
-
-    fn build_shim_args(&self, config_json: &str) -> BoxliteResult<Vec<String>> {
-        // Write config to a temp file instead of passing as CLI arg.
-        // CLI args are visible in /proc/<pid>/cmdline (world-readable on Linux),
-        // and the config may contain CA private keys and secret values.
-        let config_file = std::env::temp_dir().join(format!("boxlite-shim-{}.json", self.box_id));
-        std::fs::write(&config_file, config_json).map_err(|e| {
-            BoxliteError::Engine(format!(
-                "Failed to write shim config to {}: {}",
-                config_file.display(),
-                e
-            ))
-        })?;
-
-        // Restrict permissions to owner-only (0600)
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let perms = std::fs::Permissions::from_mode(0o600);
-            let _ = std::fs::set_permissions(&config_file, perms);
-        }
-
-        Ok(vec![
-            "--engine".to_string(),
-            format!("{:?}", self.engine_type),
-            "--config-file".to_string(),
-            config_file.to_string_lossy().to_string(),
-        ])
     }
 
     fn configure_env(&self, cmd: &mut std::process::Command) {
@@ -216,17 +199,9 @@ mod tests {
             &options,
         );
 
-        let args = spawner.build_shim_args("{\"test\":true}").unwrap();
-        assert_eq!(args.len(), 4);
-        assert_eq!(args[0], "--engine");
-        assert_eq!(args[1], "Libkrun");
-        assert_eq!(args[2], "--config-file");
-        // args[3] is a temp file path — verify it exists and contains the config
-        let config_path = &args[3];
-        let contents = std::fs::read_to_string(config_path).unwrap();
-        assert_eq!(contents, "{\"test\":true}");
-        // Clean up
-        let _ = std::fs::remove_file(config_path);
+        // No CLI args — config is sent via stdin pipe
+        // Just verify the spawner was created without error
+        assert_eq!(spawner.box_id, "test-box");
     }
 
     #[test]

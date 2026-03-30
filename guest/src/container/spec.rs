@@ -540,7 +540,7 @@ fn build_standard_mounts(bundle_path: &Path) -> BoxliteResult<Vec<Mount>> {
             })?,
     );
 
-    // Add /etc/hosts bind mount (rw so users can add DNS entries)
+    // Add /etc/hosts bind mount (read-only — writable /etc/hosts allows DNS hijacking)
     let hosts_path = bundle_path.join("hosts");
     mounts.push(
         MountBuilder::default()
@@ -549,7 +549,7 @@ fn build_standard_mounts(bundle_path: &Path) -> BoxliteResult<Vec<Mount>> {
             .source(hosts_path.to_str().ok_or_else(|| {
                 BoxliteError::Internal(format!("Invalid hosts path: {}", hosts_path.display()))
             })?)
-            .options(vec!["bind".to_string()])
+            .options(vec!["bind".to_string(), "ro".to_string()])
             .build()
             .map_err(|e| {
                 BoxliteError::Internal(format!("Failed to build /etc/hosts mount: {}", e))

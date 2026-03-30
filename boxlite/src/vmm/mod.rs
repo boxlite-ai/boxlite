@@ -145,6 +145,9 @@ impl BlockDevices {
 /// communication channel, and additional environment variables.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct InstanceSpec {
+    /// Engine type (e.g., Libkrun). Previously passed as --engine CLI arg,
+    /// now included in the config to avoid any CLI args (security: /proc/cmdline).
+    pub engine: VmmKind,
     /// Unique identifier for this box instance.
     /// Used for logging, cgroup naming, and isolation identification.
     pub box_id: String,

@@ -112,19 +112,17 @@ func handleWebSocketUpgrade(w http.ResponseWriter, req *http.Request, destAddr s
 	go func() {
 		defer wg.Done()
 		io.Copy(guestConn, upstreamReader)
-		if tc, ok := guestConn.(*net.TCPConn); ok {
-			tc.CloseWrite()
-		}
 	}()
 
 	// guest -> upstream
 	go func() {
 		defer wg.Done()
 		io.Copy(upstreamConn, guestConn)
-		upstreamConn.CloseWrite()
 	}()
 
 	wg.Wait()
+	// Both directions done — close both connections.
+	// Don't use CloseWrite on tls.Conn (sends close_notify, not TCP half-close).
 	guestConn.Close()
 	upstreamConn.Close()
 }

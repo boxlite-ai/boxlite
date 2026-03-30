@@ -173,59 +173,61 @@ class TestSecretIntegration:
                 name="key_b", value="real-val-b-DO-NOT-LEAK", hosts=["b.com"]
             ),
         ]
-        box = runtime.create(boxlite.BoxOptions(image="alpine:latest", secrets=secrets))
+        sandbox = runtime.create(
+            boxlite.BoxOptions(image="alpine:latest", secrets=secrets)
+        )
         try:
             # 1. Placeholder env vars exist with correct format
-            exec_a = box.exec("printenv", ["BOXLITE_SECRET_KEY_A"])
+            exec_a = sandbox.exec("printenv", ["BOXLITE_SECRET_KEY_A"])
             stdout_a = "".join(list(exec_a.stdout())).strip()
             exec_a.wait()
             assert "<BOXLITE_SECRET:key_a>" in stdout_a
 
-            exec_b = box.exec("printenv", ["BOXLITE_SECRET_KEY_B"])
+            exec_b = sandbox.exec("printenv", ["BOXLITE_SECRET_KEY_B"])
             stdout_b = "".join(list(exec_b.stdout())).strip()
             exec_b.wait()
             assert "<BOXLITE_SECRET:key_b>" in stdout_b
 
             # 2. Real values NOT in env
-            execution = box.exec("env", [])
+            execution = sandbox.exec("env", [])
             full_env = "".join(list(execution.stdout()))
             execution.wait()
             assert "real-val-a-DO-NOT-LEAK" not in full_env
             assert "real-val-b-DO-NOT-LEAK" not in full_env
 
             # 3. CA cert in trust store
-            execution = box.exec("cat", ["/etc/ssl/certs/ca-certificates.crt"])
+            execution = sandbox.exec("cat", ["/etc/ssl/certs/ca-certificates.crt"])
             ca_bundle = "".join(list(execution.stdout()))
             execution.wait()
             assert "BEGIN CERTIFICATE" in ca_bundle
 
             # 4. SSL_CERT_FILE env var set
-            execution = box.exec("printenv", ["SSL_CERT_FILE"])
+            execution = sandbox.exec("printenv", ["SSL_CERT_FILE"])
             ssl_cert = "".join(list(execution.stdout())).strip()
             result = execution.wait()
             assert result.exit_code == 0
             assert "ca-certificates" in ssl_cert
 
             # 5. BOXLITE_CA_PEM cleaned up (not leaked to user processes)
-            execution = box.exec("printenv", ["BOXLITE_CA_PEM"])
+            execution = sandbox.exec("printenv", ["BOXLITE_CA_PEM"])
             ca_pem = "".join(list(execution.stdout())).strip()
             result = execution.wait()
             assert result.exit_code == 1 or ca_pem == ""
         finally:
-            box.stop()
+            sandbox.stop()
 
     def test_no_secret_baseline(self, runtime):
         """Without secrets: no BOXLITE_SECRET_* env vars, no CA injection."""
-        box = runtime.create(boxlite.BoxOptions(image="alpine:latest"))
+        sandbox = runtime.create(boxlite.BoxOptions(image="alpine:latest"))
         try:
-            execution = box.exec("env", [])
+            execution = sandbox.exec("env", [])
             full_env = "".join(list(execution.stdout()))
             execution.wait()
 
             assert "BOXLITE_SECRET_" not in full_env
             assert "BOXLITE_CA_PEM" not in full_env
         finally:
-            box.stop()
+            sandbox.stop()
 
     def test_secret_substitution_reaches_upstream(self, runtime):
         """The real secret value reaches the upstream endpoint (the whole point of MITM).
@@ -241,7 +243,7 @@ class TestSecretIntegration:
             value=real_value,
             hosts=["httpbin.org"],
         )
-        box = runtime.create(
+        sandbox = runtime.create(
             boxlite.BoxOptions(
                 image="alpine:latest",
                 allow_net=["httpbin.org"],
@@ -251,7 +253,7 @@ class TestSecretIntegration:
         try:
             # Guest sends placeholder in header; MITM substitutes real value;
             # httpbin.org echoes it back in JSON response.
-            execution = box.exec(
+            execution = sandbox.exec(
                 "wget",
                 [
                     "-q",
@@ -275,7 +277,7 @@ class TestSecretIntegration:
                 "Placeholder leaked to upstream — MITM did not substitute"
             )
         finally:
-            box.stop()
+            sandbox.stop()
 
     def test_non_secret_host_not_intercepted(self, runtime):
         """HTTP to a host NOT in any secret's hosts list works without MITM.
@@ -288,7 +290,7 @@ class TestSecretIntegration:
             value="val",
             hosts=["api.openai.com"],  # only openai is MITM'd
         )
-        box = runtime.create(
+        sandbox = runtime.create(
             boxlite.BoxOptions(
                 image="alpine:latest",
                 allow_net=["httpbin.org"],
@@ -297,7 +299,7 @@ class TestSecretIntegration:
         )
         try:
             # httpbin.org is NOT in secret hosts — should work normally
-            execution = box.exec(
+            execution = sandbox.exec(
                 "wget",
                 ["-q", "-O-", "http://httpbin.org/ip"],
             )
@@ -312,7 +314,7 @@ class TestSecretIntegration:
                 f"Expected JSON with 'origin', got: {stdout[:200]}"
             )
         finally:
-            box.stop()
+            sandbox.stop()
 
 
 if __name__ == "__main__":

@@ -51,12 +51,15 @@ impl PipelineTask<InitCtx> for ContainerRootfsTask {
                     env.push((key, secret.placeholder.clone()));
                 }
                 // Set SSL trust env vars so HTTPS clients trust the MITM CA.
-                // The guest agent installs the CA cert at /etc/ssl/certs/.
                 let ca_bundle = "/etc/ssl/certs/ca-certificates.crt";
                 env.push(("SSL_CERT_FILE".into(), ca_bundle.into()));
                 env.push(("REQUESTS_CA_BUNDLE".into(), ca_bundle.into()));
                 env.push(("NODE_EXTRA_CA_CERTS".into(), ca_bundle.into()));
                 env.push(("CURL_CA_BUNDLE".into(), ca_bundle.into()));
+
+                // Note: BOXLITE_CA_PEM (CA cert for MITM) is injected by the shim
+                // after gvproxy creates the CA. It can't be done here because the
+                // CA doesn't exist yet (gvproxy starts in the shim subprocess).
             }
 
             (
