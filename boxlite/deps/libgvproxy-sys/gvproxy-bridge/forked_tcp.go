@@ -34,11 +34,18 @@ import (
 var linkLocalSubnet tcpip.Subnet
 
 func init() {
-	_, linkLocalNet, _ := net.ParseCIDR("169.254.0.0/16")
-	linkLocalSubnet, _ = tcpip.NewSubnet(
+	_, linkLocalNet, err := net.ParseCIDR("169.254.0.0/16")
+	if err != nil {
+		panic("failed to parse link-local CIDR: " + err.Error())
+	}
+	var subnetErr error
+	linkLocalSubnet, subnetErr = tcpip.NewSubnet(
 		tcpip.AddrFromSlice(linkLocalNet.IP),
 		tcpip.MaskFromBytes(linkLocalNet.Mask),
 	)
+	if subnetErr != nil {
+		panic("failed to create link-local subnet: " + subnetErr.Error())
+	}
 }
 
 func TCPWithFilter(s *stack.Stack, nat map[tcpip.Address]tcpip.Address,

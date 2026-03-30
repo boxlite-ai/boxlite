@@ -7,7 +7,6 @@ import (
 	"net"
 	"net/http"
 	"strings"
-	"sync"
 
 	logrus "github.com/sirupsen/logrus"
 )
@@ -97,25 +96,25 @@ func handleWebSocketUpgrade(w http.ResponseWriter, req *http.Request, destAddr s
 	}
 	guestBuf.Flush()
 
-	// Bidirectional relay
-	var wg sync.WaitGroup
-	wg.Add(2)
+	// Bidirectional relay. When one direction finishes (EOF or error),
+	// close both connections to unblock the other io.Copy. Without this,
+	// a hanging upstream would block the goroutine forever.
+	done := make(chan struct{}, 2)
 
-	// upstream -> guest
 	go func() {
-		defer wg.Done()
 		io.Copy(guestConn, upstreamReader)
+		guestConn.Close()
+		upstreamConn.Close()
+		done <- struct{}{}
 	}()
 
-	// guest -> upstream
 	go func() {
-		defer wg.Done()
 		io.Copy(upstreamConn, guestConn)
+		guestConn.Close()
+		upstreamConn.Close()
+		done <- struct{}{}
 	}()
 
-	wg.Wait()
-	// Both directions done — close both connections.
-	// Don't use CloseWrite on tls.Conn (sends close_notify, not TCP half-close).
-	guestConn.Close()
-	upstreamConn.Close()
+	<-done // first direction finished
+	<-done // second unblocked by Close()
 }

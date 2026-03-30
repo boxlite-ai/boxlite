@@ -170,7 +170,19 @@ pub struct Secret {
 
 impl Secret {
     /// Environment variable key for this secret's placeholder (e.g., `BOXLITE_SECRET_OPENAI`).
+    ///
+    /// # Panics
+    /// Panics if `name` contains non-alphanumeric characters (except underscore/hyphen).
     pub fn env_key(&self) -> String {
+        assert!(
+            !self.name.is_empty()
+                && self
+                    .name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'),
+            "Secret name must be non-empty and contain only alphanumeric, underscore, or hyphen characters, got: {:?}",
+            self.name
+        );
         format!("BOXLITE_SECRET_{}", self.name.to_uppercase())
     }
 

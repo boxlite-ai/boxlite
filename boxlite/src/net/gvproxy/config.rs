@@ -90,12 +90,23 @@ pub struct GvproxyConfig {
 /// Secret configuration for gvproxy MITM proxy.
 ///
 /// JSON field names match the Go `SecretConfig` struct in gvproxy-bridge.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct GvproxySecretConfig {
     pub name: String,
     pub hosts: Vec<String>,
     pub placeholder: String,
     pub value: String,
+}
+
+impl std::fmt::Debug for GvproxySecretConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GvproxySecretConfig")
+            .field("name", &self.name)
+            .field("hosts", &self.hosts)
+            .field("placeholder", &self.placeholder)
+            .field("value", &"[REDACTED]")
+            .finish()
+    }
 }
 
 impl From<&crate::runtime::options::Secret> for GvproxySecretConfig {

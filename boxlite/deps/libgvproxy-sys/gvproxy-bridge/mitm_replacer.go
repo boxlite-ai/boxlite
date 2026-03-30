@@ -26,6 +26,7 @@ type streamingReplacer struct {
 	buf            []byte // internal read buffer for boundary handling
 	bufLen         int    // valid bytes in buf
 	maxPlaceholder int
+	prefixBytes    []byte // first byte of each unique placeholder (for boundary detection)
 
 	// overflow holds replaced output that didn't fit in the caller's buffer.
 	overflow []byte
@@ -44,11 +45,19 @@ func newStreamingReplacer(body io.ReadCloser, secrets []SecretConfig) io.ReadClo
 
 	maxPH := 0
 	pairs := make([]string, 0, len(secrets)*2)
+	seen := make(map[byte]bool)
 	for _, s := range secrets {
 		pairs = append(pairs, s.Placeholder, s.Value)
 		if len(s.Placeholder) > maxPH {
 			maxPH = len(s.Placeholder)
 		}
+		if len(s.Placeholder) > 0 {
+			seen[s.Placeholder[0]] = true
+		}
+	}
+	prefixBytes := make([]byte, 0, len(seen))
+	for b := range seen {
+		prefixBytes = append(prefixBytes, b)
 	}
 
 	return &streamingReplacer{
@@ -56,6 +65,7 @@ func newStreamingReplacer(body io.ReadCloser, secrets []SecretConfig) io.ReadClo
 		replacer:       strings.NewReplacer(pairs...),
 		buf:            make([]byte, replacerBufSize+maxPH),
 		maxPlaceholder: maxPH,
+		prefixBytes:    prefixBytes,
 	}
 }
 
@@ -123,8 +133,8 @@ func (s *streamingReplacer) Read(p []byte) (int, error) {
 	safe := s.buf[:safeEnd]
 	var n int
 
-	if bytes.IndexByte(safe, '<') < 0 {
-		// Fast path: no placeholder possible, copy raw bytes directly to p
+	if !s.containsPrefixByte(safe) {
+		// Fast path: no placeholder prefix byte found, copy raw bytes directly
 		n = copy(p, safe)
 		if n < safeEnd {
 			s.overflow = append(s.overflow[:0], safe[n:]...)
@@ -156,11 +166,23 @@ func (s *streamingReplacer) safeBoundary() int {
 	}
 
 	dangerStart := s.bufLen - (s.maxPlaceholder - 1)
-	idx := bytes.IndexByte(s.buf[dangerStart:s.bufLen], '<')
-	if idx >= 0 {
-		return dangerStart + idx
+	danger := s.buf[dangerStart:s.bufLen]
+	for _, b := range s.prefixBytes {
+		if idx := bytes.IndexByte(danger, b); idx >= 0 {
+			return dangerStart + idx
+		}
 	}
 	return s.bufLen
+}
+
+// containsPrefixByte checks if data contains any placeholder first byte.
+func (s *streamingReplacer) containsPrefixByte(data []byte) bool {
+	for _, b := range s.prefixBytes {
+		if bytes.IndexByte(data, b) >= 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *streamingReplacer) Close() error {

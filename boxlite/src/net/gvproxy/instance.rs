@@ -69,7 +69,7 @@ impl GvproxyInstance {
     ///
     /// * `socket_path` - Caller-provided Unix socket path (must be unique per box)
     /// * `port_mappings` - List of (host_port, guest_port) tuples for port forwarding
-    pub fn new(
+    pub(crate) fn new(
         socket_path: PathBuf,
         port_mappings: &[(u16, u16)],
         allow_net: Vec<String>,

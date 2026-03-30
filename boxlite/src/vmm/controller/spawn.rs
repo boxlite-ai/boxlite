@@ -9,7 +9,6 @@ use crate::jailer::{Jail, JailerBuilder};
 use crate::runtime::layout::BoxFilesystemLayout;
 use crate::runtime::options::BoxOptions;
 use crate::util::configure_library_env;
-use crate::vmm::VmmKind;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use super::watchdog;
@@ -44,7 +43,6 @@ pub struct ShimSpawner<'a> {
 impl<'a> ShimSpawner<'a> {
     pub fn new(
         binary_path: &'a Path,
-        _engine_type: VmmKind,
         layout: &'a BoxFilesystemLayout,
         box_id: &'a str,
         options: &'a BoxOptions,
@@ -193,7 +191,6 @@ mod tests {
 
         let spawner = ShimSpawner::new(
             Path::new("/usr/bin/boxlite-shim"),
-            VmmKind::Libkrun,
             &layout,
             "test-box",
             &options,
@@ -218,7 +215,6 @@ mod tests {
 
         let spawner = ShimSpawner::new(
             Path::new("/usr/bin/boxlite-shim"),
-            VmmKind::Libkrun,
             &layout,
             "test-box",
             &options,
@@ -269,7 +265,6 @@ mod tests {
 
         let spawner = ShimSpawner::new(
             Path::new("/usr/bin/boxlite-shim"),
-            VmmKind::Libkrun,
             &layout,
             "test-box",
             &options,

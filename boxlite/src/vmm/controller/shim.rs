@@ -325,7 +325,6 @@ impl VmmController for ShimController {
         let shim_spawn_start = Instant::now();
         let spawner = ShimSpawner::new(
             &self.binary_path,
-            self.engine_type,
             &self.layout,
             self.box_id.as_str(),
             &self.options,
