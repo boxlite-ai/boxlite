@@ -128,11 +128,25 @@ func (ca *BoxCA) GenerateHostCert(hostname string) (*tls.Certificate, error) {
 		Leaf:        leaf, // stored for TTL check
 	}
 
-	// Evict entire cache if it grows too large (certs regenerate in ~0.1ms)
+	// Evict expired entries and enforce max size.
+	// sync.Map doesn't have a size, so we count during eviction.
 	cacheSize := 0
-	ca.certCache.Range(func(_, _ any) bool { cacheSize++; return cacheSize < maxCertCacheSize })
+	ca.certCache.Range(func(key, val any) bool {
+		if cert, ok := val.(*tls.Certificate); ok && cert.Leaf != nil && now.After(cert.Leaf.NotAfter) {
+			ca.certCache.Delete(key) // expired
+		} else {
+			cacheSize++
+		}
+		return true
+	})
 	if cacheSize >= maxCertCacheSize {
-		ca.certCache.Range(func(key, _ any) bool { ca.certCache.Delete(key); return true })
+		// Over limit even after TTL eviction — clear oldest half
+		evicted := 0
+		ca.certCache.Range(func(key, _ any) bool {
+			ca.certCache.Delete(key)
+			evicted++
+			return evicted < cacheSize/2
+		})
 	}
 
 	actual, loaded := ca.certCache.LoadOrStore(hostname, tlsCert)

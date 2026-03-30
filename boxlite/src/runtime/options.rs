@@ -165,39 +165,37 @@ pub struct Secret {
     /// Placeholder string visible to the guest (e.g., "<BOXLITE_SECRET:openai>").
     pub placeholder: String,
     /// The actual secret value (e.g., "sk-..."). Never enters the VM.
+    /// Skipped during serialization to prevent accidental leaks in logs/dumps.
+    /// The value flows to Go via GvproxySecretConfig (internal type, not user-facing).
+    #[serde(skip_serializing, default)]
     pub value: String,
 }
 
 impl Secret {
-    /// Validate that the secret name is safe for use as an env var suffix.
-    fn validate_name(name: &str) -> Result<(), String> {
-        if name.is_empty() {
-            return Err("Secret name must not be empty".into());
-        }
-        if !name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-        {
-            return Err(format!(
-                "Secret name must contain only alphanumeric, underscore, or hyphen characters, got: {name:?}"
-            ));
-        }
-        Ok(())
-    }
-
     /// Environment variable key for this secret's placeholder (e.g., `BOXLITE_SECRET_OPENAI`).
     ///
-    /// Returns `Err` if the name contains invalid characters.
-    pub fn env_key(&self) -> Result<String, String> {
-        Self::validate_name(&self.name)?;
-        Ok(format!("BOXLITE_SECRET_{}", self.name.to_uppercase()))
+    /// Sanitizes the name: replaces non-alphanumeric chars with `_`, ensures non-empty.
+    pub fn env_key(&self) -> String {
+        let sanitized: String = self
+            .name
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '_' {
+                    c.to_ascii_uppercase()
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        if sanitized.is_empty() {
+            return "BOXLITE_SECRET__UNNAMED".to_string();
+        }
+        format!("BOXLITE_SECRET_{sanitized}")
     }
 
     /// Environment variable key-value pair: (env_key, placeholder).
-    ///
-    /// Returns `None` if the name is invalid (logged at call site).
-    pub fn env_pair(&self) -> Option<(String, String)> {
-        self.env_key().ok().map(|k| (k, self.placeholder.clone()))
+    pub fn env_pair(&self) -> (String, String) {
+        (self.env_key(), self.placeholder.clone())
     }
 }
 
@@ -733,11 +731,54 @@ mod tests {
     }
 
     #[test]
-    fn test_secret_serde_roundtrip() {
+    fn test_secret_serde_value_skipped() {
         let secret = test_secret();
         let json = serde_json::to_string(&secret).unwrap();
-        let deserialized: Secret = serde_json::from_str(&json).unwrap();
-        assert_eq!(secret, deserialized);
+        // value is skip_serializing — should not appear in JSON
+        assert!(!json.contains("sk-test-super-secret-key-12345"));
+        assert!(json.contains("openai")); // name is present
+        // Deserialization with explicit value still works
+        let full_json = r#"{"name":"openai","hosts":["api.openai.com"],"placeholder":"<BOXLITE_SECRET:openai>","value":"sk-123"}"#;
+        let deserialized: Secret = serde_json::from_str(full_json).unwrap();
+        assert_eq!(deserialized.value, "sk-123");
+    }
+
+    #[test]
+    fn test_secret_env_key_valid_names() {
+        let cases = [
+            ("openai", "BOXLITE_SECRET_OPENAI"),
+            ("my_key", "BOXLITE_SECRET_MY_KEY"),
+            ("KEY123", "BOXLITE_SECRET_KEY123"),
+            ("a-b-c", "BOXLITE_SECRET_A_B_C"), // hyphen → underscore
+        ];
+        for (name, expected) in cases {
+            let secret = Secret {
+                name: name.into(),
+                hosts: vec![],
+                placeholder: String::new(),
+                value: String::new(),
+            };
+            assert_eq!(secret.env_key(), expected, "name={name:?}");
+        }
+    }
+
+    #[test]
+    fn test_secret_env_key_sanitizes_invalid_names() {
+        let cases = [
+            ("my key", "BOXLITE_SECRET_MY_KEY"), // space → _
+            ("a/b/c", "BOXLITE_SECRET_A_B_C"),   // slash → _
+            ("", "BOXLITE_SECRET__UNNAMED"),     // empty
+            ("café", "BOXLITE_SECRET_CAF_"),     // non-ascii → _
+        ];
+        for (name, expected) in cases {
+            let secret = Secret {
+                name: name.into(),
+                hosts: vec![],
+                placeholder: String::new(),
+                value: String::new(),
+            };
+            assert_eq!(secret.env_key(), expected, "name={name:?}");
+        }
     }
 
     #[test]

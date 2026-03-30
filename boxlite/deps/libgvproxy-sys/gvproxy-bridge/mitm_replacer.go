@@ -167,10 +167,15 @@ func (s *streamingReplacer) safeBoundary() int {
 
 	dangerStart := s.bufLen - (s.maxPlaceholder - 1)
 	danger := s.buf[dangerStart:s.bufLen]
+	// Return the earliest occurrence of any prefix byte in the danger zone.
+	minIdx := len(danger)
 	for _, b := range s.prefixBytes {
-		if idx := bytes.IndexByte(danger, b); idx >= 0 {
-			return dangerStart + idx
+		if idx := bytes.IndexByte(danger, b); idx >= 0 && idx < minIdx {
+			minIdx = idx
 		}
+	}
+	if minIdx < len(danger) {
+		return dangerStart + minIdx
 	}
 	return s.bufLen
 }

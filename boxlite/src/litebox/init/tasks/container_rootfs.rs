@@ -44,15 +44,7 @@ impl PipelineTask<InitCtx> for ContainerRootfsTask {
             let mut env = ctx.config.options.env.clone();
             // Inject secret placeholder env vars (e.g., BOXLITE_SECRET_OPENAI=<BOXLITE_SECRET:openai>).
             // The MITM proxy substitutes real values at the network boundary.
-            for secret in &ctx.config.options.secrets {
-                match secret.env_pair() {
-                    Some(pair) => env.push(pair),
-                    None => tracing::warn!(
-                        name = %secret.name,
-                        "Skipping secret with invalid name (must be alphanumeric/underscore/hyphen)"
-                    ),
-                }
-            }
+            env.extend(ctx.config.options.secrets.iter().map(|s| s.env_pair()));
 
             (
                 ctx.config.options.rootfs.clone(),
