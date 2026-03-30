@@ -16,7 +16,8 @@ import (
 const upstreamDialTimeout = 30 * time.Second
 
 // mitmAndForward handles a MITM'd connection: TLS termination, reverse proxy, secret substitution.
-func mitmAndForward(guestConn net.Conn, hostname string, destAddr string, ca *BoxCA, secrets []SecretConfig) {
+// upstreamTLSConfig overrides the TLS config for upstream connections (nil = system defaults).
+func mitmAndForward(guestConn net.Conn, hostname string, destAddr string, ca *BoxCA, secrets []SecretConfig, upstreamTLSConfig ...*tls.Config) {
 	cert, err := ca.GenerateHostCert(hostname)
 	if err != nil {
 		logrus.WithError(err).WithField("hostname", hostname).Error("MITM: cert generation failed")
@@ -31,12 +32,18 @@ func mitmAndForward(guestConn net.Conn, hostname string, destAddr string, ca *Bo
 		NextProtos: []string{"h2", "http/1.1"},
 	})
 
+	// Upstream TLS: use system cert pool by default (secure).
+	// Tests may pass a custom config for self-signed upstream certs.
+	var tlsCfg *tls.Config
+	if len(upstreamTLSConfig) > 0 && upstreamTLSConfig[0] != nil {
+		tlsCfg = upstreamTLSConfig[0]
+	} else {
+		tlsCfg = &tls.Config{ServerName: hostname}
+	}
+
 	upstreamTransport := &http.Transport{
 		ForceAttemptHTTP2: true,
-		TLSClientConfig: &tls.Config{
-			ServerName:         hostname,
-			InsecureSkipVerify: true,
-		},
+		TLSClientConfig:  tlsCfg,
 		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
 			return (&net.Dialer{Timeout: upstreamDialTimeout}).DialContext(ctx, network, destAddr)
 		},

@@ -293,12 +293,8 @@ fn build_guest_entrypoint(
         builder.with_env(key, value);
     }
 
-    // Inject secret placeholders as env vars.
-    // The guest sees "<BOXLITE_SECRET:openai>" — the MITM proxy substitutes the real value.
-    for secret in &options.secrets {
-        let env_key = format!("BOXLITE_SECRET_{}", secret.name.to_uppercase());
-        builder.with_env(&env_key, &secret.placeholder);
-    }
+    // Secret placeholder env vars are injected in container_rootfs.rs (single source of truth).
+    // The guest init process inherits them from the container environment.
 
     Ok(builder.build())
 }
@@ -360,7 +356,10 @@ fn build_network_config(
                 tracing::info!("MITM: generated ephemeral CA for secret substitution");
             }
             Err(e) => {
-                tracing::error!("MITM: failed to generate CA: {e}");
+                // CA generation failed — secrets cannot be substituted.
+                // Disable secrets rather than start a box that silently doesn't work.
+                tracing::error!("MITM: CA generation failed, secrets disabled: {e}");
+                config.secrets.clear();
             }
         }
     }

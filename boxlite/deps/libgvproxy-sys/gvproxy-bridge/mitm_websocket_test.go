@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"net"
@@ -65,12 +66,24 @@ func TestHandleWebSocketUpgrade_HeaderSubstitution(t *testing.T) {
 		},
 	}
 
-	// Start a raw TCP server that reads the HTTP upgrade request and captures headers
-	receivedAuth := make(chan string, 1)
-	upstreamLn, err := net.Listen("tcp", "127.0.0.1:0")
+	// Start a TLS upstream server that reads the HTTP upgrade request and captures headers
+	ca, err := NewBoxCA()
 	if err != nil {
 		t.Fatal(err)
 	}
+	upstreamCert, err := ca.GenerateHostCert("127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	receivedAuth := make(chan string, 1)
+	rawLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstreamLn := tls.NewListener(rawLn, &tls.Config{
+		Certificates: []tls.Certificate{*upstreamCert},
+	})
 	defer upstreamLn.Close()
 
 	go func() {
@@ -94,10 +107,11 @@ func TestHandleWebSocketUpgrade_HeaderSubstitution(t *testing.T) {
 	}()
 
 	destAddr := upstreamLn.Addr().String()
+	insecureTLS := &tls.Config{InsecureSkipVerify: true}
 
 	// Create a test HTTP server that uses handleWebSocketUpgrade
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handleWebSocketUpgrade(w, r, destAddr, secrets)
+		handleWebSocketUpgrade(w, r, destAddr, secrets, insecureTLS)
 	})
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
@@ -136,11 +150,23 @@ func TestHandleWebSocketUpgrade_HeaderSubstitution(t *testing.T) {
 func TestHandleWebSocketUpgrade_BidirectionalRelay(t *testing.T) {
 	secrets := []SecretConfig{}
 
-	// Start a simple TCP echo server (reads a line, writes it back)
-	upstreamLn, err := net.Listen("tcp", "127.0.0.1:0")
+	// Start a TLS echo server (reads a line, writes it back)
+	ca, err := NewBoxCA()
 	if err != nil {
 		t.Fatal(err)
 	}
+	upstreamCert, err := ca.GenerateHostCert("127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rawLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstreamLn := tls.NewListener(rawLn, &tls.Config{
+		Certificates: []tls.Certificate{*upstreamCert},
+	})
 	defer upstreamLn.Close()
 
 	go func() {
@@ -151,13 +177,11 @@ func TestHandleWebSocketUpgrade_BidirectionalRelay(t *testing.T) {
 		defer conn.Close()
 
 		reader := bufio.NewReader(conn)
-		// Read the HTTP upgrade request first
 		_, err = http.ReadRequest(reader)
 		if err != nil {
 			return
 		}
 
-		// Send 101 Switching Protocols
 		resp := "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n"
 		conn.Write([]byte(resp))
 
@@ -175,9 +199,10 @@ func TestHandleWebSocketUpgrade_BidirectionalRelay(t *testing.T) {
 	}()
 
 	destAddr := upstreamLn.Addr().String()
+	insecureTLS := &tls.Config{InsecureSkipVerify: true}
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		handleWebSocketUpgrade(w, r, destAddr, secrets)
+		handleWebSocketUpgrade(w, r, destAddr, secrets, insecureTLS)
 	})
 	srv := httptest.NewServer(handler)
 	defer srv.Close()

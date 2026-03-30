@@ -47,7 +47,7 @@ func dialThroughMITMWithProto(t *testing.T, ca *BoxCA, hostname, destAddr string
 	caPool, _ := ca.CACertPool()
 
 	guest, proxy := net.Pipe()
-	go mitmAndForward(proxy, hostname, destAddr, ca, secrets)
+	go mitmAndForward(proxy, hostname, destAddr, ca, secrets, &tls.Config{InsecureSkipVerify: true})
 
 	nextProtos := []string{"http/1.1"}
 	if forceProto == "h2" {
@@ -659,7 +659,7 @@ func TestMitmProxy_GuestDisconnect(t *testing.T) {
 
 	guestConn, proxyConn := net.Pipe()
 
-	go mitmAndForward(proxyConn, "api.example.com", addr, ca, secrets)
+	go mitmAndForward(proxyConn, "api.example.com", addr, ca, secrets, &tls.Config{InsecureSkipVerify: true})
 
 	// Close guest side immediately to simulate disconnect
 	guestConn.Close()

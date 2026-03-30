@@ -287,7 +287,7 @@ impl From<JsBoxOptions> for BoxOptions {
             entrypoint: js_opts.entrypoint,
             cmd: js_opts.cmd,
             user: js_opts.user,
-            secrets: vec![], // TODO: Node.js SDK secret support
+            secrets: vec![], // Secret substitution not yet supported in Node.js SDK
         }
     }
 }

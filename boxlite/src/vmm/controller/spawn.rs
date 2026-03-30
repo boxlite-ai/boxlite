@@ -92,7 +92,7 @@ impl<'a> ShimSpawner<'a> {
         jail.prepare()?;
 
         // 4. Build isolated command (includes pre_exec hook)
-        let shim_args = self.build_shim_args(config_json);
+        let shim_args = self.build_shim_args(config_json)?;
         let mut cmd = jail.command(self.binary_path, &shim_args);
 
         // 5. Configure environment
@@ -121,13 +121,33 @@ impl<'a> ShimSpawner<'a> {
         Ok(SpawnedShim { child, keepalive })
     }
 
-    fn build_shim_args(&self, config_json: &str) -> Vec<String> {
-        vec![
+    fn build_shim_args(&self, config_json: &str) -> BoxliteResult<Vec<String>> {
+        // Write config to a temp file instead of passing as CLI arg.
+        // CLI args are visible in /proc/<pid>/cmdline (world-readable on Linux),
+        // and the config may contain CA private keys and secret values.
+        let config_file = std::env::temp_dir().join(format!("boxlite-shim-{}.json", self.box_id));
+        std::fs::write(&config_file, config_json).map_err(|e| {
+            BoxliteError::Engine(format!(
+                "Failed to write shim config to {}: {}",
+                config_file.display(),
+                e
+            ))
+        })?;
+
+        // Restrict permissions to owner-only (0600)
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = std::fs::Permissions::from_mode(0o600);
+            let _ = std::fs::set_permissions(&config_file, perms);
+        }
+
+        Ok(vec![
             "--engine".to_string(),
             format!("{:?}", self.engine_type),
-            "--config".to_string(),
-            config_json.to_string(),
-        ]
+            "--config-file".to_string(),
+            config_file.to_string_lossy().to_string(),
+        ])
     }
 
     fn configure_env(&self, cmd: &mut std::process::Command) {
@@ -196,12 +216,17 @@ mod tests {
             &options,
         );
 
-        let args = spawner.build_shim_args("{\"test\":true}");
+        let args = spawner.build_shim_args("{\"test\":true}").unwrap();
         assert_eq!(args.len(), 4);
         assert_eq!(args[0], "--engine");
         assert_eq!(args[1], "Libkrun");
-        assert_eq!(args[2], "--config");
-        assert_eq!(args[3], "{\"test\":true}");
+        assert_eq!(args[2], "--config-file");
+        // args[3] is a temp file path — verify it exists and contains the config
+        let config_path = &args[3];
+        let contents = std::fs::read_to_string(config_path).unwrap();
+        assert_eq!(contents, "{\"test\":true}");
+        // Clean up
+        let _ = std::fs::remove_file(config_path);
     }
 
     #[test]

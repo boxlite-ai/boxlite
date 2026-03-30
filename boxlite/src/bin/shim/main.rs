@@ -40,17 +40,16 @@ use boxlite::net::{ConnectionType, NetworkBackendEndpoint, gvproxy::GvproxyInsta
 )]
 struct ShimArgs {
     /// Engine type to use for Box execution
-    ///
-    /// Supported engines: libkrun, firecracker
     #[arg(long)]
     engine: VmmKind,
 
-    /// Box configuration as JSON string
-    ///
-    /// This contains the full InstanceSpec including rootfs path, volumes,
-    /// networking, guest entrypoint, and other runtime configuration.
+    /// Path to config JSON file (preferred — avoids /proc/cmdline exposure)
     #[arg(long)]
-    config: String,
+    config_file: Option<String>,
+
+    /// Box configuration as inline JSON string (legacy, visible in /proc/cmdline)
+    #[arg(long)]
+    config: Option<String>,
 }
 
 /// Initialize tracing with file logging.
@@ -91,10 +90,25 @@ fn main() -> BoxliteResult<()> {
     // VmmKind parsed via FromStr trait automatically
     let args = ShimArgs::parse();
 
-    // Parse InstanceSpec from JSON
+    // Read config from file (preferred) or inline arg (legacy).
+    // File-based config avoids exposing secrets in /proc/<pid>/cmdline.
+    let config_json = if let Some(ref path) = args.config_file {
+        let json = std::fs::read_to_string(path)
+            .map_err(|e| BoxliteError::Engine(format!("Failed to read config file {path}: {e}")))?;
+        // Delete the config file immediately after reading (contains secrets)
+        let _ = std::fs::remove_file(path);
+        json
+    } else if let Some(ref json) = args.config {
+        json.clone()
+    } else {
+        return Err(BoxliteError::Engine(
+            "Either --config-file or --config must be provided".to_string(),
+        ));
+    };
+
     #[allow(unused_mut)]
-    let mut config: InstanceSpec = serde_json::from_str(&args.config)
-        .map_err(|e| BoxliteError::Engine(format!("Failed to parse config JSON: {}", e)))?;
+    let mut config: InstanceSpec = serde_json::from_str(&config_json)
+        .map_err(|e| BoxliteError::Engine(format!("Failed to parse config JSON: {e}")))?;
     timing("config parsed");
 
     // Initialize logging using box_dir derived from exit_file path.

@@ -2,12 +2,14 @@ package main
 
 import (
 	"bufio"
+	"crypto/tls"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"strings"
 	"sync"
+
+	logrus "github.com/sirupsen/logrus"
 )
 
 // isWebSocketUpgrade checks if the request is a WebSocket upgrade.
@@ -30,23 +32,38 @@ func isWebSocketUpgrade(req *http.Request) bool {
 }
 
 // handleWebSocketUpgrade handles a WebSocket upgrade through the MITM proxy.
-func handleWebSocketUpgrade(w http.ResponseWriter, req *http.Request, destAddr string, secrets []SecretConfig) {
+// Optional upstreamTLSConfig overrides upstream TLS (nil = derive from hostname).
+func handleWebSocketUpgrade(w http.ResponseWriter, req *http.Request, destAddr string, secrets []SecretConfig, upstreamTLSConfig ...*tls.Config) {
 	// Substitute secrets in request headers
 	substituteHeaders(req, secrets)
 
-	// Dial upstream
-	upstreamConn, err := net.Dial("tcp", destAddr)
+	hostname := req.Host
+	if h, _, err := net.SplitHostPort(hostname); err == nil {
+		hostname = h
+	}
+
+	// Dial upstream with TLS (wss://)
+	rawConn, err := net.Dial("tcp", destAddr)
 	if err != nil {
-		log.Printf("websocket: failed to dial upstream %s: %v", destAddr, err)
+		logrus.WithError(err).WithField("destAddr", destAddr).Warn("websocket: upstream dial failed")
 		http.Error(w, "upstream connection failed", http.StatusBadGateway)
 		return
 	}
 
-	// Write the modified HTTP request to upstream (plain TCP, no TLS for test upstream)
+	// Wrap with TLS for upstream (wss://)
+	var tlsCfg *tls.Config
+	if len(upstreamTLSConfig) > 0 && upstreamTLSConfig[0] != nil {
+		tlsCfg = upstreamTLSConfig[0]
+	} else {
+		tlsCfg = &tls.Config{ServerName: hostname}
+	}
+	upstreamConn := tls.Client(rawConn, tlsCfg)
+
+	// Write the modified HTTP request to upstream
 	err = req.Write(upstreamConn)
 	if err != nil {
 		upstreamConn.Close()
-		log.Printf("websocket: failed to write request to upstream: %v", err)
+		logrus.WithError(err).Warn("websocket: upstream request write failed")
 		http.Error(w, "upstream write failed", http.StatusBadGateway)
 		return
 	}
@@ -56,7 +73,7 @@ func handleWebSocketUpgrade(w http.ResponseWriter, req *http.Request, destAddr s
 	upstreamResp, err := http.ReadResponse(upstreamReader, req)
 	if err != nil {
 		upstreamConn.Close()
-		log.Printf("websocket: failed to read upstream response: %v", err)
+		logrus.WithError(err).Warn("websocket: upstream response read failed")
 		http.Error(w, "upstream response failed", http.StatusBadGateway)
 		return
 	}
@@ -74,7 +91,7 @@ func handleWebSocketUpgrade(w http.ResponseWriter, req *http.Request, destAddr s
 	if err != nil {
 		upstreamConn.Close()
 		upstreamResp.Body.Close()
-		log.Printf("websocket: hijack failed: %v", err)
+		logrus.WithError(err).Warn("websocket: hijack failed")
 		return
 	}
 
@@ -95,7 +112,6 @@ func handleWebSocketUpgrade(w http.ResponseWriter, req *http.Request, destAddr s
 	go func() {
 		defer wg.Done()
 		io.Copy(guestConn, upstreamReader)
-		// Signal guest that upstream is done writing
 		if tc, ok := guestConn.(*net.TCPConn); ok {
 			tc.CloseWrite()
 		}
@@ -105,10 +121,7 @@ func handleWebSocketUpgrade(w http.ResponseWriter, req *http.Request, destAddr s
 	go func() {
 		defer wg.Done()
 		io.Copy(upstreamConn, guestConn)
-		// Signal upstream that guest is done writing
-		if tc, ok := upstreamConn.(*net.TCPConn); ok {
-			tc.CloseWrite()
-		}
+		upstreamConn.CloseWrite()
 	}()
 
 	wg.Wait()

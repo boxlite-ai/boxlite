@@ -200,10 +200,10 @@ type GvproxyInstance struct {
 	Cancel     context.CancelFunc
 	conn       net.Conn                       // For macOS UnixDgram (VFKit)
 	listener   net.Listener                   // For Linux UnixStream (Qemu)
-	vn         *virtualnetwork.VirtualNetwork // Virtual network for stats collection
-	vnMu       sync.RWMutex                   // Protects vn field
-	ca            *BoxCA              // Ephemeral MITM CA (nil if no secrets)
-	secretMatcher *SecretHostMatcher  // Hostname→secrets lookup (nil if no secrets)
+	vn            *virtualnetwork.VirtualNetwork // Virtual network for stats collection
+	vnMu          sync.RWMutex                   // Protects vn field
+	ca            *BoxCA                         // Ephemeral MITM CA (nil if no secrets)
+	secretMatcher *SecretHostMatcher              // Hostname→secrets lookup (nil if no secrets)
 }
 
 var (
