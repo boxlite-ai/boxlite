@@ -121,9 +121,6 @@ async fn async_main() -> BoxliteResult<()> {
     mounts::mount_essential_tmpfs()?;
     eprintln!("[guest] T+{}ms: tmpfs mounted", boot_elapsed_ms());
 
-    // CA trust installation happens in Container.Init via gRPC CACert field.
-    // No guest-level CA setup needed (guest agent doesn't make HTTPS calls).
-
     // Parse command-line arguments with clap
     let args = GuestArgs::parse();
     info!(
