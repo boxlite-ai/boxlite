@@ -45,21 +45,12 @@ impl PipelineTask<InitCtx> for ContainerRootfsTask {
             // to exec commands. The MITM proxy substitutes the real value at
             // the network boundary — the guest only ever sees the placeholder.
             let mut env = ctx.config.options.env.clone();
-            if !ctx.config.options.secrets.is_empty() {
-                for secret in &ctx.config.options.secrets {
-                    let key = format!("BOXLITE_SECRET_{}", secret.name.to_uppercase());
-                    env.push((key, secret.placeholder.clone()));
-                }
-                // Set SSL trust env vars so HTTPS clients trust the MITM CA.
-                let ca_bundle = "/etc/ssl/certs/ca-certificates.crt";
-                env.push(("SSL_CERT_FILE".into(), ca_bundle.into()));
-                env.push(("REQUESTS_CA_BUNDLE".into(), ca_bundle.into()));
-                env.push(("NODE_EXTRA_CA_CERTS".into(), ca_bundle.into()));
-                env.push(("CURL_CA_BUNDLE".into(), ca_bundle.into()));
-
-                // Note: BOXLITE_CA_PEM (CA cert for MITM) is injected by the shim
-                // after gvproxy creates the CA. It can't be done here because the
-                // CA doesn't exist yet (gvproxy starts in the shim subprocess).
+            // Inject secret placeholder env vars so container code can use them
+            // in HTTP headers. The MITM proxy substitutes real values at the
+            // network boundary — the guest only ever sees the placeholder.
+            for secret in &ctx.config.options.secrets {
+                let key = format!("BOXLITE_SECRET_{}", secret.name.to_uppercase());
+                env.push((key, secret.placeholder.clone()));
             }
 
             (

@@ -14,13 +14,9 @@ pub(crate) const CA_BUNDLE_PATH: &str = "/etc/ssl/certs/ca-certificates.crt";
 /// Environment variable containing the base64-encoded CA PEM
 const CA_PEM_ENV: &str = "BOXLITE_CA_PEM";
 
-/// SSL trust environment variables to set for common HTTPS clients
-pub(crate) const SSL_TRUST_VARS: &[(&str, &str)] = &[
-    ("SSL_CERT_FILE", CA_BUNDLE_PATH),
-    ("REQUESTS_CA_BUNDLE", CA_BUNDLE_PATH),  // Python requests
-    ("NODE_EXTRA_CA_CERTS", CA_BUNDLE_PATH), // Node.js
-    ("CURL_CA_BUNDLE", CA_BUNDLE_PATH),      // curl
-];
+// SSL trust env vars removed — the CA cert is appended to the default bundle
+// at /etc/ssl/certs/ca-certificates.crt, which all major TLS libraries check
+// by default on Linux. No env var overrides needed.
 
 /// Install the MITM CA certificate from the environment variable.
 ///
@@ -53,15 +49,9 @@ pub fn install_ca_from_env() {
         info!("MITM CA cert installed into {CA_BUNDLE_PATH}");
     }
 
-    // Set SSL trust env vars for this process and children.
-    // These are also injected into container env by container_rootfs.rs on the host.
-    for (key, value) in SSL_TRUST_VARS {
-        std::env::set_var(key, value);
-    }
-
-    // Note: BOXLITE_CA_PEM is removed in container.rs after Container.Init
-    // reads it. It must persist until then because the container rootfs
-    // overlay also needs the CA cert.
+    // BOXLITE_CA_PEM persists in guest env for container.rs to read during
+    // Container.Init (it injects the CA into the container rootfs bundle).
+    // Container processes don't inherit it — container env is set explicitly.
 }
 
 /// Append PEM bytes to the system CA bundle file.
@@ -84,16 +74,4 @@ fn append_to_ca_bundle(pem: &[u8]) -> std::io::Result<()> {
     file.write_all(b"\n")?;
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_ssl_trust_vars_have_correct_path() {
-        for (_, path) in SSL_TRUST_VARS {
-            assert_eq!(*path, CA_BUNDLE_PATH);
-        }
-    }
 }

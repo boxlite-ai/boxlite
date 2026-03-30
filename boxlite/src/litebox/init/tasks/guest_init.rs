@@ -31,6 +31,7 @@ impl PipelineTask<InitCtx> for GuestInitTask {
             rootfs_init,
             container_mounts,
             network_spec,
+            ca_cert_pem,
         ) =
             {
                 let mut ctx = ctx.lock().await;
@@ -52,6 +53,7 @@ impl PipelineTask<InitCtx> for GuestInitTask {
                     BoxliteError::Internal("vmm_spawn task must run first".into())
                 })?;
                 let network_spec = ctx.config.options.network.clone();
+                let ca_cert_pem = ctx.ca_cert_pem.clone();
                 (
                     guest_session,
                     container_image_config,
@@ -60,6 +62,7 @@ impl PipelineTask<InitCtx> for GuestInitTask {
                     rootfs_init,
                     container_mounts,
                     network_spec,
+                    ca_cert_pem,
                 )
             };
 
@@ -71,6 +74,7 @@ impl PipelineTask<InitCtx> for GuestInitTask {
             &rootfs_init,
             &container_mounts,
             &network_spec,
+            ca_cert_pem.as_deref(),
         )
         .await
         .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
@@ -90,6 +94,7 @@ impl PipelineTask<InitCtx> for GuestInitTask {
 }
 
 /// Initialize guest and start container.
+#[allow(clippy::too_many_arguments)]
 async fn run_guest_init(
     guest_session: GuestSession,
     container_image_config: &ContainerImageConfig,
@@ -98,6 +103,7 @@ async fn run_guest_init(
     rootfs_init: &ContainerRootfsInitConfig,
     container_mounts: &[ContainerMount],
     network_spec: &NetworkSpec,
+    ca_cert_pem: Option<&str>,
 ) -> BoxliteResult<()> {
     let container_id_str = container_id.as_str();
 
@@ -127,12 +133,14 @@ async fn run_guest_init(
     // Step 2: Container Init (rootfs + container image config + user volume mounts)
     tracing::info!("Sending container configuration to guest");
     let mut container_interface = guest_session.container().await?;
+    let ca_certs: Vec<String> = ca_cert_pem.into_iter().map(|s| s.to_string()).collect();
     let returned_id = container_interface
         .init(
             container_id_str,
             container_image_config.clone(),
             rootfs_init.clone(),
             container_mounts.to_vec(),
+            ca_certs,
         )
         .await?;
     tracing::info!(container_id = %returned_id, "Container initialized");

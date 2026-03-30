@@ -187,32 +187,30 @@ impl ContainerService for GuestServer {
             }));
         }
 
-        // Inject MITM CA cert into container rootfs (if secrets are configured).
-        // Read the CA PEM directly from the BOXLITE_CA_PEM env var (base64-encoded),
-        // decode it, and append to the container's CA bundle.
-        if let Ok(b64) = std::env::var("BOXLITE_CA_PEM") {
-            use base64::Engine;
-            if let Ok(pem) = base64::engine::general_purpose::STANDARD.decode(&b64) {
-                let container_ca_bundle = bundle_rootfs.join("etc/ssl/certs/ca-certificates.crt");
-                if container_ca_bundle.exists() {
-                    use std::io::Write;
-                    match std::fs::OpenOptions::new()
-                        .append(true)
-                        .open(&container_ca_bundle)
-                    {
-                        Ok(mut f) => {
+        // Inject CA certs into container rootfs trust store (from gRPC request).
+        // These are passed explicitly via the CACert proto field — no env vars.
+        if !init_req.ca_certs.is_empty() {
+            let container_ca_bundle = bundle_rootfs.join("etc/ssl/certs/ca-certificates.crt");
+            if container_ca_bundle.exists() {
+                use std::io::Write;
+                match std::fs::OpenOptions::new()
+                    .append(true)
+                    .open(&container_ca_bundle)
+                {
+                    Ok(mut f) => {
+                        for ca in &init_req.ca_certs {
                             let _ = f.write_all(b"\n");
-                            let _ = f.write_all(&pem);
+                            let _ = f.write_all(ca.pem.as_bytes());
                             let _ = f.write_all(b"\n");
-                            info!("MITM CA cert injected into container rootfs");
                         }
-                        Err(e) => warn!("Failed to inject CA cert into container: {}", e),
+                        info!(
+                            count = init_req.ca_certs.len(),
+                            "CA certs injected into container rootfs"
+                        );
                     }
+                    Err(e) => warn!("Failed to inject CA certs into container: {}", e),
                 }
             }
-            // Remove BOXLITE_CA_PEM from env — no longer needed, prevents leaking
-            // to container processes. The cert is now in the CA bundle file.
-            unsafe { std::env::remove_var("BOXLITE_CA_PEM") };
         }
 
         // Convert proto BindMount to UserMount for OCI spec

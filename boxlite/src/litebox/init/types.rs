@@ -247,6 +247,8 @@ pub struct InitPipelineContext {
     pub rootfs_init: Option<ContainerRootfsInitConfig>,
     pub container_mounts: Option<Vec<ContainerMount>>,
     pub guest_session: Option<GuestSession>,
+    /// MITM CA cert PEM (set by vmm_spawn, read by guest_init for Container.Init gRPC).
+    pub ca_cert_pem: Option<String>,
 
     #[cfg(target_os = "linux")]
     pub bind_mount: Option<BindMountHandle>,
@@ -274,6 +276,7 @@ impl InitPipelineContext {
             rootfs_init: None,
             container_mounts: None,
             guest_session: None,
+            ca_cert_pem: None,
             #[cfg(target_os = "linux")]
             bind_mount: None,
         }

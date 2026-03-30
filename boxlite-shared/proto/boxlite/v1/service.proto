@@ -205,6 +205,14 @@ message ContainerInitRequest {
   RootfsInit rootfs = 3;
   // Bind mounts from guest VM paths into container namespace
   repeated BindMount mounts = 4;
+  // Additional CA certificates to install in the container trust store.
+  // Used for MITM secret substitution — the container trusts the proxy CA.
+  repeated CACert ca_certs = 5;
+}
+
+// A CA certificate to add to the container's trust store.
+message CACert {
+  string pem = 1;  // PEM-encoded X.509 certificate
 }
 
 // Bind mount from guest volume to container path

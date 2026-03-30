@@ -201,14 +201,7 @@ class TestSecretIntegration:
             execution.wait()
             assert "BEGIN CERTIFICATE" in ca_bundle
 
-            # 4. SSL_CERT_FILE env var set
-            execution = sandbox.exec("printenv", ["SSL_CERT_FILE"])
-            ssl_cert = "".join(list(execution.stdout())).strip()
-            result = execution.wait()
-            assert result.exit_code == 0
-            assert "ca-certificates" in ssl_cert
-
-            # 5. BOXLITE_CA_PEM cleaned up (not leaked to user processes)
+            # 4. BOXLITE_CA_PEM not leaked to container processes
             execution = sandbox.exec("printenv", ["BOXLITE_CA_PEM"])
             ca_pem = "".join(list(execution.stdout())).strip()
             result = execution.wait()

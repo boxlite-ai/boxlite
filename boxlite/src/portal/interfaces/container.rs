@@ -1,7 +1,7 @@
 //! Container service interface.
 
 use boxlite_shared::{
-    BindMount, BoxliteError, BoxliteResult, ContainerClient,
+    BindMount, BoxliteError, BoxliteResult, CaCert, ContainerClient,
     ContainerConfig as ProtoContainerConfig, ContainerInitRequest, DiskRootfs, MergedRootfs,
     OverlayRootfs, RootfsInit, container_init_response,
 };
@@ -98,6 +98,7 @@ impl ContainerInterface {
         image_config: crate::images::ContainerImageConfig,
         rootfs: ContainerRootfsInitConfig,
         mounts: Vec<ContainerMount>,
+        ca_certs: Vec<String>,
     ) -> BoxliteResult<String> {
         let proto_config = ProtoContainerConfig {
             entrypoint: image_config.final_cmd(),
@@ -137,6 +138,7 @@ impl ContainerInterface {
             container_config: Some(proto_config),
             rootfs: Some(rootfs.into_proto()),
             mounts: proto_mounts,
+            ca_certs: ca_certs.into_iter().map(|pem| CaCert { pem }).collect(),
         };
 
         let response = self.client.init(request).await?.into_inner();

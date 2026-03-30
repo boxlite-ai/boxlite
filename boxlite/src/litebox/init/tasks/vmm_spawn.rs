@@ -99,6 +99,11 @@ impl PipelineTask<InitCtx> for VmmSpawnTask {
         ctx.volume_mgr = Some(volume_mgr);
         ctx.rootfs_init = Some(rootfs_init);
         ctx.container_mounts = Some(container_mounts);
+        // Store CA cert PEM for Container.Init gRPC (passed as CACert proto field)
+        ctx.ca_cert_pem = instance_spec
+            .network_config
+            .as_ref()
+            .and_then(|nc| nc.ca_cert_pem.clone());
         Ok(())
     }
 
