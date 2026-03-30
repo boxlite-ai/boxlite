@@ -165,9 +165,11 @@ pub struct Secret {
     /// Placeholder string visible to the guest (e.g., "<BOXLITE_SECRET:openai>").
     pub placeholder: String,
     /// The actual secret value (e.g., "sk-..."). Never enters the VM.
-    /// Skipped during serialization to prevent accidental leaks in logs/dumps.
-    /// The value flows to Go via GvproxySecretConfig (internal type, not user-facing).
-    #[serde(skip_serializing, default)]
+    ///
+    /// This field IS serialized (needed for DB persistence and shim config pipe).
+    /// Debug/Display impls redact it. GvproxySecretConfig also redacts in Debug.
+    /// The serialized config is protected by stdin pipe (no /proc/cmdline) and
+    /// DB file permissions.
     pub value: String,
 }
 
@@ -731,16 +733,13 @@ mod tests {
     }
 
     #[test]
-    fn test_secret_serde_value_skipped() {
+    fn test_secret_serde_roundtrip() {
         let secret = test_secret();
         let json = serde_json::to_string(&secret).unwrap();
-        // value is skip_serializing — should not appear in JSON
-        assert!(!json.contains("sk-test-super-secret-key-12345"));
-        assert!(json.contains("openai")); // name is present
-        // Deserialization with explicit value still works
-        let full_json = r#"{"name":"openai","hosts":["api.openai.com"],"placeholder":"<BOXLITE_SECRET:openai>","value":"sk-123"}"#;
-        let deserialized: Secret = serde_json::from_str(full_json).unwrap();
-        assert_eq!(deserialized.value, "sk-123");
+        let deserialized: Secret = serde_json::from_str(&json).unwrap();
+        assert_eq!(secret, deserialized);
+        // Value IS serialized (needed for DB persistence)
+        assert!(json.contains("sk-test-super-secret-key-12345"));
     }
 
     #[test]

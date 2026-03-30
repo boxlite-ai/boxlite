@@ -354,16 +354,13 @@ fn build_network_config(
     // Generate ephemeral MITM CA when secrets are configured.
     // The CA cert+key flow through NetworkBackendConfig → GvproxyConfig → Go.
     if !options.secrets.is_empty() {
-        match crate::net::ca::generate() {
+        match crate::net::ca::load_or_generate(&layout.ca_dir()) {
             Ok(ca) => {
                 config.ca_cert_pem = Some(ca.cert_pem);
                 config.ca_key_pem = Some(ca.key_pem);
-                tracing::info!("MITM: generated ephemeral CA for secret substitution");
             }
             Err(e) => {
-                // CA generation failed — secrets cannot be substituted.
-                // Disable secrets rather than start a box that silently doesn't work.
-                tracing::error!("MITM: CA generation failed, secrets disabled: {e}");
+                tracing::error!("MITM: CA setup failed, secrets disabled: {e}");
                 config.secrets.clear();
             }
         }

@@ -438,6 +438,15 @@ impl BoxFilesystemLayout {
         self.box_dir.join("bin")
     }
 
+    /// CA directory: ~/.boxlite/boxes/{box_id}/ca
+    ///
+    /// Stores ephemeral MITM CA cert+key for secret substitution.
+    /// NOT under shared/ — the guest must not read the private key.
+    /// Files: cert.pem (0644), key.pem (0600).
+    pub fn ca_dir(&self) -> PathBuf {
+        self.box_dir.join("ca")
+    }
+
     /// Per-box logs directory: ~/.boxlite/boxes/{box_id}/logs
     ///
     /// Shim writes its logs here instead of the shared home_dir/logs/,
