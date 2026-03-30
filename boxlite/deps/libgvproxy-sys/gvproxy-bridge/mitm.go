@@ -6,7 +6,6 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/pem"
 	"fmt"
 	"math/big"
@@ -23,55 +22,6 @@ type BoxCA struct {
 	key       *ecdsa.PrivateKey
 	certPEM   []byte
 	certCache sync.Map // hostname -> *tls.Certificate
-}
-
-// NewBoxCA generates a new ephemeral CA.
-// Production uses NewBoxCAFromPEM (CA generated in Rust). This is for tests only.
-func NewBoxCA() (*BoxCA, error) {
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		return nil, err
-	}
-
-	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
-	if err != nil {
-		return nil, err
-	}
-
-	now := time.Now()
-	template := &x509.Certificate{
-		SerialNumber: serial,
-		Subject: pkix.Name{
-			CommonName: "BoxLite MITM CA",
-		},
-		NotBefore:             now.Add(-1 * time.Minute),
-		NotAfter:              now.Add(24 * time.Hour),
-		IsCA:                  true,
-		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
-		BasicConstraintsValid: true,
-		MaxPathLen:            0,
-	}
-
-	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-	if err != nil {
-		return nil, err
-	}
-
-	cert, err := x509.ParseCertificate(certDER)
-	if err != nil {
-		return nil, err
-	}
-
-	certPEM := pem.EncodeToMemory(&pem.Block{
-		Type:  "CERTIFICATE",
-		Bytes: certDER,
-	})
-
-	return &BoxCA{
-		cert:    cert,
-		key:     key,
-		certPEM: certPEM,
-	}, nil
 }
 
 // NewBoxCAFromPEM reconstructs a BoxCA from PEM-encoded cert and key.

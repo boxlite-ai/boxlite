@@ -21,10 +21,7 @@ import (
 // TestMitmRouting_SecretHostGetsMitmd verifies that when a TLS connection
 // targets a secret host, mitmAndForward is called and secrets are substituted.
 func TestMitmRouting_SecretHostGetsMitmd(t *testing.T) {
-	ca, err := NewBoxCA()
-	if err != nil {
-		t.Fatal("NewBoxCA:", err)
-	}
+	ca := newTestCA(t)
 
 	secrets := []SecretConfig{{
 		Name:        "api_key",
@@ -125,10 +122,7 @@ func TestMitmRouting_SecretHostPort80_NoMitm(t *testing.T) {
 // TestMitmRouting_AllowlistAndSecrets_MitmPriority verifies that when a host
 // appears in BOTH the allowlist and secret hosts, MITM takes priority.
 func TestMitmRouting_AllowlistAndSecrets_MitmPriority(t *testing.T) {
-	ca, err := NewBoxCA()
-	if err != nil {
-		t.Fatal("NewBoxCA:", err)
-	}
+	ca := newTestCA(t)
 
 	secrets := []SecretConfig{{
 		Name:        "key",
@@ -214,10 +208,7 @@ func TestMitmRouting_SecretsOnly_NoAllowlist(t *testing.T) {
 // TestMitmRouting_CACertPEM verifies that BoxCA produces valid PEM
 // that can be used for trust injection.
 func TestMitmRouting_CACertPEM(t *testing.T) {
-	ca, err := NewBoxCA()
-	if err != nil {
-		t.Fatal("NewBoxCA:", err)
-	}
+	ca := newTestCA(t)
 
 	pem := ca.CACertPEM()
 	if len(pem) == 0 {
@@ -248,10 +239,7 @@ func startTLSEchoServer(t *testing.T, handler http.HandlerFunc) (addr string, cl
 	t.Helper()
 
 	// Create a self-signed cert for the test server
-	ca, err := NewBoxCA()
-	if err != nil {
-		t.Fatal("NewBoxCA for test server:", err)
-	}
+	ca := newTestCA(t)
 	cert, err := ca.GenerateHostCert("127.0.0.1")
 	if err != nil {
 		t.Fatal("GenerateHostCert:", err)

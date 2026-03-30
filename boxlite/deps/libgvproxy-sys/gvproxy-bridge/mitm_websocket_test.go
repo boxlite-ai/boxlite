@@ -67,10 +67,7 @@ func TestHandleWebSocketUpgrade_HeaderSubstitution(t *testing.T) {
 	}
 
 	// Start a TLS upstream server that reads the HTTP upgrade request and captures headers
-	ca, err := NewBoxCA()
-	if err != nil {
-		t.Fatal(err)
-	}
+	ca := newTestCA(t)
 	upstreamCert, err := ca.GenerateHostCert("127.0.0.1")
 	if err != nil {
 		t.Fatal(err)
@@ -151,10 +148,7 @@ func TestHandleWebSocketUpgrade_BidirectionalRelay(t *testing.T) {
 	secrets := []SecretConfig{}
 
 	// Start a TLS echo server (reads a line, writes it back)
-	ca, err := NewBoxCA()
-	if err != nil {
-		t.Fatal(err)
-	}
+	ca := newTestCA(t)
 	upstreamCert, err := ca.GenerateHostCert("127.0.0.1")
 	if err != nil {
 		t.Fatal(err)

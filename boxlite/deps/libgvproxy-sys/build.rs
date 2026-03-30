@@ -50,8 +50,23 @@ fn build_gvproxy(source_dir: &Path, output_path: &Path) {
 }
 
 fn main() {
-    // Rebuild if any Go source in gvproxy-bridge changes
-    println!("cargo:rerun-if-changed=gvproxy-bridge");
+    // Rebuild when any Go source file changes.
+    // cargo:rerun-if-changed on a directory only detects file additions/removals,
+    // not content changes. Walk the directory and watch each .go file individually.
+    let bridge_dir = Path::new("gvproxy-bridge");
+    if bridge_dir.is_dir() {
+        for entry in fs::read_dir(bridge_dir).expect("Failed to read gvproxy-bridge directory") {
+            let entry = entry.expect("Failed to read directory entry");
+            let path = entry.path();
+            if path
+                .extension()
+                .is_some_and(|ext| ext == "go" || ext == "mod" || ext == "sum")
+            {
+                println!("cargo:rerun-if-changed={}", path.display());
+            }
+        }
+    }
+    println!("cargo:rerun-if-changed=gvproxy-bridge"); // also watch for new files
     println!("cargo:rerun-if-env-changed=BOXLITE_DEPS_STUB");
 
     // Auto-detect crates.io download: Cargo injects .cargo_vcs_info.json into

@@ -354,7 +354,6 @@ fn build_network_config(
     // Generate ephemeral MITM CA when secrets are configured.
     // The CA cert+key flow through NetworkBackendConfig → GvproxyConfig → Go.
     if !options.secrets.is_empty() {
-        #[cfg(feature = "gvproxy")]
         match crate::net::ca::generate() {
             Ok(ca) => {
                 config.ca_cert_pem = Some(ca.cert_pem);

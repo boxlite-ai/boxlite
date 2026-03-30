@@ -115,10 +115,7 @@ func testSecrets() []SecretConfig {
 // --- HTTP/1.1 Tests ---
 
 func TestMitmProxy_HTTP1_BasicRequest(t *testing.T) {
-	ca, err := NewBoxCA()
-	if err != nil {
-		t.Skip("BoxCA not implemented:", err)
-	}
+	ca := newTestCA(t)
 
 	secrets := testSecrets()
 
@@ -161,10 +158,7 @@ func TestMitmProxy_HTTP1_BasicRequest(t *testing.T) {
 }
 
 func TestMitmProxy_HTTP1_PostWithBody(t *testing.T) {
-	ca, err := NewBoxCA()
-	if err != nil {
-		t.Skip("BoxCA not implemented:", err)
-	}
+	ca := newTestCA(t)
 
 	secrets := testSecrets()
 
@@ -206,10 +200,7 @@ func TestMitmProxy_HTTP1_PostWithBody(t *testing.T) {
 }
 
 func TestMitmProxy_HTTP1_KeepAlive(t *testing.T) {
-	ca, err := NewBoxCA()
-	if err != nil {
-		t.Skip("BoxCA not implemented:", err)
-	}
+	ca := newTestCA(t)
 
 	secrets := testSecrets()
 	var requestCount int
@@ -263,10 +254,7 @@ func TestMitmProxy_HTTP1_KeepAlive(t *testing.T) {
 // --- HTTP/2 Tests ---
 
 func TestMitmProxy_HTTP2_BasicRequest(t *testing.T) {
-	ca, err := NewBoxCA()
-	if err != nil {
-		t.Skip("BoxCA not implemented:", err)
-	}
+	ca := newTestCA(t)
 
 	secrets := testSecrets()
 
@@ -306,10 +294,7 @@ func TestMitmProxy_HTTP2_BasicRequest(t *testing.T) {
 }
 
 func TestMitmProxy_HTTP2_MultiplexedStreams(t *testing.T) {
-	ca, err := NewBoxCA()
-	if err != nil {
-		t.Skip("BoxCA not implemented:", err)
-	}
+	ca := newTestCA(t)
 
 	secrets := testSecrets()
 
@@ -362,10 +347,7 @@ func TestMitmProxy_HTTP2_MultiplexedStreams(t *testing.T) {
 // --- Streaming Tests ---
 
 func TestMitmProxy_ChunkedRequestBody(t *testing.T) {
-	ca, err := NewBoxCA()
-	if err != nil {
-		t.Skip("BoxCA not implemented:", err)
-	}
+	ca := newTestCA(t)
 
 	secrets := testSecrets()
 
@@ -408,10 +390,7 @@ func TestMitmProxy_ChunkedRequestBody(t *testing.T) {
 }
 
 func TestMitmProxy_StreamingRequestBody(t *testing.T) {
-	ca, err := NewBoxCA()
-	if err != nil {
-		t.Skip("BoxCA not implemented:", err)
-	}
+	ca := newTestCA(t)
 
 	secrets := testSecrets()
 
@@ -464,10 +443,7 @@ func TestMitmProxy_StreamingRequestBody(t *testing.T) {
 }
 
 func TestMitmProxy_LargeResponseStreaming(t *testing.T) {
-	ca, err := NewBoxCA()
-	if err != nil {
-		t.Skip("BoxCA not implemented:", err)
-	}
+	ca := newTestCA(t)
 
 	secrets := testSecrets()
 	const responseSize = 10 * 1024 * 1024 // 10MB
@@ -521,10 +497,7 @@ func TestMitmProxy_LargeResponseStreaming(t *testing.T) {
 // --- Content-Length Tests ---
 
 func TestMitmProxy_ContentLengthAdjustment(t *testing.T) {
-	ca, err := NewBoxCA()
-	if err != nil {
-		t.Skip("BoxCA not implemented:", err)
-	}
+	ca := newTestCA(t)
 
 	secrets := testSecrets()
 
@@ -566,10 +539,7 @@ func TestMitmProxy_ContentLengthAdjustment(t *testing.T) {
 // --- Error Handling Tests ---
 
 func TestMitmProxy_UpstreamError(t *testing.T) {
-	ca, err := NewBoxCA()
-	if err != nil {
-		t.Skip("BoxCA not implemented:", err)
-	}
+	ca := newTestCA(t)
 
 	secrets := testSecrets()
 
@@ -605,10 +575,7 @@ func TestMitmProxy_UpstreamError(t *testing.T) {
 }
 
 func TestMitmProxy_UpstreamSlowResponse(t *testing.T) {
-	ca, err := NewBoxCA()
-	if err != nil {
-		t.Skip("BoxCA not implemented:", err)
-	}
+	ca := newTestCA(t)
 
 	secrets := testSecrets()
 
@@ -642,10 +609,7 @@ func TestMitmProxy_UpstreamSlowResponse(t *testing.T) {
 }
 
 func TestMitmProxy_GuestDisconnect(t *testing.T) {
-	ca, err := NewBoxCA()
-	if err != nil {
-		t.Skip("BoxCA not implemented:", err)
-	}
+	ca := newTestCA(t)
 
 	secrets := testSecrets()
 
@@ -675,10 +639,7 @@ func TestMitmProxy_GuestDisconnect(t *testing.T) {
 }
 
 func TestMitmProxy_EmptyBody(t *testing.T) {
-	ca, err := NewBoxCA()
-	if err != nil {
-		t.Skip("BoxCA not implemented:", err)
-	}
+	ca := newTestCA(t)
 
 	secrets := testSecrets()
 

@@ -17,11 +17,8 @@ import (
 // Section A: BoxCA Tests
 // ============================================================================
 
-func TestBoxCA_NewBoxCA(t *testing.T) {
-	ca, err := NewBoxCA()
-	if err != nil {
-		t.Fatalf("NewBoxCA() error: %v", err)
-	}
+func TestBoxCA_Creation(t *testing.T) {
+	ca := newTestCA(t)
 
 	if !ca.cert.IsCA {
 		t.Error("CA certificate IsCA should be true")
@@ -45,10 +42,7 @@ func TestBoxCA_NewBoxCA(t *testing.T) {
 }
 
 func TestBoxCA_CACertPEM(t *testing.T) {
-	ca, err := NewBoxCA()
-	if err != nil {
-		t.Fatalf("NewBoxCA() error: %v", err)
-	}
+	ca := newTestCA(t)
 
 	pemBytes := ca.CACertPEM()
 	if len(pemBytes) == 0 {
@@ -73,10 +67,7 @@ func TestBoxCA_CACertPEM(t *testing.T) {
 }
 
 func TestBoxCA_GenerateHostCert_Valid(t *testing.T) {
-	ca, err := NewBoxCA()
-	if err != nil {
-		t.Fatalf("NewBoxCA() error: %v", err)
-	}
+	ca := newTestCA(t)
 
 	tlsCert, err := ca.GenerateHostCert("api.openai.com")
 	if err != nil {
@@ -109,10 +100,7 @@ func TestBoxCA_GenerateHostCert_Valid(t *testing.T) {
 }
 
 func TestBoxCA_GenerateHostCert_Wildcard(t *testing.T) {
-	ca, err := NewBoxCA()
-	if err != nil {
-		t.Fatalf("NewBoxCA() error: %v", err)
-	}
+	ca := newTestCA(t)
 
 	tlsCert, err := ca.GenerateHostCert("*.openai.com")
 	if err != nil {
@@ -139,10 +127,7 @@ func TestBoxCA_GenerateHostCert_Wildcard(t *testing.T) {
 }
 
 func TestBoxCA_GenerateHostCert_IPAddress(t *testing.T) {
-	ca, err := NewBoxCA()
-	if err != nil {
-		t.Fatalf("NewBoxCA() error: %v", err)
-	}
+	ca := newTestCA(t)
 
 	tlsCert, err := ca.GenerateHostCert("192.168.1.1")
 	if err != nil {
@@ -171,10 +156,7 @@ func TestBoxCA_GenerateHostCert_IPAddress(t *testing.T) {
 }
 
 func TestBoxCA_GenerateHostCert_Localhost(t *testing.T) {
-	ca, err := NewBoxCA()
-	if err != nil {
-		t.Fatalf("NewBoxCA() error: %v", err)
-	}
+	ca := newTestCA(t)
 
 	tlsCert, err := ca.GenerateHostCert("localhost")
 	if err != nil {
@@ -201,10 +183,7 @@ func TestBoxCA_GenerateHostCert_Localhost(t *testing.T) {
 }
 
 func TestBoxCA_CertCache_Hit(t *testing.T) {
-	ca, err := NewBoxCA()
-	if err != nil {
-		t.Fatalf("NewBoxCA() error: %v", err)
-	}
+	ca := newTestCA(t)
 
 	cert1, err := ca.GenerateHostCert("api.openai.com")
 	if err != nil {
@@ -221,10 +200,7 @@ func TestBoxCA_CertCache_Hit(t *testing.T) {
 }
 
 func TestBoxCA_CertCache_DifferentHosts(t *testing.T) {
-	ca, err := NewBoxCA()
-	if err != nil {
-		t.Fatalf("NewBoxCA() error: %v", err)
-	}
+	ca := newTestCA(t)
 
 	certA, err := ca.GenerateHostCert("a.com")
 	if err != nil {
@@ -247,10 +223,7 @@ func TestBoxCA_CertCache_DifferentHosts(t *testing.T) {
 }
 
 func TestBoxCA_CertCache_ConcurrentSameHost(t *testing.T) {
-	ca, err := NewBoxCA()
-	if err != nil {
-		t.Fatalf("NewBoxCA() error: %v", err)
-	}
+	ca := newTestCA(t)
 
 	const n = 100
 	certs := make([]*tls.Certificate, n)
@@ -281,10 +254,7 @@ func TestBoxCA_CertCache_ConcurrentSameHost(t *testing.T) {
 }
 
 func TestBoxCA_CertCache_ConcurrentDifferentHosts(t *testing.T) {
-	ca, err := NewBoxCA()
-	if err != nil {
-		t.Fatalf("NewBoxCA() error: %v", err)
-	}
+	ca := newTestCA(t)
 
 	const n = 100
 	const numHosts = 10
@@ -322,10 +292,7 @@ func TestBoxCA_CertCache_ConcurrentDifferentHosts(t *testing.T) {
 }
 
 func TestBoxCA_TLSHandshake_H1(t *testing.T) {
-	ca, err := NewBoxCA()
-	if err != nil {
-		t.Fatalf("NewBoxCA() error: %v", err)
-	}
+	ca := newTestCA(t)
 
 	tlsCert, err := ca.GenerateHostCert("test.example.com")
 	if err != nil {
@@ -366,10 +333,7 @@ func TestBoxCA_TLSHandshake_H1(t *testing.T) {
 }
 
 func TestBoxCA_TLSHandshake_H2(t *testing.T) {
-	ca, err := NewBoxCA()
-	if err != nil {
-		t.Fatalf("NewBoxCA() error: %v", err)
-	}
+	ca := newTestCA(t)
 
 	tlsCert, err := ca.GenerateHostCert("test.example.com")
 	if err != nil {
@@ -423,10 +387,7 @@ func TestBoxCA_TLSHandshake_H2(t *testing.T) {
 }
 
 func TestBoxCA_TLSHandshake_UntrustedCA(t *testing.T) {
-	ca, err := NewBoxCA()
-	if err != nil {
-		t.Fatalf("NewBoxCA() error: %v", err)
-	}
+	ca := newTestCA(t)
 
 	tlsCert, err := ca.GenerateHostCert("test.example.com")
 	if err != nil {
