@@ -32,18 +32,9 @@ func mitmAndForward(guestConn net.Conn, hostname string, destAddr string, ca *Bo
 		NextProtos: []string{"h2", "http/1.1"},
 	})
 
-	// Upstream TLS: use system cert pool by default (secure).
-	// Tests may pass a custom config for self-signed upstream certs.
-	var tlsCfg *tls.Config
-	if len(upstreamTLSConfig) > 0 && upstreamTLSConfig[0] != nil {
-		tlsCfg = upstreamTLSConfig[0]
-	} else {
-		tlsCfg = &tls.Config{ServerName: hostname}
-	}
-
 	upstreamTransport := &http.Transport{
 		ForceAttemptHTTP2: true,
-		TLSClientConfig:  tlsCfg,
+		TLSClientConfig:  resolveUpstreamTLS(hostname, upstreamTLSConfig...),
 		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
 			return (&net.Dialer{Timeout: upstreamDialTimeout}).DialContext(ctx, network, destAddr)
 		},

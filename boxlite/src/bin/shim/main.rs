@@ -28,7 +28,7 @@ use crash_capture::CrashCapture;
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 #[cfg(feature = "gvproxy")]
-use boxlite::net::{ConnectionType, NetworkBackendEndpoint, gvproxy::GvproxyInstance};
+use boxlite::net::gvproxy::GvproxyInstance;
 
 // No CLI args — all config (including engine type) is read from stdin pipe.
 // This avoids /proc/<pid>/cmdline exposure of secrets and CA keys.
@@ -142,55 +142,12 @@ fn run_shim(mut config: InstanceSpec, timing: impl Fn(&str)) -> BoxliteResult<()
     // duration of the VM. When the shim process exits, OS cleans up all resources.
     #[cfg(feature = "gvproxy")]
     if let Some(ref net_config) = config.network_config {
-        tracing::info!(
-            port_mappings = ?net_config.port_mappings,
-            "Creating network backend (gvproxy) from config"
-        );
-
-        // Create gvproxy instance with caller-provided socket path + allowlist + secrets + CA
-        let secrets = net_config.secrets.iter().map(Into::into).collect();
-        let gvproxy = GvproxyInstance::new(
-            net_config.socket_path.clone(),
-            &net_config.port_mappings,
-            net_config.allow_net.clone(),
-            secrets,
-            net_config.ca_cert_pem.clone(),
-            net_config.ca_key_pem.clone(),
-        )?;
+        let (gvproxy, endpoint) = GvproxyInstance::from_config(net_config)?;
+        config.network_backend_endpoint = Some(endpoint);
         timing("gvproxy created");
 
-        tracing::info!(
-            socket_path = ?net_config.socket_path,
-            "Network backend created"
-        );
-
-        // Create NetworkBackendEndpoint from socket path
-        // Platform-specific connection type:
-        // - macOS: UnixDgram with VFKit protocol
-        // - Linux: UnixStream with Qemu protocol
-        let connection_type = if cfg!(target_os = "macos") {
-            ConnectionType::UnixDgram
-        } else {
-            ConnectionType::UnixStream
-        };
-
-        // Use GUEST_MAC constant - must match DHCP static lease in gvproxy config
-        use boxlite::net::constants::GUEST_MAC;
-
-        config.network_backend_endpoint = Some(NetworkBackendEndpoint::UnixSocket {
-            path: net_config.socket_path.clone(),
-            connection_type,
-            mac_address: GUEST_MAC,
-        });
-
-        // CA cert injection happens via gRPC CACert field in Container.Init.
-        // No env var needed — the guest agent doesn't make HTTPS calls.
-
-        // Leak the gvproxy instance to keep it alive for VM lifetime.
-        // This is intentional - the VM needs networking for its entire life,
-        // and OS cleanup handles resources when process exits.
-        let _gvproxy_leaked = Box::leak(Box::new(gvproxy));
-        tracing::debug!("Leaked gvproxy instance for VM lifetime");
+        // Leak to keep networking alive for VM lifetime (OS cleans up on exit)
+        Box::leak(Box::new(gvproxy));
     }
 
     // Apply VMM seccomp filter with TSYNC (covers all threads including gvproxy)

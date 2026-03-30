@@ -50,14 +50,7 @@ func handleWebSocketUpgrade(w http.ResponseWriter, req *http.Request, destAddr s
 		return
 	}
 
-	// Wrap with TLS for upstream (wss://)
-	var tlsCfg *tls.Config
-	if len(upstreamTLSConfig) > 0 && upstreamTLSConfig[0] != nil {
-		tlsCfg = upstreamTLSConfig[0]
-	} else {
-		tlsCfg = &tls.Config{ServerName: hostname}
-	}
-	upstreamConn := tls.Client(rawConn, tlsCfg)
+	upstreamConn := tls.Client(rawConn, resolveUpstreamTLS(hostname, upstreamTLSConfig...))
 
 	// Write the modified HTTP request to upstream
 	err = req.Write(upstreamConn)

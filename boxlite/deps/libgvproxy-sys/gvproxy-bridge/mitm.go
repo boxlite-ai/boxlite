@@ -198,6 +198,15 @@ func substituteHeaders(req *http.Request, secrets []SecretConfig) {
 	}
 }
 
+// resolveUpstreamTLS returns the TLS config for upstream connections.
+// Uses the first override if provided, otherwise creates a default config with ServerName.
+func resolveUpstreamTLS(hostname string, overrides ...*tls.Config) *tls.Config {
+	if len(overrides) > 0 && overrides[0] != nil {
+		return overrides[0]
+	}
+	return &tls.Config{ServerName: hostname}
+}
+
 // SecretHostMatcher provides O(1) lookup for whether a hostname has secrets.
 type SecretHostMatcher struct {
 	exactHosts       map[string]bool

@@ -41,17 +41,10 @@ impl PipelineTask<InitCtx> for ContainerRootfsTask {
                 .layout
                 .clone()
                 .ok_or_else(|| BoxliteError::Internal("filesystem task must run first".into()))?;
-            // Merge secret placeholders into container env so they're visible
-            // to exec commands. The MITM proxy substitutes the real value at
-            // the network boundary — the guest only ever sees the placeholder.
             let mut env = ctx.config.options.env.clone();
-            // Inject secret placeholder env vars so container code can use them
-            // in HTTP headers. The MITM proxy substitutes real values at the
-            // network boundary — the guest only ever sees the placeholder.
-            for secret in &ctx.config.options.secrets {
-                let key = format!("BOXLITE_SECRET_{}", secret.name.to_uppercase());
-                env.push((key, secret.placeholder.clone()));
-            }
+            // Inject secret placeholder env vars (e.g., BOXLITE_SECRET_OPENAI=<BOXLITE_SECRET:openai>).
+            // The MITM proxy substitutes real values at the network boundary.
+            env.extend(ctx.config.options.secrets.iter().map(|s| s.env_pair()));
 
             (
                 ctx.config.options.rootfs.clone(),

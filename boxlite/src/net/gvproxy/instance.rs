@@ -107,6 +107,39 @@ impl GvproxyInstance {
         &self.socket_path
     }
 
+    /// Create a GvproxyInstance from a NetworkBackendConfig and return the endpoint.
+    ///
+    /// This is the primary constructor — takes the full network config, creates the
+    /// gvproxy instance, and returns the platform-specific endpoint for the VM.
+    pub fn from_config(
+        config: &super::super::NetworkBackendConfig,
+    ) -> BoxliteResult<(Self, super::super::NetworkBackendEndpoint)> {
+        let secrets = config.secrets.iter().map(Into::into).collect();
+        let instance = Self::new(
+            config.socket_path.clone(),
+            &config.port_mappings,
+            config.allow_net.clone(),
+            secrets,
+            config.ca_cert_pem.clone(),
+            config.ca_key_pem.clone(),
+        )?;
+
+        let connection_type = if cfg!(target_os = "macos") {
+            super::super::ConnectionType::UnixDgram
+        } else {
+            super::super::ConnectionType::UnixStream
+        };
+
+        use crate::net::constants::GUEST_MAC;
+        let endpoint = super::super::NetworkBackendEndpoint::UnixSocket {
+            path: config.socket_path.clone(),
+            connection_type,
+            mac_address: GUEST_MAC,
+        };
+
+        Ok((instance, endpoint))
+    }
+
     /// Get the MITM CA certificate PEM for this instance.
     ///
     /// Returns the ephemeral CA cert generated in Rust for TLS MITM secret substitution.

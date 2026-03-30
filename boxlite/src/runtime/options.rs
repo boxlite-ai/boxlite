@@ -168,6 +168,18 @@ pub struct Secret {
     pub value: String,
 }
 
+impl Secret {
+    /// Environment variable key for this secret's placeholder (e.g., `BOXLITE_SECRET_OPENAI`).
+    pub fn env_key(&self) -> String {
+        format!("BOXLITE_SECRET_{}", self.name.to_uppercase())
+    }
+
+    /// Environment variable key-value pair: (env_key, placeholder).
+    pub fn env_pair(&self) -> (String, String) {
+        (self.env_key(), self.placeholder.clone())
+    }
+}
+
 impl std::fmt::Debug for Secret {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Secret")

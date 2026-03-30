@@ -30,6 +30,17 @@ import (
 // TCPWithFilter creates a TCP forwarder that checks the filter before allowing
 // outbound connections. For port 443/80 with hostname rules, it inspects
 // TLS SNI / HTTP Host headers to match against the allowlist.
+// linkLocalSubnet is 169.254.0.0/16, parsed once at init (not per-packet).
+var linkLocalSubnet tcpip.Subnet
+
+func init() {
+	_, linkLocalNet, _ := net.ParseCIDR("169.254.0.0/16")
+	linkLocalSubnet, _ = tcpip.NewSubnet(
+		tcpip.AddrFromSlice(linkLocalNet.IP),
+		tcpip.MaskFromBytes(linkLocalNet.Mask),
+	)
+}
+
 func TCPWithFilter(s *stack.Stack, nat map[tcpip.Address]tcpip.Address,
 	natLock *sync.Mutex, ec2MetadataAccess bool, filter *TCPFilter,
 	ca *BoxCA, secretMatcher *SecretHostMatcher) *tcp.Forwarder {
@@ -37,12 +48,6 @@ func TCPWithFilter(s *stack.Stack, nat map[tcpip.Address]tcpip.Address,
 	return tcp.NewForwarder(s, 0, 10, func(r *tcp.ForwarderRequest) {
 		localAddress := r.ID().LocalAddress
 
-		// Block link-local (169.254.0.0/16) unless EC2 metadata access enabled
-		_, linkLocalNet, _ := net.ParseCIDR("169.254.0.0/16")
-		linkLocalSubnet, _ := tcpip.NewSubnet(
-			tcpip.AddrFromSlice(linkLocalNet.IP),
-			tcpip.MaskFromBytes(linkLocalNet.Mask),
-		)
 		if !ec2MetadataAccess && linkLocalSubnet.Contains(localAddress) {
 			r.Complete(true)
 			return
