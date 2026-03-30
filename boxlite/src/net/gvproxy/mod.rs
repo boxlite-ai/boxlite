@@ -70,7 +70,6 @@
 //! # Ok::<(), boxlite_shared::errors::BoxliteError>(())
 //! ```
 
-pub(crate) mod ca;
 mod config;
 mod ffi;
 mod instance;
@@ -154,6 +153,8 @@ impl GvisorTapBackend {
             &config.port_mappings,
             config.allow_net.clone(),
             secrets,
+            config.ca_cert_pem.clone(),
+            config.ca_key_pem,
         )?);
 
         // Start background stats logging thread

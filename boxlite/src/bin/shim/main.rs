@@ -160,13 +160,15 @@ fn run_shim(args: ShimArgs, mut config: InstanceSpec, timing: impl Fn(&str)) -> 
             "Creating network backend (gvproxy) from config"
         );
 
-        // Create gvproxy instance with caller-provided socket path + allowlist + secrets
+        // Create gvproxy instance with caller-provided socket path + allowlist + secrets + CA
         let secrets = net_config.secrets.iter().map(Into::into).collect();
         let gvproxy = GvproxyInstance::new(
             net_config.socket_path.clone(),
             &net_config.port_mappings,
             net_config.allow_net.clone(),
             secrets,
+            net_config.ca_cert_pem.clone(),
+            net_config.ca_key_pem.clone(),
         )?;
         timing("gvproxy created");
 

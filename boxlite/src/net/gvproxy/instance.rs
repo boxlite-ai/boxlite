@@ -44,7 +44,7 @@ use super::stats::NetworkStats;
 ///
 /// // Create instance with caller-provided socket path
 /// let socket_path = PathBuf::from("/tmp/my-box/net.sock");
-/// let instance = GvproxyInstance::new(socket_path, &[(8080, 80), (8443, 443)], vec![], vec![])?;
+/// let instance = GvproxyInstance::new(socket_path, &[(8080, 80), (8443, 443)], vec![], vec![], None, None)?;
 ///
 /// // Socket path is known from creation — no FFI call needed
 /// println!("Socket: {:?}", instance.socket_path());
@@ -74,6 +74,8 @@ impl GvproxyInstance {
         port_mappings: &[(u16, u16)],
         allow_net: Vec<String>,
         secrets: Vec<super::config::GvproxySecretConfig>,
+        ca_cert_pem: Option<String>,
+        ca_key_pem: Option<String>,
     ) -> BoxliteResult<Self> {
         // Initialize logging callback (one-time setup)
         logging::init_logging();
@@ -81,18 +83,11 @@ impl GvproxyInstance {
         let mut config =
             super::config::GvproxyConfig::new(socket_path.clone(), port_mappings.to_vec())
                 .with_allow_net(allow_net)
-                .with_secrets(secrets.clone());
+                .with_secrets(secrets);
 
-        // Generate MITM CA in Rust when secrets are configured.
-        // The cert+key PEM are passed to Go via JSON config.
-        let ca_cert_pem = if !secrets.is_empty() {
-            let ca = super::ca::generate()?;
-            config = config.with_ca(ca.cert_pem.clone(), ca.key_pem);
-            tracing::info!("MITM: generated ephemeral CA");
-            Some(ca.cert_pem)
-        } else {
-            None
-        };
+        if let (Some(cert), Some(key)) = (&ca_cert_pem, &ca_key_pem) {
+            config = config.with_ca(cert.clone(), key.clone());
+        }
 
         let id = ffi::create_instance(&config)?;
 
@@ -300,6 +295,8 @@ mod tests {
             &[(8080, 80), (8443, 443)],
             Vec::new(),
             Vec::new(),
+            None,
+            None,
         )
         .unwrap();
 
@@ -315,10 +312,24 @@ mod tests {
         let path1 = PathBuf::from("/tmp/test-gvproxy-1.sock");
         let path2 = PathBuf::from("/tmp/test-gvproxy-2.sock");
 
-        let instance1 =
-            GvproxyInstance::new(path1.clone(), &[(8080, 80)], Vec::new(), Vec::new()).unwrap();
-        let instance2 =
-            GvproxyInstance::new(path2.clone(), &[(9090, 90)], Vec::new(), Vec::new()).unwrap();
+        let instance1 = GvproxyInstance::new(
+            path1.clone(),
+            &[(8080, 80)],
+            Vec::new(),
+            Vec::new(),
+            None,
+            None,
+        )
+        .unwrap();
+        let instance2 = GvproxyInstance::new(
+            path2.clone(),
+            &[(9090, 90)],
+            Vec::new(),
+            Vec::new(),
+            None,
+            None,
+        )
+        .unwrap();
 
         assert_ne!(instance1.id(), instance2.id());
         assert_ne!(instance1.socket_path(), instance2.socket_path());

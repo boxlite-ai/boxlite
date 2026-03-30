@@ -348,6 +348,23 @@ fn build_network_config(
     let mut config = NetworkBackendConfig::new(final_mappings, layout.net_backend_socket_path());
     config.allow_net = allow_net;
     config.secrets = options.secrets.clone();
+
+    // Generate ephemeral MITM CA when secrets are configured.
+    // The CA cert+key flow through NetworkBackendConfig → GvproxyConfig → Go.
+    if !options.secrets.is_empty() {
+        #[cfg(feature = "gvproxy")]
+        match crate::net::ca::generate() {
+            Ok(ca) => {
+                config.ca_cert_pem = Some(ca.cert_pem);
+                config.ca_key_pem = Some(ca.key_pem);
+                tracing::info!("MITM: generated ephemeral CA for secret substitution");
+            }
+            Err(e) => {
+                tracing::error!("MITM: failed to generate CA: {e}");
+            }
+        }
+    }
+
     Some(config)
 }
 

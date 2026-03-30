@@ -10,6 +10,7 @@
 use boxlite_shared::errors::BoxliteResult;
 use std::path::PathBuf;
 
+pub(crate) mod ca;
 pub mod constants;
 pub mod socket_path;
 
@@ -59,6 +60,12 @@ pub struct NetworkBackendConfig {
     /// Secrets for MITM proxy injection. Passed through to gvproxy.
     #[serde(default)]
     pub secrets: Vec<crate::runtime::options::Secret>,
+    /// PEM-encoded MITM CA certificate (generated when secrets are configured).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ca_cert_pem: Option<String>,
+    /// PEM-encoded MITM CA private key (PKCS8, generated when secrets are configured).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ca_key_pem: Option<String>,
 }
 
 impl NetworkBackendConfig {
@@ -68,6 +75,8 @@ impl NetworkBackendConfig {
             socket_path,
             allow_net: Vec::new(),
             secrets: Vec::new(),
+            ca_cert_pem: None,
+            ca_key_pem: None,
         }
     }
 }
