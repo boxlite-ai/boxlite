@@ -187,30 +187,19 @@ impl ContainerService for GuestServer {
             }));
         }
 
-        // Inject CA certs into container rootfs trust store (from gRPC request).
-        // These are passed explicitly via the CACert proto field — no env vars.
+        // Install CA certs into container trust store (from gRPC CACert field).
         if !init_req.ca_certs.is_empty() {
-            let container_ca_bundle = bundle_rootfs.join("etc/ssl/certs/ca-certificates.crt");
-            if container_ca_bundle.exists() {
-                use std::io::Write;
-                match std::fs::OpenOptions::new()
-                    .append(true)
-                    .open(&container_ca_bundle)
-                {
-                    Ok(mut f) => {
-                        for ca in &init_req.ca_certs {
-                            let _ = f.write_all(b"\n");
-                            let _ = f.write_all(ca.pem.as_bytes());
-                            let _ = f.write_all(b"\n");
-                        }
-                        info!(
-                            count = init_req.ca_certs.len(),
-                            "CA certs injected into container rootfs"
-                        );
-                    }
-                    Err(e) => warn!("Failed to inject CA certs into container: {}", e),
+            let bundle = bundle_rootfs.join("etc/ssl/certs/ca-certificates.crt");
+            let installer = crate::ca_trust::CaInstaller::with_bundle(bundle);
+            for ca in &init_req.ca_certs {
+                if let Err(e) = installer.install(ca.pem.as_bytes()) {
+                    warn!("Failed to install CA cert: {e}");
                 }
             }
+            info!(
+                count = init_req.ca_certs.len(),
+                "CA certs installed in container"
+            );
         }
 
         // Convert proto BindMount to UserMount for OCI spec

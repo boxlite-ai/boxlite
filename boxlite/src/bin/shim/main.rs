@@ -183,17 +183,8 @@ fn run_shim(mut config: InstanceSpec, timing: impl Fn(&str)) -> BoxliteResult<()
             mac_address: GUEST_MAC,
         });
 
-        // Inject MITM CA cert as env var for the guest agent's own trust store.
-        // This is for the guest init process only (runs before gRPC is up).
-        // Container-level CA injection happens via gRPC CACert field in Container.Init.
-        if let Some(ca_pem) = gvproxy.ca_cert_pem() {
-            use base64::Engine as _;
-            let b64 = base64::engine::general_purpose::STANDARD.encode(ca_pem.as_bytes());
-            config
-                .guest_entrypoint
-                .env
-                .push(("BOXLITE_CA_PEM".to_string(), b64));
-        }
+        // CA cert injection happens via gRPC CACert field in Container.Init.
+        // No env var needed — the guest agent doesn't make HTTPS calls.
 
         // Leak the gvproxy instance to keep it alive for VM lifetime.
         // This is intentional - the VM needs networking for its entire life,

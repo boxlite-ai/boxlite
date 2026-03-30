@@ -1,77 +1,29 @@
-//! MITM CA certificate installation for secret substitution.
+//! CA certificate installer for container trust stores.
 //!
-//! When the host configures secrets, it creates an ephemeral CA and passes
-//! the PEM-encoded certificate as the `BOXLITE_CA_PEM` env var (base64-encoded).
-//! This module decodes it and appends to the system CA bundle so HTTPS clients
-//! trust the MITM proxy's generated certificates.
+//! Appends PEM-encoded CA certificates to a system CA bundle file.
+//! Source-agnostic — the caller provides the PEM bytes and bundle path.
 
-use base64::Engine;
-use tracing::{info, warn};
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::PathBuf;
 
-/// System CA bundle path (Alpine Linux / musl)
-pub(crate) const CA_BUNDLE_PATH: &str = "/etc/ssl/certs/ca-certificates.crt";
-
-/// Environment variable containing the base64-encoded CA PEM
-const CA_PEM_ENV: &str = "BOXLITE_CA_PEM";
-
-// SSL trust env vars removed — the CA cert is appended to the default bundle
-// at /etc/ssl/certs/ca-certificates.crt, which all major TLS libraries check
-// by default on Linux. No env var overrides needed.
-
-/// Install the MITM CA certificate from the environment variable.
-///
-/// If `BOXLITE_CA_PEM` is set, decodes it and appends to the system CA bundle.
-/// Also sets SSL trust env vars so HTTPS clients in this process (and any
-/// children that inherit env) trust the MITM CA.
-///
-/// This is a best-effort operation — failures are logged but don't prevent
-/// the guest from starting (secrets just won't work for HTTPS).
-pub fn install_ca_from_env() {
-    let b64 = match std::env::var(CA_PEM_ENV) {
-        Ok(v) if !v.is_empty() => v,
-        _ => return, // No CA cert to install
-    };
-
-    let pem = match base64::engine::general_purpose::STANDARD.decode(&b64) {
-        Ok(bytes) => bytes,
-        Err(e) => {
-            warn!("Failed to decode {CA_PEM_ENV}: {e}");
-            return;
-        }
-    };
-
-    // Try to append CA cert to guest's system bundle (may fail on small rootfs)
-    if let Err(e) = append_to_ca_bundle(&pem) {
-        warn!("Failed to write CA cert to guest rootfs (expected on small initramfs): {e}");
-        // Continue — the CA cert will be injected into the container rootfs
-        // by container.rs during Container.Init, reading BOXLITE_CA_PEM directly.
-    } else {
-        info!("MITM CA cert installed into {CA_BUNDLE_PATH}");
-    }
-
-    // BOXLITE_CA_PEM persists in guest env for container.rs to read during
-    // Container.Init (it injects the CA into the container rootfs bundle).
-    // Container processes don't inherit it — container env is set explicitly.
+/// Installs CA certificates into a trust bundle file.
+pub struct CaInstaller {
+    bundle_path: PathBuf,
 }
 
-/// Append PEM bytes to the system CA bundle file.
-fn append_to_ca_bundle(pem: &[u8]) -> std::io::Result<()> {
-    use std::io::Write;
-
-    // Ensure the directory exists
-    if let Some(parent) = std::path::Path::new(CA_BUNDLE_PATH).parent() {
-        std::fs::create_dir_all(parent)?;
+impl CaInstaller {
+    /// Create an installer targeting a specific bundle file path.
+    pub fn with_bundle(bundle_path: PathBuf) -> Self {
+        Self { bundle_path }
     }
 
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(CA_BUNDLE_PATH)?;
-
-    // Ensure we start on a new line
-    file.write_all(b"\n")?;
-    file.write_all(pem)?;
-    file.write_all(b"\n")?;
-
-    Ok(())
+    /// Append a PEM-encoded CA certificate to the trust bundle.
+    pub fn install(&self, pem: &[u8]) -> std::io::Result<()> {
+        let mut file = OpenOptions::new().append(true).open(&self.bundle_path)?;
+        file.write_all(b"\n")?;
+        file.write_all(pem)?;
+        file.write_all(b"\n")?;
+        Ok(())
+    }
 }
