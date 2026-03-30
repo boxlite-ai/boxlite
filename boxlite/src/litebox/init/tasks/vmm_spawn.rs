@@ -208,7 +208,7 @@ async fn build_config(
 
     // Assemble VMM instance spec
     let instance_spec = InstanceSpec {
-        engine: crate::vmm::VmmKind::Libkrun,
+        engine: VmmKind::Libkrun, // only engine — will be dynamic when others are added
         // Box identification and security
         box_id: box_id.to_string(),
         security: options.advanced.security.clone(),

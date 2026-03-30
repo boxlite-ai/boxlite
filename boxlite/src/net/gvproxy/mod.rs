@@ -153,8 +153,8 @@ impl GvisorTapBackend {
             &config.port_mappings,
             config.allow_net.clone(),
             secrets,
-            config.ca_cert_pem.clone(),
-            config.ca_key_pem,
+            config.ca_cert_pem.as_deref(),
+            config.ca_key_pem.as_deref(),
         )?);
 
         // Start background stats logging thread

@@ -56,8 +56,6 @@ use super::stats::NetworkStats;
 pub struct GvproxyInstance {
     id: i64,
     socket_path: PathBuf,
-    /// CA cert PEM generated in Rust (stored for rootfs injection, no FFI needed).
-    ca_cert_pem: Option<String>,
 }
 
 impl GvproxyInstance {
@@ -74,8 +72,8 @@ impl GvproxyInstance {
         port_mappings: &[(u16, u16)],
         allow_net: Vec<String>,
         secrets: Vec<super::config::GvproxySecretConfig>,
-        ca_cert_pem: Option<String>,
-        ca_key_pem: Option<String>,
+        ca_cert_pem: Option<&str>,
+        ca_key_pem: Option<&str>,
     ) -> BoxliteResult<Self> {
         // Initialize logging callback (one-time setup)
         logging::init_logging();
@@ -85,19 +83,15 @@ impl GvproxyInstance {
                 .with_allow_net(allow_net)
                 .with_secrets(secrets);
 
-        if let (Some(cert), Some(key)) = (&ca_cert_pem, &ca_key_pem) {
-            config = config.with_ca(cert.clone(), key.clone());
+        if let (Some(cert), Some(key)) = (ca_cert_pem, ca_key_pem) {
+            config = config.with_ca(cert.to_string(), key.to_string());
         }
 
         let id = ffi::create_instance(&config)?;
 
         tracing::info!(id, ?socket_path, "Created GvproxyInstance");
 
-        Ok(Self {
-            id,
-            socket_path,
-            ca_cert_pem,
-        })
+        Ok(Self { id, socket_path })
     }
 
     /// Unix socket path for the network tap interface.
@@ -120,8 +114,8 @@ impl GvproxyInstance {
             &config.port_mappings,
             config.allow_net.clone(),
             secrets,
-            config.ca_cert_pem.clone(),
-            config.ca_key_pem.clone(),
+            config.ca_cert_pem.as_deref(),
+            config.ca_key_pem.as_deref(),
         )?;
 
         let connection_type = if cfg!(target_os = "macos") {
@@ -138,14 +132,6 @@ impl GvproxyInstance {
         };
 
         Ok((instance, endpoint))
-    }
-
-    /// Get the MITM CA certificate PEM for this instance.
-    ///
-    /// Returns the ephemeral CA cert generated in Rust for TLS MITM secret substitution.
-    /// Returns `None` if no secrets were configured. No FFI call needed.
-    pub fn ca_cert_pem(&self) -> Option<&str> {
-        self.ca_cert_pem.as_deref()
     }
 
     /// Get network statistics from this gvproxy instance

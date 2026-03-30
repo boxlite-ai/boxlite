@@ -114,9 +114,11 @@ impl<'a> ShimSpawner<'a> {
         })?;
 
         // 8. Write config to stdin, then close (shim reads until EOF).
-        // This is synchronous — safe because pipe buffer (16KB macOS, 64KB Linux)
-        // is always larger than the config (~2-5KB). If config ever exceeds the
-        // pipe buffer, write_all would block waiting for the shim to read.
+        // The child is already spawned and will read from stdin, so this is a
+        // producer-consumer pattern via the kernel pipe buffer. For typical
+        // configs (~2-5KB), write_all completes immediately. For large configs
+        // (>16KB on macOS, >64KB on Linux), write_all blocks until the child
+        // drains the buffer — which it does as its first action in main().
         if let Some(mut stdin) = child.stdin.take() {
             use std::io::Write;
             stdin.write_all(config_json.as_bytes()).map_err(|e| {

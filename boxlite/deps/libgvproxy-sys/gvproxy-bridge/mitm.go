@@ -77,9 +77,17 @@ func (ca *BoxCA) CACertPool() (*x509.CertPool, error) {
 
 // GenerateHostCert generates a TLS certificate for the given hostname, signed by this CA.
 // Results are cached per-hostname.
+const maxCertCacheSize = 10000
+
 func (ca *BoxCA) GenerateHostCert(hostname string) (*tls.Certificate, error) {
 	if cached, ok := ca.certCache.Load(hostname); ok {
-		return cached.(*tls.Certificate), nil
+		tlsCert := cached.(*tls.Certificate)
+		// Check TTL: regenerate if cert has expired
+		if tlsCert.Leaf != nil && time.Now().Before(tlsCert.Leaf.NotAfter) {
+			return tlsCert, nil
+		}
+		// Expired — fall through to regenerate
+		ca.certCache.Delete(hostname)
 	}
 
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -113,9 +121,18 @@ func (ca *BoxCA) GenerateHostCert(hostname string) (*tls.Certificate, error) {
 		return nil, err
 	}
 
+	leaf, _ := x509.ParseCertificate(certDER)
 	tlsCert := &tls.Certificate{
 		Certificate: [][]byte{certDER, ca.cert.Raw},
 		PrivateKey:  key,
+		Leaf:        leaf, // stored for TTL check
+	}
+
+	// Evict entire cache if it grows too large (certs regenerate in ~0.1ms)
+	cacheSize := 0
+	ca.certCache.Range(func(_, _ any) bool { cacheSize++; return cacheSize < maxCertCacheSize })
+	if cacheSize >= maxCertCacheSize {
+		ca.certCache.Range(func(key, _ any) bool { ca.certCache.Delete(key); return true })
 	}
 
 	actual, loaded := ca.certCache.LoadOrStore(hostname, tlsCert)

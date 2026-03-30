@@ -1,12 +1,13 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httputil"
-	"sync"
 	"time"
 
 	logrus "github.com/sirupsen/logrus"
@@ -73,9 +74,74 @@ func mitmAndForward(guestConn net.Conn, hostname string, destAddr string, ca *Bo
 		h2srv := &http2.Server{}
 		h2srv.ServeConn(tlsGuest, &http2.ServeConnOpts{Handler: proxy})
 	} else {
-		// HTTP/1.1: wrap single conn as net.Listener for http.Server
-		srv := &http.Server{Handler: proxy}
-		srv.Serve(newSingleConnListener(tlsGuest)) //nolint:errcheck
+		// HTTP/1.1: serve directly on the connection (no http.Server).
+		// Using http.Server + singleConnListener leaks a goroutine in Accept()
+		// after the connection closes. Serving directly avoids this.
+		serveHTTP1(tlsGuest, proxy)
+	}
+}
+
+// serveHTTP1 handles HTTP/1.1 requests on a single TLS connection.
+// Supports keep-alive: reads requests in a loop until the client closes.
+func serveHTTP1(conn net.Conn, handler http.Handler) {
+	defer conn.Close()
+	br := bufio.NewReaderSize(conn, 4096)
+
+	for {
+		req, err := http.ReadRequest(br)
+		if err != nil {
+			return // client closed or malformed — done
+		}
+
+		rw := newResponseWriter(conn)
+		handler.ServeHTTP(rw, req)
+		rw.finish()
+		req.Body.Close()
+
+		if req.Close || rw.closeAfter {
+			return
+		}
+	}
+}
+
+// responseWriter implements http.ResponseWriter for a raw net.Conn.
+type responseWriter struct {
+	conn       net.Conn
+	header     http.Header
+	wroteHead  bool
+	status     int
+	closeAfter bool
+}
+
+func newResponseWriter(conn net.Conn) *responseWriter {
+	return &responseWriter{conn: conn, header: http.Header{}, status: 200}
+}
+
+func (w *responseWriter) Header() http.Header { return w.header }
+
+func (w *responseWriter) WriteHeader(code int) {
+	if w.wroteHead {
+		return
+	}
+	w.wroteHead = true
+	w.status = code
+
+	// Write status line + headers
+	fmt.Fprintf(w.conn, "HTTP/1.1 %d %s\r\n", code, http.StatusText(code))
+	w.header.Write(w.conn)
+	fmt.Fprint(w.conn, "\r\n")
+}
+
+func (w *responseWriter) Write(b []byte) (int, error) {
+	if !w.wroteHead {
+		w.WriteHeader(200)
+	}
+	return w.conn.Write(b)
+}
+
+func (w *responseWriter) finish() {
+	if !w.wroteHead {
+		w.WriteHeader(200)
 	}
 }
 
@@ -94,37 +160,3 @@ func (t *secretTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return t.inner.RoundTrip(req)
 }
 
-// singleConnListener serves exactly one pre-accepted connection as a net.Listener.
-// Needed because http.Server requires a Listener, but we already have the TLS conn.
-type singleConnListener struct {
-	ch     chan net.Conn
-	addr   net.Addr
-	once   sync.Once
-	closed chan struct{}
-}
-
-func newSingleConnListener(conn net.Conn) *singleConnListener {
-	l := &singleConnListener{
-		ch:     make(chan net.Conn, 1),
-		addr:   conn.LocalAddr(),
-		closed: make(chan struct{}),
-	}
-	l.ch <- conn
-	return l
-}
-
-func (l *singleConnListener) Accept() (net.Conn, error) {
-	select {
-	case conn := <-l.ch:
-		return conn, nil
-	case <-l.closed:
-		return nil, net.ErrClosed
-	}
-}
-
-func (l *singleConnListener) Close() error {
-	l.once.Do(func() { close(l.closed) })
-	return nil
-}
-
-func (l *singleConnListener) Addr() net.Addr { return l.addr }

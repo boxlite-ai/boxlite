@@ -191,15 +191,21 @@ impl ContainerService for GuestServer {
         if !init_req.ca_certs.is_empty() {
             let bundle = bundle_rootfs.join("etc/ssl/certs/ca-certificates.crt");
             let installer = crate::ca_trust::CaInstaller::with_bundle(bundle);
+            let mut installed = 0;
             for ca in &init_req.ca_certs {
-                if let Err(e) = installer.install(ca.pem.as_bytes()) {
-                    warn!("Failed to install CA cert: {e}");
+                match installer.install(ca.pem.as_bytes()) {
+                    Ok(()) => installed += 1,
+                    Err(e) => warn!("Failed to install CA cert: {e}"),
                 }
             }
-            info!(
-                count = init_req.ca_certs.len(),
-                "CA certs installed in container"
-            );
+            if installed > 0 {
+                info!(count = installed, "CA certs installed in container");
+            } else {
+                error!(
+                    total = init_req.ca_certs.len(),
+                    "All CA cert installations failed — HTTPS will not trust MITM proxy"
+                );
+            }
         }
 
         // Convert proto BindMount to UserMount for OCI spec

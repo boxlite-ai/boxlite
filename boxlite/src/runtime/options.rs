@@ -169,26 +169,35 @@ pub struct Secret {
 }
 
 impl Secret {
+    /// Validate that the secret name is safe for use as an env var suffix.
+    fn validate_name(name: &str) -> Result<(), String> {
+        if name.is_empty() {
+            return Err("Secret name must not be empty".into());
+        }
+        if !name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        {
+            return Err(format!(
+                "Secret name must contain only alphanumeric, underscore, or hyphen characters, got: {name:?}"
+            ));
+        }
+        Ok(())
+    }
+
     /// Environment variable key for this secret's placeholder (e.g., `BOXLITE_SECRET_OPENAI`).
     ///
-    /// # Panics
-    /// Panics if `name` contains non-alphanumeric characters (except underscore/hyphen).
-    pub fn env_key(&self) -> String {
-        assert!(
-            !self.name.is_empty()
-                && self
-                    .name
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'),
-            "Secret name must be non-empty and contain only alphanumeric, underscore, or hyphen characters, got: {:?}",
-            self.name
-        );
-        format!("BOXLITE_SECRET_{}", self.name.to_uppercase())
+    /// Returns `Err` if the name contains invalid characters.
+    pub fn env_key(&self) -> Result<String, String> {
+        Self::validate_name(&self.name)?;
+        Ok(format!("BOXLITE_SECRET_{}", self.name.to_uppercase()))
     }
 
     /// Environment variable key-value pair: (env_key, placeholder).
-    pub fn env_pair(&self) -> (String, String) {
-        (self.env_key(), self.placeholder.clone())
+    ///
+    /// Returns `None` if the name is invalid (logged at call site).
+    pub fn env_pair(&self) -> Option<(String, String)> {
+        self.env_key().ok().map(|k| (k, self.placeholder.clone()))
     }
 }
 
