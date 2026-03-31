@@ -26,6 +26,13 @@ check_platform() {
     fi
 }
 
+# Check if we need $SUDO (not root and sudo exists)
+if [ "$EUID" -ne 0 ] && command -v sudo &> /dev/null; then
+    SUDO="sudo"
+else
+    SUDO=""
+fi
+
 # Check if a yum package is installed
 yum_installed() {
     yum list installed "$1" &>/dev/null
@@ -34,7 +41,7 @@ yum_installed() {
 # Update package lists
 update_yum() {
     print_section "🔄 Updating package lists..."
-    yum update -y -q
+    $SUDO yum update -y -q
     echo ""
 }
 
@@ -52,6 +59,7 @@ install_system_deps() {
         unzip
         file               # file type detection
         pkgconfig
+        patchelf           # ELF binary patching (SONAME fixup, wheel repair)
         openssl-devel
 
         # libkrun build dependencies
@@ -60,8 +68,7 @@ install_system_deps() {
         llvm
         llvm-devel
         libatomic
-        libepoxy-devel      # Required by rutabaga_gfx for OpenGL
-        virglrenderer-devel # Required by rutabaga_gfx for GPU virtualization
+        libepoxy-devel      # Required by rutabaga_gfx for OpenGL (optional on headless)
 
         # libkrunfw kernel build dependencies
         bc
@@ -90,9 +97,31 @@ install_system_deps() {
         if yum_installed "$pkg"; then
             print_success "Already installed"
         else
-            echo -e "${YELLOW}Installing...${NC}"
-            yum install -y -q "$pkg"
+            # Some packages have -minimal variants (e.g., curl-minimal on Amazon Linux)
+            # that provide the same command. Skip if the command already exists.
+            local cmd_name="${pkg%%-*}"  # e.g., "curl" from "curl", "gcc" from "gcc-c++"
+            if [ "$pkg" = "$cmd_name" ] && command -v "$cmd_name" &>/dev/null; then
+                print_success "Provided by alternative package"
+            else
+                echo -e "${YELLOW}Installing...${NC}"
+                $SUDO yum install -y -q "$pkg"
+                print_success "$pkg installed"
+            fi
+        fi
+    done
+
+    # Optional GPU packages (not available on all distros, e.g., Amazon Linux 2023)
+    local optional_packages=(
+        virglrenderer-devel # Required by rutabaga_gfx for GPU virtualization
+    )
+    for pkg in "${optional_packages[@]}"; do
+        print_step "Checking for $pkg (optional)... "
+        if yum_installed "$pkg"; then
+            print_success "Already installed"
+        elif $SUDO yum install -y -q "$pkg" 2>/dev/null; then
             print_success "$pkg installed"
+        else
+            echo -e "${YELLOW}Not available (GPU features disabled)${NC}"
         fi
     done
 
@@ -103,7 +132,7 @@ install_system_deps() {
         print_success "Already installed"
     else
         echo -e "${YELLOW}Installing...${NC}"
-        yum install -y -q glibc-static
+        $SUDO yum install -y -q glibc-static
         print_success "glibc-static installed"
     fi
 
@@ -176,7 +205,7 @@ install_protoc() {
     local PROTOC_ZIP="/tmp/protoc.zip"
 
     curl -sSL "$PROTOC_URL" -o "$PROTOC_ZIP"
-    unzip -q -o "$PROTOC_ZIP" -d /usr/local
+    $SUDO unzip -q -o "$PROTOC_ZIP" -d /usr/local
     rm -f "$PROTOC_ZIP"
 
     print_success "Installed protoc $PROTOC_VERSION"
@@ -216,7 +245,7 @@ install_nodejs() {
 
     echo -e "${YELLOW}Downloading Node.js $NODE_VERSION...${NC}"
     curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz" \
-        | tar -xJ -C /usr/local --strip-components=1
+        | $SUDO tar -xJ -C /usr/local --strip-components=1
     print_success "Node.js $NODE_VERSION installed"
     echo ""
 }

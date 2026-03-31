@@ -120,26 +120,28 @@ build_guest_binary() {
 
     cargo build $build_flag --target "$GUEST_TARGET" -p boxlite-guest
 
-    # Verify guest binary is statically linked
+    # Verify guest binary is truly statically linked (ET_EXEC, not static-PIE).
+    # Static-PIE (ET_DYN) binaries fail inside the VM because libkrunfw's kernel
+    # has CONFIG_RANDOMIZE_BASE disabled — the ELF loader can't handle ET_DYN
+    # without ASLR, causing the guest to exit immediately with no output.
     local guest_binary="$PROJECT_ROOT/target/$GUEST_TARGET/$PROFILE/boxlite-guest"
     local file_output
     file_output=$(file "$guest_binary")
-    if echo "$file_output" | grep -q "dynamically linked"; then 
+    if ! echo "$file_output" | grep -q "statically linked"; then
         local musl_arch
         musl_arch=$(echo "$GUEST_TARGET" | cut -d'-' -f1)
         local musl_gcc="${musl_arch}-linux-musl-gcc"
 
-        print_error "boxlite-guest is dynamically linked, but must be statically linked"
+        print_error "boxlite-guest is not statically linked"
         echo ""
-        echo "❌ Error: The boxlite-guest binary must be statically linked."
+        echo "❌ Error: The boxlite-guest binary must be truly statically linked (ET_EXEC)."
+        echo "   Static-PIE (ET_DYN) binaries will NOT work inside the VM."
         echo ""
-        echo "The guest binary at $guest_binary is dynamically linked, which means"
-        echo "it depends on shared libraries that won't be available inside the VM."
+        echo "   file output: $file_output"
         echo ""
         echo "🔧 To fix this issue:"
-        echo "  Check your $musl_gcc version:"
-        echo "  $ $musl_gcc --version"
-        echo "  Verify whether your C compiler is a gnu-gcc wrapper instead of true musl-gcc"
+        echo "  Ensure .cargo/config.toml has '-C link-arg=-static' in rustflags"
+        echo "  for the $GUEST_TARGET target, and that $musl_gcc is a true musl linker."
         echo ""
         exit 1
     fi

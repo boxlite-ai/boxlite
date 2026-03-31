@@ -105,6 +105,20 @@ build_shim_binary() {
     else
         cargo build $build_flag --bin boxlite-shim $features
     fi
+
+    # Verify shim binary is statically linked on Linux
+    if [ "$OS" = "linux" ]; then
+        local file_output
+        file_output=$(file "$SHIM_BINARY_PATH")
+        if ! echo "$file_output" | grep -q "statically linked"; then
+            print_error "boxlite-shim is not statically linked"
+            echo ""
+            echo "❌ Error: The boxlite-shim binary must be statically linked."
+            echo "   file output: $file_output"
+            echo ""
+            exit 1
+        fi
+    fi
 }
 
 # Sign the binary (macOS only, automatic)
