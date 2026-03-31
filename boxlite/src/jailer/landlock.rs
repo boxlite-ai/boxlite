@@ -169,27 +169,32 @@ pub unsafe fn restrict_self_raw(ruleset_fd: RawFd) -> i32 {
     // Set PR_SET_NO_NEW_PRIVS (required by Landlock).
     // This prevents privilege escalation via setuid binaries.
     // Note: bwrap may have already set this, but it's idempotent.
-    let ret = libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
+    // SAFETY: prctl with PR_SET_NO_NEW_PRIVS is always safe to call.
+    let ret = unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
     if ret != 0 {
-        let errno = *libc::__errno_location();
-        libc::close(ruleset_fd);
+        // SAFETY: errno is thread-local, safe to read after failed syscall.
+        let errno = unsafe { *libc::__errno_location() };
+        unsafe { libc::close(ruleset_fd) };
         return errno;
     }
 
     // Apply the Landlock ruleset to this thread.
-    let ret = libc::syscall(
-        libc::SYS_landlock_restrict_self,
-        ruleset_fd as libc::c_long,
-        0i64,
-    );
+    // SAFETY: ruleset_fd is a valid Landlock fd inherited from the parent.
+    let ret = unsafe {
+        libc::syscall(
+            libc::SYS_landlock_restrict_self,
+            ruleset_fd as libc::c_long,
+            0i64,
+        )
+    };
     let errno = if ret != 0 {
-        *libc::__errno_location()
+        unsafe { *libc::__errno_location() }
     } else {
         0
     };
 
     // Always close the ruleset fd (no longer needed after restrict_self).
-    libc::close(ruleset_fd);
+    unsafe { libc::close(ruleset_fd) };
 
     errno
 }

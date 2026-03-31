@@ -60,7 +60,10 @@ impl Sandbox for BwrapSandbox {
 
     fn apply(&self, ctx: &SandboxContext, cmd: &mut Command) {
         let binary = cmd.get_program().to_owned();
-        let args: Vec<std::ffi::OsString> = cmd.get_args().map(|a| a.to_owned()).collect();
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
 
         let mut bwrap_cmd = bwrap::BwrapCommand::new();
 
