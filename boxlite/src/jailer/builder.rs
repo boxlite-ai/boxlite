@@ -114,7 +114,7 @@ impl JailerBuilder {
     /// Returns [`JailerError::Config`](super::JailerError) with
     /// [`ConfigError::InvalidConfig`](super::ConfigError) if `box_id` or `box_dir` was not set.
     pub fn build(self) -> Result<Jailer<PlatformSandbox>, crate::jailer::JailerError> {
-        self.build_with(PlatformSandbox::new())
+        self.build_with(PlatformSandbox::platform_new())
     }
 
     /// Build with a custom sandbox implementation.

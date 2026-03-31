@@ -7,8 +7,11 @@
 //!
 //! 1. **Close inherited FDs** - Prevents information leakage
 //! 2. **Apply rlimits** - Resource limits (max files, memory, CPU time, etc.)
-//! 3. **Add to cgroup** - Linux only, for cgroup resource limits
-//! 4. **Write PID file** - Single source of truth for process tracking
+//! 3. **Write PID file** - Single source of truth for process tracking
+//!
+//! Sandbox-specific pre_exec hooks (cgroup join, Landlock restriction) are
+//! added by each sandbox's `apply()` method — they run before this hook
+//! since `Command::pre_exec` closures execute in registration order.
 //!
 //! # Safety
 //!
@@ -28,14 +31,12 @@ use std::process::Command;
 /// Add pre-execution hook for process isolation (async-signal-safe).
 ///
 /// Runs after fork() but before the new program starts in the child process.
-/// Applies: FD preservation (dup2), FD cleanup, rlimits, cgroup membership (Linux),
-/// PID file writing.
+/// Applies: FD preservation (dup2), FD cleanup, rlimits, PID file writing.
 ///
 /// # Arguments
 ///
 /// * `cmd` - The Command to add the hook to
 /// * `resource_limits` - Resource limits to apply
-/// * `cgroup_procs_path` - Path to cgroup.procs file (Linux only, pre-computed)
 /// * `pid_file_path` - Path to PID file (pre-computed CString for async-signal-safety)
 /// * `preserved_fds` - FDs to preserve: each `(source, target)` is dup2'd before cleanup.
 ///   After dup2, all FDs above the highest target are closed.
@@ -47,7 +48,7 @@ use std::process::Command;
 /// only uses async-signal-safe operations:
 /// - `dup2()` / `close()` / `close_range()` syscalls
 /// - `setrlimit()` syscall
-/// - `open()` / `write()` / `close()` syscalls (for cgroup and PID file)
+/// - `open()` / `write()` / `close()` syscalls (for PID file)
 /// - `getpid()` syscall
 ///
 /// **Do NOT add any of the following to the hook:**
@@ -58,7 +59,6 @@ use std::process::Command;
 pub fn add_pre_exec_hook(
     cmd: &mut Command,
     resource_limits: ResourceLimits,
-    #[allow(unused_variables)] cgroup_procs_path: Option<std::ffi::CString>,
     pid_file_path: Option<std::ffi::CString>,
     preserved_fds: Vec<(RawFd, i32)>,
 ) {
@@ -89,13 +89,7 @@ pub fn add_pre_exec_hook(
             common::rlimit::apply_limits_raw(&resource_limits)
                 .map_err(std::io::Error::from_raw_os_error)?;
 
-            // 3. Add self to cgroup (Linux only)
-            #[cfg(target_os = "linux")]
-            if let Some(ref path) = cgroup_procs_path {
-                let _ = crate::jailer::cgroup::add_self_to_cgroup_raw(path);
-            }
-
-            // 4. Write PID file
+            // 3. Write PID file
             if let Some(ref path) = pid_file_path {
                 common::pid::write_pid_file_raw(path).map_err(std::io::Error::from_raw_os_error)?;
             }
@@ -114,19 +108,7 @@ mod tests {
         let mut cmd = Command::new("/bin/echo");
         let limits = ResourceLimits::default();
 
-        add_pre_exec_hook(&mut cmd, limits, None, None, vec![]);
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn test_add_hook_with_cgroup_path() {
-        use std::ffi::CString;
-
-        let mut cmd = Command::new("/bin/echo");
-        let limits = ResourceLimits::default();
-        let cgroup_path = CString::new("/sys/fs/cgroup/boxlite/test/cgroup.procs").ok();
-
-        add_pre_exec_hook(&mut cmd, limits, cgroup_path, None, vec![]);
+        add_pre_exec_hook(&mut cmd, limits, None, vec![]);
     }
 
     #[test]
@@ -137,7 +119,7 @@ mod tests {
         let limits = ResourceLimits::default();
         let pid_file = CString::new("/tmp/test.pid").ok();
 
-        add_pre_exec_hook(&mut cmd, limits, None, pid_file, vec![]);
+        add_pre_exec_hook(&mut cmd, limits, pid_file, vec![]);
     }
 
     #[test]
@@ -146,6 +128,6 @@ mod tests {
         let limits = ResourceLimits::default();
 
         // Simulate preserving fd 5 → target fd 3
-        add_pre_exec_hook(&mut cmd, limits, None, None, vec![(5, 3)]);
+        add_pre_exec_hook(&mut cmd, limits, None, vec![(5, 3)]);
     }
 }

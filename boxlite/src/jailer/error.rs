@@ -92,6 +92,10 @@ pub enum IsolationError {
     #[error("seccomp: {0}")]
     Seccomp(String),
 
+    /// Failed to apply Landlock filesystem/network restrictions.
+    #[error("landlock: {0}")]
+    Landlock(String),
+
     /// Failed to setup cgroup resource limits.
     #[error("cgroup: {0}")]
     Cgroup(String),

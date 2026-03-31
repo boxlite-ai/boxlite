@@ -76,6 +76,11 @@ impl SeatbeltSandbox {
     pub fn new() -> Self {
         Self
     }
+
+    /// Platform constructor alias (used by [`JailerBuilder`](super::super::JailerBuilder)).
+    pub fn platform_new() -> Self {
+        Self::new()
+    }
 }
 
 impl Default for SeatbeltSandbox {
@@ -97,18 +102,22 @@ impl Sandbox for SeatbeltSandbox {
         Ok(())
     }
 
-    fn wrap(&self, ctx: &SandboxContext, binary: &Path, args: &[String]) -> Command {
-        let (sandbox_cmd, sandbox_args) =
-            build_sandbox_exec_args(&ctx.paths, binary, ctx.network_enabled, ctx.sandbox_profile);
-        let mut cmd = Command::new(sandbox_cmd);
-        cmd.args(sandbox_args);
-        cmd.arg(binary);
-        cmd.args(args);
-        cmd
-    }
+    fn apply(&self, ctx: &SandboxContext, cmd: &mut Command) {
+        let binary = cmd.get_program().to_owned();
+        let args: Vec<std::ffi::OsString> = cmd.get_args().map(|a| a.to_owned()).collect();
 
-    fn cgroup_procs_path(&self, _ctx: &SandboxContext) -> Option<std::ffi::CString> {
-        None
+        let binary_path = std::path::Path::new(&binary);
+        let (sandbox_cmd, sandbox_args) = build_sandbox_exec_args(
+            &ctx.paths,
+            binary_path,
+            ctx.network_enabled,
+            ctx.sandbox_profile,
+        );
+        let mut new_cmd = Command::new(sandbox_cmd);
+        new_cmd.args(sandbox_args);
+        new_cmd.arg(&binary);
+        new_cmd.args(&args);
+        *cmd = new_cmd;
     }
 
     fn name(&self) -> &'static str {
@@ -636,22 +645,6 @@ mod tests {
     fn test_seatbelt_sandbox_name() {
         let sandbox = SeatbeltSandbox::new();
         assert_eq!(sandbox.name(), "seatbelt");
-    }
-
-    #[test]
-    fn test_seatbelt_sandbox_no_cgroup() {
-        use crate::jailer::sandbox::SandboxContext;
-        use crate::runtime::advanced_options::ResourceLimits;
-
-        let sandbox = SeatbeltSandbox::new();
-        let ctx = SandboxContext {
-            id: "test",
-            paths: vec![],
-            resource_limits: &ResourceLimits::default(),
-            network_enabled: false,
-            sandbox_profile: None,
-        };
-        assert!(sandbox.cgroup_procs_path(&ctx).is_none());
     }
 
     /// Empty path list must produce a valid SBPL write policy with no grants.

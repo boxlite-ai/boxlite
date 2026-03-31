@@ -155,15 +155,9 @@ mod tests {
             fn setup(&self, _ctx: &SandboxContext) -> BoxliteResult<()> {
                 Ok(())
             }
-            fn wrap(&self, ctx: &SandboxContext, binary: &Path, args: &[String]) -> Command {
+            fn apply(&self, ctx: &SandboxContext, _cmd: &mut Command) {
                 *self.captured_id.lock().unwrap() = Some(ctx.id.to_string());
                 *self.captured_network.lock().unwrap() = Some(ctx.network_enabled);
-                let mut cmd = Command::new(binary);
-                cmd.args(args);
-                cmd
-            }
-            fn cgroup_procs_path(&self, _ctx: &SandboxContext) -> Option<std::ffi::CString> {
-                None
             }
             fn name(&self) -> &'static str {
                 "capture"

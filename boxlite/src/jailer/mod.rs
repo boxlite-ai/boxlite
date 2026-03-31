@@ -72,6 +72,8 @@ pub(crate) mod cgroup;
 #[cfg(target_os = "linux")]
 pub(crate) mod credentials;
 #[cfg(target_os = "linux")]
+pub mod landlock;
+#[cfg(target_os = "linux")]
 pub mod seccomp;
 
 // ============================================================================
@@ -82,7 +84,9 @@ pub mod seccomp;
 pub use crate::runtime::advanced_options::{ResourceLimits, SecurityOptions};
 pub use builder::JailerBuilder;
 pub use error::{ConfigError, IsolationError, JailerError, SystemError};
-pub use sandbox::{NoopSandbox, PathAccess, PlatformSandbox, Sandbox, SandboxContext};
+pub use sandbox::{
+    CompositeSandbox, NoopSandbox, PathAccess, PlatformSandbox, Sandbox, SandboxContext,
+};
 
 // Volume specification (convenience re-export)
 pub use crate::runtime::options::VolumeSpec;
@@ -91,7 +95,9 @@ pub use crate::runtime::options::VolumeSpec;
 #[cfg(target_os = "linux")]
 pub use bwrap::{build_shim_command, is_available as is_bwrap_available};
 #[cfg(target_os = "linux")]
-pub use sandbox::BwrapSandbox;
+pub use landlock::{build_landlock_ruleset, is_landlock_available};
+#[cfg(target_os = "linux")]
+pub use sandbox::{BwrapSandbox, LandlockSandbox};
 #[cfg(target_os = "linux")]
 pub use seccomp::SeccompRole;
 
@@ -377,28 +383,27 @@ impl<S: Sandbox> Jail for Jailer<S> {
             binary.to_path_buf()
         };
 
-        let mut cmd = if self.security.jailer_enabled && self.sandbox.is_available() {
-            tracing::info!(sandbox = self.sandbox.name(), "Building confined command");
-            self.sandbox.wrap(&ctx, &effective_binary, args)
-        } else {
-            if self.security.jailer_enabled {
-                tracing::warn!("Sandbox not available, falling back to direct command");
-            } else {
-                tracing::info!("Jailer disabled, running shim without sandbox isolation");
-            }
-            let mut cmd = Command::new(&effective_binary);
-            cmd.args(args);
-            cmd
-        };
+        // Start with a bare command. Sandbox.apply() modifies it in-place.
+        let mut cmd = Command::new(&effective_binary);
+        cmd.args(args);
 
-        // Pre-exec hook: FD preservation, FD cleanup, rlimits, cgroup join, PID file
+        if self.security.jailer_enabled && self.sandbox.is_available() {
+            tracing::info!(sandbox = self.sandbox.name(), "Applying sandbox isolation");
+            self.sandbox.apply(&ctx, &mut cmd);
+        } else if self.security.jailer_enabled {
+            tracing::warn!("Sandbox not available, falling back to direct command");
+        } else {
+            tracing::info!("Jailer disabled, running shim without sandbox isolation");
+        }
+
+        // Pre-exec hook: FD preservation, FD cleanup, rlimits, PID file.
+        // Sandbox-specific pre_exec hooks (cgroup, Landlock) are already added
+        // by sandbox.apply() above — Command supports multiple pre_exec closures.
         let resource_limits = self.security.resource_limits.clone();
-        let cgroup_procs = self.sandbox.cgroup_procs_path(&ctx);
         let pid_file = self.pid_file_path();
         pre_exec::add_pre_exec_hook(
             &mut cmd,
             resource_limits,
-            cgroup_procs,
             pid_file,
             self.preserved_fds.clone(),
         );

@@ -1,7 +1,7 @@
-//! Sandbox abstraction for platform-specific process wrapping.
+//! Sandbox abstraction for platform-specific process isolation.
 //!
 //! This module provides the [`Sandbox`] trait — the internal mechanism that
-//! wraps a command with platform-specific isolation at spawn time.
+//! applies isolation to a command at spawn time.
 //!
 //! Callers don't use `Sandbox` directly; they use the [`Jail`](super::Jail)
 //! trait. Only [`Jailer`](super::Jailer) knows about sandboxes.
@@ -10,17 +10,36 @@
 //!
 //! | Sandbox | Platform | Mechanism |
 //! |---------|----------|-----------|
-//! | [`BwrapSandbox`] | Linux | bubblewrap namespaces |
+//! | [`BwrapSandbox`] | Linux | bubblewrap namespaces + cgroups |
+//! | [`LandlockSandbox`] | Linux | Landlock filesystem/network ACL |
 //! | [`SeatbeltSandbox`] | macOS | sandbox-exec SBPL |
+//! | [`CompositeSandbox`] | any | chains multiple sandboxes |
 //! | [`NoopSandbox`] | any | passthrough (no isolation) |
+//!
+//! # Composition
+//!
+//! Sandboxes compose naturally via [`CompositeSandbox`]:
+//! ```ignore
+//! let sandbox = CompositeSandbox::new(vec![
+//!     Box::new(BwrapSandbox::new()),
+//!     Box::new(LandlockSandbox::new()),
+//! ]);
+//! ```
+//! Each child's `apply()` is called in order on the same `Command`.
 
 #[cfg(target_os = "linux")]
 mod bwrap;
+mod composite;
+#[cfg(target_os = "linux")]
+mod landlock;
 #[cfg(target_os = "macos")]
 pub mod seatbelt;
 
 #[cfg(target_os = "linux")]
 pub use bwrap::BwrapSandbox;
+pub use composite::CompositeSandbox;
+#[cfg(target_os = "linux")]
+pub use landlock::LandlockSandbox;
 #[cfg(target_os = "macos")]
 pub use seatbelt::SeatbeltSandbox;
 
@@ -33,33 +52,32 @@ use std::process::Command;
 // Sandbox Trait
 // ============================================================================
 
-/// Platform-specific sandbox wrapping.
+/// Platform-specific process isolation.
 ///
-/// Wraps a command with isolation at spawn time.
-/// Used internally by [`Jailer`](super::Jailer); callers use the
-/// [`Jail`](super::Jail) trait.
+/// Each sandbox modifies a `Command` via [`apply()`](Sandbox::apply):
+/// - **Namespace sandboxes** (bwrap) replace the command with a wrapper
+/// - **Restriction sandboxes** (Landlock) add `pre_exec` hooks
+/// - **Composed sandboxes** chain multiple `apply()` calls
 ///
-/// Each implementation is a zero-sized unit struct — no runtime cost,
-/// monomorphized at compile time.
+/// Multiple `pre_exec` hooks are safe — `Command` stores them in a `Vec`,
+/// executed in registration order.
 pub trait Sandbox: Send + Sync {
     /// Whether the sandbox tool is installed and usable.
     fn is_available(&self) -> bool;
 
-    /// Platform-specific pre-spawn setup (cgroups, userns preflight).
+    /// Pre-spawn setup (cgroups, userns preflight).
     ///
-    /// Called from the parent process before spawning.
-    fn setup(&self, ctx: &SandboxContext) -> BoxliteResult<()>;
+    /// Called from the parent process before spawning. Default: no-op.
+    fn setup(&self, _ctx: &SandboxContext) -> BoxliteResult<()> {
+        Ok(())
+    }
 
-    /// Wrap the binary with sandbox isolation.
+    /// Apply sandbox isolation to the command.
     ///
-    /// Returns a `Command` with the binary wrapped by the sandbox tool.
-    /// Assumes `is_available()` is true. Caller checks first.
-    fn wrap(&self, ctx: &SandboxContext, binary: &Path, args: &[String]) -> Command;
-
-    /// Cgroup procs path for the pre_exec hook.
-    ///
-    /// Returns `Some` on Linux (for cgroup join), `None` elsewhere.
-    fn cgroup_procs_path(&self, ctx: &SandboxContext) -> Option<std::ffi::CString>;
+    /// Modifies the command in-place. The command already has binary and args
+    /// set — use `cmd.get_program()` / `cmd.get_args()` to extract them
+    /// if needed (e.g., to wrap with bwrap).
+    fn apply(&self, ctx: &SandboxContext, cmd: &mut Command);
 
     /// Name for logging.
     fn name(&self) -> &'static str;
@@ -127,10 +145,11 @@ impl SandboxContext<'_> {
 
 /// The sandbox for the current platform.
 ///
-/// This is the single point where platform dispatch happens.
-/// All other code is generic over `S: Sandbox`.
+/// On Linux: [`CompositeSandbox`] combining bwrap (namespaces) + Landlock (filesystem ACL).
+/// On macOS: [`SeatbeltSandbox`] (sandbox-exec).
+/// On other: [`NoopSandbox`] (passthrough).
 #[cfg(target_os = "linux")]
-pub type PlatformSandbox = BwrapSandbox;
+pub type PlatformSandbox = CompositeSandbox;
 
 #[cfg(target_os = "macos")]
 pub type PlatformSandbox = SeatbeltSandbox;
@@ -152,6 +171,11 @@ impl NoopSandbox {
     pub fn new() -> Self {
         Self
     }
+
+    /// Platform constructor alias (used by [`JailerBuilder`](super::JailerBuilder)).
+    pub fn platform_new() -> Self {
+        Self::new()
+    }
 }
 
 impl Default for NoopSandbox {
@@ -165,19 +189,7 @@ impl Sandbox for NoopSandbox {
         false
     }
 
-    fn setup(&self, _ctx: &SandboxContext) -> BoxliteResult<()> {
-        Ok(())
-    }
-
-    fn wrap(&self, _ctx: &SandboxContext, binary: &Path, args: &[String]) -> Command {
-        let mut cmd = Command::new(binary);
-        cmd.args(args);
-        cmd
-    }
-
-    fn cgroup_procs_path(&self, _ctx: &SandboxContext) -> Option<std::ffi::CString> {
-        None
-    }
+    fn apply(&self, _ctx: &SandboxContext, _cmd: &mut Command) {}
 
     fn name(&self) -> &'static str {
         "noop"

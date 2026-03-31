@@ -32,8 +32,6 @@ impl Sandbox for BwrapSandbox {
 
     fn setup(&self, ctx: &SandboxContext) -> BoxliteResult<()> {
         // Preflight: verify bwrap can create user namespaces before proceeding.
-        // Uses Chrome-style clone(CLONE_NEWUSER) probe for diagnosis + bwrap
-        // probe for actual capability (handles AppArmor per-binary profiles).
         if bwrap::is_available()
             && let Err(diagnostic) = bwrap::can_create_user_namespace()
         {
@@ -49,25 +47,21 @@ impl Sandbox for BwrapSandbox {
 
         match cgroup::setup_cgroup(ctx.id, &cgroup_config) {
             Ok(path) => {
-                tracing::info!(
-                    id = %ctx.id,
-                    path = %path.display(),
-                    "Cgroup created"
-                );
+                tracing::info!(id = %ctx.id, path = %path.display(), "Cgroup created");
             }
             Err(e) => {
-                tracing::warn!(
-                    id = %ctx.id,
-                    error = %e,
-                    "Cgroup setup failed (continuing without cgroup limits)"
-                );
+                tracing::warn!(id = %ctx.id, error = %e,
+                    "Cgroup setup failed (continuing without cgroup limits)");
             }
         }
 
         Ok(())
     }
 
-    fn wrap(&self, ctx: &SandboxContext, binary: &Path, args: &[String]) -> Command {
+    fn apply(&self, ctx: &SandboxContext, cmd: &mut Command) {
+        let binary = cmd.get_program().to_owned();
+        let args: Vec<std::ffi::OsString> = cmd.get_args().map(|a| a.to_owned()).collect();
+
         let mut bwrap_cmd = bwrap::BwrapCommand::new();
 
         // =====================================================================
@@ -128,11 +122,19 @@ impl Sandbox for BwrapSandbox {
 
         bwrap_cmd.chdir("/");
 
-        bwrap_cmd.build(binary, args)
-    }
+        // Replace the command with bwrap-wrapped version.
+        *cmd = bwrap_cmd.build(std::path::Path::new(&binary), &args);
 
-    fn cgroup_procs_path(&self, ctx: &SandboxContext) -> Option<std::ffi::CString> {
-        cgroup::build_cgroup_procs_path(ctx.id)
+        // Add cgroup join as a pre_exec hook (async-signal-safe).
+        if let Some(cgroup_procs) = cgroup::build_cgroup_procs_path(ctx.id) {
+            use std::os::unix::process::CommandExt;
+            unsafe {
+                cmd.pre_exec(move || {
+                    let _ = cgroup::add_self_to_cgroup_raw(&cgroup_procs);
+                    Ok(())
+                });
+            }
+        }
     }
 
     fn name(&self) -> &'static str {
