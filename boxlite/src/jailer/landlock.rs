@@ -362,32 +362,55 @@ mod tests {
         handle.join().expect("enforcement thread panicked");
     }
 
+    /// Create a test directory under $HOME (NOT /tmp) to avoid the /tmp system write rule.
+    /// Landlock rules are hierarchical: /tmp has full write access, so subdirs of /tmp
+    /// inherit that regardless of per-path restrictions.
+    fn home_test_dir(name: &str) -> PathBuf {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+        let dir = PathBuf::from(home).join(".boxlite-test").join(name);
+        std::fs::create_dir_all(&dir).expect("create home test dir");
+        dir
+    }
+
+    /// Clean up a home test directory.
+    fn cleanup_home_test_dir(name: &str) {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+        let dir = PathBuf::from(home).join(".boxlite-test").join(name);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// E2e: read-only PathAccess allows read but denies write.
     #[test]
     fn test_landlock_readonly_denies_write() {
-        let ro_dir = tempfile::tempdir().expect("create ro tempdir");
-        let rw_dir = tempfile::tempdir().expect("create rw tempdir");
+        // Use dirs under $HOME (not /tmp) — /tmp has system write access in our ruleset,
+        // and Landlock rules propagate from parent to child in the hierarchy.
+        let test_id = format!("ro-test-{}", std::process::id());
+        let ro_dir = home_test_dir(&format!("{test_id}/ro"));
+        let rw_dir = home_test_dir(&format!("{test_id}/rw"));
 
         // Pre-create a file in ro_dir to read later.
-        let ro_file = ro_dir.path().join("readonly.txt");
+        let ro_file = ro_dir.join("readonly.txt");
         std::fs::write(&ro_file, b"read only").expect("write ro file");
 
         let paths = vec![
             PathAccess {
-                path: ro_dir.path().to_path_buf(),
+                path: ro_dir.clone(),
                 writable: false,
             },
             PathAccess {
-                path: rw_dir.path().to_path_buf(),
+                path: rw_dir.clone(),
                 writable: true,
             },
         ];
         let result = build_landlock_ruleset(&paths, false);
         let Ok(Some(fd)) = result else {
             println!("Landlock not available, skipping readonly test");
+            cleanup_home_test_dir(&test_id);
             return;
         };
 
+        let ro = ro_dir.clone();
+        let rw = rw_dir.clone();
         let handle = std::thread::spawn(move || {
             let errno = unsafe { restrict_self_raw(fd) };
             assert_eq!(errno, 0, "restrict_self_raw failed");
@@ -402,7 +425,7 @@ mod tests {
             assert_eq!(content.unwrap(), "read only");
 
             // Read-only dir: CANNOT write.
-            let write_result = std::fs::write(ro_dir.path().join("new.txt"), b"denied");
+            let write_result = std::fs::write(ro.join("new.txt"), b"denied");
             assert!(
                 write_result.is_err(),
                 "Writing to read-only dir should be denied"
@@ -414,7 +437,7 @@ mod tests {
             );
 
             // Writable dir: CAN write.
-            let write_ok = std::fs::write(rw_dir.path().join("allowed.txt"), b"ok");
+            let write_ok = std::fs::write(rw.join("allowed.txt"), b"ok");
             assert!(
                 write_ok.is_ok(),
                 "Should write to rw dir: {:?}",
@@ -423,27 +446,29 @@ mod tests {
         });
 
         handle.join().expect("readonly test thread panicked");
+        cleanup_home_test_dir(&test_id);
     }
 
     /// E2e: multiple PathAccess rules with different access levels.
     #[test]
     fn test_landlock_multiple_paths_enforcement() {
-        let dir_a = tempfile::tempdir().expect("create dir_a");
-        let dir_b = tempfile::tempdir().expect("create dir_b");
-        let dir_c = tempfile::tempdir().expect("create dir_c");
+        let test_id = format!("multi-test-{}", std::process::id());
+        let dir_a = home_test_dir(&format!("{test_id}/a"));
+        let dir_b = home_test_dir(&format!("{test_id}/b"));
+        let dir_c = home_test_dir(&format!("{test_id}/c"));
 
         // Pre-create files in read-only dirs.
-        std::fs::write(dir_a.path().join("a.txt"), b"alpha").unwrap();
-        std::fs::write(dir_b.path().join("b.txt"), b"beta").unwrap();
+        std::fs::write(dir_a.join("a.txt"), b"alpha").unwrap();
+        std::fs::write(dir_b.join("b.txt"), b"beta").unwrap();
         // dir_c: no PathAccess rule → should be denied entirely.
 
         let paths = vec![
             PathAccess {
-                path: dir_a.path().to_path_buf(),
+                path: dir_a.clone(),
                 writable: false,
             },
             PathAccess {
-                path: dir_b.path().to_path_buf(),
+                path: dir_b.clone(),
                 writable: true,
             },
             // dir_c intentionally NOT included
@@ -451,23 +476,27 @@ mod tests {
         let result = build_landlock_ruleset(&paths, false);
         let Ok(Some(fd)) = result else {
             println!("Landlock not available, skipping multi-path test");
+            cleanup_home_test_dir(&test_id);
             return;
         };
 
+        let a = dir_a.clone();
+        let b = dir_b.clone();
+        let c = dir_c.clone();
         let handle = std::thread::spawn(move || {
             let errno = unsafe { restrict_self_raw(fd) };
             assert_eq!(errno, 0);
 
             // dir_a (read-only): can read, cannot write.
-            assert!(std::fs::read_to_string(dir_a.path().join("a.txt")).is_ok());
-            assert!(std::fs::write(dir_a.path().join("x.txt"), b"denied").is_err());
+            assert!(std::fs::read_to_string(a.join("a.txt")).is_ok());
+            assert!(std::fs::write(a.join("x.txt"), b"denied").is_err());
 
             // dir_b (writable): can read and write.
-            assert!(std::fs::read_to_string(dir_b.path().join("b.txt")).is_ok());
-            assert!(std::fs::write(dir_b.path().join("y.txt"), b"ok").is_ok());
+            assert!(std::fs::read_to_string(b.join("b.txt")).is_ok());
+            assert!(std::fs::write(b.join("y.txt"), b"ok").is_ok());
 
             // dir_c (not in ruleset): cannot read.
-            let denied = std::fs::read_dir(dir_c.path());
+            let denied = std::fs::read_dir(&c);
             assert!(denied.is_err(), "dir_c should be denied (not in ruleset)");
             assert_eq!(
                 denied.unwrap_err().kind(),
@@ -476,6 +505,7 @@ mod tests {
         });
 
         handle.join().expect("multi-path test thread panicked");
+        cleanup_home_test_dir(&test_id);
     }
 
     /// E2e: network_enabled=false denies TCP connections (requires kernel 6.7+).
