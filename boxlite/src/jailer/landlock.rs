@@ -297,8 +297,6 @@ mod tests {
     /// - Denied path: cannot read /etc/hostname (EACCES)
     #[test]
     fn test_landlock_enforcement_e2e() {
-        use std::io::Write;
-
         // Build ruleset allowing only a specific temp directory (+ system paths).
         let tmp = tempfile::tempdir().expect("create tempdir");
         let allowed_file = tmp.path().join("allowed.txt");
@@ -343,12 +341,6 @@ mod tests {
             // /etc/hostname exists on most Linux systems and is NOT in our ruleset.
             // Note: system paths (/usr, /lib, /etc, ...) ARE in our ruleset as read-only,
             // so /etc/hostname should actually be readable. Use a path completely outside.
-            let denied_path = tmp.path().parent().unwrap().join("landlock_denied_probe");
-            // Create the probe file BEFORE restriction (we still have the fd from parent).
-            // Actually, we can't — restriction is already applied. Instead, try reading
-            // a path that definitely exists but isn't in our ruleset.
-            // /proc/1/cmdline is readable by default but NOT in system read paths.
-            // Actually /proc IS in SYSTEM_READ_PATHS. Let's test the home directory.
             let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
             let denied = std::fs::read_dir(&home);
             // Home directory is NOT in our allowed paths → should be denied.
