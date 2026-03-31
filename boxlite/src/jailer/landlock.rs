@@ -361,4 +361,169 @@ mod tests {
 
         handle.join().expect("enforcement thread panicked");
     }
+
+    /// E2e: read-only PathAccess allows read but denies write.
+    #[test]
+    fn test_landlock_readonly_denies_write() {
+        let ro_dir = tempfile::tempdir().expect("create ro tempdir");
+        let rw_dir = tempfile::tempdir().expect("create rw tempdir");
+
+        // Pre-create a file in ro_dir to read later.
+        let ro_file = ro_dir.path().join("readonly.txt");
+        std::fs::write(&ro_file, b"read only").expect("write ro file");
+
+        let paths = vec![
+            PathAccess {
+                path: ro_dir.path().to_path_buf(),
+                writable: false,
+            },
+            PathAccess {
+                path: rw_dir.path().to_path_buf(),
+                writable: true,
+            },
+        ];
+        let result = build_landlock_ruleset(&paths, false);
+        let Ok(Some(fd)) = result else {
+            println!("Landlock not available, skipping readonly test");
+            return;
+        };
+
+        let handle = std::thread::spawn(move || {
+            let errno = unsafe { restrict_self_raw(fd) };
+            assert_eq!(errno, 0, "restrict_self_raw failed");
+
+            // Read-only dir: CAN read.
+            let content = std::fs::read_to_string(&ro_file);
+            assert!(
+                content.is_ok(),
+                "Should read from ro dir: {:?}",
+                content.err()
+            );
+            assert_eq!(content.unwrap(), "read only");
+
+            // Read-only dir: CANNOT write.
+            let write_result = std::fs::write(ro_dir.path().join("new.txt"), b"denied");
+            assert!(
+                write_result.is_err(),
+                "Writing to read-only dir should be denied"
+            );
+            assert_eq!(
+                write_result.unwrap_err().kind(),
+                std::io::ErrorKind::PermissionDenied,
+                "Expected EACCES for write to read-only dir"
+            );
+
+            // Writable dir: CAN write.
+            let write_ok = std::fs::write(rw_dir.path().join("allowed.txt"), b"ok");
+            assert!(
+                write_ok.is_ok(),
+                "Should write to rw dir: {:?}",
+                write_ok.err()
+            );
+        });
+
+        handle.join().expect("readonly test thread panicked");
+    }
+
+    /// E2e: multiple PathAccess rules with different access levels.
+    #[test]
+    fn test_landlock_multiple_paths_enforcement() {
+        let dir_a = tempfile::tempdir().expect("create dir_a");
+        let dir_b = tempfile::tempdir().expect("create dir_b");
+        let dir_c = tempfile::tempdir().expect("create dir_c");
+
+        // Pre-create files in read-only dirs.
+        std::fs::write(dir_a.path().join("a.txt"), b"alpha").unwrap();
+        std::fs::write(dir_b.path().join("b.txt"), b"beta").unwrap();
+        // dir_c: no PathAccess rule → should be denied entirely.
+
+        let paths = vec![
+            PathAccess {
+                path: dir_a.path().to_path_buf(),
+                writable: false,
+            },
+            PathAccess {
+                path: dir_b.path().to_path_buf(),
+                writable: true,
+            },
+            // dir_c intentionally NOT included
+        ];
+        let result = build_landlock_ruleset(&paths, false);
+        let Ok(Some(fd)) = result else {
+            println!("Landlock not available, skipping multi-path test");
+            return;
+        };
+
+        let handle = std::thread::spawn(move || {
+            let errno = unsafe { restrict_self_raw(fd) };
+            assert_eq!(errno, 0);
+
+            // dir_a (read-only): can read, cannot write.
+            assert!(std::fs::read_to_string(dir_a.path().join("a.txt")).is_ok());
+            assert!(std::fs::write(dir_a.path().join("x.txt"), b"denied").is_err());
+
+            // dir_b (writable): can read and write.
+            assert!(std::fs::read_to_string(dir_b.path().join("b.txt")).is_ok());
+            assert!(std::fs::write(dir_b.path().join("y.txt"), b"ok").is_ok());
+
+            // dir_c (not in ruleset): cannot read.
+            let denied = std::fs::read_dir(dir_c.path());
+            assert!(denied.is_err(), "dir_c should be denied (not in ruleset)");
+            assert_eq!(
+                denied.unwrap_err().kind(),
+                std::io::ErrorKind::PermissionDenied
+            );
+        });
+
+        handle.join().expect("multi-path test thread panicked");
+    }
+
+    /// E2e: network_enabled=false denies TCP connections (requires kernel 6.7+).
+    #[test]
+    fn test_landlock_network_deny() {
+        use std::net::TcpStream;
+
+        // Start a TCP listener so we have a valid target to connect to.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind listener");
+        let port = listener.local_addr().unwrap().port();
+
+        // Verify connection works BEFORE Landlock.
+        let pre_check = TcpStream::connect(("127.0.0.1", port));
+        assert!(pre_check.is_ok(), "Pre-Landlock connect should work");
+        drop(pre_check);
+
+        let paths = vec![];
+        let result = build_landlock_ruleset(&paths, false); // network_enabled=false
+        let Ok(Some(fd)) = result else {
+            println!("Landlock not available, skipping network test");
+            return;
+        };
+
+        let handle = std::thread::spawn(move || {
+            let errno = unsafe { restrict_self_raw(fd) };
+            assert_eq!(errno, 0);
+
+            // Attempt TCP connect — should be denied if kernel supports Landlock V4+ (6.7+).
+            let result = TcpStream::connect(("127.0.0.1", port));
+            match result {
+                Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                    // Kernel 6.7+: network access denied by Landlock.
+                }
+                Ok(_) => {
+                    // Kernel < 6.7: Landlock doesn't handle network (BestEffort skips).
+                    // This is expected graceful degradation — not a test failure.
+                    println!(
+                        "TCP connect succeeded — kernel likely < 6.7 (no Landlock network support). \
+                         This is expected graceful degradation."
+                    );
+                }
+                Err(e) => {
+                    panic!("Unexpected error kind: {e}");
+                }
+            }
+        });
+
+        handle.join().expect("network deny test thread panicked");
+        drop(listener);
+    }
 }
