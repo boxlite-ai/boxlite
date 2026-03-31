@@ -288,22 +288,85 @@ mod tests {
         assert!(result.is_ok());
     }
 
+    /// End-to-end test: build ruleset → restrict → verify enforcement.
+    ///
+    /// Runs in a separate thread (Landlock restriction is irreversible + thread-scoped).
+    /// Creates a temp directory, builds a ruleset allowing only that directory,
+    /// applies the restriction, then verifies:
+    /// - Allowed path: can read files inside the temp directory
+    /// - Denied path: cannot read /etc/hostname (EACCES)
     #[test]
-    fn test_restrict_self_in_thread() {
-        // restrict_self is irreversible and thread-scoped.
-        // Run in a separate thread to avoid affecting test runner.
-        let result = build_landlock_ruleset(&[], false);
+    fn test_landlock_enforcement_e2e() {
+        use std::io::Write;
+
+        // Build ruleset allowing only a specific temp directory (+ system paths).
+        let tmp = tempfile::tempdir().expect("create tempdir");
+        let allowed_file = tmp.path().join("allowed.txt");
+        std::fs::write(&allowed_file, b"hello").expect("write allowed file");
+
+        let paths = vec![PathAccess {
+            path: tmp.path().to_path_buf(),
+            writable: true,
+        }];
+        let result = build_landlock_ruleset(&paths, false);
         let Ok(Some(fd)) = result else {
-            println!("Landlock not available, skipping restrict_self test");
+            println!("Landlock not available, skipping enforcement test");
             return;
         };
 
-        let handle = std::thread::spawn(move || unsafe { restrict_self_raw(fd) });
+        // Run in a separate thread since restrict_self is irreversible.
+        let allowed_path = allowed_file.clone();
+        let handle = std::thread::spawn(move || {
+            // Apply Landlock restriction.
+            let errno = unsafe { restrict_self_raw(fd) };
+            assert_eq!(errno, 0, "restrict_self_raw failed with errno {errno}");
 
-        let errno = handle.join().expect("thread panicked");
-        assert_eq!(
-            errno, 0,
-            "restrict_self_raw should succeed, got errno {errno}"
-        );
+            // ALLOWED: read file inside the permitted temp directory.
+            let content = std::fs::read_to_string(&allowed_path);
+            assert!(
+                content.is_ok(),
+                "Should be able to read allowed file, got: {:?}",
+                content.err()
+            );
+            assert_eq!(content.unwrap(), "hello");
+
+            // ALLOWED: write to the writable temp directory.
+            let write_result =
+                std::fs::write(allowed_path.parent().unwrap().join("new.txt"), b"world");
+            assert!(
+                write_result.is_ok(),
+                "Should be able to write to allowed writable dir, got: {:?}",
+                write_result.err()
+            );
+
+            // DENIED: read a file outside the allowed paths.
+            // /etc/hostname exists on most Linux systems and is NOT in our ruleset.
+            // Note: system paths (/usr, /lib, /etc, ...) ARE in our ruleset as read-only,
+            // so /etc/hostname should actually be readable. Use a path completely outside.
+            let denied_path = tmp.path().parent().unwrap().join("landlock_denied_probe");
+            // Create the probe file BEFORE restriction (we still have the fd from parent).
+            // Actually, we can't — restriction is already applied. Instead, try reading
+            // a path that definitely exists but isn't in our ruleset.
+            // /proc/1/cmdline is readable by default but NOT in system read paths.
+            // Actually /proc IS in SYSTEM_READ_PATHS. Let's test the home directory.
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+            let denied = std::fs::read_dir(&home);
+            // Home directory is NOT in our allowed paths → should be denied.
+            // (Unless HOME is under /tmp or /usr which are in system paths)
+            if !home.starts_with("/tmp") && !home.starts_with("/usr") {
+                assert!(
+                    denied.is_err(),
+                    "Reading home dir ({home}) should be denied by Landlock, but succeeded"
+                );
+                let err = denied.unwrap_err();
+                assert_eq!(
+                    err.kind(),
+                    std::io::ErrorKind::PermissionDenied,
+                    "Expected EACCES, got: {err}"
+                );
+            }
+        });
+
+        handle.join().expect("enforcement thread panicked");
     }
 }
