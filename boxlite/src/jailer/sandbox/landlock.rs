@@ -10,7 +10,6 @@
 //! - Landlock: what the process can **access** (inode-based ACL)
 
 use super::{Sandbox, SandboxContext};
-use boxlite_shared::errors::BoxliteResult;
 use std::process::Command;
 
 /// Linux sandbox using Landlock LSM for filesystem/network restrictions.
