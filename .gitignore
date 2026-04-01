@@ -119,10 +119,11 @@ sdks/node/native/build/
 sdks/node/native/Release/
 
 # FFI build artifacts
-boxlite/deps/libgvproxy-sys/gvproxy-bridge/libgvproxy.*
-boxlite/deps/libgvproxy-sys/gvproxy-bridge/vendor/
-boxlite/deps/libkrun-sys/vendor/libkrun/target/
-boxlite/deps/libkrun-sys/vendor/libkrunfw/target/
+src/deps/libgvproxy-sys/gvproxy-bridge/libgvproxy.*
+src/deps/libgvproxy-sys/gvproxy-bridge/vendor/
+src/deps/libgvproxy-sys/gvproxy-bridge/gvproxy-bridge
+src/deps/libkrun-sys/vendor/libkrun/target/
+src/deps/libkrun-sys/vendor/libkrunfw/target/
 
 # Examples
 examples/c/build/
