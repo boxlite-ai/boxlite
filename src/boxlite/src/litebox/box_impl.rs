@@ -52,7 +52,7 @@ pub type SharedBoxImpl = Arc<BoxImpl>;
 /// Separated from BoxImpl to allow operations like `info()` without initializing LiveState.
 pub(crate) struct LiveState {
     // VM process control
-    handler: std::sync::Mutex<Box<dyn VmmHandler>>,
+    handler: Arc<std::sync::Mutex<Box<dyn VmmHandler>>>,
     guest_session: GuestSession,
 
     /// Host-side network control backend (gvproxy ServicesMux client), owned
@@ -93,7 +93,7 @@ impl LiveState {
         #[cfg(target_os = "linux")] bind_mount: Option<BindMountHandle>,
     ) -> Self {
         Self {
-            handler: std::sync::Mutex::new(handler),
+            handler: Arc::new(std::sync::Mutex::new(handler)),
             guest_session,
             network: network.map(Arc::from),
             published_ports,
@@ -651,11 +651,15 @@ impl BoxImpl {
         self.ensure_usable_without_rerunning_main("metrics")?;
 
         let live = self.live_state().await?;
-        let handler = live
-            .handler
-            .lock()
-            .map_err(|e| BoxliteError::Internal(format!("handler lock poisoned: {}", e)))?;
-        let raw = handler.metrics()?;
+        let handler = Arc::clone(&live.handler);
+        let raw = tokio::task::spawn_blocking(move || {
+            let h = handler
+                .lock()
+                .map_err(|e| BoxliteError::Internal(format!("handler lock poisoned: {}", e)))?;
+            h.metrics()
+        })
+        .await
+        .map_err(|e| BoxliteError::Internal(format!("spawn_blocking join: {}", e)))??;
 
         Ok(BoxMetrics::from_storage(
             &live.metrics,
@@ -720,10 +724,17 @@ impl BoxImpl {
                 tracing::warn!(box_id = %self.config.id, "Guest shutdown timed out after 10s");
             }
 
-            // Stop handler
-            if let Ok(mut handler) = live.handler.lock() {
-                handler.stop()?;
-            }
+            // Stop handler (on blocking thread — ShimHandler::stop() polls with sleep)
+            let handler = Arc::clone(&live.handler);
+            tokio::task::spawn_blocking(move || {
+                if let Ok(mut h) = handler.lock() {
+                    h.stop()
+                } else {
+                    Ok(())
+                }
+            })
+            .await
+            .map_err(|e| BoxliteError::Internal(format!("spawn_blocking join: {}", e)))??;
         }
         // If live_state() failed (vmm_attach said Absent — shim is gone),
         // or status wasn't Running, fall through to cleanup.
