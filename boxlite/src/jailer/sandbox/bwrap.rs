@@ -6,7 +6,6 @@
 use super::{Sandbox, SandboxContext};
 use crate::jailer::{bwrap, cgroup};
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
-use std::path::Path;
 use std::process::Command;
 
 /// Linux sandbox using bubblewrap for namespace isolation.
