@@ -36,5 +36,5 @@ server\:release: runtime
 # Usage: make skillbox-image [APT_SOURCE=mirrors.aliyun.com]
 skillbox-image:
 	@echo "🐳 Building SkillBox container image..."
-	@docker build $(if $(APT_SOURCE),--build-arg APT_SOURCE=$(APT_SOURCE)) -t boxlite-skillbox:latest boxlite/resources/images/skillbox/
+	@docker build $(if $(APT_SOURCE),--build-arg APT_SOURCE=$(APT_SOURCE)) -t boxlite-skillbox:latest src/boxlite/resources/images/skillbox/
 	@echo "✅ SkillBox image built: boxlite-skillbox:latest"

@@ -1,31 +1,31 @@
 [workspace]
 members = [
-    "boxlite",
-    "boxlite-cli",
-    "boxlite-server",
-    "boxlite/deps/bubblewrap-sys",
-    "boxlite/deps/e2fsprogs-sys",
-    "boxlite/deps/libgvproxy-sys",
-    "boxlite/deps/libkrun-sys",
-    "boxlite-shared",
-    "guest",
-    "ffi",
+    "src/boxlite",
+    "src/cli",
+    "src/server",
+    "src/shared",
+    "src/ffi",
+    "src/guest",
+    "src/test-utils",
+    "src/deps/bubblewrap-sys",
+    "src/deps/e2fsprogs-sys",
+    "src/deps/libgvproxy-sys",
+    "src/deps/libkrun-sys",
     "sdks/c",
     "sdks/python",
     "sdks/node",
-    "test-utils",
 ]
 exclude = ["build/tmp", "target", ".venv", "examples/*/.venv"]
 
 resolver = "2"
 
 [workspace.dependencies]
-boxlite = { path = "boxlite", version = "0.8.0" }
-boxlite-shared = { path = "boxlite-shared", version = "0.8.0" }
-bubblewrap-sys = { path = "boxlite/deps/bubblewrap-sys", version = "0.8.0" }
-e2fsprogs-sys = { path = "boxlite/deps/e2fsprogs-sys", version = "0.8.0" }
-libgvproxy-sys = { path = "boxlite/deps/libgvproxy-sys", version = "0.8.0" }
-libkrun-sys = { path = "boxlite/deps/libkrun-sys", version = "0.8.0" }
+boxlite = { path = "src/boxlite", version = "0.8.0" }
+boxlite-shared = { path = "src/shared", version = "0.8.0" }
+bubblewrap-sys = { path = "src/deps/bubblewrap-sys", version = "0.8.0" }
+e2fsprogs-sys = { path = "src/deps/e2fsprogs-sys", version = "0.8.0" }
+libgvproxy-sys = { path = "src/deps/libgvproxy-sys", version = "0.8.0" }
+libkrun-sys = { path = "src/deps/libkrun-sys", version = "0.8.0" }
 
 [workspace.package]
 version = "0.8.0"

@@ -14,10 +14,10 @@ on:
   push:
     branches: [main]
     paths:
-      - 'boxlite/**'
-      - 'boxlite-shared/**'
-      - 'boxlite-cli/**'
-      - 'guest/**'
+      - 'src/boxlite/**'
+      - 'src/shared/**'
+      - 'src/cli/**'
+      - 'src/guest/**'
       - 'sdks/**'
       - '**/Cargo.toml'
       - 'Cargo.lock'
@@ -26,10 +26,10 @@ on:
   pull_request:
     branches: [main]
     paths:
-      - 'boxlite/**'
-      - 'boxlite-shared/**'
-      - 'boxlite-cli/**'
-      - 'guest/**'
+      - 'src/boxlite/**'
+      - 'src/shared/**'
+      - 'src/cli/**'
+      - 'src/guest/**'
       - 'sdks/**'
       - '**/Cargo.toml'
       - 'Cargo.lock'
@@ -63,13 +63,13 @@ jobs:
         with:
           filters: |
             rust:
-              - 'boxlite/**'
-              - 'boxlite-shared/**'
-              - 'guest/**'
+              - 'src/boxlite/**'
+              - 'src/shared/**'
+              - 'src/guest/**'
               - '**/Cargo.toml'
               - 'Cargo.lock'
             cli:
-              - 'boxlite-cli/**'
+              - 'src/cli/**'
             python:
               - 'sdks/python/**'
             node:

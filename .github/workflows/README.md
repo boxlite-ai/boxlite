@@ -133,7 +133,7 @@ Runs code quality checks.
 
 | Change | warm-caches | build-runtime | build-wheels | build-node |
 |--------|-------------|---------------|--------------|------------|
-| `boxlite/**` | ✅ Runs | ✅ Chains after warm-caches | ❌ Skips | ❌ Skips |
+| `src/boxlite/**` | ✅ Runs | ✅ Chains after warm-caches | ❌ Skips | ❌ Skips |
 | `sdks/python/**` | ❌ Skips | ❌ Skips | ❌ Skips | ❌ Skips |
 | `sdks/node/**` | ❌ Skips | ❌ Skips | ❌ Skips | ❌ Skips |
 | Release published | ❌ Skips | ✅ Runs directly | ✅ Runs | ✅ Runs |

@@ -10,12 +10,12 @@ $(shell \
   fi; \
   CHANGED=$$(git diff --name-only $$BASE HEAD 2>/dev/null; git diff --name-only 2>/dev/null; git diff --cached --name-only 2>/dev/null); \
   if [ -z "$$CHANGED" ]; then exit 0; fi; \
-  echo "$$CHANGED" | grep -q '^boxlite/' && printf 'rust '; \
-  echo "$$CHANGED" | grep -q '^boxlite-shared/' && printf 'rust '; \
-  echo "$$CHANGED" | grep -q '^guest/' && printf 'rust '; \
-  echo "$$CHANGED" | grep -q '^boxlite-server/' && printf 'server '; \
-  echo "$$CHANGED" | grep -q '^boxlite-cli/' && printf 'cli '; \
-  echo "$$CHANGED" | grep -q '^ffi/' && printf 'ffi '; \
+  echo "$$CHANGED" | grep -q '^src/boxlite/' && printf 'rust '; \
+  echo "$$CHANGED" | grep -q '^src/shared/' && printf 'rust '; \
+  echo "$$CHANGED" | grep -q '^src/guest/' && printf 'rust '; \
+  echo "$$CHANGED" | grep -q '^src/server/' && printf 'server '; \
+  echo "$$CHANGED" | grep -q '^src/cli/' && printf 'cli '; \
+  echo "$$CHANGED" | grep -q '^src/ffi/' && printf 'ffi '; \
   echo "$$CHANGED" | grep -q '^sdks/python/' && printf 'python '; \
   echo "$$CHANGED" | grep -q '^sdks/node/' && printf 'node '; \
   echo "$$CHANGED" | grep -q '^sdks/c/' && printf 'c '; \

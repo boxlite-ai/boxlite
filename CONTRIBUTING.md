@@ -76,12 +76,19 @@ Follow the [Rust Style Guide](./docs/development/rust-style.md) which includes:
 ## Project Structure
 
 ```
-boxlite/          # Core runtime (Rust)
-boxlite-cli/      # CLI
-guest/            # Guest agent (runs inside VM)
+src/
+  boxlite/        # Core runtime (Rust)
+  cli/            # CLI
+  server/         # Distributed server
+  shared/         # Shared types and protocol
+  ffi/            # FFI layer for SDKs
+  guest/          # Guest agent (runs inside VM)
+  test-utils/     # Test utilities
+  deps/           # Vendored C sys crates
 sdks/
   python/         # Python SDK
   c/              # C SDK
+  node/           # Node.js SDK
 examples/         # Example code
 ```
 

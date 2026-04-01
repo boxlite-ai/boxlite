@@ -42,9 +42,19 @@ This document provides project context for AI-assisted development with Claude C
 
 **High-level layout:**
 ```
-boxlite/              # Core runtime (Rust) - 19 modules
-boxlite-shared/       # Shared types and protocol
-guest/                # Guest agent (runs inside VM)
+src/
+  boxlite/            # Core runtime (Rust) - 19 modules
+  shared/             # Shared types and protocol
+  cli/                # CLI binary
+  server/             # Distributed server
+  ffi/                # FFI layer for SDKs
+  guest/              # Guest agent (runs inside VM)
+  test-utils/         # Test utilities
+  deps/               # Vendored C sys crates
+    bubblewrap-sys/
+    e2fsprogs-sys/
+    libgvproxy-sys/
+    libkrun-sys/
 sdks/
   python/             # Python SDK (PyO3)
   c/                  # C SDK (FFI)
@@ -54,7 +64,7 @@ docs/                 # Documentation
 scripts/              # Build and setup scripts
 ```
 
-**Key modules in `boxlite/src/`:**
+**Key modules in `src/boxlite/src/`:**
 - `runtime/` - BoxliteRuntime, main entry point
 - `litebox/` - LiteBox handle, command execution
 - `vmm/` - VM manager (libkrun, shim controller)
@@ -110,7 +120,7 @@ Key guidelines to internalize:
 
 **For complete code style guidelines, see:**
 - [docs/development/rust-style.md](./docs/development/rust-style.md) - Rust style guide with Microsoft guidelines
-- [boxlite-shared/src/errors.rs](./boxlite-shared/src/errors.rs) - Error handling patterns
+- [src/shared/src/errors.rs](./src/shared/src/errors.rs) - Error handling patterns
 
 ## Workflows
 
@@ -153,7 +163,7 @@ Key guidelines to internalize:
 
 **When writing code:**
 - All I/O is async (Tokio runtime)
-- Errors use centralized `BoxliteError` enum (see `boxlite-shared/src/errors.rs`)
+- Errors use centralized `BoxliteError` enum (see `src/shared/src/errors.rs`)
 - Python SDK requires Python 3.10+
 - Examples: categorized Python examples in `examples/python/` (7 subdirectories)
 
@@ -324,8 +334,8 @@ BEFORE writing ANY code, search for existing implementations:
 # (adds duplicate unix→vsock transformation in litebox.rs)
 
 # ✅ Search first, find existing code
-$ grep -r "transform.*guest" boxlite/src/
-boxlite/src/engines/krun/engine.rs:113:fn transform_guest_args(...)
+$ grep -r "transform.*guest" src/boxlite/src/
+src/boxlite/src/engines/krun/engine.rs:113:fn transform_guest_args(...)
 # → Found it! Use existing code, don't duplicate.
 ```
 
@@ -648,7 +658,7 @@ This is the #1 critical requirement. Every code change MUST pass all of the foll
 - [ ] **Unit & integration tests cover all points** — every new behavior, edge case, and error path must have a corresponding test. This is the number one priority.
   - **Tests must exercise actual code** — every test must directly call the real boxlite code it covers. Tests that only verify language/framework behavior (e.g., testing `tokio::select!` with mock sleeps) are not acceptable.
   - **Integration tests are mandatory** — don't skip because of VM/hardware dependencies. The test infrastructure handles that (uses real `alpine:latest`, temp dirs). Integration tests validate that code changes actually work end-to-end.
-  - **Test patterns**: Unit tests in `#[cfg(test)] mod tests` within the source file. Integration tests in `boxlite/tests/` or `boxlite-cli/tests/`.
+  - **Test patterns**: Unit tests in `#[cfg(test)] mod tests` within the source file. Integration tests in `src/boxlite/tests/` or `src/cli/tests/`.
 - [ ] **All tests pass** — both new and existing tests. Run: `cargo test -p <package>` (or the relevant test command for the language)
 - [ ] **Clippy clean** — `cargo clippy -p <package> --tests -- -D warnings` (zero warnings)
 - [ ] **Format clean** — `cargo fmt --check` for Rust, `ruff format --check` / `ruff check` for Python
@@ -683,12 +693,12 @@ Added `unix://` → `vsock://` transformation in `litebox.rs` when it already ex
 
 ```bash
 # BEFORE writing transformation code:
-$ grep -r "transform.*vsock" boxlite/src/
-boxlite/src/engines/krun/engine.rs:113:fn transform_guest_args
+$ grep -r "transform.*vsock" src/boxlite/src/
+src/boxlite/src/engines/krun/engine.rs:113:fn transform_guest_args
 # → Found it! Don't duplicate.
 
 # BEFORE adding krun-specific logic to litebox:
-$ grep -r "GUEST_AGENT_PORT" boxlite/src/
+$ grep -r "GUEST_AGENT_PORT" src/boxlite/src/
 # → Only in krun/ directory
 # → This is a krun detail, doesn't belong in litebox.rs
 ```

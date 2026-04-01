@@ -17,7 +17,7 @@ comment:
   require_changes: true   # Only comment if coverage changed
 
 ignore:
-  - "boxlite/deps/**"     # Vendored dependencies
+  - "src/deps/**"         # Vendored dependencies
   - "**/tests/**"         # Test files themselves
-  - "guest/**"            # Guest agent (tested separately)
+  - "src/guest/**"        # Guest agent (tested separately)
   - "sdks/**"             # SDKs (have their own test suites)

@@ -40,11 +40,11 @@ repos:
         # Only run when source/test files change (mirrors CI dorny/paths-filter).
         files: >-
           (?x)^(
-            boxlite/|
-            boxlite-shared/|
-            boxlite-cli/|
-            boxlite-ffi/|
-            guest/|
+            src/boxlite/|
+            src/shared/|
+            src/cli/|
+            src/ffi/|
+            src/guest/|
             sdks/|
             .*/Cargo\.toml$|
             Cargo\.lock$

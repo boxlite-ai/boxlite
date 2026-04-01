@@ -12,7 +12,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 # Core BoxLite dependencies
-boxlite = { path = "../../boxlite", features = ["rest"] }
+boxlite = { path = "../../src/boxlite", features = ["rest"] }
 boxlite-shared.workspace = true
 
 # napi-rs for Node.js bindings

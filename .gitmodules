@@ -1,12 +1,12 @@
-[submodule "boxlite/deps/libkrun-sys/vendor/libkrun"]
-	path = boxlite/deps/libkrun-sys/vendor/libkrun
+[submodule "src/deps/libkrun-sys/vendor/libkrun"]
+	path = src/deps/libkrun-sys/vendor/libkrun
 	url = https://github.com/boxlite-ai/libkrun.git
-[submodule "boxlite/deps/libkrun-sys/vendor/libkrunfw"]
-	path = boxlite/deps/libkrun-sys/vendor/libkrunfw
+[submodule "src/deps/libkrun-sys/vendor/libkrunfw"]
+	path = src/deps/libkrun-sys/vendor/libkrunfw
 	url = https://github.com/boxlite-labs/libkrunfw.git
-[submodule "boxlite/deps/e2fsprogs-sys/vendor/e2fsprogs"]
-	path = boxlite/deps/e2fsprogs-sys/vendor/e2fsprogs
+[submodule "src/deps/e2fsprogs-sys/vendor/e2fsprogs"]
+	path = src/deps/e2fsprogs-sys/vendor/e2fsprogs
 	url = https://github.com/tytso/e2fsprogs.git
-[submodule "boxlite/deps/bubblewrap-sys/vendor/bubblewrap"]
-	path = boxlite/deps/bubblewrap-sys/vendor/bubblewrap
+[submodule "src/deps/bubblewrap-sys/vendor/bubblewrap"]
+	path = src/deps/bubblewrap-sys/vendor/bubblewrap
 	url = https://github.com/containers/bubblewrap.git

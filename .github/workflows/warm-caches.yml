@@ -18,9 +18,9 @@ on:
   push:
     branches: [main]
     paths:
-      - 'boxlite/**'
-      - 'boxlite-shared/**'
-      - 'guest/**'
+      - 'src/boxlite/**'
+      - 'src/shared/**'
+      - 'src/guest/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/warm-caches.yml'

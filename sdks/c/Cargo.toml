@@ -15,7 +15,7 @@ crate-type = ["cdylib", "staticlib"]
 default = []
 
 [dependencies]
-boxlite-ffi = { path = "../../ffi" }
+boxlite-ffi = { path = "../../src/ffi" }
 
 [build-dependencies]
 cbindgen = "0.29"
