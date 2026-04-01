@@ -161,7 +161,8 @@ impl BoxliteRuntime {
     /// ```
     pub fn default_runtime() -> &'static Self {
         let rt = DEFAULT_RUNTIME.get_or_init(|| {
-            Self::with_defaults().expect("Failed to initialize default BoxliteRuntime")
+            Self::with_defaults()
+                .unwrap_or_else(|e| panic!("Failed to initialize BoxliteRuntime:\n\n{e}"))
         });
 
         // Register atexit handler (once) for normal exit cleanup.

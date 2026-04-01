@@ -16,6 +16,7 @@ pub mod metrics;
 pub mod net;
 pub mod pipeline;
 pub mod runtime;
+pub mod system_check;
 pub mod util;
 pub mod vmm;
 

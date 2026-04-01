@@ -10,7 +10,6 @@ pub mod engine;
 pub mod exit_info;
 pub mod factory;
 pub mod guest_check;
-pub mod host_check;
 #[cfg(feature = "krun")]
 pub mod krun;
 pub mod registry;

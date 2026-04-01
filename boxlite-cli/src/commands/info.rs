@@ -42,8 +42,8 @@ pub async fn execute(args: InfoArgs, global: &GlobalFlags) -> anyhow::Result<()>
 
     let rt = global.create_runtime_with_options(options)?;
     let version = boxlite::VERSION.to_string();
-    let virtualization = boxlite::vmm::host_check::check_virtualization_support()
-        .map(|s| s.reason)
+    let virtualization = boxlite::system_check::SystemCheck::run()
+        .map(|_| "available".to_string())
         .unwrap_or_else(|e| format!("unavailable: {}", e));
     let os = std::env::consts::OS.to_string();
     let arch = std::env::consts::ARCH.to_string();
