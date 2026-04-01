@@ -4,37 +4,33 @@ pub mod service;
 
 use boxlite::{BoxliteOptions, BoxliteRuntime};
 
+use crate::proto::coordinator_service_client::CoordinatorServiceClient;
 use crate::proto::worker_service_server::WorkerServiceServer;
+use crate::proto::{RegisterWorkerRequest, WorkerCapacity as ProtoWorkerCapacity};
 use crate::worker::service::WorkerServiceImpl;
 
-/// Register this worker with the coordinator via REST.
+/// Register this worker with the coordinator via gRPC.
 async fn register_with_coordinator(
     coordinator_url: &str,
     worker_url: &str,
 ) -> anyhow::Result<String> {
-    let client = reqwest::Client::new();
+    let mut client = CoordinatorServiceClient::connect(coordinator_url.to_string()).await?;
+
     let resp = client
-        .post(format!("{coordinator_url}/v1/admin/workers"))
-        .json(&serde_json::json!({
-            "url": worker_url,
-            "capacity": {
-                "max_boxes": 100,
-                "available_cpus": 4,
-                "available_memory_mib": 8192,
-                "running_boxes": 0
-            }
-        }))
-        .send()
+        .register_worker(RegisterWorkerRequest {
+            url: worker_url.to_string(),
+            labels: Default::default(),
+            capacity: Some(ProtoWorkerCapacity {
+                max_boxes: 100,
+                available_cpus: 4,
+                available_memory_mib: 8192,
+                running_boxes: 0,
+            }),
+        })
         .await?;
 
-    if !resp.status().is_success() {
-        let text = resp.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to register with coordinator: {text}");
-    }
-
-    let body: serde_json::Value = resp.json().await?;
-    let worker_id = body["worker_id"].as_str().unwrap_or("unknown").to_string();
-    Ok(worker_id)
+    let inner = resp.into_inner();
+    Ok(inner.worker_id)
 }
 
 /// Start the worker: BoxliteRuntime + gRPC server + coordinator registration.

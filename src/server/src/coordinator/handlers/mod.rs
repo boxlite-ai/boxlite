@@ -2,5 +2,6 @@
 
 pub mod admin;
 pub mod error;
+pub mod health;
 pub mod proxy;
 pub mod types;

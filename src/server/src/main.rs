@@ -34,6 +34,10 @@ struct CoordinatorArgs {
     #[arg(long, default_value = "8200", env = "BOXLITE_COORDINATOR_PORT")]
     port: u16,
 
+    /// Port for the gRPC service (workers connect here)
+    #[arg(long, default_value = "8201", env = "BOXLITE_COORDINATOR_GRPC_PORT")]
+    grpc_port: u16,
+
     /// Host/address to bind to
     #[arg(long, default_value = "0.0.0.0")]
     host: String,
@@ -89,7 +93,7 @@ async fn main() -> anyhow::Result<()> {
             let store = boxlite_server::store::sqlite::SqliteStateStore::open(
                 std::path::Path::new(&db_path),
             )?;
-            boxlite_server::coordinator::serve(&args.host, args.port, store).await
+            boxlite_server::coordinator::serve(&args.host, args.port, args.grpc_port, store).await
         }
         Role::Worker(args) => {
             boxlite_server::worker::serve(&args.host, args.port, &args.coordinator, args.home).await

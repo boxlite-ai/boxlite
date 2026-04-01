@@ -1,19 +1,20 @@
 //! Coordinator role — REST API gateway that dispatches to workers via gRPC.
 
+pub mod grpc;
 pub mod handlers;
 pub mod state;
 
 use std::sync::Arc;
 
 use axum::Router;
-use axum::routing::{delete, get, post, put};
+use axum::routing::{get, patch, post, put};
 use utoipa::OpenApi;
 use utoipa::openapi::security::{
     ClientCredentials, Flow, HttpAuthScheme, HttpBuilder, OAuth2, Scopes, SecurityScheme,
 };
 use utoipa_swagger_ui::SwaggerUi;
 
-use crate::coordinator::handlers::{admin, proxy, types};
+use crate::coordinator::handlers::{admin, health, proxy, types};
 use crate::coordinator::state::CoordinatorState;
 use crate::scheduler::LeastLoadedScheduler;
 use crate::store::StateStore;
@@ -63,10 +64,14 @@ use crate::store::sqlite::SqliteStateStore;
         proxy::get_image,
         proxy::image_exists,
         // Admin (coordinator-only)
-        admin::register_worker,
         admin::list_workers,
+        admin::get_worker,
         admin::remove_worker,
-        admin::worker_heartbeat,
+        admin::update_worker_status,
+        admin::get_worker_by_box,
+        // Health
+        health::liveness,
+        health::readiness,
     ),
     components(schemas(
         // Configuration
@@ -110,12 +115,15 @@ use crate::store::sqlite::SqliteStateStore;
         types::PullImageRequest,
         types::ListImagesResponse,
         // Admin
-        admin::RegisterWorkerRequest,
-        admin::RegisterWorkerResponse,
         admin::WorkerListResponse,
         admin::WorkerSummary,
-        admin::HeartbeatPayload,
+        admin::WorkerDetail,
+        admin::UpdateWorkerStatusRequest,
         crate::types::WorkerCapacity,
+        crate::types::WorkerStatus,
+        // Health
+        health::HealthResponse,
+        health::ReadinessResponse,
     )),
     tags(
         (name = "Configuration", description = "Server capability discovery"),
@@ -125,7 +133,8 @@ use crate::store::sqlite::SqliteStateStore;
         (name = "Files", description = "File upload and download"),
         (name = "Metrics", description = "Runtime and per-box metrics"),
         (name = "Images", description = "Container image management"),
-        (name = "Workers", description = "Worker registration and management"),
+        (name = "Workers", description = "Worker node management"),
+        (name = "Health", description = "Liveness and readiness probes"),
     ),
     info(
         title = "BoxLite Cloud Sandbox REST API",
@@ -269,44 +278,75 @@ pub fn build_router(state: Arc<CoordinatorState>) -> Router {
             "/v1/{prefix}/images/{image_id}",
             get(proxy::get_image).head(proxy::image_exists),
         )
-        // Admin endpoints (coordinator-only)
-        .route(
-            "/v1/admin/workers",
-            post(admin::register_worker).get(admin::list_workers),
-        )
+        // Admin endpoints (coordinator-only, operator-facing)
+        .route("/v1/admin/workers", get(admin::list_workers))
         .route(
             "/v1/admin/workers/{worker_id}",
-            delete(admin::remove_worker),
+            get(admin::get_worker).delete(admin::remove_worker),
         )
         .route(
-            "/v1/admin/workers/{worker_id}/heartbeat",
-            post(admin::worker_heartbeat),
+            "/v1/admin/workers/{worker_id}/status",
+            patch(admin::update_worker_status),
         )
+        .route(
+            "/v1/admin/workers/by-box/{box_id}",
+            get(admin::get_worker_by_box),
+        )
+        // Health probes
+        .route("/v1/health", get(health::liveness))
+        .route("/v1/health/ready", get(health::readiness))
         .with_state(state)
 }
 
-/// Start the coordinator server.
-pub async fn serve(host: &str, port: u16, store: SqliteStateStore) -> anyhow::Result<()> {
+/// Start the coordinator server (REST + gRPC).
+///
+/// - REST API on `port` (for operators/dashboards)
+/// - gRPC on `grpc_port` (for workers to register/heartbeat)
+pub async fn serve(
+    host: &str,
+    port: u16,
+    grpc_port: u16,
+    store: SqliteStateStore,
+) -> anyhow::Result<()> {
     let state = Arc::new(CoordinatorState {
         store: Arc::new(store) as Arc<dyn StateStore>,
         scheduler: Arc::new(LeastLoadedScheduler),
     });
 
-    let app = build_router(state);
-    let addr = format!("{host}:{port}");
-    let listener = tokio::net::TcpListener::bind(&addr).await?;
+    // REST server
+    let app = build_router(state.clone());
+    let rest_addr = format!("{host}:{port}");
+    let listener = tokio::net::TcpListener::bind(&rest_addr).await?;
 
-    tracing::info!("Coordinator listening on {addr}");
-    eprintln!("BoxLite coordinator listening on http://{addr}");
-    eprintln!("Swagger UI: http://{addr}/swagger-ui/");
+    tracing::info!("Coordinator REST listening on {rest_addr}");
+    eprintln!("BoxLite coordinator REST on http://{rest_addr}");
+    eprintln!("Swagger UI: http://{rest_addr}/swagger-ui/");
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-            tracing::info!("Coordinator shutting down...");
-            eprintln!("\nShutting down...");
-        })
-        .await?;
+    // gRPC server
+    let grpc_addr: std::net::SocketAddr = format!("{host}:{grpc_port}").parse()?;
+    let coordinator_svc = grpc::CoordinatorServiceImpl::new(state);
+
+    tracing::info!("Coordinator gRPC listening on {grpc_addr}");
+    eprintln!("BoxLite coordinator gRPC on http://{grpc_addr}");
+
+    let shutdown = async {
+        let _ = tokio::signal::ctrl_c().await;
+        tracing::info!("Coordinator shutting down...");
+        eprintln!("\nShutting down...");
+    };
+
+    tokio::select! {
+        result = axum::serve(listener, app).with_graceful_shutdown(shutdown) => {
+            result?;
+        }
+        result = tonic::transport::Server::builder()
+            .add_service(
+                crate::proto::coordinator_service_server::CoordinatorServiceServer::new(coordinator_svc)
+            )
+            .serve(grpc_addr) => {
+            result?;
+        }
+    }
 
     Ok(())
 }

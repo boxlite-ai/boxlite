@@ -1,7 +1,7 @@
 //! Admin endpoints for worker management.
 //!
-//! These are coordinator-only endpoints (not part of the boxlite serve API).
-//! Workers call these to register and send heartbeats.
+//! These are coordinator-only REST endpoints for platform operators and
+//! dashboards. Workers communicate with the coordinator via gRPC, not REST.
 
 use std::sync::Arc;
 
@@ -9,34 +9,13 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Json, extract::Path};
-use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use crate::coordinator::state::CoordinatorState;
-use crate::types::{WorkerCapacity, WorkerInfo, WorkerStatus, mint_worker_id, mint_worker_name};
+use crate::types::{WorkerCapacity, WorkerStatus};
 
 // ── Request/Response Types ──
-
-#[derive(Deserialize, ToSchema)]
-pub struct RegisterWorkerRequest {
-    /// Worker gRPC endpoint URL (e.g., "http://worker1:9100")
-    pub url: String,
-    /// Arbitrary labels for scheduling affinity
-    #[serde(default)]
-    pub labels: std::collections::HashMap<String, String>,
-    /// Current worker capacity
-    #[serde(default)]
-    pub capacity: WorkerCapacity,
-}
-
-#[derive(Serialize, ToSchema)]
-pub struct RegisterWorkerResponse {
-    /// Assigned worker ID (12-char Base62)
-    pub worker_id: String,
-    /// Auto-generated human-readable name
-    pub name: String,
-}
 
 #[derive(Serialize, ToSchema)]
 pub struct WorkerListResponse {
@@ -54,89 +33,26 @@ pub struct WorkerSummary {
     pub last_heartbeat: String,
 }
 
-#[derive(Deserialize, ToSchema)]
-pub struct HeartbeatPayload {
-    /// Updated worker capacity
-    #[serde(default)]
+/// Full worker details returned by get and update endpoints.
+#[derive(Serialize, ToSchema)]
+pub struct WorkerDetail {
+    pub id: String,
+    pub name: String,
+    pub url: String,
+    pub labels: std::collections::HashMap<String, String>,
+    pub status: String,
     pub capacity: WorkerCapacity,
+    pub registered_at: String,
+    pub last_heartbeat: String,
+}
+
+#[derive(Deserialize, ToSchema)]
+pub struct UpdateWorkerStatusRequest {
+    /// Target status. Only "active" and "draining" are allowed.
+    pub status: String,
 }
 
 // ── Handlers ──
-
-/// Register a new worker
-///
-/// Workers call this on startup to register with the coordinator.
-#[utoipa::path(
-    post,
-    path = "/v1/admin/workers",
-    request_body = RegisterWorkerRequest,
-    responses(
-        (status = 201, description = "Worker registered successfully", body = RegisterWorkerResponse),
-        (status = 500, description = "Internal server error")
-    ),
-    tag = "Workers"
-)]
-pub async fn register_worker(
-    State(state): State<Arc<CoordinatorState>>,
-    Json(req): Json<RegisterWorkerRequest>,
-) -> Response {
-    let now = Utc::now();
-
-    // Check if a worker with this URL already exists (re-registration after restart)
-    let workers = match state.store.list_workers().await {
-        Ok(w) => w,
-        Err(e) => {
-            tracing::error!("Failed to list workers for re-registration check: {e}");
-            return super::error::error_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                e.to_string(),
-                "InternalError",
-            );
-        }
-    };
-    let existing = workers.into_iter().find(|w| w.url == req.url);
-
-    let (worker_id, worker_name, registered_at) = match existing {
-        Some(w) => {
-            tracing::info!(worker_id = %w.id, name = %w.name, url = %req.url, "Worker re-registering (same URL)");
-            (w.id, w.name, w.registered_at)
-        }
-        None => (mint_worker_id(), mint_worker_name(), now),
-    };
-
-    let worker = WorkerInfo {
-        id: worker_id.clone(),
-        name: worker_name.clone(),
-        url: req.url,
-        labels: req.labels,
-        registered_at,
-        last_heartbeat: now,
-        status: WorkerStatus::Active,
-        capacity: req.capacity,
-    };
-
-    match state.store.upsert_worker(&worker).await {
-        Ok(()) => {
-            tracing::info!(worker_id = %worker_id, name = %worker_name, url = %worker.url, "Worker registered");
-            (
-                StatusCode::CREATED,
-                Json(RegisterWorkerResponse {
-                    worker_id,
-                    name: worker_name,
-                }),
-            )
-                .into_response()
-        }
-        Err(e) => {
-            tracing::error!("Failed to register worker: {e}");
-            super::error::error_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                e.to_string(),
-                "InternalError",
-            )
-        }
-    }
-}
 
 /// List all workers
 ///
@@ -168,6 +84,54 @@ pub async fn list_workers(State(state): State<Arc<CoordinatorState>>) -> Respons
         }
         Err(e) => {
             tracing::error!("Failed to list workers: {e}");
+            super::error::error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                e.to_string(),
+                "InternalError",
+            )
+        }
+    }
+}
+
+/// Get a worker by ID
+///
+/// Returns full details for a single worker.
+#[utoipa::path(
+    get,
+    path = "/v1/admin/workers/{worker_id}",
+    params(
+        ("worker_id" = String, Path, description = "Worker ID (12-char Base62)")
+    ),
+    responses(
+        (status = 200, description = "Worker details", body = WorkerDetail),
+        (status = 404, description = "Worker not found"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "Workers"
+)]
+pub async fn get_worker(
+    State(state): State<Arc<CoordinatorState>>,
+    Path(worker_id): Path<String>,
+) -> Response {
+    match state.store.get_worker(&worker_id).await {
+        Ok(Some(w)) => Json(WorkerDetail {
+            id: w.id,
+            name: w.name,
+            url: w.url,
+            labels: w.labels,
+            status: w.status.as_str().to_string(),
+            capacity: w.capacity,
+            registered_at: w.registered_at.to_rfc3339(),
+            last_heartbeat: w.last_heartbeat.to_rfc3339(),
+        })
+        .into_response(),
+        Ok(None) => super::error::error_response(
+            StatusCode::NOT_FOUND,
+            format!("Worker not found: {worker_id}"),
+            "NotFoundError",
+        ),
+        Err(e) => {
+            tracing::error!("Failed to get worker {worker_id}: {e}");
             super::error::error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 e.to_string(),
@@ -212,35 +176,154 @@ pub async fn remove_worker(
     }
 }
 
-/// Send worker heartbeat
+/// Update worker status
 ///
-/// Workers call this periodically to report health and updated capacity.
+/// Set a worker's status. Only `active` and `draining` transitions are allowed.
 #[utoipa::path(
-    post,
-    path = "/v1/admin/workers/{worker_id}/heartbeat",
+    patch,
+    path = "/v1/admin/workers/{worker_id}/status",
     params(
         ("worker_id" = String, Path, description = "Worker ID")
     ),
-    request_body = HeartbeatPayload,
+    request_body = UpdateWorkerStatusRequest,
     responses(
-        (status = 200, description = "Heartbeat accepted"),
+        (status = 200, description = "Status updated", body = WorkerDetail),
+        (status = 400, description = "Invalid status transition"),
+        (status = 404, description = "Worker not found"),
         (status = 500, description = "Internal server error")
     ),
     tag = "Workers"
 )]
-pub async fn worker_heartbeat(
+pub async fn update_worker_status(
     State(state): State<Arc<CoordinatorState>>,
     Path(worker_id): Path<String>,
-    Json(req): Json<HeartbeatPayload>,
+    Json(req): Json<UpdateWorkerStatusRequest>,
 ) -> Response {
-    match state
+    let new_status = match req.status.as_str() {
+        "active" => WorkerStatus::Active,
+        "draining" => WorkerStatus::Draining,
+        other => {
+            return super::error::error_response(
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "Invalid status: \"{other}\". Only \"active\" and \"draining\" are allowed."
+                ),
+                "ValidationError",
+            );
+        }
+    };
+
+    // Check worker exists
+    let worker = match state.store.get_worker(&worker_id).await {
+        Ok(Some(w)) => w,
+        Ok(None) => {
+            return super::error::error_response(
+                StatusCode::NOT_FOUND,
+                format!("Worker not found: {worker_id}"),
+                "NotFoundError",
+            );
+        }
+        Err(e) => {
+            tracing::error!("Failed to get worker {worker_id}: {e}");
+            return super::error::error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                e.to_string(),
+                "InternalError",
+            );
+        }
+    };
+
+    if let Err(e) = state
         .store
-        .update_worker_heartbeat(&worker_id, &req.capacity)
+        .update_worker_status(&worker_id, new_status)
         .await
     {
-        Ok(()) => StatusCode::OK.into_response(),
+        tracing::error!("Failed to update worker {worker_id} status: {e}");
+        return super::error::error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            e.to_string(),
+            "InternalError",
+        );
+    }
+
+    tracing::info!(worker_id = %worker_id, status = %new_status, "Worker status updated");
+
+    Json(WorkerDetail {
+        id: worker.id,
+        name: worker.name,
+        url: worker.url,
+        labels: worker.labels,
+        status: new_status.as_str().to_string(),
+        capacity: worker.capacity,
+        registered_at: worker.registered_at.to_rfc3339(),
+        last_heartbeat: worker.last_heartbeat.to_rfc3339(),
+    })
+    .into_response()
+}
+
+/// Find worker for a box
+///
+/// Look up which worker owns a given box.
+#[utoipa::path(
+    get,
+    path = "/v1/admin/workers/by-box/{box_id}",
+    params(
+        ("box_id" = String, Path, description = "Box ID to look up")
+    ),
+    responses(
+        (status = 200, description = "Worker that owns this box", body = WorkerDetail),
+        (status = 404, description = "Box not routed to any worker"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "Workers"
+)]
+pub async fn get_worker_by_box(
+    State(state): State<Arc<CoordinatorState>>,
+    Path(box_id): Path<String>,
+) -> Response {
+    // Look up box → worker mapping
+    let mapping = match state.store.get_box_mapping(&box_id).await {
+        Ok(Some(m)) => m,
+        Ok(None) => {
+            return super::error::error_response(
+                StatusCode::NOT_FOUND,
+                format!("Box not routed to any worker: {box_id}"),
+                "NotFoundError",
+            );
+        }
         Err(e) => {
-            tracing::error!("Failed to update heartbeat for {worker_id}: {e}");
+            tracing::error!("Failed to get box mapping for {box_id}: {e}");
+            return super::error::error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                e.to_string(),
+                "InternalError",
+            );
+        }
+    };
+
+    // Look up the worker
+    match state.store.get_worker(&mapping.worker_id).await {
+        Ok(Some(w)) => Json(WorkerDetail {
+            id: w.id,
+            name: w.name,
+            url: w.url,
+            labels: w.labels,
+            status: w.status.as_str().to_string(),
+            capacity: w.capacity,
+            registered_at: w.registered_at.to_rfc3339(),
+            last_heartbeat: w.last_heartbeat.to_rfc3339(),
+        })
+        .into_response(),
+        Ok(None) => super::error::error_response(
+            StatusCode::NOT_FOUND,
+            format!(
+                "Worker {} no longer exists for box {box_id}",
+                mapping.worker_id
+            ),
+            "NotFoundError",
+        ),
+        Err(e) => {
+            tracing::error!("Failed to get worker {}: {e}", mapping.worker_id);
             super::error::error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 e.to_string(),

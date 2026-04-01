@@ -32,8 +32,7 @@ parking_lot = "0.12"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
-# HTTP proxy (coordinator → worker)
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+# Async streams
 futures = "0.3"
 base64 = "0.22"
 async-stream = "0.3"
