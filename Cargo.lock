@@ -392,6 +392,7 @@ dependencies = [
  "boxlite-test-utils",
  "bubblewrap-sys",
  "caps",
+ "cc",
  "chrono",
  "clap",
  "dirs 5.0.1",

@@ -81,118 +81,25 @@ fn open_kvm() -> BoxliteResult<std::fs::File> {
 }
 
 /// Execute a HLT instruction in a throwaway VM to verify KVM works.
-/// Catches broken nested virtualization (e.g., Amazon Linux 2023 on EC2 c8i).
+/// Catches broken /dev/kvm where the device exists but guest code cannot run.
+///
+/// Implemented in C (`kvm_smoke.c`) because Rust's `libc::ioctl()` variadic FFI
+/// has ABI issues with some KVM ioctls on nested virtualization platforms.
+///
+/// References:
+///   - LWN "Using the KVM API": <https://lwn.net/Articles/658511/>
+///   - dpw/kvm-hello-world: <https://github.com/dpw/kvm-hello-world>
 #[cfg(target_os = "linux")]
 fn smoke_test_kvm(kvm: &std::fs::File) -> BoxliteResult<()> {
     use std::os::fd::AsRawFd;
 
-    const KVM_CREATE_VM: libc::c_ulong = 0xAE01;
-    const KVM_CREATE_VCPU: libc::c_ulong = 0xAE41;
-    const KVM_GET_VCPU_MMAP_SIZE: libc::c_ulong = 0xAE04;
-    const KVM_RUN: libc::c_ulong = 0xAE80;
-    const KVM_SET_USER_MEMORY_REGION: libc::c_ulong = 0x4020AE46;
-    const KVM_EXIT_HLT: u32 = 5;
+    const KVM_EXIT_HLT: i32 = 5;
 
-    #[repr(C)]
-    struct MemRegion {
-        slot: u32,
-        flags: u32,
-        guest_phys_addr: u64,
-        memory_size: u64,
-        userspace_addr: u64,
+    unsafe extern "C" {
+        fn boxlite_kvm_smoke_test(kvm_fd: libc::c_int) -> libc::c_int;
     }
 
-    let kvm_fd = kvm.as_raw_fd();
-
-    let vm_fd = unsafe { libc::ioctl(kvm_fd, KVM_CREATE_VM, 0) };
-    if vm_fd < 0 {
-        return Err(BoxliteError::Unsupported("KVM: failed to create VM".into()));
-    }
-
-    // One page of guest memory with a HLT instruction at address 0
-    let mem_size: usize = 4096;
-    let guest_mem = unsafe {
-        libc::mmap(
-            std::ptr::null_mut(),
-            mem_size,
-            libc::PROT_READ | libc::PROT_WRITE,
-            libc::MAP_SHARED | libc::MAP_ANONYMOUS,
-            -1,
-            0,
-        )
-    };
-    if guest_mem == libc::MAP_FAILED {
-        unsafe { libc::close(vm_fd) };
-        return Err(BoxliteError::Unsupported(
-            "KVM smoke test: mmap failed".into(),
-        ));
-    }
-    unsafe { *(guest_mem as *mut u8) = 0xF4 }; // HLT
-
-    let region = MemRegion {
-        slot: 0,
-        flags: 0,
-        guest_phys_addr: 0,
-        memory_size: mem_size as u64,
-        userspace_addr: guest_mem as u64,
-    };
-    if unsafe {
-        libc::ioctl(
-            vm_fd,
-            KVM_SET_USER_MEMORY_REGION,
-            &region as *const MemRegion,
-        )
-    } < 0
-    {
-        unsafe {
-            libc::munmap(guest_mem, mem_size);
-            libc::close(vm_fd);
-        }
-        return Err(BoxliteError::Unsupported(
-            "KVM smoke test: set memory region failed".into(),
-        ));
-    }
-
-    let vcpu_fd = unsafe { libc::ioctl(vm_fd, KVM_CREATE_VCPU, 0) };
-    if vcpu_fd < 0 {
-        unsafe {
-            libc::munmap(guest_mem, mem_size);
-            libc::close(vm_fd);
-        }
-        return Err(BoxliteError::Unsupported(
-            "KVM smoke test: create vCPU failed".into(),
-        ));
-    }
-
-    let mmap_size = unsafe { libc::ioctl(kvm_fd, KVM_GET_VCPU_MMAP_SIZE, 0) } as usize;
-    let run_data = unsafe {
-        libc::mmap(
-            std::ptr::null_mut(),
-            mmap_size,
-            libc::PROT_READ | libc::PROT_WRITE,
-            libc::MAP_SHARED,
-            vcpu_fd,
-            0,
-        )
-    };
-
-    let ret = unsafe { libc::ioctl(vcpu_fd, KVM_RUN, 0) };
-
-    let exit_reason = if ret == 0 && run_data != libc::MAP_FAILED {
-        unsafe { *(run_data as *const u32) }
-    } else {
-        u32::MAX
-    };
-
-    // Cleanup
-    unsafe {
-        if run_data != libc::MAP_FAILED {
-            libc::munmap(run_data, mmap_size);
-        }
-        libc::close(vcpu_fd);
-        libc::munmap(guest_mem, mem_size);
-        libc::close(vm_fd);
-    }
+    let exit_reason = unsafe { boxlite_kvm_smoke_test(kvm.as_raw_fd()) };
 
     if exit_reason == KVM_EXIT_HLT {
         return Ok(());
@@ -209,8 +116,9 @@ fn smoke_test_kvm(kvm: &std::fs::File) -> BoxliteResult<()> {
         "KVM smoke test failed: vCPU exit reason {exit_reason} (expected {KVM_EXIT_HLT})\n\n\
          /dev/kvm exists but cannot execute guest code (host kernel: {kernel}).\n\n\
          Suggestions:\n\
-         - Try a different OS or kernel version\n\
-         - Use a bare metal instance for direct KVM access\n\
+         - Ensure nested virtualization is enabled (cloud instances need this explicitly)\n\
+         - Load the KVM module: sudo modprobe kvm_intel  # or kvm_amd\n\
+         - Check: lsmod | grep kvm\n\
          - See https://github.com/boxlite-ai/boxlite/blob/main/docs/faq.md"
     )))
 }

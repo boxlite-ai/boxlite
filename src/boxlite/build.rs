@@ -778,6 +778,17 @@ fn main() {
 
     auto_detect_registry();
 
+    // Compile KVM smoke test helper (C, Linux only).
+    // Rust's libc::ioctl() variadic FFI has ABI issues with some KVM ioctls
+    // on nested virtualization, so the smoke test is implemented in C.
+    #[cfg(target_os = "linux")]
+    {
+        println!("cargo:rerun-if-changed=src/kvm_smoke.c");
+        cc::Build::new()
+            .file("src/kvm_smoke.c")
+            .compile("kvm_smoke");
+    }
+
     // Compile seccomp filters at build time (fast, required for include_bytes!())
     compile_seccomp_filters();
 
