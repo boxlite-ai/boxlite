@@ -76,10 +76,5 @@
   "engines": {
     "node": ">=18.0.0"
   },
-  "author": "Dorian Zheng <xingzhengde72@gmail.com>",
-  "optionalDependencies": {
-    "@boxlite-ai/boxlite-darwin-arm64": "0.8.1",
-    "@boxlite-ai/boxlite-linux-x64-gnu": "0.8.1",
-    "@boxlite-ai/boxlite-linux-arm64-gnu": "0.8.1"
-  }
+  "author": "Dorian Zheng <xingzhengde72@gmail.com>"
 }
