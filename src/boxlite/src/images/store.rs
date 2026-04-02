@@ -310,6 +310,7 @@ impl ImageStore {
             manifest_digest: manifest_digest.to_string(),
             layers,
             config_digest: config_digest_str,
+            diff_ids: Vec::new(), // Populated later if config is available
         })
     }
 
@@ -473,7 +474,7 @@ impl ImageStore {
 
         let (layers, config_digest) = match manifest {
             oci_client::manifest::OciManifest::Image(ref img) => {
-                let layers = Self::layers_from_image(img);
+                let layers = Self::layers_from_image(img)?;
                 let config_digest = img.config.digest.clone();
                 (layers, config_digest)
             }
@@ -484,11 +485,47 @@ impl ImageStore {
             }
         };
 
+        // Load diff_ids from config if available
+        let diff_ids = self.load_diff_ids_from_config(inner, &config_digest);
+
         Ok(ImageManifest {
             manifest_digest: cached.manifest_digest.clone(),
             layers,
             config_digest,
+            diff_ids,
         })
+    }
+
+    /// Load diff_ids from image config on disk. Returns empty vec on any failure.
+    fn load_diff_ids_from_config(
+        &self,
+        inner: &ImageStoreInner,
+        config_digest: &str,
+    ) -> Vec<String> {
+        let config_path = inner.storage.config_path(config_digest);
+        let config_json = match std::fs::read_to_string(&config_path) {
+            Ok(json) => json,
+            Err(e) => {
+                tracing::debug!("Cannot read config for diff_ids: {}", e);
+                return Vec::new();
+            }
+        };
+
+        let image_config: oci_spec::image::ImageConfiguration =
+            match serde_json::from_str(&config_json) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::debug!("Cannot parse config for diff_ids: {}", e);
+                    return Vec::new();
+                }
+            };
+
+        image_config
+            .rootfs()
+            .diff_ids()
+            .iter()
+            .map(|d| d.to_string())
+            .collect()
     }
 
     // ========================================================================
@@ -516,7 +553,7 @@ impl ImageStore {
         }
 
         // Step 3: Extract image manifest (may pull platform-specific manifest for multi-platform images)
-        let image_manifest = self
+        let mut image_manifest = self
             .extract_image_manifest(reference, &manifest, manifest_digest_str)
             .await?;
 
@@ -527,6 +564,13 @@ impl ImageStore {
         // Step 5: Download config (no lock during download)
         self.download_config(reference, &image_manifest.config_digest)
             .await?;
+
+        // Step 5b: Parse diff_ids from config for DiffID verification
+        {
+            let inner = self.inner.read().await;
+            image_manifest.diff_ids =
+                self.load_diff_ids_from_config(&inner, &image_manifest.config_digest);
+        }
 
         // Step 6: Update index using reference.whole() as the cache key
         self.update_index(&reference.whole(), &image_manifest)
@@ -565,12 +609,13 @@ impl ImageStore {
     ) -> BoxliteResult<ImageManifest> {
         match manifest {
             oci_client::manifest::OciManifest::Image(img) => {
-                let layers = Self::layers_from_image(img);
+                let layers = Self::layers_from_image(img)?;
                 let config_digest = img.config.digest.clone();
                 Ok(ImageManifest {
                     manifest_digest,
                     layers,
                     config_digest,
+                    diff_ids: Vec::new(), // Populated after config download
                 })
             }
             oci_client::manifest::OciManifest::ImageIndex(index) => {
@@ -579,15 +624,35 @@ impl ImageStore {
         }
     }
 
-    fn layers_from_image(image: &oci_client::manifest::OciImageManifest) -> Vec<LayerInfo> {
-        image
-            .layers
-            .iter()
-            .map(|layer| LayerInfo {
+    fn layers_from_image(
+        image: &oci_client::manifest::OciImageManifest,
+    ) -> BoxliteResult<Vec<LayerInfo>> {
+        let mut layers = Vec::with_capacity(image.layers.len());
+        for layer in &image.layers {
+            // Reject non-distributable / foreign layers (CVE-2020-15157 mitigation)
+            if layer.media_type.contains("nondistributable") || layer.media_type.contains("foreign")
+            {
+                return Err(BoxliteError::Image(format!(
+                    "Refusing non-distributable layer {}: media_type={} — \
+                     boxlite does not support foreign layer URLs",
+                    layer.digest, layer.media_type
+                )));
+            }
+            if layer.urls.as_ref().is_some_and(|urls| !urls.is_empty()) {
+                return Err(BoxliteError::Image(format!(
+                    "Refusing layer {} with foreign URLs: {:?} — \
+                     foreign layer URLs are rejected for security (CVE-2020-15157)",
+                    layer.digest, layer.urls
+                )));
+            }
+
+            layers.push(LayerInfo {
                 digest: layer.digest.clone(),
                 media_type: layer.media_type.clone(),
-            })
-            .collect()
+                size: layer.size,
+            });
+        }
+        Ok(layers)
     }
 
     async fn extract_platform_manifest(
@@ -631,12 +696,13 @@ impl ImageStore {
 
         match platform_image {
             oci_client::manifest::OciManifest::Image(img) => {
-                let layers = Self::layers_from_image(&img);
+                let layers = Self::layers_from_image(&img)?;
                 let config_digest = img.config.digest.clone();
                 Ok(ImageManifest {
                     manifest_digest: platform_digest,
                     layers,
                     config_digest,
+                    diff_ids: Vec::new(), // Populated after config download
                 })
             }
             _ => Err(BoxliteError::Storage(
@@ -774,7 +840,11 @@ impl ImageStore {
             // Stage download (quick read lock for path computation)
             let mut staged = {
                 let inner = self.inner.read().await;
-                match inner.storage.stage_layer_download(&layer.digest).await {
+                match inner
+                    .storage
+                    .stage_layer_download(&layer.digest, layer.size)
+                    .await
+                {
                     Ok(result) => result,
                     Err(e) => {
                         last_error = Some(format!(
@@ -794,7 +864,7 @@ impl ImageStore {
                     &OciDescriptor {
                         digest: layer.digest.clone(),
                         media_type: layer.media_type.clone(),
-                        size: 0,
+                        size: layer.size,
                         urls: None,
                         annotations: None,
                     },
@@ -910,15 +980,7 @@ impl ImageStore {
             .map_err(|e| BoxliteError::Storage(format!("Failed to parse {}: {}", context, e)))?;
 
         let config_digest_str = oci_manifest.config.digest.clone();
-
-        let layers: Vec<LayerInfo> = oci_manifest
-            .layers
-            .iter()
-            .map(|layer| LayerInfo {
-                digest: layer.digest.clone(),
-                media_type: layer.media_type.clone(),
-            })
-            .collect();
+        let layers = Self::layers_from_image(&oci_manifest)?;
 
         Ok((config_digest_str, layers))
     }
@@ -1163,5 +1225,177 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("index.json"));
+    }
+
+    // ========================================================================
+    // Foreign Layer URL Rejection Tests (Phase 1B)
+    // ========================================================================
+
+    #[test]
+    fn test_layers_from_image_rejects_nondistributable_media_type() {
+        let manifest = ClientOciImageManifest {
+            schema_version: 2,
+            config: OciDescriptor {
+                digest: "sha256:config".into(),
+                media_type: "application/vnd.oci.image.config.v1+json".into(),
+                size: 100,
+                urls: None,
+                annotations: None,
+            },
+            layers: vec![OciDescriptor {
+                digest: "sha256:layer1".into(),
+                media_type: "application/vnd.oci.image.layer.nondistributable.v1.tar+gzip".into(),
+                size: 1000,
+                urls: None,
+                annotations: None,
+            }],
+            media_type: None,
+            annotations: None,
+            artifact_type: None,
+            subject: None,
+        };
+
+        let result = ImageStore::layers_from_image(&manifest);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("nondistributable"),
+            "error should mention nondistributable: {err}"
+        );
+    }
+
+    #[test]
+    fn test_layers_from_image_rejects_foreign_urls() {
+        let manifest = ClientOciImageManifest {
+            schema_version: 2,
+            config: OciDescriptor {
+                digest: "sha256:config".into(),
+                media_type: "application/vnd.oci.image.config.v1+json".into(),
+                size: 100,
+                urls: None,
+                annotations: None,
+            },
+            layers: vec![OciDescriptor {
+                digest: "sha256:layer1".into(),
+                media_type: "application/vnd.oci.image.layer.v1.tar+gzip".into(),
+                size: 1000,
+                urls: Some(vec!["https://evil.example.com/blob".into()]),
+                annotations: None,
+            }],
+            media_type: None,
+            annotations: None,
+            artifact_type: None,
+            subject: None,
+        };
+
+        let result = ImageStore::layers_from_image(&manifest);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("foreign"),
+            "error should mention foreign URLs: {err}"
+        );
+    }
+
+    #[test]
+    fn test_layers_from_image_accepts_normal_layers() {
+        let manifest = ClientOciImageManifest {
+            schema_version: 2,
+            config: OciDescriptor {
+                digest: "sha256:config".into(),
+                media_type: "application/vnd.oci.image.config.v1+json".into(),
+                size: 100,
+                urls: None,
+                annotations: None,
+            },
+            layers: vec![
+                OciDescriptor {
+                    digest: "sha256:layer1".into(),
+                    media_type: "application/vnd.oci.image.layer.v1.tar+gzip".into(),
+                    size: 1000,
+                    urls: None,
+                    annotations: None,
+                },
+                OciDescriptor {
+                    digest: "sha256:layer2".into(),
+                    media_type: "application/vnd.docker.image.rootfs.diff.tar.gzip".into(),
+                    size: 2000,
+                    urls: None,
+                    annotations: None,
+                },
+            ],
+            media_type: None,
+            annotations: None,
+            artifact_type: None,
+            subject: None,
+        };
+
+        let result = ImageStore::layers_from_image(&manifest).unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].digest, "sha256:layer1");
+        assert_eq!(result[0].size, 1000);
+        assert_eq!(result[1].digest, "sha256:layer2");
+        assert_eq!(result[1].size, 2000);
+    }
+
+    #[test]
+    fn test_layers_from_image_accepts_empty_urls() {
+        let manifest = ClientOciImageManifest {
+            schema_version: 2,
+            config: OciDescriptor {
+                digest: "sha256:config".into(),
+                media_type: "application/vnd.oci.image.config.v1+json".into(),
+                size: 100,
+                urls: None,
+                annotations: None,
+            },
+            layers: vec![OciDescriptor {
+                digest: "sha256:layer1".into(),
+                media_type: "application/vnd.oci.image.layer.v1.tar+gzip".into(),
+                size: 500,
+                urls: Some(vec![]), // Empty URLs vec should be OK
+                annotations: None,
+            }],
+            media_type: None,
+            annotations: None,
+            artifact_type: None,
+            subject: None,
+        };
+
+        let result = ImageStore::layers_from_image(&manifest).unwrap();
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn test_layers_from_image_rejects_docker_foreign_media_type() {
+        let manifest = ClientOciImageManifest {
+            schema_version: 2,
+            config: OciDescriptor {
+                digest: "sha256:config".into(),
+                media_type: "application/vnd.oci.image.config.v1+json".into(),
+                size: 100,
+                urls: None,
+                annotations: None,
+            },
+            layers: vec![OciDescriptor {
+                digest: "sha256:layer1".into(),
+                media_type: "application/vnd.docker.image.rootfs.foreign.diff.tar.gzip".into(),
+                size: 1000,
+                urls: None,
+                annotations: None,
+            }],
+            media_type: None,
+            annotations: None,
+            artifact_type: None,
+            subject: None,
+        };
+
+        let result = ImageStore::layers_from_image(&manifest);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("foreign") || err.contains("nondistributable"),
+            "error should indicate rejection: {err}"
+        );
     }
 }

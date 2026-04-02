@@ -162,7 +162,58 @@ impl ImageObject {
             .map(|l| l.digest.clone())
             .collect();
 
-        self.blob_source.extract_layers(&digests).await
+        let extracted = self.blob_source.extract_layers(&digests).await?;
+
+        // Verify DiffIDs if available
+        self.verify_diff_ids()?;
+
+        Ok(extracted)
+    }
+
+    /// Verify layer DiffIDs against the image config's rootfs.diff_ids.
+    ///
+    /// DiffIDs are SHA256 hashes of the uncompressed layer tar content.
+    /// This ensures the decompressed filesystem content matches what the
+    /// image author intended.
+    fn verify_diff_ids(&self) -> BoxliteResult<()> {
+        use crate::images::archive::verify_diff_id;
+
+        let diff_ids = &self.manifest.diff_ids;
+        if diff_ids.is_empty() {
+            return Ok(());
+        }
+
+        let layers = &self.manifest.layers;
+        if diff_ids.len() != layers.len() {
+            tracing::warn!(
+                "DiffID count ({}) doesn't match layer count ({}), skipping verification",
+                diff_ids.len(),
+                layers.len()
+            );
+            return Ok(());
+        }
+
+        for (i, (layer, diff_id)) in layers.iter().zip(diff_ids.iter()).enumerate() {
+            let tarball_path = self.blob_source.layer_tarball_path(&layer.digest);
+            match verify_diff_id(&tarball_path, diff_id) {
+                Ok(true) => {
+                    tracing::debug!("DiffID verified for layer {}: {}", i, layer.digest);
+                }
+                Ok(false) => {
+                    return Err(BoxliteError::Image(format!(
+                        "DiffID verification failed for layer {} ({}): \
+                         uncompressed content does not match expected diff_id {}",
+                        i, layer.digest, diff_id
+                    )));
+                }
+                Err(e) => {
+                    tracing::warn!("DiffID verification error for layer {}: {}", i, e);
+                    // Don't fail the pull on verification errors (e.g., unsupported format)
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Compute a stable digest for this image based on its layers.

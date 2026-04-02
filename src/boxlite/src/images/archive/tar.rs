@@ -998,6 +998,87 @@ fn to_cstring(path: &Path) -> io::Result<CString> {
     })
 }
 
+/// Verify a layer's DiffID by decompressing and hashing the uncompressed content.
+///
+/// DiffID is the SHA256 of the uncompressed tar stream, as specified in the
+/// OCI image config's `rootfs.diff_ids` array. This verifies that the actual
+/// filesystem content matches what the image author intended.
+///
+/// # Arguments
+/// * `tarball_path` - Path to the compressed layer tarball
+/// * `expected_diff_id` - Expected DiffID (e.g., "sha256:abc123...")
+///
+/// # Returns
+/// `Ok(true)` if the DiffID matches, `Ok(false)` if it doesn't.
+pub fn verify_diff_id(tarball_path: &Path, expected_diff_id: &str) -> BoxliteResult<bool> {
+    use sha2::{Digest, Sha256};
+
+    let expected_hash = expected_diff_id
+        .strip_prefix("sha256:")
+        .ok_or_else(|| BoxliteError::Storage("Invalid diff_id format, expected sha256:".into()))?;
+
+    let file = fs::File::open(tarball_path).map_err(|e| {
+        BoxliteError::Storage(format!(
+            "Failed to open layer tarball {}: {}",
+            tarball_path.display(),
+            e
+        ))
+    })?;
+
+    // Detect compression format
+    let mut header = [0u8; 2];
+    {
+        let file_ref = &file;
+        file_ref
+            .take(2)
+            .read_exact(&mut header)
+            .map_err(|e| BoxliteError::Storage(format!("Failed to read layer header: {}", e)))?;
+    }
+
+    // Re-open to read from beginning
+    let file = fs::File::open(tarball_path).map_err(|e| {
+        BoxliteError::Storage(format!(
+            "Failed to reopen layer tarball {}: {}",
+            tarball_path.display(),
+            e
+        ))
+    })?;
+
+    // Create decompressing reader (same logic as extract_layer_tarball_streaming)
+    let mut reader: Box<dyn Read> = if header == [0x1f, 0x8b] {
+        Box::new(GzDecoder::new(BufReader::new(file)))
+    } else {
+        Box::new(BufReader::new(file))
+    };
+
+    // Hash the entire decompressed stream
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0u8; 64 * 1024];
+    loop {
+        let n = reader.read(&mut buffer).map_err(|e| {
+            BoxliteError::Storage(format!("Failed to read decompressed layer: {}", e))
+        })?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buffer[..n]);
+    }
+
+    let computed_hash = format!("{:x}", hasher.finalize());
+
+    if computed_hash != expected_hash {
+        tracing::error!(
+            "DiffID mismatch for {}:\n  Expected: {}\n  Computed: sha256:{}",
+            tarball_path.display(),
+            expected_diff_id,
+            computed_hash
+        );
+        return Ok(false);
+    }
+
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1606,5 +1687,87 @@ mod tests {
         // Read symlink target
         let target = std::fs::read_link(&link_path).unwrap();
         assert_eq!(target, PathBuf::from("target.txt"));
+    }
+
+    // ========================================================================
+    // DiffID Verification Tests
+    // ========================================================================
+
+    #[test]
+    fn test_verify_diff_id_correct_hash() {
+        use sha2::Digest;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        // Create an uncompressed tar with known content
+        let entries = vec![TestEntry {
+            path: "hello.txt".to_string(),
+            entry_type: TestEntryType::File {
+                content: b"hello".to_vec(),
+            },
+        }];
+        let tar_data = create_test_tar(entries);
+
+        // Compute expected DiffID (hash of uncompressed tar)
+        let expected_diff_id = format!("sha256:{:x}", sha2::Sha256::digest(&tar_data));
+
+        // Gzip-compress and write to file
+        let mut gz = GzEncoder::new(Vec::new(), Compression::default());
+        gz.write_all(&tar_data).unwrap();
+        let gzipped = gz.finish().unwrap();
+
+        let tarball_path = temp_dir.path().join("layer.tar.gz");
+        std::fs::write(&tarball_path, &gzipped).unwrap();
+
+        assert!(verify_diff_id(&tarball_path, &expected_diff_id).unwrap());
+    }
+
+    #[test]
+    fn test_verify_diff_id_wrong_hash() {
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        let entries = vec![TestEntry {
+            path: "hello.txt".to_string(),
+            entry_type: TestEntryType::File {
+                content: b"hello".to_vec(),
+            },
+        }];
+        let tar_data = create_test_tar(entries);
+
+        let mut gz = GzEncoder::new(Vec::new(), Compression::default());
+        gz.write_all(&tar_data).unwrap();
+        let gzipped = gz.finish().unwrap();
+
+        let tarball_path = temp_dir.path().join("layer.tar.gz");
+        std::fs::write(&tarball_path, &gzipped).unwrap();
+
+        // Use a wrong diff_id
+        let wrong_diff_id =
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+        assert!(!verify_diff_id(&tarball_path, wrong_diff_id).unwrap());
+    }
+
+    #[test]
+    fn test_verify_diff_id_uncompressed_tarball() {
+        use sha2::Digest;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        let entries = vec![TestEntry {
+            path: "test.txt".to_string(),
+            entry_type: TestEntryType::File {
+                content: b"uncompressed test".to_vec(),
+            },
+        }];
+        let tar_data = create_test_tar(entries);
+
+        // DiffID of uncompressed tar = hash of the tar itself (no compression layer)
+        let expected_diff_id = format!("sha256:{:x}", sha2::Sha256::digest(&tar_data));
+
+        // Write uncompressed tar directly
+        let tarball_path = temp_dir.path().join("layer.tar");
+        std::fs::write(&tarball_path, &tar_data).unwrap();
+
+        assert!(verify_diff_id(&tarball_path, &expected_diff_id).unwrap());
     }
 }

@@ -33,12 +33,18 @@ pub(super) struct ImageManifest {
     pub(super) manifest_digest: String,
     pub(super) layers: Vec<LayerInfo>,
     pub(super) config_digest: String,
+    /// DiffIDs from image config's `rootfs.diff_ids` (SHA256 of uncompressed layers).
+    /// Empty if not available (e.g., config not yet downloaded, or empty in config).
+    pub(super) diff_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
 pub(super) struct LayerInfo {
     pub(super) digest: String,
     pub(super) media_type: String,
+    /// Expected size from manifest descriptor (bytes).
+    /// Values <= 0 mean "unknown" and skip size validation.
+    pub(super) size: i64,
 }
 
 // ============================================================================

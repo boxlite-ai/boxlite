@@ -9,3 +9,4 @@ mod time;
 
 #[allow(unused_imports)]
 pub use tar::extract_layer_tarball_streaming;
+pub use tar::verify_diff_id;
