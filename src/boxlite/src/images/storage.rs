@@ -275,7 +275,11 @@ impl ImageStorage {
     ///
     /// Returns a StagedDownload handle that manages the temp file lifecycle.
     /// Use `staged.file()` to get the file for writing.
-    pub async fn stage_layer_download(&self, digest: &str) -> BoxliteResult<StagedDownload> {
+    pub async fn stage_layer_download(
+        &self,
+        digest: &str,
+        expected_size: i64,
+    ) -> BoxliteResult<StagedDownload> {
         // Extract expected hash from digest
         let expected_hash = digest
             .strip_prefix("sha256:")
@@ -302,6 +306,7 @@ impl ImageStorage {
             staged_path,
             self.layer_tarball_path(digest),
             expected_hash,
+            expected_size,
             file,
         ))
     }
@@ -402,6 +407,7 @@ impl ImageStorage {
             staged_path,
             config_path,
             expected_hash,
+            0, // Config size not tracked; skip size validation
             file,
         ))
     }
@@ -447,6 +453,74 @@ impl ImageStorage {
 }
 
 // ============================================================================
+// HASHING WRITER
+// ============================================================================
+
+/// AsyncWrite wrapper that computes SHA256 of all bytes written through it.
+///
+/// Feeds every successfully written byte through a SHA256 hasher, providing
+/// inline digest verification without requiring a post-download re-read.
+///
+/// Compatible with `oci-client`'s `pull_blob` which requires `T: AsyncWrite + Unpin`.
+pub struct HashingWriter<W> {
+    inner: W,
+    hasher: sha2::Sha256,
+    bytes_written: u64,
+}
+
+impl<W> HashingWriter<W> {
+    pub fn new(inner: W) -> Self {
+        use sha2::Digest;
+        Self {
+            inner,
+            hasher: sha2::Sha256::new(),
+            bytes_written: 0,
+        }
+    }
+
+    /// Consume the writer and return (inner_writer, hex_hash, bytes_written).
+    pub fn finalize(self) -> (W, String, u64) {
+        use sha2::Digest;
+        let hash = format!("{:x}", self.hasher.finalize());
+        (self.inner, hash, self.bytes_written)
+    }
+}
+
+impl<W: tokio::io::AsyncWrite + Unpin> tokio::io::AsyncWrite for HashingWriter<W> {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        use sha2::Digest;
+        let this = self.get_mut();
+        match std::pin::Pin::new(&mut this.inner).poll_write(cx, buf) {
+            std::task::Poll::Ready(Ok(n)) => {
+                // Only hash bytes that were actually written to the inner writer
+                this.hasher.update(&buf[..n]);
+                this.bytes_written += n as u64;
+                std::task::Poll::Ready(Ok(n))
+            }
+            other => other,
+        }
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().inner).poll_shutdown(cx)
+    }
+}
+
+// ============================================================================
 // STAGED DOWNLOAD
 // ============================================================================
 
@@ -471,7 +545,9 @@ pub struct StagedDownload {
     staged_path: PathBuf,
     final_path: PathBuf,
     expected_hash: String,
-    file: Option<tokio::fs::File>,
+    /// Expected blob size from manifest descriptor. Values <= 0 skip size validation.
+    expected_size: i64,
+    writer: Option<HashingWriter<tokio::fs::File>>,
 }
 
 impl StagedDownload {
@@ -480,19 +556,24 @@ impl StagedDownload {
         staged_path: PathBuf,
         final_path: PathBuf,
         expected_hash: String,
+        expected_size: i64,
         file: tokio::fs::File,
     ) -> Self {
         Self {
             staged_path,
             final_path,
             expected_hash,
-            file: Some(file),
+            expected_size,
+            writer: Some(HashingWriter::new(file)),
         }
     }
 
-    /// Get mutable reference to the file for writing
-    pub fn file(&mut self) -> &mut tokio::fs::File {
-        self.file.as_mut().expect("file already consumed")
+    /// Get mutable reference to the hashing writer for writing blob data.
+    ///
+    /// The writer computes SHA256 inline as bytes are written, eliminating
+    /// the need for a post-download re-read.
+    pub fn file(&mut self) -> &mut HashingWriter<tokio::fs::File> {
+        self.writer.as_mut().expect("writer already consumed")
     }
 
     /// Get the staged file path (for debugging/logging)
@@ -506,17 +587,22 @@ impl StagedDownload {
         &self.final_path
     }
 
-    /// Verify integrity and atomically move to final location
+    /// Verify integrity and atomically move to final location.
+    ///
+    /// Reads the hash computed inline by `HashingWriter` during the download —
+    /// no post-download re-read is needed. This is an independent verification
+    /// layer from `oci-client`'s own inline digest check.
     ///
     /// Returns Ok(true) if verification passed and file was committed,
     /// Ok(false) if verification failed (temp file is cleaned up).
     /// Consumes self to prevent further use after commit.
     pub async fn commit(mut self) -> BoxliteResult<bool> {
-        use sha2::{Digest, Sha256};
-        use tokio::io::AsyncReadExt;
-
-        // Drop the write handle before reading
-        self.file.take();
+        // Finalize the hashing writer to get computed hash and byte count
+        let writer = self
+            .writer
+            .take()
+            .ok_or_else(|| BoxliteError::Storage("writer already consumed".into()))?;
+        let (_file, computed_hash, bytes_written) = writer.finalize();
 
         if !self.staged_path.exists() {
             return Err(BoxliteError::Storage(format!(
@@ -525,25 +611,16 @@ impl StagedDownload {
             )));
         }
 
-        // Verify integrity
-        let mut file = tokio::fs::File::open(&self.staged_path)
-            .await
-            .map_err(|e| BoxliteError::Storage(format!("Failed to open temp file: {}", e)))?;
-
-        let mut hasher = Sha256::new();
-        let mut buffer = vec![0u8; 64 * 1024];
-        loop {
-            let n = file
-                .read(&mut buffer)
-                .await
-                .map_err(|e| BoxliteError::Storage(format!("Failed to read temp file: {}", e)))?;
-            if n == 0 {
-                break;
-            }
-            hasher.update(&buffer[..n]);
+        // Size validation (fail fast before hash comparison)
+        if self.expected_size > 0 && bytes_written != self.expected_size as u64 {
+            tracing::error!(
+                "Blob size mismatch: expected {} bytes, got {} bytes",
+                self.expected_size,
+                bytes_written
+            );
+            let _ = tokio::fs::remove_file(&self.staged_path).await;
+            return Ok(false);
         }
-
-        let computed_hash = format!("{:x}", hasher.finalize());
 
         if computed_hash != self.expected_hash {
             // Verification failed - clean up temp file
@@ -570,7 +647,7 @@ impl StagedDownload {
     ///
     /// Call this on download failure or cancellation.
     pub async fn abort(mut self) {
-        self.file.take();
+        self.writer.take();
         let _ = tokio::fs::remove_file(&self.staged_path).await;
     }
 }
@@ -674,6 +751,100 @@ mod tests {
 
         let config = store.load_config("sha256:config1").unwrap();
         assert_eq!(config, r#"{"foo": "bar"}"#);
+    }
+
+    #[tokio::test]
+    async fn test_hashing_writer_produces_correct_sha256() {
+        use sha2::Digest;
+        use tokio::io::AsyncWriteExt;
+
+        let data = b"hello world - hashing writer test";
+        let expected_hash = format!("{:x}", sha2::Sha256::digest(data));
+
+        let buf = Vec::new();
+        let mut writer = HashingWriter::new(buf);
+        writer.write_all(data).await.unwrap();
+
+        let (inner, hash, bytes_written) = writer.finalize();
+        assert_eq!(hash, expected_hash);
+        assert_eq!(bytes_written, data.len() as u64);
+        assert_eq!(inner, data.to_vec());
+    }
+
+    /// Helper: create a staged download with known content, expected hash, and expected size.
+    /// Returns (StagedDownload, actual_content_bytes).
+    async fn create_staged_with_content(
+        store: &ImageStorage,
+        content: &[u8],
+        expected_size: i64,
+    ) -> StagedDownload {
+        use sha2::Digest;
+        use tokio::io::AsyncWriteExt;
+
+        let hash = format!("{:x}", sha2::Sha256::digest(content));
+        let digest = format!("sha256:{}", hash);
+        let mut staged = store
+            .stage_layer_download(&digest, expected_size)
+            .await
+            .unwrap();
+        staged.file().write_all(content).await.unwrap();
+        staged.file().flush().await.unwrap();
+        staged
+    }
+
+    #[tokio::test]
+    async fn test_staged_download_commit_correct_size() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let store = ImageStorage::new(temp_dir.path().to_path_buf()).unwrap();
+
+        let content = b"hello world";
+        let staged = create_staged_with_content(&store, content, content.len() as i64).await;
+        assert!(
+            staged.commit().await.unwrap(),
+            "commit should succeed with correct size and hash"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_staged_download_commit_wrong_size() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let store = ImageStorage::new(temp_dir.path().to_path_buf()).unwrap();
+
+        let content = b"hello world";
+        // Expect 5 bytes but write 11
+        let staged = create_staged_with_content(&store, content, 5).await;
+        assert!(
+            !staged.commit().await.unwrap(),
+            "commit should fail with wrong size"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_staged_download_commit_zero_size_skips_validation() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let store = ImageStorage::new(temp_dir.path().to_path_buf()).unwrap();
+
+        let content = b"hello world";
+        // size=0 means unknown, should skip size validation
+        let staged = create_staged_with_content(&store, content, 0).await;
+        assert!(
+            staged.commit().await.unwrap(),
+            "commit should succeed when size=0 (skip validation)"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_staged_download_commit_negative_size_skips_validation() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let store = ImageStorage::new(temp_dir.path().to_path_buf()).unwrap();
+
+        let content = b"hello world";
+        // size=-1 means unknown, should skip size validation
+        let staged = create_staged_with_content(&store, content, -1).await;
+        assert!(
+            staged.commit().await.unwrap(),
+            "commit should succeed when size<0 (skip validation)"
+        );
     }
 
     #[test]

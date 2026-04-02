@@ -200,22 +200,43 @@ The kernel cmdline includes `reboot=k` which tells Linux to reboot via keyboard 
 
 The triple fault likely occurs because kernel 6.1's nested KVM doesn't properly emulate a CPU feature that the guest kernel 6.12.62 requires during very early boot (decompressor or head_64.S code).
 
-### Further investigation needed
+### Step 9: CPUID comparison
 
-To determine the exact CPU feature causing the triple fault:
-1. Use `perf kvm stat` on the host to capture VM entry/exit reasons
-2. Try an older libkrunfw guest kernel (e.g., 5.15 or 6.1) to see if it boots
-3. Compare CPUID leaves between kernel 6.1 and 6.17 nested KVM using a test program
+Dumped `KVM_GET_SUPPORTED_CPUID` on both kernels. Notable differences:
+
+| Feature | CPUID Leaf | Kernel 6.17 | Kernel 6.1 |
+|---------|-----------|-------------|------------|
+| HYPERVISOR | 1.ECX bit 31 | YES | NO |
+| L1D_FLUSH | 7.0.EDX bit 28 | YES | NO |
+| FZRM | 7.1.EAX bit 10 | YES | NO |
+| FSRS | 7.1.EAX bit 11 | YES | NO |
+| FSRC | 7.1.EAX bit 12 | YES | NO |
+| AMX_FP16 | 7.1.EAX bit 21 | YES | NO |
+| Max CPUID leaf | 0.EAX | 0x24 | 0x1f |
+
+**However:** These are `KVM_GET_SUPPORTED_CPUID` values (what the host advertises), NOT what the guest sees. libkrun transforms CPUID before passing to `KVM_SET_CPUID2`. Notably, libkrun explicitly sets the HYPERVISOR bit in `cpuid/src/transformer/common.rs:39`:
+
+```rust
+entry.ecx.write_bit(ecx::HYPERVISOR_BITINDEX, true);
+```
+
+So the CPUID differences are **informational but not the direct root cause** — the guest always sees the HYPERVISOR bit regardless of host. The actual root cause is a deeper nested VMX incompatibility.
 
 ## Why kernel 6.1 vs 6.17
 
-KVM capabilities are identical between both kernels (verified via `KVM_CHECK_EXTENSION`). The difference is likely in:
+KVM capabilities (`KVM_CHECK_EXTENSION`) are identical. CPU flags (vmx, ept, vpid, unrestricted_guest) are identical. The difference is in the **nested VMX implementation**:
 
-1. **CPUID emulation**: Kernel 6.1 may not expose certain CPUID leaves that the guest kernel 6.12.62 requires (e.g., newer Intel features like CET, WAITPKG, AMX)
-2. **MSR handling**: Certain MSRs may not be properly emulated under nested KVM in 6.1
-3. **VMX feature bits**: The nested VMX VMCS may not advertise features the guest kernel expects
+1. **VMCS field handling**: Kernel 6.1's nested KVM may not properly emulate certain VMX control fields that the guest kernel's early boot code triggers
+2. **MSR intercept handling**: Certain MSR accesses may cause VM exit failures in 6.1's L1-to-L2 translation
+3. **CPUID passthrough to KVM_SET_CPUID2**: Kernel 6.1 may reject or mishandle certain CPUID entries that libkrun configures
 
-The guest kernel hits an early boot failure (likely during CPU feature detection or APIC setup), determines it can't continue, and uses the i8042 reset as the fallback shutdown mechanism.
+The exact nested VMX bug requires host-level KVM tracing to identify:
+```bash
+# On the AL2023 host:
+sudo perf kvm stat record -a sleep 5 &
+# (run boxlite in another terminal)
+sudo perf kvm stat report
+```
 
 ## Recommendations
 
