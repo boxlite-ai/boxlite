@@ -7,6 +7,29 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// Find the cargo workspace root by walking up from CARGO_MANIFEST_DIR.
+/// Looks for a Cargo.toml containing `[workspace]`.
+fn find_workspace_root() -> PathBuf {
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+    let mut dir = manifest_dir.as_path();
+    loop {
+        let cargo_toml = dir.join("Cargo.toml");
+        if cargo_toml.is_file()
+            && fs::read_to_string(&cargo_toml)
+                .is_ok_and(|contents| contents.contains("[workspace]"))
+        {
+            return dir.to_path_buf();
+        }
+        dir = match dir.parent() {
+            Some(parent) => parent,
+            None => panic!(
+                "Could not find workspace root from {}",
+                manifest_dir.display()
+            ),
+        };
+    }
+}
+
 /// Copies all dynamic library files from source directory to destination.
 /// Only copies files with library extensions (.dylib, .so, .so.*, .dll).
 /// Preserves symlinks to avoid duplicating the same library multiple times.
@@ -635,10 +658,7 @@ impl EmbeddedManifest {
 
         // Feature enabled: collect pre-built binaries into runtime_dir,
         // then generate include_bytes! for all files.
-        let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
-        let workspace_root = manifest_dir
-            .parent()
-            .expect("CARGO_MANIFEST_DIR has no parent");
+        let workspace_root = find_workspace_root();
 
         fs::create_dir_all(&self.runtime_dir)
             .unwrap_or_else(|e| panic!("Failed to create runtime directory: {}", e));
@@ -646,13 +666,13 @@ impl EmbeddedManifest {
         let profile = env::var("PROFILE").unwrap();
 
         self.copy_prebuilt_binary(
-            workspace_root,
+            &workspace_root,
             "boxlite-shim",
             &profile,
             Self::find_prebuilt_shim,
         );
         self.copy_prebuilt_binary(
-            workspace_root,
+            &workspace_root,
             "boxlite-guest",
             &profile,
             Self::find_prebuilt_guest,
@@ -865,13 +885,12 @@ fn main() {
 ///
 /// If the binary isn't found, silently skips — runtime will compute the hash as fallback.
 fn compute_guest_hash(runtime_dir: &Path) {
-    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let profile = env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
 
     // Check source binary first (direct build output) to avoid stale OUT_DIR copies.
-    let workspace_root = manifest_dir.parent().unwrap_or(&manifest_dir);
+    let workspace_root = find_workspace_root();
     let guest_path =
-        EmbeddedManifest::find_prebuilt_guest(workspace_root, &profile).or_else(|| {
+        EmbeddedManifest::find_prebuilt_guest(&workspace_root, &profile).or_else(|| {
             // Fallback: OUT_DIR copy (for prebuilt/CI mode where source isn't available)
             let p = runtime_dir.join("boxlite-guest");
             p.is_file().then_some(p)
