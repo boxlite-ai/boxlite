@@ -34,6 +34,19 @@ describe("SkillBox constructor defaults", { timeout: 120_000 }, () => {
     expect(box.guiHttpPort).toBe(8080);
     expect(box.guiHttpsPort).toBe(8443);
   });
+
+  test("allowNet and secrets are forwarded to SimpleBox options", () => {
+    const box = new SkillBox({
+      oauthToken: "tok",
+      allowNet: ["example.com"],
+      secrets: [{ name: "api", value: "secret", hosts: ["example.com"] }],
+    });
+    const opts = (box as any)._boxOpts;
+    expect(opts.allowNet).toEqual(["example.com"]);
+    expect(opts.secrets).toEqual([
+      { name: "api", value: "secret", hosts: ["example.com"] },
+    ]);
+  });
 });
 
 describe("SkillBox OAuth token handling", { timeout: 120_000 }, () => {

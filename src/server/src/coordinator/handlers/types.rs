@@ -164,11 +164,26 @@ pub struct CreateBoxRequest {
     #[serde(default)]
     pub network: Option<String>,
     #[serde(default)]
+    pub allow_net: Option<Vec<String>>,
+    #[serde(default)]
+    pub secrets: Option<Vec<CreateBoxSecret>>,
+    #[serde(default)]
     pub auto_remove: Option<bool>,
     #[serde(default)]
     pub detach: Option<bool>,
     #[serde(default)]
     pub security: Option<SecurityPreset>,
+}
+
+/// Secret substitution rule for outbound HTTP(S) requests.
+#[derive(Debug, Deserialize, Serialize, ToSchema)]
+pub struct CreateBoxSecret {
+    pub name: String,
+    pub value: String,
+    #[serde(default)]
+    pub hosts: Vec<String>,
+    #[serde(default)]
+    pub placeholder: Option<String>,
 }
 
 /// Host-to-guest filesystem mount.
@@ -653,6 +668,12 @@ mod tests {
             "volumes": [{"host_path": "/tmp", "guest_path": "/mnt", "read_only": true}],
             "ports": [{"guest_port": 8080, "protocol": "tcp"}],
             "network": "enabled",
+            "allow_net": ["api.openai.com"],
+            "secrets": [{
+                "name": "openai",
+                "value": "sk-test",
+                "hosts": ["api.openai.com"]
+            }],
             "auto_remove": false,
             "detach": true,
             "security": "maximum"
@@ -663,6 +684,9 @@ mod tests {
         assert_eq!(req.volumes.as_ref().unwrap().len(), 1);
         assert!(req.volumes.as_ref().unwrap()[0].read_only);
         assert_eq!(req.ports.as_ref().unwrap()[0].guest_port, 8080);
+        assert_eq!(req.allow_net, Some(vec!["api.openai.com".into()]));
+        assert_eq!(req.secrets.as_ref().map(Vec::len), Some(1));
+        assert_eq!(req.secrets.as_ref().unwrap()[0].name, "openai");
         assert!(matches!(req.security, Some(SecurityPreset::Maximum)));
     }
 
@@ -675,6 +699,8 @@ mod tests {
         assert!(req.memory_mib.is_none());
         assert!(req.volumes.is_none());
         assert!(req.ports.is_none());
+        assert!(req.allow_net.is_none());
+        assert!(req.secrets.is_none());
         assert!(req.security.is_none());
         assert!(req.auto_remove.is_none());
         assert!(req.detach.is_none());

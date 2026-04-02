@@ -503,6 +503,9 @@ pub struct BoxOptions {
     /// Network isolation mode
     pub network: NetworkSpec,
 
+    /// Outbound HTTP(S) secret substitution rules
+    pub secrets: Vec<Secret>,
+
     /// Port mappings
     pub ports: Vec<PortSpec>,
 
@@ -608,10 +611,25 @@ Network isolation options.
 
 ```rust
 pub enum NetworkSpec {
-    /// Isolated network with gvproxy (default)
-    Isolated,
-    // Host,    // Future: share host network
-    // Custom,  // Future: custom network config
+    Enabled {
+        allow_net: Vec<String>, // empty = full outbound access
+    },
+    Disabled,
+}
+```
+
+`allow_net` supports exact hosts, wildcard hosts, IPs, and CIDRs. `Disabled` removes the guest network interface entirely.
+
+### Secret
+
+Outbound HTTP(S) secret substitution rule.
+
+```rust
+pub struct Secret {
+    pub name: String,
+    pub hosts: Vec<String>,
+    pub placeholder: String, // default: <BOXLITE_SECRET:{name}>
+    pub value: String,
 }
 ```
 

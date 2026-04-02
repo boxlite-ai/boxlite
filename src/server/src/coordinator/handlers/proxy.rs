@@ -138,6 +138,37 @@ fn proto_to_rest(resp: proto::BoxResponse) -> RestBoxResponse {
     }
 }
 
+fn create_box_proto_request(req: CreateBoxRequest) -> proto::CreateBoxRequest {
+    proto::CreateBoxRequest {
+        name: req.name,
+        image: req.image,
+        rootfs_path: req.rootfs_path,
+        cpus: req.cpus.map(|c| c as u32),
+        memory_mib: req.memory_mib,
+        disk_size_gb: req.disk_size_gb,
+        working_dir: req.working_dir,
+        env: req.env.unwrap_or_default(),
+        entrypoint: req.entrypoint.unwrap_or_default(),
+        cmd: req.cmd.unwrap_or_default(),
+        user: req.user,
+        auto_remove: req.auto_remove.unwrap_or(false),
+        detach: req.detach.unwrap_or(true),
+        network: req.network,
+        allow_net: req.allow_net.unwrap_or_default(),
+        secrets: req
+            .secrets
+            .unwrap_or_default()
+            .into_iter()
+            .map(|secret| proto::CreateBoxSecret {
+                name: secret.name,
+                value: secret.value,
+                hosts: secret.hosts,
+                placeholder: secret.placeholder,
+            })
+            .collect(),
+    }
+}
+
 // ============================================================================
 // Auth, Config (local)
 // ============================================================================
@@ -249,21 +280,7 @@ pub async fn create_box(
         Err(resp) => return resp,
     };
 
-    let grpc_req = proto::CreateBoxRequest {
-        name: req.name,
-        image: req.image,
-        rootfs_path: req.rootfs_path,
-        cpus: req.cpus.map(|c| c as u32),
-        memory_mib: req.memory_mib,
-        disk_size_gb: req.disk_size_gb,
-        working_dir: req.working_dir,
-        env: req.env.unwrap_or_default(),
-        entrypoint: req.entrypoint.unwrap_or_default(),
-        cmd: req.cmd.unwrap_or_default(),
-        user: req.user,
-        auto_remove: req.auto_remove.unwrap_or(false),
-        detach: req.detach.unwrap_or(true),
-    };
+    let grpc_req = create_box_proto_request(req);
 
     match client.create_box(grpc_req).await {
         Ok(resp) => {
@@ -1850,6 +1867,8 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
 
+    use crate::coordinator::handlers::types::CreateBoxSecret;
+
     #[test]
     fn test_proto_to_rest_full_fields() {
         let proto_resp = proto::BoxResponse {
@@ -1909,5 +1928,42 @@ mod tests {
         };
         let rest = proto_to_rest(proto_resp);
         assert!(rest.labels.is_empty());
+    }
+
+    #[test]
+    fn test_create_box_proto_request_maps_network_and_secrets() {
+        let req = CreateBoxRequest {
+            name: Some("test-box".into()),
+            image: Some("alpine:latest".into()),
+            rootfs_path: None,
+            cpus: Some(2),
+            memory_mib: Some(512),
+            disk_size_gb: None,
+            working_dir: Some("/workspace".into()),
+            env: Some(HashMap::from([("FOO".into(), "bar".into())])),
+            entrypoint: Some(vec!["/bin/sh".into()]),
+            cmd: Some(vec!["-lc".into(), "echo hi".into()]),
+            user: Some("1000:1000".into()),
+            volumes: None,
+            ports: None,
+            network: Some("enabled".into()),
+            allow_net: Some(vec!["api.openai.com".into()]),
+            secrets: Some(vec![CreateBoxSecret {
+                name: "openai".into(),
+                value: "sk-test".into(),
+                hosts: vec!["api.openai.com".into()],
+                placeholder: None,
+            }]),
+            auto_remove: Some(false),
+            detach: Some(true),
+            security: None,
+        };
+
+        let proto_req = create_box_proto_request(req);
+        assert_eq!(proto_req.network.as_deref(), Some("enabled"));
+        assert_eq!(proto_req.allow_net, vec!["api.openai.com"]);
+        assert_eq!(proto_req.secrets.len(), 1);
+        assert_eq!(proto_req.secrets[0].name, "openai");
+        assert_eq!(proto_req.secrets[0].placeholder, None);
     }
 }

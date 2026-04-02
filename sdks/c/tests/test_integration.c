@@ -22,7 +22,8 @@ void test_multiple_boxes() {
 
   const char *options =
       "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":\"Isolated\",\"ports\":[],\"auto_remove\":false}";
+      "\"network\":{\"Enabled\":{\"allow_net\":[]}},\"ports\":[],\"auto_"
+      "remove\":false}";
 
   // Create 3 boxes
   CBoxHandle *box1 = NULL;
@@ -99,7 +100,8 @@ void test_reattach_box() {
   // Create box and get ID
   const char *options =
       "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":\"Isolated\",\"ports\":[],\"auto_remove\":false}";
+      "\"network\":{\"Enabled\":{\"allow_net\":[]}},\"ports\":[],\"auto_"
+      "remove\":false}";
   CBoxHandle *box1 = NULL;
   code = boxlite_create_box(runtime, options, &box1, &error);
   assert(code == Ok);
@@ -158,7 +160,8 @@ void test_runtime_metrics() {
   // Create a box
   const char *options =
       "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":\"Isolated\",\"ports\":[],\"auto_remove\":false}";
+      "\"network\":{\"Enabled\":{\"allow_net\":[]}},\"ports\":[],\"auto_"
+      "remove\":false}";
   CBoxHandle *box = NULL;
   code = boxlite_create_box(runtime, options, &box, &error);
   assert(code == Ok);
@@ -196,7 +199,8 @@ void test_box_metrics() {
 
   const char *options =
       "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":\"Isolated\",\"ports\":[],\"auto_remove\":false}";
+      "\"network\":{\"Enabled\":{\"allow_net\":[]}},\"ports\":[],\"auto_"
+      "remove\":false}";
   CBoxHandle *box = NULL;
   code = boxlite_create_box(runtime, options, &box, &error);
   assert(code == Ok);
@@ -250,7 +254,8 @@ void test_concurrent_execution() {
 
   const char *options =
       "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":\"Isolated\",\"ports\":[],\"auto_remove\":false}";
+      "\"network\":{\"Enabled\":{\"allow_net\":[]}},\"ports\":[],\"auto_"
+      "remove\":false}";
   CBoxHandle *box = NULL;
   code = boxlite_create_box(runtime, options, &box, &error);
   assert(code == Ok);
@@ -296,7 +301,8 @@ void test_shutdown_with_boxes() {
   // Create multiple boxes
   const char *options =
       "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":\"Isolated\",\"ports\":[],\"auto_remove\":false}";
+      "\"network\":{\"Enabled\":{\"allow_net\":[]}},\"ports\":[],\"auto_"
+      "remove\":false}";
   CBoxHandle *box1 = NULL;
   code = boxlite_create_box(runtime, options, &box1, &error);
   assert(code == Ok);
@@ -328,7 +334,8 @@ void test_box_prefix_lookup() {
 
   const char *options =
       "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":\"Isolated\",\"ports\":[],\"auto_remove\":false}";
+      "\"network\":{\"Enabled\":{\"allow_net\":[]}},\"ports\":[],\"auto_"
+      "remove\":false}";
   CBoxHandle *box = NULL;
   code = boxlite_create_box(runtime, options, &box, &error);
   assert(code == Ok);
@@ -374,6 +381,72 @@ void test_box_prefix_lookup() {
   boxlite_runtime_free(runtime);
 }
 
+void test_allow_net_json_config() {
+  printf("\nTEST: allow_net JSON config\n");
+
+  CBoxliteRuntime *runtime = NULL;
+  CBoxliteError error = {0};
+  const char *temp_dir = "/tmp/boxlite-test-integration-allow-net";
+  BoxliteErrorCode code = boxlite_runtime_new(temp_dir, NULL, &runtime, &error);
+  assert(code == Ok);
+  assert(runtime != NULL);
+
+  const char *options =
+      "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
+      "\"network\":{\"Enabled\":{\"allow_net\":[\"example.com\"]}},"
+      "\"ports\":[],\"auto_remove\":false}";
+  CBoxHandle *box = NULL;
+  code = boxlite_create_box(runtime, options, &box, &error);
+  assert(code == Ok);
+  assert(box != NULL);
+
+  const char *args = "[\"-c\", \"wget -q -O - http://example.com >/dev/null\"]";
+  int exit_code = 0;
+  code = boxlite_execute(box, "/bin/sh", args, NULL, NULL, &exit_code, &error);
+  assert(code == Ok);
+  assert(exit_code == 0);
+  printf("  ✓ allow_net JSON accepted and outbound request succeeded\n");
+
+  char *id = boxlite_box_id(box);
+  boxlite_remove(runtime, id, 1, &error);
+  boxlite_free_string(id);
+  boxlite_runtime_free(runtime);
+}
+
+void test_secrets_json_config() {
+  printf("\nTEST: secrets JSON config\n");
+
+  CBoxliteRuntime *runtime = NULL;
+  CBoxliteError error = {0};
+  const char *temp_dir = "/tmp/boxlite-test-integration-secrets";
+  BoxliteErrorCode code = boxlite_runtime_new(temp_dir, NULL, &runtime, &error);
+  assert(code == Ok);
+  assert(runtime != NULL);
+
+  const char *options =
+      "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
+      "\"network\":{\"Enabled\":{\"allow_net\":[]}},\"ports\":[],"
+      "\"secrets\":[{\"name\":\"openai\",\"value\":\"sk-test\","
+      "\"hosts\":[\"api.openai.com\"]}],\"auto_remove\":false}";
+  CBoxHandle *box = NULL;
+  code = boxlite_create_box(runtime, options, &box, &error);
+  assert(code == Ok);
+  assert(box != NULL);
+
+  const char *args = "[\"-c\", \"test \\\"$BOXLITE_SECRET_OPENAI\\\" = "
+                     "\\\"<BOXLITE_SECRET:openai>\\\"\"]";
+  int exit_code = 0;
+  code = boxlite_execute(box, "/bin/sh", args, NULL, NULL, &exit_code, &error);
+  assert(code == Ok);
+  assert(exit_code == 0);
+  printf("  ✓ secrets JSON accepted and placeholder env var is available\n");
+
+  char *id = boxlite_box_id(box);
+  boxlite_remove(runtime, id, 1, &error);
+  boxlite_free_string(id);
+  boxlite_runtime_free(runtime);
+}
+
 int main() {
   printf("═══════════════════════════════════════\n");
   printf("  BoxLite C SDK - Integration Tests\n");
@@ -386,9 +459,11 @@ int main() {
   test_concurrent_execution();
   test_shutdown_with_boxes();
   test_box_prefix_lookup();
+  test_allow_net_json_config();
+  test_secrets_json_config();
 
   printf("\n═══════════════════════════════════════\n");
-  printf("  ✅ ALL TESTS PASSED (%d tests)\n", 7);
+  printf("  ✅ ALL TESTS PASSED (%d tests)\n", 9);
   printf("═══════════════════════════════════════\n");
 
   return 0;

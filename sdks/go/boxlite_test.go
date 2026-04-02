@@ -76,6 +76,8 @@ func TestBoxOptions(t *testing.T) {
 	WithWorkDir("/app")(cfg)
 	WithEntrypoint("/bin/sh")(cfg)
 	WithCmd("-c", "echo hi")(cfg)
+	WithAllowNet("example.com", "*.openai.com")(cfg)
+	WithSecret(Secret{Name: "openai", Value: "sk-test"})(cfg)
 
 	if cfg.name != "test-box" {
 		t.Errorf("name: got %q", cfg.name)
@@ -100,6 +102,18 @@ func TestBoxOptions(t *testing.T) {
 	}
 	if cfg.workDir != "/app" {
 		t.Errorf("workDir: got %q", cfg.workDir)
+	}
+	if cfg.networkMode != networkModeEnabled {
+		t.Errorf("networkMode: got %q", cfg.networkMode)
+	}
+	if len(cfg.allowNet) != 2 {
+		t.Errorf("allowNet: got %v", cfg.allowNet)
+	}
+	if len(cfg.secrets) != 1 {
+		t.Fatalf("secrets: got %d", len(cfg.secrets))
+	}
+	if cfg.secrets[0].Name != "openai" {
+		t.Errorf("secret name: got %q", cfg.secrets[0].Name)
 	}
 }
 
@@ -152,8 +166,12 @@ func TestBuildOptionsJSON(t *testing.T) {
 	if wire.WorkDir != "/work" {
 		t.Errorf("WorkDir: got %q", wire.WorkDir)
 	}
-	if wire.Network != "Isolated" {
-		t.Errorf("Network: got %q", wire.Network)
+	network, ok := wire.Network.(wireEnabledNetwork)
+	if !ok {
+		t.Fatalf("Network type: got %T", wire.Network)
+	}
+	if len(network.Enabled.AllowNet) != 0 {
+		t.Errorf("AllowNet should default to empty, got %v", network.Enabled.AllowNet)
 	}
 }
 
@@ -175,6 +193,9 @@ func TestBuildOptionsJSON_Defaults(t *testing.T) {
 	}
 	if wire.Ports == nil {
 		t.Error("Ports should be non-nil empty slice")
+	}
+	if wire.Secrets == nil {
+		t.Error("Secrets should be non-nil empty slice")
 	}
 }
 
@@ -284,5 +305,61 @@ func TestBuildOptionsJSON_AutoRemoveDetach(t *testing.T) {
 	}
 	if wire.Detach == nil || *wire.Detach != true {
 		t.Error("Detach should be true in wire")
+	}
+}
+
+func TestWithNetworkDisabled(t *testing.T) {
+	cfg := &boxConfig{}
+	WithAllowNet("example.com")(cfg)
+	WithNetworkDisabled()(cfg)
+
+	if cfg.networkMode != networkModeDisabled {
+		t.Errorf("networkMode: got %q", cfg.networkMode)
+	}
+	if len(cfg.allowNet) != 0 {
+		t.Errorf("allowNet should be cleared, got %v", cfg.allowNet)
+	}
+}
+
+func TestBuildOptionsJSON_AllowNetAndSecrets(t *testing.T) {
+	cfg := &boxConfig{}
+	WithAllowNet("example.com", "10.0.0.0/8")(cfg)
+	WithSecret(Secret{
+		Name:  "openai",
+		Value: "sk-secret",
+		Hosts: []string{"api.openai.com"},
+	})(cfg)
+
+	wire := buildOptionsJSON("python:slim", cfg)
+
+	network, ok := wire.Network.(wireEnabledNetwork)
+	if !ok {
+		t.Fatalf("Network type: got %T", wire.Network)
+	}
+	if len(network.Enabled.AllowNet) != 2 {
+		t.Fatalf("AllowNet length: got %d", len(network.Enabled.AllowNet))
+	}
+	if network.Enabled.AllowNet[0] != "example.com" {
+		t.Errorf("AllowNet[0]: got %q", network.Enabled.AllowNet[0])
+	}
+	if len(wire.Secrets) != 1 {
+		t.Fatalf("Secrets length: got %d", len(wire.Secrets))
+	}
+	if wire.Secrets[0].Placeholder != "<BOXLITE_SECRET:openai>" {
+		t.Errorf("Placeholder: got %q", wire.Secrets[0].Placeholder)
+	}
+}
+
+func TestBuildOptionsJSON_DisabledNetwork(t *testing.T) {
+	cfg := &boxConfig{}
+	WithNetworkDisabled()(cfg)
+
+	wire := buildOptionsJSON("alpine:latest", cfg)
+	network, ok := wire.Network.(string)
+	if !ok {
+		t.Fatalf("Network type: got %T", wire.Network)
+	}
+	if network != "Disabled" {
+		t.Errorf("Network: got %q", network)
 	}
 }

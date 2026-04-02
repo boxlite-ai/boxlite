@@ -11,7 +11,8 @@ use tonic::{Request, Response, Status, Streaming};
 
 use boxlite::{
     BoxArchive, BoxCommand, BoxInfo, BoxOptions, BoxliteRuntime, CloneOptions, CopyOptions,
-    ExecStdin, Execution, ExportOptions, LiteBox, RootfsSpec, SnapshotInfo, SnapshotOptions,
+    ExecStdin, Execution, ExportOptions, LiteBox, NetworkSpec, RootfsSpec, Secret, SnapshotInfo,
+    SnapshotOptions,
 };
 
 use crate::proto;
@@ -122,6 +123,25 @@ fn build_box_options(req: &proto::CreateBoxRequest) -> BoxOptions {
         .iter()
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
+    let network = match req.network.as_deref() {
+        Some(mode) if mode.eq_ignore_ascii_case("disabled") => NetworkSpec::Disabled,
+        _ => NetworkSpec::Enabled {
+            allow_net: req.allow_net.clone(),
+        },
+    };
+    let secrets = req
+        .secrets
+        .iter()
+        .map(|secret| Secret {
+            name: secret.name.clone(),
+            value: secret.value.clone(),
+            hosts: secret.hosts.clone(),
+            placeholder: secret
+                .placeholder
+                .clone()
+                .unwrap_or_else(|| format!("<BOXLITE_SECRET:{}>", secret.name)),
+        })
+        .collect();
     BoxOptions {
         rootfs,
         cpus: req.cpus.map(|c| c as u8),
@@ -129,6 +149,7 @@ fn build_box_options(req: &proto::CreateBoxRequest) -> BoxOptions {
         disk_size_gb: req.disk_size_gb,
         working_dir: req.working_dir.clone(),
         env,
+        network,
         entrypoint: if req.entrypoint.is_empty() {
             None
         } else {
@@ -140,6 +161,7 @@ fn build_box_options(req: &proto::CreateBoxRequest) -> BoxOptions {
             Some(req.cmd.clone())
         },
         user: req.user.clone(),
+        secrets,
         auto_remove: req.auto_remove,
         detach: req.detach,
         ..Default::default()
@@ -960,6 +982,69 @@ fn tar_directory(dir: &std::path::Path) -> Result<Vec<u8>, std::io::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn test_build_box_options_maps_network_and_secrets() {
+        let req = proto::CreateBoxRequest {
+            name: Some("test-box".into()),
+            image: Some("alpine:latest".into()),
+            rootfs_path: None,
+            cpus: Some(2),
+            memory_mib: Some(512),
+            disk_size_gb: Some(10),
+            working_dir: Some("/workspace".into()),
+            env: HashMap::from([("FOO".into(), "bar".into())]),
+            entrypoint: vec!["/bin/sh".into()],
+            cmd: vec!["-lc".into(), "echo hi".into()],
+            user: Some("1000:1000".into()),
+            auto_remove: true,
+            detach: false,
+            network: Some("enabled".into()),
+            allow_net: vec!["api.openai.com".into()],
+            secrets: vec![proto::CreateBoxSecret {
+                name: "openai".into(),
+                value: "sk-test".into(),
+                hosts: vec!["api.openai.com".into()],
+                placeholder: None,
+            }],
+        };
+
+        let opts = build_box_options(&req);
+        assert!(matches!(
+            opts.network,
+            NetworkSpec::Enabled { ref allow_net } if allow_net == &vec!["api.openai.com".to_string()]
+        ));
+        assert_eq!(opts.secrets.len(), 1);
+        assert_eq!(opts.secrets[0].placeholder, "<BOXLITE_SECRET:openai>");
+        assert_eq!(opts.secrets[0].hosts, vec!["api.openai.com"]);
+    }
+
+    #[test]
+    fn test_build_box_options_maps_disabled_network() {
+        let req = proto::CreateBoxRequest {
+            name: None,
+            image: Some("alpine:latest".into()),
+            rootfs_path: None,
+            cpus: None,
+            memory_mib: None,
+            disk_size_gb: None,
+            working_dir: None,
+            env: HashMap::new(),
+            entrypoint: Vec::new(),
+            cmd: Vec::new(),
+            user: None,
+            auto_remove: false,
+            detach: false,
+            network: Some("disabled".into()),
+            allow_net: vec!["example.com".into()],
+            secrets: Vec::new(),
+        };
+
+        let opts = build_box_options(&req);
+        assert!(matches!(opts.network, NetworkSpec::Disabled));
+        assert!(opts.secrets.is_empty());
+    }
 
     #[test]
     fn test_snapshot_info_to_proto() {

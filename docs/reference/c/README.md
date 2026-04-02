@@ -112,7 +112,7 @@ int main() {
     // Create box with JSON configuration
     const char* options = "{"
         "\"rootfs\":{\"Image\":\"alpine:3.19\"},"
-        "\"env\":[],\"volumes\":[],\"network\":\"Isolated\",\"ports\":[]"
+        "\"env\":[],\"volumes\":[],\"network\":{\"Enabled\":{\"allow_net\":[]}},\"ports\":[]"
     "}";
 
     if (boxlite_create_box(runtime, options, &box, &error) != Ok) {
@@ -511,7 +511,7 @@ BoxliteErrorCode boxlite_create_box(
 // Minimal options (required fields)
 const char* options = "{"
     "\"rootfs\":{\"Image\":\"alpine:3.19\"},"
-    "\"env\":[],\"volumes\":[],\"network\":\"Isolated\",\"ports\":[]"
+    "\"env\":[],\"volumes\":[],\"network\":{\"Enabled\":{\"allow_net\":[]}},\"ports\":[]"
 "}";
 
 CBoxHandle* box = NULL;
@@ -918,7 +918,7 @@ Safe to call with NULL.
       "readonly": false
     }
   ],
-  "network": "Isolated",
+  "network": {"Enabled": {"allow_net": []}},
   "ports": [
     {
       "host_port": 8080,
@@ -939,7 +939,7 @@ All BoxOptions JSON **must include** these fields:
   "rootfs": {"Image": "..."},
   "env": [],
   "volumes": [],
-  "network": "Isolated",
+  "network": {"Enabled": {"allow_net": []}},
   "ports": []
 }
 ```
@@ -955,9 +955,25 @@ All BoxOptions JSON **must include** these fields:
 | `working_dir` | string | null | Working directory |
 | `env` | array | Required | Environment variables as `[key, value]` pairs |
 | `volumes` | array | Required | Volume mounts |
-| `network` | string | Required | Network mode: `"Isolated"` |
+| `network` | object or string | Required | `{"Enabled":{"allow_net":[]}}` for enabled networking, or `"Disabled"` |
 | `ports` | array | Required | Port mappings |
+| `secrets` | array | optional | Outbound HTTP(S) secret substitution rules |
 | `auto_remove` | boolean | true | Remove box when stopped |
+
+#### Secrets Example
+
+```json
+{
+  "secrets": [
+    {
+      "name": "openai",
+      "value": "sk-...",
+      "hosts": ["api.openai.com"],
+      "placeholder": "<BOXLITE_SECRET:openai>"
+    }
+  ]
+}
+```
 
 ### RootfsSpec
 

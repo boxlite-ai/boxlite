@@ -64,7 +64,8 @@ static void setup_box(const char *test_name, CBoxliteRuntime **out_runtime,
 
   const char *options =
       "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":\"Isolated\",\"ports\":[],\"auto_remove\":false}";
+      "\"network\":{\"Enabled\":{\"allow_net\":[]}},\"ports\":[],\"auto_"
+      "remove\":false}";
 
   code = boxlite_create_box(*out_runtime, options, out_box, &error);
   if (code != Ok) {

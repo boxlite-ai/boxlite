@@ -87,7 +87,10 @@ Configuration options for creating a box.
 | `working_dir` | `str` | `"/root"` | Working directory inside container |
 | `env` | `List[Tuple[str, str]]` | `[]` | Environment variables as (key, value) pairs |
 | `volumes` | `List[Tuple[str, str, str]]` | `[]` | Volume mounts as (host_path, guest_path, mode) |
+| `network` | `str \| None` | `"enabled"` | Network mode: `"enabled"` or `"disabled"` |
+| `allow_net` | `List[str]` | `[]` | Outbound allowlist when network is enabled |
 | `ports` | `List[Tuple[int, int, str]]` | `[]` | Port forwarding as (host_port, guest_port, protocol) |
+| `secrets` | `List[Secret]` | `[]` | Outbound HTTP(S) secret substitution rules |
 | `auto_remove` | `bool` | `True` | Auto cleanup when stopped |
 | `detach` | `bool` | `False` | Survive parent process exit |
 
@@ -107,6 +110,21 @@ ports=[
     (8080, 80, "tcp"),    # HTTP
     (5432, 5432, "tcp"),  # PostgreSQL
     (53, 53, "udp"),      # DNS
+]
+```
+
+#### Secret Format
+
+```python
+from boxlite import Secret
+
+secrets=[
+    Secret(
+        name="openai",
+        value="sk-...",
+        hosts=["api.openai.com"],
+        # placeholder defaults to "<BOXLITE_SECRET:openai>"
+    )
 ]
 ```
 
@@ -293,7 +311,7 @@ SimpleBox(
 | `runtime` | `Boxlite` | Global default | Runtime instance |
 | `name` | `str` | None | Optional unique name |
 | `auto_remove` | `bool` | `True` | Remove box when stopped |
-| `**kwargs` | | | Additional options: `env`, `volumes`, `ports`, `working_dir` |
+| `**kwargs` | | | Additional options: `env`, `volumes`, `ports`, `working_dir`, `network`, `allow_net`, `secrets` |
 
 #### Properties
 

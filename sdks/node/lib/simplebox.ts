@@ -60,6 +60,23 @@ export interface SecurityOptions {
   closeFds?: boolean;
 }
 
+/**
+ * Secret substitution rule for outbound HTTPS requests.
+ */
+export interface Secret {
+  /** Human-readable name for the secret. */
+  name: string;
+
+  /** Real secret value. Never enters the guest VM. */
+  value: string;
+
+  /** Matching hosts for secret substitution. */
+  hosts?: string[];
+
+  /** Placeholder exposed to guest code. */
+  placeholder?: string;
+}
+
 const MAX_SAFE_U64_NUMBER = Number.MAX_SAFE_INTEGER;
 
 function normalizeU64Limit(
@@ -179,6 +196,15 @@ export interface SimpleBoxOptions {
     guestPort: number;
     protocol?: string;
   }>;
+
+  /** Network mode. */
+  network?: "enabled" | "disabled";
+
+  /** Outbound allowlist when network is enabled. */
+  allowNet?: string[];
+
+  /** Secrets to inject into outbound HTTPS requests. */
+  secrets?: Secret[];
 
   /**
    * Override image ENTRYPOINT directive.
@@ -305,11 +331,14 @@ export class SimpleBox {
         ? Object.entries(options.env).map(([key, value]) => ({ key, value }))
         : undefined,
       volumes: options.volumes,
+      network: options.network,
+      allowNet: options.allowNet,
       ports: options.ports,
       entrypoint: options.entrypoint,
       cmd: options.cmd,
       user: options.user,
       security,
+      secrets: options.secrets,
     };
 
     this._name = options.name;

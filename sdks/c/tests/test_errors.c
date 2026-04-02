@@ -157,7 +157,8 @@ void test_error_recovery() {
   // Second attempt: create a real box (should succeed)
   const char *options =
       "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":\"Isolated\",\"ports\":[],\"auto_remove\":false}";
+      "\"network\":{\"Enabled\":{\"allow_net\":[]}},\"ports\":[],\"auto_"
+      "remove\":false}";
   box = NULL;
   code = boxlite_create_box(runtime, options, &box, &error);
   assert(code == Ok);
@@ -203,7 +204,8 @@ void test_multiple_errors() {
   // Success: Normal operation
   const char *options =
       "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":\"Isolated\",\"ports\":[],\"auto_remove\":false}";
+      "\"network\":{\"Enabled\":{\"allow_net\":[]}},\"ports\":[],\"auto_"
+      "remove\":false}";
   box = NULL;
   code = boxlite_create_box(runtime2, options, &box, &error);
   assert(code == Ok);

@@ -106,12 +106,21 @@ const box = new SimpleBox({
   name: 'my-box',    // Optional name
   autoRemove: true,  // Auto-remove on stop (default: true)
   workingDir: '/app',
+  network: 'enabled',
+  allowNet: ['api.openai.com'],
   env: { FOO: 'bar' },
   volumes: [
     { hostPath: '/tmp/data', guestPath: '/data', readOnly: false }
   ],
   ports: [
     { hostPort: 8080, guestPort: 80 }
+  ],
+  secrets: [
+    {
+      name: 'openai',
+      value: process.env.OPENAI_API_KEY!,
+      hosts: ['api.openai.com'],
+    }
   ]
 });
 
@@ -356,6 +365,7 @@ import {
   type BrowserBoxOptions,
   type ComputerBoxOptions,
   type InteractiveBoxOptions,
+  type Secret,
   type ExecResult,
   type Screenshot,
   type BrowserType

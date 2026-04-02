@@ -75,7 +75,8 @@ void test_box_id_cleanup() {
 
   const char *options =
       "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":\"Isolated\",\"ports\":[],\"auto_remove\":false}";
+      "\"network\":{\"Enabled\":{\"allow_net\":[]}},\"ports\":[],\"auto_"
+      "remove\":false}";
 
   for (int i = 0; i < 5; i++) {
     CBoxHandle *box = NULL;
@@ -108,7 +109,8 @@ void test_json_output_cleanup() {
 
   const char *options =
       "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":\"Isolated\",\"ports\":[],\"auto_remove\":false}";
+      "\"network\":{\"Enabled\":{\"allow_net\":[]}},\"ports\":[],\"auto_"
+      "remove\":false}";
   CBoxHandle *box = NULL;
   code = boxlite_create_box(runtime, options, &box, &error);
   assert(code == Ok);
@@ -224,7 +226,8 @@ void test_mixed_operations() {
 
   const char *options =
       "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":\"Isolated\",\"ports\":[],\"auto_remove\":false}";
+      "\"network\":{\"Enabled\":{\"allow_net\":[]}},\"ports\":[],\"auto_"
+      "remove\":false}";
 
   for (int i = 0; i < 3; i++) {
     // Create box

@@ -28,7 +28,7 @@ int main() {
     }
 
     // Create a few boxes
-    const char* opts = "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],\"network\":\"Isolated\",\"ports\":[]}";
+    const char* opts = "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],\"network\":{\"Enabled\":{\"allow_net\":[]}},\"ports\":[]}";
 
     CBoxHandle* boxes[3];
     for (int i = 0; i < 3; i++) {

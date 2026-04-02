@@ -33,6 +33,7 @@ export {
   SimpleBox,
   type SimpleBoxOptions,
   type SecurityOptions,
+  type Secret,
 } from "./simplebox.js";
 export { type ExecResult } from "./exec.js";
 export { BoxliteError, ExecError, TimeoutError, ParseError } from "./errors.js";

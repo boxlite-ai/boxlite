@@ -23,6 +23,7 @@ install packages, create files, build up environment state, then come back later
 - **Hardware isolation**: each Box runs its own kernel — not just namespaces or containers.
 - **No daemon**: embed as a library, no root, no background service.
 - **OCI compatible**: use standard Docker images (`python:slim`, `node:alpine`, `alpine:latest`).
+- **Network policy + secret placeholders**: restrict outbound access with `allow_net` and inject real HTTP(S) secrets from host-side `secrets`.
 - **Local-first**: runs entirely on your machine — no cloud account needed. Scale out when ready.
 
 ## Python Quick Start

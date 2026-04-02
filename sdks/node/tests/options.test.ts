@@ -5,7 +5,7 @@
  */
 
 import { describe, test, expect } from "vitest";
-import type { SimpleBoxOptions } from "../lib/simplebox.js";
+import type { Secret, SimpleBoxOptions } from "../lib/simplebox.js";
 
 describe("SimpleBoxOptions", () => {
   test("cmd defaults to undefined", () => {
@@ -130,5 +130,50 @@ describe("SimpleBoxOptions", () => {
     expect(opts.diskSizeGb).toBe(20);
     expect(opts.memoryMib).toBe(1024);
     expect(opts.cpus).toBe(2);
+  });
+
+  test("accepts network allowlist", () => {
+    const opts: SimpleBoxOptions = {
+      network: "enabled",
+      allowNet: ["example.com", "*.openai.com"],
+    };
+
+    expect(opts.network).toBe("enabled");
+    expect(opts.allowNet).toEqual(["example.com", "*.openai.com"]);
+  });
+
+  test("accepts disabled network mode", () => {
+    const opts: SimpleBoxOptions = {
+      network: "disabled",
+    };
+
+    expect(opts.network).toBe("disabled");
+  });
+
+  test("accepts secrets", () => {
+    const secret: Secret = {
+      name: "openai",
+      value: "sk-test",
+      hosts: ["api.openai.com"],
+    };
+    const opts: SimpleBoxOptions = {
+      secrets: [secret],
+    };
+
+    expect(opts.secrets).toEqual([secret]);
+  });
+
+  test("accepts custom secret placeholder", () => {
+    const opts: SimpleBoxOptions = {
+      secrets: [
+        {
+          name: "anthropic",
+          value: "test-value",
+          placeholder: "<CUSTOM_SECRET>",
+        },
+      ],
+    };
+
+    expect(opts.secrets?.[0].placeholder).toBe("<CUSTOM_SECRET>");
   });
 });

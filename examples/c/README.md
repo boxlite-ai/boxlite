@@ -120,7 +120,7 @@ CBoxliteError error = {0};
 boxlite_runtime_new(NULL, NULL, &runtime, &error);
 
 const char* opts = "{\"rootfs\":{\"Image\":\"alpine:3.19\"},"
-                   "\"env\":[],\"volumes\":[],\"network\":\"Isolated\",\"ports\":[]}";
+                   "\"env\":[],\"volumes\":[],\"network\":{\"Enabled\":{\"allow_net\":[]}},\"ports\":[]}";
 boxlite_create_box(runtime, opts, &box, &error);
 
 // Execute with streaming callback

@@ -82,6 +82,16 @@ message CreateBoxRequest {
   optional string user = 11;
   bool auto_remove = 12;
   bool detach = 13;
+  optional string network = 14;
+  repeated string allow_net = 15;
+  repeated CreateBoxSecret secrets = 16;
+}
+
+message CreateBoxSecret {
+  string name = 1;
+  string value = 2;
+  repeated string hosts = 3;
+  optional string placeholder = 4;
 }
 
 message BoxResponse {
