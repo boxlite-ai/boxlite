@@ -13,6 +13,10 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+static const char *TEST_REGISTRIES =
+    "[\"docker.m.daocloud.io\",\"docker.xuanyuan.me\",\"docker.1ms.run\","
+    "\"docker.io\"]";
+
 static int remove_tree_entry(const char *path, const struct stat *statbuf,
                              int typeflag, struct FTW *ftwbuf) {
   (void)statbuf;
@@ -30,16 +34,24 @@ static void reset_test_home(const char *temp_dir) {
   assert(nftw(temp_dir, remove_tree_entry, 32, FTW_DEPTH | FTW_PHYS) == 0);
 }
 
+static CBoxliteRuntime *new_test_runtime(const char *temp_dir,
+                                         CBoxliteError *error) {
+  CBoxliteRuntime *runtime = NULL;
+  BoxliteErrorCode code =
+      boxlite_runtime_new(temp_dir, TEST_REGISTRIES, &runtime, error);
+  assert(code == Ok);
+  assert(runtime != NULL);
+  return runtime;
+}
+
 void test_multiple_boxes() {
   printf("\nTEST: Create and manage multiple boxes\n");
 
-  CBoxliteRuntime *runtime = NULL;
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-integration-multiple";
   reset_test_home(temp_dir);
-  BoxliteErrorCode code = boxlite_runtime_new(temp_dir, NULL, &runtime, &error);
-  assert(code == Ok);
-  assert(runtime != NULL);
+  CBoxliteRuntime *runtime = new_test_runtime(temp_dir, &error);
+  BoxliteErrorCode code = Ok;
 
   const char *options =
       "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
@@ -111,13 +123,11 @@ void test_multiple_boxes() {
 void test_reattach_box() {
   printf("\nTEST: Reattach to existing box\n");
 
-  CBoxliteRuntime *runtime = NULL;
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-integration-reattach";
   reset_test_home(temp_dir);
-  BoxliteErrorCode code = boxlite_runtime_new(temp_dir, NULL, &runtime, &error);
-  assert(code == Ok);
-  assert(runtime != NULL);
+  CBoxliteRuntime *runtime = new_test_runtime(temp_dir, &error);
+  BoxliteErrorCode code = Ok;
 
   // Create box and get ID
   const char *options =
@@ -164,13 +174,11 @@ void test_reattach_box() {
 void test_runtime_metrics() {
   printf("\nTEST: Runtime metrics\n");
 
-  CBoxliteRuntime *runtime = NULL;
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-integration-metrics";
   reset_test_home(temp_dir);
-  BoxliteErrorCode code = boxlite_runtime_new(temp_dir, NULL, &runtime, &error);
-  assert(code == Ok);
-  assert(runtime != NULL);
+  CBoxliteRuntime *runtime = new_test_runtime(temp_dir, &error);
+  BoxliteErrorCode code = Ok;
 
   // Get initial metrics
   char *json1 = NULL;
@@ -213,13 +221,11 @@ void test_runtime_metrics() {
 void test_box_metrics() {
   printf("\nTEST: Box metrics\n");
 
-  CBoxliteRuntime *runtime = NULL;
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-integration-boxmetrics";
   reset_test_home(temp_dir);
-  BoxliteErrorCode code = boxlite_runtime_new(temp_dir, NULL, &runtime, &error);
-  assert(code == Ok);
-  assert(runtime != NULL);
+  CBoxliteRuntime *runtime = new_test_runtime(temp_dir, &error);
+  BoxliteErrorCode code = Ok;
 
   const char *options =
       "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
@@ -269,13 +275,11 @@ void test_box_metrics() {
 void test_concurrent_execution() {
   printf("\nTEST: Concurrent command execution\n");
 
-  CBoxliteRuntime *runtime = NULL;
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-integration-concurrent";
   reset_test_home(temp_dir);
-  BoxliteErrorCode code = boxlite_runtime_new(temp_dir, NULL, &runtime, &error);
-  assert(code == Ok);
-  assert(runtime != NULL);
+  CBoxliteRuntime *runtime = new_test_runtime(temp_dir, &error);
+  BoxliteErrorCode code = Ok;
 
   const char *options =
       "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
@@ -316,13 +320,11 @@ void test_concurrent_execution() {
 void test_shutdown_with_boxes() {
   printf("\nTEST: Shutdown runtime with active boxes\n");
 
-  CBoxliteRuntime *runtime = NULL;
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-integration-shutdown";
   reset_test_home(temp_dir);
-  BoxliteErrorCode code = boxlite_runtime_new(temp_dir, NULL, &runtime, &error);
-  assert(code == Ok);
-  assert(runtime != NULL);
+  CBoxliteRuntime *runtime = new_test_runtime(temp_dir, &error);
+  BoxliteErrorCode code = Ok;
 
   // Create multiple boxes
   const char *options =
@@ -351,13 +353,11 @@ void test_shutdown_with_boxes() {
 void test_box_prefix_lookup() {
   printf("\nTEST: Box lookup by ID prefix\n");
 
-  CBoxliteRuntime *runtime = NULL;
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-integration-prefix";
   reset_test_home(temp_dir);
-  BoxliteErrorCode code = boxlite_runtime_new(temp_dir, NULL, &runtime, &error);
-  assert(code == Ok);
-  assert(runtime != NULL);
+  CBoxliteRuntime *runtime = new_test_runtime(temp_dir, &error);
+  BoxliteErrorCode code = Ok;
 
   const char *options =
       "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
@@ -411,13 +411,11 @@ void test_box_prefix_lookup() {
 void test_allow_net_json_config() {
   printf("\nTEST: allow_net JSON config\n");
 
-  CBoxliteRuntime *runtime = NULL;
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-integration-allow-net";
   reset_test_home(temp_dir);
-  BoxliteErrorCode code = boxlite_runtime_new(temp_dir, NULL, &runtime, &error);
-  assert(code == Ok);
-  assert(runtime != NULL);
+  CBoxliteRuntime *runtime = new_test_runtime(temp_dir, &error);
+  BoxliteErrorCode code = Ok;
 
   const char *options =
       "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
@@ -444,13 +442,11 @@ void test_allow_net_json_config() {
 void test_legacy_network_json_rejected() {
   printf("\nTEST: legacy network JSON is rejected\n");
 
-  CBoxliteRuntime *runtime = NULL;
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-integration-legacy-network";
   reset_test_home(temp_dir);
-  BoxliteErrorCode code = boxlite_runtime_new(temp_dir, NULL, &runtime, &error);
-  assert(code == Ok);
-  assert(runtime != NULL);
+  CBoxliteRuntime *runtime = new_test_runtime(temp_dir, &error);
+  BoxliteErrorCode code = Ok;
 
   const char *options =
       "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
@@ -470,13 +466,11 @@ void test_legacy_network_json_rejected() {
 void test_secrets_json_config() {
   printf("\nTEST: secrets JSON config\n");
 
-  CBoxliteRuntime *runtime = NULL;
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-integration-secrets";
   reset_test_home(temp_dir);
-  BoxliteErrorCode code = boxlite_runtime_new(temp_dir, NULL, &runtime, &error);
-  assert(code == Ok);
-  assert(runtime != NULL);
+  CBoxliteRuntime *runtime = new_test_runtime(temp_dir, &error);
+  BoxliteErrorCode code = Ok;
 
   const char *options =
       "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
