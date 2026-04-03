@@ -13,9 +13,15 @@ import { getJsBoxlite } from "../lib/native.js";
 // Use /tmp/ (not os.tmpdir()) to keep Unix socket paths under macOS
 // 104-char SUN_LEN limit. Same pattern as test-utils/PerTestBoxHome.
 const testHome = mkdtempSync("/tmp/boxlite-test-node-");
+const testRegistries = [
+  "docker.m.daocloud.io",
+  "docker.xuanyuan.me",
+  "docker.1ms.run",
+  "docker.io",
+];
 
 const Boxlite = getJsBoxlite();
-Boxlite.initDefault({ homeDir: testHome });
+Boxlite.initDefault({ homeDir: testHome, imageRegistries: testRegistries });
 
 afterAll(async () => {
   try {
