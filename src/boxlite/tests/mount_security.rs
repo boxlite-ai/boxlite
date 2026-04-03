@@ -59,7 +59,11 @@ async fn exec_exit_code(bx: &LiteBox, cmd: BoxCommand) -> i32 {
 // SINGLE TEST ENTRY POINT — one VM, all cases
 // ============================================================================
 
+/// This is a research/feasibility test for ID-mapped mounts, not a regression guard.
+/// It installs gcc inside the VM and compiles a C program, which takes >10 minutes.
+/// Run explicitly with: `cargo test -p boxlite --test mount_security -- --ignored --nocapture`
 #[tokio::test(flavor = "multi_thread")]
+#[ignore = "research test: installs gcc in VM, takes >10 minutes"]
 async fn mount_security_integration() {
     let home = boxlite_test_utils::home::PerTestBoxHome::new();
     let runtime = BoxliteRuntime::new(BoxliteOptions {
