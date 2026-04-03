@@ -55,11 +55,17 @@ fn test_pull_idempotent() {
 fn test_pull_progress() {
     let mut ctx = common::boxlite();
     ctx.cmd.args(["pull", "python:alpine"]);
-    ctx.cmd.assert().success().stderr(
-        predicate::str::contains("Pulling")
-            .or(predicate::str::contains("Downloading"))
-            .or(predicate::str::contains("blob"))
-            .or(predicate::str::contains("Using cached image")),
+    let output = ctx.cmd.assert().success().get_output().clone();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        stderr.contains("Pulling")
+            || stderr.contains("Downloading")
+            || stderr.contains("blob")
+            || stderr.contains("Using cached image")
+            || stdout.contains("Pulled: python:alpine"),
+        "expected progress output on stderr or a cached pull summary on stdout, got stdout={stdout:?} stderr={stderr:?}"
     );
 }
 

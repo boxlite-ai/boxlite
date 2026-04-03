@@ -176,10 +176,10 @@ test\:unit\:ffi:
 test\:integration\:cli: runtime\:debug
 	@echo "🧪 Running CLI integration tests..."
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
-		cargo nextest run -p boxlite-cli --tests --no-fail-fast \
+		cargo nextest run -p boxlite-cli --tests --profile vm --no-fail-fast \
 		$(if $(FILTER),-E 'test($(FILTER))',); \
 	else \
-		cargo test -p boxlite-cli --tests --no-fail-fast -- \
+		cargo test -p boxlite-cli --tests --no-fail-fast -- --test-threads=4 \
 		$(if $(FILTER),$(FILTER),); \
 	fi
 

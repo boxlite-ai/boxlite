@@ -745,14 +745,20 @@ fn test_run_signal_exit_code_sigint() {
 
 #[test]
 fn test_run_invalid_image() {
-    let mut ctx = common::boxlite();
+    let mut ctx = common::boxlite_bare();
     ctx.cmd.timeout(std::time::Duration::from_secs(30));
-    ctx.cmd
-        .args(["run", "nonexistent-image:latest", "echo", "hi"]);
+    ctx.cmd.args([
+        "run",
+        "docker.io/boxlite-test-does-not-exist/nonexistent-image:latest",
+        "echo",
+        "hi",
+    ]);
     ctx.cmd.assert().failure().stderr(
         predicate::str::contains("failed to pull")
             .or(predicate::str::contains("not found"))
-            .or(predicate::str::contains("Not authorized")),
+            .or(predicate::str::contains("Not authorized"))
+            .or(predicate::str::contains("manifest unknown"))
+            .or(predicate::str::contains("pull access denied")),
     );
 }
 

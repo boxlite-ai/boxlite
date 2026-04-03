@@ -28,7 +28,7 @@ pub mod sync_point;
 pub const TEST_SHUTDOWN_TIMEOUT: i32 = 10;
 
 /// Images to pre-pull during cache warm-up.
-pub const TEST_IMAGES: &[&str] = &["alpine:latest", "debian:bookworm-slim"];
+pub const TEST_IMAGES: &[&str] = &["alpine:latest", "debian:bookworm-slim", "python:alpine"];
 
 /// Docker Hub mirror registries for reliable image pulls.
 /// Mirrors are tried first; `docker.io` is the final fallback.

@@ -7,6 +7,7 @@
 //!
 //! ```text
 //! target/boxlite-test/
+//! ├── .ready          ← cache version marker
 //! ├── images/         ← pulled OCI images (shared read-only)
 //! ├── rootfs/         ← built guest rootfs (shared read-only)
 //! ├── tmp/            ← transient files (per-test subdirs)
@@ -22,6 +23,9 @@ use boxlite::runtime::options::{BoxOptions, BoxliteOptions, RootfsSpec};
 use tempfile::TempDir;
 
 use crate::{TEST_IMAGES, TEST_SHUTDOWN_TIMEOUT, test_registries};
+
+const READY_MARKER_FILE: &str = ".ready";
+const WARM_CACHE_VERSION: &str = "v2-python-alpine";
 
 /// Cleanup handle for per-test resources linked into a home directory.
 ///
@@ -69,6 +73,11 @@ impl SharedResources {
     /// Path to the DB snapshot.
     pub fn db_snapshot(&self) -> PathBuf {
         self.dir.join("db/boxlite.db")
+    }
+
+    /// Path to the versioned warm-cache ready marker.
+    fn ready_marker_path(&self) -> PathBuf {
+        self.dir.join(READY_MARKER_FILE)
     }
 
     /// Symlink shared caches into a per-test home directory and copy the DB.
@@ -142,6 +151,8 @@ impl SharedResources {
             return resources;
         }
 
+        resources.clear_ready_marker();
+
         // Ephemeral short-path home for warm-up runtime (macOS 104-char socket limit).
         // Symlinks {images,rootfs,tmp} → target/boxlite-test/ so data persists.
         let warm_home = TempDir::new_in("/tmp").expect("create warm home");
@@ -154,17 +165,29 @@ impl SharedResources {
         // the same thread panics ("Cannot start a runtime from within a runtime").
         resources.warm_on_thread(warm_home.path());
         resources.snapshot_db(warm_home.path());
+        resources.mark_ready();
         // warm_home dropped here — cleaned up automatically
 
         resources
     }
 
     fn is_warm(&self) -> bool {
-        let manifests_dir = self.images_dir().join("manifests");
-        manifests_dir.exists()
-            && std::fs::read_dir(&manifests_dir)
-                .map(|d| d.count() > 0)
-                .unwrap_or(false)
+        self.db_snapshot().exists() && self.ready_marker_matches()
+    }
+
+    fn ready_marker_matches(&self) -> bool {
+        std::fs::read_to_string(self.ready_marker_path())
+            .map(|contents| contents.trim() == WARM_CACHE_VERSION)
+            .unwrap_or(false)
+    }
+
+    fn clear_ready_marker(&self) {
+        let _ = std::fs::remove_file(self.ready_marker_path());
+    }
+
+    fn mark_ready(&self) {
+        std::fs::write(self.ready_marker_path(), format!("{WARM_CACHE_VERSION}\n"))
+            .expect("write cache ready marker");
     }
 
     fn warm_on_thread(&self, warm_home: &Path) {
@@ -348,6 +371,52 @@ mod tests {
         assert!(
             tmp_link.exists(),
             "symlink target should exist while LinkedCache is alive"
+        );
+    }
+
+    #[test]
+    fn is_warm_requires_ready_marker_and_db_snapshot() {
+        let base = tempfile::tempdir().expect("create base temp dir");
+        let cache_dir = base.path().join("cache");
+        std::fs::create_dir_all(cache_dir.join("db")).unwrap();
+
+        let resources = SharedResources { dir: cache_dir };
+
+        assert!(!resources.is_warm(), "missing marker and DB should be cold");
+
+        std::fs::write(
+            resources.ready_marker_path(),
+            format!("{WARM_CACHE_VERSION}\n"),
+        )
+        .unwrap();
+        assert!(
+            !resources.is_warm(),
+            "marker alone should not make the cache warm"
+        );
+
+        std::fs::write(resources.db_snapshot(), "").unwrap();
+        assert!(resources.is_warm(), "marker plus DB should be warm");
+    }
+
+    #[test]
+    fn is_warm_rejects_stale_marker_versions() {
+        let base = tempfile::tempdir().expect("create base temp dir");
+        let cache_dir = base.path().join("cache");
+        std::fs::create_dir_all(cache_dir.join("db")).unwrap();
+
+        let resources = SharedResources { dir: cache_dir };
+
+        std::fs::write(resources.db_snapshot(), "").unwrap();
+        std::fs::write(resources.ready_marker_path(), "v1\n").unwrap();
+        assert!(
+            !resources.is_warm(),
+            "stale cache marker versions must trigger re-warm"
+        );
+
+        resources.mark_ready();
+        assert!(
+            resources.is_warm(),
+            "current cache marker version should be accepted"
         );
     }
 }

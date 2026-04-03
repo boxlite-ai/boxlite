@@ -18,9 +18,9 @@ _ensure-node-deps:
 # Build wheel locally with maturin + embedded runtime
 dev\:python: runtime\:debug _ensure-python-deps
 	@echo "🔨 Building wheel with maturin (embedded-runtime)..."
-	@. .venv/bin/activate && pip install -q maturin && cd sdks/python && maturin develop
+	@. .venv/bin/activate && pip install -q maturin && cd sdks/python && maturin develop --uv
 
-dev\:c:
+dev\:c: runtime\:debug
 	@echo "🔨 Building C SDK (debug)..."
 	@cargo build -p boxlite-c
 	@echo "✅ C SDK built:"
@@ -35,7 +35,7 @@ dev\:node: runtime\:debug
 	@echo "✅ Node.js SDK built and linked to examples"
 
 # Build Go SDK locally (debug mode, static linking)
-dev\:go:
+dev\:go: runtime\:debug
 	@echo "🔨 Building Go SDK (debug)..."
 	@cargo build -p boxlite-c
 	@bash $(SCRIPT_DIR)/build/fix-go-symbols.sh target/debug/libboxlite.a
