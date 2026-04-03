@@ -793,6 +793,80 @@ mod tests {
         assert_eq!(exit, ProcessExit::Unknown);
     }
 
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[tokio::test]
+    #[allow(clippy::zombie_processes)]
+    async fn test_wait_for_exit_signal_kill() {
+        use std::process::Command;
+
+        // Spawn a long-lived child, then SIGKILL it.
+        // Exercises the WIFSIGNALED decode path through event-driven detection.
+        let child = Command::new("sh")
+            .arg("-c")
+            .arg("sleep 60")
+            .spawn()
+            .expect("Failed to spawn child");
+
+        let pid = child.id();
+        let monitor = ProcessMonitor::new(pid);
+
+        // Give the child a moment to start, then kill it.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+
+        let exit = monitor.wait_for_exit().await;
+        assert_eq!(exit, ProcessExit::Code(128 + libc::SIGKILL));
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[tokio::test]
+    #[allow(clippy::zombie_processes)]
+    async fn test_wait_for_exit_concurrent_monitors() {
+        use std::process::Command;
+
+        // Spawn 3 children with different exit codes.
+        // Verify concurrent pidfd/kqueue FD registrations all resolve correctly.
+        let codes = [1, 2, 3];
+        let mut monitors = Vec::new();
+
+        for &code in &codes {
+            let child = Command::new("sh")
+                .arg("-c")
+                .arg(format!("exit {code}"))
+                .spawn()
+                .expect("Failed to spawn child");
+            monitors.push(ProcessMonitor::new(child.id()));
+        }
+
+        let (r0, r1, r2) = tokio::join!(
+            monitors[0].wait_for_exit(),
+            monitors[1].wait_for_exit(),
+            monitors[2].wait_for_exit(),
+        );
+
+        assert_eq!(r0, ProcessExit::Code(1));
+        assert_eq!(r1, ProcessExit::Code(2));
+        assert_eq!(r2, ProcessExit::Code(3));
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[tokio::test]
+    #[allow(clippy::zombie_processes)]
+    async fn test_wait_polling_captures_exit_code() {
+        use std::process::Command;
+
+        // Test the polling fallback path directly.
+        let child = Command::new("sh")
+            .arg("-c")
+            .arg("exit 5")
+            .spawn()
+            .expect("Failed to spawn child");
+
+        let monitor = ProcessMonitor::new(child.id());
+        let exit = monitor.wait_polling().await;
+        assert_eq!(exit, ProcessExit::Code(5));
+    }
+
     #[test]
     fn test_process_exit_equality() {
         assert_eq!(ProcessExit::Code(0), ProcessExit::Code(0));
