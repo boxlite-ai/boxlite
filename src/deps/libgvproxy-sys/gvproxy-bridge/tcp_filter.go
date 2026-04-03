@@ -113,7 +113,7 @@ func (f *TCPFilter) MatchesIP(destIP net.IP) bool {
 		return true
 	}
 	for _, cidr := range f.cidrs {
-		if cidr.Contains(destIP) {
+		if cidr.Contains(ip4) {
 			return true
 		}
 	}

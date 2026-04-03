@@ -17,7 +17,6 @@ import (
 	"net"
 	"sync"
 
-
 	"github.com/containers/gvisor-tap-vsock/pkg/tcpproxy"
 	logrus "github.com/sirupsen/logrus"
 	"gvisor.dev/gvisor/pkg/tcpip"
@@ -33,6 +32,14 @@ import (
 // linkLocalSubnet is 169.254.0.0/16, parsed once at init (not per-packet).
 var linkLocalSubnet tcpip.Subnet
 
+type tcpRoute int
+
+const (
+	tcpRouteBlock tcpRoute = iota
+	tcpRouteStandardForward
+	tcpRouteInspect
+)
+
 func init() {
 	_, linkLocalNet, err := net.ParseCIDR("169.254.0.0/16")
 	if err != nil {
@@ -46,6 +53,31 @@ func init() {
 	if subnetErr != nil {
 		panic("failed to create link-local subnet: " + subnetErr.Error())
 	}
+}
+
+func decideTCPRoute(destIP net.IP, destPort uint16, filter *TCPFilter, secretMatcher *SecretHostMatcher) tcpRoute {
+	if filter == nil {
+		if secretMatcher != nil && destPort == 443 {
+			return tcpRouteInspect
+		}
+		return tcpRouteStandardForward
+	}
+
+	// Secret substitution needs SNI even if the destination IP is broadly allowed.
+	if secretMatcher != nil && destPort == 443 {
+		return tcpRouteInspect
+	}
+
+	// Normalize the gVisor-provided IP into canonical IPv4 form before matching.
+	if ip4 := destIP.To4(); ip4 != nil && filter.MatchesIP(ip4) {
+		return tcpRouteStandardForward
+	}
+
+	if filter.HasHostnameRules() && (destPort == 443 || destPort == 80) {
+		return tcpRouteInspect
+	}
+
+	return tcpRouteBlock
 }
 
 func TCPWithFilter(s *stack.Stack, nat map[tcpip.Address]tcpip.Address,
@@ -72,42 +104,21 @@ func TCPWithFilter(s *stack.Stack, nat map[tcpip.Address]tcpip.Address,
 		destPort := r.ID().LocalPort
 		destAddr := fmt.Sprintf("%s:%d", localAddress, destPort)
 
-		// Secrets-only mode (no allowlist filter): MITM secret hosts, allow everything else
-		if filter == nil {
-			if secretMatcher != nil && destPort == 443 {
-				inspectAndForward(r, destAddr, destPort, nil, ca, secretMatcher)
-				return
-			}
+		switch decideTCPRoute(destIP, destPort, filter, secretMatcher) {
+		case tcpRouteStandardForward:
 			standardForward(r, destAddr)
 			return
-		}
-
-		// Port 443 with secrets: MUST inspect SNI even if IP matches allowlist,
-		// because we need to know the hostname to decide MITM vs passthrough.
-		// The IP match alone can't tell us if it's a secret host.
-		if secretMatcher != nil && destPort == 443 {
+		case tcpRouteInspect:
 			inspectAndForward(r, destAddr, destPort, filter, ca, secretMatcher)
 			return
+		default:
+			// No matching rule: block
+			logrus.WithFields(logrus.Fields{
+				"dst_ip":   destIP,
+				"dst_port": destPort,
+			}).Info("allowNet TCP: blocked (no matching rule)")
+			r.Complete(true) // RST
 		}
-
-		// IP/CIDR match: standard upstream flow (allowed)
-		if filter.MatchesIP(destIP) {
-			standardForward(r, destAddr)
-			return
-		}
-
-		// Port 443/80 with hostname rules: inspect SNI/Host
-		if filter.HasHostnameRules() && (destPort == 443 || destPort == 80) {
-			inspectAndForward(r, destAddr, destPort, filter, ca, secretMatcher)
-			return
-		}
-
-		// No matching rule: block
-		logrus.WithFields(logrus.Fields{
-			"dst_ip":   destIP,
-			"dst_port": destPort,
-		}).Info("allowNet TCP: blocked (no matching rule)")
-		r.Complete(true) // RST
 	})
 }
 

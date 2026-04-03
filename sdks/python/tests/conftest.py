@@ -35,13 +35,17 @@ except ImportError:
     SYNC_AVAILABLE = False
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def shared_sync_runtime(shared_runtime):
-    """Session-scoped sync runtime that wraps the shared async runtime.
+    """Module-scoped sync runtime that wraps the shared async runtime.
 
     This fixture wraps the same underlying Boxlite instance from
     shared_runtime with SyncBoxlite's greenlet machinery. This avoids
     lock contention since both fixtures use the same runtime.
+
+    Scope is limited to a single module so pytest-asyncio can run async test
+    modules after sync test modules without inheriting a long-lived running
+    event loop from SyncBoxlite.
     """
     if not SYNC_AVAILABLE:
         pytest.skip("greenlet not installed")

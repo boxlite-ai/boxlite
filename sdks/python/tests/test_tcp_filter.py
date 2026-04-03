@@ -1,28 +1,15 @@
 """
 Integration tests for TCP-level AllowNet filtering with SNI/Host inspection.
 
-These tests verify the full network filtering stack:
-  - DNS sinkhole (PR #410): blocks DNS resolution for unlisted hostnames
-  - TCP filter (this PR): blocks direct IP connections + inspects SNI/Host headers
-
-Test matrix:
-  ┌──────────────────────┬──────────────────────┬─────────────────────────┐
-  │ Scenario             │ DNS Sinkhole         │ TCP Filter              │
-  ├──────────────────────┼──────────────────────┼─────────────────────────┤
-  │ Allowed hostname     │ Resolves normally    │ SNI/Host matches → pass │
-  │ Blocked hostname     │ Sinkholed to 0.0.0.0 │ SNI/Host no match → RST│
-  │ Direct IP (blocked)  │ N/A (no DNS)         │ IP not in allowlist→RST │
-  │ Direct IP (allowed)  │ N/A (no DNS)         │ IP in CIDR → pass      │
-  │ HTTPS to allowed     │ Resolves normally    │ SNI matches → pass      │
-  │ HTTPS to blocked     │ Sinkholed            │ SNI no match → close    │
-  │ No network           │ No gvproxy           │ No filter (no network)  │
-  │ Full access (default)│ No sinkhole          │ No filter (nil)         │
-  └──────────────────────┴──────────────────────┴─────────────────────────┘
-
-Requirements:
-  - make dev:python (build Python SDK)
-  - VM runtime available (libkrun + Hypervisor.framework)
+These tests keep real internet coverage, but resolve live IPv4 targets at
+runtime so they don't depend on stale hard-coded IPs.
 """
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+import ipaddress
+import socket
 
 import pytest
 
@@ -36,12 +23,144 @@ if not hasattr(boxlite, "NetworkSpec"):
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
+ALLOWED_HOST = "example.com"
+SECONDARY_ALLOWED_HOST = "example.org"
+BLOCKED_HOST = "github.com"
+BLOCKED_IP_CANDIDATES = ("example.org", "github.com")
+DEFAULT_TCP_PORT = 80
+_UNSET = object()
 
-def enabled_network(*allow_net: str) -> boxlite.NetworkSpec:
+
+def enabled_network(*allow_net: str):
     return boxlite.NetworkSpec(mode="enabled", allow_net=list(allow_net))
 
 
-DISABLED_NETWORK = boxlite.NetworkSpec(mode="disabled")
+def disabled_network():
+    return boxlite.NetworkSpec(mode="disabled")
+
+
+@dataclass(frozen=True)
+class LiveTargets:
+    allowed_host: str
+    second_allowed_host: str
+    blocked_host: str
+    allowed_ip: str
+    blocked_ip: str
+    allowed_cidr: str
+
+
+def _iter_ipv4_addresses(hostname: str) -> list[str]:
+    seen: set[str] = set()
+    addresses: list[str] = []
+    for family, socktype, proto, _canonname, sockaddr in socket.getaddrinfo(
+        hostname,
+        DEFAULT_TCP_PORT,
+        family=socket.AF_INET,
+        type=socket.SOCK_STREAM,
+    ):
+        del family, socktype, proto
+        ip = sockaddr[0]
+        if ip not in seen:
+            seen.add(ip)
+            addresses.append(ip)
+    return addresses
+
+
+def _pick_reachable_ipv4(
+    hostname: str,
+    *,
+    excluded_network: ipaddress.IPv4Network | None = None,
+) -> str:
+    candidates = _iter_ipv4_addresses(hostname)
+    if not candidates:
+        raise RuntimeError(f"No IPv4 addresses resolved for {hostname}")
+
+    errors: list[str] = []
+    for ip in candidates:
+        if excluded_network and ipaddress.ip_address(ip) in excluded_network:
+            continue
+        try:
+            with socket.create_connection((ip, DEFAULT_TCP_PORT), timeout=5):
+                return ip
+        except OSError as exc:
+            errors.append(f"{ip}: {exc}")
+
+    if excluded_network:
+        raise RuntimeError(
+            f"No reachable IPv4 addresses for {hostname} outside {excluded_network}. "
+            f"Tried: {', '.join(errors) or 'no eligible addresses'}"
+        )
+
+    raise RuntimeError(
+        f"No reachable IPv4 addresses for {hostname}. Tried: {', '.join(errors)}"
+    )
+
+
+@pytest.fixture(scope="module")
+def live_targets() -> LiveTargets:
+    allowed_ip = _pick_reachable_ipv4(ALLOWED_HOST)
+    allowed_network = ipaddress.ip_network(f"{allowed_ip}/24", strict=False)
+
+    # Fail early if our second allowed hostname is not resolvable.
+    if not _iter_ipv4_addresses(SECONDARY_ALLOWED_HOST):
+        raise RuntimeError(f"No IPv4 addresses resolved for {SECONDARY_ALLOWED_HOST}")
+
+    if not _iter_ipv4_addresses(BLOCKED_HOST):
+        raise RuntimeError(f"No IPv4 addresses resolved for {BLOCKED_HOST}")
+
+    blocked_ip = None
+    for candidate in BLOCKED_IP_CANDIDATES:
+        try:
+            candidate_ip = _pick_reachable_ipv4(
+                candidate,
+                excluded_network=allowed_network,
+            )
+        except RuntimeError:
+            continue
+        blocked_ip = candidate_ip
+        break
+
+    if blocked_ip is None:
+        raise RuntimeError(
+            f"Failed to find a reachable blocked host outside {allowed_network} "
+            f"from candidates {BLOCKED_IP_CANDIDATES!r}"
+        )
+
+    return LiveTargets(
+        allowed_host=ALLOWED_HOST,
+        second_allowed_host=SECONDARY_ALLOWED_HOST,
+        blocked_host=BLOCKED_HOST,
+        allowed_ip=allowed_ip,
+        blocked_ip=blocked_ip,
+        allowed_cidr=str(allowed_network),
+    )
+
+
+class TCPFilterTestBase:
+    shared_runtime: boxlite.Boxlite
+    live_targets: LiveTargets
+
+    @pytest.fixture(autouse=True)
+    def _inject_fixtures(self, shared_runtime, live_targets):
+        self.shared_runtime = shared_runtime
+        self.live_targets = live_targets
+
+    def make_box(self, *, network=_UNSET):
+        kwargs = {
+            "image": "alpine:latest",
+            "runtime": self.shared_runtime,
+        }
+        if network is not _UNSET:
+            kwargs["network"] = network
+        return boxlite.SimpleBox(**kwargs)
+
+    async def tcp_probe(self, box, ip: str, port: int = DEFAULT_TCP_PORT):
+        return await box.exec(
+            "sh",
+            "-c",
+            f"nc -w 3 -z {ip} {port}; echo EXIT:$?",
+            timeout=10,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -49,40 +168,36 @@ DISABLED_NETWORK = boxlite.NetworkSpec(mode="disabled")
 # ---------------------------------------------------------------------------
 
 
-class TestDefaultFullAccess:
+class TestDefaultFullAccess(TCPFilterTestBase):
     """When no allow_net is set, all traffic should pass freely."""
 
     async def test_dns_resolves_any_host(self):
         """Any hostname should resolve to a real IP."""
-        async with boxlite.SimpleBox(image="alpine:latest") as box:
-            result = await box.exec("nslookup", "example.com", timeout=10)
+        async with self.make_box() as box:
+            result = await box.exec(
+                "nslookup", self.live_targets.allowed_host, timeout=10
+            )
             assert result.exit_code == 0
             assert "0.0.0.0" not in result.stdout
 
     async def test_http_to_any_host(self):
         """HTTP to any host should work."""
-        async with boxlite.SimpleBox(image="alpine:latest") as box:
+        async with self.make_box() as box:
             result = await box.exec(
                 "wget",
                 "-q",
                 "-O-",
-                "--timeout=5",
-                "http://example.com/",
-                timeout=15,
+                "--timeout=10",
+                f"http://{self.live_targets.allowed_host}/",
+                timeout=20,
             )
             assert result.exit_code == 0
             assert len(result.stdout) > 0
 
     async def test_direct_ip_connection(self):
         """Direct IP connection should work with full access."""
-        async with boxlite.SimpleBox(image="alpine:latest") as box:
-            # Test raw TCP connectivity: nc exits 0 if connection succeeds
-            result = await box.exec(
-                "sh",
-                "-c",
-                "nc -w 3 -z 93.184.216.34 80; echo EXIT:$?",
-                timeout=10,
-            )
+        async with self.make_box() as box:
+            result = await self.tcp_probe(box, self.live_targets.allowed_ip)
             assert "EXIT:0" in result.stdout, (
                 f"direct IP TCP should work with full access, got: {result.stdout}"
             )
@@ -93,40 +208,41 @@ class TestDefaultFullAccess:
 # ---------------------------------------------------------------------------
 
 
-class TestHostnameAllowlist:
+class TestHostnameAllowlist(TCPFilterTestBase):
     """allow_net with hostnames filters via DNS sinkhole + SNI/Host."""
 
     async def test_allowed_host_dns_resolves(self):
         """Allowed hostname should resolve to a real IP (not sinkholed)."""
-        async with boxlite.SimpleBox(
-            image="alpine:latest",
-            network=enabled_network("example.com"),
+        async with self.make_box(
+            network=enabled_network(self.live_targets.allowed_host),
         ) as box:
-            result = await box.exec("nslookup", "example.com", timeout=10)
+            result = await box.exec(
+                "nslookup", self.live_targets.allowed_host, timeout=10
+            )
             assert result.exit_code == 0
             assert "0.0.0.0" not in result.stdout
 
     async def test_blocked_host_dns_sinkholed(self):
         """Non-allowed hostname should be sinkholed to 0.0.0.0."""
-        async with boxlite.SimpleBox(
-            image="alpine:latest",
-            network=enabled_network("example.com"),
+        async with self.make_box(
+            network=enabled_network(self.live_targets.allowed_host),
         ) as box:
-            result = await box.exec("nslookup", "github.com", timeout=10)
+            result = await box.exec(
+                "nslookup", self.live_targets.blocked_host, timeout=10
+            )
             assert "0.0.0.0" in result.stdout
 
     async def test_http_to_allowed_host_succeeds(self):
         """HTTP to allowed host — TCP filter checks Host header, should pass."""
-        async with boxlite.SimpleBox(
-            image="alpine:latest",
-            network=enabled_network("example.com"),
+        async with self.make_box(
+            network=enabled_network(self.live_targets.allowed_host),
         ) as box:
             result = await box.exec(
                 "wget",
                 "-q",
                 "-O-",
                 "--timeout=5",
-                "http://example.com/",
+                f"http://{self.live_targets.allowed_host}/",
                 timeout=15,
             )
             assert result.exit_code == 0
@@ -134,9 +250,8 @@ class TestHostnameAllowlist:
 
     async def test_https_to_allowed_host_succeeds(self):
         """HTTPS to allowed host — TCP filter checks TLS SNI, should pass."""
-        async with boxlite.SimpleBox(
-            image="alpine:latest",
-            network=enabled_network("example.com"),
+        async with self.make_box(
+            network=enabled_network(self.live_targets.allowed_host),
         ) as box:
             result = await box.exec(
                 "wget",
@@ -144,7 +259,7 @@ class TestHostnameAllowlist:
                 "-O-",
                 "--timeout=5",
                 "--no-check-certificate",
-                "https://example.com/",
+                f"https://{self.live_targets.allowed_host}/",
                 timeout=15,
             )
             # Alpine's wget may not have TLS support (busybox wget)
@@ -158,17 +273,15 @@ class TestHostnameAllowlist:
 
     async def test_direct_ip_blocked_with_hostname_only_rules(self):
         """Direct IP connection should be blocked when only hostname rules exist."""
-        async with boxlite.SimpleBox(
-            image="alpine:latest",
-            network=enabled_network("example.com"),
+        async with self.make_box(
+            network=enabled_network(self.live_targets.allowed_host),
         ) as box:
-            # 8.8.8.8 is not in any allowlist rule
             result = await box.exec(
                 "wget",
                 "-q",
                 "-O-",
                 "--timeout=3",
-                "http://8.8.8.8/",
+                f"http://{self.live_targets.allowed_ip}/",
                 timeout=10,
             )
             assert result.exit_code != 0, (
@@ -177,16 +290,15 @@ class TestHostnameAllowlist:
 
     async def test_blocked_host_http_fails(self):
         """HTTP to a non-allowed host should fail (sinkholed DNS + TCP blocked)."""
-        async with boxlite.SimpleBox(
-            image="alpine:latest",
-            network=enabled_network("example.com"),
+        async with self.make_box(
+            network=enabled_network(self.live_targets.allowed_host),
         ) as box:
             result = await box.exec(
                 "wget",
                 "-q",
                 "-O-",
                 "--timeout=3",
-                "http://github.com/",
+                f"http://{self.live_targets.blocked_host}/",
                 timeout=10,
             )
             assert result.exit_code != 0, "HTTP to blocked host should fail"
@@ -197,7 +309,7 @@ class TestHostnameAllowlist:
 # ---------------------------------------------------------------------------
 
 
-class TestWildcardAllowlist:
+class TestWildcardAllowlist(TCPFilterTestBase):
     """Wildcard patterns should match subdomains via SNI/Host."""
 
     async def test_wildcard_allows_subdomain_dns(self):
@@ -209,10 +321,7 @@ class TestWildcardAllowlist:
         depending on the DNS resolver implementation. We check the response
         doesn't contain 0.0.0.0 (sinkhole indicator).
         """
-        async with boxlite.SimpleBox(
-            image="alpine:latest",
-            network=enabled_network("*.example.com"),
-        ) as box:
+        async with self.make_box(network=enabled_network("*.example.com")) as box:
             result = await box.exec("nslookup", "www.example.com", timeout=10)
             # Wildcard DNS may not return clean nslookup output, but it should
             # NOT sinkhole the subdomain to 0.0.0.0
@@ -222,10 +331,7 @@ class TestWildcardAllowlist:
 
     async def test_wildcard_blocks_different_domain(self):
         """*.example.com should NOT match evil.com."""
-        async with boxlite.SimpleBox(
-            image="alpine:latest",
-            network=enabled_network("*.example.com"),
-        ) as box:
+        async with self.make_box(network=enabled_network("*.example.com")) as box:
             result = await box.exec("nslookup", "evil.com", timeout=10)
             assert "0.0.0.0" in result.stdout or result.exit_code != 0
 
@@ -235,57 +341,38 @@ class TestWildcardAllowlist:
 # ---------------------------------------------------------------------------
 
 
-class TestIPCIDRAllowlist:
+class TestIPCIDRAllowlist(TCPFilterTestBase):
     """IP and CIDR rules allow direct connections."""
 
     async def test_exact_ip_allowed(self):
         """Exact IP in allow_net should allow direct TCP connection."""
-        async with boxlite.SimpleBox(
-            image="alpine:latest",
-            network=enabled_network("93.184.216.34"),  # example.com's IP
+        async with self.make_box(
+            network=enabled_network(self.live_targets.allowed_ip),
         ) as box:
-            # nc -z tests TCP connectivity only (no data transfer)
-            result = await box.exec(
-                "sh",
-                "-c",
-                "nc -w 3 -z 93.184.216.34 80; echo EXIT:$?",
-                timeout=10,
-            )
+            result = await self.tcp_probe(box, self.live_targets.allowed_ip)
             assert "EXIT:0" in result.stdout, (
                 f"exact IP should be allowed, got: {result.stdout}"
             )
 
     async def test_cidr_allows_range(self):
         """CIDR should allow any IP in the range."""
-        async with boxlite.SimpleBox(
-            image="alpine:latest",
-            network=enabled_network("93.184.216.0/24"),
+        async with self.make_box(
+            network=enabled_network(self.live_targets.allowed_cidr),
         ) as box:
-            result = await box.exec(
-                "sh",
-                "-c",
-                "nc -w 3 -z 93.184.216.34 80; echo EXIT:$?",
-                timeout=10,
-            )
+            result = await self.tcp_probe(box, self.live_targets.allowed_ip)
             assert "EXIT:0" in result.stdout, (
                 f"IP in CIDR range should be allowed, got: {result.stdout}"
             )
 
     async def test_ip_outside_cidr_blocked(self):
         """IP outside CIDR range should be blocked."""
-        async with boxlite.SimpleBox(
-            image="alpine:latest",
-            network=enabled_network("10.0.0.0/8"),
+        async with self.make_box(
+            network=enabled_network(self.live_targets.allowed_cidr),
         ) as box:
-            result = await box.exec(
-                "wget",
-                "-q",
-                "-O-",
-                "--timeout=3",
-                "http://93.184.216.34/",
-                timeout=10,
+            result = await self.tcp_probe(box, self.live_targets.blocked_ip)
+            assert "EXIT:0" not in result.stdout, (
+                f"IP outside CIDR range should be blocked, got: {result.stdout}"
             )
-            assert result.exit_code != 0
 
 
 # ---------------------------------------------------------------------------
@@ -293,14 +380,16 @@ class TestIPCIDRAllowlist:
 # ---------------------------------------------------------------------------
 
 
-class TestMixedRules:
+class TestMixedRules(TCPFilterTestBase):
     """Combination of hostname and IP/CIDR rules."""
 
     async def test_hostname_and_cidr_both_work(self):
         """Both hostname (via SNI/Host) and CIDR rules should be active."""
-        async with boxlite.SimpleBox(
-            image="alpine:latest",
-            network=enabled_network("example.com", "8.8.8.0/24"),
+        async with self.make_box(
+            network=enabled_network(
+                self.live_targets.allowed_host,
+                self.live_targets.allowed_cidr,
+            ),
         ) as box:
             # Hostname rule: example.com works via HTTP Host header
             result = await box.exec(
@@ -308,21 +397,13 @@ class TestMixedRules:
                 "-q",
                 "-O-",
                 "--timeout=5",
-                "http://example.com/",
+                f"http://{self.live_targets.allowed_host}/",
                 timeout=15,
             )
             assert result.exit_code == 0
 
-            # CIDR rule: 8.8.8.8 works via direct IP
-            # We test TCP connectivity with nc (more reliable than wget for raw IP)
-            result = await box.exec(
-                "sh",
-                "-c",
-                "echo -e 'GET / HTTP/1.0\\r\\nHost: dns.google\\r\\n\\r\\n' | "
-                "nc -w 3 8.8.8.8 80; echo EXIT_CODE:$?",
-                timeout=10,
-            )
-            assert "EXIT_CODE:0" in result.stdout, "CIDR IP should be reachable"
+            result = await self.tcp_probe(box, self.live_targets.allowed_ip)
+            assert "EXIT:0" in result.stdout, "CIDR IP should be reachable"
 
 
 # ---------------------------------------------------------------------------
@@ -330,26 +411,22 @@ class TestMixedRules:
 # ---------------------------------------------------------------------------
 
 
-class TestDisabledNetwork:
+class TestDisabledNetwork(TCPFilterTestBase):
     """Disabled network has no interface at all."""
 
     async def test_commands_work_without_network(self):
         """Non-network commands should work."""
-        async with boxlite.SimpleBox(
-            image="alpine:latest",
-            network=DISABLED_NETWORK,
-        ) as box:
+        async with self.make_box(network=disabled_network()) as box:
             result = await box.exec("echo", "hello", timeout=10)
             assert result.exit_code == 0
             assert "hello" in result.stdout
 
     async def test_dns_fails_without_network(self):
         """DNS should fail when network is disabled."""
-        async with boxlite.SimpleBox(
-            image="alpine:latest",
-            network=DISABLED_NETWORK,
-        ) as box:
-            result = await box.exec("nslookup", "example.com", timeout=10)
+        async with self.make_box(network=disabled_network()) as box:
+            result = await box.exec(
+                "nslookup", self.live_targets.allowed_host, timeout=10
+            )
             assert result.exit_code != 0
 
 
@@ -358,35 +435,40 @@ class TestDisabledNetwork:
 # ---------------------------------------------------------------------------
 
 
-class TestEdgeCases:
+class TestEdgeCases(TCPFilterTestBase):
     """Edge cases and boundary conditions."""
 
     async def test_empty_allowlist_allows_all(self):
         """Empty allow_net = full access (no filter)."""
-        async with boxlite.SimpleBox(
-            image="alpine:latest",
-            network=enabled_network(),
-        ) as box:
-            result = await box.exec("nslookup", "example.com", timeout=10)
+        async with self.make_box(network=enabled_network()) as box:
+            result = await box.exec(
+                "nslookup", self.live_targets.allowed_host, timeout=10
+            )
             assert result.exit_code == 0
             assert "0.0.0.0" not in result.stdout
 
     async def test_multiple_allowed_hosts(self):
         """Multiple hostnames in allow_net should all be accessible."""
-        async with boxlite.SimpleBox(
-            image="alpine:latest",
-            network=enabled_network("example.com", "example.org"),
+        async with self.make_box(
+            network=enabled_network(
+                self.live_targets.allowed_host,
+                self.live_targets.second_allowed_host,
+            ),
         ) as box:
-            r1 = await box.exec("nslookup", "example.com", timeout=10)
+            r1 = await box.exec("nslookup", self.live_targets.allowed_host, timeout=10)
             assert r1.exit_code == 0
             assert "0.0.0.0" not in r1.stdout
 
-            r2 = await box.exec("nslookup", "example.org", timeout=10)
+            r2 = await box.exec(
+                "nslookup",
+                self.live_targets.second_allowed_host,
+                timeout=10,
+            )
             assert r2.exit_code == 0
             assert "0.0.0.0" not in r2.stdout
 
             # Unlisted host should be blocked
-            r3 = await box.exec("nslookup", "github.com", timeout=10)
+            r3 = await box.exec("nslookup", self.live_targets.blocked_host, timeout=10)
             assert "0.0.0.0" in r3.stdout
 
     async def test_gateway_ip_always_reachable(self):
@@ -394,12 +476,13 @@ class TestEdgeCases:
 
         Even with restrictive allow_net, internal network must work.
         """
-        async with boxlite.SimpleBox(
-            image="alpine:latest",
-            network=enabled_network("example.com"),
+        async with self.make_box(
+            network=enabled_network(self.live_targets.allowed_host),
         ) as box:
             # DNS queries go to the gateway — this must work
-            result = await box.exec("nslookup", "example.com", timeout=10)
+            result = await box.exec(
+                "nslookup", self.live_targets.allowed_host, timeout=10
+            )
             assert result.exit_code == 0, (
                 "DNS to gateway should work with restrictive allowlist"
             )
@@ -411,17 +494,10 @@ class TestEdgeCases:
         can't have hostname extracted, so they're blocked when only hostname
         rules exist and no IP/CIDR rules match.
         """
-        async with boxlite.SimpleBox(
-            image="alpine:latest",
-            network=enabled_network("example.com"),
+        async with self.make_box(
+            network=enabled_network(self.live_targets.allowed_host),
         ) as box:
-            # Try raw TCP on port 9999 to example.com's IP
-            result = await box.exec(
-                "sh",
-                "-c",
-                "nc -w 2 93.184.216.34 9999 </dev/null 2>&1; echo EXIT:$?",
-                timeout=10,
-            )
+            result = await self.tcp_probe(box, self.live_targets.allowed_ip, port=9999)
             assert "EXIT:0" not in result.stdout, (
                 "non-HTTP port to allowed host's IP should be blocked"
             )

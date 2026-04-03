@@ -84,6 +84,20 @@ func TestTCPFilter_EmptyHostname(t *testing.T) {
 	assertFalse(t, f.MatchesHostname(""), "empty hostname never matches")
 }
 
+func TestDecideTCPRoute_CIDRUsesStandardForward(t *testing.T) {
+	f := NewTCPFilter([]string{"104.18.26.0/24"}, "192.168.127.1", "192.168.127.2")
+
+	inRange := net.IP([]byte{104, 18, 26, 120})
+	if got := decideTCPRoute(inRange, 80, f, nil); got != tcpRouteStandardForward {
+		t.Fatalf("expected in-range CIDR traffic to standard-forward, got %v", got)
+	}
+
+	outOfRange := net.IP([]byte{104, 18, 3, 24})
+	if got := decideTCPRoute(outOfRange, 80, f, nil); got != tcpRouteBlock {
+		t.Fatalf("expected out-of-range CIDR traffic to block, got %v", got)
+	}
+}
+
 func assertTrue(t *testing.T, v bool, msg string) {
 	t.Helper()
 	if !v {
