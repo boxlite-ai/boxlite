@@ -10,6 +10,7 @@
 //! ├── .ready          ← cache version marker
 //! ├── images/         ← pulled OCI images (shared read-only)
 //! ├── rootfs/         ← built guest rootfs (shared read-only)
+//! ├── bases/          ← shared guest base disks (shared read-only)
 //! ├── tmp/            ← transient files (per-test subdirs)
 //! └── db/boxlite.db   ← DB snapshot (copied per-test)
 //! ```
@@ -25,7 +26,7 @@ use tempfile::TempDir;
 use crate::{TEST_IMAGES, TEST_SHUTDOWN_TIMEOUT, test_registries};
 
 const READY_MARKER_FILE: &str = ".ready";
-const WARM_CACHE_VERSION: &str = "v2-python-alpine";
+const WARM_CACHE_VERSION: &str = "v3-python-alpine-bases";
 
 /// Cleanup handle for per-test resources linked into a home directory.
 ///
@@ -85,11 +86,12 @@ impl SharedResources {
     /// Creates:
     /// - `home/images → target/boxlite-test/images/` (symlink, read-only)
     /// - `home/rootfs → target/boxlite-test/rootfs/` (symlink, read-only)
+    /// - `home/bases → target/boxlite-test/bases/` (symlink, read-only)
     /// - `home/tmp → target/boxlite-test/tmp/<unique>/` (symlink, per-test)
     /// - `home/db/boxlite.db` (copy, per-test writable)
     pub fn link_into(&self, home_dir: &Path) -> LinkedCache {
-        // Symlink images, rootfs → cache dir (shared, read-only)
-        for name in ["images", "rootfs"] {
+        // Symlink images, rootfs, bases → cache dir (shared, read-only)
+        for name in ["images", "rootfs", "bases"] {
             let link = home_dir.join(name);
             if !link.exists() {
                 let target = self.dir.join(name);
@@ -129,7 +131,7 @@ impl SharedResources {
         let dir = cache_dir();
 
         // Create persistent cache directories
-        for subdir in ["images", "rootfs", "tmp"] {
+        for subdir in ["images", "rootfs", "bases", "tmp"] {
             std::fs::create_dir_all(dir.join(subdir))
                 .unwrap_or_else(|e| panic!("create cache/{subdir}: {e}"));
         }
@@ -154,9 +156,9 @@ impl SharedResources {
         resources.clear_ready_marker();
 
         // Ephemeral short-path home for warm-up runtime (macOS 104-char socket limit).
-        // Symlinks {images,rootfs,tmp} → target/boxlite-test/ so data persists.
+        // Symlinks {images,rootfs,bases,tmp} → target/boxlite-test/ so data persists.
         let warm_home = TempDir::new_in("/tmp").expect("create warm home");
-        for name in ["images", "rootfs", "tmp"] {
+        for name in ["images", "rootfs", "bases", "tmp"] {
             symlink_or_exists(&dir.join(name), &warm_home.path().join(name), name);
         }
 
@@ -317,7 +319,7 @@ mod tests {
     fn linked_cache_cleans_per_test_tmp_on_drop() {
         let base = tempfile::tempdir().expect("create base temp dir");
         let cache_dir = base.path().join("cache");
-        for sub in ["images", "rootfs", "tmp"] {
+        for sub in ["images", "rootfs", "bases", "tmp"] {
             std::fs::create_dir_all(cache_dir.join(sub)).unwrap();
         }
 
@@ -350,7 +352,7 @@ mod tests {
     fn link_into_creates_tmp_symlink() {
         let base = tempfile::tempdir().expect("create base temp dir");
         let cache_dir = base.path().join("cache");
-        for sub in ["images", "rootfs", "tmp"] {
+        for sub in ["images", "rootfs", "bases", "tmp"] {
             std::fs::create_dir_all(cache_dir.join(sub)).unwrap();
         }
 
@@ -371,6 +373,34 @@ mod tests {
         assert!(
             tmp_link.exists(),
             "symlink target should exist while LinkedCache is alive"
+        );
+    }
+
+    #[test]
+    fn link_into_creates_bases_symlink() {
+        let base = tempfile::tempdir().expect("create base temp dir");
+        let cache_dir = base.path().join("cache");
+        for sub in ["images", "rootfs", "bases", "tmp"] {
+            std::fs::create_dir_all(cache_dir.join(sub)).unwrap();
+        }
+
+        let resources = SharedResources { dir: cache_dir };
+
+        let home = tempfile::tempdir().expect("create home temp dir");
+        let _linked = resources.link_into(home.path());
+
+        let bases_link = home.path().join("bases");
+        assert!(
+            bases_link
+                .symlink_metadata()
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "home/bases should be a symlink"
+        );
+        assert!(
+            bases_link.exists(),
+            "bases symlink target should exist while LinkedCache is alive"
         );
     }
 

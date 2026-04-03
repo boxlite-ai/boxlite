@@ -9,6 +9,7 @@
 //! /tmp/boxlite-XXXXXX/
 //! ├── images → target/boxlite-test/images/  (symlink, read-only)
 //! ├── rootfs → target/boxlite-test/rootfs/  (symlink, read-only)
+//! ├── bases  → target/boxlite-test/bases/   (symlink, read-only)
 //! ├── tmp    → target/boxlite-test/tmp/XXXX (symlink, per-test subdir)
 //! ├── db/boxlite.db                          (copy, per-test writable)
 //! ├── boxes/                                  (per-test writable)
