@@ -6,9 +6,29 @@
 
 #include "boxlite.h"
 #include <assert.h>
+#include <ftw.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+static int remove_tree_entry(const char *path, const struct stat *statbuf,
+                             int typeflag, struct FTW *ftwbuf) {
+  (void)statbuf;
+  (void)typeflag;
+  (void)ftwbuf;
+  return remove(path);
+}
+
+static void reset_test_home(const char *temp_dir) {
+  struct stat statbuf;
+  if (lstat(temp_dir, &statbuf) != 0) {
+    return;
+  }
+
+  assert(nftw(temp_dir, remove_tree_entry, 32, FTW_DEPTH | FTW_PHYS) == 0);
+}
 
 void test_multiple_boxes() {
   printf("\nTEST: Create and manage multiple boxes\n");
@@ -16,6 +36,7 @@ void test_multiple_boxes() {
   CBoxliteRuntime *runtime = NULL;
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-integration-multiple";
+  reset_test_home(temp_dir);
   BoxliteErrorCode code = boxlite_runtime_new(temp_dir, NULL, &runtime, &error);
   assert(code == Ok);
   assert(runtime != NULL);
@@ -93,6 +114,7 @@ void test_reattach_box() {
   CBoxliteRuntime *runtime = NULL;
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-integration-reattach";
+  reset_test_home(temp_dir);
   BoxliteErrorCode code = boxlite_runtime_new(temp_dir, NULL, &runtime, &error);
   assert(code == Ok);
   assert(runtime != NULL);
@@ -145,6 +167,7 @@ void test_runtime_metrics() {
   CBoxliteRuntime *runtime = NULL;
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-integration-metrics";
+  reset_test_home(temp_dir);
   BoxliteErrorCode code = boxlite_runtime_new(temp_dir, NULL, &runtime, &error);
   assert(code == Ok);
   assert(runtime != NULL);
@@ -193,6 +216,7 @@ void test_box_metrics() {
   CBoxliteRuntime *runtime = NULL;
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-integration-boxmetrics";
+  reset_test_home(temp_dir);
   BoxliteErrorCode code = boxlite_runtime_new(temp_dir, NULL, &runtime, &error);
   assert(code == Ok);
   assert(runtime != NULL);
@@ -248,6 +272,7 @@ void test_concurrent_execution() {
   CBoxliteRuntime *runtime = NULL;
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-integration-concurrent";
+  reset_test_home(temp_dir);
   BoxliteErrorCode code = boxlite_runtime_new(temp_dir, NULL, &runtime, &error);
   assert(code == Ok);
   assert(runtime != NULL);
@@ -294,6 +319,7 @@ void test_shutdown_with_boxes() {
   CBoxliteRuntime *runtime = NULL;
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-integration-shutdown";
+  reset_test_home(temp_dir);
   BoxliteErrorCode code = boxlite_runtime_new(temp_dir, NULL, &runtime, &error);
   assert(code == Ok);
   assert(runtime != NULL);
@@ -328,6 +354,7 @@ void test_box_prefix_lookup() {
   CBoxliteRuntime *runtime = NULL;
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-integration-prefix";
+  reset_test_home(temp_dir);
   BoxliteErrorCode code = boxlite_runtime_new(temp_dir, NULL, &runtime, &error);
   assert(code == Ok);
   assert(runtime != NULL);
@@ -387,6 +414,7 @@ void test_allow_net_json_config() {
   CBoxliteRuntime *runtime = NULL;
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-integration-allow-net";
+  reset_test_home(temp_dir);
   BoxliteErrorCode code = boxlite_runtime_new(temp_dir, NULL, &runtime, &error);
   assert(code == Ok);
   assert(runtime != NULL);
@@ -419,6 +447,7 @@ void test_legacy_network_json_rejected() {
   CBoxliteRuntime *runtime = NULL;
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-integration-legacy-network";
+  reset_test_home(temp_dir);
   BoxliteErrorCode code = boxlite_runtime_new(temp_dir, NULL, &runtime, &error);
   assert(code == Ok);
   assert(runtime != NULL);
@@ -444,6 +473,7 @@ void test_secrets_json_config() {
   CBoxliteRuntime *runtime = NULL;
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-integration-secrets";
+  reset_test_home(temp_dir);
   BoxliteErrorCode code = boxlite_runtime_new(temp_dir, NULL, &runtime, &error);
   assert(code == Ok);
   assert(runtime != NULL);

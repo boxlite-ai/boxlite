@@ -502,6 +502,7 @@ version = "0.8.2"
 dependencies = [
  "boxlite",
  "futures",
+ "serde",
  "serde_json",
  "tokio",
 ]

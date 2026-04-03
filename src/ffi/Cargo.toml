@@ -17,8 +17,8 @@ default = []
 boxlite = { path = "../boxlite" }
 
 tokio = { version = "1.37", features = ["rt", "rt-multi-thread"] }
+serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 futures = "0.3"
 
 [dev-dependencies]
-
