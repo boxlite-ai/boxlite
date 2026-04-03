@@ -1479,19 +1479,7 @@ components:
           items:
             $ref: "#/components/schemas/PortSpec"
         network:
-          type: string
-          description: |
-            Network mode. Supported: `enabled` (full access, default), `disabled` (no network).
-            When enabled, use `allow_net` to restrict outbound traffic.
-          default: enabled
-        allow_net:
-          type: array
-          items:
-            type: string
-          description: |
-            Optional outbound allowlist when `network=enabled`.
-            Empty or omitted means full outbound access.
-            Supports hostnames, wildcard hostnames, IPs, and CIDRs.
+          $ref: "#/components/schemas/NetworkSpec"
         secrets:
           type: array
           items:
@@ -1524,6 +1512,26 @@ components:
         read_only:
           type: boolean
           default: false
+
+    NetworkSpec:
+      type: object
+      description: Structured network configuration for the box
+      additionalProperties: false
+      required: [mode]
+      properties:
+        mode:
+          type: string
+          enum: [enabled, disabled]
+          description: |
+            `enabled` allows guest networking. `disabled` removes the guest network interface.
+        allow_net:
+          type: array
+          items:
+            type: string
+          description: |
+            Optional outbound allowlist used only when `mode=enabled`.
+            Empty or omitted means full outbound access.
+            Supports hostnames, wildcard hostnames, IPs, and CIDRs.
 
     PortSpec:
       type: object

@@ -11,7 +11,7 @@ use std::ptr;
 use boxlite::litebox::LiteBox;
 use boxlite::runtime::BoxliteRuntime;
 use boxlite::runtime::id::BoxID;
-use boxlite::runtime::options::{BoxOptions, BoxliteOptions};
+use boxlite::runtime::options::{BoxOptions, BoxliteOptions, NetworkConfig, NetworkSpec};
 use boxlite::{BoxliteError, RootfsSpec};
 
 use crate::error::{BoxliteErrorCode, FFIError, error_to_code, null_pointer_error, write_error};
@@ -158,10 +158,9 @@ pub unsafe fn box_create(
             }
         };
 
-        let options: BoxOptions = match serde_json::from_str(&options_str) {
+        let options = match parse_box_options_json(&options_str) {
             Ok(opts) => opts,
-            Err(e) => {
-                let err = BoxliteError::Internal(format!("Invalid JSON options: {}", e));
+            Err(err) => {
                 write_error(out_error, err);
                 return BoxliteErrorCode::InvalidArgument;
             }
@@ -190,6 +189,51 @@ pub unsafe fn box_create(
             }
         }
     }
+}
+
+fn parse_box_options_json(options_json: &str) -> Result<BoxOptions, BoxliteError> {
+    let mut value: serde_json::Value = serde_json::from_str(options_json)
+        .map_err(|e| BoxliteError::Config(format!("Invalid JSON options: {}", e)))?;
+
+    let object = value.as_object_mut().ok_or_else(|| {
+        BoxliteError::Config("Invalid JSON options: expected a JSON object".to_string())
+    })?;
+
+    if object.contains_key("allow_net") {
+        return Err(BoxliteError::Config(
+            "Invalid JSON options: top-level allow_net is not supported. \
+             Use network: { mode, allow_net }."
+                .to_string(),
+        ));
+    }
+
+    if let Some(network_value) = object.get_mut("network") {
+        let network_object = network_value.as_object().ok_or_else(|| {
+            BoxliteError::Config(
+                "Invalid JSON options: network must be an object with mode and optional allow_net."
+                    .to_string(),
+            )
+        })?;
+        if !network_object.contains_key("mode") {
+            return Err(BoxliteError::Config(
+                "Invalid JSON options: network.mode is required when network is provided."
+                    .to_string(),
+            ));
+        }
+
+        let config: NetworkConfig = serde_json::from_value(network_value.clone())
+            .map_err(|e| BoxliteError::Config(format!("Invalid JSON options: network: {}", e)))?;
+        let network = NetworkSpec::try_from(config)?;
+        *network_value = serde_json::to_value(network).map_err(|e| {
+            BoxliteError::Internal(format!(
+                "Invalid JSON options: failed to serialize network config: {}",
+                e
+            ))
+        })?;
+    }
+
+    serde_json::from_value(value)
+        .map_err(|e| BoxliteError::Config(format!("Invalid JSON options: {}", e)))
 }
 
 /// List all boxes as JSON

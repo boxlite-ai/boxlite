@@ -5,7 +5,8 @@ use boxlite::litebox::copy::CopyOptions;
 use boxlite::runtime::advanced_options::{HealthCheckOptions, SecurityOptions};
 use boxlite::runtime::constants::images;
 use boxlite::runtime::options::{
-    BoxOptions, BoxliteOptions, NetworkSpec, PortProtocol, PortSpec, RootfsSpec, VolumeSpec,
+    BoxOptions, BoxliteOptions, NetworkConfig, NetworkMode, NetworkSpec, PortProtocol, PortSpec,
+    RootfsSpec, VolumeSpec,
 };
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
@@ -107,6 +108,47 @@ impl From<PyCopyOptions> for CopyOptions {
 }
 
 // ============================================================================
+// NetworkSpec
+// ============================================================================
+
+#[pyclass(name = "NetworkSpec")]
+#[derive(Clone, Debug)]
+pub(crate) struct PyNetworkSpec {
+    #[pyo3(get, set)]
+    pub(crate) mode: String,
+    #[pyo3(get, set)]
+    pub(crate) allow_net: Vec<String>,
+}
+
+#[pymethods]
+impl PyNetworkSpec {
+    #[new]
+    #[pyo3(signature = (mode, allow_net=vec![]))]
+    fn new(mode: String, allow_net: Vec<String>) -> Self {
+        Self { mode, allow_net }
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "NetworkSpec(mode={:?}, allow_net={:?})",
+            self.mode, self.allow_net
+        )
+    }
+}
+
+impl TryFrom<PyNetworkSpec> for NetworkSpec {
+    type Error = boxlite::BoxliteError;
+
+    fn try_from(py_spec: PyNetworkSpec) -> Result<Self, Self::Error> {
+        let mode = py_spec.mode.parse::<NetworkMode>()?;
+        NetworkSpec::try_from(NetworkConfig {
+            mode,
+            allow_net: py_spec.allow_net,
+        })
+    }
+}
+
+// ============================================================================
 // Secret
 // ============================================================================
 
@@ -204,9 +246,7 @@ pub(crate) struct PyBoxOptions {
     pub(crate) env: Vec<(String, String)>,
     pub(crate) volumes: Vec<PyVolumeSpec>,
     #[pyo3(get, set)]
-    pub(crate) network: Option<String>,
-    #[pyo3(get, set)]
-    pub(crate) allow_net: Vec<String>,
+    pub(crate) network: Option<PyNetworkSpec>,
     pub(crate) ports: Vec<PyPortSpec>,
     #[pyo3(get, set)]
     pub(crate) auto_remove: Option<bool>,
@@ -248,7 +288,6 @@ impl PyBoxOptions {
         env=vec![],
         volumes=vec![],
         network=None,
-        allow_net=vec![],
         ports=vec![],
         auto_remove=None,
         detach=None,
@@ -268,8 +307,7 @@ impl PyBoxOptions {
         working_dir: Option<String>,
         env: Vec<(String, String)>,
         volumes: Vec<PyVolumeSpec>,
-        network: Option<String>,
-        allow_net: Vec<String>,
+        network: Option<PyNetworkSpec>,
         ports: Vec<PyPortSpec>,
         auto_remove: Option<bool>,
         detach: Option<bool>,
@@ -289,7 +327,6 @@ impl PyBoxOptions {
             env,
             volumes,
             network,
-            allow_net,
             ports,
             auto_remove,
             detach,
@@ -313,15 +350,15 @@ impl PyBoxOptions {
     }
 }
 
-impl From<PyBoxOptions> for BoxOptions {
-    fn from(py_opts: PyBoxOptions) -> Self {
+impl TryFrom<PyBoxOptions> for BoxOptions {
+    type Error = boxlite::BoxliteError;
+
+    fn try_from(py_opts: PyBoxOptions) -> Result<Self, Self::Error> {
         let volumes = py_opts.volumes.into_iter().map(VolumeSpec::from).collect();
 
         let network = match py_opts.network {
-            Some(ref s) if s.eq_ignore_ascii_case("disabled") => NetworkSpec::Disabled,
-            _ => NetworkSpec::Enabled {
-                allow_net: py_opts.allow_net,
-            },
+            Some(spec) => NetworkSpec::try_from(spec)?,
+            None => NetworkSpec::default(),
         };
 
         let ports = py_opts.ports.into_iter().map(PortSpec::from).collect();
@@ -387,7 +424,7 @@ impl From<PyBoxOptions> for BoxOptions {
             })
             .collect();
 
-        opts
+        Ok(opts)
     }
 }
 

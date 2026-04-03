@@ -40,7 +40,7 @@ import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 import jwt
 import uvicorn
@@ -56,7 +56,7 @@ from fastapi import (
 )
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sse_starlette.sse import EventSourceResponse, ServerSentEvent
 
 import boxlite
@@ -104,7 +104,24 @@ class SecretSpec(BaseModel):
     placeholder: Optional[str] = None
 
 
+class NetworkSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["enabled", "disabled"]
+    allow_net: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_allow_net(self) -> "NetworkSpec":
+        if self.mode == "disabled" and self.allow_net:
+            raise ValueError(
+                'network.allow_net is incompatible with network.mode="disabled"'
+            )
+        return self
+
+
 class CreateBoxRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: Optional[str] = None
     image: Optional[str] = "alpine:latest"
     rootfs_path: Optional[str] = None
@@ -118,8 +135,7 @@ class CreateBoxRequest(BaseModel):
     user: Optional[str] = None
     volumes: Optional[list[dict]] = None
     ports: Optional[list[dict]] = None
-    network: Optional[str] = "enabled"
-    allow_net: Optional[list[str]] = None
+    network: Optional[NetworkSpec] = None
     secrets: Optional[list[SecretSpec]] = None
     auto_remove: Optional[bool] = True
     detach: Optional[bool] = False
@@ -345,9 +361,10 @@ def build_box_options(req: CreateBoxRequest) -> boxlite.BoxOptions:
     if req.env:
         kwargs["env"] = list(req.env.items())
     if req.network is not None:
-        kwargs["network"] = req.network
-    if req.allow_net is not None:
-        kwargs["allow_net"] = req.allow_net
+        kwargs["network"] = boxlite.NetworkSpec(
+            mode=req.network.mode,
+            allow_net=req.network.allow_net,
+        )
     if req.entrypoint is not None:
         kwargs["entrypoint"] = req.entrypoint
     if req.cmd is not None:

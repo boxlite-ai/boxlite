@@ -132,22 +132,26 @@ describe("SimpleBoxOptions", () => {
     expect(opts.cpus).toBe(2);
   });
 
-  test("accepts network allowlist", () => {
+  test("accepts structured network allowlist", () => {
     const opts: SimpleBoxOptions = {
-      network: "enabled",
-      allowNet: ["example.com", "*.openai.com"],
+      network: {
+        mode: "enabled",
+        allowNet: ["example.com", "*.openai.com"],
+      },
     };
 
-    expect(opts.network).toBe("enabled");
-    expect(opts.allowNet).toEqual(["example.com", "*.openai.com"]);
+    expect(opts.network?.mode).toBe("enabled");
+    expect(opts.network?.allowNet).toEqual(["example.com", "*.openai.com"]);
   });
 
   test("accepts disabled network mode", () => {
     const opts: SimpleBoxOptions = {
-      network: "disabled",
+      network: {
+        mode: "disabled",
+      },
     };
 
-    expect(opts.network).toBe("disabled");
+    expect(opts.network?.mode).toBe("disabled");
   });
 
   test("accepts secrets", () => {

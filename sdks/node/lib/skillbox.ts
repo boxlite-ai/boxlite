@@ -5,7 +5,12 @@
  */
 
 import * as net from "node:net";
-import { SimpleBox, type Secret, type SimpleBoxOptions } from "./simplebox.js";
+import {
+  SimpleBox,
+  type NetworkSpec,
+  type Secret,
+  type SimpleBoxOptions,
+} from "./simplebox.js";
 import { TimeoutError } from "./errors.js";
 import {
   SKILLBOX_IMAGE,
@@ -47,10 +52,8 @@ export interface SkillBoxOptions {
   guiHttpsPort?: number;
   /** Remove box when stopped (default: true) */
   autoRemove?: boolean;
-  /** Network mode (default: enabled). */
-  network?: "enabled" | "disabled";
-  /** Outbound allowlist when network is enabled. */
-  allowNet?: string[];
+  /** Structured network configuration. */
+  network?: NetworkSpec;
   /** Secrets to inject into outbound HTTPS requests. */
   secrets?: Secret[];
   /** Optional runtime instance */
@@ -150,7 +153,6 @@ export class SkillBox extends SimpleBox {
       name: options.name ?? "skill-box",
       autoRemove: options.autoRemove ?? true,
       network: options.network,
-      allowNet: options.allowNet,
       secrets: options.secrets,
       runtime: options.runtime,
       env: {

@@ -1,6 +1,9 @@
 package boxlite
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // Wire types match the JSON format produced by the Rust FFI layer.
 // These are unexported — only used for JSON marshaling/unmarshaling.
@@ -34,12 +37,9 @@ type wirePort struct {
 	Protocol  string `json:"protocol"`
 }
 
-type wireEnabledNetwork struct {
-	Enabled wireAllowNet `json:"Enabled"`
-}
-
-type wireAllowNet struct {
-	AllowNet []string `json:"allow_net"`
+type wireNetworkSpec struct {
+	Mode     string   `json:"mode"`
+	AllowNet []string `json:"allow_net,omitempty"`
 }
 
 type wireSecret struct {
@@ -90,7 +90,7 @@ func (w *boxInfoWire) toBoxInfo() BoxInfo {
 }
 
 // buildOptionsJSON creates the JSON wire representation from boxConfig.
-func buildOptionsJSON(image string, cfg *boxConfig) boxOptionsWire {
+func buildOptionsJSON(image string, cfg *boxConfig) (boxOptionsWire, error) {
 	w := boxOptionsWire{
 		Rootfs: wireRootfsImage{Image: image},
 		Env:    cfg.env,
@@ -122,16 +122,36 @@ func buildOptionsJSON(image string, cfg *boxConfig) boxOptionsWire {
 		w.Cmd = cfg.cmd
 	}
 
-	allowNet := cfg.allowNet
+	network := NetworkSpec{
+		Mode: NetworkModeEnabled,
+	}
+	if cfg.network != nil {
+		network = *cfg.network
+	}
+	allowNet := network.AllowNet
 	if allowNet == nil {
 		allowNet = []string{}
 	}
-	if cfg.networkMode == networkModeDisabled {
-		w.Network = "Disabled"
-	} else {
-		w.Network = wireEnabledNetwork{
-			Enabled: wireAllowNet{AllowNet: allowNet},
+	switch network.Mode {
+	case "", NetworkModeEnabled:
+		w.Network = wireNetworkSpec{
+			Mode:     string(NetworkModeEnabled),
+			AllowNet: allowNet,
 		}
+	case NetworkModeDisabled:
+		if len(allowNet) > 0 {
+			return boxOptionsWire{}, fmt.Errorf(
+				"network.mode=%q is incompatible with allow_net", NetworkModeDisabled,
+			)
+		}
+		w.Network = wireNetworkSpec{Mode: string(NetworkModeDisabled)}
+	default:
+		return boxOptionsWire{}, fmt.Errorf(
+			"invalid network mode %q: expected %q or %q",
+			network.Mode,
+			NetworkModeEnabled,
+			NetworkModeDisabled,
+		)
 	}
 
 	for _, v := range cfg.volumes {
@@ -168,5 +188,5 @@ func buildOptionsJSON(image string, cfg *boxConfig) boxOptionsWire {
 		w.Secrets = []wireSecret{}
 	}
 
-	return w
+	return w, nil
 }

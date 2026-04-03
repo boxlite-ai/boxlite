@@ -87,12 +87,27 @@ Configuration options for creating a box.
 | `working_dir` | `str` | `"/root"` | Working directory inside container |
 | `env` | `List[Tuple[str, str]]` | `[]` | Environment variables as (key, value) pairs |
 | `volumes` | `List[Tuple[str, str, str]]` | `[]` | Volume mounts as (host_path, guest_path, mode) |
-| `network` | `str \| None` | `"enabled"` | Network mode: `"enabled"` or `"disabled"` |
-| `allow_net` | `List[str]` | `[]` | Outbound allowlist when network is enabled |
+| `network` | `NetworkSpec \| None` | `None` | Structured network configuration. Omit for default enabled networking. |
 | `ports` | `List[Tuple[int, int, str]]` | `[]` | Port forwarding as (host_port, guest_port, protocol) |
 | `secrets` | `List[Secret]` | `[]` | Outbound HTTP(S) secret substitution rules |
 | `auto_remove` | `bool` | `True` | Auto cleanup when stopped |
 | `detach` | `bool` | `False` | Survive parent process exit |
+
+#### `NetworkSpec`
+
+```python
+from boxlite import NetworkSpec
+
+network = NetworkSpec(
+    mode="enabled",
+    allow_net=["api.openai.com"],
+)
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `mode` | `str` | Required | `"enabled"` or `"disabled"` |
+| `allow_net` | `List[str]` | `[]` | Outbound allowlist used only when `mode="enabled"` |
 
 #### Volume Mount Format
 
@@ -311,7 +326,7 @@ SimpleBox(
 | `runtime` | `Boxlite` | Global default | Runtime instance |
 | `name` | `str` | None | Optional unique name |
 | `auto_remove` | `bool` | `True` | Remove box when stopped |
-| `**kwargs` | | | Additional options: `env`, `volumes`, `ports`, `working_dir`, `network`, `allow_net`, `secrets` |
+| `**kwargs` | | | Additional options: `env`, `volumes`, `ports`, `working_dir`, `network`, `secrets` |
 
 #### Properties
 

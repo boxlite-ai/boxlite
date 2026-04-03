@@ -103,12 +103,22 @@ Configuration options for creating a box.
 | `workingDir` | `string` | `"/root"` | Working directory inside container |
 | `env` | `JsEnvVar[]` | `[]` | Environment variables |
 | `volumes` | `JsVolumeSpec[]` | `[]` | Volume mounts |
-| `network` | `"enabled" \| "disabled"` | `"enabled"` | Network mode |
-| `allowNet` | `string[]` | `[]` | Outbound allowlist when network is enabled |
+| `network` | `NetworkSpec` | `{ mode: "enabled" }` | Structured network configuration |
 | `ports` | `JsPortSpec[]` | `[]` | Port mappings |
 | `secrets` | `Secret[]` | `[]` | Outbound HTTP(S) secret substitution rules |
 | `autoRemove` | `boolean` | `false` | Auto cleanup when stopped |
 | `detach` | `boolean` | `false` | Survive parent process exit |
+
+#### `NetworkSpec`
+
+```typescript
+interface NetworkSpec {
+  mode: "enabled" | "disabled";
+  allowNet?: string[];
+}
+```
+
+Use `allowNet` only when `mode: "enabled"`. Empty or omitted `allowNet` means full outbound access.
 
 #### `JsEnvVar`
 
@@ -301,8 +311,7 @@ interface SimpleBoxOptions {
   workingDir?: string;    // Working directory
   env?: Record<string, string>;  // Environment variables
   volumes?: VolumeSpec[]; // Volume mounts
-  network?: "enabled" | "disabled";
-  allowNet?: string[];
+  network?: NetworkSpec;
   ports?: PortSpec[];     // Port mappings
   secrets?: Secret[];
 }

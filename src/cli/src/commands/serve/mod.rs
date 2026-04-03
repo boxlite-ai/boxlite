@@ -18,8 +18,10 @@ use axum::{Json, Router};
 use clap::Args;
 use tokio::sync::RwLock;
 
+use boxlite::runtime::options::{NetworkConfig, NetworkMode};
 use boxlite::{
-    BoxCommand, BoxInfo, BoxOptions, BoxliteRuntime, ExecStdin, Execution, LiteBox, RootfsSpec,
+    BoxCommand, BoxInfo, BoxOptions, BoxliteRuntime, ExecStdin, Execution, LiteBox, NetworkSpec,
+    RootfsSpec,
 };
 
 use crate::cli::GlobalFlags;
@@ -100,7 +102,7 @@ fn box_info_to_response(info: &BoxInfo) -> BoxResponse {
     }
 }
 
-fn build_box_options(req: &CreateBoxRequest) -> BoxOptions {
+fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::BoxliteError> {
     let rootfs = if let Some(ref path) = req.rootfs_path {
         RootfsSpec::RootfsPath(path.clone())
     } else {
@@ -113,20 +115,29 @@ fn build_box_options(req: &CreateBoxRequest) -> BoxOptions {
         .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
         .unwrap_or_default();
 
-    BoxOptions {
+    let network = match &req.network {
+        Some(network) => NetworkSpec::try_from(NetworkConfig {
+            mode: network.mode.parse::<NetworkMode>()?,
+            allow_net: network.allow_net.clone(),
+        })?,
+        None => NetworkSpec::default(),
+    };
+
+    Ok(BoxOptions {
         rootfs,
         cpus: req.cpus,
         memory_mib: req.memory_mib,
         disk_size_gb: req.disk_size_gb,
         working_dir: req.working_dir.clone(),
         env,
+        network,
         entrypoint: req.entrypoint.clone(),
         cmd: req.cmd.clone(),
         user: req.user.clone(),
         auto_remove: req.auto_remove.unwrap_or(false),
         detach: req.detach.unwrap_or(true),
         ..Default::default()
-    }
+    })
 }
 
 fn build_box_command(req: &ExecRequest) -> BoxCommand {

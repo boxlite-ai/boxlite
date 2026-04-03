@@ -2,10 +2,27 @@ import { describe, expect, test } from "vitest";
 import { SimpleBox } from "../lib/simplebox.js";
 
 describe("SimpleBox network and secrets", { timeout: 180_000 }, () => {
+  test("rejects legacy string network", () => {
+    expect(
+      () =>
+        new SimpleBox({ image: "alpine:latest", network: "enabled" } as any),
+    ).toThrow("SimpleBoxOptions.network must be an object");
+  });
+
+  test("rejects legacy top-level allowNet", () => {
+    expect(
+      () =>
+        new SimpleBox({
+          image: "alpine:latest",
+          allowNet: ["example.com"],
+        } as any),
+    ).toThrow("SimpleBoxOptions.allowNet was removed");
+  });
+
   test("disabled network removes eth0", async () => {
     const box = new SimpleBox({
       image: "alpine:latest",
-      network: "disabled",
+      network: { mode: "disabled" },
       autoRemove: true,
     });
 
@@ -23,7 +40,10 @@ describe("SimpleBox network and secrets", { timeout: 180_000 }, () => {
   test("allowNet permits listed host access", async () => {
     const box = new SimpleBox({
       image: "alpine:latest",
-      allowNet: ["example.com"],
+      network: {
+        mode: "enabled",
+        allowNet: ["example.com"],
+      },
       autoRemove: true,
     });
 
@@ -45,7 +65,10 @@ describe("SimpleBox network and secrets", { timeout: 180_000 }, () => {
   test("secrets are substituted at the network boundary", async () => {
     const box = new SimpleBox({
       image: "python:slim",
-      allowNet: ["httpbin.org"],
+      network: {
+        mode: "enabled",
+        allowNet: ["httpbin.org"],
+      },
       secrets: [
         {
           name: "testkey",

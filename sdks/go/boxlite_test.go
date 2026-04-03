@@ -76,7 +76,10 @@ func TestBoxOptions(t *testing.T) {
 	WithWorkDir("/app")(cfg)
 	WithEntrypoint("/bin/sh")(cfg)
 	WithCmd("-c", "echo hi")(cfg)
-	WithAllowNet("example.com", "*.openai.com")(cfg)
+	WithNetwork(NetworkSpec{
+		Mode:     NetworkModeEnabled,
+		AllowNet: []string{"example.com", "*.openai.com"},
+	})(cfg)
 	WithSecret(Secret{Name: "openai", Value: "sk-test"})(cfg)
 
 	if cfg.name != "test-box" {
@@ -103,11 +106,14 @@ func TestBoxOptions(t *testing.T) {
 	if cfg.workDir != "/app" {
 		t.Errorf("workDir: got %q", cfg.workDir)
 	}
-	if cfg.networkMode != networkModeEnabled {
-		t.Errorf("networkMode: got %q", cfg.networkMode)
+	if cfg.network == nil {
+		t.Fatal("network should be set")
 	}
-	if len(cfg.allowNet) != 2 {
-		t.Errorf("allowNet: got %v", cfg.allowNet)
+	if cfg.network.Mode != NetworkModeEnabled {
+		t.Errorf("network.Mode: got %q", cfg.network.Mode)
+	}
+	if len(cfg.network.AllowNet) != 2 {
+		t.Errorf("network.AllowNet: got %v", cfg.network.AllowNet)
 	}
 	if len(cfg.secrets) != 1 {
 		t.Fatalf("secrets: got %d", len(cfg.secrets))
@@ -142,7 +148,10 @@ func TestBuildOptionsJSON(t *testing.T) {
 	WithVolume("/src", "/dst")(cfg)
 	WithWorkDir("/work")(cfg)
 
-	wire := buildOptionsJSON("alpine:latest", cfg)
+	wire, err := buildOptionsJSON("alpine:latest", cfg)
+	if err != nil {
+		t.Fatalf("buildOptionsJSON: %v", err)
+	}
 
 	rootfs, ok := wire.Rootfs.(wireRootfsImage)
 	if !ok {
@@ -166,18 +175,24 @@ func TestBuildOptionsJSON(t *testing.T) {
 	if wire.WorkDir != "/work" {
 		t.Errorf("WorkDir: got %q", wire.WorkDir)
 	}
-	network, ok := wire.Network.(wireEnabledNetwork)
+	network, ok := wire.Network.(wireNetworkSpec)
 	if !ok {
 		t.Fatalf("Network type: got %T", wire.Network)
 	}
-	if len(network.Enabled.AllowNet) != 0 {
-		t.Errorf("AllowNet should default to empty, got %v", network.Enabled.AllowNet)
+	if network.Mode != string(NetworkModeEnabled) {
+		t.Errorf("Network.Mode: got %q", network.Mode)
+	}
+	if len(network.AllowNet) != 0 {
+		t.Errorf("AllowNet should default to empty, got %v", network.AllowNet)
 	}
 }
 
 func TestBuildOptionsJSON_Defaults(t *testing.T) {
 	cfg := &boxConfig{}
-	wire := buildOptionsJSON("ubuntu:22.04", cfg)
+	wire, err := buildOptionsJSON("ubuntu:22.04", cfg)
+	if err != nil {
+		t.Fatalf("buildOptionsJSON: %v", err)
+	}
 
 	if wire.CPUs != nil {
 		t.Error("CPUs should be nil by default")
@@ -196,6 +211,13 @@ func TestBuildOptionsJSON_Defaults(t *testing.T) {
 	}
 	if wire.Secrets == nil {
 		t.Error("Secrets should be non-nil empty slice")
+	}
+	network, ok := wire.Network.(wireNetworkSpec)
+	if !ok {
+		t.Fatalf("Network type: got %T", wire.Network)
+	}
+	if network.Mode != string(NetworkModeEnabled) {
+		t.Errorf("Network.Mode: got %q", network.Mode)
 	}
 }
 
@@ -299,7 +321,10 @@ func TestBuildOptionsJSON_AutoRemoveDetach(t *testing.T) {
 	WithAutoRemove(false)(cfg)
 	WithDetach(true)(cfg)
 
-	wire := buildOptionsJSON("alpine:latest", cfg)
+	wire, err := buildOptionsJSON("alpine:latest", cfg)
+	if err != nil {
+		t.Fatalf("buildOptionsJSON: %v", err)
+	}
 	if wire.AutoRemove == nil || *wire.AutoRemove != false {
 		t.Error("AutoRemove should be false in wire")
 	}
@@ -308,39 +333,53 @@ func TestBuildOptionsJSON_AutoRemoveDetach(t *testing.T) {
 	}
 }
 
-func TestWithNetworkDisabled(t *testing.T) {
+func TestWithNetwork(t *testing.T) {
 	cfg := &boxConfig{}
-	WithAllowNet("example.com")(cfg)
-	WithNetworkDisabled()(cfg)
+	WithNetwork(NetworkSpec{
+		Mode:     NetworkModeDisabled,
+		AllowNet: []string{},
+	})(cfg)
 
-	if cfg.networkMode != networkModeDisabled {
-		t.Errorf("networkMode: got %q", cfg.networkMode)
+	if cfg.network == nil {
+		t.Fatal("network should be set")
 	}
-	if len(cfg.allowNet) != 0 {
-		t.Errorf("allowNet should be cleared, got %v", cfg.allowNet)
+	if cfg.network.Mode != NetworkModeDisabled {
+		t.Errorf("network.Mode: got %q", cfg.network.Mode)
+	}
+	if len(cfg.network.AllowNet) != 0 {
+		t.Errorf("network.AllowNet: got %v", cfg.network.AllowNet)
 	}
 }
 
 func TestBuildOptionsJSON_AllowNetAndSecrets(t *testing.T) {
 	cfg := &boxConfig{}
-	WithAllowNet("example.com", "10.0.0.0/8")(cfg)
+	WithNetwork(NetworkSpec{
+		Mode:     NetworkModeEnabled,
+		AllowNet: []string{"example.com", "10.0.0.0/8"},
+	})(cfg)
 	WithSecret(Secret{
 		Name:  "openai",
 		Value: "sk-secret",
 		Hosts: []string{"api.openai.com"},
 	})(cfg)
 
-	wire := buildOptionsJSON("python:slim", cfg)
+	wire, err := buildOptionsJSON("python:slim", cfg)
+	if err != nil {
+		t.Fatalf("buildOptionsJSON: %v", err)
+	}
 
-	network, ok := wire.Network.(wireEnabledNetwork)
+	network, ok := wire.Network.(wireNetworkSpec)
 	if !ok {
 		t.Fatalf("Network type: got %T", wire.Network)
 	}
-	if len(network.Enabled.AllowNet) != 2 {
-		t.Fatalf("AllowNet length: got %d", len(network.Enabled.AllowNet))
+	if network.Mode != string(NetworkModeEnabled) {
+		t.Errorf("Network.Mode: got %q", network.Mode)
 	}
-	if network.Enabled.AllowNet[0] != "example.com" {
-		t.Errorf("AllowNet[0]: got %q", network.Enabled.AllowNet[0])
+	if len(network.AllowNet) != 2 {
+		t.Fatalf("AllowNet length: got %d", len(network.AllowNet))
+	}
+	if network.AllowNet[0] != "example.com" {
+		t.Errorf("AllowNet[0]: got %q", network.AllowNet[0])
 	}
 	if len(wire.Secrets) != 1 {
 		t.Fatalf("Secrets length: got %d", len(wire.Secrets))
@@ -352,14 +391,36 @@ func TestBuildOptionsJSON_AllowNetAndSecrets(t *testing.T) {
 
 func TestBuildOptionsJSON_DisabledNetwork(t *testing.T) {
 	cfg := &boxConfig{}
-	WithNetworkDisabled()(cfg)
+	WithNetwork(NetworkSpec{Mode: NetworkModeDisabled})(cfg)
 
-	wire := buildOptionsJSON("alpine:latest", cfg)
-	network, ok := wire.Network.(string)
+	wire, err := buildOptionsJSON("alpine:latest", cfg)
+	if err != nil {
+		t.Fatalf("buildOptionsJSON: %v", err)
+	}
+	network, ok := wire.Network.(wireNetworkSpec)
 	if !ok {
 		t.Fatalf("Network type: got %T", wire.Network)
 	}
-	if network != "Disabled" {
-		t.Errorf("Network: got %q", network)
+	if network.Mode != string(NetworkModeDisabled) {
+		t.Errorf("Network.Mode: got %q", network.Mode)
+	}
+	if len(network.AllowNet) != 0 {
+		t.Errorf("Network.AllowNet: got %v", network.AllowNet)
+	}
+}
+
+func TestBuildOptionsJSON_RejectsAllowNetWithDisabledMode(t *testing.T) {
+	cfg := &boxConfig{}
+	WithNetwork(NetworkSpec{
+		Mode:     NetworkModeDisabled,
+		AllowNet: []string{"example.com"},
+	})(cfg)
+
+	_, err := buildOptionsJSON("alpine:latest", cfg)
+	if err == nil {
+		t.Fatal("expected error for disabled network with allowlist")
+	}
+	if err.Error() != "network.mode=\"disabled\" is incompatible with allow_net" {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

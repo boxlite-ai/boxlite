@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use boxlite::{BoxArchive, BoxliteRuntime};
+use boxlite::{BoxArchive, BoxOptions, BoxliteRuntime};
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
@@ -118,10 +118,8 @@ impl JsBoxlite {
     #[napi]
     pub async fn create(&self, options: JsBoxOptions, name: Option<String>) -> Result<JsBox> {
         let runtime = Arc::clone(&self.runtime);
-        let handle = runtime
-            .create(options.into(), name)
-            .await
-            .map_err(map_err)?;
+        let options = BoxOptions::try_from(options).map_err(map_err)?;
+        let handle = runtime.create(options, name).await.map_err(map_err)?;
 
         Ok(JsBox {
             handle: Arc::new(handle),
@@ -152,8 +150,9 @@ impl JsBoxlite {
         name: Option<String>,
     ) -> Result<JsGetOrCreateResult> {
         let runtime = Arc::clone(&self.runtime);
+        let options = BoxOptions::try_from(options).map_err(map_err)?;
         let (handle, created) = runtime
-            .get_or_create(options.into(), name)
+            .get_or_create(options, name)
             .await
             .map_err(map_err)?;
 

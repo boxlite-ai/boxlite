@@ -106,8 +106,10 @@ const box = new SimpleBox({
   name: 'my-box',    // Optional name
   autoRemove: true,  // Auto-remove on stop (default: true)
   workingDir: '/app',
-  network: 'enabled',
-  allowNet: ['api.openai.com'],
+  network: {
+    mode: 'enabled',
+    allowNet: ['api.openai.com'],
+  },
   env: { FOO: 'bar' },
   volumes: [
     { hostPath: '/tmp/data', guestPath: '/data', readOnly: false }

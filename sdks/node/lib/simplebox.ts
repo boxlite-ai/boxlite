@@ -77,6 +77,17 @@ export interface Secret {
   placeholder?: string;
 }
 
+/**
+ * Structured network configuration for a box.
+ */
+export interface NetworkSpec {
+  /** Network mode. */
+  mode: "enabled" | "disabled";
+
+  /** Outbound allowlist when network is enabled. */
+  allowNet?: string[];
+}
+
 const MAX_SAFE_U64_NUMBER = Number.MAX_SAFE_INTEGER;
 
 function normalizeU64Limit(
@@ -197,11 +208,8 @@ export interface SimpleBoxOptions {
     protocol?: string;
   }>;
 
-  /** Network mode. */
-  network?: "enabled" | "disabled";
-
-  /** Outbound allowlist when network is enabled. */
-  allowNet?: string[];
+  /** Structured network configuration. */
+  network?: NetworkSpec;
 
   /** Secrets to inject into outbound HTTPS requests. */
   secrets?: Secret[];
@@ -309,6 +317,22 @@ export class SimpleBox {
   constructor(options: SimpleBoxOptions = {}) {
     const JsBoxlite = getJsBoxlite();
     const security = normalizeSecurityOptions(options.security);
+    const legacyOptions = options as SimpleBoxOptions & {
+      allowNet?: unknown;
+      network?: unknown;
+    };
+
+    if (legacyOptions.allowNet !== undefined) {
+      throw new TypeError(
+        "SimpleBoxOptions.allowNet was removed. Use network: { mode, allowNet }.",
+      );
+    }
+
+    if (typeof legacyOptions.network === "string") {
+      throw new TypeError(
+        "SimpleBoxOptions.network must be an object. Use network: { mode, allowNet }.",
+      );
+    }
 
     // Use provided runtime or get global default
     if (options.runtime) {
@@ -332,7 +356,6 @@ export class SimpleBox {
         : undefined,
       volumes: options.volumes,
       network: options.network,
-      allowNet: options.allowNet,
       ports: options.ports,
       entrypoint: options.entrypoint,
       cmd: options.cmd,

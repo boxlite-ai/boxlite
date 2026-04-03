@@ -153,8 +153,10 @@ fn create_box_proto_request(req: CreateBoxRequest) -> proto::CreateBoxRequest {
         user: req.user,
         auto_remove: req.auto_remove.unwrap_or(false),
         detach: req.detach.unwrap_or(true),
-        network: req.network,
-        allow_net: req.allow_net.unwrap_or_default(),
+        network: req.network.map(|network| proto::NetworkSpec {
+            mode: network.mode,
+            allow_net: network.allow_net,
+        }),
         secrets: req
             .secrets
             .unwrap_or_default()
@@ -1867,7 +1869,7 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
 
-    use crate::coordinator::handlers::types::CreateBoxSecret;
+    use crate::coordinator::handlers::types::SecretSpec;
 
     #[test]
     fn test_proto_to_rest_full_fields() {
@@ -1946,9 +1948,11 @@ mod tests {
             user: Some("1000:1000".into()),
             volumes: None,
             ports: None,
-            network: Some("enabled".into()),
-            allow_net: Some(vec!["api.openai.com".into()]),
-            secrets: Some(vec![CreateBoxSecret {
+            network: Some(super::types::NetworkSpec {
+                mode: "enabled".into(),
+                allow_net: vec!["api.openai.com".into()],
+            }),
+            secrets: Some(vec![SecretSpec {
                 name: "openai".into(),
                 value: "sk-test".into(),
                 hosts: vec!["api.openai.com".into()],
@@ -1960,8 +1964,14 @@ mod tests {
         };
 
         let proto_req = create_box_proto_request(req);
-        assert_eq!(proto_req.network.as_deref(), Some("enabled"));
-        assert_eq!(proto_req.allow_net, vec!["api.openai.com"]);
+        assert_eq!(
+            proto_req.network.as_ref().map(|n| n.mode.as_str()),
+            Some("enabled")
+        );
+        assert_eq!(
+            proto_req.network.as_ref().map(|n| n.allow_net.clone()),
+            Some(vec!["api.openai.com".into()])
+        );
         assert_eq!(proto_req.secrets.len(), 1);
         assert_eq!(proto_req.secrets[0].name, "openai");
         assert_eq!(proto_req.secrets[0].placeholder, None);

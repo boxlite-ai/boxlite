@@ -25,8 +25,8 @@ pub use exec::{JsExecResult, JsExecStderr, JsExecStdin, JsExecStdout, JsExecutio
 pub use info::{JsBoxInfo, JsBoxStateInfo, JsHealthState, JsHealthStatus};
 pub use metrics::{JsBoxMetrics, JsRuntimeMetrics};
 pub use options::{
-    JsBoxOptions, JsBoxliteRestOptions, JsEnvVar, JsHealthCheckOptions, JsOptions, JsPortSpec,
-    JsSecret, JsVolumeSpec,
+    JsBoxOptions, JsBoxliteRestOptions, JsEnvVar, JsHealthCheckOptions, JsNetworkSpec, JsOptions,
+    JsPortSpec, JsSecret, JsVolumeSpec,
 };
 pub use runtime::JsBoxlite; // re-export for dist bundling
 pub use snapshot_options::{JsCloneOptions, JsExportOptions, JsSnapshotOptions};

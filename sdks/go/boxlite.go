@@ -102,7 +102,10 @@ func (r *Runtime) Create(_ context.Context, image string, opts ...BoxOption) (*B
 		o(cfg)
 	}
 
-	wire := buildOptionsJSON(image, cfg)
+	wire, err := buildOptionsJSON(image, cfg)
+	if err != nil {
+		return nil, err
+	}
 	optsJSON, err := json.Marshal(wire)
 	if err != nil {
 		return nil, err

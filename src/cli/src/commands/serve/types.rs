@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 // ============================================================================
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct CreateBoxRequest {
     #[serde(default)]
     pub name: Option<String>,
@@ -33,9 +34,19 @@ pub(super) struct CreateBoxRequest {
     #[serde(default)]
     pub user: Option<String>,
     #[serde(default)]
+    pub network: Option<NetworkSpec>,
+    #[serde(default)]
     pub auto_remove: Option<bool>,
     #[serde(default)]
     pub detach: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct NetworkSpec {
+    pub mode: String,
+    #[serde(default)]
+    pub allow_net: Vec<String>,
 }
 
 #[derive(Serialize)]

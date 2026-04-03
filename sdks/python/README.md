@@ -151,12 +151,16 @@ Configuration options for creating a box.
 - `env: List[Tuple[str, str]]` - Environment variables as (key, value) pairs
 - `volumes: List[Tuple[str, str, str]]` - Volume mounts as (host_path, guest_path, mode)
   - Mode: `"ro"` (read-only) or `"rw"` (read-write)
-- `network: str | None` - `"enabled"` (default) or `"disabled"`
-- `allow_net: List[str]` - Optional outbound allowlist when network is enabled
+- `network: NetworkSpec | None` - Structured network configuration
 - `ports: List[Tuple[int, int, str]]` - Port forwarding as (host_port, guest_port, protocol)
   - Protocol: `"tcp"` or `"udp"`
 - `secrets: List[Secret]` - Host-side HTTP(S) secret substitution rules
 - `auto_remove: bool` - Auto cleanup after stop (default: True)
+
+`NetworkSpec` uses:
+
+- `mode: str` - `"enabled"` or `"disabled"`
+- `allow_net: List[str]` - Optional outbound allowlist when `mode="enabled"`
 
 **Example:**
 
@@ -176,7 +180,10 @@ options = boxlite.BoxOptions(
     ports=[
         (5432, 5432, "tcp"),  # PostgreSQL
     ],
-    allow_net=["api.openai.com"],
+    network=boxlite.NetworkSpec(
+        mode="enabled",
+        allow_net=["api.openai.com"],
+    ),
     secrets=[
         boxlite.Secret(
             name="openai",

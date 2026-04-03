@@ -29,7 +29,7 @@ void test_execute_success() {
 
   const char *options =
       "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":{\"Enabled\":{\"allow_net\":[]}},\"ports\":[],\"auto_"
+      "\"network\":{\"mode\":\"enabled\",\"allow_net\":[]},\"ports\":[],\"auto_"
       "remove\":false}";
   CBoxHandle *box = NULL;
   code = boxlite_create_box(runtime, options, &box, &error);
@@ -75,7 +75,7 @@ void test_execute_failure() {
 
   const char *options =
       "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":{\"Enabled\":{\"allow_net\":[]}},\"ports\":[],\"auto_"
+      "\"network\":{\"mode\":\"enabled\",\"allow_net\":[]},\"ports\":[],\"auto_"
       "remove\":false}";
   CBoxHandle *box = NULL;
   code = boxlite_create_box(runtime, options, &box, &error);
@@ -110,7 +110,7 @@ void test_execute_no_callback() {
 
   const char *options =
       "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":{\"Enabled\":{\"allow_net\":[]}},\"ports\":[],\"auto_"
+      "\"network\":{\"mode\":\"enabled\",\"allow_net\":[]},\"ports\":[],\"auto_"
       "remove\":false}";
   CBoxHandle *box = NULL;
   code = boxlite_create_box(runtime, options, &box, &error);
@@ -145,7 +145,7 @@ void test_execute_multiple_commands() {
 
   const char *options =
       "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":{\"Enabled\":{\"allow_net\":[]}},\"ports\":[],\"auto_"
+      "\"network\":{\"mode\":\"enabled\",\"allow_net\":[]},\"ports\":[],\"auto_"
       "remove\":false}";
   CBoxHandle *box = NULL;
   code = boxlite_create_box(runtime, options, &box, &error);
@@ -191,7 +191,7 @@ void test_execute_complex_args() {
 
   const char *options =
       "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":{\"Enabled\":{\"allow_net\":[]}},\"ports\":[],\"auto_"
+      "\"network\":{\"mode\":\"enabled\",\"allow_net\":[]},\"ports\":[],\"auto_"
       "remove\":false}";
   CBoxHandle *box = NULL;
   code = boxlite_create_box(runtime, options, &box, &error);
@@ -234,7 +234,7 @@ void test_execute_with_user_data() {
 
   const char *options =
       "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":{\"Enabled\":{\"allow_net\":[]}},\"ports\":[],\"auto_"
+      "\"network\":{\"mode\":\"enabled\",\"allow_net\":[]},\"ports\":[],\"auto_"
       "remove\":false}";
   CBoxHandle *box = NULL;
   code = boxlite_create_box(runtime, options, &box, &error);

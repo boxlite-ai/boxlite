@@ -9,6 +9,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tonic::{Request, Response, Status, Streaming};
 
+use boxlite::runtime::options::{NetworkConfig, NetworkMode};
 use boxlite::{
     BoxArchive, BoxCommand, BoxInfo, BoxOptions, BoxliteRuntime, CloneOptions, CopyOptions,
     ExecStdin, Execution, ExportOptions, LiteBox, NetworkSpec, RootfsSpec, Secret, SnapshotInfo,
@@ -108,7 +109,8 @@ fn image_info_to_proto(info: &boxlite::runtime::types::ImageInfo) -> proto::Imag
     }
 }
 
-fn build_box_options(req: &proto::CreateBoxRequest) -> BoxOptions {
+#[allow(clippy::result_large_err)]
+fn build_box_options(req: &proto::CreateBoxRequest) -> Result<BoxOptions, Status> {
     let rootfs = if let Some(ref path) = req.rootfs_path {
         RootfsSpec::RootfsPath(path.clone())
     } else {
@@ -123,11 +125,19 @@ fn build_box_options(req: &proto::CreateBoxRequest) -> BoxOptions {
         .iter()
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
-    let network = match req.network.as_deref() {
-        Some(mode) if mode.eq_ignore_ascii_case("disabled") => NetworkSpec::Disabled,
-        _ => NetworkSpec::Enabled {
-            allow_net: req.allow_net.clone(),
-        },
+    let network = match &req.network {
+        Some(network) => {
+            let mode = network
+                .mode
+                .parse::<NetworkMode>()
+                .map_err(|e| Status::invalid_argument(e.to_string()))?;
+            NetworkSpec::try_from(NetworkConfig {
+                mode,
+                allow_net: network.allow_net.clone(),
+            })
+            .map_err(|e| Status::invalid_argument(e.to_string()))?
+        }
+        None => NetworkSpec::default(),
     };
     let secrets = req
         .secrets
@@ -142,7 +152,7 @@ fn build_box_options(req: &proto::CreateBoxRequest) -> BoxOptions {
                 .unwrap_or_else(|| format!("<BOXLITE_SECRET:{}>", secret.name)),
         })
         .collect();
-    BoxOptions {
+    Ok(BoxOptions {
         rootfs,
         cpus: req.cpus.map(|c| c as u8),
         memory_mib: req.memory_mib,
@@ -165,7 +175,7 @@ fn build_box_options(req: &proto::CreateBoxRequest) -> BoxOptions {
         auto_remove: req.auto_remove,
         detach: req.detach,
         ..Default::default()
-    }
+    })
 }
 
 fn build_box_command(req: &proto::ExecRequest) -> BoxCommand {
@@ -199,7 +209,7 @@ impl WorkerService for WorkerServiceImpl {
     ) -> GrpcResult<proto::BoxResponse> {
         let req = request.into_inner();
         let name = req.name.clone();
-        let options = build_box_options(&req);
+        let options = build_box_options(&req)?;
 
         let litebox = self
             .runtime
@@ -1000,8 +1010,10 @@ mod tests {
             user: Some("1000:1000".into()),
             auto_remove: true,
             detach: false,
-            network: Some("enabled".into()),
-            allow_net: vec!["api.openai.com".into()],
+            network: Some(proto::NetworkSpec {
+                mode: "enabled".into(),
+                allow_net: vec!["api.openai.com".into()],
+            }),
             secrets: vec![proto::CreateBoxSecret {
                 name: "openai".into(),
                 value: "sk-test".into(),
@@ -1010,7 +1022,7 @@ mod tests {
             }],
         };
 
-        let opts = build_box_options(&req);
+        let opts = build_box_options(&req).unwrap();
         assert!(matches!(
             opts.network,
             NetworkSpec::Enabled { ref allow_net } if allow_net == &vec!["api.openai.com".to_string()]
@@ -1036,14 +1048,43 @@ mod tests {
             user: None,
             auto_remove: false,
             detach: false,
-            network: Some("disabled".into()),
-            allow_net: vec!["example.com".into()],
+            network: Some(proto::NetworkSpec {
+                mode: "disabled".into(),
+                allow_net: Vec::new(),
+            }),
             secrets: Vec::new(),
         };
 
-        let opts = build_box_options(&req);
+        let opts = build_box_options(&req).unwrap();
         assert!(matches!(opts.network, NetworkSpec::Disabled));
         assert!(opts.secrets.is_empty());
+    }
+
+    #[test]
+    fn test_build_box_options_rejects_disabled_network_allow_net() {
+        let req = proto::CreateBoxRequest {
+            name: None,
+            image: Some("alpine:latest".into()),
+            rootfs_path: None,
+            cpus: None,
+            memory_mib: None,
+            disk_size_gb: None,
+            working_dir: None,
+            env: HashMap::new(),
+            entrypoint: Vec::new(),
+            cmd: Vec::new(),
+            user: None,
+            auto_remove: false,
+            detach: false,
+            network: Some(proto::NetworkSpec {
+                mode: "disabled".into(),
+                allow_net: vec!["example.com".into()],
+            }),
+            secrets: Vec::new(),
+        };
+
+        let err = build_box_options(&req).unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
     }
 
     #[test]

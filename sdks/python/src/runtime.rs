@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use boxlite::{BoxArchive, BoxliteRuntime};
+use boxlite::{BoxArchive, BoxOptions, BoxliteRuntime};
 use pyo3::prelude::*;
 
 use crate::box_handle::PyBox;
@@ -66,7 +66,7 @@ impl PyBoxlite {
         name: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let runtime = Arc::clone(&self.runtime);
-        let opts = options.into();
+        let opts = BoxOptions::try_from(options).map_err(map_err)?;
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let handle = runtime.create(opts, name).await.map_err(map_err)?;
             Ok(PyBox {
@@ -131,7 +131,7 @@ impl PyBoxlite {
         name: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let runtime = Arc::clone(&self.runtime);
-        let opts = options.into();
+        let opts = BoxOptions::try_from(options).map_err(map_err)?;
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let (handle, created) = runtime.get_or_create(opts, name).await.map_err(map_err)?;
             Ok((

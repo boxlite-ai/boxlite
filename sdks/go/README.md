@@ -36,7 +36,10 @@ func main() {
 		boxlite.WithName("my-box"),
 		boxlite.WithCPUs(1),
 		boxlite.WithMemory(512),
-		boxlite.WithAllowNet("api.openai.com"),
+		boxlite.WithNetwork(boxlite.NetworkSpec{
+			Mode:     boxlite.NetworkModeEnabled,
+			AllowNet: []string{"api.openai.com"},
+		}),
 		boxlite.WithSecret(boxlite.Secret{
 			Name:  "openai",
 			Value: "sk-...",
@@ -57,8 +60,8 @@ func main() {
 
 ## Box Options
 
-- `WithAllowNet("api.openai.com", "*.example.com")` restricts outbound traffic while keeping networking enabled.
-- `WithNetworkDisabled()` disables the guest network interface entirely.
+- `WithNetwork(boxlite.NetworkSpec{Mode: boxlite.NetworkModeEnabled, AllowNet: []string{"api.openai.com"}})` restricts outbound traffic while keeping networking enabled.
+- `WithNetwork(boxlite.NetworkSpec{Mode: boxlite.NetworkModeDisabled})` disables the guest network interface entirely.
 - `WithSecret(boxlite.Secret{...})` configures host-side HTTP(S) secret substitution; `Placeholder` defaults to `<BOXLITE_SECRET:{Name}>`.
 
 ## Development

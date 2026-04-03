@@ -16,7 +16,9 @@ use crate::box_handle::PyBox;
 use crate::exec::{PyExecStderr, PyExecStdin, PyExecStdout, PyExecution};
 use crate::info::{PyBoxInfo, PyBoxStateInfo, PyHealthState, PyHealthStatus};
 use crate::metrics::{PyBoxMetrics, PyRuntimeMetrics};
-use crate::options::{PyBoxOptions, PyBoxliteRestOptions, PyCopyOptions, PyOptions, PySecret};
+use crate::options::{
+    PyBoxOptions, PyBoxliteRestOptions, PyCopyOptions, PyNetworkSpec, PyOptions, PySecret,
+};
 use crate::runtime::PyBoxlite;
 use crate::snapshot_options::{PyCloneOptions, PyExportOptions, PySnapshotOptions};
 use crate::snapshots::{PySnapshotHandle, PySnapshotInfo};
@@ -26,6 +28,7 @@ use pyo3::prelude::*;
 fn boxlite_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyOptions>()?;
     m.add_class::<PyBoxOptions>()?;
+    m.add_class::<PyNetworkSpec>()?;
     m.add_class::<PySecurityOptions>()?;
     m.add_class::<PyHealthCheckOptions>()?;
     m.add_class::<PyAdvancedBoxOptions>()?;

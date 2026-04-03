@@ -312,7 +312,75 @@ pub struct VolumeSpec {
     pub read_only: bool,
 }
 
-/// Network configuration for a box.
+/// Network mode for public box configuration surfaces.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NetworkMode {
+    #[default]
+    Enabled,
+    Disabled,
+}
+
+impl std::str::FromStr for NetworkMode {
+    type Err = boxlite_shared::errors::BoxliteError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.to_ascii_lowercase().as_str() {
+            "enabled" => Ok(Self::Enabled),
+            "disabled" => Ok(Self::Disabled),
+            _ => Err(boxlite_shared::errors::BoxliteError::Config(format!(
+                "invalid network.mode {:?}. Expected \"enabled\" or \"disabled\".",
+                value
+            ))),
+        }
+    }
+}
+
+/// Public object-shaped network configuration used by SDK/REST/FFI boundaries.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NetworkConfig {
+    pub mode: NetworkMode,
+    #[serde(default)]
+    pub allow_net: Vec<String>,
+}
+
+impl TryFrom<NetworkConfig> for NetworkSpec {
+    type Error = boxlite_shared::errors::BoxliteError;
+
+    fn try_from(config: NetworkConfig) -> Result<Self, Self::Error> {
+        match config.mode {
+            NetworkMode::Enabled => Ok(Self::Enabled {
+                allow_net: config.allow_net,
+            }),
+            NetworkMode::Disabled if !config.allow_net.is_empty() => {
+                Err(boxlite_shared::errors::BoxliteError::Config(
+                    "network.mode=\"disabled\" is incompatible with allow_net. \
+                     Remove allow_net or use mode=\"enabled\"."
+                        .to_string(),
+                ))
+            }
+            NetworkMode::Disabled => Ok(Self::Disabled),
+        }
+    }
+}
+
+impl From<&NetworkSpec> for NetworkConfig {
+    fn from(spec: &NetworkSpec) -> Self {
+        match spec {
+            NetworkSpec::Enabled { allow_net } => Self {
+                mode: NetworkMode::Enabled,
+                allow_net: allow_net.clone(),
+            },
+            NetworkSpec::Disabled => Self {
+                mode: NetworkMode::Disabled,
+                allow_net: Vec::new(),
+            },
+        }
+    }
+}
+
+/// Internal Rust network configuration for a box.
 ///
 /// Controls whether the box has network access and what hosts it can reach.
 ///
@@ -463,6 +531,59 @@ mod tests {
 
         assert_eq!(opts.auto_remove, opts2.auto_remove);
         assert_eq!(opts.detach, opts2.detach);
+    }
+
+    #[test]
+    fn test_network_mode_from_str() {
+        assert_eq!(
+            "enabled".parse::<NetworkMode>().unwrap(),
+            NetworkMode::Enabled
+        );
+        assert_eq!(
+            "disabled".parse::<NetworkMode>().unwrap(),
+            NetworkMode::Disabled
+        );
+    }
+
+    #[test]
+    fn test_network_mode_from_str_rejects_invalid_values() {
+        let err = "broken".parse::<NetworkMode>().unwrap_err().to_string();
+        assert!(err.contains("invalid network.mode"));
+    }
+
+    #[test]
+    fn test_network_config_enabled_converts_to_internal_network_spec() {
+        let spec = NetworkSpec::try_from(NetworkConfig {
+            mode: NetworkMode::Enabled,
+            allow_net: vec!["example.com".to_string()],
+        })
+        .unwrap();
+
+        match spec {
+            NetworkSpec::Enabled { allow_net } => {
+                assert_eq!(allow_net, vec!["example.com".to_string()]);
+            }
+            NetworkSpec::Disabled => panic!("expected enabled network spec"),
+        }
+    }
+
+    #[test]
+    fn test_network_config_disabled_rejects_allow_net() {
+        let err = NetworkSpec::try_from(NetworkConfig {
+            mode: NetworkMode::Disabled,
+            allow_net: vec!["example.com".to_string()],
+        })
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("network.mode=\"disabled\""));
+    }
+
+    #[test]
+    fn test_network_spec_converts_to_public_network_config() {
+        let config = NetworkConfig::from(&NetworkSpec::Disabled);
+        assert_eq!(config.mode, NetworkMode::Disabled);
+        assert!(config.allow_net.is_empty());
     }
 
     #[test]

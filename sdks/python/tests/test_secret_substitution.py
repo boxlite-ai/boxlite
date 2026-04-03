@@ -113,7 +113,10 @@ class TestBoxOptionsWithSecrets:
             cpus=2,
             memory_mib=512,
             env=[("FOO", "bar")],
-            allow_net=["api.example.com"],
+            network=boxlite.NetworkSpec(
+                mode="enabled",
+                allow_net=["api.example.com"],
+            ),
             secrets=[secret],
         )
         assert opts.image == "python:3.12"
@@ -122,15 +125,18 @@ class TestBoxOptionsWithSecrets:
         assert len(opts.env) == 1
         assert len(opts.secrets) == 1
 
-    def test_secrets_with_allow_net(self):
-        """Secrets and allow_net can be used together."""
+    def test_secrets_with_network_spec(self):
+        """Secrets and NetworkSpec can be used together."""
         secret = boxlite.Secret(name="key", value="val", hosts=["api.openai.com"])
         opts = boxlite.BoxOptions(
             image="alpine:latest",
-            allow_net=["api.openai.com", "pypi.org"],
+            network=boxlite.NetworkSpec(
+                mode="enabled",
+                allow_net=["api.openai.com", "pypi.org"],
+            ),
             secrets=[secret],
         )
-        assert len(opts.allow_net) == 2
+        assert opts.network.allow_net == ["api.openai.com", "pypi.org"]
         assert len(opts.secrets) == 1
 
     def test_secret_fields_accessible_through_boxoptions(self):
@@ -239,7 +245,10 @@ class TestSecretIntegration:
         sandbox = runtime.create(
             boxlite.BoxOptions(
                 image="alpine:latest",
-                allow_net=["httpbin.org"],
+                network=boxlite.NetworkSpec(
+                    mode="enabled",
+                    allow_net=["httpbin.org"],
+                ),
                 secrets=[secret],
             )
         )
@@ -286,7 +295,10 @@ class TestSecretIntegration:
         sandbox = runtime.create(
             boxlite.BoxOptions(
                 image="alpine:latest",
-                allow_net=["httpbin.org"],
+                network=boxlite.NetworkSpec(
+                    mode="enabled",
+                    allow_net=["httpbin.org"],
+                ),
                 secrets=[secret],
             )
         )

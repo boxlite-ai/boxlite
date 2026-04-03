@@ -40,10 +40,11 @@ async def test_default_full_access():
 
 async def test_allowlist_filtering():
     """Test 2: Allowlist = only listed hosts resolve, others sinkholed."""
-    print("\n--- Test 2: Allowlist (allow_net=[example.com]) ---")
+    print("\n--- Test 2: Allowlist (network.allow_net=[example.com]) ---")
 
     async with boxlite.SimpleBox(
-        image="alpine:latest", allow_net=["example.com"]
+        image="alpine:latest",
+        network=boxlite.NetworkSpec(mode="enabled", allow_net=["example.com"]),
     ) as sandbox:
         # Allowed host should resolve to real IP
         result = await sandbox.exec("nslookup", "example.com")
@@ -67,7 +68,10 @@ async def test_disabled_no_network():
     """Test 3: Disabled = no network at all."""
     print("\n--- Test 3: Disabled (no network) ---")
 
-    async with boxlite.SimpleBox(image="alpine:latest", network="disabled") as sandbox:
+    async with boxlite.SimpleBox(
+        image="alpine:latest",
+        network=boxlite.NetworkSpec(mode="disabled"),
+    ) as sandbox:
         print("  box started without network")
 
         # Basic command should still work (no network needed)
@@ -93,7 +97,10 @@ async def test_enabled_explicit():
     """Test 4: Explicitly enabled."""
     print("\n--- Test 4: Explicitly enabled ---")
 
-    async with boxlite.SimpleBox(image="alpine:latest", network="enabled") as sandbox:
+    async with boxlite.SimpleBox(
+        image="alpine:latest",
+        network=boxlite.NetworkSpec(mode="enabled"),
+    ) as sandbox:
         result = await sandbox.exec("nslookup", "example.com")
         print(f"  nslookup example.com: exit={result.exit_code}")
         assert result.exit_code == 0
@@ -108,9 +115,9 @@ async def main():
     print("=" * 60)
     print()
     print("NetworkSpec options:")
-    print("  Enabled { allow_net: [] }       -> full access (default)")
-    print("  Enabled { allow_net: [hosts] }  -> DNS sinkhole for unlisted")
-    print("  Disabled                        -> no network at all")
+    print("  NetworkSpec(mode='enabled', allow_net=[])      -> full access")
+    print("  NetworkSpec(mode='enabled', allow_net=[...])   -> restricted egress")
+    print("  NetworkSpec(mode='disabled')                   -> no network at all")
 
     await test_default_full_access()
     await test_allowlist_filtering()

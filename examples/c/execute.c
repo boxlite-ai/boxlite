@@ -34,7 +34,7 @@ int main() {
     }
 
     // Create a box with Alpine Linux
-    const char* options_json = "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],\"network\":{\"Enabled\":{\"allow_net\":[]}},\"ports\":[]}";
+    const char* options_json = "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],\"network\":{\"mode\":\"enabled\",\"allow_net\":[]},\"ports\":[]}";
     code = boxlite_create_box(runtime, options_json, &box, &error);
     if (code != Ok) {
         fprintf(stderr, "Failed to create box (code %d): %s\n",

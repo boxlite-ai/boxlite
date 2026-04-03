@@ -31,6 +31,13 @@ import boxlite
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
 
+def enabled_network(*allow_net: str) -> boxlite.NetworkSpec:
+    return boxlite.NetworkSpec(mode="enabled", allow_net=list(allow_net))
+
+
+DISABLED_NETWORK = boxlite.NetworkSpec(mode="disabled")
+
+
 # ---------------------------------------------------------------------------
 # 1. Default (full access) — no filtering active
 # ---------------------------------------------------------------------------
@@ -86,7 +93,8 @@ class TestHostnameAllowlist:
     async def test_allowed_host_dns_resolves(self):
         """Allowed hostname should resolve to a real IP (not sinkholed)."""
         async with boxlite.SimpleBox(
-            image="alpine:latest", allow_net=["example.com"]
+            image="alpine:latest",
+            network=enabled_network("example.com"),
         ) as box:
             result = await box.exec("nslookup", "example.com", timeout=10)
             assert result.exit_code == 0
@@ -95,7 +103,8 @@ class TestHostnameAllowlist:
     async def test_blocked_host_dns_sinkholed(self):
         """Non-allowed hostname should be sinkholed to 0.0.0.0."""
         async with boxlite.SimpleBox(
-            image="alpine:latest", allow_net=["example.com"]
+            image="alpine:latest",
+            network=enabled_network("example.com"),
         ) as box:
             result = await box.exec("nslookup", "github.com", timeout=10)
             assert "0.0.0.0" in result.stdout
@@ -103,7 +112,8 @@ class TestHostnameAllowlist:
     async def test_http_to_allowed_host_succeeds(self):
         """HTTP to allowed host — TCP filter checks Host header, should pass."""
         async with boxlite.SimpleBox(
-            image="alpine:latest", allow_net=["example.com"]
+            image="alpine:latest",
+            network=enabled_network("example.com"),
         ) as box:
             result = await box.exec(
                 "wget",
@@ -119,7 +129,8 @@ class TestHostnameAllowlist:
     async def test_https_to_allowed_host_succeeds(self):
         """HTTPS to allowed host — TCP filter checks TLS SNI, should pass."""
         async with boxlite.SimpleBox(
-            image="alpine:latest", allow_net=["example.com"]
+            image="alpine:latest",
+            network=enabled_network("example.com"),
         ) as box:
             result = await box.exec(
                 "wget",
@@ -142,7 +153,8 @@ class TestHostnameAllowlist:
     async def test_direct_ip_blocked_with_hostname_only_rules(self):
         """Direct IP connection should be blocked when only hostname rules exist."""
         async with boxlite.SimpleBox(
-            image="alpine:latest", allow_net=["example.com"]
+            image="alpine:latest",
+            network=enabled_network("example.com"),
         ) as box:
             # 8.8.8.8 is not in any allowlist rule
             result = await box.exec(
@@ -160,7 +172,8 @@ class TestHostnameAllowlist:
     async def test_blocked_host_http_fails(self):
         """HTTP to a non-allowed host should fail (sinkholed DNS + TCP blocked)."""
         async with boxlite.SimpleBox(
-            image="alpine:latest", allow_net=["example.com"]
+            image="alpine:latest",
+            network=enabled_network("example.com"),
         ) as box:
             result = await box.exec(
                 "wget",
@@ -191,7 +204,8 @@ class TestWildcardAllowlist:
         doesn't contain 0.0.0.0 (sinkhole indicator).
         """
         async with boxlite.SimpleBox(
-            image="alpine:latest", allow_net=["*.example.com"]
+            image="alpine:latest",
+            network=enabled_network("*.example.com"),
         ) as box:
             result = await box.exec("nslookup", "www.example.com", timeout=10)
             # Wildcard DNS may not return clean nslookup output, but it should
@@ -203,7 +217,8 @@ class TestWildcardAllowlist:
     async def test_wildcard_blocks_different_domain(self):
         """*.example.com should NOT match evil.com."""
         async with boxlite.SimpleBox(
-            image="alpine:latest", allow_net=["*.example.com"]
+            image="alpine:latest",
+            network=enabled_network("*.example.com"),
         ) as box:
             result = await box.exec("nslookup", "evil.com", timeout=10)
             assert "0.0.0.0" in result.stdout or result.exit_code != 0
@@ -221,7 +236,7 @@ class TestIPCIDRAllowlist:
         """Exact IP in allow_net should allow direct TCP connection."""
         async with boxlite.SimpleBox(
             image="alpine:latest",
-            allow_net=["93.184.216.34"],  # example.com's IP
+            network=enabled_network("93.184.216.34"),  # example.com's IP
         ) as box:
             # nc -z tests TCP connectivity only (no data transfer)
             result = await box.exec(
@@ -238,7 +253,7 @@ class TestIPCIDRAllowlist:
         """CIDR should allow any IP in the range."""
         async with boxlite.SimpleBox(
             image="alpine:latest",
-            allow_net=["93.184.216.0/24"],
+            network=enabled_network("93.184.216.0/24"),
         ) as box:
             result = await box.exec(
                 "sh",
@@ -254,7 +269,7 @@ class TestIPCIDRAllowlist:
         """IP outside CIDR range should be blocked."""
         async with boxlite.SimpleBox(
             image="alpine:latest",
-            allow_net=["10.0.0.0/8"],
+            network=enabled_network("10.0.0.0/8"),
         ) as box:
             result = await box.exec(
                 "wget",
@@ -279,7 +294,7 @@ class TestMixedRules:
         """Both hostname (via SNI/Host) and CIDR rules should be active."""
         async with boxlite.SimpleBox(
             image="alpine:latest",
-            allow_net=["example.com", "8.8.8.0/24"],
+            network=enabled_network("example.com", "8.8.8.0/24"),
         ) as box:
             # Hostname rule: example.com works via HTTP Host header
             result = await box.exec(
@@ -314,14 +329,20 @@ class TestDisabledNetwork:
 
     async def test_commands_work_without_network(self):
         """Non-network commands should work."""
-        async with boxlite.SimpleBox(image="alpine:latest", network="disabled") as box:
+        async with boxlite.SimpleBox(
+            image="alpine:latest",
+            network=DISABLED_NETWORK,
+        ) as box:
             result = await box.exec("echo", "hello", timeout=10)
             assert result.exit_code == 0
             assert "hello" in result.stdout
 
     async def test_dns_fails_without_network(self):
         """DNS should fail when network is disabled."""
-        async with boxlite.SimpleBox(image="alpine:latest", network="disabled") as box:
+        async with boxlite.SimpleBox(
+            image="alpine:latest",
+            network=DISABLED_NETWORK,
+        ) as box:
             result = await box.exec("nslookup", "example.com", timeout=10)
             assert result.exit_code != 0
 
@@ -336,7 +357,10 @@ class TestEdgeCases:
 
     async def test_empty_allowlist_allows_all(self):
         """Empty allow_net = full access (no filter)."""
-        async with boxlite.SimpleBox(image="alpine:latest", allow_net=[]) as box:
+        async with boxlite.SimpleBox(
+            image="alpine:latest",
+            network=enabled_network(),
+        ) as box:
             result = await box.exec("nslookup", "example.com", timeout=10)
             assert result.exit_code == 0
             assert "0.0.0.0" not in result.stdout
@@ -345,7 +369,7 @@ class TestEdgeCases:
         """Multiple hostnames in allow_net should all be accessible."""
         async with boxlite.SimpleBox(
             image="alpine:latest",
-            allow_net=["example.com", "example.org"],
+            network=enabled_network("example.com", "example.org"),
         ) as box:
             r1 = await box.exec("nslookup", "example.com", timeout=10)
             assert r1.exit_code == 0
@@ -365,7 +389,8 @@ class TestEdgeCases:
         Even with restrictive allow_net, internal network must work.
         """
         async with boxlite.SimpleBox(
-            image="alpine:latest", allow_net=["example.com"]
+            image="alpine:latest",
+            network=enabled_network("example.com"),
         ) as box:
             # DNS queries go to the gateway — this must work
             result = await box.exec("nslookup", "example.com", timeout=10)
@@ -381,7 +406,8 @@ class TestEdgeCases:
         rules exist and no IP/CIDR rules match.
         """
         async with boxlite.SimpleBox(
-            image="alpine:latest", allow_net=["example.com"]
+            image="alpine:latest",
+            network=enabled_network("example.com"),
         ) as box:
             # Try raw TCP on port 9999 to example.com's IP
             result = await box.exec(

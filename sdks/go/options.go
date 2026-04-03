@@ -21,12 +21,17 @@ func WithRegistries(registries ...string) RuntimeOption {
 // BoxOption configures a Box.
 type BoxOption func(*boxConfig)
 
-type boxNetworkMode string
+type NetworkMode string
 
 const (
-	networkModeEnabled  boxNetworkMode = "enabled"
-	networkModeDisabled boxNetworkMode = "disabled"
+	NetworkModeEnabled  NetworkMode = "enabled"
+	NetworkModeDisabled NetworkMode = "disabled"
 )
+
+type NetworkSpec struct {
+	Mode     NetworkMode
+	AllowNet []string
+}
 
 // Secret configures outbound HTTPS secret substitution.
 type Secret struct {
@@ -37,19 +42,18 @@ type Secret struct {
 }
 
 type boxConfig struct {
-	name        string
-	cpus        int
-	memoryMiB   int
-	env         [][2]string
-	volumes     []volumeEntry
-	workDir     string
-	entrypoint  []string
-	cmd         []string
-	autoRemove  *bool
-	detach      *bool
-	networkMode boxNetworkMode
-	allowNet    []string
-	secrets     []Secret
+	name       string
+	cpus       int
+	memoryMiB  int
+	env        [][2]string
+	volumes    []volumeEntry
+	workDir    string
+	entrypoint []string
+	cmd        []string
+	autoRemove *bool
+	detach     *bool
+	network    *NetworkSpec
+	secrets    []Secret
 }
 
 type volumeEntry struct {
@@ -109,19 +113,14 @@ func WithCmd(args ...string) BoxOption {
 	return func(c *boxConfig) { c.cmd = args }
 }
 
-// WithAllowNet restricts outbound traffic to the provided hosts/IPs/CIDRs.
-func WithAllowNet(rules ...string) BoxOption {
+// WithNetwork sets the structured network configuration for the box.
+func WithNetwork(spec NetworkSpec) BoxOption {
 	return func(c *boxConfig) {
-		c.networkMode = networkModeEnabled
-		c.allowNet = append(c.allowNet, rules...)
-	}
-}
-
-// WithNetworkDisabled disables the guest network interface entirely.
-func WithNetworkDisabled() BoxOption {
-	return func(c *boxConfig) {
-		c.networkMode = networkModeDisabled
-		c.allowNet = nil
+		allowNet := append([]string(nil), spec.AllowNet...)
+		c.network = &NetworkSpec{
+			Mode:     spec.Mode,
+			AllowNet: allowNet,
+		}
 	}
 }
 

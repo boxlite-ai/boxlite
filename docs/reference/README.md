@@ -114,32 +114,33 @@ image="gcr.io/project/image:tag"
 - Layer-level caching for fast subsequent starts
 - Authentication: Use registry-specific auth (Docker credentials, etc.)
 
-#### `network: "enabled" | "disabled"`
+#### `network`
 
-Controls whether the guest has an outbound network interface.
+Structured network configuration for outbound connectivity.
 
-**Default:** `"enabled"`
+**Default:** omitted, which behaves like:
+
+```json
+{
+  "mode": "enabled",
+  "allow_net": []
+}
+```
+
+**Shape:**
+- `mode`: `"enabled"` or `"disabled"`
+- `allow_net`: optional outbound allowlist used only when `mode="enabled"`
 
 **Notes:**
 - `"enabled"` gives the guest outbound connectivity.
 - `"disabled"` removes the guest network interface entirely.
-- When network is enabled, use `allow_net` to restrict egress instead of inventing a second network mode.
-
-#### `allow_net: List[str]`
-
-Optional outbound allowlist applied when `network="enabled"`.
-
-**Default:** `[]` (full outbound access)
+- Empty or omitted `allow_net` means full outbound access.
 
 **Supported patterns:**
 - Exact hostname: `"api.openai.com"`
 - Wildcard hostname: `"*.example.com"`
 - Exact IP: `"192.168.1.10"`
 - CIDR range: `"10.0.0.0/8"`
-
-**Notes:**
-- Empty or omitted means unrestricted outbound access.
-- Non-empty means only listed hosts/IPs are reachable.
 
 #### `secrets`
 

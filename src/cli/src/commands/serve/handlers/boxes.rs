@@ -18,7 +18,10 @@ pub(in crate::commands::serve) async fn create_box(
     Json(req): Json<CreateBoxRequest>,
 ) -> Response {
     let name = req.name.clone();
-    let options = build_box_options(&req);
+    let options = match build_box_options(&req) {
+        Ok(options) => options,
+        Err(e) => return error_response(StatusCode::BAD_REQUEST, e.to_string(), "ConfigError"),
+    };
 
     let litebox = match state.runtime.create(options, name).await {
         Ok(b) => b,
