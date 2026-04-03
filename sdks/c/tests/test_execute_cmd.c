@@ -6,6 +6,7 @@
  */
 
 #include "boxlite.h"
+#include "test_runtime.h"
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -53,21 +54,16 @@ static void setup_box(const char *test_name, CBoxliteRuntime **out_runtime,
   }
   temp_dir[i] = '\0';
 
-  BoxliteErrorCode code =
-      boxlite_runtime_new(temp_dir, NULL, out_runtime, &error);
-  if (code != Ok) {
-    printf("  ✗ Failed to create runtime: code=%d, message=%s\n", error.code,
-           error.message ? error.message : "(null)");
-    boxlite_error_free(&error);
-  }
-  assert(code == Ok && "Failed to create runtime");
+  reset_test_home(temp_dir);
+  *out_runtime = new_test_runtime(temp_dir, &error);
 
   const char *options =
       "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
       "\"network\":{\"mode\":\"enabled\",\"allow_net\":[]},\"ports\":[],\"auto_"
       "remove\":false}";
 
-  code = boxlite_create_box(*out_runtime, options, out_box, &error);
+  BoxliteErrorCode code =
+      boxlite_create_box(*out_runtime, options, out_box, &error);
   if (code != Ok) {
     printf("  ✗ Failed to create box: code=%d, message=%s\n", error.code,
            error.message ? error.message : "(null)");

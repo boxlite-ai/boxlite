@@ -5,6 +5,7 @@
  */
 
 #include "boxlite.h"
+#include "test_runtime.h"
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -23,9 +24,9 @@ void test_execute_success() {
   CBoxliteRuntime *runtime = NULL;
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-execute-success";
-  BoxliteErrorCode code = boxlite_runtime_new(temp_dir, NULL, &runtime, &error);
-  assert(code == Ok);
-  assert(runtime != NULL);
+  reset_test_home(temp_dir);
+  runtime = new_test_runtime(temp_dir, &error);
+  BoxliteErrorCode code = Ok;
 
   const char *options =
       "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
@@ -69,9 +70,9 @@ void test_execute_failure() {
   CBoxliteRuntime *runtime = NULL;
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-execute-failure";
-  BoxliteErrorCode code = boxlite_runtime_new(temp_dir, NULL, &runtime, &error);
-  assert(code == Ok);
-  assert(runtime != NULL);
+  reset_test_home(temp_dir);
+  runtime = new_test_runtime(temp_dir, &error);
+  BoxliteErrorCode code = Ok;
 
   const char *options =
       "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
@@ -104,9 +105,9 @@ void test_execute_no_callback() {
   CBoxliteRuntime *runtime = NULL;
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-execute-nocallback";
-  BoxliteErrorCode code = boxlite_runtime_new(temp_dir, NULL, &runtime, &error);
-  assert(code == Ok);
-  assert(runtime != NULL);
+  reset_test_home(temp_dir);
+  runtime = new_test_runtime(temp_dir, &error);
+  BoxliteErrorCode code = Ok;
 
   const char *options =
       "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
@@ -139,9 +140,9 @@ void test_execute_multiple_commands() {
   CBoxliteRuntime *runtime = NULL;
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-execute-multiple";
-  BoxliteErrorCode code = boxlite_runtime_new(temp_dir, NULL, &runtime, &error);
-  assert(code == Ok);
-  assert(runtime != NULL);
+  reset_test_home(temp_dir);
+  runtime = new_test_runtime(temp_dir, &error);
+  BoxliteErrorCode code = Ok;
 
   const char *options =
       "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
@@ -185,9 +186,9 @@ void test_execute_complex_args() {
   CBoxliteRuntime *runtime = NULL;
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-execute-complexargs";
-  BoxliteErrorCode code = boxlite_runtime_new(temp_dir, NULL, &runtime, &error);
-  assert(code == Ok);
-  assert(runtime != NULL);
+  reset_test_home(temp_dir);
+  runtime = new_test_runtime(temp_dir, &error);
+  BoxliteErrorCode code = Ok;
 
   const char *options =
       "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
@@ -228,9 +229,9 @@ void test_execute_with_user_data() {
   CBoxliteRuntime *runtime = NULL;
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-execute-userdata";
-  BoxliteErrorCode code = boxlite_runtime_new(temp_dir, NULL, &runtime, &error);
-  assert(code == Ok);
-  assert(runtime != NULL);
+  reset_test_home(temp_dir);
+  runtime = new_test_runtime(temp_dir, &error);
+  BoxliteErrorCode code = Ok;
 
   const char *options =
       "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
