@@ -92,6 +92,7 @@ extern "C" {
         features: u32,
         flags: u32,
     ) -> i32;
+    pub fn krun_disable_tsi(ctx_id: u32) -> i32;
     pub fn krun_start_enter(ctx_id: u32) -> i32;
 
     /// Set a file path to redirect the console output to.

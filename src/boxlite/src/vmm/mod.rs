@@ -179,8 +179,8 @@ pub struct InstanceSpec {
     /// This is not serialized; it's set in-process by the shim before calling the engine.
     #[serde(skip)]
     pub network_backend_endpoint: Option<crate::net::NetworkBackendEndpoint>,
-    /// When true, add a dead network interface to prevent libkrun TSI auto-enable.
-    /// This ensures NetworkSpec::Disabled truly disables all network connectivity.
+    /// When true, disable libkrun's automatic TSI fallback.
+    /// This ensures NetworkSpec::Disabled leaves the guest with no network interface at all.
     #[serde(default)]
     pub disable_network: bool,
     /// Home directory for boxlite runtime (~/.boxlite or BOXLITE_HOME)

@@ -162,6 +162,8 @@ Configuration options for creating a box.
 - `mode: str` - `"enabled"` or `"disabled"`
 - `allow_net: List[str]` - Optional outbound allowlist when `mode="enabled"`
 
+`mode="disabled"` removes the guest network interface entirely.
+
 **Example:**
 
 ```python

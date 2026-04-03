@@ -12,11 +12,11 @@ use crate::vmm::krun::check_status;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use libkrun_sys::{
     krun_add_disk2, krun_add_net_unixgram, krun_add_net_unixstream, krun_add_virtiofs,
-    krun_add_vsock_port2, krun_create_ctx, krun_free_ctx, krun_init_log, krun_set_console_output,
-    krun_set_env, krun_set_exec, krun_set_gpu_options, krun_set_kernel, krun_set_nested_virt,
-    krun_set_port_map, krun_set_rlimits, krun_set_root, krun_set_root_disk_remount,
-    krun_set_vm_config, krun_set_workdir, krun_setgid, krun_setuid, krun_split_irqchip,
-    krun_start_enter,
+    krun_add_vsock_port2, krun_create_ctx, krun_disable_tsi, krun_free_ctx, krun_init_log,
+    krun_set_console_output, krun_set_env, krun_set_exec, krun_set_gpu_options, krun_set_kernel,
+    krun_set_nested_virt, krun_set_port_map, krun_set_rlimits, krun_set_root,
+    krun_set_root_disk_remount, krun_set_vm_config, krun_set_workdir, krun_setgid, krun_setuid,
+    krun_split_irqchip, krun_start_enter,
 };
 
 /// Thin wrapper that owns a libkrun context.
@@ -415,31 +415,12 @@ impl KrunContext {
         }
     }
 
-    /// Add a network interface using a raw file descriptor.
+    /// Disable libkrun's automatic TSI fallback when no network interfaces are attached.
     ///
-    /// Used by the dead socket trick to prevent TSI auto-enable:
-    /// pass a half-closed UnixStream fd so `net.list` is non-empty
-    /// but the interface can't actually communicate.
-    ///
-    /// # Safety
-    /// `fd` must be a valid open file descriptor.
-    pub unsafe fn add_net_fd(
-        &self,
-        fd: i32,
-        features: u32,
-        mac_address: [u8; 6],
-    ) -> BoxliteResult<()> {
-        tracing::debug!(fd, "Adding dead network interface via fd");
-        check_status("krun_add_net_unixstream", unsafe {
-            krun_add_net_unixstream(
-                self.ctx_id,
-                std::ptr::null(), // c_path: null (use fd instead)
-                fd,               // fd: valid fd from UnixStream::pair()
-                mac_address.as_ptr(),
-                features,
-                0,
-            )
-        })
+    /// This keeps the guest fully offline: no TSI hijack and no virtio-net device.
+    pub unsafe fn disable_tsi(&self) -> BoxliteResult<()> {
+        tracing::debug!("Disabling libkrun TSI fallback");
+        check_status("krun_disable_tsi", unsafe { krun_disable_tsi(self.ctx_id) })
     }
 
     /// Add a virtiofs mount, sharing a host directory with the guest.

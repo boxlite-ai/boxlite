@@ -109,6 +109,8 @@ network = NetworkSpec(
 | `mode` | `str` | Required | `"enabled"` or `"disabled"` |
 | `allow_net` | `List[str]` | `[]` | Outbound allowlist used only when `mode="enabled"` |
 
+`mode="disabled"` removes the guest network interface entirely.
+
 #### Volume Mount Format
 
 ```python

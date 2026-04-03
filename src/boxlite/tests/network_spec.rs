@@ -79,7 +79,6 @@ async fn disabled_network_returns_no_network_config() {
 }
 
 #[tokio::test]
-#[ignore = "requires VM runtime (run with make test)"]
 async fn disabled_network_runs_without_eth0() {
     let home = boxlite_test_utils::home::PerTestBoxHome::new();
     let runtime = BoxliteRuntime::new(BoxliteOptions {
@@ -106,6 +105,12 @@ async fn disabled_network_runs_without_eth0() {
     let out = run_stdout(&litebox, "ls", &["/"]).await;
     assert!(!out.is_empty(), "ls should work without network");
 
+    let status = run_exit_code(&litebox, "sh", &["-c", "test ! -e /sys/class/net/eth0"]).await;
+    assert_eq!(
+        status, 0,
+        "disabled network should remove eth0 entirely, got exit code {status}"
+    );
+
     litebox.stop().await.unwrap();
 }
 
@@ -123,6 +128,15 @@ async fn run_stdout(litebox: &boxlite::LiteBox, cmd: &str, args: &[&str]) -> Str
     }
     let _ = ex.wait().await;
     out
+}
+
+/// Helper: run a command and return its exit status.
+async fn run_exit_code(litebox: &boxlite::LiteBox, cmd: &str, args: &[&str]) -> i32 {
+    let mut ex = litebox
+        .exec(BoxCommand::new(cmd).args(args.iter().map(|s| s.to_string()).collect::<Vec<_>>()))
+        .await
+        .unwrap();
+    ex.wait().await.unwrap().exit_code
 }
 
 #[tokio::test]

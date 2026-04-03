@@ -118,7 +118,7 @@ interface NetworkSpec {
 }
 ```
 
-Use `allowNet` only when `mode: "enabled"`. Empty or omitted `allowNet` means full outbound access.
+Use `allowNet` only when `mode: "enabled"`. Empty or omitted `allowNet` means full outbound access. `mode: "disabled"` removes the guest network interface entirely.
 
 #### `JsEnvVar`
 

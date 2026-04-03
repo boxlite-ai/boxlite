@@ -52,14 +52,12 @@ describe("execution features integration", { timeout: 120_000 }, () => {
     expect(result.exitCode).not.toBe(0);
   });
 
-  test("signal(10/SIGUSR1) on running process does not crash", async () => {
+  test("signal(10/SIGUSR1) is delivered to the running process", async () => {
     const nativeBox = await (box as any)._ensureBox();
-    const run = await nativeBox.exec("sleep", ["5"], undefined, false);
+    const run = await nativeBox.exec("sleep", ["60"], undefined, false);
 
-    // SIGUSR1 (10) — sleep ignores it by default
-    await expect(run.signal(10)).resolves.not.toThrow();
-
-    await run.kill();
-    await run.wait();
+    await run.signal(10);
+    const result = await run.wait();
+    expect(result.exitCode).toBe(-10);
   });
 });
