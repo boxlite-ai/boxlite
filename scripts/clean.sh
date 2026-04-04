@@ -46,7 +46,6 @@ parse_args "$@"
 clean_cargo() {
     print_section "Cleaning Rust artifacts..."
     cargo clean
-    [ -d "guest" ] && (cd guest && cargo clean)
 }
 
 clean_python() {
