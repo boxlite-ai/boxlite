@@ -59,6 +59,8 @@ pub enum BoxliteErrorCode {
     Metadata = 18,
     /// Unsupported engine error
     UnsupportedEngine = 19,
+    /// System resource limit reached
+    ResourceExhausted = 20,
 }
 
 /// Extended error information for C API.
@@ -104,6 +106,7 @@ pub fn error_to_code(err: &BoxliteError) -> BoxliteErrorCode {
         BoxliteError::Rpc(_) => BoxliteErrorCode::Rpc,
         BoxliteError::RpcTransport(_) => BoxliteErrorCode::RpcTransport,
         BoxliteError::MetadataError(_) => BoxliteErrorCode::Metadata,
+        BoxliteError::ResourceExhausted(_) => BoxliteErrorCode::ResourceExhausted,
     }
 }
 

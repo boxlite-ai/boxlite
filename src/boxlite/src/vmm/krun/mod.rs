@@ -14,7 +14,10 @@ pub(crate) fn check_status(label: &str, status: i32) -> BoxliteResult<()> {
         tracing::error!(function = label, status, "libkrun FFI call failed");
         if status == -22 {
             return Err(BoxliteError::Engine(format!(
-                "libkrun function '{}' returned EINVAL (-22). Check that rootfs contains valid kernel and rootfs structure.",
+                "libkrun function '{}' returned EINVAL (-22). Possible causes:\n\
+                 - macOS: VM address space limit reached (kern.hv.max_address_spaces)\n\
+                 - Invalid rootfs structure (missing kernel or initrd)\n\
+                 Run `boxlite list` to check active boxes.",
                 label
             )));
         }

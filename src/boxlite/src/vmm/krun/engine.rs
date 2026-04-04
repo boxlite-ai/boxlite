@@ -8,6 +8,7 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 /// Libkrun-specific VMM instance implementation.
 struct KrunVmmInstance {
     context: KrunContext,
+    probe: Box<dyn crate::system_check::HypervisorProbe>,
 }
 
 impl VmmInstanceImpl for KrunVmmInstance {
@@ -29,13 +30,11 @@ impl VmmInstanceImpl for KrunVmmInstance {
         // 1. VM failed to start (negative status)
         // 2. VM started and guest exited (non-negative status) - this is success
         if status < 0 {
-            // VM failed to start
-            if status == -22 {
-                return Err(BoxliteError::Engine("libkrun returned EINVAL.".into()));
-            }
-            Err(BoxliteError::Engine(format!(
-                "VM failed to start with status {status}"
-            )))
+            // VM failed to start — use hypervisor probe to diagnose the cause.
+            // libkrun collapses all errors to -EINVAL, so the probe inspects
+            // the hypervisor directly to get the specific error code.
+            let err = BoxliteError::Engine(format!("VM failed to start (libkrun status={status})"));
+            Err(self.probe.diagnose_create_failure(err))
         } else {
             // VM started and guest exited successfully (status is guest exit code)
             Ok(())
@@ -473,7 +472,10 @@ impl Vmm for Krun {
 
         // Return a VmmInstance that wraps the configured context
         // The actual VM start will happen when enter() is called
-        let instance = KrunVmmInstance { context: ctx };
+        let instance = KrunVmmInstance {
+            context: ctx,
+            probe: crate::system_check::hypervisor_probe(),
+        };
         Ok(VmmInstance::new(Box::new(instance)))
     }
 }

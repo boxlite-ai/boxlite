@@ -70,6 +70,10 @@ pub enum BoxliteError {
     /// Resource (box or runtime) has been stopped/shutdown.
     #[error("stopped: {0}")]
     Stopped(String),
+
+    /// System resource limit reached (e.g., VM address spaces exhausted).
+    #[error("resource exhausted: {0}")]
+    ResourceExhausted(String),
 }
 
 // Implement From for common error types to enable `?` operator
