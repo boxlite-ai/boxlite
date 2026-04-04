@@ -4,6 +4,7 @@ package boxlite
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -22,6 +23,10 @@ func newTestRuntime(t *testing.T) *Runtime {
 
 	rt, err := NewRuntime(WithHomeDir(homeDir))
 	if err != nil {
+		var e *Error
+		if errors.As(err, &e) && (e.Code == ErrUnsupported || e.Code == ErrUnsupportedEngine) {
+			t.Skipf("runtime not available: %v", err)
+		}
 		t.Fatalf("NewRuntime: %v", err)
 	}
 	t.Cleanup(func() {

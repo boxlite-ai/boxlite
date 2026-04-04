@@ -4,6 +4,13 @@ import pytest
 
 import boxlite
 
+# Skip entire module if NetworkSpec class is not available (native extension not built)
+if not hasattr(boxlite, "NetworkSpec"):
+    pytest.skip(
+        "boxlite.NetworkSpec not available (rebuild SDK with: make dev:python)",
+        allow_module_level=True,
+    )
+
 
 class TestNetworkSpec:
     def test_creation(self):
