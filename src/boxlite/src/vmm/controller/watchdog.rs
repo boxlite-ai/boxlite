@@ -53,31 +53,99 @@ impl Drop for ChildSetup {
     }
 }
 
-/// Create a watchdog pipe pair.
+/// Create a watchdog pipe pair with `FD_CLOEXEC` set on both ends.
 ///
 /// Returns `(keepalive, child_setup)`. The parent holds the keepalive;
 /// the child setup is consumed during spawn to configure FD inheritance.
+///
+/// Both FDs are created with `FD_CLOEXEC` to prevent leaking to unrelated
+/// child processes. The shim's pre_exec hook explicitly preserves the
+/// read-end via `dup2` (which clears `CLOEXEC` on the target fd).
 pub fn create() -> BoxliteResult<(Keepalive, ChildSetup)> {
-    let mut fds = [0i32; 2];
-    // SAFETY: pipe() writes two valid FDs into the array.
-    if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
-        return Err(BoxliteError::Engine(format!(
-            "Failed to create watchdog pipe: {}",
-            std::io::Error::last_os_error()
-        )));
-    }
+    let fds = create_pipe_cloexec()?;
     Ok((
         Keepalive {
-            // SAFETY: fds[1] is a valid write-end FD from pipe().
+            // SAFETY: fds[1] is a valid write-end FD from pipe()/pipe2().
             _pipe_write: unsafe { OwnedFd::from_raw_fd(fds[1]) },
         },
         ChildSetup { pipe_read: fds[0] },
     ))
 }
 
+/// Create a pipe with `FD_CLOEXEC` set on both ends.
+///
+/// Without `CLOEXEC`, the write-end can leak to unrelated child processes
+/// forked between `pipe()` and the shim's `pre_exec`. Any process holding
+/// the write-end prevents `POLLHUP` from firing when the parent dies,
+/// orphaning the shim forever.
+fn create_pipe_cloexec() -> BoxliteResult<[i32; 2]> {
+    let mut fds = [0i32; 2];
+
+    #[cfg(target_os = "linux")]
+    {
+        // pipe2() sets O_CLOEXEC atomically — no race window.
+        // SAFETY: pipe2() writes two valid FDs into the array.
+        if unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
+            return Err(BoxliteError::Engine(format!(
+                "Failed to create watchdog pipe: {}",
+                std::io::Error::last_os_error()
+            )));
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        // SAFETY: pipe() writes two valid FDs into the array.
+        if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
+            return Err(BoxliteError::Engine(format!(
+                "Failed to create watchdog pipe: {}",
+                std::io::Error::last_os_error()
+            )));
+        }
+        // macOS lacks pipe2(); set CLOEXEC via fcntl on both ends.
+        for &fd in &fds {
+            // SAFETY: fd is a valid FD from pipe().
+            if unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) } < 0 {
+                let err = std::io::Error::last_os_error();
+                // SAFETY: closing valid pipe FDs on error path.
+                unsafe {
+                    libc::close(fds[0]);
+                    libc::close(fds[1]);
+                }
+                return Err(BoxliteError::Engine(format!(
+                    "Failed to set CLOEXEC on watchdog pipe: {err}"
+                )));
+            }
+        }
+    }
+
+    Ok(fds)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_pipe_has_cloexec_set() {
+        let fds = create_pipe_cloexec().expect("pipe creation should succeed");
+
+        for &fd in &fds {
+            let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+            assert!(flags >= 0, "fcntl F_GETFD should succeed");
+            assert_ne!(
+                flags & libc::FD_CLOEXEC,
+                0,
+                "fd {fd} must have FD_CLOEXEC set"
+            );
+        }
+
+        // Cleanup
+        unsafe {
+            libc::close(fds[0]);
+            libc::close(fds[1]);
+        }
+    }
 
     #[test]
     fn test_create_returns_valid_fds() {
@@ -143,5 +211,62 @@ mod tests {
         );
 
         drop(child_setup);
+    }
+
+    /// Regression test for orphan shim bug: without FD_CLOEXEC, a child
+    /// spawned via fork+exec inherits the pipe write-end, preventing
+    /// POLLHUP when the parent drops its Keepalive.
+    ///
+    /// This test spawns a subprocess (fork+exec), drops the Keepalive,
+    /// and asserts POLLHUP fires within 100ms. With FD_CLOEXEC, the
+    /// write-end is closed by the kernel during exec(). Without it,
+    /// the child holds the write-end open and poll() times out.
+    #[test]
+    fn test_spawned_child_does_not_block_pollhup() {
+        let (keepalive, child_setup) = create().expect("pipe creation should succeed");
+        let read_fd = child_setup.raw_fd();
+
+        // Spawn a child via Command (fork+exec) — simulates an unrelated
+        // process inheriting FDs (like Electron/VS Code in the real bug).
+        // FD_CLOEXEC closes the write-end during exec(); without it,
+        // the child keeps the write-end open.
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg("10")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("failed to spawn sleep");
+
+        // Drop keepalive (closes our write-end).
+        // If child also holds write-end (no CLOEXEC), POLLHUP won't fire.
+        drop(keepalive);
+
+        // Poll the read-end — should get POLLHUP within 100ms if
+        // the child did NOT inherit the write-end (CLOEXEC worked).
+        let mut pollfd = libc::pollfd {
+            fd: read_fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let ret = unsafe { libc::poll(&mut pollfd, 1, 100) };
+
+        // Cleanup
+        let _ = child.kill();
+        let _ = child.wait();
+        drop(child_setup);
+
+        // Assert POLLHUP was received (not a timeout)
+        assert_eq!(
+            ret, 1,
+            "poll should return 1 (POLLHUP), not 0 (timeout). \
+            The spawned child inherited the pipe write-end because FD_CLOEXEC \
+            is missing — this is the orphan shim bug."
+        );
+        assert_ne!(
+            pollfd.revents & libc::POLLHUP,
+            0,
+            "should get POLLHUP — child must not hold the write-end"
+        );
     }
 }
