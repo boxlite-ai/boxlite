@@ -54,6 +54,8 @@ typedef enum BoxliteErrorCode {
   Metadata = 18,
   // Unsupported engine error
   UnsupportedEngine = 19,
+  // System resource limit reached
+  ResourceExhausted = 20,
 } BoxliteErrorCode;
 
 // Opaque handle to a running box
