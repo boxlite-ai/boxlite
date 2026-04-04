@@ -28,6 +28,12 @@ import pytest
 
 import boxlite
 
+if not hasattr(boxlite, "NetworkSpec"):
+    pytest.skip(
+        "boxlite.NetworkSpec not available (rebuild SDK with: make dev:python)",
+        allow_module_level=True,
+    )
+
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
 
