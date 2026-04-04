@@ -46,6 +46,7 @@ set(TEST_TARGETS
 foreach(TARGET ${TEST_TARGETS})
     add_executable(${TARGET} ${TARGET}.c)
     target_link_libraries(${TARGET} ${BOXLITE_LIB})
+    target_compile_definitions(${TARGET} PRIVATE _XOPEN_SOURCE=500)
 
     # Set RPATH so the executable can find the dylib
     if(APPLE)

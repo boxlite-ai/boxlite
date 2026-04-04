@@ -153,7 +153,7 @@ lint\:c:
 		exit 1; \
 	fi; \
 	for file in sdks/c/tests/*.c; do \
-		"$$CLANG_TIDY" --warnings-as-errors='*' "$$file" -- -std=c11 -Isdks/c/include || exit 1; \
+		"$$CLANG_TIDY" --warnings-as-errors='*' "$$file" -- -std=c11 -D_XOPEN_SOURCE=500 -Isdks/c/include || exit 1; \
 	done
 
 fmt\:go:
