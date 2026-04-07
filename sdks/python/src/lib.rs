@@ -3,6 +3,7 @@
 mod advanced_options;
 mod box_handle;
 mod exec;
+mod images;
 mod info;
 mod metrics;
 mod options;
@@ -14,6 +15,7 @@ mod util;
 use crate::advanced_options::{PyAdvancedBoxOptions, PyHealthCheckOptions, PySecurityOptions};
 use crate::box_handle::PyBox;
 use crate::exec::{PyExecStderr, PyExecStdin, PyExecStdout, PyExecution};
+use crate::images::{PyImageHandle, PyImageInfo, PyImagePullResult};
 use crate::info::{PyBoxInfo, PyBoxStateInfo, PyHealthState, PyHealthStatus};
 use crate::metrics::{PyBoxMetrics, PyRuntimeMetrics};
 use crate::options::{
@@ -38,6 +40,9 @@ fn boxlite_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyExecStdin>()?;
     m.add_class::<PyExecStdout>()?;
     m.add_class::<PyExecStderr>()?;
+    m.add_class::<PyImageHandle>()?;
+    m.add_class::<PyImageInfo>()?;
+    m.add_class::<PyImagePullResult>()?;
     m.add_class::<PyBoxInfo>()?;
     m.add_class::<PyBoxStateInfo>()?;
     m.add_class::<PyHealthState>()?;

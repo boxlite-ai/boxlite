@@ -36,6 +36,7 @@ set(TEST_TARGETS
     test_lifecycle
     test_execute
     test_errors
+    test_images
     test_simple_api
     test_streaming
     test_memory
@@ -75,7 +76,7 @@ set_tests_properties(test_basic PROPERTIES LABELS "unit")
 
 # Label integration tests (require VM)
 set(INTEGRATION_TESTS
-    test_lifecycle test_execute test_errors test_simple_api
+    test_lifecycle test_execute test_errors test_images test_simple_api
     test_streaming test_memory test_integration test_execute_cmd
 )
 foreach(TARGET ${INTEGRATION_TESTS})

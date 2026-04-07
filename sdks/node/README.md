@@ -147,6 +147,22 @@ console.log(box.info()); // Metadata
 await box.stop();
 ```
 
+### Runtime Image Management
+
+```typescript
+import { JsBoxlite } from "boxlite";
+
+const runtime = JsBoxlite.withDefaultConfig();
+
+const pulled = await runtime.images.pull("alpine:latest");
+console.log(pulled.reference, pulled.configDigest, pulled.layerCount);
+
+const images = await runtime.images.list();
+for (const image of images) {
+  console.log(image.repository, image.tag, image.id);
+}
+```
+
 ### CodeBox
 
 Python code execution sandbox.

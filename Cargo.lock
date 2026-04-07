@@ -501,6 +501,7 @@ name = "boxlite-ffi"
 version = "0.8.2"
 dependencies = [
  "boxlite",
+ "chrono",
  "futures",
  "serde",
  "serde_json",

@@ -44,6 +44,7 @@ Note:
 from ._boxlite import SyncBoxlite
 from ._sync_base import SyncBase, SyncContextManager
 from ._box import SyncBox
+from ._images import SyncImageHandle
 from ._execution import SyncExecution, SyncExecStdout, SyncExecStderr
 from ._simplebox import SyncSimpleBox
 from ._codebox import SyncCodeBox
@@ -57,6 +58,7 @@ __all__ = [
     "SyncContextManager",
     # Native API mirrors
     "SyncBox",
+    "SyncImageHandle",
     "SyncExecution",
     "SyncExecStdout",
     "SyncExecStderr",

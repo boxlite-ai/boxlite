@@ -36,6 +36,21 @@ class TestExports:
 
         assert BoxInfo is not None
 
+    def test_image_handle_importable(self):
+        from boxlite import ImageHandle
+
+        assert ImageHandle is not None
+
+    def test_image_info_importable(self):
+        from boxlite import ImageInfo
+
+        assert ImageInfo is not None
+
+    def test_image_pull_result_importable(self):
+        from boxlite import ImagePullResult
+
+        assert ImagePullResult is not None
+
     def test_box_state_info_importable(self):
         from boxlite import BoxStateInfo
 
@@ -44,7 +59,15 @@ class TestExports:
     def test_all_contains_key_types(self):
         """Key management types are listed in __all__."""
         assert hasattr(boxlite, "__all__")
-        for name in ("Boxlite", "Box", "BoxInfo", "BoxStateInfo"):
+        for name in (
+            "Boxlite",
+            "Box",
+            "BoxInfo",
+            "BoxStateInfo",
+            "ImageHandle",
+            "ImageInfo",
+            "ImagePullResult",
+        ):
             assert name in boxlite.__all__, f"{name} missing from __all__"
 
 
@@ -109,10 +132,17 @@ class TestBoxliteManagementMethods:
 
     @pytest.mark.parametrize(
         "method",
-        ["list_info", "get_info", "get", "remove", "create", "get_or_create"],
+        ["list_info", "get_info", "get", "remove", "create", "get_or_create", "images"],
     )
     def test_method_exists(self, cls, method):
         assert hasattr(cls, method), f"Boxlite missing method: {method}"
+
+    def test_rest_runtime_images_unsupported(self):
+        runtime = boxlite.Boxlite.rest(
+            boxlite.BoxliteRestOptions(url="http://localhost:1")
+        )
+        with pytest.raises(RuntimeError, match="Image operations not supported"):
+            _ = runtime.images
 
 
 class TestSyncBoxliteManagementMethods:
@@ -127,7 +157,7 @@ class TestSyncBoxliteManagementMethods:
 
     @pytest.mark.parametrize(
         "method",
-        ["list_info", "get_info", "get", "remove", "create", "get_or_create"],
+        ["list_info", "get_info", "get", "remove", "create", "get_or_create", "images"],
     )
     def test_method_exists(self, cls, method):
         assert hasattr(cls, method), f"SyncBoxlite missing method: {method}"

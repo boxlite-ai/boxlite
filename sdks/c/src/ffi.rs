@@ -19,11 +19,12 @@ use std::os::raw::{c_char, c_int, c_void};
 // Import internal FFI types from shared layer
 use boxlite_ffi::error::{BoxliteErrorCode, FFIError};
 use boxlite_ffi::runner::{BoxRunner, ExecResult};
-use boxlite_ffi::runtime::{BoxHandle, RuntimeHandle};
+use boxlite_ffi::runtime::{BoxHandle, ImageHandle, RuntimeHandle};
 
 // Define C-compatible type aliases for the C header
 pub type CBoxliteRuntime = RuntimeHandle;
 pub type CBoxHandle = BoxHandle;
+pub type CBoxliteImageHandle = ImageHandle;
 pub type CBoxliteSimple = BoxRunner;
 pub type CBoxliteError = FFIError;
 pub type CBoxliteExecResult = ExecResult;
@@ -73,6 +74,56 @@ pub unsafe extern "C" fn boxlite_runtime_new(
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
     boxlite_ffi::ops::runtime_new(home_dir, registries_json, out_runtime, out_error)
+}
+
+/// Get an image handle for runtime-level image operations.
+///
+/// # Arguments
+/// * `runtime` - Pointer to the active `CBoxliteRuntime`.
+/// * `out_handle` - Output parameter to store the created `CBoxliteImageHandle`.
+/// * `out_error` - Output parameter for error information.
+///
+/// # Returns
+/// `BoxliteErrorCode::Ok` on success.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_runtime_images(
+    runtime: *mut CBoxliteRuntime,
+    out_handle: *mut *mut CBoxliteImageHandle,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    boxlite_ffi::ops::runtime_images(runtime, out_handle, out_error)
+}
+
+/// Pull an image and return metadata as JSON.
+///
+/// # Arguments
+/// * `handle` - Image handle.
+/// * `image_ref` - Image reference to pull.
+/// * `out_json` - Output pointer for JSON string. Caller must free with `boxlite_free_string`.
+/// * `out_error` - Output parameter for error information.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_image_pull(
+    handle: *mut CBoxliteImageHandle,
+    image_ref: *const c_char,
+    out_json: *mut *mut c_char,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    boxlite_ffi::ops::image_pull(handle, image_ref, out_json, out_error)
+}
+
+/// List cached images as JSON.
+///
+/// # Arguments
+/// * `handle` - Image handle.
+/// * `out_json` - Output pointer for JSON string. Caller must free with `boxlite_free_string`.
+/// * `out_error` - Output parameter for error information.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_image_list(
+    handle: *mut CBoxliteImageHandle,
+    out_json: *mut *mut c_char,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    boxlite_ffi::ops::image_list(handle, out_json, out_error)
 }
 
 /// Create a new box with the given options (JSON).
@@ -517,6 +568,15 @@ pub unsafe extern "C" fn boxlite_simple_free(box_runner: *mut CBoxliteSimple) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_box_free(handle: *mut CBoxHandle) {
     boxlite_ffi::ops::box_free(handle)
+}
+
+/// Free an image handle.
+///
+/// # Arguments
+/// * `handle` - Pointer to `CBoxliteImageHandle` to free.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_image_free(handle: *mut CBoxliteImageHandle) {
+    boxlite_ffi::ops::image_free(handle)
 }
 
 /// Free a runtime handle.

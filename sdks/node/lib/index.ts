@@ -20,10 +20,18 @@
  */
 
 import { getNativeModule, getJsBoxlite } from "./native.js";
+import type {
+  JsImageHandle as NativeImageHandle,
+  JsImageInfo as NativeImageInfo,
+  JsImagePullResult as NativeImagePullResult,
+} from "../native/index.js";
 
 // Re-export native bindings
 export const JsBoxlite = getJsBoxlite();
 export type { CopyOptions } from "./copy.js";
+export type ImageHandle = NativeImageHandle;
+export type ImageInfo = NativeImageInfo;
+export type ImagePullResult = NativeImagePullResult;
 
 // Export native module loader for advanced use cases
 export { getNativeModule, getJsBoxlite };

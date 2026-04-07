@@ -3,6 +3,7 @@ package boxlite
 import (
 	"errors"
 	"testing"
+	"time"
 )
 
 // ============================================================================
@@ -272,6 +273,58 @@ func TestBoxInfoWire_ToBoxInfo_NilPID(t *testing.T) {
 	}
 	if boxInfo.Running {
 		t.Error("Running should be false")
+	}
+}
+
+func TestImageInfoWire_ToImageInfo(t *testing.T) {
+	size := uint64(8192)
+	now := time.Now().UTC().Round(time.Second)
+	info := imageInfoWire{
+		Reference:  "docker.io/library/alpine:latest",
+		Repository: "docker.io/library/alpine",
+		Tag:        "latest",
+		ID:         "sha256:abc123",
+		CachedAt:   now,
+		SizeBytes:  &size,
+	}
+
+	imageInfo := info.toImageInfo()
+	if imageInfo.Reference != info.Reference {
+		t.Errorf("Reference: got %q", imageInfo.Reference)
+	}
+	if imageInfo.Repository != info.Repository {
+		t.Errorf("Repository: got %q", imageInfo.Repository)
+	}
+	if imageInfo.Tag != info.Tag {
+		t.Errorf("Tag: got %q", imageInfo.Tag)
+	}
+	if imageInfo.ID != info.ID {
+		t.Errorf("ID: got %q", imageInfo.ID)
+	}
+	if !imageInfo.CachedAt.Equal(now) {
+		t.Errorf("CachedAt: got %v want %v", imageInfo.CachedAt, now)
+	}
+	if imageInfo.SizeBytes == nil || *imageInfo.SizeBytes != size {
+		t.Fatalf("SizeBytes: got %v want %d", imageInfo.SizeBytes, size)
+	}
+}
+
+func TestImagePullResultWire_ToImagePullResult(t *testing.T) {
+	wire := imagePullResultWire{
+		Reference:    "alpine:latest",
+		ConfigDigest: "sha256:def456",
+		LayerCount:   3,
+	}
+
+	result := wire.toImagePullResult()
+	if result.Reference != wire.Reference {
+		t.Errorf("Reference: got %q", result.Reference)
+	}
+	if result.ConfigDigest != wire.ConfigDigest {
+		t.Errorf("ConfigDigest: got %q", result.ConfigDigest)
+	}
+	if result.LayerCount != wire.LayerCount {
+		t.Errorf("LayerCount: got %d", result.LayerCount)
 	}
 }
 

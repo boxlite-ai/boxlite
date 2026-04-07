@@ -56,3 +56,20 @@ type BoxMetrics struct {
 	NetworkTCPConns      int     `json:"network_tcp_connections"`
 	NetworkTCPErrors     int     `json:"network_tcp_errors"`
 }
+
+// ImageInfo holds metadata about a cached image.
+type ImageInfo struct {
+	Reference  string
+	Repository string
+	Tag        string
+	ID         string
+	CachedAt   time.Time
+	SizeBytes  *uint64
+}
+
+// ImagePullResult contains metadata returned by a pull operation.
+type ImagePullResult struct {
+	Reference    string
+	ConfigDigest string
+	LayerCount   int
+}

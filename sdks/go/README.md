@@ -58,6 +58,31 @@ func main() {
 }
 ```
 
+### Runtime Image Management
+
+```go
+ctx := context.Background()
+images, err := rt.Images()
+if err != nil {
+	log.Fatal(err)
+}
+defer images.Close()
+
+pull, err := images.Pull(ctx, "alpine:latest")
+if err != nil {
+	log.Fatal(err)
+}
+fmt.Println(pull.Reference, pull.ConfigDigest, pull.LayerCount)
+
+cached, err := images.List(ctx)
+if err != nil {
+	log.Fatal(err)
+}
+for _, image := range cached {
+	fmt.Println(image.Repository, image.Tag, image.ID)
+}
+```
+
 ## Box Options
 
 - `WithNetwork(boxlite.NetworkSpec{Mode: boxlite.NetworkModeEnabled, AllowNet: []string{"api.openai.com"}})` restricts outbound traffic while keeping networking enabled.

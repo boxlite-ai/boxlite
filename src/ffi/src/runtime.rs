@@ -7,12 +7,19 @@ use std::sync::Arc;
 use tokio::runtime::Runtime as TokioRuntime;
 
 use boxlite::BoxID;
+use boxlite::ImageHandle as CoreImageHandle;
 use boxlite::litebox::LiteBox;
 use boxlite::runtime::BoxliteRuntime;
 
 /// Opaque handle to a BoxliteRuntime instance with associated Tokio runtime
 pub struct RuntimeHandle {
     pub runtime: BoxliteRuntime,
+    pub tokio_rt: Arc<TokioRuntime>,
+}
+
+/// Opaque handle to runtime image operations
+pub struct ImageHandle {
+    pub handle: CoreImageHandle,
     pub tokio_rt: Arc<TokioRuntime>,
 }
 

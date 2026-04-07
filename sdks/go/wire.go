@@ -89,6 +89,40 @@ func (w *boxInfoWire) toBoxInfo() BoxInfo {
 	}
 }
 
+type imageInfoWire struct {
+	Reference  string    `json:"reference"`
+	Repository string    `json:"repository"`
+	Tag        string    `json:"tag"`
+	ID         string    `json:"id"`
+	CachedAt   time.Time `json:"cached_at"`
+	SizeBytes  *uint64   `json:"size_bytes"`
+}
+
+func (w *imageInfoWire) toImageInfo() ImageInfo {
+	return ImageInfo{
+		Reference:  w.Reference,
+		Repository: w.Repository,
+		Tag:        w.Tag,
+		ID:         w.ID,
+		CachedAt:   w.CachedAt,
+		SizeBytes:  w.SizeBytes,
+	}
+}
+
+type imagePullResultWire struct {
+	Reference    string `json:"reference"`
+	ConfigDigest string `json:"config_digest"`
+	LayerCount   int    `json:"layer_count"`
+}
+
+func (w *imagePullResultWire) toImagePullResult() ImagePullResult {
+	return ImagePullResult{
+		Reference:    w.Reference,
+		ConfigDigest: w.ConfigDigest,
+		LayerCount:   w.LayerCount,
+	}
+}
+
 // buildOptionsJSON creates the JSON wire representation from boxConfig.
 func buildOptionsJSON(image string, cfg *boxConfig) (boxOptionsWire, error) {
 	w := boxOptionsWire{

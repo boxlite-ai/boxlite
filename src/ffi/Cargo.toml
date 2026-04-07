@@ -14,7 +14,7 @@ crate-type = ["rlib"]
 default = []
 
 [dependencies]
-boxlite = { path = "../boxlite" }
+boxlite = { path = "../boxlite", features = ["rest"] }
 
 tokio = { version = "1.37", features = ["rt", "rt-multi-thread"] }
 serde = { version = "1.0", features = ["derive"] }
@@ -22,3 +22,4 @@ serde_json = "1.0"
 futures = "0.3"
 
 [dev-dependencies]
+chrono = "0.4"

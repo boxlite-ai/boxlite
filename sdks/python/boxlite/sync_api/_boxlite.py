@@ -12,6 +12,7 @@ from greenlet import greenlet
 
 if TYPE_CHECKING:
     from ._box import SyncBox
+    from ._images import SyncImageHandle
     from ..boxlite import Boxlite, BoxOptions, BoxInfo, RuntimeMetrics, Options
 
 __all__ = ["SyncBoxlite"]
@@ -348,6 +349,14 @@ class SyncBoxlite:
         """
         self._require_started()
         return self._sync(self._boxlite.metrics())
+
+    @property
+    def images(self) -> "SyncImageHandle":
+        """Get the runtime image handle."""
+        self._require_started()
+        from ._images import SyncImageHandle
+
+        return SyncImageHandle(self, self._boxlite.images)
 
     def remove(self, id_or_name: str, force: bool = False) -> None:
         """

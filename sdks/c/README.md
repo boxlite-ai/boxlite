@@ -242,6 +242,27 @@ int main() {
 }
 ```
 
+### Runtime Image Management
+
+```c
+CBoxliteImageHandle* images = NULL;
+char* json = NULL;
+
+if (boxlite_runtime_images(runtime, &images, &error) == Ok) {
+    if (boxlite_image_pull(images, "alpine:latest", &json, &error) == Ok) {
+        printf("Pulled: %s\n", json);
+        boxlite_free_string(json);
+    }
+
+    if (boxlite_image_list(images, &json, &error) == Ok) {
+        printf("Images: %s\n", json);
+        boxlite_free_string(json);
+    }
+
+    boxlite_image_free(images);
+}
+```
+
 ---
 
 ## API Overview

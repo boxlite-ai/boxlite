@@ -5,6 +5,7 @@ use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
 use crate::box_handle::JsBox;
+use crate::images::JsImageHandle;
 use crate::info::JsBoxInfo;
 use crate::metrics::JsRuntimeMetrics;
 use crate::options::{JsBoxOptions, JsBoxliteRestOptions, JsOptions};
@@ -265,6 +266,15 @@ impl JsBoxlite {
         let runtime = Arc::clone(&self.runtime);
         let metrics = runtime.metrics().await.map_err(map_err)?;
         Ok(JsRuntimeMetrics::from(metrics))
+    }
+
+    /// Get the runtime image handle.
+    #[napi(getter)]
+    pub fn images(&self) -> Result<JsImageHandle> {
+        self.runtime.images().map_err(map_err)?;
+        Ok(JsImageHandle {
+            runtime: Arc::clone(&self.runtime),
+        })
     }
 
     /// Remove a box by ID or name.

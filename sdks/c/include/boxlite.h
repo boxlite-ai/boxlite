@@ -64,6 +64,9 @@ typedef struct BoxHandle BoxHandle;
 // Opaque handle for Runner API (auto-manages runtime)
 typedef struct BoxRunner BoxRunner;
 
+// Opaque handle to runtime image operations
+typedef struct ImageHandle ImageHandle;
+
 // Opaque handle to a BoxliteRuntime instance with associated Tokio runtime
 typedef struct RuntimeHandle RuntimeHandle;
 
@@ -81,6 +84,8 @@ typedef struct FFIError {
 } FFIError;
 
 typedef struct FFIError CBoxliteError;
+
+typedef struct ImageHandle CBoxliteImageHandle;
 
 typedef struct BoxHandle CBoxHandle;
 
@@ -152,6 +157,41 @@ enum BoxliteErrorCode boxlite_runtime_new(const char *home_dir,
                                           const char *registries_json,
                                           CBoxliteRuntime **out_runtime,
                                           CBoxliteError *out_error);
+
+// Get an image handle for runtime-level image operations.
+//
+// # Arguments
+// * `runtime` - Pointer to the active `CBoxliteRuntime`.
+// * `out_handle` - Output parameter to store the created `CBoxliteImageHandle`.
+// * `out_error` - Output parameter for error information.
+//
+// # Returns
+// `BoxliteErrorCode::Ok` on success.
+enum BoxliteErrorCode boxlite_runtime_images(CBoxliteRuntime *runtime,
+                                             CBoxliteImageHandle **out_handle,
+                                             CBoxliteError *out_error);
+
+// Pull an image and return metadata as JSON.
+//
+// # Arguments
+// * `handle` - Image handle.
+// * `image_ref` - Image reference to pull.
+// * `out_json` - Output pointer for JSON string. Caller must free with `boxlite_free_string`.
+// * `out_error` - Output parameter for error information.
+enum BoxliteErrorCode boxlite_image_pull(CBoxliteImageHandle *handle,
+                                         const char *image_ref,
+                                         char **out_json,
+                                         CBoxliteError *out_error);
+
+// List cached images as JSON.
+//
+// # Arguments
+// * `handle` - Image handle.
+// * `out_json` - Output pointer for JSON string. Caller must free with `boxlite_free_string`.
+// * `out_error` - Output parameter for error information.
+enum BoxliteErrorCode boxlite_image_list(CBoxliteImageHandle *handle,
+                                         char **out_json,
+                                         CBoxliteError *out_error);
 
 // Create a new box with the given options (JSON).
 //
@@ -487,6 +527,12 @@ void boxlite_simple_free(CBoxliteSimple *box_runner);
 // # Arguments
 // * `handle` - Pointer to `CBoxHandle` to free.
 void boxlite_box_free(CBoxHandle *handle);
+
+// Free an image handle.
+//
+// # Arguments
+// * `handle` - Pointer to `CBoxliteImageHandle` to free.
+void boxlite_image_free(CBoxliteImageHandle *handle);
 
 // Free a runtime handle.
 //

@@ -4,6 +4,7 @@ use boxlite::{BoxArchive, BoxOptions, BoxliteRuntime};
 use pyo3::prelude::*;
 
 use crate::box_handle::PyBox;
+use crate::images::PyImageHandle;
 use crate::info::PyBoxInfo;
 use crate::metrics::PyRuntimeMetrics;
 use crate::options::{PyBoxOptions, PyBoxliteRestOptions, PyOptions};
@@ -148,6 +149,14 @@ impl PyBoxlite {
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let metrics = runtime.metrics().await.map_err(map_err)?;
             Ok(PyRuntimeMetrics::from(metrics))
+        })
+    }
+
+    #[getter]
+    fn images(&self) -> PyResult<PyImageHandle> {
+        self.runtime.images().map_err(map_err)?;
+        Ok(PyImageHandle {
+            runtime: Arc::clone(&self.runtime),
         })
     }
 

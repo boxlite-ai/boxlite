@@ -1,0 +1,79 @@
+use std::sync::Arc;
+
+use boxlite::BoxliteRuntime;
+use boxlite::runtime::types::ImageInfo;
+use napi::bindgen_prelude::*;
+use napi_derive::napi;
+
+use crate::util::map_err;
+
+/// Public metadata about a cached image.
+#[napi(object)]
+#[derive(Clone, Debug)]
+pub struct JsImageInfo {
+    pub reference: String,
+    pub repository: String,
+    pub tag: String,
+    pub id: String,
+    #[napi(js_name = "cachedAt")]
+    pub cached_at: String,
+    #[napi(js_name = "sizeBytes")]
+    pub size_bytes: Option<i64>,
+}
+
+impl From<ImageInfo> for JsImageInfo {
+    fn from(info: ImageInfo) -> Self {
+        Self {
+            reference: info.reference,
+            repository: info.repository,
+            tag: info.tag,
+            id: info.id,
+            cached_at: info.cached_at.to_rfc3339(),
+            size_bytes: info
+                .size
+                .map(|size| i64::try_from(size.as_bytes()).unwrap_or(i64::MAX)),
+        }
+    }
+}
+
+/// Result metadata returned from an image pull operation.
+#[napi(object)]
+#[derive(Clone, Debug)]
+pub struct JsImagePullResult {
+    pub reference: String,
+    #[napi(js_name = "configDigest")]
+    pub config_digest: String,
+    #[napi(js_name = "layerCount")]
+    pub layer_count: u32,
+}
+
+/// Runtime-scoped handle for image operations.
+#[napi]
+pub struct JsImageHandle {
+    pub(crate) runtime: Arc<BoxliteRuntime>,
+}
+
+#[napi]
+impl JsImageHandle {
+    /// Pull an image and return metadata about the cached result.
+    #[napi]
+    pub async fn pull(&self, reference: String) -> Result<JsImagePullResult> {
+        let runtime = Arc::clone(&self.runtime);
+        let images = runtime.images().map_err(map_err)?;
+        let image = images.pull(&reference).await.map_err(map_err)?;
+        Ok(JsImagePullResult {
+            reference: image.reference().to_string(),
+            config_digest: image.config_digest().to_string(),
+            layer_count: u32::try_from(image.layer_count()).unwrap_or(u32::MAX),
+        })
+    }
+
+    /// List cached images for this runtime.
+    #[napi]
+    pub async fn list(&self) -> Result<Vec<JsImageInfo>> {
+        let runtime = Arc::clone(&self.runtime);
+        let images = runtime.images().map_err(map_err)?;
+        let infos = images.list().await.map_err(map_err)?;
+        Ok(infos.into_iter().map(JsImageInfo::from).collect())
+    }
+}

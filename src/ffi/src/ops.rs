@@ -15,8 +15,10 @@ use boxlite::runtime::options::{BoxOptions, BoxliteOptions, NetworkConfig, Netwo
 use boxlite::{BoxliteError, RootfsSpec};
 
 use crate::error::{BoxliteErrorCode, FFIError, error_to_code, null_pointer_error, write_error};
-use crate::json::box_info_to_json;
-use crate::runtime::{BoxHandle, RuntimeHandle, create_tokio_runtime};
+use crate::json::{box_info_to_json, image_info_to_json, image_pull_result_to_json};
+use crate::runtime::{
+    BoxHandle, ImageHandle as FfiImageHandle, RuntimeHandle, create_tokio_runtime,
+};
 use crate::string::c_str_to_string;
 
 /// Create a new BoxliteRuntime
@@ -98,6 +100,171 @@ pub unsafe fn runtime_new(
 
         *out_runtime = Box::into_raw(Box::new(RuntimeHandle { runtime, tokio_rt }));
         BoxliteErrorCode::Ok
+    }
+}
+
+/// Get an image operations handle for a runtime.
+///
+/// # Safety
+/// `runtime` and `out_handle` must be valid pointers.
+pub unsafe fn runtime_images(
+    runtime: *mut RuntimeHandle,
+    out_handle: *mut *mut FfiImageHandle,
+    out_error: *mut FFIError,
+) -> BoxliteErrorCode {
+    unsafe {
+        if runtime.is_null() {
+            write_error(out_error, null_pointer_error("runtime"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+        if out_handle.is_null() {
+            write_error(out_error, null_pointer_error("out_handle"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+
+        let runtime_ref = &*runtime;
+        match runtime_ref.runtime.images() {
+            Ok(handle) => {
+                *out_handle = Box::into_raw(Box::new(FfiImageHandle {
+                    handle,
+                    tokio_rt: runtime_ref.tokio_rt.clone(),
+                }));
+                BoxliteErrorCode::Ok
+            }
+            Err(e) => {
+                let code = error_to_code(&e);
+                write_error(out_error, e);
+                code
+            }
+        }
+    }
+}
+
+/// Pull an image and return SDK-friendly metadata as JSON.
+///
+/// # Safety
+/// `handle`, `image_ref`, and `out_json` must be valid pointers.
+pub unsafe fn image_pull(
+    handle: *mut FfiImageHandle,
+    image_ref: *const c_char,
+    out_json: *mut *mut c_char,
+    out_error: *mut FFIError,
+) -> BoxliteErrorCode {
+    unsafe {
+        if handle.is_null() {
+            write_error(out_error, null_pointer_error("handle"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+        if out_json.is_null() {
+            write_error(out_error, null_pointer_error("out_json"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+
+        let image_ref = match c_str_to_string(image_ref) {
+            Ok(reference) => reference,
+            Err(e) => {
+                write_error(out_error, e);
+                return BoxliteErrorCode::InvalidArgument;
+            }
+        };
+
+        let handle_ref = &*handle;
+        let result = handle_ref
+            .tokio_rt
+            .block_on(handle_ref.handle.pull(&image_ref));
+        match result {
+            Ok(image) => {
+                let json = image_pull_result_to_json(
+                    image.reference(),
+                    image.config_digest(),
+                    image.layer_count(),
+                );
+                let json_str = match serde_json::to_string(&json) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        let err =
+                            BoxliteError::Internal(format!("JSON serialization failed: {}", e));
+                        write_error(out_error, err);
+                        return BoxliteErrorCode::Internal;
+                    }
+                };
+
+                match CString::new(json_str) {
+                    Ok(s) => {
+                        *out_json = s.into_raw();
+                        BoxliteErrorCode::Ok
+                    }
+                    Err(e) => {
+                        let err =
+                            BoxliteError::Internal(format!("CString conversion failed: {}", e));
+                        write_error(out_error, err);
+                        BoxliteErrorCode::Internal
+                    }
+                }
+            }
+            Err(e) => {
+                let code = error_to_code(&e);
+                write_error(out_error, e);
+                code
+            }
+        }
+    }
+}
+
+/// List cached images and return metadata as JSON.
+///
+/// # Safety
+/// `handle` and `out_json` must be valid pointers.
+pub unsafe fn image_list(
+    handle: *mut FfiImageHandle,
+    out_json: *mut *mut c_char,
+    out_error: *mut FFIError,
+) -> BoxliteErrorCode {
+    unsafe {
+        if handle.is_null() {
+            write_error(out_error, null_pointer_error("handle"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+        if out_json.is_null() {
+            write_error(out_error, null_pointer_error("out_json"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+
+        let handle_ref = &*handle;
+        let result = handle_ref.tokio_rt.block_on(handle_ref.handle.list());
+        match result {
+            Ok(images) => {
+                let json_array: Vec<serde_json::Value> =
+                    images.iter().map(image_info_to_json).collect();
+                let json_str = match serde_json::to_string(&json_array) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        let err =
+                            BoxliteError::Internal(format!("JSON serialization failed: {}", e));
+                        write_error(out_error, err);
+                        return BoxliteErrorCode::Internal;
+                    }
+                };
+
+                match CString::new(json_str) {
+                    Ok(s) => {
+                        *out_json = s.into_raw();
+                        BoxliteErrorCode::Ok
+                    }
+                    Err(e) => {
+                        let err =
+                            BoxliteError::Internal(format!("CString conversion failed: {}", e));
+                        write_error(out_error, err);
+                        BoxliteErrorCode::Internal
+                    }
+                }
+            }
+            Err(e) => {
+                let code = error_to_code(&e);
+                write_error(out_error, e);
+                code
+            }
+        }
     }
 }
 
@@ -1160,6 +1327,18 @@ pub unsafe fn runtime_free(runtime: *mut RuntimeHandle) {
     }
 }
 
+/// Free an image handle.
+///
+/// # Safety
+/// `handle` must be null or a valid pointer returned by `runtime_images`.
+pub unsafe fn image_free(handle: *mut FfiImageHandle) {
+    if !handle.is_null() {
+        unsafe {
+            drop(Box::from_raw(handle));
+        }
+    }
+}
+
 /// Free a string allocated by BoxLite
 ///
 /// # Parameters
@@ -1639,6 +1818,28 @@ mod tests {
     }
 
     #[test]
+    fn test_runtime_images_null_pointer_validation() {
+        unsafe {
+            let mut error = FFIError::default();
+            let code = runtime_images(ptr::null_mut(), ptr::null_mut(), &mut error as *mut _);
+            assert_eq!(code, BoxliteErrorCode::InvalidArgument);
+            assert!(!error.message.is_null());
+            error_free(&mut error as *mut _);
+        }
+    }
+
+    #[test]
+    fn test_image_list_null_pointer_validation() {
+        unsafe {
+            let mut error = FFIError::default();
+            let code = image_list(ptr::null_mut(), ptr::null_mut(), &mut error as *mut _);
+            assert_eq!(code, BoxliteErrorCode::InvalidArgument);
+            assert!(!error.message.is_null());
+            error_free(&mut error as *mut _);
+        }
+    }
+
+    #[test]
     fn test_c_string_conversion_logic() {
         let test_str = CString::new("hello").unwrap();
         unsafe {
@@ -1662,6 +1863,7 @@ mod tests {
     fn test_free_functions_null_safe() {
         unsafe {
             runtime_free(ptr::null_mut());
+            image_free(ptr::null_mut());
             box_free(ptr::null_mut());
             string_free(ptr::null_mut());
             error_free(ptr::null_mut());
@@ -1709,5 +1911,31 @@ mod tests {
 
         assert_eq!(options.secrets.len(), 1);
         assert_eq!(options.secrets[0].placeholder, "<CUSTOM:openai>");
+    }
+
+    #[test]
+    fn test_runtime_images_unsupported_on_rest_runtime() {
+        let tokio_rt = create_tokio_runtime().expect("create tokio runtime");
+        let runtime = BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new("http://localhost:1"))
+            .expect("create rest runtime");
+        let mut runtime_handle = RuntimeHandle { runtime, tokio_rt };
+        let mut image_handle: *mut FfiImageHandle = ptr::null_mut();
+        let mut error = FFIError::default();
+
+        let code = unsafe {
+            runtime_images(
+                &mut runtime_handle as *mut _,
+                &mut image_handle as *mut _,
+                &mut error as *mut _,
+            )
+        };
+
+        assert_eq!(code, BoxliteErrorCode::Unsupported);
+        assert!(image_handle.is_null());
+        assert!(!error.message.is_null());
+
+        unsafe {
+            error_free(&mut error as *mut _);
+        }
     }
 }
