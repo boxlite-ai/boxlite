@@ -5,9 +5,12 @@
  */
 
 import { SimpleBox, SimpleBoxOptions } from "./simplebox.js";
-
-// Import types from native module (will be available after build)
-type Execution = any;
+import type {
+  JsExecution,
+  JsExecStderr,
+  JsExecStdin,
+  JsExecStdout,
+} from "./native-contracts.js";
 
 /**
  * Options for creating an InteractiveBox.
@@ -64,10 +67,10 @@ export class InteractiveBox extends SimpleBox {
   protected _shell: string;
   protected _interactiveEnv?: Record<string, string>;
   protected _tty: boolean;
-  protected _execution?: Execution;
-  protected _stdin?: any;
-  protected _stdout?: any;
-  protected _stderr?: any;
+  protected _execution?: JsExecution;
+  protected _stdin?: JsExecStdin;
+  protected _stdout?: JsExecStdout;
+  protected _stderr?: JsExecStderr;
   protected _ioTasks: Promise<void>[] = [];
   protected _exited: boolean = false;
 
@@ -278,12 +281,7 @@ export class InteractiveBox extends SimpleBox {
         const chunk = await this._stdout.next();
         if (chunk === null) break;
 
-        // Write to stdout
-        if (typeof chunk === "string") {
-          process.stdout.write(chunk);
-        } else {
-          process.stdout.write(chunk);
-        }
+        process.stdout.write(chunk);
       }
     } catch (err) {
       // Stream ended or error
@@ -301,12 +299,7 @@ export class InteractiveBox extends SimpleBox {
         const chunk = await this._stderr.next();
         if (chunk === null) break;
 
-        // Write to stderr
-        if (typeof chunk === "string") {
-          process.stderr.write(chunk);
-        } else {
-          process.stderr.write(chunk);
-        }
+        process.stderr.write(chunk);
       }
     } catch (err) {
       // Stream ended or error

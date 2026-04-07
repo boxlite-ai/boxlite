@@ -23,10 +23,28 @@ import {
   DESKTOP_READY_TIMEOUT,
   DESKTOP_READY_RETRY_DELAY,
 } from "./constants.js";
+import type {
+  JsBoxlite,
+  JsExecution,
+  JsExecStdin,
+  JsExecStdout,
+} from "./native-contracts.js";
 
-// Import types from native module
-type Boxlite = any;
-type NativeExecution = any;
+interface ClaudeContentItem {
+  type?: string;
+  text?: string;
+}
+
+interface ClaudeMessage {
+  content?: ClaudeContentItem[];
+}
+
+interface ClaudeResponse {
+  type?: string;
+  session_id?: string;
+  result?: string;
+  message?: ClaudeMessage;
+}
 
 /**
  * Options for creating a SkillBox.
@@ -57,7 +75,7 @@ export interface SkillBoxOptions {
   /** Secrets to inject into outbound HTTPS requests. */
   secrets?: Secret[];
   /** Optional runtime instance */
-  runtime?: Boxlite;
+  runtime?: JsBoxlite;
 }
 
 function findAvailablePort(start = 10000, end = 65535): Promise<number> {
@@ -118,9 +136,9 @@ function sleep(ms: number): Promise<void> {
 export class SkillBox extends SimpleBox {
   private _skills: string[];
   private _oauthToken: string;
-  private _process: NativeExecution | null = null;
-  private _stdin: any = null;
-  private _stdout: any = null;
+  private _process: JsExecution | null = null;
+  private _stdin: JsExecStdin | null = null;
+  private _stdout: JsExecStdout | null = null;
   private _sessionId: string = "default";
   private _setupComplete: boolean = false;
   private _started: boolean = false;
@@ -420,6 +438,13 @@ export class SkillBox extends SimpleBox {
   }
 
   private async _sendMessage(content: string): Promise<[string, string]> {
+    const stdin = this._stdin;
+    const stdout = this._stdout;
+
+    if (!stdin || !stdout) {
+      throw new Error("Claude process is not running");
+    }
+
     const msg = {
       type: "user",
       message: { role: "user", content },
@@ -428,9 +453,9 @@ export class SkillBox extends SimpleBox {
     };
 
     const payload = JSON.stringify(msg) + "\n";
-    await this._stdin.writeString(payload);
+    await stdin.writeString(payload);
 
-    const responses: any[] = [];
+    const responses: ClaudeResponse[] = [];
     let newSessionId = this._sessionId;
     let buffer = "";
     let done = false;
@@ -438,7 +463,7 @@ export class SkillBox extends SimpleBox {
     try {
       while (!done) {
         const chunk: string | null = await Promise.race([
-          this._stdout.next() as Promise<string | null>,
+          stdout.next(),
           sleep(120_000).then(() => {
             throw new TimeoutError("Timeout waiting for Claude response");
           }),
@@ -455,14 +480,19 @@ export class SkillBox extends SimpleBox {
           if (!line) continue;
 
           try {
-            const parsed = JSON.parse(line);
-            responses.push(parsed);
-
-            if (parsed.session_id) {
-              newSessionId = parsed.session_id;
+            const parsed = JSON.parse(line) as unknown;
+            if (typeof parsed !== "object" || parsed === null) {
+              continue;
             }
 
-            if (parsed.type === "result") {
+            const response = parsed as ClaudeResponse;
+            responses.push(response);
+
+            if (response.session_id) {
+              newSessionId = response.session_id;
+            }
+
+            if (response.type === "result") {
               done = true;
               break;
             }

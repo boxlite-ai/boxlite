@@ -127,6 +127,13 @@ lint\:python: _ensure-python-deps
 	@. .venv/bin/activate && cd sdks/python && python -c "import tomllib; config=tomllib.load(open('pyproject.toml','rb')); deps=config.get('project',{}).get('dependencies',[]); import sys; (print(f'ERROR: pyproject.toml has required dependencies: {deps}') or print('Move dependencies to [project.optional-dependencies] instead.') or sys.exit(1)) if deps else print('✓ No required dependencies')"
 
 lint\:node: _ensure-node-deps
+	@echo "🔍 Checking Node SDK native import boundary..."
+	@if rg -n "from ['\"]\\.\\./native/|import\\(['\"]\\.\\./native/" \
+		sdks/node/lib --glob '*.ts' --glob '!native.ts'; then \
+		echo ""; \
+		echo "❌ Checked-in Node TypeScript must not import ../native/ outside lib/native.ts."; \
+		exit 1; \
+	fi
 	@echo "🔍 Linting Node SDK (TypeScript type check)..."
 	@cd sdks/node && npx tsc --noEmit
 

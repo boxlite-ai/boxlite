@@ -11,12 +11,13 @@
 import type { CopyOptions } from "./copy.js";
 import type { ExecResult } from "./exec.js";
 import { getJsBoxlite } from "./native.js";
-
-// Import types from native module (will be available after build)
-type Boxlite = any;
-type Box = any;
-type Execution = any;
-type BoxOptions = any;
+import type {
+  JsBox,
+  JsBoxOptions,
+  JsBoxlite,
+  JsExecStderr,
+  JsExecStdout,
+} from "./native-contracts.js";
 
 /**
  * Security isolation options for a box.
@@ -174,7 +175,7 @@ export interface SimpleBoxOptions {
   diskSizeGb?: number;
 
   /** Optional runtime instance (uses global default if not provided) */
-  runtime?: Boxlite;
+  runtime?: JsBoxlite;
 
   /** Optional name for the box (must be unique) */
   name?: string;
@@ -289,11 +290,11 @@ export interface SimpleBoxOptions {
  * ```
  */
 export class SimpleBox {
-  protected _runtime: Boxlite;
-  protected _box: Box | null = null;
-  protected _boxPromise: Promise<Box> | null = null;
+  protected _runtime: JsBoxlite;
+  protected _box: JsBox | null = null;
+  protected _boxPromise: Promise<JsBox> | null = null;
   protected _name?: string;
-  protected _boxOpts: BoxOptions;
+  protected _boxOpts: JsBoxOptions;
   protected _reuseExisting: boolean;
   protected _created: boolean | null = null;
 
@@ -372,7 +373,7 @@ export class SimpleBox {
    * Ensure the box is created (lazy initialization).
    * @internal
    */
-  protected async _ensureBox(): Promise<Box> {
+  protected async _ensureBox(): Promise<JsBox> {
     if (this._box) {
       return this._box;
     }
@@ -530,7 +531,7 @@ export class SimpleBox {
     } else {
       // exec(cmd, ...args, env?)
       // Collect all arguments
-      const allArgs: any[] = [
+      const allArgs: unknown[] = [
         argsOrFirstArg,
         envOrSecondArg,
         optionsOrThirdArg,
@@ -557,7 +558,7 @@ export class SimpleBox {
 
     // Ensure box is created, then execute via Rust (returns Execution)
     const box = await this._ensureBox();
-    const execution: Execution = await box.exec(
+    const execution = await box.exec(
       cmd,
       args,
       envArray,
@@ -572,8 +573,8 @@ export class SimpleBox {
     const stderrLines: string[] = [];
 
     // Get streams
-    let stdout;
-    let stderr;
+    let stdout: JsExecStdout | null;
+    let stderr: JsExecStderr | null;
 
     try {
       stdout = await execution.stdout();
