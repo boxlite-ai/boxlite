@@ -41,6 +41,9 @@ pub mod dirs {
 
     /// Subdirectory for per-entity locks
     pub const LOCKS_DIR: &str = "locks";
+
+    /// Exit info file written by shim on crash (contains exit code, signal, etc.)
+    pub const EXIT_FILE: &str = "exit";
 }
 
 /// Configuration for filesystem layout behavior.
@@ -504,10 +507,9 @@ impl BoxFilesystemLayout {
     /// Exit file path: ~/.boxlite/boxes/{box_id}/exit
     ///
     /// Written by the shim process on exit (normal or panic).
-    /// Format: First line is exit code, subsequent lines contain error details.
-    /// Follows Podman's conmon pattern for capturing exit information.
+    /// Format: JSON with exit_code, type, and optional message/signal.
     pub fn exit_file_path(&self) -> PathBuf {
-        self.box_dir.join("exit")
+        self.box_dir.join(dirs::EXIT_FILE)
     }
 
     /// Stderr file path: ~/.boxlite/boxes/{box_id}/shim.stderr

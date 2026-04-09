@@ -601,4 +601,281 @@ pub struct AdvancedBoxOptions {
     /// Most users should rely on the defaults.
     #[serde(default)]
     pub health_check: Option<HealthCheckOptions>,
+
+    /// Restart policy for automatic restart on crash.
+    ///
+    /// When set, the health check task will evaluate the policy when the
+    /// shim process dies and automatically restart the box if the policy allows it.
+    ///
+    /// If `health_check` is not configured but `restart_policy` is, a default
+    /// health check is auto-enabled (interval=5s, timeout=10s, retries=3, start_period=60s).
+    #[serde(default)]
+    pub restart_policy: Option<RestartPolicy>,
+}
+
+/// Restart policy for automatic restart on crash.
+///
+/// Similar to Docker's restart policy. Controls what happens when a box's
+/// shim process crashes.
+///
+/// # Example
+///
+/// ```
+/// use boxlite::runtime::advanced_options::{AdvancedBoxOptions, RestartPolicy};
+///
+/// let opts = AdvancedBoxOptions {
+///     restart_policy: Some(RestartPolicy::Always),
+///     ..Default::default()
+/// };
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum RestartPolicy {
+    /// Never restart (default).
+    No,
+    /// Always restart regardless of exit status. Unlimited retries with exponential backoff.
+    Always,
+    /// Restart only on non-zero exit code, limited to max_retries consecutive failures.
+    OnFailure {
+        /// Maximum consecutive restart attempts before giving up.
+        max_retries: u32,
+    },
+    /// Always restart unless user explicitly called stop(). Unlimited retries.
+    UnlessStopped,
+}
+
+impl RestartPolicy {
+    /// Evaluate whether a restart should happen based on exit code and restart count.
+    ///
+    /// # Arguments
+    /// * `exit_code` - Exit code from the shim process (None = signal/unknown)
+    /// * `restart_count` - Current consecutive restart attempt count
+    ///
+    /// # Returns
+    /// `true` if the box should be restarted
+    ///
+    /// # Warning
+    /// `Always` and `UnlessStopped` restart regardless of exit code. If the shim
+    /// exits cleanly (exit_code == 0) repeatedly, this results in an infinite
+    /// restart loop. Use `UnlessStopped` when you want a user-initiated `stop()`
+    /// to break the loop (the only way to stop an `Always` loop is to remove the box).
+    pub fn should_restart(&self, exit_code: Option<i32>, restart_count: u32) -> bool {
+        match self {
+            RestartPolicy::No => false,
+            RestartPolicy::Always => true,
+            RestartPolicy::OnFailure { max_retries } => {
+                // Only restart on non-zero exit code (explicit failure)
+                // None (no exit file) means normal/clean exit - no restart
+                let is_failure = exit_code.is_some_and(|code| code != 0);
+                is_failure && restart_count < *max_retries
+            }
+            RestartPolicy::UnlessStopped => true,
+        }
+    }
+
+    /// Check if this policy has unlimited retries.
+    pub fn is_unlimited_retries(&self) -> bool {
+        matches!(self, RestartPolicy::Always | RestartPolicy::UnlessStopped)
+    }
+
+    /// Default health check config to use when restart_policy is set but health_check is not.
+    pub fn default_health_check() -> HealthCheckOptions {
+        HealthCheckOptions {
+            interval: Duration::from_secs(5),
+            timeout: Duration::from_secs(10),
+            retries: 3,
+            start_period: Duration::from_secs(60),
+        }
+    }
+}
+
+impl AdvancedBoxOptions {
+    /// Get the effective health check config.
+    ///
+    /// Returns user-configured health check if set, or auto-enables default
+    /// health check when restart_policy is configured without one.
+    pub fn effective_health_check(&self) -> Option<HealthCheckOptions> {
+        if let Some(ref hc) = self.health_check {
+            Some(hc.clone())
+        } else if self.restart_policy.is_some() {
+            Some(RestartPolicy::default_health_check())
+        } else {
+            None
+        }
+    }
+}
+
+/// Calculate exponential backoff delay for restart attempts.
+///
+/// Base: 100ms, doubles each attempt, capped at 30s.
+/// Sequence: 100ms, 200ms, 400ms, 800ms, 1.6s, 3.2s, 6.4s, 12.8s, 25.6s, 30s (capped)
+pub fn calculate_backoff(restart_count: u32) -> Duration {
+    let base_ms: u64 = 100;
+    let max_ms: u64 = 30_000;
+    let exp = 1u64.checked_shl(restart_count.min(18)).unwrap_or(u64::MAX); // Cap shift to avoid overflow
+    Duration::from_millis(base_ms.saturating_mul(exp).min(max_ms))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ====================================================================
+    // RestartPolicy::should_restart tests
+    // ====================================================================
+
+    #[test]
+    fn test_restart_policy_no_never_restarts() {
+        let policy = RestartPolicy::No;
+        assert!(!policy.should_restart(Some(0), 0));
+        assert!(!policy.should_restart(Some(1), 0));
+        assert!(!policy.should_restart(None, 0));
+        assert!(!policy.should_restart(Some(0), 100));
+    }
+
+    #[test]
+    fn test_restart_policy_always_always_restarts() {
+        let policy = RestartPolicy::Always;
+        assert!(policy.should_restart(Some(0), 0));
+        assert!(policy.should_restart(Some(1), 0));
+        assert!(policy.should_restart(None, 0));
+        assert!(policy.should_restart(Some(0), 100)); // Unlimited retries
+    }
+
+    #[test]
+    fn test_restart_policy_unless_stopped_always_restarts() {
+        let policy = RestartPolicy::UnlessStopped;
+        assert!(policy.should_restart(Some(0), 0));
+        assert!(policy.should_restart(Some(1), 0));
+        assert!(policy.should_restart(None, 0));
+        assert!(policy.should_restart(Some(0), 100)); // Unlimited retries
+    }
+
+    #[test]
+    fn test_restart_policy_on_failure_restarts_on_non_zero_exit() {
+        let policy = RestartPolicy::OnFailure { max_retries: 3 };
+        // Non-zero exit code should restart
+        assert!(policy.should_restart(Some(1), 0));
+        assert!(policy.should_restart(Some(127), 1));
+        assert!(policy.should_restart(Some(-1), 2));
+    }
+
+    #[test]
+    fn test_restart_policy_on_failure_no_restart_on_zero_exit() {
+        let policy = RestartPolicy::OnFailure { max_retries: 3 };
+        // Zero exit code should NOT restart
+        assert!(!policy.should_restart(Some(0), 0));
+        assert!(!policy.should_restart(Some(0), 2));
+    }
+
+    #[test]
+    fn test_restart_policy_on_failure_no_restart_on_no_exit_file() {
+        let policy = RestartPolicy::OnFailure { max_retries: 3 };
+        // No exit file (None) means clean/normal exit - no restart
+        assert!(!policy.should_restart(None, 0));
+        assert!(!policy.should_restart(None, 1));
+    }
+
+    #[test]
+    fn test_restart_policy_on_failure_respects_max_retries() {
+        let policy = RestartPolicy::OnFailure { max_retries: 3 };
+        // Should restart when under max_retries
+        assert!(policy.should_restart(Some(1), 0));
+        assert!(policy.should_restart(Some(1), 1));
+        assert!(policy.should_restart(Some(1), 2));
+        // Should NOT restart when at max_retries
+        assert!(!policy.should_restart(Some(1), 3));
+        assert!(!policy.should_restart(Some(1), 4));
+    }
+
+    #[test]
+    fn test_restart_policy_on_failure_zero_max_retries() {
+        let policy = RestartPolicy::OnFailure { max_retries: 0 };
+        // With max_retries=0, should never restart
+        assert!(!policy.should_restart(Some(1), 0));
+        assert!(!policy.should_restart(None, 0));
+    }
+
+    // ====================================================================
+    // RestartPolicy::is_unlimited_retries tests
+    // ====================================================================
+
+    #[test]
+    fn test_is_unlimited_retries() {
+        assert!(!RestartPolicy::No.is_unlimited_retries());
+        assert!(RestartPolicy::Always.is_unlimited_retries());
+        assert!(RestartPolicy::UnlessStopped.is_unlimited_retries());
+        assert!(!RestartPolicy::OnFailure { max_retries: 3 }.is_unlimited_retries());
+    }
+
+    // ====================================================================
+    // calculate_backoff tests
+    // ====================================================================
+
+    #[test]
+    fn test_calculate_backoff_sequence() {
+        assert_eq!(calculate_backoff(0), Duration::from_millis(100));
+        assert_eq!(calculate_backoff(1), Duration::from_millis(200));
+        assert_eq!(calculate_backoff(2), Duration::from_millis(400));
+        assert_eq!(calculate_backoff(3), Duration::from_millis(800));
+        assert_eq!(calculate_backoff(4), Duration::from_millis(1600));
+        assert_eq!(calculate_backoff(5), Duration::from_millis(3200));
+        assert_eq!(calculate_backoff(6), Duration::from_millis(6400));
+        assert_eq!(calculate_backoff(7), Duration::from_millis(12800));
+        assert_eq!(calculate_backoff(8), Duration::from_millis(25600));
+    }
+
+    #[test]
+    fn test_calculate_backoff_capped_at_30s() {
+        // After 30s cap is reached
+        assert_eq!(calculate_backoff(9), Duration::from_millis(30000));
+        assert_eq!(calculate_backoff(10), Duration::from_millis(30000));
+        assert_eq!(calculate_backoff(100), Duration::from_millis(30000));
+    }
+
+    // ====================================================================
+    // AdvancedBoxOptions::effective_health_check tests
+    // ====================================================================
+
+    #[test]
+    fn test_effective_health_check_user_config() {
+        let user_config = HealthCheckOptions {
+            interval: Duration::from_secs(10),
+            timeout: Duration::from_secs(5),
+            retries: 5,
+            start_period: Duration::from_secs(30),
+        };
+        let opts = AdvancedBoxOptions {
+            health_check: Some(user_config.clone()),
+            restart_policy: Some(RestartPolicy::Always),
+            ..Default::default()
+        };
+        let effective = opts.effective_health_check().unwrap();
+        assert_eq!(effective.interval, Duration::from_secs(10));
+        assert_eq!(effective.retries, 5);
+    }
+
+    #[test]
+    fn test_effective_health_check_auto_enabled_for_restart_policy() {
+        let opts = AdvancedBoxOptions {
+            health_check: None,
+            restart_policy: Some(RestartPolicy::Always),
+            ..Default::default()
+        };
+        let effective = opts.effective_health_check().unwrap();
+        assert_eq!(effective.interval, Duration::from_secs(5));
+        assert_eq!(effective.timeout, Duration::from_secs(10));
+        assert_eq!(effective.retries, 3);
+        assert_eq!(effective.start_period, Duration::from_secs(60));
+    }
+
+    #[test]
+    fn test_effective_health_check_none_when_no_policy() {
+        let opts = AdvancedBoxOptions {
+            health_check: None,
+            restart_policy: None,
+            ..Default::default()
+        };
+        assert!(opts.effective_health_check().is_none());
+    }
 }

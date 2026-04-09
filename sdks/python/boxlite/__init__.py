@@ -9,6 +9,7 @@ import warnings
 # Import core Rust API
 try:
     from .boxlite import (
+        AdvancedBoxOptions,
         Box,
         BoxInfo,
         Boxlite,
@@ -27,6 +28,7 @@ try:
         HealthStatus,
         NetworkSpec,
         Options,
+        RestartPolicy,
         RuntimeMetrics,
         Secret,
         SecurityOptions,
@@ -39,6 +41,7 @@ try:
         # Core Rust API
         "Options",
         "BoxOptions",
+        "AdvancedBoxOptions",
         "BoxliteRestOptions",
         "Boxlite",
         "NetworkSpec",
@@ -54,6 +57,7 @@ try:
         "BoxMetrics",
         "CopyOptions",
         "HealthCheckOptions",
+        "RestartPolicy",
         "SecurityOptions",
         "Secret",
         "SnapshotHandle",

@@ -118,3 +118,4 @@ bincode = "2.0"  # Serialize compiled BPF filters
 [dev-dependencies]
 boxlite-test-utils = { path = "../test-utils" }
 proptest = "1.4"
+rusqlite = { version = "0.37", features = ["bundled"] }

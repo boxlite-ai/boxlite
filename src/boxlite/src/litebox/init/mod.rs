@@ -73,7 +73,7 @@ fn get_execution_plan(status: BoxStatus) -> ExecutionPlan<InitCtx> {
             Stage::sequential(vec![Box::new(GuestConnectTask)]),
             Stage::sequential(vec![Box::new(GuestInitTask)]),
         ],
-        BoxStatus::Stopped => vec![
+        BoxStatus::Stopped | BoxStatus::Restarting => vec![
             // Restart: Same flow but rootfs tasks reuse existing COW disks
             // (preserves user modifications from previous run)
             Stage::sequential(vec![Box::new(FilesystemTask)]),
@@ -186,7 +186,7 @@ impl BoxBuilder {
         } = self;
 
         let status = state.status;
-        let reuse_rootfs = status == BoxStatus::Stopped;
+        let reuse_rootfs = matches!(status, BoxStatus::Stopped | BoxStatus::Restarting);
         let skip_guest_wait = status == BoxStatus::Running;
 
         let ctx = InitPipelineContext::new(config, runtime.clone(), reuse_rootfs, skip_guest_wait);

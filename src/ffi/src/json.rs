@@ -12,6 +12,8 @@ pub fn status_to_string(status: BoxStatus) -> &'static str {
         BoxStatus::Running => "running",
         BoxStatus::Stopping => "stopping",
         BoxStatus::Stopped => "stopped",
+        BoxStatus::Crashed => "crashed",
+        BoxStatus::Restarting => "restarting",
         BoxStatus::Paused => "paused",
     }
 }

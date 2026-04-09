@@ -315,6 +315,14 @@ pub struct BoxInfo {
 
     /// Health status.
     pub health_status: HealthStatus,
+
+    /// Stop info (valid when status is Stopped/Crashed/Restarting).
+    #[serde(default)]
+    pub stop_info: crate::litebox::StopInfo,
+
+    /// Last restart error message (if any).
+    #[serde(default)]
+    pub last_restart_error: Option<String>,
 }
 
 impl BoxInfo {
@@ -337,6 +345,8 @@ impl BoxInfo {
             memory_mib: config.options.memory_mib.unwrap_or(512),
             labels: HashMap::new(),
             health_status: state.health_status,
+            stop_info: state.stop_info.clone(),
+            last_restart_error: None,
         }
     }
 }

@@ -235,6 +235,8 @@ impl BoxResponse {
             memory_mib: self.memory_mib,
             labels: self.labels.clone(),
             health_status: crate::litebox::HealthStatus::new(), // REST API doesn't provide health status
+            stop_info: crate::litebox::StopInfo::default(), // REST API doesn't provide stop info
+            last_restart_error: None, // REST API doesn't provide restart error
         }
     }
 }

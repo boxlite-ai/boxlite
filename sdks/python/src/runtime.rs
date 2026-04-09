@@ -19,7 +19,6 @@ impl PyBoxlite {
     #[new]
     fn new(options: PyOptions) -> PyResult<Self> {
         let runtime = BoxliteRuntime::new(options.into()).map_err(map_err)?;
-
         Ok(Self {
             runtime: Arc::new(runtime),
         })

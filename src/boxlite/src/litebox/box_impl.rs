@@ -166,6 +166,19 @@ impl BoxImpl {
         BoxInfo::new(&self.config, &state)
     }
 
+    /// Abort the health check task (if running).
+    ///
+    /// Used by restart() to stop monitoring before creating a fresh BoxImpl.
+    pub(crate) fn abort_health_check(&self) {
+        if let Some(task) = self.health_check_task.write().take() {
+            tracing::debug!(
+                box_id = %self.config.id,
+                "Aborting health check task"
+            );
+            task.abort();
+        }
+    }
+
     // ========================================================================
     // OPERATIONS (require LiveState)
     // ========================================================================
@@ -689,8 +702,8 @@ impl BoxImpl {
         // All operations succeeded - disarm the cleanup guard
         cleanup_guard.disarm();
 
-        // Start health check task if configured
-        if let Some(ref health_config) = self.config.options.advanced.health_check {
+        // Start health check task if configured (auto-enabled when restart_policy is set)
+        if let Some(health_config) = self.config.options.advanced.effective_health_check() {
             // Get guest interface from session
             let guest = live_state.guest_session.guest().await?;
 
@@ -698,7 +711,7 @@ impl BoxImpl {
             let health_task = self.spawn_health_check(
                 Arc::clone(&self.state),
                 self.config.id.clone(),
-                health_config.to_owned(),
+                health_config,
                 guest,
                 self.shutdown_token.child_token(),
                 Arc::clone(&self.runtime),
@@ -724,6 +737,7 @@ impl BoxImpl {
         shutdown_token: CancellationToken,
         runtime: SharedRuntimeImpl,
     ) -> JoinHandle<()> {
+        let crash_tx = runtime.crash_sender();
         let interval = health_config.interval;
         let check_timeout = health_config.timeout;
         let retries = health_config.retries;
@@ -828,20 +842,44 @@ impl BoxImpl {
                         false
                     };
 
-                    // If shim died, mark as Unhealthy and stop health check immediately
+                    // If shim died, notify Crash Handler and exit.
+                    // State mutation (exit info, Crashed status, persistence) is the
+                    // Crash Handler's responsibility — Health Check only detects and reports.
                     if shim_died {
-                        let mut state_guard = state.write();
-                        state_guard.force_status(crate::litebox::BoxStatus::Stopped);
-                        state_guard.set_pid(None);
-                        state_guard.health_status.state = crate::litebox::HealthState::Unhealthy;
+                        tracing::info!(
+                            box_id = %box_id,
+                            "Shim process died, notifying crash handler"
+                        );
 
-                        if let Err(db_err) = runtime.box_manager.save_box(&box_id, &state_guard) {
-                            tracing::error!(
-                                box_id = %box_id,
-                                error = %db_err,
-                                "Failed to persist health check state to database"
-                            );
+                        // Send crash notification to Crash Handler with timeout
+                        // Channel has capacity 100; if full, wait briefly then give up
+                        match tokio::time::timeout(
+                            Duration::from_millis(100),
+                            crash_tx.send(box_id.clone()),
+                        )
+                        .await
+                        {
+                            Ok(Ok(())) => {
+                                tracing::debug!(box_id = %box_id, "Crash notification sent to handler");
+                            }
+                            Ok(Err(e)) => {
+                                // Channel closed (receiver dropped)
+                                tracing::error!(
+                                    box_id = %box_id,
+                                    error = %e,
+                                    "Crash handler channel closed, notification dropped"
+                                );
+                            }
+                            Err(_) => {
+                                // Timeout - channel full for too long
+                                tracing::error!(
+                                    box_id = %box_id,
+                                    "Timeout sending crash notification (channel full), notification dropped"
+                                );
+                            }
                         }
+
+                        // Exit immediately after attempting notification
                         break;
                     }
 
@@ -860,7 +898,7 @@ impl BoxImpl {
                         let mut state_guard = state.write();
                         let became_unhealthy = state_guard.mark_health_check_failure(retries);
 
-                        if let Err(db_err) = runtime.box_manager.save_box(&box_id, &state.read()) {
+                        if let Err(db_err) = runtime.box_manager.save_box(&box_id, &state_guard) {
                             tracing::error!(
                                 box_id = %box_id,
                                 error = %db_err,

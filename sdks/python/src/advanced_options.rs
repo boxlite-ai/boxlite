@@ -1,4 +1,6 @@
-use boxlite::runtime::advanced_options::{HealthCheckOptions, ResourceLimits, SecurityOptions};
+use boxlite::runtime::advanced_options::{
+    HealthCheckOptions, ResourceLimits, RestartPolicy, SecurityOptions,
+};
 use pyo3::prelude::*;
 
 // ============================================================================
@@ -250,6 +252,97 @@ impl From<PySecurityOptions> for SecurityOptions {
 }
 
 // ============================================================================
+// Restart Policy
+// ============================================================================
+
+/// Restart policy for automatic restart on crash.
+///
+/// Similar to Docker's restart policy. Controls what happens when a box's
+/// shim process crashes.
+///
+/// # Variants
+/// - `RestartPolicy.no()` - Never restart (default)
+/// - `RestartPolicy.always()` - Always restart regardless of exit status
+/// - `RestartPolicy.on_failure(max_retries)` - Restart only on non-zero exit code
+/// - `RestartPolicy.unless_stopped()` - Always restart unless user explicitly called stop()
+///
+/// # Example
+///     ```python
+///     from boxlite import RestartPolicy, AdvancedBoxOptions
+///
+///     # Always restart
+///     policy = RestartPolicy.always()
+///
+///     # Restart on failure, max 3 retries
+///     policy = RestartPolicy.on_failure(max_retries=3)
+///
+///     opts = AdvancedBoxOptions(restart_policy=policy)
+///     ```
+#[pyclass(name = "RestartPolicy")]
+#[derive(Clone, Debug)]
+pub struct PyRestartPolicy {
+    inner: RestartPolicy,
+}
+
+#[pymethods]
+impl PyRestartPolicy {
+    /// Never restart (default).
+    #[staticmethod]
+    fn no() -> Self {
+        Self {
+            inner: RestartPolicy::No,
+        }
+    }
+
+    /// Always restart regardless of exit status.
+    /// Unlimited retries with exponential backoff.
+    #[staticmethod]
+    fn always() -> Self {
+        Self {
+            inner: RestartPolicy::Always,
+        }
+    }
+
+    /// Restart only on non-zero exit code.
+    ///
+    /// Args:
+    ///     max_retries: Maximum consecutive restart attempts before giving up
+    #[staticmethod]
+    #[pyo3(signature = (max_retries))]
+    fn on_failure(max_retries: u32) -> Self {
+        Self {
+            inner: RestartPolicy::OnFailure { max_retries },
+        }
+    }
+
+    /// Always restart unless user explicitly called stop().
+    /// Unlimited retries.
+    #[staticmethod]
+    fn unless_stopped() -> Self {
+        Self {
+            inner: RestartPolicy::UnlessStopped,
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        match &self.inner {
+            RestartPolicy::No => "RestartPolicy.no()".to_string(),
+            RestartPolicy::Always => "RestartPolicy.always()".to_string(),
+            RestartPolicy::OnFailure { max_retries } => {
+                format!("RestartPolicy.on_failure(max_retries={})", max_retries)
+            }
+            RestartPolicy::UnlessStopped => "RestartPolicy.unless_stopped()".to_string(),
+        }
+    }
+}
+
+impl From<PyRestartPolicy> for RestartPolicy {
+    fn from(py_policy: PyRestartPolicy) -> Self {
+        py_policy.inner
+    }
+}
+
+// ============================================================================
 // Advanced Options
 // ============================================================================
 
@@ -266,19 +359,25 @@ pub struct PyAdvancedBoxOptions {
     /// Health check options.
     #[pyo3(get, set)]
     pub health_check: Option<PyHealthCheckOptions>,
+
+    /// Restart policy for automatic restart on crash.
+    #[pyo3(get, set)]
+    pub restart_policy: Option<PyRestartPolicy>,
 }
 
 #[pymethods]
 impl PyAdvancedBoxOptions {
     #[new]
-    #[pyo3(signature = (security=None, health_check=None))]
+    #[pyo3(signature = (security=None, health_check=None, restart_policy=None))]
     fn new(
         security: Option<PySecurityOptions>,
         health_check: Option<PyHealthCheckOptions>,
+        restart_policy: Option<PyRestartPolicy>,
     ) -> Self {
         Self {
             security,
             health_check,
+            restart_policy,
         }
     }
 }
