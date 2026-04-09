@@ -137,3 +137,4 @@ entitlements.plist
 CLAUDE.local.md
 Cargo.lock
 *.dylib.dSYM/
+apps/infra/.sst/

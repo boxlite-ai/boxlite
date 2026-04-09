@@ -25,8 +25,6 @@ help:
 	@echo "    make guest          - Build the guest binary (cross-compile for VM)"
 	@echo "    make runtime        - Build runtime artifacts (release)"
 	@echo "    make runtime:debug  - Build runtime artifacts (debug)"
-	@echo "    make server         - Build the distributed server (boxlite-server)"
-	@echo "    make server:release - Build the distributed server (release)"
 	@echo "    make skillbox-image - Build SkillBox Docker image (APT_SOURCE=mirrors.aliyun.com for China)"
 	@echo ""
 	@echo "  Testing (strict full-matrix default):"

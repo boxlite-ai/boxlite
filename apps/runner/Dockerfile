@@ -1,0 +1,65 @@
+FROM node:22-alpine AS build
+
+ENV CI=true
+
+RUN npm install -g corepack && corepack enable
+
+COPY --from=golang:1.25.4-alpine /usr/local/go/ /usr/local/go/
+
+ENV PATH="/usr/local/go/bin:${PATH}"
+
+RUN apk add --no-cache git
+
+WORKDIR /boxlite
+
+# Yarn caching layer
+COPY apps/package.json apps/yarn.lock apps/.yarnrc.yml ./
+RUN yarn install --immutable
+
+# Nx config
+COPY apps/nx.json ./
+
+# Go dependency layer (cached unless go.mod/go.sum change)
+COPY go.work go.work.sum ./
+COPY apps/runner/go.mod apps/runner/go.sum apps/runner/
+COPY apps/daemon/go.mod apps/daemon/go.sum apps/daemon/
+COPY apps/common-go/go.mod apps/common-go/go.sum apps/common-go/
+COPY apps/api-client-go/go.mod apps/api-client-go/go.sum apps/api-client-go/
+RUN head -1 go.work > go.work.tmp && printf '\nuse (\n\t./apps/runner\n\t./apps/daemon\n\t./apps/common-go\n\t./apps/api-client-go\n)\n' >> go.work.tmp && mv go.work.tmp go.work
+
+ENV NX_DAEMON=false
+
+RUN go -C apps/runner mod download \
+  && go -C apps/daemon mod download \
+  && go -C apps/common-go mod download \
+  && go -C apps/api-client-go mod download
+
+# Go source
+COPY apps/runner/ apps/runner/
+COPY apps/daemon/ apps/daemon/
+COPY apps/common-go/ apps/common-go/
+COPY apps/api-client-go/ apps/api-client-go/
+COPY apps/libs/computer-use/ libs/computer-use/
+
+# Computer-use binary (dummy for initial build, replace with real binary later)
+COPY dist/libs/computer-use-amd64 dist/libs/computer-use-amd64
+
+ARG VERSION=0.0.1
+RUN --mount=type=cache,target=/root/.cache/go-build \
+  SKIP_COMPUTER_USE_BUILD=true VERSION=$VERSION yarn nx build runner --configuration=production --nxBail=true
+
+FROM docker:28.2.2-dind-alpine3.22 AS runner
+
+RUN apk add --no-cache curl rsync
+
+WORKDIR /usr/local/bin
+
+COPY --from=build /boxlite/dist/apps/runner boxlite-runner
+
+RUN chmod +x boxlite-runner
+
+RUN mkdir -p /etc/docker && echo '{"insecure-registries": ["registry:6000"]}' > /etc/docker/daemon.json
+
+HEALTHCHECK CMD [ "curl", "-f", "http://localhost:3003/" ]
+
+ENTRYPOINT ["sh", "-c", "/usr/local/bin/dockerd-entrypoint.sh & boxlite-runner"]

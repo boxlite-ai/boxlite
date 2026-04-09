@@ -1,0 +1,19 @@
+{
+  "name": "@boxlite/infra",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "sst dev",
+    "deploy": "sst deploy",
+    "remove": "sst remove"
+  },
+  "devDependencies": {
+    "@pulumi/aws": "^7.24.0",
+    "sst": "^4.6.11"
+  },
+  "dependencies": {
+    "@pulumi/random": "^4.19.2",
+    "dotenv": "^17.4.0"
+  }
+}

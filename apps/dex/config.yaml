@@ -1,0 +1,31 @@
+# Dex OIDC Provider Configuration for BoxLite
+# Issuer URL is set via DEX_ISSUER environment variable at runtime
+
+issuer: ${DEX_ISSUER}
+storage:
+  type: sqlite3
+  config:
+    file: /var/dex/dex.db
+
+web:
+  http: 0.0.0.0:5556
+  allowedOrigins: ['*']
+  allowedHeaders: ['x-requested-with']
+
+staticClients:
+  - id: boxlite
+    redirectURIs:
+      - '${REDIRECT_URI}'
+      - 'http://localhost:3000'
+      - 'http://localhost:5173'
+    name: 'BoxLite'
+    public: true
+
+enablePasswordDB: true
+
+staticPasswords:
+  - email: 'admin@boxlite.dev'
+    # password: password
+    hash: '$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W'
+    username: 'admin'
+    userID: '1234'

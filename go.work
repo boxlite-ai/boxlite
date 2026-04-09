@@ -1,0 +1,13 @@
+go 1.25.4
+
+use (
+	apps/api-client-go
+	apps/cli
+	apps/common-go
+	apps/daemon
+	apps/otel-collector/exporter
+	apps/proxy
+	apps/runner
+	apps/snapshot-manager
+	apps/ssh-gateway
+)
