@@ -1,5 +1,19 @@
+import { mkdtempSync, rmSync } from "node:fs";
 import { describe, expect, test } from "vitest";
 import { JsBoxlite } from "../lib/index.js";
+
+const testRegistries = [
+  "docker.m.daocloud.io",
+  "docker.xuanyuan.me",
+  "docker.1ms.run",
+  "docker.io",
+];
+
+function newIsolatedRuntime() {
+  const homeDir = mkdtempSync("/tmp/boxlite-test-node-images-");
+  const runtime = new JsBoxlite({ homeDir, imageRegistries: testRegistries });
+  return { homeDir, runtime };
+}
 
 describe("runtime image handle integration", { timeout: 120_000 }, () => {
   test("REST runtime rejects image handle access", () => {
@@ -32,5 +46,18 @@ describe("runtime image handle integration", { timeout: 120_000 }, () => {
     expect(alpine).toBeDefined();
     expect(alpine?.id).toMatch(/^sha256:/);
     expect(alpine?.cachedAt).toEqual(expect.any(String));
+  });
+
+  test("cached image handle rejects operations after shutdown", async () => {
+    const { homeDir, runtime } = newIsolatedRuntime();
+
+    try {
+      const images = runtime.images;
+      await runtime.shutdown();
+
+      await expect(images.pull("alpine:latest")).rejects.toThrow(/shut down/);
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
   });
 });

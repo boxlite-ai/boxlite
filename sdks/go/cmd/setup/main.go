@@ -1,5 +1,5 @@
 // Setup downloads the prebuilt libboxlite native library from GitHub Releases
-// into the Go module cache so that `go build` can link against it.
+// into the Go module cache so that `go build` can compile and link against it.
 //
 // Usage (after go get):
 //
@@ -44,9 +44,14 @@ func main() {
 	// Target: root module cache directory
 	moduleDir := filepath.Join(modCache, modulePath+"@"+version)
 
-	targetFile := filepath.Join(moduleDir, "libboxlite.a")
-	if _, err := os.Stat(targetFile); err == nil {
-		fmt.Printf("\nlibboxlite.a already exists at %s, skipping.\n", targetFile)
+	targetLib := filepath.Join(moduleDir, "libboxlite.a")
+	targetHeader := filepath.Join(moduleDir, "include", "boxlite.h")
+	if fileExists(targetLib) && fileExists(targetHeader) {
+		fmt.Printf(
+			"\nBoxLite native assets already exist at %s and %s, skipping.\n",
+			targetLib,
+			targetHeader,
+		)
 		return
 	}
 
@@ -131,8 +136,8 @@ func goModCache() string {
 	return cache
 }
 
-// downloadToModCache downloads the archive and extracts libboxlite.a into the
-// module cache directory, temporarily making it writable.
+// downloadToModCache downloads the archive and extracts the Go SDK native assets
+// into the module cache directory, temporarily making it writable.
 func downloadToModCache(url, destDir string) error {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
@@ -165,7 +170,6 @@ func downloadToModCache(url, destDir string) error {
 	defer func() { _ = os.Chmod(destDir, 0o555) }()
 
 	tr := tar.NewReader(gz)
-	extracted := false
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
@@ -179,29 +183,39 @@ func downloadToModCache(url, destDir string) error {
 		}
 
 		// Archive structure: boxlite-c-vX.Y.Z-platform/{lib,include}/filename
-		// We only need lib/libboxlite.a (header is committed in the Go module).
 		parts := strings.SplitN(hdr.Name, "/", 2)
 		if len(parts) < 2 {
 			continue
 		}
-		if parts[1] == "lib/libboxlite.a" {
+		switch parts[1] {
+		case "lib/libboxlite.a":
 			dest := filepath.Join(destDir, "libboxlite.a")
 			if err := writeFile(dest, tr, hdr.Mode); err != nil {
 				return err
 			}
 			fmt.Printf("  extracted: libboxlite.a (%d MB)\n", hdr.Size/(1024*1024))
-			extracted = true
-			break
+		case "include/boxlite.h":
+			dest := filepath.Join(destDir, "include", "boxlite.h")
+			if err := writeFile(dest, tr, hdr.Mode); err != nil {
+				return err
+			}
+			fmt.Printf("  extracted: include/boxlite.h\n")
 		}
 	}
 
-	if !extracted {
+	if !fileExists(filepath.Join(destDir, "libboxlite.a")) {
 		return fmt.Errorf("libboxlite.a not found in archive")
+	}
+	if !fileExists(filepath.Join(destDir, "include", "boxlite.h")) {
+		return fmt.Errorf("include/boxlite.h not found in archive")
 	}
 	return nil
 }
 
 func writeFile(path string, r io.Reader, mode int64) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", filepath.Dir(path), err)
+	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(mode)&0o755)
 	if err != nil {
 		return fmt.Errorf("create %s: %w", path, err)
@@ -211,6 +225,11 @@ func writeFile(path string, r io.Reader, mode int64) error {
 		return fmt.Errorf("write %s: %w", path, err)
 	}
 	return f.Close()
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 func fatalf(format string, args ...any) {

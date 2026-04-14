@@ -34,6 +34,9 @@ func (r *Runtime) Images() (*Images, error) {
 }
 
 // Pull pulls an image and returns metadata about the cached result.
+//
+// The context is currently accepted for API symmetry. Once the FFI call starts,
+// the underlying operation is not yet cancellable.
 func (i *Images) Pull(_ context.Context, reference string) (*ImagePullResult, error) {
 	if i == nil || i.handle == nil {
 		return nil, closedImagesError()
@@ -62,6 +65,9 @@ func (i *Images) Pull(_ context.Context, reference string) (*ImagePullResult, er
 }
 
 // List lists cached images for this runtime.
+//
+// The context is currently accepted for API symmetry. Once the FFI call starts,
+// the underlying operation is not yet cancellable.
 func (i *Images) List(_ context.Context) ([]ImageInfo, error) {
 	if i == nil || i.handle == nil {
 		return nil, closedImagesError()

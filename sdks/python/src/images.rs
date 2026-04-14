@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use boxlite::BoxliteRuntime;
+use boxlite::ImageHandle;
 use boxlite::runtime::types::ImageInfo;
 use pyo3::prelude::*;
 
@@ -69,16 +69,15 @@ impl PyImagePullResult {
 
 #[pyclass(name = "ImageHandle")]
 pub(crate) struct PyImageHandle {
-    pub(crate) runtime: Arc<BoxliteRuntime>,
+    pub(crate) handle: Arc<ImageHandle>,
 }
 
 #[pymethods]
 impl PyImageHandle {
     fn pull<'py>(&self, py: Python<'py>, reference: String) -> PyResult<Bound<'py, PyAny>> {
-        let runtime = Arc::clone(&self.runtime);
+        let handle = Arc::clone(&self.handle);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let images = runtime.images().map_err(map_err)?;
-            let image = images.pull(&reference).await.map_err(map_err)?;
+            let image = handle.pull(&reference).await.map_err(map_err)?;
             Ok(PyImagePullResult {
                 reference: image.reference().to_string(),
                 config_digest: image.config_digest().to_string(),
@@ -88,10 +87,9 @@ impl PyImageHandle {
     }
 
     fn list<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let runtime = Arc::clone(&self.runtime);
+        let handle = Arc::clone(&self.handle);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let images = runtime.images().map_err(map_err)?;
-            let infos = images.list().await.map_err(map_err)?;
+            let infos = handle.list().await.map_err(map_err)?;
             Ok(infos.into_iter().map(PyImageInfo::from).collect::<Vec<_>>())
         })
     }

@@ -58,3 +58,9 @@ func IsInvalidState(err error) bool {
 	var e *Error
 	return errors.As(err, &e) && e.Code == ErrInvalidState
 }
+
+// IsStopped reports whether err indicates a stopped or shut down resource.
+func IsStopped(err error) bool {
+	var e *Error
+	return errors.As(err, &e) && e.Code == ErrStopped
+}

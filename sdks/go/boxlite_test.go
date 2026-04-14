@@ -51,6 +51,16 @@ func TestIsInvalidState(t *testing.T) {
 	}
 }
 
+func TestIsStopped(t *testing.T) {
+	err := &Error{Code: ErrStopped, Message: "runtime shut down"}
+	if !IsStopped(err) {
+		t.Error("expected IsStopped to return true")
+	}
+	if IsStopped(errors.New("other")) {
+		t.Error("expected IsStopped to return false for non-Error")
+	}
+}
+
 func TestError_Unwrap(t *testing.T) {
 	err := &Error{Code: ErrNotFound, Message: "test"}
 	var target *Error

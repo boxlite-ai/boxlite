@@ -271,9 +271,9 @@ impl JsBoxlite {
     /// Get the runtime image handle.
     #[napi(getter)]
     pub fn images(&self) -> Result<JsImageHandle> {
-        self.runtime.images().map_err(map_err)?;
+        let handle = self.runtime.images().map_err(map_err)?;
         Ok(JsImageHandle {
-            runtime: Arc::clone(&self.runtime),
+            handle: Arc::new(handle),
         })
     }
 

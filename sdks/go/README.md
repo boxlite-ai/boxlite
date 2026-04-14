@@ -9,7 +9,7 @@ go get github.com/boxlite-ai/boxlite/sdks/go
 go run github.com/boxlite-ai/boxlite/sdks/go/cmd/setup
 ```
 
-Requires Go 1.24+ with CGO enabled. The setup step downloads the prebuilt native library from GitHub Releases (one-time). Set `GITHUB_TOKEN` to avoid API rate limits.
+Requires Go 1.24+ with CGO enabled. The setup step downloads the prebuilt native library and header into the module directory in your Go module cache (one-time). Set `GITHUB_TOKEN` to avoid API rate limits.
 
 ## Usage
 

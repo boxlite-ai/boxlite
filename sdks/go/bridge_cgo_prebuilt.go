@@ -6,7 +6,7 @@ package boxlite
 //   go run github.com/boxlite-ai/boxlite/sdks/go/cmd/setup
 
 /*
-#cgo CFLAGS: -I${SRCDIR}/../c/include
+#cgo CFLAGS: -I${SRCDIR}/include
 
 #cgo darwin LDFLAGS: ${SRCDIR}/libboxlite.a
 #cgo darwin LDFLAGS: -framework CoreFoundation -framework Security -framework IOKit

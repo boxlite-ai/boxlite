@@ -111,3 +111,53 @@ func TestImagesClose(t *testing.T) {
 		t.Fatal("expected List to fail after Close")
 	}
 }
+
+func TestImagesRejectedAfterRuntimeShutdown(t *testing.T) {
+	rt := newImageTestRuntime(t)
+
+	images, err := rt.Images()
+	if err != nil {
+		t.Fatalf("Images: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = images.Close()
+	})
+
+	if err := rt.Shutdown(context.Background(), 0); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+
+	if _, err := rt.Images(); err == nil {
+		t.Fatal("expected Images to fail after Shutdown")
+	} else if !IsStopped(err) {
+		t.Fatalf("expected stopped error from Images after Shutdown, got: %v", err)
+	}
+
+	if _, err := images.Pull(context.Background(), "alpine:latest"); err == nil {
+		t.Fatal("expected Pull to fail after Shutdown")
+	} else if !IsStopped(err) {
+		t.Fatalf("expected stopped error from Pull after Shutdown, got: %v", err)
+	}
+}
+
+func TestImagesRejectedAfterRuntimeClose(t *testing.T) {
+	rt := newImageTestRuntime(t)
+
+	images, err := rt.Images()
+	if err != nil {
+		t.Fatalf("Images: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = images.Close()
+	})
+
+	if err := rt.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	if _, err := images.Pull(context.Background(), "alpine:latest"); err == nil {
+		t.Fatal("expected Pull to fail after Close")
+	} else if !IsStopped(err) {
+		t.Fatalf("expected stopped error from Pull after Close, got: %v", err)
+	}
+}

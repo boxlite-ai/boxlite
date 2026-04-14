@@ -1527,10 +1527,20 @@ impl super::backend::RuntimeBackend for LocalRuntime {
 #[async_trait::async_trait]
 impl super::images::ImageBackend for LocalRuntime {
     async fn pull_image(&self, image_ref: &str) -> BoxliteResult<crate::images::ImageObject> {
+        if self.0.shutdown_token.is_cancelled() {
+            return Err(BoxliteError::Stopped(
+                "Cannot pull image: runtime has been shut down".into(),
+            ));
+        }
         self.0.image_manager.pull(image_ref).await
     }
 
     async fn list_images(&self) -> BoxliteResult<Vec<crate::runtime::types::ImageInfo>> {
+        if self.0.shutdown_token.is_cancelled() {
+            return Err(BoxliteError::Stopped(
+                "Cannot list images: runtime has been shut down".into(),
+            ));
+        }
         self.0.image_manager.list().await
     }
 }
@@ -1559,6 +1569,7 @@ mod tests {
     use super::*;
     use crate::litebox::config::{BoxConfig, ContainerRuntimeConfig};
     use crate::runtime::backend::RuntimeBackend;
+    use crate::runtime::images::ImageBackend;
     use crate::runtime::options::RootfsSpec;
     use tempfile::TempDir;
 
@@ -2228,6 +2239,48 @@ mod tests {
             }
             Err(other) => panic!("Expected Stopped error, got: {other}"),
             Ok(_) => panic!("create should fail after shutdown"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_pull_image_after_shutdown_returns_stopped() {
+        let (runtime, _dir) = create_test_runtime();
+        let local_runtime = LocalRuntime(runtime.clone());
+
+        runtime.shutdown(None).await.unwrap();
+
+        let result = local_runtime.pull_image("alpine:latest").await;
+
+        match result {
+            Err(BoxliteError::Stopped(msg)) => {
+                assert!(
+                    msg.contains("shut down"),
+                    "Error should mention 'shut down': {msg}"
+                );
+            }
+            Err(other) => panic!("Expected Stopped error, got: {other}"),
+            Ok(_) => panic!("pull_image should fail after shutdown"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_list_images_after_shutdown_returns_stopped() {
+        let (runtime, _dir) = create_test_runtime();
+        let local_runtime = LocalRuntime(runtime.clone());
+
+        runtime.shutdown(None).await.unwrap();
+
+        let result = local_runtime.list_images().await;
+
+        match result {
+            Err(BoxliteError::Stopped(msg)) => {
+                assert!(
+                    msg.contains("shut down"),
+                    "Error should mention 'shut down': {msg}"
+                );
+            }
+            Err(other) => panic!("Expected Stopped error, got: {other}"),
+            Ok(_) => panic!("list_images should fail after shutdown"),
         }
     }
 

@@ -39,3 +39,13 @@ async def test_images_list_returns_cached_image(shared_runtime: boxlite.Boxlite)
     assert alpine is not None
     assert alpine.id.startswith("sha256:")
     assert isinstance(alpine.cached_at, str)
+
+
+async def test_cached_image_handle_rejects_after_runtime_shutdown(tmp_path):
+    runtime = boxlite.Boxlite(boxlite.Options(home_dir=str(tmp_path)))
+    images = runtime.images
+
+    await runtime.shutdown()
+
+    with pytest.raises(RuntimeError, match="shut down"):
+        await images.pull("alpine:latest")

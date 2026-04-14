@@ -154,9 +154,9 @@ impl PyBoxlite {
 
     #[getter]
     fn images(&self) -> PyResult<PyImageHandle> {
-        self.runtime.images().map_err(map_err)?;
+        let handle = self.runtime.images().map_err(map_err)?;
         Ok(PyImageHandle {
-            runtime: Arc::clone(&self.runtime),
+            handle: Arc::new(handle),
         })
     }
 

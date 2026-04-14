@@ -50,6 +50,7 @@ pub(crate) trait ImageBackend: Send + Sync {
 ///     Ok(())
 /// }
 /// ```
+#[derive(Clone)]
 pub struct ImageHandle {
     manager: Arc<dyn ImageBackend>,
 }

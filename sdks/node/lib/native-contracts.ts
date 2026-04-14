@@ -202,7 +202,7 @@ export interface JsSnapshotInfo {
   sizeBytes: number;
 }
 
-export interface JsSnapshotOptions {}
+export type JsSnapshotOptions = Record<string, never>;
 
 export interface JsSnapshotHandle {
   create(
@@ -215,9 +215,9 @@ export interface JsSnapshotHandle {
   restore(name: string): Promise<void>;
 }
 
-export interface JsCloneOptions {}
+export type JsCloneOptions = Record<string, never>;
 
-export interface JsExportOptions {}
+export type JsExportOptions = Record<string, never>;
 
 export interface JsBox {
   readonly id: string;

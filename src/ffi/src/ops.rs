@@ -17,9 +17,23 @@ use boxlite::{BoxliteError, RootfsSpec};
 use crate::error::{BoxliteErrorCode, FFIError, error_to_code, null_pointer_error, write_error};
 use crate::json::{box_info_to_json, image_info_to_json, image_pull_result_to_json};
 use crate::runtime::{
-    BoxHandle, ImageHandle as FfiImageHandle, RuntimeHandle, create_tokio_runtime,
+    BoxHandle, ImageHandle as FfiImageHandle, RuntimeHandle, RuntimeLiveness, create_tokio_runtime,
 };
 use crate::string::c_str_to_string;
+
+fn stopped_runtime_error(action: &str) -> BoxliteError {
+    BoxliteError::Stopped(format!(
+        "Cannot {action}: runtime has been shut down or closed"
+    ))
+}
+
+fn ensure_runtime_live(liveness: &RuntimeLiveness, action: &str) -> Result<(), BoxliteError> {
+    if liveness.is_alive() {
+        Ok(())
+    } else {
+        Err(stopped_runtime_error(action))
+    }
+}
 
 /// Create a new BoxliteRuntime
 ///
@@ -98,7 +112,11 @@ pub unsafe fn runtime_new(
             }
         };
 
-        *out_runtime = Box::into_raw(Box::new(RuntimeHandle { runtime, tokio_rt }));
+        *out_runtime = Box::into_raw(Box::new(RuntimeHandle {
+            runtime,
+            tokio_rt,
+            liveness: std::sync::Arc::new(RuntimeLiveness::new()),
+        }));
         BoxliteErrorCode::Ok
     }
 }
@@ -123,11 +141,18 @@ pub unsafe fn runtime_images(
         }
 
         let runtime_ref = &*runtime;
+        if let Err(e) = ensure_runtime_live(&runtime_ref.liveness, "access images") {
+            let code = error_to_code(&e);
+            write_error(out_error, e);
+            return code;
+        }
+
         match runtime_ref.runtime.images() {
             Ok(handle) => {
                 *out_handle = Box::into_raw(Box::new(FfiImageHandle {
                     handle,
                     tokio_rt: runtime_ref.tokio_rt.clone(),
+                    liveness: runtime_ref.liveness.clone(),
                 }));
                 BoxliteErrorCode::Ok
             }
@@ -169,6 +194,14 @@ pub unsafe fn image_pull(
         };
 
         let handle_ref = &*handle;
+        if let Err(e) = ensure_runtime_live(&handle_ref.liveness, "pull image") {
+            let code = error_to_code(&e);
+            write_error(out_error, e);
+            return code;
+        }
+
+        // This liveness check is advisory: runtime_free can still race after it
+        // passes. The backend shutdown token remains the authoritative gate.
         let result = handle_ref
             .tokio_rt
             .block_on(handle_ref.handle.pull(&image_ref));
@@ -231,6 +264,14 @@ pub unsafe fn image_list(
         }
 
         let handle_ref = &*handle;
+        if let Err(e) = ensure_runtime_live(&handle_ref.liveness, "list images") {
+            let code = error_to_code(&e);
+            write_error(out_error, e);
+            return code;
+        }
+
+        // This liveness check is advisory: runtime_free can still race after it
+        // passes. The backend shutdown token remains the authoritative gate.
         let result = handle_ref.tokio_rt.block_on(handle_ref.handle.list());
         match result {
             Ok(images) => {
@@ -837,6 +878,7 @@ pub unsafe fn runtime_shutdown(
         }
 
         let runtime_ref = &*runtime;
+        runtime_ref.liveness.mark_closed();
 
         let result = runtime_ref
             .tokio_rt
@@ -1322,6 +1364,7 @@ pub unsafe fn box_metrics(
 pub unsafe fn runtime_free(runtime: *mut RuntimeHandle) {
     if !runtime.is_null() {
         unsafe {
+            (*runtime).liveness.mark_closed();
             drop(Box::from_raw(runtime));
         }
     }
@@ -1732,7 +1775,47 @@ mod tests {
     use crate::error::error_to_c_error;
     use crate::json::status_to_string;
     use boxlite::runtime::types::BoxStatus;
-    use std::ffi::CStr;
+    use std::ffi::{CStr, CString};
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique_test_home(prefix: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("boxlite-ffi-{prefix}-{unique}"))
+    }
+
+    unsafe fn new_test_runtime_handle(prefix: &str) -> (*mut RuntimeHandle, PathBuf) {
+        let home_dir = unique_test_home(prefix);
+        let home_dir_c = CString::new(home_dir.display().to_string()).expect("home dir cstring");
+        let mut runtime: *mut RuntimeHandle = ptr::null_mut();
+        let mut error = FFIError::default();
+
+        let code = unsafe {
+            runtime_new(
+                home_dir_c.as_ptr(),
+                ptr::null(),
+                &mut runtime as *mut _,
+                &mut error as *mut _,
+            )
+        };
+
+        if code != BoxliteErrorCode::Ok {
+            let err_msg = if error.message.is_null() {
+                String::new()
+            } else {
+                unsafe { CStr::from_ptr(error.message) }
+                    .to_string_lossy()
+                    .into_owned()
+            };
+            unsafe { error_free(&mut error as *mut _) };
+            panic!("runtime_new failed with {code:?}: {err_msg}");
+        }
+
+        (runtime, home_dir)
+    }
 
     #[test]
     fn test_version_string() {
@@ -1918,7 +2001,11 @@ mod tests {
         let tokio_rt = create_tokio_runtime().expect("create tokio runtime");
         let runtime = BoxliteRuntime::rest(boxlite::BoxliteRestOptions::new("http://localhost:1"))
             .expect("create rest runtime");
-        let mut runtime_handle = RuntimeHandle { runtime, tokio_rt };
+        let mut runtime_handle = RuntimeHandle {
+            runtime,
+            tokio_rt,
+            liveness: std::sync::Arc::new(RuntimeLiveness::new()),
+        };
         let mut image_handle: *mut FfiImageHandle = ptr::null_mut();
         let mut error = FFIError::default();
 
@@ -1937,5 +2024,79 @@ mod tests {
         unsafe {
             error_free(&mut error as *mut _);
         }
+    }
+
+    #[test]
+    fn test_runtime_images_rejected_after_shutdown() {
+        let (runtime, home_dir) = unsafe { new_test_runtime_handle("images-shutdown") };
+        let mut error = FFIError::default();
+        let mut image_handle: *mut FfiImageHandle = ptr::null_mut();
+
+        let shutdown_code = unsafe { runtime_shutdown(runtime, None, &mut error as *mut _) };
+        assert_eq!(shutdown_code, BoxliteErrorCode::Ok);
+        unsafe { error_free(&mut error as *mut _) };
+
+        let code =
+            unsafe { runtime_images(runtime, &mut image_handle as *mut _, &mut error as *mut _) };
+        assert_eq!(code, BoxliteErrorCode::Stopped);
+        assert!(image_handle.is_null());
+        assert!(!error.message.is_null());
+        let message = unsafe { CStr::from_ptr(error.message) }
+            .to_string_lossy()
+            .into_owned();
+        assert!(
+            message.contains("shut down") || message.contains("closed"),
+            "error should mention shutdown or closed: {message}"
+        );
+
+        unsafe {
+            error_free(&mut error as *mut _);
+            runtime_free(runtime);
+        }
+        let _ = std::fs::remove_dir_all(home_dir);
+    }
+
+    #[test]
+    fn test_image_pull_rejected_after_runtime_free() {
+        let (runtime, home_dir) = unsafe { new_test_runtime_handle("images-free") };
+        let mut error = FFIError::default();
+        let mut image_handle: *mut FfiImageHandle = ptr::null_mut();
+
+        let code =
+            unsafe { runtime_images(runtime, &mut image_handle as *mut _, &mut error as *mut _) };
+        assert_eq!(code, BoxliteErrorCode::Ok);
+        assert!(!image_handle.is_null());
+
+        unsafe {
+            error_free(&mut error as *mut _);
+            runtime_free(runtime);
+        }
+
+        let image_ref = CString::new("alpine:latest").expect("image ref cstring");
+        let mut pull_json: *mut c_char = ptr::null_mut();
+        let pull_code = unsafe {
+            image_pull(
+                image_handle,
+                image_ref.as_ptr(),
+                &mut pull_json as *mut _,
+                &mut error as *mut _,
+            )
+        };
+        assert_eq!(pull_code, BoxliteErrorCode::Stopped);
+        assert!(pull_json.is_null());
+        assert!(!error.message.is_null());
+        let message = unsafe { CStr::from_ptr(error.message) }
+            .to_string_lossy()
+            .into_owned();
+        assert!(
+            message.contains("shut down") || message.contains("closed"),
+            "error should mention shutdown or closed: {message}"
+        );
+
+        unsafe {
+            error_free(&mut error as *mut _);
+            image_free(image_handle);
+        }
+        let _ = std::fs::remove_dir_all(home_dir);
     }
 }
