@@ -2,9 +2,15 @@
 
 mod common;
 
+use boxlite::net::constants::{HOST_HOSTNAME, HOST_IP};
 use boxlite::runtime::options::{BoxOptions, BoxliteOptions, NetworkSpec};
 use boxlite::{BoxCommand, BoxliteRuntime};
 use futures::StreamExt;
+use std::io::{Read, Write};
+use std::net::TcpListener;
+use std::sync::mpsc;
+use std::thread;
+use std::time::{Duration, Instant};
 
 #[test]
 fn default_is_enabled_with_empty_allowlist() {
@@ -137,6 +143,86 @@ async fn run_exit_code(litebox: &boxlite::LiteBox, cmd: &str, args: &[&str]) -> 
         .await
         .unwrap();
     ex.wait().await.unwrap().exit_code
+}
+
+fn wget_url_command(url: &str) -> String {
+    format!("wget -O- --timeout=5 {url} 2>&1; printf '\\nEXIT:%s\\n' $?")
+}
+
+fn start_host_http_server(response_body: &'static str) -> (u16, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind host test server");
+    listener
+        .set_nonblocking(true)
+        .expect("set host test server nonblocking");
+    let port = listener.local_addr().expect("host test server addr").port();
+
+    let handle = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let (mut stream, _) = loop {
+            match listener.accept() {
+                Ok(conn) => break conn,
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(
+                        Instant::now() < deadline,
+                        "timed out waiting for host test server connection"
+                    );
+                    thread::yield_now();
+                }
+                Err(err) => panic!("accept host test server: {err}"),
+            }
+        };
+        let mut request_buf = [0_u8; 1024];
+        // We only care that wget opened the connection; the request body is irrelevant.
+        let _ = stream.read(&mut request_buf);
+
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            response_body.len(),
+            response_body
+        );
+        stream
+            .write_all(response.as_bytes())
+            .expect("write host test server response");
+    });
+
+    (port, handle)
+}
+
+fn start_host_http_server_expect_no_connection() -> (u16, mpsc::Sender<()>, thread::JoinHandle<()>)
+{
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind host negative test server");
+    listener
+        .set_nonblocking(true)
+        .expect("set host negative test server nonblocking");
+    let port = listener
+        .local_addr()
+        .expect("host negative test server addr")
+        .port();
+    let (stop_tx, stop_rx) = mpsc::channel();
+
+    let handle = thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            match listener.accept() {
+                Ok((_, addr)) => panic!("expected no host test server connection, got {addr}"),
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    match stop_rx.try_recv() {
+                        Ok(()) | Err(mpsc::TryRecvError::Disconnected) => break,
+                        Err(mpsc::TryRecvError::Empty) => {}
+                    }
+
+                    assert!(
+                        Instant::now() < deadline,
+                        "negative server deadline exceeded before stop signal"
+                    );
+                    thread::yield_now();
+                }
+                Err(err) => panic!("accept host negative test server: {err}"),
+            }
+        }
+    });
+
+    (port, stop_tx, handle)
 }
 
 #[tokio::test]
@@ -294,5 +380,130 @@ async fn tcp_filter_sni_allows_https_to_allowed_host() {
         "HTTPS to allowed host should work via SNI match, got empty output"
     );
 
+    litebox.stop().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires VM runtime (run with make test)"]
+async fn host_alias_resolves_to_dedicated_host_ip() {
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .unwrap();
+
+    let litebox = runtime.create(common::alpine_opts(), None).await.unwrap();
+    litebox.start().await.unwrap();
+
+    let out = run_stdout(&litebox, "nslookup", &[HOST_HOSTNAME]).await;
+    assert!(
+        out.contains(HOST_IP),
+        "host alias should resolve to the dedicated host IP, got: {out}"
+    );
+
+    litebox.stop().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires VM runtime (run with make test)"]
+async fn host_alias_reaches_host_loopback_service() {
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .unwrap();
+
+    let litebox = runtime.create(common::alpine_opts(), None).await.unwrap();
+    litebox.start().await.unwrap();
+
+    let (port, server) = start_host_http_server("boxlite-host-alias");
+    let command = wget_url_command(&format!("http://{HOST_HOSTNAME}:{port}/"));
+    let out = run_stdout(&litebox, "sh", &["-c", &command]).await;
+
+    assert!(
+        out.contains("boxlite-host-alias"),
+        "host alias should reach host loopback service, got: {out}"
+    );
+
+    server.join().unwrap();
+    litebox.stop().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires VM runtime (run with make test)"]
+async fn host_alias_reaches_host_loopback_service_with_restrictive_allowlist() {
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .unwrap();
+
+    let opts = BoxOptions {
+        network: NetworkSpec::Enabled {
+            allow_net: vec!["example.com".into()],
+        },
+        ..common::alpine_opts()
+    };
+
+    let litebox = runtime.create(opts, None).await.unwrap();
+    litebox.start().await.unwrap();
+
+    let nslookup = run_stdout(&litebox, "nslookup", &[HOST_HOSTNAME]).await;
+    assert!(
+        nslookup.contains(HOST_IP),
+        "host alias should still resolve under restrictive allowlist, got: {nslookup}"
+    );
+
+    let (port, server) = start_host_http_server("boxlite-host-alias-allowlist");
+    let command = wget_url_command(&format!("http://{HOST_HOSTNAME}:{port}/"));
+    let out = run_stdout(&litebox, "sh", &["-c", &command]).await;
+
+    assert!(
+        out.contains("boxlite-host-alias-allowlist"),
+        "host alias should bypass allowlist filtering for internal host access, got: {out}"
+    );
+
+    server.join().unwrap();
+    litebox.stop().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires VM runtime (run with make test)"]
+async fn disabled_network_cannot_reach_host_virtual_ip() {
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .unwrap();
+
+    let opts = BoxOptions {
+        network: NetworkSpec::Disabled,
+        ..common::alpine_opts()
+    };
+
+    let litebox = runtime.create(opts, None).await.unwrap();
+    litebox.start().await.unwrap();
+
+    let no_eth0 = run_exit_code(&litebox, "sh", &["-c", "test ! -e /sys/class/net/eth0"]).await;
+    assert_eq!(
+        no_eth0, 0,
+        "disabled network should remove eth0 entirely, got exit code {no_eth0}"
+    );
+
+    let (port, stop_server, server) = start_host_http_server_expect_no_connection();
+    let command = wget_url_command(&format!("http://{HOST_IP}:{port}/"));
+    let out = run_stdout(&litebox, "sh", &["-c", &command]).await;
+
+    assert!(
+        out.contains("EXIT:") && !out.contains("EXIT:0"),
+        "host virtual IP should be unreachable with network disabled, got: {out}"
+    );
+
+    let _ = stop_server.send(());
+    server.join().unwrap();
     litebox.stop().await.unwrap();
 }

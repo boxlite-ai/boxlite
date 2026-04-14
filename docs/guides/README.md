@@ -302,6 +302,28 @@ async with boxlite.SimpleBox(image="alpine:latest") as box:
     print(result.stdout)
 ```
 
+**From Box to Host Loopback:**
+
+```bash
+# On the host, start a service bound to loopback
+python3 -m http.server 8081 --bind 127.0.0.1
+```
+
+```python
+async with boxlite.SimpleBox(image="alpine:latest") as box:
+    result = await box.exec(
+        "wget",
+        "-O-",
+        "http://host.boxlite.internal:8081",
+    )
+    print(result.stdout)
+```
+
+`host.boxlite.internal` is a built-in BoxLite hostname that resolves to the
+host loopback proxy address. It is not a Docker compatibility alias.
+Security note: any service bound to host loopback is reachable from inside the
+box while networking is enabled.
+
 ### Network Metrics
 
 Monitor network usage:

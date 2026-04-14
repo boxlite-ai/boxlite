@@ -164,46 +164,108 @@ type PortMapping struct {
 	GuestPort uint16 `json:"guest_port"`
 }
 
+// DNSRecord represents an exact A record within a local DNS zone.
+type DNSRecord struct {
+	Name string `json:"name"`
+	IP   string `json:"ip"`
+}
+
 // DNSZone represents a local DNS zone configuration
 // These are local DNS records served by the gateway's embedded DNS server.
 // Queries not matching any zone are forwarded to the host's system DNS.
 type DNSZone struct {
-	Name      string `json:"name"`       // Zone name (e.g., "myapp.local.", "." for root)
-	DefaultIP string `json:"default_ip"` // Default IP for unmatched queries in this zone
+	Name      string      `json:"name"`              // Zone name (e.g., "myapp.local.", "." for root)
+	Records   []DNSRecord `json:"records,omitempty"` // Exact A records within the zone
+	DefaultIP string      `json:"default_ip"`        // Default IP for unmatched queries in this zone
 }
 
 // GvproxyConfig matches the Rust structure (must stay in sync!)
 type GvproxyConfig struct {
-	SocketPath       string        `json:"socket_path"`
-	Subnet           string        `json:"subnet"`
-	GatewayIP        string        `json:"gateway_ip"`
-	GatewayMac       string        `json:"gateway_mac"`
-	GuestIP          string        `json:"guest_ip"`
-	GuestMac         string        `json:"guest_mac"`
-	MTU              uint16        `json:"mtu"`
-	PortMappings     []PortMapping `json:"port_mappings"`
-	DNSZones         []DNSZone     `json:"dns_zones"`
-	DNSSearchDomains []string      `json:"dns_search_domains"`
-	Debug       bool     `json:"debug"`
-	CaptureFile *string  `json:"capture_file,omitempty"`
-	AllowNet    []string       `json:"allow_net,omitempty"`
-	Secrets     []SecretConfig `json:"secrets,omitempty"`
-	CACertPEM   string         `json:"ca_cert_pem,omitempty"`
-	CAKeyPEM    string         `json:"ca_key_pem,omitempty"`
+	SocketPath       string         `json:"socket_path"`
+	Subnet           string         `json:"subnet"`
+	GatewayIP        string         `json:"gateway_ip"`
+	GatewayMac       string         `json:"gateway_mac"`
+	GuestIP          string         `json:"guest_ip"`
+	HostIP           string         `json:"host_ip"`
+	GuestMac         string         `json:"guest_mac"`
+	MTU              uint16         `json:"mtu"`
+	PortMappings     []PortMapping  `json:"port_mappings"`
+	DNSZones         []DNSZone      `json:"dns_zones"`
+	DNSSearchDomains []string       `json:"dns_search_domains"`
+	Debug            bool           `json:"debug"`
+	CaptureFile      *string        `json:"capture_file,omitempty"`
+	AllowNet         []string       `json:"allow_net,omitempty"`
+	Secrets          []SecretConfig `json:"secrets,omitempty"`
+	CACertPEM        string         `json:"ca_cert_pem,omitempty"`
+	CAKeyPEM         string         `json:"ca_key_pem,omitempty"`
 }
 
 // GvproxyInstance tracks a running gvisor-tap-vsock instance
 type GvproxyInstance struct {
-	ID         int64
-	SocketPath string
-	Config     *types.Configuration
-	Cancel     context.CancelFunc
-	conn       net.Conn                       // For macOS UnixDgram (VFKit)
-	listener   net.Listener                   // For Linux UnixStream (Qemu)
+	ID            int64
+	SocketPath    string
+	Config        *types.Configuration
+	Cancel        context.CancelFunc
+	conn          net.Conn                       // For macOS UnixDgram (VFKit)
+	listener      net.Listener                   // For Linux UnixStream (Qemu)
 	vn            *virtualnetwork.VirtualNetwork // Virtual network for stats collection
 	vnMu          sync.RWMutex                   // Protects vn field
 	ca            *BoxCA                         // Ephemeral MITM CA (nil if no secrets)
-	secretMatcher *SecretHostMatcher              // Hostname→secrets lookup (nil if no secrets)
+	secretMatcher *SecretHostMatcher             // Hostname→secrets lookup (nil if no secrets)
+}
+
+func buildDNSZones(config GvproxyConfig) []types.Zone {
+	dnsZones := make([]types.Zone, 0, len(config.DNSZones)+1)
+	for _, zone := range config.DNSZones {
+		dnsZone := types.Zone{
+			Name:      zone.Name,
+			DefaultIP: net.ParseIP(zone.DefaultIP),
+		}
+		for _, record := range zone.Records {
+			dnsZone.Records = append(dnsZone.Records, types.Record{
+				Name: record.Name,
+				IP:   net.ParseIP(record.IP),
+			})
+		}
+		dnsZones = append(dnsZones, dnsZone)
+	}
+
+	if len(config.AllowNet) > 0 {
+		allowNetZones := buildAllowNetDNSZones(config.AllowNet)
+		dnsZones = append(dnsZones, allowNetZones...)
+		logrus.WithField("rules", len(config.AllowNet)).Info("Network allowlist enabled (DNS sinkhole)")
+	}
+
+	return dnsZones
+}
+
+func buildTapConfig(config GvproxyConfig, protocol types.Protocol) *types.Configuration {
+	nat := make(map[string]string)
+	gatewayVirtualIPs := []string{config.GatewayIP}
+	if config.HostIP != "" {
+		nat[config.HostIP] = "127.0.0.1"
+		if config.HostIP != config.GatewayIP {
+			gatewayVirtualIPs = append(gatewayVirtualIPs, config.HostIP)
+		}
+	}
+
+	return &types.Configuration{
+		Debug:             config.Debug,
+		MTU:               int(config.MTU),
+		Subnet:            config.Subnet,
+		GatewayIP:         config.GatewayIP,
+		GatewayMacAddress: config.GatewayMac,
+		DHCPStaticLeases: map[string]string{
+			config.GuestIP: config.GuestMac,
+		},
+		Forwards:          make(map[string]string),
+		NAT:               nat,
+		GatewayVirtualIPs: gatewayVirtualIPs,
+		Protocol:          protocol,
+		DNS:               buildDNSZones(config),
+		DNSSearchDomains:  config.DNSSearchDomains,
+		CaptureFile:       "",
+	}
 }
 
 var (
@@ -247,42 +309,8 @@ func gvproxy_create(configJSON *C.char) C.longlong {
 		protocol = types.QemuProtocol
 	}
 
-	// Build DNS zones from config
-	// These are local DNS records - queries not matching any zone are forwarded to host DNS
-	dnsZones := make([]types.Zone, len(config.DNSZones))
-	for i, zone := range config.DNSZones {
-		dnsZones[i] = types.Zone{
-			Name:      zone.Name,
-			DefaultIP: net.ParseIP(zone.DefaultIP),
-		}
-	}
-
-	// Build DNS allowlist zones when AllowNet is configured
-	if len(config.AllowNet) > 0 {
-		allowNetZones := buildAllowNetDNSZones(config.AllowNet)
-		dnsZones = append(allowNetZones, dnsZones...)
-		logrus.WithField("rules", len(config.AllowNet)).Info("Network allowlist enabled (DNS sinkhole)")
-	}
-
 	// Create gvisor-tap-vsock configuration from provided config
-	tapConfig := &types.Configuration{
-		Debug:             config.Debug,
-		MTU:               int(config.MTU),
-		Subnet:            config.Subnet,
-		GatewayIP:         config.GatewayIP,
-		GatewayMacAddress: config.GatewayMac,
-		DHCPStaticLeases: map[string]string{
-			config.GuestIP: config.GuestMac,
-		},
-		Forwards: make(map[string]string),
-		NAT: map[string]string{
-			config.GuestIP: "127.0.0.1",
-		},
-		GatewayVirtualIPs: []string{config.GatewayIP},
-		Protocol:          protocol,
-		DNS:               dnsZones,
-		DNSSearchDomains:  config.DNSSearchDomains,
-	}
+	tapConfig := buildTapConfig(config, protocol)
 
 	// Set CaptureFile if provided
 	if config.CaptureFile != nil && *config.CaptureFile != "" {
@@ -393,7 +421,7 @@ func gvproxy_create(configJSON *C.char) C.longlong {
 		if len(config.AllowNet) > 0 || instance.secretMatcher != nil {
 			var tcpFilter *TCPFilter
 			if len(config.AllowNet) > 0 {
-				tcpFilter = NewTCPFilter(config.AllowNet, config.GatewayIP, config.GuestIP)
+				tcpFilter = NewTCPFilter(config.AllowNet, config.GatewayIP, config.GuestIP, config.HostIP)
 			}
 			if err := OverrideTCPHandler(vn, tapConfig, tapConfig.Ec2MetadataAccess, tcpFilter, instance.ca, instance.secretMatcher); err != nil {
 				logrus.WithError(err).Error("TCP: failed to override handler")

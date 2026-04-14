@@ -135,6 +135,10 @@ Structured network configuration for outbound connectivity.
 - `"enabled"` gives the guest outbound connectivity.
 - `"disabled"` removes the guest network interface entirely.
 - Empty or omitted `allow_net` means full outbound access.
+- `host.boxlite.internal` is always available as a built-in hostname for
+  reaching host loopback services and is not governed by `allow_net`.
+- Security: when networking is enabled, any service bound to host loopback can
+  be reached from inside the box via `host.boxlite.internal` or `192.168.127.254`.
 
 **Supported patterns:**
 - Exact hostname: `"api.openai.com"`
@@ -307,6 +311,8 @@ ports=[
 - Host port must be available (not in use)
 - Multiple boxes can forward to same host port (error if conflict)
 - Supports both TCP and UDP protocols
+- Port mappings are only for host → box traffic. Use
+  `host.boxlite.internal:<port>` for box → host loopback traffic.
 
 #### `auto_remove: bool`
 

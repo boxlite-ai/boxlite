@@ -18,7 +18,7 @@ import (
 type TCPFilter struct {
 	exactIPs         map[[4]byte]bool
 	cidrs            []*net.IPNet
-	alwaysAllow      map[[4]byte]bool // gateway + guest IPs
+	alwaysAllow      map[[4]byte]bool // internal IPs that should never be filtered
 	exactHosts       map[string]bool  // "api.openai.com" → true
 	wildcardSuffixes []string         // ".example.com"
 	hasHostnameRules bool
@@ -26,7 +26,7 @@ type TCPFilter struct {
 
 // NewTCPFilter parses allow_net rules into IP/CIDR and hostname categories.
 // Returns nil if rules is empty (zero overhead fast path).
-func NewTCPFilter(rules []string, gatewayIP, guestIP string) *TCPFilter {
+func NewTCPFilter(rules []string, internalIPs ...string) *TCPFilter {
 	if len(rules) == 0 {
 		return nil
 	}
@@ -38,7 +38,10 @@ func NewTCPFilter(rules []string, gatewayIP, guestIP string) *TCPFilter {
 	}
 
 	// Internal IPs always allowed
-	for _, ipStr := range []string{gatewayIP, guestIP} {
+	for _, ipStr := range internalIPs {
+		if ipStr == "" {
+			continue
+		}
 		if parsed := net.ParseIP(ipStr); parsed != nil {
 			if ip4 := parsed.To4(); ip4 != nil {
 				f.alwaysAllow[toIPv4Key(ip4)] = true

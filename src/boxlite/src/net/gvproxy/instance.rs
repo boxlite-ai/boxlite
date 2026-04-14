@@ -38,20 +38,10 @@ use super::stats::NetworkStats;
 ///
 /// ## Example
 ///
-/// ```no_run
-/// use boxlite::net::gvproxy::GvproxyInstance;
-/// use std::path::PathBuf;
-///
-/// // Create instance with caller-provided socket path
-/// let socket_path = PathBuf::from("/tmp/my-box/net.sock");
-/// let instance = GvproxyInstance::new(socket_path, &[(8080, 80), (8443, 443)], vec![], vec![], None, None)?;
-///
-/// // Socket path is known from creation — no FFI call needed
-/// println!("Socket: {:?}", instance.socket_path());
-///
-/// // Instance is automatically cleaned up when dropped
-/// # Ok::<(), boxlite_shared::errors::BoxliteError>(())
-/// ```
+/// `GvproxyInstance` is created internally by BoxLite's gvproxy backend during
+/// box startup. Once initialized, the instance exposes its socket path via
+/// [`GvproxyInstance::socket_path`] and automatically destroys the underlying
+/// gvproxy handle on drop.
 #[derive(Debug)]
 pub struct GvproxyInstance {
     id: i64,
@@ -146,26 +136,8 @@ impl GvproxyInstance {
     /// - VirtualNetwork not initialized yet (too early)
     /// - JSON parsing failed
     ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// use boxlite::net::gvproxy::GvproxyInstance;
-    ///
-    /// let instance = GvproxyInstance::new(path, &[(8080, 80)], vec![], vec![])?;
-    /// let stats = instance.get_stats()?;
-    ///
-    /// // Check for packet drops due to maxInFlight limit
-    /// if stats.tcp.forward_max_inflight_drop > 0 {
-    ///     tracing::warn!(
-    ///         drops = stats.tcp.forward_max_inflight_drop,
-    ///         "Connections dropped - consider increasing maxInFlight"
-    ///     );
-    /// }
-    ///
-    /// println!("Sent: {} bytes, Received: {} bytes",
-    ///     stats.bytes_sent, stats.bytes_received);
-    /// # Ok::<(), boxlite_shared::errors::BoxliteError>(())
-    /// ```
+    /// Call this on an existing gvproxy instance to inspect bandwidth counters
+    /// and debugging metrics such as `forward_max_inflight_drop`.
     pub fn get_stats(&self) -> BoxliteResult<NetworkStats> {
         // Get JSON from FFI layer
         let json_str = ffi::get_stats_json(self.id)?;

@@ -82,7 +82,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 // Re-export public API
-pub use config::{DnsZone, GvproxyConfig, GvproxySecretConfig, PortMapping};
+pub use config::{DnsRecord, DnsZone, GvproxyConfig, GvproxySecretConfig, PortMapping};
 pub use instance::GvproxyInstance;
 pub use logging::init_logging;
 pub use stats::{NetworkStats, TcpStats};

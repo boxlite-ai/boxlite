@@ -13,6 +13,23 @@ pub const GATEWAY_IP: &str = "192.168.127.1";
 /// Guest IP address (assigned via DHCP static lease)
 pub const GUEST_IP: &str = "192.168.127.2";
 
+/// Built-in DNS label for reaching host loopback services from inside the box.
+pub const HOST_ALIAS_LABEL: &str = "host";
+
+/// Built-in DNS zone for reaching host loopback services from inside the box.
+pub const HOST_ALIAS_ZONE: &str = "boxlite.internal.";
+
+/// Built-in DNS hostname for reaching host loopback services from inside the box.
+pub const HOST_HOSTNAME: &str = "host.boxlite.internal";
+
+/// Virtual host IP address exposed inside the guest as the host endpoint.
+///
+/// gvproxy NATs traffic sent to this IP to `127.0.0.1` on the host.
+/// The built-in [`HOST_HOSTNAME`] alias resolves to this address.
+/// This destination is always allowed while networking is enabled, even when
+/// `allow_net` would otherwise restrict outbound traffic.
+pub const HOST_IP: &str = "192.168.127.254";
+
 /// Guest IP with subnet prefix (for static IP assignment in guest)
 pub const GUEST_CIDR: &str = "192.168.127.2/24";
 
@@ -74,5 +91,17 @@ mod tests {
         }
         assert_eq!(GUEST_MAC[5], 0xee);
         assert_eq!(GATEWAY_MAC[5], 0xdd);
+    }
+
+    #[test]
+    fn test_host_alias_components_match_hostname() {
+        assert_eq!(
+            HOST_HOSTNAME,
+            format!(
+                "{}.{}",
+                HOST_ALIAS_LABEL,
+                HOST_ALIAS_ZONE.trim_end_matches('.')
+            )
+        );
     }
 }

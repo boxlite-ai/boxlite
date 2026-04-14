@@ -80,6 +80,21 @@ func decideTCPRoute(destIP net.IP, destPort uint16, filter *TCPFilter, secretMat
 	return tcpRouteBlock
 }
 
+func resolveTCPDestination(localAddress tcpip.Address, nat map[tcpip.Address]tcpip.Address,
+	natLock *sync.Mutex) (net.IP, tcpip.Address) {
+	policyAddress := localAddress
+	dialAddress := localAddress
+
+	natLock.Lock()
+	if replaced, ok := nat[localAddress]; ok {
+		dialAddress = replaced
+	}
+	natLock.Unlock()
+
+	addr4 := policyAddress.As4()
+	return net.IP(addr4[:]), dialAddress
+}
+
 func TCPWithFilter(s *stack.Stack, nat map[tcpip.Address]tcpip.Address,
 	natLock *sync.Mutex, ec2MetadataAccess bool, filter *TCPFilter,
 	ca *BoxCA, secretMatcher *SecretHostMatcher) *tcp.Forwarder {
@@ -92,17 +107,11 @@ func TCPWithFilter(s *stack.Stack, nat map[tcpip.Address]tcpip.Address,
 			return
 		}
 
-		// NAT translation
-		natLock.Lock()
-		if replaced, ok := nat[localAddress]; ok {
-			localAddress = replaced
-		}
-		natLock.Unlock()
-
-		addr4 := localAddress.As4()
-		destIP := net.IP(addr4[:])
+		// Policy checks must see the pre-NAT destination (for example the host alias IP),
+		// while the actual outbound dial uses any NAT-translated address (for example 127.0.0.1).
+		destIP, dialAddress := resolveTCPDestination(localAddress, nat, natLock)
 		destPort := r.ID().LocalPort
-		destAddr := fmt.Sprintf("%s:%d", localAddress, destPort)
+		destAddr := fmt.Sprintf("%s:%d", dialAddress, destPort)
 
 		switch decideTCPRoute(destIP, destPort, filter, secretMatcher) {
 		case tcpRouteStandardForward:

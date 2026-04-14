@@ -7,12 +7,24 @@ use std::path::PathBuf;
 ///
 /// Defines local DNS records served by the gateway's embedded DNS server.
 /// Queries not matching any zone are forwarded to the host's system DNS.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DnsZone {
     /// Zone name (e.g., "myapp.local.", "." for root)
     pub name: String,
+    /// Exact A records within this zone.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub records: Vec<DnsRecord>,
     /// Default IP for unmatched queries in this zone
     pub default_ip: String,
+}
+
+/// Exact A record within a local DNS zone.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DnsRecord {
+    /// Record label within the zone (e.g., "host" in "boxlite.internal.")
+    pub name: String,
+    /// IPv4 address returned for this record
+    pub ip: String,
 }
 
 /// Port mapping configuration
@@ -45,6 +57,9 @@ pub struct GvproxyConfig {
 
     /// Guest IP address
     pub guest_ip: String,
+
+    /// Virtual host IP address that routes to host loopback services
+    pub host_ip: String,
 
     /// Guest MAC address
     pub guest_mac: String,
@@ -130,10 +145,11 @@ fn defaults_with_socket_path(socket_path: PathBuf) -> GvproxyConfig {
         gateway_ip: GATEWAY_IP.to_string(),
         gateway_mac: GATEWAY_MAC_STRING.to_string(),
         guest_ip: GUEST_IP.to_string(),
+        host_ip: HOST_IP.to_string(),
         guest_mac: GUEST_MAC_STRING.to_string(),
         mtu: DEFAULT_MTU,
         port_mappings: Vec::new(),
-        dns_zones: Vec::new(),
+        dns_zones: vec![boxlite_internal_dns_zone()],
         dns_search_domains: DNS_SEARCH_DOMAINS.iter().map(|s| s.to_string()).collect(),
         debug: false,
         capture_file: None,
@@ -141,6 +157,20 @@ fn defaults_with_socket_path(socket_path: PathBuf) -> GvproxyConfig {
         secrets: Vec::new(),
         ca_cert_pem: None,
         ca_key_pem: None,
+    }
+}
+
+fn boxlite_internal_dns_zone() -> DnsZone {
+    use crate::net::constants::{HOST_ALIAS_LABEL, HOST_ALIAS_ZONE, HOST_IP};
+
+    DnsZone {
+        name: HOST_ALIAS_ZONE.to_string(),
+        records: vec![DnsRecord {
+            name: HOST_ALIAS_LABEL.to_string(),
+            ip: HOST_IP.to_string(),
+        }],
+        // Empty default_ip means this zone only serves the exact `host` record.
+        default_ip: String::new(),
     }
 }
 
@@ -191,9 +221,11 @@ impl GvproxyConfig {
         self
     }
 
-    /// Set custom DNS zones
+    /// Add custom DNS zones after the built-in BoxLite zones.
+    ///
+    /// This method appends; repeated calls keep earlier zones in place.
     pub fn with_dns_zones(mut self, dns_zones: Vec<DnsZone>) -> Self {
-        self.dns_zones = dns_zones;
+        self.dns_zones.extend(dns_zones);
         self
     }
 
@@ -212,8 +244,9 @@ impl GvproxyConfig {
     ///
     /// ```no_run
     /// use boxlite::net::gvproxy::GvproxyConfig;
+    /// use std::path::PathBuf;
     ///
-    /// let config = GvproxyConfig::new(vec![(8080, 80)])
+    /// let config = GvproxyConfig::new(PathBuf::from("/tmp/network.sock"), vec![(8080, 80)])
     ///     .with_capture_file("/tmp/network.pcap".to_string());
     /// ```
     pub fn with_capture_file(mut self, capture_file: String) -> Self {
@@ -244,6 +277,7 @@ impl GvproxyConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::net::constants::{HOST_ALIAS_LABEL, HOST_ALIAS_ZONE, HOST_HOSTNAME, HOST_IP};
 
     fn test_socket_path() -> PathBuf {
         PathBuf::from("/tmp/test-gvproxy.sock")
@@ -256,9 +290,19 @@ mod tests {
         assert_eq!(config.subnet, "192.168.127.0/24");
         assert_eq!(config.gateway_ip, "192.168.127.1");
         assert_eq!(config.guest_ip, "192.168.127.2");
+        assert_eq!(config.host_ip, HOST_IP);
         assert_eq!(config.mtu, 1500);
         assert!(!config.debug);
-        assert!(config.dns_zones.is_empty());
+        assert_eq!(config.dns_zones.len(), 1);
+        assert_eq!(config.dns_zones[0].name, HOST_ALIAS_ZONE);
+        assert_eq!(
+            config.dns_zones[0].records,
+            vec![DnsRecord {
+                name: HOST_ALIAS_LABEL.to_string(),
+                ip: HOST_IP.to_string(),
+            }]
+        );
+        assert!(config.dns_zones[0].default_ip.is_empty());
     }
 
     #[test]
@@ -286,7 +330,9 @@ mod tests {
         let deserialized: GvproxyConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(config.subnet, deserialized.subnet);
         assert_eq!(config.socket_path, deserialized.socket_path);
+        assert_eq!(config.host_ip, deserialized.host_ip);
         assert_eq!(config.port_mappings.len(), deserialized.port_mappings.len());
+        assert_eq!(config.dns_zones, deserialized.dns_zones);
     }
 
     #[test]
@@ -452,5 +498,66 @@ mod tests {
             "Two configs with different socket paths must produce different JSON"
         );
         assert_ne!(config_a.socket_path, config_b.socket_path);
+    }
+
+    #[test]
+    fn test_with_dns_zones_preserves_builtin_host_alias() {
+        let config = GvproxyConfig::new(test_socket_path(), vec![]).with_dns_zones(vec![DnsZone {
+            name: "example.internal.".to_string(),
+            records: vec![DnsRecord {
+                name: "api".to_string(),
+                ip: "192.168.127.10".to_string(),
+            }],
+            default_ip: String::new(),
+        }]);
+
+        assert_eq!(config.dns_zones.len(), 2);
+        assert_eq!(config.dns_zones[0].name, HOST_ALIAS_ZONE);
+        assert_eq!(config.dns_zones[1].name, "example.internal.");
+    }
+
+    #[test]
+    fn test_with_dns_zones_appends_across_multiple_calls() {
+        let config = GvproxyConfig::new(test_socket_path(), vec![])
+            .with_dns_zones(vec![DnsZone {
+                name: "one.internal.".to_string(),
+                records: vec![],
+                default_ip: "192.168.127.10".to_string(),
+            }])
+            .with_dns_zones(vec![DnsZone {
+                name: "two.internal.".to_string(),
+                records: vec![],
+                default_ip: "192.168.127.11".to_string(),
+            }]);
+
+        assert_eq!(config.dns_zones.len(), 3);
+        assert_eq!(config.dns_zones[0].name, HOST_ALIAS_ZONE);
+        assert_eq!(config.dns_zones[1].name, "one.internal.");
+        assert_eq!(config.dns_zones[2].name, "two.internal.");
+    }
+
+    #[test]
+    fn test_serialization_contains_host_alias_record() {
+        let config = GvproxyConfig::new(test_socket_path(), vec![]);
+        let json = serde_json::to_string(&config).unwrap();
+
+        assert!(json.contains(&format!("\"host_ip\":\"{HOST_IP}\"")));
+        assert!(json.contains(&format!("\"name\":\"{HOST_ALIAS_ZONE}\"")));
+        assert!(json.contains("\"records\""));
+        assert!(json.contains(&format!("\"name\":\"{HOST_ALIAS_LABEL}\"")));
+        assert!(json.contains(&format!("\"ip\":\"{HOST_IP}\"")));
+    }
+
+    #[test]
+    fn test_host_hostname_matches_built_in_zone() {
+        let zone = boxlite_internal_dns_zone();
+        let record = zone.records.first().expect("built-in host alias record");
+
+        assert_eq!(zone.name, HOST_ALIAS_ZONE);
+        assert_eq!(record.name, HOST_ALIAS_LABEL);
+        assert_eq!(
+            HOST_HOSTNAME,
+            format!("{}.{}", record.name, zone.name.trim_end_matches('.'))
+        );
     }
 }

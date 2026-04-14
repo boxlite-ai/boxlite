@@ -296,7 +296,9 @@ See [Configuring Networking](./guides/README.md#configuring-networking) for deta
 
 2. **Use host network:**
    - Box A exposes port
-   - Box B connects to `host.docker.internal:port` (or localhost on Linux)
+   - Box B connects to `host.boxlite.internal:port`
+   - This bypasses `allow_net`; if networking is enabled, host loopback
+     services are reachable from inside the box
 
 3. **External service:**
    - Both boxes connect to Redis/database on host or network
