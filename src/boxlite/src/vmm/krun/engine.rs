@@ -242,6 +242,34 @@ impl Vmm for Krun {
             // Configure VM like chroot_vm example: 4 CPUs and 4096MB memory
             ctx.set_vm_config(config.cpus.unwrap_or(4), config.memory_mib.unwrap_or(4096))?;
 
+            // On Windows (WHPX), the kernel is NOT embedded in libkrunfw — it must be
+            // provided explicitly. Discover vmlinuz and initrd from the runtime directory.
+            #[cfg(not(unix))]
+            {
+                let kernel_path = crate::util::find_binary("vmlinuz").map_err(|_| {
+                    BoxliteError::Engine(
+                        "Linux kernel (vmlinuz) not found. Set BOXLITE_RUNTIME_DIR to a directory \
+                         containing vmlinuz and initrd.img for WHPX boot."
+                            .into(),
+                    )
+                })?;
+                let initrd_path = crate::util::find_binary("initrd.img").ok();
+
+                let kernel_str = kernel_path.to_str().ok_or_else(|| {
+                    BoxliteError::Engine("kernel path contains invalid UTF-8".into())
+                })?;
+                let initrd_str = initrd_path
+                    .as_ref()
+                    .and_then(|p| p.to_str());
+
+                tracing::info!(
+                    kernel = %kernel_path.display(),
+                    initrd = ?initrd_path.as_ref().map(|p| p.display()),
+                    "Configuring kernel for WHPX boot"
+                );
+                ctx.set_kernel(kernel_str, 0, initrd_str, None)?;
+            }
+
             // Configure net from connection info passed by parent process
             if let Some(connection) = &config.network_backend_endpoint {
                 tracing::info!(connection = ?connection, "Configuring network connection");
