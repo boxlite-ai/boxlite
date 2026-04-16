@@ -11,13 +11,15 @@ use std::{ffi::CString, ptr};
 use crate::vmm::krun::check_status;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use libkrun_sys::{
-    krun_add_disk2, krun_add_net_unixgram, krun_add_net_unixstream, krun_add_virtiofs,
-    krun_add_vsock_port2, krun_create_ctx, krun_disable_tsi, krun_free_ctx, krun_init_log,
-    krun_set_console_output, krun_set_env, krun_set_exec, krun_set_gpu_options, krun_set_kernel,
-    krun_set_nested_virt, krun_set_port_map, krun_set_rlimits, krun_set_root,
-    krun_set_root_disk_remount, krun_set_vm_config, krun_set_workdir, krun_setgid, krun_setuid,
-    krun_split_irqchip, krun_start_enter,
+    krun_add_disk2, krun_add_net, krun_add_net_unixgram, krun_add_net_unixstream,
+    krun_add_virtiofs, krun_add_vsock_port2, krun_create_ctx, krun_disable_tsi, krun_free_ctx,
+    krun_get_console_output, krun_init_log, krun_set_console_output, krun_set_env, krun_set_exec,
+    krun_set_gpu_options, krun_set_kernel, krun_set_nested_virt, krun_set_port_map,
+    krun_set_rlimits, krun_set_root, krun_set_root_disk_remount, krun_set_vm_config,
+    krun_set_workdir, krun_split_irqchip, krun_start, krun_start_enter, krun_stop, krun_wait,
 };
+#[cfg(unix)]
+use libkrun_sys::{krun_setgid, krun_setuid};
 
 /// Thin wrapper that owns a libkrun context.
 pub struct KrunContext {
@@ -530,6 +532,7 @@ impl KrunContext {
     /// Set the uid for the microVM process.
     ///
     /// This should be called before `start_enter`.
+    #[cfg(unix)]
     pub unsafe fn setuid(&self, uid: libc::uid_t) -> BoxliteResult<()> {
         tracing::debug!(uid, "Setting VM process uid");
         check_status("krun_setuid", unsafe { krun_setuid(self.ctx_id, uid) })
@@ -538,6 +541,7 @@ impl KrunContext {
     /// Set the gid for the microVM process.
     ///
     /// This should be called before `start_enter`.
+    #[cfg(unix)]
     pub unsafe fn setgid(&self, gid: libc::gid_t) -> BoxliteResult<()> {
         tracing::debug!(gid, "Setting VM process gid");
         check_status("krun_setgid", unsafe { krun_setgid(self.ctx_id, gid) })
@@ -578,6 +582,50 @@ impl KrunContext {
             tracing::error!(status, "krun_start_enter failed");
         }
         status
+    }
+
+    /// Start VM on a background thread (non-blocking).
+    /// Returns immediately. Use `wait()` to block until VM exits.
+    pub unsafe fn start(&self) -> BoxliteResult<()> {
+        check_status("krun_start", unsafe { krun_start(self.ctx_id) })
+    }
+
+    /// Block until VM exits. Returns the exit code.
+    pub unsafe fn wait(&self) -> BoxliteResult<i32> {
+        let status = unsafe { krun_wait(self.ctx_id) };
+        if status < 0 {
+            Err(BoxliteError::Engine(format!("krun_wait failed: {status}")))
+        } else {
+            Ok(status)
+        }
+    }
+
+    /// Force-stop a running VM.
+    pub unsafe fn stop(&self) -> BoxliteResult<()> {
+        check_status("krun_stop", unsafe { krun_stop(self.ctx_id) })
+    }
+
+    /// Read console output buffer.
+    pub unsafe fn get_console_output(&self) -> BoxliteResult<Vec<u8>> {
+        let mut buf = vec![0u8; 65536];
+        let n = unsafe { krun_get_console_output(self.ctx_id, buf.as_mut_ptr(), buf.len() as u32) };
+        if n < 0 {
+            Err(BoxliteError::Engine(format!(
+                "krun_get_console_output failed: {n}"
+            )))
+        } else {
+            buf.truncate(n as usize);
+            Ok(buf)
+        }
+    }
+
+    /// Add TCP-based network backend (Windows).
+    pub unsafe fn add_net(&self, endpoint: &str, mac: &[u8; 6]) -> BoxliteResult<()> {
+        let endpoint_c = CString::new(endpoint)
+            .map_err(|e| BoxliteError::Engine(format!("invalid net endpoint: {e}")))?;
+        check_status("krun_add_net", unsafe {
+            krun_add_net(self.ctx_id, endpoint_c.as_ptr(), mac.as_ptr())
+        })
     }
 }
 

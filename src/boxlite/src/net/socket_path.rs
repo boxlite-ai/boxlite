@@ -1,3 +1,4 @@
+#![cfg(unix)]
 //! Unix socket path shortening via symlinks.
 //!
 //! Unix domain sockets have a `sun_path` limit of 104 bytes (macOS) / 108 bytes (Linux).

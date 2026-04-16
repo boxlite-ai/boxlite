@@ -56,10 +56,17 @@ impl SystemCheck {
             Ok(Self {})
         }
 
-        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        #[cfg(target_os = "windows")]
+        {
+            let probe = WhpxProbe;
+            probe.startup_check()?;
+            Ok(Self {})
+        }
+
+        #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
         {
             Err(BoxliteError::Unsupported(
-                "BoxLite only supports Linux and macOS".into(),
+                "BoxLite only supports Linux, macOS, and Windows".into(),
             ))
         }
     }
@@ -81,7 +88,12 @@ pub(crate) fn hypervisor_probe() -> Box<dyn HypervisorProbe> {
         Box::new(KvmProbe)
     }
 
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(target_os = "windows")]
+    {
+        Box::new(WhpxProbe)
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     {
         Box::new(NoopProbe)
     }
@@ -348,16 +360,35 @@ fn check_hypervisor_framework() -> BoxliteResult<()> {
     }
 }
 
+// ── Windows: WHPX ───────────────────────────────────────────────────────
+
+#[cfg(target_os = "windows")]
+struct WhpxProbe;
+
+#[cfg(target_os = "windows")]
+impl HypervisorProbe for WhpxProbe {
+    fn startup_check(&self) -> BoxliteResult<()> {
+        // WHPX availability is checked via WHvGetCapability at runtime.
+        // Detailed check deferred to Windows compilation.
+        Ok(())
+    }
+
+    fn diagnose_create_failure(&self, error: BoxliteError) -> BoxliteError {
+        // On Windows, WHPX errors are already propagated from the VMM layer.
+        error
+    }
+}
+
 // ── Unsupported platforms ──────────────────────────────────────────────────
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 struct NoopProbe;
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 impl HypervisorProbe for NoopProbe {
     fn startup_check(&self) -> BoxliteResult<()> {
         Err(BoxliteError::Unsupported(
-            "BoxLite only supports Linux and macOS".into(),
+            "BoxLite only supports Linux, macOS, and Windows".into(),
         ))
     }
 
