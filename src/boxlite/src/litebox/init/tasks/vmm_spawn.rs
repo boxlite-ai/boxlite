@@ -75,19 +75,20 @@ impl PipelineTask<InitCtx> for VmmSpawnTask {
         };
 
         // Build config and get outputs
-        let (instance_spec, volume_mgr, rootfs_init, container_mounts) = build_config(
-            &box_id,
-            &options,
-            &layout,
-            &container_image_config,
-            &container_disk_path,
-            guest_disk_path.as_deref(),
-            &container_id,
-            &runtime,
-            reuse_rootfs,
-        )
-        .await
-        .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
+        let (instance_spec, volume_mgr, rootfs_init, container_mounts, ready_transport) =
+            build_config(
+                &box_id,
+                &options,
+                &layout,
+                &container_image_config,
+                &container_disk_path,
+                guest_disk_path.as_deref(),
+                &container_id,
+                &runtime,
+                reuse_rootfs,
+            )
+            .await
+            .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
 
         // Spawn VM
         let handler = spawn_vm(&box_id, &instance_spec, &options, &layout)
@@ -99,6 +100,7 @@ impl PipelineTask<InitCtx> for VmmSpawnTask {
         ctx.volume_mgr = Some(volume_mgr);
         ctx.rootfs_init = Some(rootfs_init);
         ctx.container_mounts = Some(container_mounts);
+        ctx.ready_transport = Some(ready_transport);
         // Store CA cert PEM for Container.Init gRPC (passed as CACert proto field)
         ctx.ca_cert_pem = instance_spec
             .network_config
@@ -129,10 +131,22 @@ async fn build_config(
     GuestVolumeManager,
     crate::portal::interfaces::ContainerRootfsInitConfig,
     Vec<ContainerMount>,
+    Transport,
 )> {
-    // Transport setup
-    let transport = Transport::unix(layout.socket_path());
-    let ready_transport = Transport::unix(layout.ready_socket_path());
+    // Transport setup: Unix sockets on Unix, TCP ports on Windows
+    #[cfg(unix)]
+    let (transport, ready_transport) = (
+        Transport::unix(layout.socket_path()),
+        Transport::unix(layout.ready_socket_path()),
+    );
+    #[cfg(not(unix))]
+    let (transport, ready_transport) = {
+        let ports = crate::net::port::allocate_box_ports()?;
+        (
+            Transport::tcp(ports.grpc_port),
+            Transport::tcp(ports.ready_port),
+        )
+    };
 
     let user_volumes = resolve_user_volumes(&options.volumes)?;
 
@@ -235,7 +249,13 @@ async fn build_config(
         detach: options.detach,
     };
 
-    Ok((instance_spec, volume_mgr, rootfs_init, container_mounts))
+    Ok((
+        instance_spec,
+        volume_mgr,
+        rootfs_init,
+        container_mounts,
+        ready_transport,
+    ))
 }
 
 /// Configure guest rootfs with device path from volume manager.

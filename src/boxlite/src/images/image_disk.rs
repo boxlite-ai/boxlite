@@ -3,14 +3,21 @@
 //! Builds and caches pure ext4 disk images from OCI images.
 //! These disks contain only image content (no guest binary).
 
+#[cfg(any(unix, feature = "krun", test))]
 use std::fs;
 use std::path::PathBuf;
 
+#[cfg(any(unix, feature = "krun", test))]
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
-use crate::disk::{Disk, DiskFormat, create_ext4_from_dir};
+#[cfg(any(unix, feature = "krun"))]
+use crate::disk::create_ext4_from_dir;
+#[cfg(any(unix, feature = "krun", test))]
+use crate::disk::{Disk, DiskFormat};
+#[cfg(unix)]
 use crate::rootfs::RootfsBuilder;
 
+#[cfg(any(unix, feature = "krun"))]
 use super::ImageObject;
 
 /// Builds and caches ext4 disk images from OCI images.
@@ -31,7 +38,9 @@ use super::ImageObject;
 ///
 /// Cache location: `~/.boxlite/images/disk-images/`
 pub struct ImageDiskManager {
+    #[allow(dead_code)] // Read from cfg-gated methods only
     cache_dir: PathBuf,
+    #[allow(dead_code)] // Read from cfg-gated methods only
     temp_dir: PathBuf,
 }
 
@@ -48,6 +57,11 @@ impl ImageDiskManager {
     /// Returns a persistent `Disk` (won't be cleaned up on drop).
     /// If a cached disk exists for this image digest, returns it immediately.
     /// Otherwise: extracts layers → creates ext4 → atomically installs to cache.
+    ///
+    /// On Unix, uses `RootfsBuilder` for layer extraction (xattr support).
+    /// On Windows, uses `extract_layer_tarball` (simpler, no xattr).
+    /// Both platforms use native `mke2fs` for ext4 creation.
+    #[cfg(any(unix, feature = "krun"))]
     pub async fn get_or_create(&self, image: &ImageObject) -> BoxliteResult<Disk> {
         let digest = image.compute_image_digest();
 
@@ -61,6 +75,7 @@ impl ImageDiskManager {
     }
 
     /// Look up a cached disk by image digest.
+    #[cfg(any(unix, feature = "krun", test))]
     fn find(&self, digest: &str) -> Option<Disk> {
         let path = self.disk_path(digest);
         path.exists()
@@ -68,6 +83,7 @@ impl ImageDiskManager {
     }
 
     /// Build ext4 from image layers and atomically install to cache.
+    #[cfg(unix)]
     async fn build_and_install(&self, image: &ImageObject, digest: &str) -> BoxliteResult<Disk> {
         // All work happens in a temp directory (staged)
         let temp = tempfile::tempdir_in(&self.temp_dir).map_err(|e| {
@@ -97,10 +113,58 @@ impl ImageDiskManager {
         self.install(digest, temp_disk)
     }
 
+    /// Build ext4 from image layers and atomically install to cache (non-Unix).
+    ///
+    /// Uses cross-platform tar extraction (no xattr) followed by native `mke2fs`
+    /// (cross-compiled e2fsprogs binary bundled in the distribution).
+    #[cfg(all(not(unix), feature = "krun"))]
+    async fn build_and_install(&self, image: &ImageObject, digest: &str) -> BoxliteResult<Disk> {
+        // All work happens in a temp directory (staged)
+        let temp = tempfile::tempdir_in(&self.temp_dir).map_err(|e| {
+            BoxliteError::Storage(format!(
+                "Failed to create temp directory in {}: {}",
+                self.temp_dir.display(),
+                e
+            ))
+        })?;
+
+        // Extract image layers to merged directory.
+        // Uses cross-platform tar extraction (no xattr support on Windows).
+        let merged_path = temp.path().join("merged");
+        let layer_tarballs = image.layer_tarballs();
+
+        std::fs::create_dir_all(&merged_path).map_err(|e| {
+            BoxliteError::Storage(format!(
+                "Failed to create merged directory {}: {}",
+                merged_path.display(),
+                e
+            ))
+        })?;
+
+        for tarball in &layer_tarballs {
+            extract_layer_tarball(tarball, &merged_path)?;
+        }
+
+        // Create ext4 from merged directory via native mke2fs (blocking I/O)
+        let temp_disk_path = temp.path().join("image.ext4");
+        let merged_clone = merged_path.clone();
+        let disk_clone = temp_disk_path.clone();
+        let temp_disk =
+            tokio::task::spawn_blocking(move || create_ext4_from_dir(&merged_clone, &disk_clone))
+                .await
+                .map_err(|e| {
+                    BoxliteError::Internal(format!("Disk creation task failed: {}", e))
+                })??;
+
+        // Atomically install staged disk to cache
+        self.install(digest, temp_disk)
+    }
+
     /// Atomically install a staged disk to the cache directory.
     ///
     /// Takes ownership of the temp `Disk`, renames it to the final cache path,
     /// and returns a new persistent `Disk` pointing to the installed location.
+    #[cfg(any(unix, feature = "krun", test))]
     fn install(&self, digest: &str, staged_disk: Disk) -> BoxliteResult<Disk> {
         let target = self.disk_path(digest);
 
@@ -140,10 +204,97 @@ impl ImageDiskManager {
     /// Compute the cache path for a given image digest.
     ///
     /// Format matches `storage.rs:disk_image_path()`: `{digest}.ext4`
+    #[cfg(any(unix, feature = "krun", test))]
     fn disk_path(&self, digest: &str) -> PathBuf {
         let filename = digest.replace(':', "-");
         self.cache_dir.join(format!("{}.ext4", filename))
     }
+}
+
+/// Extract a layer tarball into a destination directory (cross-platform).
+///
+/// Detects compression format by magic bytes:
+/// - `1f 8b` → gzip (most common OCI layer format)
+/// - `28 b5 2f fd` → zstd
+/// - Otherwise → uncompressed tar
+///
+/// This is the Windows equivalent of [`archive::extract_layer_tarball_streaming`]
+/// which requires Unix-specific features (xattr, whiteout processing).
+/// Basic whiteout support is not included here — the builder VM guest handles
+/// filesystem semantics during ext4 creation.
+#[cfg(all(not(unix), feature = "krun"))]
+fn extract_layer_tarball(tarball: &std::path::Path, dest: &std::path::Path) -> BoxliteResult<()> {
+    use std::io::{BufReader, Read, Seek, SeekFrom};
+
+    let file = std::fs::File::open(tarball).map_err(|e| {
+        BoxliteError::Storage(format!(
+            "Failed to open layer tarball {}: {}",
+            tarball.display(),
+            e
+        ))
+    })?;
+    let mut reader = BufReader::new(file);
+
+    // Detect compression by magic bytes
+    let mut magic = [0u8; 4];
+    if reader.read_exact(&mut magic).is_err() {
+        return Err(BoxliteError::Storage(format!(
+            "Layer tarball too small to read header: {}",
+            tarball.display()
+        )));
+    }
+    reader.seek(SeekFrom::Start(0)).map_err(|e| {
+        BoxliteError::Storage(format!(
+            "Failed to seek layer tarball {}: {}",
+            tarball.display(),
+            e
+        ))
+    })?;
+
+    if magic[0] == 0x1f && magic[1] == 0x8b {
+        // gzip compressed
+        let decoder = flate2::read::GzDecoder::new(reader);
+        let mut archive = tar::Archive::new(decoder);
+        archive.set_overwrite(true);
+        archive.unpack(dest).map_err(|e| {
+            BoxliteError::Storage(format!(
+                "Failed to extract gzip layer {}: {}",
+                tarball.display(),
+                e
+            ))
+        })?;
+    } else if magic == [0x28, 0xb5, 0x2f, 0xfd] {
+        // zstd compressed
+        let decoder = zstd::Decoder::new(reader).map_err(|e| {
+            BoxliteError::Storage(format!(
+                "Failed to create zstd decoder for {}: {}",
+                tarball.display(),
+                e
+            ))
+        })?;
+        let mut archive = tar::Archive::new(decoder);
+        archive.set_overwrite(true);
+        archive.unpack(dest).map_err(|e| {
+            BoxliteError::Storage(format!(
+                "Failed to extract zstd layer {}: {}",
+                tarball.display(),
+                e
+            ))
+        })?;
+    } else {
+        // Assume uncompressed tar
+        let mut archive = tar::Archive::new(reader);
+        archive.set_overwrite(true);
+        archive.unpack(dest).map_err(|e| {
+            BoxliteError::Storage(format!(
+                "Failed to extract tar layer {}: {}",
+                tarball.display(),
+                e
+            ))
+        })?;
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]

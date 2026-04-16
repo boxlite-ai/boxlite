@@ -7,9 +7,16 @@
 //! For restart (reuse_rootfs=true), opens existing COW disk instead of creating new.
 
 use super::{InitCtx, log_task_error, task_start};
-use crate::disk::{BackingFormat, Disk, DiskFormat, Qcow2Helper};
-use crate::images::{ContainerImageConfig, ImageDiskManager};
-use crate::litebox::init::types::{ContainerRootfsPrepResult, USE_DISK_ROOTFS, USE_OVERLAYFS};
+#[cfg(any(unix, feature = "krun"))]
+use crate::disk::{BackingFormat, Qcow2Helper};
+use crate::disk::{Disk, DiskFormat};
+use crate::images::ContainerImageConfig;
+#[cfg(any(unix, feature = "krun"))]
+use crate::images::ImageDiskManager;
+#[cfg(any(unix, feature = "krun"))]
+use crate::litebox::init::types::ContainerRootfsPrepResult;
+#[cfg(unix)]
+use crate::litebox::init::types::{USE_DISK_ROOTFS, USE_OVERLAYFS};
 use crate::pipeline::PipelineTask;
 use crate::runtime::layout::BoxFilesystemLayout;
 use crate::runtime::options::RootfsSpec;
@@ -170,33 +177,57 @@ async fn run_container_rootfs(
         }
     };
 
-    // Prepare rootfs from image
-    let rootfs_result = if USE_DISK_ROOTFS {
-        prepare_disk_rootfs(&runtime.image_disk_mgr, &image).await?
-    } else if USE_OVERLAYFS {
-        prepare_overlayfs_layers(&image).await?
-    } else {
-        return Err(BoxliteError::Storage(
-            "Merged rootfs not supported. Use overlayfs or disk rootfs.".into(),
+    #[cfg(all(not(unix), not(feature = "krun")))]
+    {
+        let _ = (
+            &runtime,
+            &image,
+            &env,
+            &layout,
+            disk_size_gb,
+            entrypoint_override,
+            cmd_override,
+            user_override,
+        );
+        return Err(BoxliteError::Unsupported(
+            "Container rootfs preparation requires the 'krun' feature on this platform".into(),
         ));
-    };
-
-    let image_config = image.load_config().await?;
-    let mut container_image_config = ContainerImageConfig::from_oci_config(&image_config)?;
-
-    if !env.is_empty() {
-        container_image_config.merge_env(env.to_vec());
     }
-    apply_user_overrides(
-        &mut container_image_config,
-        entrypoint_override,
-        cmd_override,
-        user_override,
-    );
 
-    let disk = create_cow_disk(&rootfs_result, layout, disk_size_gb)?;
+    // Prepare rootfs from image
+    #[cfg(any(unix, feature = "krun"))]
+    {
+        #[cfg(unix)]
+        let rootfs_result = if USE_DISK_ROOTFS {
+            prepare_disk_rootfs(&runtime.image_disk_mgr, &image).await?
+        } else if USE_OVERLAYFS {
+            prepare_overlayfs_layers(&image).await?
+        } else {
+            return Err(BoxliteError::Storage(
+                "Merged rootfs not supported. Use overlayfs or disk rootfs.".into(),
+            ));
+        };
 
-    Ok((container_image_config, disk))
+        #[cfg(not(unix))]
+        let rootfs_result = prepare_disk_rootfs(&runtime.image_disk_mgr, &image).await?;
+
+        let image_config = image.load_config().await?;
+        let mut container_image_config = ContainerImageConfig::from_oci_config(&image_config)?;
+
+        if !env.is_empty() {
+            container_image_config.merge_env(env.to_vec());
+        }
+        apply_user_overrides(
+            &mut container_image_config,
+            entrypoint_override,
+            cmd_override,
+            user_override,
+        );
+
+        let disk = create_cow_disk(&rootfs_result, layout, disk_size_gb)?;
+
+        Ok((container_image_config, disk))
+    }
 }
 
 /// Create COW disk from base rootfs.
@@ -206,6 +237,7 @@ async fn run_container_rootfs(
 /// * `layout` - Box filesystem layout for disk paths
 /// * `disk_size_gb` - Optional user-specified disk size in GB. If set, the COW disk
 ///   will have this virtual size (or the base disk size, whichever is larger).
+#[cfg(any(unix, feature = "krun"))]
 fn create_cow_disk(
     rootfs_result: &ContainerRootfsPrepResult,
     layout: &crate::runtime::layout::BoxFilesystemLayout,
@@ -282,6 +314,7 @@ async fn pull_image(
     runtime.image_manager.pull(image_ref).await
 }
 
+#[cfg(unix)]
 async fn prepare_overlayfs_layers(
     image: &crate::images::ImageObject,
 ) -> BoxliteResult<ContainerRootfsPrepResult> {
@@ -323,6 +356,7 @@ async fn prepare_overlayfs_layers(
 ///
 /// Delegates to ImageDiskManager which handles caching, layer merging,
 /// and ext4 creation with staged atomic install.
+#[cfg(any(unix, feature = "krun"))]
 async fn prepare_disk_rootfs(
     image_disk_mgr: &ImageDiskManager,
     image: &crate::images::ImageObject,

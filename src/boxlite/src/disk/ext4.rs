@@ -167,11 +167,14 @@ pub fn create_ext4_from_dir(source: &Path, output_path: &Path) -> BoxliteResult<
 /// This function fixes all other files/directories.
 fn fix_ownership_with_debugfs(image_path: &Path, source_dir: &Path) -> BoxliteResult<()> {
     // Skip if already running as root - mke2fs creates files with current uid/gid
-    let current_uid = unsafe { libc::getuid() };
-    let current_gid = unsafe { libc::getgid() };
-    if current_uid == 0 && current_gid == 0 {
-        tracing::debug!("Running as root, skipping debugfs ownership fix");
-        return Ok(());
+    #[cfg(unix)]
+    {
+        let current_uid = unsafe { libc::getuid() };
+        let current_gid = unsafe { libc::getgid() };
+        if current_uid == 0 && current_gid == 0 {
+            tracing::debug!("Running as root, skipping debugfs ownership fix");
+            return Ok(());
+        }
     }
 
     let start = std::time::Instant::now();

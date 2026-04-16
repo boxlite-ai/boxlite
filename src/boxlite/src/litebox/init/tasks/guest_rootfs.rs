@@ -5,9 +5,12 @@
 
 use super::{InitCtx, log_task_error, task_start};
 use crate::disk::{BackingFormat, Disk, DiskFormat, Qcow2Helper};
+#[cfg(any(unix, feature = "krun"))]
 use crate::images::ImageDiskManager;
 use crate::pipeline::PipelineTask;
-use crate::rootfs::guest::{GuestRootfs, GuestRootfsManager, Strategy};
+#[cfg(any(unix, feature = "krun"))]
+use crate::rootfs::guest::GuestRootfsManager;
+use crate::rootfs::guest::{GuestRootfs, Strategy};
 use crate::runtime::constants::images;
 use crate::runtime::layout::BoxFilesystemLayout;
 use crate::runtime::rt_impl::SharedRuntimeImpl;
@@ -63,17 +66,29 @@ async fn run_guest_rootfs(
 
             let base_image = pull_guest_rootfs_image(runtime).await?;
             let env = extract_env_from_image(&base_image).await?;
-            let guest_rootfs = prepare_guest_rootfs(
-                &runtime.guest_rootfs_mgr,
-                &runtime.image_disk_mgr,
-                &base_image,
-                env,
-            )
-            .await?;
 
-            tracing::info!("Bootstrap guest rootfs ready: {:?}", guest_rootfs.strategy);
+            #[cfg(any(unix, feature = "krun"))]
+            {
+                let guest_rootfs = prepare_guest_rootfs(
+                    &runtime.guest_rootfs_mgr,
+                    &runtime.image_disk_mgr,
+                    &base_image,
+                    env,
+                )
+                .await?;
 
-            Ok::<_, BoxliteError>(guest_rootfs)
+                tracing::info!("Bootstrap guest rootfs ready: {:?}", guest_rootfs.strategy);
+
+                Ok::<_, BoxliteError>(guest_rootfs)
+            }
+
+            #[cfg(all(not(unix), not(feature = "krun")))]
+            {
+                let _ = (&base_image, &env);
+                return Err(BoxliteError::Unsupported(
+                    "Guest rootfs preparation requires the 'krun' feature on this platform".into(),
+                ));
+            }
         })
         .await?
         .clone();
@@ -186,6 +201,7 @@ fn create_or_reuse_cow_disk(
 /// Uses the two-stage pipeline:
 /// 1. `ImageDiskManager`: pure image layers → ext4 disk (cached by image digest)
 /// 2. `GuestRootfsManager`: image disk + boxlite-guest → versioned rootfs (cached by digest+guest hash)
+#[cfg(any(unix, feature = "krun"))]
 async fn prepare_guest_rootfs(
     guest_rootfs_mgr: &GuestRootfsManager,
     image_disk_mgr: &ImageDiskManager,

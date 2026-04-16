@@ -13,6 +13,7 @@ use crate::runtime::options::VolumeSpec;
 use crate::runtime::rt_impl::SharedRuntimeImpl;
 use crate::vmm::controller::VmmHandler;
 use crate::volumes::{ContainerMount, GuestVolumeManager};
+use boxlite_shared::Transport;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
@@ -20,6 +21,7 @@ use std::sync::atomic::Ordering;
 /// Switch between merged and overlayfs rootfs strategies.
 /// - true: overlayfs (allows COW writes, keeps layers separate)
 /// - false: merged rootfs (all layers merged on host)
+#[cfg(unix)]
 pub const USE_OVERLAYFS: bool = true;
 
 /// Switch to disk-based rootfs strategy.
@@ -28,6 +30,7 @@ pub const USE_OVERLAYFS: bool = true;
 ///
 /// Disk-based rootfs is faster to start but requires more disk space.
 /// When enabled, USE_OVERLAYFS is ignored.
+#[cfg(unix)]
 pub const USE_DISK_ROOTFS: bool = true;
 
 /// User-specified volume with resolved paths and generated tag.
@@ -74,15 +77,24 @@ pub fn resolve_user_volumes(volumes: &[VolumeSpec]) -> BoxliteResult<Vec<Resolve
 
         // Stat host path to get owner UID/GID for auto-idmap in guest
         let (owner_uid, owner_gid) = {
-            use std::os::unix::fs::MetadataExt;
-            let meta = std::fs::metadata(&resolved_path).map_err(|e| {
-                BoxliteError::Config(format!(
-                    "Failed to stat volume path '{}': {}",
-                    resolved_path.display(),
-                    e
-                ))
-            })?;
-            (meta.uid(), meta.gid())
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                let meta = std::fs::metadata(&resolved_path).map_err(|e| {
+                    BoxliteError::Config(format!(
+                        "Failed to stat volume path '{}': {}",
+                        resolved_path.display(),
+                        e
+                    ))
+                })?;
+                (meta.uid(), meta.gid())
+            }
+            #[cfg(not(unix))]
+            {
+                // Windows: UID/GID not applicable, default to root
+                let _ = &resolved_path;
+                (0u32, 0u32)
+            }
         };
 
         tracing::debug!(
@@ -110,6 +122,7 @@ pub fn resolve_user_volumes(volumes: &[VolumeSpec]) -> BoxliteResult<Vec<Resolve
 
 /// Result of rootfs preparation - either merged, separate layers, or disk image.
 #[derive(Debug)]
+#[cfg(any(unix, feature = "krun"))]
 pub enum ContainerRootfsPrepResult {
     /// Single merged directory (all layers merged on host)
     #[allow(dead_code)]
@@ -249,6 +262,9 @@ pub struct InitPipelineContext {
     pub guest_session: Option<GuestSession>,
     /// MITM CA cert PEM (set by vmm_spawn, read by guest_init for Container.Init gRPC).
     pub ca_cert_pem: Option<String>,
+    /// Ready transport (set by vmm_spawn, read by guest_connect).
+    /// On Unix: `Transport::Unix`, on Windows: `Transport::Tcp`.
+    pub ready_transport: Option<Transport>,
 
     #[cfg(target_os = "linux")]
     pub bind_mount: Option<BindMountHandle>,
@@ -277,6 +293,7 @@ impl InitPipelineContext {
             container_mounts: None,
             guest_session: None,
             ca_cert_pem: None,
+            ready_transport: None,
             #[cfg(target_os = "linux")]
             bind_mount: None,
         }
@@ -288,6 +305,7 @@ mod tests {
     use super::*;
     use crate::runtime::options::VolumeSpec;
 
+    #[cfg(unix)]
     #[test]
     fn resolve_volume_gets_owner_uid() {
         let tmp = tempfile::tempdir().unwrap();
