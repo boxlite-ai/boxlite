@@ -396,6 +396,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     fn skip_condition_platform() {
         let cond = SkipCondition {
             #[cfg(target_os = "macos")]

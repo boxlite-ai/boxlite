@@ -8,7 +8,9 @@ publish = false
 boxlite = { path = "../boxlite" }
 tempfile = "3"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time"] }
-libc = "0.2"
 parking_lot = "0.12"
 paste = "1"
 futures = "0.3"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
