@@ -102,9 +102,11 @@ extern "C" {
 
     /// Set the uid before starting the microVM.
     /// This allows virtiofsd to run with CAP_SETUID for proper ownership handling.
+    #[cfg(unix)]
     pub fn krun_setuid(ctx_id: u32, uid: libc::uid_t) -> i32;
 
     /// Set the gid before starting the microVM.
+    #[cfg(unix)]
     pub fn krun_setgid(ctx_id: u32, gid: libc::gid_t) -> i32;
 
     /// Configure a root filesystem backed by a block device with automatic remount.
@@ -124,4 +126,23 @@ extern "C" {
         fstype: *const c_char,
         options: *const c_char,
     ) -> i32;
+
+    /// Start the VM on a background thread (non-blocking).
+    /// Returns 0 on success, negative on error.
+    /// Use `krun_wait` to block until the VM exits.
+    pub fn krun_start(ctx_id: u32) -> i32;
+
+    /// Block until the VM exits. Returns the guest exit code (>= 0) or negative on error.
+    pub fn krun_wait(ctx_id: u32) -> i32;
+
+    /// Force-stop a running VM. Returns 0 on success, negative on error.
+    pub fn krun_stop(ctx_id: u32) -> i32;
+
+    /// Read console output from the VM into `buf`.
+    /// Returns the number of bytes written (>= 0) or negative on error.
+    pub fn krun_get_console_output(ctx_id: u32, buf: *mut u8, buf_size: u32) -> i32;
+
+    /// Add a TCP-based network backend (Windows).
+    /// `endpoint` is a "host:port" string, `mac` is a 6-byte MAC address.
+    pub fn krun_add_net(ctx_id: u32, endpoint: *const c_char, mac: *const u8) -> i32;
 }
