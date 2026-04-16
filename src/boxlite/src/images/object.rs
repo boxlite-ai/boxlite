@@ -154,6 +154,7 @@ impl ImageObject {
     /// // extracted[1] = /images/extracted/sha256:def.../  (layer 1)
     /// // extracted[2] = /images/extracted/sha256:ghi.../  (layer 2)
     /// ```
+    #[cfg(unix)]
     pub async fn layer_extracted(&self) -> BoxliteResult<Vec<PathBuf>> {
         let digests: Vec<String> = self
             .manifest
@@ -169,6 +170,7 @@ impl ImageObject {
     ///
     /// This is used as a cache key for base disks - same layers = same base disk.
     /// Uses SHA256 hash of concatenated layer digests.
+    #[cfg(any(unix, feature = "krun"))]
     pub(crate) fn compute_image_digest(&self) -> String {
         use sha2::{Digest, Sha256};
 

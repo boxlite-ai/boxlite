@@ -32,6 +32,7 @@ impl CrashCapture {
     /// - `exit_file`: Where to write crash info (JSON format)
     pub fn install(exit_file: PathBuf) {
         install_panic_hook(exit_file.clone());
+        #[cfg(unix)]
         install_signal_handlers(exit_file);
     }
 }
@@ -68,6 +69,7 @@ fn install_panic_hook(exit_file: PathBuf) {
 }
 
 /// Install Unix signal handlers to catch C library crashes.
+#[cfg(unix)]
 fn install_signal_handlers(exit_file: PathBuf) {
     let _ = EXIT_FILE_PATH.set(exit_file);
 
@@ -85,6 +87,7 @@ fn install_signal_handlers(exit_file: PathBuf) {
 /// Note: We intentionally don't read stderr here. Signal handlers should be
 /// minimal and avoid async-signal-unsafe operations. CrashReport reads stderr
 /// directly from the file when formatting the error message.
+#[cfg(unix)]
 extern "C" fn crash_signal_handler(sig: libc::c_int) {
     let signal = match sig {
         libc::SIGABRT => "SIGABRT",

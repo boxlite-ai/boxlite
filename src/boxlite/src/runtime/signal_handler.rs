@@ -8,6 +8,7 @@
 //! This is important for FFI contexts like Python (PyO3) where no Tokio runtime
 //! may be active when the signal handler is installed.
 
+#[cfg(unix)]
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
@@ -15,6 +16,7 @@ use std::time::Duration;
 pub const DEFAULT_SHUTDOWN_TIMEOUT_SECS: i32 = 10;
 
 /// Flag to track if signal handler has been installed (install only once).
+#[cfg(unix)]
 static SIGNAL_HANDLER_INSTALLED: AtomicBool = AtomicBool::new(false);
 
 /// Install signal handlers for graceful shutdown.

@@ -7,14 +7,20 @@
 //! This is zero-latency, tamper-proof (kernel FDs), and works across
 //! PID/mount namespaces — the gold standard used by s6, containerd-shim,
 //! runc, crun, and conmon.
+//!
+//! This module is Unix-only (pipe/poll/fd semantics).
 
+#[cfg(unix)]
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
+#[cfg(unix)]
 use std::os::fd::{FromRawFd, OwnedFd, RawFd};
 
 /// Well-known FD for the watchdog pipe in the shim process.
 /// Pre-exec dup2s the inherited pipe read end to this position.
+#[cfg(unix)]
 pub const PIPE_FD: i32 = 3;
 
+#[cfg(unix)]
 /// Parent-side keepalive handle.
 ///
 /// While this exists, the shim's watchdog thread blocks on poll().
@@ -27,6 +33,7 @@ pub struct Keepalive {
     _pipe_write: OwnedFd,
 }
 
+#[cfg(unix)]
 /// Child-side setup data, consumed during subprocess spawn.
 ///
 /// Carries the raw FD that must be preserved through pre_exec.
@@ -36,6 +43,7 @@ pub struct ChildSetup {
     pipe_read: RawFd,
 }
 
+#[cfg(unix)]
 impl ChildSetup {
     /// Raw FD to preserve through pre_exec FD cleanup.
     /// Will be dup2'd to [`PIPE_FD`] by the pre_exec hook.
@@ -44,6 +52,7 @@ impl ChildSetup {
     }
 }
 
+#[cfg(unix)]
 impl Drop for ChildSetup {
     fn drop(&mut self) {
         // SAFETY: closing a valid pipe read-end FD.
@@ -53,6 +62,7 @@ impl Drop for ChildSetup {
     }
 }
 
+#[cfg(unix)]
 /// Create a watchdog pipe pair with `FD_CLOEXEC` set on both ends.
 ///
 /// Returns `(keepalive, child_setup)`. The parent holds the keepalive;
@@ -72,6 +82,7 @@ pub fn create() -> BoxliteResult<(Keepalive, ChildSetup)> {
     ))
 }
 
+#[cfg(unix)]
 /// Create a pipe with `FD_CLOEXEC` set on both ends.
 ///
 /// Without `CLOEXEC`, the write-end can leak to unrelated child processes
@@ -122,7 +133,7 @@ fn create_pipe_cloexec() -> BoxliteResult<[i32; 2]> {
     Ok(fds)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

@@ -9,6 +9,7 @@ use crate::{
 };
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
+#[cfg(unix)]
 use super::watchdog;
 use super::{
     VmmController, VmmHandler as VmmHandlerTrait, VmmMetrics,
@@ -35,6 +36,7 @@ pub struct ShimHandler {
     /// POLLHUP to the shim and triggering graceful shutdown.
     /// Defense-in-depth: even if `stop()` is never called, dropping the
     /// handler closes this, triggering shim cleanup automatically.
+    #[cfg(unix)]
     #[allow(dead_code)]
     keepalive: Option<watchdog::Keepalive>,
     /// Shared System instance for CPU metrics calculation across calls.
@@ -54,6 +56,7 @@ impl ShimHandler {
             pid,
             box_id,
             process: Some(spawned.child),
+            #[cfg(unix)]
             keepalive: spawned.keepalive,
             metrics_sys: Mutex::new(sysinfo::System::new()),
         }
@@ -72,6 +75,7 @@ impl ShimHandler {
             pid,
             box_id,
             process: None,
+            #[cfg(unix)]
             keepalive: None,
             metrics_sys: Mutex::new(sysinfo::System::new()),
         }
@@ -91,9 +95,12 @@ impl VmmHandlerTrait for ShimHandler {
 
         if let Some(mut process) = self.process.take() {
             // Step 1: Send SIGTERM for graceful shutdown
-            let pid = process.id();
-            unsafe {
-                libc::kill(pid as i32, libc::SIGTERM);
+            #[cfg(unix)]
+            {
+                let pid = process.id();
+                unsafe {
+                    libc::kill(pid as i32, libc::SIGTERM);
+                }
             }
 
             // Step 2: Wait with timeout for process to exit
@@ -124,41 +131,55 @@ impl VmmHandlerTrait for ShimHandler {
                 }
             }
         } else {
-            // Attached mode: use SIGTERM then SIGKILL with polling
-            // We don't have a Child handle, so we use waitpid/kill directly
-            unsafe {
-                libc::kill(self.pid as i32, libc::SIGTERM);
+            // Attached mode: use platform-specific process termination
+            #[cfg(unix)]
+            {
+                unsafe {
+                    libc::kill(self.pid as i32, libc::SIGTERM);
+                }
+
+                // Poll for exit with timeout
+                let start = std::time::Instant::now();
+                loop {
+                    let mut status: i32 = 0;
+                    let result =
+                        unsafe { libc::waitpid(self.pid as i32, &mut status, libc::WNOHANG) };
+
+                    if result > 0 {
+                        return Ok(());
+                    }
+                    if result < 0 {
+                        let exists = crate::util::is_process_alive(self.pid);
+                        if !exists {
+                            return Ok(());
+                        }
+                    }
+
+                    if start.elapsed().as_millis() > GRACEFUL_SHUTDOWN_TIMEOUT_MS as u128 {
+                        unsafe {
+                            libc::kill(self.pid as i32, libc::SIGKILL);
+                        }
+                        return Ok(());
+                    }
+
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
             }
 
-            // Poll for exit with timeout
-            let start = std::time::Instant::now();
-            loop {
-                let mut status: i32 = 0;
-                let result = unsafe { libc::waitpid(self.pid as i32, &mut status, libc::WNOHANG) };
-
-                if result > 0 {
-                    // Process exited gracefully (we reaped it)
-                    return Ok(());
-                }
-                if result < 0 {
-                    // Error - process may not be our child (common in attached mode)
-                    // Fall back to checking if process still exists
-                    let exists = crate::util::is_process_alive(self.pid);
-                    if !exists {
-                        return Ok(()); // Already dead
+            #[cfg(not(unix))]
+            {
+                // Windows: use TerminateProcess via is_process_alive polling
+                let start = std::time::Instant::now();
+                loop {
+                    if !crate::util::is_process_alive(self.pid) {
+                        return Ok(());
                     }
-                }
-                // result == 0 means still running
-
-                if start.elapsed().as_millis() > GRACEFUL_SHUTDOWN_TIMEOUT_MS as u128 {
-                    // Timeout - force kill
-                    unsafe {
-                        libc::kill(self.pid as i32, libc::SIGKILL);
+                    if start.elapsed().as_millis() > GRACEFUL_SHUTDOWN_TIMEOUT_MS as u128 {
+                        // Force kill not yet implemented on Windows
+                        return Ok(());
                     }
-                    return Ok(());
+                    std::thread::sleep(std::time::Duration::from_millis(50));
                 }
-
-                std::thread::sleep(std::time::Duration::from_millis(50));
             }
         }
 

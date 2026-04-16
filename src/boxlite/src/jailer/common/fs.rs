@@ -164,6 +164,7 @@ mod tests {
     /// After copy_if_newer, source and dest must have different inodes.
     /// This guarantees memory isolation: each box gets independent page cache
     /// entries and .text sections (whether reflink or regular copy was used).
+    #[cfg(unix)]
     #[test]
     fn test_copy_if_newer_creates_distinct_inode() {
         use std::os::unix::fs::MetadataExt;

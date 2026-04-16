@@ -30,6 +30,8 @@
 #[cfg(target_os = "linux")]
 mod bwrap;
 mod composite;
+#[cfg(target_os = "windows")]
+mod job_object;
 #[cfg(target_os = "linux")]
 mod landlock;
 #[cfg(target_os = "macos")]
@@ -38,6 +40,8 @@ pub mod seatbelt;
 #[cfg(target_os = "linux")]
 pub use bwrap::BwrapSandbox;
 pub use composite::CompositeSandbox;
+#[cfg(target_os = "windows")]
+pub use job_object::JobSandbox;
 #[cfg(target_os = "linux")]
 pub use landlock::LandlockSandbox;
 #[cfg(target_os = "macos")]

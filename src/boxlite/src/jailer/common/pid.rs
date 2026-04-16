@@ -1,10 +1,12 @@
-//! PID file writing for process tracking.
+//! PID file writing for process tracking (Unix-only).
 //!
 //! Writes the current process PID to a file in an async-signal-safe manner.
 //! This is designed to be called from `pre_exec` hook after fork() but before exec().
 //!
 //! The PID file serves as the single source of truth for the shim process PID,
 //! enabling crash recovery and process tracking.
+
+#![cfg(unix)]
 
 /// Write current process PID to file - async-signal-safe version for pre_exec.
 ///

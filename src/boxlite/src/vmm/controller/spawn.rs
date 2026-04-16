@@ -11,6 +11,7 @@ use crate::runtime::options::BoxOptions;
 use crate::util::configure_library_env;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
+#[cfg(unix)]
 use super::watchdog;
 
 /// A shim that was spawned, with its child process handle and optional keepalive.
@@ -22,6 +23,7 @@ pub struct SpawnedShim {
     pub child: Child,
     /// Parent-side watchdog keepalive. Dropping triggers shim shutdown.
     /// `None` for detached boxes (no watchdog).
+    #[cfg(unix)]
     pub keepalive: Option<watchdog::Keepalive>,
 }
 
@@ -63,7 +65,11 @@ impl<'a> ShimSpawner<'a> {
     /// # Returns
     /// * `SpawnedShim` containing the child process and optional keepalive
     pub fn spawn(&self, config_json: &str, detach: bool) -> BoxliteResult<SpawnedShim> {
-        // 1. Create watchdog pipe (non-detached only)
+        #[cfg(not(unix))]
+        let _ = detach; // Only used in Unix watchdog pipe creation
+
+        // 1. Create watchdog pipe (non-detached only, Unix only)
+        #[cfg(unix)]
         let (keepalive, child_setup) = if !detach {
             let (k, s) = watchdog::create()?;
             (Some(k), Some(s))
@@ -72,12 +78,14 @@ impl<'a> ShimSpawner<'a> {
         };
 
         // 2. Build jailer with optional FD preservation for watchdog pipe
+        #[allow(unused_mut)] // Mutated only in #[cfg(unix)] block below
         let mut builder = JailerBuilder::new()
             .with_box_id(self.box_id)
             .with_layout(self.layout.clone())
             .with_security(self.options.advanced.security.clone())
             .with_volumes(self.options.volumes.clone());
 
+        #[cfg(unix)]
         if let Some(ref setup) = child_setup {
             builder = builder.with_preserved_fd(setup.raw_fd(), watchdog::PIPE_FD);
         }
@@ -128,9 +136,14 @@ impl<'a> ShimSpawner<'a> {
         }
 
         // 9. Close read end in parent (child inherited it via fork)
+        #[cfg(unix)]
         drop(child_setup);
 
-        Ok(SpawnedShim { child, keepalive })
+        Ok(SpawnedShim {
+            child,
+            #[cfg(unix)]
+            keepalive,
+        })
     }
 
     fn configure_env(&self, cmd: &mut std::process::Command) {
@@ -205,6 +218,7 @@ mod tests {
 
     #[test]
     fn test_configure_env_sets_box_scoped_temp_dir() {
+        use crate::runtime::advanced_options::{AdvancedBoxOptions, SecurityOptions};
         use crate::runtime::layout::{BoxFilesystemLayout, FsLayoutConfig};
         use std::path::PathBuf;
 
@@ -213,7 +227,18 @@ mod tests {
             FsLayoutConfig::without_bind_mount(),
             false,
         );
-        let options = BoxOptions::default();
+        // Explicitly set jailer_enabled: true so TMPDIR is set on all platforms
+        // (BoxOptions::default() uses cfg!(target_os = "macos") which differs)
+        let options = BoxOptions {
+            advanced: AdvancedBoxOptions {
+                security: SecurityOptions {
+                    jailer_enabled: true,
+                    ..SecurityOptions::default()
+                },
+                ..AdvancedBoxOptions::default()
+            },
+            ..BoxOptions::default()
+        };
 
         let spawner = ShimSpawner::new(
             Path::new("/usr/bin/boxlite-shim"),

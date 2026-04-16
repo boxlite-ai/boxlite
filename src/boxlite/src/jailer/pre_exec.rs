@@ -1,4 +1,4 @@
-//! Pre-execution hook for process isolation.
+//! Pre-execution hook for process isolation (Unix-only).
 //!
 //! This module provides the pre-execution hook that runs after `fork()` but
 //! before the new program starts in the child process.
@@ -22,6 +22,8 @@
 //! - No logging (tracing, println)
 //!
 //! See the [`common`](crate::jailer::common) module for async-signal-safe utilities.
+
+#![cfg(unix)]
 
 use crate::jailer::common;
 use crate::runtime::advanced_options::ResourceLimits;

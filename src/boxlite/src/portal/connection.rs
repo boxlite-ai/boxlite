@@ -6,9 +6,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use boxlite_shared::{BoxliteError, BoxliteResult, Transport};
+#[cfg(unix)]
 use hyper_util::rt::TokioIo;
 use tokio::sync::OnceCell;
-use tonic::transport::{Channel, Endpoint, Uri};
+#[cfg(unix)]
+use tonic::transport::Uri;
+use tonic::transport::{Channel, Endpoint};
+#[cfg(unix)]
 use tower::service_fn;
 
 /// Lazy connection to guest.
@@ -43,6 +47,7 @@ impl Connection {
 /// Connect to a transport.
 async fn connect_transport(transport: &Transport) -> BoxliteResult<Channel> {
     match transport {
+        #[cfg(unix)]
         Transport::Unix { socket_path } => {
             tracing::debug!("Connecting via Unix: {}", socket_path.display());
             connect_unix(socket_path).await
@@ -55,9 +60,14 @@ async fn connect_transport(transport: &Transport) -> BoxliteResult<Channel> {
             "Vsock client not yet implemented (port: {})",
             port
         ))),
+        #[cfg(not(unix))]
+        _ => Err(BoxliteError::Internal(
+            "Unsupported transport on this platform".to_string(),
+        )),
     }
 }
 
+#[cfg(unix)]
 async fn connect_unix(socket_path: &std::path::Path) -> BoxliteResult<Channel> {
     let socket_path = socket_path.to_path_buf();
 

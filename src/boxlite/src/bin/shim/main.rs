@@ -208,16 +208,24 @@ fn run_shim(mut config: InstanceSpec, timing: impl Fn(&str)) -> BoxliteResult<()
 
     // Install SIGTERM handler for graceful shutdown (all boxes, detached or not).
     // When SIGTERM is received: Guest.Shutdown() RPC (flush qcow2) → re-raise SIGTERM.
+    #[cfg(unix)]
     install_graceful_shutdown_handler(transport);
+    #[cfg(not(unix))]
+    let _ = &transport;
 
     // Start parent watchdog if detach=false.
     // The parent holds the write end of a pipe (fd 3 in this process).
     // When parent dies or drops the keepalive, kernel closes the write end,
     // delivering POLLHUP to our watchdog thread → SIGTERM → graceful shutdown.
+    #[cfg(unix)]
     if !detach {
         start_parent_watchdog();
         tracing::info!("Parent watchdog started via pipe POLLHUP (detach=false)");
     } else {
+        tracing::info!("Running in detached mode (detach=true)");
+    }
+    #[cfg(not(unix))]
+    if detach {
         tracing::info!("Running in detached mode (detach=true)");
     }
 
@@ -251,6 +259,7 @@ const GUEST_SHUTDOWN_TIMEOUT_SECS: u64 = 3;
 /// triggers a graceful guest shutdown with filesystem sync. Without this handler,
 /// SIGTERM would immediately kill the process, risking qcow2 COW disk buffer loss
 /// and ext4 filesystem corruption on next restart.
+#[cfg(unix)]
 fn install_graceful_shutdown_handler(transport: boxlite_shared::Transport) {
     use signal_hook::consts::signal::SIGTERM;
     use signal_hook::iterator::Signals;
@@ -321,6 +330,7 @@ fn install_graceful_shutdown_handler(transport: boxlite_shared::Transport) {
 /// On POLLHUP: sends SIGTERM to self. The SIGTERM handler
 /// ([`install_graceful_shutdown_handler`]) does the actual graceful shutdown
 /// (Guest.Shutdown() RPC → qcow2 flush → exit).
+#[cfg(unix)]
 fn start_parent_watchdog() {
     thread::spawn(|| {
         let mut pollfd = libc::pollfd {

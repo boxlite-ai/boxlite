@@ -196,6 +196,7 @@ impl EmbeddedRuntime {
 
     /// Known executable binary names that should get 0o755.
     /// Everything else (shared libraries) gets 0o644.
+    #[cfg(unix)]
     const EXECUTABLES: &[&str] = &["boxlite-shim", "boxlite-guest", "mke2fs", "debugfs"];
 
     #[cfg(unix)]
@@ -228,9 +229,11 @@ mod tests {
         let dir_str = dir.to_string_lossy();
 
         // Verify path structure: .../boxlite/runtimes/v{VERSION}[-{HASH}]
+        let sep = std::path::MAIN_SEPARATOR;
+        let expected_segment = format!("boxlite{sep}runtimes{sep}");
         assert!(
-            dir_str.contains("boxlite/runtimes/"),
-            "Expected path to contain boxlite/runtimes/, got {}",
+            dir_str.contains(&expected_segment),
+            "Expected path to contain boxlite{sep}runtimes{sep}, got {}",
             dir.display()
         );
         let dir_name = dir.file_name().unwrap().to_string_lossy();

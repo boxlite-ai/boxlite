@@ -928,6 +928,8 @@ impl BoxImpl {
             // Not running — execute directly, no quiesce needed.
             return fut.await;
         };
+        #[cfg(not(unix))]
+        let _ = pid; // Only used in Unix signal-sending blocks below
 
         let t0 = Instant::now();
 
@@ -936,19 +938,22 @@ impl BoxImpl {
         let frozen = self.guest_quiesce().await;
         let quiesce_ms = t_quiesce.elapsed().as_millis() as u64;
 
-        // Phase 2: SIGSTOP — pause vCPUs
-        // SAFETY: sending SIGSTOP to a known valid PID that we own (shim process).
-        let ret = unsafe { libc::kill(pid, libc::SIGSTOP) };
-        if ret != 0 {
-            // If SIGSTOP fails, thaw before returning error
-            if frozen {
-                self.guest_thaw().await;
+        // Phase 2: SIGSTOP — pause vCPUs (Unix only)
+        #[cfg(unix)]
+        {
+            // SAFETY: sending SIGSTOP to a known valid PID that we own (shim process).
+            let ret = unsafe { libc::kill(pid, libc::SIGSTOP) };
+            if ret != 0 {
+                // If SIGSTOP fails, thaw before returning error
+                if frozen {
+                    self.guest_thaw().await;
+                }
+                return Err(BoxliteError::Internal(format!(
+                    "Failed to SIGSTOP shim process (pid={}): {}",
+                    pid,
+                    std::io::Error::last_os_error()
+                )));
             }
-            return Err(BoxliteError::Internal(format!(
-                "Failed to SIGSTOP shim process (pid={}): {}",
-                pid,
-                std::io::Error::last_os_error()
-            )));
         }
         {
             let mut state = self.state.write();
@@ -962,15 +967,18 @@ impl BoxImpl {
         let operation_ms = t_op.elapsed().as_millis() as u64;
 
         // Phase 4: SIGCONT — resume vCPUs (always, even if f() failed)
-        // SAFETY: Always send SIGCONT — harmless ESRCH if process already dead.
-        unsafe {
-            libc::kill(pid, libc::SIGCONT);
-        }
-        // Only transition to Running if process is still alive after resume.
-        if unsafe { libc::kill(pid, 0) } == 0 {
-            let mut state = self.state.write();
-            state.force_status(BoxStatus::Running);
-            let _ = self.runtime.box_manager.save_box(self.id(), &state);
+        #[cfg(unix)]
+        {
+            // SAFETY: Always send SIGCONT — harmless ESRCH if process already dead.
+            unsafe {
+                libc::kill(pid, libc::SIGCONT);
+            }
+            // Only transition to Running if process is still alive after resume.
+            if unsafe { libc::kill(pid, 0) } == 0 {
+                let mut state = self.state.write();
+                state.force_status(BoxStatus::Running);
+                let _ = self.runtime.box_manager.save_box(self.id(), &state);
+            }
         }
 
         // Phase 5: Thaw guest I/O (always, best-effort)

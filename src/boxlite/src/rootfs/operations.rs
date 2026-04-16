@@ -206,6 +206,7 @@ pub fn process_whiteouts(dir: &Path) -> BoxliteResult<()> {
 /// # Returns
 /// * `Ok(())` if permissions and xattr were set successfully
 /// * `Err(...)` if critical operations failed
+#[cfg(unix)]
 pub fn fix_rootfs_permissions(rootfs: &Path) -> BoxliteResult<()> {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
