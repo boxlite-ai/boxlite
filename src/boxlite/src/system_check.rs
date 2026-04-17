@@ -394,13 +394,14 @@ impl HypervisorProbe for WhpxProbe {
 #[cfg(target_os = "windows")]
 fn check_whpx_available() -> BoxliteResult<()> {
     use std::ffi::c_void;
-    use windows_sys::Win32::System::LibraryLoader::{FreeLibrary, GetProcAddress, LoadLibraryW};
+    use windows_sys::Win32::Foundation::FreeLibrary;
+    use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 
     // WHvCapabilityCodeHypervisorPresent = 0
     const HYPERVISOR_PRESENT: i32 = 0;
 
-    // RAII guard for the loaded DLL handle.
-    struct DllGuard(isize);
+    // RAII guard for the loaded DLL handle (HMODULE = *mut c_void in windows-sys 0.59+).
+    struct DllGuard(*mut c_void);
     impl Drop for DllGuard {
         fn drop(&mut self) {
             unsafe {
@@ -412,7 +413,7 @@ fn check_whpx_available() -> BoxliteResult<()> {
     // Load WinHvPlatform.dll dynamically.
     let dll_name: Vec<u16> = "WinHvPlatform.dll\0".encode_utf16().collect();
     let module = unsafe { LoadLibraryW(dll_name.as_ptr()) };
-    if module == 0 {
+    if module.is_null() {
         return Err(BoxliteError::Unsupported(
             "Windows Hypervisor Platform (WHPX) is not installed\n\n\
              Suggestions:\n\

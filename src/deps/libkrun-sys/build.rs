@@ -924,8 +924,8 @@ fn build() {
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     let libkrun_install = out_dir.join("libkrun");
 
-    // No libkrunfw on Windows (direct kernel boot)
-    println!("cargo:LIBKRUNFW_BOXLITE_DEP=/nonexistent");
+    // No libkrunfw on Windows (direct kernel boot).
+    // Don't emit LIBKRUNFW_BOXLITE_DEP — boxlite's build.rs checks path existence.
 
     if cfg!(feature = "krun") {
         let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
