@@ -258,9 +258,7 @@ impl Vmm for Krun {
                 let kernel_str = kernel_path.to_str().ok_or_else(|| {
                     BoxliteError::Engine("kernel path contains invalid UTF-8".into())
                 })?;
-                let initrd_str = initrd_path
-                    .as_ref()
-                    .and_then(|p| p.to_str());
+                let initrd_str = initrd_path.as_ref().and_then(|p| p.to_str());
 
                 tracing::info!(
                     kernel = %kernel_path.display(),

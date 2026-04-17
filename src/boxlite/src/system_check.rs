@@ -439,8 +439,7 @@ fn check_whpx_available() -> BoxliteResult<()> {
     })?;
 
     // WHvGetCapability(code, buffer, buffer_size, written_size) -> HRESULT
-    type WhvGetCapabilityFn =
-        unsafe extern "system" fn(i32, *mut c_void, u32, *mut u32) -> i32;
+    type WhvGetCapabilityFn = unsafe extern "system" fn(i32, *mut c_void, u32, *mut u32) -> i32;
     let whv_get_capability: WhvGetCapabilityFn = unsafe { std::mem::transmute(func) };
 
     // Query HypervisorPresent (result is BOOL = i32).
