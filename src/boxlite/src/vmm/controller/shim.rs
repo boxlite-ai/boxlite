@@ -168,14 +168,14 @@ impl VmmHandlerTrait for ShimHandler {
 
             #[cfg(not(unix))]
             {
-                // Windows: use TerminateProcess via is_process_alive polling
+                // Windows: poll for exit, then force-kill via TerminateProcess on timeout.
                 let start = std::time::Instant::now();
                 loop {
                     if !crate::util::is_process_alive(self.pid) {
                         return Ok(());
                     }
                     if start.elapsed().as_millis() > GRACEFUL_SHUTDOWN_TIMEOUT_MS as u128 {
-                        // Force kill not yet implemented on Windows
+                        crate::util::kill_process(self.pid);
                         return Ok(());
                     }
                     std::thread::sleep(std::time::Duration::from_millis(50));
