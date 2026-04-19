@@ -153,34 +153,58 @@ fn create_or_reuse_cow_disk(
         );
     }
 
-    // Fresh start: create new COW disk
+    // Fresh start: create new disk from base
     if let Strategy::Disk { ref disk_path, .. } = guest_rootfs.strategy {
         let base_disk_path = disk_path;
 
-        // Get base disk size
-        let base_size = std::fs::metadata(base_disk_path)
-            .map(|m| m.len())
-            .unwrap_or(512 * 1024 * 1024);
+        // On Windows, copy the base ext4 as a raw disk — QCOW2 backing files
+        // are not supported by the WHPX VMM.
+        #[cfg(windows)]
+        let disk = {
+            std::fs::copy(base_disk_path, &guest_rootfs_disk_path).map_err(|e| {
+                BoxliteError::Storage(format!(
+                    "Failed to copy guest rootfs {} to {}: {}",
+                    base_disk_path.display(),
+                    guest_rootfs_disk_path.display(),
+                    e
+                ))
+            })?;
+            let d = Disk::new(guest_rootfs_disk_path.clone(), DiskFormat::Ext4, true);
+            tracing::info!(
+                disk = %guest_rootfs_disk_path.display(),
+                base_disk = %base_disk_path.display(),
+                "Created guest rootfs (raw copy, persistent)"
+            );
+            d
+        };
 
-        // Point the COW overlay directly at the shared rootfs cache.
-        // Disk images are data (read by the hypervisor, not executed on the host),
-        // so sharing the backing file is safe — no Spectre-class concerns.
-        let temp_disk = Qcow2Helper::create_cow_child_disk(
-            base_disk_path,
-            BackingFormat::Raw,
-            &guest_rootfs_disk_path,
-            base_size,
-        )?;
+        #[cfg(not(windows))]
+        let disk = {
+            // Get base disk size
+            let base_size = std::fs::metadata(base_disk_path)
+                .map(|m| m.len())
+                .unwrap_or(512 * 1024 * 1024);
 
-        // Make disk persistent so it survives stop/restart
-        let disk_path_owned = temp_disk.leak();
-        let disk = Disk::new(disk_path_owned, DiskFormat::Qcow2, true);
+            // Point the COW overlay directly at the shared rootfs cache.
+            // Disk images are data (read by the hypervisor, not executed on the host),
+            // so sharing the backing file is safe — no Spectre-class concerns.
+            let temp_disk = Qcow2Helper::create_cow_child_disk(
+                base_disk_path,
+                BackingFormat::Raw,
+                &guest_rootfs_disk_path,
+                base_size,
+            )?;
 
-        tracing::info!(
-            cow_disk = %guest_rootfs_disk_path.display(),
-            base_disk = %base_disk_path.display(),
-            "Created guest rootfs COW overlay (persistent)"
-        );
+            // Make disk persistent so it survives stop/restart
+            let disk_path_owned = temp_disk.leak();
+            let d = Disk::new(disk_path_owned, DiskFormat::Qcow2, true);
+            tracing::info!(
+                cow_disk = %guest_rootfs_disk_path.display(),
+                base_disk = %base_disk_path.display(),
+                "Created guest rootfs COW overlay (persistent)"
+            );
+            d
+        };
 
         // Update guest_rootfs with COW disk path
         let mut updated = guest_rootfs.clone();

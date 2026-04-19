@@ -248,36 +248,62 @@ fn create_cow_disk(
             base_disk_path,
             disk_size: base_disk_size,
         } => {
-            // Calculate target disk size: use max of user-specified size and base disk size
-            let target_disk_size = if let Some(size_gb) = disk_size_gb {
-                let user_size_bytes = size_gb * 1024 * 1024 * 1024;
-                std::cmp::max(user_size_bytes, *base_disk_size)
-            } else {
-                *base_disk_size
-            };
+            let disk_path = layout.disk_path();
 
-            let cow_disk_path = layout.disk_path();
-            let temp_disk = Qcow2Helper::create_cow_child_disk(
-                base_disk_path,
-                BackingFormat::Raw,
-                &cow_disk_path,
-                target_disk_size,
-            )?;
+            // On Windows, copy the base ext4 as a raw disk — QCOW2 backing files
+            // are not supported by the WHPX VMM.
+            #[cfg(windows)]
+            {
+                std::fs::copy(base_disk_path, &disk_path).map_err(|e| {
+                    BoxliteError::Storage(format!(
+                        "Failed to copy base disk {} to {}: {}",
+                        base_disk_path.display(),
+                        disk_path.display(),
+                        e
+                    ))
+                })?;
+                let disk = Disk::new(disk_path.clone(), DiskFormat::Ext4, true);
+                tracing::info!(
+                    disk = %disk_path.display(),
+                    base_disk = %base_disk_path.display(),
+                    size_mb = base_disk_size / (1024 * 1024),
+                    "Created container rootfs (raw copy, persistent)"
+                );
+                return Ok(disk);
+            }
 
-            // Make disk persistent so it survives stop/restart
-            // create_cow_child_disk returns non-persistent disk, but we want to preserve
-            // COW disks across box restarts (only delete on remove)
-            let disk_path = temp_disk.leak(); // Prevent cleanup
-            let disk = Disk::new(disk_path, DiskFormat::Qcow2, true); // persistent=true
+            #[cfg(not(windows))]
+            {
+                // Calculate target disk size: use max of user-specified size and base disk size
+                let target_disk_size = if let Some(size_gb) = disk_size_gb {
+                    let user_size_bytes = size_gb * 1024 * 1024 * 1024;
+                    std::cmp::max(user_size_bytes, *base_disk_size)
+                } else {
+                    *base_disk_size
+                };
 
-            tracing::info!(
-                cow_disk = %cow_disk_path.display(),
-                base_disk = %base_disk_path.display(),
-                virtual_size_mb = target_disk_size / (1024 * 1024),
-                "Created container rootfs COW overlay (persistent)"
-            );
+                let temp_disk = Qcow2Helper::create_cow_child_disk(
+                    base_disk_path,
+                    BackingFormat::Raw,
+                    &disk_path,
+                    target_disk_size,
+                )?;
 
-            Ok(disk)
+                // Make disk persistent so it survives stop/restart
+                // create_cow_child_disk returns non-persistent disk, but we want to preserve
+                // COW disks across box restarts (only delete on remove)
+                let leaked_path = temp_disk.leak(); // Prevent cleanup
+                let disk = Disk::new(leaked_path, DiskFormat::Qcow2, true); // persistent=true
+
+                tracing::info!(
+                    cow_disk = %disk_path.display(),
+                    base_disk = %base_disk_path.display(),
+                    virtual_size_mb = target_disk_size / (1024 * 1024),
+                    "Created container rootfs COW overlay (persistent)"
+                );
+
+                Ok(disk)
+            }
         }
         ContainerRootfsPrepResult::Layers { .. } => Err(BoxliteError::Internal(
             "Layers mode requires overlayfs - disk creation not applicable".into(),
