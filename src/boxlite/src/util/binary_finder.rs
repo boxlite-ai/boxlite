@@ -78,7 +78,8 @@ impl RuntimeBinaryFinder {
 
         // 1. Explicit override (highest priority)
         if let Ok(runtime_dir) = std::env::var("BOXLITE_RUNTIME_DIR") {
-            for path in runtime_dir.split(':').filter(|s| !s.is_empty()) {
+            let separator = if cfg!(windows) { ';' } else { ':' };
+            for path in runtime_dir.split(separator).filter(|s| !s.is_empty()) {
                 builder = builder.with_path(path);
             }
         }
@@ -127,6 +128,8 @@ impl RuntimeBinaryFinder {
     }
 
     /// Find a binary by name, searching all configured paths.
+    ///
+    /// On Windows, also checks for the `.exe` suffix if the bare name isn't found.
     pub fn find(&self, binary_name: &str) -> BoxliteResult<PathBuf> {
         for search_path in &self.search_paths {
             let candidate = search_path.join(binary_name);
@@ -134,6 +137,16 @@ impl RuntimeBinaryFinder {
             if candidate.exists() {
                 tracing::debug!(binary = %candidate.display(), "Found binary");
                 return Ok(candidate);
+            }
+
+            // On Windows, also check with .exe suffix
+            #[cfg(windows)]
+            if !binary_name.ends_with(".exe") {
+                let exe_candidate = search_path.join(format!("{}.exe", binary_name));
+                if exe_candidate.exists() {
+                    tracing::debug!(binary = %exe_candidate.display(), "Found binary (.exe)");
+                    return Ok(exe_candidate);
+                }
             }
         }
 
