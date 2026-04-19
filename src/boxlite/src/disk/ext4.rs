@@ -21,6 +21,14 @@ fn get_debugfs_path() -> PathBuf {
     util::find_binary("debugfs").expect("debugfs binary not found")
 }
 
+/// Convert a path to a string with forward slashes.
+///
+/// On Windows, `Path::display()` uses backslashes, but debugfs and ext4
+/// require forward slashes. This function normalizes path separators.
+pub(crate) fn to_unix_path_str(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
 /// Calculate the total size needed for a directory tree on ext4.
 ///
 /// This accounts for:
@@ -197,7 +205,7 @@ fn fix_ownership_with_debugfs(image_path: &Path, source_dir: &Path) -> BoxliteRe
         }
 
         // Convert to absolute path in ext4 (starting with /)
-        let ext4_path = format!("/{}", rel_path.display());
+        let ext4_path = format!("/{}", to_unix_path_str(rel_path));
         paths.push(ext4_path);
     }
 
@@ -333,7 +341,7 @@ fn build_inject_commands(host_file_str: &str, guest_path: &str) -> String {
     if let Some(parent) = guest_path_obj.parent() {
         for component in parent.components() {
             current.push(component);
-            commands.push_str(&format!("mkdir /{}\n", current.display()));
+            commands.push_str(&format!("mkdir /{}\n", to_unix_path_str(&current)));
         }
     }
 
@@ -351,7 +359,7 @@ fn build_inject_commands(host_file_str: &str, guest_path: &str) -> String {
     if let Some(parent) = guest_path_obj.parent() {
         for component in parent.components() {
             current.push(component);
-            let dir_path = format!("/{}", current.display());
+            let dir_path = format!("/{}", to_unix_path_str(&current));
             commands.push_str(&format!("sif {} uid 0\n", dir_path));
             commands.push_str(&format!("sif {} gid 0\n", dir_path));
         }
@@ -420,6 +428,29 @@ mod tests {
         assert!(cmds.contains("mkdir /a/b/c\n"));
         assert!(cmds.contains("mkdir /a/b/c/d\n"));
         assert!(cmds.contains("write \"/src/bin\" /a/b/c/d/bin\n"));
+    }
+
+    #[test]
+    fn test_to_unix_path_str_forward_slashes() {
+        let path = Path::new("boxlite/bin/guest");
+        assert_eq!(to_unix_path_str(path), "boxlite/bin/guest");
+    }
+
+    #[test]
+    fn test_to_unix_path_str_backslashes() {
+        // Simulate a Windows-style path string
+        let s = "boxlite\\bin\\guest";
+        let path = Path::new(s);
+        let result = to_unix_path_str(path);
+        assert_eq!(result, "boxlite/bin/guest");
+    }
+
+    #[test]
+    fn test_to_unix_path_str_mixed_separators() {
+        let s = "boxlite/bin\\guest";
+        let path = Path::new(s);
+        let result = to_unix_path_str(path);
+        assert_eq!(result, "boxlite/bin/guest");
     }
 
     #[test]
