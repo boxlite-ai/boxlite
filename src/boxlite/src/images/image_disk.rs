@@ -117,6 +117,9 @@ impl ImageDiskManager {
     ///
     /// Uses cross-platform tar extraction (no xattr) followed by native `mke2fs`
     /// (cross-compiled e2fsprogs binary bundled in the distribution).
+    ///
+    /// Symlinks are deferred: extracted as metadata, then created inside the ext4
+    /// image via `debugfs` after `mke2fs -d` populates regular files.
     #[cfg(all(not(unix), feature = "krun"))]
     async fn build_and_install(&self, image: &ImageObject, digest: &str) -> BoxliteResult<Disk> {
         // All work happens in a temp directory (staged)
@@ -129,7 +132,7 @@ impl ImageDiskManager {
         })?;
 
         // Extract image layers to merged directory.
-        // Uses cross-platform tar extraction (no xattr support on Windows).
+        // Symlinks are collected instead of created on the Windows filesystem.
         let merged_path = temp.path().join("merged");
         let layer_tarballs = image.layer_tarballs();
 
@@ -141,20 +144,29 @@ impl ImageDiskManager {
             ))
         })?;
 
+        let mut all_symlinks = Vec::new();
         for tarball in &layer_tarballs {
-            extract_layer_tarball(tarball, &merged_path)?;
+            let symlinks = extract_layer_tarball(tarball, &merged_path)?;
+            all_symlinks.extend(symlinks);
         }
 
         // Create ext4 from merged directory via native mke2fs (blocking I/O)
         let temp_disk_path = temp.path().join("image.ext4");
         let merged_clone = merged_path.clone();
         let disk_clone = temp_disk_path.clone();
-        let temp_disk =
-            tokio::task::spawn_blocking(move || create_ext4_from_dir(&merged_clone, &disk_clone))
-                .await
-                .map_err(|e| {
-                    BoxliteError::Internal(format!("Disk creation task failed: {}", e))
-                })??;
+        let symlinks_clone = all_symlinks;
+        let temp_disk = tokio::task::spawn_blocking(move || {
+            let disk = create_ext4_from_dir(&merged_clone, &disk_clone)?;
+
+            // Create symlinks inside the ext4 image via debugfs
+            if !symlinks_clone.is_empty() {
+                create_symlinks_in_ext4(&disk_clone, &symlinks_clone)?;
+            }
+
+            Ok::<_, BoxliteError>(disk)
+        })
+        .await
+        .map_err(|e| BoxliteError::Internal(format!("Disk creation task failed: {}", e)))??;
 
         // Atomically install staged disk to cache
         self.install(digest, temp_disk)
@@ -211,19 +223,34 @@ impl ImageDiskManager {
     }
 }
 
-/// Extract a layer tarball into a destination directory (cross-platform).
+/// A deferred symlink to be created inside the ext4 image via debugfs.
+#[cfg(any(all(not(unix), feature = "krun"), test))]
+#[allow(dead_code)] // Fields read on non-unix; on unix only used in tests
+struct DeferredSymlink {
+    /// Path inside the filesystem (e.g., "bin/arch")
+    path: String,
+    /// Symlink target (e.g., "/bin/busybox")
+    target: String,
+}
+
+/// Extract a layer tarball into a destination directory (Windows).
 ///
 /// Detects compression format by magic bytes:
 /// - `1f 8b` → gzip (most common OCI layer format)
 /// - `28 b5 2f fd` → zstd
 /// - Otherwise → uncompressed tar
 ///
-/// This is the Windows equivalent of [`archive::extract_layer_tarball_streaming`]
-/// which requires Unix-specific features (xattr, whiteout processing).
-/// Basic whiteout support is not included here — the builder VM guest handles
-/// filesystem semantics during ext4 creation.
+/// Symlinks are NOT created on the Windows filesystem (they require
+/// special privileges and can't point to Unix absolute paths). Instead,
+/// they are collected and returned for deferred creation inside the ext4
+/// image via debugfs.
+///
+/// Hardlinks are extracted as regular file copies.
 #[cfg(all(not(unix), feature = "krun"))]
-fn extract_layer_tarball(tarball: &std::path::Path, dest: &std::path::Path) -> BoxliteResult<()> {
+fn extract_layer_tarball(
+    tarball: &std::path::Path,
+    dest: &std::path::Path,
+) -> BoxliteResult<Vec<DeferredSymlink>> {
     use std::io::{BufReader, Read, Seek, SeekFrom};
 
     let file = std::fs::File::open(tarball).map_err(|e| {
@@ -252,19 +279,9 @@ fn extract_layer_tarball(tarball: &std::path::Path, dest: &std::path::Path) -> B
     })?;
 
     if magic[0] == 0x1f && magic[1] == 0x8b {
-        // gzip compressed
         let decoder = flate2::read::GzDecoder::new(reader);
-        let mut archive = tar::Archive::new(decoder);
-        archive.set_overwrite(true);
-        archive.unpack(dest).map_err(|e| {
-            BoxliteError::Storage(format!(
-                "Failed to extract gzip layer {}: {}",
-                tarball.display(),
-                e
-            ))
-        })?;
+        extract_tar_entries(tar::Archive::new(decoder), dest, tarball)
     } else if magic == [0x28, 0xb5, 0x2f, 0xfd] {
-        // zstd compressed
         let decoder = zstd::Decoder::new(reader).map_err(|e| {
             BoxliteError::Storage(format!(
                 "Failed to create zstd decoder for {}: {}",
@@ -272,27 +289,266 @@ fn extract_layer_tarball(tarball: &std::path::Path, dest: &std::path::Path) -> B
                 e
             ))
         })?;
-        let mut archive = tar::Archive::new(decoder);
-        archive.set_overwrite(true);
-        archive.unpack(dest).map_err(|e| {
-            BoxliteError::Storage(format!(
-                "Failed to extract zstd layer {}: {}",
-                tarball.display(),
-                e
-            ))
-        })?;
+        extract_tar_entries(tar::Archive::new(decoder), dest, tarball)
     } else {
-        // Assume uncompressed tar
-        let mut archive = tar::Archive::new(reader);
-        archive.set_overwrite(true);
-        archive.unpack(dest).map_err(|e| {
-            BoxliteError::Storage(format!(
-                "Failed to extract tar layer {}: {}",
-                tarball.display(),
-                e
-            ))
+        extract_tar_entries(tar::Archive::new(reader), dest, tarball)
+    }
+}
+
+/// Check if a tar entry name is an OCI whiteout marker.
+///
+/// OCI whiteout files have the prefix `.wh.` and indicate that the
+/// corresponding file from a lower layer should be deleted.
+#[cfg(any(all(not(unix), feature = "krun"), test))]
+fn is_whiteout(name: &str) -> bool {
+    // Get the filename component only
+    name.rsplit('/')
+        .next()
+        .map(|f| f.starts_with(".wh."))
+        .unwrap_or(false)
+}
+
+/// Check if a tar entry name is an OCI opaque whiteout marker.
+///
+/// The special `.wh..wh..opq` file indicates that ALL contents of the
+/// parent directory from lower layers should be deleted.
+#[cfg(any(all(not(unix), feature = "krun"), test))]
+fn is_opaque_whiteout(name: &str) -> bool {
+    name.rsplit('/')
+        .next()
+        .map(|f| f == ".wh..wh..opq")
+        .unwrap_or(false)
+}
+
+/// Extract tar entries one by one, skipping symlinks on Windows.
+///
+/// Handles OCI whiteout markers:
+/// - `.wh.<name>`: deletes the target file from the destination
+/// - `.wh..wh..opq`: deletes all existing contents of the parent directory
+///
+/// Returns deferred symlinks to be created in the ext4 image later.
+/// Symlinks are deduplicated with last-wins semantics per OCI spec.
+#[cfg(any(all(not(unix), feature = "krun"), test))]
+fn extract_tar_entries<R: std::io::Read>(
+    mut archive: tar::Archive<R>,
+    dest: &std::path::Path,
+    tarball: &std::path::Path,
+) -> BoxliteResult<Vec<DeferredSymlink>> {
+    use std::collections::HashMap;
+
+    // Use HashMap for last-wins dedup (OCI spec: upper layer overrides lower)
+    let mut symlink_map: HashMap<String, DeferredSymlink> = HashMap::new();
+
+    let entries = archive.entries().map_err(|e| {
+        BoxliteError::Storage(format!(
+            "Failed to read tar entries from {}: {}",
+            tarball.display(),
+            e
+        ))
+    })?;
+
+    for entry_result in entries {
+        let mut entry = match entry_result {
+            Ok(e) => e,
+            Err(e) => {
+                tracing::warn!("Skipping bad tar entry in {}: {}", tarball.display(), e);
+                continue;
+            }
+        };
+
+        let entry_type = entry.header().entry_type();
+        let path = match entry.path() {
+            Ok(p) => p.to_path_buf(),
+            Err(e) => {
+                tracing::warn!("Skipping entry with invalid path: {}", e);
+                continue;
+            }
+        };
+
+        let path_str = path.to_string_lossy().to_string();
+        let clean_path = path_str.strip_prefix("./").unwrap_or(&path_str);
+
+        // Handle OCI opaque whiteout: delete all existing contents in the parent directory
+        if is_opaque_whiteout(clean_path) {
+            if let Some(parent) = std::path::Path::new(clean_path).parent() {
+                let parent_dest = dest.join(parent);
+                if parent_dest.exists() {
+                    tracing::debug!(
+                        "Opaque whiteout: clearing contents of {}",
+                        parent_dest.display()
+                    );
+                    if let Ok(entries) = std::fs::read_dir(&parent_dest) {
+                        for child in entries.flatten() {
+                            let _ = if child.path().is_dir() {
+                                std::fs::remove_dir_all(child.path())
+                            } else {
+                                std::fs::remove_file(child.path())
+                            };
+                        }
+                    }
+                }
+            }
+            continue;
+        }
+
+        // Handle OCI single-file whiteout: delete the target file
+        if is_whiteout(clean_path) {
+            // ".wh.<name>" means delete "<name>" in the same directory
+            let whiteout_path = std::path::Path::new(clean_path);
+            if let Some(filename) = whiteout_path.file_name().and_then(|f| f.to_str())
+                && let Some(target_name) = filename.strip_prefix(".wh.")
+            {
+                let target_path = if let Some(parent) = whiteout_path.parent() {
+                    dest.join(parent).join(target_name)
+                } else {
+                    dest.join(target_name)
+                };
+                if target_path.exists() {
+                    tracing::debug!("Whiteout: removing {}", target_path.display());
+                    let _ = if target_path.is_dir() {
+                        std::fs::remove_dir_all(&target_path)
+                    } else {
+                        std::fs::remove_file(&target_path)
+                    };
+                }
+            }
+            continue;
+        }
+
+        // Collect symlinks for deferred creation via debugfs (last-wins dedup)
+        if entry_type == tar::EntryType::Symlink {
+            if let Ok(Some(target)) = entry.header().link_name() {
+                let target_str = target.to_string_lossy().to_string();
+                if !clean_path.is_empty() {
+                    symlink_map.insert(
+                        clean_path.to_string(),
+                        DeferredSymlink {
+                            path: clean_path.to_string(),
+                            target: target_str,
+                        },
+                    );
+                }
+            }
+            continue;
+        }
+
+        // Extract regular files, directories, and hardlinks normally
+        entry.set_preserve_permissions(false);
+        if let Err(e) = entry.unpack_in(dest) {
+            let err_msg = e.to_string();
+            // Only skip entries that fail due to unsupported entry types (device nodes, etc.)
+            if err_msg.contains("not supported")
+                || err_msg.contains("operation not permitted")
+                || entry_type == tar::EntryType::Block
+                || entry_type == tar::EntryType::Char
+                || entry_type == tar::EntryType::Fifo
+            {
+                tracing::debug!(
+                    "Skipping unsupported entry {} (type {:?}) in {}: {}",
+                    path.display(),
+                    entry_type,
+                    tarball.display(),
+                    e
+                );
+            } else {
+                return Err(BoxliteError::Storage(format!(
+                    "Failed to extract {} (type {:?}) from {}: {}",
+                    path.display(),
+                    entry_type,
+                    tarball.display(),
+                    e
+                )));
+            }
+        }
+    }
+
+    let symlinks: Vec<DeferredSymlink> = symlink_map.into_values().collect();
+
+    tracing::debug!(
+        "Extracted layer {} ({} deferred symlinks)",
+        tarball.display(),
+        symlinks.len()
+    );
+
+    Ok(symlinks)
+}
+
+/// Create symlinks inside an ext4 image using debugfs.
+///
+/// Uses `debugfs -w -f -` to batch-create symlinks that were deferred
+/// during tar extraction on Windows.
+#[cfg(all(not(unix), feature = "krun"))]
+fn create_symlinks_in_ext4(
+    image_path: &std::path::Path,
+    symlinks: &[DeferredSymlink],
+) -> BoxliteResult<()> {
+    use std::io::Write;
+
+    let start = std::time::Instant::now();
+
+    // Build debugfs commands: symlink <path> <target>
+    let mut commands = String::new();
+    for sym in symlinks {
+        // Ensure parent directories exist (debugfs mkdir is idempotent for existing dirs)
+        let sym_path = std::path::Path::new(&sym.path);
+        let mut current = PathBuf::new();
+        if let Some(parent) = sym_path.parent() {
+            for component in parent.components() {
+                current.push(component);
+                commands.push_str(&format!(
+                    "mkdir /{}\n",
+                    crate::disk::ext4::to_unix_path_str(&current)
+                ));
+            }
+        }
+        // Use forward slashes for symlink path and target (debugfs requires Unix paths)
+        let unix_path = crate::disk::ext4::to_unix_path_str(std::path::Path::new(&sym.path));
+        let unix_target = sym.target.replace('\\', "/");
+        // Create the symlink
+        commands.push_str(&format!("symlink /{} {}\n", unix_path, unix_target));
+        // Set ownership to root
+        commands.push_str(&format!("sif /{} uid 0\n", unix_path));
+        commands.push_str(&format!("sif /{} gid 0\n", unix_path));
+    }
+
+    let debugfs = crate::disk::ext4::get_debugfs_path();
+
+    let mut child = std::process::Command::new(&debugfs)
+        .args(["-w", "-f", "-"])
+        .arg(image_path)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| {
+            BoxliteError::Storage(format!("Failed to spawn debugfs for symlinks: {}", e))
+        })?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(commands.as_bytes()).map_err(|e| {
+            BoxliteError::Storage(format!("Failed to write to debugfs stdin: {}", e))
         })?;
     }
+
+    let output = child
+        .wait_with_output()
+        .map_err(|e| BoxliteError::Storage(format!("Failed to wait for debugfs: {}", e)))?;
+
+    let duration = start.elapsed();
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(BoxliteError::Storage(format!(
+            "debugfs symlink creation failed (took {:?}): {}",
+            duration, stderr
+        )));
+    }
+
+    tracing::info!(
+        "Created {} symlinks in ext4 image in {:?}",
+        symlinks.len(),
+        duration
+    );
 
     Ok(())
 }
@@ -382,5 +638,165 @@ mod tests {
         assert_eq!(result.path(), target);
         assert_eq!(std::fs::read_to_string(result.path()).unwrap(), "first");
         let _ = result.leak();
+    }
+
+    #[test]
+    fn test_is_whiteout() {
+        assert!(is_whiteout(".wh.somefile"));
+        assert!(is_whiteout("usr/lib/.wh.libold.so"));
+        assert!(is_whiteout(".wh..wh..opq"));
+        assert!(!is_whiteout("regular_file"));
+        assert!(!is_whiteout("usr/lib/libfoo.so"));
+        assert!(!is_whiteout("path/to/.hidden"));
+    }
+
+    #[test]
+    fn test_is_opaque_whiteout() {
+        assert!(is_opaque_whiteout(".wh..wh..opq"));
+        assert!(is_opaque_whiteout("etc/.wh..wh..opq"));
+        assert!(!is_opaque_whiteout(".wh.somefile"));
+        assert!(!is_opaque_whiteout("regular_file"));
+    }
+
+    #[test]
+    fn test_symlink_dedup_last_wins() {
+        use std::collections::HashMap;
+
+        let mut map: HashMap<String, DeferredSymlink> = HashMap::new();
+
+        // First layer: bin/sh -> /bin/dash
+        map.insert(
+            "bin/sh".to_string(),
+            DeferredSymlink {
+                path: "bin/sh".to_string(),
+                target: "/bin/dash".to_string(),
+            },
+        );
+
+        // Second layer overrides: bin/sh -> /bin/bash
+        map.insert(
+            "bin/sh".to_string(),
+            DeferredSymlink {
+                path: "bin/sh".to_string(),
+                target: "/bin/bash".to_string(),
+            },
+        );
+
+        let result: Vec<DeferredSymlink> = map.into_values().collect();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].target, "/bin/bash");
+    }
+
+    #[test]
+    fn test_extract_tar_entries_whiteout() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let dest = dir.path().join("extract");
+        std::fs::create_dir_all(&dest).unwrap();
+
+        // Pre-create files that whiteouts should delete
+        let etc_dir = dest.join("etc");
+        std::fs::create_dir_all(&etc_dir).unwrap();
+        std::fs::write(etc_dir.join("old_config"), "old").unwrap();
+        std::fs::write(etc_dir.join("keep_this"), "keep").unwrap();
+
+        // Build a tar with:
+        // 1. A single-file whiteout: etc/.wh.old_config
+        // 2. A regular file: etc/new_config
+        let tar_path = dir.path().join("layer.tar");
+        {
+            let file = std::fs::File::create(&tar_path).unwrap();
+            let mut builder = tar::Builder::new(file);
+
+            // Add whiteout marker for old_config
+            let mut header = tar::Header::new_gnu();
+            header.set_size(0);
+            header.set_entry_type(tar::EntryType::Regular);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder
+                .append_data(&mut header, "etc/.wh.old_config", std::io::empty())
+                .unwrap();
+
+            // Add a new regular file
+            let data = b"new content";
+            let mut header = tar::Header::new_gnu();
+            header.set_size(data.len() as u64);
+            header.set_entry_type(tar::EntryType::Regular);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder
+                .append_data(&mut header, "etc/new_config", &data[..])
+                .unwrap();
+
+            builder.finish().unwrap();
+        }
+
+        let file = std::fs::File::open(&tar_path).unwrap();
+        let archive = tar::Archive::new(file);
+        let symlinks = extract_tar_entries(archive, &dest, &tar_path).unwrap();
+
+        // old_config should be deleted by the whiteout
+        assert!(!etc_dir.join("old_config").exists());
+        // keep_this should still exist (not affected)
+        assert!(etc_dir.join("keep_this").exists());
+        // new_config should be extracted
+        assert!(etc_dir.join("new_config").exists());
+        assert_eq!(
+            std::fs::read_to_string(etc_dir.join("new_config")).unwrap(),
+            "new content"
+        );
+        assert!(symlinks.is_empty());
+    }
+
+    #[test]
+    fn test_extract_tar_entries_opaque_whiteout() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let dest = dir.path().join("extract");
+        std::fs::create_dir_all(&dest).unwrap();
+
+        // Pre-create files in etc/ that opaque whiteout should clear
+        let etc_dir = dest.join("etc");
+        std::fs::create_dir_all(&etc_dir).unwrap();
+        std::fs::write(etc_dir.join("file_a"), "a").unwrap();
+        std::fs::write(etc_dir.join("file_b"), "b").unwrap();
+
+        // Build a tar with an opaque whiteout for etc/
+        let tar_path = dir.path().join("layer.tar");
+        {
+            let file = std::fs::File::create(&tar_path).unwrap();
+            let mut builder = tar::Builder::new(file);
+
+            let mut header = tar::Header::new_gnu();
+            header.set_size(0);
+            header.set_entry_type(tar::EntryType::Regular);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder
+                .append_data(&mut header, "etc/.wh..wh..opq", std::io::empty())
+                .unwrap();
+
+            // Add a new file in the same layer (should survive)
+            let data = b"new";
+            let mut header = tar::Header::new_gnu();
+            header.set_size(data.len() as u64);
+            header.set_entry_type(tar::EntryType::Regular);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder
+                .append_data(&mut header, "etc/new_file", &data[..])
+                .unwrap();
+
+            builder.finish().unwrap();
+        }
+
+        let file = std::fs::File::open(&tar_path).unwrap();
+        let archive = tar::Archive::new(file);
+        let _symlinks = extract_tar_entries(archive, &dest, &tar_path).unwrap();
+
+        // Old files should be cleared by opaque whiteout
+        assert!(!etc_dir.join("file_a").exists());
+        assert!(!etc_dir.join("file_b").exists());
+        // New file from the same layer should exist
+        assert!(etc_dir.join("new_file").exists());
     }
 }

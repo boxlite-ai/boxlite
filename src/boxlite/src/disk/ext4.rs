@@ -17,7 +17,7 @@ fn get_mke2fs_path() -> PathBuf {
 }
 
 /// Get the path to the debugfs binary.
-fn get_debugfs_path() -> PathBuf {
+pub(crate) fn get_debugfs_path() -> PathBuf {
     util::find_binary("debugfs").expect("debugfs binary not found")
 }
 
