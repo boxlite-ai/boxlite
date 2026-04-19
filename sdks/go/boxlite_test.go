@@ -2,6 +2,8 @@ package boxlite
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -150,6 +152,93 @@ func TestRuntimeOptions(t *testing.T) {
 // ============================================================================
 // Wire types
 // ============================================================================
+
+func TestBuildOptionsJSON_WithRootfsPath(t *testing.T) {
+	bundle := t.TempDir()
+	cfg := &boxConfig{}
+	WithRootfsPath(bundle)(cfg)
+	wire, err := buildOptionsJSON("", cfg)
+	if err != nil {
+		t.Fatalf("buildOptionsJSON: %v", err)
+	}
+	path, ok := wire.Rootfs.(wireRootfsPath)
+	if !ok {
+		t.Fatalf("Rootfs type: got %T", wire.Rootfs)
+	}
+	if path.RootfsPath != bundle {
+		t.Errorf("RootfsPath: got %q", path.RootfsPath)
+	}
+}
+
+func TestBuildOptionsJSON_RootfsPathWinsOverImage(t *testing.T) {
+	bundle := t.TempDir()
+	cfg := &boxConfig{}
+	WithRootfsPath(bundle)(cfg)
+	wire, err := buildOptionsJSON("alpine:latest", cfg)
+	if err != nil {
+		t.Fatalf("buildOptionsJSON: %v", err)
+	}
+	path, ok := wire.Rootfs.(wireRootfsPath)
+	if !ok {
+		t.Fatalf("Rootfs type: got %T", wire.Rootfs)
+	}
+	if path.RootfsPath != bundle {
+		t.Errorf("RootfsPath: got %q", path.RootfsPath)
+	}
+}
+
+func TestBuildOptionsJSON_RootfsPathMissingFallsBackToImage(t *testing.T) {
+	cfg := &boxConfig{}
+	WithRootfsPath("/no/such/oci-bundle-xyz")(cfg)
+	wire, err := buildOptionsJSON("alpine:latest", cfg)
+	if err != nil {
+		t.Fatalf("buildOptionsJSON: %v", err)
+	}
+	img, ok := wire.Rootfs.(wireRootfsImage)
+	if !ok {
+		t.Fatalf("Rootfs type: got %T", wire.Rootfs)
+	}
+	if img.Image != "alpine:latest" {
+		t.Errorf("Image: got %q", img.Image)
+	}
+}
+
+func TestBuildOptionsJSON_RootfsPathNotDirFallsBackToImage(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(f, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &boxConfig{}
+	WithRootfsPath(f)(cfg)
+	wire, err := buildOptionsJSON("ubuntu:22.04", cfg)
+	if err != nil {
+		t.Fatalf("buildOptionsJSON: %v", err)
+	}
+	out, ok := wire.Rootfs.(wireRootfsImage)
+	if !ok {
+		t.Fatalf("Rootfs type: got %T", wire.Rootfs)
+	}
+	if out.Image != "ubuntu:22.04" {
+		t.Errorf("Image: got %q", out.Image)
+	}
+}
+
+func TestBuildOptionsJSON_RootfsPathMissingAndNoImage(t *testing.T) {
+	cfg := &boxConfig{}
+	WithRootfsPath("/no/such/bundle")(cfg)
+	_, err := buildOptionsJSON("", cfg)
+	if err == nil {
+		t.Fatal("expected error when local path is missing and image is empty")
+	}
+}
+
+func TestBuildOptionsJSON_MissingImageAndPath(t *testing.T) {
+	cfg := &boxConfig{}
+	_, err := buildOptionsJSON("", cfg)
+	if err == nil {
+		t.Fatal("expected error when image is empty and WithRootfsPath is not set")
+	}
+}
 
 func TestBuildOptionsJSON(t *testing.T) {
 	cfg := &boxConfig{}

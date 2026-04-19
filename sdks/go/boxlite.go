@@ -96,6 +96,10 @@ func (r *Runtime) Shutdown(_ context.Context, timeout time.Duration) error {
 }
 
 // Create creates and returns a new box.
+//
+// The image argument is the registry reference to pull when no usable local path is
+// selected. With [WithRootfsPath], if that path exists as a directory it takes
+// precedence and image is ignored; if the path is missing, Create uses image instead.
 func (r *Runtime) Create(_ context.Context, image string, opts ...BoxOption) (*Box, error) {
 	cfg := &boxConfig{}
 	for _, o := range opts {

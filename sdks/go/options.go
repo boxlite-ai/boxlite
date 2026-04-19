@@ -45,6 +45,7 @@ type boxConfig struct {
 	name       string
 	cpus       int
 	memoryMiB  int
+	rootfsPath string
 	env        [][2]string
 	volumes    []volumeEntry
 	workDir    string
@@ -75,6 +76,17 @@ func WithCPUs(n int) BoxOption {
 // WithMemory sets the memory limit in MiB.
 func WithMemory(mib int) BoxOption {
 	return func(c *boxConfig) { c.memoryMiB = mib }
+}
+
+// WithRootfsPath prefers a local OCI image layout directory over pulling from a registry.
+//
+// If the path exists and is a directory, it is used and the image argument to
+// [Runtime.Create] is ignored. Otherwise BoxLite falls back to the image reference
+// (for example when the directory has not been exported yet).
+//
+// The directory should contain a valid OCI bundle (oci-layout, index.json, blobs/sha256/, …).
+func WithRootfsPath(path string) BoxOption {
+	return func(c *boxConfig) { c.rootfsPath = path }
 }
 
 // WithEnv adds an environment variable.

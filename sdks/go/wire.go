@@ -2,6 +2,8 @@ package boxlite
 
 import (
 	"fmt"
+	"os"
+	"strings"
 	"time"
 )
 
@@ -52,6 +54,11 @@ type wireSecret struct {
 // wireRootfsImage matches Rust RootfsSpec::Image serialization.
 type wireRootfsImage struct {
 	Image string `json:"Image"`
+}
+
+// wireRootfsPath matches Rust RootfsSpec::RootfsPath serialization.
+type wireRootfsPath struct {
+	RootfsPath string `json:"RootfsPath"`
 }
 
 // boxInfoWire matches the JSON from box_info_to_json() in ffi/src/json.rs.
@@ -125,8 +132,32 @@ func (w *imagePullResultWire) toImagePullResult() ImagePullResult {
 
 // buildOptionsJSON creates the JSON wire representation from boxConfig.
 func buildOptionsJSON(image string, cfg *boxConfig) (boxOptionsWire, error) {
+	image = strings.TrimSpace(image)
+	rootfsPath := strings.TrimSpace(cfg.rootfsPath)
+
+	useLocalOCI := false
+	if rootfsPath != "" {
+		if fi, err := os.Stat(rootfsPath); err == nil && fi.IsDir() {
+			useLocalOCI = true
+		}
+	}
+
+	var rootfs any
+	switch {
+	case useLocalOCI:
+		// Local OCI bundle: image is ignored when the path exists and is a directory.
+		rootfs = wireRootfsPath{RootfsPath: rootfsPath}
+	case image != "":
+		// Registry image, or fallback when WithRootfsPath points to a missing path.
+		rootfs = wireRootfsImage{Image: image}
+	default:
+		return boxOptionsWire{}, fmt.Errorf(
+			"boxlite: image reference is required when WithRootfsPath is unset, the path does not exist, or it is not a directory",
+		)
+	}
+
 	w := boxOptionsWire{
-		Rootfs: wireRootfsImage{Image: image},
+		Rootfs: rootfs,
 		Env:    cfg.env,
 	}
 
