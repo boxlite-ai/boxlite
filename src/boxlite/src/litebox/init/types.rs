@@ -122,7 +122,7 @@ pub fn resolve_user_volumes(volumes: &[VolumeSpec]) -> BoxliteResult<Vec<Resolve
 
 /// Result of rootfs preparation - either merged, separate layers, or disk image.
 #[derive(Debug)]
-#[cfg(any(unix, feature = "krun"))]
+#[cfg(any(unix, windows))]
 pub enum ContainerRootfsPrepResult {
     /// Single merged directory (all layers merged on host)
     #[allow(dead_code)]

@@ -7,13 +7,13 @@
 //! For restart (reuse_rootfs=true), opens existing COW disk instead of creating new.
 
 use super::{InitCtx, log_task_error, task_start};
-#[cfg(any(unix, feature = "krun"))]
+#[cfg(any(unix, windows))]
 use crate::disk::{BackingFormat, Qcow2Helper};
 use crate::disk::{Disk, DiskFormat};
 use crate::images::ContainerImageConfig;
-#[cfg(any(unix, feature = "krun"))]
+#[cfg(any(unix, windows))]
 use crate::images::ImageDiskManager;
-#[cfg(any(unix, feature = "krun"))]
+#[cfg(any(unix, windows))]
 use crate::litebox::init::types::ContainerRootfsPrepResult;
 #[cfg(unix)]
 use crate::litebox::init::types::{USE_DISK_ROOTFS, USE_OVERLAYFS};
@@ -177,7 +177,7 @@ async fn run_container_rootfs(
         }
     };
 
-    #[cfg(all(not(unix), not(feature = "krun")))]
+    #[cfg(all(not(unix), not(windows)))]
     {
         let _ = (
             &runtime,
@@ -195,7 +195,7 @@ async fn run_container_rootfs(
     }
 
     // Prepare rootfs from image
-    #[cfg(any(unix, feature = "krun"))]
+    #[cfg(any(unix, windows))]
     {
         #[cfg(unix)]
         let rootfs_result = if USE_DISK_ROOTFS {
@@ -237,7 +237,7 @@ async fn run_container_rootfs(
 /// * `layout` - Box filesystem layout for disk paths
 /// * `disk_size_gb` - Optional user-specified disk size in GB. If set, the COW disk
 ///   will have this virtual size (or the base disk size, whichever is larger).
-#[cfg(any(unix, feature = "krun"))]
+#[cfg(any(unix, windows))]
 fn create_cow_disk(
     rootfs_result: &ContainerRootfsPrepResult,
     layout: &crate::runtime::layout::BoxFilesystemLayout,
@@ -356,7 +356,7 @@ async fn prepare_overlayfs_layers(
 ///
 /// Delegates to ImageDiskManager which handles caching, layer merging,
 /// and ext4 creation with staged atomic install.
-#[cfg(any(unix, feature = "krun"))]
+#[cfg(any(unix, windows))]
 async fn prepare_disk_rootfs(
     image_disk_mgr: &ImageDiskManager,
     image: &crate::images::ImageObject,

@@ -170,7 +170,7 @@ impl ImageObject {
     ///
     /// This is used as a cache key for base disks - same layers = same base disk.
     /// Uses SHA256 hash of concatenated layer digests.
-    #[cfg(any(unix, feature = "krun"))]
+    #[cfg(any(unix, windows))]
     pub(crate) fn compute_image_digest(&self) -> String {
         use sha2::{Digest, Sha256};
 

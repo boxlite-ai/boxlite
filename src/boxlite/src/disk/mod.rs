@@ -129,14 +129,14 @@ impl Drop for Disk {
 
 pub(crate) mod base_disk;
 pub mod constants;
-#[cfg(any(unix, feature = "krun"))]
+#[cfg(any(unix, windows))]
 pub(crate) mod ext4;
 pub(crate) mod qcow2;
 
-#[cfg(any(unix, feature = "krun", test))]
+#[cfg(any(unix, windows, test))]
 pub(crate) use base_disk::BaseDisk;
 pub(crate) use base_disk::{BaseDiskKind, BaseDiskManager};
-#[cfg(any(unix, feature = "krun"))]
+#[cfg(any(unix, windows))]
 pub use ext4::{create_ext4_from_dir, inject_file_into_ext4};
 pub use qcow2::{
     BackingFormat, Qcow2Helper, is_backing_dependency, read_backing_chain, read_backing_file_path,

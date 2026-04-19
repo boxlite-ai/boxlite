@@ -3,21 +3,21 @@
 //! Builds and caches pure ext4 disk images from OCI images.
 //! These disks contain only image content (no guest binary).
 
-#[cfg(any(unix, feature = "krun", test))]
+#[cfg(any(unix, windows, test))]
 use std::fs;
 use std::path::PathBuf;
 
-#[cfg(any(unix, feature = "krun", test))]
+#[cfg(any(unix, windows, test))]
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
-#[cfg(any(unix, feature = "krun"))]
+#[cfg(any(unix, windows))]
 use crate::disk::create_ext4_from_dir;
-#[cfg(any(unix, feature = "krun", test))]
+#[cfg(any(unix, windows, test))]
 use crate::disk::{Disk, DiskFormat};
 #[cfg(unix)]
 use crate::rootfs::RootfsBuilder;
 
-#[cfg(any(unix, feature = "krun"))]
+#[cfg(any(unix, windows))]
 use super::ImageObject;
 
 /// Builds and caches ext4 disk images from OCI images.
@@ -61,7 +61,7 @@ impl ImageDiskManager {
     /// On Unix, uses `RootfsBuilder` for layer extraction (xattr support).
     /// On Windows, uses `extract_layer_tarball` (simpler, no xattr).
     /// Both platforms use native `mke2fs` for ext4 creation.
-    #[cfg(any(unix, feature = "krun"))]
+    #[cfg(any(unix, windows))]
     pub async fn get_or_create(&self, image: &ImageObject) -> BoxliteResult<Disk> {
         let digest = image.compute_image_digest();
 
@@ -75,7 +75,7 @@ impl ImageDiskManager {
     }
 
     /// Look up a cached disk by image digest.
-    #[cfg(any(unix, feature = "krun", test))]
+    #[cfg(any(unix, windows, test))]
     fn find(&self, digest: &str) -> Option<Disk> {
         let path = self.disk_path(digest);
         path.exists()
@@ -120,7 +120,7 @@ impl ImageDiskManager {
     ///
     /// Symlinks are deferred: extracted as metadata, then created inside the ext4
     /// image via `debugfs` after `mke2fs -d` populates regular files.
-    #[cfg(all(not(unix), feature = "krun"))]
+    #[cfg(windows)]
     async fn build_and_install(&self, image: &ImageObject, digest: &str) -> BoxliteResult<Disk> {
         // All work happens in a temp directory (staged)
         let temp = tempfile::tempdir_in(&self.temp_dir).map_err(|e| {
@@ -176,7 +176,7 @@ impl ImageDiskManager {
     ///
     /// Takes ownership of the temp `Disk`, renames it to the final cache path,
     /// and returns a new persistent `Disk` pointing to the installed location.
-    #[cfg(any(unix, feature = "krun", test))]
+    #[cfg(any(unix, windows, test))]
     fn install(&self, digest: &str, staged_disk: Disk) -> BoxliteResult<Disk> {
         let target = self.disk_path(digest);
 
@@ -216,7 +216,7 @@ impl ImageDiskManager {
     /// Compute the cache path for a given image digest.
     ///
     /// Format matches `storage.rs:disk_image_path()`: `{digest}.ext4`
-    #[cfg(any(unix, feature = "krun", test))]
+    #[cfg(any(unix, windows, test))]
     fn disk_path(&self, digest: &str) -> PathBuf {
         let filename = digest.replace(':', "-");
         self.cache_dir.join(format!("{}.ext4", filename))
@@ -224,7 +224,7 @@ impl ImageDiskManager {
 }
 
 /// A deferred symlink to be created inside the ext4 image via debugfs.
-#[cfg(any(all(not(unix), feature = "krun"), test))]
+#[cfg(any(windows, test))]
 #[allow(dead_code)] // Fields read on non-unix; on unix only used in tests
 struct DeferredSymlink {
     /// Path inside the filesystem (e.g., "bin/arch")
@@ -246,7 +246,7 @@ struct DeferredSymlink {
 /// image via debugfs.
 ///
 /// Hardlinks are extracted as regular file copies.
-#[cfg(all(not(unix), feature = "krun"))]
+#[cfg(windows)]
 fn extract_layer_tarball(
     tarball: &std::path::Path,
     dest: &std::path::Path,
@@ -299,7 +299,7 @@ fn extract_layer_tarball(
 ///
 /// OCI whiteout files have the prefix `.wh.` and indicate that the
 /// corresponding file from a lower layer should be deleted.
-#[cfg(any(all(not(unix), feature = "krun"), test))]
+#[cfg(any(windows, test))]
 fn is_whiteout(name: &str) -> bool {
     // Get the filename component only
     name.rsplit('/')
@@ -312,7 +312,7 @@ fn is_whiteout(name: &str) -> bool {
 ///
 /// The special `.wh..wh..opq` file indicates that ALL contents of the
 /// parent directory from lower layers should be deleted.
-#[cfg(any(all(not(unix), feature = "krun"), test))]
+#[cfg(any(windows, test))]
 fn is_opaque_whiteout(name: &str) -> bool {
     name.rsplit('/')
         .next()
@@ -328,7 +328,7 @@ fn is_opaque_whiteout(name: &str) -> bool {
 ///
 /// Returns deferred symlinks to be created in the ext4 image later.
 /// Symlinks are deduplicated with last-wins semantics per OCI spec.
-#[cfg(any(all(not(unix), feature = "krun"), test))]
+#[cfg(any(windows, test))]
 fn extract_tar_entries<R: std::io::Read>(
     mut archive: tar::Archive<R>,
     dest: &std::path::Path,
@@ -477,7 +477,7 @@ fn extract_tar_entries<R: std::io::Read>(
 ///
 /// Uses `debugfs -w -f -` to batch-create symlinks that were deferred
 /// during tar extraction on Windows.
-#[cfg(all(not(unix), feature = "krun"))]
+#[cfg(windows)]
 fn create_symlinks_in_ext4(
     image_path: &std::path::Path,
     symlinks: &[DeferredSymlink],
