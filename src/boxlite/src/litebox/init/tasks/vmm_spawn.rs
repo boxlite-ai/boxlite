@@ -160,21 +160,24 @@ async fn build_config(
     // SHARED virtiofs - needed by all strategies
     volume_mgr.add_fs_share(mount_tags::SHARED, layout.shared_dir(), None, false, None);
 
-    // Add container rootfs disk (COW overlay workflow):
-    // 1. Base disk: Pre-built ext4 image with container layers merged
-    // 2. COW disk: QCOW2 overlay with copy-on-write semantics
-    //    - Inherits formatted ext4 from base (need_format=false)
-    //    - May have larger virtual size if disk_size_gb specified
-    // 3. Guest mount: Only resize on fresh start, not restart
-    //    - Fresh start with custom size: resize2fs expands filesystem
-    //    - Restart: filesystem already at correct size, skip resize
+    // Add container rootfs disk:
+    // - Unix: QCOW2 COW overlay on top of shared base ext4 image
+    // - Windows: raw ext4 copy (WHPX VMM doesn't support QCOW2 backing files)
+    // Guest mount: Only resize on fresh start with custom disk size, not restart.
     let need_resize = options.disk_size_gb.is_some() && !reuse_rootfs;
+
+    // On Windows, rootfs disks are raw ext4 copies (no QCOW2 COW support in WHPX VMM).
+    #[cfg(windows)]
+    let container_disk_format = DiskFormat::Ext4;
+    #[cfg(not(windows))]
+    let container_disk_format = DiskFormat::Qcow2;
+
     let rootfs_device = volume_mgr.add_block_device(
         container_disk_path,
-        DiskFormat::Qcow2,
+        container_disk_format,
         false,
         None,
-        false,       // need_format: COW child inherits formatted base
+        false,       // need_format: inherits formatted base
         need_resize, // need_resize: only on fresh start with custom disk size
     );
 
@@ -268,9 +271,14 @@ fn configure_guest_rootfs(
         && let Strategy::Disk { ref disk_path, .. } = guest_rootfs.strategy
     {
         // Add disk to volume manager (guest rootfs - no format/resize needed)
+        #[cfg(windows)]
+        let guest_disk_format = DiskFormat::Ext4;
+        #[cfg(not(windows))]
+        let guest_disk_format = DiskFormat::Qcow2;
+
         let device_path = volume_mgr.add_block_device(
             disk_path_input,
-            DiskFormat::Qcow2,
+            guest_disk_format,
             false,
             None,
             false, // need_format

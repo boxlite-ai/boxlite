@@ -536,9 +536,7 @@ fn create_symlinks_in_ext4(
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .output()
-        .map_err(|e| {
-            BoxliteError::Storage(format!("Failed to run debugfs for symlinks: {}", e))
-        })?;
+        .map_err(|e| BoxliteError::Storage(format!("Failed to run debugfs for symlinks: {}", e)))?;
 
     // Clean up temp file
     let _ = std::fs::remove_file(&cmd_file);
