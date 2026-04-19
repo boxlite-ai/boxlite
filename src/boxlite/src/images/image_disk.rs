@@ -475,8 +475,10 @@ fn extract_tar_entries<R: std::io::Read>(
 
 /// Create symlinks inside an ext4 image using debugfs.
 ///
-/// Uses `debugfs -w -f -` to batch-create symlinks that were deferred
-/// during tar extraction on Windows.
+/// Writes commands to a temp file and uses `debugfs -w -f <file>` to
+/// batch-create symlinks that were deferred during tar extraction on Windows.
+/// Uses a temp file instead of stdin pipe to avoid pipe buffer deadlocks
+/// when there are many symlinks (500+).
 #[cfg(windows)]
 fn create_symlinks_in_ext4(
     image_path: &std::path::Path,
@@ -511,36 +513,43 @@ fn create_symlinks_in_ext4(
         commands.push_str(&format!("sif /{} gid 0\n", unix_path));
     }
 
+    // Write commands to a temp file to avoid pipe buffer deadlocks
+    let cmd_file = std::env::temp_dir().join(format!(
+        "boxlite-debugfs-symlinks-{}.txt",
+        std::process::id()
+    ));
+    std::fs::write(&cmd_file, commands.as_bytes()).map_err(|e| {
+        BoxliteError::Storage(format!(
+            "Failed to write debugfs command file {}: {}",
+            cmd_file.display(),
+            e
+        ))
+    })?;
+
     let debugfs = crate::disk::ext4::get_debugfs_path()?;
 
-    let mut child = std::process::Command::new(&debugfs)
-        .args(["-w", "-f", "-"])
+    let output = std::process::Command::new(&debugfs)
+        .arg("-w")
+        .arg("-f")
+        .arg(&cmd_file)
         .arg(image_path)
-        .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
+        .stderr(std::process::Stdio::null())
+        .output()
         .map_err(|e| {
-            BoxliteError::Storage(format!("Failed to spawn debugfs for symlinks: {}", e))
+            BoxliteError::Storage(format!("Failed to run debugfs for symlinks: {}", e))
         })?;
 
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(commands.as_bytes()).map_err(|e| {
-            BoxliteError::Storage(format!("Failed to write to debugfs stdin: {}", e))
-        })?;
-    }
-
-    let output = child
-        .wait_with_output()
-        .map_err(|e| BoxliteError::Storage(format!("Failed to wait for debugfs: {}", e)))?;
+    // Clean up temp file
+    let _ = std::fs::remove_file(&cmd_file);
 
     let duration = start.elapsed();
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(BoxliteError::Storage(format!(
-            "debugfs symlink creation failed (took {:?}): {}",
-            duration, stderr
+            "debugfs symlink creation failed (exit code: {:?}, took {:?})",
+            output.status.code(),
+            duration
         )));
     }
 
