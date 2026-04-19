@@ -311,6 +311,36 @@ assemble_runtime() {
         echo "✓"
     fi
 
+    # Final gate: verify binaries are truly statically linked before packaging.
+    # This catches issues regardless of how binaries were built or cached.
+    if [ "$OS" = "linux" ]; then
+        echo ""
+        print_section "Verifying static linking..."
+        local failed=false
+        for bin in boxlite-guest boxlite-shim; do
+            local bin_path="$DEST_DIR/$bin"
+            if [ -f "$bin_path" ]; then
+                local file_output
+                file_output=$(file "$bin_path")
+                if echo "$file_output" | grep -q "statically linked"; then
+                    print_step "$bin: "
+                    print_success "statically linked ✓"
+                else
+                    print_error "$bin is NOT statically linked"
+                    echo "   file: $file_output"
+                    failed=true
+                fi
+            fi
+        done
+        if [ "$failed" = true ]; then
+            echo ""
+            print_error "Runtime contains non-static binaries. Aborting."
+            echo "   Static-PIE (ET_DYN) binaries will fail inside the VM."
+            echo "   Ensure .cargo/config.toml has '-C link-arg=-static' in rustflags."
+            exit 1
+        fi
+    fi
+
     print_success "Runtime directory assembled"
 }
 

@@ -52,6 +52,7 @@ install_system_deps() {
         unzip
         file               # file type detection
         pkgconfig
+        patchelf           # ELF binary patching (SONAME fixup, wheel repair)
         openssl-dev
 
         # musl development
