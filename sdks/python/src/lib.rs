@@ -26,6 +26,10 @@ use pyo3::prelude::*;
 
 #[pymodule(name = "boxlite")]
 fn boxlite_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    // Initialize tracing from RUST_LOG env var (ignore if already initialized)
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .try_init();
     m.add_class::<PyOptions>()?;
     m.add_class::<PyBoxOptions>()?;
     m.add_class::<PyNetworkSpec>()?;
