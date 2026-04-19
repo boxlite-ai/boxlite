@@ -511,7 +511,7 @@ fn create_symlinks_in_ext4(
         commands.push_str(&format!("sif /{} gid 0\n", unix_path));
     }
 
-    let debugfs = crate::disk::ext4::get_debugfs_path();
+    let debugfs = crate::disk::ext4::get_debugfs_path()?;
 
     let mut child = std::process::Command::new(&debugfs)
         .args(["-w", "-f", "-"])

@@ -12,13 +12,21 @@ use super::constants::ext4::{
 use super::{Disk, DiskFormat};
 
 /// Get the path to the mke2fs binary.
-fn get_mke2fs_path() -> PathBuf {
-    util::find_binary("mke2fs").expect("mke2fs binary not found")
+fn get_mke2fs_path() -> BoxliteResult<PathBuf> {
+    util::find_binary("mke2fs").map_err(|e| {
+        BoxliteError::Storage(format!(
+            "mke2fs binary not found. Install e2fsprogs or set BOXLITE_RUNTIME_DIR: {e}"
+        ))
+    })
 }
 
 /// Get the path to the debugfs binary.
-pub(crate) fn get_debugfs_path() -> PathBuf {
-    util::find_binary("debugfs").expect("debugfs binary not found")
+pub(crate) fn get_debugfs_path() -> BoxliteResult<PathBuf> {
+    util::find_binary("debugfs").map_err(|e| {
+        BoxliteError::Storage(format!(
+            "debugfs binary not found. Install e2fsprogs or set BOXLITE_RUNTIME_DIR: {e}"
+        ))
+    })
 }
 
 /// Convert a path to a string with forward slashes.
@@ -116,7 +124,7 @@ pub fn create_ext4_from_dir(source: &Path, output_path: &Path) -> BoxliteResult<
         BoxliteError::Storage(format!("Invalid source path: {}", source.display()))
     })?;
 
-    let mke2fs = get_mke2fs_path();
+    let mke2fs = get_mke2fs_path()?;
 
     // Use mke2fs with -d to populate from directory
     // https://man7.org/linux/man-pages/man8/mke2fs.8.html
@@ -223,7 +231,7 @@ fn fix_ownership_with_debugfs(image_path: &Path, source_dir: &Path) -> BoxliteRe
         commands.push_str(&format!("sif {} gid 0\n", path));
     }
 
-    let debugfs = get_debugfs_path();
+    let debugfs = get_debugfs_path()?;
 
     // Run debugfs with commands via stdin
     let mut child = Command::new(&debugfs)
@@ -286,7 +294,7 @@ pub fn inject_file_into_ext4(
 
     let commands = build_inject_commands(host_file_str, guest_path);
 
-    let debugfs = get_debugfs_path();
+    let debugfs = get_debugfs_path()?;
 
     let mut child = Command::new(&debugfs)
         .args(["-w", "-f", "-"])
