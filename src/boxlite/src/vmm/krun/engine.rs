@@ -152,16 +152,102 @@ impl Krun {
         }
     }
 
-    /// Transform guest arguments to replace Unix socket URIs with vsock URIs.
+    /// Transform TCP URIs to vsock URIs in a shell command string.
     ///
-    /// Transforms both --listen and --notify from Unix to vsock.
-    /// The engine bridges Unix sockets on host to vsock ports inside VM.
-    fn transform_guest_args(mut guest_args: Vec<String>) -> Vec<String> {
-        // Transform --listen unix://... -> --listen vsock://2695
-        Self::transform_arg_unix_to_vsock(&mut guest_args, "listen", network::GUEST_AGENT_PORT);
+    /// Replaces `--{arg_name} tcp://...` with `--{arg_name} vsock://PORT`
+    fn transform_shell_arg_tcp_to_vsock(input: &str, arg_name: &str, vsock_port: u32) -> String {
+        use boxlite_shared::Transport;
+        let vsock_uri = Transport::vsock(vsock_port).to_uri();
+        let pattern = format!("--{} tcp://", arg_name);
 
-        // Transform --notify unix://... -> --notify vsock://2696
+        let mut result = String::new();
+        let mut chars = input.chars().peekable();
+        let mut pos = 0;
+
+        while let Some(c) = chars.next() {
+            if c == '-' && input[pos..].starts_with(&pattern) {
+                result.push_str(&format!("--{} ", arg_name));
+
+                let skip_len = pattern.len() - 1;
+                for _ in 0..skip_len {
+                    chars.next();
+                }
+                pos += pattern.len();
+
+                while let Some(&next) = chars.peek() {
+                    if next.is_whitespace() {
+                        break;
+                    }
+                    chars.next();
+                    pos += 1;
+                }
+
+                result.push_str(&vsock_uri);
+            } else {
+                result.push(c);
+                pos += c.len_utf8();
+            }
+        }
+
+        result
+    }
+
+    /// Transform a single TCP argument to vsock.
+    ///
+    /// Handles two cases:
+    /// 1. Separate arguments: ["--{arg_name}", "tcp://..."]
+    /// 2. Shell command string: ["-c", "... --{arg_name} tcp://... "]
+    fn transform_arg_tcp_to_vsock(guest_args: &mut [String], arg_name: &str, vsock_port: u32) {
+        use boxlite_shared::Transport;
+        let vsock_uri = Transport::vsock(vsock_port).to_uri();
+        let pattern = format!("--{} tcp://", arg_name);
+
+        for i in 0..guest_args.len() {
+            // Case 1: Separate arguments ["--{arg_name}", "tcp://..."]
+            if guest_args[i] == format!("--{}", arg_name)
+                && i + 1 < guest_args.len()
+                && guest_args[i + 1].starts_with("tcp://")
+            {
+                tracing::debug!(
+                    arg = arg_name,
+                    original = %guest_args[i + 1],
+                    transformed = %vsock_uri,
+                    "Transforming TCP to vsock URI"
+                );
+                guest_args[i + 1] = vsock_uri;
+                return;
+            }
+
+            // Case 2: Shell command string (e.g., -c "... --{arg_name} tcp://... ")
+            if guest_args[i].contains(&pattern) {
+                let transformed =
+                    Self::transform_shell_arg_tcp_to_vsock(&guest_args[i], arg_name, vsock_port);
+                tracing::debug!(
+                    arg = arg_name,
+                    original = %guest_args[i],
+                    transformed = %transformed,
+                    "Transforming shell command string (TCP)"
+                );
+                guest_args[i] = transformed;
+                return;
+            }
+        }
+    }
+
+    /// Transform guest arguments to replace host transport URIs with vsock URIs.
+    ///
+    /// Transforms both --listen and --notify from Unix/TCP to vsock.
+    /// The engine bridges host sockets to vsock ports inside VM.
+    /// On Unix, the transport is unix://; on Windows, it is tcp://.
+    /// Only one will match per platform.
+    fn transform_guest_args(mut guest_args: Vec<String>) -> Vec<String> {
+        // Transform --listen unix://... or tcp://... -> --listen vsock://2695
+        Self::transform_arg_unix_to_vsock(&mut guest_args, "listen", network::GUEST_AGENT_PORT);
+        Self::transform_arg_tcp_to_vsock(&mut guest_args, "listen", network::GUEST_AGENT_PORT);
+
+        // Transform --notify unix://... or tcp://... -> --notify vsock://2696
         Self::transform_arg_unix_to_vsock(&mut guest_args, "notify", network::GUEST_READY_PORT);
+        Self::transform_arg_tcp_to_vsock(&mut guest_args, "notify", network::GUEST_READY_PORT);
 
         guest_args
     }
@@ -530,5 +616,148 @@ impl Vmm for Krun {
             probe: crate::system_check::hypervisor_probe(),
         };
         Ok(VmmInstance::new(Box::new(instance)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- Unix→vsock tests (existing functionality) ---
+
+    #[test]
+    fn test_transform_arg_unix_to_vsock_separate_args() {
+        let mut args = vec![
+            "--listen".to_string(),
+            "unix:///tmp/boxlite.sock".to_string(),
+            "--other".to_string(),
+            "value".to_string(),
+        ];
+        Krun::transform_arg_unix_to_vsock(&mut args, "listen", 2695);
+        assert_eq!(args[0], "--listen");
+        assert_eq!(args[1], "vsock://2695");
+        assert_eq!(args[2], "--other");
+        assert_eq!(args[3], "value");
+    }
+
+    #[test]
+    fn test_transform_arg_unix_to_vsock_shell_command() {
+        let mut args = vec![
+            "-c".to_string(),
+            "exec boxlite-guest --listen unix:///tmp/boxlite.sock --notify unix:///tmp/ready.sock"
+                .to_string(),
+        ];
+        Krun::transform_arg_unix_to_vsock(&mut args, "listen", 2695);
+        assert!(args[1].contains("--listen vsock://2695"));
+        assert!(args[1].contains("--notify unix:///tmp/ready.sock"));
+    }
+
+    #[test]
+    fn test_transform_arg_unix_to_vsock_noop_when_absent() {
+        let mut args = vec!["--other".to_string(), "value".to_string()];
+        Krun::transform_arg_unix_to_vsock(&mut args, "listen", 2695);
+        assert_eq!(args, vec!["--other", "value"]);
+    }
+
+    // --- TCP→vsock tests (new functionality) ---
+
+    #[test]
+    fn test_transform_arg_tcp_to_vsock_separate_args() {
+        let mut args = vec![
+            "--listen".to_string(),
+            "tcp://127.0.0.1:12345".to_string(),
+            "--other".to_string(),
+            "value".to_string(),
+        ];
+        Krun::transform_arg_tcp_to_vsock(&mut args, "listen", 2695);
+        assert_eq!(args[0], "--listen");
+        assert_eq!(args[1], "vsock://2695");
+        assert_eq!(args[2], "--other");
+        assert_eq!(args[3], "value");
+    }
+
+    #[test]
+    fn test_transform_arg_tcp_to_vsock_shell_command() {
+        let mut args = vec![
+            "-c".to_string(),
+            "exec boxlite-guest --listen tcp://127.0.0.1:12345 --notify tcp://127.0.0.1:12346"
+                .to_string(),
+        ];
+        Krun::transform_arg_tcp_to_vsock(&mut args, "listen", 2695);
+        assert!(args[1].contains("--listen vsock://2695"));
+        // notify should remain untouched
+        assert!(args[1].contains("--notify tcp://127.0.0.1:12346"));
+    }
+
+    #[test]
+    fn test_transform_arg_tcp_to_vsock_noop_when_absent() {
+        let mut args = vec!["--other".to_string(), "value".to_string()];
+        Krun::transform_arg_tcp_to_vsock(&mut args, "listen", 2695);
+        assert_eq!(args, vec!["--other", "value"]);
+    }
+
+    #[test]
+    fn test_transform_arg_tcp_to_vsock_notify() {
+        let mut args = vec!["--notify".to_string(), "tcp://127.0.0.1:9999".to_string()];
+        Krun::transform_arg_tcp_to_vsock(&mut args, "notify", 2696);
+        assert_eq!(args[1], "vsock://2696");
+    }
+
+    // --- transform_guest_args integration ---
+
+    #[test]
+    fn test_transform_guest_args_unix() {
+        let args = vec![
+            "--listen".to_string(),
+            "unix:///tmp/boxlite.sock".to_string(),
+            "--notify".to_string(),
+            "unix:///tmp/ready.sock".to_string(),
+        ];
+        let result = Krun::transform_guest_args(args);
+        assert_eq!(result[1], format!("vsock://{}", network::GUEST_AGENT_PORT));
+        assert_eq!(result[3], format!("vsock://{}", network::GUEST_READY_PORT));
+    }
+
+    #[test]
+    fn test_transform_guest_args_tcp() {
+        let args = vec![
+            "--listen".to_string(),
+            "tcp://127.0.0.1:12345".to_string(),
+            "--notify".to_string(),
+            "tcp://127.0.0.1:12346".to_string(),
+        ];
+        let result = Krun::transform_guest_args(args);
+        assert_eq!(result[1], format!("vsock://{}", network::GUEST_AGENT_PORT));
+        assert_eq!(result[3], format!("vsock://{}", network::GUEST_READY_PORT));
+    }
+
+    #[test]
+    fn test_transform_guest_args_preserves_other_args() {
+        let args = vec![
+            "--config".to_string(),
+            "/etc/config.json".to_string(),
+            "--listen".to_string(),
+            "tcp://127.0.0.1:12345".to_string(),
+            "--verbose".to_string(),
+        ];
+        let result = Krun::transform_guest_args(args);
+        assert_eq!(result[0], "--config");
+        assert_eq!(result[1], "/etc/config.json");
+        assert_eq!(result[3], format!("vsock://{}", network::GUEST_AGENT_PORT));
+        assert_eq!(result[4], "--verbose");
+    }
+
+    #[test]
+    fn test_transform_guest_args_shell_tcp() {
+        let args = vec![
+            "-c".to_string(),
+            format!(
+                "exec boxlite-guest --listen tcp://127.0.0.1:5000 --notify tcp://127.0.0.1:5001"
+            ),
+        ];
+        let result = Krun::transform_guest_args(args);
+        let shell_cmd = &result[1];
+        assert!(shell_cmd.contains(&format!("--listen vsock://{}", network::GUEST_AGENT_PORT)));
+        assert!(shell_cmd.contains(&format!("--notify vsock://{}", network::GUEST_READY_PORT)));
     }
 }
