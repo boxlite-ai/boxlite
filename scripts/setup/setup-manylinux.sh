@@ -26,9 +26,14 @@ check_platform() {
     fi
 }
 
-# Check if a yum package is installed
+# Check if a yum package requirement is already satisfied.
+#
+# On Amazon Linux 2023, `curl-minimal` satisfies the `curl` capability but
+# `yum list installed curl` still reports "not installed", which makes the
+# setup flow try to replace `curl-minimal` with `curl` and fail. Querying
+# rpm providers avoids that false negative and works for normal packages too.
 yum_installed() {
-    yum list installed "$1" &>/dev/null
+    rpm -q --whatprovides "$1" &>/dev/null
 }
 
 # Update package lists
