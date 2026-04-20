@@ -206,17 +206,16 @@ fn run_shim(mut config: InstanceSpec, timing: impl Fn(&str)) -> BoxliteResult<()
 
     tracing::info!("Box instance created, handing over process control to Box");
 
-    // Install SIGTERM handler for graceful shutdown (all boxes, detached or not).
-    // When SIGTERM is received: Guest.Shutdown() RPC (flush qcow2) → re-raise SIGTERM.
+    // Install shutdown handlers for graceful shutdown (all boxes, detached or not).
+    // When triggered: Guest.Shutdown() RPC (flush qcow2) → exit.
     #[cfg(unix)]
     install_graceful_shutdown_handler(transport);
-    #[cfg(not(unix))]
-    let _ = &transport;
+    #[cfg(windows)]
+    install_windows_ctrl_handler(transport.clone());
 
     // Start parent watchdog if detach=false.
-    // The parent holds the write end of a pipe (fd 3 in this process).
-    // When parent dies or drops the keepalive, kernel closes the write end,
-    // delivering POLLHUP to our watchdog thread → SIGTERM → graceful shutdown.
+    // Unix: pipe POLLHUP → SIGTERM → graceful shutdown handler.
+    // Windows: Event + parent process handle → WaitForMultipleObjects → direct shutdown.
     #[cfg(unix)]
     if !detach {
         start_parent_watchdog();
@@ -224,8 +223,11 @@ fn run_shim(mut config: InstanceSpec, timing: impl Fn(&str)) -> BoxliteResult<()
     } else {
         tracing::info!("Running in detached mode (detach=true)");
     }
-    #[cfg(not(unix))]
-    if detach {
+    #[cfg(windows)]
+    if !detach {
+        install_windows_watchdog(transport);
+        tracing::info!("Parent watchdog started via Event+ProcessHandle (detach=false)");
+    } else {
         tracing::info!("Running in detached mode (detach=true)");
     }
 
@@ -371,4 +373,196 @@ fn start_parent_watchdog() {
         // Fallback: if SIGKILL somehow didn't work, exit forcefully
         std::process::exit(137); // 128 + 9 (SIGKILL)
     });
+}
+
+/// Install Ctrl+C handler on Windows via `SetConsoleCtrlHandler`.
+///
+/// Handles `CTRL_C_EVENT` and `CTRL_CLOSE_EVENT` by calling
+/// `do_graceful_shutdown()` — same Guest.Shutdown() RPC as the Unix handler.
+#[cfg(windows)]
+fn install_windows_ctrl_handler(transport: boxlite_shared::Transport) {
+    use std::sync::{Mutex, OnceLock};
+
+    // Store transport in a global so the handler callback can access it
+    static TRANSPORT: OnceLock<Mutex<Option<boxlite_shared::Transport>>> = OnceLock::new();
+    let _ = TRANSPORT.set(Mutex::new(Some(transport)));
+
+    use windows_sys::Win32::System::Console::{
+        CTRL_C_EVENT, CTRL_CLOSE_EVENT, SetConsoleCtrlHandler,
+    };
+
+    unsafe extern "system" fn ctrl_handler(ctrl_type: u32) -> i32 {
+        match ctrl_type {
+            CTRL_C_EVENT => {
+                tracing::info!("CTRL_C received in shim, initiating graceful shutdown");
+            }
+            CTRL_CLOSE_EVENT => {
+                tracing::info!("CTRL_CLOSE received in shim, initiating graceful shutdown");
+            }
+            _ => return 0, // Not handled
+        }
+
+        // Extract transport and run graceful shutdown (once only)
+        if let Some(mutex) = TRANSPORT.get() {
+            if let Ok(mut guard) = mutex.lock() {
+                if let Some(transport) = guard.take() {
+                    do_graceful_shutdown(transport);
+                }
+            }
+        }
+
+        std::process::exit(0);
+    }
+
+    unsafe {
+        if SetConsoleCtrlHandler(Some(ctrl_handler), 1) == 0 {
+            tracing::warn!("Failed to install SetConsoleCtrlHandler in shim");
+        }
+    }
+}
+
+/// Install Windows watchdog: monitors shutdown Event + parent process handle.
+///
+/// Reads `BOXLITE_SHUTDOWN_EVENT` and `BOXLITE_PARENT_PID` from environment,
+/// then spawns a monitoring thread that calls `WaitForMultipleObjects` on both.
+/// When either fires (explicit stop or parent death), calls Guest.Shutdown() RPC.
+#[cfg(windows)]
+fn install_windows_watchdog(transport: boxlite_shared::Transport) {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{
+        INFINITE, OpenProcess, SYNCHRONIZE, WaitForMultipleObjects,
+    };
+
+    // 1. Read shutdown event handle from env
+    let event_handle: isize = match std::env::var(watchdog::ENV_SHUTDOWN_EVENT) {
+        Ok(val) => match val.parse::<usize>() {
+            Ok(h) => h as isize,
+            Err(e) => {
+                tracing::warn!("Invalid {}: {e}", watchdog::ENV_SHUTDOWN_EVENT);
+                return;
+            }
+        },
+        Err(_) => {
+            tracing::warn!(
+                "{} not set, watchdog disabled",
+                watchdog::ENV_SHUTDOWN_EVENT
+            );
+            return;
+        }
+    };
+
+    // 2. Read parent PID from env and open parent process handle
+    let parent_handle: isize = match std::env::var(watchdog::ENV_PARENT_PID) {
+        Ok(val) => match val.parse::<u32>() {
+            Ok(pid) => {
+                let h = unsafe { OpenProcess(SYNCHRONIZE, 0, pid) };
+                if h == 0 {
+                    tracing::warn!(
+                        "Failed to open parent process {pid}: {}",
+                        std::io::Error::last_os_error()
+                    );
+                    // Fall back to event-only monitoring
+                    0
+                } else {
+                    h
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Invalid {}: {e}", watchdog::ENV_PARENT_PID);
+                0
+            }
+        },
+        Err(_) => {
+            tracing::debug!(
+                "{} not set, parent death detection disabled",
+                watchdog::ENV_PARENT_PID
+            );
+            0
+        }
+    };
+
+    // 3. Spawn monitoring thread
+    thread::spawn(move || {
+        // Build handle array for WaitForMultipleObjects
+        let mut handles = Vec::with_capacity(2);
+        handles.push(event_handle);
+        if parent_handle != 0 {
+            handles.push(parent_handle);
+        }
+
+        tracing::debug!(
+            event_handle = event_handle,
+            parent_handle = parent_handle,
+            num_handles = handles.len(),
+            "Watchdog monitoring started"
+        );
+
+        // Block until either event is signaled or parent dies
+        let result = unsafe {
+            WaitForMultipleObjects(
+                handles.len() as u32,
+                handles.as_ptr(),
+                0, // bWaitAll = FALSE — return when ANY handle is signaled
+                INFINITE,
+            )
+        };
+
+        // WAIT_OBJECT_0 = 0, WAIT_OBJECT_0 + 1 = 1
+        match result {
+            0 => tracing::info!("Shutdown event signaled (explicit stop)"),
+            1 => tracing::info!("Parent death detected (process handle signaled)"),
+            _ => tracing::warn!(
+                result = result,
+                "WaitForMultipleObjects returned unexpectedly"
+            ),
+        }
+
+        // Graceful shutdown: Guest.Shutdown() RPC
+        do_graceful_shutdown(transport);
+
+        // Cleanup handles
+        if parent_handle != 0 {
+            unsafe { CloseHandle(parent_handle) };
+        }
+
+        // Force exit after shutdown
+        std::process::exit(0);
+    });
+}
+
+/// Perform graceful shutdown: call Guest.Shutdown() RPC with timeout.
+///
+/// Shared by both Windows Ctrl handler and watchdog thread.
+/// Creates a single-threaded Tokio runtime to run the async shutdown.
+#[cfg(windows)]
+fn do_graceful_shutdown(transport: boxlite_shared::Transport) {
+    match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => {
+            let session = boxlite::GuestSession::new(transport);
+            let result = rt.block_on(async {
+                tokio::time::timeout(Duration::from_secs(GUEST_SHUTDOWN_TIMEOUT_SECS), async {
+                    match session.guest().await {
+                        Ok(mut guest) => {
+                            let _ = guest.shutdown().await;
+                        }
+                        Err(e) => {
+                            tracing::debug!("Could not connect to guest for shutdown: {e}");
+                        }
+                    }
+                })
+                .await
+            });
+            match result {
+                Ok(()) => tracing::info!("Guest shutdown completed (filesystems synced)"),
+                Err(_) => tracing::warn!(
+                    timeout_secs = GUEST_SHUTDOWN_TIMEOUT_SECS,
+                    "Guest shutdown timed out"
+                ),
+            }
+        }
+        Err(e) => tracing::warn!("Failed to build tokio runtime for guest shutdown: {e}"),
+    }
 }

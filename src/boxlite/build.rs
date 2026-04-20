@@ -678,6 +678,26 @@ impl EmbeddedManifest {
             Self::find_prebuilt_guest,
         );
 
+        // On Windows, the kernel is NOT embedded in libkrunfw — it must be provided
+        // explicitly. Embed vmlinuz and initrd.img in the manifest so they get
+        // extracted alongside the other runtime binaries.
+        let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+        if target_os == "windows" {
+            println!("cargo:rerun-if-env-changed=BOXLITE_KERNEL_DIR");
+            self.copy_prebuilt_binary(
+                &workspace_root,
+                "vmlinuz",
+                &profile,
+                Self::find_prebuilt_kernel,
+            );
+            self.copy_prebuilt_binary(
+                &workspace_root,
+                "initrd.img",
+                &profile,
+                Self::find_prebuilt_initrd,
+            );
+        }
+
         let entries = self.scan_entries();
         Self::emit_manifest(&manifest_path, &entries);
     }
@@ -759,6 +779,14 @@ impl EmbeddedManifest {
     /// Checks matching architecture first to avoid picking wrong binary on
     /// multi-arch machines (e.g., x86_64 guest embedded into aarch64 build).
     fn find_prebuilt_guest(workspace_root: &Path, profile: &str) -> Option<PathBuf> {
+        // Check BOXLITE_KERNEL_DIR first (same dir as kernel/initrd for convenience)
+        if let Ok(dir) = env::var("BOXLITE_KERNEL_DIR") {
+            let path = PathBuf::from(dir).join("boxlite-guest");
+            if path.is_file() {
+                return Some(path);
+            }
+        }
+
         let target_dir = workspace_root.join("target");
 
         // Check matching architecture first, then fall back to others
@@ -772,6 +800,46 @@ impl EmbeddedManifest {
             }
         }
 
+        None
+    }
+
+    /// Find pre-built vmlinuz (Linux kernel) for Windows WHPX boot.
+    ///
+    /// Search order:
+    /// 1. `BOXLITE_KERNEL_DIR` env var
+    /// 2. `target/kernel-windows-x86_64/vmlinuz` (cross-compiled output)
+    fn find_prebuilt_kernel(workspace_root: &Path, _profile: &str) -> Option<PathBuf> {
+        if let Ok(dir) = env::var("BOXLITE_KERNEL_DIR") {
+            let path = PathBuf::from(dir).join("vmlinuz");
+            if path.is_file() {
+                return Some(path);
+            }
+        }
+
+        let path = workspace_root.join("target/kernel-windows-x86_64/vmlinuz");
+        if path.is_file() {
+            return Some(path);
+        }
+        None
+    }
+
+    /// Find pre-built initrd.img for Windows WHPX boot.
+    ///
+    /// Search order:
+    /// 1. `BOXLITE_KERNEL_DIR` env var
+    /// 2. `target/kernel-windows-x86_64/initrd.img` (build output)
+    fn find_prebuilt_initrd(workspace_root: &Path, _profile: &str) -> Option<PathBuf> {
+        if let Ok(dir) = env::var("BOXLITE_KERNEL_DIR") {
+            let path = PathBuf::from(dir).join("initrd.img");
+            if path.is_file() {
+                return Some(path);
+            }
+        }
+
+        let path = workspace_root.join("target/kernel-windows-x86_64/initrd.img");
+        if path.is_file() {
+            return Some(path);
+        }
         None
     }
 

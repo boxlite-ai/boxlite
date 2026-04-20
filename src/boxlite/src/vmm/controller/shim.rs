@@ -9,7 +9,6 @@ use crate::{
 };
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
-#[cfg(unix)]
 use super::watchdog;
 use super::{
     VmmController, VmmHandler as VmmHandlerTrait, VmmMetrics,
@@ -32,12 +31,11 @@ pub struct ShimHandler {
     /// When we spawn the process, we keep the Child to properly wait() on stop.
     /// When we attach to an existing process, this is None.
     process: Option<Child>,
-    /// Watchdog keepalive. Dropping closes the pipe write end, delivering
-    /// POLLHUP to the shim and triggering graceful shutdown.
-    /// Defense-in-depth: even if `stop()` is never called, dropping the
-    /// handler closes this, triggering shim cleanup automatically.
-    #[cfg(unix)]
-    #[allow(dead_code)]
+    /// Watchdog keepalive. Defense-in-depth: even if `stop()` is never called,
+    /// dropping the handler triggers shim shutdown automatically.
+    /// - **Unix:** Dropping closes pipe write end → POLLHUP in shim.
+    /// - **Windows:** Dropping signals the Event → shim detects via WaitForMultipleObjects.
+    #[allow(dead_code)] // Read via Drop semantics — dropping triggers shim shutdown
     keepalive: Option<watchdog::Keepalive>,
     /// Shared System instance for CPU metrics calculation across calls.
     /// CPU usage requires comparing snapshots over time, so we must reuse the same System.
@@ -56,7 +54,6 @@ impl ShimHandler {
             pid,
             box_id,
             process: Some(spawned.child),
-            #[cfg(unix)]
             keepalive: spawned.keepalive,
             metrics_sys: Mutex::new(sysinfo::System::new()),
         }
@@ -75,7 +72,6 @@ impl ShimHandler {
             pid,
             box_id,
             process: None,
-            #[cfg(unix)]
             keepalive: None,
             metrics_sys: Mutex::new(sysinfo::System::new()),
         }
@@ -94,12 +90,20 @@ impl VmmHandlerTrait for ShimHandler {
         const GRACEFUL_SHUTDOWN_TIMEOUT_MS: u64 = 2000;
 
         if let Some(mut process) = self.process.take() {
-            // Step 1: Send SIGTERM for graceful shutdown
+            // Step 1: Signal graceful shutdown
             #[cfg(unix)]
             {
                 let pid = process.id();
                 unsafe {
                     libc::kill(pid as i32, libc::SIGTERM);
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                // Signal the shutdown event — the shim's monitoring thread will
+                // call Guest.Shutdown() RPC then exit cleanly.
+                if let Some(ref keepalive) = self.keepalive {
+                    keepalive.signal();
                 }
             }
 

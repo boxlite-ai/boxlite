@@ -11,19 +11,19 @@ use crate::runtime::options::BoxOptions;
 use crate::util::configure_library_env;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
-#[cfg(unix)]
 use super::watchdog;
 
 /// A shim that was spawned, with its child process handle and optional keepalive.
 ///
-/// The `keepalive` holds the parent side of the watchdog pipe. While it exists,
-/// the shim's watchdog thread blocks on `poll()`. Dropping it closes the pipe
-/// write end, delivering POLLHUP to the shim and triggering graceful shutdown.
+/// The `keepalive` holds the parent side of the watchdog mechanism:
+/// - **Unix:** Pipe write end. Dropping delivers POLLHUP to the shim.
+/// - **Windows:** Event handle. Dropping signals the event via SetEvent.
+///
+/// In both cases, dropping triggers graceful shutdown in the shim.
 pub struct SpawnedShim {
     pub child: Child,
     /// Parent-side watchdog keepalive. Dropping triggers shim shutdown.
     /// `None` for detached boxes (no watchdog).
-    #[cfg(unix)]
     pub keepalive: Option<watchdog::Keepalive>,
 }
 
@@ -65,11 +65,9 @@ impl<'a> ShimSpawner<'a> {
     /// # Returns
     /// * `SpawnedShim` containing the child process and optional keepalive
     pub fn spawn(&self, config_json: &str, detach: bool) -> BoxliteResult<SpawnedShim> {
-        #[cfg(not(unix))]
-        let _ = detach; // Only used in Unix watchdog pipe creation
-
-        // 1. Create watchdog pipe (non-detached only, Unix only)
-        #[cfg(unix)]
+        // 1. Create watchdog (non-detached only)
+        //    Unix: pipe pair (POLLHUP on parent death)
+        //    Windows: Event handle (SetEvent on stop, parent handle on death)
         let (keepalive, child_setup) = if !detach {
             let (k, s) = watchdog::create()?;
             (Some(k), Some(s))
@@ -101,6 +99,13 @@ impl<'a> ShimSpawner<'a> {
 
         // 5. Configure environment
         self.configure_env(&mut cmd);
+
+        // 5b. Pass watchdog handles via environment (Windows)
+        #[cfg(windows)]
+        if let Some(ref setup) = child_setup {
+            cmd.env(watchdog::ENV_SHUTDOWN_EVENT, setup.event_handle_str());
+            cmd.env(watchdog::ENV_PARENT_PID, std::process::id().to_string());
+        }
 
         // 6. Configure stdio
         // stdin=piped: config JSON is sent via stdin to avoid /proc/cmdline exposure
@@ -135,15 +140,11 @@ impl<'a> ShimSpawner<'a> {
             drop(stdin); // close write end — shim sees EOF
         }
 
-        // 9. Close read end in parent (child inherited it via fork)
-        #[cfg(unix)]
+        // 9. Close read end in parent (child inherited it via fork on Unix)
+        //    On Windows, ChildSetup is just a handle value — no cleanup needed.
         drop(child_setup);
 
-        Ok(SpawnedShim {
-            child,
-            #[cfg(unix)]
-            keepalive,
-        })
+        Ok(SpawnedShim { child, keepalive })
     }
 
     fn configure_env(&self, cmd: &mut std::process::Command) {
