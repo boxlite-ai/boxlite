@@ -1,0 +1,4 @@
+.sst/
+sst-env.d.ts
+.env
+node_modules/

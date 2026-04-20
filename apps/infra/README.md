@@ -18,14 +18,22 @@ npx sst deploy --stage dev
 ```
 
 First deploy: 8–12 minutes. Output prints 10 service URLs + one CloudFront URL.
+If the build fails with a transient `auth.docker.io` EOF or Debian mirror
+`502 Bad Gateway`, just rerun `npx sst deploy --stage dev` — SST resumes
+from the failed step.
 
 ## Second deploy (2 minutes)
 
-Two values need to be fed back into `.env` before everything works end-to-end.
+Three values need to be fed back into `.env` before everything works end-to-end.
 
 ```bash
-# 1. Copy from deploy output:
-echo "CLOUDFRONT_DOMAIN=d1a2b3c4e5f6g7.cloudfront.net" >> .env
+# 1. Get the live CloudFront domain (authoritative — the deploy output
+#    doesn't always reprint it, and a stale value crashes the Api with
+#    `getaddrinfo ENOTFOUND`):
+aws cloudfront list-distributions \
+  --query 'DistributionList.Items[].{Domain:DomainName,LastMod:LastModifiedTime}' \
+  --output table
+echo "CLOUDFRONT_DOMAIN=<domain-from-above>" >> .env
 
 # 2. Get runner private IP:
 aws ec2 describe-instances \
