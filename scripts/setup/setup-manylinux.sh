@@ -34,7 +34,7 @@ yum_installed() {
 # Update package lists
 update_yum() {
     print_section "🔄 Updating package lists..."
-    yum update -y -q
+    run_with_sudo yum update -y -q
     echo ""
 }
 
@@ -91,7 +91,7 @@ install_system_deps() {
             print_success "Already installed"
         else
             echo -e "${YELLOW}Installing...${NC}"
-            yum install -y -q "$pkg"
+            run_with_sudo yum install -y -q "$pkg"
             print_success "$pkg installed"
         fi
     done
@@ -103,7 +103,7 @@ install_system_deps() {
         print_success "Already installed"
     else
         echo -e "${YELLOW}Installing...${NC}"
-        yum install -y -q glibc-static
+        run_with_sudo yum install -y -q glibc-static
         print_success "glibc-static installed"
     fi
 
@@ -119,7 +119,7 @@ install_python_deps() {
         print_success "Already installed"
     else
         echo -e "${YELLOW}Installing...${NC}"
-        pip3 install -q pyelftools
+        run_with_sudo pip3 install -q pyelftools
         print_success "pyelftools installed"
     fi
 
@@ -129,7 +129,7 @@ install_python_deps() {
         print_success "Already installed"
     else
         echo -e "${YELLOW}Installing via pip...${NC}"
-        pip3 install -q meson
+        run_with_sudo pip3 install -q meson
         print_success "meson installed"
     fi
 
@@ -176,7 +176,7 @@ install_protoc() {
     local PROTOC_ZIP="/tmp/protoc.zip"
 
     curl -sSL "$PROTOC_URL" -o "$PROTOC_ZIP"
-    unzip -q -o "$PROTOC_ZIP" -d /usr/local
+    run_with_sudo unzip -q -o "$PROTOC_ZIP" -d /usr/local
     rm -f "$PROTOC_ZIP"
 
     print_success "Installed protoc $PROTOC_VERSION"
@@ -216,7 +216,7 @@ install_nodejs() {
 
     echo -e "${YELLOW}Downloading Node.js $NODE_VERSION...${NC}"
     curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz" \
-        | tar -xJ -C /usr/local --strip-components=1
+        | run_with_sudo tar -xJ -C /usr/local --strip-components=1
     print_success "Node.js $NODE_VERSION installed"
     echo ""
 }
@@ -226,6 +226,7 @@ main() {
     print_header "BoxLite Development Setup for manylinux"
 
     check_platform
+    require_root_or_sudo
 
     print_section "📋 Checking prerequisites..."
     echo ""

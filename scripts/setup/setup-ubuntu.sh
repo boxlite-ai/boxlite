@@ -31,13 +31,6 @@ check_platform() {
     fi
 }
 
-# Check if we need $SUDO (not root and $SUDO exists)
-if [ "$EUID" -ne 0 ] && command -v sudo &> /dev/null; then
-    SUDO="sudo"
-else
-    SUDO=""
-fi
-
 # Check if a package is installed
 apt_installed() {
     dpkg -l "$1" 2>/dev/null | grep -q "^ii"
@@ -46,7 +39,7 @@ apt_installed() {
 # Update package lists
 update_apt() {
     print_section "🔄 Updating package lists..."
-    $SUDO apt-get update -qq
+    run_with_sudo apt-get update -qq
     echo ""
 }
 
@@ -103,7 +96,7 @@ install_system_deps() {
             print_success "Already installed"
         else
             echo -e "${YELLOW}Installing...${NC}"
-            $SUDO apt-get install -y -qq "$pkg"
+            run_with_sudo apt-get install -y -qq "$pkg"
             print_success "$pkg installed"
         fi
     done
@@ -135,7 +128,7 @@ install_nodejs() {
             print_success "Already installed"
         else
             echo -e "${YELLOW}Installing...${NC}"
-            $SUDO apt-get install -y -qq "$pkg"
+            run_with_sudo apt-get install -y -qq "$pkg"
             print_success "$pkg installed"
         fi
     done
@@ -150,6 +143,7 @@ main() {
     print_header "BoxLite Development Setup for Ubuntu/Debian"
 
     check_platform
+    require_root_or_sudo
 
     print_section "📋 Checking prerequisites..."
     echo ""

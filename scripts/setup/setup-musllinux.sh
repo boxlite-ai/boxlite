@@ -34,7 +34,7 @@ apk_installed() {
 # Update package lists
 update_apk() {
     print_section "🔄 Updating package lists..."
-    apk update
+    run_with_sudo apk update
     echo ""
 }
 
@@ -92,7 +92,7 @@ install_system_deps() {
             print_success "Already installed"
         else
             echo -e "${YELLOW}Installing...${NC}"
-            apk add --quiet "$pkg"
+            run_with_sudo apk add --quiet "$pkg"
             print_success "$pkg installed"
         fi
     done
@@ -109,7 +109,7 @@ install_python_deps() {
         print_success "Already installed"
     else
         echo -e "${YELLOW}Installing...${NC}"
-        pip3 install --quiet pyelftools
+        run_with_sudo pip3 install --quiet pyelftools
         print_success "pyelftools installed"
     fi
 
@@ -156,7 +156,7 @@ install_protoc() {
     local PROTOC_ZIP="/tmp/protoc.zip"
 
     curl -sSL "$PROTOC_URL" -o "$PROTOC_ZIP"
-    unzip -q -o "$PROTOC_ZIP" -d /usr/local
+    run_with_sudo unzip -q -o "$PROTOC_ZIP" -d /usr/local
     rm -f "$PROTOC_ZIP"
 
     print_success "Installed protoc $PROTOC_VERSION"
@@ -168,6 +168,7 @@ main() {
     print_header "BoxLite Development Setup for musllinux"
 
     check_platform
+    require_root_or_sudo
 
     print_section "📋 Checking prerequisites..."
     echo ""

@@ -17,6 +17,39 @@ if [[ -z "$SCRIPT_DIR" ]]; then
     source "$SCRIPT_DIR/common.sh"
 fi
 
+# Configure sudo helper for scripts that write system locations.
+setup_sudo() {
+    if [ "$EUID" -eq 0 ]; then
+        SUDO=""
+    elif command_exists sudo; then
+        SUDO="sudo"
+    else
+        SUDO=""
+    fi
+
+    export SUDO
+}
+
+# Fail early when a setup flow needs system-level package installation.
+require_root_or_sudo() {
+    setup_sudo
+
+    if [ "$EUID" -ne 0 ] && [ -z "$SUDO" ]; then
+        print_error "This setup requires root privileges or sudo"
+        echo "   Re-run as root or install sudo and retry"
+        exit 1
+    fi
+}
+
+# Run a command through sudo when the current shell is not root.
+run_with_sudo() {
+    if [ -n "${SUDO:-}" ]; then
+        "$SUDO" "$@"
+    else
+        "$@"
+    fi
+}
+
 # Check Rust installation
 check_rust() {
     print_step "Checking for Rust... "
@@ -178,8 +211,8 @@ install_go_from_official() {
     print_success "Done"
 
     print_step "Installing to /usr/local/go... "
-    ${SUDO:-} rm -rf /usr/local/go
-    ${SUDO:-} tar -C /usr/local -xzf "$tmpfile"
+    run_with_sudo rm -rf /usr/local/go
+    run_with_sudo tar -C /usr/local -xzf "$tmpfile"
     rm -f "$tmpfile"
     print_success "Installed"
 
