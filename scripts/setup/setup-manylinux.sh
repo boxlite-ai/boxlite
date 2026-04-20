@@ -36,10 +36,15 @@ yum_installed() {
     rpm -q --whatprovides "$1" &>/dev/null
 }
 
-# Update package lists
+# Refresh package metadata without upgrading the base image.
+#
+# `yum update` can trigger distro-level package replacement conflicts on
+# Amazon Linux 2023, notably around `curl` vs `curl-minimal`. Setup only
+# needs fresh repository metadata before targeted installs, not a full
+# system update.
 update_yum() {
-    print_section "🔄 Updating package lists..."
-    run_with_sudo yum update -y -q
+    print_section "🔄 Refreshing package metadata..."
+    run_with_sudo yum makecache -q
     echo ""
 }
 
