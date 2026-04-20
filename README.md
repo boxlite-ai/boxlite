@@ -311,6 +311,7 @@ For details, see [Architecture](./docs/architecture/).
 
 - [GitHub Issues](https://github.com/boxlite-ai/boxlite/issues) — Bug reports and feature requests
 - [Discord](https://go.boxlite.ai/discord) — Questions and community support
+- [Security Policy](./SECURITY.md) — How to privately report a vulnerability
 
 ## Contributing
 

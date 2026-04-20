@@ -48,6 +48,7 @@ Key test entry points:
 - Use [GitHub Issues](https://github.com/boxlite-labs/boxlite/issues)
 - Include OS, architecture, and BoxLite version
 - Provide minimal reproduction steps
+- **Security vulnerabilities:** do not open a public issue. See [SECURITY.md](./SECURITY.md) for the private reporting process.
 
 ### Pull Requests
 
