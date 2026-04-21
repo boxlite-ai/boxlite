@@ -14,7 +14,7 @@ mod common;
 
 use boxlite::runtime::options::BoxliteOptions;
 use boxlite::runtime::types::BoxStatus;
-use boxlite::{BoxCommand, BoxliteRuntime};
+use boxlite::{BoxCommand, BoxliteError, BoxliteRuntime};
 
 /// Helper: create a runtime with a per-test home directory.
 fn test_runtime() -> (boxlite_test_utils::home::PerTestBoxHome, BoxliteRuntime) {
@@ -80,10 +80,9 @@ async fn exec_rejected_while_paused() {
         Err(e) => e,
         Ok(_) => panic!("exec should fail while paused"),
     };
-    let msg = err.to_string();
     assert!(
-        msg.contains("Paused") || msg.contains("paused") || msg.contains("InvalidState"),
-        "Expected InvalidState/Paused error, got: {msg}"
+        matches!(&err, BoxliteError::InvalidState(_)),
+        "Expected InvalidState error, got: {err:?}"
     );
 
     // Resume and verify exec works again
@@ -225,10 +224,9 @@ async fn resume_on_stopped_box_returns_error() {
         Err(e) => e,
         Ok(()) => panic!("resume should fail on stopped box"),
     };
-    let msg = err.to_string();
     assert!(
-        msg.contains("stop") || msg.contains("Stop") || msg.contains("invalidated"),
-        "Expected stopped/invalidated error, got: {msg}"
+        matches!(&err, BoxliteError::Stopped(_)),
+        "Expected Stopped error, got: {err:?}"
     );
 
     let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
@@ -246,33 +244,31 @@ async fn copy_into_rejected_while_paused() {
     litebox.start().await.expect("start box");
 
     // Create a temp file to copy
-    let tmp = std::env::temp_dir().join("boxlite-test-copy-pause");
-    std::fs::write(&tmp, b"test").expect("write temp file");
+    let tmp = tempfile::NamedTempFile::new().expect("create temp file");
+    std::fs::write(tmp.path(), b"test").expect("write temp file");
 
     litebox.pause().await.expect("pause box");
 
     // copy_into should fail while paused
     let err = match litebox
-        .copy_into(&tmp, "/tmp/test", Default::default())
+        .copy_into(tmp.path(), "/tmp/test", Default::default())
         .await
     {
         Err(e) => e,
         Ok(()) => panic!("copy_into should fail while paused"),
     };
-    let msg = err.to_string();
     assert!(
-        msg.contains("paused") || msg.contains("Paused"),
-        "Expected paused error, got: {msg}"
+        matches!(&err, BoxliteError::InvalidState(_)),
+        "Expected InvalidState error, got: {err:?}"
     );
 
     // Resume and verify copy works
     litebox.resume().await.expect("resume box");
     litebox
-        .copy_into(&tmp, "/tmp/test", Default::default())
+        .copy_into(tmp.path(), "/tmp/test", Default::default())
         .await
         .expect("copy_into after resume");
 
-    let _ = std::fs::remove_file(&tmp);
     litebox.stop().await.expect("stop box");
     let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 }
@@ -295,30 +291,28 @@ async fn copy_out_rejected_while_paused() {
 
     litebox.pause().await.expect("pause box");
 
-    let host_dst = std::env::temp_dir().join("boxlite-test-copy-out-pause");
+    let host_dst = tempfile::NamedTempFile::new().expect("create temp file");
 
     // copy_out should fail while paused
     let err = match litebox
-        .copy_out("/tmp/testfile", &host_dst, Default::default())
+        .copy_out("/tmp/testfile", host_dst.path(), Default::default())
         .await
     {
         Err(e) => e,
         Ok(()) => panic!("copy_out should fail while paused"),
     };
-    let msg = err.to_string();
     assert!(
-        msg.contains("paused") || msg.contains("Paused"),
-        "Expected paused error, got: {msg}"
+        matches!(&err, BoxliteError::InvalidState(_)),
+        "Expected InvalidState error, got: {err:?}"
     );
 
     // Resume and verify copy works
     litebox.resume().await.expect("resume box");
     litebox
-        .copy_out("/tmp/testfile", &host_dst, Default::default())
+        .copy_out("/tmp/testfile", host_dst.path(), Default::default())
         .await
         .expect("copy_out after resume");
 
-    let _ = std::fs::remove_file(&host_dst);
     litebox.stop().await.expect("stop box");
     let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;
 }
@@ -340,10 +334,9 @@ async fn pause_on_stopped_box_returns_error() {
         Err(e) => e,
         Ok(()) => panic!("pause should fail on stopped box"),
     };
-    let msg = err.to_string();
     assert!(
-        msg.contains("stop") || msg.contains("Stop") || msg.contains("invalidated"),
-        "Expected stopped/invalidated error, got: {msg}"
+        matches!(&err, BoxliteError::Stopped(_)),
+        "Expected Stopped error, got: {err:?}"
     );
 
     let _ = runtime.shutdown(Some(common::TEST_SHUTDOWN_TIMEOUT)).await;

@@ -100,14 +100,22 @@ impl BoxStatus {
         )
     }
 
-    /// Check if pause() can be called from this state.
-    /// Only Running boxes can be paused.
+    /// Check if calling `pause()` from this state would cause a meaningful
+    /// state transition (i.e., enter `Paused` from `Running`).
+    ///
+    /// Note: the public `pause()` API is idempotent and may be safely invoked
+    /// from `Paused` as a no-op. This predicate intentionally returns `true`
+    /// only when a transition `Running -> Paused` is allowed.
     pub fn can_pause(&self) -> bool {
         matches!(self, BoxStatus::Running)
     }
 
-    /// Check if resume() can be called from this state.
-    /// Only Paused boxes can be resumed.
+    /// Check if calling `resume()` from this state would cause a meaningful
+    /// state transition (i.e., leave `Paused` and enter `Running`).
+    ///
+    /// Note: the public `resume()` API is idempotent and may be safely invoked
+    /// from `Running` as a no-op. This predicate intentionally returns `true`
+    /// only when a transition `Paused -> Running` is allowed.
     pub fn can_resume(&self) -> bool {
         matches!(self, BoxStatus::Paused)
     }

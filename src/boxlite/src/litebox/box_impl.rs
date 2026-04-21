@@ -523,6 +523,7 @@ impl BoxImpl {
         }
 
         // Update state
+        let was_quiesced;
         {
             let mut state = self.state.write();
             if let Err(e) = state.transition_to(BoxStatus::Running) {
@@ -533,14 +534,17 @@ impl BoxImpl {
                 tracing::warn!(box_id = %self.config.id, error = %e, "State transition to Running failed (race?)");
                 state.force_status(BoxStatus::Running);
             }
+            was_quiesced = state.quiesced;
             state.quiesced = false;
             if let Err(e) = self.runtime.box_manager.save_box(self.id(), &state) {
                 tracing::warn!(box_id = %self.config.id, error = %e, "Failed to persist Running state");
             }
         }
 
-        // Phase 2: Thaw guest I/O (best-effort)
-        self.guest_thaw().await;
+        // Phase 2: Thaw guest I/O (only if pause() actually froze filesystems)
+        if was_quiesced {
+            self.guest_thaw().await;
+        }
 
         for listener in &self.event_listeners {
             listener.on_box_resumed(&self.config.id);
@@ -1354,7 +1358,7 @@ impl BoxImpl {
         match result {
             Ok(Ok(count)) => {
                 tracing::debug!(frozen_count = count, "Guest filesystems quiesced");
-                true
+                count > 0
             }
             Ok(Err(e)) => {
                 tracing::warn!(
