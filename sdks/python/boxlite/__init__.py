@@ -72,9 +72,8 @@ except ImportError as e:
     warnings.warn(f"BoxLite native extension not available: {e}", ImportWarning)
     __all__ = []
 
-# Import Python convenience wrappers (re-exported via __all__)
+# Import error types (pure Python, always available independently of native extensions)
 try:
-    from .codebox import CodeBox  # noqa: F401
     from .errors import (  # noqa: F401
         AlreadyExistsError,
         BoxliteError,
@@ -91,20 +90,15 @@ try:
         NotFoundError,
         ParseError,
         PortalError,
+        ResourceExhaustedError,
         RpcError,
         StoppedError,
         StorageError,
         TimeoutError,
     )
-    from .exec import ExecResult  # noqa: F401
-    from .simplebox import SimpleBox  # noqa: F401
 
     __all__.extend(
         [
-            # Python convenience wrappers
-            "SimpleBox",
-            "CodeBox",
-            "ExecResult",
             # Error types (base)
             "BoxliteError",
             # Error types (mapped from Rust)
@@ -123,10 +117,27 @@ try:
             "DatabaseError",
             "InvalidArgumentError",
             "StoppedError",
+            "ResourceExhaustedError",
             # Error types (Python convenience)
             "ExecError",
             "TimeoutError",
             "ParseError",
+        ]
+    )
+except ImportError:
+    pass
+
+# Import Python convenience wrappers (re-exported via __all__)
+try:
+    from .codebox import CodeBox  # noqa: F401
+    from .exec import ExecResult  # noqa: F401
+    from .simplebox import SimpleBox  # noqa: F401
+
+    __all__.extend(
+        [
+            "SimpleBox",
+            "CodeBox",
+            "ExecResult",
         ]
     )
 except ImportError:

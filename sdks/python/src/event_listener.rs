@@ -12,6 +12,11 @@ use pyo3::prelude::*;
 
 /// Python-side event listener that delegates to a Python object.
 ///
+/// **Threading:** Callbacks run synchronously on the Rust caller thread (the
+/// async task performing the operation). Slow Python handlers will stall
+/// runtime operations — keep callbacks fast or offload heavy work to a
+/// background thread/task.
+///
 /// The Python object can implement any subset of the callback methods:
 ///
 /// ```python
@@ -39,8 +44,9 @@ pub(crate) struct PyEventListener {
 //    `Python::attach` blocks, which acquire the GIL before any interaction.
 // 2. `Py::call_method1` with a valid `Python<'_>` token is safe to invoke
 //    from multiple threads — the GIL serializes all Python execution.
-// 3. The `Py<PyAny>` is never cloned or dropped outside GIL-protected contexts
-//    (only `Arc<PyEventListener>` is cloned, which is an atomic refcount op).
+// 3. When the last `Arc<PyEventListener>` is dropped, PyO3's `Py<T>` drop
+//    implementation acquires the GIL internally to release the Python object,
+//    so this is safe even if the drop occurs on a non-Python thread.
 //
 // INVARIANT: Do NOT access `self.callback` outside a `Python::attach` closure.
 // Violating this invariant would be undefined behavior.
@@ -55,51 +61,48 @@ impl PyEventListener {
     }
 }
 
-/// Log non-AttributeError callback failures. AttributeError means the Python
-/// object didn't implement that particular method, which is expected.
-fn log_callback_err(py: Python<'_>, method: &str, err: &PyErr) {
-    if !err.is_instance_of::<pyo3::exceptions::PyAttributeError>(py) {
-        tracing::warn!("EventListener.{} callback error: {}", method, err);
-    }
+/// Call a Python callback method if it exists on the listener object.
+///
+/// Uses `hasattr` to check for the method first, then calls it. This avoids
+/// suppressing real `AttributeError` exceptions raised *inside* a user callback
+/// (which would be silently swallowed if we relied on catching `AttributeError`
+/// from `call_method1`).
+macro_rules! call_if_exists {
+    ($py:expr, $obj:expr, $method:expr, $args:expr) => {
+        if $obj.bind($py).hasattr($method).unwrap_or(false) {
+            if let Err(ref e) = $obj.call_method1($py, $method, $args) {
+                tracing::warn!("EventListener.{} callback error: {}", $method, e);
+            }
+        }
+    };
 }
 
 impl EventListener for PyEventListener {
     fn on_box_created(&self, box_id: &BoxID) {
         let id = box_id.to_string();
         Python::attach(|py| {
-            if let Err(ref e) = self.callback.call_method1(py, "on_box_created", (id,)) {
-                log_callback_err(py, "on_box_created", e);
-            }
+            call_if_exists!(py, &self.callback, "on_box_created", (id,));
         });
     }
 
     fn on_box_started(&self, box_id: &BoxID) {
         let id = box_id.to_string();
         Python::attach(|py| {
-            if let Err(ref e) = self.callback.call_method1(py, "on_box_started", (id,)) {
-                log_callback_err(py, "on_box_started", e);
-            }
+            call_if_exists!(py, &self.callback, "on_box_started", (id,));
         });
     }
 
     fn on_box_stopped(&self, box_id: &BoxID, exit_code: Option<i32>) {
         let id = box_id.to_string();
         Python::attach(|py| {
-            if let Err(ref e) = self
-                .callback
-                .call_method1(py, "on_box_stopped", (id, exit_code))
-            {
-                log_callback_err(py, "on_box_stopped", e);
-            }
+            call_if_exists!(py, &self.callback, "on_box_stopped", (id, exit_code));
         });
     }
 
     fn on_box_removed(&self, box_id: &BoxID) {
         let id = box_id.to_string();
         Python::attach(|py| {
-            if let Err(ref e) = self.callback.call_method1(py, "on_box_removed", (id,)) {
-                log_callback_err(py, "on_box_removed", e);
-            }
+            call_if_exists!(py, &self.callback, "on_box_removed", (id,));
         });
     }
 
@@ -108,12 +111,7 @@ impl EventListener for PyEventListener {
         let cmd = command.to_string();
         let a = args.to_vec();
         Python::attach(|py| {
-            if let Err(ref e) = self
-                .callback
-                .call_method1(py, "on_exec_started", (id, cmd, a))
-            {
-                log_callback_err(py, "on_exec_started", e);
-            }
+            call_if_exists!(py, &self.callback, "on_exec_started", (id, cmd, a));
         });
     }
 
@@ -122,12 +120,12 @@ impl EventListener for PyEventListener {
         let cmd = command.to_string();
         let secs = duration.as_secs_f64();
         Python::attach(|py| {
-            if let Err(ref e) =
-                self.callback
-                    .call_method1(py, "on_exec_completed", (id, cmd, exit_code, secs))
-            {
-                log_callback_err(py, "on_exec_completed", e);
-            }
+            call_if_exists!(
+                py,
+                &self.callback,
+                "on_exec_completed",
+                (id, cmd, exit_code, secs)
+            );
         });
     }
 
@@ -136,12 +134,7 @@ impl EventListener for PyEventListener {
         let src = host_src.to_string();
         let dst = container_dst.to_string();
         Python::attach(|py| {
-            if let Err(ref e) = self
-                .callback
-                .call_method1(py, "on_file_copied_in", (id, src, dst))
-            {
-                log_callback_err(py, "on_file_copied_in", e);
-            }
+            call_if_exists!(py, &self.callback, "on_file_copied_in", (id, src, dst));
         });
     }
 
@@ -150,12 +143,7 @@ impl EventListener for PyEventListener {
         let src = container_src.to_string();
         let dst = host_dst.to_string();
         Python::attach(|py| {
-            if let Err(ref e) = self
-                .callback
-                .call_method1(py, "on_file_copied_out", (id, src, dst))
-            {
-                log_callback_err(py, "on_file_copied_out", e);
-            }
+            call_if_exists!(py, &self.callback, "on_file_copied_out", (id, src, dst));
         });
     }
 }

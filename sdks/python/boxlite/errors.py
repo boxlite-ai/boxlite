@@ -21,6 +21,7 @@ __all__ = [
     "DatabaseError",
     "InvalidArgumentError",
     "StoppedError",
+    "ResourceExhaustedError",
     # Convenience aliases
     "ExecError",
     "TimeoutError",
@@ -123,6 +124,12 @@ class InvalidArgumentError(BoxliteError):
 
 class StoppedError(BoxliteError):
     """Raised when operating on a stopped box or shutdown runtime."""
+
+    pass
+
+
+class ResourceExhaustedError(BoxliteError):
+    """Raised when a system resource limit is reached (e.g., VM address spaces exhausted)."""
 
     pass
 

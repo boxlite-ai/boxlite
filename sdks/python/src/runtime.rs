@@ -8,7 +8,7 @@ use crate::images::PyImageHandle;
 use crate::info::PyBoxInfo;
 use crate::metrics::PyRuntimeMetrics;
 use crate::options::{PyBoxOptions, PyBoxliteRestOptions, PyOptions};
-use crate::util::map_boxlite_err;
+use crate::util::{map_boxlite_err, map_err};
 
 #[pyclass(name = "Boxlite")]
 pub(crate) struct PyBoxlite {

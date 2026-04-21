@@ -19,6 +19,7 @@ import_exception!(boxlite.errors, InvalidStateError);
 import_exception!(boxlite.errors, DatabaseError);
 import_exception!(boxlite.errors, InvalidArgumentError);
 import_exception!(boxlite.errors, StoppedError);
+import_exception!(boxlite.errors, ResourceExhaustedError);
 
 /// Map a BoxliteError to its corresponding typed Python exception.
 pub(crate) fn map_boxlite_err(err: BoxliteError) -> PyErr {
@@ -46,6 +47,7 @@ pub(crate) fn map_boxlite_err(err: BoxliteError) -> PyErr {
         BoxliteError::MetadataError(_) => InternalError::new_err(msg),
         BoxliteError::InvalidArgument(_) => InvalidArgumentError::new_err(msg),
         BoxliteError::Stopped(_) => StoppedError::new_err(msg),
+        BoxliteError::ResourceExhausted(_) => ResourceExhaustedError::new_err(msg),
     }
 }
 

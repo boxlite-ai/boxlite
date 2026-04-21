@@ -21,6 +21,7 @@ from boxlite.errors import (
     NotFoundError,
     ParseError,
     PortalError,
+    ResourceExhaustedError,
     RpcError,
     StoppedError,
     StorageError,
@@ -353,9 +354,24 @@ class TestStoppedError:
             raise StoppedError("stopped")
 
 
+class TestResourceExhaustedError:
+    """Test ResourceExhaustedError exception."""
+
+    def test_inherits_boxlite_error(self):
+        assert issubclass(ResourceExhaustedError, BoxliteError)
+
+    def test_can_raise(self):
+        with pytest.raises(ResourceExhaustedError):
+            raise ResourceExhaustedError("VM address spaces exhausted")
+
+    def test_can_catch_as_boxlite_error(self):
+        with pytest.raises(BoxliteError):
+            raise ResourceExhaustedError("resource limit")
+
+
 # ── All typed exceptions: parametrized tests ─────────────────────────────
 
-# Complete list of the 15 Rust-mapped exception classes
+# Complete list of the 16 Rust-mapped exception classes
 RUST_MAPPED_EXCEPTIONS = [
     EngineError,
     ConfigError,
@@ -372,9 +388,10 @@ RUST_MAPPED_EXCEPTIONS = [
     DatabaseError,
     InvalidArgumentError,
     StoppedError,
+    ResourceExhaustedError,
 ]
 
-# All 18 exception classes (Rust-mapped + Python convenience)
+# All 19 exception classes (Rust-mapped + Python convenience)
 ALL_EXCEPTIONS = RUST_MAPPED_EXCEPTIONS + [ExecError, TimeoutError, ParseError]
 
 
@@ -430,6 +447,7 @@ class TestErrorHierarchy:
             DatabaseError("db"),
             InvalidArgumentError("arg"),
             StoppedError("stopped"),
+            ResourceExhaustedError("exhausted"),
         ]
 
         for error in errors:
@@ -478,6 +496,7 @@ class TestErrorExports:
         "DatabaseError",
         "InvalidArgumentError",
         "StoppedError",
+        "ResourceExhaustedError",
         # Python convenience
         "ExecError",
         "TimeoutError",
@@ -499,7 +518,7 @@ class TestErrorExports:
         assert hasattr(boxlite.errors, name), f"boxlite.errors.{name} should exist"
 
     def test_errors_in_errors_module_all(self):
-        """Test that all 18 exceptions are listed in errors.__all__."""
+        """Test that all 19 exceptions are listed in errors.__all__."""
         from boxlite import errors
 
         for name in self.EXPECTED_EXPORTS:
