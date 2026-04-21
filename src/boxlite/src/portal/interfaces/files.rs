@@ -56,11 +56,22 @@ impl FilesInterface {
 
         let upload_result = self.client.upload(stream).await;
 
-        // Always join the reader task first — its error is the root cause when
-        // both the reader and the gRPC call fail (e.g. read error causes the
-        // stream to end, which causes the server to report failure).
+        // Join the reader task and decide which error is the root cause.
+        //
+        // - Storage error (I/O failure) → reader is the root cause; return it.
+        // - Other reader error (e.g. "stream closed" from receiver drop) → the
+        //   gRPC side likely has the real reason (server rejected the upload),
+        //   so prefer upload_result when available.
         match reader_handle.await {
-            Ok(Err(read_err)) => return Err(read_err),
+            Ok(Err(read_err)) => {
+                if matches!(&read_err, BoxliteError::Storage(_)) {
+                    return Err(read_err);
+                }
+                if let Err(status) = upload_result {
+                    return Err(map_tonic_err(status));
+                }
+                return Err(read_err);
+            }
             Err(join_err) => {
                 return Err(BoxliteError::Internal(format!(
                     "Upload reader task failed: {}",
@@ -213,10 +224,7 @@ mod tests {
             buf: &mut ReadBuf<'_>,
         ) -> Poll<std::io::Result<()>> {
             if self.remaining == 0 {
-                return Poll::Ready(Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "simulated disk failure",
-                )));
+                return Poll::Ready(Err(std::io::Error::other("simulated disk failure")));
             }
             let n = buf.remaining().min(self.remaining);
             buf.put_slice(&vec![0xCDu8; n]);
