@@ -12,35 +12,76 @@
 //! 1. **Linux 5.9+**: `close_range(first_fd, ~0U, 0)` — O(1), kernel closes all.
 //! 2. **Linux < 5.9**: Enumerate `/proc/self/fd` via raw `getdents64` syscall
 //!    (no memory allocation) and close only open FDs. Falls back to brute-force
-//!    with a dynamic upper bound from `getrlimit(RLIMIT_NOFILE)`.
+//!    with a dynamic upper bound queried via raw `prlimit64` syscall.
 //! 3. **macOS**: Brute-force close with dynamic upper bound from
-//!    `getrlimit(RLIMIT_NOFILE)` instead of a hardcoded limit.
+//!    `getrlimit(RLIMIT_NOFILE)`.
 
-/// Query the soft limit for `RLIMIT_NOFILE`. Async-signal-safe.
+/// Safe cap for brute-force FD closure (2^20), matches Linux /proc/sys/fs/nr_open.
+/// Used when the rlimit query fails or returns an excessively large value.
+const MAX_FD_CAP: i32 = 1_048_576;
+
+/// Convert rlimit soft/hard values to a capped i32 upper bound for FD iteration.
 ///
-/// Returns the soft limit (current max open files), or a safe default
-/// if the query fails. `getrlimit` is async-signal-safe per POSIX.
-///
-/// Note: Cannot reuse `rlimit::get_rlimit()` because it returns `io::Error`
-/// which heap-allocates (not async-signal-safe for pre_exec context).
-fn get_max_fd() -> i32 {
-    let mut rlim = libc::rlimit {
-        rlim_cur: 0,
-        rlim_max: 0,
-    };
-    // SAFETY: getrlimit is async-signal-safe per POSIX. rlim is a valid stack-allocated struct.
-    let result = unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut rlim) };
-    if result == 0 && rlim.rlim_cur > 0 {
-        if rlim.rlim_cur < i32::MAX as u64 {
-            rlim.rlim_cur as i32
-        } else {
-            // rlim_cur is RLIM_INFINITY or very large; cap to a safe maximum.
-            // 1048576 (2^20) matches Linux's default /proc/sys/fs/nr_open.
-            1_048_576
-        }
+/// Uses `max(soft, hard)` to cover FDs opened before a soft limit decrease.
+/// Caps excessively large values (including RLIM_INFINITY) to [`MAX_FD_CAP`].
+/// Async-signal-safe: pure arithmetic, no allocation.
+fn rlimit_to_max_fd(soft: u64, hard: u64) -> i32 {
+    let limit = soft.max(hard);
+    if limit > 0 && limit <= i32::MAX as u64 {
+        limit as i32
     } else {
-        // getrlimit failed or returned 0; safe default per POSIX OPEN_MAX
-        1024
+        // limit is 0, RLIM_INFINITY, or exceeds i32::MAX
+        MAX_FD_CAP
+    }
+}
+
+/// Query the upper bound for open FDs. Async-signal-safe.
+///
+/// On Linux, uses a raw `prlimit64` syscall to avoid libc wrappers that may
+/// not be async-signal-safe in all implementations. On other platforms, uses
+/// `getrlimit` which is async-signal-safe per POSIX.
+///
+/// Returns `max(soft, hard)` from `RLIMIT_NOFILE`, capped to [`MAX_FD_CAP`].
+/// Using the max of both limits covers the case where a process opens
+/// high-numbered FDs then lowers its soft limit before fork.
+fn get_max_fd() -> i32 {
+    #[cfg(target_os = "linux")]
+    {
+        let mut rlim = libc::rlimit64 {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        // SAFETY: Raw syscall — bypasses libc wrappers for async-signal-safety.
+        // pid=0 means current process, new_limit=NULL means read-only query.
+        let result = unsafe {
+            libc::syscall(
+                libc::SYS_prlimit64,
+                0 as libc::pid_t,
+                libc::RLIMIT_NOFILE,
+                core::ptr::null::<libc::rlimit64>(),
+                &mut rlim as *mut libc::rlimit64,
+            )
+        };
+        if result == 0 {
+            rlimit_to_max_fd(rlim.rlim_cur, rlim.rlim_max)
+        } else {
+            MAX_FD_CAP
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        let mut rlim = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        // SAFETY: getrlimit is async-signal-safe per POSIX. rlim is a valid stack-allocated struct.
+        let result = unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut rlim) };
+        if result == 0 {
+            rlimit_to_max_fd(rlim.rlim_cur, rlim.rlim_max)
+        } else {
+            MAX_FD_CAP
+        }
     }
 }
 
@@ -48,17 +89,22 @@ fn get_max_fd() -> i32 {
 /// Async-signal-safe: uses only stack buffers and raw syscalls.
 ///
 /// Returns `true` if `/proc/self/fd` was successfully enumerated,
-/// `false` if it's unavailable (e.g., mount namespace without /proc).
+/// `false` if it's unavailable or an error occurred (e.g., mount namespace
+/// without /proc, or `getdents64` failure).
 #[cfg(target_os = "linux")]
 fn close_fds_via_proc(first_fd: i32) -> bool {
-    // Open /proc/self/fd with raw syscall (no allocation)
+    // Open /proc/self/fd with a raw syscall (no libc wrapper)
     let proc_path = b"/proc/self/fd\0";
-    // SAFETY: proc_path is a valid null-terminated string literal. open() is async-signal-safe.
+    // SAFETY: syscall(SYS_openat, ...) invokes the kernel directly,
+    // appropriate for pre_exec async-signal-safe use.
     let dir_fd = unsafe {
-        libc::open(
+        libc::syscall(
+            libc::SYS_openat,
+            libc::AT_FDCWD,
             proc_path.as_ptr().cast::<libc::c_char>(),
             libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
-        )
+            0,
+        ) as i32
     };
     if dir_fd < 0 {
         return false;
@@ -67,6 +113,8 @@ fn close_fds_via_proc(first_fd: i32) -> bool {
     // Stack buffer for getdents64 — 1024 bytes handles ~40 entries per call,
     // sufficient for typical processes without heap allocation.
     let mut buf = [0u8; 1024];
+
+    let mut success = true;
 
     loop {
         let nread = unsafe {
@@ -78,7 +126,20 @@ fn close_fds_via_proc(first_fd: i32) -> bool {
             )
         };
 
-        if nread <= 0 {
+        if nread == 0 {
+            // End of directory — all entries have been read successfully.
+            break;
+        }
+
+        if nread < 0 {
+            // SAFETY: errno is thread-local and may be read immediately after
+            // the failing syscall to determine whether to retry or fall back.
+            let errno = unsafe { *libc::__errno_location() };
+            if errno == libc::EINTR {
+                continue;
+            }
+            // Non-retriable error: signal failure so the brute-force fallback runs.
+            success = false;
             break;
         }
 
@@ -115,7 +176,7 @@ fn close_fds_via_proc(first_fd: i32) -> bool {
 
     // SAFETY: close() is async-signal-safe. dir_fd was opened by us above.
     unsafe { libc::close(dir_fd) };
-    true
+    success
 }
 
 /// Parse a decimal FD number from a null-terminated C string pointer.
@@ -170,7 +231,7 @@ fn brute_force_close_fds(first_fd: i32) {
 /// # Safety
 ///
 /// This function only uses async-signal-safe syscalls (close, syscall,
-/// getrlimit, open, getdents64).
+/// prlimit64/getrlimit, openat, getdents64).
 /// Do NOT add:
 /// - Logging (tracing, println)
 /// - Memory allocation (Box, Vec, String)
@@ -203,7 +264,7 @@ pub fn close_fds_from(first_fd: i32) -> Result<(), i32> {
             return Ok(());
         }
 
-        // Strategy 3: Brute-force close with dynamic limit from getrlimit.
+        // Strategy 3: Brute-force close with dynamic limit from prlimit64.
         // Used when both close_range and /proc are unavailable (e.g., old kernel
         // in a mount namespace without /proc).
         brute_force_close_fds(first_fd);
@@ -443,6 +504,63 @@ mod tests {
             max >= 256,
             "get_max_fd should return at least 256, got {}",
             max
+        );
+    }
+
+    #[test]
+    fn test_rlimit_to_max_fd() {
+        // Normal soft limit
+        assert_eq!(rlimit_to_max_fd(1024, 4096), 4096);
+
+        // Soft > hard (unusual but handled)
+        assert_eq!(rlimit_to_max_fd(8192, 1024), 8192);
+
+        // Exact i32::MAX
+        assert_eq!(rlimit_to_max_fd(i32::MAX as u64, 0), i32::MAX);
+
+        // Exceeds i32::MAX — capped
+        assert_eq!(rlimit_to_max_fd(i32::MAX as u64 + 1, 0), MAX_FD_CAP);
+
+        // RLIM_INFINITY (u64::MAX) — capped
+        assert_eq!(rlimit_to_max_fd(u64::MAX, u64::MAX), MAX_FD_CAP);
+
+        // Both zero — capped
+        assert_eq!(rlimit_to_max_fd(0, 0), MAX_FD_CAP);
+
+        // Soft zero, hard nonzero — uses hard
+        assert_eq!(rlimit_to_max_fd(0, 2048), 2048);
+    }
+
+    /// Verify brute-force fallback closes FDs correctly.
+    /// This exercises the code path used when `close_fds_via_proc` returns `false`
+    /// (e.g., when `getdents64` fails or `/proc` is unavailable).
+    fn child_brute_force_fallback_closes_fds() -> i32 {
+        // Create test FDs
+        let fd_a = unsafe { libc::dup(STDOUT_FD) };
+        let fd_b = unsafe { libc::dup(STDOUT_FD) };
+        if fd_a < 3 || fd_b <= fd_a {
+            return 1;
+        }
+
+        // Call brute_force_close_fds directly — this is the fallback path
+        // exercised when getdents64 fails (nread < 0).
+        brute_force_close_fds(fd_a);
+
+        // Both FDs should be closed
+        if unsafe { libc::fcntl(fd_a, libc::F_GETFD) } != -1 {
+            return 2;
+        }
+        if unsafe { libc::fcntl(fd_b, libc::F_GETFD) } != -1 {
+            return 3;
+        }
+        0
+    }
+
+    #[test]
+    fn test_brute_force_fallback_closes_fds() {
+        run_in_child(
+            "test_brute_force_fallback_closes_fds",
+            child_brute_force_fallback_closes_fds,
         );
     }
 
