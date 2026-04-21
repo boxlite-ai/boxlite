@@ -11,7 +11,9 @@ use crate::litebox::init::types::resolve_user_volumes;
 use crate::net::NetworkBackendConfig;
 use crate::pipeline::PipelineTask;
 use crate::rootfs::guest::{GuestRootfs, Strategy};
-use crate::runtime::constants::{guest_paths, mount_tags};
+use crate::runtime::constants::guest_paths;
+#[cfg(unix)]
+use crate::runtime::constants::mount_tags;
 use crate::runtime::id::BoxID;
 use crate::runtime::layout::BoxFilesystemLayout;
 use crate::runtime::options::BoxOptions;
@@ -100,6 +102,7 @@ impl PipelineTask<InitCtx> for VmmSpawnTask {
         ctx.volume_mgr = Some(volume_mgr);
         ctx.rootfs_init = Some(rootfs_init);
         ctx.container_mounts = Some(container_mounts);
+        ctx.transport = Some(instance_spec.transport.clone());
         ctx.ready_transport = Some(ready_transport);
         // Store CA cert PEM for Container.Init gRPC (passed as CACert proto field)
         ctx.ca_cert_pem = instance_spec
@@ -157,7 +160,11 @@ async fn build_config(
     // Create GuestVolumeManager and configure volumes
     let mut volume_mgr = GuestVolumeManager::new();
 
-    // SHARED virtiofs - needed by all strategies
+    // SHARED virtiofs - shares host directory with guest via virtio-fs.
+    // On Windows (WHPX), virtiofs is not available — the guest creates
+    // /run/boxlite/shared as a regular directory on the root filesystem,
+    // and Container.Init (Disk strategy) mounts block devices there directly.
+    #[cfg(unix)]
     volume_mgr.add_fs_share(mount_tags::SHARED, layout.shared_dir(), None, false, None);
 
     // Add container rootfs disk:

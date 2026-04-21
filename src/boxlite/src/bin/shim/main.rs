@@ -428,15 +428,16 @@ fn install_windows_ctrl_handler(transport: boxlite_shared::Transport) {
 /// When either fires (explicit stop or parent death), calls Guest.Shutdown() RPC.
 #[cfg(windows)]
 fn install_windows_watchdog(transport: boxlite_shared::Transport) {
-    use windows_sys::Win32::Foundation::CloseHandle;
-    use windows_sys::Win32::System::Threading::{
-        INFINITE, OpenProcess, SYNCHRONIZE, WaitForMultipleObjects,
-    };
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::System::Threading::{INFINITE, OpenProcess, WaitForMultipleObjects};
+    // SYNCHRONIZE access right (0x00100000) — stable Windows constant.
+    // Defined locally because windows-sys 0.61 moved it out of Threading.
+    const SYNCHRONIZE: u32 = 0x00100000;
 
     // 1. Read shutdown event handle from env
-    let event_handle: isize = match std::env::var(watchdog::ENV_SHUTDOWN_EVENT) {
+    let event_handle: HANDLE = match std::env::var(watchdog::ENV_SHUTDOWN_EVENT) {
         Ok(val) => match val.parse::<usize>() {
-            Ok(h) => h as isize,
+            Ok(h) => h as HANDLE,
             Err(e) => {
                 tracing::warn!("Invalid {}: {e}", watchdog::ENV_SHUTDOWN_EVENT);
                 return;
@@ -452,24 +453,24 @@ fn install_windows_watchdog(transport: boxlite_shared::Transport) {
     };
 
     // 2. Read parent PID from env and open parent process handle
-    let parent_handle: isize = match std::env::var(watchdog::ENV_PARENT_PID) {
+    let parent_handle: HANDLE = match std::env::var(watchdog::ENV_PARENT_PID) {
         Ok(val) => match val.parse::<u32>() {
             Ok(pid) => {
                 let h = unsafe { OpenProcess(SYNCHRONIZE, 0, pid) };
-                if h == 0 {
+                if h.is_null() {
                     tracing::warn!(
                         "Failed to open parent process {pid}: {}",
                         std::io::Error::last_os_error()
                     );
                     // Fall back to event-only monitoring
-                    0
+                    std::ptr::null_mut()
                 } else {
                     h
                 }
             }
             Err(e) => {
                 tracing::warn!("Invalid {}: {e}", watchdog::ENV_PARENT_PID);
-                0
+                std::ptr::null_mut()
             }
         },
         Err(_) => {
@@ -477,22 +478,29 @@ fn install_windows_watchdog(transport: boxlite_shared::Transport) {
                 "{} not set, parent death detection disabled",
                 watchdog::ENV_PARENT_PID
             );
-            0
+            std::ptr::null_mut()
         }
     };
 
     // 3. Spawn monitoring thread
+    // SAFETY: HANDLE (*mut c_void) is !Send. Cast to usize for thread transfer.
+    // Windows HANDLE values are valid across threads per Win32 documentation.
+    let event_raw = event_handle as usize;
+    let parent_raw = parent_handle as usize;
     thread::spawn(move || {
+        let event_handle: HANDLE = event_raw as HANDLE;
+        let parent_handle: HANDLE = parent_raw as HANDLE;
+
         // Build handle array for WaitForMultipleObjects
         let mut handles = Vec::with_capacity(2);
         handles.push(event_handle);
-        if parent_handle != 0 {
+        if !parent_handle.is_null() {
             handles.push(parent_handle);
         }
 
         tracing::debug!(
-            event_handle = event_handle,
-            parent_handle = parent_handle,
+            event_handle = event_raw,
+            parent_handle = parent_raw,
             num_handles = handles.len(),
             "Watchdog monitoring started"
         );
@@ -521,7 +529,7 @@ fn install_windows_watchdog(transport: boxlite_shared::Transport) {
         do_graceful_shutdown(transport);
 
         // Cleanup handles
-        if parent_handle != 0 {
+        if !parent_handle.is_null() {
             unsafe { CloseHandle(parent_handle) };
         }
 

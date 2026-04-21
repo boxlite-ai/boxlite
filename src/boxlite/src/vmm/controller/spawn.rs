@@ -144,6 +144,22 @@ impl<'a> ShimSpawner<'a> {
         //    On Windows, ChildSetup is just a handle value — no cleanup needed.
         drop(child_setup);
 
+        // 10. Write PID file (Windows only).
+        //     On Unix, the pre_exec hook writes the PID file after fork via
+        //     async-signal-safe syscalls. On Windows, pre_exec is not available,
+        //     so we write it from the parent after spawn succeeds.
+        #[cfg(windows)]
+        {
+            let pid_file = self.layout.pid_file_path();
+            std::fs::write(&pid_file, child.id().to_string()).map_err(|e| {
+                BoxliteError::Storage(format!(
+                    "Failed to write PID file {}: {}",
+                    pid_file.display(),
+                    e
+                ))
+            })?;
+        }
+
         Ok(SpawnedShim { child, keepalive })
     }
 

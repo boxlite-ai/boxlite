@@ -159,7 +159,7 @@ pub const ENV_PARENT_PID: &str = "BOXLITE_PARENT_PID";
 /// `ShimHandler` closes this, and the shim's parent process handle
 /// monitoring will detect the parent death.
 pub struct Keepalive {
-    event: isize, // HANDLE
+    event: windows_sys::Win32::Foundation::HANDLE,
 }
 
 #[cfg(windows)]
@@ -217,15 +217,15 @@ impl ChildSetup {
 /// Returns `(keepalive, child_setup)`. The parent holds the keepalive;
 /// the child setup provides the handle value to pass via environment variable.
 pub fn create() -> BoxliteResult<(Keepalive, ChildSetup)> {
-    use windows_sys::Win32::Foundation::HANDLE_FLAG_INHERIT;
-    use windows_sys::Win32::System::Threading::{CreateEventW, SetHandleInformation};
+    use windows_sys::Win32::Foundation::{HANDLE_FLAG_INHERIT, SetHandleInformation};
+    use windows_sys::Win32::System::Threading::CreateEventW;
 
     unsafe {
         // Create manual-reset, initially non-signaled event
         // manual_reset=TRUE: once signaled, stays signaled (all waiters wake)
         // initial_state=FALSE: not signaled until SetEvent()
         let event = CreateEventW(std::ptr::null(), 1, 0, std::ptr::null());
-        if event == 0 {
+        if event.is_null() {
             return Err(BoxliteError::Engine(format!(
                 "Failed to create watchdog event: {}",
                 std::io::Error::last_os_error()
@@ -408,8 +408,8 @@ mod tests {
     fn test_create_returns_valid_event() {
         let (keepalive, child_setup) = create().expect("event creation should succeed");
 
-        // Handle value should be non-zero
-        assert_ne!(keepalive.event, 0, "event handle should be valid");
+        // Handle value should be non-null
+        assert!(!keepalive.event.is_null(), "event handle should be valid");
 
         // ChildSetup should have the same handle value
         let handle_str = child_setup.event_handle_str();
@@ -437,10 +437,9 @@ mod tests {
 
     #[test]
     fn test_keepalive_drop_signals_event() {
-        use windows_sys::Win32::Foundation::CloseHandle;
-        use windows_sys::Win32::Foundation::HANDLE_FLAG_INHERIT;
+        use windows_sys::Win32::Foundation::{CloseHandle, DUPLICATE_SAME_ACCESS, HANDLE};
         use windows_sys::Win32::System::Threading::{
-            CreateEventW, SetHandleInformation, WaitForSingleObject,
+            DuplicateHandle, GetCurrentProcess, WaitForSingleObject,
         };
 
         // Create a duplicate event to observe the signal after Keepalive is dropped.
@@ -450,9 +449,7 @@ mod tests {
         let event_handle = keepalive.event;
 
         // Duplicate the handle so we can check after Keepalive drops
-        use windows_sys::Win32::Foundation::DUPLICATE_SAME_ACCESS;
-        use windows_sys::Win32::System::Threading::{DuplicateHandle, GetCurrentProcess};
-        let mut dup_handle: isize = 0;
+        let mut dup_handle: HANDLE = std::ptr::null_mut();
         unsafe {
             let ok = DuplicateHandle(
                 GetCurrentProcess(),
@@ -478,8 +475,7 @@ mod tests {
 
     #[test]
     fn test_event_is_inheritable() {
-        use windows_sys::Win32::Foundation::HANDLE_FLAG_INHERIT;
-        use windows_sys::Win32::System::Threading::GetHandleInformation;
+        use windows_sys::Win32::Foundation::{GetHandleInformation, HANDLE_FLAG_INHERIT};
 
         let (keepalive, _child_setup) = create().expect("event creation should succeed");
 

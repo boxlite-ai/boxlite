@@ -53,14 +53,18 @@ impl PipelineTask<InitCtx> for GuestConnectTask {
             let exit_file = layout.exit_file_path();
             let console_log = layout.console_output_path();
             let stderr_file = layout.stderr_file_path();
-            // Use ready_transport from vmm_spawn if available (pipeline flow),
+            // Use transports from vmm_spawn if available (pipeline flow),
             // otherwise derive from config (reattach flow — Unix only).
+            let transport = ctx
+                .transport
+                .clone()
+                .unwrap_or_else(|| ctx.config.transport.clone());
             let ready_transport = ctx
                 .ready_transport
                 .clone()
                 .unwrap_or_else(|| Transport::unix(ctx.config.ready_socket_path.clone()));
             (
-                ctx.config.transport.clone(),
+                transport,
                 ready_transport,
                 ctx.skip_guest_wait,
                 ctx.guard.handler_pid(),

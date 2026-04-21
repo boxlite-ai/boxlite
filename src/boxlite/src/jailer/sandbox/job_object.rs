@@ -146,7 +146,7 @@ impl Drop for JobSandbox {
     }
 }
 
-// SAFETY: HANDLE is an isize. The Mutex protects concurrent access.
+// SAFETY: HANDLE is a raw pointer. The Mutex protects concurrent access.
 // Job Object handles are valid across threads per Windows documentation.
 unsafe impl Send for JobSandbox {}
 unsafe impl Sync for JobSandbox {}

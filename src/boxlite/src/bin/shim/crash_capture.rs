@@ -139,7 +139,7 @@ fn install_exception_handler(exit_file: PathBuf) {
 /// context similar to Unix signal handlers.
 #[cfg(windows)]
 unsafe extern "system" fn crash_exception_handler(
-    info: *mut windows_sys::Win32::System::Diagnostics::Debug::EXCEPTION_POINTERS,
+    info: *const windows_sys::Win32::System::Diagnostics::Debug::EXCEPTION_POINTERS,
 ) -> i32 {
     use windows_sys::Win32::Foundation::{
         EXCEPTION_ACCESS_VIOLATION, EXCEPTION_ILLEGAL_INSTRUCTION, EXCEPTION_STACK_OVERFLOW,

@@ -118,8 +118,9 @@ impl ImageDiskManager {
     /// Uses cross-platform tar extraction (no xattr) followed by native `mke2fs`
     /// (cross-compiled e2fsprogs binary bundled in the distribution).
     ///
-    /// Symlinks are deferred: extracted as metadata, then created inside the ext4
-    /// image via `debugfs` after `mke2fs -d` populates regular files.
+    /// Symlinks and file permissions are deferred: extracted as metadata, then
+    /// applied inside the ext4 image via `debugfs` after `mke2fs -d` populates
+    /// regular files.
     #[cfg(windows)]
     async fn build_and_install(&self, image: &ImageObject, digest: &str) -> BoxliteResult<Disk> {
         // All work happens in a temp directory (staged)
@@ -132,7 +133,7 @@ impl ImageDiskManager {
         })?;
 
         // Extract image layers to merged directory.
-        // Symlinks are collected instead of created on the Windows filesystem.
+        // Symlinks and permissions are collected instead of applied on the Windows filesystem.
         let merged_path = temp.path().join("merged");
         let layer_tarballs = image.layer_tarballs();
 
@@ -145,9 +146,11 @@ impl ImageDiskManager {
         })?;
 
         let mut all_symlinks = Vec::new();
+        let mut all_permissions = Vec::new();
         for tarball in &layer_tarballs {
-            let symlinks = extract_layer_tarball(tarball, &merged_path)?;
+            let (symlinks, permissions) = extract_layer_tarball(tarball, &merged_path)?;
             all_symlinks.extend(symlinks);
+            all_permissions.extend(permissions);
         }
 
         // Create ext4 from merged directory via native mke2fs (blocking I/O)
@@ -155,12 +158,18 @@ impl ImageDiskManager {
         let merged_clone = merged_path.clone();
         let disk_clone = temp_disk_path.clone();
         let symlinks_clone = all_symlinks;
+        let permissions_clone = all_permissions;
         let temp_disk = tokio::task::spawn_blocking(move || {
             let disk = create_ext4_from_dir(&merged_clone, &disk_clone)?;
 
             // Create symlinks inside the ext4 image via debugfs
             if !symlinks_clone.is_empty() {
                 create_symlinks_in_ext4(&disk_clone, &symlinks_clone)?;
+            }
+
+            // Fix file permissions inside the ext4 image via debugfs
+            if !permissions_clone.is_empty() {
+                fix_permissions_in_ext4(&disk_clone, &permissions_clone)?;
             }
 
             Ok::<_, BoxliteError>(disk)
@@ -233,6 +242,19 @@ struct DeferredSymlink {
     target: String,
 }
 
+/// A deferred permission to be applied inside the ext4 image via debugfs.
+///
+/// On Windows, Unix file permissions are lost during tar extraction to the
+/// local filesystem. We save the original permissions from tar headers and
+/// apply them after `mke2fs -d` creates the ext4 image.
+#[cfg(any(windows, test))]
+struct DeferredPermission {
+    /// Path inside the filesystem (e.g., "bin/busybox")
+    path: String,
+    /// Full ext4 inode mode (file type + permission bits), e.g., 0o100755
+    mode: u32,
+}
+
 /// Extract a layer tarball into a destination directory (Windows).
 ///
 /// Detects compression format by magic bytes:
@@ -245,12 +267,16 @@ struct DeferredSymlink {
 /// they are collected and returned for deferred creation inside the ext4
 /// image via debugfs.
 ///
+/// File permissions are also collected from tar headers since Windows does
+/// not preserve Unix mode bits. These are applied to the ext4 image after
+/// creation via debugfs.
+///
 /// Hardlinks are extracted as regular file copies.
 #[cfg(windows)]
 fn extract_layer_tarball(
     tarball: &std::path::Path,
     dest: &std::path::Path,
-) -> BoxliteResult<Vec<DeferredSymlink>> {
+) -> BoxliteResult<(Vec<DeferredSymlink>, Vec<DeferredPermission>)> {
     use std::io::{BufReader, Read, Seek, SeekFrom};
 
     let file = std::fs::File::open(tarball).map_err(|e| {
@@ -326,18 +352,19 @@ fn is_opaque_whiteout(name: &str) -> bool {
 /// - `.wh.<name>`: deletes the target file from the destination
 /// - `.wh..wh..opq`: deletes all existing contents of the parent directory
 ///
-/// Returns deferred symlinks to be created in the ext4 image later.
-/// Symlinks are deduplicated with last-wins semantics per OCI spec.
+/// Returns deferred symlinks and file permissions to be applied to the ext4
+/// image later. Both are deduplicated with last-wins semantics per OCI spec.
 #[cfg(any(windows, test))]
 fn extract_tar_entries<R: std::io::Read>(
     mut archive: tar::Archive<R>,
     dest: &std::path::Path,
     tarball: &std::path::Path,
-) -> BoxliteResult<Vec<DeferredSymlink>> {
+) -> BoxliteResult<(Vec<DeferredSymlink>, Vec<DeferredPermission>)> {
     use std::collections::HashMap;
 
     // Use HashMap for last-wins dedup (OCI spec: upper layer overrides lower)
     let mut symlink_map: HashMap<String, DeferredSymlink> = HashMap::new();
+    let mut permission_map: HashMap<String, DeferredPermission> = HashMap::new();
 
     let entries = archive.entries().map_err(|e| {
         BoxliteError::Storage(format!(
@@ -432,6 +459,28 @@ fn extract_tar_entries<R: std::io::Read>(
             continue;
         }
 
+        // Collect file permissions from tar header before extraction.
+        // Windows does not preserve Unix mode bits, so we save them for
+        // later application via debugfs after mke2fs creates the ext4.
+        let perm_path = clean_path.trim_end_matches('/');
+        if !perm_path.is_empty() {
+            if let Ok(tar_mode) = entry.header().mode() {
+                let type_bits = match entry_type {
+                    tar::EntryType::Regular | tar::EntryType::Link => 0o100000, // S_IFREG
+                    tar::EntryType::Directory => 0o040000,                      // S_IFDIR
+                    _ => 0o100000, // Default to regular file
+                };
+                let full_mode = type_bits | tar_mode;
+                permission_map.insert(
+                    perm_path.to_string(),
+                    DeferredPermission {
+                        path: perm_path.to_string(),
+                        mode: full_mode,
+                    },
+                );
+            }
+        }
+
         // Extract regular files, directories, and hardlinks normally
         entry.set_preserve_permissions(false);
         if let Err(e) = entry.unpack_in(dest) {
@@ -463,14 +512,16 @@ fn extract_tar_entries<R: std::io::Read>(
     }
 
     let symlinks: Vec<DeferredSymlink> = symlink_map.into_values().collect();
+    let permissions: Vec<DeferredPermission> = permission_map.into_values().collect();
 
     tracing::debug!(
-        "Extracted layer {} ({} deferred symlinks)",
+        "Extracted layer {} ({} deferred symlinks, {} deferred permissions)",
         tarball.display(),
-        symlinks.len()
+        symlinks.len(),
+        permissions.len(),
     );
 
-    Ok(symlinks)
+    Ok((symlinks, permissions))
 }
 
 /// Create symlinks inside an ext4 image using debugfs.
@@ -554,6 +605,77 @@ fn create_symlinks_in_ext4(
     tracing::info!(
         "Created {} symlinks in ext4 image in {:?}",
         symlinks.len(),
+        duration
+    );
+
+    Ok(())
+}
+
+/// Fix file permissions inside an ext4 image using debugfs.
+///
+/// On Windows, files extracted from OCI layer tarballs lose their Unix
+/// permission bits. This function restores the original permissions
+/// (from tar headers) by batch-setting the inode mode field via debugfs.
+///
+/// Uses a temp file for commands to avoid pipe buffer deadlocks with
+/// large permission sets (thousands of files).
+#[cfg(windows)]
+fn fix_permissions_in_ext4(
+    image_path: &std::path::Path,
+    permissions: &[DeferredPermission],
+) -> BoxliteResult<()> {
+    let start = std::time::Instant::now();
+
+    // Build debugfs commands: sif /<path> mode <octal_mode>
+    let mut commands = String::new();
+    for perm in permissions {
+        let unix_path = crate::disk::ext4::to_unix_path_str(std::path::Path::new(&perm.path));
+        commands.push_str(&format!("sif /{} mode 0{:o}\n", unix_path, perm.mode));
+    }
+
+    // Write commands to a temp file to avoid pipe buffer deadlocks
+    let cmd_file = std::env::temp_dir().join(format!(
+        "boxlite-debugfs-permissions-{}.txt",
+        std::process::id()
+    ));
+    std::fs::write(&cmd_file, commands.as_bytes()).map_err(|e| {
+        BoxliteError::Storage(format!(
+            "Failed to write debugfs permission command file {}: {}",
+            cmd_file.display(),
+            e
+        ))
+    })?;
+
+    let debugfs = crate::disk::ext4::get_debugfs_path()?;
+
+    let output = std::process::Command::new(&debugfs)
+        .arg("-w")
+        .arg("-f")
+        .arg(&cmd_file)
+        .arg(image_path)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .map_err(|e| {
+            BoxliteError::Storage(format!("Failed to run debugfs for permissions: {}", e))
+        })?;
+
+    // Clean up temp file
+    let _ = std::fs::remove_file(&cmd_file);
+
+    let duration = start.elapsed();
+
+    if !output.status.success() {
+        return Err(BoxliteError::Storage(format!(
+            "debugfs permission fix failed (exit code: {:?}, took {:?})",
+            output.status.code(),
+            duration
+        )));
+    }
+
+    tracing::info!(
+        "Fixed permissions of {} files in ext4 image in {:?}",
+        permissions.len(),
         duration
     );
 
@@ -740,7 +862,7 @@ mod tests {
 
         let file = std::fs::File::open(&tar_path).unwrap();
         let archive = tar::Archive::new(file);
-        let symlinks = extract_tar_entries(archive, &dest, &tar_path).unwrap();
+        let (symlinks, permissions) = extract_tar_entries(archive, &dest, &tar_path).unwrap();
 
         // old_config should be deleted by the whiteout
         assert!(!etc_dir.join("old_config").exists());
@@ -753,6 +875,10 @@ mod tests {
             "new content"
         );
         assert!(symlinks.is_empty());
+        // new_config should have its permission recorded (whiteout marker has no perm)
+        assert_eq!(permissions.len(), 1);
+        assert_eq!(permissions[0].path, "etc/new_config");
+        assert_eq!(permissions[0].mode, 0o100644); // S_IFREG | 0644
     }
 
     #[test]
@@ -798,12 +924,112 @@ mod tests {
 
         let file = std::fs::File::open(&tar_path).unwrap();
         let archive = tar::Archive::new(file);
-        let _symlinks = extract_tar_entries(archive, &dest, &tar_path).unwrap();
+        let (_symlinks, _permissions) = extract_tar_entries(archive, &dest, &tar_path).unwrap();
 
         // Old files should be cleared by opaque whiteout
         assert!(!etc_dir.join("file_a").exists());
         assert!(!etc_dir.join("file_b").exists());
         // New file from the same layer should exist
         assert!(etc_dir.join("new_file").exists());
+    }
+
+    #[test]
+    fn test_extract_tar_entries_collects_permissions() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let dest = dir.path().join("extract");
+        std::fs::create_dir_all(&dest).unwrap();
+
+        // Build a tar with files and directories with various permissions
+        let tar_path = dir.path().join("layer.tar");
+        {
+            let file = std::fs::File::create(&tar_path).unwrap();
+            let mut builder = tar::Builder::new(file);
+
+            // Directory with 0755
+            let mut header = tar::Header::new_gnu();
+            header.set_size(0);
+            header.set_entry_type(tar::EntryType::Directory);
+            header.set_mode(0o755);
+            header.set_cksum();
+            builder
+                .append_data(&mut header, "bin/", std::io::empty())
+                .unwrap();
+
+            // Executable file with 0755
+            let data = b"#!/bin/sh\necho hello";
+            let mut header = tar::Header::new_gnu();
+            header.set_size(data.len() as u64);
+            header.set_entry_type(tar::EntryType::Regular);
+            header.set_mode(0o755);
+            header.set_cksum();
+            builder
+                .append_data(&mut header, "bin/busybox", &data[..])
+                .unwrap();
+
+            // Config file with 0644
+            let data = b"root:x:0:0:root:/root:/bin/sh";
+            let mut header = tar::Header::new_gnu();
+            header.set_size(data.len() as u64);
+            header.set_entry_type(tar::EntryType::Regular);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder
+                .append_data(&mut header, "etc/passwd", &data[..])
+                .unwrap();
+
+            builder.finish().unwrap();
+        }
+
+        let file = std::fs::File::open(&tar_path).unwrap();
+        let archive = tar::Archive::new(file);
+        let (symlinks, mut permissions) =
+            extract_tar_entries(archive, &dest, &tar_path).unwrap();
+
+        assert!(symlinks.is_empty());
+        assert_eq!(permissions.len(), 3);
+
+        // Sort by path for deterministic assertion
+        permissions.sort_by(|a, b| a.path.cmp(&b.path));
+
+        // bin/ directory: S_IFDIR | 0755 = 0o040755
+        assert_eq!(permissions[0].path, "bin");
+        assert_eq!(permissions[0].mode, 0o040755);
+
+        // bin/busybox: S_IFREG | 0755 = 0o100755
+        assert_eq!(permissions[1].path, "bin/busybox");
+        assert_eq!(permissions[1].mode, 0o100755);
+
+        // etc/passwd: S_IFREG | 0644 = 0o100644
+        assert_eq!(permissions[2].path, "etc/passwd");
+        assert_eq!(permissions[2].mode, 0o100644);
+    }
+
+    #[test]
+    fn test_permission_dedup_last_wins() {
+        use std::collections::HashMap;
+
+        let mut map: HashMap<String, DeferredPermission> = HashMap::new();
+
+        // First layer: bin/busybox with 0644
+        map.insert(
+            "bin/busybox".to_string(),
+            DeferredPermission {
+                path: "bin/busybox".to_string(),
+                mode: 0o100644,
+            },
+        );
+
+        // Second layer overrides: bin/busybox with 0755
+        map.insert(
+            "bin/busybox".to_string(),
+            DeferredPermission {
+                path: "bin/busybox".to_string(),
+                mode: 0o100755,
+            },
+        );
+
+        let result: Vec<DeferredPermission> = map.into_values().collect();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].mode, 0o100755);
     }
 }
