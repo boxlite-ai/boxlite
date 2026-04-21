@@ -31,7 +31,7 @@ fn get_max_fd() -> i32 {
     // SAFETY: getrlimit is async-signal-safe per POSIX. rlim is a valid stack-allocated struct.
     let result = unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut rlim) };
     if result == 0 && rlim.rlim_cur > 0 {
-        if rlim.rlim_cur < i32::MAX as u64 {
+        if rlim.rlim_cur <= i32::MAX as u64 {
             rlim.rlim_cur as i32
         } else {
             // rlim_cur is RLIM_INFINITY or very large; cap to a safe maximum.
@@ -39,8 +39,9 @@ fn get_max_fd() -> i32 {
             1_048_576
         }
     } else {
-        // getrlimit failed or returned 0; safe default per POSIX OPEN_MAX
-        1024
+        // getrlimit failed or returned 0; use the same conservative cap to
+        // ensure we still attempt to close a wide range of FDs.
+        1_048_576
     }
 }
 
@@ -68,6 +69,8 @@ fn close_fds_via_proc(first_fd: i32) -> bool {
     // sufficient for typical processes without heap allocation.
     let mut buf = [0u8; 1024];
 
+    let mut success = true;
+
     loop {
         let nread = unsafe {
             libc::syscall(
@@ -78,7 +81,14 @@ fn close_fds_via_proc(first_fd: i32) -> bool {
             )
         };
 
-        if nread <= 0 {
+        if nread < 0 {
+            // getdents64 failed (e.g., EINTR, EBADF); signal failure so
+            // the brute-force fallback runs instead.
+            success = false;
+            break;
+        }
+        if nread == 0 {
+            // End of directory — all entries have been read successfully.
             break;
         }
 
@@ -115,7 +125,7 @@ fn close_fds_via_proc(first_fd: i32) -> bool {
 
     // SAFETY: close() is async-signal-safe. dir_fd was opened by us above.
     unsafe { libc::close(dir_fd) };
-    true
+    success
 }
 
 /// Parse a decimal FD number from a null-terminated C string pointer.
@@ -443,6 +453,39 @@ mod tests {
             max >= 256,
             "get_max_fd should return at least 256, got {}",
             max
+        );
+    }
+
+    /// Verify brute-force fallback closes FDs correctly.
+    /// This exercises the code path used when `close_fds_via_proc` returns `false`
+    /// (e.g., when `getdents64` fails or `/proc` is unavailable).
+    fn child_brute_force_fallback_closes_fds() -> i32 {
+        // Create test FDs
+        let fd_a = unsafe { libc::dup(STDOUT_FD) };
+        let fd_b = unsafe { libc::dup(STDOUT_FD) };
+        if fd_a < 3 || fd_b <= fd_a {
+            return 1;
+        }
+
+        // Call brute_force_close_fds directly — this is the fallback path
+        // exercised when getdents64 fails (nread < 0).
+        brute_force_close_fds(fd_a);
+
+        // Both FDs should be closed
+        if unsafe { libc::fcntl(fd_a, libc::F_GETFD) } != -1 {
+            return 2;
+        }
+        if unsafe { libc::fcntl(fd_b, libc::F_GETFD) } != -1 {
+            return 3;
+        }
+        0
+    }
+
+    #[test]
+    fn test_brute_force_fallback_closes_fds() {
+        run_in_child(
+            "test_brute_force_fallback_closes_fds",
+            child_brute_force_fallback_closes_fds,
         );
     }
 
