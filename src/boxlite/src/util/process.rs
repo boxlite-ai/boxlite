@@ -159,8 +159,14 @@ impl ProcessMonitor {
         // SAFETY: owned.as_raw_fd() is a valid open FD. fcntl(F_SETFD) and
         // fcntl(F_SETFL) do not take ownership.
         unsafe {
-            libc::fcntl(owned.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC);
-            if libc::fcntl(owned.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK) < 0 {
+            if libc::fcntl(owned.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC) < 0 {
+                return None; // OwnedFd closes the FD on drop
+            }
+            let flags = libc::fcntl(owned.as_raw_fd(), libc::F_GETFL);
+            if flags < 0 {
+                return None; // OwnedFd closes the FD on drop
+            }
+            if libc::fcntl(owned.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) < 0 {
                 return None; // OwnedFd closes the FD on drop
             }
         }
@@ -233,8 +239,14 @@ impl ProcessMonitor {
         // SAFETY: owned.as_raw_fd() is a valid open FD. fcntl(F_SETFD) and
         // fcntl(F_SETFL) do not take ownership.
         unsafe {
-            libc::fcntl(owned.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC);
-            if libc::fcntl(owned.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK) < 0 {
+            if libc::fcntl(owned.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC) < 0 {
+                return None; // OwnedFd closes the kqueue FD on drop
+            }
+            let flags = libc::fcntl(owned.as_raw_fd(), libc::F_GETFL);
+            if flags < 0 {
+                return None; // OwnedFd closes the kqueue FD on drop
+            }
+            if libc::fcntl(owned.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) < 0 {
                 return None; // OwnedFd closes the kqueue FD on drop
             }
         }
@@ -812,7 +824,11 @@ mod tests {
 
         // Give the child a moment to start, then kill it.
         tokio::time::sleep(Duration::from_millis(50)).await;
-        unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+        assert_eq!(
+            unsafe { libc::kill(pid as i32, libc::SIGKILL) },
+            0,
+            "Failed to send SIGKILL to child process"
+        );
 
         let exit = monitor.wait_for_exit().await;
         assert_eq!(exit, ProcessExit::Code(128 + libc::SIGKILL));
