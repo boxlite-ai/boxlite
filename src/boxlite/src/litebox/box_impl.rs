@@ -659,7 +659,12 @@ impl BoxImpl {
             h.metrics()
         })
         .await
-        .map_err(|e| BoxliteError::Internal(format!("spawn_blocking join: {}", e)))??;
+        .map_err(|e| {
+            BoxliteError::Internal(format!(
+                "metrics spawn_blocking join (box_id={}): {}",
+                self.config.id, e
+            ))
+        })??;
 
         Ok(BoxMetrics::from_storage(
             &live.metrics,
@@ -726,15 +731,24 @@ impl BoxImpl {
 
             // Stop handler (on blocking thread — ShimHandler::stop() polls with sleep)
             let handler = Arc::clone(&live.handler);
-            tokio::task::spawn_blocking(move || {
-                if let Ok(mut h) = handler.lock() {
+            let box_id_for_join = self.config.id.clone();
+            tokio::task::spawn_blocking(move || match handler.lock() {
+                Ok(mut h) => h.stop(),
+                Err(poisoned) => {
+                    tracing::warn!(
+                        "Handler mutex poisoned during shutdown; recovering guard to stop handler"
+                    );
+                    let mut h = poisoned.into_inner();
                     h.stop()
-                } else {
-                    Ok(())
                 }
             })
             .await
-            .map_err(|e| BoxliteError::Internal(format!("spawn_blocking join: {}", e)))??;
+            .map_err(|e| {
+                BoxliteError::Internal(format!(
+                    "stop spawn_blocking join (box_id={}): {}",
+                    box_id_for_join, e
+                ))
+            })??;
         }
         // If live_state() failed (vmm_attach said Absent — shim is gone),
         // or status wasn't Running, fall through to cleanup.
