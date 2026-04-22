@@ -982,8 +982,7 @@ mod tests {
 
         let file = std::fs::File::open(&tar_path).unwrap();
         let archive = tar::Archive::new(file);
-        let (symlinks, mut permissions) =
-            extract_tar_entries(archive, &dest, &tar_path).unwrap();
+        let (symlinks, mut permissions) = extract_tar_entries(archive, &dest, &tar_path).unwrap();
 
         assert!(symlinks.is_empty());
         assert_eq!(permissions.len(), 3);
