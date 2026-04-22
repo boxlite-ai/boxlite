@@ -12,7 +12,6 @@ use crate::net::NetworkBackendConfig;
 use crate::pipeline::PipelineTask;
 use crate::rootfs::guest::{GuestRootfs, Strategy};
 use crate::runtime::constants::guest_paths;
-#[cfg(unix)]
 use crate::runtime::constants::mount_tags;
 use crate::runtime::id::BoxID;
 use crate::runtime::layout::BoxFilesystemLayout;
@@ -160,11 +159,8 @@ async fn build_config(
     // Create GuestVolumeManager and configure volumes
     let mut volume_mgr = GuestVolumeManager::new();
 
-    // SHARED virtiofs - shares host directory with guest via virtio-fs.
-    // On Windows (WHPX), virtiofs is not available — the guest creates
-    // /run/boxlite/shared as a regular directory on the root filesystem,
-    // and Container.Init (Disk strategy) mounts block devices there directly.
-    #[cfg(unix)]
+    // SHARED filesystem share — host directory accessible to guest.
+    // Unix: virtiofs, Windows: virtio-9p (guest auto-detects)
     volume_mgr.add_fs_share(mount_tags::SHARED, layout.shared_dir(), None, false, None);
 
     // Add container rootfs disk:
