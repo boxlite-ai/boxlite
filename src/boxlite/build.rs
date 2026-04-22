@@ -716,6 +716,15 @@ impl EmbeddedManifest {
             )
         });
 
+        // Ensure boxlite-shim has the hypervisor entitlement on macOS. Cargo's
+        // implicit bin-target rebuild (triggered by any `cargo test -p boxlite`)
+        // produces an unsigned shim; without this step the embedded copy — and
+        // therefore every integration test — would fail with
+        // "Hypervisor.framework access denied".
+        if name == "boxlite-shim" && cfg!(target_os = "macos") {
+            sign_shim_with_entitlements(&dest);
+        }
+
         println!(
             "cargo:warning=Embedded {}: {} ({:.1} MB)",
             name,
@@ -785,6 +794,85 @@ impl EmbeddedManifest {
             "aarch64" => vec!["aarch64", "x86_64"],
             "x86_64" => vec!["x86_64", "aarch64"],
             _ => vec!["x86_64", "aarch64"],
+        }
+    }
+}
+
+/// Sign a macOS binary with the hypervisor entitlement (ad-hoc).
+///
+/// `cargo test -p boxlite` implicitly rebuilds the `boxlite-shim` bin target,
+/// which wipes whatever signature `scripts/build/sign.sh` put on it, so the
+/// copy `copy_prebuilt_binary` made into the runtime dir would land unsigned
+/// and every VM-dependent test would fail with "Hypervisor.framework access
+/// denied". Doing the signing here makes the embed step self-sufficient.
+fn sign_shim_with_entitlements(binary: &Path) {
+    const ENTITLEMENTS: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.hypervisor</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+</dict>
+</plist>
+"#;
+
+    // codesign's --entitlements needs a real file path; pass a temp plist
+    // written next to the binary.
+    let plist_path = binary.with_file_name(format!(
+        "{}.entitlements.plist",
+        binary
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("shim")
+    ));
+    if let Err(e) = fs::write(&plist_path, ENTITLEMENTS) {
+        println!(
+            "cargo:warning=failed to write entitlements plist for {}: {}",
+            binary.display(),
+            e
+        );
+        return;
+    }
+
+    let output = Command::new("codesign")
+        .args([
+            "-s",
+            "-",
+            "--force",
+            "--entitlements",
+            plist_path
+                .to_str()
+                .expect("entitlements path must be UTF-8"),
+            binary.to_str().expect("shim path must be valid UTF-8"),
+        ])
+        .output();
+
+    let _ = fs::remove_file(&plist_path);
+
+    match output {
+        Ok(out) if out.status.success() => {
+            println!(
+                "cargo:warning=Signed {} with hypervisor entitlement",
+                binary.display()
+            );
+        }
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            println!(
+                "cargo:warning=codesign on {} failed ({}): {}",
+                binary.display(),
+                out.status,
+                stderr.trim()
+            );
+        }
+        Err(e) => {
+            println!(
+                "cargo:warning=codesign could not be spawned for {}: {}",
+                binary.display(),
+                e
+            );
         }
     }
 }
