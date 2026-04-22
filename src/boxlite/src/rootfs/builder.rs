@@ -1,6 +1,6 @@
 //! Unified rootfs builder for all preparation needs.
 
-use crate::images::{ImageObject, extract_layer_tarball_streaming};
+use crate::images::{ImageObject, LayerExtractor};
 use crate::rootfs::{CopyMode, CopyMountOptions, copy_based_mount};
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use std::path::{Path, PathBuf};
@@ -186,7 +186,7 @@ impl RootfsBuilder {
                 layer_tarballs.len(),
                 tarball.display()
             );
-            extract_layer_tarball_streaming(tarball, dest)?;
+            LayerExtractor::new(dest).extract_tarball(tarball)?;
         }
 
         // Fix permissions

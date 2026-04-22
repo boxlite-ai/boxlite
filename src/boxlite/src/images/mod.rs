@@ -7,7 +7,7 @@ mod object;
 mod storage;
 mod store;
 
-pub use archive::extract_layer_tarball_streaming;
+pub use archive::LayerExtractor;
 pub use config::ContainerImageConfig;
 pub use image_disk::ImageDiskManager;
 pub use manager::ImageManager;

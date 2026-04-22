@@ -14,7 +14,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::images::archive::extract_layer_tarball_streaming;
+use crate::images::archive::LayerExtractor;
 use crate::images::storage::ImageStorage;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
@@ -252,7 +252,7 @@ impl LocalBundleBlobSource {
         })?;
 
         // Extract tarball
-        if let Err(e) = extract_layer_tarball_streaming(tarball_path, &temp_path) {
+        if let Err(e) = LayerExtractor::new(&temp_path).extract_tarball(tarball_path) {
             let _ = std::fs::remove_dir_all(&temp_path);
             return Err(e);
         }

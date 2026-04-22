@@ -176,7 +176,7 @@ impl ImageObject {
     /// This ensures the decompressed filesystem content matches what the
     /// image author intended.
     fn verify_diff_ids(&self) -> BoxliteResult<()> {
-        use crate::images::archive::verify_diff_id;
+        use crate::images::archive::LayerVerifier;
 
         let diff_ids = &self.manifest.diff_ids;
         if diff_ids.is_empty() {
@@ -195,7 +195,14 @@ impl ImageObject {
 
         for (i, (layer, diff_id)) in layers.iter().zip(diff_ids.iter()).enumerate() {
             let tarball_path = self.blob_source.layer_tarball_path(&layer.digest);
-            match verify_diff_id(&tarball_path, diff_id) {
+            let verifier = match LayerVerifier::new(diff_id) {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!("DiffID parse error for layer {}: {}", i, e);
+                    continue;
+                }
+            };
+            match verifier.verify_tarball(&tarball_path) {
                 Ok(true) => {
                     tracing::debug!("DiffID verified for layer {}: {}", i, layer.digest);
                 }

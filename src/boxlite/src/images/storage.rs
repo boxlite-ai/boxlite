@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 use oci_client::manifest::OciManifest;
 
-use crate::images::archive;
+use crate::images::archive::LayerExtractor;
 use crate::runtime::layout::ImageFilesystemLayout;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
@@ -229,7 +229,7 @@ impl ImageStorage {
         })?;
 
         // Extract tarball to temp directory - keep .wh.* files!
-        if let Err(e) = archive::extract_layer_tarball_streaming(tarball_path, &temp_path) {
+        if let Err(e) = LayerExtractor::new(&temp_path).extract_tarball(tarball_path) {
             // Clean up temp dir on extraction failure
             let _ = std::fs::remove_dir_all(&temp_path);
             return Err(e);

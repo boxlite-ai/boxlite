@@ -414,6 +414,7 @@ dependencies = [
  "oci-client",
  "oci-spec 0.8.4",
  "parking_lot",
+ "pathrs",
  "pkg-config",
  "proptest",
  "qcow2-rs",
