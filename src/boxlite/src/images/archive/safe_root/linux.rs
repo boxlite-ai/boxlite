@@ -96,14 +96,12 @@ impl Backend {
         let perms = Permissions::from_mode(mode);
         let inode = match kind {
             SpecialInode::Fifo => pathrs::InodeType::Fifo(perms),
-            SpecialInode::CharDevice { major, minor } => pathrs::InodeType::CharacterDevice(
-                perms,
-                rustix::fs::makedev(major as u32, minor as u32),
-            ),
-            SpecialInode::BlockDevice { major, minor } => pathrs::InodeType::BlockDevice(
-                perms,
-                rustix::fs::makedev(major as u32, minor as u32),
-            ),
+            SpecialInode::CharDevice { major, minor } => {
+                pathrs::InodeType::CharacterDevice(perms, libc::makedev(major as u32, minor as u32))
+            }
+            SpecialInode::BlockDevice { major, minor } => {
+                pathrs::InodeType::BlockDevice(perms, libc::makedev(major as u32, minor as u32))
+            }
         };
         self.root.create(rel, &inode).map_err(|e| {
             BoxliteError::Storage(format!(
