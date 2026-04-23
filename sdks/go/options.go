@@ -45,29 +45,25 @@ type portEntry struct {
 }
 
 // NetworkSpec controls the box's network configuration.
+// Only two modes exist: Enabled (with optional allowlist) and Disabled.
 type NetworkSpec struct {
-	mode     string   // "enabled", "disabled", "isolated"
-	allowNet []string // only used when mode == "enabled"
+	disabled bool
+	allowNet []string
 }
 
 // NetworkEnabled returns a NetworkSpec with full network access.
 func NetworkEnabled() NetworkSpec {
-	return NetworkSpec{mode: "enabled"}
+	return NetworkSpec{}
 }
 
-// NetworkEnabledWithAllowList returns a NetworkSpec that only allows specific hosts.
+// NetworkEnabledWithAllowList returns a NetworkSpec that only allows specific hosts/IPs/CIDRs.
 func NetworkEnabledWithAllowList(hosts ...string) NetworkSpec {
-	return NetworkSpec{mode: "enabled", allowNet: hosts}
+	return NetworkSpec{allowNet: hosts}
 }
 
 // NetworkDisabled returns a NetworkSpec with no network access.
 func NetworkDisabled() NetworkSpec {
-	return NetworkSpec{mode: "disabled"}
-}
-
-// NetworkIsolated returns a NetworkSpec with isolated (default) network.
-func NetworkIsolated() NetworkSpec {
-	return NetworkSpec{mode: "isolated"}
+	return NetworkSpec{disabled: true}
 }
 
 type volumeEntry struct {

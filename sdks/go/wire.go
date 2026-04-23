@@ -76,23 +76,19 @@ func (w *boxInfoWire) toBoxInfo() BoxInfo {
 }
 
 // buildNetworkWire converts a NetworkSpec to the Rust serde format.
+// Rust NetworkSpec is: Enabled { allow_net: Vec<String> } | Disabled
 func buildNetworkWire(spec *NetworkSpec) any {
-	if spec == nil {
-		return "Isolated"
-	}
-	switch spec.mode {
-	case "disabled":
+	if spec != nil && spec.disabled {
 		return "Disabled"
-	case "isolated":
-		return "Isolated"
-	case "enabled":
-		return map[string]any{
-			"Enabled": map[string]any{
-				"allow_net": spec.allowNet,
-			},
-		}
-	default:
-		return "Isolated"
+	}
+	allowNet := []string{}
+	if spec != nil && spec.allowNet != nil {
+		allowNet = spec.allowNet
+	}
+	return map[string]any{
+		"Enabled": map[string]any{
+			"allow_net": allowNet,
+		},
 	}
 }
 
@@ -160,6 +156,12 @@ func buildOptionsJSON(image string, cfg *boxConfig) boxOptionsWire {
 	}
 	if w.Ports == nil {
 		w.Ports = []wirePort{}
+	}
+	if w.Entrypoint == nil {
+		w.Entrypoint = []string{}
+	}
+	if w.Cmd == nil {
+		w.Cmd = []string{}
 	}
 
 	return w

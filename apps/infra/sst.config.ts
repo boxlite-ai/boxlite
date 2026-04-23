@@ -60,53 +60,16 @@ const HEALTH_DEFAULTS = {
   unhealthyThreshold: 3,
 } as const;
 
-// Shared CloudFront origin + cache-behavior boilerplate
-const CDN_ORIGIN_TIMEOUTS = {
-  httpPort: 80,
-  httpsPort: 443,
-  originProtocolPolicy: "http-only" as const,
-  originSslProtocols: ["TLSv1.2"],
-  originReadTimeout: 60,
-  originKeepaliveTimeout: 60,
-};
-
-const CDN_BEHAVIOR = {
-  viewerProtocolPolicy: "redirect-to-https" as const,
-  allowedMethods: ["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"],
-  cachedMethods: ["GET", "HEAD"],
-  forwardedValues: {
-    queryString: true,
-    headers: ["*"],
-    cookies: { forward: "all" as const },
-  },
-  minTtl: 0,
-  defaultTtl: 0,
-  maxTtl: 0,
-};
-
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 // Env var with fallback. Empty string also falls through.
 const envOr = <T>(key: string, fallback: T) => process.env[key] || fallback;
-
-// Strip protocol and path from a URL Output (for CloudFront origin domainName).
-const stripProtocol = (url: $util.Output<string>) =>
-  url.apply((u) =>
-    u.replace(/^https?:\/\//, "").replace(/\/.*$/, "").replace(/:\d+$/, ""),
-  );
 
 // HTTP health check with defaults + optional overrides.
 const httpHealth = (
   path: string,
   overrides: Partial<{ successCodes: string }> = {},
 ) => ({ path, ...HEALTH_DEFAULTS, ...overrides });
-
-// CloudFront custom origin (HTTP-only to ALB, HTTPS at the viewer).
-const cloudfrontOrigin = (originId: string, serviceUrl: $util.Output<string>) => ({
-  originId,
-  domainName: stripProtocol(serviceUrl),
-  customOriginConfig: CDN_ORIGIN_TIMEOUTS,
-});
 
 // The four env vars the API needs for each registry (transient + internal).
 const registryEnv = (
@@ -119,14 +82,12 @@ const registryEnv = (
   [`${prefix}_REGISTRY_PROJECT_ID`]: envOr(`${prefix}_REGISTRY_PROJECT_ID`, "boxlite"),
 });
 
-// OIDC issuer URL — external override > CloudFront Dex > in-cluster Dex.
-const oidcIssuer = (cloudfrontDomain: string | undefined, dexUrl: $util.Output<string>) =>
-  envOr(
-    "OIDC_ISSUER_BASE_URL",
-    cloudfrontDomain
-      ? `https://${cloudfrontDomain}/dex`
-      : dexUrl.apply((u) => `${u}/dex`),
-  );
+// OIDC issuer URL — must be set (Auth0, Okta, etc.). No default.
+const requireOidcIssuer = () => {
+  const v = process.env.OIDC_ISSUER_BASE_URL;
+  if (!v) throw new Error("OIDC_ISSUER_BASE_URL is required (e.g. https://<tenant>.auth0.com/)");
+  return v;
+};
 
 // Runner endpoint overrides — use RUNNER_PRIVATE_IP shortcut when set.
 const runnerEndpoint = (override: string, port: number, scheme: string) =>
@@ -146,6 +107,7 @@ export default $config({
       home: "aws",
       providers: {
         aws: { region: REGION, profile: envOr("AWS_PROFILE", "default") },
+        cloudflare: "6.14.0",
         random: "4.16.6",
       },
     };
@@ -156,9 +118,27 @@ export default $config({
     const { config } = await import("dotenv");
     config();
 
-    const cloudfrontDomain = process.env.CUSTOM_DOMAIN
-      ? process.env.CUSTOM_DOMAIN
-      : process.env.CLOUDFRONT_DOMAIN;
+    // Strip trailing slash from service.url so path concat produces clean URLs
+    // (api.url = "https://api.dev.boxlite.ai/" → apiBase = "https://api.dev.boxlite.ai").
+    const stripTrailingSlash = (url: $util.Output<string>) =>
+      url.apply((u) => (u.endsWith("/") ? u.slice(0, -1) : u));
+
+    // HTTPS everywhere: the Router CloudFront Function deletes customOriginConfig
+    // for http origins and CF then falls back to match-viewer (→ tries HTTPS on a
+    // port-80-only ALB → 502). We side-step that by giving Api and Dex ALBs
+    // HTTPS listeners with a wildcard ACM cert, so Router routes to https://
+    // origins and the non-buggy branch runs.
+    const stackDomain = process.env.STACK_DOMAIN;
+    if (!stackDomain) {
+      throw new Error(
+        "STACK_DOMAIN is required (Cloudflare-managed subdomain, e.g. dev.boxlite.ai)",
+      );
+    }
+    const cloudflareDns = sst.cloudflare.dns();
+    const serviceDomain = (name: string) => ({
+      name: `${name}.${stackDomain}`,
+      dns: cloudflareDns,
+    });
 
     // ─── 1. SECRETS ──────────────────────────────────────────────────────────
     // Auto-generated — override any one by setting the matching env var.
@@ -195,18 +175,30 @@ export default $config({
     });
     const s3AccessKey = new aws.iam.AccessKey("S3AccessKey", { user: s3User.name });
 
-    // ─── 4. AUTH (Dex OIDC) ──────────────────────────────────────────────────
-    // Issuer URL must match what clients use. On first deploy CLOUDFRONT_DOMAIN
-    // isn't known yet; set it in .env after the initial deploy and redeploy.
-    const dex = new sst.aws.Service("Dex", {
-      cluster,
-      image: { context: "../..", dockerfile: "apps/dex/Dockerfile" },
-      loadBalancer: { rules: [{ listen: "80/http", forward: `${PORTS.DEX}/http` }] },
-      environment: {
-        DEX_ISSUER: cloudfrontDomain
-          ? `https://${cloudfrontDomain}/dex`
-          : envOr("DEX_ISSUER", `http://localhost:${PORTS.DEX}/dex`),
-        REDIRECT_URI: cloudfrontDomain ? `https://${cloudfrontDomain}` : "http://localhost:3000",
+    // ─── 4. AUTH ─────────────────────────────────────────────────────────────
+    // OIDC is delegated to an external provider (Auth0/Okta/etc.) via
+    // OIDC_ISSUER_BASE_URL. No in-cluster Dex — removes one ALB + ACM cert +
+    // service and the ephemeral-sqlite key-rotation problem.
+    //
+    // Router still exists for dashboard HTTPS + routing /* to Api.
+    // NOTE: SST Router's placeholder origin is created with
+    // `OriginProtocolPolicy: "http-only"`, which wins over the per-request
+    // customOriginConfig set by its CloudFront Function for HTTPS origins
+    // (CF rejects the TLS handshake → 502). Flip it to `https-only` so CF
+    // respects the CF-Function's HTTPS override.
+    const router = new sst.aws.Router("ApiCdn", {
+      domain: { name: stackDomain, dns: cloudflareDns },
+      transform: {
+        cdn: (cdnArgs) => {
+          cdnArgs.origins = $util.output(cdnArgs.origins).apply((origins) =>
+            (origins ?? []).map((o: any) => ({
+              ...o,
+              customOriginConfig: o.customOriginConfig
+                ? { ...o.customOriginConfig, originProtocolPolicy: "https-only" }
+                : o.customOriginConfig,
+            })),
+          );
+        },
       },
     });
 
@@ -233,7 +225,10 @@ export default $config({
     const api = new sst.aws.Service("Api", {
       cluster,
       image: { context: "../..", dockerfile: "apps/api/Dockerfile" },
-      loadBalancer: { rules: [{ listen: "80/http", forward: `${PORTS.API}/http` }] },
+      loadBalancer: {
+        domain: serviceDomain("api"),
+        rules: [{ listen: "443/https", forward: `${PORTS.API}/http` }],
+      },
       link: [db, redis, storage],
       scaling: { min: 1, max: 4 },
       environment: {
@@ -263,10 +258,17 @@ export default $config({
         ENCRYPTION_KEY: envOr("ENCRYPTION_KEY", encryptionKey.result),
         ENCRYPTION_SALT: envOr("ENCRYPTION_SALT", encryptionSalt.result),
 
-        // OIDC (Dex by default, overridable to Auth0/Okta/etc.)
+        // OIDC — external provider (Auth0/Okta/etc.)
         OIDC_CLIENT_ID: envOr("OIDC_CLIENT_ID", "boxlite"),
         OIDC_AUDIENCE: envOr("OIDC_AUDIENCE", "boxlite"),
-        OIDC_ISSUER_BASE_URL: oidcIssuer(process.env.CLOUDFRONT_DOMAIN, dex.url),
+        OIDC_ISSUER_BASE_URL: requireOidcIssuer(),
+        // Optional: Auth0 Management API (enables account linking etc.)
+        ...(process.env.OIDC_MANAGEMENT_API_ENABLED === "true" && {
+          OIDC_MANAGEMENT_API_ENABLED: "true",
+          OIDC_MANAGEMENT_API_CLIENT_ID: process.env.OIDC_MANAGEMENT_API_CLIENT_ID!,
+          OIDC_MANAGEMENT_API_CLIENT_SECRET: process.env.OIDC_MANAGEMENT_API_CLIENT_SECRET!,
+          OIDC_MANAGEMENT_API_AUDIENCE: process.env.OIDC_MANAGEMENT_API_AUDIENCE!,
+        }),
 
         // S3 (API signs STS creds for per-sandbox buckets)
         S3_ENDPOINT: $interpolate`https://s3.${aws.getRegionOutput().name}.amazonaws.com`,
@@ -279,10 +281,10 @@ export default $config({
         S3_ROLE_NAME: "BoxliteS3Role",
 
         // Proxy
-        PROXY_DOMAIN: envOr("PROXY_DOMAIN", "localhost"),
-        PROXY_PROTOCOL: envOr("PROXY_PROTOCOL", "http"),
+        PROXY_DOMAIN: envOr("PROXY_DOMAIN", `proxy.${stackDomain}`),
+        PROXY_PROTOCOL: envOr("PROXY_PROTOCOL", "https"),
         PROXY_API_KEY: envOr("PROXY_API_KEY", proxyApiKey.result),
-        PROXY_TEMPLATE_URL: envOr("PROXY_TEMPLATE_URL", "http://localhost"),
+        PROXY_TEMPLATE_URL: envOr("PROXY_TEMPLATE_URL", `https://proxy.${stackDomain}`),
 
         // SSH Gateway
         SSH_GATEWAY_URL: envOr("SSH_GATEWAY_URL", `ssh://localhost:${PORTS.SSH_GATEWAY}`),
@@ -322,12 +324,19 @@ export default $config({
     });
 
     // ─── 7. EDGE SERVICES ────────────────────────────────────────────────────
-    // Proxy: routes sandbox.<id>.host → sandbox pod. Health at /health.
+    // Proxy: routes `<port>-<sandboxid>.proxy.<stack>` to the sandbox port.
+    // Wildcard cert covers *.proxy.<stack>; Cloudflare serves wildcard DNS.
+    const proxyDomain = `proxy.${stackDomain}`;
     new sst.aws.Service("Proxy", {
       cluster,
       image: { context: "../..", dockerfile: "apps/proxy/Dockerfile" },
       loadBalancer: {
-        rules: [{ listen: "80/http", forward: `${PORTS.PROXY}/http` }],
+        domain: {
+          name: proxyDomain,
+          aliases: [`*.${proxyDomain}`],
+          dns: cloudflareDns,
+        },
+        rules: [{ listen: "443/https", forward: `${PORTS.PROXY}/http` }],
         health: { [`${PORTS.PROXY}/http`]: httpHealth("/health") },
       },
       environment: {
@@ -335,12 +344,10 @@ export default $config({
         PROXY_PROTOCOL: envOr("PROXY_PROTOCOL", "http"),
         PROXY_API_KEY: envOr("PROXY_API_KEY", proxyApiKey.result),
         // api-client-go appends paths like "/config" directly → include /api suffix
-        DAYTONA_API_URL: $interpolate`${api.url}/api`,
+        DAYTONA_API_URL: $interpolate`${stripTrailingSlash(api.url)}/api`,
         OIDC_CLIENT_ID: envOr("OIDC_CLIENT_ID", "boxlite"),
         OIDC_AUDIENCE: envOr("OIDC_AUDIENCE", "boxlite"),
-        OIDC_DOMAIN: cloudfrontDomain
-          ? `https://${cloudfrontDomain}/dex`
-          : `http://localhost:${PORTS.DEX}/dex`,
+        OIDC_DOMAIN: requireOidcIssuer(),
       },
     });
 
@@ -391,7 +398,7 @@ export default $config({
       environment: {
         CLICKHOUSE_ENDPOINT: "tcp://localhost:9000",
         CLICKHOUSE_PASSWORD: "unused",
-        DAYTONA_API_URL: $interpolate`${api.url}/api`,
+        DAYTONA_API_URL: $interpolate`${stripTrailingSlash(api.url)}/api`,
       },
     });
 
@@ -430,26 +437,9 @@ export default $config({
       loadBalancer: { rules: [{ listen: "80/http", forward: `${PORTS.MAILDEV_UI}/http` }] },
     });
 
-    // ─── 10. CDN (HTTPS for Api + Dex) ───────────────────────────────────────
-    // Default: free *.cloudfront.net cert. CUSTOM_DOMAIN → your own ACM cert
-    // (must live in us-east-1, CloudFront requirement).
-    const customDomain = process.env.CUSTOM_DOMAIN;
-    new aws.cloudfront.Distribution("ApiCdn", {
-      enabled: true,
-      origins: [cloudfrontOrigin("api", api.url), cloudfrontOrigin("dex", dex.url)],
-      // /dex/* → Dex, everything else → API
-      orderedCacheBehaviors: [{ pathPattern: "/dex/*", targetOriginId: "dex", ...CDN_BEHAVIOR }],
-      defaultCacheBehavior: { targetOriginId: "api", ...CDN_BEHAVIOR },
-      restrictions: { geoRestriction: { restrictionType: "none" } },
-      viewerCertificate: customDomain
-        ? {
-            acmCertificateArn: process.env.CUSTOM_DOMAIN_CERT_ARN!,
-            sslSupportMethod: "sni-only",
-            minimumProtocolVersion: "TLSv1.2_2021",
-          }
-        : { cloudfrontDefaultCertificate: true },
-      ...(customDomain && { aliases: [customDomain] }),
-    });
+    // ─── 10. CDN ROUTES ──────────────────────────────────────────────────────
+    // Router (declared in section 4) fronts the Api with HTTPS.
+    router.route("/", api.url);
 
     // ─── 11. RUNNER (EC2 with nested KVM) ────────────────────────────────────
     // Pulls runner image from ECR, runs privileged with /dev/kvm mounted.
@@ -476,8 +466,7 @@ export default $config({
     }
     const runnerInstanceProfile = new aws.iam.InstanceProfile("RunnerProfile", { role: runnerRole.name });
 
-    // SST publishes app images to its shared ECR repo — reuse it for the runner image.
-    const ecrRepo = $interpolate`${aws.getCallerIdentityOutput().accountId}.dkr.ecr.${REGION}.amazonaws.com/sst-asset`;
+    const ecrRepo = $interpolate`${aws.getCallerIdentityOutput().accountId}.dkr.ecr.${REGION}.amazonaws.com/boxlite-runner`;
 
     const runnerUserData = $resolve([api.url, defaultRunnerApiKey.result, ecrRepo, registry.url]).apply(
       ([apiUrl, token, repo, registryUrl]) => buildRunnerUserData({ apiUrl, token, repo, registryUrl }),
@@ -491,6 +480,7 @@ export default $config({
       cpuOptions: { nestedVirtualization: "enabled" },
       associatePublicIpAddress: true,
       userDataBase64: runnerUserData,
+      userDataReplaceOnChange: true,
       rootBlockDevice: { volumeSize: RUNNER.rootDiskGB },
       tags: { Name: "boxlite-runner" },
     });
@@ -498,8 +488,8 @@ export default $config({
 });
 
 // ── runner bootstrap ─────────────────────────────────────────────────────────
-// EC2 user-data: installs Docker + AWS CLI, logs into ECR, starts the runner
-// container privileged with /dev/kvm mounted.
+// EC2 user-data: installs Docker + AWS CLI, pulls the runner image from ECR,
+// extracts the binary, and runs it directly with BoxLite VM isolation.
 function buildRunnerUserData(input: {
   apiUrl: string;
   token: string;
@@ -507,9 +497,6 @@ function buildRunnerUserData(input: {
   registryUrl: string;
 }): string {
   const ecrDomain = input.repo.split("/")[0];
-  const registryHost = input.registryUrl
-    .replace(/^https?:\/\//, "")
-    .replace(/\/$/, "");
 
   const script = `#!/bin/bash
 exec > /var/log/runner-setup.log 2>&1
@@ -517,7 +504,7 @@ exec > /var/log/runner-setup.log 2>&1
 # Wait for dpkg locks
 while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do sleep 5; done
 
-# Install Docker via official script
+# Install Docker (used only to pull the runner image from ECR)
 curl -fsSL https://get.docker.com | sh
 systemctl enable docker
 systemctl start docker
@@ -531,22 +518,43 @@ unzip -q /tmp/awscliv2.zip -d /tmp
 # Login to ECR
 /usr/local/bin/aws ecr get-login-password --region ${REGION} | docker login --username AWS --password-stdin ${ecrDomain}
 
-# Pull and run runner
-docker pull ${input.repo}:Runner
-docker run -d --restart=always --privileged \\
-  --name boxlite-runner \\
-  -p ${PORTS.RUNNER}:${PORTS.RUNNER} \\
-  -v /dev/kvm:/dev/kvm \\
-  -e DAYTONA_API_URL=${input.apiUrl}/api \\
-  -e DAYTONA_RUNNER_TOKEN=${input.token} \\
-  -e API_VERSION=2 \\
-  -e API_PORT=${PORTS.RUNNER} \\
-  ${input.repo}:Runner
+# Pull runner image and extract binary
+docker pull ${input.repo}:latest
+docker create --name runner-extract ${input.repo}:latest
+docker cp runner-extract:/usr/local/bin/boxlite-runner /usr/local/bin/boxlite-runner
+docker rm runner-extract
+chmod +x /usr/local/bin/boxlite-runner
 
-# Point runner's Docker at the insecure in-cluster registry
-sleep 10
-docker exec boxlite-runner sh -c 'echo "{\\"insecure-registries\\": [\\"${registryHost}\\"]}" > /etc/docker/daemon.json'
-docker restart boxlite-runner
+# Get host IP via IMDSv2
+IMDS_TOKEN=\$(curl -sX PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 300")
+HOST_IP=\$(curl -s -H "X-aws-ec2-metadata-token: \$IMDS_TOKEN" http://169.254.169.254/latest/meta-data/local-ipv4)
+
+# Create systemd service for the BoxLite runner
+cat > /etc/systemd/system/boxlite-runner.service << UNIT
+[Unit]
+Description=BoxLite Runner
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/boxlite-runner
+Restart=always
+RestartSec=5
+Environment=DAYTONA_API_URL=${input.apiUrl.replace(/\/$/, "")}/api
+Environment=DAYTONA_RUNNER_TOKEN=${input.token}
+Environment=API_VERSION=2
+Environment=API_PORT=${PORTS.RUNNER}
+Environment=RUNNER_DOMAIN=\$HOST_IP
+Environment=BOXLITE_HOME_DIR=/var/lib/boxlite
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+mkdir -p /var/lib/boxlite
+systemctl daemon-reload
+systemctl enable boxlite-runner
+systemctl start boxlite-runner
 
 echo "Runner setup complete"
 `;
