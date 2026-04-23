@@ -152,8 +152,11 @@ func TestBuildOptionsJSON(t *testing.T) {
 	if wire.WorkDir != "/work" {
 		t.Errorf("WorkDir: got %q", wire.WorkDir)
 	}
-	if wire.Network != "Isolated" {
-		t.Errorf("Network: got %q", wire.Network)
+	netMap, ok := wire.Network.(map[string]any)
+	if !ok {
+		t.Errorf("Network should be map (Enabled), got %T: %v", wire.Network, wire.Network)
+	} else if _, hasEnabled := netMap["Enabled"]; !hasEnabled {
+		t.Errorf("Network should have Enabled key, got %v", netMap)
 	}
 }
 

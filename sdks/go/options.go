@@ -152,7 +152,7 @@ func WithNetwork(spec NetworkSpec) BoxOption {
 // If hostPort is 0, a port will be dynamically assigned.
 func WithPort(guestPort int, hostPort int) BoxOption {
 	return func(c *boxConfig) {
-		entry := portEntry{guestPort: guestPort, protocol: "tcp"}
+		entry := portEntry{guestPort: guestPort, protocol: "Tcp"}
 		if hostPort > 0 {
 			entry.hostPort = &hostPort
 		}

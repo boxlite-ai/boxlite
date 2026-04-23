@@ -19,8 +19,8 @@ type boxOptionsWire struct {
 	WorkDir    string      `json:"working_dir,omitempty"`
 	AutoRemove *bool       `json:"auto_remove,omitempty"`
 	Detach     *bool       `json:"detach,omitempty"`
-	Entrypoint []string    `json:"entrypoint,omitempty"`
-	Cmd        []string    `json:"cmd,omitempty"`
+	Entrypoint []string    `json:"entrypoint"`
+	Cmd        []string    `json:"cmd"`
 }
 
 type wireVol struct {
@@ -141,9 +141,15 @@ func buildOptionsJSON(image string, cfg *boxConfig) boxOptionsWire {
 	}
 
 	for _, p := range cfg.ports {
+		proto := p.protocol
+		if proto == "tcp" {
+			proto = "Tcp"
+		} else if proto == "udp" {
+			proto = "Udp"
+		}
 		wp := wirePort{
 			GuestPort: p.guestPort,
-			Protocol:  p.protocol,
+			Protocol:  proto,
 		}
 		if p.hostPort != nil {
 			wp.HostPort = p.hostPort
