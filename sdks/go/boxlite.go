@@ -52,6 +52,7 @@ func NewRuntime(opts ...RuntimeOption) (*Runtime, error) {
 		defer C.free(unsafe.Pointer(homeDir))
 	}
 
+	// registries still uses JSON (Rust side expects JSON array for this config)
 	var registriesJSON *C.char
 	if len(cfg.registries) > 0 {
 		data, err := json.Marshal(cfg.registries)
@@ -72,7 +73,7 @@ func NewRuntime(opts ...RuntimeOption) (*Runtime, error) {
 	return &Runtime{handle: handle}, nil
 }
 
-// Close releases the runtime. Implements io.Closer.
+// Close releases the runtime.
 func (r *Runtime) Close() error {
 	if r.handle != nil {
 		C.boxlite_runtime_free(r.handle)
@@ -85,7 +86,7 @@ func (r *Runtime) Close() error {
 func (r *Runtime) Shutdown(_ context.Context, timeout time.Duration) error {
 	secs := int(timeout.Seconds())
 	if secs <= 0 {
-		secs = 0 // 0 = use default (10s)
+		secs = 0
 	}
 	var cerr C.CBoxliteError
 	code := C.boxlite_runtime_shutdown(r.handle, C.int(secs), &cerr)
@@ -102,23 +103,108 @@ func (r *Runtime) Create(_ context.Context, image string, opts ...BoxOption) (*B
 		o(cfg)
 	}
 
-	wire := buildOptionsJSON(image, cfg)
-	optsJSON, err := json.Marshal(wire)
-	if err != nil {
-		return nil, err
-	}
+	cImage := toCString(image)
+	defer C.free(unsafe.Pointer(cImage))
 
-	cOptsJSON := toCString(string(optsJSON))
-	defer C.free(unsafe.Pointer(cOptsJSON))
-
-	var boxHandle *C.CBoxHandle
+	var cOpts *C.CBoxliteOptions
 	var cerr C.CBoxliteError
-	code := C.boxlite_create_box(r.handle, cOptsJSON, &boxHandle, &cerr)
+	code := C.boxlite_options_new(cImage, &cOpts, &cerr)
 	if code != C.Ok {
 		return nil, freeError(&cerr)
 	}
 
-	// Read back the assigned ID.
+	if cfg.name != "" {
+		cName := toCString(cfg.name)
+		C.boxlite_options_set_name(cOpts, cName)
+		C.free(unsafe.Pointer(cName))
+	}
+	if cfg.cpus > 0 {
+		C.boxlite_options_set_cpus(cOpts, C.int(cfg.cpus))
+	}
+	if cfg.memoryMiB > 0 {
+		C.boxlite_options_set_memory(cOpts, C.int(cfg.memoryMiB))
+	}
+	if cfg.diskSizeGB > 0 {
+		C.boxlite_options_set_disk(cOpts, C.int64_t(cfg.diskSizeGB))
+	}
+	if cfg.user != "" {
+		cUser := toCString(cfg.user)
+		C.boxlite_options_set_user(cOpts, cUser)
+		C.free(unsafe.Pointer(cUser))
+	}
+	if cfg.workDir != "" {
+		cDir := toCString(cfg.workDir)
+		C.boxlite_options_set_workdir(cOpts, cDir)
+		C.free(unsafe.Pointer(cDir))
+	}
+	for _, e := range cfg.env {
+		cKey := toCString(e[0])
+		cVal := toCString(e[1])
+		C.boxlite_options_add_env(cOpts, cKey, cVal)
+		C.free(unsafe.Pointer(cKey))
+		C.free(unsafe.Pointer(cVal))
+	}
+	for _, v := range cfg.volumes {
+		cHost := toCString(v.hostPath)
+		cGuest := toCString(v.guestPath)
+		ro := C.int(0)
+		if v.readOnly {
+			ro = 1
+		}
+		C.boxlite_options_add_volume(cOpts, cHost, cGuest, ro)
+		C.free(unsafe.Pointer(cHost))
+		C.free(unsafe.Pointer(cGuest))
+	}
+	for _, p := range cfg.ports {
+		hp := 0
+		if p.hostPort != nil {
+			hp = *p.hostPort
+		}
+		C.boxlite_options_add_port(cOpts, C.int(p.guestPort), C.int(hp))
+	}
+	if cfg.network != nil {
+		if cfg.network.disabled {
+			C.boxlite_options_set_network_disabled(cOpts)
+		} else {
+			C.boxlite_options_set_network_enabled(cOpts)
+			for _, h := range cfg.network.allowNet {
+				cHost := toCString(h)
+				C.boxlite_options_add_network_allow(cOpts, cHost)
+				C.free(unsafe.Pointer(cHost))
+			}
+		}
+	}
+	if cfg.autoRemove != nil {
+		v := C.int(0)
+		if *cfg.autoRemove {
+			v = 1
+		}
+		C.boxlite_options_set_auto_remove(cOpts, v)
+	}
+	if cfg.detach != nil {
+		v := C.int(0)
+		if *cfg.detach {
+			v = 1
+		}
+		C.boxlite_options_set_detach(cOpts, v)
+	}
+	if cfg.entrypoint != nil {
+		cArgs, argc := toCStringArray(cfg.entrypoint)
+		C.boxlite_options_set_entrypoint(cOpts, cArgs, C.int(argc))
+		freeCStringArray(cArgs, argc)
+	}
+	if cfg.cmd != nil {
+		cArgs, argc := toCStringArray(cfg.cmd)
+		C.boxlite_options_set_cmd(cOpts, cArgs, C.int(argc))
+		freeCStringArray(cArgs, argc)
+	}
+
+	var boxHandle *C.CBoxHandle
+	code = C.boxlite_create_box(r.handle, cOpts, &boxHandle, &cerr)
+	if code != C.Ok {
+		return nil, freeError(&cerr)
+	}
+
 	cID := C.boxlite_box_id(boxHandle)
 	id := ""
 	if cID != nil {
@@ -151,25 +237,21 @@ func (r *Runtime) Get(_ context.Context, idOrName string) (*Box, error) {
 	return &Box{handle: boxHandle, id: id}, nil
 }
 
-// ListInfo lists all boxes.
+// ListInfo lists all boxes using C structs (no JSON).
 func (r *Runtime) ListInfo(_ context.Context) ([]BoxInfo, error) {
-	var cJSON *C.char
+	var cList *C.CBoxInfoList
 	var cerr C.CBoxliteError
-	code := C.boxlite_list_info(r.handle, &cJSON, &cerr)
+	code := C.boxlite_list_info_struct(r.handle, &cList, &cerr)
 	if code != C.Ok {
 		return nil, freeError(&cerr)
 	}
-	jsonStr := C.GoString(cJSON)
-	freeBoxliteString(cJSON)
+	defer C.boxlite_free_box_info_list(cList)
 
-	var wireInfos []boxInfoWire
-	if err := json.Unmarshal([]byte(jsonStr), &wireInfos); err != nil {
-		return nil, err
-	}
-
-	result := make([]BoxInfo, len(wireInfos))
-	for i := range wireInfos {
-		result[i] = wireInfos[i].toBoxInfo()
+	count := int(cList.count)
+	items := unsafe.Slice(cList.items, count)
+	result := make([]BoxInfo, count)
+	for i := 0; i < count; i++ {
+		result[i] = cBoxInfoToGo(&items[i])
 	}
 	return result, nil
 }
@@ -213,38 +295,65 @@ func (r *Runtime) PullImage(_ context.Context, imageRef string) error {
 	return nil
 }
 
-// ListImages lists all locally cached images.
+// ListImages lists all locally cached images using C structs (no JSON).
 func (r *Runtime) ListImages(_ context.Context) ([]ImageInfo, error) {
-	var cJSON *C.char
+	var cList *C.CImageInfoList
 	var cerr C.CBoxliteError
-	code := C.boxlite_image_list(r.handle, &cJSON, &cerr)
+	code := C.boxlite_image_list_struct(r.handle, &cList, &cerr)
 	if code != C.Ok {
 		return nil, freeError(&cerr)
 	}
-	jsonStr := C.GoString(cJSON)
-	freeBoxliteString(cJSON)
+	defer C.boxlite_free_image_info_list(cList)
 
-	var images []ImageInfo
-	if err := json.Unmarshal([]byte(jsonStr), &images); err != nil {
-		return nil, err
+	count := int(cList.count)
+	items := unsafe.Slice(cList.items, count)
+	result := make([]ImageInfo, count)
+	for i := 0; i < count; i++ {
+		item := &items[i]
+		result[i] = ImageInfo{
+			Reference:  C.GoString(item.reference),
+			Repository: C.GoString(item.repository),
+			Tag:        C.GoString(item.tag),
+			ID:         C.GoString(item.id),
+			CachedAt:   time.Unix(int64(item.cached_at), 0),
+		}
+		if item.has_size != 0 {
+			size := uint64(item.size)
+			result[i].Size = &size
+		}
 	}
-	return images, nil
+	return result, nil
 }
 
-// Metrics returns aggregate runtime metrics.
+// Metrics returns aggregate runtime metrics using C struct (no JSON).
 func (r *Runtime) Metrics(_ context.Context) (*RuntimeMetrics, error) {
-	var cJSON *C.char
+	var cm C.CRuntimeMetrics
 	var cerr C.CBoxliteError
-	code := C.boxlite_runtime_metrics(r.handle, &cJSON, &cerr)
+	code := C.boxlite_runtime_metrics_struct(r.handle, &cm, &cerr)
 	if code != C.Ok {
 		return nil, freeError(&cerr)
 	}
-	jsonStr := C.GoString(cJSON)
-	freeBoxliteString(cJSON)
 
-	var m RuntimeMetrics
-	if err := json.Unmarshal([]byte(jsonStr), &m); err != nil {
-		return nil, err
+	return &RuntimeMetrics{
+		BoxesCreatedTotal:     int(cm.boxes_created_total),
+		BoxesFailedTotal:      int(cm.boxes_failed_total),
+		RunningBoxes:          int(cm.num_running_boxes),
+		TotalCommandsExecuted: int(cm.total_commands_executed),
+		TotalExecErrors:       int(cm.total_exec_errors),
+	}, nil
+}
+
+// cBoxInfoToGo converts a C CBoxInfo to a Go BoxInfo.
+func cBoxInfoToGo(c *C.CBoxInfo) BoxInfo {
+	return BoxInfo{
+		ID:        C.GoString(c.id),
+		Name:      C.GoString(c.name),
+		Image:     C.GoString(c.image),
+		State:     State(C.GoString(c.status)),
+		Running:   c.running != 0,
+		PID:       int(c.pid),
+		CPUs:      int(c.cpus),
+		MemoryMiB: int(c.memory_mib),
+		CreatedAt: time.Unix(int64(c.created_at), 0),
 	}
-	return &m, nil
 }

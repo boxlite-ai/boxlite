@@ -14,20 +14,15 @@ import (
 )
 
 // Box is a handle to a BoxLite box (virtual machine).
-// Call Close to release the handle when done. Closing does not destroy the box.
 type Box struct {
 	handle *C.CBoxHandle
 	id     string
 	name   string
 }
 
-// ID returns the unique identifier of the box.
-func (b *Box) ID() string { return b.id }
-
-// Name returns the user-defined name of the box, if set.
+func (b *Box) ID() string   { return b.id }
 func (b *Box) Name() string { return b.name }
 
-// Start starts (or restarts) the box.
 func (b *Box) Start(_ context.Context) error {
 	var cerr C.CBoxliteError
 	code := C.boxlite_start_box(b.handle, &cerr)
@@ -37,7 +32,6 @@ func (b *Box) Start(_ context.Context) error {
 	return nil
 }
 
-// Stop stops the box.
 func (b *Box) Stop(_ context.Context) error {
 	var cerr C.CBoxliteError
 	code := C.boxlite_stop_box(b.handle, &cerr)
@@ -47,8 +41,6 @@ func (b *Box) Stop(_ context.Context) error {
 	return nil
 }
 
-// Close releases the box handle. The box itself continues to exist in the runtime.
-// Implements io.Closer.
 func (b *Box) Close() error {
 	if b.handle != nil {
 		C.boxlite_box_free(b.handle)
@@ -57,57 +49,55 @@ func (b *Box) Close() error {
 	return nil
 }
 
-// Info returns information about the box.
+// Info returns information about the box using C struct (no JSON).
 func (b *Box) Info(_ context.Context) (*BoxInfo, error) {
-	var cJSON *C.char
+	var cInfo *C.CBoxInfo
 	var cerr C.CBoxliteError
-	code := C.boxlite_box_info(b.handle, &cJSON, &cerr)
+	code := C.boxlite_box_info_struct(b.handle, &cInfo, &cerr)
 	if code != C.Ok {
 		return nil, freeError(&cerr)
 	}
-	jsonStr := C.GoString(cJSON)
-	freeBoxliteString(cJSON)
+	defer C.boxlite_free_box_info(cInfo)
 
-	var info boxInfoWire
-	if err := json.Unmarshal([]byte(jsonStr), &info); err != nil {
-		return nil, err
-	}
-
-	// Update cached name if we got one from the server.
+	info := cBoxInfoToGo(cInfo)
 	if info.Name != "" && b.name == "" {
 		b.name = info.Name
 	}
-
-	boxInfo := info.toBoxInfo()
-	return &boxInfo, nil
+	return &info, nil
 }
 
-// Metrics returns real-time metrics for this box.
+// Metrics returns real-time metrics using C struct (no JSON).
 func (b *Box) Metrics(_ context.Context) (*BoxMetrics, error) {
-	var cJSON *C.char
+	var cm C.CBoxMetrics
 	var cerr C.CBoxliteError
-	code := C.boxlite_box_metrics(b.handle, &cJSON, &cerr)
+	code := C.boxlite_box_metrics_struct(b.handle, &cm, &cerr)
 	if code != C.Ok {
 		return nil, freeError(&cerr)
 	}
-	jsonStr := C.GoString(cJSON)
-	freeBoxliteString(cJSON)
 
-	var m BoxMetrics
-	if err := json.Unmarshal([]byte(jsonStr), &m); err != nil {
-		return nil, err
-	}
-	return &m, nil
+	return &BoxMetrics{
+		CPUPercent:           float64(cm.cpu_percent),
+		MemoryBytes:          int64(cm.memory_bytes),
+		CommandsExecuted:     int(cm.commands_executed),
+		ExecErrors:           int(cm.exec_errors),
+		BytesSent:            int64(cm.bytes_sent),
+		BytesReceived:        int64(cm.bytes_received),
+		CreateDurationMs:     int64(cm.create_duration_ms),
+		BootDurationMs:       int64(cm.boot_duration_ms),
+		NetworkBytesSent:     int64(cm.network_bytes_sent),
+		NetworkBytesReceived: int64(cm.network_bytes_received),
+		NetworkTCPConns:      int(cm.network_tcp_connections),
+		NetworkTCPErrors:     int(cm.network_tcp_errors),
+	}, nil
 }
 
 // Exec executes a command and returns the buffered result.
-// This is the simple path — for streaming, use Command.
 func (b *Box) Exec(ctx context.Context, name string, arg ...string) (*ExecResult, error) {
 	cmd := b.Command(name, arg...)
 
-	// Use callback to capture stdout/stderr.
 	var stdoutBuf, stderrBuf []byte
 
+	// args still uses JSON for the C FFI (simple string array)
 	argsJSON, err := json.Marshal(cmd.Args)
 	if err != nil {
 		return nil, err
@@ -187,7 +177,6 @@ func (b *Box) Command(name string, arg ...string) *Cmd {
 	}
 }
 
-// bytesCollector is a simple io.Writer that appends to a byte slice.
 type bytesCollector struct {
 	buf *[]byte
 }

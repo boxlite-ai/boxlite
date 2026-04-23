@@ -194,6 +194,55 @@ pub unsafe fn box_create(
     }
 }
 
+/// Create a new box from an OptionsHandle (type-safe, no JSON).
+pub unsafe fn box_create_opts(
+    runtime: *mut RuntimeHandle,
+    opts: *mut crate::options::OptionsHandle,
+    out_box: *mut *mut BoxHandle,
+    out_error: *mut FFIError,
+) -> BoxliteErrorCode {
+    unsafe {
+        if runtime.is_null() {
+            write_error(out_error, null_pointer_error("runtime"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+        if opts.is_null() {
+            write_error(out_error, null_pointer_error("opts"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+        if out_box.is_null() {
+            write_error(out_error, null_pointer_error("out_box"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+
+        let runtime_ref = &mut *runtime;
+        let opts_handle = Box::from_raw(opts);
+
+        let result = runtime_ref.tokio_rt.block_on(
+            runtime_ref
+                .runtime
+                .create(opts_handle.options, opts_handle.name),
+        );
+
+        match result {
+            Ok(handle) => {
+                let box_id = handle.id().clone();
+                *out_box = Box::into_raw(Box::new(BoxHandle {
+                    handle,
+                    box_id,
+                    tokio_rt: runtime_ref.tokio_rt.clone(),
+                }));
+                BoxliteErrorCode::Ok
+            }
+            Err(e) => {
+                let code = error_to_code(&e);
+                write_error(out_error, e);
+                code
+            }
+        }
+    }
+}
+
 /// List all boxes as JSON
 ///
 /// # Parameters

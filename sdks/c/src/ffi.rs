@@ -75,33 +75,141 @@ pub unsafe extern "C" fn boxlite_runtime_new(
     boxlite_ffi::ops::runtime_new(home_dir, registries_json, out_runtime, out_error)
 }
 
-/// Create a new box with the given options (JSON).
-///
-/// # Arguments
-/// * `runtime` - Pointer to the active `CBoxliteRuntime`.
-/// * `options_json` - JSON string defining the box (e.g., image, resources).
-/// * `out_box` - Output parameter to store the created `CBoxHandle`.
-/// * `out_error` - Output parameter for error information.
-///
-/// # Returns
-/// `BoxliteErrorCode::Ok` on success.
-///
-/// # Example
-/// ```c
-/// const char *options = "{\"rootfs\": {\"Image\": \"alpine:latest\"}}";
-/// CBoxHandle *box;
-/// if (boxlite_create_box(runtime, options, &box, error) == BOXLITE_OK) {
-///     // Use box...
-/// }
-/// ```
+// ============================================================================
+// Type-safe Box Options Builder (replaces JSON)
+// ============================================================================
+
+pub type CBoxliteOptions = boxlite_ffi::options::OptionsHandle;
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_options_new(
+    image: *const c_char,
+    out_opts: *mut *mut CBoxliteOptions,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    boxlite_ffi::options::options_new(image, out_opts, out_error)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_options_set_name(opts: *mut CBoxliteOptions, name: *const c_char) {
+    boxlite_ffi::options::options_set_name(opts, name)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_options_set_cpus(opts: *mut CBoxliteOptions, cpus: c_int) {
+    boxlite_ffi::options::options_set_cpus(opts, cpus)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_options_set_memory(opts: *mut CBoxliteOptions, memory_mib: c_int) {
+    boxlite_ffi::options::options_set_memory(opts, memory_mib)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_options_set_disk(opts: *mut CBoxliteOptions, disk_gb: i64) {
+    boxlite_ffi::options::options_set_disk(opts, disk_gb)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_options_set_user(opts: *mut CBoxliteOptions, user: *const c_char) {
+    boxlite_ffi::options::options_set_user(opts, user)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_options_set_workdir(
+    opts: *mut CBoxliteOptions,
+    workdir: *const c_char,
+) {
+    boxlite_ffi::options::options_set_workdir(opts, workdir)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_options_add_env(
+    opts: *mut CBoxliteOptions,
+    key: *const c_char,
+    val: *const c_char,
+) {
+    boxlite_ffi::options::options_add_env(opts, key, val)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_options_add_volume(
+    opts: *mut CBoxliteOptions,
+    host_path: *const c_char,
+    guest_path: *const c_char,
+    read_only: c_int,
+) {
+    boxlite_ffi::options::options_add_volume(opts, host_path, guest_path, read_only)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_options_add_port(
+    opts: *mut CBoxliteOptions,
+    guest_port: c_int,
+    host_port: c_int,
+) {
+    boxlite_ffi::options::options_add_port(opts, guest_port, host_port)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_options_set_network_enabled(opts: *mut CBoxliteOptions) {
+    boxlite_ffi::options::options_set_network_enabled(opts)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_options_set_network_disabled(opts: *mut CBoxliteOptions) {
+    boxlite_ffi::options::options_set_network_disabled(opts)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_options_add_network_allow(
+    opts: *mut CBoxliteOptions,
+    host: *const c_char,
+) {
+    boxlite_ffi::options::options_add_network_allow(opts, host)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_options_set_auto_remove(opts: *mut CBoxliteOptions, val: c_int) {
+    boxlite_ffi::options::options_set_auto_remove(opts, val)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_options_set_detach(opts: *mut CBoxliteOptions, val: c_int) {
+    boxlite_ffi::options::options_set_detach(opts, val)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_options_set_entrypoint(
+    opts: *mut CBoxliteOptions,
+    args: *const *const c_char,
+    argc: c_int,
+) {
+    boxlite_ffi::options::options_set_entrypoint(opts, args, argc)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_options_set_cmd(
+    opts: *mut CBoxliteOptions,
+    args: *const *const c_char,
+    argc: c_int,
+) {
+    boxlite_ffi::options::options_set_cmd(opts, args, argc)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_options_free(opts: *mut CBoxliteOptions) {
+    boxlite_ffi::options::options_free(opts)
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_create_box(
     runtime: *mut CBoxliteRuntime,
-    options_json: *const c_char,
+    opts: *mut CBoxliteOptions,
     out_box: *mut *mut CBoxHandle,
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
-    boxlite_ffi::ops::box_create(runtime, options_json, std::ptr::null(), out_box, out_error)
+    boxlite_ffi::ops::box_create_opts(runtime, opts, out_box, out_error)
 }
 
 /// Execute a command in a box.
@@ -558,6 +666,82 @@ pub unsafe extern "C" fn boxlite_simple_run(
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
     boxlite_ffi::ops::runner_exec(box_runner, command, args, argc, out_result, out_error)
+}
+
+// ============================================================================
+// Struct-based Returns (no JSON)
+// ============================================================================
+
+pub type CBoxInfo = boxlite_ffi::structs::CBoxInfo;
+pub type CBoxInfoList = boxlite_ffi::structs::CBoxInfoList;
+pub type CBoxMetrics = boxlite_ffi::structs::CBoxMetrics;
+pub type CRuntimeMetrics = boxlite_ffi::structs::CRuntimeMetrics;
+pub type CImageInfo = boxlite_ffi::structs::CImageInfo;
+pub type CImageInfoList = boxlite_ffi::structs::CImageInfoList;
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_box_info_struct(
+    handle: *mut CBoxHandle,
+    out_info: *mut *mut CBoxInfo,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    boxlite_ffi::ops_structs::box_info_struct(handle, out_info, out_error)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_box_metrics_struct(
+    handle: *mut CBoxHandle,
+    out_metrics: *mut CBoxMetrics,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    boxlite_ffi::ops_structs::box_metrics_struct(handle, out_metrics, out_error)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_runtime_metrics_struct(
+    runtime: *mut CBoxliteRuntime,
+    out_metrics: *mut CRuntimeMetrics,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    boxlite_ffi::ops_structs::runtime_metrics_struct(runtime, out_metrics, out_error)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_list_info_struct(
+    runtime: *mut CBoxliteRuntime,
+    out_list: *mut *mut CBoxInfoList,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    boxlite_ffi::ops_structs::box_list_struct(runtime, out_list, out_error)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_image_list_struct(
+    runtime: *mut CBoxliteRuntime,
+    out_list: *mut *mut CImageInfoList,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    boxlite_ffi::ops_structs::image_list_struct(runtime, out_list, out_error)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_free_box_info(info: *mut CBoxInfo) {
+    boxlite_ffi::structs::free_box_info(info);
+    if !info.is_null() {
+        unsafe {
+            drop(Box::from_raw(info));
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_free_box_info_list(list: *mut CBoxInfoList) {
+    boxlite_ffi::structs::free_box_info_list(list)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_free_image_info_list(list: *mut CImageInfoList) {
+    boxlite_ffi::structs::free_image_info_list(list)
 }
 
 // ============================================================================

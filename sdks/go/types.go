@@ -2,7 +2,6 @@ package boxlite
 
 import "time"
 
-// State represents the lifecycle state of a box.
 type State string
 
 const (
@@ -12,7 +11,6 @@ const (
 	StateStopped    State = "stopped"
 )
 
-// BoxInfo holds information about a box.
 type BoxInfo struct {
 	ID        string
 	Name      string
@@ -25,44 +23,40 @@ type BoxInfo struct {
 	CreatedAt time.Time
 }
 
-// ImageInfo holds metadata about a locally cached image.
 type ImageInfo struct {
-	Reference  string  `json:"reference"`
-	Repository string  `json:"repository"`
-	Tag        string  `json:"tag"`
-	ID         string  `json:"id"`
-	CachedAt   string  `json:"cached_at"`
-	Size       *uint64 `json:"size"`
+	Reference  string
+	Repository string
+	Tag        string
+	ID         string
+	CachedAt   time.Time
+	Size       *uint64
 }
 
-// ExecResult contains the result of a buffered command execution.
 type ExecResult struct {
 	ExitCode int
 	Stdout   string
 	Stderr   string
 }
 
-// RuntimeMetrics holds aggregate runtime metrics.
 type RuntimeMetrics struct {
-	BoxesCreatedTotal     int `json:"boxes_created_total"`
-	BoxesFailedTotal      int `json:"boxes_failed_total"`
-	RunningBoxes          int `json:"num_running_boxes"`
-	TotalCommandsExecuted int `json:"total_commands_executed"`
-	TotalExecErrors       int `json:"total_exec_errors"`
+	BoxesCreatedTotal     int
+	BoxesFailedTotal      int
+	RunningBoxes          int
+	TotalCommandsExecuted int
+	TotalExecErrors       int
 }
 
-// BoxMetrics holds per-box metrics.
 type BoxMetrics struct {
-	CPUPercent           float64 `json:"cpu_percent"`
-	MemoryBytes          int64   `json:"memory_bytes"`
-	CommandsExecuted     int     `json:"commands_executed_total"`
-	ExecErrors           int     `json:"exec_errors_total"`
-	BytesSent            int64   `json:"bytes_sent_total"`
-	BytesReceived        int64   `json:"bytes_received_total"`
-	CreateDurationMs     int64   `json:"total_create_duration_ms"`
-	BootDurationMs       int64   `json:"guest_boot_duration_ms"`
-	NetworkBytesSent     int64   `json:"network_bytes_sent"`
-	NetworkBytesReceived int64   `json:"network_bytes_received"`
-	NetworkTCPConns      int     `json:"network_tcp_connections"`
-	NetworkTCPErrors     int     `json:"network_tcp_errors"`
+	CPUPercent           float64
+	MemoryBytes          int64
+	CommandsExecuted     int
+	ExecErrors           int
+	BytesSent            int64
+	BytesReceived        int64
+	CreateDurationMs     int64
+	BootDurationMs       int64
+	NetworkBytesSent     int64
+	NetworkBytesReceived int64
+	NetworkTCPConns      int
+	NetworkTCPErrors     int
 }

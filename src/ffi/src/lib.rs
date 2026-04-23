@@ -7,12 +7,17 @@
 //! - Runtime management (Tokio + BoxliteRuntime)
 //! - Core FFI operations implementation
 
+#![allow(clippy::missing_safety_doc, clippy::collapsible_if)]
+
 pub mod error;
 pub mod json;
 pub mod ops;
+pub mod ops_structs;
+pub mod options;
 pub mod runner;
 pub mod runtime;
 pub mod string;
+pub mod structs;
 
 pub use error::*;
 pub use json::*;

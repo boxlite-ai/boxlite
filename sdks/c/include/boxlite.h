@@ -62,6 +62,8 @@ typedef struct BoxHandle BoxHandle;
 // Opaque handle for Runner API (auto-manages runtime)
 typedef struct BoxRunner BoxRunner;
 
+typedef struct OptionsHandle OptionsHandle;
+
 // Opaque handle to a BoxliteRuntime instance with associated Tokio runtime
 typedef struct RuntimeHandle RuntimeHandle;
 
@@ -79,6 +81,8 @@ typedef struct FFIError {
 } FFIError;
 
 typedef struct FFIError CBoxliteError;
+
+typedef struct OptionsHandle CBoxliteOptions;
 
 typedef struct BoxHandle CBoxHandle;
 
@@ -111,6 +115,61 @@ typedef struct ExecResult {
 } ExecResult;
 
 typedef struct ExecResult CBoxliteExecResult;
+
+typedef struct CBoxInfo {
+  char *id;
+  char *name;
+  char *image;
+  char *status;
+  int running;
+  int pid;
+  int cpus;
+  int memory_mib;
+  int64_t created_at;
+} CBoxInfo;
+
+typedef struct CBoxMetrics {
+  double cpu_percent;
+  int64_t memory_bytes;
+  int commands_executed;
+  int exec_errors;
+  int64_t bytes_sent;
+  int64_t bytes_received;
+  int64_t create_duration_ms;
+  int64_t boot_duration_ms;
+  int64_t network_bytes_sent;
+  int64_t network_bytes_received;
+  int network_tcp_connections;
+  int network_tcp_errors;
+} CBoxMetrics;
+
+typedef struct CRuntimeMetrics {
+  int boxes_created_total;
+  int boxes_failed_total;
+  int num_running_boxes;
+  int total_commands_executed;
+  int total_exec_errors;
+} CRuntimeMetrics;
+
+typedef struct CBoxInfoList {
+  struct CBoxInfo *items;
+  int count;
+} CBoxInfoList;
+
+typedef struct CImageInfo {
+  char *reference;
+  char *repository;
+  char *tag;
+  char *id;
+  int64_t cached_at;
+  uint64_t size;
+  int has_size;
+} CImageInfo;
+
+typedef struct CImageInfoList {
+  struct CImageInfo *items;
+  int count;
+} CImageInfoList;
 
 #ifdef __cplusplus
 extern "C" {
@@ -151,27 +210,49 @@ enum BoxliteErrorCode boxlite_runtime_new(const char *home_dir,
                                           CBoxliteRuntime **out_runtime,
                                           CBoxliteError *out_error);
 
-// Create a new box with the given options (JSON).
-//
-// # Arguments
-// * `runtime` - Pointer to the active `CBoxliteRuntime`.
-// * `options_json` - JSON string defining the box (e.g., image, resources).
-// * `out_box` - Output parameter to store the created `CBoxHandle`.
-// * `out_error` - Output parameter for error information.
-//
-// # Returns
-// `BoxliteErrorCode::Ok` on success.
-//
-// # Example
-// ```c
-// const char *options = "{\"rootfs\": {\"Image\": \"alpine:latest\"}}";
-// CBoxHandle *box;
-// if (boxlite_create_box(runtime, options, &box, error) == BOXLITE_OK) {
-//     // Use box...
-// }
-// ```
+enum BoxliteErrorCode boxlite_options_new(const char *image,
+                                          CBoxliteOptions **out_opts,
+                                          CBoxliteError *out_error);
+
+void boxlite_options_set_name(CBoxliteOptions *opts, const char *name);
+
+void boxlite_options_set_cpus(CBoxliteOptions *opts, int cpus);
+
+void boxlite_options_set_memory(CBoxliteOptions *opts, int memory_mib);
+
+void boxlite_options_set_disk(CBoxliteOptions *opts, int64_t disk_gb);
+
+void boxlite_options_set_user(CBoxliteOptions *opts, const char *user);
+
+void boxlite_options_set_workdir(CBoxliteOptions *opts, const char *workdir);
+
+void boxlite_options_add_env(CBoxliteOptions *opts, const char *key, const char *val);
+
+void boxlite_options_add_volume(CBoxliteOptions *opts,
+                                const char *host_path,
+                                const char *guest_path,
+                                int read_only);
+
+void boxlite_options_add_port(CBoxliteOptions *opts, int guest_port, int host_port);
+
+void boxlite_options_set_network_enabled(CBoxliteOptions *opts);
+
+void boxlite_options_set_network_disabled(CBoxliteOptions *opts);
+
+void boxlite_options_add_network_allow(CBoxliteOptions *opts, const char *host);
+
+void boxlite_options_set_auto_remove(CBoxliteOptions *opts, int val);
+
+void boxlite_options_set_detach(CBoxliteOptions *opts, int val);
+
+void boxlite_options_set_entrypoint(CBoxliteOptions *opts, const char *const *args, int argc);
+
+void boxlite_options_set_cmd(CBoxliteOptions *opts, const char *const *args, int argc);
+
+void boxlite_options_free(CBoxliteOptions *opts);
+
 enum BoxliteErrorCode boxlite_create_box(CBoxliteRuntime *runtime,
-                                         const char *options_json,
+                                         CBoxliteOptions *opts,
                                          CBoxHandle **out_box,
                                          CBoxliteError *out_error);
 
@@ -511,6 +592,32 @@ enum BoxliteErrorCode boxlite_simple_run(CBoxliteSimple *box_runner,
                                          int argc,
                                          CBoxliteExecResult **out_result,
                                          CBoxliteError *out_error);
+
+enum BoxliteErrorCode boxlite_box_info_struct(CBoxHandle *handle,
+                                              struct CBoxInfo **out_info,
+                                              CBoxliteError *out_error);
+
+enum BoxliteErrorCode boxlite_box_metrics_struct(CBoxHandle *handle,
+                                                 struct CBoxMetrics *out_metrics,
+                                                 CBoxliteError *out_error);
+
+enum BoxliteErrorCode boxlite_runtime_metrics_struct(CBoxliteRuntime *runtime,
+                                                     struct CRuntimeMetrics *out_metrics,
+                                                     CBoxliteError *out_error);
+
+enum BoxliteErrorCode boxlite_list_info_struct(CBoxliteRuntime *runtime,
+                                               struct CBoxInfoList **out_list,
+                                               CBoxliteError *out_error);
+
+enum BoxliteErrorCode boxlite_image_list_struct(CBoxliteRuntime *runtime,
+                                                struct CImageInfoList **out_list,
+                                                CBoxliteError *out_error);
+
+void boxlite_free_box_info(struct CBoxInfo *info);
+
+void boxlite_free_box_info_list(struct CBoxInfoList *list);
+
+void boxlite_free_image_info_list(struct CImageInfoList *list);
 
 // Free an execution result.
 //

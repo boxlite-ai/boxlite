@@ -9,101 +9,114 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-// Error codes returned by BoxLite C API functions.
-//
-// These codes map directly to Rust's BoxliteError variants,
-// allowing programmatic error handling in C.
 typedef enum BoxliteErrorCode {
-  // Operation succeeded
   Ok = 0,
-  // Internal error
   Internal = 1,
-  // Resource not found
   NotFound = 2,
-  // Resource already exists
   AlreadyExists = 3,
-  // Invalid state for operation
   InvalidState = 4,
-  // Invalid argument provided
   InvalidArgument = 5,
-  // Configuration error
   Config = 6,
-  // Storage error
   Storage = 7,
-  // Image error
   Image = 8,
-  // Network error
   Network = 9,
-  // Execution error
   Execution = 10,
-  // Resource stopped
   Stopped = 11,
-  // Engine error
   Engine = 12,
-  // Unsupported operation
   Unsupported = 13,
-  // Database error
   Database = 14,
-  // Portal/communication error
   Portal = 15,
-  // RPC error
   Rpc = 16,
-  // RPC transport error
   RpcTransport = 17,
-  // Metadata error
   Metadata = 18,
-  // Unsupported engine error
   UnsupportedEngine = 19,
 } BoxliteErrorCode;
 
-// Opaque handle to a running box
 typedef struct BoxHandle BoxHandle;
-
-// Opaque handle for Runner API (auto-manages runtime)
 typedef struct BoxRunner BoxRunner;
-
-// Opaque handle to a BoxliteRuntime instance with associated Tokio runtime
 typedef struct RuntimeHandle RuntimeHandle;
+typedef struct OptionsHandle OptionsHandle;
 
 typedef struct RuntimeHandle CBoxliteRuntime;
+typedef struct BoxHandle CBoxHandle;
+typedef struct OptionsHandle CBoxliteOptions;
+typedef struct BoxRunner CBoxliteSimple;
 
-// Extended error information for C API.
-//
-// Contains both an error code (for programmatic handling)
-// and an optional detailed message (for debugging).
 typedef struct FFIError {
-  // Error code
   enum BoxliteErrorCode code;
-  // Detailed error message (NULL if none, caller must free with boxlite_error_free)
   char *message;
 } FFIError;
 
 typedef struct FFIError CBoxliteError;
 
-typedef struct BoxHandle CBoxHandle;
+// ── C struct returns (no JSON) ──
 
-// C-compatible command descriptor with all BoxCommand options.
-//
-// All string fields are nullable — NULL means "use default".
-// `timeout_secs` of 0.0 means no timeout.
+typedef struct CBoxInfo {
+  char *id;
+  char *name;
+  char *image;
+  char *status;
+  int running;
+  int pid;
+  int cpus;
+  int memory_mib;
+  int64_t created_at;
+} CBoxInfo;
+
+typedef struct CBoxInfoList {
+  CBoxInfo *items;
+  int count;
+} CBoxInfoList;
+
+typedef struct CBoxMetrics {
+  double cpu_percent;
+  int64_t memory_bytes;
+  int commands_executed;
+  int exec_errors;
+  int64_t bytes_sent;
+  int64_t bytes_received;
+  int64_t create_duration_ms;
+  int64_t boot_duration_ms;
+  int64_t network_bytes_sent;
+  int64_t network_bytes_received;
+  int network_tcp_connections;
+  int network_tcp_errors;
+} CBoxMetrics;
+
+typedef struct CRuntimeMetrics {
+  int boxes_created_total;
+  int boxes_failed_total;
+  int num_running_boxes;
+  int total_commands_executed;
+  int total_exec_errors;
+} CRuntimeMetrics;
+
+typedef struct CImageInfo {
+  char *reference;
+  char *repository;
+  char *tag;
+  char *id;
+  int64_t cached_at;
+  uint64_t size;
+  int has_size;
+} CImageInfo;
+
+typedef struct CImageInfoList {
+  CImageInfo *items;
+  int count;
+} CImageInfoList;
+
+// ── Command struct ──
+
 typedef struct BoxliteCommand {
-  // Command to execute (required, must not be NULL).
   const char *command;
-  // JSON array of arguments (e.g., `["-c", "echo hello"]`). NULL = no args.
   const char *args_json;
-  // JSON array of `["key","val"]` pairs (e.g., `[["FOO","bar"]]`). NULL = inherit env.
   const char *env_json;
-  // Working directory inside the container. NULL = container default.
   const char *workdir;
-  // User spec (e.g., "nobody", "1000:1000"). NULL = container default.
   const char *user;
-  // Timeout in seconds. 0.0 = no timeout.
   double timeout_secs;
 } BoxliteCommand;
 
-typedef struct BoxRunner CBoxliteSimple;
-
-// Result structure for runner command execution
 typedef struct ExecResult {
   int exit_code;
   char *stdout_text;
@@ -114,89 +127,74 @@ typedef struct ExecResult CBoxliteExecResult;
 
 #ifdef __cplusplus
 extern "C" {
-#endif // __cplusplus
+#endif
 
-// Get BoxLite version string
-//
-// # Returns
-// A pointer to a static C string containing the version. Do not free this string.
-//
-// # Example
-// ```c
-// printf("BoxLite Version: %s\n", boxlite_version());
-// ```
+// ── Version ──
 const char *boxlite_version(void);
 
-// Create a new BoxLite runtime configuration.
-//
-// # Arguments
-// * `home_dir` - Optional path to the home directory. If NULL, defaults to `~/.boxlite`.
-// * `registries_json` - Optional JSON array of registry configurations.
-// * `out_runtime` - Output parameter to store the created `CBoxliteRuntime` pointer.
-// * `out_error` - Output parameter for error information.
-//
-// # Returns
-// `BoxliteErrorCode::Ok` on success, or an error code on failure.
-//
-// # Example
-// ```c
-// CBoxliteRuntime *runtime;
-// CBoxliteError *error = malloc(sizeof(CBoxliteError));
-// if (boxlite_runtime_new(NULL, NULL, &runtime, error) != BOXLITE_OK) {
-//     fprintf(stderr, "Failed to create runtime\n");
-// }
-// ```
+// ── Runtime ──
 enum BoxliteErrorCode boxlite_runtime_new(const char *home_dir,
                                           const char *registries_json,
                                           CBoxliteRuntime **out_runtime,
                                           CBoxliteError *out_error);
+enum BoxliteErrorCode boxlite_runtime_shutdown(CBoxliteRuntime *runtime,
+                                               int timeout,
+                                               CBoxliteError *out_error);
+enum BoxliteErrorCode boxlite_runtime_metrics_struct(CBoxliteRuntime *runtime,
+                                                     CRuntimeMetrics *out_metrics,
+                                                     CBoxliteError *out_error);
 
-// Create a new box with the given options (JSON).
-//
-// # Arguments
-// * `runtime` - Pointer to the active `CBoxliteRuntime`.
-// * `options_json` - JSON string defining the box (e.g., image, resources).
-// * `out_box` - Output parameter to store the created `CBoxHandle`.
-// * `out_error` - Output parameter for error information.
-//
-// # Returns
-// `BoxliteErrorCode::Ok` on success.
-//
-// # Example
-// ```c
-// const char *options = "{\"rootfs\": {\"Image\": \"alpine:latest\"}}";
-// CBoxHandle *box;
-// if (boxlite_create_box(runtime, options, &box, error) == BOXLITE_OK) {
-//     // Use box...
-// }
-// ```
+// ── Box Options Builder ──
+enum BoxliteErrorCode boxlite_options_new(const char *image,
+                                          CBoxliteOptions **out_opts,
+                                          CBoxliteError *out_error);
+void boxlite_options_set_name(CBoxliteOptions *opts, const char *name);
+void boxlite_options_set_cpus(CBoxliteOptions *opts, int cpus);
+void boxlite_options_set_memory(CBoxliteOptions *opts, int memory_mib);
+void boxlite_options_set_disk(CBoxliteOptions *opts, int64_t disk_gb);
+void boxlite_options_set_user(CBoxliteOptions *opts, const char *user);
+void boxlite_options_set_workdir(CBoxliteOptions *opts, const char *workdir);
+void boxlite_options_add_env(CBoxliteOptions *opts, const char *key, const char *val);
+void boxlite_options_add_volume(CBoxliteOptions *opts, const char *host_path, const char *guest_path, int read_only);
+void boxlite_options_add_port(CBoxliteOptions *opts, int guest_port, int host_port);
+void boxlite_options_set_network_enabled(CBoxliteOptions *opts);
+void boxlite_options_set_network_disabled(CBoxliteOptions *opts);
+void boxlite_options_add_network_allow(CBoxliteOptions *opts, const char *host);
+void boxlite_options_set_auto_remove(CBoxliteOptions *opts, int val);
+void boxlite_options_set_detach(CBoxliteOptions *opts, int val);
+void boxlite_options_set_entrypoint(CBoxliteOptions *opts, const char **args, int argc);
+void boxlite_options_set_cmd(CBoxliteOptions *opts, const char **args, int argc);
+void boxlite_options_free(CBoxliteOptions *opts);
+
+// ── Box Lifecycle ──
 enum BoxliteErrorCode boxlite_create_box(CBoxliteRuntime *runtime,
-                                         const char *options_json,
+                                         CBoxliteOptions *opts,
                                          CBoxHandle **out_box,
                                          CBoxliteError *out_error);
+enum BoxliteErrorCode boxlite_start_box(CBoxHandle *handle, CBoxliteError *out_error);
+enum BoxliteErrorCode boxlite_stop_box(CBoxHandle *handle, CBoxliteError *out_error);
+enum BoxliteErrorCode boxlite_get(CBoxliteRuntime *runtime,
+                                  const char *id_or_name,
+                                  CBoxHandle **out_handle,
+                                  CBoxliteError *out_error);
+enum BoxliteErrorCode boxlite_remove(CBoxliteRuntime *runtime,
+                                     const char *id_or_name,
+                                     int force,
+                                     CBoxliteError *out_error);
+char *boxlite_box_id(CBoxHandle *handle);
 
-// Execute a command in a box.
-//
-// # Arguments
-// * `handle` - Box handle.
-// * `command` - Command to execute (e.g., "/bin/sh").
-// * `args_json` - JSON array of arguments, e.g.: `["-c", "echo hello"]`.
-// * `callback` - Optional callback for streaming output.
-// * `user_data` - User data passed to callback.
-// * `out_exit_code` - Output parameter for command exit code.
-// * `out_error` - Output parameter for error information.
-//
-// # Returns
-// `BoxliteErrorCode::Ok` on success.
-//
-// # Example
-// ```c
-// int exit_code;
-// const char *args = "[\"hello\"]";
-// if (boxlite_execute(box, "echo", args, NULL, NULL, &exit_code, error) == BOXLITE_OK) {
-//     printf("Exit code: %d\n", exit_code);
-// }
-// ```
+// ── Box Info & Metrics (C structs) ──
+enum BoxliteErrorCode boxlite_box_info_struct(CBoxHandle *handle,
+                                              CBoxInfo **out_info,
+                                              CBoxliteError *out_error);
+enum BoxliteErrorCode boxlite_box_metrics_struct(CBoxHandle *handle,
+                                                 CBoxMetrics *out_metrics,
+                                                 CBoxliteError *out_error);
+enum BoxliteErrorCode boxlite_list_info_struct(CBoxliteRuntime *runtime,
+                                               CBoxInfoList **out_list,
+                                               CBoxliteError *out_error);
+
+// ── Execution ──
 enum BoxliteErrorCode boxlite_execute(CBoxHandle *handle,
                                       const char *command,
                                       const char *args_json,
@@ -204,352 +202,51 @@ enum BoxliteErrorCode boxlite_execute(CBoxHandle *handle,
                                       void *user_data,
                                       int *out_exit_code,
                                       CBoxliteError *out_error);
-
-// Execute a command in a box using a command struct.
-//
-// This function supports all execution options: env, user, timeout, workdir.
-// For simple commands without these options, use `boxlite_execute` instead.
-//
-// # Arguments
-// * `handle` - Box handle.
-// * `cmd` - Pointer to a `BoxliteCommand` struct. Must not be NULL.
-// * `callback` - Optional callback for streaming output.
-// * `user_data` - User data passed to callback.
-// * `out_exit_code` - Output parameter for command exit code.
-// * `out_error` - Output parameter for error information.
-//
-// # Example
-// ```c
-// BoxliteCommand cmd = {
-//     .command = "pwd",
-//     .args_json = NULL,
-//     .env_json = NULL,
-//     .workdir = "/tmp",
-//     .user = NULL,
-//     .timeout_secs = 0.0,
-// };
-// int exit_code;
-// if (boxlite_execute_cmd(box, &cmd, NULL, NULL, &exit_code, error) == BOXLITE_OK) {
-//     printf("Exit code: %d\n", exit_code);
-// }
-// ```
 enum BoxliteErrorCode boxlite_execute_cmd(CBoxHandle *handle,
-                                          const struct BoxliteCommand *cmd,
+                                          const BoxliteCommand *cmd,
                                           void (*callback)(const char*, int, void*),
                                           void *user_data,
                                           int *out_exit_code,
                                           CBoxliteError *out_error);
 
-// Stop a box.
-//
-// # Arguments
-// * `handle` - Box handle.
-// * `out_error` - output error.
-//
-// # Example
-// ```c
-// boxlite_stop_box(box, error);
-// ```
-enum BoxliteErrorCode boxlite_stop_box(CBoxHandle *handle, CBoxliteError *out_error);
-
-// List all boxes as JSON.
-//
-// # Arguments
-// * `runtime` - Runtime handle.
-// * `out_json` - Output pointer for JSON string. Caller must free this with `boxlite_free_string`.
-// * `out_error` - Output error.
-//
-// # Example
-// ```c
-// char *json;
-// if (boxlite_list_info(runtime, &json, error) == BOXLITE_OK) {
-//     printf("Boxes: %s\n", json);
-//     boxlite_free_string(json);
-// }
-// ```
-enum BoxliteErrorCode boxlite_list_info(CBoxliteRuntime *runtime,
-                                        char **out_json,
-                                        CBoxliteError *out_error);
-
-// Get single box info as JSON.
-//
-// # Arguments
-// * `runtime` - Runtime handle.
-// * `id_or_name` - ID or name of the box.
-// * `out_json` - Output pointer for JSON string.
-// * `out_error` - Output error.
-//
-// # Example
-// ```c
-// char *json;
-// boxlite_get_info(runtime, "my-box", &json, error);
-// ```
-enum BoxliteErrorCode boxlite_get_info(CBoxliteRuntime *runtime,
-                                       const char *id_or_name,
-                                       char **out_json,
-                                       CBoxliteError *out_error);
-
-// Attach to an existing box.
-//
-// # Arguments
-// * `runtime` - Runtime handle.
-// * `id_or_name` - ID or name of the box.
-// * `out_handle` - Output pointer for box handle.
-// * `out_error` - Output error.
-//
-// # Example
-// ```c
-// CBoxHandle *handle;
-// if (boxlite_get(runtime, "my-box", &handle, error) == BOXLITE_OK) {
-//     // Use handle...
-// }
-// ```
-enum BoxliteErrorCode boxlite_get(CBoxliteRuntime *runtime,
-                                  const char *id_or_name,
-                                  CBoxHandle **out_handle,
-                                  CBoxliteError *out_error);
-
-// Remove a box.
-//
-// # Arguments
-// * `runtime` - Runtime handle.
-// * `id_or_name` - ID or name of the box.
-// * `force` - 1 to force remove (stop if running), 0 otherwise.
-// * `out_error` - Output error.
-//
-// # Example
-// ```c
-// boxlite_remove(runtime, "my-box", 1, error);
-// ```
-enum BoxliteErrorCode boxlite_remove(CBoxliteRuntime *runtime,
-                                     const char *id_or_name,
-                                     int force,
-                                     CBoxliteError *out_error);
-
-// Get runtime metrics as JSON.
-//
-// # Arguments
-// * `runtime` - Runtime handle.
-// * `out_json` - Output pointer for JSON string.
-// * `out_error` - Output error.
-//
-// # Example
-// ```c
-// char *json;
-// boxlite_runtime_metrics(runtime, &json, error);
-// ```
-enum BoxliteErrorCode boxlite_runtime_metrics(CBoxliteRuntime *runtime,
-                                              char **out_json,
-                                              CBoxliteError *out_error);
-
-// Gracefully shutdown all boxes in this runtime.
-//
-// # Arguments
-// * `runtime` - Runtime handle.
-// * `timeout` - Seconds to wait before force-killing each box:
-//   - 0 - Use default timeout (10 seconds)
-//   - Positive integer - Wait that many seconds
-//   - -1 - Wait indefinitely (no timeout)
-// * `out_error` - Output parameter for error information
-//
-// # Example
-// ```c
-// boxlite_runtime_shutdown(runtime, 5, error);
-// ```
-enum BoxliteErrorCode boxlite_runtime_shutdown(CBoxliteRuntime *runtime,
-                                               int timeout,
-                                               CBoxliteError *out_error);
-
-// Get info for a box handle as JSON.
-//
-// # Arguments
-// * `handle` - Box handle.
-// * `out_json` - Output pointer for JSON string.
-// * `out_error` - Output error.
-//
-// # Example
-// ```c
-// char *json;
-// boxlite_box_info(handle, &json, error);
-// ```
-enum BoxliteErrorCode boxlite_box_info(CBoxHandle *handle,
-                                       char **out_json,
-                                       CBoxliteError *out_error);
-
-// Get metrics for a box handle as JSON.
-//
-// # Arguments
-// * `handle` - Box handle.
-// * `out_json` - Output pointer for JSON string.
-// * `out_error` - Output error.
-//
-// # Example
-// ```c
-// char *json;
-// boxlite_box_metrics(handle, &json, error);
-// ```
-enum BoxliteErrorCode boxlite_box_metrics(CBoxHandle *handle,
-                                          char **out_json,
-                                          CBoxliteError *out_error);
-
-// Start a stopped box.
-//
-// # Arguments
-// * `handle` - Box handle.
-// * `out_error` - output error.
-//
-// # Example
-// ```c
-// boxlite_start_box(handle, error);
-// ```
-enum BoxliteErrorCode boxlite_start_box(CBoxHandle *handle, CBoxliteError *out_error);
-
-// Get box ID.
-//
-// # Arguments
-// * `handle` - Box handle.
-//
-// # Returns
-// Pointer to a C string containing the ID. Must be freed with `boxlite_free_string`.
-//
-// # Example
-// ```c
-// char *id = boxlite_box_id(handle);
-// printf("Box ID: %s\n", id);
-// boxlite_free_string(id);
-// ```
-char *boxlite_box_id(CBoxHandle *handle);
-
-// Pull an OCI image into the local cache.
-//
-// # Arguments
-// * `runtime` - Runtime handle.
-// * `image_ref` - Image reference (e.g., "alpine:latest").
-// * `out_error` - Output error.
-enum BoxliteErrorCode boxlite_image_pull(CBoxliteRuntime *runtime,
-                                         const char *image_ref,
-                                         CBoxliteError *out_error);
-
-// List all locally cached images as JSON.
-//
-// # Arguments
-// * `runtime` - Runtime handle.
-// * `out_json` - Output pointer for JSON string. Caller must free with `boxlite_free_string`.
-// * `out_error` - Output error.
-enum BoxliteErrorCode boxlite_image_list(CBoxliteRuntime *runtime,
-                                         char **out_json,
-                                         CBoxliteError *out_error);
-
-// Copy a file or directory from the host into a box.
-//
-// # Arguments
-// * `handle` - Box handle.
-// * `host_src` - Path on the host to copy from.
-// * `guest_dst` - Path inside the box to copy to.
-// * `out_error` - Output error.
+// ── File Copy ──
 enum BoxliteErrorCode boxlite_copy_into(CBoxHandle *handle,
                                         const char *host_src,
                                         const char *guest_dst,
                                         CBoxliteError *out_error);
-
-// Copy a file or directory from a box to the host.
-//
-// # Arguments
-// * `handle` - Box handle.
-// * `guest_src` - Path inside the box to copy from.
-// * `host_dst` - Path on the host to copy to.
-// * `out_error` - Output error.
 enum BoxliteErrorCode boxlite_copy_out(CBoxHandle *handle,
                                        const char *guest_src,
                                        const char *host_dst,
                                        CBoxliteError *out_error);
 
-// Create a simplified box runner.
-//
-// # Arguments
-// * `image` - Container image.
-// * `cpus` - Number of CPUs.
-// * `memory_mib` - Memory in MiB.
-// * `out_box` - Output pointer for `CBoxliteSimple,`.
-// * `out_error` - Output error.
-//
-// # Returns
-// `BoxliteErrorCode::Ok` on success.
-//
-// # Example
-// ```c
-// CBoxliteSimple, *runner;
-// if (boxlite_simple_new("alpine", 1, 128, &runner, error) == BOXLITE_OK) {
-//     // Use runner...
-// }
-// ```
-enum BoxliteErrorCode boxlite_simple_new(const char *image,
-                                         int cpus,
-                                         int memory_mib,
-                                         CBoxliteSimple **out_box,
+// ── Images ──
+enum BoxliteErrorCode boxlite_image_pull(CBoxliteRuntime *runtime,
+                                         const char *image_ref,
                                          CBoxliteError *out_error);
+enum BoxliteErrorCode boxlite_image_list_struct(CBoxliteRuntime *runtime,
+                                                CImageInfoList **out_list,
+                                                CBoxliteError *out_error);
 
-// Run a command using the simplified runner.
-//
-// # Arguments
-// * `box_runner` - Runner handle.
-// * `command` - Command to execute.
-// * `args` - Array of argument strings.
-// * `argc` - Count of arguments.
-// * `out_result` - Output pointer for `CBoxliteExecResult`.
-// * `out_error` - Output error.
-//
-// # Example
-// ```c
-// CBoxliteExecResult *result;
-// const char *args[] = {"hello"};
-// boxlite_simple_run(runner, "echo", args, 1, &result, error);
-// ```
-enum BoxliteErrorCode boxlite_simple_run(CBoxliteSimple *box_runner,
-                                         const char *command,
-                                         const char *const *args,
-                                         int argc,
-                                         CBoxliteExecResult **out_result,
-                                         CBoxliteError *out_error);
+// ── Memory Management ──
+void boxlite_box_free(CBoxHandle *handle);
+void boxlite_runtime_free(CBoxliteRuntime *runtime);
+void boxlite_free_string(char *s);
+void boxlite_error_free(CBoxliteError *error);
+void boxlite_free_box_info(CBoxInfo *info);
+void boxlite_free_box_info_list(CBoxInfoList *list);
+void boxlite_free_image_info_list(CImageInfoList *list);
 
-// Free an execution result.
-//
-// # Arguments
-// * `result` - Pointer to `CBoxliteExecResult` to free.
+// ── Simple Runner API ──
+enum BoxliteErrorCode boxlite_simple_new(const char *image, int cpus, int memory_mib,
+                                         CBoxliteSimple **out_box, CBoxliteError *out_error);
+enum BoxliteErrorCode boxlite_simple_run(CBoxliteSimple *box_runner, const char *command,
+                                         const char *const *args, int argc,
+                                         CBoxliteExecResult **out_result, CBoxliteError *out_error);
 void boxlite_result_free(CBoxliteExecResult *result);
-
-// Free a simple runner.
-//
-// # Arguments
-// * `box_runner` - Pointer to `CBoxliteSimple,` to free.
 void boxlite_simple_free(CBoxliteSimple *box_runner);
 
-// Free a box handle.
-//
-// # Arguments
-// * `handle` - Pointer to `CBoxHandle` to free.
-void boxlite_box_free(CBoxHandle *handle);
-
-// Free a runtime handle.
-//
-// # Arguments
-// * `runtime` - Pointer to `CBoxliteRuntime` to free.
-void boxlite_runtime_free(CBoxliteRuntime *runtime);
-
-// Free a string allocated by the library.
-//
-// # Arguments
-// * `s` - Pointer to string to free.
-void boxlite_free_string(char *s);
-
-// Free an error object.
-//
-// # Arguments
-// * `error` - Pointer to `CBoxliteError` to free.
-void boxlite_error_free(CBoxliteError *error);
-
 #ifdef __cplusplus
-}  // extern "C"
-#endif  // __cplusplus
+}
+#endif
 
-#endif  /* BOXLITE_H */
+#endif /* BOXLITE_H */
