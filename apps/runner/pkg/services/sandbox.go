@@ -7,28 +7,28 @@ import (
 	"context"
 	"log/slog"
 
+	blclient "github.com/daytonaio/runner/pkg/boxlite"
 	"github.com/daytonaio/runner/pkg/cache"
-	"github.com/daytonaio/runner/pkg/docker"
 	"github.com/daytonaio/runner/pkg/models"
 	"github.com/daytonaio/runner/pkg/models/enums"
 )
 
 type SandboxService struct {
 	backupInfoCache *cache.BackupInfoCache
-	docker          *docker.DockerClient
+	boxlite         *blclient.Client
 	log             *slog.Logger
 }
 
-func NewSandboxService(logger *slog.Logger, backupInfoCache *cache.BackupInfoCache, docker *docker.DockerClient) *SandboxService {
+func NewSandboxService(logger *slog.Logger, backupInfoCache *cache.BackupInfoCache, boxlite *blclient.Client) *SandboxService {
 	return &SandboxService{
 		log:             logger.With(slog.String("component", "sandbox_service")),
 		backupInfoCache: backupInfoCache,
-		docker:          docker,
+		boxlite:         boxlite,
 	}
 }
 
 func (s *SandboxService) GetSandboxInfo(ctx context.Context, sandboxId string) (*models.SandboxInfo, error) {
-	sandboxState, err := s.docker.GetSandboxState(ctx, sandboxId)
+	sandboxState, err := s.boxlite.GetSandboxState(ctx, sandboxId)
 	if err != nil {
 		s.log.Warn("Failed to get sandbox state", "sandboxId", sandboxId, "error", err)
 		return nil, err

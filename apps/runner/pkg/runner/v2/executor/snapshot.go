@@ -20,12 +20,12 @@ func (e *Executor) buildSnapshot(ctx context.Context, job *apiclient.Job) (any, 
 		return nil, err
 	}
 
-	err = e.docker.BuildSnapshot(ctx, request)
+	err = e.backend.BuildSnapshot(ctx, request)
 	if err != nil {
 		return nil, err
 	}
 
-	info, err := e.docker.GetImageInfo(ctx, request.Snapshot)
+	info, err := e.backend.GetImageInfo(ctx, request.Snapshot)
 	if err != nil {
 		return nil, err
 	}
@@ -48,12 +48,12 @@ func (e *Executor) pullSnapshot(ctx context.Context, job *apiclient.Job) (any, e
 		return nil, err
 	}
 
-	err = e.docker.PullSnapshot(ctx, request)
+	err = e.backend.PullSnapshot(ctx, request)
 	if err != nil {
 		return nil, err
 	}
 
-	info, err := e.docker.GetImageInfo(ctx, request.Snapshot)
+	info, err := e.backend.GetImageInfo(ctx, request.Snapshot)
 	if err != nil {
 		return nil, err
 	}
@@ -74,7 +74,7 @@ func (e *Executor) removeSnapshot(ctx context.Context, job *apiclient.Job) (any,
 		return nil, errors.New("payload is required")
 	}
 
-	return nil, e.docker.RemoveImage(ctx, *job.Payload, true)
+	return nil, e.backend.RemoveImage(ctx, *job.Payload, true)
 }
 
 func (e *Executor) inspectSnapshotInRegistry(ctx context.Context, job *apiclient.Job) (any, error) {
@@ -84,7 +84,7 @@ func (e *Executor) inspectSnapshotInRegistry(ctx context.Context, job *apiclient
 		return nil, err
 	}
 
-	digest, err := e.docker.InspectImageInRegistry(ctx, request.Snapshot, request.Registry)
+	digest, err := e.backend.InspectImageInRegistry(ctx, request.Snapshot, request.Registry)
 	if err != nil {
 		return nil, err
 	}

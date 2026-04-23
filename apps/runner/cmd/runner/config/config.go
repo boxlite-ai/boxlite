@@ -5,7 +5,6 @@ package config
 
 import (
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,7 +12,6 @@ import (
 
 	"github.com/go-playground/validator/v10"
 	"github.com/kelseyhightower/envconfig"
-	"github.com/vishvananda/netlink"
 )
 
 type Config struct {
@@ -59,6 +57,7 @@ type Config struct {
 	ApiVersion                         int           `envconfig:"API_VERSION" default:"2"`
 	InitializeDaemonTelemetry          bool          `envconfig:"INITIALIZE_DAEMON_TELEMETRY" default:"true"`
 	SnapshotErrorCacheRetention        time.Duration `envconfig:"SNAPSHOT_ERROR_CACHE_RETENTION" default:"10m" validate:"min=5m"`
+	BoxliteHomeDir                     string        `envconfig:"BOXLITE_HOME_DIR"`
 }
 
 var DEFAULT_API_PORT int = 8080
@@ -189,33 +188,3 @@ func GetBuildLogFilePath(snapshotRef string) (string, error) {
 	return logPath, nil
 }
 
-// getOutboundIP returns the IP address of the default route's network interface
-func getOutboundIP() (net.IP, error) {
-	routes, err := netlink.RouteList(nil, netlink.FAMILY_V4)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list routes: %w", err)
-	}
-
-	// Find the default route (destination 0.0.0.0/0)
-	for _, route := range routes {
-		if route.Dst == nil || route.Dst.IP.Equal(net.IPv4zero) {
-			// Get the link (interface) for this route
-			link, err := netlink.LinkByIndex(route.LinkIndex)
-			if err != nil {
-				return nil, fmt.Errorf("failed to get link: %w", err)
-			}
-
-			// Get addresses for this interface
-			addrs, err := netlink.AddrList(link, netlink.FAMILY_V4)
-			if err != nil {
-				return nil, fmt.Errorf("failed to get addresses: %w", err)
-			}
-
-			if len(addrs) > 0 {
-				return addrs[0].IP, nil
-			}
-		}
-	}
-
-	return nil, fmt.Errorf("no default route found")
-}

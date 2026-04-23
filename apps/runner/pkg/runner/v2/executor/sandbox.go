@@ -21,7 +21,7 @@ func (e *Executor) createSandbox(ctx context.Context, job *apiclient.Job) (any, 
 		return nil, fmt.Errorf("failed to unmarshal payload: %w", err)
 	}
 
-	_, daemonVersion, err := e.docker.Create(ctx, createSandboxDto)
+	_, daemonVersion, err := e.backend.Create(ctx, createSandboxDto)
 	if err != nil {
 		common.ContainerOperationCount.WithLabelValues("create", string(common.PrometheusOperationStatusFailure)).Inc()
 		return nil, common.FormatRecoverableError(err)
@@ -41,7 +41,7 @@ func (e *Executor) startSandbox(ctx context.Context, job *apiclient.Job) (any, e
 		return nil, fmt.Errorf("failed to unmarshal payload: %w", err)
 	}
 
-	_, daemonVersion, err := e.docker.Start(ctx, job.ResourceId, payload.AuthToken, payload.Metadata)
+	daemonVersion, err := e.backend.Start(ctx, job.ResourceId, payload.AuthToken, payload.Metadata)
 	if err != nil {
 		return nil, common.FormatRecoverableError(err)
 	}
@@ -57,7 +57,7 @@ func (e *Executor) stopSandbox(ctx context.Context, job *apiclient.Job) (any, er
 		_ = e.parsePayload(job.Payload, &payload)
 	}
 
-	err := e.docker.Stop(ctx, job.ResourceId, payload.Force)
+	err := e.backend.Stop(ctx, job.ResourceId, payload.Force)
 	if err != nil {
 		return nil, common.FormatRecoverableError(err)
 	}
@@ -66,7 +66,7 @@ func (e *Executor) stopSandbox(ctx context.Context, job *apiclient.Job) (any, er
 }
 
 func (e *Executor) destroySandbox(ctx context.Context, job *apiclient.Job) (any, error) {
-	err := e.docker.Destroy(ctx, job.ResourceId)
+	err := e.backend.Destroy(ctx, job.ResourceId)
 	if err != nil {
 		common.ContainerOperationCount.WithLabelValues("destroy", string(common.PrometheusOperationStatusFailure)).Inc()
 		return nil, common.FormatRecoverableError(err)
@@ -84,7 +84,7 @@ func (e *Executor) updateNetworkSettings(ctx context.Context, job *apiclient.Job
 		return nil, common.FormatRecoverableError(fmt.Errorf("failed to unmarshal payload: %w", err))
 	}
 
-	return nil, e.docker.UpdateNetworkSettings(ctx, job.ResourceId, updateNetworkSettingsDto)
+	return nil, e.backend.UpdateNetworkSettings(ctx, job.ResourceId, updateNetworkSettingsDto)
 }
 
 func (e *Executor) recoverSandbox(ctx context.Context, job *apiclient.Job) (any, error) {
@@ -94,7 +94,7 @@ func (e *Executor) recoverSandbox(ctx context.Context, job *apiclient.Job) (any,
 		return nil, fmt.Errorf("failed to unmarshal payload: %w", err)
 	}
 
-	err = e.docker.RecoverSandbox(ctx, job.ResourceId, recoverSandboxDto)
+	err = e.backend.RecoverSandbox(ctx, job.ResourceId, recoverSandboxDto)
 	if err != nil {
 		return nil, common.FormatRecoverableError(err)
 	}
@@ -109,7 +109,7 @@ func (e *Executor) resizeSandbox(ctx context.Context, job *apiclient.Job) (any, 
 		return nil, fmt.Errorf("failed to unmarshal payload: %w", err)
 	}
 
-	err = e.docker.Resize(ctx, job.ResourceId, resizeSandboxDto)
+	err = e.backend.Resize(ctx, job.ResourceId, resizeSandboxDto)
 	if err != nil {
 		common.ContainerOperationCount.WithLabelValues("resize", string(common.PrometheusOperationStatusFailure)).Inc()
 		return nil, common.FormatRecoverableError(err)

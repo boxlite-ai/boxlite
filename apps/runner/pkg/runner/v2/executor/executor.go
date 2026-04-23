@@ -22,11 +22,11 @@ import (
 	apiclient "github.com/daytonaio/daytona/libs/api-client-go"
 	"github.com/daytonaio/runner/internal/metrics"
 	runnerapiclient "github.com/daytonaio/runner/pkg/apiclient"
-	"github.com/daytonaio/runner/pkg/docker"
+	"github.com/daytonaio/runner/pkg/backend"
 )
 
 type ExecutorConfig struct {
-	Docker    *docker.DockerClient
+	Backend   backend.SandboxBackend
 	Collector *metrics.Collector
 	Logger    *slog.Logger
 }
@@ -35,7 +35,7 @@ type ExecutorConfig struct {
 type Executor struct {
 	log       *slog.Logger
 	client    *apiclient.APIClient
-	docker    *docker.DockerClient
+	backend   backend.SandboxBackend
 	collector *metrics.Collector
 }
 
@@ -49,7 +49,7 @@ func NewExecutor(cfg *ExecutorConfig) (*Executor, error) {
 	return &Executor{
 		log:       cfg.Logger.With(slog.String("component", "executor")),
 		client:    apiClient,
-		docker:    cfg.Docker,
+		backend:   cfg.Backend,
 		collector: cfg.Collector,
 	}, nil
 }

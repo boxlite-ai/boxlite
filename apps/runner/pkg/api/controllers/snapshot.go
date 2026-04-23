@@ -54,7 +54,7 @@ func TagImage(ctx *gin.Context) {
 		return
 	}
 
-	exists, err := runner.Docker.ImageExists(ctx.Request.Context(), request.SourceImage, false)
+	exists, err := runner.Boxlite.ImageExists(ctx.Request.Context(), request.SourceImage)
 	if err != nil {
 		ctx.Error(err)
 		return
@@ -70,7 +70,7 @@ func TagImage(ctx *gin.Context) {
 		return
 	}
 
-	if err := runner.Docker.TagImage(ctx.Request.Context(), request.SourceImage, request.TargetImage); err != nil {
+	if err := runner.Boxlite.TagImage(ctx.Request.Context(), request.SourceImage, request.TargetImage); err != nil {
 		ctx.Error(err)
 		return
 	}
@@ -120,7 +120,7 @@ func PullSnapshot(generalCtx context.Context, logger *slog.Logger) func(ctx *gin
 		}
 
 		go func() {
-			err := runner.Docker.PullSnapshot(generalCtx, request)
+			err := runner.Boxlite.PullSnapshot(generalCtx, request)
 			if err != nil {
 				logger.DebugContext(generalCtx, "Pull snapshot failed", "cacheKey", cacheKey, "error", err)
 				err = runner.SnapshotErrorCache.SetError(generalCtx, cacheKey, err.Error())
@@ -181,7 +181,7 @@ func BuildSnapshot(generalCtx context.Context, logger *slog.Logger) func(ctx *gi
 		}
 
 		go func() {
-			err := runner.Docker.BuildSnapshot(generalCtx, request)
+			err := runner.Boxlite.BuildSnapshot(generalCtx, request)
 			if err != nil {
 				logger.DebugContext(generalCtx, "Build snapshot failed", "cacheKey", request.Snapshot, "error", err)
 				err = runner.SnapshotErrorCache.SetError(generalCtx, request.Snapshot, err.Error())
@@ -229,7 +229,7 @@ func SnapshotExists(ctx *gin.Context) {
 		return
 	}
 
-	exists, err := runner.Docker.ImageExists(ctx.Request.Context(), snapshot, false)
+	exists, err := runner.Boxlite.ImageExists(ctx.Request.Context(), snapshot)
 	if err != nil {
 		ctx.Error(err)
 		return
@@ -270,7 +270,7 @@ func RemoveSnapshot(logger *slog.Logger) gin.HandlerFunc {
 			return
 		}
 
-		err = runner.Docker.RemoveImage(ctx.Request.Context(), snapshot, true)
+		err = runner.Boxlite.RemoveImage(ctx.Request.Context(), snapshot, true)
 		if err != nil {
 			ctx.Error(err)
 			return
@@ -385,7 +385,7 @@ func GetBuildLogs(logger *slog.Logger) gin.HandlerFunc {
 		}()
 
 		for {
-			exists, err := runner.Docker.ImageExists(ctx.Request.Context(), checkSnapshotRef, false)
+			exists, err := runner.Boxlite.ImageExists(ctx.Request.Context(), checkSnapshotRef)
 			if err != nil {
 				logger.ErrorContext(reqCtx, "Error checking build status", "error", err)
 				break
@@ -431,7 +431,7 @@ func GetSnapshotInfo(ctx *gin.Context) {
 		return
 	}
 
-	exists, err := runner.Docker.ImageExists(ctx.Request.Context(), snapshot, false)
+	exists, err := runner.Boxlite.ImageExists(ctx.Request.Context(), snapshot)
 	if err != nil {
 		ctx.Error(err)
 		return
@@ -447,7 +447,7 @@ func GetSnapshotInfo(ctx *gin.Context) {
 		return
 	}
 
-	info, err := runner.Docker.GetImageInfo(ctx.Request.Context(), snapshot)
+	info, err := runner.Boxlite.GetImageInfo(ctx.Request.Context(), snapshot)
 	if err != nil {
 		ctx.Error(err)
 		return
@@ -491,7 +491,7 @@ func InspectSnapshotInRegistry(ctx *gin.Context) {
 		return
 	}
 
-	digest, err := runner.Docker.InspectImageInRegistry(ctx.Request.Context(), request.Snapshot, request.Registry)
+	digest, err := runner.Boxlite.InspectImageInRegistry(ctx.Request.Context(), request.Snapshot, request.Registry)
 	if err != nil {
 		ctx.Error(err)
 		return

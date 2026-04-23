@@ -25,6 +25,16 @@ type BoxInfo struct {
 	CreatedAt time.Time
 }
 
+// ImageInfo holds metadata about a locally cached image.
+type ImageInfo struct {
+	Reference  string  `json:"reference"`
+	Repository string  `json:"repository"`
+	Tag        string  `json:"tag"`
+	ID         string  `json:"id"`
+	CachedAt   string  `json:"cached_at"`
+	Size       *uint64 `json:"size"`
+}
+
 // ExecResult contains the result of a buffered command execution.
 type ExecResult struct {
 	ExitCode int

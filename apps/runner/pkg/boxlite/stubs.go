@@ -8,26 +8,101 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/daytonaio/runner/pkg/docker/dto"
+	boxlite "github.com/boxlite-ai/boxlite/sdks/go"
+	"github.com/daytonaio/runner/pkg/api/dto"
 )
 
-// Resize changes the CPU/memory/disk allocation of a running sandbox.
-// TODO: Implement when BoxLite Go SDK supports hot-resize.
+// Resize changes the CPU/memory/disk allocation of a sandbox.
+// BoxLite VMs don't support hot-resize, so this stops, removes, and recreates.
 func (c *Client) Resize(ctx context.Context, sandboxId string, resizeDto dto.ResizeSandboxDTO) error {
-	c.logger.Warn("resize not yet implemented in BoxLite",
-		"sandbox", sandboxId,
-		"cpu", resizeDto.Cpu,
-		"memory", resizeDto.Memory,
-		"disk", resizeDto.Disk,
-	)
-	return fmt.Errorf("resize not yet supported by BoxLite runtime")
+	c.logger.Info("resize sandbox (stop/recreate)", "sandbox", sandboxId)
+
+	bx, err := c.getOrFetchBox(ctx, sandboxId)
+	if err != nil {
+		return fmt.Errorf("failed to get box for resize: %w", err)
+	}
+
+	info, err := bx.Info(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get box info for resize: %w", err)
+	}
+
+	if err := bx.Stop(ctx); err != nil {
+		c.logger.Warn("failed to stop box during resize", "error", err)
+	}
+
+	if err := c.Destroy(ctx, sandboxId); err != nil {
+		return fmt.Errorf("failed to destroy box during resize: %w", err)
+	}
+
+	cpus := info.CPUs
+	if resizeDto.Cpu > 0 {
+		cpus = int(resizeDto.Cpu)
+	}
+	memoryMiB := info.MemoryMiB
+	if resizeDto.Memory > 0 {
+		memoryMiB = int(resizeDto.Memory / (1024 * 1024))
+	}
+
+	opts := []boxlite.BoxOption{
+		boxlite.WithName(sandboxId),
+		boxlite.WithCPUs(cpus),
+		boxlite.WithMemory(memoryMiB),
+		boxlite.WithAutoRemove(false),
+		boxlite.WithDetach(true),
+		boxlite.WithNetwork(boxlite.NetworkEnabled()),
+	}
+
+	if resizeDto.Disk > 0 {
+		opts = append(opts, boxlite.WithDiskSize(resizeDto.Disk/(1024*1024*1024)))
+	}
+
+	newBox, err := c.runtime.Create(ctx, info.Image, opts...)
+	if err != nil {
+		return fmt.Errorf("failed to recreate box during resize: %w", err)
+	}
+
+	c.mu.Lock()
+	c.boxes[sandboxId] = newBox
+	c.mu.Unlock()
+
+	if err := newBox.Start(ctx); err != nil {
+		return fmt.Errorf("failed to start resized box: %w", err)
+	}
+
+	return nil
 }
 
-// RecoverSandbox recovers a sandbox from a storage limit error.
-// TODO: Implement when BoxLite supports storage recovery.
+// RecoverSandbox destroys and recreates a sandbox from its snapshot.
 func (c *Client) RecoverSandbox(ctx context.Context, sandboxId string, recoverDto dto.RecoverSandboxDTO) error {
-	c.logger.Warn("recover sandbox not yet implemented in BoxLite", "sandbox", sandboxId)
-	return fmt.Errorf("recover not yet supported by BoxLite runtime")
+	c.logger.Info("recover sandbox", "sandbox", sandboxId)
+
+	if err := c.Destroy(ctx, sandboxId); err != nil {
+		c.logger.Warn("failed to destroy during recover", "error", err)
+	}
+
+	snapshot := "alpine:latest"
+	if recoverDto.Snapshot != nil {
+		snapshot = *recoverDto.Snapshot
+	}
+
+	createDto := dto.CreateSandboxDTO{
+		Id:              sandboxId,
+		Snapshot:        snapshot,
+		OsUser:          recoverDto.OsUser,
+		CpuQuota:        recoverDto.CpuQuota,
+		MemoryQuota:     recoverDto.MemoryQuota,
+		StorageQuota:    recoverDto.StorageQuota,
+		Env:             recoverDto.Env,
+		Volumes:         recoverDto.Volumes,
+		NetworkBlockAll: recoverDto.NetworkBlockAll,
+		NetworkAllowList: recoverDto.NetworkAllowList,
+		FromVolumeId:    recoverDto.FromVolumeId,
+		UserId:          recoverDto.UserId,
+	}
+
+	_, _, err := c.Create(ctx, createDto)
+	return err
 }
 
 // CreateBackup creates a backup/snapshot of a running sandbox.
@@ -45,22 +120,28 @@ func (c *Client) BuildSnapshot(ctx context.Context, req dto.BuildSnapshotRequest
 }
 
 // PullSnapshot pulls a snapshot image from a registry.
-// TODO: Implement when BoxLite Go SDK exposes registry operations.
 func (c *Client) PullSnapshot(ctx context.Context, req dto.PullSnapshotRequestDTO) error {
-	c.logger.Info("pull snapshot", "snapshot", req.Snapshot)
-	// BoxLite auto-pulls during Create, so this is a pre-fetch hint
+	c.logger.Info("pulling snapshot", "snapshot", req.Snapshot)
 	return c.PullImage(ctx, req.Snapshot)
 }
 
 // GetImageInfo returns metadata about a cached image.
-// TODO: Implement when BoxLite Go SDK exposes image inspection.
 func (c *Client) GetImageInfo(ctx context.Context, imageName string) (*ImageInfo, error) {
-	c.logger.Warn("get image info not yet implemented in BoxLite", "image", imageName)
-	return &ImageInfo{}, nil
+	img, err := c.GetImageInfoFromCache(ctx, imageName)
+	if err != nil {
+		return &ImageInfo{}, nil
+	}
+	var sizeGB float64
+	if img.Size != nil {
+		sizeGB = float64(*img.Size) / (1024 * 1024 * 1024)
+	}
+	return &ImageInfo{
+		Size: int64(sizeGB * 1024 * 1024 * 1024),
+		Hash: img.ID,
+	}, nil
 }
 
 // InspectImageInRegistry inspects an image in a remote registry.
-// TODO: Implement registry inspection.
 func (c *Client) InspectImageInRegistry(ctx context.Context, imageName string, registry *dto.RegistryDTO) (*ImageDigest, error) {
 	c.logger.Warn("inspect image in registry not yet implemented in BoxLite", "image", imageName)
 	return &ImageDigest{}, nil

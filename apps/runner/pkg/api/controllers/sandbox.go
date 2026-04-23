@@ -46,7 +46,7 @@ func Create(ctx *gin.Context) {
 		return
 	}
 
-	_, daemonVersion, err := runner.Docker.Create(ctx.Request.Context(), createSandboxDto)
+	_, daemonVersion, err := runner.Boxlite.Create(ctx.Request.Context(), createSandboxDto)
 	if err != nil {
 		common.ContainerOperationCount.WithLabelValues("create", string(common.PrometheusOperationStatusFailure)).Inc()
 		ctx.Error(err)
@@ -85,7 +85,7 @@ func Destroy(ctx *gin.Context) {
 		return
 	}
 
-	err = runner.Docker.Destroy(ctx.Request.Context(), sandboxId)
+	err = runner.Boxlite.Destroy(ctx.Request.Context(), sandboxId)
 	if err != nil {
 		common.ContainerOperationCount.WithLabelValues("destroy", string(common.PrometheusOperationStatusFailure)).Inc()
 		ctx.Error(err)
@@ -131,7 +131,7 @@ func CreateBackup(logger *slog.Logger) gin.HandlerFunc {
 			return
 		}
 
-		err = runner.Docker.CreateBackupAsync(ctx.Request.Context(), sandboxId, createBackupDTO)
+		err = runner.Boxlite.CreateBackup(ctx.Request.Context(), sandboxId, createBackupDTO)
 		if err != nil {
 			setErr := runner.BackupInfoCache.SetBackupState(ctx.Request.Context(), sandboxId, enums.BackupStateFailed, createBackupDTO.Snapshot, err)
 			if setErr != nil {
@@ -179,7 +179,7 @@ func Resize(ctx *gin.Context) {
 		return
 	}
 
-	err = runner.Docker.Resize(ctx.Request.Context(), sandboxId, resizeDto)
+	err = runner.Boxlite.Resize(ctx.Request.Context(), sandboxId, resizeDto)
 	if err != nil {
 		common.ContainerOperationCount.WithLabelValues("resize", string(common.PrometheusOperationStatusFailure)).Inc()
 		ctx.Error(err)
@@ -223,7 +223,7 @@ func UpdateNetworkSettings(ctx *gin.Context) {
 		return
 	}
 
-	err = runner.Docker.UpdateNetworkSettings(ctx.Request.Context(), sandboxId, updateNetworkSettingsDto)
+	err = runner.Boxlite.UpdateNetworkSettings(ctx.Request.Context(), sandboxId, updateNetworkSettingsDto)
 	if err != nil {
 		ctx.Error(err)
 		return
@@ -252,7 +252,7 @@ func GetNetworkSettings(ctx *gin.Context) {
 	// TODO: Implement GetNetworkSettings in Docker client
 	// sandboxId := ctx.Param("sandboxId")
 	// runner := runner.GetInstance(nil)
-	// networkSettings, err := runner.Docker.GetNetworkSettings(ctx.Request.Context(), sandboxId)
+	// networkSettings, err := runner.Boxlite.GetNetworkSettings(ctx.Request.Context(), sandboxId)
 	// if err != nil {
 	// 	ctx.Error(err)
 	// 	return
@@ -307,7 +307,7 @@ func Start(ctx *gin.Context) {
 		authToken = &tokenQuery
 	}
 
-	_, daemonVersion, err := runner.Docker.Start(ctx.Request.Context(), sandboxId, authToken, metadata)
+	daemonVersion, err := runner.Boxlite.Start(ctx.Request.Context(), sandboxId, authToken, metadata)
 	if err != nil {
 		ctx.Error(err)
 		return
@@ -348,7 +348,7 @@ func Stop(ctx *gin.Context) {
 		return
 	}
 
-	err = runner.Docker.Stop(ctx.Request.Context(), sandboxId, stopDto.Force)
+	err = runner.Boxlite.Stop(ctx.Request.Context(), sandboxId, stopDto.Force)
 	if err != nil {
 		ctx.Error(err)
 		return
@@ -390,7 +390,7 @@ func Info(ctx *gin.Context) {
 
 	var daemonVersion *string
 	if info.SandboxState == enums.SandboxStateStarted {
-		daemonVersionStr, err := runner.Docker.GetDaemonVersion(ctx.Request.Context(), sandboxId)
+		daemonVersionStr, err := runner.Boxlite.GetDaemonVersion(ctx.Request.Context(), sandboxId)
 		if err == nil {
 			daemonVersion = &daemonVersionStr
 		}
@@ -446,7 +446,7 @@ func Recover(ctx *gin.Context) {
 		return
 	}
 
-	err = runner.Docker.RecoverSandbox(ctx.Request.Context(), sandboxId, recoverDto)
+	err = runner.Boxlite.RecoverSandbox(ctx.Request.Context(), sandboxId, recoverDto)
 	if err != nil {
 		ctx.Error(err)
 		return

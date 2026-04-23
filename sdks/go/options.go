@@ -25,13 +25,49 @@ type boxConfig struct {
 	name       string
 	cpus       int
 	memoryMiB  int
+	diskSizeGB int64
+	user       string
 	env        [][2]string
 	volumes    []volumeEntry
+	ports      []portEntry
+	network    *NetworkSpec
 	workDir    string
 	entrypoint []string
 	cmd        []string
 	autoRemove *bool
 	detach     *bool
+}
+
+type portEntry struct {
+	hostPort  *int
+	guestPort int
+	protocol  string
+}
+
+// NetworkSpec controls the box's network configuration.
+type NetworkSpec struct {
+	mode     string   // "enabled", "disabled", "isolated"
+	allowNet []string // only used when mode == "enabled"
+}
+
+// NetworkEnabled returns a NetworkSpec with full network access.
+func NetworkEnabled() NetworkSpec {
+	return NetworkSpec{mode: "enabled"}
+}
+
+// NetworkEnabledWithAllowList returns a NetworkSpec that only allows specific hosts.
+func NetworkEnabledWithAllowList(hosts ...string) NetworkSpec {
+	return NetworkSpec{mode: "enabled", allowNet: hosts}
+}
+
+// NetworkDisabled returns a NetworkSpec with no network access.
+func NetworkDisabled() NetworkSpec {
+	return NetworkSpec{mode: "disabled"}
+}
+
+// NetworkIsolated returns a NetworkSpec with isolated (default) network.
+func NetworkIsolated() NetworkSpec {
+	return NetworkSpec{mode: "isolated"}
 }
 
 type volumeEntry struct {
@@ -99,4 +135,31 @@ func WithAutoRemove(v bool) BoxOption {
 // WithDetach sets whether the box survives parent process exit.
 func WithDetach(v bool) BoxOption {
 	return func(c *boxConfig) { c.detach = &v }
+}
+
+// WithDiskSize sets the disk size in GB.
+func WithDiskSize(gb int64) BoxOption {
+	return func(c *boxConfig) { c.diskSizeGB = gb }
+}
+
+// WithUser sets the user to run as inside the box (e.g., "root", "1000:1000").
+func WithUser(spec string) BoxOption {
+	return func(c *boxConfig) { c.user = spec }
+}
+
+// WithNetwork sets the network configuration for the box.
+func WithNetwork(spec NetworkSpec) BoxOption {
+	return func(c *boxConfig) { c.network = &spec }
+}
+
+// WithPort adds a port mapping from host to guest.
+// If hostPort is 0, a port will be dynamically assigned.
+func WithPort(guestPort int, hostPort int) BoxOption {
+	return func(c *boxConfig) {
+		entry := portEntry{guestPort: guestPort, protocol: "tcp"}
+		if hostPort > 0 {
+			entry.hostPort = &hostPort
+		}
+		c.ports = append(c.ports, entry)
+	}
 }

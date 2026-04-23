@@ -15,7 +15,7 @@ import (
 	"github.com/daytonaio/runner/internal"
 	"github.com/daytonaio/runner/internal/metrics"
 	runnerapiclient "github.com/daytonaio/runner/pkg/apiclient"
-	"github.com/daytonaio/runner/pkg/docker"
+	blclient "github.com/daytonaio/runner/pkg/boxlite"
 )
 
 type HealthcheckServiceConfig struct {
@@ -27,10 +27,9 @@ type HealthcheckServiceConfig struct {
 	ApiPort    int
 	ProxyPort  int
 	TlsEnabled bool
-	Docker     *docker.DockerClient
+	Boxlite    *blclient.Client
 }
 
-// Service handles healthcheck reporting to the API
 type Service struct {
 	log        *slog.Logger
 	interval   time.Duration
@@ -41,18 +40,17 @@ type Service struct {
 	apiPort    int
 	proxyPort  int
 	tlsEnabled bool
-	docker     *docker.DockerClient
+	boxlite    *blclient.Client
 }
 
-// NewService creates a new healthcheck service
 func NewService(cfg *HealthcheckServiceConfig) (*Service, error) {
 	apiClient, err := runnerapiclient.GetApiClient()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create API client: %w", err)
 	}
 
-	if cfg.Docker == nil {
-		return nil, fmt.Errorf("docker client is required for healthcheck service")
+	if cfg.Boxlite == nil {
+		return nil, fmt.Errorf("boxlite client is required for healthcheck service")
 	}
 
 	logger := slog.Default()
@@ -70,16 +68,14 @@ func NewService(cfg *HealthcheckServiceConfig) (*Service, error) {
 		apiPort:    cfg.ApiPort,
 		proxyPort:  cfg.ProxyPort,
 		tlsEnabled: cfg.TlsEnabled,
-		docker:     cfg.Docker,
+		boxlite:    cfg.Boxlite,
 	}, nil
 }
 
-// Start begins the healthcheck loop
 func (s *Service) Start(ctx context.Context) {
 	ticker := time.NewTicker(s.interval)
 	defer ticker.Stop()
 
-	// Send initial healthcheck immediately
 	if err := s.sendHealthcheck(ctx); err != nil {
 		s.log.WarnContext(ctx, "Failed to send initial healthcheck", "error", err)
 	}
@@ -92,19 +88,15 @@ func (s *Service) Start(ctx context.Context) {
 		case <-ticker.C:
 			if err := s.sendHealthcheck(ctx); err != nil {
 				s.log.WarnContext(ctx, "Failed to send healthcheck", "error", err)
-				// Continue trying - don't crash
 			}
 		}
 	}
 }
 
-// sendHealthcheck sends a healthcheck to the API
 func (s *Service) sendHealthcheck(ctx context.Context) error {
-	// Create context with timeout
 	reqCtx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
 
-	// Build healthcheck request
 	healthcheck := apiclient.NewRunnerHealthcheck(internal.Version)
 	healthcheck.SetDomain(s.domain)
 
@@ -119,23 +111,22 @@ func (s *Service) sendHealthcheck(ctx context.Context) error {
 	healthcheck.SetProxyUrl(proxyUrl)
 	healthcheck.SetApiUrl(apiUrl)
 
-	dockerHealth := apiclient.RunnerServiceHealth{
-		ServiceName: "docker",
+	runtimeHealth := apiclient.RunnerServiceHealth{
+		ServiceName: "boxlite",
 		Healthy:     true,
 	}
 
-	err := s.docker.Ping(reqCtx)
+	err := s.boxlite.Ping(reqCtx)
 	if err != nil {
-		s.log.WarnContext(reqCtx, "Failed to ping Docker daemon", "error", err)
+		s.log.WarnContext(reqCtx, "Failed to ping BoxLite runtime", "error", err)
 
 		errStr := err.Error()
-		dockerHealth.Healthy = false
-		dockerHealth.ErrorReason = &errStr
+		runtimeHealth.Healthy = false
+		runtimeHealth.ErrorReason = &errStr
 	}
 
-	healthcheck.SetServiceHealth([]apiclient.RunnerServiceHealth{dockerHealth})
+	healthcheck.SetServiceHealth([]apiclient.RunnerServiceHealth{runtimeHealth})
 
-	// Collect metrics
 	m, err := s.collector.Collect(reqCtx)
 	if err != nil {
 		s.log.WarnContext(reqCtx, "Failed to collect metrics for healthcheck", "error", err)

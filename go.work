@@ -10,4 +10,5 @@ use (
 	apps/runner
 	apps/snapshot-manager
 	apps/ssh-gateway
+	sdks/go
 )

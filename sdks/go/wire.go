@@ -10,9 +10,11 @@ type boxOptionsWire struct {
 	Rootfs     any         `json:"rootfs"`
 	CPUs       *int        `json:"cpus,omitempty"`
 	MemoryMiB  *int        `json:"memory_mib,omitempty"`
+	DiskSizeGB *int64      `json:"disk_size_gb,omitempty"`
+	User       string      `json:"user,omitempty"`
 	Env        [][2]string `json:"env"`
 	Volumes    []wireVol   `json:"volumes"`
-	Network    string      `json:"network"`
+	Network    any         `json:"network"`
 	Ports      []wirePort  `json:"ports"`
 	WorkDir    string      `json:"working_dir,omitempty"`
 	AutoRemove *bool       `json:"auto_remove,omitempty"`
@@ -73,12 +75,33 @@ func (w *boxInfoWire) toBoxInfo() BoxInfo {
 	}
 }
 
+// buildNetworkWire converts a NetworkSpec to the Rust serde format.
+func buildNetworkWire(spec *NetworkSpec) any {
+	if spec == nil {
+		return "Isolated"
+	}
+	switch spec.mode {
+	case "disabled":
+		return "Disabled"
+	case "isolated":
+		return "Isolated"
+	case "enabled":
+		return map[string]any{
+			"Enabled": map[string]any{
+				"allow_net": spec.allowNet,
+			},
+		}
+	default:
+		return "Isolated"
+	}
+}
+
 // buildOptionsJSON creates the JSON wire representation from boxConfig.
 func buildOptionsJSON(image string, cfg *boxConfig) boxOptionsWire {
 	w := boxOptionsWire{
 		Rootfs:  wireRootfsImage{Image: image},
 		Env:     cfg.env,
-		Network: "Isolated",
+		Network: buildNetworkWire(cfg.network),
 	}
 
 	if w.Env == nil {
@@ -90,6 +113,12 @@ func buildOptionsJSON(image string, cfg *boxConfig) boxOptionsWire {
 	}
 	if cfg.memoryMiB > 0 {
 		w.MemoryMiB = &cfg.memoryMiB
+	}
+	if cfg.diskSizeGB > 0 {
+		w.DiskSizeGB = &cfg.diskSizeGB
+	}
+	if cfg.user != "" {
+		w.User = cfg.user
 	}
 	if cfg.workDir != "" {
 		w.WorkDir = cfg.workDir
@@ -113,6 +142,17 @@ func buildOptionsJSON(image string, cfg *boxConfig) boxOptionsWire {
 			GuestPath: v.guestPath,
 			ReadOnly:  v.readOnly,
 		})
+	}
+
+	for _, p := range cfg.ports {
+		wp := wirePort{
+			GuestPort: p.guestPort,
+			Protocol:  p.protocol,
+		}
+		if p.hostPort != nil {
+			wp.HostPort = p.hostPort
+		}
+		w.Ports = append(w.Ports, wp)
 	}
 
 	if w.Volumes == nil {

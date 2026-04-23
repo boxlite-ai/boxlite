@@ -12,22 +12,22 @@ import (
 	"net"
 	"time"
 
-	"github.com/daytonaio/runner/pkg/docker"
+	blclient "github.com/daytonaio/runner/pkg/boxlite"
 	"golang.org/x/crypto/ssh"
 )
 
 type Service struct {
-	log          *slog.Logger
-	dockerClient *docker.DockerClient
-	port         int
+	log     *slog.Logger
+	boxlite *blclient.Client
+	port    int
 }
 
-func NewService(logger *slog.Logger, dockerClient *docker.DockerClient) *Service {
+func NewService(logger *slog.Logger, boxlite *blclient.Client) *Service {
 	port := GetSSHGatewayPort()
 
 	service := &Service{
-		log:          logger.With(slog.String("component", "ssh_gateway_service")),
-		dockerClient: dockerClient,
+		log:     logger.With(slog.String("component", "ssh_gateway_service")),
+		boxlite: boxlite,
 		port:         port,
 	}
 
@@ -260,23 +260,15 @@ func (s *Service) connectToSandbox(sandboxId, channelType string, extraData []by
 	return sandboxChannel, sandboxRequests, nil
 }
 
-// getSandboxDetails gets sandbox information via docker client
 func (s *Service) getSandboxDetails(sandboxId string) (*SandboxDetails, error) {
-	// Get container details via docker client
-	container, err := s.dockerClient.ContainerInspect(context.Background(), sandboxId)
+	_, err := s.boxlite.GetSandboxState(context.Background(), sandboxId)
 	if err != nil {
-		return nil, fmt.Errorf("failed to inspect container %s: %w", sandboxId, err)
-	}
-
-	// Get container IP address
-	containerIP := docker.GetContainerIpAddress(context.Background(), container)
-	if containerIP == "" {
-		return nil, fmt.Errorf("sandbox IP not found for %s", sandboxId)
+		return nil, fmt.Errorf("failed to get sandbox %s: %w", sandboxId, err)
 	}
 
 	return &SandboxDetails{
 		User:     "daytona",
-		Hostname: containerIP,
+		Hostname: sandboxId,
 	}, nil
 }
 

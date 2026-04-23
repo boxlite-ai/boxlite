@@ -21,5 +21,5 @@ func (e *Executor) createBackup(ctx context.Context, job *apiclient.Job) (any, e
 	}
 
 	// TODO: is state cache needed?
-	return nil, e.docker.CreateBackup(ctx, job.ResourceId, createBackupDto)
+	return nil, e.backend.CreateBackup(ctx, job.ResourceId, createBackupDto)
 }

@@ -427,6 +427,78 @@ pub unsafe extern "C" fn boxlite_box_id(handle: *mut CBoxHandle) -> *mut c_char 
 }
 
 // ============================================================================
+// Image Operations API
+// ============================================================================
+
+/// Pull an OCI image into the local cache.
+///
+/// # Arguments
+/// * `runtime` - Runtime handle.
+/// * `image_ref` - Image reference (e.g., "alpine:latest").
+/// * `out_error` - Output error.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_image_pull(
+    runtime: *mut CBoxliteRuntime,
+    image_ref: *const c_char,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    boxlite_ffi::ops::image_pull(runtime, image_ref, out_error)
+}
+
+/// List all locally cached images as JSON.
+///
+/// # Arguments
+/// * `runtime` - Runtime handle.
+/// * `out_json` - Output pointer for JSON string. Caller must free with `boxlite_free_string`.
+/// * `out_error` - Output error.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_image_list(
+    runtime: *mut CBoxliteRuntime,
+    out_json: *mut *mut c_char,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    boxlite_ffi::ops::image_list(runtime, out_json, out_error)
+}
+
+// ============================================================================
+// File Copy API
+// ============================================================================
+
+/// Copy a file or directory from the host into a box.
+///
+/// # Arguments
+/// * `handle` - Box handle.
+/// * `host_src` - Path on the host to copy from.
+/// * `guest_dst` - Path inside the box to copy to.
+/// * `out_error` - Output error.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_copy_into(
+    handle: *mut CBoxHandle,
+    host_src: *const c_char,
+    guest_dst: *const c_char,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    boxlite_ffi::ops::box_copy_into(handle, host_src, guest_dst, out_error)
+}
+
+/// Copy a file or directory from a box to the host.
+///
+/// # Arguments
+/// * `handle` - Box handle.
+/// * `guest_src` - Path inside the box to copy from.
+/// * `host_dst` - Path on the host to copy to.
+/// * `out_error` - Output error.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_copy_out(
+    handle: *mut CBoxHandle,
+    guest_src: *const c_char,
+    host_dst: *const c_char,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    boxlite_ffi::ops::box_copy_out(handle, guest_src, host_dst, out_error)
+}
+
+// ============================================================================
 // Runner API (formerly Simple API)
 // ============================================================================
 

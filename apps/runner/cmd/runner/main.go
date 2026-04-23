@@ -17,10 +17,9 @@ import (
 	"github.com/daytonaio/runner/internal"
 	"github.com/daytonaio/runner/internal/metrics"
 	"github.com/daytonaio/runner/pkg/api"
+	"github.com/daytonaio/runner/pkg/backend"
+	blclient "github.com/daytonaio/runner/pkg/boxlite"
 	"github.com/daytonaio/runner/pkg/cache"
-	"github.com/daytonaio/runner/pkg/daemon"
-	"github.com/daytonaio/runner/pkg/docker"
-	"github.com/daytonaio/runner/pkg/netrules"
 	"github.com/daytonaio/runner/pkg/runner"
 	"github.com/daytonaio/runner/pkg/runner/v2/executor"
 	"github.com/daytonaio/runner/pkg/runner/v2/healthcheck"
@@ -28,10 +27,8 @@ import (
 	"github.com/daytonaio/runner/pkg/services"
 	"github.com/daytonaio/runner/pkg/sshgateway"
 	"github.com/daytonaio/runner/pkg/telemetry/filters"
-	"github.com/docker/docker/client"
 	"github.com/lmittmann/tint"
 	"github.com/mattn/go-isatty"
-	"go.opentelemetry.io/otel"
 )
 
 func main() {
@@ -39,7 +36,6 @@ func main() {
 }
 
 func run() int {
-	// Init slog logger
 	logger := slog.New(tint.NewHandler(os.Stdout, &tint.Options{
 		NoColor:    !isatty.IsTerminal(os.Stdout.Fd()),
 		TimeFormat: time.RFC3339,
@@ -68,15 +64,12 @@ func run() int {
 			Environment:    cfg.Environment,
 		}
 
-		// Initialize OpenTelemetry logging
 		newLogger, lp, err := telemetry.InitLogger(ctx, logger, telemetryConfig)
 		if err != nil {
 			logger.ErrorContext(ctx, "Failed to initialize logger", "error", err)
 			return 2
 		}
 
-		// Reassign logger to the new OTEL-enabled logger returned by InitLogger.
-		// This ensures that all subsequent code uses the logger instance that has OTEL support.
 		logger = newLogger
 
 		defer telemetry.ShutdownLogger(logger, lp)
@@ -93,7 +86,6 @@ func run() int {
 			Environment:    cfg.Environment,
 		}
 
-		// Initialize OpenTelemetry tracing with a custom filter to ignore 404 errors
 		tp, err := telemetry.InitTracer(ctx, telemetryConfig, &filters.NotFoundExporterFilter{})
 		if err != nil {
 			logger.ErrorContext(ctx, "Failed to initialize tracer", "error", err)
@@ -102,103 +94,33 @@ func run() int {
 		defer telemetry.ShutdownTracer(logger, tp)
 	}
 
-	cli, err := client.NewClientWithOpts(
-		client.FromEnv,
-		client.WithAPIVersionNegotiation(),
-		client.WithTraceProvider(otel.GetTracerProvider()),
-	)
+	// Initialize BoxLite runtime
+	boxliteClient, err := blclient.NewClient(ctx, blclient.ClientConfig{
+		Logger:  logger,
+		HomeDir: cfg.BoxliteHomeDir,
+	})
 	if err != nil {
-		logger.Error("Error creating Docker client", "error", err)
+		logger.Error("Error creating BoxLite client", "error", err)
 		return 2
 	}
+	defer boxliteClient.Close()
 
-	// Initialize net rules manager
-	persistent := cfg.Environment != "development"
-	netRulesManager, err := netrules.NewNetRulesManager(logger, persistent)
-	if err != nil {
-		logger.Error("Failed to initialize net rules manager", "error", err)
-		return 2
-	}
-
-	// Start net rules manager
-	if err = netRulesManager.Start(); err != nil {
-		logger.Error("Failed to start net rules manager", "error", err)
-		return 2
-	}
-	defer netRulesManager.Stop()
-
-	daemonPath, err := daemon.WriteStaticBinary("daemon-amd64")
-	if err != nil {
-		logger.Error("Error writing daemon binary", "error", err)
-		return 2
-	}
-
-	pluginPath, err := daemon.WriteStaticBinary("daytona-computer-use")
-	if err != nil {
-		logger.Error("Error writing plugin binary", "error", err)
-		return 2
-	}
+	logger.Info("BoxLite runtime initialized")
 
 	backupInfoCache := cache.NewBackupInfoCache(ctx, cfg.BackupInfoCacheRetention)
 
-	dockerClient, err := docker.NewDockerClient(ctx, docker.DockerClientConfig{
-		ApiClient:                    cli,
-		BackupInfoCache:              backupInfoCache,
-		Logger:                       logger,
-		AWSRegion:                    cfg.AWSRegion,
-		AWSEndpointUrl:               cfg.AWSEndpointUrl,
-		AWSAccessKeyId:               cfg.AWSAccessKeyId,
-		AWSSecretAccessKey:           cfg.AWSSecretAccessKey,
-		DaemonPath:                   daemonPath,
-		ComputerUsePluginPath:        pluginPath,
-		NetRulesManager:              netRulesManager,
-		ResourceLimitsDisabled:       cfg.ResourceLimitsDisabled,
-		UseSnapshotEntrypoint:        cfg.UseSnapshotEntrypoint,
-		VolumeCleanupInterval:        cfg.VolumeCleanupInterval,
-		VolumeCleanupDryRun:          cfg.VolumeCleanupDryRun,
-		VolumeCleanupExclusionPeriod: cfg.VolumeCleanupExclusionPeriod,
-		BackupTimeoutMin:             cfg.BackupTimeoutMin,
-		SnapshotPullTimeout:          cfg.SnapshotPullTimeout,
-		InitializeDaemonTelemetry:    cfg.InitializeDaemonTelemetry,
-		InterSandboxNetworkEnabled:   cfg.InterSandboxNetworkEnabled,
-	})
-	if err != nil {
-		logger.Error("Error creating Docker client wrapper", "error", err)
-		return 2
-	}
+	sandboxService := services.NewSandboxService(logger, backupInfoCache, boxliteClient)
 
-	// Start Docker events monitor
-	monitorOpts := docker.MonitorOptions{
-		OnDestroyEvent: func(ctx context.Context) {
-			dockerClient.CleanupOrphanedVolumeMounts(ctx)
-		},
-	}
-	monitor := docker.NewDockerMonitor(logger, cli, netRulesManager, monitorOpts)
-	monitorErrChan := make(chan error)
-	go func() {
-		logger.Info("Starting Docker monitor")
-		err = monitor.Start()
-		if err != nil {
-			monitorErrChan <- err
-		}
-	}()
-	defer monitor.Stop()
-
-	sandboxService := services.NewSandboxService(logger, backupInfoCache, dockerClient)
-
-	// Initialize sandbox state synchronization service
 	sandboxSyncService := services.NewSandboxSyncService(services.SandboxSyncServiceConfig{
 		Logger:   logger,
-		Docker:   dockerClient,
-		Interval: 10 * time.Second, // Sync every 10 seconds
+		Boxlite:  boxliteClient,
+		Interval: 10 * time.Second,
 	})
 	sandboxSyncService.StartSyncProcess(ctx)
 
 	// Initialize SSH Gateway if enabled
-	var sshGatewayService *sshgateway.Service
 	if sshgateway.IsSSHGatewayEnabled() {
-		sshGatewayService = sshgateway.NewService(logger, dockerClient)
-
+		sshGatewayService := sshgateway.NewService(logger, boxliteClient)
 		go func() {
 			logger.Info("Starting SSH Gateway")
 			if err := sshGatewayService.Start(ctx); err != nil {
@@ -209,10 +131,9 @@ func run() int {
 		logger.Info("Gateway disabled - set SSH_GATEWAY_ENABLE=true to enable")
 	}
 
-	// Create metrics collector
 	metricsCollector := metrics.NewCollector(metrics.CollectorConfig{
 		Logger:                             logger,
-		Docker:                             dockerClient,
+		Boxlite:                            boxliteClient,
 		WindowSize:                         cfg.CollectorWindowSize,
 		CPUUsageSnapshotInterval:           cfg.CPUUsageSnapshotInterval,
 		AllocatedResourcesSnapshotInterval: cfg.AllocatedResourcesSnapshotInterval,
@@ -223,16 +144,16 @@ func run() int {
 		Logger:             logger,
 		BackupInfoCache:    backupInfoCache,
 		SnapshotErrorCache: cache.NewSnapshotErrorCache(ctx, cfg.SnapshotErrorCacheRetention),
-		Docker:             dockerClient,
+		Boxlite:            boxliteClient,
 		SandboxService:     sandboxService,
 		MetricsCollector:   metricsCollector,
-		NetRulesManager:    netRulesManager,
-		SSHGatewayService:  sshGatewayService,
 	})
 	if err != nil {
 		logger.Error("Failed to initialize runner instance", "error", err)
 		return 2
 	}
+
+	sandboxBackend := backend.NewBoxliteAdapter(boxliteClient)
 
 	if cfg.ApiVersion == 2 {
 		healthcheckService, err := healthcheck.NewService(&healthcheck.HealthcheckServiceConfig{
@@ -244,7 +165,7 @@ func run() int {
 			ApiPort:    cfg.ApiPort,
 			ProxyPort:  cfg.ApiPort,
 			TlsEnabled: cfg.EnableTLS,
-			Docker:     dockerClient,
+			Boxlite:    boxliteClient,
 		})
 		if err != nil {
 			logger.Error("Failed to create healthcheck service", "error", err)
@@ -258,7 +179,7 @@ func run() int {
 
 		executorService, err := executor.NewExecutor(&executor.ExecutorConfig{
 			Logger:    logger,
-			Docker:    dockerClient,
+			Backend:   sandboxBackend,
 			Collector: metricsCollector,
 		})
 		if err != nil {
@@ -311,9 +232,6 @@ func run() int {
 		logger.Info("Signal received, shutting down")
 		apiServer.Stop()
 		logger.Info("Shutdown complete")
-		return 143 // SIGTERM
-	case err := <-monitorErrChan:
-		logger.Error("Docker monitor error", "error", err)
-		return 1
+		return 143
 	}
 }

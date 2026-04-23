@@ -420,6 +420,50 @@ enum BoxliteErrorCode boxlite_start_box(CBoxHandle *handle, CBoxliteError *out_e
 // ```
 char *boxlite_box_id(CBoxHandle *handle);
 
+// Pull an OCI image into the local cache.
+//
+// # Arguments
+// * `runtime` - Runtime handle.
+// * `image_ref` - Image reference (e.g., "alpine:latest").
+// * `out_error` - Output error.
+enum BoxliteErrorCode boxlite_image_pull(CBoxliteRuntime *runtime,
+                                         const char *image_ref,
+                                         CBoxliteError *out_error);
+
+// List all locally cached images as JSON.
+//
+// # Arguments
+// * `runtime` - Runtime handle.
+// * `out_json` - Output pointer for JSON string. Caller must free with `boxlite_free_string`.
+// * `out_error` - Output error.
+enum BoxliteErrorCode boxlite_image_list(CBoxliteRuntime *runtime,
+                                         char **out_json,
+                                         CBoxliteError *out_error);
+
+// Copy a file or directory from the host into a box.
+//
+// # Arguments
+// * `handle` - Box handle.
+// * `host_src` - Path on the host to copy from.
+// * `guest_dst` - Path inside the box to copy to.
+// * `out_error` - Output error.
+enum BoxliteErrorCode boxlite_copy_into(CBoxHandle *handle,
+                                        const char *host_src,
+                                        const char *guest_dst,
+                                        CBoxliteError *out_error);
+
+// Copy a file or directory from a box to the host.
+//
+// # Arguments
+// * `handle` - Box handle.
+// * `guest_src` - Path inside the box to copy from.
+// * `host_dst` - Path on the host to copy to.
+// * `out_error` - Output error.
+enum BoxliteErrorCode boxlite_copy_out(CBoxHandle *handle,
+                                       const char *guest_src,
+                                       const char *host_dst,
+                                       CBoxliteError *out_error);
+
 // Create a simplified box runner.
 //
 // # Arguments

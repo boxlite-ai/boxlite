@@ -6,9 +6,11 @@
 use futures::StreamExt;
 use std::ffi::{CString, c_void};
 use std::os::raw::{c_char, c_int};
+use std::path::Path;
 use std::ptr;
 
 use boxlite::litebox::LiteBox;
+use boxlite::litebox::copy::CopyOptions;
 use boxlite::runtime::BoxliteRuntime;
 use boxlite::runtime::id::BoxID;
 use boxlite::runtime::options::{BoxOptions, BoxliteOptions};
@@ -1460,6 +1462,247 @@ pub unsafe fn box_free(handle: *mut BoxHandle) {
     if !handle.is_null() {
         unsafe {
             drop(Box::from_raw(handle));
+        }
+    }
+}
+
+/// Pull an OCI image into the local cache.
+///
+/// # Safety
+/// All pointer parameters must be valid or null.
+pub unsafe fn image_pull(
+    runtime: *mut RuntimeHandle,
+    image_ref: *const c_char,
+    out_error: *mut FFIError,
+) -> BoxliteErrorCode {
+    unsafe {
+        if runtime.is_null() {
+            write_error(out_error, null_pointer_error("runtime"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+
+        let runtime_ref = &*runtime;
+
+        let ref_str = match c_str_to_string(image_ref) {
+            Ok(s) => s,
+            Err(e) => {
+                write_error(out_error, e);
+                return BoxliteErrorCode::InvalidArgument;
+            }
+        };
+
+        let images = match runtime_ref.runtime.images() {
+            Ok(h) => h,
+            Err(e) => {
+                let code = error_to_code(&e);
+                write_error(out_error, e);
+                return code;
+            }
+        };
+
+        let result = runtime_ref.tokio_rt.block_on(images.pull(&ref_str));
+
+        match result {
+            Ok(_) => BoxliteErrorCode::Ok,
+            Err(e) => {
+                let code = error_to_code(&e);
+                write_error(out_error, e);
+                code
+            }
+        }
+    }
+}
+
+/// List all locally cached images as JSON.
+///
+/// # Safety
+/// All pointer parameters must be valid or null.
+pub unsafe fn image_list(
+    runtime: *mut RuntimeHandle,
+    out_json: *mut *mut c_char,
+    out_error: *mut FFIError,
+) -> BoxliteErrorCode {
+    unsafe {
+        if runtime.is_null() {
+            write_error(out_error, null_pointer_error("runtime"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+        if out_json.is_null() {
+            write_error(out_error, null_pointer_error("out_json"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+
+        let runtime_ref = &*runtime;
+
+        let images = match runtime_ref.runtime.images() {
+            Ok(h) => h,
+            Err(e) => {
+                let code = error_to_code(&e);
+                write_error(out_error, e);
+                return code;
+            }
+        };
+
+        let result = runtime_ref.tokio_rt.block_on(images.list());
+
+        match result {
+            Ok(image_list) => {
+                let json_array: Vec<serde_json::Value> = image_list
+                    .iter()
+                    .map(|img| {
+                        serde_json::json!({
+                            "reference": img.reference,
+                            "repository": img.repository,
+                            "tag": img.tag,
+                            "id": img.id,
+                            "cached_at": img.cached_at.to_rfc3339(),
+                            "size": img.size.as_ref().map(|s| s.0),
+                        })
+                    })
+                    .collect();
+
+                let json_str = match serde_json::to_string(&json_array) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        let err =
+                            BoxliteError::Internal(format!("JSON serialization failed: {}", e));
+                        write_error(out_error, err);
+                        return BoxliteErrorCode::Internal;
+                    }
+                };
+
+                match CString::new(json_str) {
+                    Ok(s) => {
+                        *out_json = s.into_raw();
+                        BoxliteErrorCode::Ok
+                    }
+                    Err(e) => {
+                        let err =
+                            BoxliteError::Internal(format!("CString conversion failed: {}", e));
+                        write_error(out_error, err);
+                        BoxliteErrorCode::Internal
+                    }
+                }
+            }
+            Err(e) => {
+                let code = error_to_code(&e);
+                write_error(out_error, e);
+                code
+            }
+        }
+    }
+}
+
+/// Copy a file or directory from the host into a box.
+///
+/// # Safety
+/// All pointer parameters must be valid or null.
+pub unsafe fn box_copy_into(
+    handle: *mut BoxHandle,
+    host_src: *const c_char,
+    guest_dst: *const c_char,
+    out_error: *mut FFIError,
+) -> BoxliteErrorCode {
+    unsafe {
+        if handle.is_null() {
+            write_error(out_error, null_pointer_error("handle"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+
+        let handle_ref = &*handle;
+
+        let src = match c_str_to_string(host_src) {
+            Ok(s) => s,
+            Err(e) => {
+                write_error(out_error, e);
+                return BoxliteErrorCode::InvalidArgument;
+            }
+        };
+
+        let dst = match c_str_to_string(guest_dst) {
+            Ok(s) => s,
+            Err(e) => {
+                write_error(out_error, e);
+                return BoxliteErrorCode::InvalidArgument;
+            }
+        };
+
+        let opts = CopyOptions {
+            recursive: true,
+            overwrite: true,
+            follow_symlinks: false,
+            include_parent: false,
+        };
+
+        let result =
+            handle_ref
+                .tokio_rt
+                .block_on(handle_ref.handle.copy_into(Path::new(&src), &dst, opts));
+
+        match result {
+            Ok(()) => BoxliteErrorCode::Ok,
+            Err(e) => {
+                let code = error_to_code(&e);
+                write_error(out_error, e);
+                code
+            }
+        }
+    }
+}
+
+/// Copy a file or directory from a box to the host.
+///
+/// # Safety
+/// All pointer parameters must be valid or null.
+pub unsafe fn box_copy_out(
+    handle: *mut BoxHandle,
+    guest_src: *const c_char,
+    host_dst: *const c_char,
+    out_error: *mut FFIError,
+) -> BoxliteErrorCode {
+    unsafe {
+        if handle.is_null() {
+            write_error(out_error, null_pointer_error("handle"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+
+        let handle_ref = &*handle;
+
+        let src = match c_str_to_string(guest_src) {
+            Ok(s) => s,
+            Err(e) => {
+                write_error(out_error, e);
+                return BoxliteErrorCode::InvalidArgument;
+            }
+        };
+
+        let dst = match c_str_to_string(host_dst) {
+            Ok(s) => s,
+            Err(e) => {
+                write_error(out_error, e);
+                return BoxliteErrorCode::InvalidArgument;
+            }
+        };
+
+        let opts = CopyOptions {
+            recursive: true,
+            overwrite: true,
+            follow_symlinks: false,
+            include_parent: false,
+        };
+
+        let result =
+            handle_ref
+                .tokio_rt
+                .block_on(handle_ref.handle.copy_out(&src, Path::new(&dst), opts));
+
+        match result {
+            Ok(()) => BoxliteErrorCode::Ok,
+            Err(e) => {
+                let code = error_to_code(&e);
+                write_error(out_error, e);
+                code
+            }
         }
     }
 }

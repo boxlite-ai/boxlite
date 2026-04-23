@@ -10,34 +10,28 @@ import (
 	"time"
 
 	"github.com/daytonaio/runner/internal/metrics"
+	blclient "github.com/daytonaio/runner/pkg/boxlite"
 	"github.com/daytonaio/runner/pkg/cache"
-	"github.com/daytonaio/runner/pkg/docker"
 	"github.com/daytonaio/runner/pkg/models"
-	"github.com/daytonaio/runner/pkg/netrules"
 	"github.com/daytonaio/runner/pkg/services"
-	"github.com/daytonaio/runner/pkg/sshgateway"
 )
 
 type RunnerInstanceConfig struct {
 	Logger             *slog.Logger
 	BackupInfoCache    *cache.BackupInfoCache
 	SnapshotErrorCache *cache.SnapshotErrorCache
-	Docker             *docker.DockerClient
+	Boxlite            *blclient.Client
 	MetricsCollector   *metrics.Collector
 	SandboxService     *services.SandboxService
-	NetRulesManager    *netrules.NetRulesManager
-	SSHGatewayService  *sshgateway.Service
 }
 
 type Runner struct {
 	Logger             *slog.Logger
 	BackupInfoCache    *cache.BackupInfoCache
 	SnapshotErrorCache *cache.SnapshotErrorCache
-	Docker             *docker.DockerClient
+	Boxlite            *blclient.Client
 	MetricsCollector   *metrics.Collector
 	SandboxService     *services.SandboxService
-	NetRulesManager    *netrules.NetRulesManager
-	SSHGatewayService  *sshgateway.Service
 }
 
 var runner *Runner
@@ -61,11 +55,9 @@ func GetInstance(config *RunnerInstanceConfig) (*Runner, error) {
 			Logger:             logger.With(slog.String("component", "runner")),
 			BackupInfoCache:    config.BackupInfoCache,
 			SnapshotErrorCache: config.SnapshotErrorCache,
-			Docker:             config.Docker,
+			Boxlite:            config.Boxlite,
 			SandboxService:     config.SandboxService,
 			MetricsCollector:   config.MetricsCollector,
-			NetRulesManager:    config.NetRulesManager,
-			SSHGatewayService:  config.SSHGatewayService,
 		}
 	}
 
@@ -78,19 +70,19 @@ func (r *Runner) InspectRunnerServices(ctx context.Context) []models.RunnerServi
 	pingCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 
-	dockerHealth := models.RunnerServiceInfo{
-		ServiceName: "docker",
+	boxliteHealth := models.RunnerServiceInfo{
+		ServiceName: "boxlite",
 		Healthy:     true,
 	}
 
-	err := r.Docker.Ping(pingCtx)
+	err := r.Boxlite.Ping(pingCtx)
 	if err != nil {
-		r.Logger.WarnContext(ctx, "Failed to ping Docker daemon", "error", err)
-		dockerHealth.Healthy = false
-		dockerHealth.Err = err
+		r.Logger.WarnContext(ctx, "Failed to ping BoxLite runtime", "error", err)
+		boxliteHealth.Healthy = false
+		boxliteHealth.Err = err
 	}
 
-	runnerServicesInfo = append(runnerServicesInfo, dockerHealth)
+	runnerServicesInfo = append(runnerServicesInfo, boxliteHealth)
 
 	return runnerServicesInfo
 }

@@ -200,6 +200,37 @@ func (r *Runtime) ForceRemove(_ context.Context, idOrName string) error {
 	return nil
 }
 
+// PullImage pulls an OCI image into the local cache.
+func (r *Runtime) PullImage(_ context.Context, imageRef string) error {
+	cRef := toCString(imageRef)
+	defer C.free(unsafe.Pointer(cRef))
+
+	var cerr C.CBoxliteError
+	code := C.boxlite_image_pull(r.handle, cRef, &cerr)
+	if code != C.Ok {
+		return freeError(&cerr)
+	}
+	return nil
+}
+
+// ListImages lists all locally cached images.
+func (r *Runtime) ListImages(_ context.Context) ([]ImageInfo, error) {
+	var cJSON *C.char
+	var cerr C.CBoxliteError
+	code := C.boxlite_image_list(r.handle, &cJSON, &cerr)
+	if code != C.Ok {
+		return nil, freeError(&cerr)
+	}
+	jsonStr := C.GoString(cJSON)
+	freeBoxliteString(cJSON)
+
+	var images []ImageInfo
+	if err := json.Unmarshal([]byte(jsonStr), &images); err != nil {
+		return nil, err
+	}
+	return images, nil
+}
+
 // Metrics returns aggregate runtime metrics.
 func (r *Runtime) Metrics(_ context.Context) (*RuntimeMetrics, error) {
 	var cJSON *C.char

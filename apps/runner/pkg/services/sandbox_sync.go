@@ -11,20 +11,19 @@ import (
 
 	apiclient "github.com/daytonaio/daytona/libs/api-client-go"
 	runnerapiclient "github.com/daytonaio/runner/pkg/apiclient"
-	"github.com/daytonaio/runner/pkg/docker"
+	blclient "github.com/daytonaio/runner/pkg/boxlite"
 	"github.com/daytonaio/runner/pkg/models/enums"
-	"github.com/docker/docker/api/types/container"
 )
 
 type SandboxSyncServiceConfig struct {
 	Logger   *slog.Logger
-	Docker   *docker.DockerClient
+	Boxlite  *blclient.Client
 	Interval time.Duration
 }
 
 type SandboxSyncService struct {
 	log      *slog.Logger
-	docker   *docker.DockerClient
+	boxlite  *blclient.Client
 	interval time.Duration
 	client   *apiclient.APIClient
 }
@@ -32,39 +31,34 @@ type SandboxSyncService struct {
 func NewSandboxSyncService(config SandboxSyncServiceConfig) *SandboxSyncService {
 	return &SandboxSyncService{
 		log:      config.Logger.With(slog.String("component", "sandbox_sync_service")),
-		docker:   config.Docker,
+		boxlite:  config.Boxlite,
 		interval: config.Interval,
 	}
 }
 
 func (s *SandboxSyncService) GetLocalContainerStates(ctx context.Context) (map[string]enums.SandboxState, error) {
-	containers, err := s.docker.ApiClient().ContainerList(ctx, container.ListOptions{
-		All: true, // Include stopped containers
-	})
+	boxes, err := s.boxlite.ListInfo(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list containers: %w", err)
+		return nil, fmt.Errorf("failed to list boxes: %w", err)
 	}
 
-	containerStates := make(map[string]enums.SandboxState)
-
-	for _, container := range containers {
-		// Extract sandbox ID from container name or labels
-		sandboxId := s.extractSandboxId(container)
+	boxStates := make(map[string]enums.SandboxState)
+	for _, box := range boxes {
+		sandboxId := box.Name
 		if sandboxId == "" {
-			continue // Skip non-sandbox containers
+			sandboxId = box.ID
 		}
 
-		// Get the current state of this container
-		state, err := s.docker.GetSandboxState(ctx, sandboxId)
+		state, err := s.boxlite.GetSandboxState(ctx, sandboxId)
 		if err != nil {
 			s.log.DebugContext(ctx, "Failed to get state for sandbox", "sandboxId", sandboxId, "error", err)
 			continue
 		}
 
-		containerStates[sandboxId] = state
+		boxStates[sandboxId] = state
 	}
 
-	return containerStates, nil
+	return boxStates, nil
 }
 
 func (s *SandboxSyncService) GetRemoteSandboxStates(ctx context.Context) (map[string]apiclient.SandboxState, error) {
@@ -114,7 +108,6 @@ func (s *SandboxSyncService) PerformSync(ctx context.Context) error {
 		return fmt.Errorf("failed to get remote sandbox states: %w", err)
 	}
 
-	// Compare states and sync differences
 	syncCount := 0
 	for sandboxId, localState := range localStates {
 		remoteState, exists := remoteStates[sandboxId]
@@ -122,7 +115,6 @@ func (s *SandboxSyncService) PerformSync(ctx context.Context) error {
 			continue
 		}
 
-		// Convert remote state to local state format for comparison
 		convertedRemoteState := s.convertFromApiState(remoteState)
 
 		if localState != convertedRemoteState {
@@ -144,17 +136,14 @@ func (s *SandboxSyncService) PerformSync(ctx context.Context) error {
 	return nil
 }
 
-// StartSyncProcess starts a background goroutine that synchronizes sandbox states
 func (s *SandboxSyncService) StartSyncProcess(ctx context.Context) {
 	s.log.InfoContext(ctx, "Starting sandbox sync process")
 	go func() {
-		// Perform initial sync
 		err := s.PerformSync(ctx)
 		if err != nil {
 			s.log.ErrorContext(ctx, "Failed to perform initial sync", "error", err)
 		}
 
-		// Set up ticker for periodic sync
 		ticker := time.NewTicker(s.interval)
 		defer ticker.Stop()
 
@@ -171,15 +160,6 @@ func (s *SandboxSyncService) StartSyncProcess(ctx context.Context) {
 			}
 		}
 	}()
-}
-
-func (s *SandboxSyncService) extractSandboxId(container container.Summary) string {
-	if len(container.Names) > 0 && len(container.Names[0]) > 1 {
-		name := container.Names[0][1:] // Remove leading "/"
-		return name
-	}
-
-	return ""
 }
 
 func (s *SandboxSyncService) convertToApiState(localState enums.SandboxState) apiclient.SandboxState {
