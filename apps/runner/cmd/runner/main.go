@@ -106,10 +106,7 @@ func run() int {
 		}
 	}
 
-	daemonPath, err := daemon.WriteStaticBinary("daemon-amd64")
-	if err != nil {
-		logger.Warn("Failed to extract daemon binary (sandbox entrypoint will use image default)", "error", err)
-	}
+	daemonPath, _ := daemon.WriteStaticBinary("daemon-amd64")
 
 	boxliteClient, err := blclient.NewClient(ctx, blclient.ClientConfig{
 		Logger:             logger,

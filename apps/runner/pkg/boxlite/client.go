@@ -7,13 +7,10 @@
 package boxlite
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"sync"
-	"time"
 
 	boxlite "github.com/boxlite-ai/boxlite/sdks/go"
 	"github.com/daytonaio/runner/pkg/api/dto"
@@ -125,9 +122,10 @@ func (c *Client) Create(ctx context.Context, sandboxDto dto.CreateSandboxDTO) (s
 		opts = append(opts, boxlite.WithNetwork(boxlite.NetworkEnabled()))
 	}
 
-	// Expose daemon and terminal ports
-	opts = append(opts, boxlite.WithPort(2280, 0))
-	opts = append(opts, boxlite.WithPort(22222, 0))
+	if c.daemonPath != "" {
+		opts = append(opts, boxlite.WithPort(2280, 0))
+		opts = append(opts, boxlite.WithPort(22222, 0))
+	}
 
 	bx, err := c.runtime.Create(ctx, sandboxDto.Snapshot, opts...)
 	if err != nil {
@@ -146,23 +144,22 @@ func (c *Client) Create(ctx context.Context, sandboxDto dto.CreateSandboxDTO) (s
 			return bx.ID(), "", fmt.Errorf("failed to start box: %w", err)
 		}
 
-		// Inject and start daemon binary after VM is running
 		if c.daemonPath != "" {
 			if err := bx.CopyInto(ctx, c.daemonPath, common.DAEMON_PATH); err != nil {
-				c.logger.Warn("failed to inject daemon binary", "error", err)
+				c.logger.Warn("failed to inject daemon", "error", err)
 			} else {
 				go func() {
-					envCmd := fmt.Sprintf("DAYTONA_USER_HOME_AS_WORKDIR=true DAYTONA_SANDBOX_ID=%s %s 2>&1", sandboxDto.Id, common.DAEMON_PATH)
+					envCmd := fmt.Sprintf(
+						"DAYTONA_USER_HOME_AS_WORKDIR=true DAYTONA_SANDBOX_ID=%s %s 2>&1",
+						sandboxDto.Id, common.DAEMON_PATH,
+					)
 					result, err := bx.Exec(context.Background(), "/bin/sh", "-c", envCmd)
 					if err != nil {
-						c.logger.Warn("failed to start daemon", "error", err)
-					} else if result != nil {
-						c.logger.Info("daemon exited", "exitCode", result.ExitCode, "stdout", result.Stdout[:min(len(result.Stdout), 200)])
+						c.logger.Warn("daemon exec failed", "error", err)
+					} else if result != nil && result.ExitCode != 0 {
+						c.logger.Warn("daemon exited", "code", result.ExitCode, "out", result.Stdout[:min(len(result.Stdout), 500)])
 					}
 				}()
-
-				// Wait for daemon to be ready and initialize it
-				c.waitForDaemon(ctx, sandboxDto.AuthToken)
 			}
 		}
 	}
@@ -358,36 +355,6 @@ func (c *Client) getOrFetchBox(ctx context.Context, sandboxId string) (*boxlite.
 	c.mu.Unlock()
 
 	return bx, nil
-}
-
-// waitForDaemon polls the daemon's version endpoint and initializes it with the auth token.
-func (c *Client) waitForDaemon(ctx context.Context, authToken *string) {
-	client := &http.Client{Timeout: 1 * time.Second}
-	deadline := time.Now().Add(30 * time.Second)
-
-	for time.Now().Before(deadline) {
-		resp, err := client.Get("http://localhost:2280/version")
-		if err == nil {
-			resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
-				c.logger.Info("daemon is ready")
-
-				if authToken != nil {
-					go func() {
-						body := fmt.Sprintf(`{"token":"%s"}`, *authToken)
-						req, _ := http.NewRequest("POST", "http://localhost:2280/init", bytes.NewBufferString(body))
-						req.Header.Set("Content-Type", "application/json")
-						if resp, err := client.Do(req); err == nil {
-							resp.Body.Close()
-						}
-					}()
-				}
-				return
-			}
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	c.logger.Warn("daemon did not become ready in time")
 }
 
 // ExecResult holds the output of a command execution.
