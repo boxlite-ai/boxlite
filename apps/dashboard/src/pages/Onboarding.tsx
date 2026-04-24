@@ -155,7 +155,7 @@ const Onboarding: React.FC = () => {
                 </div>
                 <div>
                   <h2 className="text-xl font-semibold mb-4">Install the SDK</h2>
-                  <p className="mb-4">Run the following command in your terminal to install the Daytona SDK:</p>
+                  <p className="mb-4">Run the following command in your terminal to install the BoxLite SDK:</p>
                   <div className="transition-all duration-500">
                     <CodeBlock code={codeExamples[language].install} language="bash" showCopy />
                   </div>
@@ -324,13 +324,13 @@ const codeExamples = {
   typescript: {
     install: `npm install @daytonaio/sdk`,
     run: `npx tsx index.mts`,
-    example: `import { Daytona } from '@daytonaio/sdk'
+    example: `import { Daytona as BoxLite } from '@daytonaio/sdk'
   
-// Initialize the Daytona client
-const daytona = new Daytona({ apiKey: 'your-api-key' });
+// Initialize the BoxLite client
+const boxlite = new BoxLite({ apiKey: 'your-api-key' });
 
 // Create the Sandbox instance
-const sandbox = await daytona.create({
+const sandbox = await boxlite.create({
   language: 'typescript',
 });
 
@@ -342,16 +342,16 @@ console.log(response.result);
   python: {
     install: `pip install daytona`,
     run: `python main.py`,
-    example: `from daytona import Daytona, DaytonaConfig
+    example: `from daytona import Daytona as BoxLite, DaytonaConfig as BoxLiteConfig
   
 # Define the configuration
-config = DaytonaConfig(api_key="your-api-key")
+config = BoxLiteConfig(api_key="your-api-key")
 
-# Initialize the Daytona client
-daytona = Daytona(config)
+# Initialize the BoxLite client
+boxlite = BoxLite(config)
 
 # Create the Sandbox instance
-sandbox = daytona.create()
+sandbox = boxlite.create()
 
 # Run the code securely inside the Sandbox
 response = sandbox.process.code_run('print("Hello World from code!")')

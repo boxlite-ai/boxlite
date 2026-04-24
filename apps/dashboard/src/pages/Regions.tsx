@@ -43,6 +43,7 @@ import { handleApiError } from '@/lib/error-handling'
 import { useRegions } from '@/hooks/useRegions'
 import { getMaskedToken } from '@/lib/utils'
 import { Copy } from 'lucide-react'
+import { PageContent, PageHeader, PageLayout, PageTitle } from '@/components/PageLayout'
 
 const Regions: React.FC = () => {
   const { organizationsApi } = useApi()
@@ -252,28 +253,30 @@ const Regions: React.FC = () => {
   }
 
   return (
-    <div className="px-6 py-2">
-      <div className="mb-2 h-12 flex items-center justify-between">
-        <h1 className="text-2xl font-medium">Regions</h1>
+    <PageLayout>
+      <PageHeader size="full">
+        <PageTitle>Regions</PageTitle>
         <CreateRegionDialog
           onCreateRegion={handleCreateRegion}
           writePermitted={writePermitted}
           loadingData={loadingRegions}
         />
-      </div>
+      </PageHeader>
 
-      <RegionTable
-        data={regions}
-        loading={loadingRegions}
-        isLoadingRegion={(region) => regionIsLoading[region.id] || false}
-        deletePermitted={deletePermitted}
-        writePermitted={writePermitted}
-        onDelete={(region) => {
-          setRegionToDelete(region)
-          setDeleteRegionDialogIsOpen(true)
-        }}
-        onOpenDetails={handleOpenRegionDetails}
-      />
+      <PageContent size="full">
+        <RegionTable
+          data={regions}
+          loading={loadingRegions}
+          isLoadingRegion={(region) => regionIsLoading[region.id] || false}
+          deletePermitted={deletePermitted}
+          writePermitted={writePermitted}
+          onDelete={(region) => {
+            setRegionToDelete(region)
+            setDeleteRegionDialogIsOpen(true)
+          }}
+          onOpenDetails={handleOpenRegionDetails}
+        />
+      </PageContent>
 
       <RegionDetailsSheet
         region={selectedRegion}
@@ -595,7 +598,7 @@ const Regions: React.FC = () => {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </PageLayout>
   )
 }
 

@@ -102,7 +102,7 @@ const UserOrganizationInvitations: React.FC = () => {
 
   return (
     <PageLayout>
-      <PageHeader>
+      <PageHeader size="full">
         <PageTitle>Invitations</PageTitle>
       </PageHeader>
 

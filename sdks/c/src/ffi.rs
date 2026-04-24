@@ -69,10 +69,17 @@ pub extern "C" fn boxlite_version() -> *const c_char {
 pub unsafe extern "C" fn boxlite_runtime_new(
     home_dir: *const c_char,
     registries_json: *const c_char,
+    insecure_registries_json: *const c_char,
     out_runtime: *mut *mut CBoxliteRuntime,
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
-    boxlite_ffi::ops::runtime_new(home_dir, registries_json, out_runtime, out_error)
+    boxlite_ffi::ops::runtime_new(
+        home_dir,
+        registries_json,
+        insecure_registries_json,
+        out_runtime,
+        out_error,
+    )
 }
 
 // ============================================================================

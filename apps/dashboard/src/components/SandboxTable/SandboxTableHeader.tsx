@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { useIsCompactScreen, useIsMobile } from '@/hooks/use-mobile'
 import { cn } from '@/lib/utils'
 import {
   ArrowUpDown,
@@ -67,6 +68,8 @@ export function SandboxTableHeader({
   onRefresh,
   isRefreshing = false,
 }: SandboxTableHeaderProps) {
+  const isMobile = useIsMobile()
+  const isCompactScreen = useIsCompactScreen()
   const [open, setOpen] = React.useState(false)
   const currentSort = table.getState().sorting[0]?.id || ''
 
@@ -78,54 +81,90 @@ export function SandboxTableHeader({
     { id: 'lastEvent', label: 'Last Event' },
   ]
 
+  const stateFilterValue = (table.getColumn('state')?.getFilterValue() as string[]) || []
+  const snapshotFilterValue = (table.getColumn('snapshot')?.getFilterValue() as string[]) || []
+  const regionFilterValue = (table.getColumn('region')?.getFilterValue() as string[]) || []
+  const resourceFilterValue = (table.getColumn('resources')?.getFilterValue() as ResourceFilterValue) || {}
+  const labelFilterValue = (table.getColumn('labels')?.getFilterValue() as string[]) || []
+  const lastEventFilterValue = (table.getColumn('lastEvent')?.getFilterValue() as Date[]) || []
+
+  const hasActiveFilters =
+    stateFilterValue.length > 0 ||
+    snapshotFilterValue.length > 0 ||
+    regionFilterValue.length > 0 ||
+    RESOURCE_FILTERS.some((filter) => Boolean(resourceFilterValue[filter.type])) ||
+    labelFilterValue.length > 0 ||
+    lastEventFilterValue.length > 0
+
   return (
-    <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-      <div className="flex flex-wrap gap-2 items-center">
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-wrap items-center gap-2">
         <DebouncedInput
           value={(table.getColumn('name')?.getFilterValue() as string) ?? ''}
           onChange={(value) => table.getColumn('name')?.setFilterValue(value)}
           placeholder="Search by Name or UUID"
-          className="w-[240px]"
+          className={cn('min-w-0', {
+            'w-full': isMobile,
+            'min-w-[16rem] flex-1': !isMobile && isCompactScreen,
+            'w-[360px]': !isMobile && !isCompactScreen,
+          })}
         />
 
-        <Button variant="outline" onClick={onRefresh} disabled={isRefreshing} className="flex items-center gap-2">
+        <Button
+          variant="outline"
+          onClick={onRefresh}
+          disabled={isRefreshing}
+          aria-label="Refresh sandboxes"
+          className={cn('flex items-center gap-2', isCompactScreen && 'px-2')}
+        >
           <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
-          Refresh
+          {!isCompactScreen && 'Refresh'}
         </Button>
 
-        <DropdownMenu modal={false}>
-          <DropdownMenuTrigger asChild>
-            <Button variant="outline">
-              <Columns className="w-4 h-4" />
-              View
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-[200px] p-0">
-            <TableColumnVisibilityToggle
-              columns={table.getAllColumns().filter((column) => ['name', 'id', 'labels'].includes(column.id))}
-              getColumnLabel={(id: string) => {
-                switch (id) {
-                  case 'name':
-                    return 'Name'
-                  case 'id':
-                    return 'UUID'
-                  case 'labels':
-                    return 'Labels'
-                  default:
-                    return id
-                }
-              }}
-            />
-          </DropdownMenuContent>
-        </DropdownMenu>
+        {!isCompactScreen && (
+          <DropdownMenu modal={false}>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline">
+                <Columns className="w-4 h-4" />
+                View
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-[200px] p-0">
+              <TableColumnVisibilityToggle
+                columns={table.getAllColumns().filter((column) => ['name', 'id', 'labels'].includes(column.id))}
+                getColumnLabel={(id: string) => {
+                  switch (id) {
+                    case 'name':
+                      return 'Name'
+                    case 'id':
+                      return 'UUID'
+                    case 'labels':
+                      return 'Labels'
+                    default:
+                      return id
+                  }
+                }}
+              />
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
 
         <Popover open={open} onOpenChange={setOpen}>
           <PopoverTrigger asChild>
-            <Button variant="outline" role="combobox" aria-expanded={open} className="justify-between">
+            <Button
+              variant="outline"
+              role="combobox"
+              aria-expanded={open}
+              className={cn('justify-between', {
+                'min-w-[180px] flex-1': isMobile,
+                'w-[200px]': !isMobile && isCompactScreen,
+                'w-[240px]': !isMobile && !isCompactScreen,
+              })}
+            >
               {currentSort ? (
                 <div className="flex items-center gap-2">
                   <div className="text-muted-foreground font-normal">
-                    Sorted by:{' '}
+                    {isCompactScreen ? 'Sort:' : 'Sorted by:'}{' '}
                     <span className="font-medium text-primary">
                       {sortableColumns.find((column) => column.id === currentSort)?.label}
                     </span>
@@ -180,12 +219,12 @@ export function SandboxTableHeader({
 
         <DropdownMenu modal={false}>
           <DropdownMenuTrigger asChild>
-            <Button variant="outline">
+            <Button variant="outline" className={cn(isCompactScreen && 'px-3')}>
               <ListFilter className="w-4 h-4" />
               Filter
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent className=" w-40" align="start">
+          <DropdownMenuContent className="w-40" align="start">
             <DropdownMenuSub>
               <DropdownMenuSubTrigger>
                 <Square className="w-4 h-4" />
@@ -194,7 +233,7 @@ export function SandboxTableHeader({
               <DropdownMenuPortal>
                 <DropdownMenuSubContent className="p-0 w-64">
                   <StateFilter
-                    value={(table.getColumn('state')?.getFilterValue() as string[]) || []}
+                    value={stateFilterValue}
                     onFilterChange={(value) => table.getColumn('state')?.setFilterValue(value)}
                   />
                 </DropdownMenuSubContent>
@@ -208,7 +247,7 @@ export function SandboxTableHeader({
               <DropdownMenuPortal>
                 <DropdownMenuSubContent className="p-0 w-64">
                   <SnapshotFilter
-                    value={(table.getColumn('snapshot')?.getFilterValue() as string[]) || []}
+                    value={snapshotFilterValue}
                     onFilterChange={(value) => table.getColumn('snapshot')?.setFilterValue(value)}
                     snapshots={snapshots}
                     isLoading={snapshotsDataIsLoading}
@@ -226,7 +265,7 @@ export function SandboxTableHeader({
               <DropdownMenuPortal>
                 <DropdownMenuSubContent className="p-0 w-64">
                   <RegionFilter
-                    value={(table.getColumn('region')?.getFilterValue() as string[]) || []}
+                    value={regionFilterValue}
                     onFilterChange={(value) => table.getColumn('region')?.setFilterValue(value)}
                     options={regionOptions}
                     isLoading={regionsDataIsLoading}
@@ -243,7 +282,7 @@ export function SandboxTableHeader({
                 <DropdownMenuPortal>
                   <DropdownMenuSubContent className="p-3 w-64">
                     <ResourceFilter
-                      value={(table.getColumn('resources')?.getFilterValue() as ResourceFilterValue) || {}}
+                      value={resourceFilterValue}
                       onFilterChange={(value) => table.getColumn('resources')?.setFilterValue(value)}
                       resourceType={type}
                     />
@@ -259,7 +298,7 @@ export function SandboxTableHeader({
               <DropdownMenuPortal>
                 <DropdownMenuSubContent className="p-0 w-64">
                   <LabelFilter
-                    value={(table.getColumn('labels')?.getFilterValue() as string[]) || []}
+                    value={labelFilterValue}
                     onFilterChange={(value) => table.getColumn('labels')?.setFilterValue(value)}
                   />
                 </DropdownMenuSubContent>
@@ -274,7 +313,7 @@ export function SandboxTableHeader({
                 <DropdownMenuSubContent className="p-3 w-92">
                   <LastEventFilter
                     onFilterChange={(value) => table.getColumn('lastEvent')?.setFilterValue(value)}
-                    value={(table.getColumn('lastEvent')?.getFilterValue() as Date[]) || []}
+                    value={lastEventFilterValue}
                   />
                 </DropdownMenuSubContent>
               </DropdownMenuPortal>
@@ -283,60 +322,67 @@ export function SandboxTableHeader({
         </DropdownMenu>
       </div>
 
-      <div className="flex flex-1 gap-1 overflow-x-auto scrollbar-hide h-8 items-center">
-        {(table.getColumn('state')?.getFilterValue() as string[])?.length > 0 && (
-          <StateFilterIndicator
-            value={(table.getColumn('state')?.getFilterValue() as string[]) || []}
-            onFilterChange={(value) => table.getColumn('state')?.setFilterValue(value)}
-          />
-        )}
-
-        {(table.getColumn('snapshot')?.getFilterValue() as string[])?.length > 0 && (
-          <SnapshotFilterIndicator
-            value={(table.getColumn('snapshot')?.getFilterValue() as string[]) || []}
-            onFilterChange={(value) => table.getColumn('snapshot')?.setFilterValue(value)}
-            snapshots={snapshots}
-            isLoading={snapshotsDataIsLoading}
-            hasMore={snapshotsDataHasMore}
-            onChangeSnapshotSearchValue={onChangeSnapshotSearchValue}
-          />
-        )}
-
-        {(table.getColumn('region')?.getFilterValue() as string[])?.length > 0 && (
-          <RegionFilterIndicator
-            value={(table.getColumn('region')?.getFilterValue() as string[]) || []}
-            onFilterChange={(value) => table.getColumn('region')?.setFilterValue(value)}
-            options={regionOptions}
-            isLoading={regionsDataIsLoading}
-          />
-        )}
-
-        {RESOURCE_FILTERS.map(({ type }) => {
-          const resourceValue = (table.getColumn('resources')?.getFilterValue() as ResourceFilterValue)?.[type]
-          return resourceValue ? (
-            <ResourceFilterIndicator
-              key={type}
-              value={table.getColumn('resources')?.getFilterValue() as ResourceFilterValue}
-              onFilterChange={(value) => table.getColumn('resources')?.setFilterValue(value)}
-              resourceType={type}
+      {hasActiveFilters && (
+        <div
+          className={cn('flex gap-1', {
+            'h-8 items-center overflow-x-auto scrollbar-hide': !isCompactScreen,
+            'flex-wrap': isCompactScreen,
+          })}
+        >
+          {stateFilterValue.length > 0 && (
+            <StateFilterIndicator
+              value={stateFilterValue}
+              onFilterChange={(value) => table.getColumn('state')?.setFilterValue(value)}
             />
-          ) : null
-        })}
+          )}
 
-        {(table.getColumn('labels')?.getFilterValue() as string[])?.length > 0 && (
-          <LabelFilterIndicator
-            value={(table.getColumn('labels')?.getFilterValue() as string[]) || []}
-            onFilterChange={(value) => table.getColumn('labels')?.setFilterValue(value)}
-          />
-        )}
+          {snapshotFilterValue.length > 0 && (
+            <SnapshotFilterIndicator
+              value={snapshotFilterValue}
+              onFilterChange={(value) => table.getColumn('snapshot')?.setFilterValue(value)}
+              snapshots={snapshots}
+              isLoading={snapshotsDataIsLoading}
+              hasMore={snapshotsDataHasMore}
+              onChangeSnapshotSearchValue={onChangeSnapshotSearchValue}
+            />
+          )}
 
-        {(table.getColumn('lastEvent')?.getFilterValue() as Date[])?.length > 0 && (
-          <LastEventFilterIndicator
-            value={(table.getColumn('lastEvent')?.getFilterValue() as Date[]) || []}
-            onFilterChange={(value) => table.getColumn('lastEvent')?.setFilterValue(value)}
-          />
-        )}
-      </div>
+          {regionFilterValue.length > 0 && (
+            <RegionFilterIndicator
+              value={regionFilterValue}
+              onFilterChange={(value) => table.getColumn('region')?.setFilterValue(value)}
+              options={regionOptions}
+              isLoading={regionsDataIsLoading}
+            />
+          )}
+
+          {RESOURCE_FILTERS.map(({ type }) => {
+            const resourceValue = resourceFilterValue[type]
+            return resourceValue ? (
+              <ResourceFilterIndicator
+                key={type}
+                value={resourceFilterValue}
+                onFilterChange={(value) => table.getColumn('resources')?.setFilterValue(value)}
+                resourceType={type}
+              />
+            ) : null
+          })}
+
+          {labelFilterValue.length > 0 && (
+            <LabelFilterIndicator
+              value={labelFilterValue}
+              onFilterChange={(value) => table.getColumn('labels')?.setFilterValue(value)}
+            />
+          )}
+
+          {lastEventFilterValue.length > 0 && (
+            <LastEventFilterIndicator
+              value={lastEventFilterValue}
+              onFilterChange={(value) => table.getColumn('lastEvent')?.setFilterValue(value)}
+            />
+          )}
+        </div>
+      )}
     </div>
   )
 }

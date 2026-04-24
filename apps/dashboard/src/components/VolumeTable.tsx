@@ -214,7 +214,7 @@ export function VolumeTable({
                     <p>
                       Create one via the SDK or CLI. <br />
                       <a
-                        href="https://www.daytona.io/docs/volumes"
+                        href="https://docs.boxlite.ai"
                         target="_blank"
                         rel="noopener noreferrer"
                         className="text-primary hover:underline font-medium"

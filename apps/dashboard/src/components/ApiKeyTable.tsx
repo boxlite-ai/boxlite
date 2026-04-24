@@ -118,11 +118,11 @@ export function ApiKeyTable({ data, loading, isLoadingKey, onRevoke }: DataTable
                 icon={<KeyRound className="w-8 h-8" />}
                 description={
                   <div className="space-y-2">
-                    <p>API Keys authenticate requests made through the Daytona SDK or CLI.</p>
+                    <p>API Keys authenticate requests made through the BoxLite SDK or CLI.</p>
                     <p>
                       Generate one and{' '}
                       <a
-                        href="https://www.daytona.io/docs/api-keys"
+                        href="https://docs.boxlite.ai"
                         target="_blank"
                         rel="noopener noreferrer"
                         className="text-primary hover:underline font-medium"

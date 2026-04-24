@@ -252,7 +252,7 @@ const Registries: React.FC = () => {
 
   return (
     <PageLayout>
-      <PageHeader>
+      <PageHeader size="full">
         <PageTitle>Registries</PageTitle>
         {writePermitted && (
           <Button

@@ -4,7 +4,7 @@
  */
 
 /**
- * External URLs for Daytona resources
+ * External URLs for BoxLite resources
  */
-export const DAYTONA_DOCS_URL = 'https://www.daytona.io/docs'
-export const DAYTONA_SLACK_URL = 'https://go.daytona.io/slack'
+export const DAYTONA_DOCS_URL = 'https://docs.boxlite.ai'
+export const DAYTONA_SLACK_URL = 'https://go.boxlite.ai/discord'

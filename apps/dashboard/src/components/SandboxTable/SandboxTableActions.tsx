@@ -7,6 +7,7 @@ import { RoutePath } from '@/enums/RoutePath'
 import { SandboxState } from '@daytonaio/api-client'
 import { Terminal, MoreVertical, Play, Square, Loader2, Wrench } from 'lucide-react'
 import { generatePath, useNavigate } from 'react-router-dom'
+import { useMemo } from 'react'
 import { Button } from '../ui/button'
 import {
   DropdownMenu,
@@ -16,10 +17,10 @@ import {
   DropdownMenuTrigger,
 } from '../ui/dropdown-menu'
 import { SandboxTableActionsProps } from './types'
-import { useMemo } from 'react'
 
 export function SandboxTableActions({
   sandbox,
+  layout = 'table',
   writePermitted,
   deletePermitted,
   isLoading,
@@ -35,6 +36,39 @@ export function SandboxTableActions({
   onScreenRecordings,
 }: SandboxTableActionsProps) {
   const navigate = useNavigate()
+  const isTransitioning = sandbox.state === SandboxState.STARTING || sandbox.state === SandboxState.STOPPING
+
+  const primaryAction = useMemo(() => {
+    if (sandbox.state === SandboxState.STARTED) {
+      return {
+        label: 'Stop',
+        icon: <Square className="w-4 h-4" />,
+        onClick: () => onStop(sandbox.id),
+      }
+    }
+
+    if (isTransitioning) {
+      return {
+        label: 'Working',
+        icon: <Loader2 className="w-4 h-4 animate-spin" />,
+        onClick: undefined,
+      }
+    }
+
+    if (sandbox.state === SandboxState.ERROR && sandbox.recoverable) {
+      return {
+        label: 'Recover',
+        icon: <Wrench className="w-4 h-4" />,
+        onClick: () => onRecover(sandbox.id),
+      }
+    }
+
+    return {
+      label: 'Start',
+      icon: <Play className="w-4 h-4" />,
+      onClick: () => onStart(sandbox.id),
+    }
+  }, [isTransitioning, onRecover, onStart, onStop, sandbox.id, sandbox.recoverable, sandbox.state])
 
   const menuItems = useMemo(() => {
     const items = []
@@ -48,6 +82,12 @@ export function SandboxTableActions({
 
     if (writePermitted) {
       if (sandbox.state === SandboxState.STARTED) {
+        items.push({
+          key: 'terminal',
+          label: 'Terminal',
+          onClick: () => onOpenWebTerminal(sandbox.id),
+          disabled: isLoading,
+        })
         items.push({
           key: 'vnc',
           label: 'VNC',
@@ -133,6 +173,7 @@ export function SandboxTableActions({
     onDelete,
     onArchive,
     onVnc,
+    onOpenWebTerminal,
     onCreateSshAccess,
     onRevokeSshAccess,
     onRecover,
@@ -144,50 +185,105 @@ export function SandboxTableActions({
     return null
   }
 
+  if (layout === 'mobile') {
+    return (
+      <div className="flex items-center justify-end gap-2">
+        {writePermitted && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="min-w-20 justify-center"
+            disabled={isLoading || isTransitioning}
+            onClick={(e) => {
+              e.stopPropagation()
+              primaryAction.onClick?.()
+            }}
+          >
+            {primaryAction.icon}
+            {primaryAction.label}
+          </Button>
+        )}
+
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="outline"
+              size="icon-sm"
+              className="text-muted-foreground"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <span className="sr-only">Open menu</span>
+              <MoreVertical />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            {menuItems.map((item) => {
+              if (item.type === 'separator') {
+                return <DropdownMenuSeparator key={item.key} />
+              }
+
+              return (
+                <DropdownMenuItem
+                  key={item.key}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    item.onClick?.()
+                  }}
+                  className={`cursor-pointer ${item.className || ''}`}
+                  disabled={item.disabled}
+                >
+                  {item.label}
+                </DropdownMenuItem>
+              )
+            })}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+    )
+  }
+
   return (
     <div className="flex items-center justify-end gap-2">
       <Button
         variant="outline"
-        className="h-7 w-7 p-0 text-muted-foreground"
+        size="icon-sm"
+        className="text-muted-foreground"
+        disabled={isLoading || isTransitioning}
         onClick={(e) => {
           e.stopPropagation()
-          if (sandbox.state === SandboxState.STARTED) {
-            onStop(sandbox.id)
-          } else if (sandbox.state === SandboxState.ERROR && sandbox.recoverable) {
-            onRecover(sandbox.id)
-          } else {
-            onStart(sandbox.id)
-          }
+          primaryAction.onClick?.()
         }}
       >
-        {sandbox.state === SandboxState.STARTED ? (
-          <Square className="w-4 h-4" />
-        ) : sandbox.state === SandboxState.STOPPING || sandbox.state === SandboxState.STARTING ? (
-          <Loader2 className="w-4 h-4 animate-spin" />
-        ) : sandbox.state === SandboxState.ERROR && sandbox.recoverable ? (
-          <Wrench className="w-4 h-4" />
-        ) : (
-          <Play className="w-4 h-4" />
-        )}
+        {primaryAction.icon}
       </Button>
 
       {sandbox.state === SandboxState.STARTED ? (
         <Button
           variant="outline"
-          className="h-7 w-7 p-0 text-muted-foreground"
-          onClick={() => onOpenWebTerminal(sandbox.id)}
+          size="icon-sm"
+          className="text-muted-foreground"
+          disabled={isLoading}
+          onClick={(e) => {
+            e.stopPropagation()
+            onOpenWebTerminal(sandbox.id)
+          }}
         >
           <Terminal className="w-4 h-4" />
         </Button>
       ) : (
-        <Button variant="outline" className="h-7 w-7 p-0 text-muted-foreground" disabled>
+        <Button variant="outline" size="icon-sm" className="text-muted-foreground" disabled>
           <Terminal className="w-4 h-4" />
         </Button>
       )}
 
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="outline" className="h-7 w-7 p-0 text-muted-foreground">
+          <Button
+            variant="outline"
+            size="icon-sm"
+            className="text-muted-foreground"
+            onClick={(e) => e.stopPropagation()}
+          >
             <span className="sr-only">Open menu</span>
             <MoreVertical />
           </Button>

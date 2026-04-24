@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { cn } from '@/lib/utils'
 import { SandboxState as SandboxStateType } from '@daytonaio/api-client'
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip'
 import { getStateLabel } from './constants'
@@ -12,9 +13,10 @@ interface SandboxStateProps {
   state?: SandboxStateType
   errorReason?: string
   recoverable?: boolean
+  className?: string
 }
 
-export function SandboxState({ state, errorReason, recoverable }: SandboxStateProps) {
+export function SandboxState({ state, errorReason, recoverable, className }: SandboxStateProps) {
   if (!state) return null
   const stateIcon = recoverable ? STATE_ICONS['RECOVERY'] : STATE_ICONS[state] || STATE_ICONS[SandboxStateType.UNKNOWN]
   const label = getStateLabel(state)
@@ -23,7 +25,7 @@ export function SandboxState({ state, errorReason, recoverable }: SandboxStatePr
     const errorColor = recoverable ? 'text-yellow-600 dark:text-yellow-400' : 'text-red-600 dark:text-red-400'
 
     const errorContent = (
-      <div className={`flex items-center gap-1 ${errorColor}`}>
+      <div className={cn('flex items-center gap-1', errorColor, className)}>
         <div className="w-4 h-4 flex items-center justify-center flex-shrink-0">{stateIcon}</div>
         <span className="truncate">{label}</span>
       </div>
@@ -44,7 +46,13 @@ export function SandboxState({ state, errorReason, recoverable }: SandboxStatePr
   }
 
   return (
-    <div className={`flex items-center gap-1 ${state === SandboxStateType.ARCHIVED ? 'text-muted-foreground' : ''}`}>
+    <div
+      className={cn(
+        'flex items-center gap-1',
+        state === SandboxStateType.ARCHIVED && 'text-muted-foreground',
+        className,
+      )}
+    >
       <div className="w-4 h-4 flex items-center justify-center flex-shrink-0">{stateIcon}</div>
       <span className="truncate">{label}</span>
     </div>

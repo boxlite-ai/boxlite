@@ -137,11 +137,11 @@ const WebhookEndpointDetails: React.FC = () => {
 
   return (
     <PageLayout>
-      <PageHeader>
+      <PageHeader size="full">
         <PageTitle>Webhooks</PageTitle>
       </PageHeader>
 
-      <PageContent className="gap-6">
+      <PageContent size="full" className="gap-6">
         <div className="flex items-center gap-3 min-w-0">
           <Button variant="ghost" size="icon-sm" className="shrink-0" onClick={() => navigate(RoutePath.WEBHOOKS)}>
             <ArrowLeft className="w-4 h-4" />

@@ -9,7 +9,7 @@ import { cn } from '@/lib/utils'
 
 const Table = React.forwardRef<HTMLTableElement, React.HTMLAttributes<HTMLTableElement>>(
   ({ className, ...props }, ref) => (
-    <div className="flex-1 w-full overflow-auto rounded-md scrollbar-thin scrollbar-thumb-border scrollbar-track-background">
+    <div className="flex-1 w-full overflow-auto scrollbar-thin scrollbar-thumb-border scrollbar-track-background">
       <table ref={ref} className={cn('w-full caption-bottom text-sm', className)} {...props} />
     </div>
   ),
@@ -23,7 +23,7 @@ TableHeader.displayName = 'TableHeader'
 
 const TableBody = React.forwardRef<HTMLTableSectionElement, React.HTMLAttributes<HTMLTableSectionElement>>(
   ({ className, ...props }, ref) => (
-    <tbody ref={ref} className={cn('[&_tr:last-child]:border-0', '[&_tr]:h-10', className)} {...props} />
+    <tbody ref={ref} className={cn('[&_tr:last-child]:border-0', '[&_tr]:h-11', className)} {...props} />
   ),
 )
 TableBody.displayName = 'TableBody'
@@ -40,7 +40,7 @@ const TableRow = React.forwardRef<HTMLTableRowElement, React.HTMLAttributes<HTML
     <tr
       ref={ref}
       className={cn(
-        'bg-background border-b transition-colors data-[state=selected]:bg-muted/25 dark:data-[state=selected]:bg-muted/25',
+        'border-b bg-background transition-colors hover:bg-muted/35 data-[state=selected]:bg-muted/55',
         className,
       )}
       {...props}
@@ -56,7 +56,7 @@ const TableHead = React.forwardRef<
   <th
     ref={ref}
     className={cn(
-      'bg-inherit h-10 px-2 text-left align-middle font-medium whitespace-nowrap [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]',
+      'bg-inherit h-11 px-2 text-left align-middle text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground whitespace-nowrap [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]',
       sticky && cn('sticky', 'z-10', sticky === 'left' ? 'left-0' : 'right-0'),
       className,
     )}
@@ -72,7 +72,7 @@ const TableCell = React.forwardRef<
   <td
     ref={ref}
     className={cn(
-      'bg-inherit p-2 align-middle [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]',
+      'bg-inherit p-2 align-middle text-sm tracking-tight [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]',
       sticky && cn('sticky', 'z-[1]', sticky === 'left' ? 'left-0' : 'right-0'),
       className,
     )}

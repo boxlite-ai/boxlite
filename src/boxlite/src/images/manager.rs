@@ -91,8 +91,18 @@ impl ImageManager {
     /// * `images_dir` - Directory for image cache
     /// * `db` - Database for image index
     /// * `registries` - Registries to search for unqualified images (tried in order)
-    pub fn new(images_dir: PathBuf, db: Database, registries: Vec<String>) -> BoxliteResult<Self> {
-        let store = Arc::new(ImageStore::new(images_dir, db, registries)?);
+    pub fn new(
+        images_dir: PathBuf,
+        db: Database,
+        registries: Vec<String>,
+        insecure_registries: Vec<String>,
+    ) -> BoxliteResult<Self> {
+        let store = Arc::new(ImageStore::new(
+            images_dir,
+            db,
+            registries,
+            insecure_registries,
+        )?);
         Ok(Self { store })
     }
 

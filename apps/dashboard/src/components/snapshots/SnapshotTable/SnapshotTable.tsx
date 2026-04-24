@@ -268,7 +268,7 @@ export function SnapshotTable({
                     <p>
                       Create one from the Dashboard, CLI, or SDK to get started. <br />
                       <a
-                        href="https://www.daytona.io/docs/snapshots"
+                        href="https://docs.boxlite.ai"
                         target="_blank"
                         rel="noopener noreferrer"
                         className="text-primary hover:underline font-medium"

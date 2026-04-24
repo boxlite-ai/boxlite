@@ -129,7 +129,7 @@ export function getColumns({
       },
       accessorKey: 'name',
       cell: ({ row }) => {
-        const displayName = getDisplayName(row.original)
+        const displayName = getSandboxDisplayName(row.original)
         return (
           <div className="w-full truncate">
             <span className="truncate block">{displayName}</span>
@@ -280,9 +280,9 @@ export function getColumns({
       header: ({ column }) => {
         return <SortableHeader column={column} label="Last Event" />
       },
-      accessorFn: (row) => getLastEvent(row).date,
+      accessorFn: (row) => getSandboxLastEvent(row).date,
       cell: ({ row }) => {
-        const lastEvent = getLastEvent(row.original)
+        const lastEvent = getSandboxLastEvent(row.original)
         return (
           <div className="w-full truncate">
             <span className="truncate block">{lastEvent.relativeTimeString}</span>
@@ -337,7 +337,7 @@ export function getColumns({
   return columns
 }
 
-function getDisplayName(sandbox: Sandbox): string {
+export function getSandboxDisplayName(sandbox: Sandbox): string {
   // If the sandbox is destroying and the name starts with "DESTROYED_", trim the prefix and timestamp
   if (sandbox.desiredState === SandboxDesiredState.DESTROYED && sandbox.name.startsWith('DESTROYED_')) {
     // Remove "DESTROYED_" prefix and everything after the last underscore (timestamp)
@@ -351,6 +351,6 @@ function getDisplayName(sandbox: Sandbox): string {
   return sandbox.name
 }
 
-function getLastEvent(sandbox: Sandbox): { date: Date; relativeTimeString: string } {
+export function getSandboxLastEvent(sandbox: Sandbox): { date: Date; relativeTimeString: string } {
   return getRelativeTimeString(sandbox.updatedAt)
 }

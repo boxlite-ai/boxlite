@@ -59,6 +59,7 @@ export interface SandboxTableProps {
 
 export interface SandboxTableActionsProps {
   sandbox: Sandbox
+  layout?: 'table' | 'mobile'
   writePermitted: boolean
   deletePermitted: boolean
   isLoading: boolean

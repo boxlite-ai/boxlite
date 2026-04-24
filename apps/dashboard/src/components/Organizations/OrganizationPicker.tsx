@@ -11,6 +11,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { SidebarMenuButton, SidebarMenuItem } from '@/components/ui/sidebar'
+import { cn } from '@/lib/utils'
 import { useApi } from '@/hooks/useApi'
 import { useOrganizations } from '@/hooks/useOrganizations'
 import { useRegions } from '@/hooks/useRegions'
@@ -66,7 +67,11 @@ function useOrganizationCommands() {
   useRegisterCommands(commands, { groupId: 'organization', groupLabel: 'Organization', groupOrder: 5 })
 }
 
-export const OrganizationPicker: React.FC = () => {
+interface OrganizationPickerProps {
+  variant?: 'sidebar' | 'header'
+}
+
+export const OrganizationPicker: React.FC<OrganizationPickerProps> = ({ variant = 'sidebar' }) => {
   const { organizationsApi } = useApi()
 
   const { organizations, refreshOrganizations } = useOrganizations()
@@ -140,16 +145,23 @@ export const OrganizationPicker: React.FC = () => {
     return null
   }
 
+  const Wrapper = variant === 'header' ? 'div' : SidebarMenuItem
+
   return (
-    <SidebarMenuItem>
+    <Wrapper className={cn(variant === 'header' && 'min-w-[11rem] max-w-[15rem]')}>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <SidebarMenuButton
             disabled={loadingSelectOrganization}
-            className="outline outline-1 outline-border outline-offset-0 mb-2 bg-muted"
-            tooltip={optimisticSelectedOrganization.name}
+            className={cn(
+              'outline outline-1 outline-border outline-offset-0 bg-muted',
+              variant === 'sidebar' && 'mb-2',
+              variant === 'header' &&
+                'mb-0 w-auto min-w-[11rem] max-w-[15rem] rounded-full border-0 bg-background px-3 text-xs font-normal text-foreground hover:bg-accent',
+            )}
+            tooltip={variant === 'sidebar' ? optimisticSelectedOrganization.name : undefined}
           >
-            <div className="w-4 h-4 flex-shrink-0 bg-black rounded-full text-white flex items-center justify-center text-[10px] font-bold">
+            <div className="flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-full bg-black text-[10px] font-bold text-white">
               {optimisticSelectedOrganization.name[0].toUpperCase()}
             </div>
             <span className="truncate text-foreground">{optimisticSelectedOrganization.name}</span>
@@ -190,6 +202,6 @@ export const OrganizationPicker: React.FC = () => {
         getRegionName={getRegionName}
         onCreateOrganization={handleCreateOrganization}
       />
-    </SidebarMenuItem>
+    </Wrapper>
   )
 }

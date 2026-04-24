@@ -98,10 +98,27 @@ impl ImageStore {
     /// * `images_dir` - Directory for image cache
     /// * `db` - Database for image index
     /// * `registries` - Registries to search for unqualified images (tried in order)
-    pub fn new(images_dir: PathBuf, db: Database, registries: Vec<String>) -> BoxliteResult<Self> {
+    pub fn new(
+        images_dir: PathBuf,
+        db: Database,
+        registries: Vec<String>,
+        insecure_registries: Vec<String>,
+    ) -> BoxliteResult<Self> {
         let inner = ImageStoreInner::new(images_dir, db)?;
+
+        let protocol = if insecure_registries.is_empty() {
+            oci_client::client::ClientProtocol::Https
+        } else {
+            oci_client::client::ClientProtocol::HttpsExcept(insecure_registries)
+        };
+
+        let client_config = oci_client::client::ClientConfig {
+            protocol,
+            ..Default::default()
+        };
+
         Ok(Self {
-            client: oci_client::Client::new(Default::default()),
+            client: oci_client::Client::new(client_config),
             inner: RwLock::new(inner),
             registries,
         })
@@ -1071,7 +1088,7 @@ mod tests {
 
         // Create store
         let db = Database::open(&db_path).unwrap();
-        let store = ImageStore::new(images_dir.clone(), db, vec![]).unwrap();
+        let store = ImageStore::new(images_dir.clone(), db, vec![], vec![]).unwrap();
 
         // Load from local
         let manifest = store.load_from_local(bundle_dir.clone()).await.unwrap();
@@ -1095,7 +1112,7 @@ mod tests {
 
         // Create store
         let db = Database::open(&db_path).unwrap();
-        let store = ImageStore::new(images_dir.clone(), db, vec![]).unwrap();
+        let store = ImageStore::new(images_dir.clone(), db, vec![], vec![]).unwrap();
 
         // Load from local
         let _manifest = store.load_from_local(bundle_dir.clone()).await.unwrap();
@@ -1130,7 +1147,7 @@ mod tests {
 
         // Create store
         let db = Database::open(&db_path).unwrap();
-        let store = ImageStore::new(images_dir.clone(), db, vec![]).unwrap();
+        let store = ImageStore::new(images_dir.clone(), db, vec![], vec![]).unwrap();
 
         // Load should fail
         let result = store.load_from_local(bundle_dir).await;
@@ -1156,7 +1173,7 @@ mod tests {
 
         // Create store
         let db = Database::open(&db_path).unwrap();
-        let store = ImageStore::new(images_dir.clone(), db, vec![]).unwrap();
+        let store = ImageStore::new(images_dir.clone(), db, vec![], vec![]).unwrap();
 
         // Load should fail
         let result = store.load_from_local(bundle_dir).await;

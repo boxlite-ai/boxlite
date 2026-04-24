@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -95,9 +96,19 @@ func run() int {
 	}
 
 	// Initialize BoxLite runtime
+	var insecureRegs []string
+	if cfg.InsecureRegistries != "" {
+		for _, r := range strings.Split(cfg.InsecureRegistries, ",") {
+			if trimmed := strings.TrimSpace(r); trimmed != "" {
+				insecureRegs = append(insecureRegs, trimmed)
+			}
+		}
+	}
+
 	boxliteClient, err := blclient.NewClient(ctx, blclient.ClientConfig{
-		Logger:  logger,
-		HomeDir: cfg.BoxliteHomeDir,
+		Logger:             logger,
+		HomeDir:            cfg.BoxliteHomeDir,
+		InsecureRegistries: insecureRegs,
 	})
 	if err != nil {
 		logger.Error("Error creating BoxLite client", "error", err)

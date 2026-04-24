@@ -58,6 +58,7 @@ type Config struct {
 	InitializeDaemonTelemetry          bool          `envconfig:"INITIALIZE_DAEMON_TELEMETRY" default:"true"`
 	SnapshotErrorCacheRetention        time.Duration `envconfig:"SNAPSHOT_ERROR_CACHE_RETENTION" default:"10m" validate:"min=5m"`
 	BoxliteHomeDir                     string        `envconfig:"BOXLITE_HOME_DIR"`
+	InsecureRegistries                 string        `envconfig:"INSECURE_REGISTRIES"`
 }
 
 var DEFAULT_API_PORT int = 8080

@@ -30,6 +30,7 @@ import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { useNotificationSocket } from '@/hooks/useNotificationSocket'
 import { handleApiError } from '@/lib/error-handling'
 import { useRegions } from '@/hooks/useRegions'
+import { PageContent, PageHeader, PageLayout, PageTitle } from '@/components/PageLayout'
 
 const Runners: React.FC = () => {
   const { runnersApi } = useApi()
@@ -213,31 +214,33 @@ const Runners: React.FC = () => {
   )
 
   return (
-    <div className="px-6 py-2">
-      <div className="mb-2 h-12 flex items-center justify-between">
-        <h1 className="text-2xl font-medium">Runners</h1>
+    <PageLayout>
+      <PageHeader size="full">
+        <PageTitle>Runners</PageTitle>
         {writePermitted && regions.length > 0 && (
           <CreateRunnerDialog regions={regions} onCreateRunner={handleCreateRunner} />
         )}
-      </div>
+      </PageHeader>
 
-      <RunnerTable
-        data={runners}
-        regions={regions}
-        loading={loadingRunnersData || loadingRegions}
-        isLoadingRunner={(runner) => runnerIsLoading[runner.id] || false}
-        writePermitted={writePermitted}
-        deletePermitted={deletePermitted}
-        onToggleEnabled={handleToggleEnabled}
-        onDelete={handleDelete}
-        getRegionName={getRegionName}
-        onRowClick={(runner: Runner) => {
-          setSelectedRunner(runner)
-          setShowRunnerDetails(true)
-        }}
-        autoRefresh={autoRefresh}
-        onAutoRefreshChange={setAutoRefresh}
-      />
+      <PageContent size="full">
+        <RunnerTable
+          data={runners}
+          regions={regions}
+          loading={loadingRunnersData || loadingRegions}
+          isLoadingRunner={(runner) => runnerIsLoading[runner.id] || false}
+          writePermitted={writePermitted}
+          deletePermitted={deletePermitted}
+          onToggleEnabled={handleToggleEnabled}
+          onDelete={handleDelete}
+          getRegionName={getRegionName}
+          onRowClick={(runner: Runner) => {
+            setSelectedRunner(runner)
+            setShowRunnerDetails(true)
+          }}
+          autoRefresh={autoRefresh}
+          onAutoRefreshChange={setAutoRefresh}
+        />
+      </PageContent>
 
       {runnerToToggleScheduling && (
         <Dialog open={toggleRunnerSchedulingDialogIsOpen} onOpenChange={setToggleRunnerSchedulingDialogIsOpen}>
@@ -308,7 +311,7 @@ const Runners: React.FC = () => {
         }}
         getRegionName={getRegionName}
       />
-    </div>
+    </PageLayout>
   )
 }
 

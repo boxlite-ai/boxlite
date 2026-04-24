@@ -89,7 +89,7 @@ const Playground: React.FC = () => {
 
   return (
     <PageLayout className="max-h-[100vh] overflow-auto">
-      <PageHeader>
+      <PageHeader size="full">
         <PageTitle>Playground</PageTitle>
       </PageHeader>
 

@@ -103,7 +103,7 @@ export function useSandboxSession(options?: UseSandboxSessionOptions): UseSandbo
   const createMutation = useMutation<Sandbox, Error, CreateSandboxParams | undefined>({
     mutationKey: ['create-sandbox', scope ?? 'default'],
     mutationFn: async (params) => {
-      if (!client) throw new Error('Unable to create Daytona client: missing access token or organization ID.')
+      if (!client) throw new Error('Unable to create BoxLite client: missing access token or organization ID.')
       return await client.create(params ?? createParams)
     },
     onSuccess: (newSandbox) => {

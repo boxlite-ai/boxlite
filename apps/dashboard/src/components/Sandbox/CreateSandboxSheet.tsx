@@ -26,6 +26,7 @@ import { RoutePath } from '@/enums/RoutePath'
 import { useCreateSandboxMutation } from '@/hooks/mutations/useCreateSandboxMutation'
 import { useSnapshotsQuery } from '@/hooks/queries/useSnapshotsQuery'
 import { useConfig } from '@/hooks/useConfig'
+import { useIsCompactScreen } from '@/hooks/use-mobile'
 import { useRegions } from '@/hooks/useRegions'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { parseEnvFile } from '@/lib/env'
@@ -145,8 +146,15 @@ const InfoTooltipButton = ({ className, ...props }: ComponentProps<'button'>) =>
   )
 }
 
-export const CreateSandboxSheet = ({ className }: { className?: string }) => {
+export const CreateSandboxSheet = ({
+  className,
+  triggerClassName,
+}: {
+  className?: string
+  triggerClassName?: string
+}) => {
   const navigate = useNavigate()
+  const isCompactScreen = useIsCompactScreen()
   const createSandboxEnabled = useFeatureFlagEnabled(FeatureFlags.DASHBOARD_CREATE_SANDBOX)
   const [open, setOpen] = useState(false)
 
@@ -325,9 +333,14 @@ export const CreateSandboxSheet = ({ className }: { className?: string }) => {
       }}
     >
       <SheetTrigger asChild>
-        <Button variant="default" size="sm" title="Create Sandbox">
+        <Button
+          variant="default"
+          size="sm"
+          title="Create Sandbox"
+          className={cn('w-full sm:w-auto', triggerClassName)}
+        >
           <Plus className="size-4" />
-          Create Sandbox
+          <span>{isCompactScreen ? 'Create' : 'Create Sandbox'}</span>
         </Button>
       </SheetTrigger>
       <SheetContent className={`w-dvw sm:w-[500px] p-0 flex flex-col gap-0 ${className ?? ''}`}>

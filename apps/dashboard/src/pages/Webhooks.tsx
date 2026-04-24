@@ -76,10 +76,10 @@ const Webhooks: React.FC = () => {
   if (endpoints.error) {
     return (
       <PageLayout>
-        <PageHeader>
+        <PageHeader size="full">
           <PageTitle>Webhooks</PageTitle>
         </PageHeader>
-        <PageContent>
+        <PageContent size="full">
           <Card>
             <CardHeader>
               <CardTitle className="text-center">Oops, something went wrong</CardTitle>
@@ -99,14 +99,9 @@ const Webhooks: React.FC = () => {
 
   return (
     <PageLayout>
-      <PageHeader>
+      <PageHeader size="full">
         <PageTitle>Webhooks</PageTitle>
-        <a
-          href="https://www.daytona.io/docs/en/tools/api/#daytona/webhook/undefined/"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="ml-auto"
-        >
+        <a href="https://docs.boxlite.ai" target="_blank" rel="noopener noreferrer" className="ml-auto">
           <Button variant="link" size="sm">
             Docs
           </Button>
@@ -114,7 +109,7 @@ const Webhooks: React.FC = () => {
         {activeTab === 'endpoints' && <CreateEndpointDialog onSuccess={handleSuccess} />}
       </PageHeader>
 
-      <PageContent>
+      <PageContent size="full">
         <Tabs value={activeTab} onValueChange={setActiveTab} className="gap-6">
           <TabsList className="shadow-none bg-transparent w-auto p-0 pb-0 justify-start border-b rounded-none">
             <TabsTrigger

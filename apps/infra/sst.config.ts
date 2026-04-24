@@ -497,6 +497,7 @@ function buildRunnerUserData(input: {
   registryUrl: string;
 }): string {
   const ecrDomain = input.repo.split("/")[0];
+  const registryHost = input.registryUrl.replace(/^https?:\/\//, "").replace(/\/$/, "");
 
   const script = `#!/bin/bash
 exec > /var/log/runner-setup.log 2>&1
@@ -546,6 +547,7 @@ Environment=API_VERSION=2
 Environment=API_PORT=${PORTS.RUNNER}
 Environment=RUNNER_DOMAIN=\$HOST_IP
 Environment=BOXLITE_HOME_DIR=/var/lib/boxlite
+Environment=INSECURE_REGISTRIES=${registryHost}
 
 [Install]
 WantedBy=multi-user.target

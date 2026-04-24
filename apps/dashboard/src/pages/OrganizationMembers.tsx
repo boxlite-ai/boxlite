@@ -177,7 +177,7 @@ const OrganizationMembers: React.FC = () => {
 
   return (
     <PageLayout>
-      <PageHeader>
+      <PageHeader size="full">
         <PageTitle>Members</PageTitle>
         {authenticatedUserIsOwner && (
           <CreateOrganizationInvitationDialog
@@ -189,7 +189,7 @@ const OrganizationMembers: React.FC = () => {
         )}
       </PageHeader>
 
-      <PageContent>
+      <PageContent size="full">
         <OrganizationMemberTable
           data={organizationMembers}
           loadingData={loadingRoles}
@@ -203,8 +203,10 @@ const OrganizationMembers: React.FC = () => {
 
         {authenticatedUserIsOwner && (
           <>
-            <div className="mb-2 mt-12 h-12 flex items-center justify-between">
-              <h1 className="text-2xl font-medium">Invitations</h1>
+            <div className="mb-2 mt-12 flex min-h-10 items-center justify-between">
+              <h2 className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
+                Invitations
+              </h2>
             </div>
 
             <OrganizationInvitationTable

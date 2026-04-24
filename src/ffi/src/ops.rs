@@ -39,6 +39,7 @@ use crate::string::c_str_to_string;
 pub unsafe fn runtime_new(
     home_dir: *const c_char,
     registries_json: *const c_char,
+    insecure_registries_json: *const c_char,
     out_runtime: *mut *mut RuntimeHandle,
     out_error: *mut FFIError,
 ) -> BoxliteErrorCode {
@@ -77,6 +78,27 @@ pub unsafe fn runtime_new(
                     Ok(registries) => options.image_registries = registries,
                     Err(e) => {
                         let err = BoxliteError::Internal(format!("Invalid registries JSON: {}", e));
+                        write_error(out_error, err);
+                        return BoxliteErrorCode::Internal;
+                    }
+                },
+                Err(e) => {
+                    write_error(out_error, e);
+                    return BoxliteErrorCode::InvalidArgument;
+                }
+            }
+        }
+
+        // Parse insecure registries (JSON array)
+        if !insecure_registries_json.is_null() {
+            match c_str_to_string(insecure_registries_json) {
+                Ok(json_str) => match serde_json::from_str::<Vec<String>>(&json_str) {
+                    Ok(registries) => options.insecure_registries = registries,
+                    Err(e) => {
+                        let err = BoxliteError::Internal(format!(
+                            "Invalid insecure registries JSON: {}",
+                            e
+                        ));
                         write_error(out_error, err);
                         return BoxliteErrorCode::Internal;
                     }

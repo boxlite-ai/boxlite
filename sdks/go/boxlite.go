@@ -52,7 +52,6 @@ func NewRuntime(opts ...RuntimeOption) (*Runtime, error) {
 		defer C.free(unsafe.Pointer(homeDir))
 	}
 
-	// registries still uses JSON (Rust side expects JSON array for this config)
 	var registriesJSON *C.char
 	if len(cfg.registries) > 0 {
 		data, err := json.Marshal(cfg.registries)
@@ -63,9 +62,19 @@ func NewRuntime(opts ...RuntimeOption) (*Runtime, error) {
 		defer C.free(unsafe.Pointer(registriesJSON))
 	}
 
+	var insecureJSON *C.char
+	if len(cfg.insecureRegistries) > 0 {
+		data, err := json.Marshal(cfg.insecureRegistries)
+		if err != nil {
+			return nil, err
+		}
+		insecureJSON = toCString(string(data))
+		defer C.free(unsafe.Pointer(insecureJSON))
+	}
+
 	var handle *C.CBoxliteRuntime
 	var cerr C.CBoxliteError
-	code := C.boxlite_runtime_new(homeDir, registriesJSON, &handle, &cerr)
+	code := C.boxlite_runtime_new(homeDir, registriesJSON, insecureJSON, &handle, &cerr)
 	if code != C.Ok {
 		return nil, freeError(&cerr)
 	}

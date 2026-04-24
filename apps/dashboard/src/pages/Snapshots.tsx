@@ -328,7 +328,7 @@ const Snapshots: React.FC = () => {
 
   return (
     <PageLayout>
-      <PageHeader>
+      <PageHeader size="full">
         <PageTitle>Snapshots</PageTitle>
         {writePermitted && <CreateSnapshotDialog className="ml-auto" ref={dialogRef} />}
       </PageHeader>

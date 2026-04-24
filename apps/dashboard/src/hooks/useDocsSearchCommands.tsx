@@ -95,7 +95,7 @@ export const useDocsSearchQuery = ({ search, enabled }: { search: string; enable
 }
 
 const openDocs = (path = '') => {
-  window.open(`https://www.daytona.io/docs${path}`, '_blank')
+  window.open(`https://docs.boxlite.ai${path}`, '_blank')
 }
 
 const SearchSnippet = ({
@@ -146,7 +146,7 @@ const parseSDKLanguage = (hit: AlgoliaHit) => {
 }
 
 const handleSelect = (hit: AlgoliaHit) => {
-  const url = `https://www.daytona.io${hit.url}`
+  const url = `https://docs.boxlite.ai${hit.url}`
   window.open(url, '_blank')
 }
 

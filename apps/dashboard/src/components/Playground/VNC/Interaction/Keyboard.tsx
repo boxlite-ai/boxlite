@@ -46,7 +46,7 @@ const VNCKeyboardOperations: React.FC<VNCInteractionOptionsSectionComponentProps
   ]
 
   const typeParamsFormData: ParameterFormData<KeyboardType> = [
-    { label: 'Text', key: 'text', placeholder: 'Daytona', required: true },
+    { label: 'Text', key: 'text', placeholder: 'BoxLite', required: true },
     { label: 'Delay(ms)', key: 'delay', placeholder: '50ms', min: 0, max: Infinity, step: 10 },
   ]
 

@@ -22,7 +22,7 @@ import { useDocsSearchCommands } from '@/hooks/useDocsSearchCommands'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { useSuspensionBanner } from '@/hooks/useSuspensionBanner'
 import { cn } from '@/lib/utils'
-import { BookOpen, BookSearchIcon, SlackIcon, SunMoon } from 'lucide-react'
+import { BookOpen, BookSearchIcon, MessageCircle, SunMoon } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { PrivacyBanner } from '@/components/PrivacyBanner'
 
@@ -33,8 +33,8 @@ function useDashboardCommands() {
     () => [
       {
         id: 'open-slack',
-        label: 'Open Slack',
-        icon: <SlackIcon className="w-4 h-4" />,
+        label: 'Open Discord',
+        icon: <MessageCircle className="w-4 h-4" />,
         onSelect: () => window.open(DAYTONA_SLACK_URL, '_blank'),
       },
       {
@@ -136,14 +136,14 @@ const Dashboard: React.FC = () => {
   }
 
   return (
-    <div className="relative w-full">
+    <div className={cn('relative w-full', isBannerVisible ? 'pt-16 md:pt-12' : '')}>
       {isBannerVisible && bannerText && (
         <AnnouncementBanner text={bannerText} onDismiss={handleDismissBanner} learnMoreUrl={bannerLearnMoreUrl} />
       )}
-      <SidebarProvider isBannerVisible={isBannerVisible} defaultOpen={true}>
+      <SidebarProvider isBannerVisible={false} defaultOpen={true} className="flex-col">
         <Sidebar isBannerVisible={isBannerVisible} billingEnabled={!!config.billingApiUrl} version={config.version} />
-        <SidebarInset className="overflow-y-auto">
-          <div className={cn('w-full min-h-screen overscroll-none', isBannerVisible ? 'md:pt-12' : '')}>
+        <SidebarInset className="min-h-0 overflow-visible">
+          <div className="w-full min-h-[calc(100svh-3.5rem)] overscroll-none">
             <Outlet />
             <CommandPalette />
           </div>

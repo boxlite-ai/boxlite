@@ -6,22 +6,31 @@
 import { cn } from '@/lib/utils'
 import { type ComponentProps } from 'react'
 import { BannerStack } from './Banner'
-import { SidebarTrigger } from './ui/sidebar'
+
+type PageSize = 'default' | 'full'
 
 function PageLayout({ className, ...props }: ComponentProps<'div'>) {
-  return <div className={cn('flex h-full flex-col group/page', className)} {...props} />
+  return <div className={cn('group/page flex h-full flex-col', className)} {...props} />
 }
 
-function PageHeader({ className, children, ...props }: ComponentProps<'header'>) {
+function PageHeader({
+  className,
+  children,
+  size = 'default',
+  ...props
+}: ComponentProps<'header'> & { size?: PageSize }) {
   return (
     <header
       className={cn(
-        'flex gap-2 sm:gap-4 items-center border-b border-border p-4 sm:px-5 bg-background z-10 group-[:has([data-slot=page-banner]:not(:empty))]/page:border-b-transparent',
+        'flex min-h-10 w-full flex-wrap items-center gap-3 gap-y-3 px-4 pt-7 pb-2 sm:px-5 2xl:px-0',
+        {
+          'mx-auto max-w-[960px]': size === 'default',
+          'mx-auto max-w-[1440px]': size === 'full',
+        },
         className,
       )}
       {...props}
     >
-      <SidebarTrigger className="[&_svg]:size-5 md:hidden" />
       {children}
     </header>
   )
@@ -29,7 +38,13 @@ function PageHeader({ className, children, ...props }: ComponentProps<'header'>)
 
 function PageTitle({ className, children, ...props }: ComponentProps<'h1'>) {
   return (
-    <h1 className={cn('text-2xl font-medium tracking-tight', className)} {...props}>
+    <h1
+      className={cn(
+        'text-[11px] font-medium uppercase tracking-[0.18em] leading-none text-muted-foreground',
+        className,
+      )}
+      {...props}
+    >
       {children}
     </h1>
   )
@@ -47,11 +62,7 @@ function PageBanner({ className, children, ...props }: ComponentProps<'div'>) {
   )
 }
 
-function PageContent({
-  className,
-  size = 'default',
-  ...props
-}: ComponentProps<'main'> & { size?: 'default' | 'full' }) {
+function PageContent({ className, size = 'default', ...props }: ComponentProps<'main'> & { size?: PageSize }) {
   return (
     <>
       <PageBanner>
@@ -59,9 +70,10 @@ function PageContent({
       </PageBanner>
       <main
         className={cn(
-          'flex flex-col gap-4 p-4 sm:px-5 w-full pt-6',
+          'flex w-full flex-col gap-4 px-4 pb-8 sm:px-5 2xl:px-0',
           {
-            'max-w-5xl mx-auto': size === 'default',
+            'mx-auto max-w-[960px]': size === 'default',
+            'mx-auto max-w-[1440px]': size === 'full',
           },
           className,
         )}

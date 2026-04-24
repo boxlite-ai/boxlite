@@ -183,7 +183,7 @@ const Volumes: React.FC = () => {
 
   return (
     <PageLayout>
-      <PageHeader>
+      <PageHeader size="full">
         <PageTitle>Volumes</PageTitle>
         <Dialog
           open={showCreateDialog}

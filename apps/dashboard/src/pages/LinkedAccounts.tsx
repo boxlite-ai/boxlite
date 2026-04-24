@@ -57,7 +57,7 @@ const LinkedAccounts: React.FC = () => {
     <Card>
       <CardHeader className="p-4">
         <CardTitle>Linked Accounts</CardTitle>
-        <CardDescription>View and manage accounts linked to your Daytona account.</CardDescription>
+        <CardDescription>View and manage accounts linked to your BoxLite account.</CardDescription>
       </CardHeader>
       {accountProvidersQuery.isLoading ? (
         <CardContent className="flex flex-col gap-5">

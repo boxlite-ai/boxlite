@@ -29,8 +29,9 @@ type Client struct {
 
 // ClientConfig holds configuration for the BoxLite client.
 type ClientConfig struct {
-	Logger  *slog.Logger
-	HomeDir string
+	Logger              *slog.Logger
+	HomeDir             string
+	InsecureRegistries  []string
 }
 
 // NewClient creates a new BoxLite client backed by the BoxLite VM runtime.
@@ -38,6 +39,9 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 	var opts []boxlite.RuntimeOption
 	if config.HomeDir != "" {
 		opts = append(opts, boxlite.WithHomeDir(config.HomeDir))
+	}
+	if len(config.InsecureRegistries) > 0 {
+		opts = append(opts, boxlite.WithInsecureRegistries(config.InsecureRegistries...))
 	}
 
 	rt, err := boxlite.NewRuntime(opts...)

@@ -920,9 +920,9 @@ const Sandboxes: React.FC = () => {
 
   return (
     <PageLayout>
-      <PageHeader>
+      <PageHeader size="full">
         <PageTitle>Sandboxes</PageTitle>
-        <div className="flex items-center gap-2 ml-auto">
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
           {!sandboxesDataIsLoading && (!sandboxesData?.items || sandboxesData.items.length === 0) && (
             <>
               <Button variant="link" className="text-primary" onClick={() => navigate(RoutePath.ONBOARDING)} size="sm">
@@ -935,10 +935,12 @@ const Sandboxes: React.FC = () => {
               </Button>
             </>
           )}
-          {authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_SANDBOXES) && <CreateSandboxSheet />}
+          {authenticatedUserHasPermission(OrganizationRolePermissionsEnum.WRITE_SANDBOXES) && (
+            <CreateSandboxSheet triggerClassName="w-auto" />
+          )}
         </div>
       </PageHeader>
-      <PageContent size="full" className="flex-1 max-h-[calc(100vh-65px)]">
+      <PageContent size="full" className="min-h-0 flex-1 gap-3 max-h-[calc(100vh-65px)]">
         <SandboxTable
           sandboxIsLoading={sandboxIsLoading}
           sandboxStateIsTransitioning={sandboxStateIsTransitioning}

@@ -42,6 +42,10 @@ pub struct BoxliteOptions {
     /// ```
     #[serde(default)]
     pub image_registries: Vec<String>,
+
+    /// Registries that should use HTTP instead of HTTPS.
+    #[serde(default)]
+    pub insecure_registries: Vec<String>,
 }
 
 fn default_home_dir() -> PathBuf {
@@ -59,6 +63,7 @@ impl Default for BoxliteOptions {
         Self {
             home_dir: default_home_dir(),
             image_registries: Vec::new(),
+            insecure_registries: Vec::new(),
         }
     }
 }

@@ -221,7 +221,7 @@ const AuditLogs: React.FC = () => {
 
   return (
     <PageLayout>
-      <PageHeader>
+      <PageHeader size="full">
         <PageTitle>Audit Logs</PageTitle>
       </PageHeader>
 

@@ -4,8 +4,9 @@ package boxlite
 type RuntimeOption func(*runtimeConfig)
 
 type runtimeConfig struct {
-	homeDir    string
-	registries []string
+	homeDir            string
+	registries         []string
+	insecureRegistries []string
 }
 
 // WithHomeDir sets the BoxLite data directory.
@@ -16,6 +17,11 @@ func WithHomeDir(dir string) RuntimeOption {
 // WithRegistries sets the OCI registries to use for image pulls.
 func WithRegistries(registries ...string) RuntimeOption {
 	return func(c *runtimeConfig) { c.registries = registries }
+}
+
+// WithInsecureRegistries sets registries that should use HTTP instead of HTTPS.
+func WithInsecureRegistries(registries ...string) RuntimeOption {
+	return func(c *runtimeConfig) { c.insecureRegistries = registries }
 }
 
 // BoxOption configures a Box.

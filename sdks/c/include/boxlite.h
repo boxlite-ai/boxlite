@@ -207,6 +207,7 @@ const char *boxlite_version(void);
 // ```
 enum BoxliteErrorCode boxlite_runtime_new(const char *home_dir,
                                           const char *registries_json,
+                                          const char *insecure_registries_json,
                                           CBoxliteRuntime **out_runtime,
                                           CBoxliteError *out_error);
 
