@@ -17,7 +17,6 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// ProxyRequest handles proxying requests to a sandbox's toolbox daemon
 func ProxyRequest(logger *slog.Logger) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		if ctx.Request.Header.Get("Upgrade") != "websocket" && regexp.MustCompile(`^/process/session/.+/command/.+/logs$`).MatchString(ctx.Param("path")) {
@@ -44,15 +43,29 @@ func getProxyTarget(ctx *gin.Context) (*url.URL, map[string]string, error) {
 		return nil, nil, errors.New("sandbox ID is required")
 	}
 
-	// BoxLite VMs expose ports on localhost via gvproxy port forwarding.
-	targetURL := fmt.Sprintf("http://localhost:2280")
-
 	path := ctx.Param("path")
 	if path == "" {
 		path = "/"
 	} else if !strings.HasPrefix(path, "/") {
 		path = "/" + path
 	}
+
+	// Extract port from path: /proxy/<port>/... or default to 2280
+	targetPort := "2280"
+	if strings.HasPrefix(path, "/proxy/") {
+		rest := strings.TrimPrefix(path, "/proxy/")
+		parts := strings.SplitN(rest, "/", 2)
+		if len(parts) >= 1 && parts[0] != "" {
+			targetPort = parts[0]
+			if len(parts) >= 2 {
+				path = "/" + parts[1]
+			} else {
+				path = "/"
+			}
+		}
+	}
+
+	targetURL := fmt.Sprintf("http://localhost:%s", targetPort)
 
 	target, err := url.Parse(fmt.Sprintf("%s%s", targetURL, path))
 	if err != nil {

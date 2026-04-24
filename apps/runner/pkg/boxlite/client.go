@@ -7,10 +7,13 @@
 package boxlite
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"sync"
+	"time"
 
 	boxlite "github.com/boxlite-ai/boxlite/sdks/go"
 	"github.com/daytonaio/runner/pkg/api/dto"
@@ -149,10 +152,13 @@ func (c *Client) Create(ctx context.Context, sandboxDto dto.CreateSandboxDTO) (s
 				c.logger.Warn("failed to inject daemon binary", "error", err)
 			} else {
 				go func() {
-					if _, err := bx.Exec(ctx, common.DAEMON_PATH); err != nil {
+					if _, err := bx.Exec(context.Background(), common.DAEMON_PATH); err != nil {
 						c.logger.Warn("failed to start daemon", "error", err)
 					}
 				}()
+
+				// Wait for daemon to be ready and initialize it
+				c.waitForDaemon(ctx, sandboxDto.AuthToken)
 			}
 		}
 	}
@@ -348,6 +354,36 @@ func (c *Client) getOrFetchBox(ctx context.Context, sandboxId string) (*boxlite.
 	c.mu.Unlock()
 
 	return bx, nil
+}
+
+// waitForDaemon polls the daemon's version endpoint and initializes it with the auth token.
+func (c *Client) waitForDaemon(ctx context.Context, authToken *string) {
+	client := &http.Client{Timeout: 1 * time.Second}
+	deadline := time.Now().Add(30 * time.Second)
+
+	for time.Now().Before(deadline) {
+		resp, err := client.Get("http://localhost:2280/version")
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				c.logger.Info("daemon is ready")
+
+				if authToken != nil {
+					go func() {
+						body := fmt.Sprintf(`{"token":"%s"}`, *authToken)
+						req, _ := http.NewRequest("POST", "http://localhost:2280/init", bytes.NewBufferString(body))
+						req.Header.Set("Content-Type", "application/json")
+						if resp, err := client.Do(req); err == nil {
+							resp.Body.Close()
+						}
+					}()
+				}
+				return
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	c.logger.Warn("daemon did not become ready in time")
 }
 
 // ExecResult holds the output of a command execution.
