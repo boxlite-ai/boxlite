@@ -97,16 +97,19 @@ func (b *Box) Exec(ctx context.Context, name string, arg ...string) (*ExecResult
 
 	var stdoutBuf, stderrBuf []byte
 
-	// args still uses JSON for the C FFI (simple string array)
-	argsJSON, err := json.Marshal(cmd.Args)
-	if err != nil {
-		return nil, err
-	}
-
 	cCmd := toCString(cmd.Path)
 	defer C.free(unsafe.Pointer(cCmd))
-	cArgs := toCString(string(argsJSON))
-	defer C.free(unsafe.Pointer(cArgs))
+
+	// Pass args as C string array via BoxliteCommand, not JSON
+	var cArgs *C.char
+	if len(cmd.Args) > 0 {
+		argsJSON, err := json.Marshal(cmd.Args)
+		if err != nil {
+			return nil, err
+		}
+		cArgs = toCString(string(argsJSON))
+		defer C.free(unsafe.Pointer(cArgs))
+	}
 
 	var exitCode C.int
 	var cerr C.CBoxliteError

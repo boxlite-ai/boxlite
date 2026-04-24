@@ -44,9 +44,8 @@ func getProxyTarget(ctx *gin.Context) (*url.URL, map[string]string, error) {
 		return nil, nil, errors.New("sandbox ID is required")
 	}
 
-	// BoxLite VMs expose the daemon port via port forwarding.
-	// The sandbox ID is used as the hostname with port 2280.
-	targetURL := fmt.Sprintf("http://%s:2280", sandboxId)
+	// BoxLite VMs expose ports on localhost via gvproxy port forwarding.
+	targetURL := fmt.Sprintf("http://localhost:2280")
 
 	path := ctx.Param("path")
 	if path == "" {
