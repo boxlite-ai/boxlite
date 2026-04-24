@@ -38,8 +38,10 @@ use crate::string::c_str_to_string;
 /// All pointer parameters must be valid or null. `out_runtime` must be a valid pointer to a pointer.
 pub unsafe fn runtime_new(
     home_dir: *const c_char,
-    registries_json: *const c_char,
-    insecure_registries_json: *const c_char,
+    registries: *const *const c_char,
+    registries_count: c_int,
+    insecure_registries: *const *const c_char,
+    insecure_registries_count: c_int,
     out_runtime: *mut *mut RuntimeHandle,
     out_error: *mut FFIError,
 ) -> BoxliteErrorCode {
@@ -71,44 +73,8 @@ pub unsafe fn runtime_new(
             }
         }
 
-        // Parse image registries (JSON array)
-        if !registries_json.is_null() {
-            match c_str_to_string(registries_json) {
-                Ok(json_str) => match serde_json::from_str::<Vec<String>>(&json_str) {
-                    Ok(registries) => options.image_registries = registries,
-                    Err(e) => {
-                        let err = BoxliteError::Internal(format!("Invalid registries JSON: {}", e));
-                        write_error(out_error, err);
-                        return BoxliteErrorCode::Internal;
-                    }
-                },
-                Err(e) => {
-                    write_error(out_error, e);
-                    return BoxliteErrorCode::InvalidArgument;
-                }
-            }
-        }
-
-        // Parse insecure registries (JSON array)
-        if !insecure_registries_json.is_null() {
-            match c_str_to_string(insecure_registries_json) {
-                Ok(json_str) => match serde_json::from_str::<Vec<String>>(&json_str) {
-                    Ok(registries) => options.insecure_registries = registries,
-                    Err(e) => {
-                        let err = BoxliteError::Internal(format!(
-                            "Invalid insecure registries JSON: {}",
-                            e
-                        ));
-                        write_error(out_error, err);
-                        return BoxliteErrorCode::Internal;
-                    }
-                },
-                Err(e) => {
-                    write_error(out_error, e);
-                    return BoxliteErrorCode::InvalidArgument;
-                }
-            }
-        }
+        options.image_registries = parse_c_string_array(registries, registries_count);
+        options.insecure_registries = parse_c_string_array(insecure_registries, insecure_registries_count);
 
         // Create runtime
         let runtime = match BoxliteRuntime::new(options) {
@@ -686,10 +652,14 @@ pub type OutputCallback = extern "C" fn(*const c_char, c_int, *mut c_void);
 pub struct BoxliteCommand {
     /// Command to execute (required, must not be NULL).
     pub command: *const c_char,
-    /// JSON array of arguments (e.g., `["-c", "echo hello"]`). NULL = no args.
-    pub args_json: *const c_char,
-    /// JSON array of `["key","val"]` pairs (e.g., `[["FOO","bar"]]`). NULL = inherit env.
-    pub env_json: *const c_char,
+    /// Array of argument strings. NULL = no args.
+    pub args: *const *const c_char,
+    /// Number of arguments in args array.
+    pub argc: c_int,
+    /// Array of env var pairs: [key0, val0, key1, val1, ...]. NULL = inherit env.
+    pub env_pairs: *const *const c_char,
+    /// Number of strings in env_pairs (must be even).
+    pub env_count: c_int,
     /// Working directory inside the container. NULL = container default.
     pub workdir: *const c_char,
     /// User spec (e.g., "nobody", "1000:1000"). NULL = container default.
@@ -716,10 +686,30 @@ pub struct BoxliteCommand {
 /// # Safety
 /// All pointer parameters must be valid or null.
 ///
+/// Parse a C string array into a Vec<String>.
+fn parse_c_string_array(args: *const *const c_char, argc: c_int) -> Vec<String> {
+    let mut result = Vec::new();
+    if !args.is_null() {
+        for i in 0..argc {
+            unsafe {
+                let arg_ptr = *args.offset(i as isize);
+                if arg_ptr.is_null() {
+                    break;
+                }
+                if let Ok(s) = c_str_to_string(arg_ptr) {
+                    result.push(s);
+                }
+            }
+        }
+    }
+    result
+}
+
 pub unsafe fn box_exec(
     handle: *mut BoxHandle,
     command: *const c_char,
-    args_json: *const c_char,
+    args: *const *const c_char,
+    argc: c_int,
     callback: Option<OutputCallback>,
     user_data: *mut c_void,
     out_exit_code: *mut c_int,
@@ -738,7 +728,6 @@ pub unsafe fn box_exec(
 
         let handle_ref = &mut *handle;
 
-        // Parse command
         let cmd_str = match c_str_to_string(command) {
             Ok(s) => s,
             Err(e) => {
@@ -748,29 +737,10 @@ pub unsafe fn box_exec(
             }
         };
 
-        // Parse args
-        let args: Vec<String> = if !args_json.is_null() {
-            match c_str_to_string(args_json) {
-                Ok(json_str) => match serde_json::from_str(&json_str) {
-                    Ok(a) => a,
-                    Err(e) => {
-                        let err = BoxliteError::Internal(format!("Invalid args JSON: {}", e));
-                        write_error(out_error, err);
-                        return BoxliteErrorCode::InvalidArgument;
-                    }
-                },
-                Err(e) => {
-                    let code = error_to_code(&e);
-                    write_error(out_error, e);
-                    return code;
-                }
-            }
-        } else {
-            vec![]
-        };
+        let arg_vec = parse_c_string_array(args, argc);
 
         let mut cmd = boxlite::BoxCommand::new(cmd_str);
-        cmd = cmd.args(args);
+        cmd = cmd.args(arg_vec);
 
         // Execute command using new API
         let result = handle_ref.tokio_rt.block_on(async {
@@ -871,52 +841,17 @@ pub unsafe fn box_exec_cmd(
             }
         };
 
-        // Parse args
-        let args: Vec<String> = if !cmd_ref.args_json.is_null() {
-            match c_str_to_string(cmd_ref.args_json) {
-                Ok(json_str) => match serde_json::from_str(&json_str) {
-                    Ok(a) => a,
-                    Err(e) => {
-                        let err = BoxliteError::Internal(format!("Invalid args JSON: {}", e));
-                        write_error(out_error, err);
-                        return BoxliteErrorCode::InvalidArgument;
-                    }
-                },
-                Err(e) => {
-                    let code = error_to_code(&e);
-                    write_error(out_error, e);
-                    return code;
-                }
-            }
-        } else {
-            vec![]
-        };
+        let arg_vec = parse_c_string_array(cmd_ref.args, cmd_ref.argc);
 
         let mut box_cmd = boxlite::BoxCommand::new(cmd_str);
-        box_cmd = box_cmd.args(args);
+        box_cmd = box_cmd.args(arg_vec);
 
-        // Parse env: JSON array of ["key","val"] pairs
-        if !cmd_ref.env_json.is_null() {
-            match c_str_to_string(cmd_ref.env_json) {
-                Ok(json_str) => {
-                    let env_pairs: Vec<Vec<String>> = match serde_json::from_str(&json_str) {
-                        Ok(p) => p,
-                        Err(e) => {
-                            let err = BoxliteError::Internal(format!("Invalid env JSON: {}", e));
-                            write_error(out_error, err);
-                            return BoxliteErrorCode::InvalidArgument;
-                        }
-                    };
-                    for pair in env_pairs {
-                        if pair.len() == 2 {
-                            box_cmd = box_cmd.env(pair[0].clone(), pair[1].clone());
-                        }
-                    }
-                }
-                Err(e) => {
-                    let code = error_to_code(&e);
-                    write_error(out_error, e);
-                    return code;
+        // Parse env pairs: [key0, val0, key1, val1, ...]
+        if !cmd_ref.env_pairs.is_null() && cmd_ref.env_count > 0 {
+            let env_strs = parse_c_string_array(cmd_ref.env_pairs, cmd_ref.env_count);
+            for pair in env_strs.chunks(2) {
+                if pair.len() == 2 {
+                    box_cmd = box_cmd.env(pair[0].clone(), pair[1].clone());
                 }
             }
         }

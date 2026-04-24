@@ -93,10 +93,14 @@ typedef struct BoxHandle CBoxHandle;
 typedef struct BoxliteCommand {
   // Command to execute (required, must not be NULL).
   const char *command;
-  // JSON array of arguments (e.g., `["-c", "echo hello"]`). NULL = no args.
-  const char *args_json;
-  // JSON array of `["key","val"]` pairs (e.g., `[["FOO","bar"]]`). NULL = inherit env.
-  const char *env_json;
+  // Array of argument strings. NULL = no args.
+  const char *const *args;
+  // Number of arguments in args array.
+  int argc;
+  // Array of env var pairs: [key0, val0, key1, val1, ...]. NULL = inherit env.
+  const char *const *env_pairs;
+  // Number of strings in env_pairs (must be even).
+  int env_count;
   // Working directory inside the container. NULL = container default.
   const char *workdir;
   // User spec (e.g., "nobody", "1000:1000"). NULL = container default.
@@ -206,8 +210,10 @@ const char *boxlite_version(void);
 // }
 // ```
 enum BoxliteErrorCode boxlite_runtime_new(const char *home_dir,
-                                          const char *registries_json,
-                                          const char *insecure_registries_json,
+                                          const char *const *registries,
+                                          int registries_count,
+                                          const char *const *insecure_registries,
+                                          int insecure_registries_count,
                                           CBoxliteRuntime **out_runtime,
                                           CBoxliteError *out_error);
 
@@ -281,7 +287,8 @@ enum BoxliteErrorCode boxlite_create_box(CBoxliteRuntime *runtime,
 // ```
 enum BoxliteErrorCode boxlite_execute(CBoxHandle *handle,
                                       const char *command,
-                                      const char *args_json,
+                                      const char *const *args,
+                                      int argc,
                                       void (*callback)(const char*, int, void*),
                                       void *user_data,
                                       int *out_exit_code,

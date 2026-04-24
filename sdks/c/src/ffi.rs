@@ -68,15 +68,19 @@ pub extern "C" fn boxlite_version() -> *const c_char {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_runtime_new(
     home_dir: *const c_char,
-    registries_json: *const c_char,
-    insecure_registries_json: *const c_char,
+    registries: *const *const c_char,
+    registries_count: c_int,
+    insecure_registries: *const *const c_char,
+    insecure_registries_count: c_int,
     out_runtime: *mut *mut CBoxliteRuntime,
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
     boxlite_ffi::ops::runtime_new(
         home_dir,
-        registries_json,
-        insecure_registries_json,
+        registries,
+        registries_count,
+        insecure_registries,
+        insecure_registries_count,
         out_runtime,
         out_error,
     )
@@ -245,20 +249,15 @@ pub unsafe extern "C" fn boxlite_create_box(
 pub unsafe extern "C" fn boxlite_execute(
     handle: *mut CBoxHandle,
     command: *const c_char,
-    args_json: *const c_char,
+    args: *const *const c_char,
+    argc: c_int,
     callback: Option<extern "C" fn(*const c_char, c_int, *mut c_void)>,
     user_data: *mut c_void,
     out_exit_code: *mut c_int,
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
     boxlite_ffi::ops::box_exec(
-        handle,
-        command,
-        args_json,
-        callback,
-        user_data,
-        out_exit_code,
-        out_error,
+        handle, command, args, argc, callback, user_data, out_exit_code, out_error,
     )
 }
 

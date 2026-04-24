@@ -24,7 +24,6 @@ package boxlite
 import "C"
 import (
 	"context"
-	"encoding/json"
 	"time"
 	"unsafe"
 )
@@ -52,29 +51,23 @@ func NewRuntime(opts ...RuntimeOption) (*Runtime, error) {
 		defer C.free(unsafe.Pointer(homeDir))
 	}
 
-	var registriesJSON *C.char
+	var cRegs **C.char
+	var regsCount int
 	if len(cfg.registries) > 0 {
-		data, err := json.Marshal(cfg.registries)
-		if err != nil {
-			return nil, err
-		}
-		registriesJSON = toCString(string(data))
-		defer C.free(unsafe.Pointer(registriesJSON))
+		cRegs, regsCount = toCStringArray(cfg.registries)
+		defer freeCStringArray(cRegs, regsCount)
 	}
 
-	var insecureJSON *C.char
+	var cInsecure **C.char
+	var insecureCount int
 	if len(cfg.insecureRegistries) > 0 {
-		data, err := json.Marshal(cfg.insecureRegistries)
-		if err != nil {
-			return nil, err
-		}
-		insecureJSON = toCString(string(data))
-		defer C.free(unsafe.Pointer(insecureJSON))
+		cInsecure, insecureCount = toCStringArray(cfg.insecureRegistries)
+		defer freeCStringArray(cInsecure, insecureCount)
 	}
 
 	var handle *C.CBoxliteRuntime
 	var cerr C.CBoxliteError
-	code := C.boxlite_runtime_new(homeDir, registriesJSON, insecureJSON, &handle, &cerr)
+	code := C.boxlite_runtime_new(homeDir, cRegs, C.int(regsCount), cInsecure, C.int(insecureCount), &handle, &cerr)
 	if code != C.Ok {
 		return nil, freeError(&cerr)
 	}

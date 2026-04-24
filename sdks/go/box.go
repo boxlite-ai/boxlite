@@ -9,11 +9,9 @@ extern void goBoxliteOutputCallback(char* text, int is_stderr, void* user_data);
 import "C"
 import (
 	"context"
-	"encoding/json"
 	"unsafe"
 )
 
-// Box is a handle to a BoxLite box (virtual machine).
 type Box struct {
 	handle *C.CBoxHandle
 	id     string
@@ -49,7 +47,6 @@ func (b *Box) Close() error {
 	return nil
 }
 
-// Info returns information about the box using C struct (no JSON).
 func (b *Box) Info(_ context.Context) (*BoxInfo, error) {
 	var cInfo *C.CBoxInfo
 	var cerr C.CBoxliteError
@@ -66,7 +63,6 @@ func (b *Box) Info(_ context.Context) (*BoxInfo, error) {
 	return &info, nil
 }
 
-// Metrics returns real-time metrics using C struct (no JSON).
 func (b *Box) Metrics(_ context.Context) (*BoxMetrics, error) {
 	var cm C.CBoxMetrics
 	var cerr C.CBoxliteError
@@ -91,7 +87,6 @@ func (b *Box) Metrics(_ context.Context) (*BoxMetrics, error) {
 	}, nil
 }
 
-// Exec executes a command and returns the buffered result.
 func (b *Box) Exec(ctx context.Context, name string, arg ...string) (*ExecResult, error) {
 	cmd := b.Command(name, arg...)
 
@@ -100,15 +95,11 @@ func (b *Box) Exec(ctx context.Context, name string, arg ...string) (*ExecResult
 	cCmd := toCString(cmd.Path)
 	defer C.free(unsafe.Pointer(cCmd))
 
-	// Pass args as C string array via BoxliteCommand, not JSON
-	var cArgs *C.char
+	var cArgs **C.char
+	var argc int
 	if len(cmd.Args) > 0 {
-		argsJSON, err := json.Marshal(cmd.Args)
-		if err != nil {
-			return nil, err
-		}
-		cArgs = toCString(string(argsJSON))
-		defer C.free(unsafe.Pointer(cArgs))
+		cArgs, argc = toCStringArray(cmd.Args)
+		defer freeCStringArray(cArgs, argc)
 	}
 
 	var exitCode C.int
@@ -125,6 +116,7 @@ func (b *Box) Exec(ctx context.Context, name string, arg ...string) (*ExecResult
 		b.handle,
 		cCmd,
 		cArgs,
+		C.int(argc),
 		(*[0]byte)(C.goBoxliteOutputCallback),
 		handleToPtr(h),
 		&exitCode,
@@ -141,7 +133,6 @@ func (b *Box) Exec(ctx context.Context, name string, arg ...string) (*ExecResult
 	}, nil
 }
 
-// CopyInto copies a file or directory from the host into the box.
 func (b *Box) CopyInto(_ context.Context, hostSrc, guestDst string) error {
 	cSrc := toCString(hostSrc)
 	defer C.free(unsafe.Pointer(cSrc))
@@ -156,7 +147,6 @@ func (b *Box) CopyInto(_ context.Context, hostSrc, guestDst string) error {
 	return nil
 }
 
-// CopyOut copies a file or directory from the box to the host.
 func (b *Box) CopyOut(_ context.Context, guestSrc, hostDst string) error {
 	cSrc := toCString(guestSrc)
 	defer C.free(unsafe.Pointer(cSrc))
@@ -171,7 +161,6 @@ func (b *Box) CopyOut(_ context.Context, guestSrc, hostDst string) error {
 	return nil
 }
 
-// Command creates a Cmd for streaming execution, mirroring os/exec.Cmd.
 func (b *Box) Command(name string, arg ...string) *Cmd {
 	return &Cmd{
 		Path: name,

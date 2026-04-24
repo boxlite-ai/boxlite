@@ -110,8 +110,10 @@ typedef struct CImageInfoList {
 
 typedef struct BoxliteCommand {
   const char *command;
-  const char *args_json;
-  const char *env_json;
+  const char **args;
+  int argc;
+  const char **env_pairs;
+  int env_count;
   const char *workdir;
   const char *user;
   double timeout_secs;
@@ -134,8 +136,10 @@ const char *boxlite_version(void);
 
 // ── Runtime ──
 enum BoxliteErrorCode boxlite_runtime_new(const char *home_dir,
-                                          const char *registries_json,
-                                          const char *insecure_registries_json,
+                                          const char **registries,
+                                          int registries_count,
+                                          const char **insecure_registries,
+                                          int insecure_registries_count,
                                           CBoxliteRuntime **out_runtime,
                                           CBoxliteError *out_error);
 enum BoxliteErrorCode boxlite_runtime_shutdown(CBoxliteRuntime *runtime,
@@ -198,7 +202,8 @@ enum BoxliteErrorCode boxlite_list_info_struct(CBoxliteRuntime *runtime,
 // ── Execution ──
 enum BoxliteErrorCode boxlite_execute(CBoxHandle *handle,
                                       const char *command,
-                                      const char *args_json,
+                                      const char **args,
+                                      int argc,
                                       void (*callback)(const char*, int, void*),
                                       void *user_data,
                                       int *out_exit_code,
