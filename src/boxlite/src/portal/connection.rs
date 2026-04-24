@@ -88,11 +88,17 @@ async fn connect_unix(socket_path: &std::path::Path) -> BoxliteResult<Channel> {
 
 async fn connect_tcp(port: u16) -> BoxliteResult<Channel> {
     let addr = format!("http://127.0.0.1:{}", port);
-    let channel = Endpoint::try_from(addr)?
+    let t0 = std::time::Instant::now();
+    let channel = Endpoint::try_from(addr.clone())?
         .connect_timeout(Duration::from_secs(30))
+        .tcp_nodelay(true)
         .connect()
         .await?;
 
-    tracing::debug!("Connected via TCP");
+    tracing::warn!(
+        "Connected via TCP to {} in {}ms",
+        addr,
+        t0.elapsed().as_millis()
+    );
     Ok(channel)
 }
