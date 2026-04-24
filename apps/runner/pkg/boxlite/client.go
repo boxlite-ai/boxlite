@@ -98,10 +98,6 @@ func (c *Client) Create(ctx context.Context, sandboxDto dto.CreateSandboxDTO) (s
 		boxlite.WithDetach(true),
 	}
 
-	if sandboxDto.OsUser != "" {
-		opts = append(opts, boxlite.WithUser(sandboxDto.OsUser))
-	}
-
 	for k, v := range sandboxDto.Env {
 		opts = append(opts, boxlite.WithEnv(k, v))
 	}
