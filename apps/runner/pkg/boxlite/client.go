@@ -105,12 +105,7 @@ func (c *Client) Create(ctx context.Context, sandboxDto dto.CreateSandboxDTO) (s
 		opts = append(opts, boxlite.WithEnv(k, v))
 	}
 
-	if c.daemonPath != "" {
-		opts = append(opts, boxlite.WithEntrypoint(common.DAEMON_PATH))
-		if len(sandboxDto.Entrypoint) > 0 {
-			opts = append(opts, boxlite.WithCmd(sandboxDto.Entrypoint...))
-		}
-	} else if len(sandboxDto.Entrypoint) > 0 {
+	if len(sandboxDto.Entrypoint) > 0 {
 		opts = append(opts, boxlite.WithEntrypoint(sandboxDto.Entrypoint...))
 	}
 
@@ -136,13 +131,6 @@ func (c *Client) Create(ctx context.Context, sandboxDto dto.CreateSandboxDTO) (s
 		return "", "", fmt.Errorf("failed to create box: %w", err)
 	}
 
-	// Inject daemon binary before start (BoxLite writes to rootfs disk directly)
-	if c.daemonPath != "" {
-		if err := bx.CopyInto(ctx, c.daemonPath, common.DAEMON_PATH); err != nil {
-			c.logger.Warn("failed to inject daemon binary", "error", err)
-		}
-	}
-
 	c.mu.Lock()
 	c.boxes[sandboxDto.Id] = bx
 	c.mu.Unlock()
@@ -153,6 +141,19 @@ func (c *Client) Create(ctx context.Context, sandboxDto dto.CreateSandboxDTO) (s
 	if !skipStart {
 		if err := bx.Start(ctx); err != nil {
 			return bx.ID(), "", fmt.Errorf("failed to start box: %w", err)
+		}
+
+		// Inject and start daemon binary after VM is running
+		if c.daemonPath != "" {
+			if err := bx.CopyInto(ctx, c.daemonPath, common.DAEMON_PATH); err != nil {
+				c.logger.Warn("failed to inject daemon binary", "error", err)
+			} else {
+				go func() {
+					if _, err := bx.Exec(ctx, common.DAEMON_PATH); err != nil {
+						c.logger.Warn("failed to start daemon", "error", err)
+					}
+				}()
+			}
 		}
 	}
 
