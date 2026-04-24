@@ -14,17 +14,18 @@ import (
 
 	boxlite "github.com/boxlite-ai/boxlite/sdks/go"
 	"github.com/daytonaio/runner/pkg/api/dto"
+	"github.com/daytonaio/runner/pkg/common"
 	"github.com/daytonaio/runner/pkg/models/enums"
 )
 
 // Client wraps the BoxLite Go SDK to provide the same interface as the Docker client.
 // It manages VMs instead of containers, providing hardware-level isolation.
 type Client struct {
-	runtime *boxlite.Runtime
-	logger  *slog.Logger
-	mu      sync.RWMutex
-	// Track box handles by sandbox ID for quick lookup
-	boxes map[string]*boxlite.Box
+	runtime    *boxlite.Runtime
+	logger     *slog.Logger
+	mu         sync.RWMutex
+	boxes      map[string]*boxlite.Box
+	daemonPath string
 }
 
 // ClientConfig holds configuration for the BoxLite client.
@@ -32,6 +33,7 @@ type ClientConfig struct {
 	Logger              *slog.Logger
 	HomeDir             string
 	InsecureRegistries  []string
+	DaemonPath          string
 }
 
 // NewClient creates a new BoxLite client backed by the BoxLite VM runtime.
@@ -55,9 +57,10 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 	}
 
 	return &Client{
-		runtime: rt,
-		logger:  logger,
-		boxes:   make(map[string]*boxlite.Box),
+		runtime:    rt,
+		logger:     logger,
+		boxes:      make(map[string]*boxlite.Box),
+		daemonPath: config.DaemonPath,
 	}, nil
 }
 
@@ -102,7 +105,12 @@ func (c *Client) Create(ctx context.Context, sandboxDto dto.CreateSandboxDTO) (s
 		opts = append(opts, boxlite.WithEnv(k, v))
 	}
 
-	if len(sandboxDto.Entrypoint) > 0 {
+	if c.daemonPath != "" {
+		opts = append(opts, boxlite.WithEntrypoint(common.DAEMON_PATH))
+		if len(sandboxDto.Entrypoint) > 0 {
+			opts = append(opts, boxlite.WithCmd(sandboxDto.Entrypoint...))
+		}
+	} else if len(sandboxDto.Entrypoint) > 0 {
 		opts = append(opts, boxlite.WithEntrypoint(sandboxDto.Entrypoint...))
 	}
 
@@ -119,12 +127,20 @@ func (c *Client) Create(ctx context.Context, sandboxDto dto.CreateSandboxDTO) (s
 		opts = append(opts, boxlite.WithNetwork(boxlite.NetworkEnabled()))
 	}
 
-	// Expose daemon port for toolbox access
+	// Expose daemon and terminal ports
 	opts = append(opts, boxlite.WithPort(2280, 0))
+	opts = append(opts, boxlite.WithPort(22222, 0))
 
 	bx, err := c.runtime.Create(ctx, sandboxDto.Snapshot, opts...)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to create box: %w", err)
+	}
+
+	// Inject daemon binary before start (BoxLite writes to rootfs disk directly)
+	if c.daemonPath != "" {
+		if err := bx.CopyInto(ctx, c.daemonPath, common.DAEMON_PATH); err != nil {
+			c.logger.Warn("failed to inject daemon binary", "error", err)
+		}
 	}
 
 	c.mu.Lock()
