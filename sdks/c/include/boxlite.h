@@ -67,6 +67,8 @@ typedef struct OptionsHandle OptionsHandle;
 // Opaque handle to a BoxliteRuntime instance with associated Tokio runtime
 typedef struct RuntimeHandle RuntimeHandle;
 
+typedef struct SessionHandle SessionHandle;
+
 typedef struct RuntimeHandle CBoxliteRuntime;
 
 // Extended error information for C API.
@@ -174,6 +176,8 @@ typedef struct CImageInfoList {
   struct CImageInfo *items;
   int count;
 } CImageInfoList;
+
+typedef struct SessionHandle CSessionHandle;
 
 #ifdef __cplusplus
 extern "C" {
@@ -626,6 +630,22 @@ void boxlite_free_box_info(struct CBoxInfo *info);
 void boxlite_free_box_info_list(struct CBoxInfoList *list);
 
 void boxlite_free_image_info_list(struct CImageInfoList *list);
+
+enum BoxliteErrorCode boxlite_session_start(CBoxHandle *handle,
+                                            const char *command,
+                                            const char *const *args,
+                                            int argc,
+                                            void (*callback)(const char*, int, void*),
+                                            void *user_data,
+                                            CSessionHandle **out_session,
+                                            CBoxliteError *out_error);
+
+enum BoxliteErrorCode boxlite_session_write(CSessionHandle *session,
+                                            const char *data,
+                                            int len,
+                                            CBoxliteError *out_error);
+
+void boxlite_session_free(CSessionHandle *session);
 
 // Free an execution result.
 //

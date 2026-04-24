@@ -9,6 +9,7 @@ package boxlite
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"sync"
 
@@ -197,6 +198,15 @@ func (c *Client) GetSandboxState(ctx context.Context, sandboxId string) (enums.S
 	default:
 		return enums.SandboxStateUnknown, nil
 	}
+}
+
+// StartSession starts an interactive TTY session in a sandbox.
+func (c *Client) StartSession(ctx context.Context, sandboxId string, command string, args []string, stdout, stderr io.Writer) (*boxlite.Session, error) {
+	bx, err := c.getOrFetchBox(ctx, sandboxId)
+	if err != nil {
+		return nil, err
+	}
+	return bx.StartSession(ctx, command, args, stdout, stderr)
 }
 
 // Exec executes a command in a running sandbox and returns the result.

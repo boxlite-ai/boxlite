@@ -233,6 +233,21 @@ enum BoxliteErrorCode boxlite_image_list_struct(CBoxliteRuntime *runtime,
                                                 CImageInfoList **out_list,
                                                 CBoxliteError *out_error);
 
+// ── Interactive Session (TTY with stdin/stdout) ──
+typedef struct SessionHandle CSessionHandle;
+
+enum BoxliteErrorCode boxlite_session_start(CBoxHandle *handle,
+                                            const char *command,
+                                            const char **args, int argc,
+                                            void (*callback)(const char*, int, void*),
+                                            void *user_data,
+                                            CSessionHandle **out_session,
+                                            CBoxliteError *out_error);
+enum BoxliteErrorCode boxlite_session_write(CSessionHandle *session,
+                                            const char *data, int len,
+                                            CBoxliteError *out_error);
+void boxlite_session_free(CSessionHandle *session);
+
 // ── Memory Management ──
 void boxlite_box_free(CBoxHandle *handle);
 void boxlite_runtime_free(CBoxliteRuntime *runtime);

@@ -17,6 +17,7 @@ pub mod options;
 pub mod runner;
 pub mod runtime;
 pub mod string;
+pub mod session;
 pub mod structs;
 
 pub use error::*;

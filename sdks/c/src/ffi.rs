@@ -751,6 +751,41 @@ pub unsafe extern "C" fn boxlite_free_image_info_list(list: *mut CImageInfoList)
 }
 
 // ============================================================================
+// Interactive Session API
+// ============================================================================
+
+pub type CSessionHandle = boxlite_ffi::session::SessionHandle;
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_session_start(
+    handle: *mut CBoxHandle,
+    command: *const c_char,
+    args: *const *const c_char,
+    argc: c_int,
+    callback: extern "C" fn(*const c_char, c_int, *mut c_void),
+    user_data: *mut c_void,
+    out_session: *mut *mut CSessionHandle,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    boxlite_ffi::session::session_start(handle, command, args, argc, callback, user_data, out_session, out_error)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_session_write(
+    session: *mut CSessionHandle,
+    data: *const c_char,
+    len: c_int,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    boxlite_ffi::session::session_write(session, data, len, out_error)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_session_free(session: *mut CSessionHandle) {
+    boxlite_ffi::session::session_free(session)
+}
+
+// ============================================================================
 // Memory Management
 // ============================================================================
 

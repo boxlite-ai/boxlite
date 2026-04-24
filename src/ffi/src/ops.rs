@@ -687,7 +687,7 @@ pub struct BoxliteCommand {
 /// All pointer parameters must be valid or null.
 ///
 /// Parse a C string array into a Vec<String>.
-fn parse_c_string_array(args: *const *const c_char, argc: c_int) -> Vec<String> {
+pub fn parse_c_string_array(args: *const *const c_char, argc: c_int) -> Vec<String> {
     let mut result = Vec::new();
     if !args.is_null() {
         for i in 0..argc {
