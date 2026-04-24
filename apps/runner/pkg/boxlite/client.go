@@ -152,7 +152,7 @@ func (c *Client) Create(ctx context.Context, sandboxDto dto.CreateSandboxDTO) (s
 				c.logger.Warn("failed to inject daemon binary", "error", err)
 			} else {
 				go func() {
-					if _, err := bx.Exec(context.Background(), common.DAEMON_PATH); err != nil {
+					if _, err := bx.Exec(context.Background(), "/bin/sh", "-c", "DAYTONA_USER_HOME_AS_WORKDIR=true exec "+common.DAEMON_PATH); err != nil {
 						c.logger.Warn("failed to start daemon", "error", err)
 					}
 				}()
