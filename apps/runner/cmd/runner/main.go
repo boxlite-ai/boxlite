@@ -21,7 +21,6 @@ import (
 	"github.com/daytonaio/runner/pkg/backend"
 	blclient "github.com/daytonaio/runner/pkg/boxlite"
 	"github.com/daytonaio/runner/pkg/cache"
-	"github.com/daytonaio/runner/pkg/daemon"
 	"github.com/daytonaio/runner/pkg/runner"
 	"github.com/daytonaio/runner/pkg/runner/v2/executor"
 	"github.com/daytonaio/runner/pkg/runner/v2/healthcheck"
@@ -106,13 +105,10 @@ func run() int {
 		}
 	}
 
-	daemonPath, _ := daemon.WriteStaticBinary("daemon-amd64")
-
 	boxliteClient, err := blclient.NewClient(ctx, blclient.ClientConfig{
 		Logger:             logger,
 		HomeDir:            cfg.BoxliteHomeDir,
 		InsecureRegistries: insecureRegs,
-		DaemonPath:         daemonPath,
 	})
 	if err != nil {
 		logger.Error("Error creating BoxLite client", "error", err)

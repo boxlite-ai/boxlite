@@ -14,18 +14,16 @@ import (
 
 	boxlite "github.com/boxlite-ai/boxlite/sdks/go"
 	"github.com/daytonaio/runner/pkg/api/dto"
-	"github.com/daytonaio/runner/pkg/common"
 	"github.com/daytonaio/runner/pkg/models/enums"
 )
 
 // Client wraps the BoxLite Go SDK to provide the same interface as the Docker client.
 // It manages VMs instead of containers, providing hardware-level isolation.
 type Client struct {
-	runtime    *boxlite.Runtime
-	logger     *slog.Logger
-	mu         sync.RWMutex
-	boxes      map[string]*boxlite.Box
-	daemonPath string
+	runtime *boxlite.Runtime
+	logger  *slog.Logger
+	mu      sync.RWMutex
+	boxes   map[string]*boxlite.Box
 }
 
 // ClientConfig holds configuration for the BoxLite client.
@@ -33,7 +31,6 @@ type ClientConfig struct {
 	Logger              *slog.Logger
 	HomeDir             string
 	InsecureRegistries  []string
-	DaemonPath          string
 }
 
 // NewClient creates a new BoxLite client backed by the BoxLite VM runtime.
@@ -57,10 +54,9 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 	}
 
 	return &Client{
-		runtime:    rt,
-		logger:     logger,
-		boxes:      make(map[string]*boxlite.Box),
-		daemonPath: config.DaemonPath,
+		runtime: rt,
+		logger:  logger,
+		boxes:   make(map[string]*boxlite.Box),
 	}, nil
 }
 
@@ -122,11 +118,6 @@ func (c *Client) Create(ctx context.Context, sandboxDto dto.CreateSandboxDTO) (s
 		opts = append(opts, boxlite.WithNetwork(boxlite.NetworkEnabled()))
 	}
 
-	if c.daemonPath != "" {
-		opts = append(opts, boxlite.WithPort(2280, 0))
-		opts = append(opts, boxlite.WithPort(22222, 0))
-	}
-
 	bx, err := c.runtime.Create(ctx, sandboxDto.Snapshot, opts...)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to create box: %w", err)
@@ -142,25 +133,6 @@ func (c *Client) Create(ctx context.Context, sandboxDto dto.CreateSandboxDTO) (s
 	if !skipStart {
 		if err := bx.Start(ctx); err != nil {
 			return bx.ID(), "", fmt.Errorf("failed to start box: %w", err)
-		}
-
-		if c.daemonPath != "" {
-			if err := bx.CopyInto(ctx, c.daemonPath, common.DAEMON_PATH); err != nil {
-				c.logger.Warn("failed to inject daemon", "error", err)
-			} else {
-				go func() {
-					envCmd := fmt.Sprintf(
-						"DAYTONA_USER_HOME_AS_WORKDIR=true DAYTONA_SANDBOX_ID=%s %s 2>&1",
-						sandboxDto.Id, common.DAEMON_PATH,
-					)
-					result, err := bx.Exec(context.Background(), "/bin/sh", "-c", envCmd)
-					if err != nil {
-						c.logger.Warn("daemon exec failed", "error", err)
-					} else if result != nil && result.ExitCode != 0 {
-						c.logger.Warn("daemon exited", "code", result.ExitCode, "out", result.Stdout[:min(len(result.Stdout), 500)])
-					}
-				}()
-			}
 		}
 	}
 
