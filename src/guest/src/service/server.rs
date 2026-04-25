@@ -164,6 +164,7 @@ impl GuestServer {
             }
 
             Transport::Tcp { port } => {
+                use futures::TryStreamExt;
                 use tokio_stream::wrappers::TcpListenerStream;
 
                 let addr = format!("127.0.0.1:{}", port);
@@ -176,7 +177,14 @@ impl GuestServer {
                     port
                 );
 
-                let incoming = TcpListenerStream::new(listener);
+                // Set TCP_NODELAY on each accepted connection to eliminate Nagle
+                // buffering delay on small gRPC response frames (saves ~15-40ms).
+                let incoming = TcpListenerStream::new(listener).map_ok(|stream| {
+                    if let Err(e) = stream.set_nodelay(true) {
+                        warn!("Failed to set TCP_NODELAY on accepted connection: {}", e);
+                    }
+                    stream
+                });
 
                 tokio::spawn(async move {
                     if let Err(e) = notify_host_ready(notify_uri).await {
