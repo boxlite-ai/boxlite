@@ -35,7 +35,7 @@ void test_runtime_cleanup() {
     CBoxliteError error = {0};
     const char *temp_dir = cleanup_temp_dirs[i];
     BoxliteErrorCode code =
-        boxlite_runtime_new(temp_dir, NULL, &runtime, &error);
+        boxlite_runtime_new(temp_dir, NULL, 0, NULL, 0, &runtime, &error);
     assert(code == Ok);
     assert(runtime != NULL);
     boxlite_runtime_free(runtime);
@@ -51,9 +51,9 @@ void test_error_string_cleanup() {
     CBoxliteRuntime *runtime = NULL;
     CBoxliteError error = {0};
     const char *temp_dir = error_temp_dirs[i];
-    const char *bad_json = "{invalid}";
+    const char *bad_reg[] = {"{invalid}"};
     BoxliteErrorCode code =
-        boxlite_runtime_new(temp_dir, bad_json, &runtime, &error);
+        boxlite_runtime_new(temp_dir, bad_reg, 1, NULL, 0, &runtime, &error);
     assert(code != Ok);
     assert(runtime == NULL);
     assert(error.message != NULL);
@@ -69,48 +69,17 @@ void test_box_id_cleanup() {
   CBoxliteRuntime *runtime = NULL;
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-memory-boxid";
-  BoxliteErrorCode code = boxlite_runtime_new(temp_dir, NULL, &runtime, &error);
+  BoxliteErrorCode code =
+      boxlite_runtime_new(temp_dir, NULL, 0, NULL, 0, &runtime, &error);
   assert(code == Ok);
   assert(runtime != NULL);
 
-  const char *options =
-      "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":\"Isolated\",\"ports\":[],\"auto_remove\":false}";
-
-  for (int i = 0; i < 5; i++) {
-    CBoxHandle *box = NULL;
-    code = boxlite_create_box(runtime, options, &box, &error);
-    assert(code == Ok);
-    assert(box != NULL);
-
-    char *id = boxlite_box_id(box);
-    assert(id != NULL);
-    boxlite_free_string(id);
-
-    id = boxlite_box_id(box);
-    boxlite_remove(runtime, id, 1, &error);
-    boxlite_free_string(id);
-  }
-
-  boxlite_runtime_free(runtime);
-  printf("  ✓ Created and freed 5 box IDs (no leaks)\n");
-}
-
-void test_json_output_cleanup() {
-  printf("\nTEST: JSON output cleanup\n");
-
-  CBoxliteRuntime *runtime = NULL;
-  CBoxliteError error = {0};
-  const char *temp_dir = "/tmp/boxlite-test-memory-json";
-  BoxliteErrorCode code = boxlite_runtime_new(temp_dir, NULL, &runtime, &error);
+  CBoxliteOptions *opts = NULL;
+  code = boxlite_options_new("alpine:3.19", &opts, &error);
   assert(code == Ok);
-  assert(runtime != NULL);
-
-  const char *options =
-      "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":\"Isolated\",\"ports\":[],\"auto_remove\":false}";
   CBoxHandle *box = NULL;
-  code = boxlite_create_box(runtime, options, &box, &error);
+  code = boxlite_create_box(runtime, opts, &box, &error);
+  boxlite_options_free(opts);
   assert(code == Ok);
   assert(box != NULL);
 
@@ -126,6 +95,42 @@ void test_json_output_cleanup() {
   printf("  ✓ Created and freed 5 JSON outputs (no leaks)\n");
 
   // Cleanup
+  char *id = boxlite_box_id(box);
+  boxlite_remove(runtime, id, 1, &error);
+  boxlite_free_string(id);
+  boxlite_runtime_free(runtime);
+}
+
+void test_json_output_cleanup() {
+  printf("\nTEST: JSON output cleanup\n");
+
+  CBoxliteRuntime *runtime = NULL;
+  CBoxliteError error = {0};
+  const char *temp_dir = "/tmp/boxlite-test-memory-json";
+  BoxliteErrorCode code =
+      boxlite_runtime_new(temp_dir, NULL, 0, NULL, 0, &runtime, &error);
+  assert(code == Ok);
+  assert(runtime != NULL);
+
+  CBoxliteOptions *opts = NULL;
+  code = boxlite_options_new("alpine:3.19", &opts, &error);
+  assert(code == Ok);
+  CBoxHandle *box = NULL;
+  code = boxlite_create_box(runtime, opts, &box, &error);
+  boxlite_options_free(opts);
+  assert(code == Ok);
+  assert(box != NULL);
+
+  for (int i = 0; i < 5; i++) {
+    char *json = NULL;
+    code = boxlite_box_info(box, &json, &error);
+    assert(code == Ok);
+    assert(json != NULL);
+    boxlite_free_string(json);
+  }
+
+  printf("  ✓ Created and freed 5 JSON outputs (no leaks)\n");
+
   char *id = boxlite_box_id(box);
   boxlite_remove(runtime, id, 1, &error);
   boxlite_free_string(id);
@@ -218,18 +223,19 @@ void test_mixed_operations() {
   CBoxliteRuntime *runtime = NULL;
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-memory-mixed";
-  BoxliteErrorCode code = boxlite_runtime_new(temp_dir, NULL, &runtime, &error);
+  BoxliteErrorCode code =
+      boxlite_runtime_new(temp_dir, NULL, 0, NULL, 0, &runtime, &error);
   assert(code == Ok);
   assert(runtime != NULL);
 
-  const char *options =
-      "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":\"Isolated\",\"ports\":[],\"auto_remove\":false}";
-
   for (int i = 0; i < 3; i++) {
     // Create box
+    CBoxliteOptions *opts = NULL;
+    code = boxlite_options_new("alpine:3.19", &opts, &error);
+    assert(code == Ok);
     CBoxHandle *box = NULL;
-    code = boxlite_create_box(runtime, options, &box, &error);
+    code = boxlite_create_box(runtime, opts, &box, &error);
+    boxlite_options_free(opts);
     assert(code == Ok);
     assert(box != NULL);
 
@@ -239,9 +245,9 @@ void test_mixed_operations() {
     boxlite_free_string(json);
 
     // Execute command
-    const char *args = "[\"test\"]";
+    const char *args[] = {"test"};
     int exit_code = 0;
-    boxlite_execute(box, "/bin/echo", args, NULL, NULL, &exit_code, &error);
+    boxlite_execute(box, "/bin/echo", args, 1, NULL, NULL, &exit_code, &error);
 
     // Get ID and remove
     char *id = boxlite_box_id(box);

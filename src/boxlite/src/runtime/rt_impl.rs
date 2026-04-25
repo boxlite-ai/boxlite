@@ -1571,6 +1571,7 @@ mod tests {
         let options = BoxliteOptions {
             home_dir: temp_dir.path().to_path_buf(),
             image_registries: vec![],
+            insecure_registries: vec![],
         };
         let runtime = RuntimeImpl::new(options).expect("Failed to create runtime");
         (runtime, temp_dir)

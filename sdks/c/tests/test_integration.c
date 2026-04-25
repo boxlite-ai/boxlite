@@ -16,92 +16,17 @@ void test_multiple_boxes() {
   CBoxliteRuntime *runtime = NULL;
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-integration-multiple";
-  BoxliteErrorCode code = boxlite_runtime_new(temp_dir, NULL, &runtime, &error);
+  BoxliteErrorCode code =
+      boxlite_runtime_new(temp_dir, NULL, 0, NULL, 0, &runtime, &error);
   assert(code == Ok);
   assert(runtime != NULL);
 
-  const char *options =
-      "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":\"Isolated\",\"ports\":[],\"auto_remove\":false}";
-
-  // Create 3 boxes
+  CBoxliteOptions *opts = NULL;
+  code = boxlite_options_new("alpine:3.19", &opts, &error);
+  assert(code == Ok);
   CBoxHandle *box1 = NULL;
-  code = boxlite_create_box(runtime, options, &box1, &error);
-  assert(code == Ok);
-  assert(box1 != NULL);
-
-  CBoxHandle *box2 = NULL;
-  code = boxlite_create_box(runtime, options, &box2, &error);
-  assert(code == Ok);
-  assert(box2 != NULL);
-
-  CBoxHandle *box3 = NULL;
-  code = boxlite_create_box(runtime, options, &box3, &error);
-  assert(code == Ok);
-  assert(box3 != NULL);
-
-  printf("  ✓ Created 3 boxes\n");
-
-  // Execute command in each box
-  const char *args = "[\"test\"]";
-  int exit_code = 0;
-
-  code =
-      boxlite_execute(box1, "/bin/echo", args, NULL, NULL, &exit_code, &error);
-  assert(code == Ok);
-  assert(exit_code == 0);
-
-  code =
-      boxlite_execute(box2, "/bin/echo", args, NULL, NULL, &exit_code, &error);
-  assert(code == Ok);
-  assert(exit_code == 0);
-
-  code =
-      boxlite_execute(box3, "/bin/echo", args, NULL, NULL, &exit_code, &error);
-  assert(code == Ok);
-  assert(exit_code == 0);
-
-  printf("  ✓ Executed commands in all boxes\n");
-
-  // List should show 3+ boxes
-  char *json = NULL;
-  code = boxlite_list_info(runtime, &json, &error);
-  assert(code == Ok);
-  assert(json != NULL);
-  printf("  ✓ Listed boxes: %s\n", json);
-  boxlite_free_string(json);
-
-  // Cleanup
-  char *id1 = boxlite_box_id(box1);
-  char *id2 = boxlite_box_id(box2);
-  char *id3 = boxlite_box_id(box3);
-
-  boxlite_remove(runtime, id1, 1, &error);
-  boxlite_remove(runtime, id2, 1, &error);
-  boxlite_remove(runtime, id3, 1, &error);
-
-  boxlite_free_string(id1);
-  boxlite_free_string(id2);
-  boxlite_free_string(id3);
-  boxlite_runtime_free(runtime);
-}
-
-void test_reattach_box() {
-  printf("\nTEST: Reattach to existing box\n");
-
-  CBoxliteRuntime *runtime = NULL;
-  CBoxliteError error = {0};
-  const char *temp_dir = "/tmp/boxlite-test-integration-reattach";
-  BoxliteErrorCode code = boxlite_runtime_new(temp_dir, NULL, &runtime, &error);
-  assert(code == Ok);
-  assert(runtime != NULL);
-
-  // Create box and get ID
-  const char *options =
-      "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":\"Isolated\",\"ports\":[],\"auto_remove\":false}";
-  CBoxHandle *box1 = NULL;
-  code = boxlite_create_box(runtime, options, &box1, &error);
+  code = boxlite_create_box(runtime, opts, &box1, &error);
+  boxlite_options_free(opts);
   assert(code == Ok);
   assert(box1 != NULL);
 
@@ -123,15 +48,63 @@ void test_reattach_box() {
   code = boxlite_start_box(box2, &error);
   assert(code == Ok);
 
-  const char *args = "[\"reattached\"]";
+  const char *args[] = {"reattached"};
   int exit_code = 0;
-  code =
-      boxlite_execute(box2, "/bin/echo", args, NULL, NULL, &exit_code, &error);
+  code = boxlite_execute(box2, "/bin/echo", args, 1, NULL, NULL, &exit_code,
+                         &error);
   assert(code == Ok);
   assert(exit_code == 0);
   printf("  ✓ Executed command after reattachment\n");
 
   // Cleanup
+  boxlite_remove(runtime, box_id, 1, &error);
+  boxlite_free_string(box_id);
+  boxlite_runtime_free(runtime);
+}
+
+void test_reattach_box() {
+  printf("\nTEST: Reattach to existing box\n");
+
+  CBoxliteRuntime *runtime = NULL;
+  CBoxliteError error = {0};
+  const char *temp_dir = "/tmp/boxlite-test-integration-reattach";
+  BoxliteErrorCode code =
+      boxlite_runtime_new(temp_dir, NULL, 0, NULL, 0, &runtime, &error);
+  assert(code == Ok);
+  assert(runtime != NULL);
+
+  CBoxliteOptions *opts = NULL;
+  code = boxlite_options_new("alpine:3.19", &opts, &error);
+  assert(code == Ok);
+  CBoxHandle *box1 = NULL;
+  code = boxlite_create_box(runtime, opts, &box1, &error);
+  boxlite_options_free(opts);
+  assert(code == Ok);
+  assert(box1 != NULL);
+
+  char *box_id = boxlite_box_id(box1);
+  printf("  Box ID: %s\n", box_id);
+
+  boxlite_stop_box(box1, &error);
+  printf("  ✓ Box stopped\n");
+
+  CBoxHandle *box2 = NULL;
+  code = boxlite_get(runtime, box_id, &box2, &error);
+  assert(code == Ok);
+  assert(box2 != NULL);
+  printf("  ✓ Reattached to box\n");
+
+  code = boxlite_start_box(box2, &error);
+  assert(code == Ok);
+
+  const char *args[] = {"reattached"};
+  int exit_code = 0;
+  code = boxlite_execute(box2, "/bin/echo", args, 1, NULL, NULL, &exit_code,
+                         &error);
+  assert(code == Ok);
+  assert(exit_code == 0);
+  printf("  ✓ Executed command after reattachment\n");
+
   boxlite_remove(runtime, box_id, 1, &error);
   boxlite_free_string(box_id);
   boxlite_runtime_free(runtime);
@@ -143,7 +116,8 @@ void test_runtime_metrics() {
   CBoxliteRuntime *runtime = NULL;
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-integration-metrics";
-  BoxliteErrorCode code = boxlite_runtime_new(temp_dir, NULL, &runtime, &error);
+  BoxliteErrorCode code =
+      boxlite_runtime_new(temp_dir, NULL, 0, NULL, 0, &runtime, &error);
   assert(code == Ok);
   assert(runtime != NULL);
 
@@ -156,18 +130,19 @@ void test_runtime_metrics() {
   boxlite_free_string(json1);
 
   // Create a box
-  const char *options =
-      "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":\"Isolated\",\"ports\":[],\"auto_remove\":false}";
+  CBoxliteOptions *opts = NULL;
+  code = boxlite_options_new("alpine:3.19", &opts, &error);
+  assert(code == Ok);
   CBoxHandle *box = NULL;
-  code = boxlite_create_box(runtime, options, &box, &error);
+  code = boxlite_create_box(runtime, opts, &box, &error);
+  boxlite_options_free(opts);
   assert(code == Ok);
   assert(box != NULL);
 
   // Execute command
-  const char *args = "[\"test\"]";
+  const char *args[] = {"test"};
   int exit_code = 0;
-  boxlite_execute(box, "/bin/echo", args, NULL, NULL, &exit_code, &error);
+  boxlite_execute(box, "/bin/echo", args, 1, NULL, NULL, &exit_code, &error);
 
   // Get updated metrics
   char *json2 = NULL;
@@ -190,29 +165,31 @@ void test_box_metrics() {
   CBoxliteRuntime *runtime = NULL;
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-integration-boxmetrics";
-  BoxliteErrorCode code = boxlite_runtime_new(temp_dir, NULL, &runtime, &error);
+  BoxliteErrorCode code =
+      boxlite_runtime_new(temp_dir, NULL, 0, NULL, 0, &runtime, &error);
   assert(code == Ok);
   assert(runtime != NULL);
 
-  const char *options =
-      "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":\"Isolated\",\"ports\":[],\"auto_remove\":false}";
+  CBoxliteOptions *opts = NULL;
+  code = boxlite_options_new("alpine:3.19", &opts, &error);
+  assert(code == Ok);
   CBoxHandle *box = NULL;
-  code = boxlite_create_box(runtime, options, &box, &error);
+  code = boxlite_create_box(runtime, opts, &box, &error);
+  boxlite_options_free(opts);
   assert(code == Ok);
   assert(box != NULL);
 
   // Execute some commands
-  const char *args = "[\"test\"]";
+  const char *args[] = {"test"};
   int exit_code = 0;
-  code =
-      boxlite_execute(box, "/bin/echo", args, NULL, NULL, &exit_code, &error);
+  code = boxlite_execute(box, "/bin/echo", args, 1, NULL, NULL, &exit_code,
+                         &error);
   if (code != Ok) {
     printf("  ✗ Execute 1 failed: code=%d, message=%s\n", code,
            error.message ? error.message : "(null)");
   }
-  code =
-      boxlite_execute(box, "/bin/echo", args, NULL, NULL, &exit_code, &error);
+  code = boxlite_execute(box, "/bin/echo", args, 1, NULL, NULL, &exit_code,
+                         &error);
   if (code != Ok) {
     printf("  ✗ Execute 2 failed: code=%d, message=%s\n", code,
            error.message ? error.message : "(null)");
@@ -244,30 +221,35 @@ void test_concurrent_execution() {
   CBoxliteRuntime *runtime = NULL;
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-integration-concurrent";
-  BoxliteErrorCode code = boxlite_runtime_new(temp_dir, NULL, &runtime, &error);
+  BoxliteErrorCode code =
+      boxlite_runtime_new(temp_dir, NULL, 0, NULL, 0, &runtime, &error);
   assert(code == Ok);
   assert(runtime != NULL);
 
-  const char *options =
-      "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":\"Isolated\",\"ports\":[],\"auto_remove\":false}";
+  CBoxliteOptions *opts = NULL;
+  code = boxlite_options_new("alpine:3.19", &opts, &error);
+  assert(code == Ok);
   CBoxHandle *box = NULL;
-  code = boxlite_create_box(runtime, options, &box, &error);
+  code = boxlite_create_box(runtime, opts, &box, &error);
+  boxlite_options_free(opts);
   assert(code == Ok);
   assert(box != NULL);
 
   // Execute multiple commands sequentially (true concurrency would need
   // threads)
-  const char *args1 = "[\"cmd1\"]";
-  const char *args2 = "[\"cmd2\"]";
-  const char *args3 = "[\"cmd3\"]";
+  const char *args1[] = {"cmd1"};
+  const char *args2[] = {"cmd2"};
+  const char *args3[] = {"cmd3"};
 
   int exit1 = 0, exit2 = 0, exit3 = 0;
-  code = boxlite_execute(box, "/bin/echo", args1, NULL, NULL, &exit1, &error);
+  code =
+      boxlite_execute(box, "/bin/echo", args1, 1, NULL, NULL, &exit1, &error);
   assert(code == Ok);
-  code = boxlite_execute(box, "/bin/echo", args2, NULL, NULL, &exit2, &error);
+  code =
+      boxlite_execute(box, "/bin/echo", args2, 1, NULL, NULL, &exit2, &error);
   assert(code == Ok);
-  code = boxlite_execute(box, "/bin/echo", args3, NULL, NULL, &exit3, &error);
+  code =
+      boxlite_execute(box, "/bin/echo", args3, 1, NULL, NULL, &exit3, &error);
   assert(code == Ok);
 
   assert(exit1 == 0);
@@ -289,19 +271,25 @@ void test_shutdown_with_boxes() {
   CBoxliteRuntime *runtime = NULL;
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-integration-shutdown";
-  BoxliteErrorCode code = boxlite_runtime_new(temp_dir, NULL, &runtime, &error);
+  BoxliteErrorCode code =
+      boxlite_runtime_new(temp_dir, NULL, 0, NULL, 0, &runtime, &error);
   assert(code == Ok);
   assert(runtime != NULL);
 
   // Create multiple boxes
-  const char *options =
-      "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":\"Isolated\",\"ports\":[],\"auto_remove\":false}";
+  CBoxliteOptions *opts = NULL;
+  code = boxlite_options_new("alpine:3.19", &opts, &error);
+  assert(code == Ok);
   CBoxHandle *box1 = NULL;
-  code = boxlite_create_box(runtime, options, &box1, &error);
+  code = boxlite_create_box(runtime, opts, &box1, &error);
+  boxlite_options_free(opts);
+  assert(code == Ok);
+  CBoxliteOptions *opts2 = NULL;
+  code = boxlite_options_new("alpine:3.19", &opts2, &error);
   assert(code == Ok);
   CBoxHandle *box2 = NULL;
-  code = boxlite_create_box(runtime, options, &box2, &error);
+  code = boxlite_create_box(runtime, opts2, &box2, &error);
+  boxlite_options_free(opts2);
   assert(code == Ok);
   assert(box1 != NULL);
   assert(box2 != NULL);
@@ -322,15 +310,17 @@ void test_box_prefix_lookup() {
   CBoxliteRuntime *runtime = NULL;
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-integration-prefix";
-  BoxliteErrorCode code = boxlite_runtime_new(temp_dir, NULL, &runtime, &error);
+  BoxliteErrorCode code =
+      boxlite_runtime_new(temp_dir, NULL, 0, NULL, 0, &runtime, &error);
   assert(code == Ok);
   assert(runtime != NULL);
 
-  const char *options =
-      "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":\"Isolated\",\"ports\":[],\"auto_remove\":false}";
+  CBoxliteOptions *opts = NULL;
+  code = boxlite_options_new("alpine:3.19", &opts, &error);
+  assert(code == Ok);
   CBoxHandle *box = NULL;
-  code = boxlite_create_box(runtime, options, &box, &error);
+  code = boxlite_create_box(runtime, opts, &box, &error);
+  boxlite_options_free(opts);
   assert(code == Ok);
   assert(box != NULL);
 

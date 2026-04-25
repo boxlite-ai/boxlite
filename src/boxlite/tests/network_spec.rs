@@ -66,6 +66,7 @@ async fn disabled_network_returns_no_network_config() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        insecure_registries: vec![],
     })
     .unwrap();
 
@@ -85,6 +86,7 @@ async fn disabled_network_runs_without_eth0() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        insecure_registries: vec![],
     })
     .unwrap();
 
@@ -132,6 +134,7 @@ async fn dns_sinkhole_blocks_unlisted_host() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        insecure_registries: vec![],
     })
     .unwrap();
 
@@ -162,6 +165,7 @@ async fn dns_sinkhole_allows_listed_host() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        insecure_registries: vec![],
     })
     .unwrap();
 
@@ -192,6 +196,7 @@ async fn empty_allowlist_allows_all() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        insecure_registries: vec![],
     })
     .unwrap();
 
@@ -219,6 +224,7 @@ async fn tcp_filter_blocks_direct_ip_connection() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        insecure_registries: vec![],
     })
     .unwrap();
 
@@ -255,6 +261,7 @@ async fn tcp_filter_sni_allows_https_to_allowed_host() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        insecure_registries: vec![],
     })
     .unwrap();
 

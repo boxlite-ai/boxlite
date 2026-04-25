@@ -54,7 +54,7 @@ static void setup_box(const char *test_name, CBoxliteRuntime **out_runtime,
   temp_dir[i] = '\0';
 
   BoxliteErrorCode code =
-      boxlite_runtime_new(temp_dir, NULL, out_runtime, &error);
+      boxlite_runtime_new(temp_dir, NULL, 0, NULL, 0, out_runtime, &error);
   if (code != Ok) {
     printf("  ✗ Failed to create runtime: code=%d, message=%s\n", error.code,
            error.message ? error.message : "(null)");
@@ -62,11 +62,12 @@ static void setup_box(const char *test_name, CBoxliteRuntime **out_runtime,
   }
   assert(code == Ok && "Failed to create runtime");
 
-  const char *options =
-      "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":\"Isolated\",\"ports\":[],\"auto_remove\":false}";
+  CBoxliteOptions *opts = NULL;
+  code = boxlite_options_new("alpine:3.19", &opts, &error);
+  assert(code == Ok);
 
-  code = boxlite_create_box(*out_runtime, options, out_box, &error);
+  code = boxlite_create_box(*out_runtime, opts, out_box, &error);
+  boxlite_options_free(opts);
   if (code != Ok) {
     printf("  ✗ Failed to create box: code=%d, message=%s\n", error.code,
            error.message ? error.message : "(null)");
@@ -93,8 +94,10 @@ void test_execute_cmd_basic(void) {
   setup_box("basic", &runtime, &box);
 
   BoxliteCommand cmd = {.command = "/bin/echo",
-                        .args_json = "[\"hello\"]",
-                        .env_json = NULL,
+                        .args = (const char *[]){"hello"},
+                        .argc = 1,
+                        .env_pairs = NULL,
+                        .env_count = 0,
                         .workdir = NULL,
                         .user = NULL,
                         .timeout_secs = 0.0};
@@ -127,8 +130,10 @@ void test_execute_cmd_with_workdir(void) {
   setup_box("workdir", &runtime, &box);
 
   BoxliteCommand cmd = {.command = "/bin/pwd",
-                        .args_json = NULL,
-                        .env_json = NULL,
+                        .args = NULL,
+                        .argc = 0,
+                        .env_pairs = NULL,
+                        .env_count = 0,
                         .workdir = "/tmp",
                         .user = NULL,
                         .timeout_secs = 0.0};
@@ -160,8 +165,10 @@ void test_execute_cmd_with_env(void) {
   setup_box("env", &runtime, &box);
 
   BoxliteCommand cmd = {.command = "/usr/bin/env",
-                        .args_json = NULL,
-                        .env_json = "[[\"FOO\",\"bar\"]]",
+                        .args = NULL,
+                        .argc = 0,
+                        .env_pairs = (const char *[]){"FOO", "bar"},
+                        .env_count = 2,
                         .workdir = NULL,
                         .user = NULL,
                         .timeout_secs = 0.0};
@@ -193,8 +200,10 @@ void test_execute_cmd_with_user(void) {
   setup_box("user", &runtime, &box);
 
   BoxliteCommand cmd = {.command = "/usr/bin/whoami",
-                        .args_json = NULL,
-                        .env_json = NULL,
+                        .args = NULL,
+                        .argc = 0,
+                        .env_pairs = NULL,
+                        .env_count = 0,
                         .workdir = NULL,
                         .user = "nobody",
                         .timeout_secs = 0.0};
@@ -226,8 +235,10 @@ void test_execute_cmd_with_timeout(void) {
   setup_box("timeout", &runtime, &box);
 
   BoxliteCommand cmd = {.command = "/bin/sleep",
-                        .args_json = "[\"60\"]",
-                        .env_json = NULL,
+                        .args = (const char *[]){"60"},
+                        .argc = 1,
+                        .env_pairs = NULL,
+                        .env_count = 0,
                         .workdir = NULL,
                         .user = NULL,
                         .timeout_secs = 2.0};
@@ -257,8 +268,10 @@ void test_execute_cmd_null_optional_fields(void) {
   setup_box("nullopts", &runtime, &box);
 
   BoxliteCommand cmd = {.command = "/bin/echo",
-                        .args_json = NULL,
-                        .env_json = NULL,
+                        .args = NULL,
+                        .argc = 0,
+                        .env_pairs = NULL,
+                        .env_count = 0,
                         .workdir = NULL,
                         .user = NULL,
                         .timeout_secs = 0.0};

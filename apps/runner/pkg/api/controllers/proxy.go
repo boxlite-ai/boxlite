@@ -18,7 +18,7 @@ var upgrader = websocket.Upgrader{
 
 // ProxyRequest handles toolbox/terminal requests.
 // For WebSocket: bridges to an interactive TTY session via BoxLite exec.
-// For HTTP: executes a command and returns the result.
+// For HTTP GET: serves the xterm.js terminal page (loaded in an iframe by the dashboard).
 func ProxyRequest(logger *slog.Logger) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		r, err := runner.GetInstance(nil)
@@ -29,24 +29,48 @@ func ProxyRequest(logger *slog.Logger) gin.HandlerFunc {
 
 		sandboxId := ctx.Param("sandboxId")
 
-		// WebSocket upgrade → interactive terminal
 		if ctx.Request.Header.Get("Upgrade") == "websocket" {
 			handleWebSocketTerminal(ctx, r, sandboxId, logger)
 			return
 		}
 
-		// HTTP → exec command
-		result, execErr := r.Boxlite.Exec(ctx.Request.Context(), sandboxId, "echo", "ok")
-		if execErr != nil {
-			logger.Warn("sandbox exec failed", "sandbox", sandboxId, "error", execErr)
-			ctx.JSON(http.StatusBadGateway, gin.H{"error": "sandbox not reachable: " + execErr.Error()})
-			return
-		}
-
-		_ = result
-		ctx.JSON(http.StatusOK, gin.H{"message": "sandbox is running", "sandbox": sandboxId})
+		ctx.Data(http.StatusOK, "text/html; charset=utf-8", []byte(terminalHTML))
 	}
 }
+
+const terminalHTML = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Terminal</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
+<style>
+html,body{margin:0;padding:0;height:100%;background:#1e1e1e;overflow:hidden}
+#terminal{height:100%;width:100%}
+</style>
+</head>
+<body>
+<div id="terminal"></div>
+<script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
+<script>
+var term=new Terminal({cursorBlink:true,theme:{background:'#1e1e1e'}});
+var fitAddon=new FitAddon.FitAddon();
+term.loadAddon(fitAddon);
+term.open(document.getElementById('terminal'));
+fitAddon.fit();
+
+var proto=location.protocol==='https:'?'wss:':'ws:';
+var ws=new WebSocket(proto+'//'+location.host+location.pathname+location.search);
+ws.onopen=function(){term.focus();};
+ws.onmessage=function(e){term.write(e.data);};
+ws.onclose=function(){term.write('\r\n[Connection closed]\r\n');};
+ws.onerror=function(){term.write('\r\n[Connection error]\r\n');};
+term.onData(function(data){if(ws.readyState===WebSocket.OPEN)ws.send(data);});
+window.addEventListener('resize',function(){fitAddon.fit();});
+</script>
+</body>
+</html>`
 
 func handleWebSocketTerminal(ctx *gin.Context, r *runner.Runner, sandboxId string, logger *slog.Logger) {
 	ws, err := upgrader.Upgrade(ctx.Writer, ctx.Request, nil)

@@ -24,8 +24,8 @@ void test_runtime_creation() {
 
   CBoxliteRuntime *runtime = NULL;
   CBoxliteError error = {0};
-  BoxliteErrorCode code = boxlite_runtime_new("/tmp/boxlite-test-basic-create",
-                                              NULL, &runtime, &error);
+  BoxliteErrorCode code = boxlite_runtime_new(
+      "/tmp/boxlite-test-basic-create", NULL, 0, NULL, 0, &runtime, &error);
 
   assert(code == Ok);
   assert(runtime != NULL);
@@ -42,7 +42,8 @@ void test_runtime_with_custom_home() {
   CBoxliteError error = {0};
   const char *home_dir = "/tmp/boxlite-test";
 
-  BoxliteErrorCode code = boxlite_runtime_new(home_dir, NULL, &runtime, &error);
+  BoxliteErrorCode code =
+      boxlite_runtime_new(home_dir, NULL, 0, NULL, 0, &runtime, &error);
 
   assert(code == Ok);
   assert(runtime != NULL);
@@ -56,10 +57,11 @@ void test_runtime_with_registries() {
 
   CBoxliteRuntime *runtime = NULL;
   CBoxliteError error = {0};
-  const char *registries = "[\"ghcr.io\", \"docker.io\"]";
+  const char *registries[] = {"ghcr.io", "docker.io"};
 
-  BoxliteErrorCode code = boxlite_runtime_new(
-      "/tmp/boxlite-test-basic-registries", registries, &runtime, &error);
+  BoxliteErrorCode code =
+      boxlite_runtime_new("/tmp/boxlite-test-basic-registries", registries, 2,
+                          NULL, 0, &runtime, &error);
 
   assert(code == Ok);
   assert(runtime != NULL);
@@ -74,7 +76,7 @@ void test_runtime_shutdown() {
   CBoxliteRuntime *runtime = NULL;
   CBoxliteError error = {0};
   BoxliteErrorCode code = boxlite_runtime_new(
-      "/tmp/boxlite-test-basic-shutdown", NULL, &runtime, &error);
+      "/tmp/boxlite-test-basic-shutdown", NULL, 0, NULL, 0, &runtime, &error);
   assert(code == Ok);
   assert(runtime != NULL);
 
@@ -84,27 +86,6 @@ void test_runtime_shutdown() {
   printf("  ✓ Runtime shutdown successful\n");
 
   boxlite_runtime_free(runtime);
-}
-
-void test_error_string_cleanup() {
-  printf("\nTEST: Error string cleanup\n");
-
-  // Trigger an error with invalid JSON
-  CBoxliteRuntime *runtime = NULL;
-  CBoxliteError error = {0};
-  const char *invalid_json = "{invalid json";
-
-  BoxliteErrorCode code = boxlite_runtime_new("/tmp/boxlite-test-basic-error",
-                                              invalid_json, &runtime, &error);
-
-  assert(code != Ok);
-  assert(runtime == NULL);
-  assert(error.message != NULL);
-  printf("  ✓ Error code: %d, message: %s\n", error.code, error.message);
-
-  // Must free error
-  boxlite_error_free(&error);
-  printf("  ✓ Error freed\n");
 }
 
 void test_null_safety() {
@@ -127,11 +108,10 @@ int main() {
   test_runtime_with_custom_home();
   test_runtime_with_registries();
   test_runtime_shutdown();
-  test_error_string_cleanup();
   test_null_safety();
 
   printf("\n═══════════════════════════════════════\n");
-  printf("  ✅ ALL TESTS PASSED (%d tests)\n", 7);
+  printf("  ✅ ALL TESTS PASSED (%d tests)\n", 6);
   printf("═══════════════════════════════════════\n");
 
   return 0;

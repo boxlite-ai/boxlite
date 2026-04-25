@@ -16,7 +16,8 @@ void test_create_box() {
   CBoxliteRuntime *runtime = NULL;
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-lifecycle-create";
-  BoxliteErrorCode code = boxlite_runtime_new(temp_dir, NULL, &runtime, &error);
+  BoxliteErrorCode code =
+      boxlite_runtime_new(temp_dir, NULL, 0, NULL, 0, &runtime, &error);
   if (code != Ok) {
     printf("  ✗ Error creating runtime: code=%d, message=%s\n", error.code,
            error.message ? error.message : "(null)");
@@ -25,48 +26,12 @@ void test_create_box() {
   assert(code == Ok);
   assert(runtime != NULL);
 
-  const char *options = "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],"
-                        "\"volumes\":[],\"network\":\"Isolated\",\"ports\":[]}";
-  CBoxHandle *box = NULL;
-  code = boxlite_create_box(runtime, options, &box, &error);
-
-  if (code != Ok) {
-    printf("  ✗ Error creating box: code=%d, message=%s\n", error.code,
-           error.message ? error.message : "(null)");
-  }
-
+  CBoxliteOptions *opts = NULL;
+  code = boxlite_options_new("alpine:3.19", &opts, &error);
   assert(code == Ok);
-  assert(box != NULL);
-  printf("  ✓ Box created successfully\n");
-
-  // Get box ID
-  char *box_id = boxlite_box_id(box);
-  assert(box_id != NULL);
-  assert(strlen(box_id) > 0);
-  printf("  ✓ Box ID: %s\n", box_id);
-  boxlite_free_string(box_id);
-
-  // Cleanup
-  boxlite_stop_box(box, &error);
-  boxlite_runtime_free(runtime);
-}
-
-void test_start_stop_restart() {
-  printf("\nTEST: Start, stop, restart box\n");
-
-  CBoxliteRuntime *runtime = NULL;
-  CBoxliteError error = {0};
-  const char *temp_dir = "/tmp/boxlite-test-lifecycle-restart";
-  BoxliteErrorCode code = boxlite_runtime_new(temp_dir, NULL, &runtime, &error);
-  assert(code == Ok);
-  assert(runtime != NULL);
-
-  // Set auto_remove to false so box persists after stop
-  const char *options =
-      "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":\"Isolated\",\"ports\":[],\"auto_remove\":false}";
   CBoxHandle *box = NULL;
-  code = boxlite_create_box(runtime, options, &box, &error);
+  code = boxlite_create_box(runtime, opts, &box, &error);
+  boxlite_options_free(opts);
   assert(code == Ok);
   assert(box != NULL);
 
@@ -117,21 +82,68 @@ void test_start_stop_restart() {
   boxlite_runtime_free(runtime);
 }
 
+void test_start_stop_restart() {
+  printf("\nTEST: Start, stop, restart box\n");
+
+  CBoxliteRuntime *runtime = NULL;
+  CBoxliteError error = {0};
+  const char *temp_dir = "/tmp/boxlite-test-lifecycle-restart";
+  BoxliteErrorCode code =
+      boxlite_runtime_new(temp_dir, NULL, 0, NULL, 0, &runtime, &error);
+  assert(code == Ok);
+  assert(runtime != NULL);
+
+  CBoxliteOptions *opts = NULL;
+  code = boxlite_options_new("alpine:3.19", &opts, &error);
+  assert(code == Ok);
+  CBoxHandle *box = NULL;
+  code = boxlite_create_box(runtime, opts, &box, &error);
+  boxlite_options_free(opts);
+  assert(code == Ok);
+  assert(box != NULL);
+
+  char *box_id = boxlite_box_id(box);
+  printf("  ✓ Box auto-started\n");
+
+  code = boxlite_stop_box(box, &error);
+  assert(code == Ok);
+  printf("  ✓ Box stopped\n");
+
+  CBoxHandle *box2 = NULL;
+  code = boxlite_get(runtime, box_id, &box2, &error);
+  assert(code == Ok);
+  assert(box2 != NULL);
+  printf("  ✓ Box handle retrieved after stop\n");
+
+  char *info = NULL;
+  code = boxlite_box_info(box2, &info, &error);
+  assert(code == Ok);
+  assert(info != NULL);
+  printf("  ✓ Box info retrieved\n");
+  boxlite_free_string(info);
+
+  boxlite_remove(runtime, box_id, 0, &error);
+  boxlite_free_string(box_id);
+  boxlite_runtime_free(runtime);
+}
+
 void test_remove_box() {
   printf("\nTEST: Remove box\n");
 
   CBoxliteRuntime *runtime = NULL;
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-lifecycle-remove";
-  BoxliteErrorCode code = boxlite_runtime_new(temp_dir, NULL, &runtime, &error);
+  BoxliteErrorCode code =
+      boxlite_runtime_new(temp_dir, NULL, 0, NULL, 0, &runtime, &error);
   assert(code == Ok);
   assert(runtime != NULL);
 
-  const char *options =
-      "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":\"Isolated\",\"ports\":[],\"auto_remove\":false}";
+  CBoxliteOptions *opts = NULL;
+  code = boxlite_options_new("alpine:3.19", &opts, &error);
+  assert(code == Ok);
   CBoxHandle *box = NULL;
-  code = boxlite_create_box(runtime, options, &box, &error);
+  code = boxlite_create_box(runtime, opts, &box, &error);
+  boxlite_options_free(opts);
   assert(code == Ok);
   assert(box != NULL);
 
@@ -166,15 +178,17 @@ void test_force_remove() {
   CBoxliteRuntime *runtime = NULL;
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-lifecycle-force";
-  BoxliteErrorCode code = boxlite_runtime_new(temp_dir, NULL, &runtime, &error);
+  BoxliteErrorCode code =
+      boxlite_runtime_new(temp_dir, NULL, 0, NULL, 0, &runtime, &error);
   assert(code == Ok);
   assert(runtime != NULL);
 
-  const char *options =
-      "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":\"Isolated\",\"ports\":[],\"auto_remove\":false}";
+  CBoxliteOptions *opts = NULL;
+  code = boxlite_options_new("alpine:3.19", &opts, &error);
+  assert(code == Ok);
   CBoxHandle *box = NULL;
-  code = boxlite_create_box(runtime, options, &box, &error);
+  code = boxlite_create_box(runtime, opts, &box, &error);
+  boxlite_options_free(opts);
   assert(code == Ok);
   assert(box != NULL);
 
@@ -196,21 +210,27 @@ void test_list_boxes() {
   CBoxliteRuntime *runtime = NULL;
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-lifecycle-list";
-  BoxliteErrorCode code = boxlite_runtime_new(temp_dir, NULL, &runtime, &error);
+  BoxliteErrorCode code =
+      boxlite_runtime_new(temp_dir, NULL, 0, NULL, 0, &runtime, &error);
   assert(code == Ok);
   assert(runtime != NULL);
 
   // Create 2 boxes
-  const char *options =
-      "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":\"Isolated\",\"ports\":[],\"auto_remove\":false}";
+  CBoxliteOptions *opts = NULL;
+  code = boxlite_options_new("alpine:3.19", &opts, &error);
+  assert(code == Ok);
   CBoxHandle *box1 = NULL;
-  code = boxlite_create_box(runtime, options, &box1, &error);
+  code = boxlite_create_box(runtime, opts, &box1, &error);
+  boxlite_options_free(opts);
   assert(code == Ok);
   assert(box1 != NULL);
 
+  CBoxliteOptions *opts2 = NULL;
+  code = boxlite_options_new("alpine:3.19", &opts2, &error);
+  assert(code == Ok);
   CBoxHandle *box2 = NULL;
-  code = boxlite_create_box(runtime, options, &box2, &error);
+  code = boxlite_create_box(runtime, opts2, &box2, &error);
+  boxlite_options_free(opts2);
   assert(code == Ok);
   assert(box2 != NULL);
 
@@ -244,15 +264,17 @@ void test_get_box_info() {
   CBoxliteRuntime *runtime = NULL;
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-lifecycle-info";
-  BoxliteErrorCode code = boxlite_runtime_new(temp_dir, NULL, &runtime, &error);
+  BoxliteErrorCode code =
+      boxlite_runtime_new(temp_dir, NULL, 0, NULL, 0, &runtime, &error);
   assert(code == Ok);
   assert(runtime != NULL);
 
-  const char *options =
-      "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":\"Isolated\",\"ports\":[],\"auto_remove\":false}";
+  CBoxliteOptions *opts = NULL;
+  code = boxlite_options_new("alpine:3.19", &opts, &error);
+  assert(code == Ok);
   CBoxHandle *box = NULL;
-  code = boxlite_create_box(runtime, options, &box, &error);
+  code = boxlite_create_box(runtime, opts, &box, &error);
+  boxlite_options_free(opts);
   assert(code == Ok);
   assert(box != NULL);
 

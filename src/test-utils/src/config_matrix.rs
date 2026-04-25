@@ -267,6 +267,7 @@ where
         let runtime = boxlite::BoxliteRuntime::new(BoxliteOptions {
             home_dir: home.path.clone(),
             image_registries: crate::test_registries(),
+            insecure_registries: vec![],
         })
         .expect("create runtime for config matrix");
 
@@ -335,7 +336,7 @@ macro_rules! config_matrix_tests {
                     let runtime = ::boxlite::BoxliteRuntime::new(
                         ::boxlite::runtime::options::BoxliteOptions {
                             home_dir: home.path.clone(),
-                            image_registries: $crate::test_registries(),
+                            image_registries: $crate::test_registries(), insecure_registries: vec![],
                         }
                     ).expect("create runtime for config matrix test");
 

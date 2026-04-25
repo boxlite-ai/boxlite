@@ -257,7 +257,14 @@ pub unsafe extern "C" fn boxlite_execute(
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
     boxlite_ffi::ops::box_exec(
-        handle, command, args, argc, callback, user_data, out_exit_code, out_error,
+        handle,
+        command,
+        args,
+        argc,
+        callback,
+        user_data,
+        out_exit_code,
+        out_error,
     )
 }
 
@@ -767,7 +774,16 @@ pub unsafe extern "C" fn boxlite_session_start(
     out_session: *mut *mut CSessionHandle,
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
-    boxlite_ffi::session::session_start(handle, command, args, argc, callback, user_data, out_session, out_error)
+    boxlite_ffi::session::session_start(
+        handle,
+        command,
+        args,
+        argc,
+        callback,
+        user_data,
+        out_session,
+        out_error,
+    )
 }
 
 #[unsafe(no_mangle)]

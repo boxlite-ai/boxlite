@@ -14,6 +14,7 @@ pub struct SessionHandle {
 
 pub type OutputCallback = extern "C" fn(*const c_char, c_int, *mut c_void);
 
+#[allow(clippy::too_many_arguments)]
 pub unsafe fn session_start(
     handle: *mut BoxHandle,
     command: *const c_char,

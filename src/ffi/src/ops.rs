@@ -74,7 +74,8 @@ pub unsafe fn runtime_new(
         }
 
         options.image_registries = parse_c_string_array(registries, registries_count);
-        options.insecure_registries = parse_c_string_array(insecure_registries, insecure_registries_count);
+        options.insecure_registries =
+            parse_c_string_array(insecure_registries, insecure_registries_count);
 
         // Create runtime
         let runtime = match BoxliteRuntime::new(options) {
@@ -687,7 +688,7 @@ pub struct BoxliteCommand {
 /// All pointer parameters must be valid or null.
 ///
 /// Parse a C string array into a Vec<String>.
-pub fn parse_c_string_array(args: *const *const c_char, argc: c_int) -> Vec<String> {
+pub unsafe fn parse_c_string_array(args: *const *const c_char, argc: c_int) -> Vec<String> {
     let mut result = Vec::new();
     if !args.is_null() {
         for i in 0..argc {
@@ -705,6 +706,7 @@ pub fn parse_c_string_array(args: *const *const c_char, argc: c_int) -> Vec<Stri
     result
 }
 
+#[allow(clippy::too_many_arguments)]
 pub unsafe fn box_exec(
     handle: *mut BoxHandle,
     command: *const c_char,
@@ -1795,6 +1797,9 @@ mod tests {
             let code = runtime_new(
                 ptr::null(),
                 ptr::null(),
+                0,
+                ptr::null(),
+                0,
                 ptr::null_mut(),
                 &mut error as *mut _,
             );

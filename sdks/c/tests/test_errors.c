@@ -41,8 +41,9 @@ void test_invalid_json_error() {
   CBoxliteError error = {0};
   const char *invalid_json = "{invalid}";
 
+  const char *regs[] = {invalid_json};
   BoxliteErrorCode code =
-      boxlite_runtime_new(NULL, invalid_json, &runtime, &error);
+      boxlite_runtime_new(NULL, regs, 1, NULL, 0, &runtime, &error);
 
   assert(code != Ok);
   assert(runtime == NULL);
@@ -59,7 +60,8 @@ void test_not_found_error() {
   CBoxliteRuntime *runtime = NULL;
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-errors-notfound";
-  BoxliteErrorCode code = boxlite_runtime_new(temp_dir, NULL, &runtime, &error);
+  BoxliteErrorCode code =
+      boxlite_runtime_new(temp_dir, NULL, 0, NULL, 0, &runtime, &error);
   assert(code == Ok);
   assert(runtime != NULL);
 
@@ -140,7 +142,8 @@ void test_error_recovery() {
   CBoxliteRuntime *runtime = NULL;
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-errors-recovery";
-  BoxliteErrorCode code = boxlite_runtime_new(temp_dir, NULL, &runtime, &error);
+  BoxliteErrorCode code =
+      boxlite_runtime_new(temp_dir, NULL, 0, NULL, 0, &runtime, &error);
   assert(code == Ok);
   assert(runtime != NULL);
 
@@ -155,11 +158,12 @@ void test_error_recovery() {
   printf("  ✓ First attempt failed as expected\n");
 
   // Second attempt: create a real box (should succeed)
-  const char *options =
-      "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":\"Isolated\",\"ports\":[],\"auto_remove\":false}";
+  CBoxliteOptions *opts = NULL;
+  code = boxlite_options_new("alpine:3.19", &opts, &error);
+  assert(code == Ok);
   box = NULL;
-  code = boxlite_create_box(runtime, options, &box, &error);
+  code = boxlite_create_box(runtime, opts, &box, &error);
+  boxlite_options_free(opts);
   assert(code == Ok);
   assert(box != NULL);
   printf("  ✓ Recovery successful - box created\n");
@@ -179,8 +183,9 @@ void test_multiple_errors() {
 
   // Error 1: Invalid JSON
   CBoxliteRuntime *runtime1 = NULL;
+  const char *bad_regs[] = {"{bad"};
   BoxliteErrorCode code =
-      boxlite_runtime_new(temp_dir, "{bad", &runtime1, &error);
+      boxlite_runtime_new(temp_dir, bad_regs, 1, NULL, 0, &runtime1, &error);
   assert(code != Ok);
   assert(runtime1 == NULL);
   assert(error.message != NULL);
@@ -189,7 +194,7 @@ void test_multiple_errors() {
 
   // Error 2: NotFound
   CBoxliteRuntime *runtime2 = NULL;
-  code = boxlite_runtime_new(temp_dir, NULL, &runtime2, &error);
+  code = boxlite_runtime_new(temp_dir, NULL, 0, NULL, 0, &runtime2, &error);
   assert(code == Ok);
   assert(runtime2 != NULL);
   CBoxHandle *box = NULL;
@@ -201,11 +206,12 @@ void test_multiple_errors() {
   error = (CBoxliteError){0};
 
   // Success: Normal operation
-  const char *options =
-      "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":\"Isolated\",\"ports\":[],\"auto_remove\":false}";
+  CBoxliteOptions *opts2 = NULL;
+  code = boxlite_options_new("alpine:3.19", &opts2, &error);
+  assert(code == Ok);
   box = NULL;
-  code = boxlite_create_box(runtime2, options, &box, &error);
+  code = boxlite_create_box(runtime2, opts2, &box, &error);
+  boxlite_options_free(opts2);
   assert(code == Ok);
   assert(box != NULL);
 
