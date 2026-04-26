@@ -524,17 +524,30 @@ fn install_windows_watchdog(transport: boxlite_shared::Transport) {
         };
 
         // WAIT_OBJECT_0 = 0, WAIT_OBJECT_0 + 1 = 1
-        match result {
-            0 => tracing::info!("Shutdown event signaled (explicit stop)"),
-            1 => tracing::info!("Parent death detected (process handle signaled)"),
-            _ => tracing::warn!(
-                result = result,
-                "WaitForMultipleObjects returned unexpectedly"
-            ),
-        }
+        let explicit_stop = match result {
+            0 => {
+                tracing::info!("Shutdown event signaled (explicit stop)");
+                true
+            }
+            1 => {
+                tracing::info!("Parent death detected (process handle signaled)");
+                false
+            }
+            _ => {
+                tracing::warn!(
+                    result = result,
+                    "WaitForMultipleObjects returned unexpectedly"
+                );
+                false
+            }
+        };
 
-        // Graceful shutdown: Guest.Shutdown() RPC
-        do_graceful_shutdown(transport);
+        // On explicit stop, the parent (box_impl.rs) already tried Guest.Shutdown()
+        // RPC — skip the redundant attempt to avoid a 3s timeout when networking
+        // is unavailable. On parent death, we're the last chance to flush qcow2.
+        if !explicit_stop {
+            do_graceful_shutdown(transport);
+        }
 
         // Cleanup handles
         if !parent_handle.is_null() {

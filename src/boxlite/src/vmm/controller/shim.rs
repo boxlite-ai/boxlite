@@ -108,31 +108,46 @@ impl VmmHandlerTrait for ShimHandler {
             }
 
             // Step 2: Wait with timeout for process to exit
-            let start = std::time::Instant::now();
-            loop {
-                match process.try_wait() {
-                    Ok(Some(_)) => {
-                        // Process exited gracefully
-                        return Ok(());
-                    }
-                    Ok(None) => {
-                        // Still running, check timeout
-                        if start.elapsed().as_millis() > GRACEFUL_SHUTDOWN_TIMEOUT_MS as u128 {
-                            // Timeout - force kill
+            #[cfg(unix)]
+            {
+                let start = std::time::Instant::now();
+                loop {
+                    match process.try_wait() {
+                        Ok(Some(_)) => return Ok(()),
+                        Ok(None) => {
+                            if start.elapsed().as_millis() > GRACEFUL_SHUTDOWN_TIMEOUT_MS as u128 {
+                                let _ = process.kill();
+                                let _ = process.wait();
+                                return Ok(());
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(50));
+                        }
+                        Err(_) => {
                             let _ = process.kill();
                             let _ = process.wait();
                             return Ok(());
                         }
-                        // Brief sleep before checking again
-                        std::thread::sleep(std::time::Duration::from_millis(50));
-                    }
-                    Err(_) => {
-                        // Error checking status - try to kill anyway
-                        let _ = process.kill();
-                        let _ = process.wait();
-                        return Ok(());
                     }
                 }
+            }
+
+            #[cfg(windows)]
+            {
+                // Event-driven wait: WaitForSingleObject on process handle wakes
+                // immediately when the process exits, avoiding 50ms polling latency.
+                use std::os::windows::io::AsRawHandle;
+                use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
+                use windows_sys::Win32::System::Threading::WaitForSingleObject;
+
+                let handle = process.as_raw_handle() as _;
+                let result =
+                    unsafe { WaitForSingleObject(handle, GRACEFUL_SHUTDOWN_TIMEOUT_MS as u32) };
+                if result != WAIT_OBJECT_0 {
+                    // Timeout or error — force kill
+                    let _ = process.kill();
+                }
+                let _ = process.wait();
+                return Ok(());
             }
         } else {
             // Attached mode: use platform-specific process termination
@@ -170,20 +185,29 @@ impl VmmHandlerTrait for ShimHandler {
                 }
             }
 
-            #[cfg(not(unix))]
+            #[cfg(windows)]
             {
-                // Windows: poll for exit, then force-kill via TerminateProcess on timeout.
-                let start = std::time::Instant::now();
-                loop {
-                    if !crate::util::is_process_alive(self.pid) {
-                        return Ok(());
-                    }
-                    if start.elapsed().as_millis() > GRACEFUL_SHUTDOWN_TIMEOUT_MS as u128 {
-                        crate::util::kill_process(self.pid);
-                        return Ok(());
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(50));
+                // Event-driven wait: open process handle, then WaitForSingleObject.
+                use windows_sys::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
+                use windows_sys::Win32::System::Threading::{
+                    OpenProcess, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, WaitForSingleObject,
+                };
+
+                let handle =
+                    unsafe { OpenProcess(PROCESS_SYNCHRONIZE | PROCESS_TERMINATE, 0, self.pid) };
+                // Null check: HANDLE may be isize (0.61) or *mut c_void (0.52)
+                if handle as usize == 0 {
+                    // Process already gone
+                    return Ok(());
                 }
+                let result =
+                    unsafe { WaitForSingleObject(handle, GRACEFUL_SHUTDOWN_TIMEOUT_MS as u32) };
+                if result != WAIT_OBJECT_0 {
+                    // Timeout — force kill
+                    crate::util::kill_process(self.pid);
+                }
+                unsafe { CloseHandle(handle) };
+                return Ok(());
             }
         }
 
