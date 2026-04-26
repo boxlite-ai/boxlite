@@ -463,22 +463,22 @@ fn extract_tar_entries<R: std::io::Read>(
         // Windows does not preserve Unix mode bits, so we save them for
         // later application via debugfs after mke2fs creates the ext4.
         let perm_path = clean_path.trim_end_matches('/');
-        if !perm_path.is_empty() {
-            if let Ok(tar_mode) = entry.header().mode() {
-                let type_bits = match entry_type {
-                    tar::EntryType::Regular | tar::EntryType::Link => 0o100000, // S_IFREG
-                    tar::EntryType::Directory => 0o040000,                      // S_IFDIR
-                    _ => 0o100000, // Default to regular file
-                };
-                let full_mode = type_bits | tar_mode;
-                permission_map.insert(
-                    perm_path.to_string(),
-                    DeferredPermission {
-                        path: perm_path.to_string(),
-                        mode: full_mode,
-                    },
-                );
-            }
+        if !perm_path.is_empty()
+            && let Ok(tar_mode) = entry.header().mode()
+        {
+            let type_bits = match entry_type {
+                tar::EntryType::Regular | tar::EntryType::Link => 0o100000, // S_IFREG
+                tar::EntryType::Directory => 0o040000,                      // S_IFDIR
+                _ => 0o100000, // Default to regular file
+            };
+            let full_mode = type_bits | tar_mode;
+            permission_map.insert(
+                perm_path.to_string(),
+                DeferredPermission {
+                    path: perm_path.to_string(),
+                    mode: full_mode,
+                },
+            );
         }
 
         // Extract regular files, directories, and hardlinks normally
