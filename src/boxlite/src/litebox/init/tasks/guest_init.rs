@@ -5,11 +5,9 @@
 
 use super::{InitCtx, log_task_error, task_start};
 use crate::images::ContainerImageConfig;
-#[cfg(unix)]
 use crate::net::constants::{GATEWAY_IP, GUEST_CIDR, GUEST_INTERFACE};
 use crate::pipeline::PipelineTask;
 use crate::portal::GuestSession;
-#[cfg(unix)]
 use crate::portal::interfaces::NetworkInitConfig;
 use crate::portal::interfaces::{ContainerRootfsInitConfig, GuestInitConfig};
 use crate::runtime::options::NetworkSpec;
@@ -113,10 +111,9 @@ async fn run_guest_init(
     // Build guest volumes from volume manager
     let guest_volumes = volume_mgr.build_guest_mounts();
 
-    // On Windows (WHPX), the guest has no virtio-net device — networking
-    // is handled transparently by libkrun's TSI via vsock, so no guest-side
-    // eth0 configuration is needed.
-    #[cfg(unix)]
+    // Configure guest network when networking is enabled.
+    // Gvproxy creates a virtio-net device (eth0) on all platforms;
+    // the guest configures it with a static IP via rtnetlink.
     let network = match network_spec {
         NetworkSpec::Enabled { .. } => Some(NetworkInitConfig {
             interface: GUEST_INTERFACE.to_string(),
@@ -124,11 +121,6 @@ async fn run_guest_init(
             gateway: Some(GATEWAY_IP.to_string()),
         }),
         NetworkSpec::Disabled => None,
-    };
-    #[cfg(not(unix))]
-    let network = {
-        let _ = network_spec; // suppress unused warning
-        None
     };
 
     let guest_init_config = GuestInitConfig {

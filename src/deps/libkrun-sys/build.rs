@@ -940,6 +940,11 @@ fn build() {
         println!("cargo:rustc-link-search=native={}", libkrun_lib.display());
         println!("cargo:rustc-link-lib=static=krun");
         println!("cargo:rustc-link-lib=dylib=WinHvPlatform");
+
+        // FORCE:MULTIPLE: libkrun staticlib embeds its own copy of Rust std,
+        // which duplicates symbols (rust_eh_personality, EMPTY_PANIC) with the
+        // outer binary's std. Both copies are identical so first-wins is safe.
+        println!("cargo:rustc-link-arg=/FORCE:MULTIPLE");
     }
 }
 

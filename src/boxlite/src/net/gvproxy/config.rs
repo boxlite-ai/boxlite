@@ -85,6 +85,11 @@ pub struct GvproxyConfig {
     /// PEM-encoded MITM CA private key (PKCS8 format, consumed by Go).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ca_key_pem: Option<String>,
+
+    /// TCP listen address for Windows (e.g., "127.0.0.1:12345").
+    /// When set, gvproxy listens on TCP instead of a Unix socket.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub listen_addr: Option<String>,
 }
 
 /// Secret configuration for gvproxy MITM proxy.
@@ -141,6 +146,7 @@ fn defaults_with_socket_path(socket_path: PathBuf) -> GvproxyConfig {
         secrets: Vec::new(),
         ca_cert_pem: None,
         ca_key_pem: None,
+        listen_addr: None,
     }
 }
 
@@ -230,6 +236,12 @@ impl GvproxyConfig {
     /// Set secrets for MITM proxy injection.
     pub fn with_secrets(mut self, secrets: Vec<GvproxySecretConfig>) -> Self {
         self.secrets = secrets;
+        self
+    }
+
+    /// Set TCP listen address for Windows (bypasses Unix socket).
+    pub fn with_listen_addr(mut self, addr: String) -> Self {
+        self.listen_addr = Some(addr);
         self
     }
 
@@ -425,6 +437,34 @@ mod tests {
         assert_eq!(deserialized.hosts, gvproxy_secret.hosts);
         assert_eq!(deserialized.placeholder, gvproxy_secret.placeholder);
         assert_eq!(deserialized.value, gvproxy_secret.value);
+    }
+
+    #[test]
+    fn test_listen_addr_builder_and_serialization() {
+        let config = GvproxyConfig::new(test_socket_path(), vec![(8080, 80)])
+            .with_listen_addr("127.0.0.1:12345".to_string());
+        assert_eq!(config.listen_addr, Some("127.0.0.1:12345".to_string()));
+
+        // Serialization round-trip
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(json.contains("listen_addr"));
+        assert!(json.contains("127.0.0.1:12345"));
+        let deserialized: GvproxyConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            deserialized.listen_addr,
+            Some("127.0.0.1:12345".to_string())
+        );
+    }
+
+    #[test]
+    fn test_listen_addr_omitted_when_none() {
+        let config = GvproxyConfig::new(test_socket_path(), vec![]);
+        assert_eq!(config.listen_addr, None);
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(
+            !json.contains("listen_addr"),
+            "listen_addr should be omitted from JSON when None"
+        );
     }
 
     #[test]

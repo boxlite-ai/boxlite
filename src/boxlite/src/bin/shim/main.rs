@@ -142,7 +142,15 @@ fn run_shim(mut config: InstanceSpec, timing: impl Fn(&str)) -> BoxliteResult<()
     // duration of the VM. When the shim process exits, OS cleans up all resources.
     #[cfg(feature = "gvproxy")]
     if let Some(ref net_config) = config.network_config {
+        #[cfg(unix)]
         let (gvproxy, endpoint) = GvproxyInstance::from_config(net_config)?;
+
+        #[cfg(not(unix))]
+        let (gvproxy, endpoint) = {
+            let net_port = boxlite::net::port::allocate_port()?;
+            GvproxyInstance::from_config_tcp(net_config, net_port)?
+        };
+
         config.network_backend_endpoint = Some(endpoint);
         timing("gvproxy created");
 

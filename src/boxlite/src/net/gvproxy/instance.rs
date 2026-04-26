@@ -134,6 +134,56 @@ impl GvproxyInstance {
         Ok((instance, endpoint))
     }
 
+    /// Create a GvproxyInstance with TCP transport and return the endpoint.
+    ///
+    /// Used on Windows where Unix domain sockets are not available.
+    /// Gvproxy listens on a TCP port instead, using the same QemuProtocol
+    /// (length-prefixed Ethernet frames) as Linux Unix streams.
+    #[cfg(not(unix))]
+    pub fn from_config_tcp(
+        config: &super::super::NetworkBackendConfig,
+        net_port: u16,
+    ) -> BoxliteResult<(Self, super::super::NetworkBackendEndpoint)> {
+        let listen_addr = format!("127.0.0.1:{}", net_port);
+        let secrets = config.secrets.iter().map(Into::into).collect();
+
+        let mut gvproxy_config = super::config::GvproxyConfig::new(
+            config.socket_path.clone(),
+            config.port_mappings.to_vec(),
+        )
+        .with_listen_addr(listen_addr)
+        .with_allow_net(config.allow_net.clone())
+        .with_secrets(secrets);
+
+        if let (Some(cert), Some(key)) =
+            (config.ca_cert_pem.as_deref(), config.ca_key_pem.as_deref())
+        {
+            gvproxy_config = gvproxy_config.with_ca(cert.to_string(), key.to_string());
+        }
+
+        // Initialize logging callback (one-time setup)
+        logging::init_logging();
+
+        let id = ffi::create_instance(&gvproxy_config)?;
+
+        tracing::info!(id, net_port, "Created GvproxyInstance with TCP transport");
+
+        let instance = Self {
+            id,
+            socket_path: config.socket_path.clone(),
+        };
+
+        let endpoint = super::super::NetworkBackendEndpoint::TcpSocket {
+            addr: std::net::SocketAddr::new(
+                std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+                net_port,
+            ),
+            mac_address: crate::net::constants::GUEST_MAC,
+        };
+
+        Ok((instance, endpoint))
+    }
+
     /// Get network statistics from this gvproxy instance
     ///
     /// Returns current network counters including bandwidth, TCP metrics,

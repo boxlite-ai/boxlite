@@ -938,6 +938,21 @@ fn main() {
     println!("cargo:rustc-link-arg=-Wl,-rpath,@loader_path");
     #[cfg(target_os = "linux")]
     println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN");
+
+    // Windows + gvproxy: DELAYLOAD linker flags for gvproxy.dll.
+    //
+    // These MUST be in this crate's build.rs (the crate with [[bin]] boxlite-shim),
+    // not in libgvproxy-sys/build.rs. cargo:rustc-link-arg from a dependency's
+    // build.rs only applies to that crate, not to the final binary link step.
+    //
+    // DELAYLOAD defers gvproxy.dll loading until the first gvproxy FFI call
+    // (gvproxy_create). Without it, the DLL loads at process startup, causing
+    // Go runtime auto-initialization and thread creation that interfere with WHPX.
+    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    if target_os == "windows" && env::var("CARGO_FEATURE_GVPROXY").is_ok() {
+        println!("cargo:rustc-link-arg=/DELAYLOAD:gvproxy.dll");
+        println!("cargo:rustc-link-arg=delayimp.lib");
+    }
 }
 
 /// Compute SHA256 hash of the `boxlite-guest` binary and embed it via `cargo:rustc-env`.

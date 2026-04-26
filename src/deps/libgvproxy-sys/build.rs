@@ -68,6 +68,7 @@ fn main() {
     }
     println!("cargo:rerun-if-changed=gvproxy-bridge"); // also watch for new files
     println!("cargo:rerun-if-env-changed=BOXLITE_DEPS_STUB");
+    println!("cargo:rerun-if-env-changed=LIBGVPROXY_PREBUILT");
 
     // Auto-detect crates.io download: Cargo injects .cargo_vcs_info.json into
     // published packages. When present, enter stub mode since Go sources are
@@ -91,54 +92,101 @@ fn main() {
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set");
 
     let source_dir = Path::new(&manifest_dir).join("gvproxy-bridge");
-    let lib_output = Path::new(&out_dir).join("libgvproxy.a");
+    // On Unix: linker auto-prepends "lib" → looks for "libgvproxy.a"
+    // On Windows: linker uses exact name → looks for "gvproxy.lib"
+    let lib_output = if cfg!(target_os = "windows") {
+        Path::new(&out_dir).join("gvproxy.lib")
+    } else {
+        Path::new(&out_dir).join("libgvproxy.a")
+    };
 
-    // Build libgvproxy from Go sources
-    // Note: cargo only re-runs this script when rerun-if-changed files change,
-    // so no extra caching is needed here.
-    build_gvproxy(&source_dir, &lib_output);
+    // Check for pre-built library (cross-compiled on macOS for Windows).
+    // Set LIBGVPROXY_PREBUILT=/path/to/libgvproxy.lib to skip Go build entirely.
+    if let Ok(prebuilt) = env::var("LIBGVPROXY_PREBUILT") {
+        let prebuilt_path = Path::new(&prebuilt);
+        if prebuilt_path.exists() {
+            println!(
+                "cargo:warning=Using pre-built libgvproxy from {}",
+                prebuilt_path.display()
+            );
+            fs::copy(prebuilt_path, &lib_output).expect("Failed to copy pre-built libgvproxy");
 
-    // Copy header file for downstream C/C++ usage (optional)
-    let header_src = source_dir.join("libgvproxy.h");
-    if header_src.exists() {
-        let header_dst = Path::new(&out_dir).join("libgvproxy.h");
-        fs::copy(&header_src, &header_dst).expect("Failed to copy libgvproxy.h");
+            // Copy header if present alongside the library
+            let prebuilt_header = prebuilt_path.with_extension("h");
+            if prebuilt_header.exists() {
+                let header_dst = Path::new(&out_dir).join("libgvproxy.h");
+                fs::copy(&prebuilt_header, &header_dst).expect("Failed to copy libgvproxy.h");
+            }
+        } else {
+            panic!(
+                "LIBGVPROXY_PREBUILT={} does not exist",
+                prebuilt_path.display()
+            );
+        }
+    } else {
+        // Build libgvproxy from Go sources
+        // Note: cargo only re-runs this script when rerun-if-changed files change,
+        // so no extra caching is needed here.
+        build_gvproxy(&source_dir, &lib_output);
+
+        // Copy header file for downstream C/C++ usage (optional)
+        let header_src = source_dir.join("libgvproxy.h");
+        if header_src.exists() {
+            let header_dst = Path::new(&out_dir).join("libgvproxy.h");
+            fs::copy(&header_src, &header_dst).expect("Failed to copy libgvproxy.h");
+        }
     }
 
     // Tell Cargo where to find the library
     println!("cargo:rustc-link-search=native={}", out_dir);
-    println!("cargo:rustc-link-lib=static=gvproxy");
 
-    // Transitive dependencies from the Go runtime (embedded in the c-archive).
-    // Go's net package uses the CGO resolver by default, which calls res_search
-    // from libresolv for DNS lookups on both macOS and Linux.
-    #[cfg(target_os = "macos")]
+    // On Windows: link dynamically via import library (.lib thunks → .dll at runtime).
+    // Go's c-archive static linking causes Go runtime to auto-initialize at process
+    // startup, which creates threads that interfere with WHPX. Using a DLL defers
+    // Go runtime initialization until gvproxy_create() is first called.
+    // On Unix: link statically (c-archive works fine with KVM/Hypervisor.framework).
+    //
+    // NOTE: DELAYLOAD linker flags are in boxlite/build.rs (the binary crate), not here.
+    // cargo:rustc-link-arg from a library crate's build.rs doesn't propagate to the
+    // final binary link step — it only applies to the crate that emits it.
+    #[cfg(target_os = "windows")]
     {
-        println!("cargo:rustc-link-lib=framework=CoreFoundation");
-        println!("cargo:rustc-link-lib=framework=Security");
+        println!("cargo:rustc-link-lib=dylib=gvproxy");
     }
-    // On Linux, force static linking of libresolv to ensure the shim binary
-    // remains fully static when built with crt-static. Without this, the linker
-    // picks libresolv.so (dynamic), making the binary dynamically linked and
-    // causing SIGSEGV on TLS access (fs:[0x28]) on some VMs.
-    // When building with --target, Rust may not include the system library
-    // paths, so we add them explicitly for the linker to find libresolv.a.
-    #[cfg(target_os = "linux")]
+
+    #[cfg(not(target_os = "windows"))]
     {
-        let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
-        // Debian/Ubuntu: /usr/lib/<triple>
-        let gnu_triple = match arch.as_str() {
-            "x86_64" => "x86_64-linux-gnu",
-            "aarch64" => "aarch64-linux-gnu",
-            _ => "x86_64-linux-gnu",
-        };
-        println!("cargo:rustc-link-search=native=/usr/lib/{}", gnu_triple);
-        // RHEL/manylinux: /usr/lib64
-        println!("cargo:rustc-link-search=native=/usr/lib64");
-        println!("cargo:rustc-link-lib=static=resolv");
+        println!("cargo:rustc-link-lib=static=gvproxy");
+
+        // Transitive dependencies from the Go runtime (embedded in the c-archive).
+        // Go's net package uses the CGO resolver by default, which calls res_search
+        // from libresolv for DNS lookups on both macOS and Linux.
+        #[cfg(target_os = "macos")]
+        {
+            println!("cargo:rustc-link-lib=framework=CoreFoundation");
+            println!("cargo:rustc-link-lib=framework=Security");
+            println!("cargo:rustc-link-lib=resolv");
+        }
+
+        // On Linux, force static linking of libresolv to ensure the shim binary
+        // remains fully static when built with crt-static. Without this, the linker
+        // picks libresolv.so (dynamic), making the binary dynamically linked and
+        // causing SIGSEGV on TLS access (fs:[0x28]) on some VMs.
+        #[cfg(target_os = "linux")]
+        {
+            let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
+            // Debian/Ubuntu: /usr/lib/<triple>
+            let gnu_triple = match arch.as_str() {
+                "x86_64" => "x86_64-linux-gnu",
+                "aarch64" => "aarch64-linux-gnu",
+                _ => "x86_64-linux-gnu",
+            };
+            println!("cargo:rustc-link-search=native=/usr/lib/{}", gnu_triple);
+            // RHEL/manylinux: /usr/lib64
+            println!("cargo:rustc-link-search=native=/usr/lib64");
+            println!("cargo:rustc-link-lib=static=resolv");
+        }
     }
-    #[cfg(not(target_os = "linux"))]
-    println!("cargo:rustc-link-lib=resolv");
 
     // Expose library directory to downstream crates (used by boxlite/build.rs)
     // Convention: {LIBNAME}_BOXLITE_DEP=<path> for auto-discovery
