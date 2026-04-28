@@ -323,6 +323,11 @@ func (c *Client) ListInfo(ctx context.Context) ([]boxlite.BoxInfo, error) {
 	return c.runtime.ListInfo(ctx)
 }
 
+// GetBox retrieves a box handle from cache or fetches it from the runtime.
+func (c *Client) GetBox(ctx context.Context, sandboxId string) (*boxlite.Box, error) {
+	return c.getOrFetchBox(ctx, sandboxId)
+}
+
 // getOrFetchBox retrieves a box handle from cache or fetches it from the runtime.
 func (c *Client) getOrFetchBox(ctx context.Context, sandboxId string) (*boxlite.Box, error) {
 	c.mu.RLock()

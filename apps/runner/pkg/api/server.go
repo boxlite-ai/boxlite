@@ -159,6 +159,19 @@ func (a *ApiServer) Start(ctx context.Context) error {
 		snapshotController.POST("/inspect", controllers.InspectSnapshotInRegistry)
 	}
 
+	// BoxLite REST API — exec, files, metrics
+	boxliteApi := protected.Group("/v1/boxes")
+	{
+		boxliteApi.POST("/:boxId/exec", controllers.BoxliteExec)
+		boxliteApi.GET("/:boxId/executions/:execId/output", controllers.BoxliteExecOutput)
+		boxliteApi.POST("/:boxId/executions/:execId/input", controllers.BoxliteExecInput)
+		boxliteApi.POST("/:boxId/executions/:execId/signal", controllers.BoxliteExecSignal)
+		boxliteApi.POST("/:boxId/executions/:execId/resize", controllers.BoxliteExecResize)
+		boxliteApi.PUT("/:boxId/files", controllers.BoxliteFileUpload)
+		boxliteApi.GET("/:boxId/files", controllers.BoxliteFileDownload)
+		boxliteApi.GET("/:boxId/metrics", controllers.BoxliteMetrics)
+	}
+
 	a.httpServer = &http.Server{
 		Addr:    fmt.Sprintf(":%d", a.apiPort),
 		Handler: a.router,

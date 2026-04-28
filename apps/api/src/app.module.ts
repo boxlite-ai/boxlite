@@ -43,6 +43,7 @@ import { BodyParserErrorModule } from './common/modules/body-parser-error.module
 import { AdminModule } from './admin/admin.module'
 import { ClickHouseModule } from './clickhouse/clickhouse.module'
 import { SandboxTelemetryModule } from './sandbox-telemetry/sandbox-telemetry.module'
+import { BoxliteRestModule } from './boxlite-rest/boxlite-rest.module'
 
 @Module({
   imports: [
@@ -195,6 +196,7 @@ import { SandboxTelemetryModule } from './sandbox-telemetry/sandbox-telemetry.mo
     HealthModule,
     ClickHouseModule,
     SandboxTelemetryModule,
+    BoxliteRestModule,
     OpenFeatureModule.forRoot({
       contextFactory: (request: ExecutionContext) => {
         const req = request.switchToHttp().getRequest()

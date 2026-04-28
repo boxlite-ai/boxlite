@@ -322,43 +322,40 @@ const Onboarding: React.FC = () => {
 
 const codeExamples = {
   typescript: {
-    install: `npm install @daytonaio/sdk`,
+    install: `npm install boxlite`,
     run: `npx tsx index.mts`,
-    example: `import { Daytona as BoxLite } from '@daytonaio/sdk'
-  
-// Initialize the BoxLite client
-const boxlite = new BoxLite({ apiKey: 'your-api-key' });
+    example: `import { Boxlite, BoxliteRestOptions, BoxOptions, BoxCommand } from 'boxlite'
 
-// Create the Sandbox instance
-const sandbox = await boxlite.create({
-  language: 'typescript',
-});
+// Connect to BoxLite Cloud
+const opts = BoxliteRestOptions.create('your-api-url')
+  .withCredentials('default', 'your-api-key')
+const rt = Boxlite.rest(opts)
 
-// Run the code securely inside the Sandbox
-const response = await sandbox.process.codeRun('console.log("Hello World from code!")')
-console.log(response.result);
+// Create a sandbox
+const box = await rt.create(BoxOptions.create('alpine:latest'), 'my-sandbox')
+
+// Run code securely inside the sandbox
+const r = await box.exec(BoxCommand.create('echo').arg('Hello World!'))
+const result = await r.wait()
+console.log(result)
   `,
   },
   python: {
-    install: `pip install daytona`,
+    install: `pip install boxlite`,
     run: `python main.py`,
-    example: `from daytona import Daytona as BoxLite, DaytonaConfig as BoxLiteConfig
-  
-# Define the configuration
-config = BoxLiteConfig(api_key="your-api-key")
+    example: `from boxlite import Boxlite, BoxliteRestOptions, BoxOptions, BoxCommand
 
-# Initialize the BoxLite client
-boxlite = BoxLite(config)
+# Connect to BoxLite Cloud
+opts = BoxliteRestOptions("your-api-url")
+opts = opts.with_credentials("default", "your-api-key")
+rt = Boxlite.rest(opts)
 
-# Create the Sandbox instance
-sandbox = boxlite.create()
+# Create a sandbox
+box = await rt.create(BoxOptions(image="alpine:latest"), name="my-sandbox")
 
-# Run the code securely inside the Sandbox
-response = sandbox.process.code_run('print("Hello World from code!")')
-if response.exit_code != 0:
-  print(f"Error: {response.exit_code} {response.result}")
-else:
-    print(response.result)
+# Run code securely inside the sandbox
+result = await box.exec(BoxCommand("echo").arg("Hello World!"))
+print(f"Exit code: {result.exit_code}")
   `,
   },
 }
