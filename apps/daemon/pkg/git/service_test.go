@@ -23,7 +23,7 @@ var repoHttp = &gitprovider.GitRepository{
 
 var repoHttps = &gitprovider.GitRepository{
 	Id:     "123",
-	Url:    "https://github.com/daytonaio/boxlite",
+	Url:    "https://github.com/daytonaio/daytona",
 	Name:   "boxlite",
 	Branch: "main",
 	Target: gitprovider.CloneTargetBranch,
@@ -31,7 +31,7 @@ var repoHttps = &gitprovider.GitRepository{
 
 var repoWithoutProtocol = &gitprovider.GitRepository{
 	Id:     "123",
-	Url:    "github.com/daytonaio/boxlite",
+	Url:    "github.com/daytonaio/daytona",
 	Name:   "boxlite",
 	Branch: "main",
 	Target: gitprovider.CloneTargetBranch,
@@ -39,7 +39,7 @@ var repoWithoutProtocol = &gitprovider.GitRepository{
 
 var repoWithCloneTargetCommit = &gitprovider.GitRepository{
 	Id:     "123",
-	Url:    "https://github.com/daytonaio/boxlite",
+	Url:    "https://github.com/daytonaio/daytona",
 	Name:   "boxlite",
 	Branch: "main",
 	Sha:    "1234567890",
@@ -72,28 +72,28 @@ func TestGitService(t *testing.T) {
 
 func (s *GitServiceTestSuite) TestCloneRepositoryCmd_WithCreds() {
 	cloneCmd := s.gitService.CloneRepositoryCmd(repoHttps, creds)
-	s.Require().Equal([]string{"git", "clone", "--single-branch", "--branch", "\"main\"", "https://daytonaio:Daytona123@github.com/daytonaio/boxlite", "/work-dir"}, cloneCmd)
+	s.Require().Equal([]string{"git", "clone", "--single-branch", "--branch", "\"main\"", "https://daytonaio:Daytona123@github.com/daytonaio/daytona", "/work-dir"}, cloneCmd)
 
 	cloneCmd = s.gitService.CloneRepositoryCmd(repoHttp, creds)
 	s.Require().Equal([]string{"git", "clone", "--single-branch", "--branch", "\"main\"", "http://daytonaio:Daytona123@localhost:3000/daytonaio/boxlite", "/work-dir"}, cloneCmd)
 
 	cloneCmd = s.gitService.CloneRepositoryCmd(repoWithoutProtocol, creds)
-	s.Require().Equal([]string{"git", "clone", "--single-branch", "--branch", "\"main\"", "https://daytonaio:Daytona123@github.com/daytonaio/boxlite", "/work-dir"}, cloneCmd)
+	s.Require().Equal([]string{"git", "clone", "--single-branch", "--branch", "\"main\"", "https://daytonaio:Daytona123@github.com/daytonaio/daytona", "/work-dir"}, cloneCmd)
 
 	cloneCmd = s.gitService.CloneRepositoryCmd(repoWithCloneTargetCommit, creds)
-	s.Require().Equal([]string{"git", "clone", "--single-branch", "--branch", "\"main\"", "https://daytonaio:Daytona123@github.com/daytonaio/boxlite", "/work-dir", "&&", "cd", "/work-dir", "&&", "git", "checkout", "1234567890"}, cloneCmd)
+	s.Require().Equal([]string{"git", "clone", "--single-branch", "--branch", "\"main\"", "https://daytonaio:Daytona123@github.com/daytonaio/daytona", "/work-dir", "&&", "cd", "/work-dir", "&&", "git", "checkout", "1234567890"}, cloneCmd)
 }
 
 func (s *GitServiceTestSuite) TestCloneRepositoryCmd_WithoutCreds() {
 	cloneCmd := s.gitService.CloneRepositoryCmd(repoHttps, nil)
-	s.Require().Equal([]string{"git", "clone", "--single-branch", "--branch", "\"main\"", "https://github.com/daytonaio/boxlite", "/work-dir"}, cloneCmd)
+	s.Require().Equal([]string{"git", "clone", "--single-branch", "--branch", "\"main\"", "https://github.com/daytonaio/daytona", "/work-dir"}, cloneCmd)
 
 	cloneCmd = s.gitService.CloneRepositoryCmd(repoHttp, nil)
 	s.Require().Equal([]string{"git", "clone", "--single-branch", "--branch", "\"main\"", "http://localhost:3000/daytonaio/boxlite", "/work-dir"}, cloneCmd)
 
 	cloneCmd = s.gitService.CloneRepositoryCmd(repoWithoutProtocol, nil)
-	s.Require().Equal([]string{"git", "clone", "--single-branch", "--branch", "\"main\"", "https://github.com/daytonaio/boxlite", "/work-dir"}, cloneCmd)
+	s.Require().Equal([]string{"git", "clone", "--single-branch", "--branch", "\"main\"", "https://github.com/daytonaio/daytona", "/work-dir"}, cloneCmd)
 
 	cloneCmd = s.gitService.CloneRepositoryCmd(repoWithCloneTargetCommit, nil)
-	s.Require().Equal([]string{"git", "clone", "--single-branch", "--branch", "\"main\"", "https://github.com/daytonaio/boxlite", "/work-dir", "&&", "cd", "/work-dir", "&&", "git", "checkout", "1234567890"}, cloneCmd)
+	s.Require().Equal([]string{"git", "clone", "--single-branch", "--branch", "\"main\"", "https://github.com/daytonaio/daytona", "/work-dir", "&&", "cd", "/work-dir", "&&", "git", "checkout", "1234567890"}, cloneCmd)
 }

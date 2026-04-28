@@ -7,10 +7,10 @@ package organization
 import (
 	"context"
 
-	"github.com/daytonaio/boxlite/cli/apiclient"
-	"github.com/daytonaio/boxlite/cli/cmd/common"
-	"github.com/daytonaio/boxlite/cli/config"
-	"github.com/daytonaio/boxlite/cli/views/organization"
+	"github.com/daytonaio/daytona/cli/apiclient"
+	"github.com/daytonaio/daytona/cli/cmd/common"
+	"github.com/daytonaio/daytona/cli/config"
+	"github.com/daytonaio/daytona/cli/views/organization"
 	"github.com/spf13/cobra"
 )
 

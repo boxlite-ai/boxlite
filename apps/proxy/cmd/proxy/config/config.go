@@ -13,7 +13,7 @@ import (
 
 	"github.com/daytonaio/common-go/pkg/cache"
 	"github.com/daytonaio/common-go/pkg/utils"
-	apiclient "github.com/daytonaio/boxlite/libs/api-client-go"
+	apiclient "github.com/daytonaio/daytona/libs/api-client-go"
 	"github.com/go-playground/validator/v10"
 	"github.com/joho/godotenv"
 	"github.com/kelseyhightower/envconfig"

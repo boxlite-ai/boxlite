@@ -9,14 +9,14 @@ import (
 
 	log "github.com/sirupsen/logrus"
 
-	"github.com/daytonaio/boxlite/cli/cmd"
-	"github.com/daytonaio/boxlite/cli/cmd/auth"
-	"github.com/daytonaio/boxlite/cli/cmd/mcp"
-	"github.com/daytonaio/boxlite/cli/cmd/organization"
-	"github.com/daytonaio/boxlite/cli/cmd/sandbox"
-	"github.com/daytonaio/boxlite/cli/cmd/snapshot"
-	"github.com/daytonaio/boxlite/cli/cmd/volume"
-	"github.com/daytonaio/boxlite/cli/internal"
+	"github.com/daytonaio/daytona/cli/cmd"
+	"github.com/daytonaio/daytona/cli/cmd/auth"
+	"github.com/daytonaio/daytona/cli/cmd/mcp"
+	"github.com/daytonaio/daytona/cli/cmd/organization"
+	"github.com/daytonaio/daytona/cli/cmd/sandbox"
+	"github.com/daytonaio/daytona/cli/cmd/snapshot"
+	"github.com/daytonaio/daytona/cli/cmd/volume"
+	"github.com/daytonaio/daytona/cli/internal"
 	"github.com/joho/godotenv"
 	"github.com/spf13/cobra"
 )

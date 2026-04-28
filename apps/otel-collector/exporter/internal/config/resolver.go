@@ -8,7 +8,7 @@ import (
 	"time"
 
 	common_cache "github.com/daytonaio/common-go/pkg/cache"
-	apiclient "github.com/daytonaio/boxlite/libs/api-client-go"
+	apiclient "github.com/daytonaio/daytona/libs/api-client-go"
 	"go.uber.org/zap"
 )
 

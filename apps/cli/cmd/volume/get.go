@@ -7,9 +7,9 @@ package volume
 import (
 	"context"
 
-	"github.com/daytonaio/boxlite/cli/apiclient"
-	"github.com/daytonaio/boxlite/cli/cmd/common"
-	"github.com/daytonaio/boxlite/cli/views/volume"
+	"github.com/daytonaio/daytona/cli/apiclient"
+	"github.com/daytonaio/daytona/cli/cmd/common"
+	"github.com/daytonaio/daytona/cli/views/volume"
 	"github.com/spf13/cobra"
 )
 

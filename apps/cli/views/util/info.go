@@ -6,7 +6,7 @@ package util
 
 import (
 	"github.com/charmbracelet/lipgloss"
-	"github.com/daytonaio/boxlite/cli/views/common"
+	"github.com/daytonaio/daytona/cli/views/common"
 )
 
 const PropertyNameWidth = 16

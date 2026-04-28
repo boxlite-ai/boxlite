@@ -7,7 +7,7 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/daytonaio/boxlite/cli/views/common"
+	"github.com/daytonaio/daytona/cli/views/common"
 	"github.com/pkg/browser"
 	"github.com/spf13/cobra"
 )

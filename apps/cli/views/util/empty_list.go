@@ -5,7 +5,7 @@
 package util
 
 import (
-	"github.com/daytonaio/boxlite/cli/views/common"
+	"github.com/daytonaio/daytona/cli/views/common"
 )
 
 func NotifyEmptySandboxList(tip bool) {

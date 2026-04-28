@@ -5,7 +5,7 @@
 package volume
 
 import (
-	"github.com/daytonaio/boxlite/cli/internal"
+	"github.com/daytonaio/daytona/cli/internal"
 	"github.com/spf13/cobra"
 )
 

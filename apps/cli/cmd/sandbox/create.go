@@ -11,12 +11,12 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
-	apiclient_cli "github.com/daytonaio/boxlite/cli/apiclient"
-	"github.com/daytonaio/boxlite/cli/cmd/common"
-	"github.com/daytonaio/boxlite/cli/config"
-	"github.com/daytonaio/boxlite/cli/util"
-	views_common "github.com/daytonaio/boxlite/cli/views/common"
-	apiclient "github.com/daytonaio/boxlite/libs/api-client-go"
+	apiclient_cli "github.com/daytonaio/daytona/cli/apiclient"
+	"github.com/daytonaio/daytona/cli/cmd/common"
+	"github.com/daytonaio/daytona/cli/config"
+	"github.com/daytonaio/daytona/cli/util"
+	views_common "github.com/daytonaio/daytona/cli/views/common"
+	apiclient "github.com/daytonaio/daytona/libs/api-client-go"
 	"github.com/spf13/cobra"
 )
 

@@ -13,7 +13,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/daytonaio/boxlite/cli/config"
+	"github.com/daytonaio/daytona/cli/config"
 	log "github.com/sirupsen/logrus"
 )
 

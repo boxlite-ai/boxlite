@@ -11,7 +11,7 @@ import (
 	"io"
 	"path/filepath"
 
-	"github.com/daytonaio/boxlite/cli/apiclient"
+	"github.com/daytonaio/daytona/cli/apiclient"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 

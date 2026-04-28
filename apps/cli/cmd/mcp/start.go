@@ -8,7 +8,7 @@ import (
 	"os"
 	"os/signal"
 
-	"github.com/daytonaio/boxlite/cli/mcp"
+	"github.com/daytonaio/daytona/cli/mcp"
 	"github.com/spf13/cobra"
 )
 

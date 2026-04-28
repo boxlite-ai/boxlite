@@ -8,10 +8,10 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/daytonaio/boxlite/cli/apiclient"
-	"github.com/daytonaio/boxlite/cli/cmd/common"
-	"github.com/daytonaio/boxlite/cli/config"
-	"github.com/daytonaio/boxlite/cli/views/snapshot"
+	"github.com/daytonaio/daytona/cli/apiclient"
+	"github.com/daytonaio/daytona/cli/cmd/common"
+	"github.com/daytonaio/daytona/cli/config"
+	"github.com/daytonaio/daytona/cli/views/snapshot"
 	"github.com/spf13/cobra"
 )
 

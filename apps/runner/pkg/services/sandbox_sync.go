@@ -10,7 +10,7 @@ import (
 	"log/slog"
 	"time"
 
-	apiclient "github.com/daytonaio/boxlite/libs/api-client-go"
+	apiclient "github.com/daytonaio/daytona/libs/api-client-go"
 	runnerapiclient "github.com/daytonaio/runner/pkg/apiclient"
 	blclient "github.com/daytonaio/runner/pkg/boxlite"
 	"github.com/daytonaio/runner/pkg/models/enums"

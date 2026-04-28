@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/daytonaio/boxlite/cli/internal"
+	"github.com/daytonaio/daytona/cli/internal"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v2"
 )

@@ -12,8 +12,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/daytonaio/boxlite/cli/cmd"
-	"github.com/daytonaio/boxlite/cli/internal"
+	"github.com/daytonaio/daytona/cli/cmd"
+	"github.com/daytonaio/daytona/cli/internal"
 )
 
 const BOXLITE_API_URL_ENV_VAR = "BOXLITE_API_URL"
