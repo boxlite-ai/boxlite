@@ -356,8 +356,8 @@ func GetBuildLogs(logger *slog.Logger) gin.HandlerFunc {
 		checkSnapshotRef := snapshotRef
 
 		// Fixed tag for instances where we are not looking for an entry with snapshot ID
-		if strings.HasPrefix(snapshotRef, "boxlite") {
-			checkSnapshotRef = snapshotRef + ":boxlite"
+		if strings.HasPrefix(snapshotRef, "daytona") {
+			checkSnapshotRef = snapshotRef + ":daytona"
 		}
 
 		flusher, ok := ctx.Writer.(http.Flusher)

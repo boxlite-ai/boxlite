@@ -150,10 +150,10 @@ func GetEnvironment() string {
 
 func GetBuildLogFilePath(snapshotRef string) (string, error) {
 	// Extract image name from various snapshot ref formats:
-	// - registry:5000/boxlite/boxlite-<hash>
-	// - boxlite-<hash>
-	// - boxlite-<hash>:tag
-	// - cr.preprod.boxlite.ai/sbox/boxlite/boxlite-<hash>:boxlite
+	// - registry:5000/boxlite/daytona-<hash>
+	// - daytona-<hash>
+	// - daytona-<hash>:tag
+	// - cr.preprod.boxlite.ai/sbox/boxlite/daytona-<hash>:daytona
 
 	buildId := snapshotRef
 
