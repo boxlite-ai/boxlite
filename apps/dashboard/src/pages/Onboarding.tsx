@@ -267,8 +267,10 @@ const Onboarding: React.FC = () => {
                     <CodeBlock
                       code={
                         createdApiKey && isApiKeyRevealed
-                          ? codeExamples[language].example.replace('your-api-key', createdApiKey.value)
-                          : codeExamples[language].example
+                          ? codeExamples[language].example
+                              .replace('your-api-key', createdApiKey.value)
+                              .replace('your-api-url', apiUrl)
+                          : codeExamples[language].example.replace('your-api-url', apiUrl)
                       }
                       language={language}
                       showCopy
