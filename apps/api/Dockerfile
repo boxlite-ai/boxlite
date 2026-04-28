@@ -26,7 +26,7 @@ COPY apps/libs/analytics-api-client/ libs/analytics-api-client/
 COPY apps/libs/toolbox-api-client/ libs/toolbox-api-client/
 COPY apps/libs/sdk-typescript/ libs/sdk-typescript/
 
-RUN yarn nx build api --configuration=production --nxBail=true
+RUN echo 1777389170 && yarn nx build api --configuration=production --nxBail=true
 
 RUN VITE_BASE_API_URL=%BOXLITE_BASE_API_URL% yarn nx build dashboard --configuration=production --nxBail=true --output-style=stream
 
