@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2024 Daytona Platforms Inc.
+// Modified by BoxLite AI, 2025-2026
 // Modified and rebranded for BoxLite
 
 /// <reference path="./.sst/platform/config.d.ts" />
@@ -344,7 +345,7 @@ export default $config({
         PROXY_PROTOCOL: envOr("PROXY_PROTOCOL", "http"),
         PROXY_API_KEY: envOr("PROXY_API_KEY", proxyApiKey.result),
         // api-client-go appends paths like "/config" directly → include /api suffix
-        DAYTONA_API_URL: $interpolate`${stripTrailingSlash(api.url)}/api`,
+        BOXLITE_API_URL: $interpolate`${stripTrailingSlash(api.url)}/api`,
         OIDC_CLIENT_ID: envOr("OIDC_CLIENT_ID", "boxlite"),
         OIDC_AUDIENCE: envOr("OIDC_AUDIENCE", "boxlite"),
         OIDC_DOMAIN: requireOidcIssuer(),
@@ -398,7 +399,7 @@ export default $config({
       environment: {
         CLICKHOUSE_ENDPOINT: "tcp://localhost:9000",
         CLICKHOUSE_PASSWORD: "unused",
-        DAYTONA_API_URL: $interpolate`${stripTrailingSlash(api.url)}/api`,
+        BOXLITE_API_URL: $interpolate`${stripTrailingSlash(api.url)}/api`,
       },
     });
 
@@ -541,8 +542,8 @@ Type=simple
 ExecStart=/usr/local/bin/boxlite-runner
 Restart=always
 RestartSec=5
-Environment=DAYTONA_API_URL=${input.apiUrl.replace(/\/$/, "")}/api
-Environment=DAYTONA_RUNNER_TOKEN=${input.token}
+Environment=BOXLITE_API_URL=${input.apiUrl.replace(/\/$/, "")}/api
+Environment=BOXLITE_RUNNER_TOKEN=${input.token}
 Environment=API_VERSION=2
 Environment=API_PORT=${PORTS.RUNNER}
 Environment=RUNNER_DOMAIN=\$HOST_IP
