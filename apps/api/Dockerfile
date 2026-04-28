@@ -1,5 +1,5 @@
 FROM node:24-slim AS boxlite
-
+# build: 2026-04-28-v2
 ENV CI=true
 
 RUN apt-get update && apt-get install -y --no-install-recommends bash curl && \
