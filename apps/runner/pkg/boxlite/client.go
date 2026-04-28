@@ -158,7 +158,13 @@ func (c *Client) Stop(ctx context.Context, sandboxId string, force bool) error {
 	if err != nil {
 		return err
 	}
-	return bx.Stop(ctx)
+	err = bx.Stop(ctx)
+
+	c.mu.Lock()
+	delete(c.boxes, sandboxId)
+	c.mu.Unlock()
+
+	return err
 }
 
 // Destroy removes a sandbox entirely.
