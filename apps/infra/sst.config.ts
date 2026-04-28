@@ -225,7 +225,7 @@ export default $config({
     // ─── 6. API (NestJS control plane) ───────────────────────────────────────
     const api = new sst.aws.Service("Api", {
       cluster,
-      image: { context: "../..", dockerfile: "apps/api/Dockerfile", cacheFrom: [] },
+      image: { context: "../..", dockerfile: "apps/api/Dockerfile", cacheFrom: [], cacheTo: [], args: { CACHE_BUST: Date.now().toString() } },
       loadBalancer: {
         domain: serviceDomain("api"),
         rules: [{ listen: "443/https", forward: `${PORTS.API}/http` }],
