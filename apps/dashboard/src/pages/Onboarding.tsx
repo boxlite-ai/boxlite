@@ -329,40 +329,53 @@ const codeExamples = {
   typescript: {
     install: `npm install boxlite`,
     run: `npx tsx index.mts`,
-    example: `import { Boxlite, BoxliteRestOptions, BoxOptions, BoxCommand } from 'boxlite'
+    example: `import { Boxlite, BoxliteRestOptions } from 'boxlite'
 
 // Connect to BoxLite Cloud
-const opts = BoxliteRestOptions.create('your-api-url')
-  .withCredentials('default', 'your-api-key')
-const rt = Boxlite.rest(opts)
+const rt = Boxlite.rest(new BoxliteRestOptions({
+  url: 'your-api-url',
+  clientId: 'default',
+  clientSecret: 'your-api-key',
+}))
 
 // Create a sandbox
-const box = await rt.create(BoxOptions.create('alpine:latest'), 'my-sandbox')
+const box = await rt.create({ image: 'alpine:latest' }, 'my-sandbox')
+await box.start()
 
-// Run code securely inside the sandbox
-const r = await box.exec(BoxCommand.create('echo').arg('Hello World!'))
-const result = await r.wait()
-console.log(result)
+// Run a command securely inside the sandbox
+const exec = await box.exec('echo', ['Hello World!'])
+const result = await exec.wait()
+console.log('Exit code:', result.exitCode)
+
+// Cleanup
+await rt.remove(box.id, true)
   `,
   },
   python: {
     install: `pip install boxlite`,
     run: `python main.py`,
     example: `import asyncio
-from boxlite import Boxlite, BoxliteRestOptions, BoxOptions, BoxCommand
+from boxlite import Boxlite, BoxliteRestOptions, BoxOptions
 
 async def main():
     # Connect to BoxLite Cloud
-    opts = BoxliteRestOptions("your-api-url")
-    opts = opts.with_credentials("default", "your-api-key")
-    rt = Boxlite.rest(opts)
+    rt = Boxlite.rest(BoxliteRestOptions(
+        url="your-api-url",
+        client_id="default",
+        client_secret="your-api-key",
+    ))
 
     # Create a sandbox
     box = await rt.create(BoxOptions(image="alpine:latest"), name="my-sandbox")
+    await box.start()
 
-    # Run code securely inside the sandbox
-    result = await box.exec(BoxCommand("echo").arg("Hello World!"))
+    # Run a command securely inside the sandbox
+    execution = await box.exec("echo", args=["Hello World!"])
+    result = await execution.wait()
     print(f"Exit code: {result.exit_code}")
+
+    # Cleanup
+    await rt.remove(box.id, force=True)
 
 asyncio.run(main())
   `,
