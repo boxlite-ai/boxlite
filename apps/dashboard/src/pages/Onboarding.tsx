@@ -348,19 +348,23 @@ console.log(result)
   python: {
     install: `pip install boxlite`,
     run: `python main.py`,
-    example: `from boxlite import Boxlite, BoxliteRestOptions, BoxOptions, BoxCommand
+    example: `import asyncio
+from boxlite import Boxlite, BoxliteRestOptions, BoxOptions, BoxCommand
 
-# Connect to BoxLite Cloud
-opts = BoxliteRestOptions("your-api-url")
-opts = opts.with_credentials("default", "your-api-key")
-rt = Boxlite.rest(opts)
+async def main():
+    # Connect to BoxLite Cloud
+    opts = BoxliteRestOptions("your-api-url")
+    opts = opts.with_credentials("default", "your-api-key")
+    rt = Boxlite.rest(opts)
 
-# Create a sandbox
-box = await rt.create(BoxOptions(image="alpine:latest"), name="my-sandbox")
+    # Create a sandbox
+    box = await rt.create(BoxOptions(image="alpine:latest"), name="my-sandbox")
 
-# Run code securely inside the sandbox
-result = await box.exec(BoxCommand("echo").arg("Hello World!"))
-print(f"Exit code: {result.exit_code}")
+    # Run code securely inside the sandbox
+    result = await box.exec(BoxCommand("echo").arg("Hello World!"))
+    print(f"Exit code: {result.exit_code}")
+
+asyncio.run(main())
   `,
   },
 }
