@@ -1195,7 +1195,7 @@ export class SnapshotManager implements TrackableJobExecutions, OnApplicationShu
     if (!snapshot.ref) {
       shouldSave = true
       const sanitizedUrl = internalRegistry.url.replace(/^https?:\/\//, '')
-      snapshot.ref = `${sanitizedUrl}/${internalRegistry.project || 'boxlite'}/boxlite-${hash}:boxlite`
+      snapshot.ref = `${sanitizedUrl}/${internalRegistry.project || 'boxlite'}/daytona-${hash}:daytona`
     }
 
     if (!snapshot.size) {
