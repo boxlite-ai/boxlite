@@ -197,7 +197,7 @@ import { BoxliteRestModule } from './boxlite-rest/boxlite-rest.module'
     HealthModule,
     ClickHouseModule,
     SandboxTelemetryModule,
-    // BoxliteRestModule, // TODO: re-enable after fixing DI dependencies
+    BoxliteRestModule,
     OpenFeatureModule.forRoot({
       contextFactory: (request: ExecutionContext) => {
         const req = request.switchToHttp().getRequest()
