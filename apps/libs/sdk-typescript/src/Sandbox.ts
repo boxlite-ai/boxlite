@@ -1,5 +1,6 @@
 /*
  * Copyright 2025 Daytona Platforms Inc.
+ * Modified by BoxLite AI, 2025-2026
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -18,7 +19,7 @@ import {
   SignedPortPreviewUrl,
   ResizeSandbox,
 } from '@daytonaio/api-client'
-import { Resources } from './Daytona'
+import { Resources } from './BoxLite'
 import {
   FileSystemApi,
   GitApi,
@@ -32,7 +33,7 @@ import { FileSystem } from './FileSystem'
 import { Git } from './Git'
 import { CodeRunParams, Process } from './Process'
 import { LspLanguageId, LspServer } from './LspServer'
-import { DaytonaError, DaytonaNotFoundError } from './errors/DaytonaError'
+import { BoxliteError, BoxLiteNotFoundError } from './errors/BoxliteError'
 import { ComputerUse } from './ComputerUse'
 import { AxiosInstance } from 'axios'
 import { CodeInterpreter } from './CodeInterpreter'
@@ -48,7 +49,7 @@ export interface SandboxCodeToolbox {
 }
 
 /**
- * Represents a Daytona Sandbox.
+ * Represents a BoxLite Sandbox.
  *
  * @property {FileSystem} fs - File system operations interface
  * @property {Git} git - Git operations interface
@@ -58,7 +59,7 @@ export interface SandboxCodeToolbox {
  * @property {ComputerUse} computerUse - Computer use operations interface for desktop automation
  * @property {string} id - Unique identifier for the Sandbox
  * @property {string} organizationId - Organization ID of the Sandbox
- * @property {string} [snapshot] - Daytona snapshot used to create the Sandbox
+ * @property {string} [snapshot] - BoxLite snapshot used to create the Sandbox
  * @property {string} user - OS user running in the Sandbox
  * @property {Record<string, string>} env - Environment variables set in the Sandbox
  * @property {Record<string, string>} labels - Custom labels attached to the Sandbox
@@ -259,17 +260,17 @@ export class Sandbox implements SandboxDto {
    * @param {number} [timeout] - Maximum time to wait in seconds. 0 means no timeout.
    *                            Defaults to 60-second timeout.
    * @returns {Promise<void>}
-   * @throws {DaytonaError} - `DaytonaError` - If Sandbox fails to start or times out
+   * @throws {BoxliteError} - `BoxliteError` - If Sandbox fails to start or times out
    *
    * @example
-   * const sandbox = await daytona.getCurrentSandbox('my-sandbox');
+   * const sandbox = await boxlite.getCurrentSandbox('my-sandbox');
    * await sandbox.start(40);  // Wait up to 40 seconds
    * console.log('Sandbox started successfully');
    */
   @WithInstrumentation()
   public async start(timeout = 60): Promise<void> {
     if (timeout < 0) {
-      throw new DaytonaError('Timeout must be a non-negative number')
+      throw new BoxliteError('Timeout must be a non-negative number')
     }
 
     const startTime = Date.now()
@@ -285,16 +286,16 @@ export class Sandbox implements SandboxDto {
    * @param {number} [timeout] - Maximum time to wait in seconds. 0 means no timeout.
    *                            Defaults to 60-second timeout.
    * @returns {Promise<void>}
-   * @throws {DaytonaError} - `DaytonaError` - If Sandbox fails to recover or times out
+   * @throws {BoxliteError} - `BoxliteError` - If Sandbox fails to recover or times out
    *
    * @example
-   * const sandbox = await daytona.get('my-sandbox-id');
+   * const sandbox = await boxlite.get('my-sandbox-id');
    * await sandbox.recover();
    * console.log('Sandbox recovered successfully');
    */
   public async recover(timeout = 60): Promise<void> {
     if (timeout < 0) {
-      throw new DaytonaError('Timeout must be a non-negative number')
+      throw new BoxliteError('Timeout must be a non-negative number')
     }
 
     const startTime = Date.now()
@@ -315,14 +316,14 @@ export class Sandbox implements SandboxDto {
    * @returns {Promise<void>}
    *
    * @example
-   * const sandbox = await daytona.get('my-sandbox-id');
+   * const sandbox = await boxlite.get('my-sandbox-id');
    * await sandbox.stop();
    * console.log('Sandbox stopped successfully');
    */
   @WithInstrumentation()
   public async stop(timeout = 60, force = false): Promise<void> {
     if (timeout < 0) {
-      throw new DaytonaError('Timeout must be a non-negative number')
+      throw new BoxliteError('Timeout must be a non-negative number')
     }
     const startTime = Date.now()
     await this.sandboxApi.stopSandbox(this.id, undefined, force, { timeout: timeout * 1000 })
@@ -350,12 +351,12 @@ export class Sandbox implements SandboxDto {
    * @param {number} [timeout] - Maximum time to wait in seconds. 0 means no timeout.
    *                               Defaults to 60 seconds.
    * @returns {Promise<void>}
-   * @throws {DaytonaError} - `DaytonaError` - If the sandbox ends up in an error state or fails to start within the timeout period.
+   * @throws {BoxliteError} - `BoxliteError` - If the sandbox ends up in an error state or fails to start within the timeout period.
    */
   @WithInstrumentation()
   public async waitUntilStarted(timeout = 60) {
     if (timeout < 0) {
-      throw new DaytonaError('Timeout must be a non-negative number')
+      throw new BoxliteError('Timeout must be a non-negative number')
     }
 
     const checkInterval = 100 // Wait 100 ms between checks
@@ -371,11 +372,11 @@ export class Sandbox implements SandboxDto {
 
       if (this.state === 'error') {
         const errMsg = `Sandbox ${this.id} failed to start with status: ${this.state}, error reason: ${this.errorReason}`
-        throw new DaytonaError(errMsg)
+        throw new BoxliteError(errMsg)
       }
 
       if (timeout !== 0 && Date.now() - startTime > timeout * 1000) {
-        throw new DaytonaError('Sandbox failed to become ready within the timeout period')
+        throw new BoxliteError('Sandbox failed to become ready within the timeout period')
       }
 
       await new Promise((resolve) => setTimeout(resolve, checkInterval))
@@ -391,12 +392,12 @@ export class Sandbox implements SandboxDto {
    * @param {number} [timeout] - Maximum time to wait in seconds. 0 means no timeout.
    *                               Defaults to 60 seconds.
    * @returns {Promise<void>}
-   * @throws {DaytonaError} - `DaytonaError` - If the sandbox fails to stop within the timeout period.
+   * @throws {BoxliteError} - `BoxliteError` - If the sandbox fails to stop within the timeout period.
    */
   @WithInstrumentation()
   public async waitUntilStopped(timeout = 60) {
     if (timeout < 0) {
-      throw new DaytonaError('Timeout must be a non-negative number')
+      throw new BoxliteError('Timeout must be a non-negative number')
     }
 
     const checkInterval = 100 // Wait 100 ms between checks
@@ -413,11 +414,11 @@ export class Sandbox implements SandboxDto {
 
       if (this.state === 'error') {
         const errMsg = `Sandbox failed to stop with status: ${this.state}, error reason: ${this.errorReason}`
-        throw new DaytonaError(errMsg)
+        throw new BoxliteError(errMsg)
       }
 
       if (timeout !== 0 && Date.now() - startTime > timeout * 1000) {
-        throw new DaytonaError('Sandbox failed to become stopped within the timeout period')
+        throw new BoxliteError('Sandbox failed to become stopped within the timeout period')
       }
 
       await new Promise((resolve) => setTimeout(resolve, checkInterval))
@@ -467,7 +468,7 @@ export class Sandbox implements SandboxDto {
    * @param {number} interval - Number of minutes of inactivity before auto-stopping.
    *                           Set to 0 to disable auto-stop. Default is 15 minutes.
    * @returns {Promise<void>}
-   * @throws {DaytonaError} - `DaytonaError` - If interval is not a non-negative integer
+   * @throws {BoxliteError} - `BoxliteError` - If interval is not a non-negative integer
    *
    * @example
    * // Auto-stop after 1 hour
@@ -478,7 +479,7 @@ export class Sandbox implements SandboxDto {
   @WithInstrumentation()
   public async setAutostopInterval(interval: number): Promise<void> {
     if (!Number.isInteger(interval) || interval < 0) {
-      throw new DaytonaError('autoStopInterval must be a non-negative integer')
+      throw new BoxliteError('autoStopInterval must be a non-negative integer')
     }
 
     await this.sandboxApi.setAutostopInterval(this.id, interval)
@@ -493,7 +494,7 @@ export class Sandbox implements SandboxDto {
    * @param {number} interval - Number of minutes after which a continuously stopped Sandbox will be auto-archived.
    *                           Set to 0 for the maximum interval. Default is 7 days.
    * @returns {Promise<void>}
-   * @throws {DaytonaError} - `DaytonaError` - If interval is not a non-negative integer
+   * @throws {BoxliteError} - `BoxliteError` - If interval is not a non-negative integer
    *
    * @example
    * // Auto-archive after 1 hour
@@ -504,7 +505,7 @@ export class Sandbox implements SandboxDto {
   @WithInstrumentation()
   public async setAutoArchiveInterval(interval: number): Promise<void> {
     if (!Number.isInteger(interval) || interval < 0) {
-      throw new DaytonaError('autoArchiveInterval must be a non-negative integer')
+      throw new BoxliteError('autoArchiveInterval must be a non-negative integer')
     }
     await this.sandboxApi.setAutoArchiveInterval(this.id, interval)
     this.autoArchiveInterval = interval
@@ -599,7 +600,7 @@ export class Sandbox implements SandboxDto {
    *   - disk: Disk space in GiB (can only be increased, requires stopped sandbox).
    * @param {number} [timeout=60] - Timeout in seconds for the resize operation. 0 means no timeout.
    * @returns {Promise<void>}
-   * @throws {DaytonaError} - If hot resize constraints are violated, disk resize attempted on running sandbox,
+   * @throws {BoxliteError} - If hot resize constraints are violated, disk resize attempted on running sandbox,
    *   disk size decrease is attempted, no resource changes are specified, or resize operation times out.
    *
    * @example
@@ -613,7 +614,7 @@ export class Sandbox implements SandboxDto {
   @WithInstrumentation()
   public async resize(resources: Resources, timeout = 60): Promise<void> {
     if (timeout < 0) {
-      throw new DaytonaError('Timeout must be a non-negative number')
+      throw new BoxliteError('Timeout must be a non-negative number')
     }
 
     const startTime = Date.now()
@@ -637,12 +638,12 @@ export class Sandbox implements SandboxDto {
    *
    * @param {number} [timeout=60] - Maximum time to wait in seconds. 0 means no timeout.
    * @returns {Promise<void>}
-   * @throws {DaytonaError} - If the sandbox ends up in an error state or resize times out.
+   * @throws {BoxliteError} - If the sandbox ends up in an error state or resize times out.
    */
   @WithInstrumentation()
   public async waitForResizeComplete(timeout = 60): Promise<void> {
     if (timeout < 0) {
-      throw new DaytonaError('Timeout must be a non-negative number')
+      throw new BoxliteError('Timeout must be a non-negative number')
     }
 
     const checkInterval = 100 // Wait 100 ms between checks
@@ -653,7 +654,7 @@ export class Sandbox implements SandboxDto {
 
       // @ts-expect-error this.refreshData() can modify this.state so this check is fine
       if (this.state === SandboxState.ERROR || this.state === SandboxState.BUILD_FAILED) {
-        throw new DaytonaError(
+        throw new BoxliteError(
           `Sandbox ${this.id} resize failed with state: ${this.state}, error reason: ${this.errorReason}`,
         )
       }
@@ -663,7 +664,7 @@ export class Sandbox implements SandboxDto {
       }
 
       if (timeout !== 0 && Date.now() - startTime > timeout * 1000) {
-        throw new DaytonaError('Sandbox resize did not complete within the timeout period')
+        throw new BoxliteError('Sandbox resize did not complete within the timeout period')
       }
 
       await new Promise((resolve) => setTimeout(resolve, checkInterval))
@@ -750,7 +751,7 @@ export class Sandbox implements SandboxDto {
     try {
       await this.refreshData()
     } catch (error) {
-      if (error instanceof DaytonaNotFoundError) {
+      if (error instanceof BoxLiteNotFoundError) {
         this.state = SandboxState.DESTROYED
       }
     }

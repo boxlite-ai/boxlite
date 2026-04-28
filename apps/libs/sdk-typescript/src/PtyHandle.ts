@@ -1,11 +1,12 @@
 /*
  * Copyright 2025 Daytona Platforms Inc.
+ * Modified by BoxLite AI, 2025-2026
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import WebSocket from 'isomorphic-ws'
 import { PtyResult } from './types/Pty'
-import { DaytonaError } from './errors/DaytonaError'
+import { BoxliteError } from './errors/BoxliteError'
 import { PtySessionInfo } from '@daytonaio/toolbox-api-client'
 import { WithInstrumentation } from './utils/otel.decorator'
 
@@ -94,7 +95,7 @@ export class PtyHandle {
 
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
-        reject(new DaytonaError('PTY connection timeout'))
+        reject(new BoxliteError('PTY connection timeout'))
       }, 10000) // 10 second timeout
 
       const checkConnection = () => {
@@ -103,7 +104,7 @@ export class PtyHandle {
           resolve()
         } else if (this.ws.readyState === WebSocket.CLOSED || this._error) {
           clearTimeout(timeout)
-          reject(new DaytonaError(this._error || 'Connection failed'))
+          reject(new BoxliteError(this._error || 'Connection failed'))
         } else {
           setTimeout(checkConnection, 100)
         }
@@ -132,7 +133,7 @@ export class PtyHandle {
   @WithInstrumentation()
   async sendInput(data: string | Uint8Array): Promise<void> {
     if (!this.isConnected()) {
-      throw new DaytonaError('PTY is not connected')
+      throw new BoxliteError('PTY is not connected')
     }
 
     try {
@@ -143,7 +144,7 @@ export class PtyHandle {
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error)
-      throw new DaytonaError(`Failed to send input to PTY: ${errorMessage}`)
+      throw new BoxliteError(`Failed to send input to PTY: ${errorMessage}`)
     }
   }
 
@@ -229,7 +230,7 @@ export class PtyHandle {
             error: this._error,
           })
         } else if (this._error) {
-          reject(new DaytonaError(this._error))
+          reject(new BoxliteError(this._error))
         } else {
           setTimeout(checkExit, 100)
         }
@@ -310,7 +311,7 @@ export class PtyHandle {
             const buffer = await data.arrayBuffer()
             bytes = new Uint8Array(buffer)
           } else {
-            throw new DaytonaError(`Unsupported message data type: ${Object.prototype.toString.call(data)}`)
+            throw new BoxliteError(`Unsupported message data type: ${Object.prototype.toString.call(data)}`)
           }
 
           if (this.onPty) {
@@ -319,7 +320,7 @@ export class PtyHandle {
         }
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error)
-        throw new DaytonaError(`Error handling PTY message: ${errorMessage}`)
+        throw new BoxliteError(`Error handling PTY message: ${errorMessage}`)
       }
     }
 
@@ -384,7 +385,7 @@ export class PtyHandle {
       this.ws.on('error', handleError)
       this.ws.on('close', handleClose)
     } else {
-      throw new DaytonaError('Unsupported WebSocket implementation')
+      throw new BoxliteError('Unsupported WebSocket implementation')
     }
   }
 }

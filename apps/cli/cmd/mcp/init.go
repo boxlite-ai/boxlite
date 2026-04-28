@@ -1,4 +1,5 @@
-// Copyright 2025 Daytona Platforms Inc.
+// Copyright 2025 BoxLite AI (originally Daytona Platforms Inc.
+// Modified by BoxLite AI, 2025-2026
 // SPDX-License-Identifier: AGPL-3.0
 
 package mcp
@@ -8,13 +9,13 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/daytonaio/daytona/cli/cmd/mcp/agents"
+	"github.com/daytonaio/boxlite/cli/cmd/mcp/agents"
 	"github.com/spf13/cobra"
 )
 
 var InitCmd = &cobra.Command{
 	Use:   "init [AGENT_NAME]",
-	Short: "Initialize Daytona MCP Server with an agent (currently supported: claude, windsurf, cursor)",
+	Short: "Initialize BoxLite MCP Server with an agent (currently supported: claude, windsurf, cursor)",
 	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if len(args) == 0 {
@@ -53,7 +54,7 @@ var InitCmd = &cobra.Command{
 }
 
 func injectConfig(agentConfigFilePath, mcpLogFilePath string) error {
-	daytonaMcpConfig, err := getDayonaMcpConfig(mcpLogFilePath)
+	boxliteMcpConfig, err := getDayonaMcpConfig(mcpLogFilePath)
 	if err != nil {
 		return err
 	}
@@ -76,8 +77,8 @@ func injectConfig(agentConfigFilePath, mcpLogFilePath string) error {
 		mcpServers = make(map[string]interface{})
 	}
 
-	// Add or update daytona-mcp configuration
-	mcpServers["daytona-mcp"] = daytonaMcpConfig
+	// Add or update boxlite-mcp configuration
+	mcpServers["boxlite-mcp"] = boxliteMcpConfig
 	agentConfig["mcpServers"] = mcpServers
 
 	// Write back the updated config with indentation

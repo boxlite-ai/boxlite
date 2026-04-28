@@ -13,7 +13,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Skeleton } from '@/components/ui/skeleton'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Legend } from 'recharts'
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
-import { DAYTONA_DOCS_URL } from '@/constants/ExternalLinks'
+import { BOXLITE_DOCS_URL } from '@/constants/ExternalLinks'
 import { RefreshCw, BarChart3 } from 'lucide-react'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { format, subHours } from 'date-fns'
@@ -223,7 +223,7 @@ function MetricsEmptyState() {
         <EmptyTitle>No metrics available</EmptyTitle>
         <EmptyDescription>
           Metrics may take a moment to appear after the sandbox starts.{' '}
-          <a href={`${DAYTONA_DOCS_URL}/en/experimental/otel-collection`} target="_blank" rel="noopener noreferrer">
+          <a href={`${BOXLITE_DOCS_URL}/en/experimental/otel-collection`} target="_blank" rel="noopener noreferrer">
             Learn more about observability
           </a>
           .

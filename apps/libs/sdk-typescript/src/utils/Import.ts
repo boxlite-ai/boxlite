@@ -1,9 +1,10 @@
 /*
  * Copyright 2025 Daytona Platforms Inc.
+ * Modified by BoxLite AI, 2025-2026
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { DaytonaError } from '../errors/DaytonaError'
+import { BoxliteError } from '../errors/BoxliteError'
 import { RUNTIME } from './Runtime'
 
 const loaderMap = {
@@ -47,7 +48,7 @@ export async function dynamicImport<K extends keyof ModuleMap>(
 ): Promise<Awaited<ReturnType<ModuleMap[K]>>> {
   const loader = loaderMap[name]
   if (!loader) {
-    throw new DaytonaError(`${errorPrefix || ''} Unknown module "${name}"`)
+    throw new BoxliteError(`${errorPrefix || ''} Unknown module "${name}"`)
   }
 
   let mod: any
@@ -56,11 +57,11 @@ export async function dynamicImport<K extends keyof ModuleMap>(
     mod = mod?.default ?? mod
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
-    throw new DaytonaError(`${errorPrefix || ''} Module "${name}" is not available in the "${RUNTIME}" runtime: ${msg}`)
+    throw new BoxliteError(`${errorPrefix || ''} Module "${name}" is not available in the "${RUNTIME}" runtime: ${msg}`)
   }
 
   if (validateMap[name] && !validateMap[name](mod)) {
-    throw new DaytonaError(
+    throw new BoxliteError(
       `${errorPrefix || ''} Module "${name}" didn't pass import validation in the "${RUNTIME}" runtime`,
     )
   }
@@ -73,7 +74,7 @@ type RequireMap = typeof requireMap
 export function dynamicRequire<K extends keyof RequireMap>(name: K, errorPrefix?: string): ReturnType<RequireMap[K]> {
   const loader = requireMap[name]
   if (!loader) {
-    throw new DaytonaError(`${errorPrefix || ''} Unknown module "${name}"`)
+    throw new BoxliteError(`${errorPrefix || ''} Unknown module "${name}"`)
   }
 
   let mod: any
@@ -82,11 +83,11 @@ export function dynamicRequire<K extends keyof RequireMap>(name: K, errorPrefix?
     mod = mod?.default ?? mod
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
-    throw new DaytonaError(`${errorPrefix || ''} Module "${name}" is not available in the "${RUNTIME}" runtime: ${msg}`)
+    throw new BoxliteError(`${errorPrefix || ''} Module "${name}" is not available in the "${RUNTIME}" runtime: ${msg}`)
   }
 
   if (validateMap[name] && !validateMap[name](mod)) {
-    throw new DaytonaError(
+    throw new BoxliteError(
       `${errorPrefix || ''} Module "${name}" didn't pass import validation in the "${RUNTIME}" runtime`,
     )
   }

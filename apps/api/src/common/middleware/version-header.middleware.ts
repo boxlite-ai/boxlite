@@ -1,5 +1,6 @@
 /*
  * Copyright 2025 Daytona Platforms Inc.
+ * Modified by BoxLite AI, 2025-2026
  * SPDX-License-Identifier: AGPL-3.0
  */
 
@@ -17,7 +18,7 @@ export class VersionHeaderMiddleware implements NestMiddleware {
 
   use(req: Request, res: Response, next: NextFunction) {
     if (this.version) {
-      res.setHeader('X-Daytona-Api-Version', `${this.version}`)
+      res.setHeader('X-BoxLite-Api-Version', `${this.version}`)
     }
     next()
   }

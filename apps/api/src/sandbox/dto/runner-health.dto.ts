@@ -1,5 +1,6 @@
 /*
  * Copyright 2025 Daytona Platforms Inc.
+ * Modified by BoxLite AI, 2025-2026
  * SPDX-License-Identifier: AGPL-3.0
  */
 
@@ -140,21 +141,21 @@ export class RunnerHealthcheckDto {
 
   @ApiPropertyOptional({
     description: 'Runner domain',
-    example: 'runner-123.daytona.example.com',
+    example: 'runner-123.boxlite.example.com',
   })
   @IsOptional()
   domain?: string
 
   @ApiPropertyOptional({
     description: 'Runner proxy URL',
-    example: 'http://proxy.daytona.example.com:8080',
+    example: 'http://proxy.boxlite.example.com:8080',
   })
   @IsOptional()
   proxyUrl?: string
 
   @ApiPropertyOptional({
     description: 'Runner API URL',
-    example: 'http://api.daytona.example.com:8080',
+    example: 'http://api.boxlite.example.com:8080',
   })
   @IsOptional()
   apiUrl?: string

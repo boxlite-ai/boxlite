@@ -1,8 +1,8 @@
 /* tslint:disable */
 /* eslint-disable */
 /**
- * Daytona Runner API
- * Daytona Runner API
+ * BoxLite Runner API
+ * BoxLite Runner API
  *
  * The version of the OpenAPI document: v0.0.0-dev
  * 

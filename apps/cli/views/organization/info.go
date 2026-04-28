@@ -1,4 +1,5 @@
-// Copyright 2025 Daytona Platforms Inc.
+// Copyright 2025 BoxLite AI (originally Daytona Platforms Inc.
+// Modified by BoxLite AI, 2025-2026
 // SPDX-License-Identifier: AGPL-3.0
 
 package organization
@@ -8,9 +9,9 @@ import (
 	"os"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/daytonaio/daytona/cli/views/common"
-	"github.com/daytonaio/daytona/cli/views/util"
-	apiclient "github.com/daytonaio/daytona/libs/api-client-go"
+	"github.com/daytonaio/boxlite/cli/views/common"
+	"github.com/daytonaio/boxlite/cli/views/util"
+	apiclient "github.com/daytonaio/boxlite/libs/api-client-go"
 	"golang.org/x/term"
 )
 

@@ -1,5 +1,5 @@
 /*
- * Copyright Daytona Platforms Inc.
+ * Copyright BoxLite AI (originally Daytona Platforms Inc.
  * SPDX-License-Identifier: AGPL-3.0
  */
 
@@ -55,5 +55,5 @@ func main() {
 		os.Exit(1)
 	}
 
-	log.Info("Daytona Snapshot manager stopped")
+	log.Info("BoxLite Snapshot manager stopped")
 }

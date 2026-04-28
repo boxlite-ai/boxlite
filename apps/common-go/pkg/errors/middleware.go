@@ -1,4 +1,5 @@
-// Copyright 2025 Daytona Platforms Inc.
+// Copyright 2025 BoxLite AI (originally Daytona Platforms Inc.
+// Modified by BoxLite AI, 2025-2026
 // SPDX-License-Identifier: Apache-2.0
 
 package errors

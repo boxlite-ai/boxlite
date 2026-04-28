@@ -1,4 +1,5 @@
-// Copyright 2025 Daytona Platforms Inc.
+// Copyright 2025 BoxLite AI (originally Daytona Platforms Inc.
+// Modified by BoxLite AI, 2025-2026
 // SPDX-License-Identifier: AGPL-3.0
 
 package snapshot
@@ -7,10 +8,10 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/daytonaio/daytona/cli/apiclient"
-	"github.com/daytonaio/daytona/cli/cmd/common"
-	"github.com/daytonaio/daytona/cli/config"
-	"github.com/daytonaio/daytona/cli/views/snapshot"
+	"github.com/daytonaio/boxlite/cli/apiclient"
+	"github.com/daytonaio/boxlite/cli/cmd/common"
+	"github.com/daytonaio/boxlite/cli/config"
+	"github.com/daytonaio/boxlite/cli/views/snapshot"
 	"github.com/spf13/cobra"
 )
 
@@ -22,7 +23,7 @@ var (
 var ListCmd = &cobra.Command{
 	Use:     "list",
 	Short:   "List all snapshots",
-	Long:    "List all available Daytona snapshots",
+	Long:    "List all available BoxLite snapshots",
 	Aliases: common.GetAliases("list"),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := context.Background()

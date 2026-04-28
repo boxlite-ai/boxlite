@@ -1,4 +1,5 @@
-// Copyright 2025 Daytona Platforms Inc.
+// Copyright 2025 BoxLite AI (originally Daytona Platforms Inc.
+// Modified by BoxLite AI, 2025-2026
 // SPDX-License-Identifier: AGPL-3.0
 
 package tools
@@ -8,7 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/daytonaio/daytona/cli/apiclient"
+	"github.com/daytonaio/boxlite/cli/apiclient"
 	"github.com/mark3labs/mcp-go/mcp"
 
 	log "github.com/sirupsen/logrus"
@@ -21,14 +22,14 @@ type ListFilesArgs struct {
 
 func GetListFilesTool() mcp.Tool {
 	return mcp.NewTool("list_files",
-		mcp.WithDescription("List files in a directory in the Daytona sandbox."),
+		mcp.WithDescription("List files in a directory in the BoxLite sandbox."),
 		mcp.WithString("path", mcp.Description("Path to the directory to list files from (defaults to current directory).")),
 		mcp.WithString("id", mcp.Required(), mcp.Description("ID of the sandbox to list the files from.")),
 	)
 }
 
 func ListFiles(ctx context.Context, request mcp.CallToolRequest, args ListFilesArgs) (*mcp.CallToolResult, error) {
-	apiClient, err := apiclient.GetApiClient(nil, daytonaMCPHeaders)
+	apiClient, err := apiclient.GetApiClient(nil, boxliteMCPHeaders)
 	if err != nil {
 		return &mcp.CallToolResult{IsError: true}, err
 	}

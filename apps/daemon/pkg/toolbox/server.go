@@ -1,9 +1,10 @@
-// Copyright 2025 Daytona Platforms Inc.
+// Copyright 2025 BoxLite AI (originally Daytona Platforms Inc.
+// Modified by BoxLite AI, 2025-2026
 // SPDX-License-Identifier: AGPL-3.0
 
-//	@title			Daytona Toolbox API
+//	@title			BoxLite Toolbox API
 //	@version		v0.0.0-dev
-//	@description	Daytona Toolbox API
+//	@description	BoxLite Toolbox API
 
 package toolbox
 
@@ -109,8 +110,8 @@ func (s *server) Start() error {
 	s.ctx, s.cancel = context.WithCancel(context.Background())
 	defer s.cancel()
 
-	docs.SwaggerInfo.Description = "Daytona Toolbox API"
-	docs.SwaggerInfo.Title = "Daytona Toolbox API"
+	docs.SwaggerInfo.Description = "BoxLite Toolbox API"
+	docs.SwaggerInfo.Title = "BoxLite Toolbox API"
 	docs.SwaggerInfo.BasePath = "/"
 	docs.SwaggerInfo.Version = internal.Version
 
@@ -262,10 +263,10 @@ func (s *server) Start() error {
 
 	go func() {
 		// Initialize plugin-based computer use lazily in a background goroutine
-		pluginPath := "/usr/local/lib/daytona-computer-use"
+		pluginPath := "/usr/local/lib/boxlite-computer-use"
 		// Fallback to local config directory for development
 		if _, err := os.Stat(pluginPath); os.IsNotExist(err) {
-			pluginPath = path.Join(s.configDir, "daytona-computer-use")
+			pluginPath = path.Join(s.configDir, "boxlite-computer-use")
 		}
 
 		impl, err := manager.GetComputerUse(s.logger, pluginPath)

@@ -1,5 +1,6 @@
 /*
  * Copyright 2025 Daytona Platforms Inc.
+ * Modified by BoxLite AI, 2025-2026
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -303,7 +304,7 @@ export class Process {
    *
    * // Change directory
    * await process.executeSessionCommand(sessionId, {
-   *   command: 'cd /home/daytona'
+   *   command: 'cd /home/boxlite'
    * });
    *
    * // Run command in new directory

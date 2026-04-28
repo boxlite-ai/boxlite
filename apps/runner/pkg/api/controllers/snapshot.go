@@ -1,4 +1,5 @@
-// Copyright 2025 Daytona Platforms Inc.
+// Copyright 2025 BoxLite AI (originally Daytona Platforms Inc.
+// Modified by BoxLite AI, 2025-2026
 // SPDX-License-Identifier: AGPL-3.0
 
 package controllers
@@ -355,8 +356,8 @@ func GetBuildLogs(logger *slog.Logger) gin.HandlerFunc {
 		checkSnapshotRef := snapshotRef
 
 		// Fixed tag for instances where we are not looking for an entry with snapshot ID
-		if strings.HasPrefix(snapshotRef, "daytona") {
-			checkSnapshotRef = snapshotRef + ":daytona"
+		if strings.HasPrefix(snapshotRef, "boxlite") {
+			checkSnapshotRef = snapshotRef + ":boxlite"
 		}
 
 		flusher, ok := ctx.Writer.(http.Flusher)

@@ -1,5 +1,6 @@
 /*
  * Copyright 2025 Daytona Platforms Inc.
+ * Modified by BoxLite AI, 2025-2026
  * SPDX-License-Identifier: AGPL-3.0
  */
 
@@ -20,7 +21,7 @@ import { RunnerAdapterFactory } from './sandbox/runner-adapter/runnerAdapter'
 import { RegionType } from './region/enums/region-type.enum'
 import { RunnerState } from './sandbox/enums/runner-state.enum'
 
-export const DAYTONA_ADMIN_USER_ID = 'daytona-admin'
+export const BOXLITE_ADMIN_USER_ID = 'boxlite-admin'
 
 @Injectable()
 export class AppService implements OnApplicationBootstrap, OnApplicationShutdown {
@@ -166,13 +167,13 @@ export class AppService implements OnApplicationBootstrap, OnApplicationShutdown
   }
 
   private async initializeAdminUser(): Promise<void> {
-    if (await this.userService.findOne(DAYTONA_ADMIN_USER_ID)) {
+    if (await this.userService.findOne(BOXLITE_ADMIN_USER_ID)) {
       return
     }
 
     const user = await this.userService.create({
-      id: DAYTONA_ADMIN_USER_ID,
-      name: 'Daytona Admin',
+      id: BOXLITE_ADMIN_USER_ID,
+      name: 'BoxLite Admin',
       personalOrganizationQuota: {
         totalCpuQuota: this.configService.getOrThrow('admin.totalCpuQuota'),
         totalMemoryQuota: this.configService.getOrThrow('admin.totalMemoryQuota'),
@@ -191,7 +192,7 @@ export class AppService implements OnApplicationBootstrap, OnApplicationShutdown
     const { value } = await this.apiKeyService.createApiKey(
       personalOrg.id,
       user.id,
-      DAYTONA_ADMIN_USER_ID,
+      BOXLITE_ADMIN_USER_ID,
       [],
       undefined,
       this.configService.getOrThrow('admin.apiKey'),
@@ -310,7 +311,7 @@ Admin user created with API key: ${value}
   }
 
   private async initializeDefaultSnapshot(): Promise<void> {
-    const adminPersonalOrg = await this.organizationService.findPersonal(DAYTONA_ADMIN_USER_ID)
+    const adminPersonalOrg = await this.organizationService.findPersonal(BOXLITE_ADMIN_USER_ID)
 
     try {
       const existingSnapshot = await this.snapshotService.getSnapshotByName(

@@ -1,4 +1,5 @@
-// Copyright 2025 Daytona Platforms Inc.
+// Copyright 2025 BoxLite AI (originally Daytona Platforms Inc.
+// Modified by BoxLite AI, 2025-2026
 // SPDX-License-Identifier: AGPL-3.0
 
 package proxy
@@ -16,7 +17,7 @@ import (
 	"sync"
 	"time"
 
-	apiclient "github.com/daytonaio/daytona/libs/api-client-go"
+	apiclient "github.com/daytonaio/boxlite/libs/api-client-go"
 	"github.com/daytonaio/proxy/cmd/proxy/config"
 	"github.com/daytonaio/proxy/internal"
 	"github.com/gin-contrib/cors"
@@ -35,11 +36,11 @@ type RunnerInfo struct {
 	ApiKey string `json:"apiKey"`
 }
 
-const SANDBOX_AUTH_KEY_HEADER = "X-Daytona-Preview-Token"
-const SANDBOX_AUTH_KEY_QUERY_PARAM = "DAYTONA_SANDBOX_AUTH_KEY"
-const SANDBOX_AUTH_COOKIE_NAME = "daytona-sandbox-auth-"
-const SKIP_LAST_ACTIVITY_UPDATE_HEADER = "X-Daytona-Skip-Last-Activity-Update"
-const ACTIVITY_POLL_STOP_KEY = "daytona-activity-poll-stop"
+const SANDBOX_AUTH_KEY_HEADER = "X-BoxLite-Preview-Token"
+const SANDBOX_AUTH_KEY_QUERY_PARAM = "BOXLITE_SANDBOX_AUTH_KEY"
+const SANDBOX_AUTH_COOKIE_NAME = "boxlite-sandbox-auth-"
+const SKIP_LAST_ACTIVITY_UPDATE_HEADER = "X-BoxLite-Skip-Last-Activity-Update"
+const ACTIVITY_POLL_STOP_KEY = "boxlite-activity-poll-stop"
 const TERMINAL_PORT = "22222"
 const TOOLBOX_PORT = "2280"
 const RECORDING_DASHBOARD_PORT = "33333"
@@ -146,8 +147,8 @@ func StartProxy(ctx context.Context, config *config.Config) error {
 	}))
 
 	router.Use(func(ctx *gin.Context) {
-		if ctx.Request.Header.Get("X-Daytona-Disable-CORS") == "true" {
-			ctx.Request.Header.Del("X-Daytona-Disable-CORS")
+		if ctx.Request.Header.Get("X-BoxLite-Disable-CORS") == "true" {
+			ctx.Request.Header.Del("X-BoxLite-Disable-CORS")
 			return
 		}
 

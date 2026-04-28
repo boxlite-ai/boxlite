@@ -1,10 +1,11 @@
 /*
  * Copyright 2025 Daytona Platforms Inc.
+ * Modified by BoxLite AI, 2025-2026
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { Buffer } from 'buffer'
-import { DaytonaError } from '../errors/DaytonaError'
+import { BoxliteError } from '../errors/BoxliteError'
 
 /**
  * Converts various data types to Uint8Array
@@ -19,7 +20,7 @@ export function toUint8Array(data: string | ArrayBuffer | ArrayBufferView): Uint
   if (ArrayBuffer.isView(data)) {
     return new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
   }
-  throw new DaytonaError('Unsupported data type for byte conversion.')
+  throw new BoxliteError('Unsupported data type for byte conversion.')
 }
 
 /**
@@ -154,7 +155,7 @@ export async function collectStreamBytes(stream: any): Promise<Uint8Array> {
     return new Uint8Array(arrayBuffer)
   }
 
-  throw new DaytonaError('Unsupported stream type for byte collection.')
+  throw new BoxliteError('Unsupported stream type for byte collection.')
 }
 
 /**

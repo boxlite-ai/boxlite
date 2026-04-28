@@ -1,4 +1,5 @@
-// Copyright 2025 Daytona Platforms Inc.
+// Copyright 2025 BoxLite AI (originally Daytona Platforms Inc.
+// Modified by BoxLite AI, 2025-2026
 // SPDX-License-Identifier: AGPL-3.0
 
 package common
@@ -8,7 +9,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/daytonaio/daytona/cli/internal"
+	"github.com/daytonaio/boxlite/cli/internal"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v2"
 )

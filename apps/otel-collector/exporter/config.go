@@ -1,4 +1,4 @@
-// Copyright Daytona Platforms Inc.
+// Copyright BoxLite AI (originally Daytona Platforms Inc.
 // SPDX-License-Identifier: AGPL-3.0
 
 package exporter
@@ -28,10 +28,10 @@ type Config struct {
 	// RetrySettings defines the retry behavior for failed exports.
 	RetrySettings configretry.BackOffConfig `mapstructure:"retry_on_failure"`
 
-	// SendingQueue configures the queueing and batching behavior for sending requests to Daytona API.
+	// SendingQueue configures the queueing and batching behavior for sending requests to BoxLite API.
 	SendingQueue exporterhelper.QueueBatchConfig `mapstructure:"sending_queue"`
 
-	// Daytona API configuration.
+	// BoxLite API configuration.
 	ApiUrl string `mapstructure:"api_url"`
 	ApiKey string `mapstructure:"api_key"`
 

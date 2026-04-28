@@ -1,5 +1,6 @@
 /*
  * Copyright 2025 Daytona Platforms Inc.
+ * Modified by BoxLite AI, 2025-2026
  * SPDX-License-Identifier: AGPL-3.0
  */
 
@@ -20,7 +21,7 @@ import { getOpenApiConfig } from './openapi.config'
 import { AuditInterceptor } from './audit/interceptors/audit.interceptor'
 import { join } from 'node:path'
 import { ApiKeyService } from './api-key/api-key.service'
-import { DAYTONA_ADMIN_USER_ID } from './app.service'
+import { BOXLITE_ADMIN_USER_ID } from './app.service'
 import { OrganizationService } from './organization/services/organization.service'
 import { MicroserviceOptions, Transport } from '@nestjs/microservices'
 import { Partitioners } from 'kafkajs'
@@ -104,7 +105,7 @@ async function bootstrap() {
     swaggerOptions: {
       initOAuth: {
         clientId: configService.get('oidc.clientId'),
-        appName: 'Daytona AI',
+        appName: 'BoxLite AI',
         scopes: ['openid', 'profile', 'email'],
         additionalQueryStringParams: {
           audience: configService.get('oidc.audience'),
@@ -125,10 +126,10 @@ async function bootstrap() {
           }
           continue
         }
-        Logger.log(`Replacing %DAYTONA_BASE_API_URL% in ${filePath}`)
+        Logger.log(`Replacing %BOXLITE_BASE_API_URL% in ${filePath}`)
         const fileContent = readFileSync(filePath, 'utf8')
         const newFileContent = fileContent.replaceAll(
-          '%DAYTONA_BASE_API_URL%',
+          '%BOXLITE_BASE_API_URL%',
           configService.get('dashboardBaseApiUrl'),
         )
         writeFileSync(filePath, newFileContent)
@@ -145,7 +146,7 @@ async function bootstrap() {
 
   if (isApiEnabled()) {
     await app.listen(port, host)
-    Logger.log(`🚀 Daytona API is running on: http://${host}:${port}/${globalPrefix}`)
+    Logger.log(`🚀 BoxLite API is running on: http://${host}:${port}/${globalPrefix}`)
   } else {
     await app.init()
     app.flushLogs()
@@ -163,7 +164,7 @@ async function bootstrap() {
         },
         consumer: {
           allowAutoTopicCreation: true,
-          groupId: 'daytona',
+          groupId: 'boxlite',
         },
         run: {
           autoCommit: false,
@@ -186,8 +187,8 @@ async function createAdminApiKey(app: INestApplication, apiKeyName: string) {
   const apiKeyService = app.get(ApiKeyService)
   const organizationService = app.get(OrganizationService)
 
-  const personalOrg = await organizationService.findPersonal(DAYTONA_ADMIN_USER_ID)
-  const { value } = await apiKeyService.createApiKey(personalOrg.id, DAYTONA_ADMIN_USER_ID, apiKeyName, [])
+  const personalOrg = await organizationService.findPersonal(BOXLITE_ADMIN_USER_ID)
+  const { value } = await apiKeyService.createApiKey(personalOrg.id, BOXLITE_ADMIN_USER_ID, apiKeyName, [])
   Logger.log(
     `
 =========================================

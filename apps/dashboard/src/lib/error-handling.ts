@@ -1,10 +1,11 @@
 /*
  * Copyright 2025 Daytona Platforms Inc.
+ * Modified by BoxLite AI, 2025-2026
  * SPDX-License-Identifier: AGPL-3.0
  */
 
 import { Action, toast } from 'sonner'
-import { DaytonaError } from '@/api/errors'
+import { BoxliteError } from '@/api/errors'
 
 interface HandleApiErrorOptions {
   action?: React.ReactNode | Action
@@ -12,15 +13,15 @@ interface HandleApiErrorOptions {
 }
 
 export function handleApiError(error: unknown, message: string, options?: HandleApiErrorOptions) {
-  const isDaytonaError = error instanceof DaytonaError
+  const isBoxliteError = error instanceof BoxliteError
 
   toast.error(message, {
     ...(options?.toastId ? { id: options.toastId } : {}),
-    description: isDaytonaError ? error.message : 'Please try again or check the console for more details',
+    description: isBoxliteError ? error.message : 'Please try again or check the console for more details',
     action: options?.action,
   })
 
-  if (!isDaytonaError) {
+  if (!isBoxliteError) {
     console.error(message, error)
   }
 }

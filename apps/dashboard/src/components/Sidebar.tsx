@@ -1,5 +1,6 @@
 /*
  * Copyright 2025 Daytona Platforms Inc.
+ * Modified by BoxLite AI, 2025-2026
  * SPDX-License-Identifier: AGPL-3.0
  */
 
@@ -15,7 +16,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { DAYTONA_DOCS_URL, DAYTONA_SLACK_URL } from '@/constants/ExternalLinks'
+import { BOXLITE_DOCS_URL, BOXLITE_SLACK_URL } from '@/constants/ExternalLinks'
 import { useTheme } from '@/contexts/ThemeContext'
 import { FeatureFlags } from '@/enums/FeatureFlags'
 import { RoutePath } from '@/enums/RoutePath'
@@ -508,13 +509,13 @@ export function Sidebar({ isBannerVisible, billingEnabled, version: _version }: 
               )}
               <DropdownMenuSeparator />
               <DropdownMenuItem asChild className="cursor-pointer">
-                <a href={DAYTONA_DOCS_URL} target="_blank" rel="noopener noreferrer">
+                <a href={BOXLITE_DOCS_URL} target="_blank" rel="noopener noreferrer">
                   <BookOpen className="size-4" />
                   Docs
                 </a>
               </DropdownMenuItem>
               <DropdownMenuItem asChild className="cursor-pointer">
-                <a href={DAYTONA_SLACK_URL} target="_blank" rel="noopener noreferrer">
+                <a href={BOXLITE_SLACK_URL} target="_blank" rel="noopener noreferrer">
                   <MessageCircle className="size-4" />
                   Discord
                 </a>

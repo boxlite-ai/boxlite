@@ -1,5 +1,6 @@
 /*
  * Copyright 2025 Daytona Platforms Inc.
+ * Modified by BoxLite AI, 2025-2026
  * SPDX-License-Identifier: AGPL-3.0
  */
 
@@ -12,7 +13,7 @@ import { Sidebar } from '@/components/Sidebar'
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { Toaster } from '@/components/ui/sonner'
 import { VerifyEmailDialog } from '@/components/VerifyEmailDialog'
-import { DAYTONA_DOCS_URL, DAYTONA_SLACK_URL } from '@/constants/ExternalLinks'
+import { BOXLITE_DOCS_URL, BOXLITE_SLACK_URL } from '@/constants/ExternalLinks'
 import { useTheme } from '@/contexts/ThemeContext'
 import { LocalStorageKey } from '@/enums/LocalStorageKey'
 import { RoutePath } from '@/enums/RoutePath'
@@ -35,13 +36,13 @@ function useDashboardCommands() {
         id: 'open-slack',
         label: 'Open Discord',
         icon: <MessageCircle className="w-4 h-4" />,
-        onSelect: () => window.open(DAYTONA_SLACK_URL, '_blank'),
+        onSelect: () => window.open(BOXLITE_SLACK_URL, '_blank'),
       },
       {
         id: 'open-docs',
         label: 'Open Docs',
         icon: <BookOpen className="w-4 h-4" />,
-        onSelect: () => window.open(DAYTONA_DOCS_URL, '_blank'),
+        onSelect: () => window.open(BOXLITE_DOCS_URL, '_blank'),
       },
       {
         id: 'search-docs',

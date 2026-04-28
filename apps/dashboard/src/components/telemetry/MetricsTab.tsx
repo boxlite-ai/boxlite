@@ -73,7 +73,7 @@ function buildChartConfig(series: MetricSeries[]): ChartConfig {
   const config: ChartConfig = {}
   series.forEach((s, index) => {
     config[s.metricName] = {
-      label: s.metricName.replace(/^daytona\.sandbox\./, ''),
+      label: s.metricName.replace(/^boxlite\.sandbox\./, ''),
       color: CHART_COLORS[index % CHART_COLORS.length],
     }
   })

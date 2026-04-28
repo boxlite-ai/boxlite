@@ -1,5 +1,6 @@
 /*
  * Copyright 2025 Daytona Platforms Inc.
+ * Modified by BoxLite AI, 2025-2026
  * SPDX-License-Identifier: AGPL-3.0
  */
 
@@ -21,7 +22,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
-import { DAYTONA_DOCS_URL } from '@/constants/ExternalLinks'
+import { BOXLITE_DOCS_URL } from '@/constants/ExternalLinks'
 import { DEFAULT_PAGE_SIZE } from '@/constants/Pagination'
 import { LocalStorageKey } from '@/enums/LocalStorageKey'
 import { RoutePath } from '@/enums/RoutePath'
@@ -776,7 +777,7 @@ const Sandboxes: React.FC = () => {
                   <div>Computer-use dependencies are missing in the runtime environment.</div>
                   <div className="mt-2">
                     <a
-                      href={`${DAYTONA_DOCS_URL}/getting-started/computer-use`}
+                      href={`${BOXLITE_DOCS_URL}/getting-started/computer-use`}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="text-primary hover:underline"
@@ -929,7 +930,7 @@ const Sandboxes: React.FC = () => {
                 Onboarding guide
               </Button>
               <Button variant="link" className="text-primary" asChild size="sm">
-                <a href={DAYTONA_DOCS_URL} target="_blank" rel="noopener noreferrer" className="text-primary">
+                <a href={BOXLITE_DOCS_URL} target="_blank" rel="noopener noreferrer" className="text-primary">
                   Docs
                 </a>
               </Button>

@@ -1,4 +1,4 @@
-// Copyright Daytona Platforms Inc.
+// Copyright BoxLite AI (originally Daytona Platforms Inc.
 // SPDX-License-Identifier: AGPL-3.0
 
 package toolbox
@@ -48,11 +48,11 @@ func (s *server) initTelemetry(ctx context.Context, serviceName, entrypointLogFi
 
 	extraLabels := make(map[string]string)
 	if organizationId != nil && *organizationId != "" {
-		extraLabels["daytona_organization_id"] = *organizationId
+		extraLabels["boxlite_organization_id"] = *organizationId
 	}
 
 	if regionId != nil && *regionId != "" {
-		extraLabels["daytona_region_id"] = *regionId
+		extraLabels["boxlite_region_id"] = *regionId
 	}
 
 	if len(extraLabels) > 0 {
@@ -83,7 +83,7 @@ func (s *server) initTelemetry(ctx context.Context, serviceName, entrypointLogFi
 
 		entrypointLogFile, err := os.Open(entrypointLogFilePath)
 		if err != nil {
-			s.logger.ErrorContext(ctx, "Failed to open entrypoint log file", "error", err, "daytona-entrypoint", true)
+			s.logger.ErrorContext(ctx, "Failed to open entrypoint log file", "error", err, "boxlite-entrypoint", true)
 			return
 		}
 		defer entrypointLogFile.Close()
@@ -97,12 +97,12 @@ func (s *server) initTelemetry(ctx context.Context, serviceName, entrypointLogFi
 			case <-entrypointCtx.Done():
 				return
 			case line := <-stdoutChan:
-				s.logger.InfoContext(telemetryContext, string(line), "daytona-entrypoint", true)
+				s.logger.InfoContext(telemetryContext, string(line), "boxlite-entrypoint", true)
 			case line := <-stderrChan:
-				s.logger.ErrorContext(telemetryContext, string(line), "daytona-entrypoint", true)
+				s.logger.ErrorContext(telemetryContext, string(line), "boxlite-entrypoint", true)
 			case err := <-errChan:
 				if err != nil {
-					s.logger.ErrorContext(telemetryContext, "Error reading entrypoint log file", "error", err, "daytona-entrypoint", true)
+					s.logger.ErrorContext(telemetryContext, "Error reading entrypoint log file", "error", err, "boxlite-entrypoint", true)
 				}
 				return
 			}
@@ -110,7 +110,7 @@ func (s *server) initTelemetry(ctx context.Context, serviceName, entrypointLogFi
 	}()
 
 	// Initialize OpenTelemetry metrics
-	mp, err := telemetry.InitMetrics(ctx, config, "daytona.sandbox")
+	mp, err := telemetry.InitMetrics(ctx, config, "boxlite.sandbox")
 	if err != nil {
 		if shutDownErr := lp.Shutdown(telemetryContext); shutDownErr != nil {
 			s.logger.ErrorContext(ctx, "Failed to shutdown logger after metrics initialization failure", "shutdownErr", shutDownErr)

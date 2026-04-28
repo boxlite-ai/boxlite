@@ -1,4 +1,5 @@
-// Copyright 2025 Daytona Platforms Inc.
+// Copyright 2025 BoxLite AI (originally Daytona Platforms Inc.
+// Modified by BoxLite AI, 2025-2026
 // SPDX-License-Identifier: AGPL-3.0
 
 package snapshot
@@ -12,12 +13,12 @@ import (
 	"strings"
 	"time"
 
-	apiclient_cli "github.com/daytonaio/daytona/cli/apiclient"
-	"github.com/daytonaio/daytona/cli/cmd/common"
-	"github.com/daytonaio/daytona/cli/docker"
-	views_common "github.com/daytonaio/daytona/cli/views/common"
-	views_util "github.com/daytonaio/daytona/cli/views/util"
-	apiclient "github.com/daytonaio/daytona/libs/api-client-go"
+	apiclient_cli "github.com/daytonaio/boxlite/cli/apiclient"
+	"github.com/daytonaio/boxlite/cli/cmd/common"
+	"github.com/daytonaio/boxlite/cli/docker"
+	views_common "github.com/daytonaio/boxlite/cli/views/common"
+	views_util "github.com/daytonaio/boxlite/cli/views/util"
+	apiclient "github.com/daytonaio/boxlite/libs/api-client-go"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/registry"
 	"github.com/docker/docker/client"
@@ -28,7 +29,7 @@ import (
 var PushCmd = &cobra.Command{
 	Use:   "push [SNAPSHOT]",
 	Short: "Push local snapshot",
-	Long:  "Push a local Docker image to Daytona. To securely build it on our infrastructure, use 'daytona snapshot build'",
+	Long:  "Push a local Docker image to BoxLite. To securely build it on our infrastructure, use 'boxlite snapshot build'",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := context.Background()
@@ -153,7 +154,7 @@ var PushCmd = &cobra.Command{
 			return apiclient_cli.HandleErrorResponse(res, err)
 		}
 
-		views_common.RenderInfoMessageBold(fmt.Sprintf("Successfully pushed %s to Daytona", sourceImage))
+		views_common.RenderInfoMessageBold(fmt.Sprintf("Successfully pushed %s to BoxLite", sourceImage))
 
 		err = views_util.WithInlineSpinner("Waiting for the snapshot to be validated", func() error {
 			return common.AwaitSnapshotState(ctx, apiClient, nameFlag, apiclient.SNAPSHOTSTATE_ACTIVE)

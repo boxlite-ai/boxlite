@@ -31,7 +31,7 @@ export * from './create-snapshot';
 export * from './create-user';
 export * from './create-volume';
 export * from './create-workspace';
-export * from './daytona-configuration';
+export * from './boxlite-configuration';
 export * from './display-info-response';
 export * from './docker-registry';
 export * from './download-files';

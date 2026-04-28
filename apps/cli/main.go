@@ -1,4 +1,5 @@
-// Copyright 2025 Daytona Platforms Inc.
+// Copyright 2025 BoxLite AI (originally Daytona Platforms Inc.
+// Modified by BoxLite AI, 2025-2026
 // SPDX-License-Identifier: AGPL-3.0
 
 package main
@@ -8,22 +9,22 @@ import (
 
 	log "github.com/sirupsen/logrus"
 
-	"github.com/daytonaio/daytona/cli/cmd"
-	"github.com/daytonaio/daytona/cli/cmd/auth"
-	"github.com/daytonaio/daytona/cli/cmd/mcp"
-	"github.com/daytonaio/daytona/cli/cmd/organization"
-	"github.com/daytonaio/daytona/cli/cmd/sandbox"
-	"github.com/daytonaio/daytona/cli/cmd/snapshot"
-	"github.com/daytonaio/daytona/cli/cmd/volume"
-	"github.com/daytonaio/daytona/cli/internal"
+	"github.com/daytonaio/boxlite/cli/cmd"
+	"github.com/daytonaio/boxlite/cli/cmd/auth"
+	"github.com/daytonaio/boxlite/cli/cmd/mcp"
+	"github.com/daytonaio/boxlite/cli/cmd/organization"
+	"github.com/daytonaio/boxlite/cli/cmd/sandbox"
+	"github.com/daytonaio/boxlite/cli/cmd/snapshot"
+	"github.com/daytonaio/boxlite/cli/cmd/volume"
+	"github.com/daytonaio/boxlite/cli/internal"
 	"github.com/joho/godotenv"
 	"github.com/spf13/cobra"
 )
 
 var rootCmd = &cobra.Command{
-	Use:               "daytona",
-	Short:             "Daytona CLI",
-	Long:              "Command line interface for Daytona Sandboxes",
+	Use:               "boxlite",
+	Short:             "BoxLite CLI",
+	Long:              "Command line interface for BoxLite Sandboxes",
 	DisableAutoGenTag: true,
 	SilenceUsage:      true,
 	SilenceErrors:     true,
@@ -61,8 +62,8 @@ func init() {
 	rootCmd.AddCommand(createSandboxShortcut(sandbox.PreviewUrlCmd))
 
 	rootCmd.CompletionOptions.HiddenDefaultCmd = true
-	rootCmd.PersistentFlags().BoolP("help", "", false, "help for daytona")
-	rootCmd.Flags().BoolP("version", "v", false, "Display the version of Daytona")
+	rootCmd.PersistentFlags().BoolP("help", "", false, "help for boxlite")
+	rootCmd.Flags().BoolP("version", "v", false, "Display the version of BoxLite")
 
 	rootCmd.PreRun = func(command *cobra.Command, args []string) {
 		versionFlag, _ := command.Flags().GetBool("version")

@@ -1,5 +1,6 @@
 /*
  * Copyright 2025 Daytona Platforms Inc.
+ * Modified by BoxLite AI, 2025-2026
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -15,7 +16,7 @@ import {
 import { FileSystemApi } from '@daytonaio/toolbox-api-client'
 import { dynamicImport } from './utils/Import'
 import { RUNTIME, Runtime } from './utils/Runtime'
-import { DaytonaError } from './errors/DaytonaError'
+import { BoxliteError } from './errors/BoxliteError'
 import {
   normalizeResponseStream,
   processDownloadFilesResponseWithBusboy,
@@ -34,7 +35,7 @@ import { WithInstrumentation } from './utils/otel.decorator'
  * @example
  * const permissions: FilePermissionsParams = {
  *   mode: '644',
- *   owner: 'daytona',
+ *   owner: 'boxlite',
  *   group: 'users'
  * };
  */
@@ -191,7 +192,7 @@ export class FileSystem {
       const response = await this.downloadFiles([{ source: remotePath }], timeout)
 
       if (response[0].error) {
-        throw new DaytonaError(response[0].error)
+        throw new BoxliteError(response[0].error)
       }
 
       return response[0].result as Buffer
@@ -200,7 +201,7 @@ export class FileSystem {
     const response = await this.downloadFiles([{ source: remotePath, destination: dst }], timeout)
 
     if (response[0].error) {
-      throw new DaytonaError(response[0].error)
+      throw new BoxliteError(response[0].error)
     }
   }
 
@@ -212,7 +213,7 @@ export class FileSystem {
    * Default is 30 minutes.
    * @returns {Promise<FileDownloadResponse[]>} Array of download results.
    *
-   * @throws {DaytonaError} If the request itself fails (network issues, invalid request/response, etc.). Individual
+   * @throws {BoxliteError} If the request itself fails (network issues, invalid request/response, etc.). Individual
    * file download errors are returned in the `FileDownloadResponse.error` field.
    *
    * @example
@@ -407,7 +408,7 @@ export class FileSystem {
    * @example
    * // Set file permissions and ownership
    * await fs.setFilePermissions('app/script.sh', {
-   *   owner: 'daytona',
+   *   owner: 'boxlite',
    *   group: 'users',
    *   mode: '755'  // Execute permission for shell script
    * });

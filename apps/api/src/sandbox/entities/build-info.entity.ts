@@ -1,5 +1,6 @@
 /*
  * Copyright 2025 Daytona Platforms Inc.
+ * Modified by BoxLite AI, 2025-2026
  * SPDX-License-Identifier: AGPL-3.0
  */
 
@@ -12,7 +13,7 @@ export function generateBuildInfoHash(dockerfileContent: string, contextHashes: 
   const sortedContextHashes = [...contextHashes].sort() || []
   const combined = dockerfileContent + sortedContextHashes.join('')
   const hash = createHash('sha256').update(combined).digest('hex')
-  return 'daytona-' + hash + ':daytona'
+  return 'boxlite-' + hash + ':boxlite'
 }
 
 @Entity()

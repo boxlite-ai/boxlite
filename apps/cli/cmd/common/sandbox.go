@@ -1,4 +1,4 @@
-// Copyright Daytona Platforms Inc.
+// Copyright BoxLite AI (originally Daytona Platforms Inc.
 // SPDX-License-Identifier: AGPL-3.0
 
 package common
@@ -6,7 +6,7 @@ package common
 import (
 	"fmt"
 
-	apiclient "github.com/daytonaio/daytona/libs/api-client-go"
+	apiclient "github.com/daytonaio/boxlite/libs/api-client-go"
 )
 
 func RequireStartedState(sandbox *apiclient.Sandbox) error {
@@ -26,11 +26,11 @@ func RequireStartedState(sandbox *apiclient.Sandbox) error {
 
 	switch state {
 	case apiclient.SANDBOXSTATE_STOPPED:
-		return fmt.Errorf("sandbox is stopped. Start it with: daytona sandbox start %s", sandboxRef)
+		return fmt.Errorf("sandbox is stopped. Start it with: boxlite sandbox start %s", sandboxRef)
 	case apiclient.SANDBOXSTATE_ARCHIVED:
-		return fmt.Errorf("sandbox is archived. Start it with: daytona sandbox start %s", sandboxRef)
+		return fmt.Errorf("sandbox is archived. Start it with: boxlite sandbox start %s", sandboxRef)
 	case apiclient.SANDBOXSTATE_ARCHIVING:
-		return fmt.Errorf("sandbox is archiving. Start it with: daytona sandbox start %s", sandboxRef)
+		return fmt.Errorf("sandbox is archiving. Start it with: boxlite sandbox start %s", sandboxRef)
 	case apiclient.SANDBOXSTATE_STARTING:
 		return fmt.Errorf("sandbox is starting. Please wait for it to be ready")
 	case apiclient.SANDBOXSTATE_STOPPING:

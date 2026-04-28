@@ -1,24 +1,25 @@
 /*
  * Copyright 2025 Daytona Platforms Inc.
+ * Modified by BoxLite AI, 2025-2026
  * SPDX-License-Identifier: Apache-2.0
  */
 
-export { CodeLanguage, Daytona } from './Daytona'
+export { CodeLanguage, BoxLite } from './BoxLite'
 export type {
   CreateSandboxBaseParams,
   CreateSandboxFromImageParams,
   CreateSandboxFromSnapshotParams,
-  DaytonaConfig,
+  BoxliteConfig,
   Resources,
   VolumeMount,
-} from './Daytona'
+} from './BoxLite'
 export { FileSystem } from './FileSystem'
 export { Git } from './Git'
 export { LspLanguageId } from './LspServer'
 export { Process } from './Process'
 // export { LspServer } from './LspServer'
 // export type { LspLanguageId, Position } from './LspServer'
-export { DaytonaError, DaytonaNotFoundError, DaytonaRateLimitError, DaytonaTimeoutError } from './errors/DaytonaError'
+export { BoxliteError, BoxLiteNotFoundError, BoxLiteRateLimitError, BoxLiteTimeoutError } from './errors/BoxliteError'
 export { Image } from './Image'
 export { Sandbox } from './Sandbox'
 export type { SandboxCodeToolbox } from './Sandbox'

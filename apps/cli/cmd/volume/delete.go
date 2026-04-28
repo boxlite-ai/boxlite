@@ -1,4 +1,5 @@
-// Copyright 2025 Daytona Platforms Inc.
+// Copyright 2025 BoxLite AI (originally Daytona Platforms Inc.
+// Modified by BoxLite AI, 2025-2026
 // SPDX-License-Identifier: AGPL-3.0
 
 package volume
@@ -7,9 +8,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/daytonaio/daytona/cli/apiclient"
-	"github.com/daytonaio/daytona/cli/cmd/common"
-	view_common "github.com/daytonaio/daytona/cli/views/common"
+	"github.com/daytonaio/boxlite/cli/apiclient"
+	"github.com/daytonaio/boxlite/cli/cmd/common"
+	view_common "github.com/daytonaio/boxlite/cli/views/common"
 	"github.com/spf13/cobra"
 )
 

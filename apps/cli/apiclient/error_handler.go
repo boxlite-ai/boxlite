@@ -1,4 +1,5 @@
-// Copyright 2025 Daytona Platforms Inc.
+// Copyright 2025 BoxLite AI (originally Daytona Platforms Inc.
+// Modified by BoxLite AI, 2025-2026
 // SPDX-License-Identifier: AGPL-3.0
 
 package apiclient
@@ -54,7 +55,7 @@ func HandleErrorResponse(res *http.Response, requestErr error) error {
 	}
 
 	if res.StatusCode == http.StatusUnauthorized {
-		errMessage += " - run 'daytona login' to reauthenticate"
+		errMessage += " - run 'boxlite login' to reauthenticate"
 	}
 
 	return errors.New(errMessage)

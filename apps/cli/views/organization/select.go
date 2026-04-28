@@ -1,12 +1,13 @@
-// Copyright 2025 Daytona Platforms Inc.
+// Copyright 2025 BoxLite AI (originally Daytona Platforms Inc.
+// Modified by BoxLite AI, 2025-2026
 // SPDX-License-Identifier: AGPL-3.0
 
 package organization
 
 import (
 	"github.com/charmbracelet/huh"
-	"github.com/daytonaio/daytona/cli/views/common"
-	apiclient "github.com/daytonaio/daytona/libs/api-client-go"
+	"github.com/daytonaio/boxlite/cli/views/common"
+	apiclient "github.com/daytonaio/boxlite/libs/api-client-go"
 )
 
 func GetOrganizationIdFromPrompt(organizationList []apiclient.Organization) (*apiclient.Organization, error) {

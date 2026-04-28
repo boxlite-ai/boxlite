@@ -1,4 +1,4 @@
-// Copyright Daytona Platforms Inc.
+// Copyright BoxLite AI (originally Daytona Platforms Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 package log

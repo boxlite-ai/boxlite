@@ -1,4 +1,5 @@
-// Copyright 2025 Daytona Platforms Inc.
+// Copyright 2025 BoxLite AI (originally Daytona Platforms Inc.
+// Modified by BoxLite AI, 2025-2026
 // SPDX-License-Identifier: AGPL-3.0
 
 package main
@@ -22,7 +23,7 @@ func main() {
 	hc_plugin.Serve(&hc_plugin.ServeConfig{
 		HandshakeConfig: manager.ComputerUseHandshakeConfig,
 		Plugins: map[string]hc_plugin.Plugin{
-			"daytona-computer-use": &computeruse.ComputerUsePlugin{Impl: &cu.ComputerUse{}},
+			"boxlite-computer-use": &computeruse.ComputerUsePlugin{Impl: &cu.ComputerUse{}},
 		},
 		Logger: logger,
 	})

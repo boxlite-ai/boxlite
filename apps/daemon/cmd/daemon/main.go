@@ -1,4 +1,5 @@
-// Copyright 2025 Daytona Platforms Inc.
+// Copyright 2025 BoxLite AI (originally Daytona Platforms Inc.
+// Modified by BoxLite AI, 2025-2026
 // SPDX-License-Identifier: AGPL-3.0
 
 package main
@@ -55,7 +56,7 @@ func run() int {
 		return 2
 	}
 
-	configDir := filepath.Join(homeDir, ".daytona")
+	configDir := filepath.Join(homeDir, ".boxlite")
 	err = os.MkdirAll(configDir, 0755)
 	if err != nil {
 		logger.Error("Failed to create config directory", "path", configDir, "error", err)

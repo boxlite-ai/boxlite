@@ -1,9 +1,10 @@
 /*
  * Copyright 2025 Daytona Platforms Inc.
+ * Modified by BoxLite AI, 2025-2026
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { DaytonaError } from '@/api/errors'
+import { BoxliteError } from '@/api/errors'
 import axios, { AxiosInstance } from 'axios'
 import {
   AutomaticTopUp,
@@ -35,7 +36,7 @@ export class BillingApiClient {
       (error) => {
         const errorMessage = error.response?.data?.message || error.response?.data || error.message || String(error)
 
-        throw DaytonaError.fromString(String(errorMessage))
+        throw BoxliteError.fromString(String(errorMessage))
       },
     )
   }

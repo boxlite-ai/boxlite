@@ -1,11 +1,12 @@
 /*
  * Copyright 2025 Daytona Platforms Inc.
+ * Modified by BoxLite AI, 2025-2026
  * SPDX-License-Identifier: AGPL-3.0
  */
 
 import { RoutePath } from '@/enums/RoutePath'
 import { queryKeys } from '@/hooks/queries/queryKeys'
-import { DaytonaConfiguration } from '@daytonaio/api-client'
+import { BoxliteConfiguration } from '@daytonaio/api-client'
 import { useSuspenseQuery } from '@tanstack/react-query'
 import { InMemoryWebStorage, WebStorageStateStore } from 'oidc-client-ts'
 import { ReactNode, useMemo } from 'react'
@@ -26,7 +27,7 @@ export function ConfigProvider(props: Props) {
       if (!res.ok) {
         throw res
       }
-      return res.json() as Promise<DaytonaConfiguration>
+      return res.json() as Promise<BoxliteConfiguration>
     },
   })
 

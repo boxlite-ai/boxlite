@@ -1,4 +1,5 @@
-// Copyright 2025 Daytona Platforms Inc.
+// Copyright 2025 BoxLite AI (originally Daytona Platforms Inc.
+// Modified by BoxLite AI, 2025-2026
 // SPDX-License-Identifier: AGPL-3.0
 
 package proxy
@@ -15,10 +16,10 @@ import (
 )
 
 const (
-	SKIP_PREVIEW_WARNING_HEADER      = "X-Daytona-Skip-Preview-Warning"
-	PREVIEW_PAGE_ACCEPT_COOKIE_NAME  = "daytona-preview-page-accepted"
+	SKIP_PREVIEW_WARNING_HEADER      = "X-BoxLite-Skip-Preview-Warning"
+	PREVIEW_PAGE_ACCEPT_COOKIE_NAME  = "boxlite-preview-page-accepted"
 	PREVIEW_PAGE_COOKIE_MAX_AGE      = 1 * 24 * 60 * 60 // 1 day in seconds
-	ACCEPT_PREVIEW_PAGE_WARNING_PATH = "/accept-daytona-preview-warning"
+	ACCEPT_PREVIEW_PAGE_WARNING_PATH = "/accept-boxlite-preview-warning"
 )
 
 func handleAcceptProxyWarning(ctx *gin.Context, secure bool) {
@@ -110,7 +111,7 @@ func serveWarningPage(c *gin.Context, https bool) {
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Daytona Preview - Warning</title>
+    <title>BoxLite Preview - Warning</title>
     <style>
       * {
         margin: 0;
@@ -270,11 +271,11 @@ func serveWarningPage(c *gin.Context, https bool) {
         <p class="warning-subtitle">You are about to visit <strong>%s</strong></p>
 
         <div class="warning-text">
-          • This website is served through <a href="https://daytona.io" target="_blank">daytona.io</a><br />
+          • This website is served through <a href="https://boxlite.ai" target="_blank">boxlite.ai</a><br />
           • Content and functionality may change without notice<br />
           • You should only visit this website if you trust whoever sent the link to<br />
           • Be careful about disclosing personal or financial information like passwords, phone numbers, or credit cards<br />
-          • To get rid of this warning for your organization, visit our docs: <a href="https://daytona.io/docs/en/preview-and-authentication" target="_blank">https://daytona.io/docs/en/preview-and-authentication</a>
+          • To get rid of this warning for your organization, visit our docs: <a href="https://boxlite.ai/docs/en/preview-and-authentication" target="_blank">https://boxlite.ai/docs/en/preview-and-authentication</a>
         </div>
 
         <form action="%s" method="POST" style="margin: 0">
@@ -285,7 +286,7 @@ func serveWarningPage(c *gin.Context, https bool) {
       </div>
     </div>
 
-    <div class="footer">Powered by Daytona - Secure and Elastic Infrastructure for AI-Generated Code</div>
+    <div class="footer">Powered by BoxLite - Secure and Elastic Infrastructure for AI-Generated Code</div>
   </body>
 </html>`
 

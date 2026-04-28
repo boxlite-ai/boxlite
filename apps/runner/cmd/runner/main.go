@@ -1,4 +1,5 @@
-// Copyright 2025 Daytona Platforms Inc.
+// Copyright 2025 BoxLite AI (originally Daytona Platforms Inc.
+// Modified by BoxLite AI, 2025-2026
 // SPDX-License-Identifier: AGPL-3.0
 
 package main
@@ -60,7 +61,7 @@ func run() int {
 		telemetryConfig := telemetry.Config{
 			Endpoint:       cfg.OtelEndpoint,
 			Headers:        cfg.GetOtelHeaders(),
-			ServiceName:    "daytona-runner",
+			ServiceName:    "boxlite-runner",
 			ServiceVersion: internal.Version,
 			Environment:    cfg.Environment,
 		}
@@ -82,7 +83,7 @@ func run() int {
 		telemetryConfig := telemetry.Config{
 			Endpoint:       cfg.OtelEndpoint,
 			Headers:        cfg.GetOtelHeaders(),
-			ServiceName:    "daytona-runner",
+			ServiceName:    "boxlite-runner",
 			ServiceVersion: internal.Version,
 			Environment:    cfg.Environment,
 		}

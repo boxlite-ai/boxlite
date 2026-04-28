@@ -1,5 +1,6 @@
 /*
  * Copyright 2025 Daytona Platforms Inc.
+ * Modified by BoxLite AI, 2025-2026
  * SPDX-License-Identifier: AGPL-3.0
  */
 
@@ -9,7 +10,7 @@ import { ApiProperty, ApiSchema } from '@nestjs/swagger'
 export class ToolboxProxyUrlDto {
   @ApiProperty({
     description: 'The toolbox proxy URL for the sandbox',
-    example: 'https://proxy.app.daytona.io/toolbox',
+    example: 'https://proxy.app.boxlite.io/toolbox',
   })
   url: string
 

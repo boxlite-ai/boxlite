@@ -1,4 +1,5 @@
-// Copyright 2025 Daytona Platforms Inc.
+// Copyright 2025 BoxLite AI (originally Daytona Platforms Inc.
+// Modified by BoxLite AI, 2025-2026
 // SPDX-License-Identifier: AGPL-3.0
 
 package tools
@@ -8,7 +9,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/daytonaio/daytona/cli/apiclient"
+	"github.com/daytonaio/boxlite/cli/apiclient"
 	"github.com/mark3labs/mcp-go/mcp"
 
 	log "github.com/sirupsen/logrus"
@@ -20,13 +21,13 @@ type DestroySandboxArgs struct {
 
 func GetDestroySandboxTool() mcp.Tool {
 	return mcp.NewTool("destroy_sandbox",
-		mcp.WithDescription("Destroy a sandbox with Daytona"),
+		mcp.WithDescription("Destroy a sandbox with BoxLite"),
 		mcp.WithString("id", mcp.Required(), mcp.Description("ID of the sandbox to destroy.")),
 	)
 }
 
 func DestroySandbox(ctx context.Context, request mcp.CallToolRequest, args DestroySandboxArgs) (*mcp.CallToolResult, error) {
-	apiClient, err := apiclient.GetApiClient(nil, daytonaMCPHeaders)
+	apiClient, err := apiclient.GetApiClient(nil, boxliteMCPHeaders)
 	if err != nil {
 		return &mcp.CallToolResult{IsError: true}, err
 	}

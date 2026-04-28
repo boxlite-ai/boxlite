@@ -1,5 +1,6 @@
 /*
  * Copyright 2025 Daytona Platforms Inc.
+ * Modified by BoxLite AI, 2025-2026
  * SPDX-License-Identifier: AGPL-3.0
  */
 
@@ -9,9 +10,10 @@ import CodeBlock from '@/components/CodeBlock'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { DAYTONA_DOCS_URL } from '@/constants/ExternalLinks'
+import { BOXLITE_DOCS_URL } from '@/constants/ExternalLinks'
 import { RoutePath } from '@/enums/RoutePath'
 import { useApi } from '@/hooks/useApi'
+import { useConfig } from '@/hooks/useConfig'
 import { useOrganizations } from '@/hooks/useOrganizations'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { handleApiError } from '@/lib/error-handling'
@@ -24,6 +26,7 @@ import { toast } from 'sonner'
 
 const Onboarding: React.FC = () => {
   const { apiKeyApi } = useApi()
+  const { apiUrl } = useConfig()
   const { organizations } = useOrganizations()
   const { selectedOrganization, onSelectOrganization, authenticatedUserHasPermission } = useSelectedOrganization()
   const navigate = useNavigate()
@@ -305,7 +308,7 @@ const Onboarding: React.FC = () => {
                   <h2 className="text-xl font-semibold mb-4">That's It</h2>
                   <p className="text-muted-foreground">
                     It's as easy as that. For more examples check out the{' '}
-                    <a href={DAYTONA_DOCS_URL} target="_blank" rel="noopener noreferrer" className="text-primary">
+                    <a href={BOXLITE_DOCS_URL} target="_blank" rel="noopener noreferrer" className="text-primary">
                       Docs
                     </a>
                     .

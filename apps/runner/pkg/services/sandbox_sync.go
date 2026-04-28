@@ -1,4 +1,5 @@
-// Copyright 2025 Daytona Platforms Inc.
+// Copyright 2025 BoxLite AI (originally Daytona Platforms Inc.
+// Modified by BoxLite AI, 2025-2026
 // SPDX-License-Identifier: AGPL-3.0
 
 package services
@@ -9,7 +10,7 @@ import (
 	"log/slog"
 	"time"
 
-	apiclient "github.com/daytonaio/daytona/libs/api-client-go"
+	apiclient "github.com/daytonaio/boxlite/libs/api-client-go"
 	runnerapiclient "github.com/daytonaio/runner/pkg/apiclient"
 	blclient "github.com/daytonaio/runner/pkg/boxlite"
 	"github.com/daytonaio/runner/pkg/models/enums"

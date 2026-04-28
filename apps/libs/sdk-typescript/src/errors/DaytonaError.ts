@@ -1,5 +1,6 @@
 /*
  * Copyright 2025 Daytona Platforms Inc.
+ * Modified by BoxLite AI, 2025-2026
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -12,9 +13,9 @@ import type { AxiosHeaders } from 'axios'
 type ResponseHeaders = InstanceType<typeof AxiosHeaders>
 
 /**
- * Base error for Daytona SDK.
+ * Base error for BoxLite SDK.
  */
-export class DaytonaError extends Error {
+export class BoxliteError extends Error {
   /** HTTP status code if available */
   public statusCode?: number
   /** Response headers if available */
@@ -22,35 +23,35 @@ export class DaytonaError extends Error {
 
   constructor(message: string, statusCode?: number, headers?: ResponseHeaders) {
     super(message)
-    this.name = 'DaytonaError'
+    this.name = 'BoxliteError'
     this.statusCode = statusCode
     this.headers = headers
   }
 }
 
-export class DaytonaNotFoundError extends DaytonaError {
+export class BoxLiteNotFoundError extends BoxliteError {
   constructor(message: string, statusCode?: number, headers?: ResponseHeaders) {
     super(message, statusCode, headers)
-    this.name = 'DaytonaNotFoundError'
+    this.name = 'BoxLiteNotFoundError'
   }
 }
 
 /**
  * Error thrown when rate limit is exceeded.
  */
-export class DaytonaRateLimitError extends DaytonaError {
+export class BoxLiteRateLimitError extends BoxliteError {
   constructor(message: string, statusCode?: number, headers?: ResponseHeaders) {
     super(message, statusCode, headers)
-    this.name = 'DaytonaRateLimitError'
+    this.name = 'BoxLiteRateLimitError'
   }
 }
 
 /**
  * Error thrown when a timeout occurs.
  */
-export class DaytonaTimeoutError extends DaytonaError {
+export class BoxLiteTimeoutError extends BoxliteError {
   constructor(message: string, statusCode?: number, headers?: ResponseHeaders) {
     super(message, statusCode, headers)
-    this.name = 'DaytonaTimeoutError'
+    this.name = 'BoxLiteTimeoutError'
   }
 }

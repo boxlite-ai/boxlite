@@ -1,5 +1,6 @@
 /*
  * Copyright 2025 Daytona Platforms Inc.
+ * Modified by BoxLite AI, 2025-2026
  * SPDX-License-Identifier: AGPL-3.0
  */
 
@@ -47,7 +48,7 @@ export class EmailService {
       await this.transporter.sendMail({
         from: this.options.from,
         to: payload.inviteeEmail,
-        subject: 'Invitation to join a Daytona organization',
+        subject: 'Invitation to join a BoxLite organization',
         html: await renderFile(path.join(__dirname, 'assets/templates/organization-invitation.template.ejs'), {
           organizationName: payload.organizationName,
           invitedBy: payload.invitedBy,

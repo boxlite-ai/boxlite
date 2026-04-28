@@ -1,5 +1,6 @@
 /*
  * Copyright 2025 Daytona Platforms Inc.
+ * Modified by BoxLite AI, 2025-2026
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -7,7 +8,7 @@ import { ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3'
 import { Upload } from '@aws-sdk/lib-storage'
 import * as crypto from 'crypto'
 import * as pathe from 'pathe'
-import { DaytonaError } from './errors/DaytonaError'
+import { BoxliteError } from './errors/BoxliteError'
 import { dynamicImport } from './utils/Import'
 import { WithInstrumentation } from './utils/otel.decorator'
 
@@ -40,7 +41,7 @@ export class ObjectStorage {
   private s3Client: S3Client
 
   constructor(config: ObjectStorageConfig) {
-    this.bucketName = config.bucketName || 'daytona-volume-builds'
+    this.bucketName = config.bucketName || 'boxlite-volume-builds'
     this.s3Client = new S3Client({
       region: this.extractAwsRegion(config.endpointUrl) || 'us-east-1',
       endpoint: config.endpointUrl,
@@ -67,7 +68,7 @@ export class ObjectStorage {
 
     if (!fs.existsSync(path)) {
       const errMsg = `Path does not exist: ${path}`
-      throw new DaytonaError(errMsg)
+      throw new BoxliteError(errMsg)
     }
 
     // Compute hash for the path

@@ -1,4 +1,5 @@
-// Copyright 2025 Daytona Platforms Inc.
+// Copyright 2025 BoxLite AI (originally Daytona Platforms Inc.
+// Modified by BoxLite AI, 2025-2026
 // SPDX-License-Identifier: AGPL-3.0
 
 package apiclient
@@ -6,14 +7,14 @@ package apiclient
 import (
 	"net/http"
 
-	apiclient "github.com/daytonaio/daytona/libs/api-client-go"
+	apiclient "github.com/daytonaio/boxlite/libs/api-client-go"
 	"github.com/daytonaio/runner/cmd/runner/config"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 var apiClient *apiclient.APIClient
 
-const DaytonaSourceHeader = "X-Daytona-Source"
+const BoxliteSourceHeader = "X-BoxLite-Source"
 
 func GetApiClient() (*apiclient.APIClient, error) {
 	c, err := config.GetConfig()
@@ -23,7 +24,7 @@ func GetApiClient() (*apiclient.APIClient, error) {
 
 	var newApiClient *apiclient.APIClient
 
-	serverUrl := c.DaytonaApiUrl
+	serverUrl := c.BoxliteApiUrl
 
 	clientConfig := apiclient.NewConfiguration()
 	clientConfig.Servers = apiclient.ServerConfigurations{
@@ -34,7 +35,7 @@ func GetApiClient() (*apiclient.APIClient, error) {
 
 	clientConfig.AddDefaultHeader("Authorization", "Bearer "+c.ApiToken)
 
-	clientConfig.AddDefaultHeader(DaytonaSourceHeader, "runner")
+	clientConfig.AddDefaultHeader(BoxliteSourceHeader, "runner")
 
 	newApiClient = apiclient.NewAPIClient(clientConfig)
 

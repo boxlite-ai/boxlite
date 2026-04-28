@@ -1,4 +1,5 @@
-// Copyright 2025 Daytona Platforms Inc.
+// Copyright 2025 BoxLite AI (originally Daytona Platforms Inc.
+// Modified by BoxLite AI, 2025-2026
 // SPDX-License-Identifier: AGPL-3.0
 
 package tools
@@ -7,8 +8,8 @@ import (
 	"context"
 	"fmt"
 
-	apiclient_cli "github.com/daytonaio/daytona/cli/apiclient"
-	apiclient "github.com/daytonaio/daytona/libs/api-client-go"
+	apiclient_cli "github.com/daytonaio/boxlite/cli/apiclient"
+	apiclient "github.com/daytonaio/boxlite/libs/api-client-go"
 	"github.com/mark3labs/mcp-go/mcp"
 
 	log "github.com/sirupsen/logrus"
@@ -21,14 +22,14 @@ type DeleteFileArgs struct {
 
 func GetDeleteFileTool() mcp.Tool {
 	return mcp.NewTool("delete_file",
-		mcp.WithDescription("Delete a file or directory in the Daytona sandbox."),
+		mcp.WithDescription("Delete a file or directory in the BoxLite sandbox."),
 		mcp.WithString("filePath", mcp.Required(), mcp.Description("Path to the file or directory to delete.")),
 		mcp.WithString("id", mcp.Required(), mcp.Description("ID of the sandbox to delete the file in.")),
 	)
 }
 
 func DeleteFile(ctx context.Context, request mcp.CallToolRequest, args DeleteFileArgs) (*mcp.CallToolResult, error) {
-	apiClient, err := apiclient_cli.GetApiClient(nil, daytonaMCPHeaders)
+	apiClient, err := apiclient_cli.GetApiClient(nil, boxliteMCPHeaders)
 	if err != nil {
 		return &mcp.CallToolResult{IsError: true}, err
 	}

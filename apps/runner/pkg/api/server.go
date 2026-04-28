@@ -1,9 +1,10 @@
-// Copyright 2025 Daytona Platforms Inc.
+// Copyright 2025 BoxLite AI (originally Daytona Platforms Inc.
+// Modified by BoxLite AI, 2025-2026
 // SPDX-License-Identifier: AGPL-3.0
 
-//	@title			Daytona Runner API
+//	@title			BoxLite Runner API
 //	@version		v0.0.0-dev
-//	@description	Daytona Runner API
+//	@description	BoxLite Runner API
 
 //	@securityDefinitions.apikey	Bearer
 //	@in							header
@@ -77,8 +78,8 @@ type ApiServer struct {
 }
 
 func (a *ApiServer) Start(ctx context.Context) error {
-	docs.SwaggerInfo.Description = "Daytona Runner API"
-	docs.SwaggerInfo.Title = "Daytona Runner API"
+	docs.SwaggerInfo.Description = "BoxLite Runner API"
+	docs.SwaggerInfo.Title = "BoxLite Runner API"
 	docs.SwaggerInfo.BasePath = "/"
 	docs.SwaggerInfo.Version = internal.Version
 
@@ -103,7 +104,7 @@ func (a *ApiServer) Start(ctx context.Context) error {
 	if a.logRequests {
 		a.router.Use(sloggin.New(a.logger))
 	}
-	a.router.Use(otelgin.Middleware("daytona-runner"))
+	a.router.Use(otelgin.Middleware("boxlite-runner"))
 	a.router.Use(common_errors.NewErrorMiddleware(common.HandlePossibleDockerError))
 	a.router.Use(middlewares.RecoverableErrorsMiddleware())
 

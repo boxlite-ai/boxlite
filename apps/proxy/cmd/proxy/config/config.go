@@ -1,4 +1,5 @@
-// Copyright 2025 Daytona Platforms Inc.
+// Copyright 2025 BoxLite AI (originally Daytona Platforms Inc.
+// Modified by BoxLite AI, 2025-2026
 // SPDX-License-Identifier: AGPL-3.0
 
 package config
@@ -12,7 +13,7 @@ import (
 
 	"github.com/daytonaio/common-go/pkg/cache"
 	"github.com/daytonaio/common-go/pkg/utils"
-	apiclient "github.com/daytonaio/daytona/libs/api-client-go"
+	apiclient "github.com/daytonaio/boxlite/libs/api-client-go"
 	"github.com/go-playground/validator/v10"
 	"github.com/joho/godotenv"
 	"github.com/kelseyhightower/envconfig"
@@ -26,7 +27,7 @@ type Config struct {
 	TLSCertFile           string             `envconfig:"TLS_CERT_FILE"`
 	TLSKeyFile            string             `envconfig:"TLS_KEY_FILE"`
 	EnableTLS             bool               `envconfig:"ENABLE_TLS"`
-	DaytonaApiUrl         string             `envconfig:"DAYTONA_API_URL" validate:"required"`
+	BoxliteApiUrl         string             `envconfig:"BOXLITE_API_URL" validate:"required"`
 	Oidc                  OidcConfig         `envconfig:"OIDC"`
 	Redis                 *cache.RedisConfig `envconfig:"REDIS"`
 	ToolboxOnlyMode       bool               `envconfig:"TOOLBOX_ONLY_MODE"`
@@ -89,7 +90,7 @@ func GetConfig() (*Config, error) {
 	clientConfig := apiclient.NewConfiguration()
 	clientConfig.Servers = apiclient.ServerConfigurations{
 		{
-			URL: config.DaytonaApiUrl,
+			URL: config.BoxliteApiUrl,
 		},
 	}
 
@@ -103,10 +104,10 @@ func GetConfig() (*Config, error) {
 
 	ctx := context.Background()
 
-	// Retry fetching Daytona API config with exponential backoff
+	// Retry fetching BoxLite API config with exponential backoff
 	err = utils.RetryWithExponentialBackoff(
 		ctx,
-		"get Daytona API config",
+		"get BoxLite API config",
 		10,
 		time.Second,
 		1*time.Minute,

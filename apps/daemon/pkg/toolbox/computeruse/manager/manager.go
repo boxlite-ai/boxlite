@@ -1,4 +1,5 @@
-// Copyright 2025 Daytona Platforms Inc.
+// Copyright 2025 BoxLite AI (originally Daytona Platforms Inc.
+// Modified by BoxLite AI, 2025-2026
 // SPDX-License-Identifier: AGPL-3.0
 
 package manager
@@ -26,8 +27,8 @@ type pluginRef struct {
 
 var ComputerUseHandshakeConfig = plugin.HandshakeConfig{
 	ProtocolVersion:  1,
-	MagicCookieKey:   "DAYTONA_COMPUTER_USE_PLUGIN",
-	MagicCookieValue: "daytona_computer_use",
+	MagicCookieKey:   "BOXLITE_COMPUTER_USE_PLUGIN",
+	MagicCookieValue: "boxlite_computer_use",
 }
 
 var computerUse = &pluginRef{}

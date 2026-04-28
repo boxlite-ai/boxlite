@@ -1,4 +1,5 @@
-// Copyright 2025 Daytona Platforms Inc.
+// Copyright 2025 BoxLite AI (originally Daytona Platforms Inc.
+// Modified by BoxLite AI, 2025-2026
 // SPDX-License-Identifier: AGPL-3.0
 
 package snapshot
@@ -9,13 +10,13 @@ import (
 	"strings"
 	"time"
 
-	apiclient_cli "github.com/daytonaio/daytona/cli/apiclient"
-	"github.com/daytonaio/daytona/cli/cmd/common"
-	"github.com/daytonaio/daytona/cli/config"
-	"github.com/daytonaio/daytona/cli/util"
-	view_common "github.com/daytonaio/daytona/cli/views/common"
-	views_util "github.com/daytonaio/daytona/cli/views/util"
-	apiclient "github.com/daytonaio/daytona/libs/api-client-go"
+	apiclient_cli "github.com/daytonaio/boxlite/cli/apiclient"
+	"github.com/daytonaio/boxlite/cli/cmd/common"
+	"github.com/daytonaio/boxlite/cli/config"
+	"github.com/daytonaio/boxlite/cli/util"
+	view_common "github.com/daytonaio/boxlite/cli/views/common"
+	views_util "github.com/daytonaio/boxlite/cli/views/util"
+	apiclient "github.com/daytonaio/boxlite/libs/api-client-go"
 	"github.com/spf13/cobra"
 )
 
@@ -122,7 +123,7 @@ var CreateCmd = &cobra.Command{
 		}
 
 		view_common.RenderInfoMessageBold(fmt.Sprintf("Snapshot %s successfully created", snapshotName))
-		view_common.RenderInfoMessage(fmt.Sprintf("%s Run 'daytona sandbox create --snapshot %s' to create a new sandbox using this snapshot", view_common.Checkmark, snapshotName))
+		view_common.RenderInfoMessage(fmt.Sprintf("%s Run 'boxlite sandbox create --snapshot %s' to create a new sandbox using this snapshot", view_common.Checkmark, snapshotName))
 		return nil
 	},
 }

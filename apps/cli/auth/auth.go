@@ -1,4 +1,5 @@
-// Copyright 2025 Daytona Platforms Inc.
+// Copyright 2025 BoxLite AI (originally Daytona Platforms Inc.
+// Modified by BoxLite AI, 2025-2026
 // SPDX-License-Identifier: AGPL-3.0
 
 package auth
@@ -14,7 +15,7 @@ import (
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
-	"github.com/daytonaio/daytona/cli/config"
+	"github.com/daytonaio/boxlite/cli/config"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/oauth2"
 )
@@ -96,7 +97,7 @@ func RefreshTokenIfNeeded(ctx context.Context) error {
 	}
 
 	if activeProfile.Api.Token == nil {
-		return fmt.Errorf("no valid token found, use 'daytona login' to reauthenticate")
+		return fmt.Errorf("no valid token found, use 'boxlite login' to reauthenticate")
 	}
 
 	// Check if token is about to expire (within 5 minutes)
@@ -123,7 +124,7 @@ func RefreshTokenIfNeeded(ctx context.Context) error {
 
 	newToken, err := oauth2Config.TokenSource(ctx, token).Token()
 	if err != nil {
-		return fmt.Errorf("use 'daytona login' to reauthenticate: %w", err)
+		return fmt.Errorf("use 'boxlite login' to reauthenticate: %w", err)
 	}
 
 	activeProfile.Api.Token = &config.Token{

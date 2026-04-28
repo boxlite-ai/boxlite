@@ -1,5 +1,5 @@
 /*
- * Copyright Daytona Platforms Inc.
+ * Copyright BoxLite AI (originally Daytona Platforms Inc.
  * SPDX-License-Identifier: AGPL-3.0
  */
 

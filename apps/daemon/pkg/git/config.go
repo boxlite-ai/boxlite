@@ -1,4 +1,5 @@
-// Copyright 2025 Daytona Platforms Inc.
+// Copyright 2025 BoxLite AI (originally Daytona Platforms Inc.
+// Modified by BoxLite AI, 2025-2026
 // SPDX-License-Identifier: AGPL-3.0
 
 package git
@@ -34,7 +35,7 @@ func (s *Service) SetGitConfig(userData *gitprovider.GitUser, providerConfig *gi
 		}
 	}
 
-	_, err = cfg.Section("credential").NewKey("helper", "/usr/local/bin/daytona git-cred")
+	_, err = cfg.Section("credential").NewKey("helper", "/usr/local/bin/boxlite git-cred")
 	if err != nil {
 		return err
 	}

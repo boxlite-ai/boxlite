@@ -1,5 +1,6 @@
 /*
  * Copyright 2025 Daytona Platforms Inc.
+ * Modified by BoxLite AI, 2025-2026
  * SPDX-License-Identifier: AGPL-3.0
  */
 
@@ -17,7 +18,7 @@ export class ConfigController {
   @ApiOperation({ summary: 'Get config' })
   @ApiResponse({
     status: 200,
-    description: 'Daytona configuration',
+    description: 'BoxLite configuration',
     type: ConfigurationDto,
   })
   getConfig() {

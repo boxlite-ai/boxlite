@@ -6,7 +6,7 @@
 import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
-import { DAYTONA_DOCS_URL } from '@/constants/ExternalLinks'
+import { BOXLITE_DOCS_URL } from '@/constants/ExternalLinks'
 import { useTerminalSessionQuery } from '@/hooks/queries/useTerminalSessionQuery'
 import { useSandboxSessionContext } from '@/hooks/useSandboxSessionContext'
 import { isStoppable } from '@/lib/utils/sandbox'
@@ -54,7 +54,7 @@ export function SandboxTerminalTab({ sandbox }: { sandbox: Sandbox }) {
               <EmptyTitle>Sandbox is not running</EmptyTitle>
               <EmptyDescription>
                 Start the sandbox to access the terminal.{' '}
-                <a href={`${DAYTONA_DOCS_URL}/en/web-terminal`} target="_blank" rel="noopener noreferrer">
+                <a href={`${BOXLITE_DOCS_URL}/en/web-terminal`} target="_blank" rel="noopener noreferrer">
                   Learn more
                 </a>
                 .
@@ -79,7 +79,7 @@ export function SandboxTerminalTab({ sandbox }: { sandbox: Sandbox }) {
               <EmptyTitle>Terminal</EmptyTitle>
               <EmptyDescription>
                 Connect to an interactive terminal session in your sandbox.{' '}
-                <a href={`${DAYTONA_DOCS_URL}/en/web-terminal`} target="_blank" rel="noopener noreferrer">
+                <a href={`${BOXLITE_DOCS_URL}/en/web-terminal`} target="_blank" rel="noopener noreferrer">
                   Learn more
                 </a>
                 .

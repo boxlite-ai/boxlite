@@ -1,5 +1,6 @@
 /*
  * Copyright 2025 Daytona Platforms Inc.
+ * Modified by BoxLite AI, 2025-2026
  * SPDX-License-Identifier: AGPL-3.0
  */
 
@@ -26,7 +27,7 @@ import {
   WebhooksApi,
 } from '@daytonaio/api-client'
 import axios, { AxiosError } from 'axios'
-import { DaytonaError } from './errors'
+import { BoxliteError } from './errors'
 
 export class ApiClient {
   private config: Configuration
@@ -66,7 +67,7 @@ export class ApiClient {
           errorMessage = error.response?.data?.message || error.response?.data || error.message || String(error)
         }
 
-        throw DaytonaError.fromString(String(errorMessage), { cause: error instanceof Error ? error : undefined })
+        throw BoxliteError.fromString(String(errorMessage), { cause: error instanceof Error ? error : undefined })
       },
     )
 

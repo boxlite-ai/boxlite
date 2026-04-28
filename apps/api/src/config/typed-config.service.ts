@@ -1,5 +1,6 @@
 /*
  * Copyright 2025 Daytona Platforms Inc.
+ * Modified by BoxLite AI, 2025-2026
  * SPDX-License-Identifier: AGPL-3.0
  */
 
@@ -127,7 +128,7 @@ export class TypedConfigService {
           getCredentials: fromTemporaryCredentials({
             params: {
               RoleArn: this.get('opensearch.aws.roleArn'),
-              RoleSessionName: 'daytona-opensearch',
+              RoleSessionName: 'boxlite-opensearch',
             },
           }),
           service: 'es',

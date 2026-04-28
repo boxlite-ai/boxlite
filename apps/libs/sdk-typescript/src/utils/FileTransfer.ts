@@ -1,11 +1,12 @@
 /*
  * Copyright 2025 Daytona Platforms Inc.
+ * Modified by BoxLite AI, 2025-2026
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import { Buffer } from 'buffer'
 import busboy from 'busboy'
-import { DaytonaError } from '../errors/DaytonaError'
+import { BoxliteError } from '../errors/BoxliteError'
 import { dynamicImport } from './Import'
 import { collectStreamBytes, toBuffer, toUint8Array } from './Binary'
 import { extractBoundary, getHeader, parseMultipartWithFormData } from './Multipart'
@@ -64,14 +65,14 @@ export async function processDownloadFilesResponseWithBusboy(
       const source = fileInfo?.filename
       if (!source) {
         abortStream(stream)
-        reject(new DaytonaError(`Received unexpected file "${fileInfo?.filename}".`))
+        reject(new BoxliteError(`Received unexpected file "${fileInfo?.filename}".`))
         return
       }
 
       const metadata = metadataMap.get(source)
       if (!metadata) {
         abortStream(stream)
-        reject(new DaytonaError(`Target metadata missing for valid source: ${source}`))
+        reject(new BoxliteError(`Target metadata missing for valid source: ${source}`))
         return
       }
 
@@ -181,7 +182,7 @@ async function feedStreamToBusboy(stream: any, bb: any): Promise<void> {
   }
 
   // Unsupported stream type
-  throw new DaytonaError(`Unsupported stream type: ${stream?.constructor?.name || typeof stream}`)
+  throw new BoxliteError(`Unsupported stream type: ${stream?.constructor?.name || typeof stream}`)
 }
 
 export async function processDownloadFilesResponseWithBuffered(
@@ -217,7 +218,7 @@ export async function processDownloadFilesResponseWithBuffered(
   // Manual multipart parsing (handles multipart/mixed, etc.)
   const boundary = extractBoundary(contentType)
   if (!boundary) {
-    throw new DaytonaError(`Missing multipart boundary in Content-Type: "${contentType}"`)
+    throw new BoxliteError(`Missing multipart boundary in Content-Type: "${contentType}"`)
   }
 
   const parts = parseMultipart(bodyBytes, boundary)

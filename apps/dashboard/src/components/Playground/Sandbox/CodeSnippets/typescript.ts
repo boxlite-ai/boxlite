@@ -10,8 +10,8 @@ export const TypeScriptSnippetGenerator: CodeSnippetGenerator = {
   getImports(p) {
     return (
       [
-        'import { Daytona as BoxLite',
-        p.actions.useConfigObject ? 'DaytonaConfig as BoxLiteConfig' : '',
+        'import { BoxLite as BoxLite',
+        p.actions.useConfigObject ? 'BoxliteConfig as BoxLiteConfig' : '',
         p.config.createSandboxFromImage ? 'Image' : '',
       ]
         .filter(Boolean)

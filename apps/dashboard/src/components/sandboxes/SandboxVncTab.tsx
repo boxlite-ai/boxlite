@@ -6,7 +6,7 @@
 import { useEffect } from 'react'
 import { Button } from '@/components/ui/button'
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
-import { DAYTONA_DOCS_URL } from '@/constants/ExternalLinks'
+import { BOXLITE_DOCS_URL } from '@/constants/ExternalLinks'
 import { useStartVncMutation } from '@/hooks/mutations/useStartVncMutation'
 import { useVncInitialStatusQuery, useVncPollStatusQuery } from '@/hooks/queries/useVncStatusQuery'
 import { useVncSessionQuery } from '@/hooks/queries/useVncSessionQuery'
@@ -75,7 +75,7 @@ export function SandboxVncTab({ sandbox }: { sandbox: Sandbox }) {
               <EmptyTitle>Sandbox is not running</EmptyTitle>
               <EmptyDescription>
                 Start the sandbox to access the VNC desktop.{' '}
-                <a href={`${DAYTONA_DOCS_URL}/en/vnc-access`} target="_blank" rel="noopener noreferrer">
+                <a href={`${BOXLITE_DOCS_URL}/en/vnc-access`} target="_blank" rel="noopener noreferrer">
                   Learn more
                 </a>
                 .
@@ -110,7 +110,7 @@ export function SandboxVncTab({ sandbox }: { sandbox: Sandbox }) {
               <EmptyTitle>VNC not available</EmptyTitle>
               <EmptyDescription>
                 Computer-use dependencies are not installed in this sandbox.{' '}
-                <a href={`${DAYTONA_DOCS_URL}/en/vnc-access`} target="_blank" rel="noopener noreferrer">
+                <a href={`${BOXLITE_DOCS_URL}/en/vnc-access`} target="_blank" rel="noopener noreferrer">
                   Read the setup guide
                 </a>
                 .
@@ -135,7 +135,7 @@ export function SandboxVncTab({ sandbox }: { sandbox: Sandbox }) {
               <EmptyTitle>VNC Desktop</EmptyTitle>
               <EmptyDescription>
                 Start the VNC server to access a graphical desktop.{' '}
-                <a href={`${DAYTONA_DOCS_URL}/en/vnc-access`} target="_blank" rel="noopener noreferrer">
+                <a href={`${BOXLITE_DOCS_URL}/en/vnc-access`} target="_blank" rel="noopener noreferrer">
                   Learn more
                 </a>
                 .

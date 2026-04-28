@@ -1,4 +1,5 @@
-// Copyright 2025 Daytona Platforms Inc.
+// Copyright 2025 BoxLite AI (originally Daytona Platforms Inc.
+// Modified by BoxLite AI, 2025-2026
 // SPDX-License-Identifier: AGPL-3.0
 
 package tools
@@ -9,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	apiclient_cli "github.com/daytonaio/daytona/cli/apiclient"
-	apiclient "github.com/daytonaio/daytona/libs/api-client-go"
+	apiclient_cli "github.com/daytonaio/boxlite/cli/apiclient"
+	apiclient "github.com/daytonaio/boxlite/libs/api-client-go"
 	"github.com/mark3labs/mcp-go/mcp"
 
 	log "github.com/sirupsen/logrus"
@@ -40,8 +41,8 @@ type CreateSandboxArgs struct {
 
 func GetCreateSandboxTool() mcp.Tool {
 	return mcp.NewTool("create_sandbox",
-		mcp.WithDescription("Create a new sandbox with Daytona"),
-		mcp.WithString("id", mcp.Description("If a sandbox ID is provided it is first checked if it exists and is running, if so, the existing sandbox will be used. However, a model is not able to provide custom sandbox ID but only the ones Daytona commands return and should always leave ID field empty if the intention is to create a new sandbox.")),
+		mcp.WithDescription("Create a new sandbox with BoxLite"),
+		mcp.WithString("id", mcp.Description("If a sandbox ID is provided it is first checked if it exists and is running, if so, the existing sandbox will be used. However, a model is not able to provide custom sandbox ID but only the ones BoxLite commands return and should always leave ID field empty if the intention is to create a new sandbox.")),
 		mcp.WithString("name", mcp.Description("Name of the sandbox. If not provided, the sandbox ID will be used as the name.")),
 		mcp.WithString("target", mcp.DefaultString("us"), mcp.Description("Target region of the sandbox.")),
 		mcp.WithString("snapshot", mcp.Description("Snapshot of the sandbox (don't specify any if not explicitly instructed from user). Cannot be specified when using a build info entry.")),
@@ -64,7 +65,7 @@ func GetCreateSandboxTool() mcp.Tool {
 }
 
 func CreateSandbox(ctx context.Context, request mcp.CallToolRequest, args CreateSandboxArgs) (*mcp.CallToolResult, error) {
-	apiClient, err := apiclient_cli.GetApiClient(nil, daytonaMCPHeaders)
+	apiClient, err := apiclient_cli.GetApiClient(nil, boxliteMCPHeaders)
 	if err != nil {
 		return &mcp.CallToolResult{IsError: true}, err
 	}

@@ -1,18 +1,19 @@
-// Copyright 2025 Daytona Platforms Inc.
+// Copyright 2025 BoxLite AI (originally Daytona Platforms Inc.
+// Modified by BoxLite AI, 2025-2026
 // SPDX-License-Identifier: AGPL-3.0
 
 package auth
 
 import (
-	"github.com/daytonaio/daytona/cli/config"
-	"github.com/daytonaio/daytona/cli/internal"
-	"github.com/daytonaio/daytona/cli/views/common"
+	"github.com/daytonaio/boxlite/cli/config"
+	"github.com/daytonaio/boxlite/cli/internal"
+	"github.com/daytonaio/boxlite/cli/views/common"
 	"github.com/spf13/cobra"
 )
 
 var LogoutCmd = &cobra.Command{
 	Use:     "logout",
-	Short:   "Logout from Daytona",
+	Short:   "Logout from BoxLite",
 	Args:    cobra.NoArgs,
 	GroupID: internal.USER_GROUP,
 	RunE: func(cmd *cobra.Command, args []string) error {

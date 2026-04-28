@@ -1,4 +1,5 @@
-// Copyright 2025 Daytona Platforms Inc.
+// Copyright 2025 BoxLite AI (originally Daytona Platforms Inc.
+// Modified by BoxLite AI, 2025-2026
 // SPDX-License-Identifier: AGPL-3.0
 
 package tools
@@ -7,8 +8,8 @@ import (
 	"context"
 	"fmt"
 
-	apiclient_cli "github.com/daytonaio/daytona/cli/apiclient"
-	apiclient "github.com/daytonaio/daytona/libs/api-client-go"
+	apiclient_cli "github.com/daytonaio/boxlite/cli/apiclient"
+	apiclient "github.com/daytonaio/boxlite/libs/api-client-go"
 	"github.com/mark3labs/mcp-go/mcp"
 
 	log "github.com/sirupsen/logrus"
@@ -26,7 +27,7 @@ type GitCloneArgs struct {
 
 func GetGitCloneTool() mcp.Tool {
 	return mcp.NewTool("git_clone",
-		mcp.WithDescription("Clone a Git repository into the Daytona sandbox."),
+		mcp.WithDescription("Clone a Git repository into the BoxLite sandbox."),
 		mcp.WithString("url", mcp.Required(), mcp.Description("URL of the Git repository to clone.")),
 		mcp.WithString("path", mcp.Description("Directory to clone the repository into (defaults to current directory).")),
 		mcp.WithString("branch", mcp.Description("Branch to clone.")),
@@ -38,7 +39,7 @@ func GetGitCloneTool() mcp.Tool {
 }
 
 func GitClone(ctx context.Context, request mcp.CallToolRequest, args GitCloneArgs) (*mcp.CallToolResult, error) {
-	apiClient, err := apiclient_cli.GetApiClient(nil, daytonaMCPHeaders)
+	apiClient, err := apiclient_cli.GetApiClient(nil, boxliteMCPHeaders)
 	if err != nil {
 		return &mcp.CallToolResult{IsError: true}, err
 	}

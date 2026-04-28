@@ -1,4 +1,5 @@
-// Copyright 2025 Daytona Platforms Inc.
+// Copyright 2025 BoxLite AI (originally Daytona Platforms Inc.
+// Modified by BoxLite AI, 2025-2026
 // SPDX-License-Identifier: AGPL-3.0
 
 package cmd
@@ -32,7 +33,7 @@ var AutoCompleteCmd = &cobra.Command{
 		fmt.Printf("For manual sourcing, use: source %s\n", profilePath)
 		if shell == "bash" {
 			fmt.Println("Please make sure that you have bash-completion installed in order to get full autocompletion functionality.")
-			fmt.Println("On how to install bash-completion, please refer to the following link: https://www.daytona.io/docs/tools/cli/#daytona-autocomplete")
+			fmt.Println("On how to install bash-completion, please refer to the following link: https://www.boxlite.ai/docs/tools/cli/#boxlite-autocomplete")
 		}
 
 		return nil
@@ -69,16 +70,16 @@ func SetupAutocompletionForShell(rootCmd *cobra.Command, shell string) (string, 
 	var filePath, profilePath string
 	switch shell {
 	case "bash":
-		filePath = filepath.Join(homeDir, ".daytona.completion_script.bash")
+		filePath = filepath.Join(homeDir, ".boxlite.completion_script.bash")
 		profilePath = filepath.Join(homeDir, ".bashrc")
 	case "zsh":
-		filePath = filepath.Join(homeDir, ".daytona.completion_script.zsh")
+		filePath = filepath.Join(homeDir, ".boxlite.completion_script.zsh")
 		profilePath = filepath.Join(homeDir, ".zshrc")
 	case "fish":
-		filePath = filepath.Join(homeDir, ".config", "fish", "daytona.completion_script.fish")
+		filePath = filepath.Join(homeDir, ".config", "fish", "boxlite.completion_script.fish")
 		profilePath = filepath.Join(homeDir, ".config", "fish", "config.fish")
 	case "powershell":
-		filePath = filepath.Join(homeDir, "daytona.completion_script.ps1")
+		filePath = filepath.Join(homeDir, "boxlite.completion_script.ps1")
 		profilePath = filepath.Join(homeDir, "Documents", "WindowsPowerShell", "Microsoft.PowerShell_profile.ps1")
 	default:
 		return "", errors.New("unsupported shell type. Please use bash, zsh, fish, or powershell")

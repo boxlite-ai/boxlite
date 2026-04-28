@@ -1,5 +1,5 @@
 /*
- * Copyright 2025 Daytona Platforms Inc.
+ * Copyright 2025 BoxLite AI (originally Daytona Platforms Inc.
  * SPDX-License-Identifier: AGPL-3.0
  */
 
@@ -13,7 +13,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/daytonaio/daytona/cli/config"
+	"github.com/daytonaio/boxlite/cli/config"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -51,7 +51,7 @@ func ReadBuildLogs(ctx context.Context, params ReadLogParams) {
 		req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", params.ServerApi.Token.AccessToken))
 
 		if params.ActiveOrganizationId != nil {
-			req.Header.Add("X-Daytona-Organization-ID", *params.ActiveOrganizationId)
+			req.Header.Add("X-BoxLite-Organization-ID", *params.ActiveOrganizationId)
 		}
 	}
 

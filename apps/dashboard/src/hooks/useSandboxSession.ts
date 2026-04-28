@@ -10,7 +10,7 @@ import {
   CreateSandboxBaseParams,
   CreateSandboxFromImageParams,
   CreateSandboxFromSnapshotParams,
-  Daytona,
+  BoxLite,
   Sandbox,
 } from '@daytonaio/sdk'
 import { QueryClient, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -93,7 +93,7 @@ export function useSandboxSession(options?: UseSandboxSessionOptions): UseSandbo
 
   const client = useMemo(() => {
     if (!user?.access_token || !selectedOrganization?.id) return null
-    return new Daytona({
+    return new BoxLite({
       jwtToken: user.access_token,
       apiUrl: import.meta.env.VITE_API_URL,
       organizationId: selectedOrganization.id,

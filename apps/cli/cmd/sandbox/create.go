@@ -1,4 +1,5 @@
-// Copyright 2025 Daytona Platforms Inc.
+// Copyright 2025 BoxLite AI (originally Daytona Platforms Inc.
+// Modified by BoxLite AI, 2025-2026
 // SPDX-License-Identifier: AGPL-3.0
 
 package sandbox
@@ -10,12 +11,12 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
-	apiclient_cli "github.com/daytonaio/daytona/cli/apiclient"
-	"github.com/daytonaio/daytona/cli/cmd/common"
-	"github.com/daytonaio/daytona/cli/config"
-	"github.com/daytonaio/daytona/cli/util"
-	views_common "github.com/daytonaio/daytona/cli/views/common"
-	apiclient "github.com/daytonaio/daytona/libs/api-client-go"
+	apiclient_cli "github.com/daytonaio/boxlite/cli/apiclient"
+	"github.com/daytonaio/boxlite/cli/cmd/common"
+	"github.com/daytonaio/boxlite/cli/config"
+	"github.com/daytonaio/boxlite/cli/util"
+	views_common "github.com/daytonaio/boxlite/cli/views/common"
+	apiclient "github.com/daytonaio/boxlite/libs/api-client-go"
 	"github.com/spf13/cobra"
 )
 
@@ -180,7 +181,7 @@ var CreateCmd = &cobra.Command{
 		boldStyle := lipgloss.NewStyle().Bold(true)
 
 		views_common.RenderInfoMessageBold(fmt.Sprintf("Sandbox '%s' created successfully", sandbox.Name))
-		views_common.RenderInfoMessage(fmt.Sprintf("Connect via SSH:         %s", boldStyle.Render(fmt.Sprintf("daytona ssh %s", sandbox.Name))))
+		views_common.RenderInfoMessage(fmt.Sprintf("Connect via SSH:         %s", boldStyle.Render(fmt.Sprintf("boxlite ssh %s", sandbox.Name))))
 		views_common.RenderInfoMessage(fmt.Sprintf("Open the Web Terminal:   %s\n", views_common.LinkStyle.Render(previewUrl.Url)))
 		return nil
 	},

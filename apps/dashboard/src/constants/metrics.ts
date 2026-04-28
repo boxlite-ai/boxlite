@@ -4,18 +4,18 @@
  */
 
 export const METRIC_DISPLAY_NAMES: Record<string, string> = {
-  'daytona.sandbox.cpu.utilization': 'CPU Utilization',
-  'daytona.sandbox.cpu.limit': 'CPU Limit',
-  'daytona.sandbox.memory.utilization': 'Memory Utilization',
-  'daytona.sandbox.memory.usage': 'Memory Usage',
-  'daytona.sandbox.memory.limit': 'Memory Limit',
-  'daytona.sandbox.filesystem.utilization': 'Disk Utilization',
-  'daytona.sandbox.filesystem.usage': 'Disk Usage',
-  'daytona.sandbox.filesystem.total': 'Disk Total',
-  'daytona.sandbox.filesystem.available': 'Disk Available',
+  'boxlite.sandbox.cpu.utilization': 'CPU Utilization',
+  'boxlite.sandbox.cpu.limit': 'CPU Limit',
+  'boxlite.sandbox.memory.utilization': 'Memory Utilization',
+  'boxlite.sandbox.memory.usage': 'Memory Usage',
+  'boxlite.sandbox.memory.limit': 'Memory Limit',
+  'boxlite.sandbox.filesystem.utilization': 'Disk Utilization',
+  'boxlite.sandbox.filesystem.usage': 'Disk Usage',
+  'boxlite.sandbox.filesystem.total': 'Disk Total',
+  'boxlite.sandbox.filesystem.available': 'Disk Available',
   'system.memory.utilization': 'System Memory Utilization',
 }
 
 export function getMetricDisplayName(metricName: string): string {
-  return METRIC_DISPLAY_NAMES[metricName] ?? metricName.replace(/^daytona\.sandbox\./, '')
+  return METRIC_DISPLAY_NAMES[metricName] ?? metricName.replace(/^boxlite\.sandbox\./, '')
 }

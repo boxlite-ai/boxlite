@@ -1,5 +1,6 @@
 /*
  * Copyright 2025 Daytona Platforms Inc.
+ * Modified by BoxLite AI, 2025-2026
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -10,7 +11,7 @@
 import WebSocket from 'isomorphic-ws'
 import { InterpreterApi, InterpreterContext } from '@daytonaio/toolbox-api-client'
 import { Configuration } from '@daytonaio/api-client'
-import { DaytonaError, DaytonaTimeoutError } from './errors/DaytonaError'
+import { BoxliteError, BoxLiteTimeoutError } from './errors/BoxliteError'
 import { ExecutionError, ExecutionResult, RunCodeOptions } from './types/CodeInterpreter'
 import { createSandboxWebSocket } from './utils/WebSocket'
 
@@ -69,7 +70,7 @@ export class CodeInterpreter {
    */
   public async runCode(code: string, options: RunCodeOptions = {}): Promise<ExecutionResult> {
     if (!code || !code.trim()) {
-      throw new DaytonaError('Code is required for execution')
+      throw new BoxliteError('Code is required for execution')
     }
 
     const url = `${this.clientConfig.basePath.replace(/^http/, 'ws')}/process/interpreter/execute`
@@ -178,7 +179,7 @@ export class CodeInterpreter {
       }
 
       const handleError = (error: Error) => {
-        fail(new DaytonaError(`Failed to execute code: ${error.message ?? String(error)}`))
+        fail(new BoxliteError(`Failed to execute code: ${error.message ?? String(error)}`))
       }
 
       const detach = () => {
@@ -212,7 +213,7 @@ export class CodeInterpreter {
         ;(ws as any).on('close', handleClose)
         ;(ws as any).on('error', handleError)
       } else {
-        throw new DaytonaError('Unsupported WebSocket implementation')
+        throw new BoxliteError('Unsupported WebSocket implementation')
       }
     })
   }
@@ -307,15 +308,15 @@ export class CodeInterpreter {
     }
   }
 
-  private createCloseError(code: number, message?: string): DaytonaError {
+  private createCloseError(code: number, message?: string): BoxliteError {
     if (code === WEBSOCKET_TIMEOUT_CODE) {
-      return new DaytonaTimeoutError(
+      return new BoxLiteTimeoutError(
         'Execution timed out: operation exceeded the configured `timeout`. Provide a larger value if needed.',
       )
     }
     if (message) {
-      return new DaytonaError(message + ` (close code ${code})`)
+      return new BoxliteError(message + ` (close code ${code})`)
     }
-    return new DaytonaError(`Code execution failed: WebSocket closed with code ${code}`)
+    return new BoxliteError(`Code execution failed: WebSocket closed with code ${code}`)
   }
 }

@@ -1,8 +1,8 @@
 /* tslint:disable */
 /* eslint-disable */
 /**
- * Daytona Toolbox API
- * Daytona Toolbox API
+ * BoxLite Toolbox API
+ * BoxLite Toolbox API
  *
  * The version of the OpenAPI document: v0.0.0-dev
  * 

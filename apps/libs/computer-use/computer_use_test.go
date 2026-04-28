@@ -1,4 +1,5 @@
-// Copyright 2025 Daytona Platforms Inc.
+// Copyright 2025 BoxLite AI (originally Daytona Platforms Inc.
+// Modified by BoxLite AI, 2025-2026
 // SPDX-License-Identifier: AGPL-3.0
 
 package main
@@ -40,7 +41,7 @@ func NewTestClient() (*TestClient, error) {
 	client := hc_plugin.NewClient(&hc_plugin.ClientConfig{
 		HandshakeConfig: manager.ComputerUseHandshakeConfig,
 		Plugins: map[string]hc_plugin.Plugin{
-			"daytona-computer-use": &computeruse.ComputerUsePlugin{},
+			"boxlite-computer-use": &computeruse.ComputerUsePlugin{},
 		},
 		Cmd:     exec.Command("./test-computer-use"),
 		Logger:  hclog.New(&hclog.LoggerOptions{Level: hclog.Error}),
@@ -55,7 +56,7 @@ func NewTestClient() (*TestClient, error) {
 	}
 
 	// Get the plugin instance
-	raw, err := rpcClient.Dispense("daytona-computer-use")
+	raw, err := rpcClient.Dispense("boxlite-computer-use")
 	if err != nil {
 		client.Kill()
 		return nil, fmt.Errorf("failed to dispense plugin: %v", err)

@@ -1,4 +1,5 @@
-// Copyright 2025 Daytona Platforms Inc.
+// Copyright 2025 BoxLite AI (originally Daytona Platforms Inc.
+// Modified by BoxLite AI, 2025-2026
 // SPDX-License-Identifier: AGPL-3.0
 
 package middlewares
@@ -15,12 +16,12 @@ import (
 
 func AuthMiddleware(apiToken string) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
-		authHeader := ctx.GetHeader(constants.DAYTONA_AUTHORIZATION_HEADER)
+		authHeader := ctx.GetHeader(constants.BOXLITE_AUTHORIZATION_HEADER)
 		if authHeader == "" {
 			authHeader = ctx.GetHeader(constants.AUTHORIZATION_HEADER)
 		}
 
-		ctx.Request.Header.Del(constants.DAYTONA_AUTHORIZATION_HEADER)
+		ctx.Request.Header.Del(constants.BOXLITE_AUTHORIZATION_HEADER)
 
 		if authHeader == "" {
 			ctx.Error(common_errors.NewUnauthorizedError(errors.New("authorization header required")))

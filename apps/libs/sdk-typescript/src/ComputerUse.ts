@@ -1,5 +1,6 @@
 /*
  * Copyright 2025 Daytona Platforms Inc.
+ * Modified by BoxLite AI, 2025-2026
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -189,7 +190,7 @@ export class Keyboard {
    *
    * @param {string} text - The text to type
    * @param {number} [delay=0] - Delay between characters in milliseconds
-   * @throws {DaytonaError} If the type operation fails
+   * @throws {BoxliteError} If the type operation fails
    *
    * @example
    * ```typescript
@@ -220,7 +221,7 @@ export class Keyboard {
    *
    * @param {string} key - The key to press (e.g., 'Enter', 'Escape', 'Tab', 'a', 'A')
    * @param {string[]} [modifiers=[]] - Modifier keys ('ctrl', 'alt', 'meta', 'shift')
-   * @throws {DaytonaError} If the press operation fails
+   * @throws {BoxliteError} If the press operation fails
    *
    * @example
    * ```typescript
@@ -259,7 +260,7 @@ export class Keyboard {
    * Presses a hotkey combination
    *
    * @param {string} keys - The hotkey combination (e.g., 'ctrl+c', 'alt+tab', 'cmd+shift+t')
-   * @throws {DaytonaError} If the hotkey operation fails
+   * @throws {BoxliteError} If the hotkey operation fails
    *
    * @example
    * ```typescript

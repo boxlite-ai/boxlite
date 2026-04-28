@@ -10,8 +10,8 @@ export const PythonSnippetGenerator: CodeSnippetGenerator = {
   getImports(p) {
     return (
       [
-        'from daytona import Daytona as BoxLite',
-        p.actions.useConfigObject ? 'DaytonaConfig as BoxLiteConfig' : '',
+        'from boxlite import BoxLite as BoxLite',
+        p.actions.useConfigObject ? 'BoxliteConfig as BoxLiteConfig' : '',
         p.config.useSandboxCreateParams
           ? p.config.createSandboxFromSnapshot
             ? 'CreateSandboxFromSnapshotParams'

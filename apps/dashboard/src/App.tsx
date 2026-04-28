@@ -1,5 +1,6 @@
 /*
  * Copyright 2025 Daytona Platforms Inc.
+ * Modified by BoxLite AI, 2025-2026
  * SPDX-License-Identifier: AGPL-3.0
  */
 
@@ -30,7 +31,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from './components/ui/dialog'
-import { DAYTONA_DOCS_URL, DAYTONA_SLACK_URL } from './constants/ExternalLinks'
+import { BOXLITE_DOCS_URL, BOXLITE_SLACK_URL } from './constants/ExternalLinks'
 import { FeatureFlags } from './enums/FeatureFlags'
 import { RoutePath, getRouteSubPath } from './enums/RoutePath'
 import { useConfig } from './hooks/useConfig'
@@ -63,7 +64,7 @@ import { SvixProvider } from './providers/SvixProvider'
 // Simple redirection components for external URLs
 const DocsRedirect = () => {
   React.useEffect(() => {
-    window.open(DAYTONA_DOCS_URL, '_blank')
+    window.open(BOXLITE_DOCS_URL, '_blank')
     window.location.href = RoutePath.DASHBOARD
   }, [])
   return null
@@ -71,7 +72,7 @@ const DocsRedirect = () => {
 
 const SlackRedirect = () => {
   React.useEffect(() => {
-    window.open(DAYTONA_SLACK_URL, '_blank')
+    window.open(BOXLITE_SLACK_URL, '_blank')
     window.location.href = RoutePath.DASHBOARD
   }, [])
   return null

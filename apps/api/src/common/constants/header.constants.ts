@@ -1,5 +1,6 @@
 /*
  * Copyright 2025 Daytona Platforms Inc.
+ * Modified by BoxLite AI, 2025-2026
  * SPDX-License-Identifier: AGPL-3.0
  */
 
@@ -14,7 +15,7 @@ export const CustomHeaders: {
   }
 } = {
   ORGANIZATION_ID: {
-    name: 'X-Daytona-Organization-ID',
+    name: 'X-BoxLite-Organization-ID',
     description: 'Use with JWT to specify the organization ID',
     required: false,
     schema: {
@@ -22,7 +23,7 @@ export const CustomHeaders: {
     },
   },
   SOURCE: {
-    name: 'X-Daytona-Source',
+    name: 'X-BoxLite-Source',
     description: 'Use to specify the source of the request',
     required: false,
     schema: {
@@ -30,7 +31,7 @@ export const CustomHeaders: {
     },
   },
   SDK_VERSION: {
-    name: 'X-Daytona-SDK-Version',
+    name: 'X-BoxLite-SDK-Version',
     description: 'Use to specify the version of the SDK',
     required: false,
     schema: {

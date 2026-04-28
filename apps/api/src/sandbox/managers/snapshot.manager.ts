@@ -1,5 +1,6 @@
 /*
  * Copyright 2025 Daytona Platforms Inc.
+ * Modified by BoxLite AI, 2025-2026
  * SPDX-License-Identifier: AGPL-3.0
  */
 
@@ -1036,7 +1037,7 @@ export class SnapshotManager implements TrackableJobExecutions, OnApplicationShu
         .andWhere(
           `sr.updatedAt < now() - interval '${this.configService.getOrThrow('buildInfoSnapshotRunnerStalenessDays')} days'`,
         )
-        .andWhere("sr.snapshotRef LIKE 'daytona-%'")
+        .andWhere("sr.snapshotRef LIKE 'boxlite-%'")
         .limit(500)
         .getMany()
 
@@ -1194,7 +1195,7 @@ export class SnapshotManager implements TrackableJobExecutions, OnApplicationShu
     if (!snapshot.ref) {
       shouldSave = true
       const sanitizedUrl = internalRegistry.url.replace(/^https?:\/\//, '')
-      snapshot.ref = `${sanitizedUrl}/${internalRegistry.project || 'daytona'}/daytona-${hash}:daytona`
+      snapshot.ref = `${sanitizedUrl}/${internalRegistry.project || 'boxlite'}/boxlite-${hash}:boxlite`
     }
 
     if (!snapshot.size) {

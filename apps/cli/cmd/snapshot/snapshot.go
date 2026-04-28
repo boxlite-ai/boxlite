@@ -1,17 +1,18 @@
-// Copyright 2025 Daytona Platforms Inc.
+// Copyright 2025 BoxLite AI (originally Daytona Platforms Inc.
+// Modified by BoxLite AI, 2025-2026
 // SPDX-License-Identifier: AGPL-3.0
 
 package snapshot
 
 import (
-	"github.com/daytonaio/daytona/cli/internal"
+	"github.com/daytonaio/boxlite/cli/internal"
 	"github.com/spf13/cobra"
 )
 
 var SnapshotsCmd = &cobra.Command{
 	Use:     "snapshot",
-	Short:   "Manage Daytona snapshots",
-	Long:    "Commands for managing Daytona snapshots",
+	Short:   "Manage BoxLite snapshots",
+	Long:    "Commands for managing BoxLite snapshots",
 	Aliases: []string{"snapshots"},
 	GroupID: internal.SANDBOX_GROUP,
 }

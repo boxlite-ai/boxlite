@@ -372,7 +372,7 @@ export default $config({
       environment: { COLLECTOR_OTLP_ENABLED: "true" },
     });
 
-    // OtelCollector — Daytona's custom ocb build. The ClickHouse exporter is
+    // OtelCollector — BoxLite's custom ocb build. The ClickHouse exporter is
     // compiled in but dropped at runtime via --set (dev has no ClickHouse).
     // Placeholder CLICKHOUSE_* env vars keep config.yaml parsing clean.
     new sst.aws.Service("OtelCollector", {
@@ -380,9 +380,9 @@ export default $config({
       image: { context: "../..", dockerfile: "apps/otel-collector/Dockerfile" },
       command: [
         "--config", "/otelcol/collector-config.yaml",
-        "--set", "service::pipelines::traces::exporters=[daytona_exporter]",
-        "--set", "service::pipelines::metrics::exporters=[daytona_exporter]",
-        "--set", "service::pipelines::logs::exporters=[daytona_exporter]",
+        "--set", "service::pipelines::traces::exporters=[boxlite_exporter]",
+        "--set", "service::pipelines::metrics::exporters=[boxlite_exporter]",
+        "--set", "service::pipelines::logs::exporters=[boxlite_exporter]",
       ],
       loadBalancer: {
         rules: [

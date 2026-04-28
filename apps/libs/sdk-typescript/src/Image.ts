@@ -1,11 +1,12 @@
 /*
  * Copyright 2025 Daytona Platforms Inc.
+ * Modified by BoxLite AI, 2025-2026
  * SPDX-License-Identifier: Apache-2.0
  */
 
 import * as pathe from 'pathe'
 import { quote, parse as parseShellQuote } from 'shell-quote'
-import { DaytonaError } from './errors/DaytonaError'
+import { BoxliteError } from './errors/BoxliteError'
 import { dynamicRequire } from './utils/Import'
 
 const SUPPORTED_PYTHON_SERIES = ['3.9', '3.10', '3.11', '3.12', '3.13'] as const
@@ -55,7 +56,7 @@ export interface PyprojectOptions extends PipInstallOptions {
 }
 
 /**
- * Represents an image definition for a Daytona sandbox.
+ * Represents an image definition for a BoxLite sandbox.
  * Do not construct this class directly. Instead use one of its static factory methods,
  * such as `Image.base()`, `Image.debianSlim()` or `Image.fromDockerfile()`.
  *
@@ -154,7 +155,7 @@ export class Image {
         'No [project.dependencies] section in pyproject.toml file. ' +
         'See https://packaging.python.org/en/latest/guides/writing-pyproject-toml ' +
         'for further file format guidelines.'
-      throw new DaytonaError(msg)
+      throw new BoxliteError(msg)
     }
 
     dependencies.push(...tomlData.project.dependencies)
@@ -182,7 +183,7 @@ export class Image {
    * @example
    * const image = Image
    *  .debianSlim('3.12')
-   *  .addLocalFile('requirements.txt', '/home/daytona/requirements.txt')
+   *  .addLocalFile('requirements.txt', '/home/boxlite/requirements.txt')
    */
   addLocalFile(localPath: string, remotePath: string): Image {
     const importErrorPrefix = '"addLocalFile" is not supported: '
@@ -209,7 +210,7 @@ export class Image {
    * @example
    * const image = Image
    *  .debianSlim('3.12')
-   *  .addLocalDir('src', '/home/daytona/src')
+   *  .addLocalDir('src', '/home/boxlite/src')
    */
   addLocalDir(localPath: string, remotePath: string): Image {
     const importErrorPrefix = '"addLocalDir" is not supported: '
@@ -285,7 +286,7 @@ export class Image {
    * @example
    * const image = Image
    *  .debianSlim('3.12')
-   *  .workdir('/home/daytona')
+   *  .workdir('/home/boxlite')
    */
   workdir(dirPath: string): Image {
     this._dockerfile += `WORKDIR ${quote([dirPath])}\n`
@@ -541,7 +542,7 @@ export class Image {
     if (!SUPPORTED_PYTHON_SERIES.includes(pythonVersion)) {
       throw new Error(
         `Unsupported Python version: ${pythonVersion}. ` +
-          `Daytona supports the following series: ${SUPPORTED_PYTHON_SERIES.join(', ')}`,
+          `BoxLite supports the following series: ${SUPPORTED_PYTHON_SERIES.join(', ')}`,
       )
     }
 

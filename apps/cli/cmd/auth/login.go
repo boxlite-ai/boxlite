@@ -1,4 +1,5 @@
-// Copyright 2025 Daytona Platforms Inc.
+// Copyright 2025 BoxLite AI (originally Daytona Platforms Inc.
+// Modified by BoxLite AI, 2025-2026
 // SPDX-License-Identifier: AGPL-3.0
 
 package auth
@@ -8,11 +9,11 @@ import (
 	"fmt"
 
 	"github.com/coreos/go-oidc/v3/oidc"
-	"github.com/daytonaio/daytona/cli/auth"
-	"github.com/daytonaio/daytona/cli/cmd/common"
-	"github.com/daytonaio/daytona/cli/config"
-	"github.com/daytonaio/daytona/cli/internal"
-	view_common "github.com/daytonaio/daytona/cli/views/common"
+	"github.com/daytonaio/boxlite/cli/auth"
+	"github.com/daytonaio/boxlite/cli/cmd/common"
+	"github.com/daytonaio/boxlite/cli/config"
+	"github.com/daytonaio/boxlite/cli/internal"
+	view_common "github.com/daytonaio/boxlite/cli/views/common"
 	"github.com/pkg/browser"
 	"github.com/spf13/cobra"
 	"golang.org/x/oauth2"
@@ -20,7 +21,7 @@ import (
 
 var LoginCmd = &cobra.Command{
 	Use:     "login",
-	Short:   "Log in to Daytona",
+	Short:   "Log in to BoxLite",
 	Args:    cobra.NoArgs,
 	GroupID: internal.USER_GROUP,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -32,7 +33,7 @@ var LoginCmd = &cobra.Command{
 
 		items := []view_common.SelectItem{
 			{Title: "Login with Browser", Desc: "Authenticate using OAuth in your browser"},
-			{Title: "Set Daytona API Key", Desc: "Authenticate using Daytona API key"},
+			{Title: "Set BoxLite API Key", Desc: "Authenticate using BoxLite API key"},
 		}
 
 		choice, err := view_common.Select("Select Authentication Method", items)
@@ -45,11 +46,11 @@ var LoginCmd = &cobra.Command{
 		}
 
 		var tokenConfig *config.Token
-		setApiKey := choice == "Set Daytona API Key"
+		setApiKey := choice == "Set BoxLite API Key"
 
 		if setApiKey {
 			// Prompt for API key
-			apiKey, err := view_common.PromptForInput("", "Enter your Daytona API key", "You can find it in the Daytona dashboard - https://app.daytona.io/dashboard")
+			apiKey, err := view_common.PromptForInput("", "Enter your BoxLite API key", "You can find it in the BoxLite dashboard - https://app.boxlite.ai/dashboard")
 			if err != nil {
 				return err
 			}
@@ -101,7 +102,7 @@ func updateProfileWithLogin(tokenConfig *config.Token, apiKey *string) error {
 		activeProfile.Api.Token = nil
 		activeProfile.Api.Key = apiKey
 
-		view_common.RenderInfoMessageBold("Successfully set Daytona API key!")
+		view_common.RenderInfoMessageBold("Successfully set BoxLite API key!")
 	}
 
 	if tokenConfig != nil {
@@ -131,7 +132,7 @@ func createInitialProfile(c *config.Config) (config.Profile, error) {
 		Id:   "initial",
 		Name: "initial",
 		Api: config.ServerApi{
-			Url: config.GetDaytonaApiUrl(),
+			Url: config.GetBoxliteApiUrl(),
 		},
 	}
 

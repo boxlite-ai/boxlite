@@ -25,7 +25,7 @@ export const useCreateSandboxMutation = () => {
       }
 
       const { target, ...createParams } = params
-      const client = new Daytona({
+      const client = new BoxLite({
         jwtToken: user.access_token,
         apiUrl: import.meta.env.VITE_API_URL,
         organizationId: selectedOrganization.id,

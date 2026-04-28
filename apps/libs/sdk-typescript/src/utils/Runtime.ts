@@ -1,5 +1,6 @@
 /*
  * Copyright 2025 Daytona Platforms Inc.
+ * Modified by BoxLite AI, 2025-2026
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -63,18 +64,18 @@ export function getEnvVar(name: string): string | undefined {
   return undefined
 }
 
-export class DaytonaEnvReader {
+export class BoxliteEnvReader {
   private readonly envLocalVars: Record<string, string>
   private readonly envVars: Record<string, string>
 
   constructor() {
-    this.envLocalVars = DaytonaEnvReader.parseFileVars('.env.local')
-    this.envVars = DaytonaEnvReader.parseFileVars('.env')
+    this.envLocalVars = BoxliteEnvReader.parseFileVars('.env.local')
+    this.envVars = BoxliteEnvReader.parseFileVars('.env')
   }
 
   get(name: string): string | undefined {
-    if (!name.startsWith('DAYTONA_')) {
-      throw new Error(`DaytonaEnvReader: variable name must start with 'DAYTONA_', got '${name}'`)
+    if (!name.startsWith('BOXLITE_')) {
+      throw new Error(`BoxliteEnvReader: variable name must start with 'BOXLITE_', got '${name}'`)
     }
     // 1. Runtime env
     const runtimeVal = getEnvVar(name)
@@ -91,7 +92,7 @@ export class DaytonaEnvReader {
     if (!fs.existsSync(path)) return {}
     const dotenv = require('dotenv')
     const parsed = dotenv.parse(fs.readFileSync(path)) as Record<string, string>
-    return Object.fromEntries(Object.entries(parsed).filter(([k]) => k.startsWith('DAYTONA_')))
+    return Object.fromEntries(Object.entries(parsed).filter(([k]) => k.startsWith('BOXLITE_')))
   }
 }
 

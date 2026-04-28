@@ -1,5 +1,6 @@
 /*
  * Copyright 2025 Daytona Platforms Inc.
+ * Modified by BoxLite AI, 2025-2026
  * SPDX-License-Identifier: AGPL-3.0
  */
 
@@ -92,7 +93,7 @@ export class SandboxWarmPoolService {
       })
       if (!snapshot) {
         throw new BadRequestError(
-          `Snapshot ${sandboxSnapshot} not found. Did you add it through the Daytona Dashboard?`,
+          `Snapshot ${sandboxSnapshot} not found. Did you add it through the BoxLite Dashboard?`,
         )
       }
     } else {

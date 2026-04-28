@@ -1,4 +1,5 @@
-// Copyright 2025 Daytona Platforms Inc.
+// Copyright 2025 BoxLite AI (originally Daytona Platforms Inc.
+// Modified by BoxLite AI, 2025-2026
 // SPDX-License-Identifier: AGPL-3.0
 
 package apiclient
@@ -10,10 +11,10 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/daytonaio/daytona/cli/auth"
-	"github.com/daytonaio/daytona/cli/config"
-	"github.com/daytonaio/daytona/cli/internal"
-	apiclient "github.com/daytonaio/daytona/libs/api-client-go"
+	"github.com/daytonaio/boxlite/cli/auth"
+	"github.com/daytonaio/boxlite/cli/config"
+	"github.com/daytonaio/boxlite/cli/internal"
+	apiclient "github.com/daytonaio/boxlite/libs/api-client-go"
 
 	log "github.com/sirupsen/logrus"
 )
@@ -35,8 +36,8 @@ func (t *versionCheckTransport) RoundTrip(req *http.Request) (*http.Response, er
 
 var apiClient *apiclient.APIClient
 
-const DaytonaSourceHeader = "X-Daytona-Source"
-const API_VERSION_HEADER = "X-Daytona-Api-Version"
+const BoxliteSourceHeader = "X-BoxLite-Source"
+const API_VERSION_HEADER = "X-BoxLite-Api-Version"
 
 func checkVersionsMismatch(res *http.Response) {
 	// If the CLI is running in a structured output mode (e.g. json/yaml),
@@ -63,7 +64,7 @@ func checkVersionsMismatch(res *http.Response) {
 	}
 
 	versionMismatchWarningOnce.Do(func() {
-		log.Warn(fmt.Sprintf("Version mismatch: Daytona CLI is on v%s and API is on v%s.\nMake sure the versions are aligned using 'brew upgrade daytonaio/cli/daytona' or by downloading the latest version from https://github.com/daytonaio/daytona/releases.", cliVersion, apiVersion))
+		log.Warn(fmt.Sprintf("Version mismatch: BoxLite CLI is on v%s and API is on v%s.\nMake sure the versions are aligned using 'brew upgrade daytonaio/cli/daytona' or by downloading the latest version from https://github.com/daytonaio/boxlite/releases.", cliVersion, apiVersion))
 	})
 }
 
@@ -141,11 +142,11 @@ func GetApiClient(profile *config.Profile, defaultHeaders map[string]string) (*a
 		clientConfig.AddDefaultHeader("Authorization", "Bearer "+activeProfile.Api.Token.AccessToken)
 
 		if activeProfile.ActiveOrganizationId != nil {
-			clientConfig.AddDefaultHeader("X-Daytona-Organization-ID", *activeProfile.ActiveOrganizationId)
+			clientConfig.AddDefaultHeader("X-BoxLite-Organization-ID", *activeProfile.ActiveOrganizationId)
 		}
 	}
 
-	clientConfig.AddDefaultHeader(DaytonaSourceHeader, "cli")
+	clientConfig.AddDefaultHeader(BoxliteSourceHeader, "cli")
 
 	for headerKey, headerValue := range defaultHeaders {
 		clientConfig.AddDefaultHeader(headerKey, headerValue)

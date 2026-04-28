@@ -1,4 +1,4 @@
-// Copyright Daytona Platforms Inc.
+// Copyright BoxLite AI (originally Daytona Platforms Inc.
 // SPDX-License-Identifier: AGPL-3.0
 
 package sandbox
@@ -9,9 +9,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/daytonaio/daytona/cli/apiclient"
-	"github.com/daytonaio/daytona/cli/cmd/common"
-	"github.com/daytonaio/daytona/cli/toolbox"
+	"github.com/daytonaio/boxlite/cli/apiclient"
+	"github.com/daytonaio/boxlite/cli/cmd/common"
+	"github.com/daytonaio/boxlite/cli/toolbox"
 	"github.com/spf13/cobra"
 )
 

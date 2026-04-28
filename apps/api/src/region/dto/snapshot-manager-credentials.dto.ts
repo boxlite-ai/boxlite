@@ -10,7 +10,7 @@ import { IsString, IsNotEmpty } from 'class-validator'
 export class SnapshotManagerCredentialsDto {
   @ApiProperty({
     description: 'Snapshot Manager username for the region',
-    example: 'daytona',
+    example: 'boxlite',
   })
   @IsString()
   @IsNotEmpty()

@@ -1,4 +1,5 @@
-// Copyright 2025 Daytona Platforms Inc.
+// Copyright 2025 BoxLite AI (originally Daytona Platforms Inc.
+// Modified by BoxLite AI, 2025-2026
 // SPDX-License-Identifier: AGPL-3.0
 
 package config
@@ -11,18 +12,18 @@ import (
 )
 
 type Config struct {
-	DaemonLogFilePath        string        `envconfig:"DAYTONA_DAEMON_LOG_FILE_PATH"`
-	UserHomeAsWorkDir        bool          `envconfig:"DAYTONA_USER_HOME_AS_WORKDIR"`
-	SandboxId                string        `envconfig:"DAYTONA_SANDBOX_ID" validate:"required"`
-	OtelEndpoint             *string       `envconfig:"DAYTONA_OTEL_ENDPOINT"`
-	TerminationCheckInterval time.Duration `envconfig:"DAYTONA_TERMINATION_CHECK_INTERVAL" default:"100ms" validate:"min_duration=1ms"`
-	TerminationGracePeriod   time.Duration `envconfig:"DAYTONA_TERMINATION_GRACE_PERIOD" default:"5s" validate:"min_duration=1s"`
-	RecordingsDir            string        `envconfig:"DAYTONA_RECORDINGS_DIR"`
-	OrganizationId           *string       `envconfig:"DAYTONA_ORGANIZATION_ID"`
-	RegionId                 *string       `envconfig:"DAYTONA_REGION_ID"`
+	DaemonLogFilePath        string        `envconfig:"BOXLITE_DAEMON_LOG_FILE_PATH"`
+	UserHomeAsWorkDir        bool          `envconfig:"BOXLITE_USER_HOME_AS_WORKDIR"`
+	SandboxId                string        `envconfig:"BOXLITE_SANDBOX_ID" validate:"required"`
+	OtelEndpoint             *string       `envconfig:"BOXLITE_OTEL_ENDPOINT"`
+	TerminationCheckInterval time.Duration `envconfig:"BOXLITE_TERMINATION_CHECK_INTERVAL" default:"100ms" validate:"min_duration=1ms"`
+	TerminationGracePeriod   time.Duration `envconfig:"BOXLITE_TERMINATION_GRACE_PERIOD" default:"5s" validate:"min_duration=1s"`
+	RecordingsDir            string        `envconfig:"BOXLITE_RECORDINGS_DIR"`
+	OrganizationId           *string       `envconfig:"BOXLITE_ORGANIZATION_ID"`
+	RegionId                 *string       `envconfig:"BOXLITE_REGION_ID"`
 }
 
-var defaultDaemonLogFilePath = "/tmp/daytona-daemon.log"
+var defaultDaemonLogFilePath = "/tmp/boxlite-daemon.log"
 
 var config *Config
 

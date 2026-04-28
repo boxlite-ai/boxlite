@@ -1,5 +1,6 @@
 /*
  * Copyright 2025 Daytona Platforms Inc.
+ * Modified by BoxLite AI, 2025-2026
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -17,14 +18,14 @@ import axios, { AxiosError, AxiosInstance, InternalAxiosRequestConfig } from 'ax
 import { SandboxPythonCodeToolbox } from './code-toolbox/SandboxPythonCodeToolbox'
 import { SandboxTsCodeToolbox } from './code-toolbox/SandboxTsCodeToolbox'
 import { SandboxJsCodeToolbox } from './code-toolbox/SandboxJsCodeToolbox'
-import { DaytonaError, DaytonaNotFoundError, DaytonaRateLimitError } from './errors/DaytonaError'
+import { BoxliteError, BoxLiteNotFoundError, BoxLiteRateLimitError } from './errors/BoxliteError'
 import { Image } from './Image'
 import { Sandbox, PaginatedSandboxes } from './Sandbox'
 import { SnapshotService } from './Snapshot'
 import { VolumeService } from './Volume'
 import * as packageJson from '../package.json'
 import { processStreamingResponse } from './utils/Stream'
-import { DaytonaEnvReader, RUNTIME, Runtime } from './utils/Runtime'
+import { BoxliteEnvReader, RUNTIME, Runtime } from './utils/Runtime'
 import { WithInstrumentation } from './utils/otel.decorator'
 import { context, trace, propagation, SpanStatusCode } from '@opentelemetry/api'
 import { NodeSDK } from '@opentelemetry/sdk-node'
@@ -50,36 +51,36 @@ export interface VolumeMount extends SandboxVolume {
 }
 
 /**
- * Configuration options for initializing the Daytona client.
+ * Configuration options for initializing the BoxLite client.
  *
  * @interface
- * @property {string} apiKey - API key for authentication with the Daytona API
- * @property {string} jwtToken - JWT token for authentication with the Daytona API. If not set, it must be provided
- * via the environment variable `DAYTONA_JWT_TOKEN`, or an API key must be provided instead.
+ * @property {string} apiKey - API key for authentication with the BoxLite API
+ * @property {string} jwtToken - JWT token for authentication with the BoxLite API. If not set, it must be provided
+ * via the environment variable `BOXLITE_JWT_TOKEN`, or an API key must be provided instead.
  * @property {string} organizationId - Organization ID used for JWT-based authentication. Required if a JWT token
- * is provided, and must be set either here or in the environment variable `DAYTONA_ORGANIZATION_ID`.
- * @property {string} apiUrl - URL of the Daytona API. Defaults to 'https://app.daytona.io/api'
- * if not set here and not set in environment variable DAYTONA_API_URL.
+ * is provided, and must be set either here or in the environment variable `BOXLITE_ORGANIZATION_ID`.
+ * @property {string} apiUrl - URL of the BoxLite API. Defaults to 'https://app.boxlite.io/api'
+ * if not set here and not set in environment variable BOXLITE_API_URL.
  * @property {string} target - Target location for Sandboxes
  * @property {boolean} otelEnabled - OpenTelemetry tracing enabled.
  * If set, all SDK operations will be traced.
  *
  * @example
- * const config: DaytonaConfig = {
+ * const config: BoxliteConfig = {
  *     apiKey: "your-api-key",
  *     apiUrl: "https://your-api.com",
  *     target: "us"
  * };
- * const daytona = new Daytona(config);
+ * const boxlite = new BoxLite(config);
  */
-export interface DaytonaConfig {
-  /** API key for authentication with the Daytona API */
+export interface BoxliteConfig {
+  /** API key for authentication with the BoxLite API */
   apiKey?: string
-  /** JWT token for authentication with the Daytona API */
+  /** JWT token for authentication with the BoxLite API */
   jwtToken?: string
-  /** Organization ID for authentication with the Daytona API */
+  /** Organization ID for authentication with the BoxLite API */
   organizationId?: string
-  /** URL of the Daytona API.
+  /** URL of the BoxLite API.
    */
   apiUrl?: string
   /**
@@ -188,36 +189,36 @@ export type CreateSandboxFromSnapshotParams = CreateSandboxBaseParams & {
 }
 
 /**
- * Main class for interacting with the Daytona API.
- * Provides methods for creating, managing, and interacting with Daytona Sandboxes.
+ * Main class for interacting with the BoxLite API.
+ * Provides methods for creating, managing, and interacting with BoxLite Sandboxes.
  * Can be initialized either with explicit configuration or using environment variables.
  *
- * @property {VolumeService} volume - Service for managing Daytona Volumes
- * @property {SnapshotService} snapshot - Service for managing Daytona Snapshots
+ * @property {VolumeService} volume - Service for managing BoxLite Volumes
+ * @property {SnapshotService} snapshot - Service for managing BoxLite Snapshots
  *
  * @example
  * // Using environment variables
- * // Uses DAYTONA_API_KEY, DAYTONA_API_URL, DAYTONA_TARGET
- * const daytona = new Daytona();
- * const sandbox = await daytona.create();
+ * // Uses BOXLITE_API_KEY, BOXLITE_API_URL, BOXLITE_TARGET
+ * const boxlite = new BoxLite();
+ * const sandbox = await boxlite.create();
  *
  * @example
  * // Using explicit configuration
- * const config: DaytonaConfig = {
+ * const config: BoxliteConfig = {
  *     apiKey: "your-api-key",
  *     apiUrl: "https://your-api.com",
  *     target: "us"
  * };
- * const daytona = new Daytona(config);
+ * const boxlite = new BoxLite(config);
  *
  * @example
- * // Disposes daytona and flushes traces when done
- * await using daytona = new Daytona({
+ * // Disposes boxlite and flushes traces when done
+ * await using boxlite = new BoxLite({
  *   otelEnabled: true,
  * });
  * @class
  */
-export class Daytona implements AsyncDisposable {
+export class BoxLite implements AsyncDisposable {
   private readonly clientConfig: Configuration
   private readonly sandboxApi: SandboxApi
   private readonly objectStorageApi: ObjectStorageApi
@@ -232,12 +233,12 @@ export class Daytona implements AsyncDisposable {
   public readonly snapshot: SnapshotService
 
   /**
-   * Creates a new Daytona client instance.
+   * Creates a new BoxLite client instance.
    *
-   * @param {DaytonaConfig} [config] - Configuration options
-   * @throws {DaytonaError} - `DaytonaError` - When API key is missing
+   * @param {BoxliteConfig} [config] - Configuration options
+   * @throws {BoxliteError} - `BoxliteError` - When API key is missing
    */
-  constructor(config?: DaytonaConfig) {
+  constructor(config?: BoxliteConfig) {
     let apiUrl: string | undefined
     if (config) {
       this.apiKey = !config?.apiKey && config?.jwtToken ? undefined : config?.apiKey
@@ -247,10 +248,10 @@ export class Daytona implements AsyncDisposable {
       this.target = config?.target
     }
 
-    let _envReader: DaytonaEnvReader | null | undefined
-    const envReader = (): DaytonaEnvReader | null => {
+    let _envReader: BoxliteEnvReader | null | undefined
+    const envReader = (): BoxliteEnvReader | null => {
       if (_envReader === undefined) {
-        _envReader = RUNTIME !== Runtime.BROWSER ? new DaytonaEnvReader() : null
+        _envReader = RUNTIME !== Runtime.BROWSER ? new BoxliteEnvReader() : null
       }
       return _envReader
     }
@@ -261,28 +262,28 @@ export class Daytona implements AsyncDisposable {
     ) {
       const reader = envReader()
       if (reader) {
-        this.apiKey = this.apiKey || (this.jwtToken ? undefined : reader.get('DAYTONA_API_KEY'))
-        this.jwtToken = this.jwtToken || reader.get('DAYTONA_JWT_TOKEN')
-        this.organizationId = this.organizationId || reader.get('DAYTONA_ORGANIZATION_ID')
-        apiUrl = apiUrl || reader.get('DAYTONA_API_URL') || reader.get('DAYTONA_SERVER_URL')
-        this.target = this.target || reader.get('DAYTONA_TARGET')
+        this.apiKey = this.apiKey || (this.jwtToken ? undefined : reader.get('BOXLITE_API_KEY'))
+        this.jwtToken = this.jwtToken || reader.get('BOXLITE_JWT_TOKEN')
+        this.organizationId = this.organizationId || reader.get('BOXLITE_ORGANIZATION_ID')
+        apiUrl = apiUrl || reader.get('BOXLITE_API_URL') || reader.get('BOXLITE_SERVER_URL')
+        this.target = this.target || reader.get('BOXLITE_TARGET')
 
-        if (reader.get('DAYTONA_SERVER_URL') && !reader.get('DAYTONA_API_URL')) {
+        if (reader.get('BOXLITE_SERVER_URL') && !reader.get('BOXLITE_API_URL')) {
           console.warn(
-            '[Deprecation Warning] Environment variable `DAYTONA_SERVER_URL` is deprecated and will be removed in future versions. Use `DAYTONA_API_URL` instead.',
+            '[Deprecation Warning] Environment variable `BOXLITE_SERVER_URL` is deprecated and will be removed in future versions. Use `BOXLITE_API_URL` instead.',
           )
         }
       }
     }
 
-    this.apiUrl = apiUrl || 'https://app.daytona.io/api'
+    this.apiUrl = apiUrl || 'https://app.boxlite.io/api'
 
     const orgHeader: Record<string, string> = {}
     if (!this.apiKey) {
       if (!this.organizationId) {
-        throw new DaytonaError('Organization ID is required when using JWT token')
+        throw new BoxliteError('Organization ID is required when using JWT token')
       }
-      orgHeader['X-Daytona-Organization-ID'] = this.organizationId
+      orgHeader['X-BoxLite-Organization-ID'] = this.organizationId
     }
 
     const configuration = new Configuration({
@@ -290,8 +291,8 @@ export class Daytona implements AsyncDisposable {
       baseOptions: {
         headers: {
           Authorization: `Bearer ${this.apiKey || this.jwtToken}`,
-          'X-Daytona-Source': 'sdk-typescript',
-          'X-Daytona-SDK-Version': packageJson.version,
+          'X-BoxLite-Source': 'sdk-typescript',
+          'X-BoxLite-SDK-Version': packageJson.version,
           'User-Agent': `sdk-typescript/${packageJson.version}`,
           ...orgHeader,
         },
@@ -312,7 +313,7 @@ export class Daytona implements AsyncDisposable {
     )
     this.clientConfig = configuration
 
-    if (!config?._experimental?.otelEnabled && envReader()?.get('DAYTONA_EXPERIMENTAL_OTEL_ENABLED') !== 'true') {
+    if (!config?._experimental?.otelEnabled && envReader()?.get('BOXLITE_EXPERIMENTAL_OTEL_ENABLED') !== 'true') {
       return
     }
 
@@ -321,7 +322,7 @@ export class Daytona implements AsyncDisposable {
     this.otelSdk = new NodeSDK({
       resource: resourceFromAttributes({
         [ATTR_SERVICE_VERSION]: packageJson.version,
-        [ATTR_SERVICE_NAME]: 'daytona-typescript-sdk',
+        [ATTR_SERVICE_NAME]: 'boxlite-typescript-sdk',
       }),
       instrumentations: [
         new HttpInstrumentation({
@@ -363,7 +364,7 @@ export class Daytona implements AsyncDisposable {
    * @returns {Promise<Sandbox>} The created Sandbox instance
    *
    * @example
-   * const sandbox = await daytona.create();
+   * const sandbox = await boxlite.create();
    *
    * @example
    * // Create a custom sandbox
@@ -378,12 +379,12 @@ export class Daytona implements AsyncDisposable {
    *     autoArchiveInterval: 60,
    *     autoDeleteInterval: 120
    * };
-   * const sandbox = await daytona.create(params, { timeout: 100 });
+   * const sandbox = await boxlite.create(params, { timeout: 100 });
    */
   public async create(params?: CreateSandboxFromSnapshotParams, options?: { timeout?: number }): Promise<Sandbox>
   /**
-   * Creates Sandboxes from specified image available on some registry or declarative Daytona Image. You can specify various parameters,
-   * including resources, language, image, environment variables, and volumes. Daytona creates snapshot from
+   * Creates Sandboxes from specified image available on some registry or declarative BoxLite Image. You can specify various parameters,
+   * including resources, language, image, environment variables, and volumes. BoxLite creates snapshot from
    * provided image and uses it to create Sandbox.
    *
    * @param {CreateSandboxFromImageParams} [params] - Parameters for Sandbox creation from image
@@ -393,7 +394,7 @@ export class Daytona implements AsyncDisposable {
    * @returns {Promise<Sandbox>} The created Sandbox instance
    *
    * @example
-   * const sandbox = await daytona.create({ image: 'debian:12.9' }, { timeout: 90, onSnapshotCreateLogs: console.log });
+   * const sandbox = await boxlite.create({ image: 'debian:12.9' }, { timeout: 90, onSnapshotCreateLogs: console.log });
    *
    * @example
    * // Create a custom sandbox
@@ -413,7 +414,7 @@ export class Daytona implements AsyncDisposable {
    *     autoArchiveInterval: 60,
    *     autoDeleteInterval: 120
    * };
-   * const sandbox = await daytona.create(params, { timeout: 100, onSnapshotCreateLogs: console.log });
+   * const sandbox = await boxlite.create(params, { timeout: 100, onSnapshotCreateLogs: console.log });
    */
   public async create(
     params?: CreateSandboxFromImageParams,
@@ -441,14 +442,14 @@ export class Daytona implements AsyncDisposable {
     }
 
     if (options.timeout < 0) {
-      throw new DaytonaError('Timeout must be a non-negative number')
+      throw new BoxliteError('Timeout must be a non-negative number')
     }
 
     if (
       params.autoStopInterval !== undefined &&
       (!Number.isInteger(params.autoStopInterval) || params.autoStopInterval < 0)
     ) {
-      throw new DaytonaError('autoStopInterval must be a non-negative integer')
+      throw new BoxliteError('autoStopInterval must be a non-negative integer')
     }
 
     if (params.ephemeral) {
@@ -464,7 +465,7 @@ export class Daytona implements AsyncDisposable {
       params.autoArchiveInterval !== undefined &&
       (!Number.isInteger(params.autoArchiveInterval) || params.autoArchiveInterval < 0)
     ) {
-      throw new DaytonaError('autoArchiveInterval must be a non-negative integer')
+      throw new BoxliteError('autoArchiveInterval must be a non-negative integer')
     }
 
     const codeToolbox = this.getCodeToolbox(params.language as CodeLanguage)
@@ -537,7 +538,7 @@ export class Daytona implements AsyncDisposable {
           if (options.timeout) {
             const elapsed = (Date.now() - startTime) / 1000
             if (elapsed > options.timeout) {
-              throw new DaytonaError(
+              throw new BoxliteError(
                 `Sandbox build has been pending for more than ${options.timeout} seconds. Please check the sandbox state again later.`,
               )
             }
@@ -579,9 +580,9 @@ export class Daytona implements AsyncDisposable {
 
       return sandbox
     } catch (error) {
-      if (error instanceof DaytonaError && error.message.includes('Operation timed out')) {
+      if (error instanceof BoxliteError && error.message.includes('Operation timed out')) {
         const errMsg = `Failed to create and start sandbox within ${options.timeout} seconds. Operation timed out.`
-        throw new DaytonaError(errMsg)
+        throw new BoxliteError(errMsg)
       }
       throw error
     }
@@ -594,7 +595,7 @@ export class Daytona implements AsyncDisposable {
    * @returns {Promise<Sandbox>} The Sandbox
    *
    * @example
-   * const sandbox = await daytona.get('my-sandbox-id-or-name');
+   * const sandbox = await boxlite.get('my-sandbox-id-or-name');
    * console.log(`Sandbox state: ${sandbox.state}`);
    */
   @WithInstrumentation()
@@ -622,7 +623,7 @@ export class Daytona implements AsyncDisposable {
    * @returns {Promise<PaginatedSandboxes>} Paginated list of Sandboxes that match the labels.
    *
    * @example
-   * const result = await daytona.list({ 'my-label': 'my-value' }, 2, 10);
+   * const result = await boxlite.list({ 'my-label': 'my-value' }, 2, 10);
    * for (const sandbox of result.items) {
    *     console.log(`${sandbox.id}: ${sandbox.state}`);
    * }
@@ -663,9 +664,9 @@ export class Daytona implements AsyncDisposable {
    * @returns {Promise<void>}
    *
    * @example
-   * const sandbox = await daytona.get('my-sandbox-id');
+   * const sandbox = await boxlite.get('my-sandbox-id');
    * // Wait up to 60 seconds for the sandbox to start
-   * await daytona.start(sandbox, 60);
+   * await boxlite.start(sandbox, 60);
    */
   @WithInstrumentation()
   public async start(sandbox: Sandbox, timeout?: number) {
@@ -679,8 +680,8 @@ export class Daytona implements AsyncDisposable {
    * @returns {Promise<void>}
    *
    * @example
-   * const sandbox = await daytona.get('my-sandbox-id');
-   * await daytona.stop(sandbox);
+   * const sandbox = await boxlite.get('my-sandbox-id');
+   * await boxlite.stop(sandbox);
    */
   @WithInstrumentation()
   public async stop(sandbox: Sandbox) {
@@ -695,8 +696,8 @@ export class Daytona implements AsyncDisposable {
    * @returns {Promise<void>}
    *
    * @example
-   * const sandbox = await daytona.get('my-sandbox-id');
-   * await daytona.delete(sandbox);
+   * const sandbox = await boxlite.get('my-sandbox-id');
+   * await boxlite.delete(sandbox);
    */
   @WithInstrumentation()
   public async delete(sandbox: Sandbox, timeout = 60) {
@@ -709,7 +710,7 @@ export class Daytona implements AsyncDisposable {
    * @private
    * @param {CodeLanguage} [language] - Programming language for the toolbox
    * @returns {SandboxCodeToolbox} The appropriate code toolbox instance
-   * @throws {DaytonaError} - `DaytonaError` - When an unsupported language is specified
+   * @throws {BoxliteError} - `BoxliteError` - When an unsupported language is specified
    */
   private getCodeToolbox(language?: CodeLanguage) {
     switch (language) {
@@ -722,7 +723,7 @@ export class Daytona implements AsyncDisposable {
         return new SandboxPythonCodeToolbox()
       default: {
         const errMsg = `Unsupported language: ${language}, supported languages: ${Object.values(CodeLanguage).join(', ')}`
-        throw new DaytonaError(errMsg)
+        throw new BoxliteError(errMsg)
       }
     }
   }
@@ -778,11 +779,11 @@ export class Daytona implements AsyncDisposable {
 
         switch (statusCode) {
           case 404:
-            throw new DaytonaNotFoundError(errorMessage, statusCode, headers)
+            throw new BoxLiteNotFoundError(errorMessage, statusCode, headers)
           case 429:
-            throw new DaytonaRateLimitError(errorMessage, statusCode, headers)
+            throw new BoxLiteRateLimitError(errorMessage, statusCode, headers)
           default:
-            throw new DaytonaError(errorMessage, statusCode, headers)
+            throw new BoxliteError(errorMessage, statusCode, headers)
         }
       },
     )

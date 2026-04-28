@@ -1,4 +1,5 @@
-// Copyright 2025 Daytona Platforms Inc.
+// Copyright 2025 BoxLite AI (originally Daytona Platforms Inc.
+// Modified by BoxLite AI, 2025-2026
 // SPDX-License-Identifier: AGPL-3.0
 
 package session
@@ -8,5 +9,5 @@ import (
 )
 
 func IsCombinedOutput(sdkVersion string, versionComparison *int, requestHeader http.Header) bool {
-	return (versionComparison != nil && *versionComparison < 0 && sdkVersion != "0.0.0-dev") || (sdkVersion == "" && requestHeader.Get("X-Daytona-Split-Output") != "true")
+	return (versionComparison != nil && *versionComparison < 0 && sdkVersion != "0.0.0-dev") || (sdkVersion == "" && requestHeader.Get("X-BoxLite-Split-Output") != "true")
 }

@@ -1,20 +1,21 @@
-// Copyright 2025 Daytona Platforms Inc.
+// Copyright 2025 BoxLite AI (originally Daytona Platforms Inc.
+// Modified by BoxLite AI, 2025-2026
 // SPDX-License-Identifier: AGPL-3.0
 
 package sandbox
 
 import (
-	"github.com/daytonaio/daytona/cli/internal"
+	"github.com/daytonaio/boxlite/cli/internal"
 	"github.com/spf13/cobra"
 )
 
 var SandboxCmd = &cobra.Command{
 	Use:     "sandbox",
-	Short:   "Manage Daytona sandboxes",
-	Long:    "Commands for managing Daytona sandboxes",
+	Short:   "Manage BoxLite sandboxes",
+	Long:    "Commands for managing BoxLite sandboxes",
 	Aliases: []string{"sandboxes"},
 	GroupID: internal.SANDBOX_GROUP,
-	Hidden:  true, // Deprecated: use top-level commands instead (e.g., "daytona start" instead of "daytona sandbox start")
+	Hidden:  true, // Deprecated: use top-level commands instead (e.g., "boxlite start" instead of "boxlite sandbox start")
 }
 
 func init() {

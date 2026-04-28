@@ -1,4 +1,5 @@
-// Copyright 2025 Daytona Platforms Inc.
+// Copyright 2025 BoxLite AI (originally Daytona Platforms Inc.
+// Modified by BoxLite AI, 2025-2026
 // SPDX-License-Identifier: AGPL-3.0
 
 package mcp
@@ -7,16 +8,16 @@ import (
 	"os"
 	"os/signal"
 
-	"github.com/daytonaio/daytona/cli/mcp"
+	"github.com/daytonaio/boxlite/cli/mcp"
 	"github.com/spf13/cobra"
 )
 
 var StartCmd = &cobra.Command{
 	Use:   "start",
-	Short: "Start Daytona MCP Server",
+	Short: "Start BoxLite MCP Server",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		server := mcp.NewDaytonaMCPServer()
+		server := mcp.NewBoxliteMCPServer()
 
 		interruptChan := make(chan os.Signal, 1)
 		signal.Notify(interruptChan, os.Interrupt)

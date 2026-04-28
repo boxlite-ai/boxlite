@@ -1,5 +1,6 @@
 /*
  * Copyright 2025 Daytona Platforms Inc.
+ * Modified by BoxLite AI, 2025-2026
  * SPDX-License-Identifier: AGPL-3.0
  */
 
@@ -117,7 +118,7 @@ export class WorkspaceController {
   }
 
   @Post()
-  @HttpCode(200) //  for Daytona Api compatibility
+  @HttpCode(200) //  for BoxLite Api compatibility
   @UseInterceptors(ContentTypeInterceptor)
   @ApiOperation({
     summary: '[DEPRECATED] Create a new workspace',
@@ -282,7 +283,7 @@ export class WorkspaceController {
   }
 
   @Post(':workspaceId/stop')
-  @HttpCode(200) //  for Daytona Api compatibility
+  @HttpCode(200) //  for BoxLite Api compatibility
   @ApiOperation({
     summary: '[DEPRECATED] Stop workspace',
     operationId: 'stopWorkspace_deprecated',

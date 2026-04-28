@@ -1,11 +1,12 @@
-// Copyright 2025 Daytona Platforms Inc.
+// Copyright 2025 BoxLite AI (originally Daytona Platforms Inc.
+// Modified by BoxLite AI, 2025-2026
 // SPDX-License-Identifier: AGPL-3.0
 
 package internal
 
 var (
 	Version           = "v0.0.0-dev"
-	DaytonaApiUrl     = ""
+	BoxliteApiUrl     = ""
 	Auth0Domain       = ""
 	Auth0ClientId     = ""
 	Auth0ClientSecret = ""
