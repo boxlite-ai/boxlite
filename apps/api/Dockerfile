@@ -28,6 +28,7 @@ COPY apps/libs/toolbox-api-client/ libs/toolbox-api-client/
 COPY apps/libs/sdk-typescript/ libs/sdk-typescript/
 
 ENV NX_DAEMON=false
+ARG CACHE_BUST=1
 
 RUN yarn nx build api --configuration=production --nxBail=true
 
