@@ -22,6 +22,54 @@ impl TsiFeatures {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tsi_features_none_is_zero() {
+        assert_eq!(TsiFeatures::None.as_raw(), 0);
+    }
+
+    #[test]
+    fn tsi_features_hijack_inet_is_bit_0() {
+        assert_eq!(TsiFeatures::HijackInet.as_raw(), 1);
+    }
+
+    #[test]
+    fn tsi_features_hijack_unix_is_bit_1() {
+        assert_eq!(TsiFeatures::HijackUnix.as_raw(), 2);
+    }
+
+    #[test]
+    fn tsi_features_hijack_all_combines_both_bits() {
+        let raw = TsiFeatures::HijackAll.as_raw();
+        assert_eq!(raw, 3);
+        assert_eq!(
+            raw,
+            TsiFeatures::HijackInet.as_raw() | TsiFeatures::HijackUnix.as_raw()
+        );
+    }
+
+    #[test]
+    fn tsi_features_variants_are_distinct() {
+        let values: Vec<u32> = [
+            TsiFeatures::None,
+            TsiFeatures::HijackInet,
+            TsiFeatures::HijackUnix,
+            TsiFeatures::HijackAll,
+        ]
+        .iter()
+        .map(|f| f.as_raw())
+        .collect();
+        for i in 0..values.len() {
+            for j in (i + 1)..values.len() {
+                assert_ne!(values[i], values[j], "variants {i} and {j} must differ");
+            }
+        }
+    }
+}
+
 /// Network feature flags (host-specific)
 pub mod network_features {
     // Virtio-net feature flags for libkrun net
