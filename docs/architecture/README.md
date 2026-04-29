@@ -72,10 +72,10 @@ can be embedded directly into applications without requiring a daemon or externa
 
 ### BoxliteRuntime
 
-The main entry point for creating and managing Boxes. Holds all runtime state protected by a single
-`RwLock`.
+The main entry point for creating and managing Boxes. Uses a coordination
+`RwLock` (`sync_state`) plus manager-internal locks and atomic counters.
 
-**Source:** `boxlite/src/runtime/`
+**Source:** `src/boxlite/src/runtime/`
 
 **Key responsibilities:**
 
@@ -86,16 +86,22 @@ The main entry point for creating and managing Boxes. Holds all runtime state pr
 
 **State architecture:**
 
-```
-RuntimeInnerImpl
-├── sync_state (RwLock)
-│   ├── BoxManager      # Tracks all Boxes and their states (Source: boxlite/src/management/box_manager.rs)
-│   └── ImageManager    # OCI image cache and management (Source: boxlite/src/management/image_manager.rs)
-└── non_sync_state (immutable)
-    ├── FilesystemLayout  # Directory structure (~/.boxlite)
-
-    ├── InitRootfs        # Shared init rootfs for guests
-    └── RuntimeMetrics    # Atomic counters (lock-free)
+```text
+RuntimeImpl
+├── sync_state (RwLock<SynchronizedState>)
+│   ├── active_boxes_by_id   # Weak cache of BoxImpl handles
+│   └── active_boxes_by_name # Weak cache of named BoxImpl handles
+├── box_manager        # DB-backed Box metadata/state management
+├── image_manager      # OCI image pull/cache management
+├── layout             # FilesystemLayout (~/.boxlite)
+├── image_disk_mgr     # Cached image layer -> ext4 conversion
+├── guest_rootfs_mgr   # Versioned guest rootfs cache manager
+├── guest_rootfs       # Arc<OnceCell<GuestRootfs>> lazy singleton
+├── base_disk_mgr      # Clone base/rootfs backing lifecycle
+├── snapshot_mgr       # Snapshot metadata + disk lifecycle
+├── lock_manager       # Per-entity multiprocess file locks
+├── _runtime_lock      # BOXLITE_HOME process-wide lock
+└── runtime_metrics    # Atomic counters (lock-free)
 ```
 
 ### LiteBox
@@ -103,7 +109,7 @@ RuntimeInnerImpl
 Individual Box handle providing execution capabilities. Supports lazy initialization - heavy work (
 image pulling, Box startup) is deferred until first use.
 
-**Source:** `boxlite/src/litebox/`
+**Source:** `src/boxlite/src/litebox/`
 
 **Key responsibilities:**
 
@@ -122,7 +128,7 @@ image pulling, Box startup) is deferred until first use.
 Universal subprocess-based Box controller. Spawns `boxlite-shim` binary in a subprocess to isolate
 Box process takeover from the host application.
 
-**Source:** `boxlite/src/vmm/controller/shim.rs`, `boxlite/src/bin/shim.rs`
+**Source:** `src/boxlite/src/vmm/controller/shim.rs`, `src/boxlite/src/bin/shim/main.rs`
 
 **Why subprocess isolation:**
 
@@ -136,7 +142,7 @@ Box process takeover from the host application.
 Defense-in-depth security layer that sandboxes the shim process, inspired by Firecracker's jailer.
 Provides OS-level isolation on top of hardware virtualization.
 
-**Source:** `boxlite/src/jailer/`
+**Source:** `src/boxlite/src/jailer/`
 
 **Key responsibilities:**
 
@@ -194,7 +200,7 @@ let opts = BoxOptions {
 };
 ```
 
-**For complete threat model and security design, see:** `boxlite/src/jailer/THREAT_MODEL.md`
+**For complete threat model and security design, see:** `src/boxlite/src/jailer/THREAT_MODEL.md`
 
 ### Portal (Host-Guest Communication)
 
@@ -204,19 +210,20 @@ gRPC-based communication layer between host and guest.
 
 - `GuestSession`: High-level facade for service interfaces
 - `Connection`: Lazy gRPC channel management
-- Service interfaces: `GuestInterface`, `ContainerInterface`, `ExecutionInterface`
+- Service interfaces: `GuestInterface`, `ContainerInterface`, `ExecutionInterface`, `FilesInterface`
 
 ### Guest Agent
 
 Runs inside the Box, receives commands from host via gRPC.
 
-**Source:** `guest/` (crate: `boxlite-guest`)
+**Source:** `src/guest/` (crate: `boxlite-guest`)
 
 **Services:**
 
 - `Guest`: Environment initialization (mounts, rootfs, network)
 - `Container`: OCI container lifecycle management (via libcontainer)
 - `Execution`: Command execution with streaming I/O
+- `Files`: Tar-based upload/download between host and container rootfs
 
 **Guest-side modules:**
 
@@ -228,7 +235,7 @@ Runs inside the Box, receives commands from host via gRPC.
 
 BoxLite uses OCI-compatible container images with intelligent caching.
 
-**Location:** `boxlite/src/images/`
+**Location:** `src/boxlite/src/images/`
 
 ### Components
 
@@ -251,7 +258,7 @@ Registry (Docker Hub, GHCR, ECR, etc.)
            │
            ▼
 ┌─────────────────────┐
-│   ImageStore        │  Store blobs in ~/.boxlite/images/blobs/
+│   ImageStore        │  Store manifests/configs/layers in ~/.boxlite/images/
 └─────────────────────┘
            │
            ▼
@@ -261,7 +268,7 @@ Registry (Docker Hub, GHCR, ECR, etc.)
            │
            ▼
 ┌─────────────────────┐
-│   Rootfs Assembly   │  Combine layers for Box rootfs
+│   Disk Cache Build  │  Build/reuse ext4 base images for fast COW startup
 └─────────────────────┘
 ```
 
@@ -275,30 +282,36 @@ Registry (Docker Hub, GHCR, ECR, etc.)
 
 ### Rootfs Preparation
 
-**Location:** `boxlite/src/rootfs/`
+**Location:** `src/boxlite/src/rootfs/` and `src/boxlite/src/litebox/init/tasks/`
 
-The rootfs builder assembles a container filesystem from OCI image layers:
+Current startup path is disk-first (faster restart/clone), orchestrated by init tasks:
 
 ```
-Image Layers          Rootfs Builder              Box Rootfs
-┌─────────┐          ┌─────────────┐          ┌─────────────┐
-│ Layer 1 │────┐     │             │          │ /bin        │
-├─────────┤    │     │  Extract &  │          │ /etc        │
-│ Layer 2 │────┼────▶│   Overlay   │─────────▶│ /usr        │
-├─────────┤    │     │             │          │ /var        │
-│ Layer N │────┘     └─────────────┘          │ ...         │
-└─────────┘                                   └─────────────┘
+OCI Image
+   │
+   ▼
+ImageDiskManager (cached ext4 base image)
+   │
+   ▼
+ContainerRootfsTask (create/reuse per-box qcow2 COW disk)
+   │
+   ▼
+GuestInitTask (mount + initialize container in guest)
 ```
+
+Guest bootstrap rootfs follows a separate cache path:
+- `GuestRootfsManager`: versioned guest rootfs cache keyed by image digest + guest binary hash
+- `GuestRootfsTask`: create/reuse per-box guest-rootfs COW overlay
 
 **Key operations:**
 
-- Layer extraction and overlay mounting
-- DNS configuration injection
-- Copy-on-write snapshot creation
+- Layer extraction and cached ext4 image preparation
+- Guest rootfs bootstrap and versioned caching
+- Per-box COW disk creation/reuse for fast restart
 
 ### Volume Management
 
-**Location:** `boxlite/src/volumes/`
+**Location:** `src/boxlite/src/volumes/`
 
 **Supported volume types:**
 
@@ -317,32 +330,31 @@ Image Layers          Rootfs Builder              Box Rootfs
 
 BoxLite supports pluggable network backends for Box connectivity.
 
-**Location:** `boxlite/src/net/`
+**Location:** `src/boxlite/src/net/`
 
 ### Architecture
 
 ```rust
 pub trait NetworkBackend: Send + Sync {
-    fn start(&mut self) -> BoxliteResult<NetworkConfig>;
-    fn stop(&mut self) -> BoxliteResult<()>;
-    fn metrics(&self) -> NetworkMetrics;
+    fn endpoint(&self) -> BoxliteResult<NetworkBackendEndpoint>;
+    fn name(&self) -> &'static str;
+    fn metrics(&self) -> BoxliteResult<Option<NetworkMetrics>>;
 }
 ```
 
 ### Available Backends
 
-#### gvproxy (Default)
+#### gvproxy (recommended when `gvproxy` feature is enabled)
 
 User-mode networking based on gVisor's network stack.
 
 ```
-Box                    gvproxy                  Internet
-┌──────┐              ┌───────┐              ┌──────────┐
-│ eth0 │◄────vsock───▶│       │◄────TCP/UDP─▶│          │
-└──────┘              │ NAT   │              │ External │
-                      │ DHCP  │              │ Services │
-                      │ DNS   │              └──────────┘
-                      └───────┘
+Box (virtio-net)        gvproxy                 Internet
+┌──────────────┐       ┌───────┐              ┌──────────┐
+│ guest eth0   │◄─────▶│ NAT   │◄────TCP/UDP─▶│ External │
+└──────────────┘       │ DHCP  │              │ Services │
+                       │ DNS   │              └──────────┘
+                       └───────┘
 ```
 
 **Features:**
@@ -370,7 +382,7 @@ Boxes receive network configuration via DHCP:
 
 BoxLite uses a pluggable Vmm (Virtual Machine Monitor) architecture for Box execution.
 
-**Location:** `boxlite/src/vmm/`
+**Location:** `src/boxlite/src/vmm/`
 
 ### Vmm Trait
 
@@ -424,7 +436,7 @@ To add a new Vmm implementation:
 
 1. Implement `Vmm` trait
 2. Implement `VmmInstanceImpl` for the instance type
-3. Register in `VmmFactory`
+3. Register engine factory via inventory (`EngineFactoryRegistration`)
 4. Add `VmmKind` variant
 
 ## Host-Guest Communication
@@ -436,7 +448,7 @@ Communication uses gRPC over transport channels, bridged via libkrun's vsock sup
 ```
 Host Application
       │
-      │ Unix Socket (/tmp/boxlite-{id}.sock)
+      │ Unix Socket (~/.boxlite/boxes/{id}/sockets/box.sock)
       ▼
 ┌─────────────────┐
 │  libkrun vsock  │  (Unix socket ↔ vsock bridge)
@@ -450,13 +462,15 @@ Guest Agent (gRPC Server)
 
 ### Protocol Definition
 
-Defined in `boxlite-shared/proto/boxlite/v1/service.proto`:
+Defined in `src/shared/proto/boxlite/v1/service.proto`:
 
 ```protobuf
 service Guest {
   rpc Init(GuestInitRequest) returns (GuestInitResponse);
   rpc Ping(PingRequest) returns (PingResponse);
   rpc Shutdown(ShutdownRequest) returns (ShutdownResponse);
+  rpc Quiesce(QuiesceRequest) returns (QuiesceResponse);
+  rpc Thaw(ThawRequest) returns (ThawResponse);
 }
 
 service Container {
@@ -471,6 +485,11 @@ service Execution {
   rpc Kill(KillRequest) returns (KillResponse);
   rpc ResizeTty(ResizeTtyRequest) returns (ResizeTtyResponse);
 }
+
+service Files {
+  rpc Upload(stream UploadChunk) returns (UploadResponse);
+  rpc Download(DownloadRequest) returns (stream DownloadChunk);
+}
 ```
 
 ### Initialization Sequence
@@ -480,7 +499,7 @@ Host                              Guest (Box)
   │                                 │
   │──── spawn Box subprocess ──────▶│
   │                                 │
-  │◀─── ready notification ─────────│ (vsock connect to port 2696)
+  │◀─── ready notification ─────────│ (host-ready socket signaled)
   │                                 │
   │──── Guest.Init ────────────────▶│ (mounts, rootfs, network)
   │◀─── GuestInitResponse ──────────│
@@ -497,7 +516,7 @@ Host                              Guest (Box)
 
 BoxLite provides comprehensive metrics at runtime and per-Box levels.
 
-**Location:** `boxlite/src/metrics/`
+**Location:** `src/boxlite/src/metrics/`
 
 ### Architecture
 
@@ -507,20 +526,22 @@ BoxLite provides comprehensive metrics at runtime and per-Box levels.
 │  ┌─────────────────────────────────┐   │
 │  │  AtomicU64 counters (lock-free) │   │
 │  │  - boxes_created                │   │
-│  │  - boxes_destroyed              │   │
-│  │  - total_exec_calls             │   │
-│  │  - total_bytes_transferred      │   │
+│  │  - boxes_failed                 │   │
+│  │  - boxes_stopped                │   │
+│  │  - total_commands               │   │
+│  │  - total_exec_errors            │   │
 │  └─────────────────────────────────┘   │
 └─────────────────────────────────────────┘
            │
            ▼
 ┌─────────────────────────────────────────┐
 │            BoxMetrics (per-Box)         │
-│  - cpu_time_ms                          │
-│  - memory_usage_bytes                   │
-│  - exec_count                           │
+│  - commands_executed                    │
+│  - exec_errors                          │
+│  - cpu_percent / memory_bytes           │
 │  - network_bytes_sent                   │
 │  - network_bytes_received               │
+│  - stage_*_duration_ms                  │
 └─────────────────────────────────────────┘
 ```
 
@@ -554,7 +575,7 @@ BoxLite provides language-specific SDKs built on the core Rust library.
 | SDK         | Technology     | Status      | Location       |
 |-------------|----------------|-------------|----------------|
 | **Python**  | PyO3 + maturin | Available   | `sdks/python/` |
-| **Node.js** | napi-rs        | In Progress | `sdks/node/`   |
+| **Node.js** | napi-rs        | Available   | `sdks/node/`   |
 | **C**       | FFI + cbindgen | Available   | `sdks/c/`      |
 
 ## Shared Library
@@ -562,7 +583,7 @@ BoxLite provides language-specific SDKs built on the core Rust library.
 The `boxlite-shared` crate contains data types, error definitions, and constants shared between the
 host runtime, the shim, and the guest agent.
 
-**Location:** `boxlite-shared/`
+**Location:** `src/shared/`
 
 **Key Components:**
 
@@ -576,18 +597,31 @@ Default home directory: `~/.boxlite`
 
 ```
 ~/.boxlite/
+├── .lock               # Runtime lock file (single process per BOXLITE_HOME)
+├── db/
+│   └── boxlite.db      # SQLite metadata (boxes/images/snapshots/base refs)
 ├── boxes/              # Per-Box runtime data
 │   └── {box-id}/
-│       ├── rootfs/     # Container rootfs
-│       └── config.json
+│       ├── sockets/    # box.sock / ready.sock / net.sock
+│       ├── mounts/     # Host preparation area
+│       ├── shared/     # Guest-visible share root
+│       ├── disks/
+│       │   ├── disk.qcow2
+│       │   └── guest-rootfs.qcow2
+│       ├── logs/       # boxlite-shim.log / console.log
+│       └── tmp/
 ├── images/             # OCI image cache
-│   ├── blobs/          # Image layer blobs (by digest)
-│   └── index.json      # Image index
-├── init/               # Shared init rootfs
-│   └── rootfs/
-├── logs/               # Runtime logs
-│   └── boxlite.log     # Daily rotating log
-└── boxlite.lock        # Runtime lock file (prevents multiple instances)
+│   ├── layers/
+│   ├── extracted/
+│   ├── disk-images/
+│   ├── manifests/
+│   ├── configs/
+│   └── local/
+├── bases/              # Shared base/backing files
+├── locks/              # Per-entity lock files
+├── tmp/                # Runtime temp files
+└── logs/
+    └── boxlite.log     # Runtime log
 ```
 
 ## Concurrency Model
@@ -596,16 +630,17 @@ Default home directory: `~/.boxlite`
 
 - `BoxliteRuntime`: `Send + Sync`, safely shareable across threads
 - `LiteBox`: `Send + Sync`, handles can be passed between threads
-- Single `RwLock` protects all mutable runtime state
+- Runtime coordination uses `sync_state: RwLock<...>` plus manager-internal locks
 - Metrics use `AtomicU64` for lock-free updates
 
-### Single Lock Design
+### Locking Design
 
-BoxLite uses one `RwLock` for all mutable state:
+BoxLite uses layered synchronization:
 
-- Eliminates nested locking complexity
-- Simplifies reasoning about concurrency
+- Runtime-level coordination lock (`sync_state`) for multi-step atomic flows
+- Manager-level internal locks (`BoxManager`, `ImageStore`, etc.)
 - Filesystem lock prevents multiple runtimes using same `BOXLITE_HOME`
+- Per-entity file locks provide cross-process safety for box operations
 
 ### Async Design
 
@@ -621,6 +656,7 @@ Centralized error type: `BoxliteError`
 pub enum BoxliteError {
     UnsupportedEngine,
     Engine(String),
+    Config(String),
     Storage(String),
     Image(String),
     Portal(String),
@@ -629,6 +665,15 @@ pub enum BoxliteError {
     RpcTransport(String),
     Internal(String),
     Execution(String),
+    Unsupported(String),
+    NotFound(String),
+    AlreadyExists(String),
+    InvalidState(String),
+    Database(String),
+    MetadataError(String),
+    InvalidArgument(String),
+    Stopped(String),
+    ResourceExhausted(String),
 }
 ```
 

@@ -2,7 +2,7 @@
 
 **Date:** 2025-02-22
 **Scope:** `handle.start()` latency on macOS ARM64 (Apple Silicon)
-**Test:** `boxlite/tests/timing_profile.rs` with `alpine:latest` image
+**Test:** `src/boxlite/tests/timing_profile.rs` with `alpine:latest` image
 
 ## Executive Summary
 

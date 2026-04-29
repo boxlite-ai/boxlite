@@ -54,7 +54,7 @@ async fn read_config(path: &Path) -> Result<Config> {
 
 ### Centralized Error Handling
 
-Use the `BoxliteError` enum for all errors (see `boxlite-shared/src/errors.rs`):
+Use the `BoxliteError` enum for all errors (see `src/shared/src/errors.rs`):
 
 ```rust
 // ✅ Correct: use BoxliteError with context

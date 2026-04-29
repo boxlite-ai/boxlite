@@ -205,10 +205,10 @@ BoxLite's sandbox policy is split into multiple files:
 
 ### Viewing Generated Policy
 
-The full runtime policy is assembled in `boxlite/src/jailer/sandbox/seatbelt.rs` by `build_sandbox_policy()` and passed directly via `sandbox-exec -p`.
+The full runtime policy is assembled in `src/boxlite/src/jailer/sandbox/seatbelt.rs` by `build_sandbox_policy()` and passed directly via `sandbox-exec -p`.
 
 When debugging, inspect:
-- Static fragments in `boxlite/resources/seatbelt/*.sbpl`
+- Static fragments in `src/boxlite/resources/seatbelt/*.sbpl`
 - Dynamic path grants from `build_dynamic_read_paths()` and `build_dynamic_write_paths()`
 - Sandbox denials from `log show`/`log stream` to identify missing allowlist clauses
 

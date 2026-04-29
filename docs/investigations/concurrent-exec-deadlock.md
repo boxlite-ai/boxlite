@@ -207,8 +207,8 @@ only one build() runs at a time, yet it still stalls intermittently.
 Traced the call path through these files:
 
 ```
-guest/src/service/exec/executor.rs    → ContainerExecutor::spawn()
-guest/src/container/command.rs        → build_and_spawn()
+src/guest/src/service/exec/executor.rs    → ContainerExecutor::spawn()
+src/guest/src/container/command.rs        → build_and_spawn()
 libcontainer/tenant_builder.rs        → TenantContainerBuilder::build()
 libcontainer/builder_impl.rs          → ContainerBuilderImpl::create()
                                       → run_container()
@@ -238,7 +238,7 @@ waiting for the intermediate process to send `intermediate_ready`.
 
 ### Step 3: Add Watchdog Diagnostic Thread
 
-**Tool:** Custom diagnostic code in `guest/src/container/command.rs`
+**Tool:** Custom diagnostic code in `src/guest/src/container/command.rs`
 
 Added a watchdog thread that fires after 3 seconds if `build()` hasn't completed:
 
@@ -630,9 +630,9 @@ When intermediate deadlocks at step 5:
 ## Files Read During Investigation
 
 ```
-guest/src/container/command.rs                                    (MODIFIED — watchdog)
-guest/src/service/exec/executor.rs                                (ContainerExecutor::spawn)
-guest/src/service/exec/mod.rs
+src/guest/src/container/command.rs                                    (MODIFIED — watchdog)
+src/guest/src/service/exec/executor.rs                                (ContainerExecutor::spawn)
+src/guest/src/service/exec/mod.rs
 libcontainer/src/channel.rs                                       (base channel, socketpair)
 libcontainer/src/process/channel.rs                               (Main/Inter/Init channels)
 libcontainer/src/process/container_main_process.rs                (fork + channel lifecycle)
