@@ -7,28 +7,28 @@ use std::process::{Command, Stdio};
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-// libkrunfw release configuration (v5.1.0)
+// libkrunfw release configuration
 // Source: https://github.com/boxlite-ai/libkrunfw (fork with prebuilt releases)
+const LIBKRUNFW_VERSION: &str = "v5.3.0";
 
 // macOS: Download prebuilt kernel.c, compile locally to .dylib
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-const LIBKRUNFW_PREBUILT_URL: &str =
-    "https://github.com/boxlite-ai/libkrunfw/releases/download/v5.1.0/libkrunfw-prebuilt-aarch64.tgz";
+const LIBKRUNFW_PREBUILT_URL: &str = "https://github.com/boxlite-ai/libkrunfw/releases/download/v5.3.0/libkrunfw-prebuilt-aarch64.tgz";
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-const LIBKRUNFW_SHA256: &str = "2b2801d2e414140d8d0a30d7e30a011077b7586eabbbecdca42aea804b59de8b";
+const LIBKRUNFW_SHA256: &str = "12b9401d7735d1682450e4d025273c5016ec2237dcbfb76b2f0a152be6e606d6";
 
 // Linux: Download pre-compiled .so directly (no build needed)
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 const LIBKRUNFW_SO_URL: &str =
-    "https://github.com/boxlite-ai/libkrunfw/releases/download/v5.1.0/libkrunfw-x86_64.tgz";
+    "https://github.com/boxlite-ai/libkrunfw/releases/download/v5.3.0/libkrunfw-x86_64.tgz";
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-const LIBKRUNFW_SHA256: &str = "faca64a3581ce281498b8ae7eccc6bd0da99b167984f9ee39c47754531d4b37d";
+const LIBKRUNFW_SHA256: &str = "0a7bb64a35a273b8501801dd69b75736a8c676aa21aa62fb5642842cda9dc91d";
 
 #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
 const LIBKRUNFW_SO_URL: &str =
-    "https://github.com/boxlite-ai/libkrunfw/releases/download/v5.1.0/libkrunfw-aarch64.tgz";
+    "https://github.com/boxlite-ai/libkrunfw/releases/download/v5.3.0/libkrunfw-aarch64.tgz";
 #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
-const LIBKRUNFW_SHA256: &str = "e254bc3fb07b32e26a258d9958967b2f22eb6c3136cfedf358c332308b6d35ea";
+const LIBKRUNFW_SHA256: &str = "8b5b9211da5445d9301dafb2201431f4392ab96455512bce63a5cfbd33c49839";
 
 // Library directory name differs by platform
 #[cfg(target_os = "macos")]
@@ -162,14 +162,13 @@ impl Fetcher {
 /// Returns the path to the extracted source directory containing kernel.c.
 #[cfg(target_os = "macos")]
 fn download_libkrunfw_prebuilt(out_dir: &Path) -> PathBuf {
-    let tarball_path = out_dir.join("libkrunfw-prebuilt.tar.gz");
-    let extract_dir = out_dir.join("libkrunfw-src");
-    // boxlite-ai/libkrunfw prebuilt tarball extracts to "libkrunfw/" directory
+    let versioned_dir = format!("libkrunfw-src-{LIBKRUNFW_VERSION}");
+    let tarball_path = out_dir.join(format!("libkrunfw-prebuilt-{LIBKRUNFW_VERSION}.tar.gz"));
+    let extract_dir = out_dir.join(&versioned_dir);
     let src_dir = extract_dir.join("libkrunfw");
 
-    // Check if already extracted
     if src_dir.join("kernel.c").exists() {
-        println!("cargo:warning=Using cached libkrunfw source");
+        println!("cargo:warning=Using cached libkrunfw source ({LIBKRUNFW_VERSION})");
         return src_dir;
     }
 
@@ -196,27 +195,21 @@ fn download_libkrunfw_prebuilt(out_dir: &Path) -> PathBuf {
 fn download_libkrunfw_so(install_dir: &Path) {
     let lib_dir = install_dir.join(LIB_DIR);
 
-    // Check if already extracted
-    let already_cached = lib_dir
-        .read_dir()
-        .ok()
-        .map(|entries| {
-            entries
-                .filter_map(Result::ok)
-                .any(|e| e.file_name().to_string_lossy().starts_with("libkrunfw.so"))
-        })
-        .unwrap_or(false);
-
-    if already_cached {
-        println!("cargo:warning=Using cached libkrunfw.so");
+    let version_marker = install_dir.join(format!(".version-{LIBKRUNFW_VERSION}"));
+    if version_marker.exists() {
+        println!("cargo:warning=Using cached libkrunfw.so ({LIBKRUNFW_VERSION})");
         return;
     }
 
-    // Create install directory first (required before download)
+    // Remove stale artifacts from a previous version
+    if install_dir.exists() {
+        fs::remove_dir_all(install_dir).ok();
+    }
+
     fs::create_dir_all(install_dir)
         .unwrap_or_else(|e| panic!("Failed to create install dir: {}", e));
 
-    let tarball_path = install_dir.join("libkrunfw.tgz");
+    let tarball_path = install_dir.join(format!("libkrunfw-{LIBKRUNFW_VERSION}.tgz"));
 
     Fetcher::fetch(
         LIBKRUNFW_SO_URL,
@@ -225,6 +218,9 @@ fn download_libkrunfw_so(install_dir: &Path) {
         install_dir,
     )
     .unwrap_or_else(|e| panic!("Failed to fetch libkrunfw: {}", e));
+
+    fs::write(&version_marker, LIBKRUNFW_VERSION)
+        .unwrap_or_else(|e| panic!("Failed to write version marker: {}", e));
 
     println!(
         "cargo:warning=Extracted libkrunfw.so to {}",
@@ -283,7 +279,10 @@ fn build_with_make(
 struct LibBuilder;
 
 impl LibBuilder {
-    /// Builds libkrun: init binary → static library.
+    /// Builds libkrun as a static library.
+    ///
+    /// The init binary is built automatically by the `devices` crate's build.rs
+    /// using the `CC_LINUX` environment variable.
     ///
     /// Link directives and DEP var metadata are emitted by the caller
     /// (platform `build()` functions) so they can be gated on features.
@@ -291,37 +290,29 @@ impl LibBuilder {
         libkrun_src: &Path,
         libkrun_install: &Path,
         libkrunfw_install: &Path,
-        init_env: &HashMap<String, String>,
-        init_make_args: &[String],
+        env_overrides: &HashMap<String, String>,
+        cc_linux: Option<&str>,
     ) {
-        Self::build_init_binary(libkrun_src, init_env, init_make_args);
-        Self::build_libkrun_static(libkrun_src, libkrun_install, libkrunfw_install);
-    }
-
-    /// Builds only the init binary from the libkrun Makefile.
-    ///
-    /// The init binary (init/init) is a static C program that runs inside the VM.
-    /// It is embedded into libkrun via include_bytes! and must be built before
-    /// the Rust library.
-    fn build_init_binary(
-        libkrun_src: &Path,
-        extra_env: &HashMap<String, String>,
-        extra_make_args: &[String],
-    ) {
-        println!("cargo:warning=Building init binary...");
-
-        let mut cmd = make_command(libkrun_src, extra_env);
-        cmd.args(extra_make_args);
-        cmd.arg("init/init");
-
-        run_command(&mut cmd, "make init/init");
+        Self::build_libkrun_static(
+            libkrun_src,
+            libkrun_install,
+            libkrunfw_install,
+            env_overrides,
+            cc_linux,
+        );
     }
 
     /// Builds libkrun as a static library using `cargo rustc --crate-type staticlib`.
     ///
     /// This overrides libkrun's Cargo.toml crate-type (cdylib) at the command line,
     /// producing libkrun.a without modifying the vendored source code.
-    fn build_libkrun_static(libkrun_src: &Path, install_dir: &Path, libkrunfw_install: &Path) {
+    fn build_libkrun_static(
+        libkrun_src: &Path,
+        install_dir: &Path,
+        libkrunfw_install: &Path,
+        env_overrides: &HashMap<String, String>,
+        cc_linux: Option<&str>,
+    ) {
         println!("cargo:warning=Building libkrun as static library...");
 
         let lib_dir = install_dir.join(LIB_DIR);
@@ -361,6 +352,16 @@ impl LibBuilder {
         );
         cmd.stdout(Stdio::inherit());
         cmd.stderr(Stdio::inherit());
+
+        // Pass CC_LINUX for init binary cross-compilation (used by devices/build.rs)
+        if let Some(cc_linux) = cc_linux {
+            cmd.env("CC_LINUX", cc_linux);
+        }
+
+        // Apply environment overrides (e.g., PATH with llvm/lld directories)
+        for (key, value) in env_overrides {
+            cmd.env(key, value);
+        }
 
         // Prevent outer RUSTFLAGS from leaking into vendored libkrun build.
         // CI tools (e.g., actions-rust-lang/setup-rust-toolchain) set RUSTFLAGS=-D warnings,
@@ -704,11 +705,14 @@ impl MacToolchain {
     }
 
     /// Converts the discovered toolchain into make arguments and env overrides.
-    fn into_make_args(self) -> Result<(String, HashMap<String, String>), String> {
+    fn into_cc_linux(
+        self,
+        libkrun_src: &Path,
+    ) -> Result<(String, HashMap<String, String>), String> {
         // If the user provided BOXLITE_LIBKRUN_CC_LINUX, return it directly
         if env::var("BOXLITE_LIBKRUN_CC_LINUX").is_ok() {
             let cc_linux = self.clang.to_string_lossy().to_string();
-            return Ok((format!("CC_LINUX={}", cc_linux), HashMap::new()));
+            return Ok((cc_linux, HashMap::new()));
         }
 
         let path_override = Self::prepend_path_dirs(&self.path_dirs);
@@ -736,26 +740,36 @@ impl MacToolchain {
         );
 
         let linux_target_triple = match env::var("CARGO_CFG_TARGET_ARCH")
-            .unwrap_or_else(|_| "$(ARCH)".to_string())
+            .unwrap_or_else(|_| "aarch64".to_string())
             .as_str()
         {
-            // libkrun's sysroot is extracted from Debian arm64 packages, which use the GNU triplet
-            // `aarch64-linux-gnu` for libgcc/crt objects. Using `arm64-linux-gnu` can prevent clang
-            // from finding those files inside the sysroot.
             "arm64" | "aarch64" => "aarch64-linux-gnu".to_string(),
             "x86_64" => "x86_64-linux-gnu".to_string(),
             arch => format!("{arch}-linux-gnu"),
         };
 
-        // vendor/libkrun hardcodes `/usr/bin/clang` for CC_LINUX on macOS; override it.
-        let clang_escaped = {
-            let s = self.clang.to_string_lossy();
-            format!("'{}'", s.replace('\'', "'\\''"))
-        };
+        // Prepare sysroot via the Makefile's auto-download mechanism
+        let sysroot_dir = libkrun_src.join("linux-sysroot");
+        if !sysroot_dir.join(".sysroot_ready").exists() {
+            println!("cargo:warning=Preparing Linux sysroot for cross-compilation...");
+            let mut env_for_make = HashMap::new();
+            if let Some(ref path) = path_override {
+                env_for_make.insert("PATH".to_string(), path.clone());
+            }
+            let mut cmd = make_command(libkrun_src, &env_for_make);
+            cmd.arg("linux-sysroot/.sysroot_ready");
+            run_command(&mut cmd, "make linux-sysroot/.sysroot_ready");
+        }
+
+        let sysroot_abs = fs::canonicalize(&sysroot_dir)
+            .unwrap_or_else(|e| panic!("Failed to resolve sysroot path: {}", e));
+
+        let clang_str = self.clang.to_string_lossy();
         let cc_linux = format!(
-            "{} -target {} -fuse-ld=lld -Wl,-strip-debug --sysroot $(SYSROOT_LINUX) -Wno-c23-extensions",
-            clang_escaped,
-            linux_target_triple
+            "{} -target {} -fuse-ld=lld -Wl,-strip-debug --sysroot {} -Wno-c23-extensions",
+            clang_str,
+            linux_target_triple,
+            sysroot_abs.display()
         );
 
         let mut env_overrides = HashMap::new();
@@ -763,13 +777,13 @@ impl MacToolchain {
             env_overrides.insert("PATH".to_string(), path);
         }
 
-        Ok((format!("CC_LINUX={}", cc_linux), env_overrides))
+        Ok((cc_linux, env_overrides))
     }
 
-    /// Entry point: discovers the toolchain and produces make arguments.
-    pub fn resolve() -> Result<(String, HashMap<String, String>), String> {
+    /// Entry point: discovers the toolchain and produces CC_LINUX value + env overrides.
+    pub fn resolve(libkrun_src: &Path) -> Result<(String, HashMap<String, String>), String> {
         Self::setup_libclang_path();
-        Self::discover()?.into_make_args()
+        Self::discover()?.into_cc_linux(libkrun_src)
     }
 }
 
@@ -814,14 +828,14 @@ fn build() {
         verify_vendored_sources(&manifest_dir, false);
 
         let libkrun_src = manifest_dir.join("vendor/libkrun");
-        let (cc_linux_make_arg, env_overrides) =
-            MacToolchain::resolve().unwrap_or_else(|e| panic!("{}", e));
+        let (cc_linux_value, env_overrides) =
+            MacToolchain::resolve(&libkrun_src).unwrap_or_else(|e| panic!("{}", e));
         LibBuilder::build(
             &libkrun_src,
             &libkrun_install,
             &libkrunfw_install,
             &env_overrides,
-            &[cc_linux_make_arg],
+            Some(&cc_linux_value),
         );
 
         let libkrun_lib = libkrun_install.join(LIB_DIR);
@@ -891,7 +905,7 @@ fn build() {
             &libkrun_install,
             &libkrunfw_install,
             &HashMap::new(),
-            &[],
+            None,
         );
 
         let libkrun_lib = libkrun_install.join(LIB_DIR);

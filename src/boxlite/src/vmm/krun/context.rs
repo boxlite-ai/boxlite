@@ -11,12 +11,12 @@ use std::{ffi::CString, ptr};
 use crate::vmm::krun::check_status;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use libkrun_sys::{
-    krun_add_disk2, krun_add_net_unixgram, krun_add_net_unixstream, krun_add_virtiofs,
-    krun_add_vsock_port2, krun_create_ctx, krun_disable_tsi, krun_free_ctx, krun_init_log,
-    krun_set_console_output, krun_set_env, krun_set_exec, krun_set_gpu_options, krun_set_kernel,
-    krun_set_nested_virt, krun_set_port_map, krun_set_rlimits, krun_set_root,
-    krun_set_root_disk_remount, krun_set_vm_config, krun_set_workdir, krun_setgid, krun_setuid,
-    krun_split_irqchip, krun_start_enter,
+    krun_add_disk2, krun_add_net_unixgram, krun_add_net_unixstream, krun_add_virtiofs3,
+    krun_add_vsock, krun_add_vsock_port2, krun_create_ctx, krun_disable_implicit_vsock,
+    krun_free_ctx, krun_init_log, krun_set_console_output, krun_set_env, krun_set_exec,
+    krun_set_gpu_options, krun_set_kernel, krun_set_nested_virt, krun_set_port_map,
+    krun_set_rlimits, krun_set_root, krun_set_root_disk_remount, krun_set_vm_config,
+    krun_set_workdir, krun_setgid, krun_setuid, krun_split_irqchip, krun_start_enter,
 };
 
 /// Thin wrapper that owns a libkrun context.
@@ -415,12 +415,22 @@ impl KrunContext {
         }
     }
 
-    /// Disable libkrun's automatic TSI fallback when no network interfaces are attached.
+    /// Disable the implicit vsock device (which has TSI hijacking enabled by default).
     ///
-    /// This keeps the guest fully offline: no TSI hijack and no virtio-net device.
-    pub unsafe fn disable_tsi(&self) -> BoxliteResult<()> {
-        tracing::debug!("Disabling libkrun TSI fallback");
-        check_status("krun_disable_tsi", unsafe { krun_disable_tsi(self.ctx_id) })
+    /// Must be called before `add_vsock` to replace the implicit device with an explicit one.
+    pub unsafe fn disable_implicit_vsock(&self) -> BoxliteResult<()> {
+        check_status("krun_disable_implicit_vsock", unsafe {
+            krun_disable_implicit_vsock(self.ctx_id)
+        })
+    }
+
+    /// Add an explicit vsock device with specified TSI features.
+    pub unsafe fn add_vsock(&self, tsi: super::constants::TsiFeatures) -> BoxliteResult<()> {
+        let raw = tsi.as_raw();
+        tracing::debug!(?tsi, raw, "Adding explicit vsock device");
+        check_status("krun_add_vsock", unsafe {
+            krun_add_vsock(self.ctx_id, raw)
+        })
     }
 
     /// Add a virtiofs mount, sharing a host directory with the guest.
@@ -428,16 +438,28 @@ impl KrunContext {
     /// # Arguments
     /// * `host_path` - Path to directory on host to share
     /// * `mount_tag` - Tag used by guest to mount this share (e.g., "layer0", "upper")
-    pub unsafe fn add_virtiofs(&self, mount_tag: &str, host_path: &str) -> BoxliteResult<()> {
-        tracing::debug!(host_path, mount_tag, "Adding virtiofs mount");
+    /// * `read_only` - If true, the filesystem is exposed as read-only at the hypervisor level
+    pub unsafe fn add_virtiofs(
+        &self,
+        mount_tag: &str,
+        host_path: &str,
+        read_only: bool,
+    ) -> BoxliteResult<()> {
+        tracing::debug!(host_path, mount_tag, read_only, "Adding virtiofs mount");
 
         let host_path_c = CString::new(host_path)
             .map_err(|e| BoxliteError::Engine(format!("invalid host path: {e}")))?;
         let mount_tag_c = CString::new(mount_tag)
             .map_err(|e| BoxliteError::Engine(format!("invalid mount tag: {e}")))?;
 
-        check_status("krun_add_virtiofs", unsafe {
-            krun_add_virtiofs(self.ctx_id, mount_tag_c.as_ptr(), host_path_c.as_ptr())
+        check_status("krun_add_virtiofs3", unsafe {
+            krun_add_virtiofs3(
+                self.ctx_id,
+                mount_tag_c.as_ptr(),
+                host_path_c.as_ptr(),
+                0,
+                read_only,
+            )
         })
     }
 

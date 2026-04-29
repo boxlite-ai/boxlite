@@ -2,7 +2,7 @@
 //!
 //! Creates OCI-compliant runtime specifications following the runtime-spec standard.
 
-use super::capabilities::all_capabilities;
+use super::capabilities::default_capabilities;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use std::path::Path;
 
@@ -264,12 +264,9 @@ fn find_group_in_group_file(rootfs: &str, name: &str) -> BoxliteResult<u32> {
 // Spec Component Builders
 // ====================
 
-/// Build default Linux capabilities
-///
-/// Uses all 41 capabilities from the shared capabilities module.
-/// This provides maximum compatibility but reduced security isolation.
+/// Build default Linux capabilities matching Docker/OCI defaults.
 fn build_default_capabilities() -> BoxliteResult<oci_spec::runtime::LinuxCapabilities> {
-    let caps = all_capabilities();
+    let caps = default_capabilities();
 
     LinuxCapabilitiesBuilder::default()
         .bounding(caps.clone())

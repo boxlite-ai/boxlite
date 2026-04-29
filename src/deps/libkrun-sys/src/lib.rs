@@ -37,6 +37,13 @@ extern "C" {
         mount_tag: *const c_char,
         host_path: *const c_char,
     ) -> i32;
+    pub fn krun_add_virtiofs3(
+        ctx_id: u32,
+        mount_tag: *const c_char,
+        host_path: *const c_char,
+        shm_size: u64,
+        read_only: bool,
+    ) -> i32;
     pub fn krun_set_kernel(
         ctx_id: u32,
         kernel_path: *const c_char,
@@ -92,7 +99,8 @@ extern "C" {
         features: u32,
         flags: u32,
     ) -> i32;
-    pub fn krun_disable_tsi(ctx_id: u32) -> i32;
+    pub fn krun_disable_implicit_vsock(ctx_id: u32) -> i32;
+    pub fn krun_add_vsock(ctx_id: u32, tsi_features: u32) -> i32;
     pub fn krun_start_enter(ctx_id: u32) -> i32;
 
     /// Set a file path to redirect the console output to.

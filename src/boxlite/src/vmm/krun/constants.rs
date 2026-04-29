@@ -1,3 +1,27 @@
+/// TSI (Transparent Socket Impersonation) feature configuration for vsock devices.
+#[derive(Debug, Clone, Copy)]
+pub enum TsiFeatures {
+    /// No TSI hijacking — vsock IPC only, guest cannot route sockets through host.
+    None,
+    /// Hijack AF_INET sockets (outbound TCP/UDP forwarded through host).
+    HijackInet,
+    /// Hijack AF_UNIX sockets (Unix domain sockets forwarded through host).
+    HijackUnix,
+    /// Hijack both AF_INET and AF_UNIX sockets.
+    HijackAll,
+}
+
+impl TsiFeatures {
+    pub fn as_raw(self) -> u32 {
+        match self {
+            Self::None => 0,
+            Self::HijackInet => 1 << 0,
+            Self::HijackUnix => 1 << 1,
+            Self::HijackAll => (1 << 0) | (1 << 1),
+        }
+    }
+}
+
 /// Network feature flags (host-specific)
 pub mod network_features {
     // Virtio-net feature flags for libkrun net

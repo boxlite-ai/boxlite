@@ -293,9 +293,14 @@ impl Vmm for Krun {
                     }
                 }
             } else if config.disable_network {
-                // Keep the guest fully offline: no virtio-net device and no TSI fallback.
-                ctx.disable_tsi()?;
-                tracing::info!("Network disabled: TSI fallback disabled");
+                // Replace the implicit vsock (which has TSI hijacking) with an
+                // explicit one that has zero TSI features. Vsock IPC ports still
+                // work for host-guest gRPC, but guest AF_INET/AF_UNIX sockets
+                // are no longer transparently forwarded through the host.
+                use crate::vmm::krun::constants::TsiFeatures;
+                ctx.disable_implicit_vsock()?;
+                ctx.add_vsock(TsiFeatures::None)?;
+                tracing::info!("Network disabled: vsock with TSI disabled");
             } else {
                 // No network connection specified - use libkrun's built-in TSI net
                 tracing::debug!("No network backend - using libkrun's built-in TSI net");
@@ -346,7 +351,7 @@ impl Vmm for Krun {
                     share.host_path.display(),
                     if share.read_only { "ro" } else { "rw" }
                 );
-                ctx.add_virtiofs(&share.tag, path_str)?;
+                ctx.add_virtiofs(&share.tag, path_str, share.read_only)?;
             }
 
             // Attach disk images via virtio-blk
