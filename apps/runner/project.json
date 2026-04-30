@@ -24,14 +24,14 @@
       "executor": "nx:run-commands",
       "options": {
         "cwd": "{workspaceRoot}",
-        "command": "cp dist/libs/computer-use-amd64 {projectRoot}/pkg/daemon/static/daytona-computer-use"
+        "command": "cp dist/libs/computer-use-amd64 {projectRoot}/pkg/daemon/static/boxlite-computer-use"
       },
       "cache": true,
       "inputs": [
         "{workspaceRoot}/dist/libs/computer-use-amd64",
         { "dependentTasksOutputFiles": "**/*", "transitive": true }
       ],
-      "outputs": ["{projectRoot}/pkg/daemon/static/daytona-computer-use"],
+      "outputs": ["{projectRoot}/pkg/daemon/static/boxlite-computer-use"],
       "dependsOn": [
         {
           "target": "build-amd64",
@@ -44,7 +44,7 @@
       "options": {
         "main": "{projectRoot}/cmd/runner/main.go",
         "outputPath": "dist/apps/runner",
-        "flags": ["-ldflags \"-X 'github.com/daytonaio/runner/internal.Version=$VERSION'\""]
+        "flags": ["-ldflags \"-X 'github.com/boxlite-labs/runner/internal.Version=$VERSION'\""]
       },
       "dependsOn": ["copy-daemon-bin", "copy-computeruse-plugin", "check-version-env"],
       "inputs": [
@@ -63,7 +63,7 @@
           "GOARCH": "amd64",
           "GOOS": "linux"
         },
-        "flags": ["-ldflags \"-X 'github.com/daytonaio/runner/internal.Version=$VERSION'\""]
+        "flags": ["-ldflags \"-X 'github.com/boxlite-labs/runner/internal.Version=$VERSION'\""]
       },
       "dependsOn": ["copy-daemon-bin", "copy-computeruse-plugin", "check-version-env"],
       "inputs": [
@@ -142,14 +142,14 @@
       "outputs": ["{workspaceRoot}/dist/apps/runner-deb/**/*"],
       "options": {
         "commands": [
-          "mkdir -p dist/apps/runner-deb/deb/opt/daytona",
+          "mkdir -p dist/apps/runner-deb/deb/opt/boxlite",
           "mkdir -p dist/apps/runner-deb/deb/etc/systemd/system",
           "mkdir -p dist/apps/runner-deb/deb/DEBIAN",
-          "cp dist/apps/runner-amd64 dist/apps/runner-deb/deb/opt/daytona/runner",
-          "cp {projectRoot}/packaging/systemd/daytona-runner.service dist/apps/runner-deb/deb/etc/systemd/system/",
+          "cp dist/apps/runner-amd64 dist/apps/runner-deb/deb/opt/boxlite/runner",
+          "cp {projectRoot}/packaging/systemd/boxlite-runner.service dist/apps/runner-deb/deb/etc/systemd/system/",
           "cp {projectRoot}/packaging/deb/DEBIAN/postinst {projectRoot}/packaging/deb/DEBIAN/prerm {projectRoot}/packaging/deb/DEBIAN/postrm dist/apps/runner-deb/deb/DEBIAN/",
           "VERSION=${VERSION:-0.1.0} envsubst < {projectRoot}/packaging/deb/DEBIAN/control > dist/apps/runner-deb/deb/DEBIAN/control",
-          "dpkg-deb --build dist/apps/runner-deb/deb dist/apps/runner-deb/daytona-runner_${VERSION:-0.0.0-dev}_amd64.deb"
+          "dpkg-deb --build dist/apps/runner-deb/deb dist/apps/runner-deb/boxlite-runner_${VERSION:-0.0.0-dev}_amd64.deb"
         ],
         "parallel": false
       },

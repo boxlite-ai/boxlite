@@ -8,10 +8,10 @@ import (
 	"context"
 	"log/slog"
 
-	blclient "github.com/daytonaio/runner/pkg/boxlite"
-	"github.com/daytonaio/runner/pkg/cache"
-	"github.com/daytonaio/runner/pkg/models"
-	"github.com/daytonaio/runner/pkg/models/enums"
+	blclient "github.com/boxlite-labs/runner/pkg/boxlite"
+	"github.com/boxlite-labs/runner/pkg/cache"
+	"github.com/boxlite-labs/runner/pkg/models"
+	"github.com/boxlite-labs/runner/pkg/models/enums"
 )
 
 type SandboxService struct {

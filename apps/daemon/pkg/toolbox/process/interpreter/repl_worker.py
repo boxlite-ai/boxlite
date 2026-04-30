@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 
 """
-Stateful Python REPL Worker for Daytona
+Stateful Python REPL Worker for BoxLite
 - JSON line protocol (stdout)
 - Persistent globals across exec calls
 - Clean user-only tracebacks

@@ -34,7 +34,7 @@ import {
   UpdateNetworkSettingsDTO,
   InspectSnapshotInRegistryRequest,
   RecoverSandboxDTO,
-} from '@daytonaio/runner-api-client'
+} from '@boxlite-labs/runner-api-client'
 import { SnapshotStateError } from '../errors/snapshot-state-error'
 
 /**

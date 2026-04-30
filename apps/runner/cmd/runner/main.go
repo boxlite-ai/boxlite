@@ -13,22 +13,22 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/daytonaio/common-go/pkg/log"
-	"github.com/daytonaio/common-go/pkg/telemetry"
-	"github.com/daytonaio/runner/cmd/runner/config"
-	"github.com/daytonaio/runner/internal"
-	"github.com/daytonaio/runner/internal/metrics"
-	"github.com/daytonaio/runner/pkg/api"
-	"github.com/daytonaio/runner/pkg/backend"
-	blclient "github.com/daytonaio/runner/pkg/boxlite"
-	"github.com/daytonaio/runner/pkg/cache"
-	"github.com/daytonaio/runner/pkg/runner"
-	"github.com/daytonaio/runner/pkg/runner/v2/executor"
-	"github.com/daytonaio/runner/pkg/runner/v2/healthcheck"
-	"github.com/daytonaio/runner/pkg/runner/v2/poller"
-	"github.com/daytonaio/runner/pkg/services"
-	"github.com/daytonaio/runner/pkg/sshgateway"
-	"github.com/daytonaio/runner/pkg/telemetry/filters"
+	"github.com/boxlite-labs/common-go/pkg/log"
+	"github.com/boxlite-labs/common-go/pkg/telemetry"
+	"github.com/boxlite-labs/runner/cmd/runner/config"
+	"github.com/boxlite-labs/runner/internal"
+	"github.com/boxlite-labs/runner/internal/metrics"
+	"github.com/boxlite-labs/runner/pkg/api"
+	"github.com/boxlite-labs/runner/pkg/backend"
+	blclient "github.com/boxlite-labs/runner/pkg/boxlite"
+	"github.com/boxlite-labs/runner/pkg/cache"
+	"github.com/boxlite-labs/runner/pkg/runner"
+	"github.com/boxlite-labs/runner/pkg/runner/v2/executor"
+	"github.com/boxlite-labs/runner/pkg/runner/v2/healthcheck"
+	"github.com/boxlite-labs/runner/pkg/runner/v2/poller"
+	"github.com/boxlite-labs/runner/pkg/services"
+	"github.com/boxlite-labs/runner/pkg/sshgateway"
+	"github.com/boxlite-labs/runner/pkg/telemetry/filters"
 	"github.com/lmittmann/tint"
 	"github.com/mattn/go-isatty"
 )
@@ -107,9 +107,16 @@ func run() int {
 	}
 
 	boxliteClient, err := blclient.NewClient(ctx, blclient.ClientConfig{
-		Logger:             logger,
-		HomeDir:            cfg.BoxliteHomeDir,
-		InsecureRegistries: insecureRegs,
+		Logger:                       logger,
+		HomeDir:                      cfg.BoxliteHomeDir,
+		InsecureRegistries:           insecureRegs,
+		AWSRegion:                    cfg.AWSRegion,
+		AWSEndpointUrl:               cfg.AWSEndpointUrl,
+		AWSAccessKeyId:               cfg.AWSAccessKeyId,
+		AWSSecretAccessKey:           cfg.AWSSecretAccessKey,
+		VolumeCleanupInterval:        cfg.VolumeCleanupInterval,
+		VolumeCleanupDryRun:          cfg.VolumeCleanupDryRun,
+		VolumeCleanupExclusionPeriod: cfg.VolumeCleanupExclusionPeriod,
 	})
 	if err != nil {
 		logger.Error("Error creating BoxLite client", "error", err)

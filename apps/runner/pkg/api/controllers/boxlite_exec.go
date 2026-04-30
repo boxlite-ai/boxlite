@@ -1,13 +1,15 @@
 package controllers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"sync"
 
-	"github.com/daytonaio/runner/pkg/boxlite"
-	"github.com/daytonaio/runner/pkg/runner"
+	"github.com/boxlite-labs/runner/pkg/boxlite"
+	"github.com/boxlite-labs/runner/pkg/runner"
 	"github.com/gin-gonic/gin"
 )
 
@@ -33,6 +35,11 @@ type SignalRequest struct {
 type ResizeRequest struct {
 	Cols uint32 `json:"cols"`
 	Rows uint32 `json:"rows"`
+}
+
+type execOutputEvent struct {
+	name string
+	data []byte
 }
 
 func BoxliteExec(ctx *gin.Context) {
@@ -79,63 +86,116 @@ func BoxliteExecOutput(ctx *gin.Context) {
 	ctx.Header("Connection", "keep-alive")
 	ctx.Status(http.StatusOK)
 
-	flusher, canFlush := ctx.Writer.(http.Flusher)
+	streamManagedExecOutput(ctx.Request.Context(), ctx.Writer, exec)
+}
 
-	stdoutDone := make(chan struct{})
-	stderrDone := make(chan struct{})
+func streamManagedExecOutput(ctx context.Context, writer http.ResponseWriter, exec *boxlite.ManagedExec) {
+	flusher, canFlush := writer.(http.Flusher)
+	events := make(chan execOutputEvent, 16)
 
-	// Stream stdout
+	var readers sync.WaitGroup
+	readers.Add(2)
+	go pipeExecOutput(ctx, &readers, exec.StdoutR, "stdout", events)
+	go pipeExecOutput(ctx, &readers, exec.StderrR, "stderr", events)
+
 	go func() {
-		defer close(stdoutDone)
-		buf := make([]byte, 4096)
-		for {
-			n, err := exec.StdoutR.Read(buf)
-			if n > 0 {
-				encoded := boxlite.EncodeSSEData(buf[:n])
-				fmt.Fprintf(ctx.Writer, "event: stdout\ndata: {\"data\":\"%s\"}\n\n", encoded)
-				if canFlush {
-					flusher.Flush()
-				}
-			}
-			if err != nil {
-				return
-			}
-		}
+		readers.Wait()
+		close(events)
 	}()
 
-	// Stream stderr
-	go func() {
-		defer close(stderrDone)
-		buf := make([]byte, 4096)
-		for {
-			n, err := exec.StderrR.Read(buf)
-			if n > 0 {
-				encoded := boxlite.EncodeSSEData(buf[:n])
-				fmt.Fprintf(ctx.Writer, "event: stderr\ndata: {\"data\":\"%s\"}\n\n", encoded)
-				if canFlush {
-					flusher.Flush()
-				}
-			}
-			if err != nil {
+	for {
+		select {
+		case event, ok := <-events:
+			if !ok {
+				writeExecExit(ctx, writer, flusher, canFlush, exec)
 				return
 			}
+			writeExecOutputEvent(writer, event.name, event.data)
+			if canFlush {
+				flusher.Flush()
+			}
+		case <-ctx.Done():
+			return
 		}
-	}()
+	}
+}
 
-	<-stdoutDone
-	<-stderrDone
+func writeExecExit(
+	ctx context.Context,
+	writer http.ResponseWriter,
+	flusher http.Flusher,
+	canFlush bool,
+	exec *boxlite.ManagedExec,
+) {
+	if exec.TTY {
+		writeExecExitIfDone(writer, exec)
+		if canFlush {
+			flusher.Flush()
+		}
+		return
+	}
 
 	select {
 	case <-exec.Done:
-		exitData, _ := json.Marshal(map[string]interface{}{
-			"exit_code": exec.ExitCode,
-		})
-		fmt.Fprintf(ctx.Writer, "event: exit\ndata: %s\n\n", string(exitData))
-	default:
-		fmt.Fprintf(ctx.Writer, "event: exit\ndata: {\"exit_code\":-1}\n\n")
+	case <-ctx.Done():
+		return
 	}
+
+	writeExecExitEvent(writer, exec)
 	if canFlush {
 		flusher.Flush()
+	}
+}
+
+func pipeExecOutput(
+	ctx context.Context,
+	readers *sync.WaitGroup,
+	reader io.Reader,
+	name string,
+	events chan<- execOutputEvent,
+) {
+	defer readers.Done()
+	buf := make([]byte, 4096)
+	for {
+		n, err := reader.Read(buf)
+		if n > 0 {
+			data := make([]byte, n)
+			copy(data, buf[:n])
+
+			select {
+			case events <- execOutputEvent{name: name, data: data}:
+			case <-ctx.Done():
+				return
+			}
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+func writeExecOutputEvent(writer io.Writer, name string, data []byte) {
+	encoded := boxlite.EncodeSSEData(data)
+	fmt.Fprintf(writer, "event: %s\ndata: {\"data\":\"%s\"}\n\n", name, encoded)
+}
+
+func writeExecExitEvent(writer io.Writer, exec *boxlite.ManagedExec) {
+	exitData := map[string]interface{}{
+		"exit_code": exec.ExitCode,
+	}
+	if exec.Err != nil {
+		exitData["error"] = exec.Err.Error()
+	}
+	encoded, _ := json.Marshal(exitData)
+	fmt.Fprintf(writer, "event: exit\ndata: %s\n\n", string(encoded))
+}
+
+func writeExecExitIfDone(writer io.Writer, exec *boxlite.ManagedExec) {
+	select {
+	case <-exec.Done:
+		writeExecExitEvent(writer, exec)
+	default:
+		fmt.Fprint(writer, "event: exit\ndata: {\"exit_code\":-1}\n\n")
 	}
 }
 

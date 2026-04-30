@@ -9,8 +9,8 @@
  */
 
 import WebSocket from 'isomorphic-ws'
-import { InterpreterApi, InterpreterContext } from '@daytonaio/toolbox-api-client'
-import { Configuration } from '@daytonaio/api-client'
+import { InterpreterApi, InterpreterContext } from '@boxlite-labs/toolbox-api-client'
+import { Configuration } from '@boxlite-labs/api-client'
 import { BoxliteError, BoxLiteTimeoutError } from './errors/BoxliteError'
 import { ExecutionError, ExecutionResult, RunCodeOptions } from './types/CodeInterpreter'
 import { createSandboxWebSocket } from './utils/WebSocket'

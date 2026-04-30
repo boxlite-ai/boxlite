@@ -44,7 +44,7 @@ POST /api/webhooks/organizations/{organizationId}/send
 {
   "eventType": "custom.event",
   "payload": {
-    "message": "Hello from Daytona!",
+    "message": "Hello from BoxLite!",
     "timestamp": "2025-01-01T00:00:00.000Z"
   },
   "eventId": "optional-unique-id"

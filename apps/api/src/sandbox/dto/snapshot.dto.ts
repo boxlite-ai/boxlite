@@ -84,7 +84,7 @@ export class SnapshotDto {
 
   @ApiPropertyOptional({
     description: 'The snapshot reference',
-    example: 'daytonaio/sandbox:latest',
+    example: 'boxlite-labs/sandbox:latest',
     required: false,
   })
   @IsOptional()

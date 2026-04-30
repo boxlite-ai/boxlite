@@ -6,7 +6,7 @@ package recording
 import (
 	"time"
 
-	"github.com/daytonaio/daemon/pkg/recording"
+	"github.com/boxlite-labs/daemon/pkg/recording"
 )
 
 // Recording represents a recording session (active or completed)

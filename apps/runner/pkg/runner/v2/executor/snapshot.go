@@ -9,8 +9,8 @@ import (
 	"context"
 	"errors"
 
-	apiclient "github.com/daytonaio/daytona/libs/api-client-go"
-	"github.com/daytonaio/runner/pkg/api/dto"
+	apiclient "github.com/boxlite-labs/boxlite/libs/api-client-go"
+	"github.com/boxlite-labs/runner/pkg/api/dto"
 )
 
 func (e *Executor) buildSnapshot(ctx context.Context, job *apiclient.Job) (any, error) {
@@ -53,13 +53,14 @@ func (e *Executor) pullSnapshot(ctx context.Context, job *apiclient.Job) (any, e
 		return nil, err
 	}
 
-	info, err := e.backend.GetImageInfo(ctx, request.Snapshot)
+	snapshotRef := pulledSnapshotRef(request)
+	info, err := e.backend.GetImageInfo(ctx, snapshotRef)
 	if err != nil {
 		return nil, err
 	}
 
 	infoResponse := dto.SnapshotInfoResponse{
-		Name:       request.Snapshot,
+		Name:       snapshotRef,
 		SizeGB:     float64(info.Size) / (1024 * 1024 * 1024), // Convert bytes to GB
 		Entrypoint: info.Entrypoint,
 		Cmd:        info.Cmd,
@@ -67,6 +68,14 @@ func (e *Executor) pullSnapshot(ctx context.Context, job *apiclient.Job) (any, e
 	}
 
 	return infoResponse, nil
+}
+
+func pulledSnapshotRef(request dto.PullSnapshotRequestDTO) string {
+	if request.DestinationRef != nil && *request.DestinationRef != "" {
+		return *request.DestinationRef
+	}
+
+	return request.Snapshot
 }
 
 func (e *Executor) removeSnapshot(ctx context.Context, job *apiclient.Job) (any, error) {

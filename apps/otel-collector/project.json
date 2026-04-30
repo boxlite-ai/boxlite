@@ -29,11 +29,11 @@
     "serve": {
       "executor": "nx:run-commands",
       "options": {
-        "commands": ["dist/apps/otel-collector/daytona-otel-collector --config {projectRoot}/config.dev.yaml"]
+        "commands": ["dist/apps/otel-collector/boxlite-otel-collector --config {projectRoot}/config.dev.yaml"]
       },
       "configurations": {
         "production": {
-          "commands": ["dist/apps/otel-collector/daytona-otel-collector --config {projectRoot}/config.yaml"]
+          "commands": ["dist/apps/otel-collector/boxlite-otel-collector --config {projectRoot}/config.yaml"]
         }
       },
       "dependsOn": ["build"]

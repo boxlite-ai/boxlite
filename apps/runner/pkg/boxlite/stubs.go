@@ -9,7 +9,8 @@ import (
 	"fmt"
 
 	boxlite "github.com/boxlite-ai/boxlite/sdks/go"
-	"github.com/daytonaio/runner/pkg/api/dto"
+	"github.com/boxlite-labs/runner/pkg/api/dto"
+	"github.com/containerd/errdefs"
 )
 
 // Resize changes the CPU/memory/disk allocation of a sandbox.
@@ -87,18 +88,18 @@ func (c *Client) RecoverSandbox(ctx context.Context, sandboxId string, recoverDt
 	}
 
 	createDto := dto.CreateSandboxDTO{
-		Id:              sandboxId,
-		Snapshot:        snapshot,
-		OsUser:          recoverDto.OsUser,
-		CpuQuota:        recoverDto.CpuQuota,
-		MemoryQuota:     recoverDto.MemoryQuota,
-		StorageQuota:    recoverDto.StorageQuota,
-		Env:             recoverDto.Env,
-		Volumes:         recoverDto.Volumes,
-		NetworkBlockAll: recoverDto.NetworkBlockAll,
+		Id:               sandboxId,
+		Snapshot:         snapshot,
+		OsUser:           recoverDto.OsUser,
+		CpuQuota:         recoverDto.CpuQuota,
+		MemoryQuota:      recoverDto.MemoryQuota,
+		StorageQuota:     recoverDto.StorageQuota,
+		Env:              recoverDto.Env,
+		Volumes:          recoverDto.Volumes,
+		NetworkBlockAll:  recoverDto.NetworkBlockAll,
 		NetworkAllowList: recoverDto.NetworkAllowList,
-		FromVolumeId:    recoverDto.FromVolumeId,
-		UserId:          recoverDto.UserId,
+		FromVolumeId:     recoverDto.FromVolumeId,
+		UserId:           recoverDto.UserId,
 	}
 
 	_, _, err := c.Create(ctx, createDto)
@@ -109,27 +110,21 @@ func (c *Client) RecoverSandbox(ctx context.Context, sandboxId string, recoverDt
 // TODO: Implement when BoxLite Go SDK exposes snapshot operations.
 func (c *Client) CreateBackup(ctx context.Context, sandboxId string, backupDto dto.CreateBackupDTO) error {
 	c.logger.Warn("create backup not yet implemented in BoxLite", "sandbox", sandboxId)
-	return fmt.Errorf("backup not yet supported by BoxLite runtime")
+	return errdefs.ErrNotImplemented.WithMessage("backup is not supported by the BoxLite Go SDK")
 }
 
 // BuildSnapshot builds an image from a Dockerfile.
 // TODO: Implement OCI builder integration.
 func (c *Client) BuildSnapshot(ctx context.Context, req dto.BuildSnapshotRequestDTO) error {
 	c.logger.Warn("build snapshot not yet implemented in BoxLite", "snapshot", req.Snapshot)
-	return fmt.Errorf("snapshot build not yet supported by BoxLite runtime")
-}
-
-// PullSnapshot pulls a snapshot image from a registry.
-func (c *Client) PullSnapshot(ctx context.Context, req dto.PullSnapshotRequestDTO) error {
-	c.logger.Info("pulling snapshot", "snapshot", req.Snapshot)
-	return c.PullImage(ctx, req.Snapshot)
+	return errdefs.ErrNotImplemented.WithMessage("snapshot build is not supported by the BoxLite Go SDK")
 }
 
 // GetImageInfo returns metadata about a cached image.
 func (c *Client) GetImageInfo(ctx context.Context, imageName string) (*ImageInfo, error) {
 	img, err := c.GetImageInfoFromCache(ctx, imageName)
 	if err != nil {
-		return &ImageInfo{}, nil
+		return nil, err
 	}
 	var sizeGB float64
 	if img.Size != nil {
@@ -141,39 +136,28 @@ func (c *Client) GetImageInfo(ctx context.Context, imageName string) (*ImageInfo
 	}, nil
 }
 
-// InspectImageInRegistry inspects an image in a remote registry.
-func (c *Client) InspectImageInRegistry(ctx context.Context, imageName string, registry *dto.RegistryDTO) (*ImageDigest, error) {
-	c.logger.Warn("inspect image in registry not yet implemented in BoxLite", "image", imageName)
-	return &ImageDigest{}, nil
-}
-
 // UpdateNetworkSettings updates the network allowlist/blocklist for a sandbox.
 // TODO: Implement when BoxLite Go SDK exposes network configuration.
 func (c *Client) UpdateNetworkSettings(ctx context.Context, sandboxId string, settings dto.UpdateNetworkSettingsDTO) error {
 	c.logger.Warn("update network settings not yet implemented in BoxLite", "sandbox", sandboxId)
-	return nil
+	return errdefs.ErrNotImplemented.WithMessage("live network settings update is not supported by the BoxLite Go SDK")
 }
 
 // TagImage tags a local image with a new name.
 func (c *Client) TagImage(ctx context.Context, sourceImage string, targetImage string) error {
 	c.logger.Warn("tag image not yet implemented in BoxLite", "source", sourceImage, "target", targetImage)
-	return fmt.Errorf("image tagging not yet supported by BoxLite runtime")
+	return errdefs.ErrNotImplemented.WithMessage("image tagging is not supported by the BoxLite Go SDK")
 }
 
 // PushImage pushes a local image to a remote registry.
 func (c *Client) PushImage(ctx context.Context, imageName string, reg *dto.RegistryDTO) error {
 	c.logger.Warn("push image not yet implemented in BoxLite", "image", imageName)
-	return fmt.Errorf("image push not yet supported by BoxLite runtime")
+	return errdefs.ErrNotImplemented.WithMessage("image push is not supported by the BoxLite Go SDK")
 }
 
 // GetDaemonVersion returns the version of the in-sandbox daemon.
 func (c *Client) GetDaemonVersion(ctx context.Context, sandboxId string) (string, error) {
 	return "boxlite", nil
-}
-
-// CleanupOrphanedVolumeMounts cleans up orphaned volume mounts.
-func (c *Client) CleanupOrphanedVolumeMounts(ctx context.Context) {
-	// No-op for BoxLite — VMs don't have orphaned mounts
 }
 
 // ImageInfo holds metadata about an image.

@@ -1,0 +1,9 @@
+name: boxlite organization delete
+synopsis: Delete an organization
+usage: boxlite organization delete [ORGANIZATION] [flags]
+inherited_options:
+  - name: help
+    default_value: 'false'
+    usage: help for boxlite
+see_also:
+  - boxlite organization - Manage BoxLite organizations

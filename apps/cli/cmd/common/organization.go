@@ -7,9 +7,9 @@ package common
 import (
 	"context"
 
-	apiclient_cli "github.com/daytonaio/daytona/cli/apiclient"
-	"github.com/daytonaio/daytona/cli/config"
-	apiclient "github.com/daytonaio/daytona/libs/api-client-go"
+	apiclient_cli "github.com/boxlite-labs/boxlite/cli/apiclient"
+	"github.com/boxlite-labs/boxlite/cli/config"
+	apiclient "github.com/boxlite-labs/boxlite/libs/api-client-go"
 )
 
 func GetPersonalOrganizationId(profile config.Profile) (string, error) {

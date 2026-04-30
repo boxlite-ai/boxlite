@@ -10,8 +10,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	common_errors "github.com/daytonaio/common-go/pkg/errors"
-	"github.com/daytonaio/daemon/internal/util"
+	common_errors "github.com/boxlite-labs/common-go/pkg/errors"
+	"github.com/boxlite-labs/daemon/internal/util"
 )
 
 // SendInput godoc

@@ -11,8 +11,8 @@ import (
 	"os"
 	"os/exec"
 
-	"github.com/daytonaio/daemon/pkg/common"
-	"github.com/daytonaio/daemon/pkg/ssh/config"
+	"github.com/boxlite-labs/daemon/pkg/common"
+	"github.com/boxlite-labs/daemon/pkg/ssh/config"
 	"github.com/gliderlabs/ssh"
 	"github.com/pkg/sftp"
 	"golang.org/x/sys/unix"

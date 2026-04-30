@@ -11,8 +11,8 @@ import (
 	"os"
 	"os/exec"
 
+	"github.com/boxlite-labs/daemon/pkg/common"
 	"github.com/creack/pty"
-	"github.com/daytonaio/daemon/pkg/common"
 )
 
 // Info returns the current session information

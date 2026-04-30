@@ -1,18 +1,18 @@
 {
-  "name": "@daytonaio/analytics-api-client",
+  "name": "@boxlite-labs/analytics-api-client",
   "version": "0.0.0-dev",
-  "description": "OpenAPI client for @daytonaio/analytics-api-client",
+  "description": "OpenAPI client for @boxlite-labs/analytics-api-client",
   "author": "OpenAPI-Generator Contributors",
   "repository": {
     "type": "git",
-    "url": "https://github.com/daytonaio/daytona.git"
+    "url": "https://github.com/boxlite-labs/boxlite.git"
   },
   "keywords": [
     "axios",
     "typescript",
     "openapi-client",
     "openapi-generator",
-    "@daytonaio/analytics-api-client"
+    "@boxlite-labs/analytics-api-client"
   ],
   "license": "Apache-2.0",
   "main": "./src/index.js",

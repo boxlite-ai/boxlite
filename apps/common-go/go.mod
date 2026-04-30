@@ -1,9 +1,9 @@
-module github.com/daytonaio/common-go
+module github.com/boxlite-labs/common-go
 
 go 1.25.4
 
 require (
-	github.com/daytonaio/daytona/libs/api-client-go v0.152.1
+	github.com/boxlite-labs/boxlite/libs/api-client-go v0.152.1
 	github.com/gin-gonic/gin v1.10.1
 	github.com/jellydator/ttlcache/v3 v3.4.0
 	github.com/redis/go-redis/v9 v9.10.0
@@ -73,3 +73,5 @@ require (
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+replace github.com/boxlite-labs/boxlite/libs/api-client-go => ../api-client-go

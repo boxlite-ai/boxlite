@@ -1,4 +1,4 @@
-# OpenTelemetry Collector configuration for Daytona
+# OpenTelemetry Collector configuration for BoxLite
 
 receivers:
   otlp:
@@ -8,7 +8,7 @@ receivers:
         include_metadata: true
 
 exporters:
-  daytona_exporter:
+  boxlite_exporter:
     # Sandbox authentication header name
     sandbox_auth_token_header: 'sandbox-auth-token'
 
@@ -25,9 +25,9 @@ exporters:
       max_interval: 30s
       max_elapsed_time: 5m
 
-    # Daytona API configuration
-    api_url: ${env:DAYTONA_API_URL:-http://localhost:3000/api}
-    api_key: ${env:DAYTONA_API_KEY:-otel_collector_api_key}
+    # BoxLite API configuration
+    api_url: ${env:BOXLITE_API_URL:-http://localhost:3000/api}
+    api_key: ${env:BOXLITE_API_KEY:-otel_collector_api_key}
 
     # Optional Redis configuration for caching
     redis:
@@ -59,10 +59,10 @@ service:
   pipelines:
     traces:
       receivers: [otlp]
-      exporters: [daytona_exporter]
+      exporters: [boxlite_exporter]
     metrics:
       receivers: [otlp]
-      exporters: [daytona_exporter]
+      exporters: [boxlite_exporter]
     logs:
       receivers: [otlp]
-      exporters: [daytona_exporter]
+      exporters: [boxlite_exporter]

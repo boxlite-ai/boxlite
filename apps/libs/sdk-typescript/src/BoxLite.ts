@@ -13,7 +13,7 @@ import {
   VolumesApi,
   SandboxVolume,
   ConfigApi,
-} from '@daytonaio/api-client'
+} from '@boxlite-labs/api-client'
 import axios, { AxiosError, AxiosInstance, InternalAxiosRequestConfig } from 'axios'
 import { SandboxPythonCodeToolbox } from './code-toolbox/SandboxPythonCodeToolbox'
 import { SandboxTsCodeToolbox } from './code-toolbox/SandboxTsCodeToolbox'

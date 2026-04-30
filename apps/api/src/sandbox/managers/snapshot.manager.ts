@@ -30,7 +30,7 @@ import { TrackJobExecution } from '../../common/decorators/track-job-execution.d
 import { setTimeout as sleep } from 'timers/promises'
 import { LogExecution } from '../../common/decorators/log-execution.decorator'
 import { WithInstrumentation } from '../../common/decorators/otel.decorator'
-import { RunnerAdapterFactory } from '../runner-adapter/runnerAdapter'
+import { RunnerAdapterFactory, RunnerSnapshotInfo, SnapshotDigestResponse } from '../runner-adapter/runnerAdapter'
 import { SnapshotStateError } from '../errors/snapshot-state-error'
 import { SnapshotEvents } from '../constants/snapshot-events'
 import { SnapshotCreatedEvent } from '../events/snapshot-created.event'
@@ -42,9 +42,9 @@ import { SandboxDesiredState } from '../enums/sandbox-desired-state.enum'
 import { BackupState } from '../enums/backup-state.enum'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { SandboxRepository } from '../repositories/sandbox.repository'
-import { SnapshotInfoResponse } from '@daytonaio/runner-api-client'
 import { SnapshotActivatedEvent } from '../events/snapshot-activated.event'
 import { TypedConfigService } from '../../config/typed-config.service'
+import { createBoxLiteInternalSnapshotRef } from '../utils/snapshot-ref.util'
 
 const SYNC_AGAIN = 'sync-again'
 const DONT_SYNC_AGAIN = 'dont-sync-again'
@@ -742,7 +742,7 @@ export class SnapshotManager implements TrackableJobExecutions, OnApplicationShu
 
     const initialImageRefOnRunner = snapshot.buildInfo ? snapshot.buildInfo.snapshotRef : snapshot.ref
 
-    let snapshotInfoResponse: SnapshotInfoResponse
+    let snapshotInfoResponse: RunnerSnapshotInfo
     try {
       snapshotInfoResponse = await runnerAdapter.getSnapshotInfo(initialImageRefOnRunner)
     } catch (error) {
@@ -770,12 +770,22 @@ export class SnapshotManager implements TrackableJobExecutions, OnApplicationShu
       return DONT_SYNC_AGAIN
     }
 
+    let inspectedSnapshotDigest: SnapshotDigestResponse | undefined
     try {
-      await runnerAdapter.inspectSnapshotInRegistry(snapshot.ref, internalRegistry)
+      inspectedSnapshotDigest = await runnerAdapter.inspectSnapshotInRegistry(snapshot.ref, internalRegistry)
     } catch (error) {
       this.logger.error(`Failed to inspect snapshot ${snapshot.ref} in registry: ${error}`)
-      await this.snapshotRepository.save(snapshot)
       return DONT_SYNC_AGAIN
+    }
+
+    if (snapshot.size == null && typeof inspectedSnapshotDigest?.sizeGB === 'number') {
+      await this.processSnapshotDigest(
+        snapshot,
+        internalRegistry,
+        snapshotInfoResponse.hash,
+        inspectedSnapshotDigest.sizeGB,
+        snapshotInfoResponse.entrypoint,
+      )
     }
 
     try {
@@ -1188,17 +1198,17 @@ export class SnapshotManager implements TrackableJobExecutions, OnApplicationShu
     snapshot: Snapshot,
     internalRegistry: DockerRegistry,
     hash: string,
-    sizeGB: number,
+    sizeGB?: number,
     entrypoint?: string[] | string,
-  ) {
+  ): Promise<SyncState | void> {
     let shouldSave = false
+
     if (!snapshot.ref) {
       shouldSave = true
-      const sanitizedUrl = internalRegistry.url.replace(/^https?:\/\//, '')
-      snapshot.ref = `${sanitizedUrl}/${internalRegistry.project || 'boxlite'}/daytona-${hash}:daytona`
+      snapshot.ref = createBoxLiteInternalSnapshotRef(internalRegistry.url, internalRegistry.project, hash)
     }
 
-    if (!snapshot.size) {
+    if (snapshot.size == null && typeof sizeGB === 'number') {
       shouldSave = true
 
       const organization = await this.organizationService.findOne(snapshot.organizationId)

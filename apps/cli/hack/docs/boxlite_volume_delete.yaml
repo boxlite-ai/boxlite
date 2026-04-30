@@ -1,0 +1,9 @@
+name: boxlite volume delete
+synopsis: Delete a volume
+usage: boxlite volume delete [VOLUME_ID] [flags]
+inherited_options:
+  - name: help
+    default_value: 'false'
+    usage: help for boxlite
+see_also:
+  - boxlite volume - Manage BoxLite volumes

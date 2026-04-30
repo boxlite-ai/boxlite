@@ -10,11 +10,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/boxlite-labs/runner/internal/util"
 	"github.com/containerd/errdefs"
-	"github.com/daytonaio/runner/internal/util"
 	"github.com/gin-gonic/gin"
 
-	common_errors "github.com/daytonaio/common-go/pkg/errors"
+	common_errors "github.com/boxlite-labs/common-go/pkg/errors"
 )
 
 func HandlePossibleDockerError(ctx *gin.Context, err error) common_errors.ErrorResponse {
@@ -41,6 +41,15 @@ func HandlePossibleDockerError(ctx *gin.Context, err error) common_errors.ErrorR
 			StatusCode: http.StatusBadRequest,
 			Message:    fmt.Sprintf("bad request: %s", err.Error()),
 			Code:       "BAD_REQUEST",
+			Timestamp:  time.Now(),
+			Path:       ctx.Request.URL.Path,
+			Method:     ctx.Request.Method,
+		}
+	} else if errdefs.IsNotImplemented(err) {
+		return common_errors.ErrorResponse{
+			StatusCode: http.StatusNotImplemented,
+			Message:    err.Error(),
+			Code:       "NOT_IMPLEMENTED",
 			Timestamp:  time.Now(),
 			Path:       ctx.Request.URL.Path,
 			Method:     ctx.Request.Method,

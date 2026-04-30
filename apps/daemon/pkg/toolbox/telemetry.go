@@ -8,9 +8,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/daytonaio/common-go/pkg/log"
-	"github.com/daytonaio/common-go/pkg/telemetry"
-	"github.com/daytonaio/daemon/internal"
+	"github.com/boxlite-labs/common-go/pkg/log"
+	"github.com/boxlite-labs/common-go/pkg/telemetry"
+	"github.com/boxlite-labs/daemon/internal"
 )
 
 func (s *server) initTelemetry(ctx context.Context, serviceName, entrypointLogFilePath string, organizationId, regionId *string) error {

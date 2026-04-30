@@ -7,8 +7,8 @@ package organization
 import (
 	"errors"
 
-	"github.com/daytonaio/daytona/cli/config"
-	"github.com/daytonaio/daytona/cli/internal"
+	"github.com/boxlite-labs/boxlite/cli/config"
+	"github.com/boxlite-labs/boxlite/cli/internal"
 	"github.com/spf13/cobra"
 )
 

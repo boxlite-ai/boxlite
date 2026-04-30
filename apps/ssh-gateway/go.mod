@@ -1,4 +1,4 @@
-module github.com/daytonaio/ssh-gateway
+module github.com/boxlite-labs/ssh-gateway
 
 go 1.24.0
 

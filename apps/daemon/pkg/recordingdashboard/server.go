@@ -12,9 +12,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/daytonaio/daemon/pkg/recording"
-	recordingcontroller "github.com/daytonaio/daemon/pkg/toolbox/computeruse/recording"
-	"github.com/daytonaio/daemon/pkg/toolbox/config"
+	"github.com/boxlite-labs/daemon/pkg/recording"
+	recordingcontroller "github.com/boxlite-labs/daemon/pkg/toolbox/computeruse/recording"
+	"github.com/boxlite-labs/daemon/pkg/toolbox/config"
 	"github.com/gin-gonic/gin"
 )
 

@@ -2,30 +2,30 @@
 set -e
 
 # Create necessary directories
-mkdir -p /var/lib/daytona/runner
-mkdir -p /var/log/daytona
-mkdir -p /etc/daytona
+mkdir -p /var/lib/boxlite/runner
+mkdir -p /var/log/boxlite
+mkdir -p /etc/boxlite
 
 # Create default environment file if it doesn't exist
-if [ ! -f /etc/daytona/runner.env ]; then
-    cat > /etc/daytona/runner.env <<EOF
-# Daytona Runner Environment Variables
+if [ ! -f /etc/boxlite/runner.env ]; then
+    cat > /etc/boxlite/runner.env <<EOF
+# BoxLite Runner Environment Variables
 # Add your configuration here, for example:
-# DAYTONA_API_URL=https://api.daytona.io
-# DAYTONA_RUNNER_TOKEN=your-token-here
+# BOXLITE_API_URL=https://api.boxlite.io
+# BOXLITE_RUNNER_TOKEN=your-token-here
 EOF
-    chmod 600 /etc/daytona/runner.env
+    chmod 600 /etc/boxlite/runner.env
 fi
 
 # Reload systemd daemon
 systemctl daemon-reload
 
-echo "Daytona Runner installed successfully"
+echo "BoxLite Runner installed successfully"
 echo ""
 echo "Next steps:"
-echo "1. Configure environment variables in /etc/daytona/runner.env"
-echo "2. Enable and start the service: systemctl enable --now daytona-runner"
+echo "1. Configure environment variables in /etc/boxlite/runner.env"
+echo "2. Enable and start the service: systemctl enable --now boxlite-runner"
 echo ""
-echo "To check service status: systemctl status daytona-runner"
+echo "To check service status: systemctl status boxlite-runner"
 
 exit 0

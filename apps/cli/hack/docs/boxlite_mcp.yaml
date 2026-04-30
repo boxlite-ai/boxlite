@@ -1,0 +1,12 @@
+name: boxlite mcp
+synopsis: Manage BoxLite MCP Server
+description: Commands for managing BoxLite MCP Server
+inherited_options:
+  - name: help
+    default_value: 'false'
+    usage: help for boxlite
+see_also:
+  - boxlite - BoxLite CLI
+  - boxlite mcp config - Outputs JSON configuration for BoxLite MCP Server
+  - 'boxlite mcp init - Initialize BoxLite MCP Server with an agent (currently supported: claude, windsurf, cursor)'
+  - boxlite mcp start - Start BoxLite MCP Server

@@ -10,11 +10,11 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/daytonaio/runner/internal/metrics"
-	blclient "github.com/daytonaio/runner/pkg/boxlite"
-	"github.com/daytonaio/runner/pkg/cache"
-	"github.com/daytonaio/runner/pkg/models"
-	"github.com/daytonaio/runner/pkg/services"
+	"github.com/boxlite-labs/runner/internal/metrics"
+	blclient "github.com/boxlite-labs/runner/pkg/boxlite"
+	"github.com/boxlite-labs/runner/pkg/cache"
+	"github.com/boxlite-labs/runner/pkg/models"
+	"github.com/boxlite-labs/runner/pkg/services"
 )
 
 type RunnerInstanceConfig struct {

@@ -7,9 +7,9 @@ package sandbox
 import (
 	"context"
 
-	"github.com/daytonaio/daytona/cli/apiclient"
-	"github.com/daytonaio/daytona/cli/cmd/common"
-	"github.com/daytonaio/daytona/cli/views/sandbox"
+	"github.com/boxlite-labs/boxlite/cli/apiclient"
+	"github.com/boxlite-labs/boxlite/cli/cmd/common"
+	"github.com/boxlite-labs/boxlite/cli/views/sandbox"
 	"github.com/spf13/cobra"
 )
 

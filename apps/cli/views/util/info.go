@@ -5,8 +5,8 @@
 package util
 
 import (
+	"github.com/boxlite-labs/boxlite/cli/views/common"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/daytonaio/daytona/cli/views/common"
 )
 
 const PropertyNameWidth = 16

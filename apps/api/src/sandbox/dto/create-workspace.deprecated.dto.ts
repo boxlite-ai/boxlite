@@ -19,7 +19,7 @@ enum RunnerRegion {
 export class CreateWorkspaceDto {
   @ApiPropertyOptional({
     description: 'The image used for the workspace',
-    example: 'daytonaio/workspace:latest',
+    example: 'boxlite-labs/workspace:latest',
   })
   @IsOptional()
   @IsString()

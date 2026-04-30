@@ -33,7 +33,7 @@ export class BuildInfoDto {
 
   @ApiProperty({
     description: 'The snapshot reference',
-    example: 'daytonaio/sandbox:latest',
+    example: 'boxlite-labs/sandbox:latest',
   })
   snapshotRef: string
 }

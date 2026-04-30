@@ -14,11 +14,11 @@ import (
 	"os"
 	"time"
 
-	"github.com/daytonaio/daemon/internal/util"
+	"github.com/boxlite-labs/daemon/internal/util"
 	"github.com/gorilla/websocket"
 
-	common_errors "github.com/daytonaio/common-go/pkg/errors"
-	"github.com/daytonaio/common-go/pkg/log"
+	common_errors "github.com/boxlite-labs/common-go/pkg/errors"
+	"github.com/boxlite-labs/common-go/pkg/log"
 )
 
 type FetchLogsOptions struct {

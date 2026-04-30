@@ -10,7 +10,7 @@ import {
   Configuration as AnalyticsConfiguration,
   TelemetryApi as AnalyticsTelemetryApi,
   UsageApi as AnalyticsUsageApi,
-} from '@daytonaio/analytics-api-client'
+} from '@boxlite-labs/analytics-api-client'
 import {
   ApiKeysApi,
   AuditApi,
@@ -25,7 +25,7 @@ import {
   UsersApi,
   VolumesApi,
   WebhooksApi,
-} from '@daytonaio/api-client'
+} from '@boxlite-labs/api-client'
 import axios, { AxiosError } from 'axios'
 import { BoxliteError } from './errors'
 

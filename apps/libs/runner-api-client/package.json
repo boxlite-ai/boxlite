@@ -1,18 +1,18 @@
 {
-  "name": "@daytonaio/runner-api-client",
+  "name": "@boxlite-labs/runner-api-client",
   "version": "0.0.0-dev",
-  "description": "OpenAPI client for @daytonaio/runner-api-client",
+  "description": "OpenAPI client for @boxlite-labs/runner-api-client",
   "author": "OpenAPI-Generator Contributors",
   "repository": {
     "type": "git",
-    "url": "https://github.com/daytonaio/daytona.git"
+    "url": "https://github.com/boxlite-labs/boxlite.git"
   },
   "keywords": [
     "axios",
     "typescript",
     "openapi-client",
     "openapi-generator",
-    "@daytonaio/runner-api-client"
+    "@boxlite-labs/runner-api-client"
   ],
   "license": "Unlicense",
   "main": "./src/index.js",

@@ -69,7 +69,7 @@
       "options": {
         "targetName": "test"
       },
-      "exclude": ["apps/daytona-e2e/**/*"]
+      "exclude": ["apps/boxlite-e2e/**/*"]
     },
     {
       "plugin": "@nx/vite/plugin",
@@ -159,10 +159,10 @@
       "options": {
         "context": "{workspaceRoot}",
         "file": "{projectRoot}/Dockerfile",
-        "tags": ["daytonaio/daytona-{projectName}:$VERSION$ARCH"],
+        "tags": ["boxlite-labs/boxlite-{projectName}:$VERSION$ARCH"],
         "build-args": ["VERSION=$VERSION"],
-        "cache-from": ["type=registry,ref=daytonaio/daytona-{projectName}:buildcache$ARCH"],
-        "cache-to": ["type=registry,ref=daytonaio/daytona-{projectName}:buildcache$ARCH,mode=max"]
+        "cache-from": ["type=registry,ref=boxlite-labs/boxlite-{projectName}:buildcache$ARCH"],
+        "cache-to": ["type=registry,ref=boxlite-labs/boxlite-{projectName}:buildcache$ARCH,mode=max"]
       },
       "configurations": {
         "production": {
@@ -171,18 +171,18 @@
         "production-multi-platform": {
           "push": true,
           "platforms": ["linux/amd64", "linux/arm64"],
-          "tags": ["daytonaio/daytona-{projectName}:$VERSION"],
-          "cache-from": ["type=registry,ref=daytonaio/daytona-{projectName}:buildcache"],
-          "cache-to": ["type=registry,ref=daytonaio/daytona-{projectName}:buildcache,mode=max"]
+          "tags": ["boxlite-labs/boxlite-{projectName}:$VERSION"],
+          "cache-from": ["type=registry,ref=boxlite-labs/boxlite-{projectName}:buildcache"],
+          "cache-to": ["type=registry,ref=boxlite-labs/boxlite-{projectName}:buildcache,mode=max"]
         },
         "local-registry": {
           "push": true,
           "tags": [
-            "registry:5000/daytonaio/test-daytona-{projectName}:$VERSION",
-            "registry:5000/daytonaio/test-daytona-{projectName}:latest"
+            "registry:5000/boxlite-labs/test-boxlite-{projectName}:$VERSION",
+            "registry:5000/boxlite-labs/test-boxlite-{projectName}:latest"
           ],
-          "cache-from": ["type=registry,ref=registry:5000/daytonaio/test-daytona-{projectName}:buildcache"],
-          "cache-to": ["type=registry,ref=registry:5000/daytonaio/test-daytona-{projectName}:buildcache,mode=max"]
+          "cache-from": ["type=registry,ref=registry:5000/boxlite-labs/test-boxlite-{projectName}:buildcache"],
+          "cache-to": ["type=registry,ref=registry:5000/boxlite-labs/test-boxlite-{projectName}:buildcache,mode=max"]
         }
       },
       "dependsOn": ["check-version-env"]
@@ -192,10 +192,10 @@
       "options": {
         "parallel": false,
         "commands": [
-          "docker manifest create daytonaio/daytona-{projectName}:$VERSION daytonaio/daytona-{projectName}:$VERSION-amd64 daytonaio/daytona-{projectName}:$VERSION-arm64",
-          "docker manifest push daytonaio/daytona-{projectName}:$VERSION",
-          "docker manifest create daytonaio/daytona-{projectName}:latest daytonaio/daytona-{projectName}:$VERSION-amd64 daytonaio/daytona-{projectName}:$VERSION-arm64",
-          "docker manifest push daytonaio/daytona-{projectName}:latest"
+          "docker manifest create boxlite-labs/boxlite-{projectName}:$VERSION boxlite-labs/boxlite-{projectName}:$VERSION-amd64 boxlite-labs/boxlite-{projectName}:$VERSION-arm64",
+          "docker manifest push boxlite-labs/boxlite-{projectName}:$VERSION",
+          "docker manifest create boxlite-labs/boxlite-{projectName}:latest boxlite-labs/boxlite-{projectName}:$VERSION-amd64 boxlite-labs/boxlite-{projectName}:$VERSION-arm64",
+          "docker manifest push boxlite-labs/boxlite-{projectName}:latest"
         ]
       }
     },

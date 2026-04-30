@@ -39,7 +39,7 @@ export type {
   ScatterChart,
 } from './types/Charts'
 
-export { SandboxState } from '@daytonaio/api-client'
+export { SandboxState } from '@boxlite-labs/api-client'
 export type {
   FileInfo,
   GitStatus,
@@ -47,7 +47,7 @@ export type {
   Match,
   ReplaceResult,
   SearchFilesResponse,
-} from '@daytonaio/toolbox-api-client'
+} from '@boxlite-labs/toolbox-api-client'
 
 export type { ScreenshotRegion, ScreenshotOptions } from './ComputerUse'
 

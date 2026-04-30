@@ -1,0 +1,14 @@
+name: boxlite delete
+synopsis: Delete a sandbox
+usage: boxlite delete [SANDBOX_ID] | [SANDBOX_NAME] [flags]
+options:
+  - name: all
+    shorthand: a
+    default_value: 'false'
+    usage: Delete all sandboxes
+inherited_options:
+  - name: help
+    default_value: 'false'
+    usage: help for boxlite
+see_also:
+  - boxlite - BoxLite CLI

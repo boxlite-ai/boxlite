@@ -7,8 +7,8 @@ package session
 import (
 	"net/http"
 
-	"github.com/daytonaio/daemon/internal/util"
-	"github.com/daytonaio/daemon/pkg/session"
+	"github.com/boxlite-labs/daemon/internal/util"
+	"github.com/boxlite-labs/daemon/pkg/session"
 	"github.com/gin-gonic/gin"
 )
 

@@ -12,7 +12,7 @@ import {
   ListSandboxesPaginatedSortEnum,
   ListSandboxesPaginatedStatesEnum,
   PaginatedSandboxes,
-} from '@daytonaio/api-client'
+} from '@boxlite-labs/api-client'
 import { isValidUUID } from '@/lib/utils'
 
 export interface SandboxFilters {

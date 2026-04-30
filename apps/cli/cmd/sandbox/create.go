@@ -10,13 +10,13 @@ import (
 	"strings"
 	"time"
 
+	apiclient_cli "github.com/boxlite-labs/boxlite/cli/apiclient"
+	"github.com/boxlite-labs/boxlite/cli/cmd/common"
+	"github.com/boxlite-labs/boxlite/cli/config"
+	"github.com/boxlite-labs/boxlite/cli/util"
+	views_common "github.com/boxlite-labs/boxlite/cli/views/common"
+	apiclient "github.com/boxlite-labs/boxlite/libs/api-client-go"
 	"github.com/charmbracelet/lipgloss"
-	apiclient_cli "github.com/daytonaio/daytona/cli/apiclient"
-	"github.com/daytonaio/daytona/cli/cmd/common"
-	"github.com/daytonaio/daytona/cli/config"
-	"github.com/daytonaio/daytona/cli/util"
-	views_common "github.com/daytonaio/daytona/cli/views/common"
-	apiclient "github.com/daytonaio/daytona/libs/api-client-go"
 	"github.com/spf13/cobra"
 )
 

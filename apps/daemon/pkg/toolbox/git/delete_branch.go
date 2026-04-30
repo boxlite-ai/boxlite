@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/daytonaio/daemon/pkg/git"
+	"github.com/boxlite-labs/daemon/pkg/git"
 	"github.com/gin-gonic/gin"
 )
 

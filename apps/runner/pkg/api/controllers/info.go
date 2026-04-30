@@ -7,10 +7,10 @@ package controllers
 import (
 	"net/http"
 
-	"github.com/daytonaio/runner/internal"
-	"github.com/daytonaio/runner/pkg/api/dto"
-	"github.com/daytonaio/runner/pkg/models"
-	"github.com/daytonaio/runner/pkg/runner"
+	"github.com/boxlite-labs/runner/internal"
+	"github.com/boxlite-labs/runner/pkg/api/dto"
+	"github.com/boxlite-labs/runner/pkg/models"
+	"github.com/boxlite-labs/runner/pkg/runner"
 	"github.com/gin-gonic/gin"
 )
 

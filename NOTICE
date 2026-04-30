@@ -1,0 +1,19 @@
+BoxLite
+
+This repository includes source copied from Daytona.
+
+Daytona
+Copyright the various Daytona software authors.
+
+The initial developer of the software is Daytona Platforms, Inc. (https://daytona.io).
+Copyright 2025 Daytona Platforms, Inc. All Rights Reserved.
+
+The copied Daytona-derived runner source is licensed under the GNU Affero
+General Public License version 3. The runner includes the upstream LICENSE and
+NOTICE files at:
+
+apps/runner/LICENSE
+apps/runner/NOTICE
+
+Upstream source commit:
+f982c45a42e52c98631002c7dc1df565c44d7aac

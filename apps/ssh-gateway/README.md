@@ -1,6 +1,6 @@
 # SSH Gateway
 
-A standalone SSH gateway application that authenticates users using tokens and proxies connections to Daytona runners.
+A standalone SSH gateway application that authenticates users using tokens and proxies connections to BoxLite runners.
 
 ## Features
 
@@ -32,7 +32,7 @@ Where:
 ### How It Works
 
 1. **Authentication**: The gateway extracts the token from the username
-2. **Token Validation**: Calls the Daytona API to validate the token and get runner information
+2. **Token Validation**: Calls the BoxLite API to validate the token and get runner information
 3. **Credential Retrieval**: Fetches the SSH keypair from the identified runner
 4. **Connection Proxying**: Establishes a connection to the runner's SSH gateway (port 2222)
 5. **Session Forwarding**: Proxies the SSH session between the client and the runner
@@ -44,14 +44,14 @@ Where:
 | Variable           | Description                           | Default                 | Required |
 | ------------------ | ------------------------------------- | ----------------------- | -------- |
 | `SSH_GATEWAY_PORT` | Port for the SSH gateway to listen on | `2222`                  | No       |
-| `API_URL`          | Daytona API base URL                  | `http://localhost:3000` | No       |
-| `API_KEY`          | Daytona API authentication key        | -                       | **Yes**  |
+| `API_URL`          | BoxLite API base URL                  | `http://localhost:3000` | No       |
+| `API_KEY`          | BoxLite API authentication key        | -                       | **Yes**  |
 
 ### Example Environment
 
 ```bash
 export SSH_GATEWAY_PORT=2222
-export API_URL=https://api.daytona.example.com
+export API_URL=https://api.boxlite.example.com
 export API_KEY=your-api-key-here
 ```
 
@@ -82,7 +82,7 @@ docker build -t ssh-gateway .
 
 ```bash
 docker run -p 2222:2222 \
-  -e API_URL=https://api.daytona.example.com \
+  -e API_URL=https://api.boxlite.example.com \
   -e API_KEY=your-api-key-here \
   ssh-gateway
 ```
@@ -92,13 +92,13 @@ docker run -p 2222:2222 \
 - **No password authentication**: Only token-based authentication is supported
 - **No public key authentication**: Public keys are not accepted
 - **Temporary host keys**: The gateway generates new host keys on each startup
-- **Secure token validation**: All tokens are validated against the Daytona API
+- **Secure token validation**: All tokens are validated against the BoxLite API
 - **Runner isolation**: Each connection is isolated to its specific runner
 
 ## Architecture
 
 ```
-SSH Client → SSH Gateway → Daytona API → Runner SSH Gateway
+SSH Client → SSH Gateway → BoxLite API → Runner SSH Gateway
      ↓              ↓           ↓              ↓
   Token Auth   Validate    Get Keypair    SSH Session
 ```

@@ -5,9 +5,9 @@
 package organization
 
 import (
+	"github.com/boxlite-labs/boxlite/cli/views/common"
+	apiclient "github.com/boxlite-labs/boxlite/libs/api-client-go"
 	"github.com/charmbracelet/huh"
-	"github.com/daytonaio/daytona/cli/views/common"
-	apiclient "github.com/daytonaio/daytona/libs/api-client-go"
 )
 
 func GetOrganizationIdFromPrompt(organizationList []apiclient.Organization) (*apiclient.Organization, error) {

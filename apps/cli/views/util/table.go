@@ -10,9 +10,9 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/boxlite-labs/boxlite/cli/views/common"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/lipgloss/table"
-	"github.com/daytonaio/daytona/cli/views/common"
 	"golang.org/x/term"
 )
 

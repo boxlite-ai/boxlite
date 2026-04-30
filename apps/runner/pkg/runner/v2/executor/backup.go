@@ -9,8 +9,8 @@ import (
 	"context"
 	"fmt"
 
-	apiclient "github.com/daytonaio/daytona/libs/api-client-go"
-	"github.com/daytonaio/runner/pkg/api/dto"
+	apiclient "github.com/boxlite-labs/boxlite/libs/api-client-go"
+	"github.com/boxlite-labs/runner/pkg/api/dto"
 )
 
 func (e *Executor) createBackup(ctx context.Context, job *apiclient.Job) (any, error) {

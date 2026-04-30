@@ -13,7 +13,7 @@ import {
 } from '@/contexts/PlaygroundContext'
 import { ProcessCodeExecutionActions } from '@/enums/Playground'
 import { usePlayground } from '@/hooks/usePlayground'
-import { CodeLanguage } from '@daytonaio/sdk'
+import { CodeLanguage } from '@boxlite-labs/sdk'
 import PlaygroundActionForm from '../../ActionForm'
 import StackedInputFormControl from '../../Inputs/StackedInputFormControl'
 

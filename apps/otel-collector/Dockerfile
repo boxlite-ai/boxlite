@@ -46,10 +46,10 @@ RUN apk add --no-cache curl
 
 WORKDIR /usr/local/bin
 
-COPY --from=build /boxlite/dist/apps/otel-collector/daytona-otel-collector daytona-otel-collector
+COPY --from=build /boxlite/dist/apps/otel-collector/boxlite-otel-collector boxlite-otel-collector
 COPY --from=build /boxlite/apps/otel-collector/config.yaml /otelcol/collector-config.yaml
 
-RUN chmod +x daytona-otel-collector
+RUN chmod +x boxlite-otel-collector
 
 HEALTHCHECK CMD [ "curl", "-f", "http://localhost:13133/health/status" ]
 
@@ -58,6 +58,6 @@ EXPOSE 4318
 EXPOSE 13133
 EXPOSE 8888
 
-ENTRYPOINT ["daytona-otel-collector"]
+ENTRYPOINT ["boxlite-otel-collector"]
 
 CMD ["--config", "/otelcol/collector-config.yaml"]

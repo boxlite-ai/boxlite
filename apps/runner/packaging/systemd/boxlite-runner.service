@@ -1,0 +1,40 @@
+[Unit]
+Description=BoxLite Runner Service
+Documentation=https://github.com/boxlite-labs/boxlite
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/var/lib/boxlite/runner
+
+# Binary location
+ExecStart=/opt/boxlite/runner
+
+# Environment file for configuration
+EnvironmentFile=-/etc/boxlite/runner.env
+
+# Restart policy
+Restart=on-failure
+RestartSec=5s
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/boxlite/runner /var/log/boxlite /etc/iptables /tmp
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=4096
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=boxlite-runner
+
+[Install]
+WantedBy=multi-user.target

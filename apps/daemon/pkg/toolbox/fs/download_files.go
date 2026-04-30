@@ -54,7 +54,7 @@ func DownloadFiles(c *gin.Context) {
 		return
 	}
 
-	const boundary = "DAYTONA-FILE-BOUNDARY"
+	const boundary = "BOXLITE-FILE-BOUNDARY"
 	c.Status(http.StatusOK)
 	c.Header("Content-Type", fmt.Sprintf("multipart/form-data; boundary=%s", boundary))
 

@@ -1,9 +1,9 @@
-module github.com/daytonaio/otel-collector/exporter
+module github.com/boxlite-labs/otel-collector/exporter
 
 go 1.25.4
 
 require (
-	github.com/daytonaio/daytona/libs/api-client-go v0.159.0
+	github.com/boxlite-labs/boxlite/libs/api-client-go v0.159.0
 	go.opentelemetry.io/collector/client v1.50.0
 	go.opentelemetry.io/collector/component v1.50.0
 	go.opentelemetry.io/collector/config/configoptional v1.50.0
@@ -59,3 +59,5 @@ require (
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+replace github.com/boxlite-labs/boxlite/libs/api-client-go => ../../api-client-go

@@ -64,6 +64,7 @@ import { SshGatewayGuard } from './guards/ssh-gateway.guard'
 import { EventEmitter2 } from '@nestjs/event-emitter'
 import { SandboxLastActivity } from './entities/sandbox-last-activity.entity'
 import { SandboxActivityService } from './services/sandbox-activity.service'
+import { SandboxStateWaiterService } from './services/sandbox-state-waiter.service'
 
 @Module({
   imports: [
@@ -122,6 +123,7 @@ import { SandboxActivityService } from './services/sandbox-activity.service'
     JobService,
     JobStateHandlerService,
     SandboxActivityService,
+    SandboxStateWaiterService,
     SandboxAccessGuard,
     RunnerAccessGuard,
     RegionRunnerAccessGuard,
@@ -148,6 +150,7 @@ import { SandboxActivityService } from './services/sandbox-activity.service'
     SandboxRepository,
     RunnerAdapterFactory,
     SandboxActivityService,
+    SandboxStateWaiterService,
   ],
 })
 export class SandboxModule {}

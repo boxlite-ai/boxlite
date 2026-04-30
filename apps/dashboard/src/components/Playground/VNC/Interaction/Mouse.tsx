@@ -19,7 +19,7 @@ import {
 } from '@/contexts/PlaygroundContext'
 import { MouseActions, MouseButton, MouseScrollDirection } from '@/enums/Playground'
 import { usePlayground } from '@/hooks/usePlayground'
-import { ComputerUse } from '@daytonaio/sdk'
+import { ComputerUse } from '@boxlite-labs/sdk'
 import React from 'react'
 import PlaygroundActionForm from '../../ActionForm'
 import FormCheckboxInput from '../../Inputs/CheckboxInput'

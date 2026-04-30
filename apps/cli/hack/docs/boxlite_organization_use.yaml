@@ -1,0 +1,9 @@
+name: boxlite organization use
+synopsis: Set active organization
+usage: boxlite organization use [ORGANIZATION] [flags]
+inherited_options:
+  - name: help
+    default_value: 'false'
+    usage: help for boxlite
+see_also:
+  - boxlite organization - Manage BoxLite organizations

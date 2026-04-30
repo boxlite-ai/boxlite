@@ -17,12 +17,12 @@ import (
 
 	"context"
 
-	"github.com/daytonaio/runner/cmd/runner/config"
-	"github.com/daytonaio/runner/pkg/api/dto"
-	"github.com/daytonaio/runner/pkg/runner"
+	"github.com/boxlite-labs/runner/cmd/runner/config"
+	"github.com/boxlite-labs/runner/pkg/api/dto"
+	"github.com/boxlite-labs/runner/pkg/runner"
 	"github.com/gin-gonic/gin"
 
-	common_errors "github.com/daytonaio/common-go/pkg/errors"
+	common_errors "github.com/boxlite-labs/common-go/pkg/errors"
 )
 
 // TagImage godoc
@@ -356,8 +356,8 @@ func GetBuildLogs(logger *slog.Logger) gin.HandlerFunc {
 		checkSnapshotRef := snapshotRef
 
 		// Fixed tag for instances where we are not looking for an entry with snapshot ID
-		if strings.HasPrefix(snapshotRef, "daytona") {
-			checkSnapshotRef = snapshotRef + ":daytona"
+		if strings.HasPrefix(snapshotRef, "boxlite") {
+			checkSnapshotRef = snapshotRef + ":boxlite"
 		}
 
 		flusher, ok := ctx.Writer.(http.Flusher)

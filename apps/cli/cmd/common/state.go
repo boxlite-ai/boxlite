@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"time"
 
-	apiclient_cli "github.com/daytonaio/daytona/cli/apiclient"
-	apiclient "github.com/daytonaio/daytona/libs/api-client-go"
+	apiclient_cli "github.com/boxlite-labs/boxlite/cli/apiclient"
+	apiclient "github.com/boxlite-labs/boxlite/libs/api-client-go"
 )
 
 func AwaitSnapshotState(ctx context.Context, apiClient *apiclient.APIClient, name string, state apiclient.SnapshotState) error {

@@ -1,0 +1,10 @@
+name: boxlite mcp init
+synopsis: |
+  Initialize BoxLite MCP Server with an agent (currently supported: claude, windsurf, cursor)
+usage: boxlite mcp init [AGENT_NAME] [flags]
+inherited_options:
+  - name: help
+    default_value: 'false'
+    usage: help for boxlite
+see_also:
+  - boxlite mcp - Manage BoxLite MCP Server

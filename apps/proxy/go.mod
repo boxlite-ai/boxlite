@@ -1,4 +1,4 @@
-module github.com/daytonaio/proxy
+module github.com/boxlite-labs/proxy
 
 go 1.25.4
 

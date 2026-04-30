@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Sandbox, Region } from '@daytonaio/api-client'
+import { Sandbox, Region } from '@boxlite-labs/api-client'
 import {
   useReactTable,
   getCoreRowModel,

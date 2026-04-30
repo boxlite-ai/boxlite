@@ -14,9 +14,9 @@ import (
 	"syscall"
 	"time"
 
-	common_errors "github.com/daytonaio/common-go/pkg/errors"
+	common_errors "github.com/boxlite-labs/common-go/pkg/errors"
 
-	"github.com/daytonaio/daemon/pkg/common"
+	"github.com/boxlite-labs/daemon/pkg/common"
 	"github.com/gin-gonic/gin"
 )
 

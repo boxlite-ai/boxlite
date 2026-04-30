@@ -5,9 +5,9 @@
 package auth
 
 import (
-	"github.com/daytonaio/daytona/cli/config"
-	"github.com/daytonaio/daytona/cli/internal"
-	"github.com/daytonaio/daytona/cli/views/common"
+	"github.com/boxlite-labs/boxlite/cli/config"
+	"github.com/boxlite-labs/boxlite/cli/internal"
+	"github.com/boxlite-labs/boxlite/cli/views/common"
 	"github.com/spf13/cobra"
 )
 

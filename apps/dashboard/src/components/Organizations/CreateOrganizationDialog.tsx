@@ -6,7 +6,7 @@
 
 import { useState } from 'react'
 import { Check, Copy } from 'lucide-react'
-import { Organization, Region } from '@daytonaio/api-client'
+import { Organization, Region } from '@boxlite-labs/api-client'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,

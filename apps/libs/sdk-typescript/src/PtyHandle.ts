@@ -7,7 +7,7 @@
 import WebSocket from 'isomorphic-ws'
 import { PtyResult } from './types/Pty'
 import { BoxliteError } from './errors/BoxliteError'
-import { PtySessionInfo } from '@daytonaio/toolbox-api-client'
+import { PtySessionInfo } from '@boxlite-labs/toolbox-api-client'
 import { WithInstrumentation } from './utils/otel.decorator'
 
 /**

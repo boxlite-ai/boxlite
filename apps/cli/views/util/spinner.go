@@ -8,10 +8,10 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/boxlite-labs/boxlite/cli/views/common"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/daytonaio/daytona/cli/views/common"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/term"
 )

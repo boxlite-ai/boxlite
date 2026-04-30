@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Sandbox, SandboxState } from '@daytonaio/api-client'
+import { Sandbox, SandboxState } from '@boxlite-labs/api-client'
 
 export function isStartable(sandbox: Sandbox): boolean {
   return sandbox.state === SandboxState.STOPPED || sandbox.state === SandboxState.ARCHIVED

@@ -14,7 +14,7 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/daytonaio/daemon/pkg/toolbox/computeruse"
+	"github.com/boxlite-labs/daemon/pkg/toolbox/computeruse"
 	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/go-plugin"
 )

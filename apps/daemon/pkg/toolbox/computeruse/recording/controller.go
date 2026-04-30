@@ -4,7 +4,7 @@
 package recording
 
 import (
-	"github.com/daytonaio/daemon/pkg/recording"
+	"github.com/boxlite-labs/daemon/pkg/recording"
 )
 
 type RecordingController struct {

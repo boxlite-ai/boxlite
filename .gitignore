@@ -139,3 +139,11 @@ Cargo.lock
 *.dylib.dSYM/
 apps/infra/.sst/
 runner
+
+# New active runner source files must not be hidden by the broad runner ignore.
+!apps/runner/
+!apps/runner/LICENSE
+!apps/runner/NOTICE
+!apps/runner/pkg/
+!apps/runner/pkg/boxlite/
+!apps/runner/pkg/boxlite/volumes.go

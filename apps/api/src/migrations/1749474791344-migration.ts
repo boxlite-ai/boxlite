@@ -84,9 +84,9 @@ export class Migration1749474791344 implements MigrationInterface {
     // Add hideFromUsers column
     await queryRunner.query(`ALTER TABLE "snapshot" ADD "hideFromUsers" boolean NOT NULL DEFAULT false`)
 
-    // Set hideFromUsers to true for general snapshots with names starting with "daytonaio/"
+    // Set hideFromUsers to true for general snapshots with names starting with "boxlite-labs/"
     await queryRunner.query(
-      `UPDATE "snapshot" SET "hideFromUsers" = true WHERE "general" = true AND "name" LIKE 'daytonaio/%'`,
+      `UPDATE "snapshot" SET "hideFromUsers" = true WHERE "general" = true AND "name" LIKE 'boxlite-labs/%'`,
     )
   }
 

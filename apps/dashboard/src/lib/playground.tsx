@@ -5,7 +5,7 @@
  */
 
 import { ReactNode } from 'react'
-import { CodeLanguage } from '@daytonaio/sdk'
+import { CodeLanguage } from '@boxlite-labs/sdk'
 
 export const createErrorMessageOutput = (error: unknown): ReactNode => {
   return (

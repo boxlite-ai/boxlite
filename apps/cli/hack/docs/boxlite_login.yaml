@@ -1,0 +1,12 @@
+name: boxlite login
+synopsis: Log in to BoxLite
+usage: boxlite login [flags]
+options:
+  - name: api-key
+    usage: API key to use for authentication
+inherited_options:
+  - name: help
+    default_value: 'false'
+    usage: help for boxlite
+see_also:
+  - boxlite - BoxLite CLI

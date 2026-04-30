@@ -91,7 +91,7 @@
     "check-version-env": {},
     "docker": {
       "options": {
-        "target": "daytona"
+        "target": "boxlite"
       },
       "dependsOn": [
         {

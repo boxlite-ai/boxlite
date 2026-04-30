@@ -4,23 +4,23 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/daytonaio/runner/pkg/runner"
+	"github.com/boxlite-labs/runner/pkg/runner"
 	"github.com/gin-gonic/gin"
 )
 
 type BoxMetricsResponse struct {
-	CPUPercent          float64 `json:"cpu_percent"`
-	MemoryBytes         int64   `json:"memory_bytes"`
-	CommandsExecuted    int     `json:"commands_executed_total"`
-	ExecErrors          int     `json:"exec_errors_total"`
-	BytesSent           int64   `json:"bytes_sent_total"`
-	BytesReceived       int64   `json:"bytes_received_total"`
-	CreateDurationMs    int64   `json:"create_duration_ms,omitempty"`
-	BootDurationMs      int64   `json:"boot_duration_ms,omitempty"`
-	NetworkBytesSent    int64   `json:"network_bytes_sent,omitempty"`
-	NetworkBytesRecv    int64   `json:"network_bytes_received,omitempty"`
-	NetworkTCPConns     int     `json:"network_tcp_connections,omitempty"`
-	NetworkTCPErrors    int     `json:"network_tcp_errors,omitempty"`
+	CPUPercent       float64 `json:"cpu_percent"`
+	MemoryBytes      int64   `json:"memory_bytes"`
+	CommandsExecuted int     `json:"commands_executed_total"`
+	ExecErrors       int     `json:"exec_errors_total"`
+	BytesSent        int64   `json:"bytes_sent_total"`
+	BytesReceived    int64   `json:"bytes_received_total"`
+	CreateDurationMs int64   `json:"create_duration_ms,omitempty"`
+	BootDurationMs   int64   `json:"boot_duration_ms,omitempty"`
+	NetworkBytesSent int64   `json:"network_bytes_sent,omitempty"`
+	NetworkBytesRecv int64   `json:"network_bytes_received,omitempty"`
+	NetworkTCPConns  int     `json:"network_tcp_connections,omitempty"`
+	NetworkTCPErrors int     `json:"network_tcp_errors,omitempty"`
 }
 
 func BoxliteMetrics(ctx *gin.Context) {

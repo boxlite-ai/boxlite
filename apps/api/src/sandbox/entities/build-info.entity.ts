@@ -13,7 +13,7 @@ export function generateBuildInfoHash(dockerfileContent: string, contextHashes: 
   const sortedContextHashes = [...contextHashes].sort() || []
   const combined = dockerfileContent + sortedContextHashes.join('')
   const hash = createHash('sha256').update(combined).digest('hex')
-  return 'daytona-' + hash + ':daytona'
+  return 'boxlite-' + hash + ':boxlite'
 }
 
 @Entity()

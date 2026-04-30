@@ -1,10 +1,10 @@
-module github.com/daytonaio/daytona/cli
+module github.com/boxlite-labs/boxlite/cli
 
 go 1.25.4
 
 require (
+	github.com/boxlite-labs/boxlite/libs/api-client-go v0.159.0
 	github.com/charmbracelet/bubbletea v1.1.0
-	github.com/daytonaio/daytona/libs/api-client-go v0.159.0
 	github.com/docker/docker v28.5.2+incompatible
 	github.com/mark3labs/mcp-go v0.32.0
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c
@@ -98,3 +98,5 @@ require (
 	golang.org/x/term v0.40.0
 	gopkg.in/yaml.v2 v2.4.0
 )
+
+replace github.com/boxlite-labs/boxlite/libs/api-client-go => ../api-client-go

@@ -8,13 +8,13 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/daytonaio/runner/pkg/api/dto"
-	"github.com/daytonaio/runner/pkg/common"
-	"github.com/daytonaio/runner/pkg/models/enums"
-	"github.com/daytonaio/runner/pkg/runner"
+	"github.com/boxlite-labs/runner/pkg/api/dto"
+	"github.com/boxlite-labs/runner/pkg/common"
+	"github.com/boxlite-labs/runner/pkg/models/enums"
+	"github.com/boxlite-labs/runner/pkg/runner"
 	"github.com/gin-gonic/gin"
 
-	common_errors "github.com/daytonaio/common-go/pkg/errors"
+	common_errors "github.com/boxlite-labs/common-go/pkg/errors"
 )
 
 // Create 			godoc

@@ -4,7 +4,7 @@
 
 package tools
 
-import "github.com/daytonaio/daytona/cli/apiclient"
+import "github.com/boxlite-labs/boxlite/cli/apiclient"
 
 var boxliteMCPHeaders map[string]string = map[string]string{
 	apiclient.BoxliteSourceHeader: "boxlite-mcp",

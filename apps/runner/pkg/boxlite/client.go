@@ -12,26 +12,45 @@ import (
 	"io"
 	"log/slog"
 	"sync"
+	"time"
 
 	boxlite "github.com/boxlite-ai/boxlite/sdks/go"
-	"github.com/daytonaio/runner/pkg/api/dto"
-	"github.com/daytonaio/runner/pkg/models/enums"
+	"github.com/boxlite-labs/runner/pkg/api/dto"
+	"github.com/boxlite-labs/runner/pkg/models/enums"
+	"github.com/containerd/errdefs"
 )
 
 // Client wraps the BoxLite Go SDK to provide the same interface as the Docker client.
 // It manages VMs instead of containers, providing hardware-level isolation.
 type Client struct {
-	runtime *boxlite.Runtime
-	logger  *slog.Logger
-	mu      sync.RWMutex
-	boxes   map[string]*boxlite.Box
+	runtime            *boxlite.Runtime
+	logger             *slog.Logger
+	insecureRegistries []string
+	mu                 sync.RWMutex
+	boxes              map[string]*boxlite.Box
+	awsRegion          string
+	awsEndpointUrl     string
+	awsAccessKeyId     string
+	awsSecretAccessKey string
+	volumeMutexes      map[string]*sync.Mutex
+	volumeMutexesMutex sync.Mutex
+	volumeCleanupMutex sync.Mutex
+	lastVolumeCleanup  time.Time
+	volumeCleanup      volumeCleanupConfig
 }
 
 // ClientConfig holds configuration for the BoxLite client.
 type ClientConfig struct {
-	Logger              *slog.Logger
-	HomeDir             string
-	InsecureRegistries  []string
+	Logger                       *slog.Logger
+	HomeDir                      string
+	InsecureRegistries           []string
+	AWSRegion                    string
+	AWSEndpointUrl               string
+	AWSAccessKeyId               string
+	AWSSecretAccessKey           string
+	VolumeCleanupInterval        time.Duration
+	VolumeCleanupDryRun          bool
+	VolumeCleanupExclusionPeriod time.Duration
 }
 
 // NewClient creates a new BoxLite client backed by the BoxLite VM runtime.
@@ -55,9 +74,20 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 	}
 
 	return &Client{
-		runtime: rt,
-		logger:  logger,
-		boxes:   make(map[string]*boxlite.Box),
+		runtime:            rt,
+		logger:             logger,
+		insecureRegistries: normalizeRegistryHosts(config.InsecureRegistries),
+		boxes:              make(map[string]*boxlite.Box),
+		awsRegion:          config.AWSRegion,
+		awsEndpointUrl:     config.AWSEndpointUrl,
+		awsAccessKeyId:     config.AWSAccessKeyId,
+		awsSecretAccessKey: config.AWSSecretAccessKey,
+		volumeMutexes:      make(map[string]*sync.Mutex),
+		volumeCleanup: volumeCleanupConfig{
+			interval:        config.VolumeCleanupInterval,
+			dryRun:          config.VolumeCleanupDryRun,
+			exclusionPeriod: config.VolumeCleanupExclusionPeriod,
+		},
 	}, nil
 }
 
@@ -106,9 +136,18 @@ func (c *Client) Create(ctx context.Context, sandboxDto dto.CreateSandboxDTO) (s
 		opts = append(opts, boxlite.WithEntrypoint(sandboxDto.Entrypoint...))
 	}
 
-	for _, vol := range sandboxDto.Volumes {
-		hostPath := fmt.Sprintf("/volumes/%s", vol.VolumeId)
-		opts = append(opts, boxlite.WithVolume(hostPath, vol.MountPath))
+	volumeMounts, err := c.getVolumeMounts(ctx, sandboxDto.Volumes)
+	if err != nil {
+		return "", "", err
+	}
+	for _, vol := range volumeMounts {
+		opts = append(opts, boxlite.WithVolume(vol.hostPath, vol.mountPath))
+	}
+
+	if len(volumeMounts) > 0 {
+		if err := c.recordSandboxVolumeMounts(ctx, sandboxDto.Id, volumeMounts); err != nil {
+			return "", "", err
+		}
 	}
 
 	if sandboxDto.NetworkBlockAll != nil && *sandboxDto.NetworkBlockAll {
@@ -121,6 +160,11 @@ func (c *Client) Create(ctx context.Context, sandboxDto dto.CreateSandboxDTO) (s
 
 	bx, err := c.runtime.Create(ctx, sandboxDto.Snapshot, opts...)
 	if err != nil {
+		if len(volumeMounts) > 0 {
+			if cleanupErr := c.removeSandboxVolumeMountRecord(ctx, sandboxDto.Id); cleanupErr != nil {
+				c.logger.WarnContext(ctx, "failed to remove sandbox volume mount record after create failure", "sandbox", sandboxDto.Id, "error", cleanupErr)
+			}
+		}
 		return "", "", fmt.Errorf("failed to create box: %w", err)
 	}
 
@@ -142,6 +186,10 @@ func (c *Client) Create(ctx context.Context, sandboxDto dto.CreateSandboxDTO) (s
 
 // Start starts a stopped sandbox and returns the daemon version.
 func (c *Client) Start(ctx context.Context, sandboxId string, authToken *string, metadata map[string]string) (string, error) {
+	if err := c.ensureVolumeMountsFromMetadata(ctx, sandboxId, metadata); err != nil {
+		c.logger.ErrorContext(ctx, "failed to ensure volume FUSE mounts", "error", err)
+	}
+
 	bx, err := c.getOrFetchBox(ctx, sandboxId)
 	if err != nil {
 		return "", err
@@ -176,7 +224,16 @@ func (c *Client) Destroy(ctx context.Context, sandboxId string) error {
 	}
 	c.mu.Unlock()
 
-	return c.runtime.ForceRemove(ctx, sandboxId)
+	if err := c.runtime.ForceRemove(ctx, sandboxId); err != nil {
+		return err
+	}
+
+	if err := c.removeSandboxVolumeMountRecord(ctx, sandboxId); err != nil {
+		c.logger.WarnContext(ctx, "failed to remove sandbox volume mount record", "sandbox", sandboxId, "error", err)
+	}
+	c.CleanupOrphanedVolumeMounts(ctx)
+
+	return nil
 }
 
 // GetSandboxState returns the current state of a sandbox.
@@ -259,10 +316,9 @@ func (c *Client) PullImage(ctx context.Context, imageName string) error {
 }
 
 // RemoveImage removes a cached image.
-// BoxLite does not yet support image removal; this is a no-op.
 func (c *Client) RemoveImage(ctx context.Context, imageName string, force bool) error {
 	c.logger.Warn("remove image not yet implemented in BoxLite", "image", imageName)
-	return nil
+	return errdefs.ErrNotImplemented.WithMessage("image removal is not supported by the BoxLite Go SDK")
 }
 
 // ImageExists checks if an image is cached locally.

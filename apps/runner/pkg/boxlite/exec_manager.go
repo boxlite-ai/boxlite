@@ -26,6 +26,7 @@ type ManagedExec struct {
 	Done     chan struct{}
 	ExitCode int
 	Err      error
+	TTY      bool
 	created  time.Time
 }
 
@@ -46,6 +47,7 @@ func (m *ExecManager) Start(ctx context.Context, bx *boxlite.Box, command string
 		StdoutR: stdoutR,
 		StderrR: stderrR,
 		Done:    make(chan struct{}),
+		TTY:     tty,
 		created: time.Now(),
 	}
 

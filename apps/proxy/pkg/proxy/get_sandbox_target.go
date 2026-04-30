@@ -14,9 +14,9 @@ import (
 	"strings"
 	"time"
 
-	common_errors "github.com/daytonaio/common-go/pkg/errors"
-	"github.com/daytonaio/common-go/pkg/utils"
-	apiclient "github.com/daytonaio/daytona/libs/api-client-go"
+	apiclient "github.com/boxlite-labs/boxlite/libs/api-client-go"
+	common_errors "github.com/boxlite-labs/common-go/pkg/errors"
+	"github.com/boxlite-labs/common-go/pkg/utils"
 	"github.com/gin-gonic/gin"
 
 	log "github.com/sirupsen/logrus"

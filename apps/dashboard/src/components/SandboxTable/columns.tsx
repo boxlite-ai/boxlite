@@ -5,7 +5,7 @@
  */
 
 import { formatTimestamp, getRelativeTimeString } from '@/lib/utils'
-import { Sandbox, SandboxDesiredState, SandboxState } from '@daytonaio/api-client'
+import { Sandbox, SandboxDesiredState, SandboxState } from '@boxlite-labs/api-client'
 import { ColumnDef } from '@tanstack/react-table'
 import { ArrowDown, ArrowUp } from 'lucide-react'
 import React from 'react'

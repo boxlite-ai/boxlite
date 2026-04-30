@@ -2,7 +2,7 @@
 
 > **Based on [Daytona](https://github.com/daytonaio/daytona)** by Daytona
 > Platforms Inc., licensed under AGPL-3.0. This infrastructure configuration
-> is a modified deployment of the Daytona control plane, rebranded as BoxLite.
+> is a modified deployment of the BoxLite control plane, rebranded as BoxLite.
 > See the project root `LICENSE` file and individual source file headers for
 > full license terms.
 
@@ -63,16 +63,9 @@ The stack delegates all authentication to an external OIDC provider. For Auth0:
 1. **SPA Application** — create in Auth0, set callback/logout URLs to `https://<STACK_DOMAIN>`
 2. **Custom API** — identifier becomes `OIDC_AUDIENCE` (e.g. `https://dev.boxlite.ai/api`)
 3. **Post-Login Action** — Auth0 access_tokens don't include `email_verified` by default;
-   without it Daytona suspends the user's organization. Add this Action:
-   ```js
-   exports.onExecutePostLogin = async (event, api) => {
-     if (event.authorization) {
-       api.accessToken.setCustomClaim('email_verified', event.user.email_verified);
-       api.accessToken.setCustomClaim('email', event.user.email);
-       api.accessToken.setCustomClaim('name', event.user.name);
-     }
-   };
-   ```
+   without it BoxLite suspends the user's organization. Use
+   `functions/auth0/setCustomClaims.onExecutePostLogin.js`, copied from upstream BoxLite
+   with its AGPL-3.0 SPDX header preserved.
    Deploy → Actions → Flows → Login → drag onto flow → Apply.
 4. **Machine-to-Machine app** (optional, for account linking) — authorize for Auth0 Management API
    with permissions: `read:users`, `update:users`, `read:connections`,

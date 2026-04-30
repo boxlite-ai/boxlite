@@ -12,9 +12,9 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/daytonaio/snapshot-manager/internal/config"
-	"github.com/daytonaio/snapshot-manager/internal/logger"
-	"github.com/daytonaio/snapshot-manager/internal/server"
+	"github.com/boxlite-labs/snapshot-manager/internal/config"
+	"github.com/boxlite-labs/snapshot-manager/internal/logger"
+	"github.com/boxlite-labs/snapshot-manager/internal/server"
 )
 
 func main() {

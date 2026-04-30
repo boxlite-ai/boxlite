@@ -1,8 +1,8 @@
 {
   "swagger": "2.0",
   "info": {
-    "description": "Daytona Runner API",
-    "title": "Daytona Runner API",
+    "description": "BoxLite Runner API",
+    "title": "BoxLite Runner API",
     "contact": {},
     "version": "v0.0.0-dev"
   },

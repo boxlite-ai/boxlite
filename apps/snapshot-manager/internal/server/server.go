@@ -12,7 +12,7 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/daytonaio/snapshot-manager/internal"
+	"github.com/boxlite-labs/snapshot-manager/internal"
 	"github.com/distribution/distribution/v3/configuration"
 	_ "github.com/distribution/distribution/v3/registry/auth/htpasswd"
 	"github.com/distribution/distribution/v3/registry/handlers"

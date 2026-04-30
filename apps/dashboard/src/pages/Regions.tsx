@@ -13,7 +13,7 @@ import {
   CreateRegionResponse,
   SnapshotManagerCredentials,
   UpdateRegion,
-} from '@daytonaio/api-client'
+} from '@boxlite-labs/api-client'
 import { RegionTable } from '@/components/RegionTable'
 import { CreateRegionDialog } from '@/components/CreateRegionDialog'
 import { UpdateRegionDialog } from '@/components/UpdateRegionDialog'

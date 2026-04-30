@@ -11,11 +11,11 @@ import (
 	"log/slog"
 	"time"
 
-	apiclient "github.com/daytonaio/daytona/libs/api-client-go"
-	"github.com/daytonaio/runner/internal"
-	"github.com/daytonaio/runner/internal/metrics"
-	runnerapiclient "github.com/daytonaio/runner/pkg/apiclient"
-	blclient "github.com/daytonaio/runner/pkg/boxlite"
+	apiclient "github.com/boxlite-labs/boxlite/libs/api-client-go"
+	"github.com/boxlite-labs/runner/internal"
+	"github.com/boxlite-labs/runner/internal/metrics"
+	runnerapiclient "github.com/boxlite-labs/runner/pkg/apiclient"
+	blclient "github.com/boxlite-labs/runner/pkg/boxlite"
 )
 
 type HealthcheckServiceConfig struct {

@@ -9,7 +9,7 @@
       "executor": "@nx-go/nx-go:build",
       "inputs": ["goProduction"],
       "options": {
-        "main": "github.com/daytonaio/ssh-gateway",
+        "main": "github.com/boxlite-labs/ssh-gateway",
         "outputPath": "dist/apps/ssh-gateway"
       },
       "configurations": {
@@ -21,7 +21,7 @@
       "options": {
         "cmd": "gow",
         "cwd": ".",
-        "main": "github.com/daytonaio/ssh-gateway"
+        "main": "github.com/boxlite-labs/ssh-gateway"
       },
       "configurations": {
         "production": {}

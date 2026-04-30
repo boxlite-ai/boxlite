@@ -2,13 +2,13 @@
 set -e
 
 # Stop the service if it's running
-if systemctl is-active --quiet daytona-runner.service; then
-    systemctl stop daytona-runner.service
+if systemctl is-active --quiet boxlite-runner.service; then
+    systemctl stop boxlite-runner.service
 fi
 
 # Disable the service
-if systemctl is-enabled --quiet daytona-runner.service; then
-    systemctl disable daytona-runner.service
+if systemctl is-enabled --quiet boxlite-runner.service; then
+    systemctl disable boxlite-runner.service
 fi
 
 exit 0

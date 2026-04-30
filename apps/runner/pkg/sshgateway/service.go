@@ -13,7 +13,7 @@ import (
 	"net"
 	"time"
 
-	blclient "github.com/daytonaio/runner/pkg/boxlite"
+	blclient "github.com/boxlite-labs/runner/pkg/boxlite"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -29,7 +29,7 @@ func NewService(logger *slog.Logger, boxlite *blclient.Client) *Service {
 	service := &Service{
 		log:     logger.With(slog.String("component", "ssh_gateway_service")),
 		boxlite: boxlite,
-		port:         port,
+		port:    port,
 	}
 
 	return service

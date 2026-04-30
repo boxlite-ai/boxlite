@@ -208,8 +208,11 @@ export default $config({
     // ephemeral container disk.
     const snapshotManager = new sst.aws.Service("SnapshotManager", {
       cluster,
-      image: { context: "../..", dockerfile: "apps/snapshot-manager/Dockerfile" },
-      loadBalancer: { rules: [{ listen: "80/http", forward: `${PORTS.SNAPSHOT_MANAGER}/http` }] },
+      image: { context: "../..", dockerfile: "apps/snapshot-manager/Dockerfile", cache: false },
+      loadBalancer: {
+        rules: [{ listen: "80/http", forward: `${PORTS.SNAPSHOT_MANAGER}/http` }],
+        health: { [`${PORTS.SNAPSHOT_MANAGER}/http`]: httpHealth("/healthz") },
+      },
       environment: {
         SNAPSHOT_MANAGER_STORAGE_DRIVER: "s3",
         SNAPSHOT_MANAGER_STORAGE_S3_REGION: REGION,
@@ -225,7 +228,12 @@ export default $config({
     // ─── 6. API (NestJS control plane) ───────────────────────────────────────
     const api = new sst.aws.Service("Api", {
       cluster,
-      image: { context: "../..", dockerfile: "apps/api/Dockerfile", cacheFrom: [], cacheTo: [], args: { CACHE_BUST: Date.now().toString() } },
+      image: {
+        context: "../..",
+        dockerfile: "apps/api/Dockerfile",
+        cache: false,
+        args: { CACHE_BUST: Date.now().toString() },
+      },
       loadBalancer: {
         domain: serviceDomain("api"),
         rules: [{ listen: "443/https", forward: `${PORTS.API}/http` }],
@@ -330,7 +338,7 @@ export default $config({
     const proxyDomain = `proxy.${stackDomain}`;
     new sst.aws.Service("Proxy", {
       cluster,
-      image: { context: "../..", dockerfile: "apps/proxy/Dockerfile" },
+      image: { context: "../..", dockerfile: "apps/proxy/Dockerfile", cache: false },
       loadBalancer: {
         domain: {
           name: proxyDomain,
@@ -355,7 +363,7 @@ export default $config({
     // SSH Gateway: `ssh <sandbox>@gateway:2222` proxies to the sandbox.
     new sst.aws.Service("SshGateway", {
       cluster,
-      image: { context: "../..", dockerfile: "apps/ssh-gateway/Dockerfile" },
+      image: { context: "../..", dockerfile: "apps/ssh-gateway/Dockerfile", cache: false },
       loadBalancer: { rules: [{ listen: `${PORTS.SSH_GATEWAY}/tcp`, forward: `${PORTS.SSH_GATEWAY}/tcp` }] },
       environment: {
         API_URL: api.url,
@@ -378,7 +386,7 @@ export default $config({
     // Placeholder CLICKHOUSE_* env vars keep config.yaml parsing clean.
     new sst.aws.Service("OtelCollector", {
       cluster,
-      image: { context: "../..", dockerfile: "apps/otel-collector/Dockerfile" },
+      image: { context: "../..", dockerfile: "apps/otel-collector/Dockerfile", cache: false },
       command: [
         "--config", "/otelcol/collector-config.yaml",
         "--set", "service::pipelines::traces::exporters=[boxlite_exporter]",
@@ -391,8 +399,9 @@ export default $config({
           { listen: "80/http", forward: `${PORTS.OTEL_HEALTH}/http` },
         ],
         health: {
-          // GET / on OTLP HTTP returns 405 Method Not Allowed — accept it.
-          [`${PORTS.OTLP_HTTP}/http`]: httpHealth("/", { successCodes: "405" }),
+          // The OTLP HTTP receiver returns a client-error status for a bare
+          // health-check GET, which still proves the receiver is listening.
+          [`${PORTS.OTLP_HTTP}/http`]: httpHealth("/", { successCodes: "200-499" }),
           [`${PORTS.OTEL_HEALTH}/http`]: httpHealth("/health/status"),
         },
       },
@@ -407,7 +416,10 @@ export default $config({
     new sst.aws.Service("PgAdmin", {
       cluster,
       image: IMAGES.pgadmin,
-      loadBalancer: { rules: [{ listen: "80/http", forward: `${PORTS.PGADMIN}/http` }] },
+      loadBalancer: {
+        rules: [{ listen: "80/http", forward: `${PORTS.PGADMIN}/http` }],
+        health: { [`${PORTS.PGADMIN}/http`]: httpHealth("/", { successCodes: "200-399" }) },
+      },
       environment: {
         PGADMIN_DEFAULT_EMAIL: "admin@boxlite.dev",
         PGADMIN_DEFAULT_PASSWORD: pgAdminPassword.result,

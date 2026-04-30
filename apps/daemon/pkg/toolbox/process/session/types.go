@@ -4,7 +4,7 @@
 
 package session
 
-import "github.com/daytonaio/daemon/pkg/session"
+import "github.com/boxlite-labs/daemon/pkg/session"
 
 type CreateSessionRequest struct {
 	SessionId string `json:"sessionId" validate:"required"`
