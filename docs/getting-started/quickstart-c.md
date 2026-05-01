@@ -164,11 +164,17 @@ int main() {
     // Execute commands with streaming output
     int exit_code = 0;
     const char* args[] = {"-la", "/"};
+    BoxliteCommand cmd = {.command = "/bin/ls", .args = args, .argc = 2};
+    CExecutionHandle* execution = NULL;
 
     printf("\n--- Running: ls -la / ---\n");
-    if (boxlite_execute(box, "/bin/ls", args, 2, output_callback, NULL, &exit_code, &error) == Ok) {
-        printf("\nExit code: %d\n", exit_code);
-    } else {
+    if (boxlite_execute(box, &cmd, output_callback, NULL, &execution, &error) == Ok) {
+        if (boxlite_execution_wait(execution, &exit_code, &error) == Ok) {
+            printf("\nExit code: %d\n", exit_code);
+        }
+        boxlite_execution_free(execution);
+    }
+    if (error.code != Ok) {
         fprintf(stderr, "Execute error: %s\n", error.message);
         boxlite_error_free(&error);
     }

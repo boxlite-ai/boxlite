@@ -57,8 +57,8 @@ int main(void) {
   const char *const echo_args[] = {"test"};
   int exit_code = 0;
   for (int i = 0; i < 5; i++) {
-    boxlite_execute(box, "/bin/echo", echo_args, 1, NULL, NULL, &exit_code,
-                    &error);
+    execute_and_wait(box, "/bin/echo", echo_args, 1, NULL, NULL, &exit_code,
+                     &error);
   }
 
   printf("Runtime metrics after commands:\n");
@@ -69,8 +69,8 @@ int main(void) {
   printf("\nMetric samples:\n");
   const char *const uname_args[] = {"-a"};
   for (int i = 0; i < 3; i++) {
-    boxlite_execute(box, "/bin/uname", uname_args, 1, NULL, NULL, &exit_code,
-                    &error);
+    execute_and_wait(box, "/bin/uname", uname_args, 1, NULL, NULL, &exit_code,
+                     &error);
     printf("sample %d: ", i + 1);
     print_box_metrics(box);
     sleep(1);

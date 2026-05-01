@@ -225,7 +225,7 @@ void test_mixed_operations() {
     // Execute command
     const char *const args[] = {"test"};
     int exit_code = 0;
-    boxlite_execute(box, "/bin/echo", args, 1, NULL, NULL, &exit_code, &error);
+    test_execute(box, "/bin/echo", args, 1, NULL, NULL, &exit_code, &error);
 
     // Get ID and remove
     char *id = boxlite_box_id(box);

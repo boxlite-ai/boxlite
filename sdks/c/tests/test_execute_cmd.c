@@ -1,7 +1,7 @@
 /**
  * BoxLite C SDK - Execute Cmd Tests
  *
- * Tests the boxlite_execute_cmd() function with BoxliteCommand struct,
+ * Tests the test_execute_cmd() function with BoxliteCommand struct,
  * covering workdir, env, user, and timeout options.
  */
 
@@ -57,7 +57,7 @@ static void cleanup_box(CBoxliteRuntime *runtime, CBoxHandle *box) {
 /* ── Tests ───────────────────────────────────────────────────────────── */
 
 void test_execute_cmd_basic(void) {
-  printf("\nTEST: boxlite_execute_cmd basic (command + args)\n");
+  printf("\nTEST: boxlite_execute basic (command + args)\n");
 
   CBoxliteRuntime *runtime = NULL;
   CBoxHandle *box = NULL;
@@ -76,8 +76,8 @@ void test_execute_cmd_basic(void) {
   reset_capture();
   int exit_code = -1;
   CBoxliteError error = {0};
-  BoxliteErrorCode code = boxlite_execute_cmd(
-      box, &cmd, capture_stdout_callback, NULL, &exit_code, &error);
+  BoxliteErrorCode code = test_execute_cmd(box, &cmd, capture_stdout_callback,
+                                           NULL, &exit_code, &error);
 
   if (code != Ok) {
     printf("  ✗ Error executing command: code=%d, message=%s\n", error.code,
@@ -94,7 +94,7 @@ void test_execute_cmd_basic(void) {
 }
 
 void test_execute_cmd_with_workdir(void) {
-  printf("\nTEST: boxlite_execute_cmd with workdir\n");
+  printf("\nTEST: boxlite_execute with workdir\n");
 
   CBoxliteRuntime *runtime = NULL;
   CBoxHandle *box = NULL;
@@ -112,8 +112,8 @@ void test_execute_cmd_with_workdir(void) {
   reset_capture();
   int exit_code = -1;
   CBoxliteError error = {0};
-  BoxliteErrorCode code = boxlite_execute_cmd(
-      box, &cmd, capture_stdout_callback, NULL, &exit_code, &error);
+  BoxliteErrorCode code = test_execute_cmd(box, &cmd, capture_stdout_callback,
+                                           NULL, &exit_code, &error);
 
   if (code != Ok) {
     printf("  ✗ Error executing command: code=%d, message=%s\n", error.code,
@@ -129,7 +129,7 @@ void test_execute_cmd_with_workdir(void) {
 }
 
 void test_execute_cmd_with_env(void) {
-  printf("\nTEST: boxlite_execute_cmd with env\n");
+  printf("\nTEST: boxlite_execute with env\n");
 
   CBoxliteRuntime *runtime = NULL;
   CBoxHandle *box = NULL;
@@ -148,8 +148,8 @@ void test_execute_cmd_with_env(void) {
   reset_capture();
   int exit_code = -1;
   CBoxliteError error = {0};
-  BoxliteErrorCode code = boxlite_execute_cmd(
-      box, &cmd, capture_stdout_callback, NULL, &exit_code, &error);
+  BoxliteErrorCode code = test_execute_cmd(box, &cmd, capture_stdout_callback,
+                                           NULL, &exit_code, &error);
 
   if (code != Ok) {
     printf("  ✗ Error executing command: code=%d, message=%s\n", error.code,
@@ -165,7 +165,7 @@ void test_execute_cmd_with_env(void) {
 }
 
 void test_execute_cmd_with_user(void) {
-  printf("\nTEST: boxlite_execute_cmd with user\n");
+  printf("\nTEST: boxlite_execute with user\n");
 
   CBoxliteRuntime *runtime = NULL;
   CBoxHandle *box = NULL;
@@ -183,8 +183,8 @@ void test_execute_cmd_with_user(void) {
   reset_capture();
   int exit_code = -1;
   CBoxliteError error = {0};
-  BoxliteErrorCode code = boxlite_execute_cmd(
-      box, &cmd, capture_stdout_callback, NULL, &exit_code, &error);
+  BoxliteErrorCode code = test_execute_cmd(box, &cmd, capture_stdout_callback,
+                                           NULL, &exit_code, &error);
 
   if (code != Ok) {
     printf("  ✗ Error executing command: code=%d, message=%s\n", error.code,
@@ -200,7 +200,7 @@ void test_execute_cmd_with_user(void) {
 }
 
 void test_execute_cmd_with_timeout(void) {
-  printf("\nTEST: boxlite_execute_cmd with timeout\n");
+  printf("\nTEST: boxlite_execute with timeout\n");
 
   CBoxliteRuntime *runtime = NULL;
   CBoxHandle *box = NULL;
@@ -219,7 +219,7 @@ void test_execute_cmd_with_timeout(void) {
   int exit_code = 0;
   CBoxliteError error = {0};
   BoxliteErrorCode code =
-      boxlite_execute_cmd(box, &cmd, NULL, NULL, &exit_code, &error);
+      test_execute_cmd(box, &cmd, NULL, NULL, &exit_code, &error);
 
   /* Timeout may cause non-zero exit or an execution error */
   if (code == Ok) {
@@ -234,7 +234,7 @@ void test_execute_cmd_with_timeout(void) {
 }
 
 void test_execute_cmd_null_optional_fields(void) {
-  printf("\nTEST: boxlite_execute_cmd with all optional fields NULL\n");
+  printf("\nTEST: boxlite_execute with all optional fields NULL\n");
 
   CBoxliteRuntime *runtime = NULL;
   CBoxHandle *box = NULL;
@@ -252,8 +252,8 @@ void test_execute_cmd_null_optional_fields(void) {
   reset_capture();
   int exit_code = -1;
   CBoxliteError error = {0};
-  BoxliteErrorCode code = boxlite_execute_cmd(
-      box, &cmd, capture_stdout_callback, NULL, &exit_code, &error);
+  BoxliteErrorCode code = test_execute_cmd(box, &cmd, capture_stdout_callback,
+                                           NULL, &exit_code, &error);
 
   if (code != Ok) {
     printf("  ✗ Error executing command: code=%d, message=%s\n", error.code,

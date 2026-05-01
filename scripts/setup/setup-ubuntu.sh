@@ -36,10 +36,20 @@ apt_installed() {
     dpkg -l "$1" 2>/dev/null | grep -q "^ii"
 }
 
+# Run apt-get with network retry settings. `apt-get update` can otherwise exit
+# successfully after failed index downloads, then package install fails later.
+apt_get() {
+    run_with_sudo apt-get \
+        -o Acquire::Retries="${APT_RETRIES:-5}" \
+        -o Acquire::http::Timeout="${APT_TIMEOUT:-30}" \
+        -o Acquire::https::Timeout="${APT_TIMEOUT:-30}" \
+        "$@"
+}
+
 # Update package lists
 update_apt() {
     print_section "🔄 Updating package lists..."
-    run_with_sudo apt-get update -qq
+    apt_get -o APT::Update::Error-Mode=any update -qq
     echo ""
 }
 
@@ -96,7 +106,7 @@ install_system_deps() {
             print_success "Already installed"
         else
             echo -e "${YELLOW}Installing...${NC}"
-            run_with_sudo apt-get install -y -qq "$pkg"
+            apt_get install -y -qq "$pkg"
             print_success "$pkg installed"
         fi
     done
@@ -128,7 +138,7 @@ install_nodejs() {
             print_success "Already installed"
         else
             echo -e "${YELLOW}Installing...${NC}"
-            run_with_sudo apt-get install -y -qq "$pkg"
+            apt_get install -y -qq "$pkg"
             print_success "$pkg installed"
         fi
     done

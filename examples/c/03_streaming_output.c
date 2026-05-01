@@ -50,7 +50,7 @@ int main(void) {
 
   printf("1. Simple real-time output (ls /bin)\n");
   const char *const list_bin_args[] = {"/bin"};
-  BoxliteErrorCode code = boxlite_execute(
+  BoxliteErrorCode code = execute_and_wait(
       box, "/bin/ls", list_bin_args, 1, realtime_output, NULL, &exit_code,
       &error);
   if (code != Ok) {
@@ -63,8 +63,8 @@ int main(void) {
   OutputStats stats = {0};
   const char *const recursive_args[] = {"-R", "/"};
   exit_code = 0;
-  code = boxlite_execute(box, "/bin/ls", recursive_args, 2, stats_callback,
-                         &stats, &exit_code, &error);
+  code = execute_and_wait(box, "/bin/ls", recursive_args, 2, stats_callback,
+                          &stats, &exit_code, &error);
   if (code != Ok) {
     print_error("ls -R /", &error);
     boxlite_error_free(&error);
@@ -77,8 +77,8 @@ int main(void) {
   const char *const shell_args[] = {
       "-c", "echo 'This is stdout'; echo 'This is stderr' >&2"};
   exit_code = 0;
-  code = boxlite_execute(box, "/bin/sh", shell_args, 2, realtime_output, NULL,
-                         &exit_code, &error);
+  code = execute_and_wait(box, "/bin/sh", shell_args, 2, realtime_output, NULL,
+                          &exit_code, &error);
   if (code != Ok) {
     print_error("sh", &error);
     boxlite_error_free(&error);

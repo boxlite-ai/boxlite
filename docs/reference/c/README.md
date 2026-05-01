@@ -127,13 +127,19 @@ int main() {
     }
     boxlite_options_free(opts);
 
-    // Execute command with streaming output
+    // Start command with streaming output, then wait for completion
     int exit_code = 0;
     const char* args[] = {"-la", "/"};
+    BoxliteCommand cmd = {.command = "/bin/ls", .args = args, .argc = 2};
+    CExecutionHandle* execution = NULL;
 
-    if (boxlite_execute(box, "/bin/ls", args, 2, output_callback, NULL, &exit_code, &error) == Ok) {
-        printf("\nExit code: %d\n", exit_code);
-    } else {
+    if (boxlite_execute(box, &cmd, output_callback, NULL, &execution, &error) == Ok) {
+        if (boxlite_execution_wait(execution, &exit_code, &error) == Ok) {
+            printf("\nExit code: %d\n", exit_code);
+        }
+        boxlite_execution_free(execution);
+    }
+    if (error.code != Ok) {
         fprintf(stderr, "Error: %s\n", error.message);
         boxlite_error_free(&error);
     }
@@ -624,17 +630,27 @@ Safe to call with NULL. Use when you need to release a box handle without freein
 
 #### boxlite_execute
 
-Execute a command with optional streaming output.
+Start a command with optional streaming output and return an execution handle.
 
 ```c
+typedef struct BoxliteCommand {
+    const char* command;      // Required: command to execute
+    const char* const* args;  // Argument array, or NULL
+    int argc;                 // Number of entries in args
+    const char* const* env_pairs; // [key0, value0, key1, value1, ...], or NULL
+    int env_count;            // Number of strings in env_pairs
+    const char* workdir;      // Working directory, or NULL
+    const char* user;         // User spec (e.g., "nobody", "1000:1000"), or NULL
+    double timeout_secs;      // Timeout in seconds (0.0 = no timeout)
+    int tty;                  // 0 = no TTY, non-zero = TTY
+} BoxliteCommand;
+
 BoxliteErrorCode boxlite_execute(
     CBoxHandle* handle,
-    const char* command,
-    const char* const* args,
-    int argc,
+    const BoxliteCommand* cmd,
     void (*callback)(const char* text, int is_stderr, void* user_data),
     void* user_data,
-    int* out_exit_code,
+    CExecutionHandle** out_execution,
     CBoxliteError* out_error
 );
 ```
@@ -644,12 +660,10 @@ BoxliteErrorCode boxlite_execute(
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `handle` | `CBoxHandle*` | Box handle |
-| `command` | `const char*` | Command to execute |
-| `args` | `const char* const*` | Optional array of argument strings |
-| `argc` | `int` | Number of entries in `args` |
+| `cmd` | `const BoxliteCommand*` | Command descriptor |
 | `callback` | function pointer | Optional streaming output callback |
 | `user_data` | `void*` | User data passed to callback |
-| `out_exit_code` | `int*` | Output: command exit code |
+| `out_execution` | `CExecutionHandle**` | Output: execution handle |
 | `out_error` | `CBoxliteError*` | Output: error information |
 
 #### Callback Signature
@@ -674,17 +688,21 @@ void output_handler(const char* text, int is_stderr, void* data) {
 
 int exit_code = 0;
 const char* args[] = {"-c", "print('hello')"};
+BoxliteCommand cmd = {.command = "python", .args = args, .argc = 2};
+CExecutionHandle* execution = NULL;
 BoxliteErrorCode code = boxlite_execute(
     box,
-    "python",
-    args,
-    2,
+    &cmd,
     output_handler,
     NULL,
-    &exit_code,
+    &execution,
     &error
 );
 
+if (code == Ok) {
+    code = boxlite_execution_wait(execution, &exit_code, &error);
+    boxlite_execution_free(execution);
+}
 if (code == Ok) {
     printf("Exit code: %d\n", exit_code);
 }
@@ -692,37 +710,17 @@ if (code == Ok) {
 
 ---
 
-#### boxlite_execute_cmd
-
-Execute a command using a structured command descriptor with all options (env, user, timeout, working directory).
+#### Execution Control
 
 ```c
-BoxliteErrorCode boxlite_execute_cmd(
-    CBoxHandle* handle,
-    const BoxliteCommand* cmd,
-    void (*callback)(const char* text, int is_stderr, void* user_data),
-    void* user_data,
-    int* out_exit_code,
-    CBoxliteError* out_error
-);
+BoxliteErrorCode boxlite_execution_write(CExecutionHandle* execution, const char* data, int len, CBoxliteError* out_error);
+BoxliteErrorCode boxlite_execution_wait(CExecutionHandle* execution, int* out_exit_code, CBoxliteError* out_error);
+BoxliteErrorCode boxlite_execution_kill(CExecutionHandle* execution, CBoxliteError* out_error);
+BoxliteErrorCode boxlite_execution_resize_tty(CExecutionHandle* execution, int rows, int cols, CBoxliteError* out_error);
+void boxlite_execution_free(CExecutionHandle* execution);
 ```
 
-#### BoxliteCommand Structure
-
-```c
-typedef struct BoxliteCommand {
-    const char* command;      // Required: command to execute
-    const char* const* args;  // Argument array, or NULL
-    int argc;                 // Number of entries in args
-    const char* const* env_pairs; // [key0, value0, key1, value1, ...], or NULL
-    int env_count;            // Number of strings in env_pairs
-    const char* workdir;      // Working directory, or NULL
-    const char* user;         // User spec (e.g., "nobody", "1000:1000"), or NULL
-    double timeout_secs;      // Timeout in seconds (0.0 = no timeout)
-} BoxliteCommand;
-```
-
-#### Example
+#### Example: command options
 
 ```c
 const char* args[] = {"-c", "import os; print(os.getcwd())"};
@@ -739,9 +737,13 @@ BoxliteCommand cmd = {
 };
 
 int exit_code = 0;
-BoxliteErrorCode code = boxlite_execute_cmd(
-    box, &cmd, output_handler, NULL, &exit_code, &error
-);
+CExecutionHandle* execution = NULL;
+BoxliteErrorCode code =
+    boxlite_execute(box, &cmd, output_handler, NULL, &execution, &error);
+if (code == Ok) {
+    code = boxlite_execution_wait(execution, &exit_code, &error);
+    boxlite_execution_free(execution);
+}
 ```
 
 ---
@@ -968,7 +970,7 @@ if (code != Ok) {
 
 **v0.1.x:**
 ```c
-int exit_code = boxlite_execute(box, "echo", args, callback, NULL, &error);
+int exit_code = old_execute_api_returning_exit_code(...);
 if (exit_code < 0) {
     // Error
 }
@@ -978,7 +980,14 @@ if (exit_code < 0) {
 ```c
 int exit_code = 0;
 const char* args[] = {"hello"};
-BoxliteErrorCode code = boxlite_execute(box, "echo", args, 1, callback, NULL, &exit_code, &error);
+BoxliteCommand cmd = {.command = "echo", .args = args, .argc = 1};
+CExecutionHandle* execution = NULL;
+BoxliteErrorCode code =
+    boxlite_execute(box, &cmd, callback, NULL, &execution, &error);
+if (code == Ok) {
+    code = boxlite_execution_wait(execution, &exit_code, &error);
+    boxlite_execution_free(execution);
+}
 if (code != Ok) {
     // Error
 }
@@ -1037,7 +1046,12 @@ void output_callback(const char* text, int is_stderr, void* user_data) {
 
 int exit_code = 0;
 const char* args[] = {"-c", "print('hello')"};
-boxlite_execute(box, "python", args, output_callback, NULL, &exit_code, &error);
+BoxliteCommand cmd = {.command = "python", .args = args, .argc = 2};
+CExecutionHandle* execution = NULL;
+if (boxlite_execute(box, &cmd, output_callback, NULL, &execution, &error) == Ok) {
+    boxlite_execution_wait(execution, &exit_code, &error);
+    boxlite_execution_free(execution);
+}
 ```
 
 ### Reattach to Box

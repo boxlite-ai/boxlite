@@ -128,7 +128,12 @@ boxlite_options_free(opts);
 // Execute with streaming callback
 int exit_code = 0;
 const char* args[] = {"-la", "/"};
-boxlite_execute(box, "/bin/ls", args, 2, output_callback, NULL, &exit_code, &error);
+BoxliteCommand cmd = {.command = "/bin/ls", .args = args, .argc = 2};
+CExecutionHandle* execution = NULL;
+if (boxlite_execute(box, &cmd, output_callback, NULL, &execution, &error) == Ok) {
+    boxlite_execution_wait(execution, &exit_code, &error);
+    boxlite_execution_free(execution);
+}
 printf("Exit code: %d\n", exit_code);
 
 boxlite_runtime_free(runtime);
@@ -243,7 +248,12 @@ void counting_callback(const char* text, int is_stderr, void* user_data) {
 }
 
 OutputStats stats = {0};
-boxlite_execute(box, cmd, args, counting_callback, &stats, &exit_code, &error);
+BoxliteCommand cmd = {.command = "/bin/ls", .args = args, .argc = 2};
+CExecutionHandle* execution = NULL;
+if (boxlite_execute(box, &cmd, counting_callback, &stats, &execution, &error) == Ok) {
+    boxlite_execution_wait(execution, &exit_code, &error);
+    boxlite_execution_free(execution);
+}
 printf("Received %d stdout chunks, %d stderr chunks\n",
        stats.stdout_chunks, stats.stderr_chunks);
 ```

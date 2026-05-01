@@ -34,8 +34,8 @@ void test_execute_success() {
   output_callback_called = 0;
 
   int exit_code = 0;
-  code = boxlite_execute(box, "/bin/echo", args, 1, simple_callback, NULL,
-                         &exit_code, &error);
+  code = test_execute(box, "/bin/echo", args, 1, simple_callback, NULL,
+                      &exit_code, &error);
 
   if (code != Ok) {
     printf("  ✗ Error executing command: code=%d, message=%s\n", error.code,
@@ -70,8 +70,7 @@ void test_execute_failure() {
   // Execute: ls /nonexistent (should fail)
   const char *const args[] = {"/nonexistent"};
   int exit_code = 0;
-  code =
-      boxlite_execute(box, "/bin/ls", args, 1, NULL, NULL, &exit_code, &error);
+  code = test_execute(box, "/bin/ls", args, 1, NULL, NULL, &exit_code, &error);
 
   assert(code == Ok);     // API call succeeds
   assert(exit_code != 0); // But command fails
@@ -98,8 +97,7 @@ void test_execute_no_callback() {
 
   // Execute without callback
   int exit_code = 0;
-  code =
-      boxlite_execute(box, "/bin/pwd", NULL, 0, NULL, NULL, &exit_code, &error);
+  code = test_execute(box, "/bin/pwd", NULL, 0, NULL, NULL, &exit_code, &error);
 
   assert(code == Ok);
   assert(exit_code == 0);
@@ -131,18 +129,18 @@ void test_execute_multiple_commands() {
   const char *const args2[] = {"test2"};
   const char *const args3[] = {"test3"};
 
-  code = boxlite_execute(box, "/bin/echo", args1, 1, NULL, NULL, &exit_code,
-                         &error);
+  code =
+      test_execute(box, "/bin/echo", args1, 1, NULL, NULL, &exit_code, &error);
   assert(code == Ok);
   assert(exit_code == 0);
 
-  code = boxlite_execute(box, "/bin/echo", args2, 1, NULL, NULL, &exit_code,
-                         &error);
+  code =
+      test_execute(box, "/bin/echo", args2, 1, NULL, NULL, &exit_code, &error);
   assert(code == Ok);
   assert(exit_code == 0);
 
-  code = boxlite_execute(box, "/bin/echo", args3, 1, NULL, NULL, &exit_code,
-                         &error);
+  code =
+      test_execute(box, "/bin/echo", args3, 1, NULL, NULL, &exit_code, &error);
   assert(code == Ok);
   assert(exit_code == 0);
 
@@ -170,8 +168,7 @@ void test_execute_complex_args() {
   // Execute with multiple arguments
   const char *const args[] = {"-alh", "/"};
   int exit_code = 0;
-  code =
-      boxlite_execute(box, "/bin/ls", args, 2, NULL, NULL, &exit_code, &error);
+  code = test_execute(box, "/bin/ls", args, 2, NULL, NULL, &exit_code, &error);
 
   assert(code == Ok);
   assert(exit_code == 0);
@@ -207,8 +204,8 @@ void test_execute_with_user_data() {
   counter = 0;
   int exit_code = 0;
   const char *const args[] = {"hello"};
-  code = boxlite_execute(box, "/bin/echo", args, 1, user_data_callback,
-                         &counter, &exit_code, &error);
+  code = test_execute(box, "/bin/echo", args, 1, user_data_callback, &counter,
+                      &exit_code, &error);
 
   assert(code == Ok);
   assert(exit_code == 0);

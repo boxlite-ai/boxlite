@@ -26,7 +26,7 @@ int main(void) {
 
   printf("2. Executing hostname...\n");
   int exit_code = 0;
-  BoxliteErrorCode code = boxlite_execute(
+  BoxliteErrorCode code = execute_and_wait(
       box, "/bin/hostname", NULL, 0, NULL, NULL, &exit_code, &error);
   if (code != Ok) {
     print_error("hostname", &error);
@@ -62,8 +62,8 @@ int main(void) {
   printf("5. Executing uname -a...\n");
   const char *const uname_args[] = {"-a"};
   exit_code = 0;
-  code = boxlite_execute(box2, "/bin/uname", uname_args, 1, NULL, NULL,
-                         &exit_code, &error);
+  code = execute_and_wait(box2, "/bin/uname", uname_args, 1, NULL, NULL,
+                          &exit_code, &error);
   if (code != Ok) {
     print_error("uname", &error);
     boxlite_error_free(&error);

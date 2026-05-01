@@ -32,9 +32,8 @@ int main(void) {
   CBoxliteError error = {0};
 
   printf("Command 1: ls -alrt /\n---\n");
-  BoxliteErrorCode code = boxlite_execute(box, "/bin/ls", ls_args, 2,
-                                          output_callback, NULL, &exit_code,
-                                          &error);
+  BoxliteErrorCode code = execute_and_wait(
+      box, "/bin/ls", ls_args, 2, output_callback, NULL, &exit_code, &error);
   if (code != Ok) {
     print_error("ls", &error);
     boxlite_error_free(&error);
@@ -44,8 +43,8 @@ int main(void) {
   printf("Command 2: ip addr\n---\n");
   error = (CBoxliteError){0};
   exit_code = 0;
-  code = boxlite_execute(box, "ip", ip_args, 1, output_callback, NULL,
-                         &exit_code, &error);
+  code = execute_and_wait(box, "ip", ip_args, 1, output_callback, NULL,
+                          &exit_code, &error);
   if (code != Ok) {
     print_error("ip addr", &error);
     boxlite_error_free(&error);
@@ -55,8 +54,8 @@ int main(void) {
   printf("Command 3: env\n---\n");
   error = (CBoxliteError){0};
   exit_code = 0;
-  code = boxlite_execute(box, "/usr/bin/env", NULL, 0, output_callback, NULL,
-                         &exit_code, &error);
+  code = execute_and_wait(box, "/usr/bin/env", NULL, 0, output_callback, NULL,
+                          &exit_code, &error);
   if (code != Ok) {
     print_error("env", &error);
     boxlite_error_free(&error);

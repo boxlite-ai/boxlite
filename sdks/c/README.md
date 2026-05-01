@@ -227,13 +227,23 @@ int main() {
     }
     boxlite_options_free(opts);
 
-    // Execute command with streaming output
+    // Start command with streaming output, then wait for completion
     int exit_code = 0;
     const char* args[] = {"-la", "/"};
+    BoxliteCommand cmd = {
+        .command = "/bin/ls",
+        .args = args,
+        .argc = 2,
+    };
+    CExecutionHandle* execution = NULL;
 
-    if (boxlite_execute(box, "/bin/ls", args, 2, output_callback, NULL, &exit_code, &error) == Ok) {
-        printf("\nExit code: %d\n", exit_code);
-    } else {
+    if (boxlite_execute(box, &cmd, output_callback, NULL, &execution, &error) == Ok) {
+        if (boxlite_execution_wait(execution, &exit_code, &error) == Ok) {
+            printf("\nExit code: %d\n", exit_code);
+        }
+        boxlite_execution_free(execution);
+    }
+    if (error.code != Ok) {
         fprintf(stderr, "Error: %s\n", error.message);
         boxlite_error_free(&error);
     }
@@ -398,19 +408,6 @@ char* boxlite_box_id(CBoxHandle* handle);
 #### Command Execution
 
 ```c
-// Simple: execute command with optional streaming callback
-BoxliteErrorCode boxlite_execute(
-    CBoxHandle* handle,
-    const char* command,
-    const char* const* args,
-    int argc,
-    void (*callback)(const char* text, int is_stderr, void* user_data),
-    void* user_data,
-    int* out_exit_code,
-    CBoxliteError* out_error
-);
-
-// Structured: execute with full options (env, user, timeout, workdir)
 typedef struct BoxliteCommand {
     const char* command;      // Required
     const char* const* args;  // Argument array, or NULL
@@ -420,16 +417,23 @@ typedef struct BoxliteCommand {
     const char* workdir;      // Working directory, or NULL
     const char* user;         // User spec (e.g., "nobody", "1000:1000"), or NULL
     double timeout_secs;      // 0.0 = no timeout
+    int tty;                  // 0 = no TTY, non-zero = TTY
 } BoxliteCommand;
 
-BoxliteErrorCode boxlite_execute_cmd(
+BoxliteErrorCode boxlite_execute(
     CBoxHandle* handle,
     const BoxliteCommand* cmd,
     void (*callback)(const char* text, int is_stderr, void* user_data),
     void* user_data,
-    int* out_exit_code,
+    CExecutionHandle** out_execution,
     CBoxliteError* out_error
 );
+
+BoxliteErrorCode boxlite_execution_write(CExecutionHandle* execution, const char* data, int len, CBoxliteError* out_error);
+BoxliteErrorCode boxlite_execution_wait(CExecutionHandle* execution, int* out_exit_code, CBoxliteError* out_error);
+BoxliteErrorCode boxlite_execution_kill(CExecutionHandle* execution, CBoxliteError* out_error);
+BoxliteErrorCode boxlite_execution_resize_tty(CExecutionHandle* execution, int rows, int cols, CBoxliteError* out_error);
+void boxlite_execution_free(CExecutionHandle* execution);
 ```
 
 **Example: structured command with options**
@@ -446,8 +450,12 @@ BoxliteCommand cmd = {
     .user = "nobody",
     .timeout_secs = 30.0,
 };
+CExecutionHandle* execution = NULL;
 int exit_code;
-boxlite_execute_cmd(box, &cmd, my_callback, NULL, &exit_code, &error);
+if (boxlite_execute(box, &cmd, my_callback, NULL, &execution, &error) == Ok) {
+    boxlite_execution_wait(execution, &exit_code, &error);
+    boxlite_execution_free(execution);
+}
 ```
 
 #### Discovery & Introspection
@@ -727,10 +735,10 @@ CBoxHandle* box = NULL;
 boxlite_create_box(runtime, opts, &box, &error);
 
 // Thread 1
-boxlite_execute(box, ...);  // UNSAFE
+boxlite_execute(box, &cmd1, ...);  // UNSAFE
 
 // Thread 2
-boxlite_execute(box, ...);  // UNSAFE
+boxlite_execute(box, &cmd2, ...);  // UNSAFE
 ```
 
 **Safe: Per-thread boxes**
@@ -745,7 +753,12 @@ void* thread_func(void* arg) {
     boxlite_options_free(opts);
     int exit_code = 0;
     const char* args[] = {"hello"};
-    boxlite_execute(box, "/bin/echo", args, 1, NULL, NULL, &exit_code, &error);
+    BoxliteCommand cmd = {.command = "/bin/echo", .args = args, .argc = 1};
+    CExecutionHandle* execution = NULL;
+    if (boxlite_execute(box, &cmd, NULL, NULL, &execution, &error) == Ok) {
+        boxlite_execution_wait(execution, &exit_code, &error);
+        boxlite_execution_free(execution);
+    }
     boxlite_stop_box(box, &error);
     return NULL;
 }
@@ -806,7 +819,7 @@ Before (0.1.x):
 char* error = NULL;
 CBoxliteRuntime* runtime = boxlite_runtime_new(NULL, &error);
 CBoxHandle* box = boxlite_create_box(runtime, opts, &error);
-boxlite_execute(box, "/bin/echo", args, NULL, NULL, &error);
+old_execute_api(box, "/bin/echo", args, NULL, NULL, &error);
 boxlite_stop_box(box, &error);
 boxlite_runtime_free(runtime);
 ```

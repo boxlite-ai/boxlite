@@ -72,4 +72,36 @@ static CBoxHandle *create_test_box(CBoxliteRuntime *runtime,
   return create_box_with_options(runtime, opts, error);
 }
 
+static BoxliteErrorCode
+test_execute_cmd(CBoxHandle *box, const BoxliteCommand *cmd,
+                 void (*callback)(const char *, int, void *), void *user_data,
+                 int *out_exit_code, CBoxliteError *error) {
+  CExecutionHandle *execution = NULL;
+  BoxliteErrorCode code =
+      boxlite_execute(box, cmd, callback, user_data, &execution, error);
+  if (code != Ok) {
+    return code;
+  }
+
+  code = boxlite_execution_wait(execution, out_exit_code, error);
+  boxlite_execution_free(execution);
+  return code;
+}
+
+static BoxliteErrorCode
+test_execute(CBoxHandle *box, const char *command, const char *const *args,
+             int argc, void (*callback)(const char *, int, void *),
+             void *user_data, int *out_exit_code, CBoxliteError *error) {
+  BoxliteCommand cmd = {.command = command,
+                        .args = args,
+                        .argc = argc,
+                        .env_pairs = NULL,
+                        .env_count = 0,
+                        .workdir = NULL,
+                        .user = NULL,
+                        .timeout_secs = 0.0,
+                        .tty = 0};
+  return test_execute_cmd(box, &cmd, callback, user_data, out_exit_code, error);
+}
+
 #endif

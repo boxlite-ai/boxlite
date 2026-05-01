@@ -30,18 +30,18 @@ void test_multiple_boxes() {
   const char *const args[] = {"test"};
   int exit_code = 0;
 
-  code = boxlite_execute(box1, "/bin/echo", args, 1, NULL, NULL, &exit_code,
-                         &error);
+  code =
+      test_execute(box1, "/bin/echo", args, 1, NULL, NULL, &exit_code, &error);
   assert(code == Ok);
   assert(exit_code == 0);
 
-  code = boxlite_execute(box2, "/bin/echo", args, 1, NULL, NULL, &exit_code,
-                         &error);
+  code =
+      test_execute(box2, "/bin/echo", args, 1, NULL, NULL, &exit_code, &error);
   assert(code == Ok);
   assert(exit_code == 0);
 
-  code = boxlite_execute(box3, "/bin/echo", args, 1, NULL, NULL, &exit_code,
-                         &error);
+  code =
+      test_execute(box3, "/bin/echo", args, 1, NULL, NULL, &exit_code, &error);
   assert(code == Ok);
   assert(exit_code == 0);
 
@@ -103,8 +103,8 @@ void test_reattach_box() {
 
   const char *const args[] = {"reattached"};
   int exit_code = 0;
-  code = boxlite_execute(box2, "/bin/echo", args, 1, NULL, NULL, &exit_code,
-                         &error);
+  code =
+      test_execute(box2, "/bin/echo", args, 1, NULL, NULL, &exit_code, &error);
   assert(code == Ok);
   assert(exit_code == 0);
   printf("  ✓ Executed command after reattachment\n");
@@ -136,7 +136,7 @@ void test_runtime_metrics() {
   // Execute command
   const char *const args[] = {"test"};
   int exit_code = 0;
-  boxlite_execute(box, "/bin/echo", args, 1, NULL, NULL, &exit_code, &error);
+  test_execute(box, "/bin/echo", args, 1, NULL, NULL, &exit_code, &error);
 
   // Get updated metrics
   CRuntimeMetrics metrics2 = {0};
@@ -166,14 +166,14 @@ void test_box_metrics() {
   // Execute some commands
   const char *const args[] = {"test"};
   int exit_code = 0;
-  code = boxlite_execute(box, "/bin/echo", args, 1, NULL, NULL, &exit_code,
-                         &error);
+  code =
+      test_execute(box, "/bin/echo", args, 1, NULL, NULL, &exit_code, &error);
   if (code != Ok) {
     printf("  ✗ Execute 1 failed: code=%d, message=%s\n", code,
            error.message ? error.message : "(null)");
   }
-  code = boxlite_execute(box, "/bin/echo", args, 1, NULL, NULL, &exit_code,
-                         &error);
+  code =
+      test_execute(box, "/bin/echo", args, 1, NULL, NULL, &exit_code, &error);
   if (code != Ok) {
     printf("  ✗ Execute 2 failed: code=%d, message=%s\n", code,
            error.message ? error.message : "(null)");
@@ -215,14 +215,11 @@ void test_concurrent_execution() {
   const char *const args3[] = {"cmd3"};
 
   int exit1 = 0, exit2 = 0, exit3 = 0;
-  code =
-      boxlite_execute(box, "/bin/echo", args1, 1, NULL, NULL, &exit1, &error);
+  code = test_execute(box, "/bin/echo", args1, 1, NULL, NULL, &exit1, &error);
   assert(code == Ok);
-  code =
-      boxlite_execute(box, "/bin/echo", args2, 1, NULL, NULL, &exit2, &error);
+  code = test_execute(box, "/bin/echo", args2, 1, NULL, NULL, &exit2, &error);
   assert(code == Ok);
-  code =
-      boxlite_execute(box, "/bin/echo", args3, 1, NULL, NULL, &exit3, &error);
+  code = test_execute(box, "/bin/echo", args3, 1, NULL, NULL, &exit3, &error);
   assert(code == Ok);
 
   assert(exit1 == 0);
@@ -330,8 +327,7 @@ void test_allow_net_typed_config() {
   const char *const args[] = {"-c",
                               "wget -q -O - http://example.com >/dev/null"};
   int exit_code = 0;
-  code =
-      boxlite_execute(box, "/bin/sh", args, 2, NULL, NULL, &exit_code, &error);
+  code = test_execute(box, "/bin/sh", args, 2, NULL, NULL, &exit_code, &error);
   assert(code == Ok);
   assert(exit_code == 0);
   printf(
@@ -381,8 +377,7 @@ void test_secrets_typed_config() {
   const char *const args[] = {
       "-c", "test \"$BOXLITE_SECRET_OPENAI\" = \"<BOXLITE_SECRET:openai>\""};
   int exit_code = 0;
-  code =
-      boxlite_execute(box, "/bin/sh", args, 2, NULL, NULL, &exit_code, &error);
+  code = test_execute(box, "/bin/sh", args, 2, NULL, NULL, &exit_code, &error);
   assert(code == Ok);
   assert(exit_code == 0);
   printf("  ✓ secrets typed options accepted and placeholder env var is "

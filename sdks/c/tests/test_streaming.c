@@ -53,8 +53,8 @@ void test_streaming_stdout() {
   // Execute command that produces stdout
   const char *const args[] = {"hello world"};
   int exit_code = 0;
-  code = boxlite_execute(box, "/bin/echo", args, 1, counting_callback, NULL,
-                         &exit_code, &error);
+  code = test_execute(box, "/bin/echo", args, 1, counting_callback, NULL,
+                      &exit_code, &error);
 
   assert(code == Ok);
   assert(exit_code == 0);
@@ -89,8 +89,8 @@ void test_streaming_stderr() {
   // Execute command that produces stderr (ls on nonexistent path)
   const char *const args[] = {"/nonexistent"};
   int exit_code = 0;
-  code = boxlite_execute(box, "/bin/ls", args, 1, counting_callback, NULL,
-                         &exit_code, &error);
+  code = test_execute(box, "/bin/ls", args, 1, counting_callback, NULL,
+                      &exit_code, &error);
 
   assert(code == Ok);
   assert(exit_code != 0);
@@ -125,8 +125,8 @@ void test_streaming_both() {
   // Using sh to write to both streams
   const char *const args[] = {"-c", "echo stdout; echo stderr >&2"};
   int exit_code = 0;
-  code = boxlite_execute(box, "/bin/sh", args, 2, counting_callback, NULL,
-                         &exit_code, &error);
+  code = test_execute(box, "/bin/sh", args, 2, counting_callback, NULL,
+                      &exit_code, &error);
 
   assert(code == Ok);
   assert(exit_code == 0);
@@ -191,8 +191,8 @@ void test_streaming_with_context() {
 
   const char *const args[] = {"line1\nline2\nline3"};
   int exit_code = 0;
-  code = boxlite_execute(box, "/bin/echo", args, 1, accumulating_callback, &ctx,
-                         &exit_code, &error);
+  code = test_execute(box, "/bin/echo", args, 1, accumulating_callback, &ctx,
+                      &exit_code, &error);
 
   assert(code == Ok);
   assert(exit_code == 0);
@@ -226,8 +226,8 @@ void test_streaming_large_output() {
   const char *const args[] = {
       "-c", "i=0; while [ $i -lt 100 ]; do echo line$i; i=$((i+1)); done"};
   int exit_code = 0;
-  code = boxlite_execute(box, "/bin/sh", args, 2, counting_callback, NULL,
-                         &exit_code, &error);
+  code = test_execute(box, "/bin/sh", args, 2, counting_callback, NULL,
+                      &exit_code, &error);
 
   assert(code == Ok);
   assert(exit_code == 0);
@@ -256,8 +256,8 @@ void test_streaming_no_callback() {
   // Execute without callback (should still work)
   const char *const args[] = {"hello"};
   int exit_code = 0;
-  code = boxlite_execute(box, "/bin/echo", args, 1, NULL, NULL, &exit_code,
-                         &error);
+  code =
+      test_execute(box, "/bin/echo", args, 1, NULL, NULL, &exit_code, &error);
 
   assert(code == Ok);
   assert(exit_code == 0);

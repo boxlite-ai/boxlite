@@ -162,6 +162,7 @@ fn test_free_functions_null_safe() {
         boxlite_error_free(ptr::null_mut());
         boxlite_result_free(ptr::null_mut());
         boxlite_simple_free(ptr::null_mut());
+        boxlite_execution_free(ptr::null_mut());
     }
 }
 

@@ -52,4 +52,30 @@ static CBoxHandle *create_alpine_box_or_exit(CBoxliteRuntime *runtime) {
   return box;
 }
 
+static BoxliteErrorCode
+execute_and_wait(CBoxHandle *box, const char *command,
+                 const char *const *args, int argc,
+                 void (*callback)(const char *, int, void *), void *user_data,
+                 int *out_exit_code, CBoxliteError *error) {
+  BoxliteCommand cmd = {.command = command,
+                        .args = args,
+                        .argc = argc,
+                        .env_pairs = NULL,
+                        .env_count = 0,
+                        .workdir = NULL,
+                        .user = NULL,
+                        .timeout_secs = 0.0,
+                        .tty = 0};
+  CExecutionHandle *execution = NULL;
+  BoxliteErrorCode code =
+      boxlite_execute(box, &cmd, callback, user_data, &execution, error);
+  if (code != Ok) {
+    return code;
+  }
+
+  code = boxlite_execution_wait(execution, out_exit_code, error);
+  boxlite_execution_free(execution);
+  return code;
+}
+
 #endif
