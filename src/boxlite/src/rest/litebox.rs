@@ -133,6 +133,8 @@ impl BoxBackend for RestBox {
             Some(stdin),
             Some(stdout),
             Some(stderr),
+            std::time::Instant::now(),
+            None,
         ))
     }
 

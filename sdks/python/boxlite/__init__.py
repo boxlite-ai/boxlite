@@ -72,24 +72,72 @@ except ImportError as e:
     warnings.warn(f"BoxLite native extension not available: {e}", ImportWarning)
     __all__ = []
 
+# Import error types (pure Python, always available independently of native extensions)
+try:
+    from .errors import (  # noqa: F401
+        AlreadyExistsError,
+        BoxliteError,
+        ConfigError,
+        DatabaseError,
+        EngineError,
+        ExecError,
+        ExecutionError,
+        ImageError,
+        InternalError,
+        InvalidArgumentError,
+        InvalidStateError,
+        NetworkError,
+        NotFoundError,
+        ParseError,
+        PortalError,
+        ResourceExhaustedError,
+        RpcError,
+        StoppedError,
+        StorageError,
+        TimeoutError,
+    )
+
+    __all__.extend(
+        [
+            # Error types (base)
+            "BoxliteError",
+            # Error types (mapped from Rust)
+            "EngineError",
+            "ConfigError",
+            "StorageError",
+            "ImageError",
+            "PortalError",
+            "NetworkError",
+            "RpcError",
+            "InternalError",
+            "ExecutionError",
+            "NotFoundError",
+            "AlreadyExistsError",
+            "InvalidStateError",
+            "DatabaseError",
+            "InvalidArgumentError",
+            "StoppedError",
+            "ResourceExhaustedError",
+            # Error types (Python convenience)
+            "ExecError",
+            "TimeoutError",
+            "ParseError",
+        ]
+    )
+except ImportError:
+    pass
+
 # Import Python convenience wrappers (re-exported via __all__)
 try:
     from .codebox import CodeBox  # noqa: F401
-    from .errors import BoxliteError, ExecError, ParseError, TimeoutError  # noqa: F401
     from .exec import ExecResult  # noqa: F401
     from .simplebox import SimpleBox  # noqa: F401
 
     __all__.extend(
         [
-            # Python convenience wrappers
             "SimpleBox",
             "CodeBox",
             "ExecResult",
-            # Error types
-            "BoxliteError",
-            "ExecError",
-            "TimeoutError",
-            "ParseError",
         ]
     )
 except ImportError:

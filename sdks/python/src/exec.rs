@@ -1,4 +1,4 @@
-use crate::util::map_err;
+use crate::util::{map_boxlite_err, map_err};
 use boxlite::Execution;
 use pyo3::{Bound, PyAny, PyRef, PyResult, Python, pyclass, pymethods};
 use std::sync::Arc;
@@ -170,7 +170,7 @@ impl PyExecution {
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let execution_mut = unsafe { &mut *(Arc::as_ptr(&execution) as *mut Execution) };
-            let exec_result = execution_mut.wait().await.map_err(map_err)?;
+            let exec_result = execution_mut.wait().await.map_err(map_boxlite_err)?;
             Ok(PyExecResult {
                 exit_code: exec_result.exit_code,
                 error_message: exec_result.error_message,
@@ -183,7 +183,7 @@ impl PyExecution {
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let execution_mut = unsafe { &mut *(Arc::as_ptr(&execution) as *mut Execution) };
-            execution_mut.kill().await.map_err(map_err)?;
+            execution_mut.kill().await.map_err(map_boxlite_err)?;
             Ok(())
         })
     }
@@ -195,7 +195,10 @@ impl PyExecution {
         let execution = Arc::clone(&self.execution);
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            execution.resize_tty(rows, cols).await.map_err(map_err)?;
+            execution
+                .resize_tty(rows, cols)
+                .await
+                .map_err(map_boxlite_err)?;
             Ok(())
         })
     }

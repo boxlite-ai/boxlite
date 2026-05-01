@@ -5,7 +5,28 @@ Tests the error hierarchy and exception behavior.
 """
 
 import pytest
-from boxlite.errors import BoxliteError, ExecError, TimeoutError, ParseError
+from boxlite.errors import (
+    AlreadyExistsError,
+    BoxliteError,
+    ConfigError,
+    DatabaseError,
+    EngineError,
+    ExecError,
+    ExecutionError,
+    ImageError,
+    InternalError,
+    InvalidArgumentError,
+    InvalidStateError,
+    NetworkError,
+    NotFoundError,
+    ParseError,
+    PortalError,
+    ResourceExhaustedError,
+    RpcError,
+    StoppedError,
+    StorageError,
+    TimeoutError,
+)
 
 
 class TestBoxliteError:
@@ -104,21 +125,305 @@ class TestParseError:
             raise ParseError("parse error")
 
 
+class TestEngineError:
+    """Test EngineError exception."""
+
+    def test_inherits_boxlite_error(self):
+        assert issubclass(EngineError, BoxliteError)
+
+    def test_can_raise(self):
+        with pytest.raises(EngineError):
+            raise EngineError("engine crashed")
+
+    def test_can_catch_as_boxlite_error(self):
+        with pytest.raises(BoxliteError):
+            raise EngineError("engine error")
+
+    def test_message(self):
+        err = EngineError("unsupported engine: kvm")
+        assert str(err) == "unsupported engine: kvm"
+
+
+class TestConfigError:
+    """Test ConfigError exception."""
+
+    def test_inherits_boxlite_error(self):
+        assert issubclass(ConfigError, BoxliteError)
+
+    def test_can_raise(self):
+        with pytest.raises(ConfigError):
+            raise ConfigError("invalid config")
+
+    def test_can_catch_as_boxlite_error(self):
+        with pytest.raises(BoxliteError):
+            raise ConfigError("bad option")
+
+
+class TestStorageError:
+    """Test StorageError exception."""
+
+    def test_inherits_boxlite_error(self):
+        assert issubclass(StorageError, BoxliteError)
+
+    def test_can_raise(self):
+        with pytest.raises(StorageError):
+            raise StorageError("disk full")
+
+    def test_can_catch_as_boxlite_error(self):
+        with pytest.raises(BoxliteError):
+            raise StorageError("I/O error")
+
+
+class TestImageError:
+    """Test ImageError exception."""
+
+    def test_inherits_boxlite_error(self):
+        assert issubclass(ImageError, BoxliteError)
+
+    def test_can_raise(self):
+        with pytest.raises(ImageError):
+            raise ImageError("image not found")
+
+    def test_can_catch_as_boxlite_error(self):
+        with pytest.raises(BoxliteError):
+            raise ImageError("pull failed")
+
+
+class TestPortalError:
+    """Test PortalError exception."""
+
+    def test_inherits_boxlite_error(self):
+        assert issubclass(PortalError, BoxliteError)
+
+    def test_can_raise(self):
+        with pytest.raises(PortalError):
+            raise PortalError("portal connection lost")
+
+    def test_can_catch_as_boxlite_error(self):
+        with pytest.raises(BoxliteError):
+            raise PortalError("gRPC portal error")
+
+
+class TestNetworkError:
+    """Test NetworkError exception."""
+
+    def test_inherits_boxlite_error(self):
+        assert issubclass(NetworkError, BoxliteError)
+
+    def test_can_raise(self):
+        with pytest.raises(NetworkError):
+            raise NetworkError("network unreachable")
+
+    def test_can_catch_as_boxlite_error(self):
+        with pytest.raises(BoxliteError):
+            raise NetworkError("DNS resolution failed")
+
+
+class TestRpcError:
+    """Test RpcError exception."""
+
+    def test_inherits_boxlite_error(self):
+        assert issubclass(RpcError, BoxliteError)
+
+    def test_can_raise(self):
+        with pytest.raises(RpcError):
+            raise RpcError("gRPC status: UNAVAILABLE")
+
+    def test_can_catch_as_boxlite_error(self):
+        with pytest.raises(BoxliteError):
+            raise RpcError("transport error")
+
+
+class TestInternalError:
+    """Test InternalError exception."""
+
+    def test_inherits_boxlite_error(self):
+        assert issubclass(InternalError, BoxliteError)
+
+    def test_can_raise(self):
+        with pytest.raises(InternalError):
+            raise InternalError("unexpected state")
+
+    def test_can_catch_as_boxlite_error(self):
+        with pytest.raises(BoxliteError):
+            raise InternalError("internal error")
+
+
+class TestExecutionError:
+    """Test ExecutionError exception."""
+
+    def test_inherits_boxlite_error(self):
+        assert issubclass(ExecutionError, BoxliteError)
+
+    def test_can_raise(self):
+        with pytest.raises(ExecutionError):
+            raise ExecutionError("execution failed")
+
+    def test_can_catch_as_boxlite_error(self):
+        with pytest.raises(BoxliteError):
+            raise ExecutionError("runtime exec error")
+
+
+class TestNotFoundError:
+    """Test NotFoundError exception."""
+
+    def test_inherits_boxlite_error(self):
+        assert issubclass(NotFoundError, BoxliteError)
+
+    def test_can_raise(self):
+        with pytest.raises(NotFoundError):
+            raise NotFoundError("box abc123 not found")
+
+    def test_can_catch_as_boxlite_error(self):
+        with pytest.raises(BoxliteError):
+            raise NotFoundError("resource not found")
+
+
+class TestAlreadyExistsError:
+    """Test AlreadyExistsError exception."""
+
+    def test_inherits_boxlite_error(self):
+        assert issubclass(AlreadyExistsError, BoxliteError)
+
+    def test_can_raise(self):
+        with pytest.raises(AlreadyExistsError):
+            raise AlreadyExistsError("box already exists")
+
+    def test_can_catch_as_boxlite_error(self):
+        with pytest.raises(BoxliteError):
+            raise AlreadyExistsError("duplicate")
+
+
+class TestInvalidStateError:
+    """Test InvalidStateError exception."""
+
+    def test_inherits_boxlite_error(self):
+        assert issubclass(InvalidStateError, BoxliteError)
+
+    def test_can_raise(self):
+        with pytest.raises(InvalidStateError):
+            raise InvalidStateError("box is stopped")
+
+    def test_can_catch_as_boxlite_error(self):
+        with pytest.raises(BoxliteError):
+            raise InvalidStateError("wrong state")
+
+
+class TestDatabaseError:
+    """Test DatabaseError exception."""
+
+    def test_inherits_boxlite_error(self):
+        assert issubclass(DatabaseError, BoxliteError)
+
+    def test_can_raise(self):
+        with pytest.raises(DatabaseError):
+            raise DatabaseError("SQLite error: table not found")
+
+    def test_can_catch_as_boxlite_error(self):
+        with pytest.raises(BoxliteError):
+            raise DatabaseError("db error")
+
+
+class TestInvalidArgumentError:
+    """Test InvalidArgumentError exception."""
+
+    def test_inherits_boxlite_error(self):
+        assert issubclass(InvalidArgumentError, BoxliteError)
+
+    def test_can_raise(self):
+        with pytest.raises(InvalidArgumentError):
+            raise InvalidArgumentError("invalid memory: -1")
+
+    def test_can_catch_as_boxlite_error(self):
+        with pytest.raises(BoxliteError):
+            raise InvalidArgumentError("bad argument")
+
+
+class TestStoppedError:
+    """Test StoppedError exception."""
+
+    def test_inherits_boxlite_error(self):
+        assert issubclass(StoppedError, BoxliteError)
+
+    def test_can_raise(self):
+        with pytest.raises(StoppedError):
+            raise StoppedError("runtime is shut down")
+
+    def test_can_catch_as_boxlite_error(self):
+        with pytest.raises(BoxliteError):
+            raise StoppedError("stopped")
+
+
+class TestResourceExhaustedError:
+    """Test ResourceExhaustedError exception."""
+
+    def test_inherits_boxlite_error(self):
+        assert issubclass(ResourceExhaustedError, BoxliteError)
+
+    def test_can_raise(self):
+        with pytest.raises(ResourceExhaustedError):
+            raise ResourceExhaustedError("VM address spaces exhausted")
+
+    def test_can_catch_as_boxlite_error(self):
+        with pytest.raises(BoxliteError):
+            raise ResourceExhaustedError("resource limit")
+
+
+# ── All typed exceptions: parametrized tests ─────────────────────────────
+
+# Complete list of the 16 Rust-mapped exception classes
+RUST_MAPPED_EXCEPTIONS = [
+    EngineError,
+    ConfigError,
+    StorageError,
+    ImageError,
+    PortalError,
+    NetworkError,
+    RpcError,
+    InternalError,
+    ExecutionError,
+    NotFoundError,
+    AlreadyExistsError,
+    InvalidStateError,
+    DatabaseError,
+    InvalidArgumentError,
+    StoppedError,
+    ResourceExhaustedError,
+]
+
+# All 19 exception classes (Rust-mapped + Python convenience)
+ALL_EXCEPTIONS = RUST_MAPPED_EXCEPTIONS + [ExecError, TimeoutError, ParseError]
+
+
 class TestErrorHierarchy:
     """Test the complete error hierarchy."""
 
-    def test_all_errors_inherit_from_base(self):
-        """Test that all error types inherit from BoxliteError."""
-        assert issubclass(ExecError, BoxliteError)
-        assert issubclass(TimeoutError, BoxliteError)
-        assert issubclass(ParseError, BoxliteError)
+    @pytest.mark.parametrize(
+        "exc_class",
+        RUST_MAPPED_EXCEPTIONS,
+        ids=lambda c: c.__name__,
+    )
+    def test_rust_mapped_errors_inherit_from_base(self, exc_class):
+        """Every Rust-mapped exception inherits from BoxliteError."""
+        assert issubclass(exc_class, BoxliteError)
 
-    def test_all_errors_are_exceptions(self):
-        """Test that all error types are Exceptions."""
-        assert issubclass(BoxliteError, Exception)
-        assert issubclass(ExecError, Exception)
-        assert issubclass(TimeoutError, Exception)
-        assert issubclass(ParseError, Exception)
+    @pytest.mark.parametrize(
+        "exc_class",
+        ALL_EXCEPTIONS,
+        ids=lambda c: c.__name__,
+    )
+    def test_all_errors_are_exceptions(self, exc_class):
+        """Every exception type is a subclass of Exception."""
+        assert issubclass(exc_class, Exception)
+
+    @pytest.mark.parametrize(
+        "exc_class",
+        RUST_MAPPED_EXCEPTIONS,
+        ids=lambda c: c.__name__,
+    )
+    def test_rust_mapped_errors_directly_inherit_base(self, exc_class):
+        """Rust-mapped exceptions inherit directly from BoxliteError (flat hierarchy)."""
+        assert BoxliteError in exc_class.__bases__
 
     def test_catch_all_with_base_class(self):
         """Test catching all boxlite errors with base class."""
@@ -127,6 +432,22 @@ class TestErrorHierarchy:
             ExecError("cmd", 1, "err"),
             TimeoutError("timeout"),
             ParseError("parse"),
+            EngineError("engine"),
+            ConfigError("config"),
+            StorageError("storage"),
+            ImageError("image"),
+            PortalError("portal"),
+            NetworkError("network"),
+            RpcError("rpc"),
+            InternalError("internal"),
+            ExecutionError("execution"),
+            NotFoundError("not found"),
+            AlreadyExistsError("exists"),
+            InvalidStateError("state"),
+            DatabaseError("db"),
+            InvalidArgumentError("arg"),
+            StoppedError("stopped"),
+            ResourceExhaustedError("exhausted"),
         ]
 
         for error in errors:
@@ -135,27 +456,73 @@ class TestErrorHierarchy:
             except BoxliteError as e:
                 assert e is error
 
+    @pytest.mark.parametrize(
+        "exc_class",
+        RUST_MAPPED_EXCEPTIONS,
+        ids=lambda c: c.__name__,
+    )
+    def test_specific_catch_does_not_catch_siblings(self, exc_class):
+        """Catching one typed exception does not catch a different one."""
+        # Pick a sibling that is different from exc_class
+        sibling = next(e for e in RUST_MAPPED_EXCEPTIONS if e is not exc_class)
+        with pytest.raises(sibling):
+            # This should NOT be caught by exc_class
+            try:
+                raise sibling("test")
+            except exc_class:
+                pytest.fail(
+                    f"Catching {exc_class.__name__} should not catch {sibling.__name__}"
+                )
+
 
 class TestErrorExports:
     """Test that errors are properly exported."""
 
-    def test_errors_in_module(self):
-        """Test that errors are exported from boxlite module."""
+    EXPECTED_EXPORTS = [
+        "BoxliteError",
+        # Rust-mapped
+        "EngineError",
+        "ConfigError",
+        "StorageError",
+        "ImageError",
+        "PortalError",
+        "NetworkError",
+        "RpcError",
+        "InternalError",
+        "ExecutionError",
+        "NotFoundError",
+        "AlreadyExistsError",
+        "InvalidStateError",
+        "DatabaseError",
+        "InvalidArgumentError",
+        "StoppedError",
+        "ResourceExhaustedError",
+        # Python convenience
+        "ExecError",
+        "TimeoutError",
+        "ParseError",
+    ]
+
+    @pytest.mark.parametrize("name", EXPECTED_EXPORTS)
+    def test_errors_in_module(self, name):
+        """Test that each error is exported from the boxlite module."""
         import boxlite
 
-        assert hasattr(boxlite, "BoxliteError")
-        assert hasattr(boxlite, "ExecError")
-        assert hasattr(boxlite, "TimeoutError")
-        assert hasattr(boxlite, "ParseError")
+        assert hasattr(boxlite, name), f"boxlite.{name} should be exported"
 
-    def test_errors_from_errors_module(self):
-        """Test that errors can be imported from errors module."""
-        from boxlite.errors import BoxliteError, ExecError, TimeoutError, ParseError
+    @pytest.mark.parametrize("name", EXPECTED_EXPORTS)
+    def test_errors_from_errors_module(self, name):
+        """Test that each error can be imported from boxlite.errors."""
+        import boxlite.errors
 
-        assert BoxliteError is not None
-        assert ExecError is not None
-        assert TimeoutError is not None
-        assert ParseError is not None
+        assert hasattr(boxlite.errors, name), f"boxlite.errors.{name} should exist"
+
+    def test_errors_in_errors_module_all(self):
+        """Test that all 19 exceptions are listed in errors.__all__."""
+        from boxlite import errors
+
+        for name in self.EXPECTED_EXPORTS:
+            assert name in errors.__all__, f"{name} should be in errors.__all__"
 
 
 if __name__ == "__main__":

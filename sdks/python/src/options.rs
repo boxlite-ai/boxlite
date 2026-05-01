@@ -1,6 +1,8 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use boxlite::BoxliteRestOptions;
+use boxlite::event_listener::EventListener;
 use boxlite::litebox::copy::CopyOptions;
 use boxlite::runtime::advanced_options::{HealthCheckOptions, SecurityOptions};
 use boxlite::runtime::constants::images;
@@ -13,33 +15,55 @@ use pyo3::prelude::*;
 use pyo3::types::{PyAnyMethods, PyDict, PyTuple};
 
 use crate::advanced_options::PyAdvancedBoxOptions;
+use crate::event_listener::PyEventListener;
 
+/// Runtime configuration options.
+///
+/// Args:
+///     home_dir: Override the default BoxLite home directory (~/.boxlite).
+///     image_registries: Registries to search for unqualified image references.
+///         Tried in order; first successful pull wins.
+///     event_listeners: List of event listener objects for lifecycle callbacks.
+///         Each object can implement any subset of: on_box_created, on_box_started,
+///         on_box_stopped, on_box_removed, on_exec_started, on_exec_completed,
+///         on_file_copied_in, on_file_copied_out.
 #[pyclass(name = "Options")]
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub(crate) struct PyOptions {
     #[pyo3(get, set)]
     pub(crate) home_dir: Option<String>,
-    /// Registries to search for unqualified image references.
-    /// Tried in order; first successful pull wins.
     #[pyo3(get, set)]
     pub(crate) image_registries: Vec<String>,
+    /// Converted from Python objects to Arc<dyn EventListener> at construction time.
+    pub(crate) event_listeners: Vec<Arc<dyn EventListener>>,
 }
 
 #[pymethods]
 impl PyOptions {
     #[new]
-    #[pyo3(signature = (home_dir=None, image_registries=vec![]))]
-    fn new(home_dir: Option<String>, image_registries: Vec<String>) -> Self {
+    #[pyo3(signature = (home_dir=None, image_registries=vec![], event_listeners=vec![]))]
+    fn new(
+        home_dir: Option<String>,
+        image_registries: Vec<String>,
+        event_listeners: Vec<Py<PyAny>>,
+    ) -> Self {
+        let listeners: Vec<Arc<dyn EventListener>> = event_listeners
+            .into_iter()
+            .map(|obj| Arc::new(PyEventListener::new(obj)) as Arc<dyn EventListener>)
+            .collect();
         Self {
             home_dir,
             image_registries,
+            event_listeners: listeners,
         }
     }
 
     fn __repr__(&self) -> String {
         format!(
-            "Options(home_dir={:?}, image_registries={:?})",
-            self.home_dir, self.image_registries
+            "Options(home_dir={:?}, image_registries={:?}, event_listeners=[{} listeners])",
+            self.home_dir,
+            self.image_registries,
+            self.event_listeners.len()
         )
     }
 }
@@ -53,6 +77,7 @@ impl From<PyOptions> for BoxliteOptions {
         }
 
         config.image_registries = py_opts.image_registries;
+        config.event_listeners = py_opts.event_listeners;
 
         config
     }

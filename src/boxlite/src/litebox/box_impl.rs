@@ -136,6 +136,7 @@ impl BoxImpl {
         state: BoxState,
         runtime: SharedRuntimeImpl,
         shutdown_token: CancellationToken,
+        event_listeners: Vec<std::sync::Arc<dyn EventListener>>,
     ) -> Self {
         Self {
             config,
@@ -143,7 +144,7 @@ impl BoxImpl {
             runtime,
             shutdown_token,
             disk_ops: tokio::sync::Mutex::new(()),
-            event_listeners: Vec::new(), // populated from runtime options
+            event_listeners,
             live: OnceCell::new(),
             health_check_task: RwLock::new(None),
         }
@@ -254,9 +255,11 @@ impl BoxImpl {
             listener.on_exec_started(&self.config.id, &command.command, &command.args);
         }
 
+        let exec_started_at = Instant::now();
+
         let mut exec_interface = live.guest_session.execution().await?;
         let result = exec_interface
-            .exec(command, self.shutdown_token.clone())
+            .exec(command.clone(), self.shutdown_token.clone())
             .await;
 
         // Instrument metrics
@@ -274,6 +277,20 @@ impl BoxImpl {
                 .fetch_add(1, Ordering::Relaxed);
         }
 
+        // Build completion callback for event listeners
+        let on_completed = if self.event_listeners.is_empty() {
+            None
+        } else {
+            let listeners = self.event_listeners.clone();
+            let box_id = self.config.id.clone();
+            let cmd = command.command.clone();
+            Some(Box::new(move |exit_code: i32, duration: Duration| {
+                for listener in &listeners {
+                    listener.on_exec_completed(&box_id, &cmd, exit_code, duration);
+                }
+            }) as Box<dyn FnOnce(i32, Duration) + Send>)
+        };
+
         let components = result?;
         Ok(Execution::new(
             components.execution_id,
@@ -282,6 +299,8 @@ impl BoxImpl {
             Some(ExecStdin::new(components.stdin_tx)),
             Some(ExecStdout::new(components.stdout_rx)),
             Some(ExecStderr::new(components.stderr_rx)),
+            exec_started_at,
+            on_completed,
         ))
     }
 

@@ -2,6 +2,7 @@
 
 mod advanced_options;
 mod box_handle;
+mod event_listener;
 mod exec;
 mod images;
 mod info;

@@ -8,7 +8,7 @@ use boxlite_shared::errors::BoxliteResult;
 use futures::Stream;
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
 /// Command builder for executing programs in a box.
@@ -151,6 +151,13 @@ pub(crate) struct ExecutionInner {
 
     /// Standard error stream (read-only).
     stderr: Option<ExecStderr>,
+
+    /// When the execution was initiated (for duration calculation).
+    started_at: Instant,
+
+    /// Optional callback fired once when the execution completes.
+    /// Used by BoxImpl to invoke event listeners with exit_code and duration.
+    on_completed: Option<Box<dyn FnOnce(i32, Duration) + Send>>,
 }
 
 /// Unique identifier for an execution.
@@ -158,6 +165,7 @@ pub type ExecutionId = String;
 
 impl Execution {
     /// Create a new Execution (internal use).
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         execution_id: ExecutionId,
         interface: Box<dyn ExecBackend>,
@@ -165,6 +173,8 @@ impl Execution {
         stdin: Option<ExecStdin>,
         stdout: Option<ExecStdout>,
         stderr: Option<ExecStderr>,
+        started_at: Instant,
+        on_completed: Option<Box<dyn FnOnce(i32, Duration) + Send>>,
     ) -> Self {
         let inner = ExecutionInner {
             interface,
@@ -173,6 +183,8 @@ impl Execution {
             stdin,
             stdout,
             stderr,
+            started_at,
+            on_completed,
         };
 
         Self {
@@ -223,15 +235,21 @@ impl Execution {
         }
 
         // Try to receive from result channel (non-blocking)
-        if let Ok(status) = inner.result_rx.try_recv() {
-            inner.cached_result = Some(status.clone());
-            return Ok(status);
+        let status = if let Ok(status) = inner.result_rx.try_recv() {
+            status
+        } else {
+            // Await next result
+            inner.result_rx.recv().await.ok_or_else(|| {
+                boxlite_shared::BoxliteError::Internal("Result channel closed".into())
+            })?
+        };
+
+        // Fire completion callback once (on first wait)
+        if let Some(callback) = inner.on_completed.take() {
+            let duration = inner.started_at.elapsed();
+            callback(status.exit_code, duration);
         }
 
-        // Await next result
-        let status = inner.result_rx.recv().await.ok_or_else(|| {
-            boxlite_shared::BoxliteError::Internal("Result channel closed".into())
-        })?;
         inner.cached_result = Some(status.clone());
         Ok(status)
     }

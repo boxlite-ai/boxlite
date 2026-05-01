@@ -6,7 +6,7 @@ use boxlite::{LiteBox, SnapshotInfo, SnapshotOptions};
 use pyo3::prelude::*;
 
 use crate::snapshot_options::PySnapshotOptions;
-use crate::util::map_err;
+use crate::util::map_boxlite_err;
 
 /// Snapshot metadata.
 #[pyclass(name = "SnapshotInfo")]
@@ -73,7 +73,7 @@ impl PySnapshotHandle {
                 .snapshots()
                 .create(options, &name)
                 .await
-                .map_err(map_err)?;
+                .map_err(map_boxlite_err)?;
             Ok(PySnapshotInfo::from(info))
         })
     }
@@ -82,7 +82,7 @@ impl PySnapshotHandle {
     fn list<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let handle = Arc::clone(&self.handle);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let infos = handle.snapshots().list().await.map_err(map_err)?;
+            let infos = handle.snapshots().list().await.map_err(map_boxlite_err)?;
             Ok(infos
                 .into_iter()
                 .map(PySnapshotInfo::from)
@@ -94,7 +94,11 @@ impl PySnapshotHandle {
     fn get<'py>(&self, py: Python<'py>, name: String) -> PyResult<Bound<'py, PyAny>> {
         let handle = Arc::clone(&self.handle);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let info = handle.snapshots().get(&name).await.map_err(map_err)?;
+            let info = handle
+                .snapshots()
+                .get(&name)
+                .await
+                .map_err(map_boxlite_err)?;
             Ok(info.map(PySnapshotInfo::from))
         })
     }
@@ -103,7 +107,11 @@ impl PySnapshotHandle {
     fn remove<'py>(&self, py: Python<'py>, name: String) -> PyResult<Bound<'py, PyAny>> {
         let handle = Arc::clone(&self.handle);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            handle.snapshots().remove(&name).await.map_err(map_err)?;
+            handle
+                .snapshots()
+                .remove(&name)
+                .await
+                .map_err(map_boxlite_err)?;
             Ok(())
         })
     }
@@ -112,7 +120,11 @@ impl PySnapshotHandle {
     fn restore<'py>(&self, py: Python<'py>, name: String) -> PyResult<Bound<'py, PyAny>> {
         let handle = Arc::clone(&self.handle);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            handle.snapshots().restore(&name).await.map_err(map_err)?;
+            handle
+                .snapshots()
+                .restore(&name)
+                .await
+                .map_err(map_boxlite_err)?;
             Ok(())
         })
     }
