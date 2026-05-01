@@ -15,12 +15,12 @@ The C SDK provides C-compatible FFI bindings for integrating BoxLite into C/C++ 
 The SDK provides two API styles:
 
 1. **Simple API** (`boxlite_simple_*`) - Convenience layer for common use cases
-   - No JSON required
+   - No runtime setup required
    - Auto-managed runtime
    - Buffered command results
 
 2. **Native API** (`boxlite_*`) - Full-featured, flexible interface
-   - JSON configuration
+   - Typed `CBoxliteOptions` configuration
    - Streaming output callbacks
    - Advanced features (volumes, networking, etc.)
 
@@ -45,7 +45,6 @@ The SDK provides two API styles:
   - [Discovery & Introspection](#discovery--introspection)
   - [Metrics](#metrics)
 - [Memory Management](#memory-management)
-- [JSON Schema Reference](#json-schema-reference)
 - [Thread Safety](#thread-safety)
 - [Platform Requirements](#platform-requirements)
 - [Migration from v0.1.x](#migration-from-v01x)
@@ -64,7 +63,7 @@ int main() {
     CBoxliteSimple* box = NULL;
     CBoxliteError error = {0};
 
-    // Create box (no JSON, auto-starts)
+    // Create box and auto-start it
     if (boxlite_simple_new("python:slim", 0, 0, &box, &error) != Ok) {
         fprintf(stderr, "Error %d: %s\n", error.code, error.message);
         boxlite_error_free(&error);
@@ -103,30 +102,36 @@ int main() {
     CBoxliteError error = {0};
 
     // Create runtime
-    if (boxlite_runtime_new(NULL, NULL, &runtime, &error) != Ok) {
+    if (boxlite_runtime_new(NULL, NULL, 0, &runtime, &error) != Ok) {
         fprintf(stderr, "Error %d: %s\n", error.code, error.message);
         boxlite_error_free(&error);
         return 1;
     }
 
-    // Create box with JSON configuration
-    const char* options = "{"
-        "\"rootfs\":{\"Image\":\"alpine:3.19\"},"
-        "\"env\":[],\"volumes\":[],\"network\":{\"mode\":\"enabled\",\"allow_net\":[]},\"ports\":[]"
-    "}";
-
-    if (boxlite_create_box(runtime, options, &box, &error) != Ok) {
+    // Create box with typed options
+    CBoxliteOptions* opts = NULL;
+    if (boxlite_options_new("alpine:3.19", &opts, &error) != Ok) {
         fprintf(stderr, "Error %d: %s\n", error.code, error.message);
         boxlite_error_free(&error);
         boxlite_runtime_free(runtime);
         return 1;
     }
+    boxlite_options_set_network_enabled(opts);
+
+    if (boxlite_create_box(runtime, opts, &box, &error) != Ok) {
+        fprintf(stderr, "Error %d: %s\n", error.code, error.message);
+        boxlite_error_free(&error);
+        boxlite_options_free(opts);
+        boxlite_runtime_free(runtime);
+        return 1;
+    }
+    boxlite_options_free(opts);
 
     // Execute command with streaming output
     int exit_code = 0;
-    const char* args = "[\"-la\", \"/\"]";
+    const char* args[] = {"-la", "/"};
 
-    if (boxlite_execute(box, "/bin/ls", args, output_callback, NULL, &exit_code, &error) == Ok) {
+    if (boxlite_execute(box, "/bin/ls", args, 2, output_callback, NULL, &exit_code, &error) == Ok) {
         printf("\nExit code: %d\n", exit_code);
     } else {
         fprintf(stderr, "Error: %s\n", error.message);
@@ -260,7 +265,7 @@ for (int i = 0; i < retries; i++) {
 
 ## Simple API
 
-The Simple API provides a streamlined interface for common use cases without JSON configuration.
+The Simple API provides a streamlined interface for common use cases.
 
 ### boxlite_simple_new
 
@@ -410,7 +415,8 @@ Create a new runtime instance.
 ```c
 BoxliteErrorCode boxlite_runtime_new(
     const char* home_dir,
-    const char* registries_json,
+    const char* const* registries,
+    int registries_count,
     CBoxliteRuntime** out_runtime,
     CBoxliteError* out_error
 );
@@ -421,7 +427,8 @@ BoxliteErrorCode boxlite_runtime_new(
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `home_dir` | `const char*` | Path to BoxLite home. `NULL` = default (`~/.boxlite`) |
-| `registries_json` | `const char*` | JSON array of registries. `NULL` = `["docker.io"]` |
+| `registries` | `const char* const*` | Optional array of registry hostnames. `NULL` = default registries |
+| `registries_count` | `int` | Number of entries in `registries` |
 | `out_runtime` | `CBoxliteRuntime**` | Output: runtime handle |
 | `out_error` | `CBoxliteError*` | Output: error information |
 
@@ -432,15 +439,15 @@ CBoxliteRuntime* runtime = NULL;
 CBoxliteError error = {0};
 
 // Default configuration
-if (boxlite_runtime_new(NULL, NULL, &runtime, &error) != Ok) {
+if (boxlite_runtime_new(NULL, NULL, 0, &runtime, &error) != Ok) {
     fprintf(stderr, "Error: %s\n", error.message);
     boxlite_error_free(&error);
     return 1;
 }
 
 // Custom registries
-const char* registries = "[\"ghcr.io\", \"docker.io\"]";
-if (boxlite_runtime_new("/var/lib/boxlite", registries, &runtime, &error) != Ok) {
+const char* registries[] = {"ghcr.io", "docker.io"};
+if (boxlite_runtime_new("/var/lib/boxlite", registries, 2, &runtime, &error) != Ok) {
     // Handle error
 }
 ```
@@ -490,7 +497,7 @@ Create and auto-start a box.
 ```c
 BoxliteErrorCode boxlite_create_box(
     CBoxliteRuntime* runtime,
-    const char* options_json,
+    CBoxliteOptions* opts,
     CBoxHandle** out_box,
     CBoxliteError* out_error
 );
@@ -501,24 +508,27 @@ BoxliteErrorCode boxlite_create_box(
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `runtime` | `CBoxliteRuntime*` | Runtime instance |
-| `options_json` | `const char*` | JSON-encoded BoxOptions |
+| `opts` | `CBoxliteOptions*` | Box options created with `boxlite_options_new()` |
 | `out_box` | `CBoxHandle**` | Output: box handle |
 | `out_error` | `CBoxliteError*` | Output: error information |
 
 #### Example
 
 ```c
-// Minimal options (required fields)
-const char* options = "{"
-    "\"rootfs\":{\"Image\":\"alpine:3.19\"},"
-    "\"env\":[],\"volumes\":[],\"network\":{\"mode\":\"enabled\",\"allow_net\":[]},\"ports\":[]"
-"}";
+CBoxliteOptions* opts = NULL;
+if (boxlite_options_new("alpine:3.19", &opts, &error) != Ok) {
+    // Handle error
+}
+boxlite_options_set_cpus(opts, 2);
+boxlite_options_set_memory(opts, 512);
+boxlite_options_set_network_enabled(opts);
 
 CBoxHandle* box = NULL;
-if (boxlite_create_box(runtime, options, &box, &error) != Ok) {
+if (boxlite_create_box(runtime, opts, &box, &error) != Ok) {
     fprintf(stderr, "Error: %s\n", error.message);
     boxlite_error_free(&error);
 }
+boxlite_options_free(opts);
 ```
 
 ---
@@ -620,7 +630,8 @@ Execute a command with optional streaming output.
 BoxliteErrorCode boxlite_execute(
     CBoxHandle* handle,
     const char* command,
-    const char* args_json,
+    const char* const* args,
+    int argc,
     void (*callback)(const char* text, int is_stderr, void* user_data),
     void* user_data,
     int* out_exit_code,
@@ -634,7 +645,8 @@ BoxliteErrorCode boxlite_execute(
 |-----------|------|-------------|
 | `handle` | `CBoxHandle*` | Box handle |
 | `command` | `const char*` | Command to execute |
-| `args_json` | `const char*` | JSON array of arguments, e.g., `["arg1", "arg2"]` |
+| `args` | `const char* const*` | Optional array of argument strings |
+| `argc` | `int` | Number of entries in `args` |
 | `callback` | function pointer | Optional streaming output callback |
 | `user_data` | `void*` | User data passed to callback |
 | `out_exit_code` | `int*` | Output: command exit code |
@@ -661,10 +673,12 @@ void output_handler(const char* text, int is_stderr, void* data) {
 }
 
 int exit_code = 0;
+const char* args[] = {"-c", "print('hello')"};
 BoxliteErrorCode code = boxlite_execute(
     box,
     "python",
-    "[\"-c\", \"print('hello')\"]",
+    args,
+    2,
     output_handler,
     NULL,
     &exit_code,
@@ -698,8 +712,10 @@ BoxliteErrorCode boxlite_execute_cmd(
 ```c
 typedef struct BoxliteCommand {
     const char* command;      // Required: command to execute
-    const char* args_json;    // JSON array of arguments, or NULL
-    const char* env_json;     // JSON array of ["key","val"] pairs, or NULL
+    const char* const* args;  // Argument array, or NULL
+    int argc;                 // Number of entries in args
+    const char* const* env_pairs; // [key0, value0, key1, value1, ...], or NULL
+    int env_count;            // Number of strings in env_pairs
     const char* workdir;      // Working directory, or NULL
     const char* user;         // User spec (e.g., "nobody", "1000:1000"), or NULL
     double timeout_secs;      // Timeout in seconds (0.0 = no timeout)
@@ -709,10 +725,14 @@ typedef struct BoxliteCommand {
 #### Example
 
 ```c
+const char* args[] = {"-c", "import os; print(os.getcwd())"};
+const char* env[] = {"MY_VAR", "hello"};
 BoxliteCommand cmd = {
     .command = "python",
-    .args_json = "[\"-c\", \"import os; print(os.getcwd())\"]",
-    .env_json = "[[\"MY_VAR\",\"hello\"]]",
+    .args = args,
+    .argc = 2,
+    .env_pairs = env,
+    .env_count = 2,
     .workdir = "/tmp",
     .user = "nobody",
     .timeout_secs = 30.0,
@@ -730,29 +750,29 @@ BoxliteErrorCode code = boxlite_execute_cmd(
 
 #### boxlite_list_info
 
-List all boxes as JSON.
+List all boxes.
 
 ```c
 BoxliteErrorCode boxlite_list_info(
     CBoxliteRuntime* runtime,
-    char** out_json,
+    CBoxInfoList** out_list,
     CBoxliteError* out_error
 );
 ```
 
-Returns JSON array. Caller must free `out_json` with `boxlite_free_string()`.
+Caller must free `out_list` with `boxlite_free_box_info_list()`.
 
 ---
 
 #### boxlite_get_info
 
-Get single box info as JSON.
+Get single box info by ID or name.
 
 ```c
 BoxliteErrorCode boxlite_get_info(
     CBoxliteRuntime* runtime,
     const char* id_or_name,
-    char** out_json,
+    CBoxInfo** out_info,
     CBoxliteError* out_error
 );
 ```
@@ -761,31 +781,23 @@ BoxliteErrorCode boxlite_get_info(
 
 #### boxlite_box_info
 
-Get box info from handle as JSON.
+Get box info from handle.
 
 ```c
 BoxliteErrorCode boxlite_box_info(
     CBoxHandle* handle,
-    char** out_json,
+    CBoxInfo** out_info,
     CBoxliteError* out_error
 );
 ```
 
-**Example JSON output:**
+Caller must free `out_info` with `boxlite_free_box_info()`.
 
-```json
-{
-  "id": "01HJK4TNRPQSXYZ8WM6NCVT9R5",
-  "name": null,
-  "state": {
-    "status": "running",
-    "running": true,
-    "pid": 12345
-  },
-  "created_at": "2024-01-15T10:30:00Z",
-  "image": "alpine:3.19",
-  "cpus": 2,
-  "memory_mib": 512
+```c
+CBoxInfo* info = NULL;
+if (boxlite_box_info(box, &info, &error) == Ok) {
+    printf("Box %s status: %s\n", info->id, info->status);
+    boxlite_free_box_info(info);
 }
 ```
 
@@ -795,55 +807,28 @@ BoxliteErrorCode boxlite_box_info(
 
 #### boxlite_runtime_metrics
 
-Get runtime-wide metrics as JSON.
+Get runtime-wide metrics.
 
 ```c
 BoxliteErrorCode boxlite_runtime_metrics(
     CBoxliteRuntime* runtime,
-    char** out_json,
+    CRuntimeMetrics* out_metrics,
     CBoxliteError* out_error
 );
-```
-
-**Example output:**
-
-```json
-{
-  "boxes_created_total": 10,
-  "boxes_failed_total": 0,
-  "num_running_boxes": 2,
-  "total_commands_executed": 42,
-  "total_exec_errors": 1
-}
 ```
 
 ---
 
 #### boxlite_box_metrics
 
-Get per-box metrics as JSON.
+Get per-box metrics.
 
 ```c
 BoxliteErrorCode boxlite_box_metrics(
     CBoxHandle* handle,
-    char** out_json,
+    CBoxMetrics* out_metrics,
     CBoxliteError* out_error
 );
-```
-
-**Example output:**
-
-```json
-{
-  "cpu_percent": 5.2,
-  "memory_bytes": 12582912,
-  "commands_executed_total": 10,
-  "exec_errors_total": 0,
-  "bytes_sent_total": 1024,
-  "bytes_received_total": 2048,
-  "total_create_duration_ms": 1234,
-  "guest_boot_duration_ms": 567
-}
 ```
 
 ---
@@ -854,14 +839,16 @@ BoxliteErrorCode boxlite_box_metrics(
 
 1. **All allocated strings must be freed**
    - `boxlite_box_id()` → `boxlite_free_string()`
-   - `boxlite_list_info()` → `boxlite_free_string()`
-   - Info/metrics JSON → `boxlite_free_string()`
 
 2. **Error structs must be freed**
    - `CBoxliteError` → `boxlite_error_free()`
 
 3. **Results must be freed**
    - `CBoxliteExecResult` → `boxlite_result_free()`
+   - `CBoxInfo` → `boxlite_free_box_info()`
+   - `CBoxInfoList` → `boxlite_free_box_info_list()`
+   - `CImagePullResult` → `boxlite_free_image_pull_result()`
+   - `CImageInfoList` → `boxlite_free_image_info_list()`
 
 4. **All cleanup functions are NULL-safe**
 
@@ -899,116 +886,6 @@ Safe to call with NULL.
 
 ---
 
-## JSON Schema Reference
-
-### BoxOptions Schema
-
-```json
-{
-  "rootfs": {"Image": "alpine:3.19"},
-  "cpus": 2,
-  "memory_mib": 512,
-  "disk_size_gb": 10,
-  "working_dir": "/workspace",
-  "env": [["KEY", "value"], ["ANOTHER", "value"]],
-  "volumes": [
-    {
-      "host_path": "/host/data",
-      "guest_path": "/data",
-      "readonly": false
-    }
-  ],
-  "network": {"mode": "enabled", "allow_net": []},
-  "ports": [
-    {
-      "host_port": 8080,
-      "guest_port": 80,
-      "protocol": "Tcp"
-    }
-  ],
-  "auto_remove": true
-}
-```
-
-#### Required Fields
-
-All BoxOptions JSON **must include** these fields:
-
-```json
-{
-  "rootfs": {"Image": "..."},
-  "env": [],
-  "volumes": [],
-  "network": {"mode": "enabled", "allow_net": []},
-  "ports": []
-}
-```
-
-#### Field Reference
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `rootfs` | object | Required | Root filesystem source |
-| `cpus` | integer | 2 | Number of CPUs |
-| `memory_mib` | integer | 512 | Memory in MiB |
-| `disk_size_gb` | integer | null | Disk size in GB |
-| `working_dir` | string | null | Working directory |
-| `env` | array | Required | Environment variables as `[key, value]` pairs |
-| `volumes` | array | Required | Volume mounts |
-| `network` | object | Required | `{"mode":"enabled","allow_net":[]}` or `{"mode":"disabled"}` |
-| `ports` | array | Required | Port mappings |
-| `secrets` | array | optional | Outbound HTTP(S) secret substitution rules |
-| `auto_remove` | boolean | true | Remove box when stopped |
-
-#### Secrets Example
-
-```json
-{
-  "secrets": [
-    {
-      "name": "openai",
-      "value": "sk-...",
-      "hosts": ["api.openai.com"],
-      "placeholder": "<BOXLITE_SECRET:openai>"
-    }
-  ]
-}
-```
-
-### RootfsSpec
-
-```json
-{"Image": "python:3.11-slim"}
-```
-
-or
-
-```json
-{"RootfsPath": "/path/to/rootfs"}
-```
-
-### VolumeSpec
-
-```json
-{
-  "host_path": "/absolute/path/on/host",
-  "guest_path": "/path/in/guest",
-  "readonly": false
-}
-```
-
-### PortSpec
-
-```json
-{
-  "host_port": 8080,
-  "guest_port": 80,
-  "protocol": "Tcp"
-}
-```
-
----
-
 ## Thread Safety
 
 | Component | Thread Safety |
@@ -1025,17 +902,20 @@ or
 void* thread_func(void* arg) {
     CBoxliteRuntime* runtime = (CBoxliteRuntime*)arg;
     CBoxliteError error = {0};
+    CBoxliteOptions* opts = NULL;
     CBoxHandle* box = NULL;
 
     // Each thread creates its own box
-    boxlite_create_box(runtime, options, &box, &error);
+    boxlite_options_new("alpine:3.19", &opts, &error);
+    boxlite_create_box(runtime, opts, &box, &error);
+    boxlite_options_free(opts);
     // Use box in this thread only
     boxlite_stop_box(box, &error);
     return NULL;
 }
 
 CBoxliteRuntime* runtime;
-boxlite_runtime_new(NULL, NULL, &runtime, &error);
+boxlite_runtime_new(NULL, NULL, 0, &runtime, &error);
 
 pthread_t threads[4];
 for (int i = 0; i < 4; i++) {
@@ -1064,7 +944,7 @@ for (int i = 0; i < 4; i++) {
 **v0.1.x (old):**
 ```c
 char* error = NULL;
-CBoxliteRuntime* runtime = boxlite_runtime_new(NULL, NULL, &error);
+CBoxliteRuntime* runtime = boxlite_runtime_new(NULL, &error);
 if (!runtime) {
     fprintf(stderr, "Error: %s\n", error);
     boxlite_free_string(error);
@@ -1076,7 +956,7 @@ if (!runtime) {
 ```c
 CBoxliteRuntime* runtime = NULL;
 CBoxliteError error = {0};
-BoxliteErrorCode code = boxlite_runtime_new(NULL, NULL, &runtime, &error);
+BoxliteErrorCode code = boxlite_runtime_new(NULL, NULL, 0, &runtime, &error);
 if (code != Ok) {
     fprintf(stderr, "Error %d: %s\n", error.code, error.message);
     boxlite_error_free(&error);
@@ -1088,7 +968,7 @@ if (code != Ok) {
 
 **v0.1.x:**
 ```c
-int exit_code = boxlite_execute(box, "echo", "[\"hello\"]", callback, NULL, &error);
+int exit_code = boxlite_execute(box, "echo", args, callback, NULL, &error);
 if (exit_code < 0) {
     // Error
 }
@@ -1097,7 +977,8 @@ if (exit_code < 0) {
 **v0.2.0:**
 ```c
 int exit_code = 0;
-BoxliteErrorCode code = boxlite_execute(box, "echo", "[\"hello\"]", callback, NULL, &exit_code, &error);
+const char* args[] = {"hello"};
+BoxliteErrorCode code = boxlite_execute(box, "echo", args, 1, callback, NULL, &exit_code, &error);
 if (code != Ok) {
     // Error
 }
@@ -1110,7 +991,7 @@ if (code != Ok) {
 - [ ] Update all function calls to use output parameters
 - [ ] Replace return value checks with `BoxliteErrorCode` checks
 - [ ] Replace `boxlite_free_string(error)` with `boxlite_error_free(&error)`
-- [ ] Update JSON options to include all required fields
+- [ ] Create boxes with `CBoxliteOptions`
 
 ---
 
@@ -1155,6 +1036,7 @@ void output_callback(const char* text, int is_stderr, void* user_data) {
 }
 
 int exit_code = 0;
+const char* args[] = {"-c", "print('hello')"};
 boxlite_execute(box, "python", args, output_callback, NULL, &exit_code, &error);
 ```
 
@@ -1174,10 +1056,10 @@ boxlite_free_string(box_id);
 ### Get Box Info
 
 ```c
-char* json = NULL;
-if (boxlite_box_info(box, &json, &error) == Ok) {
-    printf("Box info: %s\n", json);
-    boxlite_free_string(json);
+CBoxInfo* info = NULL;
+if (boxlite_box_info(box, &info, &error) == Ok) {
+    printf("Box %s status: %s\n", info->id, info->status);
+    boxlite_free_box_info(info);
 }
 ```
 
@@ -1207,16 +1089,16 @@ if (code != Ok) {
 }
 ```
 
-### Forgetting to free JSON strings
+### Forgetting to free result structs
 
 ```c
-char* json;
-boxlite_list_info(runtime, &json, &error);
+CBoxInfoList* list;
+boxlite_list_info(runtime, &list, &error);
 // Wrong: forgot to free
 
-char* json;
-boxlite_list_info(runtime, &json, &error);
-boxlite_free_string(json);  // Correct
+CBoxInfoList* list;
+boxlite_list_info(runtime, &list, &error);
+boxlite_free_box_info_list(list);  // Correct
 ```
 
 ---

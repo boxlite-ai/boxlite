@@ -31,13 +31,13 @@ C bindings for the BoxLite runtime, providing a stable C API for integrating Box
 The C SDK provides two API styles:
 
 1. **Simple API** (`boxlite_simple_*`) - Convenience layer for common use cases
-   - No JSON required
+   - No runtime setup required
    - Auto-managed runtime
    - Buffered command results
    - Automatic cleanup
 
 2. **Native API** (`boxlite_*`) - Full-featured, flexible interface
-   - JSON configuration
+   - Typed `CBoxliteOptions` configuration
    - Streaming output callbacks
    - Fine-grained control
    - Advanced features (volumes, networking, etc.)
@@ -59,9 +59,9 @@ Both APIs support:
 - **C-compatible FFI bindings** (`cdylib`, `staticlib`)
 - **Auto-generated header file** (`include/boxlite.h`)
 - **Structured error handling** - Error codes + detailed messages
-- **Simple convenience API** - No JSON, auto-cleanup
+- **Simple convenience API** - Auto-cleanup
 - **Streaming output support** - Real-time callbacks
-- **JSON-based configuration** - Avoid ABI compatibility issues
+- **Typed configuration** - Builder-style options and typed result structs
 
 ### Advanced Features
 - **Box lifecycle management** - Create, start, stop, restart, remove
@@ -159,7 +159,7 @@ endif()
 #include "boxlite.h"
 
 int main() {
-    // Create a box (no JSON, no runtime management)
+    // Create a box with no runtime management
     CBoxliteSimple* box;
     CBoxliteError error = {0};
 
@@ -202,34 +202,36 @@ int main() {
     CBoxliteError error = {0};
 
     // Create runtime
-    if (boxlite_runtime_new(NULL, NULL, &runtime, &error) != Ok) {
+    if (boxlite_runtime_new(NULL, NULL, 0, &runtime, &error) != Ok) {
         fprintf(stderr, "Error %d: %s\n", error.code, error.message);
         boxlite_error_free(&error);
         return 1;
     }
 
-    // Create box with JSON configuration
-    const char* options = "{"
-        "\"rootfs\":{\"Image\":\"alpine:3.19\"},"
-        "\"env\":[],\"volumes\":[],\"network\":{\"mode\":\"enabled\",\"allow_net\":[]},\"ports\":[]"
-    "}";
-
-    if (boxlite_create_box(runtime, options, &box, &error) != Ok) {
+    // Create box with typed options
+    CBoxliteOptions* opts = NULL;
+    if (boxlite_options_new("alpine:3.19", &opts, &error) != Ok) {
         fprintf(stderr, "Error %d: %s\n", error.code, error.message);
         boxlite_error_free(&error);
         boxlite_runtime_free(runtime);
         return 1;
     }
+    boxlite_options_set_network_enabled(opts);
 
-    // The raw JSON surface also accepts NetworkSpec and secrets:
-    // "\"network\":{\"mode\":\"enabled\",\"allow_net\":[\"api.openai.com\"]},"
-    // "\"secrets\":[{\"name\":\"openai\",\"value\":\"sk-...\",\"hosts\":[\"api.openai.com\"]}]"
+    if (boxlite_create_box(runtime, opts, &box, &error) != Ok) {
+        fprintf(stderr, "Error %d: %s\n", error.code, error.message);
+        boxlite_error_free(&error);
+        boxlite_options_free(opts);
+        boxlite_runtime_free(runtime);
+        return 1;
+    }
+    boxlite_options_free(opts);
 
     // Execute command with streaming output
     int exit_code = 0;
-    const char* args = "[\"-la\", \"/\"]";
+    const char* args[] = {"-la", "/"};
 
-    if (boxlite_execute(box, "/bin/ls", args, output_callback, NULL, &exit_code, &error) == Ok) {
+    if (boxlite_execute(box, "/bin/ls", args, 2, output_callback, NULL, &exit_code, &error) == Ok) {
         printf("\nExit code: %d\n", exit_code);
     } else {
         fprintf(stderr, "Error: %s\n", error.message);
@@ -246,17 +248,18 @@ int main() {
 
 ```c
 CBoxliteImageHandle* images = NULL;
-char* json = NULL;
 
 if (boxlite_runtime_images(runtime, &images, &error) == Ok) {
-    if (boxlite_image_pull(images, "alpine:latest", &json, &error) == Ok) {
-        printf("Pulled: %s\n", json);
-        boxlite_free_string(json);
+    CImagePullResult* pull = NULL;
+    if (boxlite_image_pull(images, "alpine:latest", &pull, &error) == Ok) {
+        printf("Pulled: %s (%d layers)\n", pull->reference, pull->layer_count);
+        boxlite_free_image_pull_result(pull);
     }
 
-    if (boxlite_image_list(images, &json, &error) == Ok) {
-        printf("Images: %s\n", json);
-        boxlite_free_string(json);
+    CImageInfoList* list = NULL;
+    if (boxlite_image_list(images, &list, &error) == Ok) {
+        printf("Images: %d\n", list->count);
+        boxlite_free_image_info_list(list);
     }
 
     boxlite_image_free(images);
@@ -269,7 +272,7 @@ if (boxlite_runtime_images(runtime, &images, &error) == Ok) {
 
 ### Simple API
 
-The Simple API provides a streamlined interface for common use cases. No JSON configuration required, automatic resource management.
+The Simple API provides a streamlined interface for common use cases with automatic resource management.
 
 #### Key Functions
 
@@ -310,7 +313,7 @@ void boxlite_simple_free(CBoxliteSimple* box);
 - ❌ Need streaming output callbacks
 - ❌ Custom volumes or networking
 - ❌ Multi-box orchestration
-- ❌ Advanced configuration (custom JSON options)
+- ❌ Advanced configuration (custom box options)
 
 ### Native API
 
@@ -324,8 +327,9 @@ const char* boxlite_version(void);
 
 // Create runtime with options
 BoxliteErrorCode boxlite_runtime_new(
-    const char* home_dir,        // NULL = ~/.boxlite
-    const char* registries_json, // NULL = ["docker.io"]
+    const char* home_dir,            // NULL = ~/.boxlite
+    const char* const* registries,   // NULL = default registries
+    int registries_count,
     CBoxliteRuntime** out_runtime,
     CBoxliteError* out_error
 );
@@ -337,10 +341,10 @@ BoxliteErrorCode boxlite_runtime_shutdown(
     CBoxliteError* out_error
 );
 
-// Runtime-wide metrics (JSON)
+// Runtime-wide metrics
 BoxliteErrorCode boxlite_runtime_metrics(
     CBoxliteRuntime* runtime,
-    char** out_json,
+    CRuntimeMetrics* out_metrics,
     CBoxliteError* out_error
 );
 
@@ -354,7 +358,7 @@ void boxlite_runtime_free(CBoxliteRuntime* runtime);
 // Create box (auto-started)
 BoxliteErrorCode boxlite_create_box(
     CBoxliteRuntime* runtime,
-    const char* options_json,
+    CBoxliteOptions* opts,
     CBoxHandle** out_box,
     CBoxliteError* out_error
 );
@@ -398,7 +402,8 @@ char* boxlite_box_id(CBoxHandle* handle);
 BoxliteErrorCode boxlite_execute(
     CBoxHandle* handle,
     const char* command,
-    const char* args_json,  // JSON array: ["arg1", "arg2"]
+    const char* const* args,
+    int argc,
     void (*callback)(const char* text, int is_stderr, void* user_data),
     void* user_data,
     int* out_exit_code,
@@ -408,8 +413,10 @@ BoxliteErrorCode boxlite_execute(
 // Structured: execute with full options (env, user, timeout, workdir)
 typedef struct BoxliteCommand {
     const char* command;      // Required
-    const char* args_json;    // JSON array, or NULL
-    const char* env_json;     // JSON array of ["key","val"] pairs, or NULL
+    const char* const* args;  // Argument array, or NULL
+    int argc;
+    const char* const* env_pairs; // [key0, value0, key1, value1, ...], or NULL
+    int env_count;
     const char* workdir;      // Working directory, or NULL
     const char* user;         // User spec (e.g., "nobody", "1000:1000"), or NULL
     double timeout_secs;      // 0.0 = no timeout
@@ -428,10 +435,13 @@ BoxliteErrorCode boxlite_execute_cmd(
 **Example: structured command with options**
 
 ```c
+const char* env[] = {"MY_VAR", "hello"};
 BoxliteCommand cmd = {
     .command = "pwd",
-    .args_json = NULL,
-    .env_json = "[[\"MY_VAR\",\"hello\"]]",
+    .args = NULL,
+    .argc = 0,
+    .env_pairs = env,
+    .env_count = 2,
     .workdir = "/tmp",
     .user = "nobody",
     .timeout_secs = 30.0,
@@ -443,32 +453,32 @@ boxlite_execute_cmd(box, &cmd, my_callback, NULL, &exit_code, &error);
 #### Discovery & Introspection
 
 ```c
-// List all boxes (returns JSON array)
+// List all boxes
 BoxliteErrorCode boxlite_list_info(
     CBoxliteRuntime* runtime,
-    char** out_json,
+    CBoxInfoList** out_list,
     CBoxliteError* out_error
 );
 
-// Get specific box info (returns JSON object)
+// Get specific box info
 BoxliteErrorCode boxlite_get_info(
     CBoxliteRuntime* runtime,
     const char* id_or_name,
-    char** out_json,
+    CBoxInfo** out_info,
     CBoxliteError* out_error
 );
 
 // Get box info from handle
 BoxliteErrorCode boxlite_box_info(
     CBoxHandle* handle,
-    char** out_json,
+    CBoxInfo** out_info,
     CBoxliteError* out_error
 );
 
-// Per-box metrics (JSON)
+// Per-box metrics
 BoxliteErrorCode boxlite_box_metrics(
     CBoxHandle* handle,
-    char** out_json,
+    CBoxMetrics* out_metrics,
     CBoxliteError* out_error
 );
 ```
@@ -578,7 +588,7 @@ for (int i = 0; i < retries; i++) {
 
 ## Complete API Reference
 
-For the full API reference with detailed parameter tables, JSON schema, and code examples, see:
+For the full API reference with detailed parameter tables and code examples, see:
 
 **[C SDK API Reference](docs/reference/c/README.md)**
 
@@ -621,14 +631,16 @@ make
 
 1. **All allocated strings must be freed**
    - `boxlite_box_id()` → `boxlite_free_string()`
-   - `boxlite_list_info()` JSON → `boxlite_free_string()`
-   - Info/metrics JSON → `boxlite_free_string()`
 
 2. **Error structs must be freed**
    - `CBoxliteError` → `boxlite_error_free()`
 
 3. **Results must be freed**
    - `CBoxliteExecResult` → `boxlite_result_free()`
+   - `CBoxInfo` → `boxlite_free_box_info()`
+   - `CBoxInfoList` → `boxlite_free_box_info_list()`
+   - `CImagePullResult` → `boxlite_free_image_pull_result()`
+   - `CImageInfoList` → `boxlite_free_image_info_list()`
 
 4. **Handles have specific free functions**
    - `CBoxliteRuntime` → `boxlite_runtime_free()` (auto-frees all boxes)
@@ -692,21 +704,27 @@ leaks -atExit -- ./my_app
 ```c
 CBoxliteRuntime* runtime = NULL;
 CBoxliteError error = {0};
-boxlite_runtime_new(NULL, NULL, &runtime, &error);
+boxlite_runtime_new(NULL, NULL, 0, &runtime, &error);
 
 // Thread 1
 CBoxHandle* box1 = NULL;
-boxlite_create_box(runtime, options, &box1, &error);
+CBoxliteOptions* opts1 = NULL;
+boxlite_options_new("alpine:3.19", &opts1, &error);
+boxlite_create_box(runtime, opts1, &box1, &error);
+boxlite_options_free(opts1);
 
 // Thread 2
 CBoxHandle* box2 = NULL;
-boxlite_create_box(runtime, options, &box2, &error);
+CBoxliteOptions* opts2 = NULL;
+boxlite_options_new("alpine:3.19", &opts2, &error);
+boxlite_create_box(runtime, opts2, &box2, &error);
+boxlite_options_free(opts2);
 ```
 
 **Unsafe: Sharing box handle across threads**
 ```c
 CBoxHandle* box = NULL;
-boxlite_create_box(runtime, options, &box, &error);
+boxlite_create_box(runtime, opts, &box, &error);
 
 // Thread 1
 boxlite_execute(box, ...);  // UNSAFE
@@ -721,9 +739,13 @@ void* thread_func(void* arg) {
     CBoxliteRuntime* runtime = (CBoxliteRuntime*)arg;
     CBoxHandle* box = NULL;
     CBoxliteError error = {0};
-    boxlite_create_box(runtime, options, &box, &error);
+    CBoxliteOptions* opts = NULL;
+    boxlite_options_new("alpine:3.19", &opts, &error);
+    boxlite_create_box(runtime, opts, &box, &error);
+    boxlite_options_free(opts);
     int exit_code = 0;
-    boxlite_execute(box, "/bin/echo", "[\"hello\"]", NULL, NULL, &exit_code, &error);
+    const char* args[] = {"hello"};
+    boxlite_execute(box, "/bin/echo", args, 1, NULL, NULL, &exit_code, &error);
     boxlite_stop_box(box, &error);
     return NULL;
 }
@@ -782,10 +804,9 @@ Callbacks are invoked on the **calling thread**. Do not block in callbacks.
 Before (0.1.x):
 ```c
 char* error = NULL;
-CBoxliteRuntime* runtime = boxlite_runtime_new(NULL, NULL, &error);
-const char* opts = "{\"rootfs\":{\"Image\":\"alpine:3.19\"}}";
+CBoxliteRuntime* runtime = boxlite_runtime_new(NULL, &error);
 CBoxHandle* box = boxlite_create_box(runtime, opts, &error);
-boxlite_execute(box, "/bin/echo", "[\"hello\"]", NULL, NULL, &error);
+boxlite_execute(box, "/bin/echo", args, NULL, NULL, &error);
 boxlite_stop_box(box, &error);
 boxlite_runtime_free(runtime);
 ```
@@ -888,26 +909,27 @@ valgrind --leak-check=full --show-leak-kinds=all ./my_app
 ```
 
 **Common causes:**
-- Not freeing strings: `boxlite_box_id()`, `boxlite_list_info()`
+- Not freeing strings: `boxlite_box_id()`
 - Not freeing errors: `boxlite_error_free()`
-- Not freeing results: `boxlite_result_free()`
+- Not freeing results: `boxlite_result_free()` and typed list/info structs
 
 ### High Memory Usage
 
 **Check box count:**
 ```c
-char* metrics = NULL;
+CRuntimeMetrics metrics = {0};
 CBoxliteError error = {0};
 boxlite_runtime_metrics(runtime, &metrics, &error);
-printf("Metrics: %s\n", metrics);
-boxlite_free_string(metrics);
+printf("Running boxes: %d\n", metrics.num_running_boxes);
 ```
 
 **Reduce memory per box:**
 ```c
 // Simple API: Can't configure (uses defaults)
 // Use native API instead:
-const char* opts = "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"memory_mib\":256}";
+CBoxliteOptions* opts = NULL;
+boxlite_options_new("alpine:3.19", &opts, &error);
+boxlite_options_set_memory(opts, 256);
 ```
 
 ### Command Hangs
@@ -929,32 +951,37 @@ const char* opts = "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"memory_mib\":256}"
 The C SDK is a thin wrapper around the Rust `boxlite` crate:
 
 ```
-ffi/src/lib.rs
-  ↓ (re-export)
-ffi/src/ops.rs       (box operations)
-ffi/src/runtime.rs   (runtime management)
-ffi/src/runner.rs    (simple API)
+sdks/c/src/lib.rs
+  ↓ (exports C ABI)
+sdks/c/src/runtime.rs    (runtime management)
+sdks/c/src/box_handle.rs (box lifecycle)
+sdks/c/src/exec.rs       (command execution)
+sdks/c/src/images.rs     (image operations)
+sdks/c/src/info.rs       (box info)
+sdks/c/src/metrics.rs    (metrics)
+sdks/c/src/copy.rs       (file copy)
   ↓ (wraps)
 boxlite/src/runtime/
 ```
 
-- Built as separate crate (`boxlite-ffi` in `ffi/`) to produce `cdylib`/`staticlib`
+- Built as the `boxlite-c` crate to produce `cdylib`/`staticlib`
 - Header auto-generated from Rust code using `cbindgen`
-- JSON used for complex types to avoid ABI issues
+- Typed structs are used for complex inputs and outputs
 - Maintains same functionality as Rust API
 
 ### Development
 
 **Rebuilding Header:**
 ```bash
-cargo build -p boxlite-ffi
+cargo build -p boxlite-c
 # Outputs: sdks/c/include/boxlite.h
 ```
 
 **Adding New Functions:**
-1. Add function to the appropriate file in `ffi/src/` with `#[no_mangle]` and `extern "C"`
-2. Rebuild: `cargo build -p boxlite-ffi`
-3. Header is automatically updated
+1. Add implementation to the appropriate file in `sdks/c/src/`
+2. Add the exported C symbol in the same domain module
+3. Rebuild: `cargo build -p boxlite-c`
+4. Header is automatically updated
 
 **Testing:**
 See `sdks/c/tests/` for the test suite.

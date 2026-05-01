@@ -18,24 +18,26 @@ static void test_runtime_images_pull_and_list(void) {
   assert(code == Ok);
   assert(images != NULL);
 
-  char *pull_json = NULL;
-  code = boxlite_image_pull(images, "alpine:latest", &pull_json, &error);
+  CImagePullResult *pull = NULL;
+  code = boxlite_image_pull(images, "alpine:latest", &pull, &error);
   assert(code == Ok);
-  assert(pull_json != NULL);
-  assert(strstr(pull_json, "\"reference\":\"alpine:latest\"") != NULL);
-  assert(strstr(pull_json, "\"config_digest\":\"sha256:") != NULL);
-  assert(strstr(pull_json, "\"layer_count\":") != NULL);
-  printf("  ✓ Pulled image: %s\n", pull_json);
-  boxlite_free_string(pull_json);
+  assert(pull != NULL);
+  assert(strcmp(pull->reference, "alpine:latest") == 0);
+  assert(strstr(pull->config_digest, "sha256:") != NULL);
+  assert(pull->layer_count > 0);
+  printf("  ✓ Pulled image: %s (%d layers)\n", pull->reference,
+         pull->layer_count);
+  boxlite_free_image_pull_result(pull);
 
-  char *list_json = NULL;
-  code = boxlite_image_list(images, &list_json, &error);
+  CImageInfoList *list = NULL;
+  code = boxlite_image_list(images, &list, &error);
   assert(code == Ok);
-  assert(list_json != NULL);
-  assert(strstr(list_json, "alpine") != NULL);
-  assert(strstr(list_json, "\"cached_at\":\"") != NULL);
-  printf("  ✓ Listed images: %s\n", list_json);
-  boxlite_free_string(list_json);
+  assert(list != NULL);
+  assert(list->count > 0);
+  assert(strstr(list->items[0].reference, "alpine") != NULL);
+  assert(list->items[0].cached_at > 0);
+  printf("  ✓ Listed %d images\n", list->count);
+  boxlite_free_image_info_list(list);
 
   boxlite_image_free(images);
   boxlite_runtime_free(runtime);
@@ -79,10 +81,10 @@ static void test_image_pull_rejected_after_runtime_free(void) {
 
   boxlite_runtime_free(runtime);
 
-  char *pull_json = NULL;
-  code = boxlite_image_pull(images, "alpine:latest", &pull_json, &error);
+  CImagePullResult *pull = NULL;
+  code = boxlite_image_pull(images, "alpine:latest", &pull, &error);
   assert(code == Stopped);
-  assert(pull_json == NULL);
+  assert(pull == NULL);
   assert(error.message != NULL);
   assert(strstr(error.message, "shut down") != NULL ||
          strstr(error.message, "closed") != NULL);

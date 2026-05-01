@@ -1,8 +1,7 @@
 /**
  * BoxLite C SDK - Simple API Demo
  *
- * Demonstrates the new simple convenience API that doesn't require
- * JSON or manual runtime management.
+ * Demonstrates the simple convenience API with automatic runtime management.
  */
 
 #include <stdio.h>
@@ -13,7 +12,7 @@ int main() {
     printf("🚀 BoxLite Simple API Demo\n");
     printf("Version: %s\n\n", boxlite_version());
 
-    // Create a box using simple API (no JSON, no runtime management)
+    // Create a box using the simple API.
     CBoxliteSimple* box;
     CBoxliteError error = {0};
 

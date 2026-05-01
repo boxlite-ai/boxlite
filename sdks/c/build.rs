@@ -17,7 +17,7 @@ fn main() {
     let config_path = PathBuf::from(&crate_dir).join("cbindgen.toml");
     let config = cbindgen::Config::from_file(&config_path).expect("Failed to load cbindgen.toml");
 
-    // Generate C header from Rust code (including boxlite-ffi types via parse_deps)
+    // Generate C header from the C SDK crate.
     cbindgen::Builder::new()
         .with_crate(&crate_dir)
         .with_config(config)

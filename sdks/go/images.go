@@ -8,9 +8,26 @@ import "C"
 
 import (
 	"context"
-	"encoding/json"
+	"time"
 	"unsafe"
 )
+
+// ImageInfo holds metadata about a cached image.
+type ImageInfo struct {
+	Reference  string
+	Repository string
+	Tag        string
+	ID         string
+	CachedAt   time.Time
+	SizeBytes  *uint64
+}
+
+// ImagePullResult contains metadata returned by a pull operation.
+type ImagePullResult struct {
+	Reference    string
+	ConfigDigest string
+	LayerCount   int
+}
 
 // Images is a runtime-scoped handle for image operations.
 type Images struct {
@@ -34,9 +51,6 @@ func (r *Runtime) Images() (*Images, error) {
 }
 
 // Pull pulls an image and returns metadata about the cached result.
-//
-// The context is currently accepted for API symmetry. Once the FFI call starts,
-// the underlying operation is not yet cancellable.
 func (i *Images) Pull(_ context.Context, reference string) (*ImagePullResult, error) {
 	if i == nil || i.handle == nil {
 		return nil, closedImagesError()
@@ -45,52 +59,51 @@ func (i *Images) Pull(_ context.Context, reference string) (*ImagePullResult, er
 	cReference := toCString(reference)
 	defer C.free(unsafe.Pointer(cReference))
 
-	var cJSON *C.char
+	var cResult *C.CImagePullResult
 	var cerr C.CBoxliteError
-	code := C.boxlite_image_pull(i.handle, cReference, &cJSON, &cerr)
+	code := C.boxlite_image_pull(i.handle, cReference, &cResult, &cerr)
 	if code != C.Ok {
 		return nil, freeError(&cerr)
 	}
+	defer C.boxlite_free_image_pull_result(cResult)
 
-	jsonStr := C.GoString(cJSON)
-	freeBoxliteString(cJSON)
-
-	var wire imagePullResultWire
-	if err := json.Unmarshal([]byte(jsonStr), &wire); err != nil {
-		return nil, err
-	}
-
-	result := wire.toImagePullResult()
-	return &result, nil
+	return &ImagePullResult{
+		Reference:    cString(cResult.reference),
+		ConfigDigest: cString(cResult.config_digest),
+		LayerCount:   int(cResult.layer_count),
+	}, nil
 }
 
 // List lists cached images for this runtime.
-//
-// The context is currently accepted for API symmetry. Once the FFI call starts,
-// the underlying operation is not yet cancellable.
 func (i *Images) List(_ context.Context) ([]ImageInfo, error) {
 	if i == nil || i.handle == nil {
 		return nil, closedImagesError()
 	}
 
-	var cJSON *C.char
+	var cList *C.CImageInfoList
 	var cerr C.CBoxliteError
-	code := C.boxlite_image_list(i.handle, &cJSON, &cerr)
+	code := C.boxlite_image_list(i.handle, &cList, &cerr)
 	if code != C.Ok {
 		return nil, freeError(&cerr)
 	}
+	defer C.boxlite_free_image_info_list(cList)
 
-	jsonStr := C.GoString(cJSON)
-	freeBoxliteString(cJSON)
-
-	var wireInfos []imageInfoWire
-	if err := json.Unmarshal([]byte(jsonStr), &wireInfos); err != nil {
-		return nil, err
-	}
-
-	images := make([]ImageInfo, len(wireInfos))
-	for idx := range wireInfos {
-		images[idx] = wireInfos[idx].toImageInfo()
+	items := unsafe.Slice(cList.items, int(cList.count))
+	images := make([]ImageInfo, len(items))
+	for idx := range items {
+		var size *uint64
+		if items[idx].has_size != 0 {
+			v := uint64(items[idx].size)
+			size = &v
+		}
+		images[idx] = ImageInfo{
+			Reference:  cString(items[idx].reference),
+			Repository: cString(items[idx].repository),
+			Tag:        cString(items[idx].tag),
+			ID:         cString(items[idx].id),
+			CachedAt:   time.Unix(int64(items[idx].cached_at), 0),
+			SizeBytes:  size,
+		}
 	}
 
 	return images, nil

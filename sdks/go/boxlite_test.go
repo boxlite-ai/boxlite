@@ -2,10 +2,7 @@ package boxlite
 
 import (
 	"errors"
-	"os"
-	"path/filepath"
 	"testing"
-	"time"
 )
 
 // ============================================================================
@@ -149,281 +146,11 @@ func TestRuntimeOptions(t *testing.T) {
 	}
 }
 
-// ============================================================================
-// Wire types
-// ============================================================================
-
-func TestBuildOptionsJSON_WithRootfsPath(t *testing.T) {
-	bundle := t.TempDir()
+func TestBuildCOptions_MissingImageAndPath(t *testing.T) {
 	cfg := &boxConfig{}
-	WithRootfsPath(bundle)(cfg)
-	wire, err := buildOptionsJSON("", cfg)
-	if err != nil {
-		t.Fatalf("buildOptionsJSON: %v", err)
-	}
-	path, ok := wire.Rootfs.(wireRootfsPath)
-	if !ok {
-		t.Fatalf("Rootfs type: got %T", wire.Rootfs)
-	}
-	if path.RootfsPath != bundle {
-		t.Errorf("RootfsPath: got %q", path.RootfsPath)
-	}
-}
-
-func TestBuildOptionsJSON_RootfsPathWinsOverImage(t *testing.T) {
-	bundle := t.TempDir()
-	cfg := &boxConfig{}
-	WithRootfsPath(bundle)(cfg)
-	wire, err := buildOptionsJSON("alpine:latest", cfg)
-	if err != nil {
-		t.Fatalf("buildOptionsJSON: %v", err)
-	}
-	path, ok := wire.Rootfs.(wireRootfsPath)
-	if !ok {
-		t.Fatalf("Rootfs type: got %T", wire.Rootfs)
-	}
-	if path.RootfsPath != bundle {
-		t.Errorf("RootfsPath: got %q", path.RootfsPath)
-	}
-}
-
-func TestBuildOptionsJSON_RootfsPathMissingFallsBackToImage(t *testing.T) {
-	cfg := &boxConfig{}
-	WithRootfsPath("/no/such/oci-bundle-xyz")(cfg)
-	wire, err := buildOptionsJSON("alpine:latest", cfg)
-	if err != nil {
-		t.Fatalf("buildOptionsJSON: %v", err)
-	}
-	img, ok := wire.Rootfs.(wireRootfsImage)
-	if !ok {
-		t.Fatalf("Rootfs type: got %T", wire.Rootfs)
-	}
-	if img.Image != "alpine:latest" {
-		t.Errorf("Image: got %q", img.Image)
-	}
-}
-
-func TestBuildOptionsJSON_RootfsPathNotDirFallsBackToImage(t *testing.T) {
-	f := filepath.Join(t.TempDir(), "not-a-dir")
-	if err := os.WriteFile(f, []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	cfg := &boxConfig{}
-	WithRootfsPath(f)(cfg)
-	wire, err := buildOptionsJSON("ubuntu:22.04", cfg)
-	if err != nil {
-		t.Fatalf("buildOptionsJSON: %v", err)
-	}
-	out, ok := wire.Rootfs.(wireRootfsImage)
-	if !ok {
-		t.Fatalf("Rootfs type: got %T", wire.Rootfs)
-	}
-	if out.Image != "ubuntu:22.04" {
-		t.Errorf("Image: got %q", out.Image)
-	}
-}
-
-func TestBuildOptionsJSON_RootfsPathMissingAndNoImage(t *testing.T) {
-	cfg := &boxConfig{}
-	WithRootfsPath("/no/such/bundle")(cfg)
-	_, err := buildOptionsJSON("", cfg)
-	if err == nil {
-		t.Fatal("expected error when local path is missing and image is empty")
-	}
-}
-
-func TestBuildOptionsJSON_MissingImageAndPath(t *testing.T) {
-	cfg := &boxConfig{}
-	_, err := buildOptionsJSON("", cfg)
+	_, err := buildCOptions("", cfg)
 	if err == nil {
 		t.Fatal("expected error when image is empty and WithRootfsPath is not set")
-	}
-}
-
-func TestBuildOptionsJSON(t *testing.T) {
-	cfg := &boxConfig{}
-	WithCPUs(2)(cfg)
-	WithMemory(512)(cfg)
-	WithEnv("KEY", "VAL")(cfg)
-	WithVolume("/src", "/dst")(cfg)
-	WithWorkDir("/work")(cfg)
-
-	wire, err := buildOptionsJSON("alpine:latest", cfg)
-	if err != nil {
-		t.Fatalf("buildOptionsJSON: %v", err)
-	}
-
-	rootfs, ok := wire.Rootfs.(wireRootfsImage)
-	if !ok {
-		t.Fatalf("Rootfs type: got %T", wire.Rootfs)
-	}
-	if rootfs.Image != "alpine:latest" {
-		t.Errorf("Rootfs.Image: got %q", rootfs.Image)
-	}
-	if wire.CPUs == nil || *wire.CPUs != 2 {
-		t.Error("CPUs not set")
-	}
-	if wire.MemoryMiB == nil || *wire.MemoryMiB != 512 {
-		t.Error("MemoryMiB not set")
-	}
-	if len(wire.Env) != 1 {
-		t.Errorf("Env length: got %d", len(wire.Env))
-	}
-	if len(wire.Volumes) != 1 {
-		t.Errorf("Volumes length: got %d", len(wire.Volumes))
-	}
-	if wire.WorkDir != "/work" {
-		t.Errorf("WorkDir: got %q", wire.WorkDir)
-	}
-	network, ok := wire.Network.(wireNetworkSpec)
-	if !ok {
-		t.Fatalf("Network type: got %T", wire.Network)
-	}
-	if network.Mode != string(NetworkModeEnabled) {
-		t.Errorf("Network.Mode: got %q", network.Mode)
-	}
-	if len(network.AllowNet) != 0 {
-		t.Errorf("AllowNet should default to empty, got %v", network.AllowNet)
-	}
-}
-
-func TestBuildOptionsJSON_Defaults(t *testing.T) {
-	cfg := &boxConfig{}
-	wire, err := buildOptionsJSON("ubuntu:22.04", cfg)
-	if err != nil {
-		t.Fatalf("buildOptionsJSON: %v", err)
-	}
-
-	if wire.CPUs != nil {
-		t.Error("CPUs should be nil by default")
-	}
-	if wire.MemoryMiB != nil {
-		t.Error("MemoryMiB should be nil by default")
-	}
-	if wire.Env == nil {
-		t.Error("Env should be non-nil empty slice")
-	}
-	if wire.Volumes == nil {
-		t.Error("Volumes should be non-nil empty slice")
-	}
-	if wire.Ports == nil {
-		t.Error("Ports should be non-nil empty slice")
-	}
-	if wire.Secrets == nil {
-		t.Error("Secrets should be non-nil empty slice")
-	}
-	network, ok := wire.Network.(wireNetworkSpec)
-	if !ok {
-		t.Fatalf("Network type: got %T", wire.Network)
-	}
-	if network.Mode != string(NetworkModeEnabled) {
-		t.Errorf("Network.Mode: got %q", network.Mode)
-	}
-}
-
-func TestBoxInfoWire_ToBoxInfo(t *testing.T) {
-	pid := 42
-	info := boxInfoWire{
-		ID:   "abc-123",
-		Name: "test-box",
-		State: wireStateInfo{
-			Status:  "running",
-			Running: true,
-			PID:     &pid,
-		},
-		Image:     "alpine:latest",
-		CPUs:      2,
-		MemoryMiB: 512,
-	}
-
-	boxInfo := info.toBoxInfo()
-	if boxInfo.ID != "abc-123" {
-		t.Errorf("ID: got %q", boxInfo.ID)
-	}
-	if boxInfo.State != StateRunning {
-		t.Errorf("State: got %q", boxInfo.State)
-	}
-	if !boxInfo.Running {
-		t.Error("Running should be true")
-	}
-	if boxInfo.PID != 42 {
-		t.Errorf("PID: got %d", boxInfo.PID)
-	}
-	if boxInfo.CPUs != 2 {
-		t.Errorf("CPUs: got %d", boxInfo.CPUs)
-	}
-	if boxInfo.Image != "alpine:latest" {
-		t.Errorf("Image: got %q", boxInfo.Image)
-	}
-}
-
-func TestBoxInfoWire_ToBoxInfo_NilPID(t *testing.T) {
-	info := boxInfoWire{
-		State: wireStateInfo{
-			Status:  "configured",
-			Running: false,
-			PID:     nil,
-		},
-	}
-
-	boxInfo := info.toBoxInfo()
-	if boxInfo.PID != 0 {
-		t.Errorf("PID: got %d, want 0", boxInfo.PID)
-	}
-	if boxInfo.Running {
-		t.Error("Running should be false")
-	}
-}
-
-func TestImageInfoWire_ToImageInfo(t *testing.T) {
-	size := uint64(8192)
-	now := time.Now().UTC().Round(time.Second)
-	info := imageInfoWire{
-		Reference:  "docker.io/library/alpine:latest",
-		Repository: "docker.io/library/alpine",
-		Tag:        "latest",
-		ID:         "sha256:abc123",
-		CachedAt:   now,
-		SizeBytes:  &size,
-	}
-
-	imageInfo := info.toImageInfo()
-	if imageInfo.Reference != info.Reference {
-		t.Errorf("Reference: got %q", imageInfo.Reference)
-	}
-	if imageInfo.Repository != info.Repository {
-		t.Errorf("Repository: got %q", imageInfo.Repository)
-	}
-	if imageInfo.Tag != info.Tag {
-		t.Errorf("Tag: got %q", imageInfo.Tag)
-	}
-	if imageInfo.ID != info.ID {
-		t.Errorf("ID: got %q", imageInfo.ID)
-	}
-	if !imageInfo.CachedAt.Equal(now) {
-		t.Errorf("CachedAt: got %v want %v", imageInfo.CachedAt, now)
-	}
-	if imageInfo.SizeBytes == nil || *imageInfo.SizeBytes != size {
-		t.Fatalf("SizeBytes: got %v want %d", imageInfo.SizeBytes, size)
-	}
-}
-
-func TestImagePullResultWire_ToImagePullResult(t *testing.T) {
-	wire := imagePullResultWire{
-		Reference:    "alpine:latest",
-		ConfigDigest: "sha256:def456",
-		LayerCount:   3,
-	}
-
-	result := wire.toImagePullResult()
-	if result.Reference != wire.Reference {
-		t.Errorf("Reference: got %q", result.Reference)
-	}
-	if result.ConfigDigest != wire.ConfigDigest {
-		t.Errorf("ConfigDigest: got %q", result.ConfigDigest)
-	}
-	if result.LayerCount != wire.LayerCount {
-		t.Errorf("LayerCount: got %d", result.LayerCount)
 	}
 }
 
@@ -468,23 +195,6 @@ func TestWithDetach(t *testing.T) {
 	}
 }
 
-func TestBuildOptionsJSON_AutoRemoveDetach(t *testing.T) {
-	cfg := &boxConfig{}
-	WithAutoRemove(false)(cfg)
-	WithDetach(true)(cfg)
-
-	wire, err := buildOptionsJSON("alpine:latest", cfg)
-	if err != nil {
-		t.Fatalf("buildOptionsJSON: %v", err)
-	}
-	if wire.AutoRemove == nil || *wire.AutoRemove != false {
-		t.Error("AutoRemove should be false in wire")
-	}
-	if wire.Detach == nil || *wire.Detach != true {
-		t.Error("Detach should be true in wire")
-	}
-}
-
 func TestWithNetwork(t *testing.T) {
 	cfg := &boxConfig{}
 	WithNetwork(NetworkSpec{
@@ -503,72 +213,14 @@ func TestWithNetwork(t *testing.T) {
 	}
 }
 
-func TestBuildOptionsJSON_AllowNetAndSecrets(t *testing.T) {
-	cfg := &boxConfig{}
-	WithNetwork(NetworkSpec{
-		Mode:     NetworkModeEnabled,
-		AllowNet: []string{"example.com", "10.0.0.0/8"},
-	})(cfg)
-	WithSecret(Secret{
-		Name:  "openai",
-		Value: "sk-secret",
-		Hosts: []string{"api.openai.com"},
-	})(cfg)
-
-	wire, err := buildOptionsJSON("python:slim", cfg)
-	if err != nil {
-		t.Fatalf("buildOptionsJSON: %v", err)
-	}
-
-	network, ok := wire.Network.(wireNetworkSpec)
-	if !ok {
-		t.Fatalf("Network type: got %T", wire.Network)
-	}
-	if network.Mode != string(NetworkModeEnabled) {
-		t.Errorf("Network.Mode: got %q", network.Mode)
-	}
-	if len(network.AllowNet) != 2 {
-		t.Fatalf("AllowNet length: got %d", len(network.AllowNet))
-	}
-	if network.AllowNet[0] != "example.com" {
-		t.Errorf("AllowNet[0]: got %q", network.AllowNet[0])
-	}
-	if len(wire.Secrets) != 1 {
-		t.Fatalf("Secrets length: got %d", len(wire.Secrets))
-	}
-	if wire.Secrets[0].Placeholder != "<BOXLITE_SECRET:openai>" {
-		t.Errorf("Placeholder: got %q", wire.Secrets[0].Placeholder)
-	}
-}
-
-func TestBuildOptionsJSON_DisabledNetwork(t *testing.T) {
-	cfg := &boxConfig{}
-	WithNetwork(NetworkSpec{Mode: NetworkModeDisabled})(cfg)
-
-	wire, err := buildOptionsJSON("alpine:latest", cfg)
-	if err != nil {
-		t.Fatalf("buildOptionsJSON: %v", err)
-	}
-	network, ok := wire.Network.(wireNetworkSpec)
-	if !ok {
-		t.Fatalf("Network type: got %T", wire.Network)
-	}
-	if network.Mode != string(NetworkModeDisabled) {
-		t.Errorf("Network.Mode: got %q", network.Mode)
-	}
-	if len(network.AllowNet) != 0 {
-		t.Errorf("Network.AllowNet: got %v", network.AllowNet)
-	}
-}
-
-func TestBuildOptionsJSON_RejectsAllowNetWithDisabledMode(t *testing.T) {
+func TestBuildCOptions_RejectsAllowNetWithDisabledMode(t *testing.T) {
 	cfg := &boxConfig{}
 	WithNetwork(NetworkSpec{
 		Mode:     NetworkModeDisabled,
 		AllowNet: []string{"example.com"},
 	})(cfg)
 
-	_, err := buildOptionsJSON("alpine:latest", cfg)
+	_, err := buildCOptions("alpine:latest", cfg)
 	if err == nil {
 		t.Fatal("expected error for disabled network with allowlist")
 	}

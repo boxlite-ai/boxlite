@@ -1,20 +1,4 @@
 // Package boxlite provides an idiomatic Go SDK for the BoxLite runtime.
-//
-// BoxLite is an embeddable virtual machine runtime for secure, isolated code
-// execution. Think "SQLite for sandboxing".
-//
-// # Quick Start
-//
-//	rt, err := boxlite.NewRuntime()
-//	if err != nil { log.Fatal(err) }
-//	defer rt.Close()
-//
-//	box, err := rt.Create(ctx, "alpine:latest", boxlite.WithName("my-box"))
-//	if err != nil { log.Fatal(err) }
-//	defer box.Close()
-//
-//	result, err := box.Exec(ctx, "echo", "hello")
-//	fmt.Println(result.Stdout) // "hello\n"
 package boxlite
 
 /*
@@ -24,7 +8,6 @@ package boxlite
 import "C"
 import (
 	"context"
-	"encoding/json"
 	"time"
 	"unsafe"
 )
@@ -52,19 +35,12 @@ func NewRuntime(opts ...RuntimeOption) (*Runtime, error) {
 		defer C.free(unsafe.Pointer(homeDir))
 	}
 
-	var registriesJSON *C.char
-	if len(cfg.registries) > 0 {
-		data, err := json.Marshal(cfg.registries)
-		if err != nil {
-			return nil, err
-		}
-		registriesJSON = toCString(string(data))
-		defer C.free(unsafe.Pointer(registriesJSON))
-	}
+	cRegistries, registriesCount := toCStringArray(cfg.registries)
+	defer freeCStringArray(cRegistries, registriesCount)
 
 	var handle *C.CBoxliteRuntime
 	var cerr C.CBoxliteError
-	code := C.boxlite_runtime_new(homeDir, registriesJSON, &handle, &cerr)
+	code := C.boxlite_runtime_new(homeDir, cRegistries, C.int(registriesCount), &handle, &cerr)
 	if code != C.Ok {
 		return nil, freeError(&cerr)
 	}
@@ -85,7 +61,7 @@ func (r *Runtime) Close() error {
 func (r *Runtime) Shutdown(_ context.Context, timeout time.Duration) error {
 	secs := int(timeout.Seconds())
 	if secs <= 0 {
-		secs = 0 // 0 = use default (10s)
+		secs = 0
 	}
 	var cerr C.CBoxliteError
 	code := C.boxlite_runtime_shutdown(r.handle, C.int(secs), &cerr)
@@ -96,36 +72,25 @@ func (r *Runtime) Shutdown(_ context.Context, timeout time.Duration) error {
 }
 
 // Create creates and returns a new box.
-//
-// The image argument is the registry reference to pull when no usable local path is
-// selected. With [WithRootfsPath], if that path exists as a directory it takes
-// precedence and image is ignored; if the path is missing, Create uses image instead.
 func (r *Runtime) Create(_ context.Context, image string, opts ...BoxOption) (*Box, error) {
 	cfg := &boxConfig{}
 	for _, o := range opts {
 		o(cfg)
 	}
 
-	wire, err := buildOptionsJSON(image, cfg)
+	cOpts, err := buildCOptions(image, cfg)
 	if err != nil {
 		return nil, err
 	}
-	optsJSON, err := json.Marshal(wire)
-	if err != nil {
-		return nil, err
-	}
-
-	cOptsJSON := toCString(string(optsJSON))
-	defer C.free(unsafe.Pointer(cOptsJSON))
 
 	var boxHandle *C.CBoxHandle
 	var cerr C.CBoxliteError
-	code := C.boxlite_create_box(r.handle, cOptsJSON, &boxHandle, &cerr)
+	code := C.boxlite_create_box(r.handle, cOpts, &boxHandle, &cerr)
 	if code != C.Ok {
+		C.boxlite_options_free(cOpts)
 		return nil, freeError(&cerr)
 	}
 
-	// Read back the assigned ID.
 	cID := C.boxlite_box_id(boxHandle)
 	id := ""
 	if cID != nil {
@@ -158,29 +123,6 @@ func (r *Runtime) Get(_ context.Context, idOrName string) (*Box, error) {
 	return &Box{handle: boxHandle, id: id}, nil
 }
 
-// ListInfo lists all boxes.
-func (r *Runtime) ListInfo(_ context.Context) ([]BoxInfo, error) {
-	var cJSON *C.char
-	var cerr C.CBoxliteError
-	code := C.boxlite_list_info(r.handle, &cJSON, &cerr)
-	if code != C.Ok {
-		return nil, freeError(&cerr)
-	}
-	jsonStr := C.GoString(cJSON)
-	freeBoxliteString(cJSON)
-
-	var wireInfos []boxInfoWire
-	if err := json.Unmarshal([]byte(jsonStr), &wireInfos); err != nil {
-		return nil, err
-	}
-
-	result := make([]BoxInfo, len(wireInfos))
-	for i := range wireInfos {
-		result[i] = wireInfos[i].toBoxInfo()
-	}
-	return result, nil
-}
-
 // Remove removes a box by ID or name.
 func (r *Runtime) Remove(_ context.Context, idOrName string) error {
 	cID := toCString(idOrName)
@@ -205,22 +147,4 @@ func (r *Runtime) ForceRemove(_ context.Context, idOrName string) error {
 		return freeError(&cerr)
 	}
 	return nil
-}
-
-// Metrics returns aggregate runtime metrics.
-func (r *Runtime) Metrics(_ context.Context) (*RuntimeMetrics, error) {
-	var cJSON *C.char
-	var cerr C.CBoxliteError
-	code := C.boxlite_runtime_metrics(r.handle, &cJSON, &cerr)
-	if code != C.Ok {
-		return nil, freeError(&cerr)
-	}
-	jsonStr := C.GoString(cJSON)
-	freeBoxliteString(cJSON)
-
-	var m RuntimeMetrics
-	if err := json.Unmarshal([]byte(jsonStr), &m); err != nil {
-		return nil, err
-	}
-	return &m, nil
 }

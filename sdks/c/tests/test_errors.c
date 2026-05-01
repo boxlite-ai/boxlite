@@ -4,7 +4,7 @@
  * Tests error code handling and recovery
  */
 
-#include "boxlite.h"
+#include "test_runtime.h"
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -34,21 +34,19 @@ void test_error_struct_default() {
   printf("  ✓ Default error struct is OK with NULL message\n");
 }
 
-void test_invalid_json_error() {
-  printf("\nTEST: Invalid JSON error\n");
+void test_invalid_options_error() {
+  printf("\nTEST: Invalid options error\n");
 
-  CBoxliteRuntime *runtime = NULL;
+  CBoxliteOptions *opts = NULL;
   CBoxliteError error = {0};
-  const char *invalid_json = "{invalid}";
 
-  BoxliteErrorCode code =
-      boxlite_runtime_new(NULL, invalid_json, &runtime, &error);
+  BoxliteErrorCode code = boxlite_options_new(NULL, &opts, &error);
 
   assert(code != Ok);
-  assert(runtime == NULL);
+  assert(opts == NULL);
   assert(error.message != NULL);
   assert(strlen(error.message) > 0);
-  printf("  ✓ Invalid JSON error: %s\n", error.message);
+  printf("  ✓ Invalid options error: %s\n", error.message);
 
   boxlite_error_free(&error);
 }
@@ -59,7 +57,8 @@ void test_not_found_error() {
   CBoxliteRuntime *runtime = NULL;
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-errors-notfound";
-  BoxliteErrorCode code = boxlite_runtime_new(temp_dir, NULL, &runtime, &error);
+  BoxliteErrorCode code =
+      boxlite_runtime_new(temp_dir, NULL, 0, &runtime, &error);
   assert(code == Ok);
   assert(runtime != NULL);
 
@@ -140,7 +139,8 @@ void test_error_recovery() {
   CBoxliteRuntime *runtime = NULL;
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-errors-recovery";
-  BoxliteErrorCode code = boxlite_runtime_new(temp_dir, NULL, &runtime, &error);
+  BoxliteErrorCode code =
+      boxlite_runtime_new(temp_dir, NULL, 0, &runtime, &error);
   assert(code == Ok);
   assert(runtime != NULL);
 
@@ -155,14 +155,7 @@ void test_error_recovery() {
   printf("  ✓ First attempt failed as expected\n");
 
   // Second attempt: create a real box (should succeed)
-  const char *options =
-      "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":{\"mode\":\"enabled\",\"allow_net\":[]},\"ports\":[],\"auto_"
-      "remove\":false}";
-  box = NULL;
-  code = boxlite_create_box(runtime, options, &box, &error);
-  assert(code == Ok);
-  assert(box != NULL);
+  box = create_test_box(runtime, &error);
   printf("  ✓ Recovery successful - box created\n");
 
   // Cleanup
@@ -178,19 +171,18 @@ void test_multiple_errors() {
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-errors-multiple";
 
-  // Error 1: Invalid JSON
-  CBoxliteRuntime *runtime1 = NULL;
-  BoxliteErrorCode code =
-      boxlite_runtime_new(temp_dir, "{bad", &runtime1, &error);
+  // Error 1: Invalid options
+  CBoxliteOptions *opts = NULL;
+  BoxliteErrorCode code = boxlite_options_new(NULL, &opts, &error);
   assert(code != Ok);
-  assert(runtime1 == NULL);
+  assert(opts == NULL);
   assert(error.message != NULL);
   boxlite_error_free(&error);
   error = (CBoxliteError){0};
 
   // Error 2: NotFound
   CBoxliteRuntime *runtime2 = NULL;
-  code = boxlite_runtime_new(temp_dir, NULL, &runtime2, &error);
+  code = boxlite_runtime_new(temp_dir, NULL, 0, &runtime2, &error);
   assert(code == Ok);
   assert(runtime2 != NULL);
   CBoxHandle *box = NULL;
@@ -202,14 +194,7 @@ void test_multiple_errors() {
   error = (CBoxliteError){0};
 
   // Success: Normal operation
-  const char *options =
-      "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":{\"mode\":\"enabled\",\"allow_net\":[]},\"ports\":[],\"auto_"
-      "remove\":false}";
-  box = NULL;
-  code = boxlite_create_box(runtime2, options, &box, &error);
-  assert(code == Ok);
-  assert(box != NULL);
+  box = create_test_box(runtime2, &error);
 
   printf("  ✓ Multiple errors handled correctly\n");
 
@@ -227,7 +212,7 @@ int main() {
 
   test_error_codes();
   test_error_struct_default();
-  test_invalid_json_error();
+  test_invalid_options_error();
   test_not_found_error();
   test_invalid_argument_simple_api();
   test_invalid_argument_null_output();

@@ -1,7 +1,7 @@
 /**
  * BoxLite C SDK - Simple API Tests
  *
- * Tests the simple convenience API (no JSON, auto-cleanup)
+ * Tests the simple convenience API with automatic cleanup.
  */
 
 #include "boxlite.h"

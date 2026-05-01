@@ -4,7 +4,6 @@ members = [
     "src/cli",
     "src/server",
     "src/shared",
-    "src/ffi",
     "src/guest",
     "src/test-utils",
     "src/deps/bubblewrap-sys",

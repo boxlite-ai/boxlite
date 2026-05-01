@@ -1,87 +1,86 @@
 /**
- * BoxLite C SDK - Example 5: Performance Metrics
- *
- * Demonstrates runtime and box performance monitoring
+ * BoxLite C SDK - Example 5: Performance metrics.
  */
 
+#include "example_common.h"
 #include <stdio.h>
-#include <stdlib.h>
 #include <unistd.h>
-#include "boxlite.h"
 
-int main() {
-    printf("=== BoxLite Example: Performance Metrics ===\n\n");
+static void print_runtime_metrics(CBoxliteRuntime *runtime) {
+  CBoxliteError error = {0};
+  CRuntimeMetrics metrics = {0};
+  BoxliteErrorCode code = boxlite_runtime_metrics(runtime, &metrics, &error);
+  if (code != Ok) {
+    print_error("runtime metrics", &error);
+    boxlite_error_free(&error);
+    return;
+  }
+  printf("created=%d failed=%d running=%d commands=%d exec_errors=%d\n",
+         metrics.boxes_created_total, metrics.boxes_failed_total,
+         metrics.num_running_boxes, metrics.total_commands_executed,
+         metrics.total_exec_errors);
+}
 
-    char* error = NULL;
-    CBoxliteRuntime* runtime = boxlite_runtime_new(NULL, NULL, &error);
-    if (!runtime) {
-        fprintf(stderr, "Failed to create runtime: %s\n", error);
-        boxlite_free_string(error);
-        return 1;
-    }
+static void print_box_metrics(CBoxHandle *box) {
+  CBoxliteError error = {0};
+  CBoxMetrics metrics = {0};
+  BoxliteErrorCode code = boxlite_box_metrics(box, &metrics, &error);
+  if (code != Ok) {
+    print_error("box metrics", &error);
+    boxlite_error_free(&error);
+    return;
+  }
+  printf("commands=%d exec_errors=%d memory=%lld cpu=%.2f\n",
+         metrics.commands_executed, metrics.exec_errors,
+         (long long)metrics.memory_bytes, metrics.cpu_percent);
+}
 
-    // Get initial runtime metrics
-    printf("1. Initial Runtime Metrics\n");
-    printf("─────────────────────────────────────────\n");
-    char* metrics = NULL;
-    boxlite_runtime_metrics(runtime, &metrics, &error);
-    printf("%s\n\n", metrics);
-    boxlite_free_string(metrics);
+int main(void) {
+  printf("=== BoxLite Example: Performance Metrics ===\n\n");
 
-    // Create a box
-    printf("2. Creating box and executing commands...\n");
-    printf("─────────────────────────────────────────\n");
-    const char* options = "{\"rootfs\":{\"Image\":\"alpine:3.19\"}}";
-    CBoxHandle* box = boxlite_create_box(runtime, options, &error);
-    if (!box) {
-        fprintf(stderr, "Failed: %s\n", error);
-        boxlite_free_string(error);
-        return 1;
-    }
+  CBoxliteRuntime *runtime = create_runtime_or_exit();
+  if (runtime == NULL) {
+    return 1;
+  }
 
-    // Execute multiple commands to generate metrics
-    for (int i = 0; i < 5; i++) {
-        const char* args = "[\"test\"]";
-        boxlite_execute(box, "/bin/echo", args, NULL, NULL, &error);
-    }
-    printf("✓ Executed 5 commands\n\n");
+  printf("Initial runtime metrics:\n");
+  print_runtime_metrics(runtime);
+  printf("\n");
 
-    // Get updated runtime metrics
-    printf("3. Updated Runtime Metrics\n");
-    printf("─────────────────────────────────────────\n");
-    boxlite_runtime_metrics(runtime, &metrics, &error);
-    printf("%s\n\n", metrics);
-    boxlite_free_string(metrics);
-
-    // Get box-specific metrics
-    printf("4. Box-Specific Metrics\n");
-    printf("─────────────────────────────────────────\n");
-    char* box_metrics = NULL;
-    boxlite_box_metrics(box, &box_metrics, &error);
-    printf("%s\n\n", box_metrics);
-    boxlite_free_string(box_metrics);
-
-    // Monitor metrics over time
-    printf("5. Real-time Metrics Monitoring (3 samples)\n");
-    printf("─────────────────────────────────────────\n");
-    for (int i = 0; i < 3; i++) {
-        // Execute command
-        boxlite_execute(box, "/bin/uname", "[\"-a\"]", NULL, NULL, &error);
-
-        // Get metrics
-        boxlite_box_metrics(box, &box_metrics, &error);
-        printf("Sample %d: %s\n", i + 1, box_metrics);
-        boxlite_free_string(box_metrics);
-
-        sleep(1);
-    }
-
-    // Cleanup
-    char* id = boxlite_box_id(box);
-    boxlite_remove(runtime, id, 1, &error);
-    boxlite_free_string(id);
+  CBoxHandle *box = create_alpine_box_or_exit(runtime);
+  if (box == NULL) {
     boxlite_runtime_free(runtime);
+    return 1;
+  }
 
-    printf("\n=== Metrics Demo Complete ===\n");
-    return 0;
+  CBoxliteError error = {0};
+  const char *const echo_args[] = {"test"};
+  int exit_code = 0;
+  for (int i = 0; i < 5; i++) {
+    boxlite_execute(box, "/bin/echo", echo_args, 1, NULL, NULL, &exit_code,
+                    &error);
+  }
+
+  printf("Runtime metrics after commands:\n");
+  print_runtime_metrics(runtime);
+  printf("\nBox metrics:\n");
+  print_box_metrics(box);
+
+  printf("\nMetric samples:\n");
+  const char *const uname_args[] = {"-a"};
+  for (int i = 0; i < 3; i++) {
+    boxlite_execute(box, "/bin/uname", uname_args, 1, NULL, NULL, &exit_code,
+                    &error);
+    printf("sample %d: ", i + 1);
+    print_box_metrics(box);
+    sleep(1);
+  }
+
+  char *id = boxlite_box_id(box);
+  boxlite_remove(runtime, id, 1, &error);
+  boxlite_free_string(id);
+  boxlite_runtime_free(runtime);
+
+  printf("\n=== Metrics Demo Complete ===\n");
+  return 0;
 }

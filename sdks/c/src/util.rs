@@ -1,6 +1,4 @@
-//! C string utilities for BoxLite FFI
-//!
-//! Provides functions for converting between Rust strings and C strings.
+//! Utility helpers for the BoxLite C SDK.
 
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
@@ -62,4 +60,48 @@ pub unsafe fn free_c_string(s: *mut c_char) {
             drop(CString::from_raw(s));
         }
     }
+}
+
+use std::os::raw::c_int;
+
+use crate::runtime::RuntimeLiveness;
+
+pub fn stopped_runtime_error(action: &str) -> BoxliteError {
+    BoxliteError::Stopped(format!(
+        "Cannot {action}: runtime has been shut down or closed"
+    ))
+}
+
+pub fn ensure_runtime_live(liveness: &RuntimeLiveness, action: &str) -> Result<(), BoxliteError> {
+    if liveness.is_alive() {
+        Ok(())
+    } else {
+        Err(stopped_runtime_error(action))
+    }
+}
+
+pub unsafe fn parse_c_string_array(values: *const *const c_char, count: c_int) -> Vec<String> {
+    let mut parsed = Vec::new();
+    if values.is_null() || count <= 0 {
+        return parsed;
+    }
+
+    unsafe {
+        for idx in 0..count {
+            let value_ptr = *values.add(idx as usize);
+            if value_ptr.is_null() {
+                continue;
+            }
+            if let Ok(value) = c_str_to_string(value_ptr) {
+                parsed.push(value);
+            }
+        }
+    }
+
+    parsed
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_free_string(s: *mut c_char) {
+    free_c_string(s)
 }

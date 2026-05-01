@@ -4,45 +4,11 @@
  * Tests complex scenarios: multi-box, reattachment, metrics
  */
 
-#include "boxlite.h"
+#include "test_runtime.h"
 #include <assert.h>
-#include <ftw.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
-#include <unistd.h>
-
-static const char *TEST_REGISTRIES =
-    "[\"docker.m.daocloud.io\",\"docker.xuanyuan.me\",\"docker.1ms.run\","
-    "\"docker.io\"]";
-
-static int remove_tree_entry(const char *path, const struct stat *statbuf,
-                             int typeflag, struct FTW *ftwbuf) {
-  (void)statbuf;
-  (void)typeflag;
-  (void)ftwbuf;
-  return remove(path);
-}
-
-static void reset_test_home(const char *temp_dir) {
-  struct stat statbuf;
-  if (lstat(temp_dir, &statbuf) != 0) {
-    return;
-  }
-
-  assert(nftw(temp_dir, remove_tree_entry, 32, FTW_DEPTH | FTW_PHYS) == 0);
-}
-
-static CBoxliteRuntime *new_test_runtime(const char *temp_dir,
-                                         CBoxliteError *error) {
-  CBoxliteRuntime *runtime = NULL;
-  BoxliteErrorCode code =
-      boxlite_runtime_new(temp_dir, TEST_REGISTRIES, &runtime, error);
-  assert(code == Ok);
-  assert(runtime != NULL);
-  return runtime;
-}
 
 void test_multiple_boxes() {
   printf("\nTEST: Create and manage multiple boxes\n");
@@ -53,57 +19,42 @@ void test_multiple_boxes() {
   CBoxliteRuntime *runtime = new_test_runtime(temp_dir, &error);
   BoxliteErrorCode code = Ok;
 
-  const char *options =
-      "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":{\"mode\":\"enabled\",\"allow_net\":[]},\"ports\":[],\"auto_"
-      "remove\":false}";
-
   // Create 3 boxes
-  CBoxHandle *box1 = NULL;
-  code = boxlite_create_box(runtime, options, &box1, &error);
-  assert(code == Ok);
-  assert(box1 != NULL);
-
-  CBoxHandle *box2 = NULL;
-  code = boxlite_create_box(runtime, options, &box2, &error);
-  assert(code == Ok);
-  assert(box2 != NULL);
-
-  CBoxHandle *box3 = NULL;
-  code = boxlite_create_box(runtime, options, &box3, &error);
-  assert(code == Ok);
-  assert(box3 != NULL);
+  CBoxHandle *box1 = create_test_box(runtime, &error);
+  CBoxHandle *box2 = create_test_box(runtime, &error);
+  CBoxHandle *box3 = create_test_box(runtime, &error);
 
   printf("  ✓ Created 3 boxes\n");
 
   // Execute command in each box
-  const char *args = "[\"test\"]";
+  const char *const args[] = {"test"};
   int exit_code = 0;
 
-  code =
-      boxlite_execute(box1, "/bin/echo", args, NULL, NULL, &exit_code, &error);
+  code = boxlite_execute(box1, "/bin/echo", args, 1, NULL, NULL, &exit_code,
+                         &error);
   assert(code == Ok);
   assert(exit_code == 0);
 
-  code =
-      boxlite_execute(box2, "/bin/echo", args, NULL, NULL, &exit_code, &error);
+  code = boxlite_execute(box2, "/bin/echo", args, 1, NULL, NULL, &exit_code,
+                         &error);
   assert(code == Ok);
   assert(exit_code == 0);
 
-  code =
-      boxlite_execute(box3, "/bin/echo", args, NULL, NULL, &exit_code, &error);
+  code = boxlite_execute(box3, "/bin/echo", args, 1, NULL, NULL, &exit_code,
+                         &error);
   assert(code == Ok);
   assert(exit_code == 0);
 
   printf("  ✓ Executed commands in all boxes\n");
 
   // List should show 3+ boxes
-  char *json = NULL;
-  code = boxlite_list_info(runtime, &json, &error);
+  CBoxInfoList *list = NULL;
+  code = boxlite_list_info(runtime, &list, &error);
   assert(code == Ok);
-  assert(json != NULL);
-  printf("  ✓ Listed boxes: %s\n", json);
-  boxlite_free_string(json);
+  assert(list != NULL);
+  assert(list->count >= 3);
+  printf("  ✓ Listed %d boxes\n", list->count);
+  boxlite_free_box_info_list(list);
 
   // Cleanup
   char *id1 = boxlite_box_id(box1);
@@ -130,14 +81,7 @@ void test_reattach_box() {
   BoxliteErrorCode code = Ok;
 
   // Create box and get ID
-  const char *options =
-      "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":{\"mode\":\"enabled\",\"allow_net\":[]},\"ports\":[],\"auto_"
-      "remove\":false}";
-  CBoxHandle *box1 = NULL;
-  code = boxlite_create_box(runtime, options, &box1, &error);
-  assert(code == Ok);
-  assert(box1 != NULL);
+  CBoxHandle *box1 = create_test_box(runtime, &error);
 
   char *box_id = boxlite_box_id(box1);
   printf("  Box ID: %s\n", box_id);
@@ -157,10 +101,10 @@ void test_reattach_box() {
   code = boxlite_start_box(box2, &error);
   assert(code == Ok);
 
-  const char *args = "[\"reattached\"]";
+  const char *const args[] = {"reattached"};
   int exit_code = 0;
-  code =
-      boxlite_execute(box2, "/bin/echo", args, NULL, NULL, &exit_code, &error);
+  code = boxlite_execute(box2, "/bin/echo", args, 1, NULL, NULL, &exit_code,
+                         &error);
   assert(code == Ok);
   assert(exit_code == 0);
   printf("  ✓ Executed command after reattachment\n");
@@ -181,35 +125,25 @@ void test_runtime_metrics() {
   BoxliteErrorCode code = Ok;
 
   // Get initial metrics
-  char *json1 = NULL;
-  code = boxlite_runtime_metrics(runtime, &json1, &error);
+  CRuntimeMetrics metrics1 = {0};
+  code = boxlite_runtime_metrics(runtime, &metrics1, &error);
   assert(code == Ok);
-  assert(json1 != NULL);
-  printf("  ✓ Initial metrics: %s\n", json1);
-  boxlite_free_string(json1);
+  printf("  ✓ Initial metrics: running=%d\n", metrics1.num_running_boxes);
 
   // Create a box
-  const char *options =
-      "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":{\"mode\":\"enabled\",\"allow_net\":[]},\"ports\":[],\"auto_"
-      "remove\":false}";
-  CBoxHandle *box = NULL;
-  code = boxlite_create_box(runtime, options, &box, &error);
-  assert(code == Ok);
-  assert(box != NULL);
+  CBoxHandle *box = create_test_box(runtime, &error);
 
   // Execute command
-  const char *args = "[\"test\"]";
+  const char *const args[] = {"test"};
   int exit_code = 0;
-  boxlite_execute(box, "/bin/echo", args, NULL, NULL, &exit_code, &error);
+  boxlite_execute(box, "/bin/echo", args, 1, NULL, NULL, &exit_code, &error);
 
   // Get updated metrics
-  char *json2 = NULL;
-  code = boxlite_runtime_metrics(runtime, &json2, &error);
+  CRuntimeMetrics metrics2 = {0};
+  code = boxlite_runtime_metrics(runtime, &metrics2, &error);
   assert(code == Ok);
-  assert(json2 != NULL);
-  printf("  ✓ Updated metrics: %s\n", json2);
-  boxlite_free_string(json2);
+  printf("  ✓ Updated metrics: commands=%d\n",
+         metrics2.total_commands_executed);
 
   // Cleanup
   char *id = boxlite_box_id(box);
@@ -227,43 +161,34 @@ void test_box_metrics() {
   CBoxliteRuntime *runtime = new_test_runtime(temp_dir, &error);
   BoxliteErrorCode code = Ok;
 
-  const char *options =
-      "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":{\"mode\":\"enabled\",\"allow_net\":[]},\"ports\":[],\"auto_"
-      "remove\":false}";
-  CBoxHandle *box = NULL;
-  code = boxlite_create_box(runtime, options, &box, &error);
-  assert(code == Ok);
-  assert(box != NULL);
+  CBoxHandle *box = create_test_box(runtime, &error);
 
   // Execute some commands
-  const char *args = "[\"test\"]";
+  const char *const args[] = {"test"};
   int exit_code = 0;
-  code =
-      boxlite_execute(box, "/bin/echo", args, NULL, NULL, &exit_code, &error);
+  code = boxlite_execute(box, "/bin/echo", args, 1, NULL, NULL, &exit_code,
+                         &error);
   if (code != Ok) {
     printf("  ✗ Execute 1 failed: code=%d, message=%s\n", code,
            error.message ? error.message : "(null)");
   }
-  code =
-      boxlite_execute(box, "/bin/echo", args, NULL, NULL, &exit_code, &error);
+  code = boxlite_execute(box, "/bin/echo", args, 1, NULL, NULL, &exit_code,
+                         &error);
   if (code != Ok) {
     printf("  ✗ Execute 2 failed: code=%d, message=%s\n", code,
            error.message ? error.message : "(null)");
   }
 
   // Get box metrics
-  char *json = NULL;
-  code = boxlite_box_metrics(box, &json, &error);
+  CBoxMetrics metrics = {0};
+  code = boxlite_box_metrics(box, &metrics, &error);
   if (code != Ok) {
     printf("  ✗ Box metrics failed: code=%d, message=%s\n", code,
            error.message ? error.message : "(null)");
     fflush(stdout);
   }
   assert(code == Ok);
-  assert(json != NULL);
-  printf("  ✓ Box metrics: %s\n", json);
-  boxlite_free_string(json);
+  printf("  ✓ Box metrics: commands=%d\n", metrics.commands_executed);
 
   // Cleanup
   char *id = boxlite_box_id(box);
@@ -281,27 +206,23 @@ void test_concurrent_execution() {
   CBoxliteRuntime *runtime = new_test_runtime(temp_dir, &error);
   BoxliteErrorCode code = Ok;
 
-  const char *options =
-      "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":{\"mode\":\"enabled\",\"allow_net\":[]},\"ports\":[],\"auto_"
-      "remove\":false}";
-  CBoxHandle *box = NULL;
-  code = boxlite_create_box(runtime, options, &box, &error);
-  assert(code == Ok);
-  assert(box != NULL);
+  CBoxHandle *box = create_test_box(runtime, &error);
 
   // Execute multiple commands sequentially (true concurrency would need
   // threads)
-  const char *args1 = "[\"cmd1\"]";
-  const char *args2 = "[\"cmd2\"]";
-  const char *args3 = "[\"cmd3\"]";
+  const char *const args1[] = {"cmd1"};
+  const char *const args2[] = {"cmd2"};
+  const char *const args3[] = {"cmd3"};
 
   int exit1 = 0, exit2 = 0, exit3 = 0;
-  code = boxlite_execute(box, "/bin/echo", args1, NULL, NULL, &exit1, &error);
+  code =
+      boxlite_execute(box, "/bin/echo", args1, 1, NULL, NULL, &exit1, &error);
   assert(code == Ok);
-  code = boxlite_execute(box, "/bin/echo", args2, NULL, NULL, &exit2, &error);
+  code =
+      boxlite_execute(box, "/bin/echo", args2, 1, NULL, NULL, &exit2, &error);
   assert(code == Ok);
-  code = boxlite_execute(box, "/bin/echo", args3, NULL, NULL, &exit3, &error);
+  code =
+      boxlite_execute(box, "/bin/echo", args3, 1, NULL, NULL, &exit3, &error);
   assert(code == Ok);
 
   assert(exit1 == 0);
@@ -327,16 +248,8 @@ void test_shutdown_with_boxes() {
   BoxliteErrorCode code = Ok;
 
   // Create multiple boxes
-  const char *options =
-      "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":{\"mode\":\"enabled\",\"allow_net\":[]},\"ports\":[],\"auto_"
-      "remove\":false}";
-  CBoxHandle *box1 = NULL;
-  code = boxlite_create_box(runtime, options, &box1, &error);
-  assert(code == Ok);
-  CBoxHandle *box2 = NULL;
-  code = boxlite_create_box(runtime, options, &box2, &error);
-  assert(code == Ok);
+  CBoxHandle *box1 = create_test_box(runtime, &error);
+  CBoxHandle *box2 = create_test_box(runtime, &error);
   assert(box1 != NULL);
   assert(box2 != NULL);
 
@@ -359,14 +272,7 @@ void test_box_prefix_lookup() {
   CBoxliteRuntime *runtime = new_test_runtime(temp_dir, &error);
   BoxliteErrorCode code = Ok;
 
-  const char *options =
-      "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":{\"mode\":\"enabled\",\"allow_net\":[]},\"ports\":[],\"auto_"
-      "remove\":false}";
-  CBoxHandle *box = NULL;
-  code = boxlite_create_box(runtime, options, &box, &error);
-  assert(code == Ok);
-  assert(box != NULL);
+  CBoxHandle *box = create_test_box(runtime, &error);
 
   // Get full ID
   char *full_id = boxlite_box_id(box);
@@ -408,8 +314,8 @@ void test_box_prefix_lookup() {
   boxlite_runtime_free(runtime);
 }
 
-void test_allow_net_json_config() {
-  printf("\nTEST: allow_net JSON config\n");
+void test_allow_net_typed_config() {
+  printf("\nTEST: allow_net typed config\n");
 
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-integration-allow-net";
@@ -417,21 +323,19 @@ void test_allow_net_json_config() {
   CBoxliteRuntime *runtime = new_test_runtime(temp_dir, &error);
   BoxliteErrorCode code = Ok;
 
-  const char *options =
-      "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":{\"mode\":\"enabled\",\"allow_net\":[\"example.com\"]},"
-      "\"ports\":[],\"auto_remove\":false}";
-  CBoxHandle *box = NULL;
-  code = boxlite_create_box(runtime, options, &box, &error);
-  assert(code == Ok);
-  assert(box != NULL);
+  CBoxliteOptions *opts = new_alpine_options(&error);
+  boxlite_options_add_network_allow(opts, "example.com");
+  CBoxHandle *box = create_box_with_options(runtime, opts, &error);
 
-  const char *args = "[\"-c\", \"wget -q -O - http://example.com >/dev/null\"]";
+  const char *const args[] = {"-c",
+                              "wget -q -O - http://example.com >/dev/null"};
   int exit_code = 0;
-  code = boxlite_execute(box, "/bin/sh", args, NULL, NULL, &exit_code, &error);
+  code =
+      boxlite_execute(box, "/bin/sh", args, 2, NULL, NULL, &exit_code, &error);
   assert(code == Ok);
   assert(exit_code == 0);
-  printf("  ✓ allow_net JSON accepted and outbound request succeeded\n");
+  printf(
+      "  ✓ allow_net typed options accepted and outbound request succeeded\n");
 
   char *id = boxlite_box_id(box);
   boxlite_remove(runtime, id, 1, &error);
@@ -439,32 +343,28 @@ void test_allow_net_json_config() {
   boxlite_runtime_free(runtime);
 }
 
-void test_legacy_network_json_rejected() {
-  printf("\nTEST: legacy network JSON is rejected\n");
+void test_null_options_rejected() {
+  printf("\nTEST: NULL options are rejected\n");
 
   CBoxliteError error = {0};
-  const char *temp_dir = "/tmp/boxlite-test-integration-legacy-network";
+  const char *temp_dir = "/tmp/boxlite-test-integration-null-options";
   reset_test_home(temp_dir);
   CBoxliteRuntime *runtime = new_test_runtime(temp_dir, &error);
   BoxliteErrorCode code = Ok;
 
-  const char *options =
-      "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":{\"Enabled\":{\"allow_net\":[\"example.com\"]}},"
-      "\"ports\":[],\"auto_remove\":false}";
   CBoxHandle *box = NULL;
-  code = boxlite_create_box(runtime, options, &box, &error);
+  code = boxlite_create_box(runtime, NULL, &box, &error);
   assert(code == InvalidArgument);
   assert(box == NULL);
   assert(error.message != NULL);
-  printf("  ✓ legacy network JSON rejected: %s\n", error.message);
+  printf("  ✓ NULL options rejected: %s\n", error.message);
 
   boxlite_error_free(&error);
   boxlite_runtime_free(runtime);
 }
 
-void test_secrets_json_config() {
-  printf("\nTEST: secrets JSON config\n");
+void test_secrets_typed_config() {
+  printf("\nTEST: secrets typed config\n");
 
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-integration-secrets";
@@ -472,23 +372,21 @@ void test_secrets_json_config() {
   CBoxliteRuntime *runtime = new_test_runtime(temp_dir, &error);
   BoxliteErrorCode code = Ok;
 
-  const char *options =
-      "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":{\"mode\":\"enabled\",\"allow_net\":[]},\"ports\":[],"
-      "\"secrets\":[{\"name\":\"openai\",\"value\":\"sk-test\","
-      "\"hosts\":[\"api.openai.com\"]}],\"auto_remove\":false}";
-  CBoxHandle *box = NULL;
-  code = boxlite_create_box(runtime, options, &box, &error);
-  assert(code == Ok);
-  assert(box != NULL);
+  CBoxliteOptions *opts = new_alpine_options(&error);
+  const char *const hosts[] = {"api.openai.com"};
+  boxlite_options_add_secret(opts, "openai", "sk-test",
+                             "<BOXLITE_SECRET:openai>", hosts, 1);
+  CBoxHandle *box = create_box_with_options(runtime, opts, &error);
 
-  const char *args = "[\"-c\", \"test \\\"$BOXLITE_SECRET_OPENAI\\\" = "
-                     "\\\"<BOXLITE_SECRET:openai>\\\"\"]";
+  const char *const args[] = {
+      "-c", "test \"$BOXLITE_SECRET_OPENAI\" = \"<BOXLITE_SECRET:openai>\""};
   int exit_code = 0;
-  code = boxlite_execute(box, "/bin/sh", args, NULL, NULL, &exit_code, &error);
+  code =
+      boxlite_execute(box, "/bin/sh", args, 2, NULL, NULL, &exit_code, &error);
   assert(code == Ok);
   assert(exit_code == 0);
-  printf("  ✓ secrets JSON accepted and placeholder env var is available\n");
+  printf("  ✓ secrets typed options accepted and placeholder env var is "
+         "available\n");
 
   char *id = boxlite_box_id(box);
   boxlite_remove(runtime, id, 1, &error);
@@ -508,9 +406,9 @@ int main() {
   test_concurrent_execution();
   test_shutdown_with_boxes();
   test_box_prefix_lookup();
-  test_allow_net_json_config();
-  test_legacy_network_json_rejected();
-  test_secrets_json_config();
+  test_allow_net_typed_config();
+  test_null_options_rejected();
+  test_secrets_typed_config();
 
   printf("\n═══════════════════════════════════════\n");
   printf("  ✅ ALL TESTS PASSED (%d tests)\n", 10);

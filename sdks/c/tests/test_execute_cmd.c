@@ -5,7 +5,6 @@
  * covering workdir, env, user, and timeout options.
  */
 
-#include "boxlite.h"
 #include "test_runtime.h"
 #include <assert.h>
 #include <stdio.h>
@@ -16,6 +15,7 @@
 
 static char captured_stdout[4096];
 static int captured_stdout_len;
+static const char *const COMMAND_TEST_HOME = "/tmp/boxlite-test-cmd";
 
 static void capture_stdout_callback(const char *text, int is_stderr,
                                     void *user_data) {
@@ -38,38 +38,11 @@ static void reset_capture(void) {
 /**
  * Create a runtime + box for a test. Caller must clean up via cleanup_box().
  */
-static void setup_box(const char *test_name, CBoxliteRuntime **out_runtime,
-                      CBoxHandle **out_box) {
+static void setup_box(CBoxliteRuntime **out_runtime, CBoxHandle **out_box) {
   CBoxliteError error = {0};
-  const char *prefix = "/tmp/boxlite-test-cmd-";
-  char temp_dir[256];
-  size_t i = 0;
-  while (prefix[i] != '\0' && i < sizeof(temp_dir) - 1) {
-    temp_dir[i] = prefix[i];
-    i++;
-  }
-  size_t j = 0;
-  while (test_name[j] != '\0' && i < sizeof(temp_dir) - 1) {
-    temp_dir[i++] = test_name[j++];
-  }
-  temp_dir[i] = '\0';
+  *out_runtime = new_test_runtime(COMMAND_TEST_HOME, &error);
 
-  reset_test_home(temp_dir);
-  *out_runtime = new_test_runtime(temp_dir, &error);
-
-  const char *options =
-      "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":{\"mode\":\"enabled\",\"allow_net\":[]},\"ports\":[],\"auto_"
-      "remove\":false}";
-
-  BoxliteErrorCode code =
-      boxlite_create_box(*out_runtime, options, out_box, &error);
-  if (code != Ok) {
-    printf("  ✗ Failed to create box: code=%d, message=%s\n", error.code,
-           error.message ? error.message : "(null)");
-    boxlite_error_free(&error);
-  }
-  assert(code == Ok && "Failed to create box");
+  *out_box = create_test_box(*out_runtime, &error);
 }
 
 static void cleanup_box(CBoxliteRuntime *runtime, CBoxHandle *box) {
@@ -77,6 +50,7 @@ static void cleanup_box(CBoxliteRuntime *runtime, CBoxHandle *box) {
   char *id = boxlite_box_id(box);
   boxlite_remove(runtime, id, 1, &error);
   boxlite_free_string(id);
+  boxlite_box_free(box);
   boxlite_runtime_free(runtime);
 }
 
@@ -87,11 +61,14 @@ void test_execute_cmd_basic(void) {
 
   CBoxliteRuntime *runtime = NULL;
   CBoxHandle *box = NULL;
-  setup_box("basic", &runtime, &box);
+  setup_box(&runtime, &box);
 
+  const char *args[] = {"hello"};
   BoxliteCommand cmd = {.command = "/bin/echo",
-                        .args_json = "[\"hello\"]",
-                        .env_json = NULL,
+                        .args = args,
+                        .argc = 1,
+                        .env_pairs = NULL,
+                        .env_count = 0,
                         .workdir = NULL,
                         .user = NULL,
                         .timeout_secs = 0.0};
@@ -121,11 +98,13 @@ void test_execute_cmd_with_workdir(void) {
 
   CBoxliteRuntime *runtime = NULL;
   CBoxHandle *box = NULL;
-  setup_box("workdir", &runtime, &box);
+  setup_box(&runtime, &box);
 
   BoxliteCommand cmd = {.command = "/bin/pwd",
-                        .args_json = NULL,
-                        .env_json = NULL,
+                        .args = NULL,
+                        .argc = 0,
+                        .env_pairs = NULL,
+                        .env_count = 0,
                         .workdir = "/tmp",
                         .user = NULL,
                         .timeout_secs = 0.0};
@@ -154,11 +133,14 @@ void test_execute_cmd_with_env(void) {
 
   CBoxliteRuntime *runtime = NULL;
   CBoxHandle *box = NULL;
-  setup_box("env", &runtime, &box);
+  setup_box(&runtime, &box);
 
+  const char *env[] = {"FOO", "bar"};
   BoxliteCommand cmd = {.command = "/usr/bin/env",
-                        .args_json = NULL,
-                        .env_json = "[[\"FOO\",\"bar\"]]",
+                        .args = NULL,
+                        .argc = 0,
+                        .env_pairs = env,
+                        .env_count = 2,
                         .workdir = NULL,
                         .user = NULL,
                         .timeout_secs = 0.0};
@@ -187,11 +169,13 @@ void test_execute_cmd_with_user(void) {
 
   CBoxliteRuntime *runtime = NULL;
   CBoxHandle *box = NULL;
-  setup_box("user", &runtime, &box);
+  setup_box(&runtime, &box);
 
   BoxliteCommand cmd = {.command = "/usr/bin/whoami",
-                        .args_json = NULL,
-                        .env_json = NULL,
+                        .args = NULL,
+                        .argc = 0,
+                        .env_pairs = NULL,
+                        .env_count = 0,
                         .workdir = NULL,
                         .user = "nobody",
                         .timeout_secs = 0.0};
@@ -220,11 +204,14 @@ void test_execute_cmd_with_timeout(void) {
 
   CBoxliteRuntime *runtime = NULL;
   CBoxHandle *box = NULL;
-  setup_box("timeout", &runtime, &box);
+  setup_box(&runtime, &box);
 
+  const char *args[] = {"60"};
   BoxliteCommand cmd = {.command = "/bin/sleep",
-                        .args_json = "[\"60\"]",
-                        .env_json = NULL,
+                        .args = args,
+                        .argc = 1,
+                        .env_pairs = NULL,
+                        .env_count = 0,
                         .workdir = NULL,
                         .user = NULL,
                         .timeout_secs = 2.0};
@@ -251,11 +238,13 @@ void test_execute_cmd_null_optional_fields(void) {
 
   CBoxliteRuntime *runtime = NULL;
   CBoxHandle *box = NULL;
-  setup_box("nullopts", &runtime, &box);
+  setup_box(&runtime, &box);
 
   BoxliteCommand cmd = {.command = "/bin/echo",
-                        .args_json = NULL,
-                        .env_json = NULL,
+                        .args = NULL,
+                        .argc = 0,
+                        .env_pairs = NULL,
+                        .env_count = 0,
                         .workdir = NULL,
                         .user = NULL,
                         .timeout_secs = 0.0};
@@ -285,6 +274,8 @@ int main(void) {
   printf("  BoxLite C SDK - Execute Cmd Tests\n");
   printf("═══════════════════════════════════════\n");
 
+  reset_test_home(COMMAND_TEST_HOME);
+
   test_execute_cmd_basic();
   test_execute_cmd_with_workdir();
   test_execute_cmd_with_env();
@@ -295,6 +286,8 @@ int main(void) {
   printf("\n═══════════════════════════════════════\n");
   printf("  ✅ ALL TESTS PASSED (6 tests)\n");
   printf("═══════════════════════════════════════\n");
+
+  reset_test_home(COMMAND_TEST_HOME);
 
   return 0;
 }

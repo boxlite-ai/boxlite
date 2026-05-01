@@ -55,7 +55,7 @@ int main() {
     CBoxliteSimple* box = NULL;
     CBoxliteError error = {0};
 
-    // Create box (no JSON required, auto-starts)
+    // Create box and auto-start it
     if (boxlite_simple_new("python:slim", 0, 0, &box, &error) != Ok) {
         fprintf(stderr, "Error %d: %s\n", error.code, error.message);
         boxlite_error_free(&error);
@@ -132,7 +132,7 @@ int main() {
     CBoxliteError error = {0};
 
     // Create runtime
-    if (boxlite_runtime_new(NULL, NULL, &runtime, &error) != Ok) {
+    if (boxlite_runtime_new(NULL, NULL, 0, &runtime, &error) != Ok) {
         fprintf(stderr, "Runtime error: %s\n", error.message);
         boxlite_error_free(&error);
         return 1;
@@ -140,29 +140,33 @@ int main() {
 
     printf("BoxLite v%s\n", boxlite_version());
 
-    // Create box with JSON configuration
-    const char* options = "{"
-        "\"rootfs\":{\"Image\":\"alpine:3.19\"},"
-        "\"cpus\":2,"
-        "\"memory_mib\":512,"
-        "\"env\":[],"
-        "\"volumes\":[],"
-        "\"network\":{\"mode\":\"enabled\",\"allow_net\":[]},"
-        "\"ports\":[]"
-    "}";
-
-    if (boxlite_create_box(runtime, options, &box, &error) != Ok) {
-        fprintf(stderr, "Box error: %s\n", error.message);
+    // Create box with typed options
+    CBoxliteOptions* opts = NULL;
+    if (boxlite_options_new("alpine:3.19", &opts, &error) != Ok) {
+        fprintf(stderr, "Options error: %s\n", error.message);
         boxlite_error_free(&error);
         boxlite_runtime_free(runtime);
         return 1;
     }
+    boxlite_options_set_cpus(opts, 2);
+    boxlite_options_set_memory(opts, 512);
+    boxlite_options_set_network_enabled(opts);
+
+    if (boxlite_create_box(runtime, opts, &box, &error) != Ok) {
+        fprintf(stderr, "Box error: %s\n", error.message);
+        boxlite_error_free(&error);
+        boxlite_options_free(opts);
+        boxlite_runtime_free(runtime);
+        return 1;
+    }
+    boxlite_options_free(opts);
 
     // Execute commands with streaming output
     int exit_code = 0;
+    const char* args[] = {"-la", "/"};
 
     printf("\n--- Running: ls -la / ---\n");
-    if (boxlite_execute(box, "/bin/ls", "[\"-la\", \"/\"]", output_callback, NULL, &exit_code, &error) == Ok) {
+    if (boxlite_execute(box, "/bin/ls", args, 2, output_callback, NULL, &exit_code, &error) == Ok) {
         printf("\nExit code: %d\n", exit_code);
     } else {
         fprintf(stderr, "Execute error: %s\n", error.message);
@@ -176,21 +180,6 @@ int main() {
 ```
 
 Build and run using the same commands as above.
-
-The native JSON surface also accepts `NetworkSpec` and `secrets`, for example:
-
-```json
-{
-  "network": {"mode": "enabled", "allow_net": ["api.openai.com"]},
-  "secrets": [
-    {
-      "name": "openai",
-      "value": "sk-...",
-      "hosts": ["api.openai.com"]
-    }
-  ]
-}
-```
 
 ---
 
@@ -272,7 +261,7 @@ See [C SDK API Reference](../reference/c/README.md#boxliteerrorcode) for the com
 
 - **[C SDK README](../../sdks/c/README.md)** - Complete SDK documentation
   - Simple API and Native API details
-  - JSON configuration schema
+  - Typed box options
   - Memory management rules
   - Threading and safety
   - Troubleshooting guide

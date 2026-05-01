@@ -456,8 +456,10 @@ dependencies = [
 name = "boxlite-c"
 version = "0.8.2"
 dependencies = [
- "boxlite-ffi",
+ "boxlite",
  "cbindgen",
+ "futures",
+ "tokio",
 ]
 
 [[package]]
@@ -495,18 +497,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "ulid",
-]
-
-[[package]]
-name = "boxlite-ffi"
-version = "0.8.2"
-dependencies = [
- "boxlite",
- "chrono",
- "futures",
- "serde",
- "serde_json",
- "tokio",
 ]
 
 [[package]]

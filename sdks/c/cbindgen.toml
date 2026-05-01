@@ -13,7 +13,4 @@ style = "both"
 usize_is_size_t = true
 
 [parse]
-# Enable parsing dependency crates to resolve types defined in boxlite-ffi
-parse_deps = true
-# Only parse boxlite-ffi (avoid scanning the entire boxlite core crate)
-include = ["boxlite-ffi"]
+parse_deps = false

@@ -15,7 +15,12 @@ crate-type = ["cdylib", "staticlib"]
 default = []
 
 [dependencies]
-boxlite-ffi = { path = "../../src/ffi" }
+boxlite = { workspace = true }
+futures = "0.3"
+tokio = { version = "1.37", features = ["rt", "rt-multi-thread"] }
+
+[dev-dependencies]
+boxlite = { workspace = true, features = ["rest"] }
 
 [build-dependencies]
 cbindgen = "0.29"

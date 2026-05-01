@@ -145,3 +145,15 @@ pub unsafe fn write_error(out_error: *mut FFIError, err: BoxliteError) {
 pub fn null_pointer_error(param_name: &str) -> BoxliteError {
     BoxliteError::InvalidArgument(format!("{} is null", param_name))
 }
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_error_free(error: *mut crate::CBoxliteError) {
+    if !error.is_null() {
+        let err = &mut *error;
+        if !err.message.is_null() {
+            drop(CString::from_raw(err.message));
+            err.message = ptr::null_mut();
+        }
+        err.code = BoxliteErrorCode::Ok;
+    }
+}

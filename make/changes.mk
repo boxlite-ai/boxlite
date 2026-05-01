@@ -15,7 +15,6 @@ $(shell \
   echo "$$CHANGED" | grep -q '^src/guest/' && printf 'rust '; \
   echo "$$CHANGED" | grep -q '^src/server/' && printf 'server '; \
   echo "$$CHANGED" | grep -q '^src/cli/' && printf 'cli '; \
-  echo "$$CHANGED" | grep -q '^src/ffi/' && printf 'ffi '; \
   echo "$$CHANGED" | grep -q '^sdks/python/' && printf 'python '; \
   echo "$$CHANGED" | grep -q '^sdks/node/' && printf 'node '; \
   echo "$$CHANGED" | grep -q '^sdks/c/' && printf 'c '; \
@@ -28,5 +27,5 @@ endef
 CHANGED_COMPONENTS := $(sort $(detect_changes))
 
 # Map test components to format/lint surfaces.
-# server/cli/ffi don't need separate formatters — cargo fmt --all and clippy --workspace cover them.
-FMT_COMPONENTS := $(sort $(subst server,rust,$(subst cli,rust,$(subst ffi,rust,$(CHANGED_COMPONENTS)))))
+# server/cli don't need separate formatters — cargo fmt --all and clippy --workspace cover them.
+FMT_COMPONENTS := $(sort $(subst server,rust,$(subst cli,rust,$(CHANGED_COMPONENTS))))

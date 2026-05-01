@@ -4,7 +4,6 @@
  * Tests command execution and exit codes
  */
 
-#include "boxlite.h"
 #include "test_runtime.h"
 #include <assert.h>
 #include <stdio.h>
@@ -28,24 +27,16 @@ void test_execute_success() {
   runtime = new_test_runtime(temp_dir, &error);
   BoxliteErrorCode code = Ok;
 
-  const char *options =
-      "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":{\"mode\":\"enabled\",\"allow_net\":[]},\"ports\":[],\"auto_"
-      "remove\":false}";
-  CBoxHandle *box = NULL;
-  code = boxlite_create_box(runtime, options, &box, &error);
-  assert(code == Ok);
-  assert(box != NULL);
+  CBoxHandle *box = create_test_box(runtime, &error);
 
   // Execute: echo hello
-  const char *args = "[\"hello\"]";
+  const char *const args[] = {"hello"};
   output_callback_called = 0;
 
   int exit_code = 0;
-  code = boxlite_execute(box, "/bin/echo", args, simple_callback, NULL,
+  code = boxlite_execute(box, "/bin/echo", args, 1, simple_callback, NULL,
                          &exit_code, &error);
 
-  printf("  DEBUG: code=%d, Ok=%d, code==Ok? %d\n", code, Ok, code == Ok);
   if (code != Ok) {
     printf("  ✗ Error executing command: code=%d, message=%s\n", error.code,
            error.message ? error.message : "(null)");
@@ -74,19 +65,13 @@ void test_execute_failure() {
   runtime = new_test_runtime(temp_dir, &error);
   BoxliteErrorCode code = Ok;
 
-  const char *options =
-      "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":{\"mode\":\"enabled\",\"allow_net\":[]},\"ports\":[],\"auto_"
-      "remove\":false}";
-  CBoxHandle *box = NULL;
-  code = boxlite_create_box(runtime, options, &box, &error);
-  assert(code == Ok);
-  assert(box != NULL);
+  CBoxHandle *box = create_test_box(runtime, &error);
 
   // Execute: ls /nonexistent (should fail)
-  const char *args = "[\"/nonexistent\"]";
+  const char *const args[] = {"/nonexistent"};
   int exit_code = 0;
-  code = boxlite_execute(box, "/bin/ls", args, NULL, NULL, &exit_code, &error);
+  code =
+      boxlite_execute(box, "/bin/ls", args, 1, NULL, NULL, &exit_code, &error);
 
   assert(code == Ok);     // API call succeeds
   assert(exit_code != 0); // But command fails
@@ -109,19 +94,12 @@ void test_execute_no_callback() {
   runtime = new_test_runtime(temp_dir, &error);
   BoxliteErrorCode code = Ok;
 
-  const char *options =
-      "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":{\"mode\":\"enabled\",\"allow_net\":[]},\"ports\":[],\"auto_"
-      "remove\":false}";
-  CBoxHandle *box = NULL;
-  code = boxlite_create_box(runtime, options, &box, &error);
-  assert(code == Ok);
-  assert(box != NULL);
+  CBoxHandle *box = create_test_box(runtime, &error);
 
   // Execute without callback
-  const char *args = "[]";
   int exit_code = 0;
-  code = boxlite_execute(box, "/bin/pwd", args, NULL, NULL, &exit_code, &error);
+  code =
+      boxlite_execute(box, "/bin/pwd", NULL, 0, NULL, NULL, &exit_code, &error);
 
   assert(code == Ok);
   assert(exit_code == 0);
@@ -144,30 +122,27 @@ void test_execute_multiple_commands() {
   runtime = new_test_runtime(temp_dir, &error);
   BoxliteErrorCode code = Ok;
 
-  const char *options =
-      "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":{\"mode\":\"enabled\",\"allow_net\":[]},\"ports\":[],\"auto_"
-      "remove\":false}";
-  CBoxHandle *box = NULL;
-  code = boxlite_create_box(runtime, options, &box, &error);
-  assert(code == Ok);
-  assert(box != NULL);
+  CBoxHandle *box = create_test_box(runtime, &error);
 
   // Execute multiple commands in sequence
   int exit_code = 0;
 
-  code = boxlite_execute(box, "/bin/echo", "[\"test1\"]", NULL, NULL,
-                         &exit_code, &error);
+  const char *const args1[] = {"test1"};
+  const char *const args2[] = {"test2"};
+  const char *const args3[] = {"test3"};
+
+  code = boxlite_execute(box, "/bin/echo", args1, 1, NULL, NULL, &exit_code,
+                         &error);
   assert(code == Ok);
   assert(exit_code == 0);
 
-  code = boxlite_execute(box, "/bin/echo", "[\"test2\"]", NULL, NULL,
-                         &exit_code, &error);
+  code = boxlite_execute(box, "/bin/echo", args2, 1, NULL, NULL, &exit_code,
+                         &error);
   assert(code == Ok);
   assert(exit_code == 0);
 
-  code = boxlite_execute(box, "/bin/echo", "[\"test3\"]", NULL, NULL,
-                         &exit_code, &error);
+  code = boxlite_execute(box, "/bin/echo", args3, 1, NULL, NULL, &exit_code,
+                         &error);
   assert(code == Ok);
   assert(exit_code == 0);
 
@@ -190,19 +165,13 @@ void test_execute_complex_args() {
   runtime = new_test_runtime(temp_dir, &error);
   BoxliteErrorCode code = Ok;
 
-  const char *options =
-      "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":{\"mode\":\"enabled\",\"allow_net\":[]},\"ports\":[],\"auto_"
-      "remove\":false}";
-  CBoxHandle *box = NULL;
-  code = boxlite_create_box(runtime, options, &box, &error);
-  assert(code == Ok);
-  assert(box != NULL);
+  CBoxHandle *box = create_test_box(runtime, &error);
 
   // Execute with multiple arguments
-  const char *args = "[\"-alh\", \"/\"]";
+  const char *const args[] = {"-alh", "/"};
   int exit_code = 0;
-  code = boxlite_execute(box, "/bin/ls", args, NULL, NULL, &exit_code, &error);
+  code =
+      boxlite_execute(box, "/bin/ls", args, 2, NULL, NULL, &exit_code, &error);
 
   assert(code == Ok);
   assert(exit_code == 0);
@@ -233,18 +202,12 @@ void test_execute_with_user_data() {
   runtime = new_test_runtime(temp_dir, &error);
   BoxliteErrorCode code = Ok;
 
-  const char *options =
-      "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":{\"mode\":\"enabled\",\"allow_net\":[]},\"ports\":[],\"auto_"
-      "remove\":false}";
-  CBoxHandle *box = NULL;
-  code = boxlite_create_box(runtime, options, &box, &error);
-  assert(code == Ok);
-  assert(box != NULL);
+  CBoxHandle *box = create_test_box(runtime, &error);
 
   counter = 0;
   int exit_code = 0;
-  code = boxlite_execute(box, "/bin/echo", "[\"hello\"]", user_data_callback,
+  const char *const args[] = {"hello"};
+  code = boxlite_execute(box, "/bin/echo", args, 1, user_data_callback,
                          &counter, &exit_code, &error);
 
   assert(code == Ok);

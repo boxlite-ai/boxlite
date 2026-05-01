@@ -162,13 +162,13 @@ test\:integration\:rust: runtime\:debug test\:warm-cache\:rust
 			$(if $(FILTER),$(FILTER),); \
 	fi
 
-# BoxLite FFI unit tests.
+# BoxLite C SDK unit tests.
 test\:unit\:ffi:
-	@echo "🧪 Running BoxLite FFI unit tests..."
+	@echo "🧪 Running BoxLite C SDK unit tests..."
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
-		cargo nextest run -p boxlite-ffi; \
+		cargo nextest run -p boxlite-c; \
 	else \
-		cargo test -p boxlite-ffi; \
+		cargo test -p boxlite-c; \
 	fi
 
 # CLI integration tests.

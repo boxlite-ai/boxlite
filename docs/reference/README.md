@@ -11,7 +11,7 @@ Complete API documentation for each SDK:
 | **Python** | [Python API Reference](python/README.md) | Async/sync API, box types, metrics |
 | **Node.js** | [Node.js API Reference](nodejs/README.md) | TypeScript definitions, box types, CDP endpoints |
 | **Rust** | [Rust API Reference](rust/README.md) | Core runtime, stream APIs, security options |
-| **C** | [C API Reference](c/README.md) | FFI bindings, JSON API, callback streaming |
+| **C** | [C API Reference](c/README.md) | FFI bindings, typed options, callback streaming |
 
 ---
 
@@ -159,7 +159,7 @@ Host-side secret substitution rules for outbound HTTP(S) requests.
 **Notes:**
 - The guest sees only the placeholder, never the real secret value.
 - The placeholder is also exposed as `BOXLITE_SECRET_<NAME>` inside the guest.
-- C SDK users pass the same structure through the raw JSON `options_json` surface.
+- C SDK users configure secrets with `boxlite_options_add_secret()`.
 
 #### `cpus: int`
 

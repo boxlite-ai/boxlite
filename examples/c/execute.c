@@ -1,108 +1,71 @@
 /**
- * Simple BoxLite C API example
- *
- * Demonstrates creating a container and executing commands.
+ * BoxLite C SDK - Command execution with streaming output.
  */
 
+#include "example_common.h"
 #include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include "boxlite.h"
 
-// Callback for streaming command output
-void output_callback(const char* text, int is_stderr, void* user_data) {
-    FILE* stream = is_stderr ? stderr : stdout;
-    fprintf(stream, "%s", text);
+static void output_callback(const char *text, int is_stderr, void *user_data) {
+  (void)user_data;
+  FILE *stream = is_stderr ? stderr : stdout;
+  fprintf(stream, "%s", text ? text : "");
 }
 
-int main() {
-    CBoxliteRuntime* runtime = NULL;
-    CBoxHandle* box = NULL;
-    CBoxliteError error = {0};
-    BoxliteErrorCode code;
+int main(void) {
+  printf("BoxLite C API Example\n");
+  printf("Version: %s\n\n", boxlite_version());
 
-    printf("🚀 BoxLite C API Example\n");
-    printf("Version: %s\n\n", boxlite_version());
+  CBoxliteRuntime *runtime = create_runtime_or_exit();
+  if (runtime == NULL) {
+    return 1;
+  }
 
-    // Create runtime with default home directory
-    code = boxlite_runtime_new(NULL, NULL, &runtime, &error);
-    if (code != Ok) {
-        fprintf(stderr, "Failed to create runtime (code %d): %s\n",
-                error.code, error.message ? error.message : "unknown");
-        boxlite_error_free(&error);
-        return 1;
-    }
-
-    // Create a box with Alpine Linux
-    const char* options_json = "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],\"network\":{\"mode\":\"enabled\",\"allow_net\":[]},\"ports\":[]}";
-    code = boxlite_create_box(runtime, options_json, &box, &error);
-    if (code != Ok) {
-        fprintf(stderr, "Failed to create box (code %d): %s\n",
-                error.code, error.message ? error.message : "unknown");
-        boxlite_error_free(&error);
-        boxlite_runtime_free(runtime);
-        return 1;
-    }
-
-    printf("📦 Created container, executing commands...\n\n");
-
-    // Execute first command: list root directory
-    printf("Command 1: ls -alrt /\n");
-    printf("---\n");
-    const char* args1 = "[\"-alrt\", \"/\"]";
-    int exit_code = 0;
-    error = (CBoxliteError){0};
-    code = boxlite_execute(box, "/bin/ls", args1, output_callback, NULL, &exit_code, &error);
-    if (code != Ok) {
-        fprintf(stderr, "Execute failed (code %d): %s\n", error.code, error.message);
-        boxlite_error_free(&error);
-    } else if (exit_code != 0) {
-        fprintf(stderr, "Command failed with exit code %d\n", exit_code);
-    }
-    printf("\n");
-
-    // Execute second command: show network interfaces
-    printf("Command 2: ip addr\n");
-    printf("---\n");
-    const char* args2 = "[\"addr\"]";
-    exit_code = 0;
-    error = (CBoxliteError){0};
-    code = boxlite_execute(box, "ip", args2, output_callback, NULL, &exit_code, &error);
-    if (code != Ok) {
-        fprintf(stderr, "Execute failed (code %d): %s\n", error.code, error.message);
-        boxlite_error_free(&error);
-    } else if (exit_code != 0) {
-        fprintf(stderr, "Command failed with exit code %d\n", exit_code);
-    }
-    printf("\n");
-
-    // Execute third command: show environment
-    printf("Command 3: env\n");
-    printf("---\n");
-    const char* args3 = "[]";
-    exit_code = 0;
-    error = (CBoxliteError){0};
-    code = boxlite_execute(box, "/usr/bin/env", args3, output_callback, NULL, &exit_code, &error);
-    if (code != Ok) {
-        fprintf(stderr, "Execute failed (code %d): %s\n", error.code, error.message);
-        boxlite_error_free(&error);
-    } else if (exit_code != 0) {
-        fprintf(stderr, "Command failed with exit code %d\n", exit_code);
-    }
-    printf("\n");
-
-    printf("✅ Execution completed!\n");
-
-    // Cleanup
-    error = (CBoxliteError){0};
-    code = boxlite_stop_box(box, &error);
-    if (code != Ok) {
-        fprintf(stderr, "Warning: Failed to stop box (code %d): %s\n",
-                error.code, error.message ? error.message : "unknown");
-        boxlite_error_free(&error);
-    }
-
+  CBoxHandle *box = create_alpine_box_or_exit(runtime);
+  if (box == NULL) {
     boxlite_runtime_free(runtime);
+    return 1;
+  }
 
-    return 0;
+  const char *const ls_args[] = {"-alrt", "/"};
+  const char *const ip_args[] = {"addr"};
+  int exit_code = 0;
+  CBoxliteError error = {0};
+
+  printf("Command 1: ls -alrt /\n---\n");
+  BoxliteErrorCode code = boxlite_execute(box, "/bin/ls", ls_args, 2,
+                                          output_callback, NULL, &exit_code,
+                                          &error);
+  if (code != Ok) {
+    print_error("ls", &error);
+    boxlite_error_free(&error);
+  }
+  printf("\nExit code: %d\n\n", exit_code);
+
+  printf("Command 2: ip addr\n---\n");
+  error = (CBoxliteError){0};
+  exit_code = 0;
+  code = boxlite_execute(box, "ip", ip_args, 1, output_callback, NULL,
+                         &exit_code, &error);
+  if (code != Ok) {
+    print_error("ip addr", &error);
+    boxlite_error_free(&error);
+  }
+  printf("\nExit code: %d\n\n", exit_code);
+
+  printf("Command 3: env\n---\n");
+  error = (CBoxliteError){0};
+  exit_code = 0;
+  code = boxlite_execute(box, "/usr/bin/env", NULL, 0, output_callback, NULL,
+                         &exit_code, &error);
+  if (code != Ok) {
+    print_error("env", &error);
+    boxlite_error_free(&error);
+  }
+  printf("\nExit code: %d\n", exit_code);
+
+  char *id = boxlite_box_id(box);
+  boxlite_remove(runtime, id, 1, &error);
+  boxlite_free_string(id);
+  boxlite_runtime_free(runtime);
+  return 0;
 }

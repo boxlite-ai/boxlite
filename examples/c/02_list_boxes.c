@@ -1,144 +1,97 @@
 /**
- * BoxLite C SDK - Example 2: List and Inspect Boxes
- *
- * Demonstrates listing boxes, getting info, and parsing JSON output
+ * BoxLite C SDK - Example 2: List and inspect boxes.
  */
 
+#include "example_common.h"
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
-#include "boxlite.h"
 
-void print_separator() {
-    printf("─────────────────────────────────────────\n");
+static void print_box_info(const CBoxInfo *info) {
+  printf("id=%s image=%s status=%s running=%d pid=%d\n",
+         info->id ? info->id : "", info->image ? info->image : "",
+         info->status ? info->status : "", info->running, info->pid);
 }
 
-int main() {
-    printf("=== BoxLite Example: List and Inspect Boxes ===\n\n");
+int main(void) {
+  printf("=== BoxLite Example: List and Inspect Boxes ===\n\n");
 
-    char* error = NULL;
+  CBoxliteRuntime *runtime = create_runtime_or_exit();
+  if (runtime == NULL) {
+    return 1;
+  }
 
-    // Create runtime
-    CBoxliteRuntime* runtime = boxlite_runtime_new(NULL, NULL, &error);
-    if (!runtime) {
-        fprintf(stderr, "Failed to create runtime: %s\n", error);
-        boxlite_free_string(error);
-        return 1;
-    }
-
-    // Create multiple boxes with different images
-    printf("Creating 3 boxes...\n");
-    print_separator();
-
-    const char* opt1 = "{\"rootfs\":{\"Image\":\"alpine:3.19\"}}";
-    CBoxHandle* box1 = boxlite_create_box(runtime, opt1, &error);
-
-    const char* opt2 = "{\"rootfs\":{\"Image\":\"alpine:3.19\"}}";
-    CBoxHandle* box2 = boxlite_create_box(runtime, opt2, &error);
-
-    const char* opt3 = "{\"rootfs\":{\"Image\":\"alpine:3.19\"}}";
-    CBoxHandle* box3 = boxlite_create_box(runtime, opt3, &error);
-
-    if (!box1 || !box2 || !box3) {
-        fprintf(stderr, "Failed to create boxes: %s\n", error);
-        boxlite_free_string(error);
-        return 1;
-    }
-
-    char* id1 = boxlite_box_id(box1);
-    char* id2 = boxlite_box_id(box2);
-    char* id3 = boxlite_box_id(box3);
-
-    printf("✓ Created box 1: %s\n", id1);
-    printf("✓ Created box 2: %s\n", id2);
-    printf("✓ Created box 3: %s\n", id3);
-    printf("\n");
-
-    // List all boxes
-    printf("Listing all boxes...\n");
-    print_separator();
-
-    char* list_json = NULL;
-    if (boxlite_list_info(runtime, &list_json, &error) != 0) {
-        fprintf(stderr, "Failed to list boxes: %s\n", error);
-        boxlite_free_string(error);
-    } else {
-        printf("%s\n", list_json);
-        boxlite_free_string(list_json);
-    }
-    printf("\n");
-
-    // Get info for specific box
-    printf("Getting info for box 1...\n");
-    print_separator();
-
-    char* info_json = NULL;
-    if (boxlite_get_info(runtime, id1, &info_json, &error) != 0) {
-        fprintf(stderr, "Failed to get box info: %s\n", error);
-        boxlite_free_string(error);
-    } else {
-        printf("%s\n", info_json);
-        boxlite_free_string(info_json);
-    }
-    printf("\n");
-
-    // Get info from box handle
-    printf("Getting info from box handle...\n");
-    print_separator();
-
-    if (boxlite_box_info(box2, &info_json, &error) != 0) {
-        fprintf(stderr, "Failed to get box info: %s\n", error);
-        boxlite_free_string(error);
-    } else {
-        printf("%s\n", info_json);
-        boxlite_free_string(info_json);
-    }
-    printf("\n");
-
-    // Demonstrate prefix lookup
-    printf("Looking up box by ID prefix (first 8 chars)...\n");
-    print_separator();
-
-    char prefix[9] = {0};
-    strncpy(prefix, id3, 8);
-    printf("Using prefix: %s\n", prefix);
-
-    char* prefix_info = NULL;
-    if (boxlite_get_info(runtime, prefix, &prefix_info, &error) != 0) {
-        fprintf(stderr, "Failed to lookup by prefix: %s\n", error);
-        boxlite_free_string(error);
-    } else {
-        printf("Found box: %s\n", prefix_info);
-        boxlite_free_string(prefix_info);
-    }
-    printf("\n");
-
-    // Get runtime metrics
-    printf("Getting runtime metrics...\n");
-    print_separator();
-
-    char* metrics_json = NULL;
-    if (boxlite_runtime_metrics(runtime, &metrics_json, &error) != 0) {
-        fprintf(stderr, "Failed to get metrics: %s\n", error);
-        boxlite_free_string(error);
-    } else {
-        printf("%s\n", metrics_json);
-        boxlite_free_string(metrics_json);
-    }
-    printf("\n");
-
-    // Cleanup
-    printf("Cleaning up...\n");
-    boxlite_remove(runtime, id1, 1, &error);
-    boxlite_remove(runtime, id2, 1, &error);
-    boxlite_remove(runtime, id3, 1, &error);
-
-    boxlite_free_string(id1);
-    boxlite_free_string(id2);
-    boxlite_free_string(id3);
+  CBoxHandle *box1 = create_alpine_box_or_exit(runtime);
+  CBoxHandle *box2 = create_alpine_box_or_exit(runtime);
+  CBoxHandle *box3 = create_alpine_box_or_exit(runtime);
+  if (box1 == NULL || box2 == NULL || box3 == NULL) {
     boxlite_runtime_free(runtime);
+    return 1;
+  }
 
-    printf("✓ All boxes removed\n");
-    printf("\n=== List and Inspect Demo Complete ===\n");
-    return 0;
+  char *id1 = boxlite_box_id(box1);
+  char *id2 = boxlite_box_id(box2);
+  char *id3 = boxlite_box_id(box3);
+  printf("Created boxes:\n  %s\n  %s\n  %s\n\n", id1, id2, id3);
+
+  CBoxliteError error = {0};
+  CBoxInfoList *list = NULL;
+  BoxliteErrorCode code = boxlite_list_info(runtime, &list, &error);
+  if (code == Ok) {
+    printf("All boxes (%d):\n", list->count);
+    for (int i = 0; i < list->count; i++) {
+      print_box_info(&list->items[i]);
+    }
+    boxlite_free_box_info_list(list);
+  } else {
+    print_error("list boxes", &error);
+    boxlite_error_free(&error);
+  }
+  printf("\n");
+
+  CBoxInfo *info = NULL;
+  code = boxlite_get_info(runtime, id1, &info, &error);
+  if (code == Ok) {
+    printf("Box 1 info:\n");
+    print_box_info(info);
+    boxlite_free_box_info(info);
+  } else {
+    print_error("get box info", &error);
+    boxlite_error_free(&error);
+  }
+  printf("\n");
+
+  char prefix[9] = {0};
+  strncpy(prefix, id3, 8);
+  code = boxlite_get_info(runtime, prefix, &info, &error);
+  if (code == Ok) {
+    printf("Prefix lookup (%s):\n", prefix);
+    print_box_info(info);
+    boxlite_free_box_info(info);
+  } else {
+    print_error("prefix lookup", &error);
+    boxlite_error_free(&error);
+  }
+  printf("\n");
+
+  CRuntimeMetrics metrics = {0};
+  code = boxlite_runtime_metrics(runtime, &metrics, &error);
+  if (code == Ok) {
+    printf("Runtime metrics: created=%d running=%d commands=%d\n",
+           metrics.boxes_created_total, metrics.num_running_boxes,
+           metrics.total_commands_executed);
+  } else {
+    print_error("runtime metrics", &error);
+    boxlite_error_free(&error);
+  }
+
+  boxlite_remove(runtime, id1, 1, &error);
+  boxlite_remove(runtime, id2, 1, &error);
+  boxlite_remove(runtime, id3, 1, &error);
+  boxlite_free_string(id1);
+  boxlite_free_string(id2);
+  boxlite_free_string(id3);
+  boxlite_runtime_free(runtime);
+
+  printf("\n=== List and Inspect Demo Complete ===\n");
+  return 0;
 }

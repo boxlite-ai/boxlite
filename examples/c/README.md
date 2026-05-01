@@ -32,7 +32,7 @@ make
 
 | Example | Description |
 |---------|-------------|
-| `simple_api_demo` | Quick start using the Simple API (no JSON) |
+| `simple_api_demo` | Quick start using the Simple API |
 | `execute` | Command execution with streaming output |
 | `shutdown` | Graceful runtime shutdown with multiple boxes |
 
@@ -52,7 +52,7 @@ make
 
 ### simple_api_demo - Simple API Quick Start
 
-The easiest way to get started. No JSON configuration required.
+The easiest way to get started.
 
 ```bash
 ./simple_api_demo
@@ -117,15 +117,18 @@ CBoxHandle* box = NULL;
 CBoxliteError error = {0};
 
 // Create runtime and box
-boxlite_runtime_new(NULL, NULL, &runtime, &error);
+boxlite_runtime_new(NULL, NULL, 0, &runtime, &error);
 
-const char* opts = "{\"rootfs\":{\"Image\":\"alpine:3.19\"},"
-                   "\"env\":[],\"volumes\":[],\"network\":{\"mode\":\"enabled\",\"allow_net\":[]},\"ports\":[]}";
+CBoxliteOptions* opts = NULL;
+boxlite_options_new("alpine:3.19", &opts, &error);
+boxlite_options_set_network_enabled(opts);
 boxlite_create_box(runtime, opts, &box, &error);
+boxlite_options_free(opts);
 
 // Execute with streaming callback
 int exit_code = 0;
-boxlite_execute(box, "/bin/ls", "[\"-la\", \"/\"]", output_callback, NULL, &exit_code, &error);
+const char* args[] = {"-la", "/"};
+boxlite_execute(box, "/bin/ls", args, 2, output_callback, NULL, &exit_code, &error);
 printf("Exit code: %d\n", exit_code);
 
 boxlite_runtime_free(runtime);
@@ -195,20 +198,24 @@ Demonstrates listing boxes, getting info, and ID prefix lookup.
 
 **Key operations:**
 ```c
-// List all boxes (JSON array)
-char* json = NULL;
-boxlite_list_info(runtime, &json, &error);
-printf("Boxes: %s\n", json);
-boxlite_free_string(json);
+// List all boxes
+CBoxInfoList* list = NULL;
+boxlite_list_info(runtime, &list, &error);
+printf("Boxes: %d\n", list->count);
+boxlite_free_box_info_list(list);
 
 // Get specific box info
-boxlite_get_info(runtime, "01HJK4TN", &json, &error);  // ID prefix works
+CBoxInfo* info = NULL;
+boxlite_get_info(runtime, "01HJK4TN", &info, &error);  // ID prefix works
+boxlite_free_box_info(info);
 
 // Get info from handle
-boxlite_box_info(box, &json, &error);
+boxlite_box_info(box, &info, &error);
+boxlite_free_box_info(info);
 
 // Runtime metrics
-boxlite_runtime_metrics(runtime, &json, &error);
+CRuntimeMetrics metrics = {0};
+boxlite_runtime_metrics(runtime, &metrics, &error);
 ```
 
 ---
@@ -291,17 +298,14 @@ Demonstrates runtime and per-box metrics.
 **Code pattern:**
 ```c
 // Runtime metrics
-char* metrics = NULL;
+CRuntimeMetrics metrics = {0};
 boxlite_runtime_metrics(runtime, &metrics, &error);
-printf("Runtime metrics: %s\n", metrics);
-// {"boxes_created_total":1,"num_running_boxes":1,...}
-boxlite_free_string(metrics);
+printf("Running boxes: %d\n", metrics.num_running_boxes);
 
 // Per-box metrics
-boxlite_box_metrics(box, &metrics, &error);
-printf("Box metrics: %s\n", metrics);
-// {"cpu_percent":2.5,"memory_bytes":15728640,...}
-boxlite_free_string(metrics);
+CBoxMetrics box_metrics = {0};
+boxlite_box_metrics(box, &box_metrics, &error);
+printf("Memory bytes: %lld\n", (long long)box_metrics.memory_bytes);
 ```
 
 ---
@@ -315,7 +319,7 @@ The C SDK v0.2.0 uses structured error handling:
 CBoxliteError error = {0};
 
 // All functions return BoxliteErrorCode
-BoxliteErrorCode code = boxlite_runtime_new(NULL, NULL, &runtime, &error);
+BoxliteErrorCode code = boxlite_runtime_new(NULL, NULL, 0, &runtime, &error);
 
 // Check result
 if (code != Ok) {

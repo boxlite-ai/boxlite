@@ -4,7 +4,6 @@
  * Tests streaming output callbacks for real-time output
  */
 
-#include "boxlite.h"
 #include "test_runtime.h"
 #include <assert.h>
 #include <stdio.h>
@@ -44,14 +43,7 @@ void test_streaming_stdout() {
   runtime = new_test_runtime(temp_dir, &error);
   BoxliteErrorCode code = Ok;
 
-  const char *options =
-      "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":{\"mode\":\"enabled\",\"allow_net\":[]},\"ports\":[],\"auto_"
-      "remove\":false}";
-  CBoxHandle *box = NULL;
-  code = boxlite_create_box(runtime, options, &box, &error);
-  assert(code == Ok);
-  assert(box != NULL);
+  CBoxHandle *box = create_test_box(runtime, &error);
 
   // Reset counters
   stdout_count = 0;
@@ -59,9 +51,9 @@ void test_streaming_stdout() {
   last_output[0] = '\0';
 
   // Execute command that produces stdout
-  const char *args = "[\"hello world\"]";
+  const char *const args[] = {"hello world"};
   int exit_code = 0;
-  code = boxlite_execute(box, "/bin/echo", args, counting_callback, NULL,
+  code = boxlite_execute(box, "/bin/echo", args, 1, counting_callback, NULL,
                          &exit_code, &error);
 
   assert(code == Ok);
@@ -88,23 +80,16 @@ void test_streaming_stderr() {
   runtime = new_test_runtime(temp_dir, &error);
   BoxliteErrorCode code = Ok;
 
-  const char *options =
-      "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":{\"mode\":\"enabled\",\"allow_net\":[]},\"ports\":[],\"auto_"
-      "remove\":false}";
-  CBoxHandle *box = NULL;
-  code = boxlite_create_box(runtime, options, &box, &error);
-  assert(code == Ok);
-  assert(box != NULL);
+  CBoxHandle *box = create_test_box(runtime, &error);
 
   // Reset counters
   stdout_count = 0;
   stderr_count = 0;
 
   // Execute command that produces stderr (ls on nonexistent path)
-  const char *args = "[\"/nonexistent\"]";
+  const char *const args[] = {"/nonexistent"};
   int exit_code = 0;
-  code = boxlite_execute(box, "/bin/ls", args, counting_callback, NULL,
+  code = boxlite_execute(box, "/bin/ls", args, 1, counting_callback, NULL,
                          &exit_code, &error);
 
   assert(code == Ok);
@@ -130,14 +115,7 @@ void test_streaming_both() {
   runtime = new_test_runtime(temp_dir, &error);
   BoxliteErrorCode code = Ok;
 
-  const char *options =
-      "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":{\"mode\":\"enabled\",\"allow_net\":[]},\"ports\":[],\"auto_"
-      "remove\":false}";
-  CBoxHandle *box = NULL;
-  code = boxlite_create_box(runtime, options, &box, &error);
-  assert(code == Ok);
-  assert(box != NULL);
+  CBoxHandle *box = create_test_box(runtime, &error);
 
   // Reset counters
   stdout_count = 0;
@@ -145,9 +123,9 @@ void test_streaming_both() {
 
   // Execute command that produces both stdout and stderr
   // Using sh to write to both streams
-  const char *args = "[\"-c\", \"echo stdout; echo stderr >&2\"]";
+  const char *const args[] = {"-c", "echo stdout; echo stderr >&2"};
   int exit_code = 0;
-  code = boxlite_execute(box, "/bin/sh", args, counting_callback, NULL,
+  code = boxlite_execute(box, "/bin/sh", args, 2, counting_callback, NULL,
                          &exit_code, &error);
 
   assert(code == Ok);
@@ -206,21 +184,14 @@ void test_streaming_with_context() {
   runtime = new_test_runtime(temp_dir, &error);
   BoxliteErrorCode code = Ok;
 
-  const char *options =
-      "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":{\"mode\":\"enabled\",\"allow_net\":[]},\"ports\":[],\"auto_"
-      "remove\":false}";
-  CBoxHandle *box = NULL;
-  code = boxlite_create_box(runtime, options, &box, &error);
-  assert(code == Ok);
-  assert(box != NULL);
+  CBoxHandle *box = create_test_box(runtime, &error);
 
   // User context to accumulate output
   UserContext ctx = {0};
 
-  const char *args = "[\"line1\\nline2\\nline3\"]";
+  const char *const args[] = {"line1\nline2\nline3"};
   int exit_code = 0;
-  code = boxlite_execute(box, "/bin/echo", args, accumulating_callback, &ctx,
+  code = boxlite_execute(box, "/bin/echo", args, 1, accumulating_callback, &ctx,
                          &exit_code, &error);
 
   assert(code == Ok);
@@ -246,23 +217,16 @@ void test_streaming_large_output() {
   runtime = new_test_runtime(temp_dir, &error);
   BoxliteErrorCode code = Ok;
 
-  const char *options =
-      "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":{\"mode\":\"enabled\",\"allow_net\":[]},\"ports\":[],\"auto_"
-      "remove\":false}";
-  CBoxHandle *box = NULL;
-  code = boxlite_create_box(runtime, options, &box, &error);
-  assert(code == Ok);
-  assert(box != NULL);
+  CBoxHandle *box = create_test_box(runtime, &error);
 
   // Reset counters
   stdout_count = 0;
 
   // Execute command that produces lots of deterministic output
-  const char *args = "[\"-c\", \"i=0; while [ $i -lt 100 ]; do echo line$i; "
-                     "i=$((i+1)); done\"]";
+  const char *const args[] = {
+      "-c", "i=0; while [ $i -lt 100 ]; do echo line$i; i=$((i+1)); done"};
   int exit_code = 0;
-  code = boxlite_execute(box, "/bin/sh", args, counting_callback, NULL,
+  code = boxlite_execute(box, "/bin/sh", args, 2, counting_callback, NULL,
                          &exit_code, &error);
 
   assert(code == Ok);
@@ -287,20 +251,13 @@ void test_streaming_no_callback() {
   runtime = new_test_runtime(temp_dir, &error);
   BoxliteErrorCode code = Ok;
 
-  const char *options =
-      "{\"rootfs\":{\"Image\":\"alpine:3.19\"},\"env\":[],\"volumes\":[],"
-      "\"network\":{\"mode\":\"enabled\",\"allow_net\":[]},\"ports\":[],\"auto_"
-      "remove\":false}";
-  CBoxHandle *box = NULL;
-  code = boxlite_create_box(runtime, options, &box, &error);
-  assert(code == Ok);
-  assert(box != NULL);
+  CBoxHandle *box = create_test_box(runtime, &error);
 
   // Execute without callback (should still work)
-  const char *args = "[\"hello\"]";
+  const char *const args[] = {"hello"};
   int exit_code = 0;
-  code =
-      boxlite_execute(box, "/bin/echo", args, NULL, NULL, &exit_code, &error);
+  code = boxlite_execute(box, "/bin/echo", args, 1, NULL, NULL, &exit_code,
+                         &error);
 
   assert(code == Ok);
   assert(exit_code == 0);
