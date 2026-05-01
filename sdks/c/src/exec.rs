@@ -7,17 +7,18 @@ use std::ptr;
 use std::sync::Arc;
 
 use tokio::runtime::Runtime as TokioRuntime;
+use tokio::task::JoinHandle;
 
 use boxlite::litebox::LiteBox;
 use boxlite::runtime::BoxliteRuntime;
 use boxlite::runtime::options::{BoxOptions, BoxliteOptions};
-use boxlite::{BoxID, BoxliteError, RootfsSpec};
+use boxlite::{BoxID, BoxliteError, ExecStdin, Execution, RootfsSpec};
 
 use crate::box_handle::BoxHandle;
 use crate::error::{BoxliteErrorCode, FFIError, error_to_code, null_pointer_error, write_error};
 use crate::runtime::create_tokio_runtime;
 use crate::util::c_str_to_string;
-use crate::{CBoxHandle, CBoxliteError, CBoxliteExecResult, CBoxliteSimple};
+use crate::{CBoxHandle, CBoxliteError, CBoxliteExecResult, CBoxliteSimple, CExecutionHandle};
 
 /// Opaque handle for Runner API (auto-manages runtime)
 pub struct BoxRunner {
@@ -33,6 +34,15 @@ pub struct ExecResult {
     pub exit_code: c_int,
     pub stdout_text: *mut c_char,
     pub stderr_text: *mut c_char,
+}
+
+/// Opaque handle to a running command execution.
+pub struct ExecutionHandle {
+    execution: Option<Execution>,
+    stdin: Option<ExecStdin>,
+    output_task: Option<JoinHandle<()>>,
+    completed: bool,
+    tokio_rt: Arc<TokioRuntime>,
 }
 
 impl BoxRunner {
@@ -75,6 +85,8 @@ pub struct BoxliteCommand {
     pub user: *const c_char,
     /// Timeout in seconds. 0.0 = no timeout.
     pub timeout_secs: f64,
+    /// Enable TTY mode for interactive programs.
+    pub tty: c_int,
 }
 
 #[unsafe(no_mangle)]
@@ -110,6 +122,60 @@ pub unsafe extern "C" fn boxlite_execute_cmd(
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
     box_exec_cmd(handle, cmd, callback, user_data, out_exit_code, out_error)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_exec_start(
+    handle: *mut CBoxHandle,
+    cmd: *const BoxliteCommand,
+    callback: Option<extern "C" fn(*const c_char, c_int, *mut c_void)>,
+    user_data: *mut c_void,
+    out_execution: *mut *mut CExecutionHandle,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    exec_start(handle, cmd, callback, user_data, out_execution, out_error)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_exec_write(
+    execution: *mut CExecutionHandle,
+    data: *const c_char,
+    len: c_int,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    exec_write(execution, data, len, out_error)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_exec_wait(
+    execution: *mut CExecutionHandle,
+    out_exit_code: *mut c_int,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    exec_wait(execution, out_exit_code, out_error)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_exec_kill(
+    execution: *mut CExecutionHandle,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    exec_kill(execution, out_error)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_exec_resize_tty(
+    execution: *mut CExecutionHandle,
+    rows: c_int,
+    cols: c_int,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    exec_resize_tty(execution, rows, cols, out_error)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_exec_free(execution: *mut CExecutionHandle) {
+    exec_free(execution)
 }
 
 #[unsafe(no_mangle)]
@@ -264,64 +330,16 @@ unsafe fn box_exec_cmd(
             return BoxliteErrorCode::InvalidArgument;
         }
 
-        let handle_ref = &mut *handle;
         let cmd_ref = &*cmd;
-
-        // Parse command (required)
-        let cmd_str = match c_str_to_string(cmd_ref.command) {
-            Ok(s) => s,
+        let handle_ref = &mut *handle;
+        let box_cmd = match parse_boxlite_command(cmd_ref) {
+            Ok(command) => command,
             Err(e) => {
                 let code = error_to_code(&e);
                 write_error(out_error, e);
                 return code;
             }
         };
-
-        let mut box_cmd = boxlite::BoxCommand::new(cmd_str);
-        box_cmd = box_cmd.args(crate::util::parse_c_string_array(
-            cmd_ref.args,
-            cmd_ref.argc,
-        ));
-
-        let env_pairs = crate::util::parse_c_string_array(cmd_ref.env_pairs, cmd_ref.env_count);
-        for pair in env_pairs.chunks(2) {
-            if let [key, value] = pair {
-                box_cmd = box_cmd.env(key.clone(), value.clone());
-            }
-        }
-
-        // Parse workdir
-        if !cmd_ref.workdir.is_null() {
-            match c_str_to_string(cmd_ref.workdir) {
-                Ok(dir) => {
-                    box_cmd = box_cmd.working_dir(dir);
-                }
-                Err(e) => {
-                    let code = error_to_code(&e);
-                    write_error(out_error, e);
-                    return code;
-                }
-            }
-        }
-
-        // Parse user
-        if !cmd_ref.user.is_null() {
-            match c_str_to_string(cmd_ref.user) {
-                Ok(u) => {
-                    box_cmd = box_cmd.user(u);
-                }
-                Err(e) => {
-                    let code = error_to_code(&e);
-                    write_error(out_error, e);
-                    return code;
-                }
-            }
-        }
-
-        // Parse timeout
-        if cmd_ref.timeout_secs > 0.0 {
-            box_cmd = box_cmd.timeout(std::time::Duration::from_secs_f64(cmd_ref.timeout_secs));
-        }
 
         // Execute command
         let result = handle_ref.tokio_rt.block_on(async {
@@ -370,6 +388,341 @@ unsafe fn box_exec_cmd(
                 code
             }
         }
+    }
+}
+
+unsafe fn exec_start(
+    handle: *mut BoxHandle,
+    cmd: *const BoxliteCommand,
+    callback: Option<OutputCallback>,
+    user_data: *mut c_void,
+    out_execution: *mut *mut ExecutionHandle,
+    out_error: *mut FFIError,
+) -> BoxliteErrorCode {
+    unsafe {
+        if handle.is_null() {
+            write_error(out_error, null_pointer_error("handle"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+        if cmd.is_null() {
+            write_error(out_error, null_pointer_error("cmd"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+        if out_execution.is_null() {
+            write_error(out_error, null_pointer_error("out_execution"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+        *out_execution = ptr::null_mut();
+
+        let handle_ref = &mut *handle;
+        let command = match parse_boxlite_command(&*cmd) {
+            Ok(command) => command,
+            Err(e) => {
+                let code = error_to_code(&e);
+                write_error(out_error, e);
+                return code;
+            }
+        };
+
+        let tokio_rt = handle_ref.tokio_rt.clone();
+        let execution_rt = tokio_rt.clone();
+        let result = tokio_rt.block_on(async {
+            let mut execution = handle_ref.handle.exec(command).await?;
+            let stdin = execution.stdin();
+            let stdout = execution.stdout();
+            let stderr = execution.stderr();
+            let output_task = spawn_output_task(&tokio_rt, stdout, stderr, callback, user_data);
+
+            Ok::<ExecutionHandle, BoxliteError>(ExecutionHandle {
+                execution: Some(execution),
+                stdin,
+                output_task: Some(output_task),
+                completed: false,
+                tokio_rt: execution_rt,
+            })
+        });
+
+        match result {
+            Ok(execution) => {
+                *out_execution = Box::into_raw(Box::new(execution));
+                BoxliteErrorCode::Ok
+            }
+            Err(e) => {
+                let code = error_to_code(&e);
+                write_error(out_error, e);
+                code
+            }
+        }
+    }
+}
+
+fn spawn_output_task(
+    tokio_rt: &Arc<TokioRuntime>,
+    mut stdout: Option<boxlite::ExecStdout>,
+    mut stderr: Option<boxlite::ExecStderr>,
+    callback: Option<OutputCallback>,
+    user_data: *mut c_void,
+) -> JoinHandle<()> {
+    let user_data = user_data as usize;
+    tokio_rt.spawn(async move {
+        loop {
+            tokio::select! {
+                Some(line) = async {
+                    match &mut stdout {
+                        Some(stream) => stream.next().await,
+                        None => None,
+                    }
+                } => {
+                    write_streaming_output(callback, line, 0, user_data);
+                }
+                Some(line) = async {
+                    match &mut stderr {
+                        Some(stream) => stream.next().await,
+                        None => None,
+                    }
+                } => {
+                    write_streaming_output(callback, line, 1, user_data);
+                }
+                else => break,
+            }
+        }
+    })
+}
+
+fn write_streaming_output(
+    callback: Option<OutputCallback>,
+    line: String,
+    is_stderr: c_int,
+    user_data: usize,
+) {
+    let Some(callback) = callback else {
+        return;
+    };
+
+    if let Ok(text) = CString::new(line) {
+        callback(text.as_ptr(), is_stderr, user_data as *mut c_void);
+    }
+}
+
+unsafe fn exec_write(
+    execution: *mut ExecutionHandle,
+    data: *const c_char,
+    len: c_int,
+    out_error: *mut FFIError,
+) -> BoxliteErrorCode {
+    unsafe {
+        if execution.is_null() {
+            write_error(out_error, null_pointer_error("execution"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+        if data.is_null() && len > 0 {
+            write_error(out_error, null_pointer_error("data"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+        if len < 0 {
+            write_error(
+                out_error,
+                BoxliteError::InvalidArgument("len must be non-negative".to_string()),
+            );
+            return BoxliteErrorCode::InvalidArgument;
+        }
+        if len == 0 {
+            return BoxliteErrorCode::Ok;
+        }
+
+        let execution_ref = &mut *execution;
+        let Some(stdin) = execution_ref.stdin.as_mut() else {
+            write_error(
+                out_error,
+                BoxliteError::InvalidState("execution stdin is closed".to_string()),
+            );
+            return BoxliteErrorCode::InvalidState;
+        };
+
+        let bytes = std::slice::from_raw_parts(data as *const u8, len as usize);
+        match execution_ref.tokio_rt.block_on(stdin.write(bytes)) {
+            Ok(()) => BoxliteErrorCode::Ok,
+            Err(e) => {
+                let code = error_to_code(&e);
+                write_error(out_error, e);
+                code
+            }
+        }
+    }
+}
+
+unsafe fn exec_wait(
+    execution: *mut ExecutionHandle,
+    out_exit_code: *mut c_int,
+    out_error: *mut FFIError,
+) -> BoxliteErrorCode {
+    unsafe {
+        if execution.is_null() {
+            write_error(out_error, null_pointer_error("execution"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+        if out_exit_code.is_null() {
+            write_error(out_error, null_pointer_error("out_exit_code"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+
+        let execution_ref = &mut *execution;
+        let Some(execution) = execution_ref.execution.as_mut() else {
+            write_error(
+                out_error,
+                BoxliteError::InvalidState("execution has been freed".to_string()),
+            );
+            return BoxliteErrorCode::InvalidState;
+        };
+
+        let result = execution_ref.tokio_rt.block_on(async {
+            let result = execution.wait().await;
+            if let Some(task) = execution_ref.output_task.take() {
+                let _ = task.await;
+            }
+            result
+        });
+
+        match result {
+            Ok(status) => {
+                execution_ref.completed = true;
+                *out_exit_code = status.exit_code;
+                BoxliteErrorCode::Ok
+            }
+            Err(e) => {
+                let code = error_to_code(&e);
+                write_error(out_error, e);
+                code
+            }
+        }
+    }
+}
+
+unsafe fn exec_kill(execution: *mut ExecutionHandle, out_error: *mut FFIError) -> BoxliteErrorCode {
+    unsafe {
+        if execution.is_null() {
+            write_error(out_error, null_pointer_error("execution"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+
+        let execution_ref = &mut *execution;
+        let Some(execution) = execution_ref.execution.as_mut() else {
+            write_error(
+                out_error,
+                BoxliteError::InvalidState("execution has been freed".to_string()),
+            );
+            return BoxliteErrorCode::InvalidState;
+        };
+
+        match execution_ref.tokio_rt.block_on(execution.kill()) {
+            Ok(()) => BoxliteErrorCode::Ok,
+            Err(e) => {
+                let code = error_to_code(&e);
+                write_error(out_error, e);
+                code
+            }
+        }
+    }
+}
+
+unsafe fn exec_resize_tty(
+    execution: *mut ExecutionHandle,
+    rows: c_int,
+    cols: c_int,
+    out_error: *mut FFIError,
+) -> BoxliteErrorCode {
+    unsafe {
+        if execution.is_null() {
+            write_error(out_error, null_pointer_error("execution"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+        if rows <= 0 || cols <= 0 {
+            write_error(
+                out_error,
+                BoxliteError::InvalidArgument("rows and cols must be positive".to_string()),
+            );
+            return BoxliteErrorCode::InvalidArgument;
+        }
+
+        let execution_ref = &mut *execution;
+        let Some(execution) = execution_ref.execution.as_ref() else {
+            write_error(
+                out_error,
+                BoxliteError::InvalidState("execution has been freed".to_string()),
+            );
+            return BoxliteErrorCode::InvalidState;
+        };
+
+        match execution_ref
+            .tokio_rt
+            .block_on(execution.resize_tty(rows as u32, cols as u32))
+        {
+            Ok(()) => BoxliteErrorCode::Ok,
+            Err(e) => {
+                let code = error_to_code(&e);
+                write_error(out_error, e);
+                code
+            }
+        }
+    }
+}
+
+unsafe fn exec_free(execution: *mut ExecutionHandle) {
+    if execution.is_null() {
+        return;
+    }
+
+    unsafe {
+        let mut execution = Box::from_raw(execution);
+        if let Some(mut stdin) = execution.stdin.take() {
+            stdin.close();
+        }
+
+        if let Some(mut running) = execution.execution.take()
+            && !execution.completed
+        {
+            let _ = execution.tokio_rt.block_on(async {
+                let _ = running.kill().await;
+                running.wait().await
+            });
+        }
+
+        if let Some(task) = execution.output_task.take() {
+            task.abort();
+        }
+    }
+}
+
+unsafe fn parse_boxlite_command(cmd: &BoxliteCommand) -> Result<boxlite::BoxCommand, BoxliteError> {
+    unsafe {
+        let cmd_str = c_str_to_string(cmd.command)?;
+        let mut box_cmd = boxlite::BoxCommand::new(cmd_str)
+            .args(crate::util::parse_c_string_array(cmd.args, cmd.argc));
+
+        let env_pairs = crate::util::parse_c_string_array(cmd.env_pairs, cmd.env_count);
+        for pair in env_pairs.chunks(2) {
+            if let [key, value] = pair {
+                box_cmd = box_cmd.env(key.clone(), value.clone());
+            }
+        }
+
+        if !cmd.workdir.is_null() {
+            box_cmd = box_cmd.working_dir(c_str_to_string(cmd.workdir)?);
+        }
+
+        if !cmd.user.is_null() {
+            box_cmd = box_cmd.user(c_str_to_string(cmd.user)?);
+        }
+
+        if cmd.timeout_secs > 0.0 {
+            box_cmd = box_cmd.timeout(std::time::Duration::from_secs_f64(cmd.timeout_secs));
+        }
+
+        if cmd.tty != 0 {
+            box_cmd = box_cmd.tty(true);
+        }
+
+        Ok(box_cmd)
     }
 }
 
@@ -609,5 +962,108 @@ unsafe fn runner_free(runner: *mut BoxRunner) {
 
             drop(runner_box);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ptr;
+
+    use super::*;
+
+    extern "C" fn noop_callback(_: *const c_char, _: c_int, _: *mut c_void) {}
+
+    #[test]
+    fn exec_start_rejects_null_handle() {
+        let command = CString::new("/bin/sh").expect("command cstring");
+        let cmd = BoxliteCommand {
+            command: command.as_ptr(),
+            args: ptr::null(),
+            argc: 0,
+            env_pairs: ptr::null(),
+            env_count: 0,
+            workdir: ptr::null(),
+            user: ptr::null(),
+            timeout_secs: 0.0,
+            tty: 1,
+        };
+        let mut execution: *mut ExecutionHandle = ptr::null_mut();
+        let mut error = FFIError::default();
+
+        let code = unsafe {
+            boxlite_exec_start(
+                ptr::null_mut(),
+                &cmd as *const _,
+                Some(noop_callback),
+                ptr::null_mut(),
+                &mut execution as *mut _,
+                &mut error as *mut _,
+            )
+        };
+
+        assert_eq!(code, BoxliteErrorCode::InvalidArgument);
+        assert!(execution.is_null());
+        assert!(!error.message.is_null());
+        unsafe { crate::boxlite_error_free(&mut error as *mut _) };
+    }
+
+    #[test]
+    fn exec_write_rejects_null_execution() {
+        let mut error = FFIError::default();
+        let data = CString::new("hello").expect("data cstring");
+
+        let code =
+            unsafe { boxlite_exec_write(ptr::null_mut(), data.as_ptr(), 5, &mut error as *mut _) };
+
+        assert_eq!(code, BoxliteErrorCode::InvalidArgument);
+        assert!(!error.message.is_null());
+        unsafe { crate::boxlite_error_free(&mut error as *mut _) };
+    }
+
+    #[test]
+    fn exec_write_rejects_negative_len() {
+        let runtime = crate::runtime::create_tokio_runtime().expect("runtime");
+        let mut execution = ExecutionHandle {
+            execution: None,
+            stdin: None,
+            output_task: None,
+            completed: false,
+            tokio_rt: runtime,
+        };
+        let mut error = FFIError::default();
+
+        let code = unsafe {
+            boxlite_exec_write(
+                &mut execution as *mut _,
+                ptr::null(),
+                -1,
+                &mut error as *mut _,
+            )
+        };
+
+        assert_eq!(code, BoxliteErrorCode::InvalidArgument);
+        assert!(!error.message.is_null());
+        unsafe { crate::boxlite_error_free(&mut error as *mut _) };
+    }
+
+    #[test]
+    fn exec_resize_rejects_invalid_dimensions() {
+        let runtime = crate::runtime::create_tokio_runtime().expect("runtime");
+        let mut execution = ExecutionHandle {
+            execution: None,
+            stdin: None,
+            output_task: None,
+            completed: false,
+            tokio_rt: runtime,
+        };
+        let mut error = FFIError::default();
+
+        let code = unsafe {
+            boxlite_exec_resize_tty(&mut execution as *mut _, 0, 80, &mut error as *mut _)
+        };
+
+        assert_eq!(code, BoxliteErrorCode::InvalidArgument);
+        assert!(!error.message.is_null());
+        unsafe { crate::boxlite_error_free(&mut error as *mut _) };
     }
 }

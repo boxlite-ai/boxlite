@@ -71,6 +71,35 @@ func TestError_Unwrap(t *testing.T) {
 	}
 }
 
+func TestExecutionWriteRejectsClosedExecution(t *testing.T) {
+	execution := &Execution{}
+	execution.Stdin = &executionStdin{execution: execution}
+
+	_, err := execution.Write([]byte("hello"))
+	if err == nil {
+		t.Fatal("expected error")
+	}
+
+	var boxliteErr *Error
+	if !errors.As(err, &boxliteErr) {
+		t.Fatalf("expected *Error, got %T", err)
+	}
+	if boxliteErr.Code != ErrInvalidState {
+		t.Fatalf("Code: got %d, want %d", boxliteErr.Code, ErrInvalidState)
+	}
+}
+
+func TestExecutionCloseIsIdempotent(t *testing.T) {
+	execution := &Execution{}
+
+	if err := execution.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := execution.Close(); err != nil {
+		t.Fatalf("second Close() error = %v", err)
+	}
+}
+
 // ============================================================================
 // Options
 // ============================================================================

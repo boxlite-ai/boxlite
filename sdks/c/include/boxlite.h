@@ -64,6 +64,9 @@ typedef struct BoxHandle BoxHandle;
 // Opaque handle for Runner API (auto-manages runtime)
 typedef struct BoxRunner BoxRunner;
 
+// Opaque handle to a running command execution.
+typedef struct ExecutionHandle ExecutionHandle;
+
 // Opaque handle to runtime image operations.
 typedef struct ImageHandle ImageHandle;
 
@@ -112,7 +115,11 @@ typedef struct BoxliteCommand {
   const char *user;
   // Timeout in seconds. 0.0 = no timeout.
   double timeout_secs;
+  // Enable TTY mode for interactive programs.
+  int tty;
 } BoxliteCommand;
+
+typedef struct ExecutionHandle CExecutionHandle;
 
 typedef struct BoxRunner CBoxliteSimple;
 
@@ -242,6 +249,31 @@ enum BoxliteErrorCode boxlite_execute_cmd(CBoxHandle *handle,
                                           void *user_data,
                                           int *out_exit_code,
                                           CBoxliteError *out_error);
+
+enum BoxliteErrorCode boxlite_exec_start(CBoxHandle *handle,
+                                         const struct BoxliteCommand *cmd,
+                                         void (*callback)(const char*, int, void*),
+                                         void *user_data,
+                                         CExecutionHandle **out_execution,
+                                         CBoxliteError *out_error);
+
+enum BoxliteErrorCode boxlite_exec_write(CExecutionHandle *execution,
+                                         const char *data,
+                                         int len,
+                                         CBoxliteError *out_error);
+
+enum BoxliteErrorCode boxlite_exec_wait(CExecutionHandle *execution,
+                                        int *out_exit_code,
+                                        CBoxliteError *out_error);
+
+enum BoxliteErrorCode boxlite_exec_kill(CExecutionHandle *execution, CBoxliteError *out_error);
+
+enum BoxliteErrorCode boxlite_exec_resize_tty(CExecutionHandle *execution,
+                                              int rows,
+                                              int cols,
+                                              CBoxliteError *out_error);
+
+void boxlite_exec_free(CExecutionHandle *execution);
 
 enum BoxliteErrorCode boxlite_simple_new(const char *image,
                                          int cpus,

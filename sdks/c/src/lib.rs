@@ -30,6 +30,7 @@ pub type CBoxliteExecResult = exec::ExecResult;
 pub type CBoxInfo = info::CBoxInfo;
 pub type CBoxInfoList = info::CBoxInfoList;
 pub type CBoxMetrics = metrics::CBoxMetrics;
+pub type CExecutionHandle = exec::ExecutionHandle;
 pub type CImageInfoList = images::CImageInfoList;
 pub type CImagePullResult = images::CImagePullResult;
 pub type CRuntimeMetrics = metrics::CRuntimeMetrics;
