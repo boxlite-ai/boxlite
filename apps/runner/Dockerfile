@@ -68,10 +68,6 @@ WORKDIR /usr/local/bin
 
 COPY --from=build /boxlite/dist/apps/runner boxlite-runner
 
-# BoxLite runtime components (shim + guest agent)
-ARG BOXLITE_RUNTIME_PATH=target/boxlite-runtime
-COPY ${BOXLITE_RUNTIME_PATH}/ /usr/local/lib/boxlite-runtime/
-
 RUN chmod +x boxlite-runner
 
 HEALTHCHECK CMD [ "curl", "-f", "http://localhost:3003/" ]

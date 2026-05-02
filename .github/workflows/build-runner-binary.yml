@@ -1,0 +1,144 @@
+# Build the runner Go binary for Linux amd64.
+#
+# Self-contained workflow that downloads the prebuilt libboxlite.a from
+# GitHub Releases, builds daemon + computer-use + runner with plain `go build`,
+# and uploads the runner binary to GitHub Releases.
+#
+# The runner binary is fully self-contained: it links libboxlite.a (which
+# auto-extracts the embedded runtime at startup) and embeds the daemon and
+# computer-use binaries as static assets.
+#
+# Triggers:
+# - workflow_run: After "Build C SDK" completes (ensures libboxlite.a exists)
+# - workflow_dispatch: Manual trigger for testing
+name: Build Runner Binary
+
+on:
+  workflow_run:
+    workflows: ["Build C SDK"]
+    types: [completed]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  config:
+    uses: ./.github/workflows/config.yml
+
+  build:
+    name: Build Runner (linux-amd64)
+    needs: config
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ needs.config.outputs.go-version }}
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libx11-dev libxtst-dev libxinerama-dev
+
+      - name: Determine version
+        id: version
+        run: |
+          VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Download prebuilt libboxlite.a
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          ARCHIVE="boxlite-c-v${VERSION}-linux-x64-gnu.tar.gz"
+          URL="https://github.com/${GH_REPO}/releases/download/v${VERSION}/${ARCHIVE}"
+          echo "Downloading $URL"
+          curl -fsSL "${URL}" | tar xz -C /tmp/
+          cp "/tmp/boxlite-c-v${VERSION}-linux-x64-gnu/lib/libboxlite.a" sdks/go/libboxlite.a
+
+      - name: Rewrite go.work for minimal modules
+        run: |
+          printf 'go 1.25.4\n\nuse (\n\t./runner\n\t./daemon\n\t./common-go\n\t./api-client-go\n\t./libs/computer-use\n\t../sdks/go\n)\n' > apps/go.work
+
+      - name: Download Go dependencies
+        run: |
+          go -C apps/runner mod download
+          go -C apps/daemon mod download
+          go -C apps/common-go mod download
+          go -C apps/api-client-go mod download
+          go -C apps/libs/computer-use mod download
+
+      - name: Build daemon
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -C apps \
+            -ldflags "-X 'github.com/boxlite-ai/daemon/internal.Version=${VERSION}'" \
+            -o runner/pkg/daemon/static/daemon-amd64 \
+            ./daemon/cmd/daemon/
+
+      - name: Build computer-use
+        run: |
+          CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -C apps \
+            -o runner/pkg/daemon/static/boxlite-computer-use \
+            ./libs/computer-use/
+
+      - name: Build runner
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -C apps \
+            -ldflags "-X 'github.com/boxlite-ai/runner/internal.Version=${VERSION}'" \
+            -o /tmp/boxlite-runner \
+            ./runner/cmd/runner/
+
+      - name: Package runner binary
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          tar czf "boxlite-runner-v${VERSION}-linux-amd64.tar.gz" -C /tmp boxlite-runner
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: runner-linux-amd64
+          path: boxlite-runner-v*-linux-amd64.tar.gz
+          if-no-files-found: error
+          retention-days: ${{ needs.config.outputs.artifact-retention-days }}
+
+  upload-to-release:
+    name: Upload to GitHub Release
+    needs: [config, build]
+    if: github.event_name == 'workflow_run' && github.event.workflow_run.event == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine version
+        id: version
+        run: |
+          VERSION=$(grep '^version = ' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: runner-*
+          merge-multiple: true
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          files: dist/boxlite-runner-v*.tar.gz
+          fail_on_unmatched_files: true

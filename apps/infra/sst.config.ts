@@ -5,6 +5,10 @@
 
 /// <reference path="./.sst/platform/config.d.ts" />
 
+import { readFileSync } from "fs";
+import { dirname, resolve } from "path";
+import { fileURLToPath } from "url";
+
 // ─────────────────────────────────────────────────────────────────────────────
 // BoxLite control plane on AWS (ap-southeast-1).
 //
@@ -471,12 +475,10 @@ export default $config({
         Statement: [{ Effect: "Allow", Principal: { Service: "ec2.amazonaws.com" }, Action: "sts:AssumeRole" }],
       }),
     });
-    for (const [name, arn] of [
-      ["RunnerEcrPolicy", "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"],
-      ["RunnerSsmPolicy", "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"],
-    ] as const) {
-      new aws.iam.RolePolicyAttachment(name, { role: runnerRole.name, policyArn: arn });
-    }
+    new aws.iam.RolePolicyAttachment("RunnerSsmPolicy", {
+      role: runnerRole.name,
+      policyArn: "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore",
+    });
     new aws.iam.RolePolicy("RunnerVolumeS3Policy", {
       role: runnerRole.name,
       policy: JSON.stringify({
@@ -492,10 +494,8 @@ export default $config({
     });
     const runnerInstanceProfile = new aws.iam.InstanceProfile("RunnerProfile", { role: runnerRole.name });
 
-    const ecrRepo = $interpolate`${aws.getCallerIdentityOutput().accountId}.dkr.ecr.${REGION}.amazonaws.com/boxlite-runner`;
-
-    const runnerUserData = $resolve([api.url, defaultRunnerApiKey.result, ecrRepo, registry.url]).apply(
-      ([apiUrl, token, repo, registryUrl]) => buildRunnerUserData({ apiUrl, token, repo, registryUrl }),
+    const runnerUserData = $resolve([api.url, defaultRunnerApiKey.result, registry.url]).apply(
+      ([apiUrl, token, registryUrl]) => buildRunnerUserData({ apiUrl, token, registryUrl }),
     );
 
     new aws.ec2.Instance("Runner", {
@@ -514,15 +514,17 @@ export default $config({
 });
 
 // ── runner bootstrap ─────────────────────────────────────────────────────────
-// EC2 user-data: installs Docker + AWS CLI, pulls the runner image from ECR,
-// extracts the binary, and runs it directly with BoxLite VM isolation.
+// EC2 user-data: downloads prebuilt runner binary from GitHub Releases
+// and runs it directly with BoxLite VM isolation.
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const RUNNER_VERSION = readFileSync(resolve(__dirname, "../../Cargo.toml"), "utf-8")
+  .match(/^version\s*=\s*"(.+?)"/m)![1];
+
 function buildRunnerUserData(input: {
   apiUrl: string;
   token: string;
-  repo: string;
   registryUrl: string;
 }): string {
-  const ecrDomain = input.repo.split("/")[0];
   const registryHost = input.registryUrl.replace(/^https?:\/\//, "").replace(/\/$/, "");
 
   const script = `#!/bin/bash
@@ -531,16 +533,8 @@ exec > /var/log/runner-setup.log 2>&1
 # Wait for dpkg locks
 while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do sleep 5; done
 
-# Install Docker (used only to pull the runner image from ECR)
-curl -fsSL https://get.docker.com | sh
-systemctl enable docker
-systemctl start docker
-
-# Install AWS CLI v2
-apt-get install -y unzip
-curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
-unzip -q /tmp/awscliv2.zip -d /tmp
-/tmp/aws/install
+apt-get update
+apt-get install -y curl
 
 # Install Mountpoint for Amazon S3, used by volume mounts
 MOUNT_S3_VERSION=1.20.0
@@ -549,18 +543,9 @@ curl -fsSL "https://s3.amazonaws.com/mountpoint-s3-release/\${MOUNT_S3_VERSION}/
 apt-get install -y /tmp/mount-s3.deb
 rm -f /tmp/mount-s3.deb
 
-# Login to ECR
-/usr/local/bin/aws ecr get-login-password --region ${REGION} | docker login --username AWS --password-stdin ${ecrDomain}
-
-# Pull runner image and extract binary
-docker pull ${input.repo}:latest
-docker create --name runner-extract ${input.repo}:latest
-docker cp runner-extract:/usr/local/bin/boxlite-runner /usr/local/bin/boxlite-runner
-rm -rf /usr/local/lib/boxlite-runtime
-docker cp runner-extract:/usr/local/lib/boxlite-runtime /usr/local/lib/boxlite-runtime
-docker rm runner-extract
+# Download prebuilt runner binary from GitHub Releases
+curl -fsSL "https://github.com/boxlite-ai/boxlite/releases/download/v${RUNNER_VERSION}/boxlite-runner-v${RUNNER_VERSION}-linux-amd64.tar.gz" | tar xz -C /usr/local/bin/
 chmod +x /usr/local/bin/boxlite-runner
-chmod +x /usr/local/lib/boxlite-runtime/boxlite-* || true
 
 # Get host IP via IMDSv2
 IMDS_TOKEN=\$(curl -sX PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 300")
@@ -583,7 +568,6 @@ Environment=API_VERSION=2
 Environment=API_PORT=${PORTS.RUNNER}
 Environment=RUNNER_DOMAIN=\$HOST_IP
 Environment=BOXLITE_HOME_DIR=/var/lib/boxlite
-Environment=BOXLITE_RUNTIME_DIR=/usr/local/lib/boxlite-runtime
 Environment=INSECURE_REGISTRIES=${registryHost}
 Environment=AWS_REGION=${REGION}
 
