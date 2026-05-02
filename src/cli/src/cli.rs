@@ -606,6 +606,8 @@ impl ManagementFlags {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use tempfile::TempDir;
 
     #[test]
     fn test_apply_env_vars_with_lookup() {
@@ -635,6 +637,44 @@ mod tests {
         );
 
         assert!(!opts.env.iter().any(|(k, _)| k == "NON_EXISTENT_VAR"));
+    }
+
+    #[test]
+    fn resolve_runtime_options_prepends_cli_registries_to_config() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join("config.json");
+        fs::write(
+            &config_path,
+            r#"{
+                "image_registries": [
+                    {
+                        "host": "registry.local:5000",
+                        "transport": "http",
+                        "search": true
+                    }
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        let flags = GlobalFlags {
+            debug: false,
+            home: Some(temp_dir.path().join("home")),
+            registry: vec!["cli.registry.local".to_string()],
+            config: Some(config_path.display().to_string()),
+            url: None,
+        };
+
+        let options = flags.resolve_runtime_options().unwrap();
+
+        assert_eq!(options.home_dir, temp_dir.path().join("home"));
+        assert_eq!(
+            options.image_registries,
+            vec![
+                ImageRegistry::https("cli.registry.local").with_search(true),
+                ImageRegistry::http("registry.local:5000").with_search(true),
+            ]
+        );
     }
 
     #[test]

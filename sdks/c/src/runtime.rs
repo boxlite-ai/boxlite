@@ -354,3 +354,88 @@ pub extern "C" fn version() -> *const c_char {
     // Static string, safe to return pointer
     concat!(env!("CARGO_PKG_VERSION"), "\0").as_ptr() as *const c_char
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::CString;
+    use std::ptr;
+
+    fn registry(host: *const c_char) -> BoxliteImageRegistry {
+        BoxliteImageRegistry {
+            host,
+            transport: BoxliteRegistryTransport::BoxliteRegistryTransportHttps,
+            skip_verify: 0,
+            search: 0,
+            username: ptr::null(),
+            password: ptr::null(),
+            bearer_token: ptr::null(),
+        }
+    }
+
+    #[test]
+    fn parse_image_registry_array_maps_all_fields() {
+        let anonymous_host = CString::new("anonymous.local").unwrap();
+        let basic_host = CString::new("basic.local").unwrap();
+        let basic_username = CString::new("alice").unwrap();
+        let basic_password = CString::new("secret").unwrap();
+        let bearer_host = CString::new("bearer.local").unwrap();
+        let bearer_token = CString::new("token").unwrap();
+
+        let registries = [
+            registry(anonymous_host.as_ptr()),
+            BoxliteImageRegistry {
+                host: basic_host.as_ptr(),
+                transport: BoxliteRegistryTransport::BoxliteRegistryTransportHttp,
+                skip_verify: 1,
+                search: 1,
+                username: basic_username.as_ptr(),
+                password: basic_password.as_ptr(),
+                bearer_token: ptr::null(),
+            },
+            BoxliteImageRegistry {
+                host: bearer_host.as_ptr(),
+                bearer_token: bearer_token.as_ptr(),
+                ..registry(bearer_host.as_ptr())
+            },
+        ];
+
+        let parsed =
+            unsafe { parse_image_registry_array(registries.as_ptr(), registries.len() as c_int) }
+                .unwrap();
+
+        assert_eq!(
+            parsed,
+            vec![
+                ImageRegistry::https("anonymous.local"),
+                ImageRegistry::http("basic.local")
+                    .with_skip_verify(true)
+                    .with_search(true)
+                    .with_basic_auth("alice", "secret"),
+                ImageRegistry::https("bearer.local").with_bearer_auth("token"),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_image_registry_array_rejects_invalid_arguments() {
+        let host = CString::new("registry.local").unwrap();
+        let username = CString::new("alice").unwrap();
+        let missing_password = BoxliteImageRegistry {
+            username: username.as_ptr(),
+            ..registry(host.as_ptr())
+        };
+        let null_host = registry(ptr::null());
+
+        let cases = [
+            unsafe { parse_image_registry_array(ptr::null(), -1) },
+            unsafe { parse_image_registry_array(ptr::null(), 1) },
+            unsafe { parse_image_registry_array(&null_host as *const _, 1) },
+            unsafe { parse_image_registry_array(&missing_password as *const _, 1) },
+        ];
+
+        for result in cases {
+            assert!(result.is_err());
+        }
+    }
+}

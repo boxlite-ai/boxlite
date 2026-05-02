@@ -1093,66 +1093,89 @@ mod tests {
     use std::path::Path;
 
     #[test]
-    fn client_config_uses_http_for_configured_registry() {
-        let config = client_config_for_registry(
-            "registry.local:5000",
-            &[ImageRegistry::http("registry.local:5000")],
-        );
+    fn client_config_uses_exact_registry_transport_and_tls_settings() {
+        let registries = [
+            ImageRegistry::http("registry.local:5000").with_skip_verify(true),
+            ImageRegistry::https("registry.example.com").with_skip_verify(true),
+        ];
+        let cases = [
+            ("registry.local:5000", ClientProtocol::Http, true),
+            ("registry.example.com", ClientProtocol::Https, true),
+            ("docker.io", ClientProtocol::Https, false),
+        ];
 
-        assert_eq!(config.protocol, ClientProtocol::Http);
-        assert!(!config.accept_invalid_certificates);
+        for (host, protocol, accept_invalid_certificates) in cases {
+            let config = client_config_for_registry(host, &registries);
+            assert_eq!(config.protocol, protocol, "host={host}");
+            assert_eq!(
+                config.accept_invalid_certificates, accept_invalid_certificates,
+                "host={host}"
+            );
+        }
     }
 
     #[test]
-    fn client_config_uses_skip_verify_for_configured_registry() {
-        let config = client_config_for_registry(
-            "registry.local:5000",
-            &[ImageRegistry::https("registry.local:5000").with_skip_verify(true)],
-        );
+    fn registry_auth_uses_exact_registry_credentials() {
+        let registries = [
+            ImageRegistry::https("basic.local").with_basic_auth("alice", "secret"),
+            ImageRegistry::https("bearer.local").with_bearer_auth("token"),
+            ImageRegistry::https("anonymous.local"),
+        ];
+        let cases = [
+            (
+                "basic.local",
+                OciRegistryAuth::Basic("alice".to_string(), "secret".to_string()),
+            ),
+            ("bearer.local", OciRegistryAuth::Bearer("token".to_string())),
+            ("anonymous.local", OciRegistryAuth::Anonymous),
+            ("docker.io", OciRegistryAuth::Anonymous),
+        ];
 
-        assert_eq!(config.protocol, ClientProtocol::Https);
-        assert!(config.accept_invalid_certificates);
+        for (host, expected) in cases {
+            assert_eq!(
+                registry_auth_for(host, &registries),
+                expected,
+                "host={host}"
+            );
+        }
     }
 
     #[test]
-    fn registry_auth_uses_basic_credentials_for_configured_registry() {
-        let auth = registry_auth_for(
-            "registry.local:5000",
-            &[ImageRegistry::https("registry.local:5000").with_basic_auth("alice", "secret")],
-        );
-
-        assert_eq!(
-            auth,
-            OciRegistryAuth::Basic("alice".to_string(), "secret".to_string())
-        );
-    }
-
-    #[test]
-    fn registry_auth_uses_bearer_token_for_configured_registry() {
-        let auth = registry_auth_for(
-            "registry.local:5000",
-            &[ImageRegistry::https("registry.local:5000").with_bearer_auth("token")],
-        );
-
-        assert_eq!(auth, OciRegistryAuth::Bearer("token".to_string()));
-    }
-
-    #[test]
-    fn image_registries_only_join_search_list_when_search_is_enabled() {
+    fn search_registries_preserves_search_order_and_deduplicates() {
         let registries = search_registries(&[
-            ImageRegistry::https("ghcr.io"),
+            ImageRegistry::https("ghcr.io").with_search(true),
+            ImageRegistry::https("quay.io"),
             ImageRegistry::http("registry.local:5000").with_search(true),
+            ImageRegistry::https("ghcr.io").with_search(true),
         ]);
 
-        assert_eq!(registries, vec!["registry.local:5000".to_string()]);
+        assert_eq!(
+            registries,
+            vec!["ghcr.io".to_string(), "registry.local:5000".to_string()]
+        );
     }
 
     #[test]
-    fn validate_image_registries_rejects_urls() {
-        let result =
-            validate_image_registries(&[ImageRegistry::http("http://registry.local:5000")]);
+    fn validate_image_registries_rejects_invalid_hosts() {
+        let invalid = [
+            ImageRegistry::https(""),
+            ImageRegistry::https("   "),
+            ImageRegistry::http("http://registry.local:5000"),
+            ImageRegistry::https("registry.local:5000/ns"),
+        ];
 
-        assert!(result.is_err());
+        for registry in invalid {
+            assert!(validate_image_registries(&[registry]).is_err());
+        }
+    }
+
+    #[test]
+    fn validate_image_registries_accepts_host_and_host_port() {
+        validate_image_registries(&[
+            ImageRegistry::https("docker.io"),
+            ImageRegistry::http("registry.local:5000"),
+        ])
+        .unwrap();
     }
 
     /// Helper to create a minimal OCI bundle for testing

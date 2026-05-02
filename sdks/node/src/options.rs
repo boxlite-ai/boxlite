@@ -462,6 +462,100 @@ impl From<JsBoxliteRestOptions> for BoxliteRestOptions {
 mod tests {
     use super::*;
 
+    fn js_registry(host: &str) -> JsImageRegistry {
+        JsImageRegistry {
+            host: host.into(),
+            transport: None,
+            skip_verify: None,
+            search: None,
+            auth: None,
+        }
+    }
+
+    #[test]
+    fn js_options_into_core_maps_image_registries() {
+        let opts = js_options_into_core(JsOptions {
+            home_dir: Some("/tmp/boxlite-node".into()),
+            image_registries: Some(vec![
+                JsImageRegistry {
+                    host: "ghcr.io".into(),
+                    search: Some(true),
+                    ..js_registry("ghcr.io")
+                },
+                JsImageRegistry {
+                    host: "registry.local:5000".into(),
+                    transport: Some("http".into()),
+                    skip_verify: Some(true),
+                    search: Some(true),
+                    auth: Some(JsImageRegistryAuth {
+                        username: Some("alice".into()),
+                        password: Some("secret".into()),
+                        bearer_token: None,
+                    }),
+                },
+                JsImageRegistry {
+                    host: "registry.example.com".into(),
+                    auth: Some(JsImageRegistryAuth {
+                        username: None,
+                        password: None,
+                        bearer_token: Some("token".into()),
+                    }),
+                    ..js_registry("registry.example.com")
+                },
+            ]),
+        })
+        .unwrap();
+
+        assert_eq!(opts.home_dir, PathBuf::from("/tmp/boxlite-node"));
+        assert_eq!(
+            opts.image_registries,
+            vec![
+                ImageRegistry::https("ghcr.io").with_search(true),
+                ImageRegistry::http("registry.local:5000")
+                    .with_skip_verify(true)
+                    .with_search(true)
+                    .with_basic_auth("alice", "secret"),
+                ImageRegistry::https("registry.example.com").with_bearer_auth("token"),
+            ]
+        );
+    }
+
+    #[test]
+    fn js_image_registry_rejects_invalid_config() {
+        let cases = [
+            JsImageRegistry {
+                host: " ".into(),
+                ..js_registry(" ")
+            },
+            JsImageRegistry {
+                host: "https://registry.local".into(),
+                ..js_registry("https://registry.local")
+            },
+            JsImageRegistry {
+                host: "registry.local/ns".into(),
+                ..js_registry("registry.local/ns")
+            },
+            JsImageRegistry {
+                host: "registry.local".into(),
+                transport: Some("ftp".into()),
+                ..js_registry("registry.local")
+            },
+            JsImageRegistry {
+                host: "registry.local".into(),
+                auth: Some(JsImageRegistryAuth {
+                    username: Some("alice".into()),
+                    password: None,
+                    bearer_token: None,
+                }),
+                ..js_registry("registry.local")
+            },
+        ];
+
+        for registry in cases {
+            assert!(js_image_registry_into_core(registry).is_err());
+        }
+    }
+
     #[test]
     fn rest_options_from_js_all_fields() {
         let js = JsBoxliteRestOptions {

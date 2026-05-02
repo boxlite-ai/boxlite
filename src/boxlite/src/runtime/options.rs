@@ -175,6 +175,127 @@ impl Default for BoxliteOptions {
     }
 }
 
+#[cfg(test)]
+mod registry_options_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn options_deserialize_structured_image_registries() {
+        let json = r#"
+        {
+          "home_dir": "/tmp/boxlite-test",
+          "image_registries": [
+            {"host": "ghcr.io", "search": true},
+            {
+              "host": "registry.local:5000",
+              "transport": "http",
+              "skip_verify": true,
+              "search": true,
+              "auth": {
+                "type": "basic",
+                "username": "alice",
+                "password": "secret"
+              }
+            },
+            {
+              "host": "registry.example.com",
+              "auth": {
+                "type": "bearer",
+                "token": "token"
+              }
+            }
+          ]
+        }
+        "#;
+
+        let options: BoxliteOptions = serde_json::from_str(json).unwrap();
+
+        assert_eq!(options.home_dir, PathBuf::from("/tmp/boxlite-test"));
+        assert_eq!(
+            options.image_registries,
+            vec![
+                ImageRegistry::https("ghcr.io").with_search(true),
+                ImageRegistry::http("registry.local:5000")
+                    .with_skip_verify(true)
+                    .with_search(true)
+                    .with_basic_auth("alice", "secret"),
+                ImageRegistry::https("registry.example.com").with_bearer_auth("token"),
+            ]
+        );
+    }
+
+    #[test]
+    fn options_reject_legacy_string_image_registries() {
+        let result =
+            serde_json::from_str::<BoxliteOptions>(r#"{"image_registries": ["docker.io"]}"#);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn options_serialize_structured_image_registries() {
+        let options = BoxliteOptions {
+            home_dir: PathBuf::from("/tmp/boxlite-test"),
+            image_registries: vec![
+                ImageRegistry::http("registry.local:5000")
+                    .with_skip_verify(true)
+                    .with_search(true)
+                    .with_basic_auth("alice", "secret"),
+                ImageRegistry::https("registry.example.com").with_bearer_auth("token"),
+            ],
+        };
+
+        let value = serde_json::to_value(options).unwrap();
+
+        assert_eq!(
+            value,
+            json!({
+                "home_dir": "/tmp/boxlite-test",
+                "image_registries": [
+                    {
+                        "host": "registry.local:5000",
+                        "transport": "http",
+                        "skip_verify": true,
+                        "search": true,
+                        "auth": {
+                            "type": "basic",
+                            "username": "alice",
+                            "password": "secret"
+                        }
+                    },
+                    {
+                        "host": "registry.example.com",
+                        "transport": "https",
+                        "skip_verify": false,
+                        "search": false,
+                        "auth": {
+                            "type": "bearer",
+                            "token": "token"
+                        }
+                    }
+                ]
+            })
+        );
+    }
+
+    #[test]
+    fn image_registry_debug_redacts_credentials() {
+        let basic = format!(
+            "{:?}",
+            ImageRegistry::https("registry.example.com").with_basic_auth("alice", "secret")
+        );
+        let bearer = format!(
+            "{:?}",
+            ImageRegistry::https("registry.example.com").with_bearer_auth("bearer-secret")
+        );
+
+        assert!(basic.contains("alice"));
+        assert!(!basic.contains("secret"));
+        assert!(!bearer.contains("bearer-secret"));
+    }
+}
+
 /// Options used when constructing a box.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
