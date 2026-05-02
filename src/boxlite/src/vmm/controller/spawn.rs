@@ -205,6 +205,7 @@ mod tests {
 
     #[test]
     fn test_configure_env_sets_box_scoped_temp_dir() {
+        use crate::runtime::advanced_options::{AdvancedBoxOptions, SecurityOptions};
         use crate::runtime::layout::{BoxFilesystemLayout, FsLayoutConfig};
         use std::path::PathBuf;
 
@@ -213,7 +214,16 @@ mod tests {
             FsLayoutConfig::without_bind_mount(),
             false,
         );
-        let options = BoxOptions::default();
+        let options = BoxOptions {
+            advanced: AdvancedBoxOptions {
+                security: SecurityOptions {
+                    jailer_enabled: true,
+                    ..SecurityOptions::default()
+                },
+                ..AdvancedBoxOptions::default()
+            },
+            ..BoxOptions::default()
+        };
 
         let spawner = ShimSpawner::new(
             Path::new("/usr/bin/boxlite-shim"),

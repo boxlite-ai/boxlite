@@ -943,6 +943,14 @@ fn main() {
     // Tell the linker where to find the bundled libraries.
     println!("cargo:rustc-link-search=native={}", runtime_dir.display());
 
+    // libkrun is a Rust staticlib that embeds its own copy of std.
+    // When linked into Rust test/bin targets, std symbols conflict.
+    // Applied to both test and bin targets.
+    #[cfg(target_os = "linux")]
+    println!("cargo:rustc-link-arg-tests=-Wl,--allow-multiple-definition");
+    #[cfg(target_os = "linux")]
+    println!("cargo:rustc-link-arg-bins=-Wl,--allow-multiple-definition");
+
     // Expose the runtime directory to downstream crates (e.g., Python SDK)
     println!("cargo:runtime_dir={}", runtime_dir.display());
 

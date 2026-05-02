@@ -1,37 +1,14 @@
-//! DNS configuration for containers
+//! DNS configuration for containers.
 //!
-//! Creates /etc/resolv.conf in the container rootfs pointing to
-//! the DNS server at the gateway IP (192.168.127.1).
-//!
-//! DNS is configured after rootfs preparation, before the Box starts.
+//! Deprecated: DNS is now handled by the guest agent via bind-mount
+//! (matching Docker/containerd). This module is kept for test coverage only.
 
-use boxlite_shared::errors::{BoxliteError, BoxliteResult};
-use std::fs;
-use std::path::Path;
-
-/// Configure DNS for container by creating /etc/resolv.conf
-///
-/// Creates resolv.conf pointing to the DNS server at 192.168.127.1 (the gateway).
-///
-/// This is called during rootfs preparation, after image extraction
-/// but before the Box starts.
-///
-/// # Arguments
-/// * `rootfs` - Path to the container rootfs directory
-///
-/// # Returns
-/// * `Ok(())` on success
-/// * `Err` if directory creation or file writing fails
-///
-/// # Example
-/// ```no_run
-/// use std::path::Path;
-/// use boxlite::rootfs::configure_container_dns;
-///
-/// let rootfs = Path::new("/tmp/rootfs");
-/// configure_container_dns(rootfs).unwrap();
-/// ```
-pub fn configure_container_dns(rootfs: &Path) -> BoxliteResult<()> {
+#[cfg(test)]
+pub fn configure_container_dns(
+    rootfs: &std::path::Path,
+) -> boxlite_shared::errors::BoxliteResult<()> {
+    use boxlite_shared::errors::BoxliteError;
+    use std::fs;
     tracing::debug!("Configuring DNS for container at {:?}", rootfs);
 
     // Ensure /etc directory exists in rootfs

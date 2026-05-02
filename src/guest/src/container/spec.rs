@@ -518,59 +518,31 @@ fn build_standard_mounts(bundle_path: &Path) -> BoxliteResult<Vec<Mount>> {
             .map_err(|e| BoxliteError::Internal(format!("Failed to build /tmp mount: {}", e)))?,
     ];
 
-    // Add /etc/hostname bind mount
-    let hostname_path = bundle_path.join("hostname");
-    mounts.push(
-        MountBuilder::default()
-            .destination("/etc/hostname")
-            .typ("bind")
-            .source(hostname_path.to_str().ok_or_else(|| {
-                BoxliteError::Internal(format!(
-                    "Invalid hostname path: {}",
-                    hostname_path.display()
-                ))
-            })?)
-            .options(vec!["bind".to_string(), "ro".to_string()])
-            .build()
-            .map_err(|e| {
-                BoxliteError::Internal(format!("Failed to build /etc/hostname mount: {}", e))
-            })?,
-    );
-
-    // Add /etc/hosts bind mount (read-only — writable /etc/hosts allows DNS hijacking)
-    let hosts_path = bundle_path.join("hosts");
-    mounts.push(
-        MountBuilder::default()
-            .destination("/etc/hosts")
-            .typ("bind")
-            .source(hosts_path.to_str().ok_or_else(|| {
-                BoxliteError::Internal(format!("Invalid hosts path: {}", hosts_path.display()))
-            })?)
-            .options(vec!["bind".to_string(), "ro".to_string()])
-            .build()
-            .map_err(|e| {
-                BoxliteError::Internal(format!("Failed to build /etc/hosts mount: {}", e))
-            })?,
-    );
-
-    // Add /etc/resolv.conf bind mount
-    let resolv_conf_path = bundle_path.join("resolv.conf");
-    mounts.push(
-        MountBuilder::default()
-            .destination("/etc/resolv.conf")
-            .typ("bind")
-            .source(resolv_conf_path.to_str().ok_or_else(|| {
-                BoxliteError::Internal(format!(
-                    "Invalid resolv.conf path: {}",
-                    resolv_conf_path.display()
-                ))
-            })?)
-            .options(vec!["bind".to_string(), "ro".to_string()])
-            .build()
-            .map_err(|e| {
-                BoxliteError::Internal(format!("Failed to build /etc/resolv.conf mount: {}", e))
-            })?,
-    );
+    // Bind-mount /etc/hostname, /etc/hosts, /etc/resolv.conf from the bundle
+    // dir into the container. Uses rbind + rprivate (matching Docker defaults).
+    let etc_mounts: &[(&str, &str)] = &[
+        ("hostname", "/etc/hostname"),
+        ("hosts", "/etc/hosts"),
+        ("resolv.conf", "/etc/resolv.conf"),
+    ];
+    for (file, dest) in etc_mounts {
+        let source = bundle_path.join(file);
+        mounts.push(
+            MountBuilder::default()
+                .destination(*dest)
+                .typ("bind")
+                .source(
+                    source
+                        .to_str()
+                        .ok_or_else(|| BoxliteError::Internal(format!("Invalid {} path", file)))?,
+                )
+                .options(vec!["rbind".to_string(), "rprivate".to_string()])
+                .build()
+                .map_err(|e| {
+                    BoxliteError::Internal(format!("Failed to build {} mount: {}", dest, e))
+                })?,
+        );
+    }
 
     Ok(mounts)
 }

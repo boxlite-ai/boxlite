@@ -74,9 +74,6 @@ impl RootfsBuilder {
             }
         };
 
-        // Configure DNS (create /etc/resolv.conf) - done ONCE after rootfs is ready
-        super::configure_container_dns(&dest)?;
-
         Ok(prepared)
     }
 
@@ -143,9 +140,6 @@ impl RootfsBuilder {
                 copy_directory_overlay(layer_dir, dest)?;
             }
         }
-
-        // Fix rootfs permissions for container compatibility
-        // crate::util::fix_rootfs_permissions(dest)?;
 
         tracing::info!("✅ Rootfs prepared at {}", dest.display());
         Ok(PreparedRootfs {
@@ -515,4 +509,51 @@ fn copy_directory_overlay(src: &Path, dst: &Path) -> BoxliteResult<()> {
     );
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn copy_directory_overlay_processes_regular_whiteout_marker() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        let dst = tmp.path().join("dst");
+
+        std::fs::create_dir_all(src.join("bin")).unwrap();
+        std::fs::create_dir_all(dst.join("bin")).unwrap();
+        std::fs::write(src.join("bin/.wh.sh"), b"").unwrap();
+        std::fs::write(src.join("bin/new-tool"), b"new").unwrap();
+        std::fs::write(dst.join("bin/sh"), b"old").unwrap();
+        std::fs::write(dst.join("bin/bash"), b"keep").unwrap();
+
+        copy_directory_overlay(&src, &dst).unwrap();
+
+        assert!(!dst.join("bin/sh").exists());
+        assert!(!dst.join("bin/.wh.sh").exists());
+        assert_eq!(std::fs::read(dst.join("bin/bash")).unwrap(), b"keep");
+        assert_eq!(std::fs::read(dst.join("bin/new-tool")).unwrap(), b"new");
+    }
+
+    #[test]
+    fn copy_directory_overlay_processes_opaque_whiteout_marker() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        let dst = tmp.path().join("dst");
+
+        std::fs::create_dir_all(src.join("etc")).unwrap();
+        std::fs::create_dir_all(dst.join("etc/subdir")).unwrap();
+        std::fs::write(src.join("etc/.wh..wh..opq"), b"").unwrap();
+        std::fs::write(src.join("etc/upper"), b"upper").unwrap();
+        std::fs::write(dst.join("etc/lower"), b"lower").unwrap();
+        std::fs::write(dst.join("etc/subdir/lower"), b"lower").unwrap();
+
+        copy_directory_overlay(&src, &dst).unwrap();
+
+        assert_eq!(std::fs::read(dst.join("etc/upper")).unwrap(), b"upper");
+        assert!(!dst.join("etc/lower").exists());
+        assert!(!dst.join("etc/subdir").exists());
+        assert!(!dst.join("etc/.wh..wh..opq").exists());
+    }
 }

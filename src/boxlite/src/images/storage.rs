@@ -229,7 +229,9 @@ impl ImageStorage {
         })?;
 
         // Extract tarball to temp directory - keep .wh.* files!
-        if let Err(e) = LayerExtractor::new(&temp_path).extract_tarball(tarball_path) {
+        if let Err(e) =
+            LayerExtractor::new(&temp_path).extract_tarball_preserving_whiteouts(tarball_path)
+        {
             // Clean up temp dir on extraction failure
             let _ = std::fs::remove_dir_all(&temp_path);
             return Err(e);
@@ -660,6 +662,37 @@ impl StagedDownload {
 mod tests {
     use super::*;
 
+    fn tar_with_whiteout_marker() -> Vec<u8> {
+        let mut builder = tar::Builder::new(Vec::new());
+
+        let mut dir = tar::Header::new_gnu();
+        dir.set_path("bin").unwrap();
+        dir.set_entry_type(tar::EntryType::Directory);
+        dir.set_mode(0o755);
+        dir.set_size(0);
+        dir.set_cksum();
+        builder.append(&dir, &[][..]).unwrap();
+
+        let mut whiteout = tar::Header::new_gnu();
+        whiteout.set_path("bin/.wh.sh").unwrap();
+        whiteout.set_entry_type(tar::EntryType::Regular);
+        whiteout.set_mode(0o644);
+        whiteout.set_size(0);
+        whiteout.set_cksum();
+        builder.append(&whiteout, &[][..]).unwrap();
+
+        let content = b"upper";
+        let mut file = tar::Header::new_gnu();
+        file.set_path("bin/new-tool").unwrap();
+        file.set_entry_type(tar::EntryType::Regular);
+        file.set_mode(0o755);
+        file.set_size(content.len() as u64);
+        file.set_cksum();
+        builder.append(&file, &content[..]).unwrap();
+
+        builder.into_inner().unwrap()
+    }
+
     #[test]
     fn test_store_new_creates_directories() {
         let temp_dir = tempfile::tempdir().unwrap();
@@ -688,6 +721,24 @@ mod tests {
 
         let path = store.layer_tarball_path("sha256:layer1");
         assert_eq!(path, temp_dir.path().join("layers/sha256-layer1.tar.gz"));
+    }
+
+    #[test]
+    fn test_extract_layer_preserves_whiteout_markers_for_cache() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let store = ImageStorage::new(temp_dir.path().to_path_buf()).unwrap();
+        let digest = "sha256:whiteout-layer";
+        let tar_path = temp_dir.path().join("layer.tar");
+        std::fs::write(&tar_path, tar_with_whiteout_marker()).unwrap();
+
+        store.extract_layer(digest, &tar_path).unwrap();
+
+        let extracted = store.layer_extracted_path(digest);
+        assert!(extracted.join("bin/.wh.sh").exists());
+        assert_eq!(
+            std::fs::read(extracted.join("bin/new-tool")).unwrap(),
+            b"upper"
+        );
     }
 
     #[test]

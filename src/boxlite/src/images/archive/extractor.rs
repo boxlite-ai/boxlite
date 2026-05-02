@@ -3,7 +3,7 @@
 use super::compression::TarballReader;
 use super::metadata::EntryMetadata;
 use super::override_stat::{OverrideFileType, OverrideStat};
-use super::safe_root::{SafeRoot, special_from_entry};
+use super::safe_root::SafeRoot;
 use super::time::{bound_time, latest_time};
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use filetime::{FileTime, set_file_times, set_symlink_file_times};
@@ -12,8 +12,8 @@ use std::ffi::CString;
 use std::fs::{self, Permissions};
 use std::io::{self, Read};
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::PermissionsExt;
-use std::path::{Component, Path, PathBuf};
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tar::{Archive, Entry, EntryType};
 use tracing::{debug, trace, warn};
@@ -30,6 +30,12 @@ pub struct LayerExtractor<'a> {
     dest: &'a Path,
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum WhiteoutMode {
+    Apply,
+    Preserve,
+}
+
 impl<'a> LayerExtractor<'a> {
     /// Construct an extractor targeting `dest`. The directory is opened lazily
     /// per extraction call so the same extractor can apply multiple layers.
@@ -43,9 +49,514 @@ impl<'a> LayerExtractor<'a> {
         self.extract_reader(reader)
     }
 
+    /// Unpack a layer into a standalone cached layer directory.
+    ///
+    /// Whiteout marker files are preserved so a later copy-overlay merge can
+    /// apply them against lower layers.
+    pub(crate) fn extract_tarball_preserving_whiteouts(
+        &self,
+        tarball_path: &Path,
+    ) -> BoxliteResult<u64> {
+        let reader = TarballReader::open(tarball_path)?;
+        self.extract_reader_with_whiteout_mode(reader, WhiteoutMode::Preserve)
+    }
+
     /// Apply an already-decompressed tar stream.
     pub fn extract_reader<R: Read>(&self, reader: R) -> BoxliteResult<u64> {
-        apply_oci_layer(reader, self.dest)
+        self.extract_reader_with_whiteout_mode(reader, WhiteoutMode::Apply)
+    }
+
+    fn extract_reader_with_whiteout_mode<R: Read>(
+        &self,
+        reader: R,
+        whiteout_mode: WhiteoutMode,
+    ) -> BoxliteResult<u64> {
+        let root = SafeRoot::open(self.dest)?;
+        let is_root = unsafe { libc::geteuid() } == 0;
+        let mut archive = Archive::new(reader);
+        let mut unpacked_paths: HashSet<PathBuf> = HashSet::new();
+        let mut total_size = 0u64;
+        let mut deferred_dirs: Vec<DirMeta> = Vec::new();
+        let mut deferred_hardlinks: Vec<DeferredHardlink> = Vec::new();
+
+        for entry_result in archive
+            .entries()
+            .map_err(|e| BoxliteError::Storage(format!("Tar read entries error: {}", e)))?
+        {
+            let mut entry = entry_result
+                .map_err(|e| BoxliteError::Storage(format!("Tar read entry error: {}", e)))?;
+            let raw_path = entry
+                .path()
+                .map_err(|e| BoxliteError::Storage(format!("Tar parse header path error: {}", e)))?
+                .into_owned();
+            let normalized = match SafeRoot::normalize(&raw_path) {
+                Some(p) => p,
+                None => {
+                    debug!("Skipping path outside root: {}", raw_path.display());
+                    continue;
+                }
+            };
+
+            if normalized.as_os_str().is_empty() {
+                debug!("Skipping root entry");
+                continue;
+            }
+
+            let entry_type = entry.header().entry_type();
+            let mode = entry.header().mode().unwrap_or(0o755);
+            let uid = entry.header().uid().unwrap_or(0);
+            let gid = entry.header().gid().unwrap_or(0);
+            let mtime = entry.header().mtime().unwrap_or(0);
+            let atime = mtime;
+            total_size = total_size.saturating_add(entry.header().size().unwrap_or(0));
+
+            let link_name = if matches!(entry_type, EntryType::Link | EntryType::Symlink) {
+                entry
+                    .link_name()
+                    .map_err(|e| BoxliteError::Storage(format!("Tar read link name error: {}", e)))?
+                    .map(|p| p.into_owned())
+            } else {
+                None
+            };
+
+            let device_major =
+                entry.header().device_major().unwrap_or(None).unwrap_or(0) as libc::dev_t;
+            let device_minor =
+                entry.header().device_minor().unwrap_or(None).unwrap_or(0) as libc::dev_t;
+
+            trace!(
+                "Processing entry: path={}, type={:?}, mode={:o}, uid={}, gid={}, size={}, mtime={}, device={}:{}, link={:?}",
+                normalized.display(),
+                entry_type,
+                mode,
+                uid,
+                gid,
+                entry.header().size().unwrap_or(0),
+                mtime,
+                device_major,
+                device_minor,
+                link_name.as_ref().map(|p| p.display().to_string())
+            );
+
+            if whiteout_mode == WhiteoutMode::Apply
+                && Self::apply_whiteout(&root, &normalized, &mut unpacked_paths, entry_type)?
+            {
+                continue;
+            }
+
+            // containerd pattern: resolve parent, join leaf.
+            // Parent is resolved (symlinks re-anchored). Leaf doesn't need
+            // to exist yet — it's the entry being created.
+            let (parent_rel, leaf) = Self::split_parent_leaf(&normalized);
+            let safe_parent = root.resolve_or_root(&parent_rel)?;
+            if fs::create_dir_all(&safe_parent).is_err() {
+                // Obstacle: a file exists where a directory is needed.
+                // Walk up from safe_parent, find the non-dir obstacle, remove it, retry.
+                let root_path = root.root_path();
+                let mut cursor = safe_parent.as_path();
+                while cursor != root_path {
+                    if let Ok(m) = fs::symlink_metadata(cursor) {
+                        if !m.is_dir() {
+                            let _ = fs::remove_file(cursor);
+                        }
+                        break;
+                    }
+                    match cursor.parent() {
+                        Some(p) => cursor = p,
+                        None => break,
+                    }
+                }
+                fs::create_dir_all(&safe_parent).map_err(|e| {
+                    BoxliteError::Storage(format!(
+                        "Failed to create parent {}: {}",
+                        parent_rel.display(),
+                        e
+                    ))
+                })?;
+            }
+            let safe_path = safe_parent.join(&leaf);
+            Self::remove_nofollow(&safe_path, entry_type == EntryType::Directory)?;
+
+            let xattrs = read_xattrs(&mut entry)?;
+            let mut is_deferred = false;
+
+            match entry_type {
+                EntryType::Directory => {
+                    if !safe_path.exists() {
+                        fs::create_dir(&safe_path).map_err(|e| {
+                            BoxliteError::Storage(format!(
+                                "Failed to create dir {}: {}",
+                                normalized.display(),
+                                e
+                            ))
+                        })?;
+                    }
+                }
+                EntryType::Regular | EntryType::GNUSparse => {
+                    let mut file = fs::OpenOptions::new()
+                        .write(true)
+                        .create(true)
+                        .truncate(true)
+                        .mode(mode)
+                        .open(&safe_path)
+                        .map_err(|e| {
+                            BoxliteError::Storage(format!(
+                                "Failed to create file {}: {}",
+                                normalized.display(),
+                                e
+                            ))
+                        })?;
+                    io::copy(&mut entry, &mut file).map_err(|e| {
+                        BoxliteError::Storage(format!(
+                            "Failed to copy file data to {}: {}",
+                            normalized.display(),
+                            e
+                        ))
+                    })?;
+                }
+                EntryType::Link => {
+                    let target = link_name.clone().ok_or_else(|| {
+                        BoxliteError::Storage(format!(
+                            "Hardlink without target: {}",
+                            raw_path.display()
+                        ))
+                    })?;
+                    let target_rel = SafeRoot::normalize(&target).ok_or_else(|| {
+                        BoxliteError::Storage(format!(
+                            "Hardlink target escapes root: {}",
+                            target.display()
+                        ))
+                    })?;
+                    let (tp, tl) = Self::split_parent_leaf(&target_rel);
+                    let target_safe = root.resolve_or_root(&tp)?.join(&tl);
+                    if fs::symlink_metadata(&target_safe).is_ok() {
+                        fs::hard_link(&target_safe, &safe_path).map_err(|e| {
+                            BoxliteError::Storage(format!(
+                                "Failed to create hardlink {}: {}",
+                                normalized.display(),
+                                e
+                            ))
+                        })?;
+                    } else {
+                        trace!(
+                            "Deferring hardlink {} -> {} (target not found yet)",
+                            normalized.display(),
+                            target_rel.display()
+                        );
+                        deferred_hardlinks.push(DeferredHardlink {
+                            link_rel: normalized.clone(),
+                            target_rel,
+                            meta: EntryMetadata::builder(mode, atime, mtime)
+                                .uid(uid)
+                                .gid(gid)
+                                .entry_type(entry_type)
+                                .device(device_major, device_minor)
+                                .xattrs(vec![])
+                                .build(),
+                        });
+                        is_deferred = true;
+                    }
+                }
+                EntryType::Symlink => {
+                    let target = link_name.ok_or_else(|| {
+                        BoxliteError::Storage(format!(
+                            "Symlink without target: {}",
+                            raw_path.display()
+                        ))
+                    })?;
+                    std::os::unix::fs::symlink(&target, &safe_path).map_err(|e| {
+                        BoxliteError::Storage(format!(
+                            "Failed to create symlink {} -> {}: {}",
+                            normalized.display(),
+                            target.display(),
+                            e
+                        ))
+                    })?;
+                }
+                EntryType::Block | EntryType::Char | EntryType::Fifo => {
+                    Self::create_special_inode(
+                        &safe_path,
+                        entry_type,
+                        mode,
+                        device_major,
+                        device_minor,
+                        is_root,
+                    )?;
+                }
+                EntryType::XGlobalHeader => {
+                    trace!("Ignoring PAX global header {}", raw_path.display());
+                    continue;
+                }
+                other => {
+                    return Err(BoxliteError::Storage(format!(
+                        "Unhandled tar entry type {:?} for {}",
+                        other,
+                        raw_path.display()
+                    )));
+                }
+            }
+
+            if is_deferred {
+                Self::remember_unpacked_path(&mut unpacked_paths, root.root_path(), &safe_path);
+                continue;
+            }
+
+            apply_ownership(
+                &safe_path,
+                &EntryMetadata::builder(mode, atime, mtime)
+                    .uid(uid)
+                    .gid(gid)
+                    .entry_type(entry_type)
+                    .device(device_major, device_minor)
+                    .xattrs(xattrs.clone())
+                    .build(),
+                is_root,
+            )?;
+
+            if entry_type == EntryType::Directory {
+                deferred_dirs.push(DirMeta {
+                    path: safe_path.clone(),
+                    meta: EntryMetadata::with_timestamps(mode, atime, mtime),
+                });
+            } else {
+                apply_permissions_and_times(
+                    &safe_path,
+                    entry_type,
+                    &EntryMetadata::with_timestamps(mode, atime, mtime),
+                )?;
+            }
+
+            Self::remember_unpacked_path(&mut unpacked_paths, root.root_path(), &safe_path);
+        }
+
+        // Retry deferred hardlinks — their targets may have been created later in
+        // the same layer or removed by a whiteout.
+        for deferred in deferred_hardlinks {
+            let (tp, tl) = Self::split_parent_leaf(&deferred.target_rel);
+            let target_safe = root.resolve_or_root(&tp)?.join(&tl);
+            if fs::symlink_metadata(&target_safe).is_err() {
+                trace!(
+                    "Skipping deferred hardlink {} -> {} (target does not exist)",
+                    deferred.link_rel.display(),
+                    deferred.target_rel.display()
+                );
+                continue;
+            }
+            let (lp, ll) = Self::split_parent_leaf(&deferred.link_rel);
+            let link_safe = root.resolve_or_root(&lp)?.join(&ll);
+            trace!(
+                "Creating deferred hardlink {} -> {}",
+                deferred.link_rel.display(),
+                deferred.target_rel.display()
+            );
+            fs::hard_link(&target_safe, &link_safe).map_err(|e| {
+                BoxliteError::Storage(format!(
+                    "Failed to create deferred hardlink {}: {}",
+                    deferred.link_rel.display(),
+                    e
+                ))
+            })?;
+            apply_ownership(&link_safe, &deferred.meta, is_root)?;
+            apply_permissions_and_times(&link_safe, EntryType::Link, &deferred.meta)?;
+        }
+
+        // Finalize directory metadata deepest-first. Reverse path order ensures
+        // /a/b/c gets chmod'd before /a/b — a restrictive parent won't block
+        // chmod on children.
+        deferred_dirs.sort_unstable_by(|a, b| b.path.cmp(&a.path));
+        for dir in &deferred_dirs {
+            match fs::symlink_metadata(&dir.path) {
+                Ok(m) if m.is_dir() => {}
+                _ => {
+                    trace!(
+                        "Skipping permissions for removed/replaced directory: {}",
+                        dir.path.display()
+                    );
+                    continue;
+                }
+            }
+            apply_permissions_and_times(&dir.path, EntryType::Directory, &dir.meta)?;
+        }
+
+        Ok(total_size)
+    }
+
+    fn split_parent_leaf(rel: &Path) -> (PathBuf, PathBuf) {
+        let parent = rel.parent().unwrap_or(Path::new(""));
+        let leaf = rel
+            .file_name()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(""));
+        (parent.to_path_buf(), leaf)
+    }
+
+    fn remove_nofollow(path: &Path, keep_if_dir: bool) -> BoxliteResult<()> {
+        match fs::symlink_metadata(path) {
+            Ok(meta) => {
+                let is_real_dir = meta.is_dir() && !meta.file_type().is_symlink();
+                if keep_if_dir && is_real_dir {
+                    return Ok(());
+                }
+                if is_real_dir {
+                    fs::remove_dir_all(path)
+                } else {
+                    fs::remove_file(path)
+                }
+                .map_err(|e| {
+                    BoxliteError::Storage(format!("Failed to remove {}: {}", path.display(), e))
+                })
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(BoxliteError::Storage(format!(
+                "Failed to stat {}: {}",
+                path.display(),
+                e
+            ))),
+        }
+    }
+
+    fn remember_unpacked_path(unpacked: &mut HashSet<PathBuf>, root: &Path, path: &Path) {
+        let mut current = path;
+        while current != root {
+            unpacked.insert(current.to_path_buf());
+            let Some(parent) = current.parent() else {
+                break;
+            };
+            current = parent;
+        }
+    }
+
+    /// Create a special inode (FIFO, char/block device).
+    fn create_special_inode(
+        path: &Path,
+        entry_type: EntryType,
+        mode: u32,
+        major: libc::dev_t,
+        minor: libc::dev_t,
+        is_root: bool,
+    ) -> BoxliteResult<()> {
+        match entry_type {
+            EntryType::Fifo => {
+                let c_path = CString::new(path.as_os_str().as_bytes())
+                    .map_err(|_| BoxliteError::Storage("Path contains NUL".into()))?;
+                let res = unsafe { libc::mkfifo(c_path.as_ptr(), mode as libc::mode_t) };
+                if res != 0 {
+                    return Err(BoxliteError::Storage(format!(
+                        "Failed to mkfifo {}: {}",
+                        path.display(),
+                        std::io::Error::last_os_error()
+                    )));
+                }
+            }
+            EntryType::Char | EntryType::Block => {
+                if !is_root {
+                    trace!("Skipping device node {} (requires root)", path.display());
+                    return Ok(());
+                }
+                let c_path = CString::new(path.as_os_str().as_bytes())
+                    .map_err(|_| BoxliteError::Storage("Path contains NUL".into()))?;
+                let kind_bits = if entry_type == EntryType::Char {
+                    libc::S_IFCHR
+                } else {
+                    libc::S_IFBLK
+                };
+                let dev = libc::makedev(major as _, minor as _);
+                let full_mode = kind_bits | (mode as libc::mode_t & 0o7777);
+                let res = unsafe { libc::mknod(c_path.as_ptr(), full_mode, dev) };
+                if res != 0 {
+                    return Err(BoxliteError::Storage(format!(
+                        "Failed to mknod {}: {}",
+                        path.display(),
+                        std::io::Error::last_os_error()
+                    )));
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn apply_whiteout(
+        root: &SafeRoot,
+        rel: &Path,
+        unpacked: &mut HashSet<PathBuf>,
+        entry_type: EntryType,
+    ) -> BoxliteResult<bool> {
+        if entry_type != EntryType::Regular {
+            return Ok(false);
+        }
+
+        let base = match rel.file_name().and_then(|n| n.to_str()) {
+            Some(b) => b,
+            None => return Ok(false),
+        };
+
+        if base == ".wh..wh..opq" {
+            let parent_rel = rel.parent().unwrap_or(Path::new(""));
+            Self::apply_opaque_whiteout(root, parent_rel, unpacked)?;
+            return Ok(true);
+        }
+
+        if let Some(target_name) = base.strip_prefix(".wh.") {
+            Self::validate_whiteout_target(base, target_name)?;
+            let parent_rel = rel.parent().unwrap_or(Path::new(""));
+            // containerd: originalPath = filepath.Join(dir, originalBase)
+            // where dir = filepath.Dir(path) and path is already resolved.
+            let target_safe = root.resolve_or_root(parent_rel)?.join(target_name);
+            Self::remove_nofollow(&target_safe, false)?;
+            debug!("Whiteout removed {}", target_name);
+            return Ok(true);
+        }
+
+        Ok(false)
+    }
+
+    fn validate_whiteout_target(base: &str, target_name: &str) -> BoxliteResult<()> {
+        if target_name.is_empty() || target_name == "." || target_name == ".." {
+            return Err(BoxliteError::Storage(format!(
+                "Invalid whiteout name: {}",
+                base
+            )));
+        }
+        Ok(())
+    }
+
+    fn apply_opaque_whiteout(
+        root: &SafeRoot,
+        dir_rel: &Path,
+        unpacked: &HashSet<PathBuf>,
+    ) -> BoxliteResult<()> {
+        // containerd pattern: dir is already resolved (from filepath.Dir(path)
+        // where path = RootPath(root, ppath) + base). We resolve dir_rel to
+        // get the real directory, following any symlinks within root.
+        let dir_abs = root.resolve_or_root(dir_rel)?;
+        if !dir_abs.exists() {
+            return Ok(());
+        }
+
+        for entry in WalkDir::new(&dir_abs).min_depth(1).into_iter() {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(e) => {
+                    trace!("Skipping walk entry in {}: {}", dir_abs.display(), e);
+                    continue;
+                }
+            };
+            let abs = entry.path().to_path_buf();
+            if unpacked.contains(&abs) {
+                continue;
+            }
+            if entry.file_type().is_dir() {
+                let _ = fs::remove_dir_all(&abs);
+            } else {
+                let _ = fs::remove_file(&abs);
+            }
+            debug!(
+                "Opaque whiteout removed {}",
+                abs.strip_prefix(&dir_abs).unwrap_or(&abs).display()
+            );
+        }
+        Ok(())
     }
 }
 
@@ -54,348 +565,10 @@ struct DirMeta {
     meta: EntryMetadata,
 }
 
-/// Deferred hardlink: source doesn't exist yet, will retry later. Paths are
-/// relative to the extraction root — the eventual creation goes back through
-/// [`SafeRoot::create_hardlink`] for containment.
 struct DeferredHardlink {
     link_rel: PathBuf,
     target_rel: PathBuf,
     meta: EntryMetadata,
-}
-
-fn apply_oci_layer<R: Read>(reader: R, dest: &Path) -> BoxliteResult<u64> {
-    let root = SafeRoot::open(dest)?;
-    let is_root = unsafe { libc::geteuid() } == 0;
-    let mut archive = Archive::new(reader);
-    let mut unpacked_paths: HashSet<PathBuf> = HashSet::new();
-    let mut total_size = 0u64;
-    let mut deferred_dirs: Vec<DirMeta> = Vec::new();
-    let mut deferred_hardlinks: Vec<DeferredHardlink> = Vec::new();
-
-    for entry_result in archive
-        .entries()
-        .map_err(|e| BoxliteError::Storage(format!("Tar read entries error: {}", e)))?
-    {
-        let mut entry = entry_result
-            .map_err(|e| BoxliteError::Storage(format!("Tar read entry error: {}", e)))?;
-        let raw_path = entry
-            .path()
-            .map_err(|e| BoxliteError::Storage(format!("Tar parse header path error: {}", e)))?
-            .into_owned();
-        let normalized = match normalize_entry_path(&raw_path) {
-            Some(p) => p,
-            None => {
-                debug!("Skipping path outside root: {}", raw_path.display());
-                continue;
-            }
-        };
-
-        if normalized.as_os_str().is_empty() {
-            debug!("Skipping root entry");
-            continue;
-        }
-
-        let entry_type = entry.header().entry_type();
-        let mode = entry.header().mode().unwrap_or(0o755);
-        let uid = entry.header().uid().unwrap_or(0);
-        let gid = entry.header().gid().unwrap_or(0);
-        let mtime = entry.header().mtime().unwrap_or(0);
-        let atime = mtime;
-        total_size = total_size.saturating_add(entry.header().size().unwrap_or(0));
-
-        let link_name = if matches!(entry_type, EntryType::Link | EntryType::Symlink) {
-            entry
-                .link_name()
-                .map_err(|e| BoxliteError::Storage(format!("Tar read link name error: {}", e)))?
-                .map(|p| p.into_owned())
-        } else {
-            None
-        };
-
-        let device_major =
-            entry.header().device_major().unwrap_or(None).unwrap_or(0) as libc::dev_t;
-        let device_minor =
-            entry.header().device_minor().unwrap_or(None).unwrap_or(0) as libc::dev_t;
-
-        trace!(
-            "Processing entry: path={}, type={:?}, mode={:o}, uid={}, gid={}, size={}, mtime={}, device={}:{}, link={:?}",
-            normalized.display(),
-            entry_type,
-            mode,
-            uid,
-            gid,
-            entry.header().size().unwrap_or(0),
-            mtime,
-            device_major,
-            device_minor,
-            link_name.as_ref().map(|p| p.display().to_string())
-        );
-
-        let full_path = root.full_path(&normalized)?;
-        if handle_whiteout(&root, &normalized, &mut unpacked_paths, entry_type)? {
-            continue;
-        }
-
-        // Reject the entire entry up-front if it is an unsafe symlink — ensures
-        // no parent directories are created or replaced for an attacker-
-        // controlled entry that we'd refuse to finalize anyway.
-        if entry_type == EntryType::Symlink
-            && let Some(target) = link_name.as_ref()
-            && !root.is_symlink_target_safe(&normalized, target)
-        {
-            warn!(
-                "Rejecting unsafe symlink {} -> {} (target escapes extraction root)",
-                full_path.display(),
-                target.display()
-            );
-            continue;
-        }
-
-        root.ensure_parent(&normalized)?;
-        root.remove_nofollow(&normalized, entry_type == EntryType::Directory)?;
-
-        let xattrs = read_xattrs(&mut entry)?;
-        let mut deferred_hardlink = false;
-
-        match entry_type {
-            EntryType::Directory => root.create_dir(&normalized)?,
-            EntryType::Regular | EntryType::GNUSparse => {
-                let mut file = root.create_file(&normalized, mode)?;
-                io::copy(&mut entry, &mut file).map_err(|e| {
-                    BoxliteError::Storage(format!(
-                        "Failed to copy file data to {}: {}",
-                        full_path.display(),
-                        e
-                    ))
-                })?;
-            }
-            EntryType::Link => {
-                let target = link_name.clone().ok_or_else(|| {
-                    BoxliteError::Storage(format!(
-                        "Hardlink without target: {}",
-                        raw_path.display()
-                    ))
-                })?;
-                let target_rel = normalize_entry_path(&target).ok_or_else(|| {
-                    BoxliteError::Storage(format!(
-                        "Hardlink target escapes root: {}",
-                        target.display()
-                    ))
-                })?;
-                if root.exists_nofollow(&target_rel) {
-                    root.create_hardlink(&normalized, &target_rel)?;
-                } else {
-                    trace!(
-                        "Deferring hardlink {} -> {} (target not found yet)",
-                        full_path.display(),
-                        target_rel.display()
-                    );
-                    deferred_hardlinks.push(DeferredHardlink {
-                        link_rel: normalized.clone(),
-                        target_rel,
-                        meta: EntryMetadata::builder(mode, atime, mtime)
-                            .uid(uid)
-                            .gid(gid)
-                            .entry_type(entry_type)
-                            .device(device_major, device_minor)
-                            .xattrs(vec![])
-                            .build(),
-                    });
-                    deferred_hardlink = true;
-                }
-            }
-            EntryType::Symlink => {
-                let target = link_name.ok_or_else(|| {
-                    BoxliteError::Storage(format!("Symlink without target: {}", raw_path.display()))
-                })?;
-                root.create_symlink(&normalized, &target)?;
-            }
-            EntryType::Block | EntryType::Char | EntryType::Fifo => {
-                if let Some(kind) = special_from_entry(entry_type, device_major, device_minor) {
-                    root.create_special(&normalized, mode, kind, is_root)?;
-                }
-            }
-            EntryType::XGlobalHeader => {
-                trace!("Ignoring PAX global header {}", raw_path.display());
-                continue;
-            }
-            other => {
-                return Err(BoxliteError::Storage(format!(
-                    "Unhandled tar entry type {:?} for {}",
-                    other,
-                    raw_path.display()
-                )));
-            }
-        }
-
-        if deferred_hardlink {
-            unpacked_paths.insert(full_path);
-            continue;
-        }
-
-        apply_ownership(
-            &full_path,
-            &EntryMetadata::builder(mode, atime, mtime)
-                .uid(uid)
-                .gid(gid)
-                .entry_type(entry_type)
-                .device(device_major, device_minor)
-                .xattrs(xattrs.clone())
-                .build(),
-            is_root,
-        )?;
-
-        if entry_type == EntryType::Directory {
-            deferred_dirs.push(DirMeta {
-                path: full_path.clone(),
-                meta: EntryMetadata::with_timestamps(mode, atime, mtime),
-            });
-        } else {
-            apply_permissions_and_times(
-                &full_path,
-                entry_type,
-                &EntryMetadata::with_timestamps(mode, atime, mtime),
-            )?;
-        }
-
-        unpacked_paths.insert(full_path);
-    }
-
-    // Retry deferred hardlinks — their targets may have been created later in
-    // the same layer or removed by a whiteout.
-    for deferred in deferred_hardlinks {
-        if !root.exists_nofollow(&deferred.target_rel) {
-            trace!(
-                "Skipping deferred hardlink {} -> {} (target does not exist)",
-                deferred.link_rel.display(),
-                deferred.target_rel.display()
-            );
-            continue;
-        }
-        trace!(
-            "Creating deferred hardlink {} -> {}",
-            deferred.link_rel.display(),
-            deferred.target_rel.display()
-        );
-        root.create_hardlink(&deferred.link_rel, &deferred.target_rel)
-            .map_err(|e| {
-                BoxliteError::Storage(format!(
-                    "Failed to create deferred hardlink {} -> {}: {}",
-                    deferred.link_rel.display(),
-                    deferred.target_rel.display(),
-                    e
-                ))
-            })?;
-        let link_full = root.full_path(&deferred.link_rel)?;
-        apply_ownership(&link_full, &deferred.meta, is_root)?;
-        apply_permissions_and_times(&link_full, EntryType::Link, &deferred.meta)?;
-    }
-
-    // Finalize directory metadata deepest-first. Reverse path order ensures
-    // /a/b/c gets chmod'd before /a/b — a restrictive parent won't block
-    // chmod on children.
-    deferred_dirs.sort_unstable_by(|a, b| b.path.cmp(&a.path));
-    for dir in &deferred_dirs {
-        if !dir.path.exists() {
-            trace!(
-                "Skipping permissions for deleted directory: {}",
-                dir.path.display()
-            );
-            continue;
-        }
-
-        apply_permissions_and_times(&dir.path, EntryType::Directory, &dir.meta)?;
-    }
-
-    Ok(total_size)
-}
-
-fn normalize_entry_path(path: &Path) -> Option<PathBuf> {
-    let mut components = Vec::new();
-    for comp in path.components() {
-        match comp {
-            Component::RootDir | Component::Prefix(_) => continue,
-            Component::CurDir => {}
-            Component::ParentDir => {
-                components.pop()?;
-            }
-            Component::Normal(c) => components.push(c.to_os_string()),
-        }
-    }
-    Some(components.into_iter().collect())
-}
-
-fn handle_whiteout(
-    root: &SafeRoot,
-    rel: &Path,
-    unpacked: &mut HashSet<PathBuf>,
-    entry_type: EntryType,
-) -> BoxliteResult<bool> {
-    if entry_type != EntryType::Regular {
-        return Ok(false);
-    }
-
-    let base = match rel.file_name().and_then(|n| n.to_str()) {
-        Some(b) => b,
-        None => return Ok(false),
-    };
-
-    if base == ".wh..wh..opq" {
-        let parent_rel = rel.parent().unwrap_or(Path::new(""));
-        apply_opaque_whiteout(root, parent_rel, unpacked)?;
-        return Ok(true);
-    }
-
-    if let Some(target_name) = base.strip_prefix(".wh.") {
-        let parent_rel = rel.parent().unwrap_or(Path::new(""));
-        let target_rel = parent_rel.join(target_name);
-        // `ensure_parent` scrubs escape symlinks in the ancestry chain so that
-        // `remove_nofollow` can't be redirected out of root by an intermediate
-        // symlink planted before extraction began.
-        root.ensure_parent(&target_rel)?;
-        root.remove_nofollow(&target_rel, false)?;
-        debug!("Whiteout removed {}", target_rel.display());
-        return Ok(true);
-    }
-
-    Ok(false)
-}
-
-fn apply_opaque_whiteout(
-    root: &SafeRoot,
-    dir_rel: &Path,
-    unpacked: &HashSet<PathBuf>,
-) -> BoxliteResult<()> {
-    // Scrub any escape symlink in the ancestry of `dir_rel` before we walk it.
-    // `ensure_parent` operates on the parent of the path passed in, so we pass
-    // a synthetic child whose parent is `dir_rel` itself.
-    let sentinel = dir_rel.join(".wh..wh..opq");
-    root.ensure_parent(&sentinel)?;
-
-    let dir_abs = root.full_path(dir_rel)?;
-    if !dir_abs.exists() {
-        return Ok(());
-    }
-
-    for entry in WalkDir::new(&dir_abs).min_depth(1).into_iter() {
-        let entry = match entry {
-            Ok(e) => e,
-            Err(e) => {
-                trace!("Skipping walk entry in {}: {}", dir_abs.display(), e);
-                continue;
-            }
-        };
-        let abs = entry.path();
-        if unpacked.contains(abs) {
-            continue;
-        }
-        let Ok(rel_suffix) = abs.strip_prefix(root.root()) else {
-            continue;
-        };
-        let _ = root.remove_nofollow(rel_suffix, false);
-        debug!("Opaque whiteout removed {}", rel_suffix.display());
-    }
-    Ok(())
 }
 
 fn read_xattrs<R: Read>(entry: &mut Entry<R>) -> BoxliteResult<Vec<(String, Vec<u8>)>> {
@@ -519,17 +692,13 @@ fn apply_xattrs(
             continue;
         }
 
-        let res = setxattr_nofollow(path, key, value);
-        match res {
-            Ok(()) => {}
-            Err(e) if e.raw_os_error() == Some(libc::ENOTSUP) => {
+        if let Err(e) = setxattr_nofollow(path, key, value) {
+            if e.raw_os_error() == Some(libc::ENOTSUP) {
                 warn!("Ignoring unsupported xattr {} on {}", key, path.display());
-            }
-            Err(e)
-                if e.raw_os_error() == Some(libc::EPERM)
-                    && key.starts_with("user.")
-                    && entry_type != EntryType::Regular
-                    && entry_type != EntryType::Directory =>
+            } else if e.raw_os_error() == Some(libc::EPERM)
+                && key.starts_with("user.")
+                && entry_type != EntryType::Regular
+                && entry_type != EntryType::Directory
             {
                 warn!(
                     "Ignoring xattr {} on {} (EPERM for {:?})",
@@ -537,8 +706,7 @@ fn apply_xattrs(
                     path.display(),
                     entry_type
                 );
-            }
-            Err(e) => {
+            } else {
                 return Err(BoxliteError::Storage(format!(
                     "Failed to set xattr {} on {}: {}",
                     key,
@@ -610,6 +778,7 @@ mod tests {
     use flate2::Compression;
     use flate2::write::GzEncoder;
     use std::io::Write;
+    use std::os::unix::fs::MetadataExt;
 
     fn create_test_tar(entries: Vec<TestEntry>) -> Vec<u8> {
         let mut builder = tar::Builder::new(Vec::new());
@@ -662,6 +831,118 @@ mod tests {
         let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
         encoder.write_all(data).unwrap();
         encoder.finish().unwrap()
+    }
+
+    struct RawTarEntry<'a> {
+        path: &'a str,
+        kind: RawTarEntryKind<'a>,
+        mode: u32,
+    }
+
+    enum RawTarEntryKind<'a> {
+        Directory,
+        File(&'a [u8]),
+        Hardlink(&'a str),
+        Symlink(&'a str),
+    }
+
+    fn raw_dir(path: &str) -> RawTarEntry<'_> {
+        RawTarEntry {
+            path,
+            kind: RawTarEntryKind::Directory,
+            mode: 0o755,
+        }
+    }
+
+    fn raw_file<'a>(path: &'a str, content: &'a [u8]) -> RawTarEntry<'a> {
+        RawTarEntry {
+            path,
+            kind: RawTarEntryKind::File(content),
+            mode: 0o644,
+        }
+    }
+
+    fn raw_hardlink<'a>(path: &'a str, target: &'a str) -> RawTarEntry<'a> {
+        RawTarEntry {
+            path,
+            kind: RawTarEntryKind::Hardlink(target),
+            mode: 0o644,
+        }
+    }
+
+    fn raw_symlink<'a>(path: &'a str, target: &'a str) -> RawTarEntry<'a> {
+        RawTarEntry {
+            path,
+            kind: RawTarEntryKind::Symlink(target),
+            mode: 0o777,
+        }
+    }
+
+    fn create_raw_tar(entries: &[RawTarEntry<'_>]) -> Vec<u8> {
+        let mut builder = tar::Builder::new(Vec::new());
+
+        for entry in entries {
+            let mut header = tar::Header::new_gnu();
+            set_header_path(&mut header, entry.path);
+            header.set_mode(entry.mode);
+            match entry.kind {
+                RawTarEntryKind::Directory => {
+                    header.set_entry_type(tar::EntryType::Directory);
+                    header.set_size(0);
+                    header.set_cksum();
+                    builder.append(&header, &[][..]).unwrap();
+                }
+                RawTarEntryKind::File(content) => {
+                    header.set_entry_type(tar::EntryType::Regular);
+                    header.set_size(content.len() as u64);
+                    header.set_cksum();
+                    builder.append(&header, content).unwrap();
+                }
+                RawTarEntryKind::Hardlink(target) => {
+                    header.set_link_name_literal(target.as_bytes()).unwrap();
+                    header.set_entry_type(tar::EntryType::Link);
+                    header.set_size(0);
+                    header.set_cksum();
+                    builder.append(&header, &[][..]).unwrap();
+                }
+                RawTarEntryKind::Symlink(target) => {
+                    header.set_link_name_literal(target.as_bytes()).unwrap();
+                    header.set_entry_type(tar::EntryType::Symlink);
+                    header.set_size(0);
+                    header.set_cksum();
+                    builder.append(&header, &[][..]).unwrap();
+                }
+            }
+        }
+
+        builder.into_inner().unwrap()
+    }
+
+    fn set_header_path(header: &mut tar::Header, path: &str) {
+        if header.set_path(path).is_ok() {
+            return;
+        }
+
+        let bytes = path.as_bytes();
+        assert!(
+            bytes.len() <= 100,
+            "raw test path too long for old tar header: {}",
+            path
+        );
+        let old = header.as_old_mut();
+        old.name = [0; 100];
+        old.name[..bytes.len()].copy_from_slice(bytes);
+    }
+
+    fn extract_raw(entries: &[RawTarEntry<'_>], dest: &Path) -> BoxliteResult<u64> {
+        LayerExtractor::new(dest).extract_reader(std::io::Cursor::new(create_raw_tar(entries)))
+    }
+
+    fn assert_same_inode(left: &Path, right: &Path) {
+        let left_meta = fs::symlink_metadata(left).unwrap();
+        let right_meta = fs::symlink_metadata(right).unwrap();
+        assert_eq!(left_meta.dev(), right_meta.dev());
+        assert_eq!(left_meta.ino(), right_meta.ino());
     }
 
     struct TestEntry {
@@ -761,7 +1042,7 @@ mod tests {
     }
 
     #[test]
-    fn test_multiple_deferred_hardlinks_same_target() {
+    fn test_multiple_deferred_hardlinks() {
         let temp_dir = tempfile::tempdir().unwrap();
         let tar_path = temp_dir.path().join("test.tar");
 
@@ -880,46 +1161,307 @@ mod tests {
         assert_eq!(content, "content");
     }
 
-    // SafeRoot::ensure_parent behaviors, exercised through the new API.
+    #[test]
+    fn containerd_absolute_symlink_paths_are_reanchored() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("extract");
+
+        extract_raw(
+            &[
+                raw_symlink("localetc", "/etc"),
+                raw_file("/localetc/unbroken", b"one"),
+                raw_symlink("dummy", "."),
+                raw_symlink("normallocaletc", "/dummy/../etc"),
+                raw_file("/normallocaletc/passwd", b"two"),
+                raw_symlink("chain-a", "chain-b"),
+                raw_symlink("chain-b", "/etc"),
+                raw_file("chain-a/chain", b"three"),
+            ],
+            &dest,
+        )
+        .unwrap();
+
+        assert_eq!(std::fs::read(dest.join("etc/unbroken")).unwrap(), b"one");
+        assert_eq!(std::fs::read(dest.join("etc/passwd")).unwrap(), b"two");
+        assert_eq!(std::fs::read(dest.join("etc/chain")).unwrap(), b"three");
+        assert_eq!(
+            std::fs::read_link(dest.join("localetc")).unwrap(),
+            Path::new("/etc")
+        );
+    }
+
+    #[test]
+    fn containerd_hardlink_to_symlink_preserves_symlink_inode() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("extract");
+
+        extract_raw(
+            &[
+                raw_dir("etc"),
+                raw_file("etc/passwd", b"root"),
+                raw_symlink("passwdlink", "/etc/passwd"),
+                raw_hardlink("hardlink", "passwdlink"),
+            ],
+            &dest,
+        )
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read_link(dest.join("hardlink")).unwrap(),
+            Path::new("/etc/passwd")
+        );
+        assert_same_inode(&dest.join("passwdlink"), &dest.join("hardlink"));
+        assert_eq!(std::fs::read(dest.join("etc/passwd")).unwrap(), b"root");
+    }
+
+    #[test]
+    fn containerd_hardlink_through_symlink_parent_stays_in_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("extract");
+
+        extract_raw(
+            &[
+                raw_symlink("localetc", "/etc"),
+                raw_dir("etc"),
+                raw_file("etc/passwd", b"root"),
+                raw_hardlink("localetc/passwd.link", "etc/passwd"),
+            ],
+            &dest,
+        )
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read(dest.join("etc/passwd.link")).unwrap(),
+            b"root"
+        );
+        assert_same_inode(&dest.join("etc/passwd"), &dest.join("etc/passwd.link"));
+    }
+
+    #[test]
+    fn containerd_whiteout_final_symlink_removes_link_not_target() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("extract");
+
+        extract_raw(
+            &[
+                raw_dir("target"),
+                raw_file("target/file", b"kept"),
+                raw_symlink("remove-me", "/target"),
+                raw_file(".wh.remove-me", b""),
+            ],
+            &dest,
+        )
+        .unwrap();
+
+        assert!(std::fs::symlink_metadata(dest.join("remove-me")).is_err());
+        assert_eq!(std::fs::read(dest.join("target/file")).unwrap(), b"kept");
+    }
+
+    #[test]
+    fn containerd_whiteout_through_symlink_parent_is_reanchored() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("extract");
+
+        extract_raw(
+            &[
+                raw_symlink("localetc", "/etc"),
+                raw_dir("etc"),
+                raw_file("etc/victim", b"delete"),
+                raw_file("localetc/.wh.victim", b""),
+            ],
+            &dest,
+        )
+        .unwrap();
+
+        assert!(!dest.join("etc/victim").exists());
+        assert_eq!(
+            std::fs::read_link(dest.join("localetc")).unwrap(),
+            Path::new("/etc")
+        );
+    }
+
+    #[test]
+    fn umoci_invalid_whiteout_names_are_rejected() {
+        for path in [
+            ".wh.",
+            ".wh..",
+            ".wh...",
+            "etc/.wh.",
+            "etc/.wh..",
+            "etc/.wh...",
+        ] {
+            let tmp = tempfile::tempdir().unwrap();
+            let dest = tmp.path().join("extract");
+            let result = extract_raw(&[raw_file(path, b"")], &dest);
+            assert!(result.is_err(), "invalid whiteout should fail: {}", path);
+        }
+    }
+
+    #[test]
+    fn umoci_wh_prefix_directory_is_not_a_whiteout() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("extract");
+
+        extract_raw(
+            &[
+                raw_dir(".wh.etc"),
+                raw_file(".wh.etc/somefile", b"marker-looking path"),
+                raw_dir("etc"),
+                raw_file("etc/passwd", b"root"),
+            ],
+            &dest,
+        )
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read(dest.join(".wh.etc/somefile")).unwrap(),
+            b"marker-looking path"
+        );
+        assert_eq!(std::fs::read(dest.join("etc/passwd")).unwrap(), b"root");
+    }
+
+    #[test]
+    fn umoci_opaque_whiteout_preserves_same_layer_children() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("extract");
+        fs::create_dir_all(dest.join("dir/old-subdir")).unwrap();
+        fs::write(dest.join("dir/old-subdir/lower"), b"lower").unwrap();
+        fs::write(dest.join("dir/lower-file"), b"lower").unwrap();
+
+        extract_raw(
+            &[
+                raw_file("dir/new-subdir/new-file", b"upper"),
+                raw_file("dir/.wh..wh..opq", b""),
+            ],
+            &dest,
+        )
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read(dest.join("dir/new-subdir/new-file")).unwrap(),
+            b"upper"
+        );
+        assert!(!dest.join("dir/old-subdir").exists());
+        assert!(!dest.join("dir/lower-file").exists());
+    }
+
+    #[test]
+    fn cached_layer_unpack_preserves_whiteout_markers() {
+        let tmp = tempfile::tempdir().unwrap();
+        let tar_path = tmp.path().join("layer.tar");
+        let dest = tmp.path().join("extract");
+
+        std::fs::write(
+            &tar_path,
+            create_raw_tar(&[
+                raw_dir("bin"),
+                raw_file("bin/.wh.sh", b""),
+                raw_file("bin/new-tool", b"upper"),
+            ]),
+        )
+        .unwrap();
+
+        LayerExtractor::new(&dest)
+            .extract_tarball_preserving_whiteouts(&tar_path)
+            .unwrap();
+
+        assert!(dest.join("bin/.wh.sh").exists());
+        assert_eq!(std::fs::read(dest.join("bin/new-tool")).unwrap(), b"upper");
+    }
+
+    #[test]
+    fn umoci_parent_underflow_entries_are_skipped() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("extract");
+        let host_file = tmp.path().join("outside");
+        fs::write(&host_file, b"host").unwrap();
+
+        extract_raw(&[raw_file("../outside", b"layer")], &dest).unwrap();
+
+        assert_eq!(std::fs::read(&host_file).unwrap(), b"host");
+        assert!(!dest.join("outside").exists());
+    }
+
+    // Parent creation and obstacle handling through rooted resolution.
     // Lower-level path-safety tests live in safe_root.rs.
 
     use super::super::safe_root::SafeRoot;
 
     #[test]
-    fn ensure_parent_replaces_file_with_directory() {
+    fn extractor_replaces_file_obstacle_with_directory() {
         let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(tmp.path().join("a"), b"I'm a file").unwrap();
+        let dest = tmp.path().join("extract");
 
-        let root = SafeRoot::open(tmp.path()).unwrap();
-        root.ensure_parent(Path::new("a/b/c.txt")).unwrap();
+        // Layer 1: "a" as a regular file
+        let tar1 = tmp.path().join("layer1.tar");
+        let entries1 = vec![TestEntry {
+            path: "a".to_string(),
+            entry_type: TestEntryType::File {
+                content: b"I'm a file".to_vec(),
+            },
+        }];
+        std::fs::write(&tar1, create_test_tar(entries1)).unwrap();
+        extract(&tar1, &dest).unwrap();
 
-        assert!(tmp.path().join("a/b").is_dir());
+        // Layer 2: "a/b/c.txt" — extraction should replace the file
+        // obstacle at "a" with a directory
+        let tar2 = tmp.path().join("layer2.tar");
+        let entries2 = vec![TestEntry {
+            path: "a/b/c.txt".to_string(),
+            entry_type: TestEntryType::File {
+                content: b"nested".to_vec(),
+            },
+        }];
+        std::fs::write(&tar2, create_test_tar(entries2)).unwrap();
+        LayerExtractor::new(&dest).extract_tarball(&tar2).unwrap();
+
+        assert!(dest.join("a/b").is_dir());
     }
 
     #[test]
-    fn ensure_parent_handles_existing_directory() {
+    fn rooted_parent_creation_handles_existing_directory() {
         let tmp = tempfile::tempdir().unwrap();
         fs::create_dir_all(tmp.path().join("a")).unwrap();
 
         let root = SafeRoot::open(tmp.path()).unwrap();
-        root.ensure_parent(Path::new("a/b/c.txt")).unwrap();
+        let resolved = root.resolve(Path::new("a/b")).unwrap();
+        std::fs::create_dir_all(&resolved).unwrap();
 
         assert!(tmp.path().join("a/b").is_dir());
     }
 
     #[test]
-    fn ensure_parent_deep_nesting_replaces_file_obstacle() {
+    fn extractor_replaces_deep_file_obstacle_with_directory() {
         let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(tmp.path().join("a"), b"blocker").unwrap();
+        let dest = tmp.path().join("extract");
 
-        let root = SafeRoot::open(tmp.path()).unwrap();
-        root.ensure_parent(Path::new("a/b/c/d/e/file.txt")).unwrap();
+        // Layer 1: "a" as a file
+        let tar1 = tmp.path().join("layer1.tar");
+        let entries1 = vec![TestEntry {
+            path: "a".to_string(),
+            entry_type: TestEntryType::File {
+                content: b"blocker".to_vec(),
+            },
+        }];
+        std::fs::write(&tar1, create_test_tar(entries1)).unwrap();
+        extract(&tar1, &dest).unwrap();
 
-        assert!(tmp.path().join("a/b/c/d/e").is_dir());
+        // Layer 2: deeply nested under "a"
+        let tar2 = tmp.path().join("layer2.tar");
+        let entries2 = vec![TestEntry {
+            path: "a/b/c/d/e/file.txt".to_string(),
+            entry_type: TestEntryType::File {
+                content: b"deep".to_vec(),
+            },
+        }];
+        std::fs::write(&tar2, create_test_tar(entries2)).unwrap();
+        LayerExtractor::new(&dest).extract_tarball(&tar2).unwrap();
+
+        assert!(dest.join("a/b/c/d/e").is_dir());
     }
 
     #[test]
-    fn ensure_parent_preserves_pnpm_style_symlink_to_dir() {
+    fn rooted_parent_creation_preserves_pnpm_style_symlink_to_dir() {
         let tmp = tempfile::tempdir().unwrap();
         let bar_dir = tmp.path().join(".pnpm/bar@1.0.0/node_modules/bar");
         fs::create_dir_all(&bar_dir).unwrap();
@@ -932,10 +1474,13 @@ mod tests {
         assert!(bar_symlink.is_symlink());
 
         let root = SafeRoot::open(tmp.path()).unwrap();
-        root.ensure_parent(Path::new(
-            ".pnpm/foo@1.0.0/node_modules/bar/subdir/file.txt",
-        ))
-        .unwrap();
+        {
+            let p = Path::new(".pnpm/foo@1.0.0/node_modules/bar/subdir/file.txt");
+            if let Some(parent) = p.parent() {
+                let resolved = root.resolve(parent).unwrap();
+                std::fs::create_dir_all(&resolved).unwrap();
+            }
+        }
 
         assert!(
             bar_symlink.is_symlink(),
@@ -1069,11 +1614,10 @@ mod tests {
         );
     }
 
-    /// Regression: an escape symlink planted by an earlier layer must not be
-    /// preserved. Exercising `SafeRoot::ensure_parent` must replace it with
-    /// a real directory so a subsequent write lands inside `dest`.
+    /// Regression: an escape symlink planted by an earlier layer must not let a
+    /// subsequent write land outside `dest`.
     #[test]
-    fn ensure_parent_removes_preexisting_escape_symlink() {
+    fn resolve_preexisting_escape_symlink_stays_inside_root() {
         let tmp = tempfile::tempdir().unwrap();
         let dest = tmp.path().join("dest");
         let host_side = tmp.path().join("host_side");
@@ -1085,27 +1629,32 @@ mod tests {
         assert!(escape_link.is_symlink());
 
         let root = SafeRoot::open(&dest).unwrap();
-        root.ensure_parent(Path::new("escape/pwned.txt")).unwrap();
+        {
+            let (p, _) = LayerExtractor::split_parent_leaf(Path::new("escape/pwned.txt"));
+            if !p.as_os_str().is_empty() {
+                let sp = root.resolve(&p).unwrap();
+                std::fs::create_dir_all(&sp).unwrap();
+            }
+        }
 
+        let safe = root.resolve(Path::new("escape/pwned.txt")).unwrap();
+        // ensure parent of the resolved path exists
+        if let Some(p) = safe.parent() {
+            std::fs::create_dir_all(p).unwrap();
+        }
+        std::fs::write(&safe, b"contained").unwrap();
         assert!(
-            escape_link.is_dir() && !escape_link.is_symlink(),
-            "escape symlink should have been replaced with a real directory"
+            !host_side.join("pwned.txt").exists(),
+            "write escaped to host through symlink"
         );
-        std::fs::write(dest.join("escape/pwned.txt"), b"contained").unwrap();
-        assert!(!host_side.join("pwned.txt").exists());
-        assert!(dest.join("escape/pwned.txt").exists());
     }
 
     // ================================================================
-    // Bug-reproduction tests (audit findings). Each test is expected
-    // to FAIL against the current implementation; once the underlying
-    // issue is fixed, they become regression tests.
+    // Audit regressions.
     // ================================================================
 
-    /// Bug #1: a tar entry with an extreme `mtime` makes `unix_time()`
-    /// panic inside `UNIX_EPOCH + Duration::from_secs(..)`. The clamp
-    /// in `bound_time` runs too late to help. A crafted layer should
-    /// either succeed or return a `BoxliteError`, never unwind.
+    /// A tar entry with an extreme `mtime` should either succeed or return a
+    /// `BoxliteError`, never unwind.
     #[test]
     fn crafted_mtime_does_not_panic() {
         let temp = tempfile::tempdir().unwrap();
@@ -1134,11 +1683,8 @@ mod tests {
         );
     }
 
-    /// Bug #2: `handle_whiteout` operates on raw paths with plain
-    /// `fs::remove_file`, whose intermediate-component resolution
-    /// follows symlinks. If an escape symlink already exists in the
-    /// extraction root (e.g. residue from a pre-hardening boxlite run),
-    /// a whiteout entry underneath it deletes files on the host side.
+    /// Whiteout removal must be rooted even if an escape symlink already exists
+    /// in the extraction root.
     #[test]
     fn whiteout_does_not_follow_preexisting_escape_symlink() {
         let temp = tempfile::tempdir().unwrap();
@@ -1173,11 +1719,8 @@ mod tests {
         );
     }
 
-    /// Bug #8: `apply_permissions_and_times` runs `set_permissions` for
-    /// `EntryType::Link` (it only skips `Symlink`). Hardlinks share the
-    /// target inode, so chmod via the hardlink path overwrites the
-    /// target's declared mode whenever the tar hardlink header carries
-    /// a different mode.
+    /// Hardlink headers must not chmod the shared target inode when the tar
+    /// hardlink header carries a different mode.
     #[test]
     fn hardlink_entry_does_not_overwrite_target_permissions() {
         let temp = tempfile::tempdir().unwrap();

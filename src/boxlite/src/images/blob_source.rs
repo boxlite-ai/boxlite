@@ -251,8 +251,10 @@ impl LocalBundleBlobSource {
             ))
         })?;
 
-        // Extract tarball
-        if let Err(e) = LayerExtractor::new(&temp_path).extract_tarball(tarball_path) {
+        // Extract tarball with whiteout markers preserved for later layer stacking.
+        if let Err(e) =
+            LayerExtractor::new(&temp_path).extract_tarball_preserving_whiteouts(tarball_path)
+        {
             let _ = std::fs::remove_dir_all(&temp_path);
             return Err(e);
         }
@@ -471,6 +473,23 @@ mod tests {
             (layer_digest, config_digest)
         }
 
+        pub fn create_whiteout_layer_blob(bundle_dir: &Path) -> String {
+            std::fs::create_dir_all(bundle_dir.join("blobs/sha256")).unwrap();
+
+            let layer_content = create_whiteout_tarball();
+            let layer_digest = format!(
+                "sha256:{}",
+                Sha256::digest(&layer_content)
+                    .iter()
+                    .map(|b| format!("{:02x}", b))
+                    .collect::<String>()
+            );
+            let layer_path = bundle_dir.join("blobs/sha256").join(&layer_digest[7..]);
+            std::fs::write(layer_path, layer_content).unwrap();
+
+            layer_digest
+        }
+
         /// Create a minimal tar archive with a single file
         fn create_minimal_tarball() -> Vec<u8> {
             let mut builder = tar::Builder::new(Vec::new());
@@ -483,6 +502,37 @@ mod tests {
             header.set_mode(0o644);
             header.set_cksum();
             builder.append(&header, &content[..]).unwrap();
+
+            builder.into_inner().unwrap()
+        }
+
+        fn create_whiteout_tarball() -> Vec<u8> {
+            let mut builder = tar::Builder::new(Vec::new());
+
+            let mut dir = tar::Header::new_gnu();
+            dir.set_path("bin").unwrap();
+            dir.set_entry_type(tar::EntryType::Directory);
+            dir.set_mode(0o755);
+            dir.set_size(0);
+            dir.set_cksum();
+            builder.append(&dir, &[][..]).unwrap();
+
+            let mut whiteout = tar::Header::new_gnu();
+            whiteout.set_path("bin/.wh.sh").unwrap();
+            whiteout.set_entry_type(tar::EntryType::Regular);
+            whiteout.set_mode(0o644);
+            whiteout.set_size(0);
+            whiteout.set_cksum();
+            builder.append(&whiteout, &[][..]).unwrap();
+
+            let content = b"upper";
+            let mut file = tar::Header::new_gnu();
+            file.set_path("bin/new-tool").unwrap();
+            file.set_entry_type(tar::EntryType::Regular);
+            file.set_mode(0o755);
+            file.set_size(content.len() as u64);
+            file.set_cksum();
+            builder.append(&file, &content[..]).unwrap();
 
             builder.into_inner().unwrap()
         }
@@ -549,6 +599,26 @@ mod tests {
 
         // Should return same paths (cached)
         assert_eq!(extracted1, extracted2);
+    }
+
+    #[test]
+    fn test_local_bundle_extract_layers_preserves_whiteout_markers() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let bundle_dir = temp_dir.path().join("bundle");
+        let cache_dir = temp_dir.path().join("images/local/test-cache");
+
+        let layer_digest = test_fixtures::create_whiteout_layer_blob(&bundle_dir);
+        let source = LocalBundleBlobSource::new(bundle_dir, cache_dir);
+
+        let extracted = source
+            .extract_layers(std::slice::from_ref(&layer_digest))
+            .unwrap();
+
+        assert!(extracted[0].join("bin/.wh.sh").exists());
+        assert_eq!(
+            std::fs::read(extracted[0].join("bin/new-tool")).unwrap(),
+            b"upper"
+        );
     }
 
     #[test]
