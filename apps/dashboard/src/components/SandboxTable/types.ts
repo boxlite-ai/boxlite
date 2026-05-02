@@ -13,7 +13,7 @@ import {
   Sandbox,
   SandboxState,
   SnapshotDto,
-} from '@boxlite-labs/api-client'
+} from '@boxlite-ai/api-client'
 import { ColumnFiltersState, SortingState, Table } from '@tanstack/react-table'
 
 export interface SandboxTableProps {

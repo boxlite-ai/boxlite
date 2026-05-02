@@ -12,8 +12,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/boxlite-labs/boxlite/cli/cmd"
-	"github.com/boxlite-labs/boxlite/cli/internal"
+	"github.com/boxlite-ai/boxlite/cli/cmd"
+	"github.com/boxlite-ai/boxlite/cli/internal"
 )
 
 const BOXLITE_API_URL_ENV_VAR = "BOXLITE_API_URL"

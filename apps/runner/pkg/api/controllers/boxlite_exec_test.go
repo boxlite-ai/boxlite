@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/boxlite-labs/runner/pkg/boxlite"
+	"github.com/boxlite-ai/runner/pkg/boxlite"
 )
 
 func TestStreamManagedExecOutputIncludesOutputAndExit(t *testing.T) {

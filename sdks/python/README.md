@@ -828,7 +828,7 @@ We welcome contributions to the Python SDK!
 
 ```bash
 # Clone repository
-git clone https://github.com/boxlite-labs/boxlite.git
+git clone https://github.com/boxlite-ai/boxlite.git
 cd boxlite
 
 # Initialize submodules

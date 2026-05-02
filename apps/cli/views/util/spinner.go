@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/boxlite-labs/boxlite/cli/views/common"
+	"github.com/boxlite-ai/boxlite/cli/views/common"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"

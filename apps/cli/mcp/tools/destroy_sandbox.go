@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/boxlite-labs/boxlite/cli/apiclient"
+	"github.com/boxlite-ai/boxlite/cli/apiclient"
 	"github.com/mark3labs/mcp-go/mcp"
 
 	log "github.com/sirupsen/logrus"

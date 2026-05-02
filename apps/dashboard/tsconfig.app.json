@@ -9,8 +9,8 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["src/*"],
-      "@boxlite-labs/*": ["../../libs/*"],
-      "@boxlite-labs/sdk": ["../../dist/libs/sdk-typescript/src/index.d.ts"]
+      "@boxlite-ai/*": ["../../libs/*"],
+      "@boxlite-ai/sdk": ["../../dist/libs/sdk-typescript/src/index.d.ts"]
     }
   },
   "exclude": [

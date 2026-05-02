@@ -7,15 +7,15 @@ package git_test
 import (
 	"testing"
 
-	"github.com/boxlite-labs/daemon/pkg/git"
-	"github.com/boxlite-labs/daemon/pkg/gitprovider"
+	"github.com/boxlite-ai/daemon/pkg/git"
+	"github.com/boxlite-ai/daemon/pkg/gitprovider"
 	"github.com/go-git/go-git/v5/plumbing/transport/http"
 	"github.com/stretchr/testify/suite"
 )
 
 var repoHttp = &gitprovider.GitRepository{
 	Id:     "123",
-	Url:    "http://localhost:3000/boxlite-labs/boxlite",
+	Url:    "http://localhost:3000/boxlite-ai/boxlite",
 	Name:   "boxlite",
 	Branch: "main",
 	Target: gitprovider.CloneTargetBranch,
@@ -23,7 +23,7 @@ var repoHttp = &gitprovider.GitRepository{
 
 var repoHttps = &gitprovider.GitRepository{
 	Id:     "123",
-	Url:    "https://github.com/boxlite-labs/boxlite",
+	Url:    "https://github.com/boxlite-ai/boxlite",
 	Name:   "boxlite",
 	Branch: "main",
 	Target: gitprovider.CloneTargetBranch,
@@ -31,7 +31,7 @@ var repoHttps = &gitprovider.GitRepository{
 
 var repoWithoutProtocol = &gitprovider.GitRepository{
 	Id:     "123",
-	Url:    "github.com/boxlite-labs/boxlite",
+	Url:    "github.com/boxlite-ai/boxlite",
 	Name:   "boxlite",
 	Branch: "main",
 	Target: gitprovider.CloneTargetBranch,
@@ -39,7 +39,7 @@ var repoWithoutProtocol = &gitprovider.GitRepository{
 
 var repoWithCloneTargetCommit = &gitprovider.GitRepository{
 	Id:     "123",
-	Url:    "https://github.com/boxlite-labs/boxlite",
+	Url:    "https://github.com/boxlite-ai/boxlite",
 	Name:   "boxlite",
 	Branch: "main",
 	Sha:    "1234567890",
@@ -47,7 +47,7 @@ var repoWithCloneTargetCommit = &gitprovider.GitRepository{
 }
 
 var creds = &http.BasicAuth{
-	Username: "boxlite-labs",
+	Username: "boxlite-ai",
 	Password: "BoxLite123",
 }
 
@@ -72,28 +72,28 @@ func TestGitService(t *testing.T) {
 
 func (s *GitServiceTestSuite) TestCloneRepositoryCmd_WithCreds() {
 	cloneCmd := s.gitService.CloneRepositoryCmd(repoHttps, creds)
-	s.Require().Equal([]string{"git", "clone", "--single-branch", "--branch", "\"main\"", "https://boxlite-labs:BoxLite123@github.com/boxlite-labs/boxlite", "/work-dir"}, cloneCmd)
+	s.Require().Equal([]string{"git", "clone", "--single-branch", "--branch", "\"main\"", "https://boxlite-ai:BoxLite123@github.com/boxlite-ai/boxlite", "/work-dir"}, cloneCmd)
 
 	cloneCmd = s.gitService.CloneRepositoryCmd(repoHttp, creds)
-	s.Require().Equal([]string{"git", "clone", "--single-branch", "--branch", "\"main\"", "http://boxlite-labs:BoxLite123@localhost:3000/boxlite-labs/boxlite", "/work-dir"}, cloneCmd)
+	s.Require().Equal([]string{"git", "clone", "--single-branch", "--branch", "\"main\"", "http://boxlite-ai:BoxLite123@localhost:3000/boxlite-ai/boxlite", "/work-dir"}, cloneCmd)
 
 	cloneCmd = s.gitService.CloneRepositoryCmd(repoWithoutProtocol, creds)
-	s.Require().Equal([]string{"git", "clone", "--single-branch", "--branch", "\"main\"", "https://boxlite-labs:BoxLite123@github.com/boxlite-labs/boxlite", "/work-dir"}, cloneCmd)
+	s.Require().Equal([]string{"git", "clone", "--single-branch", "--branch", "\"main\"", "https://boxlite-ai:BoxLite123@github.com/boxlite-ai/boxlite", "/work-dir"}, cloneCmd)
 
 	cloneCmd = s.gitService.CloneRepositoryCmd(repoWithCloneTargetCommit, creds)
-	s.Require().Equal([]string{"git", "clone", "--single-branch", "--branch", "\"main\"", "https://boxlite-labs:BoxLite123@github.com/boxlite-labs/boxlite", "/work-dir", "&&", "cd", "/work-dir", "&&", "git", "checkout", "1234567890"}, cloneCmd)
+	s.Require().Equal([]string{"git", "clone", "--single-branch", "--branch", "\"main\"", "https://boxlite-ai:BoxLite123@github.com/boxlite-ai/boxlite", "/work-dir", "&&", "cd", "/work-dir", "&&", "git", "checkout", "1234567890"}, cloneCmd)
 }
 
 func (s *GitServiceTestSuite) TestCloneRepositoryCmd_WithoutCreds() {
 	cloneCmd := s.gitService.CloneRepositoryCmd(repoHttps, nil)
-	s.Require().Equal([]string{"git", "clone", "--single-branch", "--branch", "\"main\"", "https://github.com/boxlite-labs/boxlite", "/work-dir"}, cloneCmd)
+	s.Require().Equal([]string{"git", "clone", "--single-branch", "--branch", "\"main\"", "https://github.com/boxlite-ai/boxlite", "/work-dir"}, cloneCmd)
 
 	cloneCmd = s.gitService.CloneRepositoryCmd(repoHttp, nil)
-	s.Require().Equal([]string{"git", "clone", "--single-branch", "--branch", "\"main\"", "http://localhost:3000/boxlite-labs/boxlite", "/work-dir"}, cloneCmd)
+	s.Require().Equal([]string{"git", "clone", "--single-branch", "--branch", "\"main\"", "http://localhost:3000/boxlite-ai/boxlite", "/work-dir"}, cloneCmd)
 
 	cloneCmd = s.gitService.CloneRepositoryCmd(repoWithoutProtocol, nil)
-	s.Require().Equal([]string{"git", "clone", "--single-branch", "--branch", "\"main\"", "https://github.com/boxlite-labs/boxlite", "/work-dir"}, cloneCmd)
+	s.Require().Equal([]string{"git", "clone", "--single-branch", "--branch", "\"main\"", "https://github.com/boxlite-ai/boxlite", "/work-dir"}, cloneCmd)
 
 	cloneCmd = s.gitService.CloneRepositoryCmd(repoWithCloneTargetCommit, nil)
-	s.Require().Equal([]string{"git", "clone", "--single-branch", "--branch", "\"main\"", "https://github.com/boxlite-labs/boxlite", "/work-dir", "&&", "cd", "/work-dir", "&&", "git", "checkout", "1234567890"}, cloneCmd)
+	s.Require().Equal([]string{"git", "clone", "--single-branch", "--branch", "\"main\"", "https://github.com/boxlite-ai/boxlite", "/work-dir", "&&", "cd", "/work-dir", "&&", "git", "checkout", "1234567890"}, cloneCmd)
 }

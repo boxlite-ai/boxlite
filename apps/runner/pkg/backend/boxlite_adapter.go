@@ -7,9 +7,9 @@ package backend
 import (
 	"context"
 
-	"github.com/boxlite-labs/runner/pkg/api/dto"
-	blclient "github.com/boxlite-labs/runner/pkg/boxlite"
-	"github.com/boxlite-labs/runner/pkg/models/enums"
+	"github.com/boxlite-ai/runner/pkg/api/dto"
+	blclient "github.com/boxlite-ai/runner/pkg/boxlite"
+	"github.com/boxlite-ai/runner/pkg/models/enums"
 )
 
 // BoxliteAdapter wraps the BoxLite Client to implement SandboxBackend.

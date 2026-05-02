@@ -7,10 +7,10 @@ package sandbox
 import (
 	"context"
 
-	"github.com/boxlite-labs/boxlite/cli/apiclient"
-	"github.com/boxlite-labs/boxlite/cli/cmd/common"
-	"github.com/boxlite-labs/boxlite/cli/config"
-	"github.com/boxlite-labs/boxlite/cli/views/sandbox"
+	"github.com/boxlite-ai/boxlite/cli/apiclient"
+	"github.com/boxlite-ai/boxlite/cli/cmd/common"
+	"github.com/boxlite-ai/boxlite/cli/config"
+	"github.com/boxlite-ai/boxlite/cli/views/sandbox"
 	"github.com/spf13/cobra"
 )
 

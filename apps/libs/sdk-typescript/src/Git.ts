@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { GitApi, ListBranchResponse, GitStatus } from '@boxlite-labs/toolbox-api-client'
+import { GitApi, ListBranchResponse, GitStatus } from '@boxlite-ai/toolbox-api-client'
 import { WithInstrumentation } from './utils/otel.decorator'
 
 /**

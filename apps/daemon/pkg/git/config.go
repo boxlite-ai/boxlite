@@ -10,7 +10,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/boxlite-labs/daemon/pkg/gitprovider"
+	"github.com/boxlite-ai/daemon/pkg/gitprovider"
 	"gopkg.in/ini.v1"
 )
 

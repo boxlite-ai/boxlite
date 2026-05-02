@@ -6,7 +6,7 @@
 
 import { useAuth } from 'react-oidc-context'
 import { useCallback } from 'react'
-import { WebhookInitializationStatus } from '@boxlite-labs/api-client'
+import { WebhookInitializationStatus } from '@boxlite-ai/api-client'
 
 export function useWebhookService() {
   const { user } = useAuth()

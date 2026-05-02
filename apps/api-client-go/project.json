@@ -32,7 +32,7 @@
       "options": {
         "commands": [
           "rm -f {projectRoot}/*.go",
-          "yarn run openapi-generator-cli generate --git-repo-id=boxlite/libs/api-client-go --git-user-id=boxlite-labs -i dist/apps/api/openapi.json -g go --additional-properties=disallowAdditionalPropertiesIfNotPresent=false,packageName=apiclient,moduleVersion=$DEFAULT_PACKAGE_VERSION,generateInterfaces=true,enumClassPrefix=true,structPrefix=true -o libs/api-client-go",
+          "yarn run openapi-generator-cli generate --git-repo-id=boxlite/libs/api-client-go --git-user-id=boxlite-ai -i dist/apps/api/openapi.json -g go --additional-properties=disallowAdditionalPropertiesIfNotPresent=false,packageName=apiclient,moduleVersion=$DEFAULT_PACKAGE_VERSION,generateInterfaces=true,enumClassPrefix=true,structPrefix=true -o libs/api-client-go",
           "bash hack/go-client/postprocess.sh libs/api-client-go apiclient api-client-go"
         ],
         "parallel": false
@@ -61,9 +61,9 @@
       "options": {
         "cwd": "{workspaceRoot}",
         "commands": [
-          "cd apps/cli && go mod edit -require=github.com/boxlite-labs/boxlite/libs/api-client-go@$VERSION",
-          "cd libs/sdk-go && go mod edit -require=github.com/boxlite-labs/boxlite/libs/api-client-go@$VERSION",
-          "cd apps/otel-collector/exporter && go mod edit -require=github.com/boxlite-labs/boxlite/libs/api-client-go@$VERSION",
+          "cd apps/cli && go mod edit -require=github.com/boxlite-ai/boxlite/libs/api-client-go@$VERSION",
+          "cd libs/sdk-go && go mod edit -require=github.com/boxlite-ai/boxlite/libs/api-client-go@$VERSION",
+          "cd apps/otel-collector/exporter && go mod edit -require=github.com/boxlite-ai/boxlite/libs/api-client-go@$VERSION",
           "echo \"$VERSION\" > libs/api-client-go/VERSION"
         ],
         "parallel": false

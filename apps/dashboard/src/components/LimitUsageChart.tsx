@@ -14,7 +14,7 @@ import {
 } from '@/components/ui/chart'
 import { FacetFilter } from '@/components/ui/facet-filter'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import type { RegionUsageOverview } from '@boxlite-labs/api-client'
+import type { RegionUsageOverview } from '@boxlite-ai/api-client'
 import { useMemo, useState } from 'react'
 import { Bar, BarChart, CartesianGrid, ReferenceLine, XAxis, YAxis } from 'recharts'
 

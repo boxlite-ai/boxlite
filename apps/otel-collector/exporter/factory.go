@@ -14,9 +14,9 @@ import (
 	"go.opentelemetry.io/collector/exporter"
 	"go.opentelemetry.io/collector/exporter/exporterhelper"
 
-	apiclient "github.com/boxlite-labs/boxlite/libs/api-client-go"
-	common_cache "github.com/boxlite-labs/common-go/pkg/cache"
-	"github.com/boxlite-labs/otel-collector/exporter/internal/config"
+	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
+	common_cache "github.com/boxlite-ai/common-go/pkg/cache"
+	"github.com/boxlite-ai/otel-collector/exporter/internal/config"
 )
 
 const (

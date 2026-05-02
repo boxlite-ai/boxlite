@@ -7,9 +7,9 @@ package main
 import (
 	"os"
 
-	cu "github.com/boxlite-labs/computer-use/pkg/computeruse"
-	"github.com/boxlite-labs/daemon/pkg/toolbox/computeruse"
-	"github.com/boxlite-labs/daemon/pkg/toolbox/computeruse/manager"
+	cu "github.com/boxlite-ai/computer-use/pkg/computeruse"
+	"github.com/boxlite-ai/daemon/pkg/toolbox/computeruse"
+	"github.com/boxlite-ai/daemon/pkg/toolbox/computeruse/manager"
 	"github.com/hashicorp/go-hclog"
 	hc_plugin "github.com/hashicorp/go-plugin"
 )

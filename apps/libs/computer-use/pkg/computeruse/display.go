@@ -12,7 +12,7 @@ import (
 	"image/jpeg"
 	"image/png"
 
-	"github.com/boxlite-labs/daemon/pkg/toolbox/computeruse"
+	"github.com/boxlite-ai/daemon/pkg/toolbox/computeruse"
 	"github.com/go-vgo/robotgo"
 	"github.com/kbinani/screenshot"
 )

@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/boxlite-labs/daemon/pkg/gitprovider"
+	"github.com/boxlite-ai/daemon/pkg/gitprovider"
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/protocol/packp/capability"

@@ -59,7 +59,7 @@ For contributing or local development:
 
 ```bash
 # Clone repository
-git clone https://github.com/boxlite-labs/boxlite.git
+git clone https://github.com/boxlite-ai/boxlite.git
 cd boxlite
 
 # Initialize submodules (critical!)

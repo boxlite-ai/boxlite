@@ -14,7 +14,7 @@ Thank you for your interest in contributing to BoxLite!
 
 ```bash
 # Clone the repository
-git clone https://github.com/boxlite-labs/boxlite.git
+git clone https://github.com/boxlite-ai/boxlite.git
 cd boxlite
 
 # Initialize submodules
@@ -45,7 +45,7 @@ Key test entry points:
 
 ### Reporting Issues
 
-- Use [GitHub Issues](https://github.com/boxlite-labs/boxlite/issues)
+- Use [GitHub Issues](https://github.com/boxlite-ai/boxlite/issues)
 - Include OS, architecture, and BoxLite version
 - Provide minimal reproduction steps
 - **Security vulnerabilities:** do not open a public issue. See [SECURITY.md](./SECURITY.md) for the private reporting process.

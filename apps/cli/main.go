@@ -9,14 +9,14 @@ import (
 
 	log "github.com/sirupsen/logrus"
 
-	"github.com/boxlite-labs/boxlite/cli/cmd"
-	"github.com/boxlite-labs/boxlite/cli/cmd/auth"
-	"github.com/boxlite-labs/boxlite/cli/cmd/mcp"
-	"github.com/boxlite-labs/boxlite/cli/cmd/organization"
-	"github.com/boxlite-labs/boxlite/cli/cmd/sandbox"
-	"github.com/boxlite-labs/boxlite/cli/cmd/snapshot"
-	"github.com/boxlite-labs/boxlite/cli/cmd/volume"
-	"github.com/boxlite-labs/boxlite/cli/internal"
+	"github.com/boxlite-ai/boxlite/cli/cmd"
+	"github.com/boxlite-ai/boxlite/cli/cmd/auth"
+	"github.com/boxlite-ai/boxlite/cli/cmd/mcp"
+	"github.com/boxlite-ai/boxlite/cli/cmd/organization"
+	"github.com/boxlite-ai/boxlite/cli/cmd/sandbox"
+	"github.com/boxlite-ai/boxlite/cli/cmd/snapshot"
+	"github.com/boxlite-ai/boxlite/cli/cmd/volume"
+	"github.com/boxlite-ai/boxlite/cli/internal"
 	"github.com/joho/godotenv"
 	"github.com/spf13/cobra"
 )

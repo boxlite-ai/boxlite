@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { DockerRegistry, OrganizationRolePermissionsEnum } from '@boxlite-labs/api-client'
+import { DockerRegistry, OrganizationRolePermissionsEnum } from '@boxlite-ai/api-client'
 import {
   ColumnDef,
   flexRender,

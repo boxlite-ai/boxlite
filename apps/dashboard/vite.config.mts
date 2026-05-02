@@ -31,7 +31,7 @@ export default defineConfig((mode) => ({
   },
   plugins: [
     react(),
-    // Required for @boxlite-labs/sdk
+    // Required for @boxlite-ai/sdk
     nodePolyfills({
       globals: { global: true, process: true, Buffer: true },
       overrides: {
@@ -71,14 +71,14 @@ export default defineConfig((mode) => ({
   ],
   resolve: {
     alias: [
-      // Resolve @boxlite-labs/sdk to the local source
+      // Resolve @boxlite-ai/sdk to the local source
       {
-        find: '@boxlite-labs/sdk',
+        find: '@boxlite-ai/sdk',
         replacement: path.resolve(__dirname, '../../libs/sdk-typescript/src'),
       },
-      // Target @ but not @boxlite-labs,
+      // Target @ but not @boxlite-ai,
       {
-        // find: /^@(?!boxlite-labs)/,
+        // find: /^@(?!boxlite-ai)/,
         find: '@',
         replacement: path.resolve(__dirname, './src'), // Make sure this points to dashboard's src
       },

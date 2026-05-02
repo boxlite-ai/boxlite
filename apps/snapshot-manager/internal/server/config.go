@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/boxlite-labs/snapshot-manager/internal/config"
+	"github.com/boxlite-ai/snapshot-manager/internal/config"
 	"github.com/distribution/distribution/v3/configuration"
 	"golang.org/x/crypto/bcrypt"
 )

@@ -7,8 +7,8 @@ package organization
 import (
 	"errors"
 
-	"github.com/boxlite-labs/boxlite/cli/config"
-	"github.com/boxlite-labs/boxlite/cli/internal"
+	"github.com/boxlite-ai/boxlite/cli/config"
+	"github.com/boxlite-ai/boxlite/cli/internal"
 	"github.com/spf13/cobra"
 )
 

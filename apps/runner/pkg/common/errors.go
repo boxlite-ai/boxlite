@@ -10,11 +10,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/boxlite-labs/runner/internal/util"
+	"github.com/boxlite-ai/runner/internal/util"
 	"github.com/containerd/errdefs"
 	"github.com/gin-gonic/gin"
 
-	common_errors "github.com/boxlite-labs/common-go/pkg/errors"
+	common_errors "github.com/boxlite-ai/common-go/pkg/errors"
 )
 
 func HandlePossibleDockerError(ctx *gin.Context, err error) common_errors.ErrorResponse {

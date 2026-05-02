@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/boxlite-labs/daemon/pkg/git"
-	"github.com/boxlite-labs/daemon/pkg/gitprovider"
+	"github.com/boxlite-ai/daemon/pkg/git"
+	"github.com/boxlite-ai/daemon/pkg/gitprovider"
 	"github.com/gin-gonic/gin"
 	go_git_http "github.com/go-git/go-git/v5/plumbing/transport/http"
 )

@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	blclient "github.com/boxlite-labs/runner/pkg/boxlite"
+	blclient "github.com/boxlite-ai/runner/pkg/boxlite"
 	"github.com/shirou/gopsutil/v4/cpu"
 	"github.com/shirou/gopsutil/v4/disk"
 	"github.com/shirou/gopsutil/v4/load"

@@ -159,10 +159,10 @@
       "options": {
         "context": "{workspaceRoot}",
         "file": "{projectRoot}/Dockerfile",
-        "tags": ["boxlite-labs/boxlite-{projectName}:$VERSION$ARCH"],
+        "tags": ["boxlite-ai/boxlite-{projectName}:$VERSION$ARCH"],
         "build-args": ["VERSION=$VERSION"],
-        "cache-from": ["type=registry,ref=boxlite-labs/boxlite-{projectName}:buildcache$ARCH"],
-        "cache-to": ["type=registry,ref=boxlite-labs/boxlite-{projectName}:buildcache$ARCH,mode=max"]
+        "cache-from": ["type=registry,ref=boxlite-ai/boxlite-{projectName}:buildcache$ARCH"],
+        "cache-to": ["type=registry,ref=boxlite-ai/boxlite-{projectName}:buildcache$ARCH,mode=max"]
       },
       "configurations": {
         "production": {
@@ -171,18 +171,18 @@
         "production-multi-platform": {
           "push": true,
           "platforms": ["linux/amd64", "linux/arm64"],
-          "tags": ["boxlite-labs/boxlite-{projectName}:$VERSION"],
-          "cache-from": ["type=registry,ref=boxlite-labs/boxlite-{projectName}:buildcache"],
-          "cache-to": ["type=registry,ref=boxlite-labs/boxlite-{projectName}:buildcache,mode=max"]
+          "tags": ["boxlite-ai/boxlite-{projectName}:$VERSION"],
+          "cache-from": ["type=registry,ref=boxlite-ai/boxlite-{projectName}:buildcache"],
+          "cache-to": ["type=registry,ref=boxlite-ai/boxlite-{projectName}:buildcache,mode=max"]
         },
         "local-registry": {
           "push": true,
           "tags": [
-            "registry:5000/boxlite-labs/test-boxlite-{projectName}:$VERSION",
-            "registry:5000/boxlite-labs/test-boxlite-{projectName}:latest"
+            "registry:5000/boxlite-ai/test-boxlite-{projectName}:$VERSION",
+            "registry:5000/boxlite-ai/test-boxlite-{projectName}:latest"
           ],
-          "cache-from": ["type=registry,ref=registry:5000/boxlite-labs/test-boxlite-{projectName}:buildcache"],
-          "cache-to": ["type=registry,ref=registry:5000/boxlite-labs/test-boxlite-{projectName}:buildcache,mode=max"]
+          "cache-from": ["type=registry,ref=registry:5000/boxlite-ai/test-boxlite-{projectName}:buildcache"],
+          "cache-to": ["type=registry,ref=registry:5000/boxlite-ai/test-boxlite-{projectName}:buildcache,mode=max"]
         }
       },
       "dependsOn": ["check-version-env"]
@@ -192,10 +192,10 @@
       "options": {
         "parallel": false,
         "commands": [
-          "docker manifest create boxlite-labs/boxlite-{projectName}:$VERSION boxlite-labs/boxlite-{projectName}:$VERSION-amd64 boxlite-labs/boxlite-{projectName}:$VERSION-arm64",
-          "docker manifest push boxlite-labs/boxlite-{projectName}:$VERSION",
-          "docker manifest create boxlite-labs/boxlite-{projectName}:latest boxlite-labs/boxlite-{projectName}:$VERSION-amd64 boxlite-labs/boxlite-{projectName}:$VERSION-arm64",
-          "docker manifest push boxlite-labs/boxlite-{projectName}:latest"
+          "docker manifest create boxlite-ai/boxlite-{projectName}:$VERSION boxlite-ai/boxlite-{projectName}:$VERSION-amd64 boxlite-ai/boxlite-{projectName}:$VERSION-arm64",
+          "docker manifest push boxlite-ai/boxlite-{projectName}:$VERSION",
+          "docker manifest create boxlite-ai/boxlite-{projectName}:latest boxlite-ai/boxlite-{projectName}:$VERSION-amd64 boxlite-ai/boxlite-{projectName}:$VERSION-arm64",
+          "docker manifest push boxlite-ai/boxlite-{projectName}:latest"
         ]
       }
     },

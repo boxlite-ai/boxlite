@@ -10,11 +10,11 @@ import (
 	"sync"
 	"sync/atomic"
 
-	apiclient_cli "github.com/boxlite-labs/boxlite/cli/apiclient"
-	"github.com/boxlite-labs/boxlite/cli/cmd/common"
-	view_common "github.com/boxlite-labs/boxlite/cli/views/common"
-	views_util "github.com/boxlite-labs/boxlite/cli/views/util"
-	apiclient "github.com/boxlite-labs/boxlite/libs/api-client-go"
+	apiclient_cli "github.com/boxlite-ai/boxlite/cli/apiclient"
+	"github.com/boxlite-ai/boxlite/cli/cmd/common"
+	view_common "github.com/boxlite-ai/boxlite/cli/views/common"
+	views_util "github.com/boxlite-ai/boxlite/cli/views/util"
+	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
 	"github.com/spf13/cobra"
 )
 

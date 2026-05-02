@@ -14,7 +14,7 @@ import {
   CommandList,
 } from '@/components/ui/command'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { SnapshotDto } from '@boxlite-labs/api-client'
+import { SnapshotDto } from '@boxlite-ai/api-client'
 import { Loader2, X } from 'lucide-react'
 import { useState } from 'react'
 

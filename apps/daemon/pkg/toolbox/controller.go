@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/boxlite-labs/daemon/internal"
+	"github.com/boxlite-ai/daemon/internal"
 	"github.com/gin-gonic/gin"
 )
 

@@ -8,10 +8,10 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/boxlite-labs/runner/internal/constants"
+	"github.com/boxlite-ai/runner/internal/constants"
 	"github.com/gin-gonic/gin"
 
-	common_errors "github.com/boxlite-labs/common-go/pkg/errors"
+	common_errors "github.com/boxlite-ai/common-go/pkg/errors"
 )
 
 func AuthMiddleware(apiToken string) gin.HandlerFunc {

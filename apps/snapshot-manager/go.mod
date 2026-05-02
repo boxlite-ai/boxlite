@@ -1,4 +1,4 @@
-module github.com/boxlite-labs/snapshot-manager
+module github.com/boxlite-ai/snapshot-manager
 
 go 1.25.0
 

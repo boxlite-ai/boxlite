@@ -12,9 +12,9 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/boxlite-labs/snapshot-manager/internal/config"
-	"github.com/boxlite-labs/snapshot-manager/internal/logger"
-	"github.com/boxlite-labs/snapshot-manager/internal/server"
+	"github.com/boxlite-ai/snapshot-manager/internal/config"
+	"github.com/boxlite-ai/snapshot-manager/internal/logger"
+	"github.com/boxlite-ai/snapshot-manager/internal/server"
 )
 
 func main() {

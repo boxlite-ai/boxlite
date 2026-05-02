@@ -9,9 +9,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/boxlite-labs/boxlite/cli/views/common"
-	"github.com/boxlite-labs/boxlite/cli/views/util"
-	apiclient "github.com/boxlite-labs/boxlite/libs/api-client-go"
+	"github.com/boxlite-ai/boxlite/cli/views/common"
+	"github.com/boxlite-ai/boxlite/cli/views/util"
+	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
 	"github.com/charmbracelet/lipgloss"
 	"golang.org/x/term"
 )

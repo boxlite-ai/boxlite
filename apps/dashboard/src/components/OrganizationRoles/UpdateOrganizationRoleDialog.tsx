@@ -5,7 +5,7 @@
  */
 
 import React, { useState } from 'react'
-import { OrganizationRole, OrganizationRolePermissionsEnum } from '@boxlite-labs/api-client'
+import { OrganizationRole, OrganizationRolePermissionsEnum } from '@boxlite-ai/api-client'
 import {
   Dialog,
   DialogClose,

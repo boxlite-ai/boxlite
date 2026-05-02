@@ -9,9 +9,9 @@ import (
 	"context"
 	"fmt"
 
-	apiclient "github.com/boxlite-labs/boxlite/libs/api-client-go"
-	"github.com/boxlite-labs/runner/pkg/api/dto"
-	"github.com/boxlite-labs/runner/pkg/common"
+	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
+	"github.com/boxlite-ai/runner/pkg/api/dto"
+	"github.com/boxlite-ai/runner/pkg/common"
 )
 
 func (e *Executor) createSandbox(ctx context.Context, job *apiclient.Job) (any, error) {

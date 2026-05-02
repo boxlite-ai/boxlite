@@ -39,7 +39,7 @@ export class SandboxInfoDto {
 export class WorkspaceDto extends SandboxDto {
   @ApiPropertyOptional({
     description: 'The image used for the workspace',
-    example: 'boxlite-labs/workspace:latest',
+    example: 'boxlite-ai/workspace:latest',
   })
   image: string
 

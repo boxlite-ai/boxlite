@@ -5,7 +5,7 @@
  */
 
 import { pluralize } from '@/lib/utils'
-import { SnapshotDto, SnapshotState } from '@boxlite-labs/api-client'
+import { SnapshotDto, SnapshotState } from '@boxlite-ai/api-client'
 import { CheckSquare2Icon, MinusSquareIcon, PauseIcon, PlayIcon, PlusIcon, TrashIcon } from 'lucide-react'
 import { useMemo } from 'react'
 import { CommandConfig, useRegisterCommands } from '../../CommandPalette'

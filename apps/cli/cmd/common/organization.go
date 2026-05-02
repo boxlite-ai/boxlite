@@ -7,9 +7,9 @@ package common
 import (
 	"context"
 
-	apiclient_cli "github.com/boxlite-labs/boxlite/cli/apiclient"
-	"github.com/boxlite-labs/boxlite/cli/config"
-	apiclient "github.com/boxlite-labs/boxlite/libs/api-client-go"
+	apiclient_cli "github.com/boxlite-ai/boxlite/cli/apiclient"
+	"github.com/boxlite-ai/boxlite/cli/config"
+	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
 )
 
 func GetPersonalOrganizationId(profile config.Profile) (string, error) {

@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { CompletionList, LspSymbol, LspApi } from '@boxlite-labs/toolbox-api-client'
+import { CompletionList, LspSymbol, LspApi } from '@boxlite-ai/toolbox-api-client'
 import { WithInstrumentation } from './utils/otel.decorator'
 
 /**

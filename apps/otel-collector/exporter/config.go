@@ -6,7 +6,7 @@ package exporter
 import (
 	"time"
 
-	"github.com/boxlite-labs/common-go/pkg/cache"
+	"github.com/boxlite-ai/common-go/pkg/cache"
 	"go.opentelemetry.io/collector/config/configretry"
 	"go.opentelemetry.io/collector/exporter/exporterhelper"
 )

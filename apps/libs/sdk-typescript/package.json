@@ -1,17 +1,17 @@
 {
-  "name": "@boxlite-labs/sdk",
+  "name": "@boxlite-ai/sdk",
   "version": "0.0.0-dev",
   "description": "BoxLite TypeScript SDK for sandbox management and code execution",
   "main": "./src/index.js",
   "types": "./src/index.d.ts",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/boxlite-labs/boxlite.git"
+    "url": "git+https://github.com/boxlite-ai/boxlite.git"
   },
   "author": "BoxLite Platforms Inc.",
   "license": "Apache-2.0",
   "bugs": {
-    "url": "https://github.com/boxlite-labs/boxlite/issues"
+    "url": "https://github.com/boxlite-ai/boxlite/issues"
   },
   "homepage": "https://www.boxlite.io/docs",
   "config": {

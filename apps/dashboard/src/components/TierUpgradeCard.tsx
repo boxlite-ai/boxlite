@@ -12,7 +12,7 @@ import { useDowngradeTierMutation } from '@/hooks/mutations/useDowngradeTierMuta
 import { useUpgradeTierMutation } from '@/hooks/mutations/useUpgradeTierMutation'
 import { handleApiError } from '@/lib/error-handling'
 import { cn } from '@/lib/utils'
-import { Organization } from '@boxlite-labs/api-client/src'
+import { Organization } from '@boxlite-ai/api-client/src'
 import { CheckIcon, ExternalLinkIcon, Loader2 } from 'lucide-react'
 import { useMemo } from 'react'
 import { Link } from 'react-router-dom'

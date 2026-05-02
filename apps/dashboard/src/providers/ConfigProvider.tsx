@@ -6,7 +6,7 @@
 
 import { RoutePath } from '@/enums/RoutePath'
 import { queryKeys } from '@/hooks/queries/queryKeys'
-import { BoxliteConfiguration } from '@boxlite-labs/api-client'
+import { BoxliteConfiguration } from '@boxlite-ai/api-client'
 import { useSuspenseQuery } from '@tanstack/react-query'
 import { InMemoryWebStorage, WebStorageStateStore } from 'oidc-client-ts'
 import { ReactNode, useMemo } from 'react'

@@ -9,9 +9,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/boxlite-labs/boxlite/cli/apiclient"
-	"github.com/boxlite-labs/boxlite/cli/cmd/common"
-	"github.com/boxlite-labs/boxlite/cli/toolbox"
+	"github.com/boxlite-ai/boxlite/cli/apiclient"
+	"github.com/boxlite-ai/boxlite/cli/cmd/common"
+	"github.com/boxlite-ai/boxlite/cli/toolbox"
 	"github.com/spf13/cobra"
 )
 

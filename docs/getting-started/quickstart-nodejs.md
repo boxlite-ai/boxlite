@@ -71,7 +71,7 @@ BoxLite includes 5 Node.js examples:
 
 ```bash
 # Clone the repository
-git clone https://github.com/boxlite-labs/boxlite.git
+git clone https://github.com/boxlite-ai/boxlite.git
 cd boxlite/sdks/node
 
 # Build the SDK

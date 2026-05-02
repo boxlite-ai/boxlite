@@ -5,7 +5,7 @@
  */
 
 import { ReactNode, useCallback, useEffect, useMemo, useState } from 'react'
-import { Region, RegionType } from '@boxlite-labs/api-client'
+import { Region, RegionType } from '@boxlite-ai/api-client'
 import { IRegionsContext, RegionsContext } from '@/contexts/RegionsContext'
 import { useApi } from '@/hooks/useApi'
 import { handleApiError } from '@/lib/error-handling'

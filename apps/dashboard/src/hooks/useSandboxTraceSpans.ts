@@ -7,7 +7,7 @@ import { useQuery, UseQueryOptions } from '@tanstack/react-query'
 import { useApi } from '@/hooks/useApi'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { queryKeys } from '@/hooks/queries/queryKeys'
-import { TraceSpan } from '@boxlite-labs/api-client'
+import { TraceSpan } from '@boxlite-ai/api-client'
 
 export function useSandboxTraceSpans(
   sandboxId: string | undefined,

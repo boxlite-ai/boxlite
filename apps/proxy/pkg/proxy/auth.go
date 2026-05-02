@@ -10,8 +10,8 @@ import (
 	"net/http"
 	"strings"
 
-	common_errors "github.com/boxlite-labs/common-go/pkg/errors"
-	"github.com/boxlite-labs/common-go/pkg/utils"
+	common_errors "github.com/boxlite-ai/common-go/pkg/errors"
+	"github.com/boxlite-ai/common-go/pkg/utils"
 	"github.com/gin-gonic/gin"
 )
 

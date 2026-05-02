@@ -10,10 +10,10 @@ import (
 	"log/slog"
 	"time"
 
-	apiclient "github.com/boxlite-labs/boxlite/libs/api-client-go"
-	runnerapiclient "github.com/boxlite-labs/runner/pkg/apiclient"
-	blclient "github.com/boxlite-labs/runner/pkg/boxlite"
-	"github.com/boxlite-labs/runner/pkg/models/enums"
+	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
+	runnerapiclient "github.com/boxlite-ai/runner/pkg/apiclient"
+	blclient "github.com/boxlite-ai/runner/pkg/boxlite"
+	"github.com/boxlite-ai/runner/pkg/models/enums"
 )
 
 type SandboxSyncServiceConfig struct {

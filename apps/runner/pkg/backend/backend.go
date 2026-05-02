@@ -9,8 +9,8 @@ package backend
 import (
 	"context"
 
-	"github.com/boxlite-labs/runner/pkg/api/dto"
-	"github.com/boxlite-labs/runner/pkg/models/enums"
+	"github.com/boxlite-ai/runner/pkg/api/dto"
+	"github.com/boxlite-ai/runner/pkg/models/enums"
 )
 
 // ImageMeta holds common image metadata returned by GetImageInfo.

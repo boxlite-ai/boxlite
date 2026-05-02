@@ -23,20 +23,20 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/boxlite-labs/runner/cmd/runner/config"
-	"github.com/boxlite-labs/runner/internal"
-	"github.com/boxlite-labs/runner/pkg/api/controllers"
-	"github.com/boxlite-labs/runner/pkg/api/docs"
-	"github.com/boxlite-labs/runner/pkg/api/middlewares"
-	"github.com/boxlite-labs/runner/pkg/common"
+	"github.com/boxlite-ai/runner/cmd/runner/config"
+	"github.com/boxlite-ai/runner/internal"
+	"github.com/boxlite-ai/runner/pkg/api/controllers"
+	"github.com/boxlite-ai/runner/pkg/api/docs"
+	"github.com/boxlite-ai/runner/pkg/api/middlewares"
+	"github.com/boxlite-ai/runner/pkg/common"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gin-gonic/gin/binding"
 
-	common_errors "github.com/boxlite-labs/common-go/pkg/errors"
-	"github.com/boxlite-labs/common-go/pkg/log"
+	common_errors "github.com/boxlite-ai/common-go/pkg/errors"
+	"github.com/boxlite-ai/common-go/pkg/log"
 	sloggin "github.com/samber/slog-gin"
 
 	swaggerfiles "github.com/swaggo/files"

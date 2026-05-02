@@ -12,7 +12,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { DEFAULT_PAGE_SIZE } from '@/constants/Pagination'
-import { OrganizationRole, OrganizationRolePermissionsEnum } from '@boxlite-labs/api-client'
+import { OrganizationRole, OrganizationRolePermissionsEnum } from '@boxlite-ai/api-client'
 import {
   ColumnDef,
   flexRender,

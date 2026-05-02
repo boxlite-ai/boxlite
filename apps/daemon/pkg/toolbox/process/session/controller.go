@@ -7,7 +7,7 @@ package session
 import (
 	"log/slog"
 
-	"github.com/boxlite-labs/daemon/pkg/session"
+	"github.com/boxlite-ai/daemon/pkg/session"
 )
 
 type SessionController struct {

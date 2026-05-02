@@ -20,7 +20,7 @@ Get up and running with BoxLite C SDK in 5 minutes.
 
 ```bash
 # Clone the repository
-git clone https://github.com/boxlite-labs/boxlite.git
+git clone https://github.com/boxlite-ai/boxlite.git
 cd boxlite
 
 # Initialize submodules (REQUIRED!)

@@ -6,7 +6,7 @@ package controllers
 import (
 	"net/http"
 
-	"github.com/boxlite-labs/runner/internal"
+	"github.com/boxlite-ai/runner/internal"
 	"github.com/gin-gonic/gin"
 )
 

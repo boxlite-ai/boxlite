@@ -767,8 +767,8 @@ chmod 755 /host/path
 - [Architecture Documentation](./architecture/README.md) - How BoxLite works
 
 **Community:**
-- [GitHub Issues](https://github.com/boxlite-labs/boxlite/issues) - Bug reports and feature requests
-- [GitHub Discussions](https://github.com/boxlite-labs/boxlite/discussions) - Questions and community support
+- [GitHub Issues](https://github.com/boxlite-ai/boxlite/issues) - Bug reports and feature requests
+- [GitHub Discussions](https://github.com/boxlite-ai/boxlite/discussions) - Questions and community support
 
 **Before posting:**
 1. Check this FAQ
@@ -779,7 +779,7 @@ chmod 755 /host/path
 ### How do I report a bug?
 
 **1. Search existing issues:**
-[GitHub Issues](https://github.com/boxlite-labs/boxlite/issues)
+[GitHub Issues](https://github.com/boxlite-ai/boxlite/issues)
 
 **2. Gather information:**
 - BoxLite version: `python -c "import boxlite; print(boxlite.__version__)"`
@@ -814,7 +814,7 @@ RUST_LOG=debug python reproduce.py 2>&1 | tee debug.log
 ### How do I request a feature?
 
 **1. Check roadmap:**
-- Review [GitHub Issues](https://github.com/boxlite-labs/boxlite/issues) with `enhancement` label
+- Review [GitHub Issues](https://github.com/boxlite-ai/boxlite/issues) with `enhancement` label
 
 **2. Search for similar requests:**
 - May already be planned or discussed
@@ -840,7 +840,7 @@ See [CONTRIBUTING.md](../CONTRIBUTING.md) for:
 
 **Quick start:**
 ```bash
-git clone https://github.com/boxlite-labs/boxlite.git
+git clone https://github.com/boxlite-ai/boxlite.git
 cd boxlite
 git submodule update --init --recursive
 make setup

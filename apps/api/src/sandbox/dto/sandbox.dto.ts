@@ -57,7 +57,7 @@ export class SandboxDto {
 
   @ApiPropertyOptional({
     description: 'The snapshot used for the sandbox',
-    example: 'boxlite-labs/sandbox:latest',
+    example: 'boxlite-ai/sandbox:latest',
   })
   snapshot: string
 

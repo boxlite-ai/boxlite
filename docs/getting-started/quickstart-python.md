@@ -94,7 +94,7 @@ BoxLite includes 9 comprehensive Python examples:
 
 ```bash
 # Clone the repository
-git clone https://github.com/boxlite-labs/boxlite.git
+git clone https://github.com/boxlite-ai/boxlite.git
 cd boxlite
 
 # Build Python SDK

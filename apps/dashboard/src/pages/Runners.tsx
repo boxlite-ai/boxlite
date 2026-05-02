@@ -12,7 +12,7 @@ import {
   OrganizationRolePermissionsEnum,
   CreateRunner,
   CreateRunnerResponse,
-} from '@boxlite-labs/api-client'
+} from '@boxlite-ai/api-client'
 import { RunnerTable } from '@/components/RunnerTable'
 import { CreateRunnerDialog } from '@/components/CreateRunnerDialog'
 import RunnerDetailsSheet from '@/components/RunnerDetailsSheet'

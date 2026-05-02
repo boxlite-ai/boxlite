@@ -5,7 +5,7 @@
 package mcp
 
 import (
-	"github.com/boxlite-labs/boxlite/cli/mcp/tools"
+	"github.com/boxlite-ai/boxlite/cli/mcp/tools"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )

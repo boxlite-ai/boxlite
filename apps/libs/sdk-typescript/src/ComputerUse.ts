@@ -29,7 +29,7 @@ import {
   ProcessErrorsResponse,
   Recording,
   ListRecordingsResponse,
-} from '@boxlite-labs/toolbox-api-client'
+} from '@boxlite-ai/toolbox-api-client'
 import { dynamicImport } from './utils/Import'
 import { WithInstrumentation } from './utils/otel.decorator'
 

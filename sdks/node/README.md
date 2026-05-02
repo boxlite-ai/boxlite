@@ -370,7 +370,7 @@ try {
 
 ```bash
 # Clone repository
-git clone https://github.com/boxlite-labs/boxlite.git
+git clone https://github.com/boxlite-ai/boxlite.git
 cd boxlite/sdks/node
 
 # Initialize submodules (critical!)
@@ -481,7 +481,7 @@ Apache 2.0 - See [../../LICENSE](../../LICENSE)
 
 ## Support
 
-- **Issues**: [GitHub Issues](https://github.com/boxlite-labs/boxlite/issues)
+- **Issues**: [GitHub Issues](https://github.com/boxlite-ai/boxlite/issues)
 - **Documentation**: [docs/](../../docs/)
 - **Examples**: [examples/](./examples/)
 

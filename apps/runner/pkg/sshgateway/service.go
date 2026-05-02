@@ -13,7 +13,7 @@ import (
 	"net"
 	"time"
 
-	blclient "github.com/boxlite-labs/runner/pkg/boxlite"
+	blclient "github.com/boxlite-ai/runner/pkg/boxlite"
 	"golang.org/x/crypto/ssh"
 )
 

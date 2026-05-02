@@ -12,7 +12,7 @@ import {
   CreateSnapshot,
   Configuration,
   PaginatedSnapshots as PaginatedSnapshotsDto,
-} from '@boxlite-labs/api-client'
+} from '@boxlite-ai/api-client'
 import { BoxliteError } from './errors/BoxliteError'
 import { Image } from './Image'
 import { Resources } from './BoxLite'

@@ -5,7 +5,7 @@
  */
 
 import { cn } from '@/lib/utils'
-import { RegionUsageOverview } from '@boxlite-labs/api-client'
+import { RegionUsageOverview } from '@boxlite-ai/api-client'
 import QuotaLine from './QuotaLine'
 import { Skeleton } from './ui/skeleton'
 

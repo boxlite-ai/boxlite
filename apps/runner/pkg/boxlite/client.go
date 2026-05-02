@@ -16,8 +16,8 @@ import (
 	"time"
 
 	boxlite "github.com/boxlite-ai/boxlite/sdks/go"
-	"github.com/boxlite-labs/runner/pkg/api/dto"
-	"github.com/boxlite-labs/runner/pkg/models/enums"
+	"github.com/boxlite-ai/runner/pkg/api/dto"
+	"github.com/boxlite-ai/runner/pkg/models/enums"
 	"github.com/containerd/errdefs"
 )
 

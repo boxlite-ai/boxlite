@@ -11,11 +11,11 @@ import (
 	"log/slog"
 	"time"
 
-	apiclient "github.com/boxlite-labs/boxlite/libs/api-client-go"
-	"github.com/boxlite-labs/runner/internal"
-	"github.com/boxlite-labs/runner/internal/metrics"
-	runnerapiclient "github.com/boxlite-labs/runner/pkg/apiclient"
-	blclient "github.com/boxlite-labs/runner/pkg/boxlite"
+	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
+	"github.com/boxlite-ai/runner/internal"
+	"github.com/boxlite-ai/runner/internal/metrics"
+	runnerapiclient "github.com/boxlite-ai/runner/pkg/apiclient"
+	blclient "github.com/boxlite-ai/runner/pkg/boxlite"
 )
 
 type HealthcheckServiceConfig struct {

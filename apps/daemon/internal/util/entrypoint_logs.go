@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/boxlite-labs/common-go/pkg/log"
+	"github.com/boxlite-ai/common-go/pkg/log"
 )
 
 func ReadEntrypointLogs(entrypointLogFilePath string) error {

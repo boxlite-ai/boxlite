@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/boxlite-labs/daemon/pkg/toolbox/computeruse"
-	"github.com/boxlite-labs/daemon/pkg/toolbox/computeruse/manager"
+	"github.com/boxlite-ai/daemon/pkg/toolbox/computeruse"
+	"github.com/boxlite-ai/daemon/pkg/toolbox/computeruse/manager"
 	"github.com/hashicorp/go-hclog"
 	hc_plugin "github.com/hashicorp/go-plugin"
 	"github.com/stretchr/testify/assert"

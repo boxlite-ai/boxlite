@@ -12,7 +12,7 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/boxlite-labs/daemon/pkg/common"
+	"github.com/boxlite-ai/daemon/pkg/common"
 	"github.com/gorilla/websocket"
 )
 

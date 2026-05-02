@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/boxlite-labs/daemon/pkg/git"
+	"github.com/boxlite-ai/daemon/pkg/git"
 	"github.com/gin-gonic/gin"
 	go_git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing/object"

@@ -96,8 +96,8 @@ Unlike Docker, BoxLite doesn't require a daemon process. It's an embeddable libr
 
 ### Get Help
 
-- **[GitHub Issues](https://github.com/boxlite-labs/boxlite/issues)** - Bug reports and feature requests
-- **[GitHub Discussions](https://github.com/boxlite-labs/boxlite/discussions)** - Questions and community support
+- **[GitHub Issues](https://github.com/boxlite-ai/boxlite/issues)** - Bug reports and feature requests
+- **[GitHub Discussions](https://github.com/boxlite-ai/boxlite/discussions)** - Questions and community support
 
 ### Contribute
 

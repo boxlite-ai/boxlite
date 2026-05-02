@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { BoxliteConfiguration } from '@boxlite-labs/api-client'
+import { BoxliteConfiguration } from '@boxlite-ai/api-client'
 
 export type DashboardConfig = BoxliteConfiguration & {
   apiUrl: string

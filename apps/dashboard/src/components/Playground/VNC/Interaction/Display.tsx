@@ -11,8 +11,8 @@ import {
 } from '@/contexts/PlaygroundContext'
 import { DisplayActions } from '@/enums/Playground'
 import { usePlayground } from '@/hooks/usePlayground'
-import { DisplayInfoResponse, WindowsResponse } from '@boxlite-labs/api-client'
-import { ComputerUse } from '@boxlite-labs/sdk'
+import { DisplayInfoResponse, WindowsResponse } from '@boxlite-ai/api-client'
+import { ComputerUse } from '@boxlite-ai/sdk'
 import PlaygroundActionForm from '../../ActionForm'
 
 const VNCDisplayOperations: React.FC<VNCInteractionOptionsSectionComponentProps> = ({

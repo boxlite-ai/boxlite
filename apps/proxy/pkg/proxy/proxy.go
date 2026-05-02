@@ -17,16 +17,16 @@ import (
 	"sync"
 	"time"
 
-	apiclient "github.com/boxlite-labs/boxlite/libs/api-client-go"
-	"github.com/boxlite-labs/proxy/cmd/proxy/config"
-	"github.com/boxlite-labs/proxy/internal"
+	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
+	"github.com/boxlite-ai/proxy/cmd/proxy/config"
+	"github.com/boxlite-ai/proxy/internal"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/securecookie"
 
-	common_cache "github.com/boxlite-labs/common-go/pkg/cache"
-	common_errors "github.com/boxlite-labs/common-go/pkg/errors"
-	common_proxy "github.com/boxlite-labs/common-go/pkg/proxy"
+	common_cache "github.com/boxlite-ai/common-go/pkg/cache"
+	common_errors "github.com/boxlite-ai/common-go/pkg/errors"
+	common_proxy "github.com/boxlite-ai/common-go/pkg/proxy"
 
 	log "github.com/sirupsen/logrus"
 )

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { CreateSnapshot, SnapshotDto } from '@boxlite-labs/api-client'
+import { CreateSnapshot, SnapshotDto } from '@boxlite-ai/api-client'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { queryKeys } from '../queries/queryKeys'
 import { useApi } from '../useApi'

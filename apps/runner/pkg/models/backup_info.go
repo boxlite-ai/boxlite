@@ -5,7 +5,7 @@
 package models
 
 import (
-	"github.com/boxlite-labs/runner/pkg/models/enums"
+	"github.com/boxlite-ai/runner/pkg/models/enums"
 )
 
 type BackupInfo struct {

@@ -10,7 +10,7 @@ import {
   OrganizationRole,
   OrganizationInvitation,
   OrganizationInvitationRoleEnum,
-} from '@boxlite-labs/api-client'
+} from '@boxlite-ai/api-client'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import {

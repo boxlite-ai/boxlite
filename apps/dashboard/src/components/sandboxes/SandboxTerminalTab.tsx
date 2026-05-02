@@ -10,7 +10,7 @@ import { BOXLITE_DOCS_URL } from '@/constants/ExternalLinks'
 import { useTerminalSessionQuery } from '@/hooks/queries/useTerminalSessionQuery'
 import { useSandboxSessionContext } from '@/hooks/useSandboxSessionContext'
 import { isStoppable } from '@/lib/utils/sandbox'
-import { Sandbox } from '@boxlite-labs/api-client'
+import { Sandbox } from '@boxlite-ai/api-client'
 import { Spinner } from '@/components/ui/spinner'
 import { Play, RefreshCw, TerminalSquare } from 'lucide-react'
 

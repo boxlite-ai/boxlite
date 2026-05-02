@@ -13,9 +13,9 @@ import (
 	"regexp"
 	"strings"
 
-	apiclient_cli "github.com/boxlite-labs/boxlite/cli/apiclient"
-	"github.com/boxlite-labs/boxlite/cli/pkg/minio"
-	apiclient "github.com/boxlite-labs/boxlite/libs/api-client-go"
+	apiclient_cli "github.com/boxlite-ai/boxlite/cli/apiclient"
+	"github.com/boxlite-ai/boxlite/cli/pkg/minio"
+	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
 )
 
 // Create MinIO client from access parameters
