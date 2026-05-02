@@ -1,0 +1,13 @@
+name: boxlite volume get
+synopsis: Get volume details
+usage: boxlite volume get [VOLUME_ID] [flags]
+options:
+  - name: format
+    shorthand: f
+    usage: Output format. Must be one of (yaml, json)
+inherited_options:
+  - name: help
+    default_value: 'false'
+    usage: help for boxlite
+see_also:
+  - boxlite volume - Manage BoxLite volumes

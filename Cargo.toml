@@ -2,7 +2,6 @@
 members = [
     "src/boxlite",
     "src/cli",
-    "src/server",
     "src/shared",
     "src/guest",
     "src/test-utils",

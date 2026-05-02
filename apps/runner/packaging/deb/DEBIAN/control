@@ -1,0 +1,10 @@
+Package: boxlite-runner
+Version: ${VERSION}
+Section: utils
+Priority: optional
+Architecture: amd64
+Maintainer: BoxLite <support@boxlite.io>
+Description: BoxLite Runner
+ The BoxLite Runner manages execution of jobs and sandboxes
+ for the BoxLite development environment platform.
+Homepage: https://github.com/boxlite-labs/boxlite

@@ -1,0 +1,22 @@
+BoxLite apps workspace
+
+This workspace includes source copied and modified from Daytona.
+
+Daytona
+Copyright the various Daytona software authors.
+
+The initial developer of the software is Daytona Platforms, Inc. (https://daytona.io).
+Copyright 2025 Daytona Platforms, Inc. All Rights Reserved.
+
+Upstream source commit:
+f982c45a42e52c98631002c7dc1df565c44d7aac
+
+License map:
+
+- AGPL-3.0 components include apps/api, apps/cli, apps/daemon,
+  apps/dashboard, apps/infra, apps/libs/computer-use, apps/otel-collector,
+  apps/proxy, apps/runner, apps/snapshot-manager, and apps/ssh-gateway.
+- Apache-2.0 components include apps/common-go and generated SDK/client
+  packages that contain Apache-2.0 LICENSE files.
+
+Full license texts are available in apps/LICENSES/.

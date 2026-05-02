@@ -1,0 +1,17 @@
+# sst
+.sst
+apps/infra/.sst
+
+# Node modules (installed fresh inside Docker)
+node_modules
+apps/node_modules
+
+# NX cache
+.nx
+apps/.nx
+
+# Build outputs
+target
+
+# Git
+.git

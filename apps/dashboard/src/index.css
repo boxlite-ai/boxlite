@@ -1,0 +1,209 @@
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+@layer base {
+  :root {
+    --background: 42 24% 97%;
+    --foreground: 220 20% 13%;
+    --card: 42 24% 98%;
+    --card-foreground: 220 20% 13%;
+    --popover: 42 24% 99%;
+    --popover-foreground: 220 20% 13%;
+    --primary: 220 22% 12%;
+    --primary-foreground: 42 24% 97%;
+    --secondary: 40 20% 94%;
+    --secondary-foreground: 220 20% 13%;
+    --muted: 40 18% 95%;
+    --muted-foreground: 220 10% 42%;
+    --accent: 36 22% 92%;
+    --accent-foreground: 220 20% 13%;
+
+    --border: 35 13% 82%;
+    --input: 35 13% 82%;
+    --ring: 220 20% 16%;
+
+    --chart-1: 220 24% 20%;
+    --chart-2: 138 33% 38%;
+    --chart-3: 41 85% 45%;
+    --chart-4: 12 75% 52%;
+    --chart-5: 260 30% 50%;
+    --chart-6: 192 56% 37%;
+    --chart-7: 332 55% 47%;
+
+    --radius: 0.375rem;
+    --spacing: 0.25rem;
+
+    --info-background: 216 32% 95%;
+    --info-foreground: 220 30% 28%;
+    --info-separator: 214 24% 85%;
+
+    --success: 144 44% 30%;
+    --success-background: 140 25% 94%;
+    --success-foreground: 143 51% 25%;
+    --success-separator: 138 22% 84%;
+
+    --warning: 31 88% 36%;
+    --warning-background: 38 70% 94%;
+    --warning-foreground: 28 88% 31%;
+    --warning-separator: 37 63% 84%;
+
+    --destructive: 3 65% 46%;
+    --destructive-background: 8 60% 95%;
+    --destructive-foreground: 4 66% 45%;
+    --destructive-separator: 8 48% 85%;
+
+    --sidebar-background: 42 24% 98%;
+    --sidebar-foreground: 220 15% 22%;
+    --sidebar-primary: 220 22% 12%;
+    --sidebar-primary-foreground: 42 24% 97%;
+    --sidebar-accent: 40 18% 94%;
+    --sidebar-accent-foreground: 220 20% 13%;
+    --sidebar-border: 35 13% 82%;
+    --sidebar-ring: 220 20% 16%;
+
+    --code-background: 42 20% 94%;
+  }
+
+  .dark {
+    --background: 220 16% 8%;
+    --foreground: 40 18% 92%;
+    --card: 220 16% 9%;
+    --card-foreground: 40 18% 92%;
+    --popover: 220 15% 10%;
+    --popover-foreground: 40 18% 92%;
+    --primary: 40 18% 92%;
+    --primary-foreground: 220 16% 8%;
+    --secondary: 220 11% 14%;
+    --secondary-foreground: 40 18% 92%;
+    --muted: 220 11% 14%;
+    --muted-foreground: 38 9% 60%;
+    --accent: 220 11% 16%;
+    --accent-foreground: 40 18% 92%;
+
+    --border: 220 10% 20%;
+    --input: 220 10% 20%;
+    --ring: 40 18% 92%;
+
+    --info-background: 220 22% 14%;
+    --info-foreground: 212 65% 74%;
+    --info-separator: 220 18% 19%;
+
+    --success: 144 44% 48%;
+    --success-background: 144 28% 12%;
+    --success-foreground: 144 44% 58%;
+    --success-separator: 144 22% 18%;
+
+    --warning: 37 82% 54%;
+    --warning-background: 35 38% 11%;
+    --warning-foreground: 39 95% 67%;
+    --warning-separator: 35 30% 18%;
+
+    --destructive: 3 72% 58%;
+    --destructive-background: 6 34% 12%;
+    --destructive-foreground: 2 90% 72%;
+    --destructive-separator: 6 29% 18%;
+
+    --sidebar-background: 220 16% 9%;
+    --sidebar-foreground: 40 18% 92%;
+    --sidebar-primary: 40 18% 92%;
+    --sidebar-primary-foreground: 220 16% 8%;
+    --sidebar-accent: 220 11% 15%;
+    --sidebar-accent-foreground: 40 18% 92%;
+    --sidebar-border: 220 10% 20%;
+    --sidebar-ring: 40 18% 92%;
+
+    --code-background: 220 17% 6%;
+  }
+
+  html {
+    font-size: 15px;
+  }
+
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family:
+      'IBM Plex Mono',
+      'JetBrains Mono',
+      'SFMono-Regular',
+      'SF Mono',
+      ui-monospace,
+      monospace;
+    line-height: 1.45;
+  }
+
+  button,
+  input,
+  textarea,
+  select {
+    font: inherit;
+  }
+
+  input[type='time']::-webkit-calendar-picker-indicator {
+    display: none;
+    -webkit-appearance: none;
+  }
+
+  input[type='time']::-webkit-clear-button,
+  input[type='time']::-webkit-inner-spin-button {
+    display: none;
+    -webkit-appearance: none;
+  }
+
+  input[type='time'] {
+    -moz-appearance: textfield;
+  }
+
+  .slide-in-from-right {
+    animation: slide-in-from-right 0.2s ease-out;
+  }
+
+  .slide-out-to-right {
+    animation: slide-out-to-right 0.2s ease-out;
+  }
+
+  @keyframes slide-in-from-right {
+    from {
+      transform: translateX(100%);
+    }
+    to {
+      transform: translateX(0);
+    }
+  }
+
+  @keyframes slide-out-to-right {
+    from {
+      transform: translateX(0);
+    }
+    to {
+      transform: translateX(100%);
+    }
+  }
+}
+
+.scrollbar-sm {
+  @apply scrollbar-thin scrollbar-thumb-neutral-300 dark:scrollbar-thumb-neutral-700 scrollbar-track-background;
+}
+
+@keyframes skeleton-shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+::selection {
+  @apply bg-primary text-primary-foreground;
+}

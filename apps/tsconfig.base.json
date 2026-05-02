@@ -1,0 +1,26 @@
+{
+  "compileOnSave": false,
+  "compilerOptions": {
+    "rootDir": ".",
+    "sourceMap": true,
+    "declaration": false,
+    "moduleResolution": "node",
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+    "importHelpers": true,
+    "target": "ES2022",
+    "module": "commonjs",
+    "lib": ["es2022", "dom"],
+    "skipLibCheck": true,
+    "skipDefaultLibCheck": true,
+    "baseUrl": ".",
+    "paths": {
+      "@boxlite-labs/api-client": ["libs/api-client/src/index.ts"],
+      "@boxlite-labs/runner-api-client": ["libs/runner-api-client/src/index.ts"],
+      "@boxlite-labs/sdk": ["libs/sdk-typescript/src/index.ts"],
+      "@boxlite-labs/toolbox-api-client": ["libs/toolbox-api-client/src/index.ts"],
+      "@boxlite-labs/analytics-api-client": ["libs/analytics-api-client/src/index.ts"]
+    }
+  },
+  "exclude": ["node_modules", "tmp"]
+}

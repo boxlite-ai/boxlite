@@ -1,0 +1,9 @@
+name: boxlite organization create
+synopsis: Create a new organization and set it as active
+usage: boxlite organization create [ORGANIZATION_NAME] [flags]
+inherited_options:
+  - name: help
+    default_value: 'false'
+    usage: help for boxlite
+see_also:
+  - boxlite organization - Manage BoxLite organizations

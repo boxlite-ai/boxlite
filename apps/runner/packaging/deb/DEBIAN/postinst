@@ -1,0 +1,31 @@
+#!/bin/bash
+set -e
+
+# Create necessary directories
+mkdir -p /var/lib/boxlite/runner
+mkdir -p /var/log/boxlite
+mkdir -p /etc/boxlite
+
+# Create default environment file if it doesn't exist
+if [ ! -f /etc/boxlite/runner.env ]; then
+    cat > /etc/boxlite/runner.env <<EOF
+# BoxLite Runner Environment Variables
+# Add your configuration here, for example:
+# BOXLITE_API_URL=https://api.boxlite.io
+# BOXLITE_RUNNER_TOKEN=your-token-here
+EOF
+    chmod 600 /etc/boxlite/runner.env
+fi
+
+# Reload systemd daemon
+systemctl daemon-reload
+
+echo "BoxLite Runner installed successfully"
+echo ""
+echo "Next steps:"
+echo "1. Configure environment variables in /etc/boxlite/runner.env"
+echo "2. Enable and start the service: systemctl enable --now boxlite-runner"
+echo ""
+echo "To check service status: systemctl status boxlite-runner"
+
+exit 0

@@ -1,0 +1,56 @@
+// Copyright 2025 BoxLite AI (originally Daytona Platforms Inc.
+// Modified by BoxLite AI, 2025-2026
+// SPDX-License-Identifier: AGPL-3.0
+
+package fs
+
+import (
+	"net/http"
+	"os"
+	"path/filepath"
+
+	"github.com/gin-gonic/gin"
+)
+
+// ListFiles godoc
+//
+//	@Summary		List files and directories
+//	@Description	List files and directories in the specified path
+//	@Tags			file-system
+//	@Produce		json
+//	@Param			path	query	string	false	"Directory path to list (defaults to working directory)"
+//	@Success		200		{array}	FileInfo
+//	@Router			/files [get]
+//
+//	@id				ListFiles
+func ListFiles(c *gin.Context) {
+	path := c.Query("path")
+	if path == "" {
+		path = "."
+	}
+
+	files, err := os.ReadDir(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			c.AbortWithError(http.StatusNotFound, err)
+			return
+		}
+		if os.IsPermission(err) {
+			c.AbortWithError(http.StatusForbidden, err)
+			return
+		}
+		c.AbortWithError(http.StatusBadRequest, err)
+		return
+	}
+
+	var fileInfos = make([]FileInfo, 0)
+	for _, file := range files {
+		info, err := getFileInfo(filepath.Join(path, file.Name()))
+		if err != nil {
+			continue
+		}
+		fileInfos = append(fileInfos, info)
+	}
+
+	c.JSON(http.StatusOK, fileInfos)
+}

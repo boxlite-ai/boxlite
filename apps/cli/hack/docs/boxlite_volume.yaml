@@ -1,0 +1,13 @@
+name: boxlite volume
+synopsis: Manage BoxLite volumes
+description: Commands for managing BoxLite volumes
+inherited_options:
+  - name: help
+    default_value: 'false'
+    usage: help for boxlite
+see_also:
+  - boxlite - BoxLite CLI
+  - boxlite volume create - Create a volume
+  - boxlite volume delete - Delete a volume
+  - boxlite volume get - Get volume details
+  - boxlite volume list - List all volumes

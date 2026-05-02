@@ -1,0 +1,13 @@
+name: boxlite organization
+synopsis: Manage BoxLite organizations
+description: Commands for managing BoxLite organizations
+inherited_options:
+  - name: help
+    default_value: 'false'
+    usage: help for boxlite
+see_also:
+  - boxlite - BoxLite CLI
+  - boxlite organization create - Create a new organization and set it as active
+  - boxlite organization delete - Delete an organization
+  - boxlite organization list - List all organizations
+  - boxlite organization use - Set active organization

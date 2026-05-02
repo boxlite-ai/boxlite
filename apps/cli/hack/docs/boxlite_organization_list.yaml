@@ -1,0 +1,13 @@
+name: boxlite organization list
+synopsis: List all organizations
+usage: boxlite organization list [flags]
+options:
+  - name: format
+    shorthand: f
+    usage: Output format. Must be one of (yaml, json)
+inherited_options:
+  - name: help
+    default_value: 'false'
+    usage: help for boxlite
+see_also:
+  - boxlite organization - Manage BoxLite organizations

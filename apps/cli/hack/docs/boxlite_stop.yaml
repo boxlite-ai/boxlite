@@ -1,0 +1,9 @@
+name: boxlite stop
+synopsis: Stop a sandbox
+usage: boxlite stop [SANDBOX_ID] | [SANDBOX_NAME] [flags]
+inherited_options:
+  - name: help
+    default_value: 'false'
+    usage: help for boxlite
+see_also:
+  - boxlite - BoxLite CLI

@@ -1,0 +1,21 @@
+BoxLite
+
+This repository is mixed-license.
+
+The core BoxLite runtime and SDKs are licensed under Apache-2.0 unless a file
+or directory states otherwise.
+
+The apps workspace under apps/ includes source derived from Daytona and contains
+AGPL-3.0 and Apache-2.0 components. See apps/NOTICE, apps/LICENSES/, and
+app-local LICENSE files.
+
+Daytona attribution summary:
+
+Daytona
+Copyright the various Daytona software authors.
+
+The initial developer of the software is Daytona Platforms, Inc. (https://daytona.io).
+Copyright 2025 Daytona Platforms, Inc. All Rights Reserved.
+
+Upstream source commit:
+f982c45a42e52c98631002c7dc1df565c44d7aac

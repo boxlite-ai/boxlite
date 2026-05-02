@@ -1,0 +1,5 @@
+pkg/terminal/static/*
+!pkg/terminal/static/index.html
+!pkg/terminal/static/xterm-addon-fit.js
+!pkg/terminal/static/xterm.css
+!pkg/terminal/static/xterm.js

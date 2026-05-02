@@ -1,0 +1,14 @@
+#!/bin/bash
+set -e
+
+# Reload systemd daemon to remove the service
+systemctl daemon-reload
+
+# On purge, remove configuration and data
+if [ "$1" = "purge" ]; then
+    rm -rf /etc/boxlite/runner.env
+    rm -rf /var/lib/boxlite/runner
+    rm -rf /var/log/boxlite
+fi
+
+exit 0

@@ -1,0 +1,70 @@
+// Copyright 2025 BoxLite AI (originally Daytona Platforms Inc.
+// Modified by BoxLite AI, 2025-2026
+// SPDX-License-Identifier: AGPL-3.0
+
+package config
+
+import (
+	"time"
+
+	"github.com/go-playground/validator/v10"
+	"github.com/kelseyhightower/envconfig"
+)
+
+type Config struct {
+	DaemonLogFilePath        string        `envconfig:"BOXLITE_DAEMON_LOG_FILE_PATH"`
+	UserHomeAsWorkDir        bool          `envconfig:"BOXLITE_USER_HOME_AS_WORKDIR"`
+	SandboxId                string        `envconfig:"BOXLITE_SANDBOX_ID" validate:"required"`
+	OtelEndpoint             *string       `envconfig:"BOXLITE_OTEL_ENDPOINT"`
+	TerminationCheckInterval time.Duration `envconfig:"BOXLITE_TERMINATION_CHECK_INTERVAL" default:"100ms" validate:"min_duration=1ms"`
+	TerminationGracePeriod   time.Duration `envconfig:"BOXLITE_TERMINATION_GRACE_PERIOD" default:"5s" validate:"min_duration=1s"`
+	RecordingsDir            string        `envconfig:"BOXLITE_RECORDINGS_DIR"`
+	OrganizationId           *string       `envconfig:"BOXLITE_ORGANIZATION_ID"`
+	RegionId                 *string       `envconfig:"BOXLITE_REGION_ID"`
+}
+
+var defaultDaemonLogFilePath = "/tmp/boxlite-daemon.log"
+
+var config *Config
+
+func GetConfig() (*Config, error) {
+	if config != nil {
+		return config, nil
+	}
+
+	config = &Config{}
+
+	err := envconfig.Process("", config)
+	if err != nil {
+		return nil, err
+	}
+
+	var validate = validator.New()
+
+	// Register a custom tag "min_duration" that accepts a duration string like "1ms"
+	err = validate.RegisterValidation("min_duration", func(fl validator.FieldLevel) bool {
+		min, err := time.ParseDuration(fl.Param())
+		if err != nil {
+			return false
+		}
+		d, ok := fl.Field().Interface().(time.Duration)
+		if !ok {
+			return false
+		}
+		return d >= min
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	err = validate.Struct(config)
+	if err != nil {
+		return nil, err
+	}
+
+	if config.DaemonLogFilePath == "" {
+		config.DaemonLogFilePath = defaultDaemonLogFilePath
+	}
+
+	return config, nil
+}
