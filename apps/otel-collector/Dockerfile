@@ -20,11 +20,11 @@ RUN yarn install --immutable
 COPY apps/nx.json ./
 
 # Go dependency layer (cached unless go.mod/go.sum change)
-COPY go.work go.work.sum ./
+COPY apps/go.work apps/go.work.sum apps/
 COPY apps/otel-collector/exporter/go.mod apps/otel-collector/exporter/go.sum apps/otel-collector/exporter/
 COPY apps/api-client-go/go.mod apps/api-client-go/go.sum apps/api-client-go/
 COPY apps/common-go/go.mod apps/common-go/go.sum apps/common-go/
-RUN head -1 go.work > go.work.tmp && printf '\nuse (\n\t./apps/otel-collector/exporter\n\t./apps/api-client-go\n\t./apps/common-go\n)\n' >> go.work.tmp && mv go.work.tmp go.work
+RUN head -1 apps/go.work > apps/go.work.tmp && printf '\nuse (\n\t./otel-collector/exporter\n\t./api-client-go\n\t./common-go\n)\n' >> apps/go.work.tmp && mv apps/go.work.tmp apps/go.work
 
 ENV NX_DAEMON=false
 

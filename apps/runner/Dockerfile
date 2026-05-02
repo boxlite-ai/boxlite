@@ -20,7 +20,7 @@ RUN yarn install --immutable
 COPY apps/nx.json ./
 
 # Go dependency layer (cached unless go.mod/go.sum change)
-COPY go.work go.work.sum ./
+COPY apps/go.work apps/go.work.sum apps/
 COPY apps/runner/go.mod apps/runner/go.sum apps/runner/
 COPY apps/daemon/go.mod apps/daemon/go.sum apps/daemon/
 COPY apps/common-go/go.mod apps/common-go/go.sum apps/common-go/
@@ -28,7 +28,7 @@ COPY apps/api-client-go/go.mod apps/api-client-go/go.sum apps/api-client-go/
 COPY sdks/go/go.mod sdks/go/
 
 # Rewrite go.work to include only needed modules
-RUN head -1 go.work > go.work.tmp && printf '\nuse (\n\t./apps/runner\n\t./apps/daemon\n\t./apps/common-go\n\t./apps/api-client-go\n\t./sdks/go\n)\n' >> go.work.tmp && mv go.work.tmp go.work
+RUN head -1 apps/go.work > apps/go.work.tmp && printf '\nuse (\n\t./runner\n\t./daemon\n\t./common-go\n\t./api-client-go\n\t../sdks/go\n)\n' >> apps/go.work.tmp && mv apps/go.work.tmp apps/go.work
 
 ENV NX_DAEMON=false
 

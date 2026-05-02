@@ -30,7 +30,7 @@
       "!{projectRoot}/src/test-setup.[jt]s",
       "!{projectRoot}/test-setup.[jt]s"
     ],
-    "goProduction": ["default", "{workspaceRoot}/go.work", "{workspaceRoot}/go.work.sum", "sharedGlobals"],
+    "goProduction": ["default", "{workspaceRoot}/apps/go.work", "{workspaceRoot}/apps/go.work.sum", "sharedGlobals"],
     "sharedGlobals": ["{workspaceRoot}/.github/workflows/ci.yml"],
     "apiClient": [
       "{workspaceRoot}/dist/apps/api/openapi.json",

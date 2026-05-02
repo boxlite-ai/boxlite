@@ -24,9 +24,6 @@ SCRIPT_DIR="$(cd "$SCRIPT_BUILD_DIR/.." && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/common.sh"
 
-# libgvproxy-sys shells out to Go; keep it isolated from the top-level apps/go.work.
-export GOWORK=off
-
 # Capture original working directory before any cd commands
 ORIG_DIR="$(pwd)"
 

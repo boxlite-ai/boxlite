@@ -20,9 +20,9 @@ RUN yarn install --immutable
 COPY apps/nx.json ./
 
 # Go dependency layer (cached unless go.mod/go.sum change)
-COPY go.work go.work.sum ./
+COPY apps/go.work apps/go.work.sum apps/
 COPY apps/snapshot-manager/go.mod apps/snapshot-manager/go.sum apps/snapshot-manager/
-RUN head -1 go.work > go.work.tmp && printf '\nuse (\n\t./apps/snapshot-manager\n)\n' >> go.work.tmp && mv go.work.tmp go.work
+RUN head -1 apps/go.work > apps/go.work.tmp && printf '\nuse (\n\t./snapshot-manager\n)\n' >> apps/go.work.tmp && mv apps/go.work.tmp apps/go.work
 
 ENV NX_DAEMON=false
 
