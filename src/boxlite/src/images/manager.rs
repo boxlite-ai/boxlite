@@ -18,6 +18,7 @@ use super::blob_source::{BlobSource, LocalBundleBlobSource, StoreBlobSource};
 use super::object::ImageObject;
 use crate::db::Database;
 use crate::images::store::{ImageStore, SharedImageStore};
+use crate::runtime::options::ImageRegistry;
 use crate::runtime::types::ImageInfo;
 use boxlite_shared::errors::BoxliteResult;
 use oci_client::Reference;
@@ -68,7 +69,7 @@ pub(super) struct LayerInfo {
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// let db = Database::open(&PathBuf::from("/tmp/boxlite.db"))?;
-/// let manager = ImageManager::new(PathBuf::from("/tmp/images"), db, vec![])?;
+/// let manager = ImageManager::new(PathBuf::from("/tmp/images"), db, vec![], vec![])?;
 ///
 /// // Pull an image
 /// let image = manager.pull("python:alpine").await?;
@@ -97,8 +98,14 @@ impl ImageManager {
     /// * `images_dir` - Directory for image cache
     /// * `db` - Database for image index
     /// * `registries` - Registries to search for unqualified images (tried in order)
-    pub fn new(images_dir: PathBuf, db: Database, registries: Vec<String>) -> BoxliteResult<Self> {
-        let store = Arc::new(ImageStore::new(images_dir, db, registries)?);
+    /// * `registry_hosts` - Per-registry transport and TLS settings
+    pub fn new(
+        images_dir: PathBuf,
+        db: Database,
+        registries: Vec<String>,
+        registry_hosts: Vec<ImageRegistry>,
+    ) -> BoxliteResult<Self> {
+        let store = Arc::new(ImageStore::new(images_dir, db, registries, registry_hosts)?);
         Ok(Self { store })
     }
 

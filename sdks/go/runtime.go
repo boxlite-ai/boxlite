@@ -38,9 +38,23 @@ func NewRuntime(opts ...RuntimeOption) (*Runtime, error) {
 	cRegistries, registriesCount := toCStringArray(cfg.registries)
 	defer freeCStringArray(cRegistries, registriesCount)
 
+	cRegistryHosts, registryHostsCount, freeRegistryHosts, err := toCImageRegistryArray(cfg.registryHosts)
+	if err != nil {
+		return nil, err
+	}
+	defer freeRegistryHosts()
+
 	var handle *C.CBoxliteRuntime
 	var cerr C.CBoxliteError
-	code := C.boxlite_runtime_new(homeDir, cRegistries, C.int(registriesCount), &handle, &cerr)
+	code := C.boxlite_runtime_new(
+		homeDir,
+		cRegistries,
+		C.int(registriesCount),
+		cRegistryHosts,
+		C.int(registryHostsCount),
+		&handle,
+		&cerr,
+	)
 	if code != C.Ok {
 		return nil, freeError(&cerr)
 	}

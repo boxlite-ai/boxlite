@@ -92,6 +92,26 @@ main();
 
 ## API Reference
 
+### Runtime Registry Options
+
+```typescript
+import { JsBoxlite } from 'boxlite';
+
+const runtime = new JsBoxlite({
+  registryHosts: [
+    {
+      host: 'registry.example.com',
+      auth: { username: 'user', password: 'password' },
+    },
+    {
+      host: 'registry.local:5000',
+      transport: 'http',
+      search: true,
+    },
+  ],
+});
+```
+
 ### SimpleBox
 
 Basic container for command execution.

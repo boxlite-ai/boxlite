@@ -25,7 +25,15 @@ import (
 )
 
 func main() {
-	rt, err := boxlite.NewRuntime()
+	rt, err := boxlite.NewRuntime(
+		boxlite.WithImageRegistry(boxlite.ImageRegistry{
+			Host: "registry.example.com",
+			Auth: boxlite.ImageRegistryAuth{
+				Username: "user",
+				Password: "password",
+			},
+		}),
+	)
 	if err != nil {
 		log.Fatal(err)
 	}

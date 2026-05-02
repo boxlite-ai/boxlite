@@ -24,6 +24,9 @@ export type {
   ImageHandle,
   ImageInfo,
   ImagePullResult,
+  JsImageRegistry,
+  JsImageRegistryAuth,
+  JsOptions,
 } from "./native-contracts.js";
 
 // Re-export native bindings

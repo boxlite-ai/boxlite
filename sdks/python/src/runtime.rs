@@ -19,7 +19,7 @@ pub(crate) struct PyBoxlite {
 impl PyBoxlite {
     #[new]
     fn new(options: PyOptions) -> PyResult<Self> {
-        let runtime = BoxliteRuntime::new(options.into()).map_err(map_err)?;
+        let runtime = BoxliteRuntime::new(options.into_core()?).map_err(map_err)?;
 
         Ok(Self {
             runtime: Arc::new(runtime),
@@ -56,7 +56,7 @@ impl PyBoxlite {
 
     #[staticmethod]
     fn init_default(options: PyOptions) -> PyResult<()> {
-        BoxliteRuntime::init_default_runtime(options.into()).map_err(map_err)
+        BoxliteRuntime::init_default_runtime(options.into_core()?).map_err(map_err)
     }
 
     #[pyo3(signature = (options, name=None))]

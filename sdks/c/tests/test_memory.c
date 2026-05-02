@@ -35,7 +35,7 @@ void test_runtime_cleanup() {
     CBoxliteError error = {0};
     const char *temp_dir = cleanup_temp_dirs[i];
     BoxliteErrorCode code =
-        boxlite_runtime_new(temp_dir, NULL, 0, &runtime, &error);
+        boxlite_runtime_new(temp_dir, NULL, 0, NULL, 0, &runtime, &error);
     assert(code == Ok);
     assert(runtime != NULL);
     boxlite_runtime_free(runtime);
@@ -71,7 +71,7 @@ void test_box_id_cleanup() {
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-memory-boxid";
   BoxliteErrorCode code =
-      boxlite_runtime_new(temp_dir, NULL, 0, &runtime, &error);
+      boxlite_runtime_new(temp_dir, NULL, 0, NULL, 0, &runtime, &error);
   assert(code == Ok);
   assert(runtime != NULL);
 
@@ -98,7 +98,7 @@ void test_box_info_cleanup() {
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-memory-info";
   BoxliteErrorCode code =
-      boxlite_runtime_new(temp_dir, NULL, 0, &runtime, &error);
+      boxlite_runtime_new(temp_dir, NULL, 0, NULL, 0, &runtime, &error);
   assert(code == Ok);
   assert(runtime != NULL);
 
@@ -209,7 +209,7 @@ void test_mixed_operations() {
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-memory-mixed";
   BoxliteErrorCode code =
-      boxlite_runtime_new(temp_dir, NULL, 0, &runtime, &error);
+      boxlite_runtime_new(temp_dir, NULL, 0, NULL, 0, &runtime, &error);
   assert(code == Ok);
   assert(runtime != NULL);
 

@@ -29,6 +29,7 @@ try:
         HealthState,
         HealthStatus,
         NetworkSpec,
+        ImageRegistry,
         Options,
         RuntimeMetrics,
         Secret,
@@ -41,6 +42,7 @@ try:
     __all__ = [
         # Core Rust API
         "Options",
+        "ImageRegistry",
         "BoxOptions",
         "BoxliteRestOptions",
         "Boxlite",

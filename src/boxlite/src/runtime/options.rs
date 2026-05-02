@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 use crate::runtime::advanced_options::{AdvancedBoxOptions, SecurityOptions};
+use std::fmt;
 
 // ============================================================================
 // Runtime Options
@@ -42,6 +43,122 @@ pub struct BoxliteOptions {
     /// ```
     #[serde(default)]
     pub image_registries: Vec<String>,
+
+    /// Per-registry transport and TLS configuration.
+    ///
+    /// Use this for registry hosts that need plain HTTP or TLS verification
+    /// disabled. `host` values must match the registry host in the image
+    /// reference, including the port when one is present.
+    #[serde(default)]
+    pub registry_hosts: Vec<ImageRegistry>,
+}
+
+/// Registry host configuration for OCI image pulls.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImageRegistry {
+    /// Registry host name, optionally including a port. Do not include a URL scheme.
+    pub host: String,
+    /// Transport to use when contacting this registry.
+    #[serde(default)]
+    pub transport: RegistryTransport,
+    /// Disable TLS certificate and hostname verification for HTTPS registries.
+    #[serde(default)]
+    pub skip_verify: bool,
+    /// Include this host when resolving unqualified image references.
+    #[serde(default)]
+    pub search: bool,
+    /// Authentication credentials for this registry.
+    #[serde(default)]
+    pub auth: ImageRegistryAuth,
+}
+
+impl ImageRegistry {
+    pub fn https(host: impl Into<String>) -> Self {
+        Self {
+            host: host.into(),
+            transport: RegistryTransport::Https,
+            skip_verify: false,
+            search: false,
+            auth: ImageRegistryAuth::Anonymous,
+        }
+    }
+
+    pub fn http(host: impl Into<String>) -> Self {
+        Self {
+            host: host.into(),
+            transport: RegistryTransport::Http,
+            skip_verify: false,
+            search: false,
+            auth: ImageRegistryAuth::Anonymous,
+        }
+    }
+
+    pub fn with_skip_verify(mut self, skip_verify: bool) -> Self {
+        self.skip_verify = skip_verify;
+        self
+    }
+
+    pub fn with_search(mut self, search: bool) -> Self {
+        self.search = search;
+        self
+    }
+
+    pub fn with_basic_auth(
+        mut self,
+        username: impl Into<String>,
+        password: impl Into<String>,
+    ) -> Self {
+        self.auth = ImageRegistryAuth::Basic {
+            username: username.into(),
+            password: password.into(),
+        };
+        self
+    }
+
+    pub fn with_bearer_auth(mut self, token: impl Into<String>) -> Self {
+        self.auth = ImageRegistryAuth::Bearer {
+            token: token.into(),
+        };
+        self
+    }
+}
+
+/// Transport used for OCI registry requests.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RegistryTransport {
+    #[default]
+    Https,
+    Http,
+}
+
+/// Authentication for an OCI registry host.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ImageRegistryAuth {
+    #[default]
+    Anonymous,
+    Basic {
+        username: String,
+        password: String,
+    },
+    Bearer {
+        token: String,
+    },
+}
+
+impl fmt::Debug for ImageRegistryAuth {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Anonymous => f.write_str("Anonymous"),
+            Self::Basic { username, .. } => f
+                .debug_struct("Basic")
+                .field("username", username)
+                .field("password", &"***")
+                .finish(),
+            Self::Bearer { .. } => f.debug_struct("Bearer").field("token", &"***").finish(),
+        }
+    }
 }
 
 fn default_home_dir() -> PathBuf {
@@ -59,6 +176,7 @@ impl Default for BoxliteOptions {
         Self {
             home_dir: default_home_dir(),
             image_registries: Vec::new(),
+            registry_hosts: Vec::new(),
         }
     }
 }

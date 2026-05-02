@@ -202,7 +202,7 @@ int main() {
     CBoxliteError error = {0};
 
     // Create runtime
-    if (boxlite_runtime_new(NULL, NULL, 0, &runtime, &error) != Ok) {
+    if (boxlite_runtime_new(NULL, NULL, 0, NULL, 0, &runtime, &error) != Ok) {
         fprintf(stderr, "Error %d: %s\n", error.code, error.message);
         boxlite_error_free(&error);
         return 1;
@@ -335,11 +335,28 @@ The Native API provides full control and advanced features.
 // Get version
 const char* boxlite_version(void);
 
+typedef enum BoxliteRegistryTransport {
+    BoxliteRegistryTransportHttps = 0,
+    BoxliteRegistryTransportHttp = 1,
+} BoxliteRegistryTransport;
+
+typedef struct BoxliteImageRegistry {
+    const char* host;
+    BoxliteRegistryTransport transport;
+    int skip_verify;
+    int search;
+    const char* username;
+    const char* password;
+    const char* bearer_token;
+} BoxliteImageRegistry;
+
 // Create runtime with options
 BoxliteErrorCode boxlite_runtime_new(
     const char* home_dir,            // NULL = ~/.boxlite
     const char* const* registries,   // NULL = default registries
     int registries_count,
+    const BoxliteImageRegistry* registry_hosts, // NULL = no per-registry config
+    int registry_hosts_count,
     CBoxliteRuntime** out_runtime,
     CBoxliteError* out_error
 );
@@ -712,7 +729,7 @@ leaks -atExit -- ./my_app
 ```c
 CBoxliteRuntime* runtime = NULL;
 CBoxliteError error = {0};
-boxlite_runtime_new(NULL, NULL, 0, &runtime, &error);
+boxlite_runtime_new(NULL, NULL, 0, NULL, 0, &runtime, &error);
 
 // Thread 1
 CBoxHandle* box1 = NULL;

@@ -35,7 +35,7 @@ static CBoxliteRuntime *new_test_runtime(const char *temp_dir,
                                          CBoxliteError *error) {
   CBoxliteRuntime *runtime = NULL;
   BoxliteErrorCode code = boxlite_runtime_new(
-      temp_dir, TEST_REGISTRIES, TEST_REGISTRIES_COUNT, &runtime, error);
+      temp_dir, TEST_REGISTRIES, TEST_REGISTRIES_COUNT, NULL, 0, &runtime, error);
   assert(code == Ok);
   assert(runtime != NULL);
   return runtime;

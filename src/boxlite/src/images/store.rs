@@ -16,12 +16,14 @@
 use crate::db::{CachedImage, Database, ImageIndexStore};
 use crate::images::manager::{ImageManifest, LayerInfo};
 use crate::images::storage::ImageStorage;
+use crate::runtime::options::{ImageRegistry, ImageRegistryAuth, RegistryTransport};
 use boxlite_shared::{BoxliteError, BoxliteResult};
 use oci_client::Reference;
+use oci_client::client::{ClientConfig, ClientProtocol};
 use oci_client::manifest::{
     ImageIndexEntry, OciDescriptor, OciImageIndex, OciImageManifest as ClientOciImageManifest,
 };
-use oci_client::secrets::RegistryAuth;
+use oci_client::secrets::RegistryAuth as OciRegistryAuth;
 use oci_spec::image::MediaType;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -66,7 +68,7 @@ impl ImageStoreInner {
 /// # Example
 ///
 /// ```ignore
-/// let store = Arc::new(ImageStore::new(images_dir)?);
+/// let store = Arc::new(ImageStore::new(images_dir, db, vec![], vec![])?);
 ///
 /// // Pull image (thread-safe, releases lock during download)
 /// let manifest = store.pull("python:alpine").await?;
@@ -76,13 +78,13 @@ impl ImageStoreInner {
 /// let blob_source = BlobSource::Store(StoreBlobSource::new(storage));
 /// ```
 pub struct ImageStore {
-    /// OCI registry client (immutable, outside lock)
-    client: oci_client::Client,
     /// Mutable state protected by RwLock
     inner: RwLock<ImageStoreInner>,
     /// Registries to search for unqualified image references.
     /// Tried in order; first successful pull wins.
     registries: Vec<String>,
+    /// Per-registry transport and TLS settings.
+    registry_hosts: Vec<ImageRegistry>,
 }
 
 impl std::fmt::Debug for ImageStore {
@@ -98,12 +100,21 @@ impl ImageStore {
     /// * `images_dir` - Directory for image cache
     /// * `db` - Database for image index
     /// * `registries` - Registries to search for unqualified images (tried in order)
-    pub fn new(images_dir: PathBuf, db: Database, registries: Vec<String>) -> BoxliteResult<Self> {
+    /// * `registry_hosts` - Per-registry transport and TLS settings
+    pub fn new(
+        images_dir: PathBuf,
+        db: Database,
+        registries: Vec<String>,
+        registry_hosts: Vec<ImageRegistry>,
+    ) -> BoxliteResult<Self> {
+        validate_registry_hosts(&registry_hosts)?;
+
         let inner = ImageStoreInner::new(images_dir, db)?;
+        let registries = search_registries(registries, &registry_hosts);
         Ok(Self {
-            client: oci_client::Client::new(Default::default()),
             inner: RwLock::new(inner),
             registries,
+            registry_hosts,
         })
     }
 
@@ -537,10 +548,12 @@ impl ImageStore {
     /// This method handles the actual network I/O - manifest pull, layer download, etc.
     /// Lock is released during network I/O to allow other operations.
     async fn pull_from_registry(&self, reference: &Reference) -> BoxliteResult<ImageManifest> {
-        // Step 1: Pull manifest (no lock needed - uses self.client)
-        let (manifest, manifest_digest_str) = self
-            .client
-            .pull_manifest(reference, &RegistryAuth::Anonymous)
+        let client = self.client_for(reference);
+        let auth = registry_auth_for(reference.registry(), &self.registry_hosts);
+
+        // Step 1: Pull manifest (no lock needed)
+        let (manifest, manifest_digest_str) = client
+            .pull_manifest(reference, &auth)
             .await
             .map_err(|e| BoxliteError::Storage(format!("failed to pull manifest: {e}")))?;
 
@@ -554,15 +567,15 @@ impl ImageStore {
 
         // Step 3: Extract image manifest (may pull platform-specific manifest for multi-platform images)
         let mut image_manifest = self
-            .extract_image_manifest(reference, &manifest, manifest_digest_str)
+            .extract_image_manifest(&client, reference, &manifest, manifest_digest_str)
             .await?;
 
         // Step 4: Download layers (no lock during download, atomic file writes)
-        self.download_layers(reference, &image_manifest.layers)
+        self.download_layers(&client, reference, &image_manifest.layers)
             .await?;
 
         // Step 5: Download config (no lock during download)
-        self.download_config(reference, &image_manifest.config_digest)
+        self.download_config(&client, reference, &image_manifest.config_digest)
             .await?;
 
         // Step 5b: Parse diff_ids from config for DiffID verification
@@ -603,6 +616,7 @@ impl ImageStore {
 
     async fn extract_image_manifest(
         &self,
+        client: &oci_client::Client,
         reference: &Reference,
         manifest: &oci_client::manifest::OciManifest,
         manifest_digest: String,
@@ -619,7 +633,8 @@ impl ImageStore {
                 })
             }
             oci_client::manifest::OciManifest::ImageIndex(index) => {
-                self.extract_platform_manifest(reference, index).await
+                self.extract_platform_manifest(client, reference, index)
+                    .await
             }
         }
     }
@@ -657,6 +672,7 @@ impl ImageStore {
 
     async fn extract_platform_manifest(
         &self,
+        client: &oci_client::Client,
         reference: &Reference,
         index: &oci_client::manifest::OciImageIndex,
     ) -> BoxliteResult<ImageManifest> {
@@ -680,9 +696,11 @@ impl ImageStore {
             "Pulling platform-specific manifest: {}",
             platform_manifest.digest
         );
-        let (platform_image, platform_digest) = self
-            .client
-            .pull_manifest(&platform_reference, &RegistryAuth::Anonymous)
+        let (platform_image, platform_digest) = client
+            .pull_manifest(
+                &platform_reference,
+                &registry_auth_for(reference.registry(), &self.registry_hosts),
+            )
             .await
             .map_err(|e| BoxliteError::Storage(format!("failed to pull platform manifest: {e}")))?;
 
@@ -763,6 +781,7 @@ impl ImageStore {
 
     async fn download_layers(
         &self,
+        client: &oci_client::Client,
         reference: &Reference,
         layers: &[LayerInfo],
     ) -> BoxliteResult<()> {
@@ -809,7 +828,7 @@ impl ImageStore {
         // Download in parallel (no lock held)
         let download_futures = layers_to_download
             .iter()
-            .map(|layer| self.download_layer(reference, layer));
+            .map(|layer| self.download_layer(client, reference, layer));
 
         let results = join_all(download_futures).await;
 
@@ -820,7 +839,12 @@ impl ImageStore {
         Ok(())
     }
 
-    async fn download_layer(&self, reference: &Reference, layer: &LayerInfo) -> BoxliteResult<()> {
+    async fn download_layer(
+        &self,
+        client: &oci_client::Client,
+        reference: &Reference,
+        layer: &LayerInfo,
+    ) -> BoxliteResult<()> {
         const MAX_RETRIES: u32 = 3;
 
         tracing::info!("Downloading layer: {}", layer.digest);
@@ -857,8 +881,7 @@ impl ImageStore {
             };
 
             // Download (no lock)
-            match self
-                .client
+            match client
                 .pull_blob(
                     reference,
                     &OciDescriptor {
@@ -906,6 +929,7 @@ impl ImageStore {
 
     async fn download_config(
         &self,
+        client: &oci_client::Client,
         reference: &Reference,
         config_digest: &str,
     ) -> BoxliteResult<()> {
@@ -927,8 +951,7 @@ impl ImageStore {
         };
 
         // Download to temp file (no lock)
-        if let Err(e) = self
-            .client
+        if let Err(e) = client
             .pull_blob(
                 reference,
                 &OciDescriptor {
@@ -955,6 +978,13 @@ impl ImageStore {
         }
 
         Ok(())
+    }
+
+    fn client_for(&self, reference: &Reference) -> oci_client::Client {
+        oci_client::Client::new(client_config_for_registry(
+            reference.registry(),
+            &self.registry_hosts,
+        ))
     }
 
     /// Parse OCI image manifest from file path.
@@ -986,6 +1016,63 @@ impl ImageStore {
     }
 }
 
+fn client_config_for_registry(host: &str, registry_hosts: &[ImageRegistry]) -> ClientConfig {
+    let registry = registry_hosts.iter().find(|registry| registry.host == host);
+
+    let protocol = match registry.map(|registry| &registry.transport) {
+        Some(RegistryTransport::Http) => ClientProtocol::Http,
+        _ => ClientProtocol::Https,
+    };
+
+    ClientConfig {
+        protocol,
+        accept_invalid_certificates: registry.is_some_and(|registry| registry.skip_verify),
+        ..Default::default()
+    }
+}
+
+fn registry_auth_for(host: &str, registry_hosts: &[ImageRegistry]) -> OciRegistryAuth {
+    let auth = registry_hosts
+        .iter()
+        .find(|registry| registry.host == host)
+        .map(|registry| &registry.auth);
+
+    match auth {
+        Some(ImageRegistryAuth::Basic { username, password }) => {
+            OciRegistryAuth::Basic(username.clone(), password.clone())
+        }
+        Some(ImageRegistryAuth::Bearer { token }) => OciRegistryAuth::Bearer(token.clone()),
+        _ => OciRegistryAuth::Anonymous,
+    }
+}
+
+fn search_registries(mut registries: Vec<String>, registry_hosts: &[ImageRegistry]) -> Vec<String> {
+    for registry in registry_hosts.iter().filter(|registry| registry.search) {
+        if !registries.iter().any(|host| host == &registry.host) {
+            registries.push(registry.host.clone());
+        }
+    }
+    registries
+}
+
+fn validate_registry_hosts(registry_hosts: &[ImageRegistry]) -> BoxliteResult<()> {
+    for registry in registry_hosts {
+        let host = registry.host.trim();
+        if host.is_empty() {
+            return Err(BoxliteError::Config(
+                "image registry host cannot be empty".to_string(),
+            ));
+        }
+        if host.contains("://") || host.contains('/') {
+            return Err(BoxliteError::Config(format!(
+                "image registry host must be host[:port], not a URL: {}",
+                registry.host
+            )));
+        }
+    }
+    Ok(())
+}
+
 // ============================================================================
 // SHARED TYPE ALIAS
 // ============================================================================
@@ -1004,6 +1091,74 @@ mod tests {
     use super::*;
     use crate::db::Database;
     use std::path::Path;
+
+    #[test]
+    fn client_config_uses_http_for_configured_registry() {
+        let config = client_config_for_registry(
+            "registry.local:5000",
+            &[ImageRegistry::http("registry.local:5000")],
+        );
+
+        assert_eq!(config.protocol, ClientProtocol::Http);
+        assert!(!config.accept_invalid_certificates);
+    }
+
+    #[test]
+    fn client_config_uses_skip_verify_for_configured_registry() {
+        let config = client_config_for_registry(
+            "registry.local:5000",
+            &[ImageRegistry::https("registry.local:5000").with_skip_verify(true)],
+        );
+
+        assert_eq!(config.protocol, ClientProtocol::Https);
+        assert!(config.accept_invalid_certificates);
+    }
+
+    #[test]
+    fn registry_auth_uses_basic_credentials_for_configured_registry() {
+        let auth = registry_auth_for(
+            "registry.local:5000",
+            &[ImageRegistry::https("registry.local:5000").with_basic_auth("alice", "secret")],
+        );
+
+        assert_eq!(
+            auth,
+            OciRegistryAuth::Basic("alice".to_string(), "secret".to_string())
+        );
+    }
+
+    #[test]
+    fn registry_auth_uses_bearer_token_for_configured_registry() {
+        let auth = registry_auth_for(
+            "registry.local:5000",
+            &[ImageRegistry::https("registry.local:5000").with_bearer_auth("token")],
+        );
+
+        assert_eq!(auth, OciRegistryAuth::Bearer("token".to_string()));
+    }
+
+    #[test]
+    fn registry_hosts_only_join_search_list_when_search_is_enabled() {
+        let registries = search_registries(
+            vec!["docker.io".to_string()],
+            &[
+                ImageRegistry::https("ghcr.io"),
+                ImageRegistry::http("registry.local:5000").with_search(true),
+            ],
+        );
+
+        assert_eq!(
+            registries,
+            vec!["docker.io".to_string(), "registry.local:5000".to_string()]
+        );
+    }
+
+    #[test]
+    fn validate_registry_hosts_rejects_urls() {
+        let result = validate_registry_hosts(&[ImageRegistry::http("http://registry.local:5000")]);
+
+        assert!(result.is_err());
+    }
 
     /// Helper to create a minimal OCI bundle for testing
     fn create_test_oci_bundle(bundle_dir: &Path) -> String {
@@ -1133,7 +1288,7 @@ mod tests {
 
         // Create store
         let db = Database::open(&db_path).unwrap();
-        let store = ImageStore::new(images_dir.clone(), db, vec![]).unwrap();
+        let store = ImageStore::new(images_dir.clone(), db, vec![], vec![]).unwrap();
 
         // Load from local
         let manifest = store.load_from_local(bundle_dir.clone()).await.unwrap();
@@ -1157,7 +1312,7 @@ mod tests {
 
         // Create store
         let db = Database::open(&db_path).unwrap();
-        let store = ImageStore::new(images_dir.clone(), db, vec![]).unwrap();
+        let store = ImageStore::new(images_dir.clone(), db, vec![], vec![]).unwrap();
 
         // Load from local
         let _manifest = store.load_from_local(bundle_dir.clone()).await.unwrap();
@@ -1192,7 +1347,7 @@ mod tests {
 
         // Create store
         let db = Database::open(&db_path).unwrap();
-        let store = ImageStore::new(images_dir.clone(), db, vec![]).unwrap();
+        let store = ImageStore::new(images_dir.clone(), db, vec![], vec![]).unwrap();
 
         // Load should fail
         let result = store.load_from_local(bundle_dir).await;
@@ -1218,7 +1373,7 @@ mod tests {
 
         // Create store
         let db = Database::open(&db_path).unwrap();
-        let store = ImageStore::new(images_dir.clone(), db, vec![]).unwrap();
+        let store = ImageStore::new(images_dir.clone(), db, vec![], vec![]).unwrap();
 
         // Load should fail
         let result = store.load_from_local(bundle_dir).await;

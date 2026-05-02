@@ -5,9 +5,10 @@ use boxlite::BoxliteRestOptions;
 use boxlite::runtime::advanced_options::{AdvancedBoxOptions, HealthCheckOptions, SecurityOptions};
 use boxlite::runtime::constants::images;
 use boxlite::runtime::options::{
-    BoxOptions, BoxliteOptions, NetworkConfig, NetworkMode, NetworkSpec, PortProtocol, PortSpec,
-    RootfsSpec, Secret, VolumeSpec,
+    BoxOptions, BoxliteOptions, ImageRegistry, ImageRegistryAuth, NetworkConfig, NetworkMode,
+    NetworkSpec, PortProtocol, PortSpec, RegistryTransport, RootfsSpec, Secret, VolumeSpec,
 };
+use napi::bindgen_prelude::Error;
 use napi_derive::napi;
 
 use crate::advanced_options::JsSecurityOptions;
@@ -60,21 +61,108 @@ pub struct JsOptions {
     /// Tried in order; first successful pull wins.
     /// Example: ["ghcr.io", "quay.io", "docker.io"]
     pub image_registries: Option<Vec<String>>,
+    /// Per-registry transport, TLS, search, and auth configuration.
+    pub registry_hosts: Option<Vec<JsImageRegistry>>,
 }
 
-impl From<JsOptions> for BoxliteOptions {
-    fn from(js_opts: JsOptions) -> Self {
-        let mut config = BoxliteOptions::default();
+pub(crate) fn js_options_into_core(js_opts: JsOptions) -> napi::Result<BoxliteOptions> {
+    let mut config = BoxliteOptions::default();
 
-        if let Some(home_dir) = js_opts.home_dir {
-            config.home_dir = PathBuf::from(home_dir);
-        }
+    if let Some(home_dir) = js_opts.home_dir {
+        config.home_dir = PathBuf::from(home_dir);
+    }
 
-        if let Some(registries) = js_opts.image_registries {
-            config.image_registries = registries;
-        }
+    if let Some(registries) = js_opts.image_registries {
+        config.image_registries = registries;
+    }
 
-        config
+    if let Some(registry_hosts) = js_opts.registry_hosts {
+        config.registry_hosts = registry_hosts
+            .into_iter()
+            .map(js_image_registry_into_core)
+            .collect::<napi::Result<Vec<_>>>()?;
+    }
+
+    Ok(config)
+}
+
+/// Authentication for an OCI registry host.
+#[napi(object)]
+#[derive(Clone, Debug)]
+pub struct JsImageRegistryAuth {
+    pub username: Option<String>,
+    pub password: Option<String>,
+    pub bearer_token: Option<String>,
+}
+
+/// Registry host configuration for OCI image pulls.
+#[napi(object)]
+#[derive(Clone, Debug)]
+pub struct JsImageRegistry {
+    /// Registry host name, optionally including a port. Do not include a URL scheme.
+    pub host: String,
+    /// "https" or "http". Defaults to "https".
+    pub transport: Option<String>,
+    /// Disable TLS certificate and hostname verification for HTTPS registries.
+    pub skip_verify: Option<bool>,
+    /// Include this host when resolving unqualified image references.
+    pub search: Option<bool>,
+    /// Authentication credentials for this registry.
+    pub auth: Option<JsImageRegistryAuth>,
+}
+
+fn js_image_registry_into_core(registry: JsImageRegistry) -> napi::Result<ImageRegistry> {
+    validate_registry_host(&registry.host)?;
+
+    let transport = parse_registry_transport(registry.transport.as_deref().unwrap_or("https"))?;
+    let auth = registry
+        .auth
+        .map(js_registry_auth_into_core)
+        .transpose()?
+        .unwrap_or_default();
+
+    Ok(ImageRegistry {
+        host: registry.host,
+        transport,
+        skip_verify: registry.skip_verify.unwrap_or(false),
+        search: registry.search.unwrap_or(false),
+        auth,
+    })
+}
+
+fn js_registry_auth_into_core(auth: JsImageRegistryAuth) -> napi::Result<ImageRegistryAuth> {
+    if let Some(token) = auth.bearer_token {
+        return Ok(ImageRegistryAuth::Bearer { token });
+    }
+
+    match (auth.username, auth.password) {
+        (None, None) => Ok(ImageRegistryAuth::Anonymous),
+        (Some(username), Some(password)) => Ok(ImageRegistryAuth::Basic { username, password }),
+        _ => Err(Error::from_reason(
+            "registry username and password must be provided together",
+        )),
+    }
+}
+
+fn validate_registry_host(host: &str) -> napi::Result<()> {
+    if host.trim().is_empty() {
+        return Err(Error::from_reason("image registry host is required"));
+    }
+    if host.contains("://") || host.contains('/') {
+        return Err(Error::from_reason(format!(
+            "image registry host must be host[:port], not a URL: {host}"
+        )));
+    }
+    Ok(())
+}
+
+fn parse_registry_transport(transport: &str) -> napi::Result<RegistryTransport> {
+    match transport {
+        "" | "https" => Ok(RegistryTransport::Https),
+        "http" => Ok(RegistryTransport::Http),
+        _ => Err(Error::from_reason(format!(
+            "unsupported registry transport: {transport}"
+        ))),
     }
 }
 

@@ -8,7 +8,7 @@ use crate::box_handle::JsBox;
 use crate::images::JsImageHandle;
 use crate::info::JsBoxInfo;
 use crate::metrics::JsRuntimeMetrics;
-use crate::options::{JsBoxOptions, JsBoxliteRestOptions, JsOptions};
+use crate::options::{JsBoxOptions, JsBoxliteRestOptions, JsOptions, js_options_into_core};
 use crate::util::map_err;
 
 /// BoxLite runtime instance.
@@ -34,7 +34,7 @@ impl JsBoxlite {
     /// ```
     #[napi(constructor)]
     pub fn new(options: JsOptions) -> Result<Self> {
-        let runtime = BoxliteRuntime::new(options.into()).map_err(map_err)?;
+        let runtime = BoxliteRuntime::new(js_options_into_core(options)?).map_err(map_err)?;
 
         Ok(Self {
             runtime: Arc::new(runtime),
@@ -73,7 +73,7 @@ impl JsBoxlite {
     /// ```
     #[napi]
     pub fn init_default(options: JsOptions) -> Result<()> {
-        BoxliteRuntime::init_default_runtime(options.into()).map_err(map_err)
+        BoxliteRuntime::init_default_runtime(js_options_into_core(options)?).map_err(map_err)
     }
 
     /// Create a runtime that connects to a remote BoxLite REST backend.

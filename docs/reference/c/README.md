@@ -102,7 +102,7 @@ int main() {
     CBoxliteError error = {0};
 
     // Create runtime
-    if (boxlite_runtime_new(NULL, NULL, 0, &runtime, &error) != Ok) {
+    if (boxlite_runtime_new(NULL, NULL, 0, NULL, 0, &runtime, &error) != Ok) {
         fprintf(stderr, "Error %d: %s\n", error.code, error.message);
         boxlite_error_free(&error);
         return 1;
@@ -419,10 +419,27 @@ Returns static string (do not free). Example: `"0.5.7"`.
 Create a new runtime instance.
 
 ```c
+typedef enum BoxliteRegistryTransport {
+    BoxliteRegistryTransportHttps = 0,
+    BoxliteRegistryTransportHttp = 1,
+} BoxliteRegistryTransport;
+
+typedef struct BoxliteImageRegistry {
+    const char* host;
+    BoxliteRegistryTransport transport;
+    int skip_verify;
+    int search;
+    const char* username;
+    const char* password;
+    const char* bearer_token;
+} BoxliteImageRegistry;
+
 BoxliteErrorCode boxlite_runtime_new(
     const char* home_dir,
     const char* const* registries,
     int registries_count,
+    const BoxliteImageRegistry* registry_hosts,
+    int registry_hosts_count,
     CBoxliteRuntime** out_runtime,
     CBoxliteError* out_error
 );
@@ -435,6 +452,8 @@ BoxliteErrorCode boxlite_runtime_new(
 | `home_dir` | `const char*` | Path to BoxLite home. `NULL` = default (`~/.boxlite`) |
 | `registries` | `const char* const*` | Optional array of registry hostnames. `NULL` = default registries |
 | `registries_count` | `int` | Number of entries in `registries` |
+| `registry_hosts` | `const BoxliteImageRegistry*` | Optional per-registry transport, TLS, search, and auth settings |
+| `registry_hosts_count` | `int` | Number of entries in `registry_hosts` |
 | `out_runtime` | `CBoxliteRuntime**` | Output: runtime handle |
 | `out_error` | `CBoxliteError*` | Output: error information |
 
@@ -445,7 +464,7 @@ CBoxliteRuntime* runtime = NULL;
 CBoxliteError error = {0};
 
 // Default configuration
-if (boxlite_runtime_new(NULL, NULL, 0, &runtime, &error) != Ok) {
+if (boxlite_runtime_new(NULL, NULL, 0, NULL, 0, &runtime, &error) != Ok) {
     fprintf(stderr, "Error: %s\n", error.message);
     boxlite_error_free(&error);
     return 1;
@@ -453,7 +472,21 @@ if (boxlite_runtime_new(NULL, NULL, 0, &runtime, &error) != Ok) {
 
 // Custom registries
 const char* registries[] = {"ghcr.io", "docker.io"};
-if (boxlite_runtime_new("/var/lib/boxlite", registries, 2, &runtime, &error) != Ok) {
+if (boxlite_runtime_new("/var/lib/boxlite", registries, 2, NULL, 0, &runtime, &error) != Ok) {
+    // Handle error
+}
+
+// Registry host config with basic auth
+BoxliteImageRegistry registry_hosts[] = {{
+    .host = "registry.example.com",
+    .transport = BoxliteRegistryTransportHttps,
+    .skip_verify = 0,
+    .search = 0,
+    .username = "user",
+    .password = "password",
+    .bearer_token = NULL,
+}};
+if (boxlite_runtime_new(NULL, NULL, 0, registry_hosts, 1, &runtime, &error) != Ok) {
     // Handle error
 }
 ```
@@ -917,7 +950,7 @@ void* thread_func(void* arg) {
 }
 
 CBoxliteRuntime* runtime;
-boxlite_runtime_new(NULL, NULL, 0, &runtime, &error);
+boxlite_runtime_new(NULL, NULL, 0, NULL, 0, &runtime, &error);
 
 pthread_t threads[4];
 for (int i = 0; i < 4; i++) {
@@ -958,7 +991,7 @@ if (!runtime) {
 ```c
 CBoxliteRuntime* runtime = NULL;
 CBoxliteError error = {0};
-BoxliteErrorCode code = boxlite_runtime_new(NULL, NULL, 0, &runtime, &error);
+BoxliteErrorCode code = boxlite_runtime_new(NULL, NULL, 0, NULL, 0, &runtime, &error);
 if (code != Ok) {
     fprintf(stderr, "Error %d: %s\n", error.code, error.message);
     boxlite_error_free(&error);

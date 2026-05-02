@@ -56,12 +56,33 @@ pub fn create_tokio_runtime() -> Result<Arc<TokioRuntime>, String> {
 use std::os::raw::{c_char, c_int};
 
 use boxlite::BoxliteError;
-use boxlite::runtime::options::BoxliteOptions;
+use boxlite::runtime::options::{
+    BoxliteOptions, ImageRegistry, ImageRegistryAuth, RegistryTransport,
+};
 
 use crate::error::{BoxliteErrorCode, FFIError, error_to_code, null_pointer_error, write_error};
 use crate::images::ImageHandle;
 use crate::util::c_str_to_string;
 use crate::{CBoxliteError, CBoxliteImageHandle, CBoxliteRuntime};
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BoxliteRegistryTransport {
+    BoxliteRegistryTransportHttps = 0,
+    BoxliteRegistryTransportHttp = 1,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct BoxliteImageRegistry {
+    pub host: *const c_char,
+    pub transport: BoxliteRegistryTransport,
+    pub skip_verify: c_int,
+    pub search: c_int,
+    pub username: *const c_char,
+    pub password: *const c_char,
+    pub bearer_token: *const c_char,
+}
 
 #[unsafe(no_mangle)]
 pub extern "C" fn boxlite_version() -> *const c_char {
@@ -73,6 +94,8 @@ pub unsafe extern "C" fn boxlite_runtime_new(
     home_dir: *const c_char,
     registries: *const *const c_char,
     registries_count: c_int,
+    registry_hosts: *const BoxliteImageRegistry,
+    registry_hosts_count: c_int,
     out_runtime: *mut *mut CBoxliteRuntime,
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
@@ -80,6 +103,8 @@ pub unsafe extern "C" fn boxlite_runtime_new(
         home_dir,
         registries,
         registries_count,
+        registry_hosts,
+        registry_hosts_count,
         out_runtime,
         out_error,
     )
@@ -113,6 +138,8 @@ unsafe fn runtime_new(
     home_dir: *const c_char,
     registries: *const *const c_char,
     registries_count: c_int,
+    registry_hosts: *const BoxliteImageRegistry,
+    registry_hosts_count: c_int,
     out_runtime: *mut *mut RuntimeHandle,
     out_error: *mut FFIError,
 ) -> BoxliteErrorCode {
@@ -145,6 +172,15 @@ unsafe fn runtime_new(
         }
 
         options.image_registries = crate::util::parse_c_string_array(registries, registries_count);
+        options.registry_hosts =
+            match parse_image_registry_array(registry_hosts, registry_hosts_count) {
+                Ok(registry_hosts) => registry_hosts,
+                Err(e) => {
+                    let code = error_to_code(&e);
+                    write_error(out_error, e);
+                    return code;
+                }
+            };
 
         // Create runtime
         let runtime = match BoxliteRuntime::new(options) {
@@ -162,6 +198,84 @@ unsafe fn runtime_new(
             liveness: std::sync::Arc::new(RuntimeLiveness::new()),
         }));
         BoxliteErrorCode::Ok
+    }
+}
+
+unsafe fn parse_image_registry_array(
+    registry_hosts: *const BoxliteImageRegistry,
+    registry_hosts_count: c_int,
+) -> Result<Vec<ImageRegistry>, BoxliteError> {
+    if registry_hosts_count < 0 {
+        return Err(BoxliteError::InvalidArgument(
+            "registry_hosts_count must not be negative".to_string(),
+        ));
+    }
+    if registry_hosts_count == 0 {
+        return Ok(Vec::new());
+    }
+    if registry_hosts.is_null() {
+        return Err(BoxliteError::InvalidArgument(
+            "registry_hosts must not be null when registry_hosts_count is positive".to_string(),
+        ));
+    }
+
+    let mut parsed = Vec::with_capacity(registry_hosts_count as usize);
+    unsafe {
+        for idx in 0..registry_hosts_count {
+            let registry = &*registry_hosts.add(idx as usize);
+            let host = c_string_field(registry.host, "registry host")?;
+            let transport = match registry.transport {
+                BoxliteRegistryTransport::BoxliteRegistryTransportHttps => RegistryTransport::Https,
+                BoxliteRegistryTransport::BoxliteRegistryTransportHttp => RegistryTransport::Http,
+            };
+            let auth = registry_auth(registry)?;
+
+            parsed.push(ImageRegistry {
+                host,
+                transport,
+                skip_verify: registry.skip_verify != 0,
+                search: registry.search != 0,
+                auth,
+            });
+        }
+    }
+    Ok(parsed)
+}
+
+unsafe fn registry_auth(
+    registry: &BoxliteImageRegistry,
+) -> Result<ImageRegistryAuth, BoxliteError> {
+    unsafe {
+        if !registry.bearer_token.is_null() {
+            let token = c_string_field(registry.bearer_token, "registry bearer token")?;
+            if !token.is_empty() {
+                return Ok(ImageRegistryAuth::Bearer { token });
+            }
+        }
+
+        match (registry.username.is_null(), registry.password.is_null()) {
+            (true, true) => Ok(ImageRegistryAuth::Anonymous),
+            (false, false) => {
+                let username = c_string_field(registry.username, "registry username")?;
+                let password = c_string_field(registry.password, "registry password")?;
+                Ok(ImageRegistryAuth::Basic { username, password })
+            }
+            _ => Err(BoxliteError::InvalidArgument(
+                "registry username and password must be provided together".to_string(),
+            )),
+        }
+    }
+}
+
+unsafe fn c_string_field(value: *const c_char, field_name: &str) -> Result<String, BoxliteError> {
+    unsafe {
+        if value.is_null() {
+            return Err(BoxliteError::InvalidArgument(format!(
+                "{field_name} must not be null"
+            )));
+        }
+        c_str_to_string(value)
+            .map_err(|e| BoxliteError::InvalidArgument(format!("invalid {field_name}: {e}")))
     }
 }
 

@@ -19,7 +19,8 @@ use crate::images::{PyImageHandle, PyImageInfo, PyImagePullResult};
 use crate::info::{PyBoxInfo, PyBoxStateInfo, PyHealthState, PyHealthStatus};
 use crate::metrics::{PyBoxMetrics, PyRuntimeMetrics};
 use crate::options::{
-    PyBoxOptions, PyBoxliteRestOptions, PyCopyOptions, PyNetworkSpec, PyOptions, PySecret,
+    PyBoxOptions, PyBoxliteRestOptions, PyCopyOptions, PyImageRegistry, PyNetworkSpec, PyOptions,
+    PySecret,
 };
 use crate::runtime::PyBoxlite;
 use crate::snapshot_options::{PyCloneOptions, PyExportOptions, PySnapshotOptions};
@@ -29,6 +30,7 @@ use pyo3::prelude::*;
 #[pymodule(name = "boxlite")]
 fn boxlite_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyOptions>()?;
+    m.add_class::<PyImageRegistry>()?;
     m.add_class::<PyBoxOptions>()?;
     m.add_class::<PyNetworkSpec>()?;
     m.add_class::<PySecurityOptions>()?;

@@ -30,11 +30,32 @@ Create a JSON configuration file with your registry preferences:
     "ghcr.io",
     "quay.io",
     "docker.io"
+  ],
+  "registry_hosts": [
+    {
+      "host": "registry.local:5000",
+      "transport": "http",
+      "search": true
+    },
+    {
+      "host": "registry.example.com",
+      "transport": "https",
+      "skip_verify": true,
+      "auth": {
+        "type": "basic",
+        "username": "user",
+        "password": "password"
+      }
+    }
   ]
 }
 ```
 
 - `image_registries` (optional): List of registries to search for unqualified image references.
+- `registry_hosts` (optional): Per-registry settings for fully qualified pulls and, when `search` is true, unqualified image fallback.
+- `transport: "http"` enables a plain HTTP registry.
+- `skip_verify: true` disables TLS certificate and hostname verification for HTTPS registries.
+- `auth` can be `{ "type": "basic", "username": "...", "password": "..." }` or `{ "type": "bearer", "token": "..." }`.
 
 ### 2. Using the Configuration File
 
@@ -74,14 +95,26 @@ The SDKs are "pure" by design. They **do not** automatically load any configurat
 
 ### Python
 
-Pass `image_registries` to `boxlite.Options`.
+Pass `image_registries` and optional `registry_hosts` to `boxlite.Options`.
 
 ```python
 import boxlite
 
 # Configure a runtime to search ghcr.io first, then docker.io
 options = boxlite.Options(
-    image_registries=["ghcr.io", "docker.io"]
+    image_registries=["ghcr.io", "docker.io"],
+    registry_hosts=[
+        boxlite.ImageRegistry(
+            host="registry.example.com",
+            username="user",
+            password="password",
+        ),
+        boxlite.ImageRegistry(
+            host="registry.local:5000",
+            transport="http",
+            search=True,
+        ),
+    ],
 )
 runtime = boxlite.Boxlite(options)
 
@@ -94,14 +127,25 @@ async with boxlite.SimpleBox(image="alpine", runtime=runtime) as box:
 
 ### Node.js
 
-Pass `imageRegistries` to the `JsBoxlite` constructor.
+Pass `imageRegistries` and optional `registryHosts` to the `JsBoxlite` constructor.
 
 ```javascript
 import { JsBoxlite, SimpleBox } from '@boxlite-ai/boxlite';
 
 // Configure a runtime to search ghcr.io first, then docker.io
 const runtime = new JsBoxlite({
-  imageRegistries: ['ghcr.io', 'docker.io']
+  imageRegistries: ['ghcr.io', 'docker.io'],
+  registryHosts: [
+    {
+      host: 'registry.example.com',
+      auth: { username: 'user', password: 'password' }
+    },
+    {
+      host: 'registry.local:5000',
+      transport: 'http',
+      search: true
+    }
+  ]
 });
 
 // Pass the custom runtime to the box constructor
@@ -128,7 +172,19 @@ def load_boxlite_options(config_path: str):
         config = json.load(f)
 
     return boxlite.Options(
-        image_registries=config.get("image_registries", [])
+        image_registries=config.get("image_registries", []),
+        registry_hosts=[
+            boxlite.ImageRegistry(
+                host=entry["host"],
+                transport=entry.get("transport", "https"),
+                skip_verify=entry.get("skip_verify", False),
+                search=entry.get("search", False),
+                username=entry.get("auth", {}).get("username"),
+                password=entry.get("auth", {}).get("password"),
+                bearer_token=entry.get("auth", {}).get("token"),
+            )
+            for entry in config.get("registry_hosts", [])
+        ],
     )
 
 # Use it

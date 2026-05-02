@@ -58,7 +58,7 @@ void test_not_found_error() {
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-errors-notfound";
   BoxliteErrorCode code =
-      boxlite_runtime_new(temp_dir, NULL, 0, &runtime, &error);
+      boxlite_runtime_new(temp_dir, NULL, 0, NULL, 0, &runtime, &error);
   assert(code == Ok);
   assert(runtime != NULL);
 
@@ -140,7 +140,7 @@ void test_error_recovery() {
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-errors-recovery";
   BoxliteErrorCode code =
-      boxlite_runtime_new(temp_dir, NULL, 0, &runtime, &error);
+      boxlite_runtime_new(temp_dir, NULL, 0, NULL, 0, &runtime, &error);
   assert(code == Ok);
   assert(runtime != NULL);
 
@@ -182,7 +182,7 @@ void test_multiple_errors() {
 
   // Error 2: NotFound
   CBoxliteRuntime *runtime2 = NULL;
-  code = boxlite_runtime_new(temp_dir, NULL, 0, &runtime2, &error);
+  code = boxlite_runtime_new(temp_dir, NULL, 0, NULL, 0, &runtime2, &error);
   assert(code == Ok);
   assert(runtime2 != NULL);
   CBoxHandle *box = NULL;

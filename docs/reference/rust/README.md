@@ -60,6 +60,7 @@ Main entry point for creating and managing boxes.
 
 ```rust
 use boxlite::runtime::{BoxliteRuntime, BoxliteOptions, BoxOptions};
+use boxlite::ImageRegistry;
 
 // Create with default options
 let runtime = BoxliteRuntime::with_defaults()?;
@@ -68,6 +69,9 @@ let runtime = BoxliteRuntime::with_defaults()?;
 let options = BoxliteOptions {
     home_dir: PathBuf::from("/custom/boxlite"),
     image_registries: vec!["ghcr.io/myorg".to_string()],
+    registry_hosts: vec![
+        ImageRegistry::https("registry.example.com").with_basic_auth("user", "password"),
+    ],
 };
 let runtime = BoxliteRuntime::new(options)?;
 
@@ -131,13 +135,29 @@ pub struct BoxliteOptions {
     /// Registries to search for unqualified image references
     /// Empty list uses docker.io as implicit default
     pub image_registries: Vec<String>,
+
+    /// Per-registry transport, TLS, search, and auth configuration
+    pub registry_hosts: Vec<ImageRegistry>,
+}
+
+pub struct ImageRegistry {
+    /// Registry host name, optionally including a port. Do not include a URL scheme.
+    pub host: String,
+    /// `Https` by default; use `Http` for plain HTTP registries.
+    pub transport: RegistryTransport,
+    /// Disable TLS certificate and hostname verification for HTTPS registries.
+    pub skip_verify: bool,
+    /// Include this host when resolving unqualified image references.
+    pub search: bool,
+    /// Anonymous, basic, or bearer token authentication.
+    pub auth: ImageRegistryAuth,
 }
 ```
 
 #### Example
 
 ```rust
-use boxlite::runtime::BoxliteOptions;
+use boxlite::{BoxliteOptions, ImageRegistry};
 use std::path::PathBuf;
 
 let options = BoxliteOptions {
@@ -146,8 +166,15 @@ let options = BoxliteOptions {
         "ghcr.io/myorg".to_string(),
         "docker.io".to_string(),
     ],
+    registry_hosts: vec![
+        ImageRegistry::http("registry.local:5000").with_search(true),
+        ImageRegistry::https("registry.example.com")
+            .with_skip_verify(true)
+            .with_basic_auth("user", "password"),
+    ],
 };
-// "alpine" → tries ghcr.io/myorg/alpine, then docker.io/alpine
+// "alpine" tries ghcr.io/myorg/alpine, then docker.io/alpine,
+// then registry.local:5000/library/alpine.
 ```
 
 ---

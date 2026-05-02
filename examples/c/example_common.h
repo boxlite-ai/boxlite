@@ -12,7 +12,7 @@ static void print_error(const char *context, const CBoxliteError *error) {
 static CBoxliteRuntime *create_runtime_or_exit(void) {
   CBoxliteRuntime *runtime = NULL;
   CBoxliteError error = {0};
-  BoxliteErrorCode code = boxlite_runtime_new(NULL, NULL, 0, &runtime, &error);
+  BoxliteErrorCode code = boxlite_runtime_new(NULL, NULL, 0, NULL, 0, &runtime, &error);
   if (code != Ok) {
     print_error("runtime creation", &error);
     boxlite_error_free(&error);

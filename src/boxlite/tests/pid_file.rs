@@ -33,6 +33,7 @@ async fn pid_file_created_on_box_start() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -56,6 +57,7 @@ async fn pid_file_contains_correct_pid() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -93,6 +95,7 @@ async fn pid_file_deleted_on_normal_stop() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -117,6 +120,7 @@ async fn pid_matches_box_info() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -150,6 +154,7 @@ async fn pid_available_immediately_after_run() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -186,6 +191,7 @@ async fn pid_file_path_is_correct() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -218,6 +224,7 @@ async fn force_remove_deletes_pid_file() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -241,6 +248,7 @@ async fn box_directory_cleanup_includes_pid_file() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -267,6 +275,7 @@ async fn is_same_process_validates_boxlite_shim() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
+        registry_hosts: vec![],
     })
     .expect("create runtime");
 
