@@ -6,6 +6,13 @@ import pytest
 
 import boxlite
 
+# Skip when the unit-test job is running without a freshly built PyO3 extension.
+if not hasattr(boxlite, "ImageRegistry"):
+    pytest.skip(
+        "boxlite.ImageRegistry not available (rebuild SDK with: make dev:python)",
+        allow_module_level=True,
+    )
+
 
 def test_options_accepts_structured_image_registries():
     registries = [
