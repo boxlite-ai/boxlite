@@ -55,7 +55,7 @@ runtime = Boxlite(Options(home_dir="/custom/path"))
 
 # Registry host config with auth
 runtime = Boxlite(Options(
-    registry_hosts=[
+    image_registries=[
         ImageRegistry(
             host="registry.example.com",
             username="user",
@@ -81,8 +81,7 @@ Runtime configuration options.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `home_dir` | `str` | `~/.boxlite` | Base directory for runtime data |
-| `image_registries` | `List[str]` | `[]` | Custom image registries for unqualified references |
-| `registry_hosts` | `List[ImageRegistry]` | `[]` | Per-registry transport, TLS, search, and auth configuration |
+| `image_registries` | `List[ImageRegistry]` | `[]` | Registry transport, TLS, search, and auth configuration |
 
 #### `boxlite.ImageRegistry`
 

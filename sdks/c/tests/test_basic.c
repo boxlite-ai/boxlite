@@ -24,8 +24,8 @@ void test_runtime_creation() {
 
   CBoxliteRuntime *runtime = NULL;
   CBoxliteError error = {0};
-  BoxliteErrorCode code = boxlite_runtime_new(
-      "/tmp/boxlite-test-basic-create", NULL, 0, NULL, 0, &runtime, &error);
+  BoxliteErrorCode code = boxlite_runtime_new("/tmp/boxlite-test-basic-create",
+                                              NULL, 0, &runtime, &error);
 
   assert(code == Ok);
   assert(runtime != NULL);
@@ -43,7 +43,7 @@ void test_runtime_with_custom_home() {
   const char *home_dir = "/tmp/boxlite-test";
 
   BoxliteErrorCode code =
-      boxlite_runtime_new(home_dir, NULL, 0, NULL, 0, &runtime, &error);
+      boxlite_runtime_new(home_dir, NULL, 0, &runtime, &error);
 
   assert(code == Ok);
   assert(runtime != NULL);
@@ -57,11 +57,25 @@ void test_runtime_with_registries() {
 
   CBoxliteRuntime *runtime = NULL;
   CBoxliteError error = {0};
-  const char *const registries[] = {"ghcr.io", "docker.io"};
+  const BoxliteImageRegistry registries[] = {
+      {.host = "ghcr.io",
+       .transport = BoxliteRegistryTransportHttps,
+       .skip_verify = 0,
+       .search = 1,
+       .username = NULL,
+       .password = NULL,
+       .bearer_token = NULL},
+      {.host = "docker.io",
+       .transport = BoxliteRegistryTransportHttps,
+       .skip_verify = 0,
+       .search = 1,
+       .username = NULL,
+       .password = NULL,
+       .bearer_token = NULL},
+  };
 
-  BoxliteErrorCode code =
-      boxlite_runtime_new("/tmp/boxlite-test-basic-registries", registries, 2,
-                          NULL, 0, &runtime, &error);
+  BoxliteErrorCode code = boxlite_runtime_new(
+      "/tmp/boxlite-test-basic-registries", registries, 2, &runtime, &error);
 
   assert(code == Ok);
   assert(runtime != NULL);
@@ -76,7 +90,7 @@ void test_runtime_shutdown() {
   CBoxliteRuntime *runtime = NULL;
   CBoxliteError error = {0};
   BoxliteErrorCode code = boxlite_runtime_new(
-      "/tmp/boxlite-test-basic-shutdown", NULL, 0, NULL, 0, &runtime, &error);
+      "/tmp/boxlite-test-basic-shutdown", NULL, 0, &runtime, &error);
   assert(code == Ok);
   assert(runtime != NULL);
 

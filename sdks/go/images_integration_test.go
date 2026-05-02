@@ -23,11 +23,11 @@ func newImageTestRuntime(t *testing.T) *Runtime {
 
 	rt, err := NewRuntime(
 		WithHomeDir(homeDir),
-		WithRegistries(
-			"docker.m.daocloud.io",
-			"docker.xuanyuan.me",
-			"docker.1ms.run",
-			"docker.io",
+		WithImageRegistries(
+			ImageRegistry{Host: "docker.m.daocloud.io", Search: true},
+			ImageRegistry{Host: "docker.xuanyuan.me", Search: true},
+			ImageRegistry{Host: "docker.1ms.run", Search: true},
+			ImageRegistry{Host: "docker.io", Search: true},
 		),
 	)
 	if err != nil {

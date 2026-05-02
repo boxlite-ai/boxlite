@@ -27,11 +27,18 @@ Create a JSON configuration file with your registry preferences:
 ```json
 {
   "image_registries": [
-    "ghcr.io",
-    "quay.io",
-    "docker.io"
-  ],
-  "registry_hosts": [
+    {
+      "host": "ghcr.io",
+      "search": true
+    },
+    {
+      "host": "quay.io",
+      "search": true
+    },
+    {
+      "host": "docker.io",
+      "search": true
+    },
     {
       "host": "registry.local:5000",
       "transport": "http",
@@ -51,8 +58,7 @@ Create a JSON configuration file with your registry preferences:
 }
 ```
 
-- `image_registries` (optional): List of registries to search for unqualified image references.
-- `registry_hosts` (optional): Per-registry settings for fully qualified pulls and, when `search` is true, unqualified image fallback.
+- `image_registries` (optional): Per-registry settings for fully qualified pulls and, when `search` is true, unqualified image fallback.
 - `transport: "http"` enables a plain HTTP registry.
 - `skip_verify: true` disables TLS certificate and hostname verification for HTTPS registries.
 - `auth` can be `{ "type": "basic", "username": "...", "password": "..." }` or `{ "type": "bearer", "token": "..." }`.
@@ -75,7 +81,7 @@ You can use the global `--registry` flag with `boxlite run` or `boxlite create`.
 These flags are **prepended** to your configured list. This allows you to force a specific registry to be checked first for a single command without editing your config file.
 
 ```bash
-# Assume config.json contains ["ghcr.io", "docker.io"]
+# Assume config.json contains image_registries entries for ghcr.io and docker.io
 
 # This command will search:
 # 1. my.private.registry.com (from flag)
@@ -95,15 +101,16 @@ The SDKs are "pure" by design. They **do not** automatically load any configurat
 
 ### Python
 
-Pass `image_registries` and optional `registry_hosts` to `boxlite.Options`.
+Pass structured `image_registries` to `boxlite.Options`.
 
 ```python
 import boxlite
 
 # Configure a runtime to search ghcr.io first, then docker.io
 options = boxlite.Options(
-    image_registries=["ghcr.io", "docker.io"],
-    registry_hosts=[
+    image_registries=[
+        boxlite.ImageRegistry(host="ghcr.io", search=True),
+        boxlite.ImageRegistry(host="docker.io", search=True),
         boxlite.ImageRegistry(
             host="registry.example.com",
             username="user",
@@ -127,15 +134,16 @@ async with boxlite.SimpleBox(image="alpine", runtime=runtime) as box:
 
 ### Node.js
 
-Pass `imageRegistries` and optional `registryHosts` to the `JsBoxlite` constructor.
+Pass structured `imageRegistries` to the `JsBoxlite` constructor.
 
 ```javascript
 import { JsBoxlite, SimpleBox } from '@boxlite-ai/boxlite';
 
 // Configure a runtime to search ghcr.io first, then docker.io
 const runtime = new JsBoxlite({
-  imageRegistries: ['ghcr.io', 'docker.io'],
-  registryHosts: [
+  imageRegistries: [
+    { host: 'ghcr.io', search: true },
+    { host: 'docker.io', search: true },
     {
       host: 'registry.example.com',
       auth: { username: 'user', password: 'password' }
@@ -172,8 +180,7 @@ def load_boxlite_options(config_path: str):
         config = json.load(f)
 
     return boxlite.Options(
-        image_registries=config.get("image_registries", []),
-        registry_hosts=[
+        image_registries=[
             boxlite.ImageRegistry(
                 host=entry["host"],
                 transport=entry.get("transport", "https"),
@@ -183,7 +190,7 @@ def load_boxlite_options(config_path: str):
                 password=entry.get("auth", {}).get("password"),
                 bearer_token=entry.get("auth", {}).get("token"),
             )
-            for entry in config.get("registry_hosts", [])
+            for entry in config.get("image_registries", [])
         ],
     )
 

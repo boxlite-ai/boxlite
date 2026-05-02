@@ -14,10 +14,10 @@ import { getJsBoxlite } from "../lib/native.js";
 // 104-char SUN_LEN limit. Same pattern as test-utils/PerTestBoxHome.
 const testHome = mkdtempSync("/tmp/boxlite-test-node-");
 const testRegistries = [
-  "docker.m.daocloud.io",
-  "docker.xuanyuan.me",
-  "docker.1ms.run",
-  "docker.io",
+  { host: "docker.m.daocloud.io", search: true },
+  { host: "docker.xuanyuan.me", search: true },
+  { host: "docker.1ms.run", search: true },
+  { host: "docker.io", search: true },
 ];
 
 const Boxlite = getJsBoxlite();

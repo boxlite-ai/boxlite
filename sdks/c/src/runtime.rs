@@ -92,19 +92,15 @@ pub extern "C" fn boxlite_version() -> *const c_char {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_runtime_new(
     home_dir: *const c_char,
-    registries: *const *const c_char,
-    registries_count: c_int,
-    registry_hosts: *const BoxliteImageRegistry,
-    registry_hosts_count: c_int,
+    image_registries: *const BoxliteImageRegistry,
+    image_registries_count: c_int,
     out_runtime: *mut *mut CBoxliteRuntime,
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
     runtime_new(
         home_dir,
-        registries,
-        registries_count,
-        registry_hosts,
-        registry_hosts_count,
+        image_registries,
+        image_registries_count,
         out_runtime,
         out_error,
     )
@@ -136,10 +132,8 @@ pub unsafe extern "C" fn boxlite_runtime_free(runtime: *mut CBoxliteRuntime) {
 
 unsafe fn runtime_new(
     home_dir: *const c_char,
-    registries: *const *const c_char,
-    registries_count: c_int,
-    registry_hosts: *const BoxliteImageRegistry,
-    registry_hosts_count: c_int,
+    image_registries: *const BoxliteImageRegistry,
+    image_registries_count: c_int,
     out_runtime: *mut *mut RuntimeHandle,
     out_error: *mut FFIError,
 ) -> BoxliteErrorCode {
@@ -171,10 +165,9 @@ unsafe fn runtime_new(
             }
         }
 
-        options.image_registries = crate::util::parse_c_string_array(registries, registries_count);
-        options.registry_hosts =
-            match parse_image_registry_array(registry_hosts, registry_hosts_count) {
-                Ok(registry_hosts) => registry_hosts,
+        options.image_registries =
+            match parse_image_registry_array(image_registries, image_registries_count) {
+                Ok(image_registries) => image_registries,
                 Err(e) => {
                     let code = error_to_code(&e);
                     write_error(out_error, e);
@@ -202,27 +195,27 @@ unsafe fn runtime_new(
 }
 
 unsafe fn parse_image_registry_array(
-    registry_hosts: *const BoxliteImageRegistry,
-    registry_hosts_count: c_int,
+    image_registries: *const BoxliteImageRegistry,
+    image_registries_count: c_int,
 ) -> Result<Vec<ImageRegistry>, BoxliteError> {
-    if registry_hosts_count < 0 {
+    if image_registries_count < 0 {
         return Err(BoxliteError::InvalidArgument(
-            "registry_hosts_count must not be negative".to_string(),
+            "image_registries_count must not be negative".to_string(),
         ));
     }
-    if registry_hosts_count == 0 {
+    if image_registries_count == 0 {
         return Ok(Vec::new());
     }
-    if registry_hosts.is_null() {
+    if image_registries.is_null() {
         return Err(BoxliteError::InvalidArgument(
-            "registry_hosts must not be null when registry_hosts_count is positive".to_string(),
+            "image_registries must not be null when image_registries_count is positive".to_string(),
         ));
     }
 
-    let mut parsed = Vec::with_capacity(registry_hosts_count as usize);
+    let mut parsed = Vec::with_capacity(image_registries_count as usize);
     unsafe {
-        for idx in 0..registry_hosts_count {
-            let registry = &*registry_hosts.add(idx as usize);
+        for idx in 0..image_registries_count {
+            let registry = &*image_registries.add(idx as usize);
             let host = c_string_field(registry.host, "registry host")?;
             let transport = match registry.transport {
                 BoxliteRegistryTransport::BoxliteRegistryTransportHttps => RegistryTransport::Https,

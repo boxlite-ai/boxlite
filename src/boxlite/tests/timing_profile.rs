@@ -45,7 +45,6 @@ async fn boot_timing_profile() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -180,7 +179,6 @@ async fn boot_timing_profile_no_jailer() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 

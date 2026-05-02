@@ -3,7 +3,9 @@
 //! subcommands, and flag definitions.
 
 use boxlite::runtime::options::{PortProtocol, PortSpec, VolumeSpec};
-use boxlite::{BoxCommand, BoxOptions, BoxliteOptions, BoxliteRestOptions, BoxliteRuntime};
+use boxlite::{
+    BoxCommand, BoxOptions, BoxliteOptions, BoxliteRestOptions, BoxliteRuntime, ImageRegistry,
+};
 use clap::{Args, Command, Parser, Subcommand, ValueEnum};
 use clap_complete::shells::{Bash, Fish, Zsh};
 use std::io::{IsTerminal, Write};
@@ -173,7 +175,7 @@ impl GlobalFlags {
             options.image_registries = self
                 .registry
                 .iter()
-                .cloned()
+                .map(|host| ImageRegistry::https(host).with_search(true))
                 .chain(options.image_registries)
                 .collect();
         }

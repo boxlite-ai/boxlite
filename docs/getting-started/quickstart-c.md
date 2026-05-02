@@ -132,7 +132,7 @@ int main() {
     CBoxliteError error = {0};
 
     // Create runtime
-    if (boxlite_runtime_new(NULL, NULL, 0, NULL, 0, &runtime, &error) != Ok) {
+    if (boxlite_runtime_new(NULL, NULL, 0, &runtime, &error) != Ok) {
         fprintf(stderr, "Runtime error: %s\n", error.message);
         boxlite_error_free(&error);
         return 1;

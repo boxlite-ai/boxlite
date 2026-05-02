@@ -25,7 +25,6 @@ async fn test_wait_behavior_on_box_stop() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
     let handle = runtime.create(common::alpine_opts(), None).await.unwrap();
@@ -101,7 +100,6 @@ async fn test_wait_behavior_on_runtime_shutdown() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
     let handle = runtime.create(common::alpine_opts(), None).await.unwrap();
@@ -175,7 +173,6 @@ async fn test_stdout_stream_on_box_stop() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
     let handle = runtime.create(common::alpine_opts(), None).await.unwrap();
@@ -235,7 +232,6 @@ async fn test_exec_on_stopped_box() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
     let handle = runtime.create(common::alpine_opts(), None).await.unwrap();
@@ -293,7 +289,6 @@ async fn test_existing_execution_after_box_stop() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
     let handle = runtime.create(common::alpine_opts(), None).await.unwrap();
@@ -335,7 +330,6 @@ async fn test_wait_timing_after_stop() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
     let handle = runtime.create(common::alpine_opts(), None).await.unwrap();
@@ -395,7 +389,6 @@ async fn test_multiple_executions_on_box_stop() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
     let handle = runtime.create(common::alpine_opts(), None).await.unwrap();
@@ -486,7 +479,6 @@ async fn test_run_command_returns_stopped_error() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
     let handle = runtime.create(common::alpine_opts(), None).await.unwrap();
@@ -533,7 +525,6 @@ async fn test_start_returns_stopped_error() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
     let handle = runtime.create(common::alpine_opts(), None).await.unwrap();
@@ -572,7 +563,6 @@ async fn test_metrics_returns_stopped_error() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
     let handle = runtime.create(common::alpine_opts(), None).await.unwrap();
@@ -611,7 +601,6 @@ async fn test_create_after_shutdown_returns_stopped() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -647,7 +636,6 @@ async fn test_wait_returns_promptly_on_stop() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
     let handle = runtime.create(common::alpine_opts(), None).await.unwrap();
@@ -712,7 +700,6 @@ async fn test_all_waits_return_on_stop() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
     let handle = runtime.create(common::alpine_opts(), None).await.unwrap();
@@ -795,7 +782,6 @@ async fn test_runtime_shutdown_stops_all_boxes() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -888,7 +874,6 @@ async fn test_exec_completes_then_shutdown_is_clean() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
     let handle = runtime.create(common::alpine_opts(), None).await.unwrap();
@@ -913,7 +898,6 @@ async fn test_sequential_exec_same_box() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
     let handle = runtime.create(common::alpine_opts(), None).await.unwrap();
@@ -947,7 +931,6 @@ async fn test_exec_exit_code_preserved() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
     let handle = runtime.create(common::alpine_opts(), None).await.unwrap();
@@ -980,7 +963,6 @@ async fn test_exec_then_shutdown_sequential() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
     let handle = runtime.create(common::alpine_opts(), None).await.unwrap();
@@ -1137,7 +1119,6 @@ fn create_test_runtime() -> (boxlite_test_utils::home::PerTestBoxHome, BoxliteRu
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
     (home, runtime)

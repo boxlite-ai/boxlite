@@ -125,7 +125,7 @@ runtime = boxlite.Boxlite(boxlite.Options(home_dir="/custom/path"))
 
 # Custom registry host with basic auth
 runtime = boxlite.Boxlite(boxlite.Options(
-    registry_hosts=[
+    image_registries=[
         boxlite.ImageRegistry(
             host="registry.example.com",
             username="user",
@@ -789,7 +789,7 @@ sudo usermod -aG kvm $USER
 **Solutions:**
 - Check internet connectivity
 - Verify image name and tag exist: `docker pull <image>`
-- For private images, pass `registry_hosts=[boxlite.ImageRegistry(...)]` when creating `boxlite.Options`
+- For private images, pass `image_registries=[boxlite.ImageRegistry(...)]` when creating `boxlite.Options`
 
 ### Performance Issues
 

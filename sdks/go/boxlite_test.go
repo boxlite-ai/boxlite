@@ -165,32 +165,35 @@ func TestBoxOptions(t *testing.T) {
 func TestRuntimeOptions(t *testing.T) {
 	cfg := &runtimeConfig{}
 	WithHomeDir("/custom")(cfg)
-	WithRegistries("ghcr.io", "docker.io")(cfg)
-	WithImageRegistry(ImageRegistry{
-		Host:       "registry.local:5000",
-		Transport:  RegistryTransportHTTP,
-		SkipVerify: true,
-		Search:     true,
-		Auth: ImageRegistryAuth{
-			Username: "alice",
-			Password: "secret",
+	WithImageRegistries(
+		ImageRegistry{Host: "ghcr.io", Search: true},
+		ImageRegistry{Host: "docker.io", Search: true},
+		ImageRegistry{
+			Host:       "registry.local:5000",
+			Transport:  RegistryTransportHTTP,
+			SkipVerify: true,
+			Search:     true,
+			Auth: ImageRegistryAuth{
+				Username: "alice",
+				Password: "secret",
+			},
 		},
-	})(cfg)
+	)(cfg)
 
 	if cfg.homeDir != "/custom" {
 		t.Errorf("homeDir: got %q", cfg.homeDir)
 	}
-	if len(cfg.registries) != 2 {
-		t.Errorf("registries: got %v", cfg.registries)
+	if len(cfg.imageRegistries) != 3 {
+		t.Fatalf("imageRegistries: got %v", cfg.imageRegistries)
 	}
-	if len(cfg.registryHosts) != 1 {
-		t.Fatalf("registryHosts: got %v", cfg.registryHosts)
+	if !cfg.imageRegistries[0].Search {
+		t.Errorf("image registry search: got false")
 	}
-	if cfg.registryHosts[0].Transport != RegistryTransportHTTP {
-		t.Errorf("registry transport: got %q", cfg.registryHosts[0].Transport)
+	if cfg.imageRegistries[2].Transport != RegistryTransportHTTP {
+		t.Errorf("registry transport: got %q", cfg.imageRegistries[2].Transport)
 	}
-	if cfg.registryHosts[0].Auth.Username != "alice" {
-		t.Errorf("registry auth username: got %q", cfg.registryHosts[0].Auth.Username)
+	if cfg.imageRegistries[2].Auth.Username != "alice" {
+		t.Errorf("registry auth username: got %q", cfg.imageRegistries[2].Auth.Username)
 	}
 }
 

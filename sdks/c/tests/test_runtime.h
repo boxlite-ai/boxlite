@@ -8,9 +8,35 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-static const char *const TEST_REGISTRIES[] = {
-    "docker.m.daocloud.io", "docker.xuanyuan.me", "docker.1ms.run",
-    "docker.io"};
+static const BoxliteImageRegistry TEST_REGISTRIES[] = {
+    {.host = "docker.m.daocloud.io",
+     .transport = BoxliteRegistryTransportHttps,
+     .skip_verify = 0,
+     .search = 1,
+     .username = NULL,
+     .password = NULL,
+     .bearer_token = NULL},
+    {.host = "docker.xuanyuan.me",
+     .transport = BoxliteRegistryTransportHttps,
+     .skip_verify = 0,
+     .search = 1,
+     .username = NULL,
+     .password = NULL,
+     .bearer_token = NULL},
+    {.host = "docker.1ms.run",
+     .transport = BoxliteRegistryTransportHttps,
+     .skip_verify = 0,
+     .search = 1,
+     .username = NULL,
+     .password = NULL,
+     .bearer_token = NULL},
+    {.host = "docker.io",
+     .transport = BoxliteRegistryTransportHttps,
+     .skip_verify = 0,
+     .search = 1,
+     .username = NULL,
+     .password = NULL,
+     .bearer_token = NULL}};
 
 static const int TEST_REGISTRIES_COUNT = 4;
 
@@ -35,7 +61,7 @@ static CBoxliteRuntime *new_test_runtime(const char *temp_dir,
                                          CBoxliteError *error) {
   CBoxliteRuntime *runtime = NULL;
   BoxliteErrorCode code = boxlite_runtime_new(
-      temp_dir, TEST_REGISTRIES, TEST_REGISTRIES_COUNT, NULL, 0, &runtime, error);
+      temp_dir, TEST_REGISTRIES, TEST_REGISTRIES_COUNT, &runtime, error);
   assert(code == Ok);
   assert(runtime != NULL);
   return runtime;

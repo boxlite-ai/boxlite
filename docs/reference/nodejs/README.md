@@ -85,7 +85,7 @@ Runtime configuration options.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `homeDir` | `string` | `~/.boxlite` | Base directory for runtime data |
-| `imageRegistries` | `string[]` | `[]` | Custom image registries for unqualified references |
+| `imageRegistries` | `JsImageRegistry[]` | `[]` | Registry transport, TLS, search, and auth configuration |
 
 ---
 

@@ -16,9 +16,8 @@ import (
 type RuntimeOption func(*runtimeConfig)
 
 type runtimeConfig struct {
-	homeDir       string
-	registries    []string
-	registryHosts []ImageRegistry
+	homeDir         string
+	imageRegistries []ImageRegistry
 }
 
 // RegistryTransport selects the transport used to contact an OCI registry.
@@ -50,19 +49,14 @@ func WithHomeDir(dir string) RuntimeOption {
 	return func(c *runtimeConfig) { c.homeDir = dir }
 }
 
-// WithRegistries sets the OCI registries to use for image pulls.
-func WithRegistries(registries ...string) RuntimeOption {
-	return func(c *runtimeConfig) { c.registries = registries }
-}
-
-// WithImageRegistry configures transport, TLS, search, and auth for a registry host.
+// WithImageRegistry configures transport, TLS, search, and auth for a registry.
 func WithImageRegistry(registry ImageRegistry) RuntimeOption {
-	return func(c *runtimeConfig) { c.registryHosts = append(c.registryHosts, registry) }
+	return func(c *runtimeConfig) { c.imageRegistries = append(c.imageRegistries, registry) }
 }
 
-// WithImageRegistries configures multiple registry hosts.
+// WithImageRegistries configures multiple image registries.
 func WithImageRegistries(registries ...ImageRegistry) RuntimeOption {
-	return func(c *runtimeConfig) { c.registryHosts = append(c.registryHosts, registries...) }
+	return func(c *runtimeConfig) { c.imageRegistries = append(c.imageRegistries, registries...) }
 }
 
 // BoxOption configures a Box.

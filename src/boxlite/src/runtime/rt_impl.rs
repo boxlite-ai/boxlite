@@ -172,19 +172,16 @@ impl RuntimeImpl {
             ))
         })?;
 
-        let image_manager = ImageManager::new(
-            layout.images_dir(),
-            db.clone(),
-            options.image_registries,
-            options.registry_hosts,
-        )
-        .map_err(|e| {
-            BoxliteError::Storage(format!(
-                "Failed to initialize image manager at {}: {}",
-                layout.images_dir().display(),
-                e
-            ))
-        })?;
+        let image_manager =
+            ImageManager::new(layout.images_dir(), db.clone(), options.image_registries).map_err(
+                |e| {
+                    BoxliteError::Storage(format!(
+                        "Failed to initialize image manager at {}: {}",
+                        layout.images_dir().display(),
+                        e
+                    ))
+                },
+            )?;
 
         let base_disk_store = crate::db::BaseDiskStore::new(db.clone());
         let base_disk_mgr =
@@ -1582,7 +1579,6 @@ mod tests {
         let options = BoxliteOptions {
             home_dir: temp_dir.path().to_path_buf(),
             image_registries: vec![],
-            registry_hosts: vec![],
         };
         let runtime = RuntimeImpl::new(options).expect("Failed to create runtime");
         (runtime, temp_dir)

@@ -57,12 +57,8 @@ impl From<JsHealthCheckOptions> for HealthCheckOptions {
 pub struct JsOptions {
     /// Home directory for BoxLite data (defaults to ~/.boxlite)
     pub home_dir: Option<String>,
-    /// Registries to search for unqualified image references.
-    /// Tried in order; first successful pull wins.
-    /// Example: ["ghcr.io", "quay.io", "docker.io"]
-    pub image_registries: Option<Vec<String>>,
-    /// Per-registry transport, TLS, search, and auth configuration.
-    pub registry_hosts: Option<Vec<JsImageRegistry>>,
+    /// Registry transport, TLS, search, and auth configuration.
+    pub image_registries: Option<Vec<JsImageRegistry>>,
 }
 
 pub(crate) fn js_options_into_core(js_opts: JsOptions) -> napi::Result<BoxliteOptions> {
@@ -72,12 +68,8 @@ pub(crate) fn js_options_into_core(js_opts: JsOptions) -> napi::Result<BoxliteOp
         config.home_dir = PathBuf::from(home_dir);
     }
 
-    if let Some(registries) = js_opts.image_registries {
-        config.image_registries = registries;
-    }
-
-    if let Some(registry_hosts) = js_opts.registry_hosts {
-        config.registry_hosts = registry_hosts
+    if let Some(image_registries) = js_opts.image_registries {
+        config.image_registries = image_registries
             .into_iter()
             .map(js_image_registry_into_core)
             .collect::<napi::Result<Vec<_>>>()?;

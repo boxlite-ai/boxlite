@@ -91,7 +91,6 @@ async fn test_cow_child_disks_exist_after_snapshot_create() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
     let litebox = create_stopped_box(&runtime).await;
@@ -145,7 +144,6 @@ async fn test_box_restartable_after_snapshot_create() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
     let litebox = create_stopped_box(&runtime).await;
@@ -185,7 +183,6 @@ async fn test_cow_child_disks_exist_after_snapshot_restore() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
     let litebox = create_stopped_box(&runtime).await;
@@ -228,7 +225,6 @@ async fn test_box_startable_after_snapshot_restore() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
     let litebox = create_stopped_box(&runtime).await;
@@ -284,7 +280,6 @@ async fn test_snapshot_list_returns_created_snapshot() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
     let litebox = create_stopped_box(&runtime).await;

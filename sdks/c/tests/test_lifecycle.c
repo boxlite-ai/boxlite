@@ -17,7 +17,7 @@ void test_create_box() {
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-lifecycle-create";
   BoxliteErrorCode code =
-      boxlite_runtime_new(temp_dir, NULL, 0, NULL, 0, &runtime, &error);
+      boxlite_runtime_new(temp_dir, NULL, 0, &runtime, &error);
   if (code != Ok) {
     printf("  ✗ Error creating runtime: code=%d, message=%s\n", error.code,
            error.message ? error.message : "(null)");
@@ -58,7 +58,7 @@ void test_start_stop_restart() {
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-lifecycle-restart";
   BoxliteErrorCode code =
-      boxlite_runtime_new(temp_dir, NULL, 0, NULL, 0, &runtime, &error);
+      boxlite_runtime_new(temp_dir, NULL, 0, &runtime, &error);
   assert(code == Ok);
   assert(runtime != NULL);
 
@@ -119,7 +119,7 @@ void test_remove_box() {
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-lifecycle-remove";
   BoxliteErrorCode code =
-      boxlite_runtime_new(temp_dir, NULL, 0, NULL, 0, &runtime, &error);
+      boxlite_runtime_new(temp_dir, NULL, 0, &runtime, &error);
   assert(code == Ok);
   assert(runtime != NULL);
 
@@ -157,7 +157,7 @@ void test_force_remove() {
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-lifecycle-force";
   BoxliteErrorCode code =
-      boxlite_runtime_new(temp_dir, NULL, 0, NULL, 0, &runtime, &error);
+      boxlite_runtime_new(temp_dir, NULL, 0, &runtime, &error);
   assert(code == Ok);
   assert(runtime != NULL);
 
@@ -182,7 +182,7 @@ void test_list_boxes() {
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-lifecycle-list";
   BoxliteErrorCode code =
-      boxlite_runtime_new(temp_dir, NULL, 0, NULL, 0, &runtime, &error);
+      boxlite_runtime_new(temp_dir, NULL, 0, &runtime, &error);
   assert(code == Ok);
   assert(runtime != NULL);
 
@@ -219,7 +219,7 @@ void test_get_box_info() {
   CBoxliteError error = {0};
   const char *temp_dir = "/tmp/boxlite-test-lifecycle-info";
   BoxliteErrorCode code =
-      boxlite_runtime_new(temp_dir, NULL, 0, NULL, 0, &runtime, &error);
+      boxlite_runtime_new(temp_dir, NULL, 0, &runtime, &error);
   assert(code == Ok);
   assert(runtime != NULL);
 

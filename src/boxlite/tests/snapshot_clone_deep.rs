@@ -115,7 +115,6 @@ async fn test_multiple_snapshots_list_order() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -178,7 +177,6 @@ async fn test_snapshot_data_isolation_across_versions() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -227,7 +225,6 @@ async fn test_snapshot_restore_discards_post_snapshot_writes() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -267,7 +264,6 @@ async fn test_multiple_restore_cycles() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -320,7 +316,6 @@ async fn test_snapshot_get_returns_correct_metadata() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -357,7 +352,6 @@ async fn test_snapshot_created_at_ordering() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -398,7 +392,6 @@ async fn test_snapshot_remove_success() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -455,7 +448,6 @@ async fn test_snapshot_remove_then_recreate_same_name() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -500,7 +492,6 @@ async fn test_snapshot_remove_nonexistent_returns_error() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -521,7 +512,6 @@ async fn test_snapshot_remove_current_backing_rejected() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -550,7 +540,6 @@ async fn test_snapshot_remove_after_restore_different() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -596,7 +585,6 @@ async fn test_snapshot_chain_remove_oldest_with_newer_depending() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -653,7 +641,6 @@ async fn test_snapshot_remove_middle_of_three() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -703,7 +690,6 @@ async fn test_snapshot_running_box_with_quiesce() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -737,7 +723,6 @@ async fn test_snapshot_restore_rejected_while_running() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -768,7 +753,6 @@ async fn test_snapshot_remove_while_running() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -812,7 +796,6 @@ async fn test_two_snapshots_while_running() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -854,7 +837,6 @@ async fn test_clone_after_snapshot_preserves_snapshot_data() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -905,7 +887,6 @@ async fn test_snapshot_then_clone_then_remove_snapshot() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -956,7 +937,6 @@ async fn test_clone_then_snapshot_clone() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -1006,7 +986,6 @@ async fn test_clone_of_clone() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -1048,7 +1027,6 @@ async fn test_clone_source_snapshot_independence() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -1100,7 +1078,6 @@ async fn test_batch_clone_produces_correct_count() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -1140,7 +1117,6 @@ async fn test_batch_clone_names_count_mismatch_errors() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -1168,7 +1144,6 @@ async fn test_clone_count_zero_returns_empty() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -1190,7 +1165,6 @@ async fn test_clone_data_preserved() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -1219,7 +1193,6 @@ async fn test_clone_write_isolation_from_source() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -1261,7 +1234,6 @@ async fn test_clone_without_name() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -1290,7 +1262,6 @@ async fn test_clone_with_duplicate_name_errors() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -1316,7 +1287,6 @@ async fn test_multiple_clones_share_base_disk() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -1351,7 +1321,6 @@ async fn test_export_import_preserves_file_contents() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -1403,7 +1372,6 @@ async fn test_export_to_directory_uses_box_name() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -1430,7 +1398,6 @@ async fn test_double_import_from_same_archive() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -1479,7 +1446,6 @@ async fn test_imported_box_has_no_snapshots() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -1524,7 +1490,6 @@ async fn test_export_import_cloned_box() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -1559,7 +1524,6 @@ async fn test_import_validates_no_backing_references() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -1588,7 +1552,6 @@ async fn test_export_unnamed_box_uses_default_filename() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -1618,7 +1581,6 @@ async fn test_export_import_box_with_custom_options() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -1652,7 +1614,6 @@ async fn test_export_archive_has_boxlite_extension() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -1687,7 +1648,6 @@ async fn test_snapshot_name_validation_integration() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -1716,7 +1676,6 @@ async fn test_snapshot_duplicate_name_rejected() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -1746,7 +1705,6 @@ async fn test_remove_box_with_snapshots_cleans_up() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -1789,7 +1747,6 @@ async fn test_remove_source_box_blocked_by_clone() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -1819,7 +1776,6 @@ async fn test_snapshot_on_never_started_box() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -1847,7 +1803,6 @@ async fn test_restore_nonexistent_snapshot() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -1868,7 +1823,6 @@ async fn test_clone_box_without_container_disk() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -1892,7 +1846,6 @@ async fn test_snapshot_name_max_length() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -1927,7 +1880,6 @@ async fn test_snapshot_under_write_pressure() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -1977,7 +1929,6 @@ async fn test_clone_under_write_pressure() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -2021,7 +1972,6 @@ async fn test_rapid_snapshot_cycle() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -2102,7 +2052,6 @@ async fn test_export_under_write_pressure_with_data_check() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -2159,7 +2108,6 @@ async fn test_snapshot_survives_box_restart() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -2200,7 +2148,6 @@ async fn test_box_info_status_correct_throughout_snapshot_lifecycle() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -2238,7 +2185,6 @@ async fn test_snapshot_after_clone_source_modification() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -2285,7 +2231,6 @@ async fn test_multiple_boxes_snapshot_independently() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -2332,7 +2277,6 @@ async fn test_clone_and_export_same_box_sequentially() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -2381,7 +2325,6 @@ async fn test_snapshot_preserves_file_permissions() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -2437,7 +2380,6 @@ async fn test_snapshot_preserves_nested_directories() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -2485,7 +2427,6 @@ async fn test_clone_preserves_multiple_files() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -2523,7 +2464,6 @@ async fn test_export_import_preserves_symlinks() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -2578,7 +2518,6 @@ async fn test_remove_clone_triggers_base_gc_when_last_dependent() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -2617,7 +2556,6 @@ async fn test_remove_one_of_two_clones_preserves_base() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -2653,7 +2591,6 @@ async fn test_remove_all_clones_cascades_gc() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -2699,7 +2636,6 @@ async fn test_box_removal_cleans_all_snapshots() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -2745,7 +2681,6 @@ async fn test_archive_file_is_valid_zstd_tar() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -2775,7 +2710,6 @@ async fn test_archive_roundtrip_checksum_integrity() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -2812,7 +2746,6 @@ async fn test_export_produces_deterministic_extension() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 

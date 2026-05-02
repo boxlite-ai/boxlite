@@ -69,7 +69,6 @@ async fn mount_security_integration() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 

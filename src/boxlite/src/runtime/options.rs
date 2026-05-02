@@ -20,37 +20,32 @@ use std::fmt;
 pub struct BoxliteOptions {
     #[serde(default = "default_home_dir")]
     pub home_dir: PathBuf,
-    /// Registries to search for unqualified image references.
+    /// OCI registry configuration for image pulls.
     ///
-    /// When pulling an image without a registry prefix (e.g., `"alpine"`),
-    /// these registries are tried in order until one succeeds.
+    /// Use this to configure registry transport, TLS verification, auth, and
+    /// whether the registry participates in unqualified image resolution.
     ///
-    /// - Empty list (default): Uses docker.io as the implicit default
-    /// - Non-empty list: Tries each registry in order, first success wins
-    /// - Fully qualified refs (e.g., `"quay.io/foo"`) bypass this list
+    /// - Empty list (default): Uses docker.io as the implicit default for
+    ///   unqualified references
+    /// - `search = true`: Includes the registry when resolving unqualified
+    ///   image references
+    /// - Fully qualified refs (e.g., `"quay.io/foo"`) use the matching
+    ///   registry entry for transport, TLS, and auth
     ///
     /// # Example
     ///
     /// ```ignore
     /// BoxliteOptions {
     ///     image_registries: vec![
-    ///         "ghcr.io/myorg".to_string(),
-    ///         "docker.io".to_string(),
+    ///         ImageRegistry::https("ghcr.io/myorg").with_search(true),
+    ///         ImageRegistry::https("docker.io").with_search(true),
     ///     ],
     ///     ..Default::default()
     /// }
-    /// // "alpine" → tries ghcr.io/myorg/alpine, then docker.io/alpine
+    /// // "alpine" tries ghcr.io/myorg/alpine, then docker.io/alpine
     /// ```
     #[serde(default)]
-    pub image_registries: Vec<String>,
-
-    /// Per-registry transport and TLS configuration.
-    ///
-    /// Use this for registry hosts that need plain HTTP or TLS verification
-    /// disabled. `host` values must match the registry host in the image
-    /// reference, including the port when one is present.
-    #[serde(default)]
-    pub registry_hosts: Vec<ImageRegistry>,
+    pub image_registries: Vec<ImageRegistry>,
 }
 
 /// Registry host configuration for OCI image pulls.
@@ -176,7 +171,6 @@ impl Default for BoxliteOptions {
         Self {
             home_dir: default_home_dir(),
             image_registries: Vec::new(),
-            registry_hosts: Vec::new(),
         }
     }
 }

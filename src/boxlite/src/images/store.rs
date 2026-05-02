@@ -68,7 +68,7 @@ impl ImageStoreInner {
 /// # Example
 ///
 /// ```ignore
-/// let store = Arc::new(ImageStore::new(images_dir, db, vec![], vec![])?);
+/// let store = Arc::new(ImageStore::new(images_dir, db, vec![])?);
 ///
 /// // Pull image (thread-safe, releases lock during download)
 /// let manifest = store.pull("python:alpine").await?;
@@ -80,11 +80,10 @@ impl ImageStoreInner {
 pub struct ImageStore {
     /// Mutable state protected by RwLock
     inner: RwLock<ImageStoreInner>,
-    /// Registries to search for unqualified image references.
-    /// Tried in order; first successful pull wins.
+    /// Registry host names to search for unqualified image references.
     registries: Vec<String>,
-    /// Per-registry transport and TLS settings.
-    registry_hosts: Vec<ImageRegistry>,
+    /// Registry transport, TLS, auth, and search settings.
+    image_registries: Vec<ImageRegistry>,
 }
 
 impl std::fmt::Debug for ImageStore {
@@ -99,22 +98,20 @@ impl ImageStore {
     /// # Arguments
     /// * `images_dir` - Directory for image cache
     /// * `db` - Database for image index
-    /// * `registries` - Registries to search for unqualified images (tried in order)
-    /// * `registry_hosts` - Per-registry transport and TLS settings
+    /// * `image_registries` - Registry transport, TLS, auth, and search settings
     pub fn new(
         images_dir: PathBuf,
         db: Database,
-        registries: Vec<String>,
-        registry_hosts: Vec<ImageRegistry>,
+        image_registries: Vec<ImageRegistry>,
     ) -> BoxliteResult<Self> {
-        validate_registry_hosts(&registry_hosts)?;
+        validate_image_registries(&image_registries)?;
 
         let inner = ImageStoreInner::new(images_dir, db)?;
-        let registries = search_registries(registries, &registry_hosts);
+        let registries = search_registries(&image_registries);
         Ok(Self {
             inner: RwLock::new(inner),
             registries,
-            registry_hosts,
+            image_registries,
         })
     }
 
@@ -549,7 +546,7 @@ impl ImageStore {
     /// Lock is released during network I/O to allow other operations.
     async fn pull_from_registry(&self, reference: &Reference) -> BoxliteResult<ImageManifest> {
         let client = self.client_for(reference);
-        let auth = registry_auth_for(reference.registry(), &self.registry_hosts);
+        let auth = registry_auth_for(reference.registry(), &self.image_registries);
 
         // Step 1: Pull manifest (no lock needed)
         let (manifest, manifest_digest_str) = client
@@ -699,7 +696,7 @@ impl ImageStore {
         let (platform_image, platform_digest) = client
             .pull_manifest(
                 &platform_reference,
-                &registry_auth_for(reference.registry(), &self.registry_hosts),
+                &registry_auth_for(reference.registry(), &self.image_registries),
             )
             .await
             .map_err(|e| BoxliteError::Storage(format!("failed to pull platform manifest: {e}")))?;
@@ -983,7 +980,7 @@ impl ImageStore {
     fn client_for(&self, reference: &Reference) -> oci_client::Client {
         oci_client::Client::new(client_config_for_registry(
             reference.registry(),
-            &self.registry_hosts,
+            &self.image_registries,
         ))
     }
 
@@ -1016,8 +1013,10 @@ impl ImageStore {
     }
 }
 
-fn client_config_for_registry(host: &str, registry_hosts: &[ImageRegistry]) -> ClientConfig {
-    let registry = registry_hosts.iter().find(|registry| registry.host == host);
+fn client_config_for_registry(host: &str, image_registries: &[ImageRegistry]) -> ClientConfig {
+    let registry = image_registries
+        .iter()
+        .find(|registry| registry.host == host);
 
     let protocol = match registry.map(|registry| &registry.transport) {
         Some(RegistryTransport::Http) => ClientProtocol::Http,
@@ -1031,8 +1030,8 @@ fn client_config_for_registry(host: &str, registry_hosts: &[ImageRegistry]) -> C
     }
 }
 
-fn registry_auth_for(host: &str, registry_hosts: &[ImageRegistry]) -> OciRegistryAuth {
-    let auth = registry_hosts
+fn registry_auth_for(host: &str, image_registries: &[ImageRegistry]) -> OciRegistryAuth {
+    let auth = image_registries
         .iter()
         .find(|registry| registry.host == host)
         .map(|registry| &registry.auth);
@@ -1046,8 +1045,9 @@ fn registry_auth_for(host: &str, registry_hosts: &[ImageRegistry]) -> OciRegistr
     }
 }
 
-fn search_registries(mut registries: Vec<String>, registry_hosts: &[ImageRegistry]) -> Vec<String> {
-    for registry in registry_hosts.iter().filter(|registry| registry.search) {
+fn search_registries(image_registries: &[ImageRegistry]) -> Vec<String> {
+    let mut registries = Vec::new();
+    for registry in image_registries.iter().filter(|registry| registry.search) {
         if !registries.iter().any(|host| host == &registry.host) {
             registries.push(registry.host.clone());
         }
@@ -1055,8 +1055,8 @@ fn search_registries(mut registries: Vec<String>, registry_hosts: &[ImageRegistr
     registries
 }
 
-fn validate_registry_hosts(registry_hosts: &[ImageRegistry]) -> BoxliteResult<()> {
-    for registry in registry_hosts {
+fn validate_image_registries(image_registries: &[ImageRegistry]) -> BoxliteResult<()> {
+    for registry in image_registries {
         let host = registry.host.trim();
         if host.is_empty() {
             return Err(BoxliteError::Config(
@@ -1138,24 +1138,19 @@ mod tests {
     }
 
     #[test]
-    fn registry_hosts_only_join_search_list_when_search_is_enabled() {
-        let registries = search_registries(
-            vec!["docker.io".to_string()],
-            &[
-                ImageRegistry::https("ghcr.io"),
-                ImageRegistry::http("registry.local:5000").with_search(true),
-            ],
-        );
+    fn image_registries_only_join_search_list_when_search_is_enabled() {
+        let registries = search_registries(&[
+            ImageRegistry::https("ghcr.io"),
+            ImageRegistry::http("registry.local:5000").with_search(true),
+        ]);
 
-        assert_eq!(
-            registries,
-            vec!["docker.io".to_string(), "registry.local:5000".to_string()]
-        );
+        assert_eq!(registries, vec!["registry.local:5000".to_string()]);
     }
 
     #[test]
-    fn validate_registry_hosts_rejects_urls() {
-        let result = validate_registry_hosts(&[ImageRegistry::http("http://registry.local:5000")]);
+    fn validate_image_registries_rejects_urls() {
+        let result =
+            validate_image_registries(&[ImageRegistry::http("http://registry.local:5000")]);
 
         assert!(result.is_err());
     }
@@ -1288,7 +1283,7 @@ mod tests {
 
         // Create store
         let db = Database::open(&db_path).unwrap();
-        let store = ImageStore::new(images_dir.clone(), db, vec![], vec![]).unwrap();
+        let store = ImageStore::new(images_dir.clone(), db, vec![]).unwrap();
 
         // Load from local
         let manifest = store.load_from_local(bundle_dir.clone()).await.unwrap();
@@ -1312,7 +1307,7 @@ mod tests {
 
         // Create store
         let db = Database::open(&db_path).unwrap();
-        let store = ImageStore::new(images_dir.clone(), db, vec![], vec![]).unwrap();
+        let store = ImageStore::new(images_dir.clone(), db, vec![]).unwrap();
 
         // Load from local
         let _manifest = store.load_from_local(bundle_dir.clone()).await.unwrap();
@@ -1347,7 +1342,7 @@ mod tests {
 
         // Create store
         let db = Database::open(&db_path).unwrap();
-        let store = ImageStore::new(images_dir.clone(), db, vec![], vec![]).unwrap();
+        let store = ImageStore::new(images_dir.clone(), db, vec![]).unwrap();
 
         // Load should fail
         let result = store.load_from_local(bundle_dir).await;
@@ -1373,7 +1368,7 @@ mod tests {
 
         // Create store
         let db = Database::open(&db_path).unwrap();
-        let store = ImageStore::new(images_dir.clone(), db, vec![], vec![]).unwrap();
+        let store = ImageStore::new(images_dir.clone(), db, vec![]).unwrap();
 
         // Load should fail
         let result = store.load_from_local(bundle_dir).await;

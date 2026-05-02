@@ -24,7 +24,6 @@ async fn shutdown_is_idempotent() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -42,7 +41,6 @@ async fn shutdown_with_timeout() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -57,7 +55,6 @@ async fn shutdown_empty_runtime() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -76,7 +73,6 @@ async fn shutdown_does_not_affect_other_runtimes() {
     let runtime1 = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home1.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -84,7 +80,6 @@ async fn shutdown_does_not_affect_other_runtimes() {
     let runtime2 = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home2.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -105,7 +100,6 @@ async fn read_operations_work_after_shutdown() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -131,7 +125,6 @@ fn drop_releases_lock() {
         let options = BoxliteOptions {
             home_dir: home.path.clone(),
             image_registries: common::test_registries(),
-            registry_hosts: vec![],
         };
         let _rt = BoxliteRuntime::new(options).unwrap();
     } // Drop fires here
@@ -140,7 +133,6 @@ fn drop_releases_lock() {
     let options2 = BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     };
     let _rt2 = BoxliteRuntime::new(options2).unwrap();
 }
@@ -153,7 +145,6 @@ async fn cloned_runtime_shares_shutdown_state() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
     let clone = runtime.clone();
@@ -181,7 +172,6 @@ async fn shutdown_timeout_edge_values() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
     assert!(runtime.shutdown(Some(0)).await.is_ok());
@@ -191,7 +181,6 @@ async fn shutdown_timeout_edge_values() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
     assert!(runtime.shutdown(Some(-1)).await.is_ok());
@@ -201,7 +190,6 @@ async fn shutdown_timeout_edge_values() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
     assert!(runtime.shutdown(Some(30)).await.is_ok());
@@ -211,7 +199,6 @@ async fn shutdown_timeout_edge_values() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
     assert!(runtime.shutdown(Some(-5)).await.is_ok());
@@ -228,7 +215,6 @@ async fn concurrent_shutdown_is_safe() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 
@@ -260,7 +246,6 @@ async fn create_after_shutdown_is_rejected() {
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     })
     .expect("create runtime");
 

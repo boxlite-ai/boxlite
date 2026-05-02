@@ -67,7 +67,6 @@ impl BoxTestBase {
         let runtime = BoxliteRuntime::new(BoxliteOptions {
             home_dir: home.path.clone(),
             image_registries: test_registries(),
-            registry_hosts: vec![],
         })
         .expect("create BoxTestBase runtime");
 
@@ -89,7 +88,6 @@ impl BoxTestBase {
         let runtime = BoxliteRuntime::new(BoxliteOptions {
             home_dir: home.path.clone(),
             image_registries: test_registries(),
-            registry_hosts: vec![],
         })
         .expect("create isolated BoxTestBase runtime");
 

@@ -69,7 +69,7 @@ pub(super) struct LayerInfo {
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// let db = Database::open(&PathBuf::from("/tmp/boxlite.db"))?;
-/// let manager = ImageManager::new(PathBuf::from("/tmp/images"), db, vec![], vec![])?;
+/// let manager = ImageManager::new(PathBuf::from("/tmp/images"), db, vec![])?;
 ///
 /// // Pull an image
 /// let image = manager.pull("python:alpine").await?;
@@ -97,15 +97,13 @@ impl ImageManager {
     /// # Arguments
     /// * `images_dir` - Directory for image cache
     /// * `db` - Database for image index
-    /// * `registries` - Registries to search for unqualified images (tried in order)
-    /// * `registry_hosts` - Per-registry transport and TLS settings
+    /// * `image_registries` - Registry transport, TLS, auth, and search settings
     pub fn new(
         images_dir: PathBuf,
         db: Database,
-        registries: Vec<String>,
-        registry_hosts: Vec<ImageRegistry>,
+        image_registries: Vec<ImageRegistry>,
     ) -> BoxliteResult<Self> {
-        let store = Arc::new(ImageStore::new(images_dir, db, registries, registry_hosts)?);
+        let store = Arc::new(ImageStore::new(images_dir, db, image_registries)?);
         Ok(Self { store })
     }
 

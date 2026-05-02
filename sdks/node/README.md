@@ -98,7 +98,7 @@ main();
 import { JsBoxlite } from 'boxlite';
 
 const runtime = new JsBoxlite({
-  registryHosts: [
+  imageRegistries: [
     {
       host: 'registry.example.com',
       auth: { username: 'user', password: 'password' },

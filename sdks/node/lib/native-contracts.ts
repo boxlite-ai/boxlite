@@ -99,8 +99,7 @@ export interface JsBoxOptions {
 
 export interface JsOptions {
   homeDir?: string;
-  imageRegistries?: string[];
-  registryHosts?: JsImageRegistry[];
+  imageRegistries?: JsImageRegistry[];
 }
 
 export interface JsImageRegistryAuth {

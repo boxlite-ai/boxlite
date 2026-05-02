@@ -380,10 +380,8 @@ void boxlite_options_free(CBoxliteOptions *opts);
 const char *boxlite_version(void);
 
 enum BoxliteErrorCode boxlite_runtime_new(const char *home_dir,
-                                          const char *const *registries,
-                                          int registries_count,
-                                          const struct BoxliteImageRegistry *registry_hosts,
-                                          int registry_hosts_count,
+                                          const struct BoxliteImageRegistry *image_registries,
+                                          int image_registries_count,
                                           CBoxliteRuntime **out_runtime,
                                           CBoxliteError *out_error);
 

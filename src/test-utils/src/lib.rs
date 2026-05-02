@@ -39,7 +39,10 @@ pub const TEST_REGISTRIES: &[&str] = &[
     "docker.io",
 ];
 
-/// Convert `TEST_REGISTRIES` to `Vec<String>` for `BoxliteOptions::image_registries`.
-pub fn test_registries() -> Vec<String> {
-    TEST_REGISTRIES.iter().map(|s| s.to_string()).collect()
+/// Convert `TEST_REGISTRIES` to searchable `ImageRegistry` entries.
+pub fn test_registries() -> Vec<boxlite::ImageRegistry> {
+    TEST_REGISTRIES
+        .iter()
+        .map(|host| boxlite::ImageRegistry::https(*host).with_search(true))
+        .collect()
 }

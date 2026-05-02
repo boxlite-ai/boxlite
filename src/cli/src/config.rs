@@ -33,6 +33,7 @@ pub fn load_config(path: &Path) -> Result<BoxliteOptions> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use boxlite::runtime::options::ImageRegistry;
     use std::fs;
     use std::path::PathBuf;
     use tempfile::TempDir;
@@ -41,11 +42,20 @@ mod tests {
     fn test_load_config() {
         let temp_dir = TempDir::new().unwrap();
         let config_path = temp_dir.path().join("config.json");
-        let config_content = r#"{"image_registries": ["ghcr.io", "docker.io"]}"#;
+        let config_content = r#"{"image_registries": [
+            {"host": "ghcr.io", "search": true},
+            {"host": "docker.io", "search": true}
+        ]}"#;
         fs::write(&config_path, config_content).unwrap();
 
         let config = load_config(&config_path).unwrap();
-        assert_eq!(config.image_registries, vec!["ghcr.io", "docker.io"]);
+        assert_eq!(
+            config.image_registries,
+            vec![
+                ImageRegistry::https("ghcr.io").with_search(true),
+                ImageRegistry::https("docker.io").with_search(true),
+            ]
+        );
         // home_dir gets a default value from BoxliteOptions, not None
     }
 
@@ -53,12 +63,16 @@ mod tests {
     fn test_load_config_with_home_dir() {
         let temp_dir = TempDir::new().unwrap();
         let config_path = temp_dir.path().join("config.json");
-        let config_content = r#"{"home_dir": "/custom/home", "image_registries": ["docker.io"]}"#;
+        let config_content =
+            r#"{"home_dir": "/custom/home", "image_registries": [{"host": "docker.io"}]}"#;
         fs::write(&config_path, config_content).unwrap();
 
         let config = load_config(&config_path).unwrap();
         assert_eq!(config.home_dir, PathBuf::from("/custom/home"));
-        assert_eq!(config.image_registries, vec!["docker.io"]);
+        assert_eq!(
+            config.image_registries,
+            vec![ImageRegistry::https("docker.io")]
+        );
     }
 
     #[test]

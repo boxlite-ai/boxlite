@@ -3,10 +3,10 @@ import { describe, expect, test } from "vitest";
 import { JsBoxlite } from "../lib/index.js";
 
 const testRegistries = [
-  "docker.m.daocloud.io",
-  "docker.xuanyuan.me",
-  "docker.1ms.run",
-  "docker.io",
+  { host: "docker.m.daocloud.io", search: true },
+  { host: "docker.xuanyuan.me", search: true },
+  { host: "docker.1ms.run", search: true },
+  { host: "docker.io", search: true },
 ];
 
 function newIsolatedRuntime() {

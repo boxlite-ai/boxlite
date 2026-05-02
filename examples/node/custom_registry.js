@@ -15,7 +15,11 @@ async function exampleCustomRegistries() {
   // Configure runtime with custom registries
   // Registries are tried in order; first successful pull wins
   const runtime = new JsBoxlite({
-    imageRegistries: ['ghcr.io', 'quay.io', 'docker.io']
+    imageRegistries: [
+      { host: 'ghcr.io', search: true },
+      { host: 'quay.io', search: true },
+      { host: 'docker.io', search: true }
+    ]
   });
 
   console.log('Configured registries: ghcr.io, quay.io, docker.io');

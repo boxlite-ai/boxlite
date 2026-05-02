@@ -201,7 +201,6 @@ impl SharedResources {
                 let runtime = BoxliteRuntime::new(BoxliteOptions {
                     home_dir: home.clone(),
                     image_registries: test_registries(),
-                    registry_hosts: vec![],
                 })
                 .unwrap();
 

@@ -117,7 +117,7 @@ CBoxHandle* box = NULL;
 CBoxliteError error = {0};
 
 // Create runtime and box
-boxlite_runtime_new(NULL, NULL, 0, NULL, 0, &runtime, &error);
+boxlite_runtime_new(NULL, NULL, 0, &runtime, &error);
 
 CBoxliteOptions* opts = NULL;
 boxlite_options_new("alpine:3.19", &opts, &error);
@@ -329,7 +329,7 @@ The C SDK v0.2.0 uses structured error handling:
 CBoxliteError error = {0};
 
 // All functions return BoxliteErrorCode
-BoxliteErrorCode code = boxlite_runtime_new(NULL, NULL, 0, NULL, 0, &runtime, &error);
+BoxliteErrorCode code = boxlite_runtime_new(NULL, NULL, 0, &runtime, &error);
 
 // Check result
 if (code != Ok) {

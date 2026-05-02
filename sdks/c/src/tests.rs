@@ -27,8 +27,6 @@ unsafe fn new_test_runtime_handle(prefix: &str) -> (*mut crate::runtime::Runtime
             home_dir_c.as_ptr(),
             ptr::null(),
             0,
-            ptr::null(),
-            0,
             &mut runtime as *mut _,
             &mut error as *mut _,
         )
@@ -124,8 +122,6 @@ fn test_null_pointer_validation() {
             ptr::null(),
             ptr::null(),
             0,
-            ptr::null(),
-            0,
             ptr::null_mut(),
             &mut error as *mut _,
         );
@@ -157,8 +153,6 @@ fn test_runtime_accepts_image_registry_config() {
     let code = unsafe {
         boxlite_runtime_new(
             home_dir_c.as_ptr(),
-            ptr::null(),
-            0,
             &registry as *const _,
             1,
             &mut runtime as *mut _,

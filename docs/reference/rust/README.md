@@ -68,8 +68,8 @@ let runtime = BoxliteRuntime::with_defaults()?;
 // Create with custom options
 let options = BoxliteOptions {
     home_dir: PathBuf::from("/custom/boxlite"),
-    image_registries: vec!["ghcr.io/myorg".to_string()],
-    registry_hosts: vec![
+    image_registries: vec![
+        ImageRegistry::https("ghcr.io/myorg").with_search(true),
         ImageRegistry::https("registry.example.com").with_basic_auth("user", "password"),
     ],
 };
@@ -132,12 +132,8 @@ pub struct BoxliteOptions {
     /// Home directory for runtime data (~/.boxlite by default)
     pub home_dir: PathBuf,
 
-    /// Registries to search for unqualified image references
-    /// Empty list uses docker.io as implicit default
-    pub image_registries: Vec<String>,
-
-    /// Per-registry transport, TLS, search, and auth configuration
-    pub registry_hosts: Vec<ImageRegistry>,
+    /// Registry transport, TLS, search, and auth configuration
+    pub image_registries: Vec<ImageRegistry>,
 }
 
 pub struct ImageRegistry {
@@ -163,10 +159,8 @@ use std::path::PathBuf;
 let options = BoxliteOptions {
     home_dir: PathBuf::from("/var/lib/boxlite"),
     image_registries: vec![
-        "ghcr.io/myorg".to_string(),
-        "docker.io".to_string(),
-    ],
-    registry_hosts: vec![
+        ImageRegistry::https("ghcr.io/myorg").with_search(true),
+        ImageRegistry::https("docker.io").with_search(true),
         ImageRegistry::http("registry.local:5000").with_search(true),
         ImageRegistry::https("registry.example.com")
             .with_skip_verify(true)

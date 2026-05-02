@@ -16,7 +16,6 @@ fn test_runtime_prevents_concurrent_access() {
     let config1 = BoxliteOptions {
         home_dir: temp_dir.path().to_path_buf(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     };
     let runtime1 = BoxliteRuntime::new(config1).unwrap();
 
@@ -24,7 +23,6 @@ fn test_runtime_prevents_concurrent_access() {
     let config2 = BoxliteOptions {
         home_dir: temp_dir.path().to_path_buf(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     };
     let result = BoxliteRuntime::new(config2);
     assert!(result.is_err());
@@ -40,7 +38,6 @@ fn test_runtime_prevents_concurrent_access() {
     let config3 = BoxliteOptions {
         home_dir: temp_dir.path().to_path_buf(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     };
     let _runtime2 = BoxliteRuntime::new(config3).unwrap();
 }
@@ -54,7 +51,6 @@ fn test_runtime_lock_released_on_drop() {
         let config = BoxliteOptions {
             home_dir: temp_dir.path().to_path_buf(),
             image_registries: common::test_registries(),
-            registry_hosts: vec![],
         };
         let _runtime = BoxliteRuntime::new(config).unwrap();
     } // Lock released here
@@ -63,7 +59,6 @@ fn test_runtime_lock_released_on_drop() {
     let config2 = BoxliteOptions {
         home_dir: temp_dir.path().to_path_buf(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     };
     let _runtime2 = BoxliteRuntime::new(config2).unwrap();
 }
@@ -77,7 +72,6 @@ fn test_runtime_lock_across_threads() {
     let config1 = BoxliteOptions {
         home_dir: dir_path.clone(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     };
     let _runtime1 = BoxliteRuntime::new(config1).unwrap();
 
@@ -87,7 +81,6 @@ fn test_runtime_lock_across_threads() {
         let config = BoxliteOptions {
             home_dir: dir_clone,
             image_registries: common::test_registries(),
-            registry_hosts: vec![],
         };
         BoxliteRuntime::new(config)
     });
@@ -105,7 +98,6 @@ fn test_different_home_dirs_independent() {
     let config1 = BoxliteOptions {
         home_dir: temp_dir1.path().to_path_buf(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     };
     let _runtime1 = BoxliteRuntime::new(config1).unwrap();
 
@@ -113,7 +105,6 @@ fn test_different_home_dirs_independent() {
     let config2 = BoxliteOptions {
         home_dir: temp_dir2.path().to_path_buf(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     };
     let _runtime2 = BoxliteRuntime::new(config2).unwrap();
 
@@ -129,7 +120,6 @@ fn test_lock_file_created() {
     let config = BoxliteOptions {
         home_dir: temp_dir.path().to_path_buf(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     };
     let _runtime = BoxliteRuntime::new(config).unwrap();
 
@@ -145,7 +135,6 @@ fn test_lock_survives_short_operations() {
     let config1 = BoxliteOptions {
         home_dir: temp_dir.path().to_path_buf(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     };
     let runtime = BoxliteRuntime::new(config1).unwrap();
 
@@ -156,7 +145,6 @@ fn test_lock_survives_short_operations() {
     let config2 = BoxliteOptions {
         home_dir: temp_dir.path().to_path_buf(),
         image_registries: common::test_registries(),
-        registry_hosts: vec![],
     };
     let result = BoxliteRuntime::new(config2);
     assert!(result.is_err());

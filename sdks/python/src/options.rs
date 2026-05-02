@@ -19,35 +19,26 @@ use crate::advanced_options::PyAdvancedBoxOptions;
 pub(crate) struct PyOptions {
     #[pyo3(get, set)]
     pub(crate) home_dir: Option<String>,
-    /// Registries to search for unqualified image references.
-    /// Tried in order; first successful pull wins.
+    /// Registry transport, TLS, search, and auth configuration.
     #[pyo3(get, set)]
-    pub(crate) image_registries: Vec<String>,
-    /// Per-registry transport, TLS, search, and auth configuration.
-    #[pyo3(get, set)]
-    pub(crate) registry_hosts: Vec<PyImageRegistry>,
+    pub(crate) image_registries: Vec<PyImageRegistry>,
 }
 
 #[pymethods]
 impl PyOptions {
     #[new]
-    #[pyo3(signature = (home_dir=None, image_registries=vec![], registry_hosts=vec![]))]
-    fn new(
-        home_dir: Option<String>,
-        image_registries: Vec<String>,
-        registry_hosts: Vec<PyImageRegistry>,
-    ) -> Self {
+    #[pyo3(signature = (home_dir=None, image_registries=vec![]))]
+    fn new(home_dir: Option<String>, image_registries: Vec<PyImageRegistry>) -> Self {
         Self {
             home_dir,
             image_registries,
-            registry_hosts,
         }
     }
 
     fn __repr__(&self) -> String {
         format!(
-            "Options(home_dir={:?}, image_registries={:?}, registry_hosts={:?})",
-            self.home_dir, self.image_registries, self.registry_hosts
+            "Options(home_dir={:?}, image_registries={:?})",
+            self.home_dir, self.image_registries
         )
     }
 }
@@ -60,9 +51,8 @@ impl PyOptions {
             config.home_dir = PathBuf::from(home_dir);
         }
 
-        config.image_registries = self.image_registries;
-        config.registry_hosts = self
-            .registry_hosts
+        config.image_registries = self
+            .image_registries
             .into_iter()
             .map(PyImageRegistry::into_core)
             .collect::<PyResult<Vec<_>>>()?;

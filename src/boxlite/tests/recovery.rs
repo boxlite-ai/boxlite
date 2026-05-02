@@ -39,7 +39,6 @@ async fn recovery_with_live_process() {
         let runtime = BoxliteRuntime::new(BoxliteOptions {
             home_dir: home.path.clone(),
             image_registries: common::test_registries(),
-            registry_hosts: vec![],
         })
         .unwrap();
 
@@ -66,7 +65,6 @@ async fn recovery_with_live_process() {
         let runtime = BoxliteRuntime::new(BoxliteOptions {
             home_dir: home.path.clone(),
             image_registries: common::test_registries(),
-            registry_hosts: vec![],
         })
         .unwrap();
 
@@ -94,7 +92,6 @@ async fn recovery_with_dead_process() {
         let runtime = BoxliteRuntime::new(BoxliteOptions {
             home_dir: home.path.clone(),
             image_registries: common::test_registries(),
-            registry_hosts: vec![],
         })
         .unwrap();
 
@@ -129,7 +126,6 @@ async fn recovery_with_dead_process() {
         let runtime = BoxliteRuntime::new(BoxliteOptions {
             home_dir: home.path.clone(),
             image_registries: common::test_registries(),
-            registry_hosts: vec![],
         })
         .unwrap();
 
@@ -168,7 +164,6 @@ async fn recovery_with_missing_pid_file() {
         let runtime = BoxliteRuntime::new(BoxliteOptions {
             home_dir: home.path.clone(),
             image_registries: common::test_registries(),
-            registry_hosts: vec![],
         })
         .unwrap();
 
@@ -196,7 +191,6 @@ async fn recovery_with_missing_pid_file() {
         let runtime = BoxliteRuntime::new(BoxliteOptions {
             home_dir: home.path.clone(),
             image_registries: common::test_registries(),
-            registry_hosts: vec![],
         })
         .unwrap();
 
@@ -227,7 +221,6 @@ async fn recovery_with_corrupted_pid_file() {
         let runtime = BoxliteRuntime::new(BoxliteOptions {
             home_dir: home.path.clone(),
             image_registries: common::test_registries(),
-            registry_hosts: vec![],
         })
         .unwrap();
 
@@ -255,7 +248,6 @@ async fn recovery_with_corrupted_pid_file() {
         let runtime = BoxliteRuntime::new(BoxliteOptions {
             home_dir: home.path.clone(),
             image_registries: common::test_registries(),
-            registry_hosts: vec![],
         })
         .unwrap();
 
@@ -290,7 +282,6 @@ async fn recovery_preserves_stopped_boxes() {
         let runtime = BoxliteRuntime::new(BoxliteOptions {
             home_dir: home.path.clone(),
             image_registries: common::test_registries(),
-            registry_hosts: vec![],
         })
         .unwrap();
 
@@ -312,7 +303,6 @@ async fn recovery_preserves_stopped_boxes() {
         let runtime = BoxliteRuntime::new(BoxliteOptions {
             home_dir: home.path.clone(),
             image_registries: common::test_registries(),
-            registry_hosts: vec![],
         })
         .unwrap();
 
@@ -348,7 +338,6 @@ async fn recovery_removes_auto_remove_true_boxes() {
         let options = BoxliteOptions {
             home_dir: home_dir.clone(),
             image_registries: common::test_registries(),
-            registry_hosts: vec![],
         };
         let runtime = BoxliteRuntime::new(options).expect("Failed to create runtime");
 
@@ -381,7 +370,6 @@ async fn recovery_removes_auto_remove_true_boxes() {
         let options = BoxliteOptions {
             home_dir,
             image_registries: common::test_registries(),
-            registry_hosts: vec![],
         };
         let runtime = BoxliteRuntime::new(options).expect("Failed to create runtime after restart");
 
@@ -421,7 +409,6 @@ async fn recovery_removes_orphaned_stopped_boxes_without_directory() {
         let options = BoxliteOptions {
             home_dir: home.path.clone(),
             image_registries: common::test_registries(),
-            registry_hosts: vec![],
         };
         let runtime = BoxliteRuntime::new(options).expect("Failed to create runtime");
 
@@ -449,7 +436,6 @@ async fn recovery_removes_orphaned_stopped_boxes_without_directory() {
         let options = BoxliteOptions {
             home_dir: home.path.clone(),
             image_registries: common::test_registries(),
-            registry_hosts: vec![],
         };
         let runtime = BoxliteRuntime::new(options).expect("Failed to create runtime after restart");
 

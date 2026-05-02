@@ -32,7 +32,11 @@ async def example_custom_registries():
     # Configure runtime with custom registries
     # Registries are tried in order; first successful pull wins
     options = boxlite.Options(
-        image_registries=["ghcr.io", "quay.io", "docker.io"]
+        image_registries=[
+            boxlite.ImageRegistry(host="ghcr.io", search=True),
+            boxlite.ImageRegistry(host="quay.io", search=True),
+            boxlite.ImageRegistry(host="docker.io", search=True),
+        ]
     )
 
     print(f"Configured registries: {options.image_registries}")
@@ -68,7 +72,10 @@ async def example_default_vs_custom():
 
     # Custom registries: tries each in order
     options = boxlite.Options(
-        image_registries=["ghcr.io", "docker.io"]
+        image_registries=[
+            boxlite.ImageRegistry(host="ghcr.io", search=True),
+            boxlite.ImageRegistry(host="docker.io", search=True),
+        ]
     )
     print("\nWith custom registries ['ghcr.io', 'docker.io']:")
     print("  'alpine' -> ghcr.io/library/alpine (try first)")
