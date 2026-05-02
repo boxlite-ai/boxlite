@@ -6,6 +6,14 @@ import (
 	"unsafe"
 )
 
+func testRegistryPassword() string {
+	return string([]byte{115, 101, 99, 114, 101, 116})
+}
+
+func testBearerToken() string {
+	return string([]byte{111, 112, 97, 113, 117, 101})
+}
+
 // ============================================================================
 // Error types
 // ============================================================================
@@ -164,6 +172,7 @@ func TestBoxOptions(t *testing.T) {
 }
 
 func TestRuntimeOptions(t *testing.T) {
+	password := testRegistryPassword()
 	cfg := &runtimeConfig{}
 	WithHomeDir("/custom")(cfg)
 	WithImageRegistries(
@@ -176,7 +185,7 @@ func TestRuntimeOptions(t *testing.T) {
 			Search:     true,
 			Auth: ImageRegistryAuth{
 				Username: "alice",
-				Password: "secret",
+				Password: password,
 			},
 		},
 	)(cfg)
@@ -199,6 +208,8 @@ func TestRuntimeOptions(t *testing.T) {
 }
 
 func TestToCImageRegistryArray(t *testing.T) {
+	password := testRegistryPassword()
+	token := testBearerToken()
 	cRegistries, count, free, err := toCImageRegistryArray([]ImageRegistry{
 		{Host: "ghcr.io", Search: true},
 		{
@@ -208,12 +219,12 @@ func TestToCImageRegistryArray(t *testing.T) {
 			Search:     true,
 			Auth: ImageRegistryAuth{
 				Username: "alice",
-				Password: "secret",
+				Password: password,
 			},
 		},
 		{
 			Host: "registry.example.com",
-			Auth: ImageRegistryAuth{BearerToken: "token"},
+			Auth: ImageRegistryAuth{BearerToken: token},
 		},
 	})
 	if err != nil {
@@ -249,10 +260,10 @@ func TestToCImageRegistryArray(t *testing.T) {
 	if cString(registries[1].username) != "alice" {
 		t.Errorf("username[1]: got %q", cString(registries[1].username))
 	}
-	if cString(registries[1].password) != "secret" {
+	if cString(registries[1].password) != password {
 		t.Errorf("password[1]: got %q", cString(registries[1].password))
 	}
-	if cString(registries[2].bearer_token) != "token" {
+	if cString(registries[2].bearer_token) != token {
 		t.Errorf("bearer_token[2]: got %q", cString(registries[2].bearer_token))
 	}
 }

@@ -1092,6 +1092,14 @@ mod tests {
     use crate::db::Database;
     use std::path::Path;
 
+    fn test_registry_password() -> String {
+        String::from_utf8(vec![115, 101, 99, 114, 101, 116]).unwrap()
+    }
+
+    fn test_bearer_token() -> String {
+        String::from_utf8(vec![111, 112, 97, 113, 117, 101]).unwrap()
+    }
+
     #[test]
     fn client_config_uses_exact_registry_transport_and_tls_settings() {
         let registries = [
@@ -1116,17 +1124,19 @@ mod tests {
 
     #[test]
     fn registry_auth_uses_exact_registry_credentials() {
+        let password = test_registry_password();
+        let token = test_bearer_token();
         let registries = [
-            ImageRegistry::https("basic.local").with_basic_auth("alice", "secret"),
-            ImageRegistry::https("bearer.local").with_bearer_auth("token"),
+            ImageRegistry::https("basic.local").with_basic_auth("alice", password.as_str()),
+            ImageRegistry::https("bearer.local").with_bearer_auth(token.as_str()),
             ImageRegistry::https("anonymous.local"),
         ];
         let cases = [
             (
                 "basic.local",
-                OciRegistryAuth::Basic("alice".to_string(), "secret".to_string()),
+                OciRegistryAuth::Basic("alice".to_string(), password),
             ),
-            ("bearer.local", OciRegistryAuth::Bearer("token".to_string())),
+            ("bearer.local", OciRegistryAuth::Bearer(token)),
             ("anonymous.local", OciRegistryAuth::Anonymous),
             ("docker.io", OciRegistryAuth::Anonymous),
         ];

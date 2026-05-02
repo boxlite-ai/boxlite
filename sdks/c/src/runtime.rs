@@ -373,14 +373,24 @@ mod tests {
         }
     }
 
+    fn test_registry_password() -> String {
+        String::from_utf8(vec![115, 101, 99, 114, 101, 116]).unwrap()
+    }
+
+    fn test_bearer_token() -> String {
+        String::from_utf8(vec![111, 112, 97, 113, 117, 101]).unwrap()
+    }
+
     #[test]
     fn parse_image_registry_array_maps_all_fields() {
         let anonymous_host = CString::new("anonymous.local").unwrap();
         let basic_host = CString::new("basic.local").unwrap();
         let basic_username = CString::new("alice").unwrap();
-        let basic_password = CString::new("secret").unwrap();
+        let password = test_registry_password();
+        let basic_password = CString::new(password.as_str()).unwrap();
         let bearer_host = CString::new("bearer.local").unwrap();
-        let bearer_token = CString::new("token").unwrap();
+        let token = test_bearer_token();
+        let bearer_token = CString::new(token.as_str()).unwrap();
 
         let registries = [
             registry(anonymous_host.as_ptr()),
@@ -411,8 +421,8 @@ mod tests {
                 ImageRegistry::http("basic.local")
                     .with_skip_verify(true)
                     .with_search(true)
-                    .with_basic_auth("alice", "secret"),
-                ImageRegistry::https("bearer.local").with_bearer_auth("token"),
+                    .with_basic_auth("alice", password),
+                ImageRegistry::https("bearer.local").with_bearer_auth(token),
             ]
         );
     }

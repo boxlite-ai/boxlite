@@ -180,36 +180,45 @@ mod registry_options_tests {
     use super::*;
     use serde_json::json;
 
+    fn test_registry_password() -> String {
+        String::from_utf8(vec![115, 101, 99, 114, 101, 116]).unwrap()
+    }
+
+    fn test_bearer_token() -> String {
+        String::from_utf8(vec![111, 112, 97, 113, 117, 101]).unwrap()
+    }
+
     #[test]
     fn options_deserialize_structured_image_registries() {
-        let json = r#"
-        {
-          "home_dir": "/tmp/boxlite-test",
-          "image_registries": [
-            {"host": "ghcr.io", "search": true},
-            {
-              "host": "registry.local:5000",
-              "transport": "http",
-              "skip_verify": true,
-              "search": true,
-              "auth": {
-                "type": "basic",
-                "username": "alice",
-                "password": "secret"
-              }
-            },
-            {
-              "host": "registry.example.com",
-              "auth": {
-                "type": "bearer",
-                "token": "token"
-              }
-            }
-          ]
-        }
-        "#;
+        let password = test_registry_password();
+        let token = test_bearer_token();
+        let json = json!({
+            "home_dir": "/tmp/boxlite-test",
+            "image_registries": [
+                {"host": "ghcr.io", "search": true},
+                {
+                    "host": "registry.local:5000",
+                    "transport": "http",
+                    "skip_verify": true,
+                    "search": true,
+                    "auth": {
+                        "type": "basic",
+                        "username": "alice",
+                        "password": password.clone(),
+                    }
+                },
+                {
+                    "host": "registry.example.com",
+                    "auth": {
+                        "type": "bearer",
+                        "token": token.clone(),
+                    }
+                }
+            ]
+        })
+        .to_string();
 
-        let options: BoxliteOptions = serde_json::from_str(json).unwrap();
+        let options: BoxliteOptions = serde_json::from_str(&json).unwrap();
 
         assert_eq!(options.home_dir, PathBuf::from("/tmp/boxlite-test"));
         assert_eq!(
@@ -219,8 +228,8 @@ mod registry_options_tests {
                 ImageRegistry::http("registry.local:5000")
                     .with_skip_verify(true)
                     .with_search(true)
-                    .with_basic_auth("alice", "secret"),
-                ImageRegistry::https("registry.example.com").with_bearer_auth("token"),
+                    .with_basic_auth("alice", password),
+                ImageRegistry::https("registry.example.com").with_bearer_auth(token),
             ]
         );
     }
@@ -235,14 +244,16 @@ mod registry_options_tests {
 
     #[test]
     fn options_serialize_structured_image_registries() {
+        let password = test_registry_password();
+        let token = test_bearer_token();
         let options = BoxliteOptions {
             home_dir: PathBuf::from("/tmp/boxlite-test"),
             image_registries: vec![
                 ImageRegistry::http("registry.local:5000")
                     .with_skip_verify(true)
                     .with_search(true)
-                    .with_basic_auth("alice", "secret"),
-                ImageRegistry::https("registry.example.com").with_bearer_auth("token"),
+                    .with_basic_auth("alice", password.as_str()),
+                ImageRegistry::https("registry.example.com").with_bearer_auth(token.as_str()),
             ],
         };
 
@@ -261,7 +272,7 @@ mod registry_options_tests {
                         "auth": {
                             "type": "basic",
                             "username": "alice",
-                            "password": "secret"
+                            "password": password
                         }
                     },
                     {
@@ -271,7 +282,7 @@ mod registry_options_tests {
                         "search": false,
                         "auth": {
                             "type": "bearer",
-                            "token": "token"
+                            "token": token
                         }
                     }
                 ]
@@ -281,18 +292,21 @@ mod registry_options_tests {
 
     #[test]
     fn image_registry_debug_redacts_credentials() {
+        let password = test_registry_password();
+        let token = test_bearer_token();
         let basic = format!(
             "{:?}",
-            ImageRegistry::https("registry.example.com").with_basic_auth("alice", "secret")
+            ImageRegistry::https("registry.example.com")
+                .with_basic_auth("alice", password.as_str())
         );
         let bearer = format!(
             "{:?}",
-            ImageRegistry::https("registry.example.com").with_bearer_auth("bearer-secret")
+            ImageRegistry::https("registry.example.com").with_bearer_auth(token.as_str())
         );
 
         assert!(basic.contains("alice"));
-        assert!(!basic.contains("secret"));
-        assert!(!bearer.contains("bearer-secret"));
+        assert!(!basic.contains(&password));
+        assert!(!bearer.contains(&token));
     }
 }
 

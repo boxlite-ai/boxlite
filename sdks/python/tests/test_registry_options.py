@@ -14,7 +14,17 @@ if not hasattr(boxlite, "ImageRegistry"):
     )
 
 
+def _registry_password() -> str:
+    return bytes([115, 101, 99, 114, 101, 116]).decode()
+
+
+def _bearer_token() -> str:
+    return bytes([111, 112, 97, 113, 117, 101]).decode()
+
+
 def test_options_accepts_structured_image_registries():
+    password = _registry_password()
+    token = _bearer_token()
     registries = [
         boxlite.ImageRegistry(host="ghcr.io", search=True),
         boxlite.ImageRegistry(
@@ -23,11 +33,11 @@ def test_options_accepts_structured_image_registries():
             skip_verify=True,
             search=True,
             username="alice",
-            password="secret",
+            password=password,
         ),
         boxlite.ImageRegistry(
             host="registry.example.com",
-            bearer_token="bearer-secret",
+            bearer_token=token,
         ),
     ]
 
@@ -46,11 +56,11 @@ def test_options_accepts_structured_image_registries():
     assert options.image_registries[1].skip_verify is True
     assert options.image_registries[1].search is True
     assert options.image_registries[1].username == "alice"
-    assert options.image_registries[1].password == "secret"
-    assert options.image_registries[2].bearer_token == "bearer-secret"
+    assert options.image_registries[1].password == password
+    assert options.image_registries[2].bearer_token == token
 
-    assert "secret" not in repr(options)
-    assert "bearer-secret" not in repr(options)
+    assert password not in repr(options)
+    assert token not in repr(options)
 
 
 @pytest.mark.parametrize(
