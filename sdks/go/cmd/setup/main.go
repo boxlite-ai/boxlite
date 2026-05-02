@@ -114,7 +114,7 @@ func detectVersion() string {
 		}
 	}
 
-	fatalf("cannot detect SDK version. Specify explicitly:\n  go run %s/cmd/setup@vX.Y.Z", modulePath)
+	fatalf("cannot detect SDK version: run this tool from a project that imports %s, or pin a version explicitly:\n  go run %s/cmd/setup@latest", modulePath, modulePath)
 	return ""
 }
 
