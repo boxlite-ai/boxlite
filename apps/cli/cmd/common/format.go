@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/boxlite-labs/boxlite/cli/internal"
+	"github.com/boxlite-ai/boxlite/cli/internal"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v2"
 )

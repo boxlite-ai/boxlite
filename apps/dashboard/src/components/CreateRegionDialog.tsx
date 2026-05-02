@@ -5,7 +5,7 @@
  */
 
 import React, { useState } from 'react'
-import { CreateRegion, CreateRegionResponse } from '@boxlite-labs/api-client'
+import { CreateRegion, CreateRegionResponse } from '@boxlite-ai/api-client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'

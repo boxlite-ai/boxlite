@@ -7,7 +7,7 @@ import (
 	"context"
 	"time"
 
-	common_cache "github.com/boxlite-labs/common-go/pkg/cache"
+	common_cache "github.com/boxlite-ai/common-go/pkg/cache"
 )
 
 type SnapshotErrorCache struct {

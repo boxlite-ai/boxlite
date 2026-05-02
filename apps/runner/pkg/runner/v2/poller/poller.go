@@ -11,9 +11,9 @@ import (
 	"log/slog"
 	"time"
 
-	apiclient "github.com/boxlite-labs/boxlite/libs/api-client-go"
-	runnerapiclient "github.com/boxlite-labs/runner/pkg/apiclient"
-	"github.com/boxlite-labs/runner/pkg/runner/v2/executor"
+	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
+	runnerapiclient "github.com/boxlite-ai/runner/pkg/apiclient"
+	"github.com/boxlite-ai/runner/pkg/runner/v2/executor"
 )
 
 type PollerServiceConfig struct {

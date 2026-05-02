@@ -95,13 +95,13 @@ fi
 # Build the binary
 echo "Building BoxLite CLI with version: $BOXLITE_VERSION"
 go build \
-    -ldflags "-X 'github.com/boxlite-labs/boxlite/cli/internal.Version=${BOXLITE_VERSION}' \
-    -X 'github.com/boxlite-labs/boxlite/cli/internal.BoxLiteApiUrl=${BOXLITE_API_URL}' \
-    -X 'github.com/boxlite-labs/boxlite/cli/internal.Auth0Domain=${BOXLITE_AUTH0_DOMAIN}' \
-    -X 'github.com/boxlite-labs/boxlite/cli/internal.Auth0ClientId=${BOXLITE_AUTH0_CLIENT_ID}' \
-    -X 'github.com/boxlite-labs/boxlite/cli/internal.Auth0ClientSecret=${BOXLITE_AUTH0_CLIENT_SECRET}' \
-    -X 'github.com/boxlite-labs/boxlite/cli/internal.Auth0CallbackPort=${BOXLITE_AUTH0_CALLBACK_PORT}' \
-    -X 'github.com/boxlite-labs/boxlite/cli/internal.Auth0Audience=${BOXLITE_AUTH0_AUDIENCE}'" \
+    -ldflags "-X 'github.com/boxlite-ai/boxlite/cli/internal.Version=${BOXLITE_VERSION}' \
+    -X 'github.com/boxlite-ai/boxlite/cli/internal.BoxLiteApiUrl=${BOXLITE_API_URL}' \
+    -X 'github.com/boxlite-ai/boxlite/cli/internal.Auth0Domain=${BOXLITE_AUTH0_DOMAIN}' \
+    -X 'github.com/boxlite-ai/boxlite/cli/internal.Auth0ClientId=${BOXLITE_AUTH0_CLIENT_ID}' \
+    -X 'github.com/boxlite-ai/boxlite/cli/internal.Auth0ClientSecret=${BOXLITE_AUTH0_CLIENT_SECRET}' \
+    -X 'github.com/boxlite-ai/boxlite/cli/internal.Auth0CallbackPort=${BOXLITE_AUTH0_CALLBACK_PORT}' \
+    -X 'github.com/boxlite-ai/boxlite/cli/internal.Auth0Audience=${BOXLITE_AUTH0_AUDIENCE}'" \
     -o "${DIST_DIR}/dist/apps/cli/${OUTPUT_FILE}" main.go
 
 echo "Build complete: ${DIST_DIR}/dist/apps/cli/${OUTPUT_FILE}"

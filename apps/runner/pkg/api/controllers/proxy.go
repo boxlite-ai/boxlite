@@ -8,7 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/boxlite-labs/runner/pkg/runner"
+	"github.com/boxlite-ai/runner/pkg/runner"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 )

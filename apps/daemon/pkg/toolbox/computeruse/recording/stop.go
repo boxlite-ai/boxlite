@@ -9,7 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	recordingservice "github.com/boxlite-labs/daemon/pkg/recording"
+	recordingservice "github.com/boxlite-ai/daemon/pkg/recording"
 )
 
 // StopRecording godoc

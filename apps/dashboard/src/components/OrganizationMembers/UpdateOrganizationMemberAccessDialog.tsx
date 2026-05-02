@@ -5,7 +5,7 @@
  */
 
 import React, { useState } from 'react'
-import { CreateOrganizationInvitationRoleEnum, OrganizationRole, OrganizationUserRoleEnum } from '@boxlite-labs/api-client'
+import { CreateOrganizationInvitationRoleEnum, OrganizationRole, OrganizationUserRoleEnum } from '@boxlite-ai/api-client'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import {

@@ -16,7 +16,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { BOXLITE_DOCS_URL } from '@/constants/ExternalLinks'
 import { LogsQueryParams, useSandboxLogs } from '@/hooks/useSandboxLogs'
 import { cn } from '@/lib/utils'
-import { LogEntry } from '@boxlite-labs/api-client'
+import { LogEntry } from '@boxlite-ai/api-client'
 import { format, subHours } from 'date-fns'
 import { ChevronDown, ChevronLeft, ChevronRight, FileText, RefreshCw, Search } from 'lucide-react'
 import { useQueryStates } from 'nuqs'

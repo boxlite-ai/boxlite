@@ -1,9 +1,9 @@
-module github.com/boxlite-labs/boxlite/cli
+module github.com/boxlite-ai/boxlite/cli
 
 go 1.25.4
 
 require (
-	github.com/boxlite-labs/boxlite/libs/api-client-go v0.159.0
+	github.com/boxlite-ai/boxlite/libs/api-client-go v0.159.0
 	github.com/charmbracelet/bubbletea v1.1.0
 	github.com/docker/docker v28.5.2+incompatible
 	github.com/mark3labs/mcp-go v0.32.0
@@ -99,4 +99,4 @@ require (
 	gopkg.in/yaml.v2 v2.4.0
 )
 
-replace github.com/boxlite-labs/boxlite/libs/api-client-go => ../api-client-go
+replace github.com/boxlite-ai/boxlite/libs/api-client-go => ../api-client-go

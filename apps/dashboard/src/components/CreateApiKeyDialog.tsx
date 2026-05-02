@@ -29,7 +29,7 @@ import { useCreateApiKeyMutation } from '@/hooks/mutations/useCreateApiKeyMutati
 import { useCopyToClipboard } from '@/hooks/useCopyToClipboard'
 import { handleApiError } from '@/lib/error-handling'
 import { getMaskedToken } from '@/lib/utils'
-import { ApiKeyResponse, CreateApiKeyPermissionsEnum } from '@boxlite-labs/api-client'
+import { ApiKeyResponse, CreateApiKeyPermissionsEnum } from '@boxlite-ai/api-client'
 import { useForm } from '@tanstack/react-form'
 import { Plus } from 'lucide-react'
 import React, { useCallback, useEffect, useMemo, useState } from 'react'

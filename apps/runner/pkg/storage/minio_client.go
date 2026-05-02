@@ -10,7 +10,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/boxlite-labs/runner/cmd/runner/config"
+	"github.com/boxlite-ai/runner/cmd/runner/config"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 )

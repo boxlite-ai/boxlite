@@ -7,7 +7,7 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/boxlite-labs/boxlite/cli/views/common"
+	"github.com/boxlite-ai/boxlite/cli/views/common"
 	"github.com/pkg/browser"
 	"github.com/spf13/cobra"
 )

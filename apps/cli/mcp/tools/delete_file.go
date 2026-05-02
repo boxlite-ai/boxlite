@@ -8,8 +8,8 @@ import (
 	"context"
 	"fmt"
 
-	apiclient_cli "github.com/boxlite-labs/boxlite/cli/apiclient"
-	apiclient "github.com/boxlite-labs/boxlite/libs/api-client-go"
+	apiclient_cli "github.com/boxlite-ai/boxlite/cli/apiclient"
+	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
 	"github.com/mark3labs/mcp-go/mcp"
 
 	log "github.com/sirupsen/logrus"

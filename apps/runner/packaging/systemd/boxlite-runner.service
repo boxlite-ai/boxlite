@@ -1,6 +1,6 @@
 [Unit]
 Description=BoxLite Runner Service
-Documentation=https://github.com/boxlite-labs/boxlite
+Documentation=https://github.com/boxlite-ai/boxlite
 After=network.target
 Wants=network-online.target
 

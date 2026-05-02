@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/boxlite-labs/runner/pkg/api/dto"
+	"github.com/boxlite-ai/runner/pkg/api/dto"
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"

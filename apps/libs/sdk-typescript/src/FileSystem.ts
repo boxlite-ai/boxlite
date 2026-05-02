@@ -12,8 +12,8 @@ import {
   ReplaceRequest,
   ReplaceResult,
   SearchFilesResponse,
-} from '@boxlite-labs/toolbox-api-client'
-import { FileSystemApi } from '@boxlite-labs/toolbox-api-client'
+} from '@boxlite-ai/toolbox-api-client'
+import { FileSystemApi } from '@boxlite-ai/toolbox-api-client'
 import { dynamicImport } from './utils/Import'
 import { RUNTIME, Runtime } from './utils/Runtime'
 import { BoxliteError } from './errors/BoxliteError'

@@ -12,7 +12,7 @@ import {
   ModelsSandboxUsage,
   ModelsUsageChartPoint,
   ModelsUsagePeriod,
-} from '@boxlite-labs/analytics-api-client'
+} from '@boxlite-ai/analytics-api-client'
 
 export interface AnalyticsUsageParams {
   from: Date

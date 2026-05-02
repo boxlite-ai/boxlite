@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/boxlite-labs/boxlite/cli/cmd/mcp/agents"
+	"github.com/boxlite-ai/boxlite/cli/cmd/mcp/agents"
 	"github.com/spf13/cobra"
 )
 

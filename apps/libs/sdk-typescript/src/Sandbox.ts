@@ -18,7 +18,7 @@ import {
   SshAccessValidationDto,
   SignedPortPreviewUrl,
   ResizeSandbox,
-} from '@boxlite-labs/api-client'
+} from '@boxlite-ai/api-client'
 import { Resources } from './BoxLite'
 import {
   FileSystemApi,
@@ -28,7 +28,7 @@ import {
   InfoApi,
   ComputerUseApi,
   InterpreterApi,
-} from '@boxlite-labs/toolbox-api-client'
+} from '@boxlite-ai/toolbox-api-client'
 import { FileSystem } from './FileSystem'
 import { Git } from './Git'
 import { CodeRunParams, Process } from './Process'

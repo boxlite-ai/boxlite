@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { DockerRegistry } from '@boxlite-labs/api-client'
+import { DockerRegistry } from '@boxlite-ai/api-client'
 import { useQuery } from '@tanstack/react-query'
 import { useApi } from '../useApi'
 import { useSelectedOrganization } from '../useSelectedOrganization'

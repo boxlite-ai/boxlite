@@ -17,12 +17,12 @@ import (
 
 	"context"
 
-	"github.com/boxlite-labs/runner/cmd/runner/config"
-	"github.com/boxlite-labs/runner/pkg/api/dto"
-	"github.com/boxlite-labs/runner/pkg/runner"
+	"github.com/boxlite-ai/runner/cmd/runner/config"
+	"github.com/boxlite-ai/runner/pkg/api/dto"
+	"github.com/boxlite-ai/runner/pkg/runner"
 	"github.com/gin-gonic/gin"
 
-	common_errors "github.com/boxlite-labs/common-go/pkg/errors"
+	common_errors "github.com/boxlite-ai/common-go/pkg/errors"
 )
 
 // TagImage godoc

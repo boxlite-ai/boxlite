@@ -5,7 +5,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react'
-import { OrganizationRole } from '@boxlite-labs/api-client'
+import { OrganizationRole } from '@boxlite-ai/api-client'
 import { useApi } from '@/hooks/useApi'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { handleApiError } from '@/lib/error-handling'

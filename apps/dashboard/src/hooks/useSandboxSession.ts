@@ -12,7 +12,7 @@ import {
   CreateSandboxFromSnapshotParams,
   BoxLite,
   Sandbox,
-} from '@boxlite-labs/sdk'
+} from '@boxlite-ai/sdk'
 import { QueryClient, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { useAuth } from 'react-oidc-context'

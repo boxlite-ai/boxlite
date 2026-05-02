@@ -7,8 +7,8 @@ package apiclient
 import (
 	"net/http"
 
-	apiclient "github.com/boxlite-labs/boxlite/libs/api-client-go"
-	"github.com/boxlite-labs/runner/cmd/runner/config"
+	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
+	"github.com/boxlite-ai/runner/cmd/runner/config"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 

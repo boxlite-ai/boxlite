@@ -7,11 +7,11 @@ package organization
 import (
 	"context"
 
-	apiclient_cli "github.com/boxlite-labs/boxlite/cli/apiclient"
-	"github.com/boxlite-labs/boxlite/cli/config"
-	"github.com/boxlite-labs/boxlite/cli/views/common"
-	"github.com/boxlite-labs/boxlite/cli/views/organization"
-	apiclient "github.com/boxlite-labs/boxlite/libs/api-client-go"
+	apiclient_cli "github.com/boxlite-ai/boxlite/cli/apiclient"
+	"github.com/boxlite-ai/boxlite/cli/config"
+	"github.com/boxlite-ai/boxlite/cli/views/common"
+	"github.com/boxlite-ai/boxlite/cli/views/organization"
+	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
 	"github.com/spf13/cobra"
 )
 

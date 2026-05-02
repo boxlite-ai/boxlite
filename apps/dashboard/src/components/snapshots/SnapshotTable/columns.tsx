@@ -6,7 +6,7 @@
 
 import { TimestampTooltip } from '@/components/TimestampTooltip'
 import { getRelativeTimeString } from '@/lib/utils'
-import { SnapshotDto, SnapshotState } from '@boxlite-labs/api-client'
+import { SnapshotDto, SnapshotState } from '@boxlite-ai/api-client'
 import { ColumnDef, RowData, Table } from '@tanstack/react-table'
 import { Loader2, MoreHorizontal } from 'lucide-react'
 import React from 'react'

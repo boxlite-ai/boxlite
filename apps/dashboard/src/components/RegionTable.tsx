@@ -6,7 +6,7 @@
 
 import { DEFAULT_PAGE_SIZE } from '@/constants/Pagination'
 import { getRelativeTimeString } from '@/lib/utils'
-import { Region, RegionType } from '@boxlite-labs/api-client'
+import { Region, RegionType } from '@boxlite-ai/api-client'
 import {
   ColumnDef,
   flexRender,

@@ -12,7 +12,7 @@
 
 ```bash
 # Clone the repository
-git clone https://github.com/boxlite-labs/boxlite.git
+git clone https://github.com/boxlite-ai/boxlite.git
 cd boxlite
 
 # Initialize submodules
@@ -70,7 +70,7 @@ BoxLite includes 9 comprehensive Python examples demonstrating all major use cas
 
 ```bash
 # Clone repository
-git clone https://github.com/boxlite-labs/boxlite.git
+git clone https://github.com/boxlite-ai/boxlite.git
 cd boxlite
 
 # Build Python SDK

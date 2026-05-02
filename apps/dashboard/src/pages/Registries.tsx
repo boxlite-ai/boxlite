@@ -29,7 +29,7 @@ import {
   DockerRegistryRegistryTypeEnum,
   OrganizationRolePermissionsEnum,
   type DockerRegistry,
-} from '@boxlite-labs/api-client'
+} from '@boxlite-ai/api-client'
 import { Info, Plus } from 'lucide-react'
 import React, { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'

@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { SandboxState } from '@boxlite-labs/api-client'
+import { SandboxState } from '@boxlite-ai/api-client'
 import { Loader2 } from 'lucide-react'
 
 interface SquareProps {

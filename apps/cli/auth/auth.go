@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/boxlite-labs/boxlite/cli/config"
+	"github.com/boxlite-ai/boxlite/cli/config"
 	"github.com/coreos/go-oidc/v3/oidc"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/oauth2"

@@ -8,8 +8,8 @@ import (
 	"encoding/json"
 	"net/http"
 
-	common_errors "github.com/boxlite-labs/common-go/pkg/errors"
-	"github.com/boxlite-labs/runner/pkg/common"
+	common_errors "github.com/boxlite-ai/common-go/pkg/errors"
+	"github.com/boxlite-ai/runner/pkg/common"
 	"github.com/gin-gonic/gin"
 )
 

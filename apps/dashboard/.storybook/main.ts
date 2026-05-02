@@ -22,7 +22,7 @@ const config: StorybookConfig = {
       resolve: {
         alias: [
           {
-            find: '@boxlite-labs/sdk',
+            find: '@boxlite-ai/sdk',
             replacement: path.resolve(__dirname, '../../../libs/sdk-typescript/src'),
           },
           {

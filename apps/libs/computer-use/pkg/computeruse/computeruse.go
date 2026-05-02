@@ -15,7 +15,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/boxlite-labs/daemon/pkg/toolbox/computeruse"
+	"github.com/boxlite-ai/daemon/pkg/toolbox/computeruse"
 	log "github.com/sirupsen/logrus"
 )
 

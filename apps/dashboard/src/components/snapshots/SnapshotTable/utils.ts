@@ -5,7 +5,7 @@
  */
 
 import { DEFAULT_SNAPSHOT_SORTING, SnapshotSorting } from '@/hooks/queries/useSnapshotsQuery'
-import { GetAllSnapshotsOrderEnum, GetAllSnapshotsSortEnum } from '@boxlite-labs/api-client'
+import { GetAllSnapshotsOrderEnum, GetAllSnapshotsSortEnum } from '@boxlite-ai/api-client'
 import { SortingState } from '@tanstack/react-table'
 
 export const convertApiSortingToTableSorting = (sorting: SnapshotSorting): SortingState => {

@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Organization } from '@boxlite-labs/api-client'
+import { Organization } from '@boxlite-ai/api-client'
 import { createContext } from 'react'
 
 export interface IOrganizationsContext {

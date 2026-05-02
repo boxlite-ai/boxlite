@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { CreateSandboxFromImageParams, CreateSandboxFromSnapshotParams, BoxLite, Sandbox } from '@boxlite-labs/sdk'
+import { CreateSandboxFromImageParams, CreateSandboxFromSnapshotParams, BoxLite, Sandbox } from '@boxlite-ai/sdk'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useAuth } from 'react-oidc-context'
 import { useSelectedOrganization } from '../useSelectedOrganization'

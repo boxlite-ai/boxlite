@@ -7,7 +7,7 @@
 import { OrganizationEmail, OrganizationTier, OrganizationWallet } from '@/billing-api'
 import { Invoice, PaginatedInvoices, PaymentUrl } from '@/billing-api/types/Invoice'
 import { Tier } from '@/billing-api/types/tier'
-import { BoxliteConfiguration } from '@boxlite-labs/api-client/src'
+import { BoxliteConfiguration } from '@boxlite-ai/api-client/src'
 import { bypass, http, HttpResponse } from 'msw'
 
 const BILLING_API_URL = 'http://localhost:3000/api/billing'

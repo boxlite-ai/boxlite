@@ -44,7 +44,7 @@
       "options": {
         "main": "{projectRoot}/cmd/runner/main.go",
         "outputPath": "dist/apps/runner",
-        "flags": ["-ldflags \"-X 'github.com/boxlite-labs/runner/internal.Version=$VERSION'\""]
+        "flags": ["-ldflags \"-X 'github.com/boxlite-ai/runner/internal.Version=$VERSION'\""]
       },
       "dependsOn": ["copy-daemon-bin", "copy-computeruse-plugin", "check-version-env"],
       "inputs": [
@@ -63,7 +63,7 @@
           "GOARCH": "amd64",
           "GOOS": "linux"
         },
-        "flags": ["-ldflags \"-X 'github.com/boxlite-labs/runner/internal.Version=$VERSION'\""]
+        "flags": ["-ldflags \"-X 'github.com/boxlite-ai/runner/internal.Version=$VERSION'\""]
       },
       "dependsOn": ["copy-daemon-bin", "copy-computeruse-plugin", "check-version-env"],
       "inputs": [

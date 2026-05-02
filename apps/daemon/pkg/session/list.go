@@ -4,7 +4,7 @@
 
 package session
 
-import "github.com/boxlite-labs/daemon/internal/util"
+import "github.com/boxlite-ai/daemon/internal/util"
 
 func (s *SessionService) List() ([]Session, error) {
 	sessions := []Session{}

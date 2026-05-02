@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/boxlite-labs/daemon/pkg/common"
+	"github.com/boxlite-ai/daemon/pkg/common"
 	"github.com/gin-gonic/gin"
 )
 

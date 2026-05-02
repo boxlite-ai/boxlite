@@ -13,7 +13,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/boxlite-labs/boxlite/cli/config"
+	"github.com/boxlite-ai/boxlite/cli/config"
 	log "github.com/sirupsen/logrus"
 )
 

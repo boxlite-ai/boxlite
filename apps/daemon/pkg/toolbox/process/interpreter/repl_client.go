@@ -17,7 +17,7 @@ import (
 	"syscall"
 	"time"
 
-	common_errors "github.com/boxlite-labs/common-go/pkg/errors"
+	common_errors "github.com/boxlite-ai/common-go/pkg/errors"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )

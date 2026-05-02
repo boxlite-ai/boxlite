@@ -14,7 +14,7 @@ import {
   PtyCreateRequest,
   PtySessionInfo,
   SessionSendInputRequest,
-} from '@boxlite-labs/toolbox-api-client'
+} from '@boxlite-ai/toolbox-api-client'
 import { SandboxCodeToolbox } from './Sandbox'
 import { ExecuteResponse } from './types/ExecuteResponse'
 import { ArtifactParser } from './utils/ArtifactParser'

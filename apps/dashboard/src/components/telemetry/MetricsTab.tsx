@@ -14,7 +14,7 @@ import { RefreshCw, BarChart3 } from 'lucide-react'
 import { Spinner } from '@/components/ui/spinner'
 import { format } from 'date-fns'
 import { subHours } from 'date-fns'
-import { MetricSeries } from '@boxlite-labs/api-client'
+import { MetricSeries } from '@boxlite-ai/api-client'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 
 interface MetricsTabProps {

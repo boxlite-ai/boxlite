@@ -1,4 +1,4 @@
-module github.com/boxlite-labs/computer-use
+module github.com/boxlite-ai/computer-use
 
 go 1.25.0
 

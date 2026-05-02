@@ -10,7 +10,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/boxlite-labs/boxlite/cli/views/common"
+	"github.com/boxlite-ai/boxlite/cli/views/common"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/lipgloss/table"
 	"golang.org/x/term"

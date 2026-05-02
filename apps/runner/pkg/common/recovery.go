@@ -9,7 +9,7 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/boxlite-labs/runner/pkg/models"
+	"github.com/boxlite-ai/runner/pkg/models"
 )
 
 // Patterns that indicate recoverable errors mapped to their recovery types

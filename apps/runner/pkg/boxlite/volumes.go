@@ -16,9 +16,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/boxlite-labs/common-go/pkg/log"
-	"github.com/boxlite-labs/runner/cmd/runner/config"
-	"github.com/boxlite-labs/runner/pkg/api/dto"
+	"github.com/boxlite-ai/common-go/pkg/log"
+	"github.com/boxlite-ai/runner/cmd/runner/config"
+	"github.com/boxlite-ai/runner/pkg/api/dto"
 )
 
 const volumeMountPrefix = "boxlite-volume-"

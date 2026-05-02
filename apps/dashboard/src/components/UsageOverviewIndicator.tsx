@@ -5,7 +5,7 @@
  */
 
 import { cn } from '@/lib/utils'
-import { RegionUsageOverview } from '@boxlite-labs/api-client/src'
+import { RegionUsageOverview } from '@boxlite-ai/api-client/src'
 
 export function UsageOverviewIndicator({
   usage,

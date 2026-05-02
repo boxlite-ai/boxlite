@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { CreateApiKeyPermissionsEnum } from '@boxlite-labs/api-client'
+import { CreateApiKeyPermissionsEnum } from '@boxlite-ai/api-client'
 
 export const CREATE_API_KEY_PERMISSIONS_GROUPS: { name: string; permissions: CreateApiKeyPermissionsEnum[] }[] = [
   {

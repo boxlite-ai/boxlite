@@ -5,7 +5,7 @@
  */
 
 import { cn } from '@/lib/utils'
-import { SandboxState as SandboxStateType } from '@boxlite-labs/api-client'
+import { SandboxState as SandboxStateType } from '@boxlite-ai/api-client'
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip'
 import { getStateLabel } from './constants'
 import { STATE_ICONS } from './state-icons'

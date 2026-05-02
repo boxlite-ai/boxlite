@@ -11,7 +11,7 @@ import (
 	"os"
 	"os/exec"
 
-	"github.com/boxlite-labs/daemon/pkg/common"
+	"github.com/boxlite-ai/daemon/pkg/common"
 	"github.com/creack/pty"
 )
 

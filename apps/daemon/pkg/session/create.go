@@ -11,10 +11,10 @@ import (
 	"os"
 	"os/exec"
 
-	"github.com/boxlite-labs/daemon/pkg/common"
+	"github.com/boxlite-ai/daemon/pkg/common"
 	cmap "github.com/orcaman/concurrent-map/v2"
 
-	common_errors "github.com/boxlite-labs/common-go/pkg/errors"
+	common_errors "github.com/boxlite-ai/common-go/pkg/errors"
 )
 
 func (s *SessionService) Create(sessionId string, isLegacy bool) error {

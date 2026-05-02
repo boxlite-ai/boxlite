@@ -1,9 +1,9 @@
-module github.com/boxlite-labs/runner
+module github.com/boxlite-ai/runner
 
 go 1.25.4
 
 require (
-	github.com/boxlite-labs/boxlite/libs/api-client-go v0.149.0
+	github.com/boxlite-ai/boxlite/libs/api-client-go v0.149.0
 	github.com/containerd/errdefs v1.0.0
 	github.com/docker/go-units v0.5.0
 	github.com/gin-gonic/gin v1.10.1
@@ -93,4 +93,4 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/boxlite-labs/boxlite/libs/api-client-go => ../api-client-go
+replace github.com/boxlite-ai/boxlite/libs/api-client-go => ../api-client-go

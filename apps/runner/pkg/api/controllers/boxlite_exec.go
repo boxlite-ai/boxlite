@@ -8,8 +8,8 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/boxlite-labs/runner/pkg/boxlite"
-	"github.com/boxlite-labs/runner/pkg/runner"
+	"github.com/boxlite-ai/runner/pkg/boxlite"
+	"github.com/boxlite-ai/runner/pkg/runner"
 	"github.com/gin-gonic/gin"
 )
 

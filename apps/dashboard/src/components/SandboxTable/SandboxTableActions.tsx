@@ -5,7 +5,7 @@
  */
 
 import { RoutePath } from '@/enums/RoutePath'
-import { SandboxState } from '@boxlite-labs/api-client'
+import { SandboxState } from '@boxlite-ai/api-client'
 import { Terminal, MoreVertical, Play, Square, Loader2, Wrench } from 'lucide-react'
 import { generatePath, useNavigate } from 'react-router-dom'
 import { useMemo } from 'react'

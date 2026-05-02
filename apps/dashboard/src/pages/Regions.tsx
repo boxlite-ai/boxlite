@@ -13,7 +13,7 @@ import {
   CreateRegionResponse,
   SnapshotManagerCredentials,
   UpdateRegion,
-} from '@boxlite-labs/api-client'
+} from '@boxlite-ai/api-client'
 import { RegionTable } from '@/components/RegionTable'
 import { CreateRegionDialog } from '@/components/CreateRegionDialog'
 import { UpdateRegionDialog } from '@/components/UpdateRegionDialog'

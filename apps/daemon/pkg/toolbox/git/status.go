@@ -8,7 +8,7 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/boxlite-labs/daemon/pkg/git"
+	"github.com/boxlite-ai/daemon/pkg/git"
 	"github.com/gin-gonic/gin"
 )
 

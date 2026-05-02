@@ -10,8 +10,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	common_errors "github.com/boxlite-labs/common-go/pkg/errors"
-	"github.com/boxlite-labs/daemon/internal/util"
+	common_errors "github.com/boxlite-ai/common-go/pkg/errors"
+	"github.com/boxlite-ai/daemon/internal/util"
 )
 
 // CreateSession godoc

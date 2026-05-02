@@ -33,7 +33,7 @@ import {
   ToolboxApi,
   UpdateNetworkSettingsDTO,
   RecoverSandboxDTO,
-} from '@boxlite-labs/runner-api-client'
+} from '@boxlite-ai/runner-api-client'
 import { Sandbox } from '../entities/sandbox.entity'
 import { BuildInfo } from '../entities/build-info.entity'
 import { DockerRegistry } from '../../docker-registry/entities/docker-registry.entity'

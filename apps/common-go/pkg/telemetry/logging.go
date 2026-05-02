@@ -11,7 +11,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/boxlite-labs/common-go/pkg/log"
+	"github.com/boxlite-ai/common-go/pkg/log"
 	"go.opentelemetry.io/contrib/bridges/otelslog"
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp"
 	"go.opentelemetry.io/otel/log/global"

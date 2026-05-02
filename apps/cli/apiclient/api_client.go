@@ -11,10 +11,10 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/boxlite-labs/boxlite/cli/auth"
-	"github.com/boxlite-labs/boxlite/cli/config"
-	"github.com/boxlite-labs/boxlite/cli/internal"
-	apiclient "github.com/boxlite-labs/boxlite/libs/api-client-go"
+	"github.com/boxlite-ai/boxlite/cli/auth"
+	"github.com/boxlite-ai/boxlite/cli/config"
+	"github.com/boxlite-ai/boxlite/cli/internal"
+	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
 
 	log "github.com/sirupsen/logrus"
 )
@@ -64,7 +64,7 @@ func checkVersionsMismatch(res *http.Response) {
 	}
 
 	versionMismatchWarningOnce.Do(func() {
-		log.Warn(fmt.Sprintf("Version mismatch: BoxLite CLI is on v%s and API is on v%s.\nMake sure the versions are aligned using 'brew upgrade boxlite-labs/cli/boxlite' or by downloading the latest version from https://github.com/boxlite-labs/boxlite/releases.", cliVersion, apiVersion))
+		log.Warn(fmt.Sprintf("Version mismatch: BoxLite CLI is on v%s and API is on v%s.\nMake sure the versions are aligned using 'brew upgrade boxlite-ai/cli/boxlite' or by downloading the latest version from https://github.com/boxlite-ai/boxlite/releases.", cliVersion, apiVersion))
 	})
 }
 

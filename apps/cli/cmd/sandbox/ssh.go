@@ -7,8 +7,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/boxlite-labs/boxlite/cli/apiclient"
-	"github.com/boxlite-labs/boxlite/cli/cmd/common"
+	"github.com/boxlite-ai/boxlite/cli/apiclient"
+	"github.com/boxlite-ai/boxlite/cli/cmd/common"
 	"github.com/spf13/cobra"
 )
 

@@ -9,7 +9,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/boxlite-labs/daemon/internal/util"
+	"github.com/boxlite-ai/daemon/internal/util"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )

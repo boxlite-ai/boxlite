@@ -19,7 +19,7 @@ import (
 	"strings"
 	"time"
 
-	apiclient "github.com/boxlite-labs/boxlite/libs/api-client-go"
+	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
 	"golang.org/x/crypto/ssh"
 
 	log "github.com/sirupsen/logrus"

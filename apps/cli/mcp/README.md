@@ -20,7 +20,7 @@ BoxLite MCP Server allows AI agents to utilize:
 **Mac/Linux**
 
 ```bash
-brew install boxlite-labs/cli/boxlite
+brew install boxlite-ai/cli/boxlite
 ```
 
 **Windows**

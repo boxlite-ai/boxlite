@@ -26,7 +26,7 @@ import {
   Resources,
   ScreenshotOptions,
   ScreenshotRegion,
-} from '@boxlite-labs/sdk'
+} from '@boxlite-ai/sdk'
 import { createContext, ReactNode } from 'react'
 
 export interface ParameterFormItem {

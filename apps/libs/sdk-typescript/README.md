@@ -9,13 +9,13 @@ The SDK provides an interface for sandbox management, file system operations, Gi
 Install the package using **npm**:
 
 ```bash
-npm install @boxlite-labs/sdk
+npm install @boxlite-ai/sdk
 ```
 
 or using **yarn**:
 
 ```bash
-yarn add @boxlite-labs/sdk
+yarn add @boxlite-ai/sdk
 ```
 
 ## Get API key
@@ -31,7 +31,7 @@ Configure the SDK using [environment variables](https://www.boxlite.io/docs/en/c
 - `BOXLITE_TARGET`: Your target [region](https://www.boxlite.io/docs/en/regions/) environment (e.g. `us`, `eu`)
 
 ```typescript
-import { BoxLite } from '@boxlite-labs/sdk'
+import { BoxLite } from '@boxlite-ai/sdk'
 
 // Initialize with environment variables
 const boxlite = new BoxLite();
@@ -49,7 +49,7 @@ const boxlite = new BoxLite({
 Create a sandbox to run your code securely in an isolated environment.
 
 ```typescript
-import { BoxLite } from '@boxlite-labs/sdk'
+import { BoxLite } from '@boxlite-ai/sdk'
 
 const boxlite = new BoxLite({apiKey: "YOUR_API_KEY"});
 const sandbox = await boxlite.create({
@@ -68,7 +68,7 @@ BoxLite provides [examples](https://www.boxlite.io/docs/en/getting-started/#exam
 Create a sandbox with [custom resources](https://www.boxlite.io/docs/en/sandboxes/#resources) (CPU, memory, disk).
 
 ```typescript
-import { BoxLite, Image } from '@boxlite-labs/sdk';
+import { BoxLite, Image } from '@boxlite-ai/sdk';
 
 const boxlite = new BoxLite();
 const sandbox = await boxlite.create({
@@ -82,7 +82,7 @@ const sandbox = await boxlite.create({
 Create an [ephemeral sandbox](https://www.boxlite.io/docs/en/sandboxes/#ephemeral-sandboxes) that is automatically deleted when stopped.
 
 ```typescript
-import { BoxLite } from '@boxlite-labs/sdk';
+import { BoxLite } from '@boxlite-ai/sdk';
 
 const boxlite = new BoxLite();
 const sandbox = await boxlite.create({
@@ -96,7 +96,7 @@ const sandbox = await boxlite.create({
 Create a sandbox from a [snapshot](https://www.boxlite.io/docs/en/snapshots/).
 
 ```typescript
-import { BoxLite } from '@boxlite-labs/sdk';
+import { BoxLite } from '@boxlite-ai/sdk';
 
 const boxlite = new BoxLite();
 const sandbox = await boxlite.create({

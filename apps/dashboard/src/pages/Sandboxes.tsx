@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { OrganizationRolePermissionsEnum } from '@boxlite-labs/api-client'
+import { OrganizationRolePermissionsEnum } from '@boxlite-ai/api-client'
 import { OrganizationSuspendedError } from '@/api/errors'
 import { PageContent, PageHeader, PageLayout, PageTitle } from '@/components/PageLayout'
 import { CreateSandboxSheet } from '@/components/Sandbox/CreateSandboxSheet'
@@ -50,7 +50,7 @@ import {
   SandboxDesiredState,
   SandboxState,
   SshAccessDto,
-} from '@boxlite-labs/api-client'
+} from '@boxlite-ai/api-client'
 import { QueryKey, useQueryClient } from '@tanstack/react-query'
 import { Check, Copy } from 'lucide-react'
 import React, { useCallback, useEffect, useMemo, useState } from 'react'

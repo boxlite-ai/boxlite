@@ -1,4 +1,4 @@
-module github.com/boxlite-labs/proxy
+module github.com/boxlite-ai/proxy
 
 go 1.25.4
 

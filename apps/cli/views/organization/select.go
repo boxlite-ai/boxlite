@@ -5,8 +5,8 @@
 package organization
 
 import (
-	"github.com/boxlite-labs/boxlite/cli/views/common"
-	apiclient "github.com/boxlite-labs/boxlite/libs/api-client-go"
+	"github.com/boxlite-ai/boxlite/cli/views/common"
+	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
 	"github.com/charmbracelet/huh"
 )
 

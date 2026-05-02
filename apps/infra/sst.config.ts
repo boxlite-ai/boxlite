@@ -477,6 +477,19 @@ export default $config({
     ] as const) {
       new aws.iam.RolePolicyAttachment(name, { role: runnerRole.name, policyArn: arn });
     }
+    new aws.iam.RolePolicy("RunnerVolumeS3Policy", {
+      role: runnerRole.name,
+      policy: JSON.stringify({
+        Version: "2012-10-17",
+        Statement: [
+          {
+            Effect: "Allow",
+            Action: ["s3:*"],
+            Resource: ["arn:aws:s3:::boxlite-volume-*", "arn:aws:s3:::boxlite-volume-*/*"],
+          },
+        ],
+      }),
+    });
     const runnerInstanceProfile = new aws.iam.InstanceProfile("RunnerProfile", { role: runnerRole.name });
 
     const ecrRepo = $interpolate`${aws.getCallerIdentityOutput().accountId}.dkr.ecr.${REGION}.amazonaws.com/boxlite-runner`;
@@ -529,6 +542,13 @@ curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/aw
 unzip -q /tmp/awscliv2.zip -d /tmp
 /tmp/aws/install
 
+# Install Mountpoint for Amazon S3, used by volume mounts
+MOUNT_S3_VERSION=1.20.0
+MOUNT_S3_ARCH=x86_64
+curl -fsSL "https://s3.amazonaws.com/mountpoint-s3-release/\${MOUNT_S3_VERSION}/\${MOUNT_S3_ARCH}/mount-s3-\${MOUNT_S3_VERSION}-\${MOUNT_S3_ARCH}.deb" -o /tmp/mount-s3.deb
+apt-get install -y /tmp/mount-s3.deb
+rm -f /tmp/mount-s3.deb
+
 # Login to ECR
 /usr/local/bin/aws ecr get-login-password --region ${REGION} | docker login --username AWS --password-stdin ${ecrDomain}
 
@@ -536,8 +556,11 @@ unzip -q /tmp/awscliv2.zip -d /tmp
 docker pull ${input.repo}:latest
 docker create --name runner-extract ${input.repo}:latest
 docker cp runner-extract:/usr/local/bin/boxlite-runner /usr/local/bin/boxlite-runner
+rm -rf /usr/local/lib/boxlite-runtime
+docker cp runner-extract:/usr/local/lib/boxlite-runtime /usr/local/lib/boxlite-runtime
 docker rm runner-extract
 chmod +x /usr/local/bin/boxlite-runner
+chmod +x /usr/local/lib/boxlite-runtime/boxlite-* || true
 
 # Get host IP via IMDSv2
 IMDS_TOKEN=\$(curl -sX PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 300")
@@ -560,7 +583,9 @@ Environment=API_VERSION=2
 Environment=API_PORT=${PORTS.RUNNER}
 Environment=RUNNER_DOMAIN=\$HOST_IP
 Environment=BOXLITE_HOME_DIR=/var/lib/boxlite
+Environment=BOXLITE_RUNTIME_DIR=/usr/local/lib/boxlite-runtime
 Environment=INSECURE_REGISTRIES=${registryHost}
+Environment=AWS_REGION=${REGION}
 
 [Install]
 WantedBy=multi-user.target

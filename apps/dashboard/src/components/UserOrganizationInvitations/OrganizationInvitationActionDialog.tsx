@@ -14,7 +14,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { OrganizationInvitation } from '@boxlite-labs/api-client'
+import { OrganizationInvitation } from '@boxlite-ai/api-client'
 
 interface OrganizationInvitationActionDialogProps {
   invitation: OrganizationInvitation

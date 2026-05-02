@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { WebhookInitializationStatus } from '@boxlite-labs/api-client'
+import { WebhookInitializationStatus } from '@boxlite-ai/api-client'
 import { useQuery } from '@tanstack/react-query'
 import { useApi } from '../useApi'
 import { queryKeys } from './queryKeys'

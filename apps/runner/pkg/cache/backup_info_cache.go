@@ -8,10 +8,10 @@ import (
 	"context"
 	"time"
 
-	"github.com/boxlite-labs/runner/pkg/models"
-	"github.com/boxlite-labs/runner/pkg/models/enums"
+	"github.com/boxlite-ai/runner/pkg/models"
+	"github.com/boxlite-ai/runner/pkg/models/enums"
 
-	common_cache "github.com/boxlite-labs/common-go/pkg/cache"
+	common_cache "github.com/boxlite-ai/common-go/pkg/cache"
 )
 
 type BackupInfoCache struct {

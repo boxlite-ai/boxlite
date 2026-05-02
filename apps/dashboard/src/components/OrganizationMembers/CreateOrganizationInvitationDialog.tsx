@@ -20,7 +20,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
-import { CreateOrganizationInvitationRoleEnum, OrganizationRole } from '@boxlite-labs/api-client'
+import { CreateOrganizationInvitationRoleEnum, OrganizationRole } from '@boxlite-ai/api-client'
 import { Plus } from 'lucide-react'
 import React, { useEffect, useState } from 'react'
 

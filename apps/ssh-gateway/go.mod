@@ -1,4 +1,4 @@
-module github.com/boxlite-labs/ssh-gateway
+module github.com/boxlite-ai/ssh-gateway
 
 go 1.24.0
 

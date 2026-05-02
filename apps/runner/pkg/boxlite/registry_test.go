@@ -6,7 +6,7 @@ package boxlite
 import (
 	"testing"
 
-	"github.com/boxlite-labs/runner/pkg/api/dto"
+	"github.com/boxlite-ai/runner/pkg/api/dto"
 )
 
 func TestNormalizeRegistryHosts(t *testing.T) {

@@ -1,4 +1,4 @@
-module github.com/boxlite-labs/daemon
+module github.com/boxlite-ai/daemon
 
 go 1.25.4
 

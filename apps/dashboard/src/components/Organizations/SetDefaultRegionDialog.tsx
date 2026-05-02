@@ -5,7 +5,7 @@
  */
 
 import { useState } from 'react'
-import { Region } from '@boxlite-labs/api-client'
+import { Region } from '@boxlite-ai/api-client'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,

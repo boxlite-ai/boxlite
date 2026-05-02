@@ -12,8 +12,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/boxlite-labs/boxlite/cli/config"
-	apiclient "github.com/boxlite-labs/boxlite/libs/api-client-go"
+	"github.com/boxlite-ai/boxlite/cli/config"
+	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
 )
 
 type ExecuteRequest struct {

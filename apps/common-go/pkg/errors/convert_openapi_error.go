@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 
-	apiclient "github.com/boxlite-labs/boxlite/libs/api-client-go"
+	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
 )
 
 func ConvertOpenAPIError(err error) error {

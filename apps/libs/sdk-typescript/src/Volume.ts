@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { VolumeDto, VolumesApi } from '@boxlite-labs/api-client'
+import { VolumeDto, VolumesApi } from '@boxlite-ai/api-client'
 import { BoxLiteNotFoundError } from './errors/BoxliteError'
 import { WithInstrumentation } from './utils/otel.decorator'
 

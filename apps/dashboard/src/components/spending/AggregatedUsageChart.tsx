@@ -6,7 +6,7 @@
 
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
-import { ModelsAggregatedUsage } from '@boxlite-labs/analytics-api-client'
+import { ModelsAggregatedUsage } from '@boxlite-ai/analytics-api-client'
 import NumberFlow from '@number-flow/react'
 import { motion } from 'framer-motion'
 import React from 'react'

@@ -11,8 +11,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/boxlite-labs/proxy/cmd/proxy/config"
-	"github.com/boxlite-labs/proxy/pkg/proxy"
+	"github.com/boxlite-ai/proxy/cmd/proxy/config"
+	"github.com/boxlite-ai/proxy/pkg/proxy"
 
 	log "github.com/sirupsen/logrus"
 )

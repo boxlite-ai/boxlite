@@ -18,11 +18,11 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 
-	apiclient "github.com/boxlite-labs/boxlite/libs/api-client-go"
-	"github.com/boxlite-labs/common-go/pkg/utils"
-	"github.com/boxlite-labs/runner/internal/metrics"
-	runnerapiclient "github.com/boxlite-labs/runner/pkg/apiclient"
-	"github.com/boxlite-labs/runner/pkg/backend"
+	apiclient "github.com/boxlite-ai/boxlite/libs/api-client-go"
+	"github.com/boxlite-ai/common-go/pkg/utils"
+	"github.com/boxlite-ai/runner/internal/metrics"
+	runnerapiclient "github.com/boxlite-ai/runner/pkg/apiclient"
+	"github.com/boxlite-ai/runner/pkg/backend"
 )
 
 type ExecutorConfig struct {

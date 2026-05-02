@@ -4,7 +4,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react'
-import { SshAccessDto } from '@boxlite-labs/api-client'
+import { SshAccessDto } from '@boxlite-ai/api-client'
 import { useForm } from '@tanstack/react-form'
 import { CheckIcon, CopyIcon, InfoIcon } from 'lucide-react'
 import { AnimatePresence, motion } from 'motion/react'

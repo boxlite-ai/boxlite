@@ -7,10 +7,10 @@ package controllers
 import (
 	"net/http"
 
-	"github.com/boxlite-labs/runner/internal"
-	"github.com/boxlite-labs/runner/pkg/api/dto"
-	"github.com/boxlite-labs/runner/pkg/models"
-	"github.com/boxlite-labs/runner/pkg/runner"
+	"github.com/boxlite-ai/runner/internal"
+	"github.com/boxlite-ai/runner/pkg/api/dto"
+	"github.com/boxlite-ai/runner/pkg/models"
+	"github.com/boxlite-ai/runner/pkg/runner"
 	"github.com/gin-gonic/gin"
 )
 

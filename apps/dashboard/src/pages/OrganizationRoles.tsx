@@ -11,7 +11,7 @@ import { useApi } from '@/hooks/useApi'
 import { useOrganizationRoles } from '@/hooks/useOrganizationRoles'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { handleApiError } from '@/lib/error-handling'
-import { OrganizationRolePermissionsEnum } from '@boxlite-labs/api-client'
+import { OrganizationRolePermissionsEnum } from '@boxlite-ai/api-client'
 import React, { useState } from 'react'
 import { toast } from 'sonner'
 

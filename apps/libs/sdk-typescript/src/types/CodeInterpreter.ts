@@ -8,7 +8,7 @@
  * @module code-interpreter
  */
 
-import { InterpreterContext } from '@boxlite-labs/toolbox-api-client'
+import { InterpreterContext } from '@boxlite-ai/toolbox-api-client'
 
 /**
  * Represents stdout or stderr output from code execution.

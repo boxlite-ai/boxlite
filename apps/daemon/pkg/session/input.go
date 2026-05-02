@@ -10,8 +10,8 @@ import (
 	"os"
 	"strings"
 
-	common_errors "github.com/boxlite-labs/common-go/pkg/errors"
-	"github.com/boxlite-labs/common-go/pkg/log"
+	common_errors "github.com/boxlite-ai/common-go/pkg/errors"
+	"github.com/boxlite-ai/common-go/pkg/log"
 )
 
 // SendInput sends data to the session's stdin for a specific running command

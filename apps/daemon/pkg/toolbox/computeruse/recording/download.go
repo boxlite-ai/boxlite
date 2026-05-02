@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/boxlite-labs/daemon/pkg/recording"
+	"github.com/boxlite-ai/daemon/pkg/recording"
 	"github.com/gin-gonic/gin"
 )
 

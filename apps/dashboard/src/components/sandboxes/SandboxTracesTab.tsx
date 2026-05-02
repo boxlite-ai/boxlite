@@ -17,7 +17,7 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/
 import { BOXLITE_DOCS_URL } from '@/constants/ExternalLinks'
 import { ChevronLeft, ChevronRight, RefreshCw, Activity, ChevronDown } from 'lucide-react'
 import { format, subHours } from 'date-fns'
-import { TraceSummary, TraceSpan } from '@boxlite-labs/api-client'
+import { TraceSummary, TraceSpan } from '@boxlite-ai/api-client'
 import { cn } from '@/lib/utils'
 import { tracesSearchParams, timeRangeSearchParams } from './SearchParams'
 

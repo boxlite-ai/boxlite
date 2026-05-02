@@ -18,7 +18,7 @@ import {
   OrganizationInvitation,
   OrganizationUserRoleEnum,
   UpdateOrganizationInvitationRoleEnum,
-} from '@boxlite-labs/api-client'
+} from '@boxlite-ai/api-client'
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAuth } from 'react-oidc-context'
 import { toast } from 'sonner'
