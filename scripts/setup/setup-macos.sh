@@ -224,19 +224,10 @@ setup_go() {
     echo ""
 }
 
-# Setup Node.js
+# Node.js install delegates to setup_nodejs in setup-common.sh.
+# Local alias kept so the main flow reads the same on every platform.
 install_nodejs() {
-    if [ "${SKIP_INSTALL_NODEJS:-}" = "1" ]; then
-        print_step "Skipping Node.js (SKIP_INSTALL_NODEJS=1)"
-        echo ""
-        return 0
-    fi
-    if ! check_nodejs; then
-        echo -e "${YELLOW}Installing...${NC}"
-        brew install node
-        print_success "Node.js installed"
-    fi
-    echo ""
+    setup_nodejs
 }
 
 # Main installation flow

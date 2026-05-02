@@ -295,17 +295,164 @@ setup_go() {
     echo ""
 }
 
-# Check Node.js installation
+# Minimum Node.js version. The Node SDK's transitive devDeps
+# (@napi-rs/cli@3 -> @inquirer/core@11) need Node >= 20.12, and Node 20 hit
+# EOL on 2026-04-30, so we standardize on the active LTS line.
+NODE_MIN_MAJOR=22
+NODE_MIN_MINOR=0
+
+# Pinned Node.js version used for fresh installs. Should track the active LTS.
+NODE_INSTALL_VERSION="22.18.0"
+
+# Check Node.js installation and version.
+# Returns: 0 = OK, 1 = missing, 2 = too old
 check_nodejs() {
-    print_step "Checking for Node.js... "
-    if command_exists node; then
-        local node_version=$(node --version)
-        print_success "Found ($node_version)"
-        return 0
-    else
+    print_step "Checking for Node.js >= ${NODE_MIN_MAJOR}.${NODE_MIN_MINOR}... "
+
+    if ! command_exists node; then
         print_error "Not found"
         return 1
     fi
+
+    local node_version
+    node_version=$(node --version | sed 's/^v//')
+
+    local major minor
+    major=$(echo "$node_version" | cut -d. -f1)
+    minor=$(echo "$node_version" | cut -d. -f2)
+
+    if [ "$major" -gt "$NODE_MIN_MAJOR" ] 2>/dev/null ||
+       { [ "$major" -eq "$NODE_MIN_MAJOR" ] 2>/dev/null && [ "$minor" -ge "$NODE_MIN_MINOR" ] 2>/dev/null; }; then
+        print_success "Found (version $node_version)"
+        return 0
+    else
+        echo -e "${YELLOW}Found Node.js $node_version (too old, need >= ${NODE_MIN_MAJOR}.${NODE_MIN_MINOR})${NC}"
+        return 2
+    fi
+}
+
+# Install Node.js from official nodejs.org tarball (Linux).
+# Used as a fallback when no package manager path is available.
+install_nodejs_from_tarball() {
+    local arch
+    arch=$(uname -m)
+    case "$arch" in
+        x86_64)  arch="x64" ;;
+        aarch64) arch="arm64" ;;
+        *)
+            print_error "Unsupported architecture for Node.js: $arch"
+            return 1
+            ;;
+    esac
+
+    local tarball="node-v${NODE_INSTALL_VERSION}-linux-${arch}.tar.xz"
+    local url="https://nodejs.org/dist/v${NODE_INSTALL_VERSION}/${tarball}"
+
+    print_step "Downloading ${tarball}... "
+    local tmpfile="/tmp/${tarball}"
+    if ! curl -fsSL "$url" -o "$tmpfile"; then
+        print_error "Failed to download Node.js from $url"
+        return 1
+    fi
+    print_success "Done"
+
+    print_step "Installing to /usr/local... "
+    run_with_sudo tar -xJ -C /usr/local --strip-components=1 -f "$tmpfile"
+    rm -f "$tmpfile"
+    print_success "Installed"
+
+    local installed_version
+    installed_version=$(node --version | sed 's/^v//')
+    print_success "Node.js $installed_version installed"
+}
+
+# Install Node.js via NodeSource on Debian/Ubuntu.
+# Distro packages on Ubuntu 24.04 ship Node 18, which is EOL.
+install_nodejs_from_nodesource() {
+    print_step "Configuring NodeSource repository for Node.js ${NODE_MIN_MAJOR}.x... "
+    local nodesource_url="https://deb.nodesource.com/setup_${NODE_MIN_MAJOR}.x"
+    # NodeSource's setup script writes to /etc/apt/sources.list.d and runs
+    # apt-get update; pipe through sudo so it has the right privileges, but
+    # keep the body in a here-string to avoid shell quoting pitfalls.
+    local nodesource_script
+    if ! nodesource_script=$(curl -fsSL "$nodesource_url"); then
+        print_error "Failed to download NodeSource setup script"
+        return 1
+    fi
+    if ! echo "$nodesource_script" | run_with_sudo bash -; then
+        print_error "NodeSource setup script failed"
+        return 1
+    fi
+    print_success "Configured"
+
+    print_step "Installing nodejs... "
+    run_with_sudo apt-get install -y -qq nodejs
+    print_success "Installed"
+
+    local installed_version
+    installed_version=$(node --version | sed 's/^v//')
+    print_success "Node.js $installed_version installed"
+}
+
+# Install Node.js via Homebrew (macOS).
+install_nodejs_from_brew() {
+    if ! command_exists brew; then
+        print_error "Homebrew not found"
+        return 1
+    fi
+
+    local formula="node@${NODE_MIN_MAJOR}"
+    print_step "Installing ${formula} via Homebrew... "
+    brew install "$formula"
+    # node@N is keg-only; expose it on PATH (idempotent — --force overwrites symlinks).
+    brew link --overwrite --force "$formula" >/dev/null 2>&1 || true
+    print_success "Installed"
+
+    local installed_version
+    installed_version=$(node --version | sed 's/^v//')
+    print_success "Node.js $installed_version installed"
+}
+
+# Setup Node.js with version validation. Picks an installer based on platform.
+# Respects SKIP_INSTALL_NODEJS=1 to skip entirely.
+setup_nodejs() {
+    if [ "${SKIP_INSTALL_NODEJS:-}" = "1" ]; then
+        print_step "Skipping Node.js (SKIP_INSTALL_NODEJS=1)"
+        echo ""
+        return 0
+    fi
+
+    print_section "📦 Checking Node.js..."
+
+    local status=0
+    check_nodejs || status=$?
+
+    if [ "$status" -eq 0 ]; then
+        echo ""
+        return 0
+    fi
+
+    # Pick installer for the current platform
+    local os
+    os=$(detect_os)
+
+    case "$os" in
+        macos)
+            install_nodejs_from_brew
+            ;;
+        linux)
+            if command_exists apt-get && [ -f /etc/debian_version ]; then
+                install_nodejs_from_nodesource
+            else
+                install_nodejs_from_tarball
+            fi
+            ;;
+        *)
+            print_error "Unsupported platform for Node.js install: $os"
+            return 1
+            ;;
+    esac
+    echo ""
 }
 
 # Check if musl toolchain is available (fail fast)

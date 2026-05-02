@@ -183,42 +183,11 @@ install_protoc() {
     echo ""
 }
 
-# Install Node.js from nodejs.org (not available in manylinux repos)
+# Node.js install delegates to setup_nodejs in setup-common.sh.
+# manylinux has no Node packages, so the shared installer falls back to the
+# nodejs.org tarball.
 install_nodejs() {
-    if [ "${SKIP_INSTALL_NODEJS:-}" = "1" ]; then
-        print_step "Skipping Node.js (SKIP_INSTALL_NODEJS=1)"
-        echo ""
-        return 0
-    fi
-
-    print_section "📦 Installing Node.js..."
-
-    local NODE_VERSION="20.18.0"
-    local ARCH=$(uname -m)
-
-    # Map architecture names to Node.js naming convention
-    case "$ARCH" in
-        x86_64)  NODE_ARCH="x64" ;;
-        aarch64) NODE_ARCH="arm64" ;;
-        *)
-            print_error "Unsupported architecture: $ARCH"
-            return 1
-            ;;
-    esac
-
-    print_step "Checking for Node.js... "
-    if command -v node &>/dev/null; then
-        local version=$(node --version)
-        print_success "Found ($version)"
-        echo ""
-        return 0
-    fi
-
-    echo -e "${YELLOW}Downloading Node.js $NODE_VERSION...${NC}"
-    curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz" \
-        | run_with_sudo tar -xJ -C /usr/local --strip-components=1
-    print_success "Node.js $NODE_VERSION installed"
-    echo ""
+    setup_nodejs
 }
 
 # Main installation flow
