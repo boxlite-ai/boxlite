@@ -6,8 +6,7 @@
 [![codecov](https://codecov.io/gh/boxlite-ai/boxlite/branch/main/graph/badge.svg)](https://codecov.io/gh/boxlite-ai/boxlite)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-Local-first micro-VM sandbox for **AI agents** — stateful, lightweight,
-hardware-level isolation, **no daemon required**.
+Compute substrate for AI agents: lightweight enough to live on your laptop, elastic enough to scale into the cloud and unleash unlimited resources.
 
 
 ## What is BoxLite?
