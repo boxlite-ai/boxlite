@@ -24,7 +24,7 @@ Embeddable VM runtime for secure, isolated code execution environments.
 ## Installation
 
 ```bash
-npm install boxlite
+npm install @boxlite-ai/boxlite
 ```
 
 **Requirements:**
@@ -337,7 +337,7 @@ See [../../examples/node/](../../examples/node/) directory for complete examples
 
 ```bash
 # If installed via npm
-npm install boxlite
+npm install @boxlite-ai/boxlite
 node simplebox.js
 
 # If working from source
@@ -345,7 +345,7 @@ cd ../../sdks/node
 npm install && npm run build
 npm link
 cd ../../examples/node
-npm link boxlite
+npm link @boxlite-ai/boxlite
 node simplebox.js
 ```
 
@@ -385,7 +385,7 @@ npm run build
 # Link to examples
 npm link
 cd ../../examples/node
-npm link boxlite
+npm link @boxlite-ai/boxlite
 
 # Run examples
 node simplebox.js

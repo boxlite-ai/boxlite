@@ -9,8 +9,7 @@ Get up and running with BoxLite Rust crate in 5 minutes.
 Add BoxLite to your project:
 
 ```bash
-cargo add boxlite tokio --features tokio/full
-cargo add futures
+cargo add boxlite tokio futures --features tokio/macros,tokio/rt-multi-thread
 ```
 
 ## Basic Execution
@@ -31,7 +30,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         rootfs: RootfsSpec::Image("alpine:latest".into()),
         ..Default::default()
     };
-    let (_, litebox) = runtime.create(options)?;
+    let litebox = runtime.create(options, None).await?;
 
     // Execute command
     let mut execution = litebox

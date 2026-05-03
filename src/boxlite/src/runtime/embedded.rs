@@ -1,6 +1,6 @@
 //! Embedded runtime: binaries compiled into the library, extracted on first use.
 //!
-//! The build.rs generates a manifest of (filename, bytes) pairs via `include_bytes!`.
+//! The build.rs generates a manifest of (filename, mode, bytes) entries via `include_bytes!`.
 //! On first access, [`EmbeddedRuntime`] extracts them to a version-stamped directory
 //! under the platform's local data dir, then serves that directory to
 //! [`RuntimeBinaryFinder`](crate::util::RuntimeBinaryFinder) for binary discovery.
@@ -18,7 +18,7 @@ use std::time::{Duration, SystemTime};
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
-// Build.rs generates: pub const MANIFEST: &[(&str, &[u8])] = &[...];
+// Build.rs generates: pub const MANIFEST: &[(&str, u32, &[u8])] = &[...];
 include!(concat!(env!("OUT_DIR"), "/embedded_manifest.rs"));
 
 /// Embedded runtime binary cache.
@@ -98,12 +98,12 @@ impl EmbeddedRuntime {
         std::fs::create_dir_all(&tmp)
             .map_err(|e| BoxliteError::Storage(format!("mkdir {}: {}", tmp.display(), e)))?;
 
-        for (name, data) in MANIFEST {
+        for (name, mode, data) in MANIFEST {
             let path = tmp.join(name);
             std::fs::write(&path, data)
                 .map_err(|e| BoxliteError::Storage(format!("write {}: {}", path.display(), e)))?;
             #[cfg(unix)]
-            Self::set_permissions(&path, name)?;
+            Self::set_permissions(&path, *mode)?;
         }
 
         // Stamp marks extraction as complete — checked by the fast path above.
@@ -194,17 +194,12 @@ impl EmbeddedRuntime {
         Ok(dir)
     }
 
-    /// Known executable binary names that should get 0o755.
-    /// Everything else (shared libraries) gets 0o644.
-    const EXECUTABLES: &[&str] = &["boxlite-shim", "boxlite-guest", "mke2fs", "debugfs"];
-
     #[cfg(unix)]
-    fn set_permissions(path: &Path, name: &str) -> BoxliteResult<()> {
+    fn set_permissions(path: &Path, mode: u32) -> BoxliteResult<()> {
         use std::os::unix::fs::PermissionsExt;
-        let mode = if Self::EXECUTABLES.contains(&name) {
-            0o755
-        } else {
-            0o644
+        let mode = match mode & 0o777 {
+            0 => 0o644,
+            mode => mode,
         };
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).map_err(|e| {
             BoxliteError::Storage(format!("chmod {:o} {}: {}", mode, path.display(), e))
@@ -261,7 +256,7 @@ mod tests {
         if let Some(runtime) = EmbeddedRuntime::get() {
             assert!(runtime.dir().join(".complete").exists());
             // Verify all manifest entries were extracted
-            for (name, _) in MANIFEST {
+            for (name, _, _) in MANIFEST {
                 assert!(
                     runtime.dir().join(name).exists(),
                     "Expected {} to exist in cache",

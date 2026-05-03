@@ -100,7 +100,7 @@ main();
 ### Install
 
 ```bash
-cargo add boxlite
+cargo add boxlite tokio futures --features tokio/macros,tokio/rt-multi-thread
 ```
 
 ### Run
