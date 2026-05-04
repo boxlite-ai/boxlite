@@ -3,7 +3,7 @@ module github.com/boxlite-ai/snapshot-manager
 go 1.25.0
 
 require (
-	github.com/distribution/distribution/v3 v3.1.0
+	github.com/distribution/distribution/v3 v3.1.1
 	github.com/kelseyhightower/envconfig v1.4.0
 	github.com/lmittmann/tint v1.1.2
 	github.com/mattn/go-isatty v0.0.20
