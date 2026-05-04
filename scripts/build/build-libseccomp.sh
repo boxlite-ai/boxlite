@@ -7,10 +7,17 @@
 # source using the musl cross-compiler that build-guest.sh already requires.
 #
 # Output layout (cache):
-#   $LIBSECCOMP_PREFIX/lib/libseccomp.a
-#   $LIBSECCOMP_PREFIX/include/seccomp.h
+#   $BOXLITE_CACHE/libseccomp/<target>/<version>/{lib,include}
+#   $BOXLITE_CACHE/linux-headers/<version>/<arch>/include
 #
-# where $LIBSECCOMP_PREFIX = $HOME/.cache/boxlite/libseccomp/<target>/<version>
+# Default: $BOXLITE_CACHE = <project-root>/target/native
+# Override: set BOXLITE_CACHE env var (e.g. CI may want a shared cache).
+#
+# Living under target/native/ means:
+#   - per-checkout (each worktree has its own)
+#   - gitignored (target/ is in .gitignore already)
+#   - cleaned by `cargo clean`
+#   - sibling-friendly for future vendored C deps (target/native/libcap/, etc.)
 #
 # On success, exports:
 #   LIBSECCOMP_LIB_PATH      (consumed by libseccomp-sys build.rs)
@@ -22,6 +29,12 @@
 #   ensure_libseccomp_for_target aarch64-unknown-linux-musl
 
 set -e
+
+# Default cache lives under the project's target/native/ dir (per-checkout,
+# gitignored, cleaned by `cargo clean`). Resolved from this script's own
+# location so it works whether sourced or run directly.
+_BUILD_LIBSECCOMP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEFAULT_BOXLITE_CACHE="$(cd "$_BUILD_LIBSECCOMP_DIR/../.." && pwd)/target/native"
 
 LIBSECCOMP_VERSION="${LIBSECCOMP_VERSION:-2.5.5}"
 LIBSECCOMP_TARBALL_SHA256="${LIBSECCOMP_TARBALL_SHA256:-248a2c8a4d9b9858aa6baf52712c34afefcf9c9e94b76dce02c1c9aa25fb3375}"
@@ -42,7 +55,7 @@ ensure_linux_headers_for_arch() {
         return 1
     fi
 
-    local cache_root="${BOXLITE_CACHE:-$HOME/.cache/boxlite}/linux-headers/$LINUX_HEADERS_VERSION/$arch"
+    local cache_root="${BOXLITE_CACHE:-$DEFAULT_BOXLITE_CACHE}/linux-headers/$LINUX_HEADERS_VERSION/$arch"
     local include_dir="$cache_root/include"
 
     if [ -f "$include_dir/asm/unistd.h" ] && [ -f "$include_dir/linux/audit.h" ]; then
@@ -112,7 +125,7 @@ ensure_libseccomp_for_target() {
         return 1
     fi
 
-    local cache_root="${BOXLITE_CACHE:-$HOME/.cache/boxlite}/libseccomp/$target/$LIBSECCOMP_VERSION"
+    local cache_root="${BOXLITE_CACHE:-$DEFAULT_BOXLITE_CACHE}/libseccomp/$target/$LIBSECCOMP_VERSION"
     local lib_path="$cache_root/lib/libseccomp.a"
 
     if [ -f "$lib_path" ]; then
