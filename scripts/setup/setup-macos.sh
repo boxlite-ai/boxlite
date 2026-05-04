@@ -170,6 +170,19 @@ install_dylibbundler() {
     echo ""
 }
 
+# Install gperf (libseccomp build dep — required by build-libseccomp.sh)
+install_gperf() {
+    print_step "Checking for gperf... "
+    if brew_installed "gperf"; then
+        print_success "Already installed"
+    else
+        echo -e "${YELLOW}Installing...${NC}"
+        brew install gperf
+        print_success "gperf installed"
+    fi
+    echo ""
+}
+
 # Install protobuf (for boxlite-shared gRPC/protobuf compilation)
 install_protobuf() {
     print_step "Checking for protobuf... "
@@ -261,6 +274,8 @@ main() {
     install_llvm
 
     install_dylibbundler
+
+    install_gperf
 
     install_protobuf
 

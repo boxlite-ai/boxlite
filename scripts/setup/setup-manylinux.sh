@@ -80,6 +80,9 @@ install_system_deps() {
         ninja-build        # Ninja build backend
         libcap-devel       # Linux capabilities library
 
+        # libseccomp build dep (used by build-libseccomp.sh)
+        gperf
+
         # Python
         python3
         python3-pip

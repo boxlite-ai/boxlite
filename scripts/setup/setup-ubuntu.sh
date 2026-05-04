@@ -72,6 +72,7 @@ install_system_deps() {
 
         # Guest binary (static musl build)
         musl-tools         # musl-gcc for static linking
+        gperf              # libseccomp build dep (used by build-libseccomp.sh)
 
         # Python SDK
         python3

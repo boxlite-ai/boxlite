@@ -118,6 +118,14 @@ build_guest_binary() {
         fi
     fi
 
+    # libseccomp is enabled in src/guest/Cargo.toml ("libseccomp" feature on
+    # libcontainer). The Rust libseccomp-sys crate needs libseccomp.a built for
+    # the *target* triple. Build/cache it and export the env vars libseccomp-sys
+    # reads in its build.rs.
+    # shellcheck source=./build-libseccomp.sh
+    source "$SCRIPT_BUILD_DIR/build-libseccomp.sh"
+    ensure_libseccomp_for_target "$GUEST_TARGET"
+
     cargo build $build_flag --target "$GUEST_TARGET" -p boxlite-guest
 
     # Verify guest binary is statically linked

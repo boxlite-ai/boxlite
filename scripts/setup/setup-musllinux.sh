@@ -56,6 +56,7 @@ install_system_deps() {
 
         # musl development
         musl-dev
+        gperf             # libseccomp build dep (used by build-libseccomp.sh)
 
         # libkrun build dependencies
         clang
