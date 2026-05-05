@@ -5,9 +5,11 @@
 //! and registry tampering that the content digest (over the compressed blob)
 //! cannot detect.
 
+#[cfg(unix)]
 use super::compression::TarballReader;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use std::io::Read;
+#[cfg(unix)]
 use std::path::Path;
 
 /// Verifies a layer's decompressed byte stream against an expected DiffID.
@@ -36,6 +38,7 @@ impl LayerVerifier {
     }
 
     /// Decompress `tarball_path` and verify its DiffID.
+    #[cfg(unix)]
     pub fn verify_tarball(&self, tarball_path: &Path) -> BoxliteResult<bool> {
         let reader = TarballReader::open(tarball_path)?;
         self.verify_reader(reader, Some(tarball_path))
@@ -46,7 +49,7 @@ impl LayerVerifier {
     pub fn verify_reader<R: Read>(
         &self,
         mut reader: R,
-        origin: Option<&Path>,
+        origin: Option<&std::path::Path>,
     ) -> BoxliteResult<bool> {
         use sha2::{Digest, Sha256};
 

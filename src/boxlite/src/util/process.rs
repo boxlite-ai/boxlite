@@ -79,6 +79,7 @@ impl ProcessMonitor {
     /// - `Some(ProcessExit::Code(n))` - Process exited, we got the code
     /// - `Some(ProcessExit::Unknown)` - Process dead, but we're not parent (ECHILD)
     /// - `None` - Process still running
+    #[cfg(unix)]
     pub fn try_wait(&self) -> Option<ProcessExit> {
         let mut status: i32 = 0;
         let result = unsafe { libc::waitpid(self.pid as i32, &mut status, libc::WNOHANG) };
@@ -91,6 +92,16 @@ impl ProcessMonitor {
             Some(ProcessExit::Unknown)
         } else {
             // Still running (result == 0) or error but still alive
+            None
+        }
+    }
+
+    /// Windows stub: process reaping not available.
+    #[cfg(not(unix))]
+    pub fn try_wait(&self) -> Option<ProcessExit> {
+        if !self.is_alive() {
+            Some(ProcessExit::Unknown)
+        } else {
             None
         }
     }
@@ -114,6 +125,7 @@ impl ProcessMonitor {
 /// - Normal exit: returns `WEXITSTATUS` (0-255)
 /// - Signal termination: returns `128 + signal_number` (Unix convention)
 /// - Other: returns -1
+#[cfg(unix)]
 fn decode_wait_status(status: i32) -> i32 {
     if libc::WIFEXITED(status) {
         libc::WEXITSTATUS(status)
@@ -155,8 +167,41 @@ pub fn read_pid_file(path: &Path) -> BoxliteResult<u32> {
 /// # Returns
 /// * `true` - Process was killed or doesn't exist
 /// * `false` - Failed to kill (permission denied)
+#[cfg(unix)]
 pub fn kill_process(pid: u32) -> bool {
     unsafe { libc::kill(pid as i32, libc::SIGKILL) == 0 || !is_process_alive(pid) }
+}
+
+/// Terminate a process via `TerminateProcess` (Windows).
+///
+/// # Returns
+/// * `true` - Process was terminated or doesn't exist
+/// * `false` - Failed to terminate (permission denied)
+#[cfg(not(unix))]
+pub fn kill_process(pid: u32) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::System::Threading::{
+            OpenProcess, PROCESS_TERMINATE, TerminateProcess,
+        };
+
+        unsafe {
+            let handle = OpenProcess(PROCESS_TERMINATE, 0, pid);
+            if handle.is_null() {
+                return !is_process_alive(pid);
+            }
+            let result = TerminateProcess(handle, 1);
+            CloseHandle(handle);
+            result != 0 || !is_process_alive(pid)
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = pid;
+        false
+    }
 }
 
 /// Check if a process with the given PID exists.
@@ -167,6 +212,7 @@ pub fn kill_process(pid: u32) -> bool {
 /// # Returns
 /// * `true` - Process exists
 /// * `false` - Process does not exist or permission denied
+#[cfg(unix)]
 pub fn is_process_alive(pid: u32) -> bool {
     if unsafe { libc::kill(pid as i32, 0) } != 0 {
         return false;
@@ -175,6 +221,41 @@ pub fn is_process_alive(pid: u32) -> bool {
     !is_process_zombie(pid)
 }
 
+/// Check if a process with the given PID exists (Windows).
+///
+/// Uses `OpenProcess` + `GetExitCodeProcess` to check whether the process
+/// is still running (`STILL_ACTIVE = 259`).
+#[cfg(not(unix))]
+pub fn is_process_alive(pid: u32) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::System::Threading::{
+            GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+
+        const STILL_ACTIVE: u32 = 259;
+
+        unsafe {
+            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if handle.is_null() {
+                return false;
+            }
+            let mut exit_code: u32 = 0;
+            let ok = GetExitCodeProcess(handle, &mut exit_code);
+            CloseHandle(handle);
+            ok != 0 && exit_code == STILL_ACTIVE
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = pid;
+        false
+    }
+}
+
+#[cfg(unix)]
 fn is_process_zombie(pid: u32) -> bool {
     #[cfg(target_os = "linux")]
     {
@@ -188,6 +269,7 @@ fn is_process_zombie(pid: u32) -> bool {
 
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
+        let _ = pid;
         false
     }
 }
@@ -273,8 +355,8 @@ pub fn is_same_process(pid: u32, box_id: &str) -> bool {
 
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
+        let _ = box_id; // Only used on Linux (cmdline check)
         // Fallback: just check if process exists
-        // Not ideal but better than nothing
         is_process_alive(pid)
     }
 }
@@ -319,6 +401,7 @@ fn is_same_process_macos(pid: u32) -> bool {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
     #[test]
     fn test_is_process_alive_current() {
         // Current process should always be alive
@@ -326,6 +409,7 @@ mod tests {
         assert!(is_process_alive(current_pid));
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_is_process_alive_invalid() {
         // Use very high PIDs unlikely to exist
@@ -385,13 +469,14 @@ mod tests {
         let current_pid = std::process::id();
 
         // Current process is not boxlite-shim, so should return false
-        let result = is_same_process(current_pid, "test123");
+        let _result = is_same_process(current_pid, "test123");
 
         // On non-Linux/macOS systems, this will return true (fallback)
         #[cfg(any(target_os = "linux", target_os = "macos"))]
-        assert!(!result);
+        assert!(!_result);
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_is_same_process_invalid() {
         // Invalid PID should return false
@@ -449,6 +534,7 @@ mod tests {
     // ProcessMonitor tests
     // ========================================================================
 
+    #[cfg(unix)]
     #[test]
     fn test_decode_wait_status_normal_exit() {
         // Simulate WIFEXITED with exit code 0
@@ -463,6 +549,7 @@ mod tests {
         assert_eq!(decode_wait_status(status), 42);
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_decode_wait_status_signal() {
         // Simulate WIFSIGNALED with signal
@@ -477,6 +564,7 @@ mod tests {
         assert_eq!(decode_wait_status(sigabrt), 128 + sigabrt);
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_process_monitor_current_process() {
         let monitor = ProcessMonitor::new(std::process::id());
@@ -488,6 +576,7 @@ mod tests {
         assert!(monitor.try_wait().is_none());
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_process_monitor_invalid_pid() {
         let monitor = ProcessMonitor::new(999999999);

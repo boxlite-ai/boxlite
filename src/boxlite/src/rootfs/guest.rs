@@ -7,13 +7,16 @@ use std::sync::OnceLock;
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
-use crate::disk::{
-    BaseDisk, BaseDiskKind, BaseDiskManager, Disk, DiskFormat, inject_file_into_ext4,
-    read_backing_file_path,
-};
+#[cfg(any(unix, windows))]
+use crate::disk::inject_file_into_ext4;
+#[cfg(any(unix, windows, test))]
+use crate::disk::{BaseDisk, Disk, DiskFormat};
+use crate::disk::{BaseDiskKind, BaseDiskManager, read_backing_file_path};
+#[cfg(any(unix, windows))]
 use crate::images::{ImageDiskManager, ImageObject};
 #[cfg(test)]
 use crate::runtime::id::BaseDiskID;
+#[cfg(any(unix, windows, test))]
 use crate::runtime::id::BaseDiskIDMint;
 use crate::util;
 
@@ -261,6 +264,7 @@ impl GuestRootfs {
 /// for content-addressable lookup.
 pub struct GuestRootfsManager {
     base_disk_mgr: BaseDiskManager,
+    #[allow(dead_code)] // Read from cfg-gated build_and_install methods
     temp_dir: PathBuf,
     guest_hash: OnceLock<Result<String, String>>,
 }
@@ -294,6 +298,7 @@ impl GuestRootfsManager {
     /// Stage 2: copy image disk → inject guest binary via debugfs → cache.
     ///
     /// Returns a `GuestRootfs` with `Strategy::Disk` pointing at the cached ext4.
+    #[cfg(any(unix, windows))]
     pub async fn get_or_create(
         &self,
         image: &ImageObject,
@@ -350,6 +355,7 @@ impl GuestRootfsManager {
     ///
     /// Leaks the disk (prevents drop cleanup) since ownership transfers to
     /// the `OnceCell<GuestRootfs>` in the runtime.
+    #[cfg(any(unix, windows))]
     fn disk_to_guest_rootfs(disk: Disk, env: Vec<(String, String)>) -> BoxliteResult<GuestRootfs> {
         let disk_path = disk.path().to_path_buf();
         let _ = disk.leak();
@@ -366,6 +372,7 @@ impl GuestRootfsManager {
     }
 
     /// Look up a cached guest rootfs by version key (DB-backed).
+    #[cfg(any(unix, windows, test))]
     fn find(&self, version_key: &str) -> Option<Disk> {
         let record = self
             .base_disk_mgr
@@ -391,6 +398,7 @@ impl GuestRootfsManager {
     ///
     /// Verifies the actual guest binary hash against the expected version key.
     /// If the compile-time hash is stale, uses the actual hash for the version key.
+    #[cfg(any(unix, windows))]
     async fn build_and_install(
         &self,
         image_disk: &Disk,
@@ -482,6 +490,7 @@ impl GuestRootfsManager {
     /// Atomically install a staged guest rootfs to the bases directory.
     ///
     /// Generates a `BaseDiskID` filename and inserts a DB record for tracking.
+    #[cfg(any(unix, windows, test))]
     fn install(&self, version_key: &str, staged_disk: Disk) -> BoxliteResult<Disk> {
         // Defensive: another process may have installed while we were building.
         if let Some(disk) = self.find(version_key) {
@@ -767,6 +776,7 @@ impl GuestRootfsManager {
     }
 
     /// Compute the version key from image digest and guest binary hash.
+    #[cfg(any(unix, windows, test))]
     fn version_key(digest: &str, guest_hash: &str) -> String {
         let d = digest.strip_prefix("sha256:").unwrap_or(digest);
         let d = &d[..12.min(d.len())];

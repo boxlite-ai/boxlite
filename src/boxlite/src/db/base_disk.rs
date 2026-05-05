@@ -143,6 +143,7 @@ impl BaseDiskStore {
     }
 
     /// Find a base disk by box ID and name.
+    #[allow(dead_code)] // Called from cfg-gated snapshot/clone code paths
     pub(crate) fn find_by_name(
         &self,
         source_box_id: &str,

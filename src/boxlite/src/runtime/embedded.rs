@@ -104,6 +104,8 @@ impl EmbeddedRuntime {
                 .map_err(|e| BoxliteError::Storage(format!("write {}: {}", path.display(), e)))?;
             #[cfg(unix)]
             Self::set_permissions(&path, *mode)?;
+            #[cfg(not(unix))]
+            let _ = mode;
         }
 
         // Stamp marks extraction as complete — checked by the fast path above.
@@ -223,9 +225,11 @@ mod tests {
         let dir_str = dir.to_string_lossy();
 
         // Verify path structure: .../boxlite/runtimes/v{VERSION}[-{HASH}]
+        let sep = std::path::MAIN_SEPARATOR;
+        let expected_segment = format!("boxlite{sep}runtimes{sep}");
         assert!(
-            dir_str.contains("boxlite/runtimes/"),
-            "Expected path to contain boxlite/runtimes/, got {}",
+            dir_str.contains(&expected_segment),
+            "Expected path to contain boxlite{sep}runtimes{sep}, got {}",
             dir.display()
         );
         let dir_name = dir.file_name().unwrap().to_string_lossy();

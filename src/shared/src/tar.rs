@@ -505,6 +505,7 @@ mod tests {
 
     // ── pack: symlinks ───────────────────────────────────────────
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn pack_follow_symlinks_false_preserves_link() {
         let tmp = TempDir::new().unwrap();
@@ -543,6 +544,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn pack_follow_symlinks_true_dereferences() {
         let tmp = TempDir::new().unwrap();

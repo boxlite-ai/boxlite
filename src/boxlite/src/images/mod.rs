@@ -7,6 +7,7 @@ mod object;
 mod storage;
 mod store;
 
+#[cfg(unix)]
 pub use archive::LayerExtractor;
 pub use config::ContainerImageConfig;
 pub use image_disk::ImageDiskManager;

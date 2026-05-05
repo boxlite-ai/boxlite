@@ -5,9 +5,12 @@
 
 use super::{InitCtx, log_task_error, task_start};
 use crate::disk::{BackingFormat, Disk, DiskFormat, Qcow2Helper};
+#[cfg(any(unix, windows))]
 use crate::images::ImageDiskManager;
 use crate::pipeline::PipelineTask;
-use crate::rootfs::guest::{GuestRootfs, GuestRootfsManager, Strategy};
+#[cfg(any(unix, windows))]
+use crate::rootfs::guest::GuestRootfsManager;
+use crate::rootfs::guest::{GuestRootfs, Strategy};
 use crate::runtime::constants::images;
 use crate::runtime::layout::BoxFilesystemLayout;
 use crate::runtime::rt_impl::SharedRuntimeImpl;
@@ -63,17 +66,29 @@ async fn run_guest_rootfs(
 
             let base_image = pull_guest_rootfs_image(runtime).await?;
             let env = extract_env_from_image(&base_image).await?;
-            let guest_rootfs = prepare_guest_rootfs(
-                &runtime.guest_rootfs_mgr,
-                &runtime.image_disk_mgr,
-                &base_image,
-                env,
-            )
-            .await?;
 
-            tracing::info!("Bootstrap guest rootfs ready: {:?}", guest_rootfs.strategy);
+            #[cfg(any(unix, windows))]
+            {
+                let guest_rootfs = prepare_guest_rootfs(
+                    &runtime.guest_rootfs_mgr,
+                    &runtime.image_disk_mgr,
+                    &base_image,
+                    env,
+                )
+                .await?;
 
-            Ok::<_, BoxliteError>(guest_rootfs)
+                tracing::info!("Bootstrap guest rootfs ready: {:?}", guest_rootfs.strategy);
+
+                Ok::<_, BoxliteError>(guest_rootfs)
+            }
+
+            #[cfg(all(not(unix), not(windows)))]
+            {
+                let _ = (&base_image, &env);
+                return Err(BoxliteError::Unsupported(
+                    "Guest rootfs preparation requires the 'krun' feature on this platform".into(),
+                ));
+            }
         })
         .await?
         .clone();
@@ -138,34 +153,36 @@ fn create_or_reuse_cow_disk(
         );
     }
 
-    // Fresh start: create new COW disk
+    // Fresh start: create new disk from base
     if let Strategy::Disk { ref disk_path, .. } = guest_rootfs.strategy {
         let base_disk_path = disk_path;
 
-        // Get base disk size
-        let base_size = std::fs::metadata(base_disk_path)
-            .map(|m| m.len())
-            .unwrap_or(512 * 1024 * 1024);
+        let disk = {
+            // Get base disk size
+            let base_size = std::fs::metadata(base_disk_path)
+                .map(|m| m.len())
+                .unwrap_or(512 * 1024 * 1024);
 
-        // Point the COW overlay directly at the shared rootfs cache.
-        // Disk images are data (read by the hypervisor, not executed on the host),
-        // so sharing the backing file is safe — no Spectre-class concerns.
-        let temp_disk = Qcow2Helper::create_cow_child_disk(
-            base_disk_path,
-            BackingFormat::Raw,
-            &guest_rootfs_disk_path,
-            base_size,
-        )?;
+            // Point the COW overlay directly at the shared rootfs cache.
+            // Disk images are data (read by the hypervisor, not executed on the host),
+            // so sharing the backing file is safe — no Spectre-class concerns.
+            let temp_disk = Qcow2Helper::create_cow_child_disk(
+                base_disk_path,
+                BackingFormat::Raw,
+                &guest_rootfs_disk_path,
+                base_size,
+            )?;
 
-        // Make disk persistent so it survives stop/restart
-        let disk_path_owned = temp_disk.leak();
-        let disk = Disk::new(disk_path_owned, DiskFormat::Qcow2, true);
-
-        tracing::info!(
-            cow_disk = %guest_rootfs_disk_path.display(),
-            base_disk = %base_disk_path.display(),
-            "Created guest rootfs COW overlay (persistent)"
-        );
+            // Make disk persistent so it survives stop/restart
+            let disk_path_owned = temp_disk.leak();
+            let d = Disk::new(disk_path_owned, DiskFormat::Qcow2, true);
+            tracing::info!(
+                cow_disk = %guest_rootfs_disk_path.display(),
+                base_disk = %base_disk_path.display(),
+                "Created guest rootfs COW overlay (persistent)"
+            );
+            d
+        };
 
         // Update guest_rootfs with COW disk path
         let mut updated = guest_rootfs.clone();
@@ -186,6 +203,7 @@ fn create_or_reuse_cow_disk(
 /// Uses the two-stage pipeline:
 /// 1. `ImageDiskManager`: pure image layers → ext4 disk (cached by image digest)
 /// 2. `GuestRootfsManager`: image disk + boxlite-guest → versioned rootfs (cached by digest+guest hash)
+#[cfg(any(unix, windows))]
 async fn prepare_guest_rootfs(
     guest_rootfs_mgr: &GuestRootfsManager,
     image_disk_mgr: &ImageDiskManager,

@@ -6,13 +6,19 @@
 //! `time` provides time helpers, `override_stat` provides rootless container
 //! support, `safe_root` enforces containment.
 
+#[cfg(unix)]
 mod compression;
+#[cfg(unix)]
 mod extractor;
+#[cfg(unix)]
 mod metadata;
+#[cfg(unix)]
 mod override_stat;
+#[cfg(unix)]
 mod safe_root;
 mod time;
 mod verifier;
 
+#[cfg(unix)]
 pub use extractor::LayerExtractor;
 pub use verifier::LayerVerifier;

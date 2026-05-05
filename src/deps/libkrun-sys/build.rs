@@ -1,6 +1,8 @@
+#[cfg(unix)]
 use std::collections::HashMap;
 use std::env;
 use std::fs;
+#[cfg(unix)]
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -9,6 +11,7 @@ use std::process::{Command, Stdio};
 
 // libkrunfw release configuration
 // Source: https://github.com/boxlite-ai/libkrunfw (fork with prebuilt releases)
+#[cfg(unix)]
 const LIBKRUNFW_VERSION: &str = "v5.3.0";
 
 // macOS: Download prebuilt kernel.c, compile locally to .dylib
@@ -35,6 +38,8 @@ const LIBKRUNFW_SHA256: &str = "8b5b9211da5445d9301dafb2201431f4392ab96455512bce
 const LIB_DIR: &str = "lib";
 #[cfg(target_os = "linux")]
 const LIB_DIR: &str = "lib64";
+#[cfg(target_os = "windows")]
+const LIB_DIR: &str = "lib";
 
 // ── Core utilities ───────────────────────────────────────────────────────────
 
@@ -70,8 +75,10 @@ fn verify_vendored_sources(manifest_dir: &Path, require_libkrunfw: bool) {
 
 // ── Fetcher: download, verify, extract ───────────────────────────────────────
 
+#[cfg(unix)]
 struct Fetcher;
 
+#[cfg(unix)]
 impl Fetcher {
     /// Downloads, verifies, and extracts a tarball.
     /// Skips download if tarball already exists at `tarball_path`.
@@ -231,6 +238,7 @@ fn download_libkrunfw_so(install_dir: &Path) {
 // ── Make utilities ───────────────────────────────────────────────────────────
 
 /// Creates a make command with common configuration.
+#[cfg(unix)]
 fn make_command(source_dir: &Path, extra_env: &HashMap<String, String>) -> Command {
     let mut cmd = Command::new("make");
     cmd.stdout(Stdio::inherit());
@@ -248,6 +256,7 @@ fn make_command(source_dir: &Path, extra_env: &HashMap<String, String>) -> Comma
 }
 
 /// Builds a library using Make with the specified parameters.
+#[cfg(unix)]
 fn build_with_make(
     source_dir: &Path,
     install_dir: &Path,
@@ -276,8 +285,10 @@ fn build_with_make(
 
 // ── LibBuilder: libkrun build operations ─────────────────────────────────────
 
+#[cfg(unix)]
 struct LibBuilder;
 
+#[cfg(unix)]
 impl LibBuilder {
     /// Builds libkrun as a static library.
     ///
@@ -395,29 +406,41 @@ impl LibBuilder {
 
 // ── LibFixup: post-build library fixup ───────────────────────────────────────
 
+#[cfg(unix)]
 struct LibFixup;
 
+#[cfg(unix)]
 impl LibFixup {
     /// Fixes the shared library name (install_name on macOS, SONAME on Linux).
+    /// No-op on Windows (static linking, no shared library fixup needed).
     fn fix_install_name(lib_name: &str, lib_path: &Path) {
-        let lib_path_str = lib_path.to_str().expect("Invalid library path");
+        #[cfg(not(unix))]
+        {
+            let _ = (lib_name, lib_path);
+            return;
+        }
 
-        #[cfg(target_os = "macos")]
-        let mut cmd = {
-            let mut c = Command::new("install_name_tool");
-            c.args(["-id", &format!("@rpath/{}", lib_name), lib_path_str]);
-            c
-        };
+        #[cfg(unix)]
+        {
+            let lib_path_str = lib_path.to_str().expect("Invalid library path");
 
-        #[cfg(target_os = "linux")]
-        let mut cmd = {
-            println!("cargo:warning=Fixing {} in {}", lib_name, lib_path_str);
-            let mut c = Command::new("patchelf");
-            c.args(["--set-soname", lib_name, lib_path_str]);
-            c
-        };
+            #[cfg(target_os = "macos")]
+            let mut cmd = {
+                let mut c = Command::new("install_name_tool");
+                c.args(["-id", &format!("@rpath/{}", lib_name), lib_path_str]);
+                c
+            };
 
-        run_command(&mut cmd, &format!("fix install name for {}", lib_name));
+            #[cfg(target_os = "linux")]
+            let mut cmd = {
+                println!("cargo:warning=Fixing {} in {}", lib_name, lib_path_str);
+                let mut c = Command::new("patchelf");
+                c.args(["--set-soname", lib_name, lib_path_str]);
+                c
+            };
+
+            run_command(&mut cmd, &format!("fix install name for {}", lib_name));
+        }
     }
 
     /// Extract SONAME from versioned library filename.
@@ -914,6 +937,104 @@ fn build() {
         println!("cargo:rustc-link-search=native={}", libkrun_lib.display());
         println!("cargo:rustc-link-lib=static=krun");
     }
+}
+
+/// Windows: Build libkrun for WHPX backend.
+///
+/// - No libkrunfw (Windows uses direct kernel boot)
+/// - No init binary (Windows uses a different boot path)
+/// - Builds libkrun.a as a static library, links WinHvPlatform
+#[cfg(target_os = "windows")]
+fn build() {
+    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
+    let libkrun_install = out_dir.join("libkrun");
+
+    // No libkrunfw on Windows (direct kernel boot).
+    // Don't emit LIBKRUNFW_BOXLITE_DEP — boxlite's build.rs checks path existence.
+
+    if cfg!(feature = "krun") {
+        let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+        println!("cargo:warning=Building libkrun for Windows (WHPX)...");
+        verify_vendored_sources(&manifest_dir, false);
+
+        let libkrun_src = manifest_dir.join("vendor/libkrun");
+        build_libkrun_windows(&libkrun_src, &libkrun_install);
+
+        let libkrun_lib = libkrun_install.join(LIB_DIR);
+        println!("cargo:LIBKRUN_BOXLITE_DEP={}", libkrun_lib.display());
+        println!("cargo:rustc-link-search=native={}", libkrun_lib.display());
+        println!("cargo:rustc-link-lib=static=krun");
+        println!("cargo:rustc-link-lib=dylib=WinHvPlatform");
+
+        // FORCE:MULTIPLE: libkrun staticlib embeds its own copy of Rust std,
+        // which duplicates symbols (rust_eh_personality, EMPTY_PANIC) with the
+        // outer binary's std. Both copies are identical so first-wins is safe.
+        println!("cargo:rustc-link-arg=/FORCE:MULTIPLE");
+    }
+}
+
+/// Build libkrun as a static library on Windows.
+///
+/// Unlike macOS/Linux, Windows:
+/// - Has no libkrunfw dependency
+/// - Has no init binary (no Make cross-compilation)
+/// - Builds directly with cargo
+#[cfg(target_os = "windows")]
+fn build_libkrun_windows(libkrun_src: &Path, install_dir: &Path) {
+    println!("cargo:warning=Building libkrun as static library (Windows)...");
+
+    let lib_dir = install_dir.join(LIB_DIR);
+    fs::create_dir_all(&lib_dir)
+        .unwrap_or_else(|e| panic!("Failed to create lib directory: {}", e));
+
+    let mut cmd = Command::new("cargo");
+    cmd.args([
+        "rustc",
+        "-p",
+        "libkrun",
+        "--release",
+        "--crate-type",
+        "staticlib",
+    ]);
+    // Windows build uses the windows VMM module.
+    // Note: devices/* features are omitted — the krun-devices crate is
+    // Unix-only (gated behind cfg(unix) in libkrun/Cargo.toml).
+    cmd.args(["--features", "net,blk,vmm/net,vmm/blk"]);
+
+    cmd.current_dir(libkrun_src);
+    cmd.stdout(Stdio::inherit());
+    cmd.stderr(Stdio::inherit());
+
+    // Prevent outer RUSTFLAGS from leaking into vendored libkrun build
+    cmd.env_remove("RUSTFLAGS");
+    cmd.env_remove("CARGO_ENCODED_RUSTFLAGS");
+
+    run_command(&mut cmd, "cargo rustc (libkrun staticlib, Windows)");
+
+    let src = libkrun_src.join("target/release/krun.lib");
+    let dst = lib_dir.join("krun.lib");
+    // Try .lib first (MSVC), then libkrun.a (GNU)
+    if src.exists() {
+        fs::copy(&src, &dst).unwrap_or_else(|e| {
+            panic!("Failed to copy krun.lib: {}", e);
+        });
+    } else {
+        let src_a = libkrun_src.join("target/release/libkrun.a");
+        let dst_a = lib_dir.join("libkrun.a");
+        fs::copy(&src_a, &dst_a).unwrap_or_else(|e| {
+            panic!(
+                "Failed to copy libkrun.a from {} to {}: {}",
+                src_a.display(),
+                dst_a.display(),
+                e
+            );
+        });
+    }
+
+    println!(
+        "cargo:warning=Built static libkrun at {}",
+        lib_dir.display()
+    );
 }
 
 // ── Entry point ──────────────────────────────────────────────────────────────

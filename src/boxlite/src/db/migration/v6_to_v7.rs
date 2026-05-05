@@ -482,10 +482,11 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
+        let bases_sep = format!("bases{}", std::path::MAIN_SEPARATOR);
         assert!(
-            base_path.contains("bases/"),
-            "base_path should be in bases/ directory: {}",
-            base_path
+            base_path.contains(&bases_sep),
+            "base_path should be in bases{sep} directory: {base_path}",
+            sep = std::path::MAIN_SEPARATOR,
         );
         let stem = Path::new(&base_path).file_stem().unwrap().to_string_lossy();
         assert!(
@@ -538,10 +539,11 @@ mod tests {
         let new_backing = crate::disk::qcow2::read_backing_file_path(&new_guest_rootfs)
             .unwrap()
             .unwrap();
+        let bases_sep = format!("bases{}", std::path::MAIN_SEPARATOR);
         assert!(
-            new_backing.contains("bases/"),
-            "backing should now point to bases/: {}",
-            new_backing
+            new_backing.contains(&bases_sep),
+            "backing should now point to bases{sep}: {new_backing}",
+            sep = std::path::MAIN_SEPARATOR,
         );
         assert!(
             !new_backing.contains("rootfs-base"),

@@ -69,6 +69,13 @@ impl Sandbox for CompositeSandbox {
         }
     }
 
+    fn post_spawn(&self, child: &std::process::Child) -> BoxliteResult<()> {
+        for sandbox in &self.sandboxes {
+            sandbox.post_spawn(child)?;
+        }
+        Ok(())
+    }
+
     fn name(&self) -> &'static str {
         self.name
     }

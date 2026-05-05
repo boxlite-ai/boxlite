@@ -343,22 +343,52 @@ impl BoxImpl {
         // Only try to stop VM if LiveState exists
         if let Some(live) = self.live.get() {
             // Gracefully shut down guest (with timeout to avoid hanging on unresponsive guests)
+            //
+            // On Windows (WHPX), the guest shutdown RPC triggers the guest to write
+            // ACPI S5, which exits the vCPU loop and terminates the shim process.
+            // We don't need to wait for the gRPC response — just fire and give a
+            // short window for the RPC to reach the guest before signaling the shim.
+            let guest_shutdown_timeout = if cfg!(windows) {
+                // Short timeout: if gRPC connection is already established, the
+                // shutdown RPC completes in <50ms. If not (networking disabled),
+                // we bail quickly — the shim watchdog will exit on keepalive signal.
+                Duration::from_millis(200)
+            } else {
+                Duration::from_secs(10)
+            };
+            let t_shutdown = Instant::now();
             let guest_shutdown = async {
                 if let Ok(mut guest) = live.guest_session.guest().await {
                     let _ = guest.shutdown().await;
                 }
             };
-            if tokio::time::timeout(Duration::from_secs(10), guest_shutdown)
+            if tokio::time::timeout(guest_shutdown_timeout, guest_shutdown)
                 .await
                 .is_err()
             {
-                tracing::warn!(box_id = %self.config.id, "Guest shutdown timed out after 10s");
+                tracing::warn!(
+                    box_id = %self.config.id,
+                    elapsed_ms = t_shutdown.elapsed().as_millis() as u64,
+                    "Guest shutdown timed out"
+                );
+            } else {
+                tracing::debug!(
+                    box_id = %self.config.id,
+                    elapsed_ms = t_shutdown.elapsed().as_millis() as u64,
+                    "guest.shutdown() completed"
+                );
             }
 
-            // Stop handler
+            // Stop handler (signals shim to exit, waits for process termination)
+            let t_stop = Instant::now();
             if let Ok(mut handler) = live.handler.lock() {
                 handler.stop()?;
             }
+            tracing::debug!(
+                box_id = %self.config.id,
+                elapsed_ms = t_stop.elapsed().as_millis() as u64,
+                "handler.stop() completed"
+            );
         }
 
         // Clean up PID file (single source of truth)
@@ -928,6 +958,8 @@ impl BoxImpl {
             // Not running — execute directly, no quiesce needed.
             return fut.await;
         };
+        #[cfg(not(unix))]
+        let _ = pid; // Only used in Unix signal-sending blocks below
 
         let t0 = Instant::now();
 
@@ -936,19 +968,22 @@ impl BoxImpl {
         let frozen = self.guest_quiesce().await;
         let quiesce_ms = t_quiesce.elapsed().as_millis() as u64;
 
-        // Phase 2: SIGSTOP — pause vCPUs
-        // SAFETY: sending SIGSTOP to a known valid PID that we own (shim process).
-        let ret = unsafe { libc::kill(pid, libc::SIGSTOP) };
-        if ret != 0 {
-            // If SIGSTOP fails, thaw before returning error
-            if frozen {
-                self.guest_thaw().await;
+        // Phase 2: SIGSTOP — pause vCPUs (Unix only)
+        #[cfg(unix)]
+        {
+            // SAFETY: sending SIGSTOP to a known valid PID that we own (shim process).
+            let ret = unsafe { libc::kill(pid, libc::SIGSTOP) };
+            if ret != 0 {
+                // If SIGSTOP fails, thaw before returning error
+                if frozen {
+                    self.guest_thaw().await;
+                }
+                return Err(BoxliteError::Internal(format!(
+                    "Failed to SIGSTOP shim process (pid={}): {}",
+                    pid,
+                    std::io::Error::last_os_error()
+                )));
             }
-            return Err(BoxliteError::Internal(format!(
-                "Failed to SIGSTOP shim process (pid={}): {}",
-                pid,
-                std::io::Error::last_os_error()
-            )));
         }
         {
             let mut state = self.state.write();
@@ -962,15 +997,18 @@ impl BoxImpl {
         let operation_ms = t_op.elapsed().as_millis() as u64;
 
         // Phase 4: SIGCONT — resume vCPUs (always, even if f() failed)
-        // SAFETY: Always send SIGCONT — harmless ESRCH if process already dead.
-        unsafe {
-            libc::kill(pid, libc::SIGCONT);
-        }
-        // Only transition to Running if process is still alive after resume.
-        if unsafe { libc::kill(pid, 0) } == 0 {
-            let mut state = self.state.write();
-            state.force_status(BoxStatus::Running);
-            let _ = self.runtime.box_manager.save_box(self.id(), &state);
+        #[cfg(unix)]
+        {
+            // SAFETY: Always send SIGCONT — harmless ESRCH if process already dead.
+            unsafe {
+                libc::kill(pid, libc::SIGCONT);
+            }
+            // Only transition to Running if process is still alive after resume.
+            if unsafe { libc::kill(pid, 0) } == 0 {
+                let mut state = self.state.write();
+                state.force_status(BoxStatus::Running);
+                let _ = self.runtime.box_manager.save_box(self.id(), &state);
+            }
         }
 
         // Phase 5: Thaw guest I/O (always, best-effort)

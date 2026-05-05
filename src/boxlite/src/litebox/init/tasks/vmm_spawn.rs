@@ -11,7 +11,8 @@ use crate::litebox::init::types::resolve_user_volumes;
 use crate::net::NetworkBackendConfig;
 use crate::pipeline::PipelineTask;
 use crate::rootfs::guest::{GuestRootfs, Strategy};
-use crate::runtime::constants::{guest_paths, mount_tags};
+use crate::runtime::constants::guest_paths;
+use crate::runtime::constants::mount_tags;
 use crate::runtime::id::BoxID;
 use crate::runtime::layout::BoxFilesystemLayout;
 use crate::runtime::options::BoxOptions;
@@ -75,19 +76,20 @@ impl PipelineTask<InitCtx> for VmmSpawnTask {
         };
 
         // Build config and get outputs
-        let (instance_spec, volume_mgr, rootfs_init, container_mounts) = build_config(
-            &box_id,
-            &options,
-            &layout,
-            &container_image_config,
-            &container_disk_path,
-            guest_disk_path.as_deref(),
-            &container_id,
-            &runtime,
-            reuse_rootfs,
-        )
-        .await
-        .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
+        let (instance_spec, volume_mgr, rootfs_init, container_mounts, ready_transport) =
+            build_config(
+                &box_id,
+                &options,
+                &layout,
+                &container_image_config,
+                &container_disk_path,
+                guest_disk_path.as_deref(),
+                &container_id,
+                &runtime,
+                reuse_rootfs,
+            )
+            .await
+            .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
 
         // Spawn VM
         let handler = spawn_vm(&box_id, &instance_spec, &options, &layout)
@@ -99,6 +101,8 @@ impl PipelineTask<InitCtx> for VmmSpawnTask {
         ctx.volume_mgr = Some(volume_mgr);
         ctx.rootfs_init = Some(rootfs_init);
         ctx.container_mounts = Some(container_mounts);
+        ctx.transport = Some(instance_spec.transport.clone());
+        ctx.ready_transport = Some(ready_transport);
         // Store CA cert PEM for Container.Init gRPC (passed as CACert proto field)
         ctx.ca_cert_pem = instance_spec
             .network_config
@@ -129,10 +133,14 @@ async fn build_config(
     GuestVolumeManager,
     crate::portal::interfaces::ContainerRootfsInitConfig,
     Vec<ContainerMount>,
+    Transport,
 )> {
-    // Transport setup
-    let transport = Transport::unix(layout.socket_path());
-    let ready_transport = Transport::unix(layout.ready_socket_path());
+    // Transport setup: Unix sockets on all platforms
+    // On Windows, AF_UNIX is supported since Windows 10 1809+ via uds_windows crate
+    let (transport, ready_transport) = (
+        Transport::unix(layout.socket_path()),
+        Transport::unix(layout.ready_socket_path()),
+    );
 
     let user_volumes = resolve_user_volumes(&options.volumes)?;
 
@@ -143,24 +151,21 @@ async fn build_config(
     // Create GuestVolumeManager and configure volumes
     let mut volume_mgr = GuestVolumeManager::new();
 
-    // SHARED virtiofs - needed by all strategies
+    // SHARED filesystem share — host directory accessible to guest.
+    // Unix: virtiofs, Windows: virtio-9p (guest auto-detects)
     volume_mgr.add_fs_share(mount_tags::SHARED, layout.shared_dir(), None, false, None);
 
-    // Add container rootfs disk (COW overlay workflow):
-    // 1. Base disk: Pre-built ext4 image with container layers merged
-    // 2. COW disk: QCOW2 overlay with copy-on-write semantics
-    //    - Inherits formatted ext4 from base (need_format=false)
-    //    - May have larger virtual size if disk_size_gb specified
-    // 3. Guest mount: Only resize on fresh start, not restart
-    //    - Fresh start with custom size: resize2fs expands filesystem
-    //    - Restart: filesystem already at correct size, skip resize
+    // Add container rootfs disk (QCOW2 COW overlay on top of shared base ext4 image).
+    // Guest mount: Only resize on fresh start with custom disk size, not restart.
     let need_resize = options.disk_size_gb.is_some() && !reuse_rootfs;
+    let container_disk_format = DiskFormat::Qcow2;
+
     let rootfs_device = volume_mgr.add_block_device(
         container_disk_path,
-        DiskFormat::Qcow2,
+        container_disk_format,
         false,
         None,
-        false,       // need_format: COW child inherits formatted base
+        false,       // need_format: inherits formatted base
         need_resize, // need_resize: only on fresh start with custom disk size
     );
 
@@ -235,7 +240,13 @@ async fn build_config(
         detach: options.detach,
     };
 
-    Ok((instance_spec, volume_mgr, rootfs_init, container_mounts))
+    Ok((
+        instance_spec,
+        volume_mgr,
+        rootfs_init,
+        container_mounts,
+        ready_transport,
+    ))
 }
 
 /// Configure guest rootfs with device path from volume manager.
@@ -248,9 +259,11 @@ fn configure_guest_rootfs(
         && let Strategy::Disk { ref disk_path, .. } = guest_rootfs.strategy
     {
         // Add disk to volume manager (guest rootfs - no format/resize needed)
+        let guest_disk_format = DiskFormat::Qcow2;
+
         let device_path = volume_mgr.add_block_device(
             disk_path_input,
-            DiskFormat::Qcow2,
+            guest_disk_format,
             false,
             None,
             false, // need_format

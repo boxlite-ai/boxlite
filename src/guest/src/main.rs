@@ -116,6 +116,13 @@ fn main() -> BoxliteResult<()> {
 
 #[cfg(target_os = "linux")]
 async fn async_main() -> BoxliteResult<()> {
+    // Ensure /proc, /sys, /dev are available (may be unmounted after initrd switch_root)
+    mounts::mount_virtual_filesystems()?;
+    eprintln!(
+        "[guest] T+{}ms: virtual filesystems ready",
+        boot_elapsed_ms()
+    );
+
     // Mount essential tmpfs directories early
     // Needed because virtio-fs doesn't support open-unlink-fstat pattern
     mounts::mount_essential_tmpfs()?;

@@ -1,10 +1,12 @@
 //! Resource limit handling for jailer isolation.
 //!
 //! Applies rlimits to restrict resource usage of the jailed process.
-//! Works on both Linux and macOS.
+//! Works on both Linux and macOS (Unix-only — rlimits don't exist on Windows).
 //!
 //! Only the async-signal-safe `apply_limits_raw()` is used,
 //! called from the `pre_exec` hook before exec().
+
+#![cfg(unix)]
 
 use crate::runtime::advanced_options::ResourceLimits;
 use std::io;

@@ -31,11 +31,11 @@ pub struct ShimHandler {
     /// When we spawn the process, we keep the Child to properly wait() on stop.
     /// When we attach to an existing process, this is None.
     process: Option<Child>,
-    /// Watchdog keepalive. Dropping closes the pipe write end, delivering
-    /// POLLHUP to the shim and triggering graceful shutdown.
-    /// Defense-in-depth: even if `stop()` is never called, dropping the
-    /// handler closes this, triggering shim cleanup automatically.
-    #[allow(dead_code)]
+    /// Watchdog keepalive. Defense-in-depth: even if `stop()` is never called,
+    /// dropping the handler triggers shim shutdown automatically.
+    /// - **Unix:** Dropping closes pipe write end → POLLHUP in shim.
+    /// - **Windows:** Dropping signals the Event → shim detects via WaitForMultipleObjects.
+    #[allow(dead_code)] // Read via Drop semantics — dropping triggers shim shutdown
     keepalive: Option<watchdog::Keepalive>,
     /// Shared System instance for CPU metrics calculation across calls.
     /// CPU usage requires comparing snapshots over time, so we must reuse the same System.
@@ -90,75 +90,124 @@ impl VmmHandlerTrait for ShimHandler {
         const GRACEFUL_SHUTDOWN_TIMEOUT_MS: u64 = 2000;
 
         if let Some(mut process) = self.process.take() {
-            // Step 1: Send SIGTERM for graceful shutdown
-            let pid = process.id();
-            unsafe {
-                libc::kill(pid as i32, libc::SIGTERM);
+            // Step 1: Signal graceful shutdown
+            #[cfg(unix)]
+            {
+                let pid = process.id();
+                unsafe {
+                    libc::kill(pid as i32, libc::SIGTERM);
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                // Signal the shutdown event — the shim's monitoring thread will
+                // call Guest.Shutdown() RPC then exit cleanly.
+                if let Some(ref keepalive) = self.keepalive {
+                    keepalive.signal();
+                }
             }
 
             // Step 2: Wait with timeout for process to exit
-            let start = std::time::Instant::now();
-            loop {
-                match process.try_wait() {
-                    Ok(Some(_)) => {
-                        // Process exited gracefully
-                        return Ok(());
-                    }
-                    Ok(None) => {
-                        // Still running, check timeout
-                        if start.elapsed().as_millis() > GRACEFUL_SHUTDOWN_TIMEOUT_MS as u128 {
-                            // Timeout - force kill
+            #[cfg(unix)]
+            {
+                let start = std::time::Instant::now();
+                loop {
+                    match process.try_wait() {
+                        Ok(Some(_)) => return Ok(()),
+                        Ok(None) => {
+                            if start.elapsed().as_millis() > GRACEFUL_SHUTDOWN_TIMEOUT_MS as u128 {
+                                let _ = process.kill();
+                                let _ = process.wait();
+                                return Ok(());
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(50));
+                        }
+                        Err(_) => {
                             let _ = process.kill();
                             let _ = process.wait();
                             return Ok(());
                         }
-                        // Brief sleep before checking again
-                        std::thread::sleep(std::time::Duration::from_millis(50));
-                    }
-                    Err(_) => {
-                        // Error checking status - try to kill anyway
-                        let _ = process.kill();
-                        let _ = process.wait();
-                        return Ok(());
                     }
                 }
+            }
+
+            #[cfg(windows)]
+            {
+                // Event-driven wait: WaitForSingleObject on process handle wakes
+                // immediately when the process exits, avoiding 50ms polling latency.
+                use std::os::windows::io::AsRawHandle;
+                use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
+                use windows_sys::Win32::System::Threading::WaitForSingleObject;
+
+                let handle = process.as_raw_handle() as _;
+                let result =
+                    unsafe { WaitForSingleObject(handle, GRACEFUL_SHUTDOWN_TIMEOUT_MS as u32) };
+                if result != WAIT_OBJECT_0 {
+                    // Timeout or error — force kill
+                    let _ = process.kill();
+                }
+                let _ = process.wait();
+                return Ok(());
             }
         } else {
-            // Attached mode: use SIGTERM then SIGKILL with polling
-            // We don't have a Child handle, so we use waitpid/kill directly
-            unsafe {
-                libc::kill(self.pid as i32, libc::SIGTERM);
+            // Attached mode: use platform-specific process termination
+            #[cfg(unix)]
+            {
+                unsafe {
+                    libc::kill(self.pid as i32, libc::SIGTERM);
+                }
+
+                // Poll for exit with timeout
+                let start = std::time::Instant::now();
+                loop {
+                    let mut status: i32 = 0;
+                    let result =
+                        unsafe { libc::waitpid(self.pid as i32, &mut status, libc::WNOHANG) };
+
+                    if result > 0 {
+                        return Ok(());
+                    }
+                    if result < 0 {
+                        let exists = crate::util::is_process_alive(self.pid);
+                        if !exists {
+                            return Ok(());
+                        }
+                    }
+
+                    if start.elapsed().as_millis() > GRACEFUL_SHUTDOWN_TIMEOUT_MS as u128 {
+                        unsafe {
+                            libc::kill(self.pid as i32, libc::SIGKILL);
+                        }
+                        return Ok(());
+                    }
+
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
             }
 
-            // Poll for exit with timeout
-            let start = std::time::Instant::now();
-            loop {
-                let mut status: i32 = 0;
-                let result = unsafe { libc::waitpid(self.pid as i32, &mut status, libc::WNOHANG) };
+            #[cfg(windows)]
+            {
+                // Event-driven wait: open process handle, then WaitForSingleObject.
+                use windows_sys::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
+                use windows_sys::Win32::System::Threading::{
+                    OpenProcess, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, WaitForSingleObject,
+                };
 
-                if result > 0 {
-                    // Process exited gracefully (we reaped it)
+                let handle =
+                    unsafe { OpenProcess(PROCESS_SYNCHRONIZE | PROCESS_TERMINATE, 0, self.pid) };
+                // Null check: HANDLE may be isize (0.61) or *mut c_void (0.52)
+                if handle as usize == 0 {
+                    // Process already gone
                     return Ok(());
                 }
-                if result < 0 {
-                    // Error - process may not be our child (common in attached mode)
-                    // Fall back to checking if process still exists
-                    let exists = crate::util::is_process_alive(self.pid);
-                    if !exists {
-                        return Ok(()); // Already dead
-                    }
+                let result =
+                    unsafe { WaitForSingleObject(handle, GRACEFUL_SHUTDOWN_TIMEOUT_MS as u32) };
+                if result != WAIT_OBJECT_0 {
+                    // Timeout — force kill
+                    crate::util::kill_process(self.pid);
                 }
-                // result == 0 means still running
-
-                if start.elapsed().as_millis() > GRACEFUL_SHUTDOWN_TIMEOUT_MS as u128 {
-                    // Timeout - force kill
-                    unsafe {
-                        libc::kill(self.pid as i32, libc::SIGKILL);
-                    }
-                    return Ok(());
-                }
-
-                std::thread::sleep(std::time::Duration::from_millis(50));
+                unsafe { CloseHandle(handle) };
+                return Ok(());
             }
         }
 

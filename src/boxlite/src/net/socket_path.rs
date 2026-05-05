@@ -1,10 +1,10 @@
-//! Unix socket path shortening via symlinks.
+//! Socket path shortening via symlinks (Unix) or passthrough (Windows).
 //!
 //! Unix domain sockets have a `sun_path` limit of 104 bytes (macOS) / 108 bytes (Linux).
 //! When `BOXLITE_HOME` is a long path, socket paths like
 //! `~/.boxlite/boxes/{box_id}/sockets/box.sock` can exceed this limit.
 //!
-//! Solution: Create a short symlink `/tmp/bl_{short_id}` → real sockets directory.
+//! Solution (Unix): Create a short symlink `/tmp/bl_{short_id}` → real sockets directory.
 //! The kernel resolves symlinks during VFS path lookup AFTER the `sun_path` length
 //! check, so the short symlink path satisfies the buffer size constraint while the
 //! socket file physically lives at the real (long) path.
@@ -12,17 +12,25 @@
 //! This is the same pattern used by Open vSwitch (`shorten_name_via_symlink()` in
 //! `lib/socket-util-unix.c`).
 //!
+//! On Windows, AF_UNIX sockets don't have the same path length limitation, so
+//! [`SocketShortener::new()`] always returns `Ok(None)` and
+//! [`cleanup_stale_symlinks()`] is a no-op.
+//!
 //! **Library safety**: BoxLite is a library — we must NEVER change the host process's
 //! CWD. The symlink approach avoids any process-global state mutation.
 
-use boxlite_shared::errors::{BoxliteError, BoxliteResult};
+#[cfg(unix)]
+use boxlite_shared::errors::BoxliteError;
+use boxlite_shared::errors::BoxliteResult;
 use std::path::{Path, PathBuf};
 
 /// Maximum allowed socket path length.
 /// macOS = 104, Linux = 108. Use the smaller value for cross-platform safety.
+#[cfg(unix)]
 const MAX_SUN_PATH: usize = 104;
 
 /// Prefix for shortener symlinks in the temp directory.
+#[cfg(unix)]
 const SYMLINK_PREFIX: &str = "bl_";
 
 /// Manages a short symlink in `/tmp` that aliases a box's sockets directory.
@@ -36,6 +44,7 @@ const SYMLINK_PREFIX: &str = "bl_";
 /// The symlink is automatically removed on [`Drop`].
 ///
 /// Returns `None` from [`new()`](Self::new) if paths already fit — no symlink created.
+/// On Windows, always returns `None` (no `sun_path` limit).
 #[derive(Debug)]
 pub struct SocketShortener {
     /// The short symlink path: `/tmp/bl_{short_id}`
@@ -47,9 +56,11 @@ pub struct SocketShortener {
 impl SocketShortener {
     /// Create a shortener if the socket paths exceed the `sun_path` limit.
     ///
-    /// Returns `Ok(None)` if all socket paths already fit within [`MAX_SUN_PATH`].
-    /// Returns `Ok(Some(shortener))` if a symlink was created.
+    /// Returns `Ok(None)` if all socket paths already fit within [`MAX_SUN_PATH`],
+    /// or on Windows (no `sun_path` limit).
+    /// Returns `Ok(Some(shortener))` if a symlink was created (Unix only).
     /// Returns `Err` if the symlink cannot be created or paths are too long even with shortening.
+    #[cfg(unix)]
     pub fn new(short_id: &str, sockets_dir: &Path) -> BoxliteResult<Option<Self>> {
         // Check if shortening is needed (ready.sock is the longest socket name)
         let longest_real = sockets_dir.join("ready.sock");
@@ -110,6 +121,13 @@ impl SocketShortener {
         }))
     }
 
+    /// On Windows, AF_UNIX sockets don't have the same path length limitation,
+    /// so shortening is never needed.
+    #[cfg(not(unix))]
+    pub fn new(_short_id: &str, _sockets_dir: &Path) -> BoxliteResult<Option<Self>> {
+        Ok(None)
+    }
+
     /// Get the short path for a socket file.
     ///
     /// Example: `shortener.short_path("box.sock")` → `/tmp/bl_aB3xK9Lm/box.sock`
@@ -167,6 +185,9 @@ pub fn resolve_socket_path(
 ///
 /// Called during runtime startup to clean up symlinks left behind by
 /// crashed or improperly shutdown box instances.
+///
+/// On Windows, this is a no-op (no symlinks are created).
+#[cfg(unix)]
 pub fn cleanup_stale_symlinks() {
     let tmp_dir = std::env::temp_dir();
     let Ok(entries) = std::fs::read_dir(&tmp_dir) else {
@@ -197,7 +218,11 @@ pub fn cleanup_stale_symlinks() {
     }
 }
 
+#[cfg(not(unix))]
+pub fn cleanup_stale_symlinks() {}
+
 #[cfg(test)]
+#[cfg(unix)]
 mod tests {
     use super::*;
     use std::os::unix::fs::symlink;

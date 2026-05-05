@@ -15,9 +15,11 @@ use super::watchdog;
 
 /// A shim that was spawned, with its child process handle and optional keepalive.
 ///
-/// The `keepalive` holds the parent side of the watchdog pipe. While it exists,
-/// the shim's watchdog thread blocks on `poll()`. Dropping it closes the pipe
-/// write end, delivering POLLHUP to the shim and triggering graceful shutdown.
+/// The `keepalive` holds the parent side of the watchdog mechanism:
+/// - **Unix:** Pipe write end. Dropping delivers POLLHUP to the shim.
+/// - **Windows:** Event handle. Dropping signals the event via SetEvent.
+///
+/// In both cases, dropping triggers graceful shutdown in the shim.
 pub struct SpawnedShim {
     pub child: Child,
     /// Parent-side watchdog keepalive. Dropping triggers shim shutdown.
@@ -63,7 +65,9 @@ impl<'a> ShimSpawner<'a> {
     /// # Returns
     /// * `SpawnedShim` containing the child process and optional keepalive
     pub fn spawn(&self, config_json: &str, detach: bool) -> BoxliteResult<SpawnedShim> {
-        // 1. Create watchdog pipe (non-detached only)
+        // 1. Create watchdog (non-detached only)
+        //    Unix: pipe pair (POLLHUP on parent death)
+        //    Windows: Event handle (SetEvent on stop, parent handle on death)
         let (keepalive, child_setup) = if !detach {
             let (k, s) = watchdog::create()?;
             (Some(k), Some(s))
@@ -72,12 +76,14 @@ impl<'a> ShimSpawner<'a> {
         };
 
         // 2. Build jailer with optional FD preservation for watchdog pipe
+        #[allow(unused_mut)] // Mutated only in #[cfg(unix)] block below
         let mut builder = JailerBuilder::new()
             .with_box_id(self.box_id)
             .with_layout(self.layout.clone())
             .with_security(self.options.advanced.security.clone())
             .with_volumes(self.options.volumes.clone());
 
+        #[cfg(unix)]
         if let Some(ref setup) = child_setup {
             builder = builder.with_preserved_fd(setup.raw_fd(), watchdog::PIPE_FD);
         }
@@ -94,6 +100,13 @@ impl<'a> ShimSpawner<'a> {
         // 5. Configure environment
         self.configure_env(&mut cmd);
 
+        // 5b. Pass watchdog handles via environment (Windows)
+        #[cfg(windows)]
+        if let Some(ref setup) = child_setup {
+            cmd.env(watchdog::ENV_SHUTDOWN_EVENT, setup.event_handle_str());
+            cmd.env(watchdog::ENV_PARENT_PID, std::process::id().to_string());
+        }
+
         // 6. Configure stdio
         // stdin=piped: config JSON is sent via stdin to avoid /proc/cmdline exposure
         // (config contains CA private keys and secret values)
@@ -101,6 +114,15 @@ impl<'a> ShimSpawner<'a> {
         cmd.stdin(Stdio::piped());
         cmd.stdout(Stdio::null());
         cmd.stderr(Stdio::from(stderr_file));
+
+        // 6b. Spawn suspended on Windows to eliminate TOCTOU between spawn and
+        // Job Object assignment. The process is created but no threads run until
+        // we explicitly resume after assigning it to the Job Object.
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(windows_sys::Win32::System::Threading::CREATE_SUSPENDED);
+        }
 
         // 7. Spawn
         let mut child = cmd.spawn().map_err(|e| {
@@ -112,6 +134,14 @@ impl<'a> ShimSpawner<'a> {
             tracing::error!("{}", err_msg);
             BoxliteError::Engine(err_msg)
         })?;
+
+        // 7b. Post-spawn sandbox setup (Windows: Job Object assignment)
+        jail.post_spawn(&child)?;
+
+        // 7c. Resume the suspended process now that it's inside the Job Object.
+        // This ensures the process never runs outside sandbox isolation.
+        #[cfg(windows)]
+        resume_suspended_process(child.id())?;
 
         // 8. Write config to stdin, then close (shim reads until EOF).
         // The child is already spawned and will read from stdin, so this is a
@@ -127,8 +157,25 @@ impl<'a> ShimSpawner<'a> {
             drop(stdin); // close write end — shim sees EOF
         }
 
-        // 9. Close read end in parent (child inherited it via fork)
+        // 9. Close read end in parent (child inherited it via fork on Unix)
+        //    On Windows, ChildSetup is just a handle value — no cleanup needed.
         drop(child_setup);
+
+        // 10. Write PID file (Windows only).
+        //     On Unix, the pre_exec hook writes the PID file after fork via
+        //     async-signal-safe syscalls. On Windows, pre_exec is not available,
+        //     so we write it from the parent after spawn succeeds.
+        #[cfg(windows)]
+        {
+            let pid_file = self.layout.pid_file_path();
+            std::fs::write(&pid_file, child.id().to_string()).map_err(|e| {
+                BoxliteError::Storage(format!(
+                    "Failed to write PID file {}: {}",
+                    pid_file.display(),
+                    e
+                ))
+            })?;
+        }
 
         Ok(SpawnedShim { child, keepalive })
     }
@@ -174,6 +221,66 @@ impl<'a> ShimSpawner<'a> {
     }
 }
 
+/// Resume all threads of a suspended process.
+///
+/// After spawning with `CREATE_SUSPENDED`, the process exists but no threads
+/// are running. This function enumerates all threads belonging to the process
+/// using the Toolhelp32 snapshot API and resumes each one.
+///
+/// # Errors
+/// Returns an error if the thread snapshot fails or no threads are found.
+#[cfg(windows)]
+fn resume_suspended_process(pid: u32) -> BoxliteResult<()> {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
+    };
+    use windows_sys::Win32::System::Threading::{OpenThread, ResumeThread, THREAD_SUSPEND_RESUME};
+
+    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) };
+    if snapshot == windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE {
+        return Err(BoxliteError::Engine(format!(
+            "CreateToolhelp32Snapshot failed: {}",
+            std::io::Error::last_os_error()
+        )));
+    }
+
+    let mut entry: THREADENTRY32 = unsafe { std::mem::zeroed() };
+    entry.dwSize = std::mem::size_of::<THREADENTRY32>() as u32;
+
+    let mut resumed = 0u32;
+
+    let ok = unsafe { Thread32First(snapshot, &mut entry) };
+    if ok != 0 {
+        loop {
+            if entry.th32OwnerProcessID == pid {
+                let thread_handle =
+                    unsafe { OpenThread(THREAD_SUSPEND_RESUME, 0, entry.th32ThreadID) };
+                if !thread_handle.is_null() {
+                    unsafe { ResumeThread(thread_handle) };
+                    unsafe { CloseHandle(thread_handle) };
+                    resumed += 1;
+                }
+            }
+            let next = unsafe { Thread32Next(snapshot, &mut entry) };
+            if next == 0 {
+                break;
+            }
+        }
+    }
+
+    unsafe { CloseHandle(snapshot) };
+
+    if resumed == 0 {
+        return Err(BoxliteError::Engine(format!(
+            "No threads found to resume for PID {}",
+            pid
+        )));
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -214,6 +321,8 @@ mod tests {
             FsLayoutConfig::without_bind_mount(),
             false,
         );
+        // Explicitly set jailer_enabled: true so TMPDIR is set on all platforms
+        // (BoxOptions::default() uses cfg!(target_os = "macos") which differs)
         let options = BoxOptions {
             advanced: AdvancedBoxOptions {
                 security: SecurityOptions {
@@ -289,5 +398,54 @@ mod tests {
         assert!(!envs.contains_key(OsStr::new("TMPDIR")));
         assert!(!envs.contains_key(OsStr::new("TMP")));
         assert!(!envs.contains_key(OsStr::new("TEMP")));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_create_suspended_and_resume() {
+        use std::os::windows::process::CommandExt;
+        use windows_sys::Win32::System::Threading::{
+            CREATE_SUSPENDED, OpenProcess, WaitForSingleObject,
+        };
+
+        // Stable Windows constants
+        const SYNCHRONIZE: u32 = 0x00100000;
+        const WAIT_TIMEOUT: u32 = 258;
+
+        // Spawn a process in suspended state
+        let child = std::process::Command::new("cmd")
+            .args(["/c", "echo hello"])
+            .creation_flags(CREATE_SUSPENDED)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("failed to spawn suspended process");
+
+        let pid = child.id();
+
+        // Process should exist but be suspended — WaitForSingleObject should timeout
+        let handle = unsafe { OpenProcess(SYNCHRONIZE, 0, pid) };
+        assert!(
+            !handle.is_null(),
+            "should be able to open suspended process"
+        );
+
+        let wait_result = unsafe { WaitForSingleObject(handle, 50) };
+        assert_eq!(
+            wait_result, WAIT_TIMEOUT,
+            "suspended process should not have exited yet"
+        );
+
+        // Resume the process
+        resume_suspended_process(pid).expect("resume should succeed");
+
+        // Now the process should complete quickly
+        let wait_result = unsafe { WaitForSingleObject(handle, 5000) };
+        assert_eq!(
+            wait_result, 0,
+            "process should complete after resume (WAIT_OBJECT_0)"
+        );
+
+        unsafe { windows_sys::Win32::Foundation::CloseHandle(handle) };
     }
 }

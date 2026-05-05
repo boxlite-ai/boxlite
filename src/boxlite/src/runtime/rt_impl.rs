@@ -3,7 +3,9 @@ use crate::images::{ImageDiskManager, ImageManager};
 use crate::init_logging_for;
 use crate::litebox::config::BoxConfig;
 use crate::litebox::{BoxManager, LiteBox, LocalSnapshotBackend, SharedBoxImpl};
-use crate::lock::{FileLockManager, LockManager};
+#[cfg(unix)]
+use crate::lock::FileLockManager;
+use crate::lock::LockManager;
 use crate::metrics::{RuntimeMetrics, RuntimeMetricsStorage};
 use crate::rootfs::guest::{GuestRootfs, GuestRootfsManager};
 use crate::runtime::constants::filenames;
@@ -61,6 +63,7 @@ pub struct RuntimeImpl {
     /// Filesystem layout (immutable after init)
     pub(crate) layout: FilesystemLayout,
     /// Pure image disk cache manager (image layers → ext4, no guest binary)
+    #[allow(dead_code)] // Read from cfg-gated init task code
     pub(crate) image_disk_mgr: ImageDiskManager,
     /// Versioned guest rootfs manager (image disk + guest binary → ext4)
     pub(crate) guest_rootfs_mgr: GuestRootfsManager,
@@ -191,6 +194,7 @@ impl RuntimeImpl {
         let box_store = BoxStore::new(db);
 
         // Initialize lock manager for per-entity multiprocess-safe locking
+        #[cfg(unix)]
         let lock_manager: Arc<dyn LockManager> =
             Arc::new(FileLockManager::new(layout.locks_dir()).map_err(|e| {
                 BoxliteError::Storage(format!(
@@ -199,6 +203,9 @@ impl RuntimeImpl {
                     e
                 ))
             })?);
+        #[cfg(not(unix))]
+        let lock_manager: Arc<dyn LockManager> =
+            Arc::new(crate::lock::InMemoryLockManager::new(1024));
 
         tracing::debug!(
             lock_dir = %layout.locks_dir().display(),
@@ -691,8 +698,15 @@ impl RuntimeImpl {
             );
 
             // SIGTERM triggers shim's graceful shutdown handler (Guest.Shutdown RPC)
+            #[cfg(unix)]
             unsafe {
                 libc::kill(pid as i32, libc::SIGTERM);
+            }
+
+            // Windows: no SIGTERM equivalent for console apps, go straight to terminate
+            #[cfg(not(unix))]
+            {
+                crate::util::kill_process(pid);
             }
 
             // Wait for shim to finish graceful shutdown (3s guest RPC + margin)
@@ -1616,17 +1630,28 @@ mod tests {
         state
     }
 
-    /// Spawn a dummy sleep process and return its PID.
+    /// Spawn a dummy long-running process and return its PID.
     fn spawn_dummy_process() -> (u32, std::process::Child) {
+        #[cfg(unix)]
         let child = std::process::Command::new("sleep")
             .arg("300")
             .spawn()
             .expect("Failed to spawn dummy process");
+
+        #[cfg(not(unix))]
+        let child = std::process::Command::new("ping")
+            .args(["-n", "300", "127.0.0.1"])
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .expect("Failed to spawn dummy process");
+
         let pid = child.id();
         (pid, child)
     }
 
     /// Spawn a process that ignores SIGTERM (for force-kill testing).
+    /// Unix-only: SIGTERM is a Unix concept.
+    #[cfg(unix)]
     fn spawn_sigterm_ignoring_process() -> (u32, std::process::Child) {
         let child = std::process::Command::new("sh")
             .arg("-c")
@@ -2113,6 +2138,7 @@ mod tests {
     // Force-kill path (SIGTERM timeout → SIGKILL)
     // ====================================================================
 
+    #[cfg(unix)]
     #[test]
     fn test_shutdown_sync_force_kills_stuck_process() {
         let (runtime, _dir) = create_test_runtime();

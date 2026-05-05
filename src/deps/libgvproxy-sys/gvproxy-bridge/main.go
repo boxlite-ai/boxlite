@@ -198,6 +198,7 @@ type GvproxyConfig struct {
 	Secrets          []SecretConfig `json:"secrets,omitempty"`
 	CACertPEM        string         `json:"ca_cert_pem,omitempty"`
 	CAKeyPEM         string         `json:"ca_key_pem,omitempty"`
+	ListenAddr       string         `json:"listen_addr,omitempty"`
 }
 
 // GvproxyInstance tracks a running gvisor-tap-vsock instance
@@ -291,19 +292,24 @@ func gvproxy_create(configJSON *C.char) C.longlong {
 
 	// Use caller-provided socket path (unique per box)
 	socketPath := config.SocketPath
-	if socketPath == "" {
-		logrus.Error("socket_path is required in GvproxyConfig")
+	if socketPath == "" && config.ListenAddr == "" {
+		logrus.Error("socket_path or listen_addr is required in GvproxyConfig")
 		return -1
 	}
 
 	// Remove stale socket from a previous crash (safe: path is unique per box)
-	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
-		logrus.WithFields(logrus.Fields{"error": err, "path": socketPath}).Warn("Failed to remove existing socket")
+	if socketPath != "" {
+		if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
+			logrus.WithFields(logrus.Fields{"error": err, "path": socketPath}).Warn("Failed to remove existing socket")
+		}
 	}
 
 	// Platform-specific protocol selection
 	var protocol types.Protocol
-	if runtime.GOOS == "darwin" {
+	if config.ListenAddr != "" {
+		// Windows: TCP uses QemuProtocol (length-prefixed Ethernet frames)
+		protocol = types.QemuProtocol
+	} else if runtime.GOOS == "darwin" {
 		protocol = types.VfkitProtocol
 	} else {
 		protocol = types.QemuProtocol
@@ -335,7 +341,15 @@ func gvproxy_create(configJSON *C.char) C.longlong {
 	var listener net.Listener
 	var err error
 
-	if runtime.GOOS == "darwin" {
+	if config.ListenAddr != "" {
+		// Windows (or explicit TCP mode): TCP listener with Qemu protocol
+		listener, err = net.Listen("tcp", config.ListenAddr)
+		if err != nil {
+			logrus.WithFields(logrus.Fields{"error": err, "addr": config.ListenAddr}).Error("Failed to create TCP listener")
+			return -1
+		}
+		logrus.WithField("addr", config.ListenAddr).Info("Created TCP listener for Qemu protocol")
+	} else if runtime.GOOS == "darwin" {
 		// macOS: Use UnixDgram with VFKit protocol (SOCK_DGRAM)
 		socketURI := fmt.Sprintf("unixgram://%s", socketPath)
 		conn, err = transport.ListenUnixgram(socketURI)
@@ -433,17 +447,13 @@ func gvproxy_create(configJSON *C.char) C.longlong {
 		instance.vn = vn
 		instance.vnMu.Unlock()
 
-		// Platform-specific packet handling
-		if runtime.GOOS == "darwin" {
+		// Connection-type-specific packet handling.
+		// VFKit (macOS datagram) uses conn; Qemu (Linux Unix stream / Windows TCP) uses listener.
+		if conn != nil {
 			// macOS: Handle VFKit datagram packets
-			// VFKit requires a two-step process:
-			// 1. transport.AcceptVfkit() - Waits for incoming data and wraps listener with remote address
-			// 2. vn.AcceptVfkit() - Handles the VFKit protocol
 			go func() {
 				logrus.WithField("id", id).Trace("Waiting for VFKit connection on UnixDgram socket")
 
-				// Wait for incoming connection and get wrapped connection with remote address
-				// AcceptVfkit peeks at the first packet to get the remote address
 				wrappedConn, err := transport.AcceptVfkit(conn.(*net.UnixConn))
 				if err != nil {
 					logrus.WithFields(logrus.Fields{"error": err, "id": id}).Error("Failed to accept VFKit connection")
@@ -452,7 +462,6 @@ func gvproxy_create(configJSON *C.char) C.longlong {
 
 				logrus.WithFields(logrus.Fields{"id": id, "remote": wrappedConn.RemoteAddr().String()}).Info("VFKit connection accepted")
 
-				// Handle the VFKit protocol with the wrapped connection
 				if err := vn.AcceptVfkit(ctx, wrappedConn); err != nil {
 					if ctx.Err() == nil {
 						logrus.WithFields(logrus.Fields{"error": err, "id": id}).Error("AcceptVfkit error")
@@ -460,11 +469,10 @@ func gvproxy_create(configJSON *C.char) C.longlong {
 				}
 			}()
 		} else {
-			// Linux: Handle Qemu stream connections
+			// Linux (Unix stream) / Windows (TCP): Handle Qemu stream connections
 			go func() {
-				logrus.WithField("id", id).Trace("Waiting for Qemu connection on UnixStream socket")
+				logrus.WithField("id", id).Trace("Waiting for Qemu connection on stream socket")
 
-				// Accept incoming connection (blocks until VM connects)
 				acceptedConn, err := listener.Accept()
 				if err != nil {
 					if ctx.Err() == nil {
@@ -478,7 +486,6 @@ func gvproxy_create(configJSON *C.char) C.longlong {
 				// Close listener after first connection (one VM per gvproxy instance)
 				listener.Close()
 
-				// Handle the Qemu protocol
 				if err := vn.AcceptQemu(ctx, acceptedConn); err != nil {
 					if ctx.Err() == nil {
 						logrus.WithFields(logrus.Fields{"error": err, "id": id}).Error("AcceptQemu error")
@@ -491,12 +498,15 @@ func gvproxy_create(configJSON *C.char) C.longlong {
 		<-ctx.Done()
 
 		// Cleanup
-		if runtime.GOOS == "darwin" && conn != nil {
+		if conn != nil {
 			conn.Close()
 		} else if listener != nil {
 			listener.Close()
 		}
-		os.Remove(socketPath)
+		// Only remove socket file for Unix sockets (TCP has no file to clean up)
+		if socketPath != "" && config.ListenAddr == "" {
+			os.Remove(socketPath)
+		}
 	}()
 
 	logrus.Info("Created gvproxy instance", "id", id, "socket", socketPath, "protocol", protocol)

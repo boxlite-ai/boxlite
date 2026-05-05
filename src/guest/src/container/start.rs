@@ -4,11 +4,11 @@
 //! Separated from container.rs to group by lifecycle phase (Prepare → Execute).
 
 use super::spec;
+use super::zygote::{self, InitBuildSpec};
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
-use libcontainer::container::builder::ContainerBuilder;
 use libcontainer::container::Container as LibContainer;
-use libcontainer::syscall::syscall::SyscallType;
 use std::fs;
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 
 // ====================
@@ -158,7 +158,11 @@ pub(crate) fn create_oci_bundle(
 // Execution Functions (Execute Phase)
 // ====================
 
-/// Create container using libcontainer (does not start it)
+/// Create container using libcontainer via the zygote (does not start it).
+///
+/// Routes the init build through the zygote process to avoid the musl
+/// __malloc_lock deadlock when clone3() is called from a multi-threaded
+/// tokio process.
 ///
 /// Uses default stdio (inherited from parent process).
 /// For custom stdio, use `create_container_with_stdio`.
@@ -168,15 +172,16 @@ pub(crate) fn create_container(
     state_root: &Path,
     bundle_path: &Path,
 ) -> BoxliteResult<()> {
-    ContainerBuilder::new(container_id.to_string(), SyscallType::default())
-        .with_root_path(state_root)
-        .map_err(|e| BoxliteError::Internal(format!("Failed to set container root path: {}", e)))?
-        .validate_id()
-        .map_err(|e| BoxliteError::Internal(format!("Invalid container ID: {}", e)))?
-        .as_init(bundle_path)
-        .with_systemd(false)
-        .with_detach(true)
-        .build()
+    let spec = InitBuildSpec {
+        container_id: container_id.to_string(),
+        state_root: state_root.to_path_buf(),
+        bundle_path: bundle_path.to_path_buf(),
+    };
+
+    zygote::ZYGOTE
+        .get()
+        .expect("zygote not started")
+        .build_init(spec, None)
         .map_err(|e| {
             BoxliteError::Internal(format!(
                 "Failed to create container {} at bundle {}: {}",
@@ -190,7 +195,11 @@ pub(crate) fn create_container(
     Ok(())
 }
 
-/// Create container with custom stdio file descriptors.
+/// Create container with custom stdio file descriptors via the zygote.
+///
+/// Routes the init build through the zygote process to avoid the musl
+/// __malloc_lock deadlock when clone3() is called from a multi-threaded
+/// tokio process. Stdio fds are passed via SCM_RIGHTS.
 ///
 /// This allows the init process to use pipes controlled by boxlite-guest,
 /// keeping interactive entrypoints (like /bin/sh) alive by holding stdin open.
@@ -207,28 +216,35 @@ pub(crate) fn create_container_with_stdio(
     bundle_path: &Path,
     stdio_fds: super::stdio::InitStdioFds,
 ) -> BoxliteResult<()> {
-    // Note: with_stdin/stdout/stderr must be called before as_init()
-    // because they're methods on ContainerBuilder, not InitContainerBuilder
-    ContainerBuilder::new(container_id.to_string(), SyscallType::default())
-        .with_root_path(state_root)
-        .map_err(|e| BoxliteError::Internal(format!("Failed to set container root path: {}", e)))?
-        .validate_id()
-        .map_err(|e| BoxliteError::Internal(format!("Invalid container ID: {}", e)))?
-        .with_stdin(stdio_fds.stdin)
-        .with_stdout(stdio_fds.stdout)
-        .with_stderr(stdio_fds.stderr)
-        .as_init(bundle_path)
-        .with_systemd(false)
-        .with_detach(true)
-        .build()
-        .map_err(|e| {
-            BoxliteError::Internal(format!(
-                "Failed to create container {} at bundle {}: {}",
-                container_id,
-                bundle_path.display(),
-                e
-            ))
-        })?;
+    let spec = InitBuildSpec {
+        container_id: container_id.to_string(),
+        state_root: state_root.to_path_buf(),
+        bundle_path: bundle_path.to_path_buf(),
+    };
+
+    let raw_fds = [
+        stdio_fds.stdin.as_raw_fd(),
+        stdio_fds.stdout.as_raw_fd(),
+        stdio_fds.stderr.as_raw_fd(),
+    ];
+
+    let result = zygote::ZYGOTE
+        .get()
+        .expect("zygote not started")
+        .build_init(spec, Some(raw_fds));
+
+    // Drop stdio_fds AFTER build_init — zygote has its own via SCM_RIGHTS.
+    // Without this, pipe readers in the parent never see EOF.
+    drop(stdio_fds);
+
+    result.map_err(|e| {
+        BoxliteError::Internal(format!(
+            "Failed to create container {} at bundle {}: {}",
+            container_id,
+            bundle_path.display(),
+            e
+        ))
+    })?;
 
     tracing::info!(container_id, "Created OCI container with custom stdio");
     Ok(())

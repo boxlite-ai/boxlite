@@ -109,6 +109,10 @@ pub use sandbox::seatbelt::{
     SANDBOX_EXEC_PATH, get_base_policy, get_network_policy, is_sandbox_available,
 };
 
+// Windows-specific exports
+#[cfg(target_os = "windows")]
+pub use sandbox::JobSandbox;
+
 // ============================================================================
 // Jail trait — public contract
 // ============================================================================
@@ -324,6 +328,7 @@ pub struct Jailer<S: Sandbox> {
     pub(crate) layout: BoxFilesystemLayout,
     /// FDs to preserve through pre_exec: each (source_fd, target_fd) is dup2'd
     /// before FD cleanup. Used for watchdog pipe inheritance across fork.
+    #[cfg(unix)]
     pub(crate) preserved_fds: Vec<(std::os::fd::RawFd, i32)>,
 }
 
@@ -399,19 +404,33 @@ impl<S: Sandbox> Jail for Jailer<S> {
         // Pre-exec hook: FD preservation, FD cleanup, rlimits, PID file.
         // Sandbox-specific pre_exec hooks (cgroup, Landlock) are already added
         // by sandbox.apply() above — Command supports multiple pre_exec closures.
-        let resource_limits = self.security.resource_limits.clone();
-        let pid_file = self.pid_file_path();
-        pre_exec::add_pre_exec_hook(
-            &mut cmd,
-            resource_limits,
-            pid_file,
-            self.preserved_fds.clone(),
-        );
+        #[cfg(unix)]
+        {
+            let resource_limits = self.security.resource_limits.clone();
+            let pid_file = self.pid_file_path();
+            pre_exec::add_pre_exec_hook(
+                &mut cmd,
+                resource_limits,
+                pid_file,
+                self.preserved_fds.clone(),
+            );
+        }
         cmd
     }
 }
 
 impl<S: Sandbox> Jailer<S> {
+    /// Post-spawn sandbox hook.
+    ///
+    /// Delegates to the sandbox's `post_spawn()` for platform-specific
+    /// child process setup (e.g., Windows Job Object assignment).
+    pub fn post_spawn(&self, child: &std::process::Child) -> BoxliteResult<()> {
+        if self.security.jailer_enabled && self.sandbox.is_available() {
+            self.sandbox.post_spawn(child)?;
+        }
+        Ok(())
+    }
+
     /// Get the security options.
     pub fn security(&self) -> &SecurityOptions {
         &self.security
@@ -472,6 +491,7 @@ impl<S: Sandbox> Jailer<S> {
     }
 
     /// Build the PID file path as a CString for the pre_exec hook.
+    #[cfg(unix)]
     fn pid_file_path(&self) -> Option<std::ffi::CString> {
         let pid_file = self.layout.pid_file_path();
         std::ffi::CString::new(pid_file.to_string_lossy().as_bytes()).ok()

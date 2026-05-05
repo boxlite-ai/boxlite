@@ -1,6 +1,7 @@
 //! Connection management.
 //!
 //! Converts Transport to tonic Channel with lazy initialization.
+//! Uses AF_UNIX sockets on all platforms (including Windows via uds_windows).
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -8,7 +9,8 @@ use std::time::Duration;
 use boxlite_shared::{BoxliteError, BoxliteResult, Transport};
 use hyper_util::rt::TokioIo;
 use tokio::sync::OnceCell;
-use tonic::transport::{Channel, Endpoint, Uri};
+use tonic::transport::Uri;
+use tonic::transport::{Channel, Endpoint};
 use tower::service_fn;
 
 /// Lazy connection to guest.
@@ -47,17 +49,17 @@ async fn connect_transport(transport: &Transport) -> BoxliteResult<Channel> {
             tracing::debug!("Connecting via Unix: {}", socket_path.display());
             connect_unix(socket_path).await
         }
-        Transport::Tcp { port } => {
-            tracing::debug!("Connecting via TCP: 127.0.0.1:{}", port);
-            connect_tcp(*port).await
-        }
         Transport::Vsock { port } => Err(BoxliteError::Internal(format!(
             "Vsock client not yet implemented (port: {})",
             port
         ))),
+        _ => Err(BoxliteError::Internal(
+            "Unsupported transport type".to_string(),
+        )),
     }
 }
 
+#[cfg(unix)]
 async fn connect_unix(socket_path: &std::path::Path) -> BoxliteResult<Channel> {
     let socket_path = socket_path.to_path_buf();
 
@@ -76,13 +78,37 @@ async fn connect_unix(socket_path: &std::path::Path) -> BoxliteResult<Channel> {
     Ok(channel)
 }
 
-async fn connect_tcp(port: u16) -> BoxliteResult<Channel> {
-    let addr = format!("http://127.0.0.1:{}", port);
-    let channel = Endpoint::try_from(addr)?
+#[cfg(windows)]
+async fn connect_unix(socket_path: &std::path::Path) -> BoxliteResult<Channel> {
+    use std::os::windows::io::{FromRawSocket, IntoRawSocket};
+
+    let socket_path = socket_path.to_path_buf();
+
+    let channel = Endpoint::try_from("http://[::]:50051")?
         .connect_timeout(Duration::from_secs(30))
-        .connect()
+        .connect_with_connector(service_fn(move |_: Uri| {
+            let socket_path = socket_path.clone();
+            async move {
+                // Connect via uds_windows in a blocking task
+                let path = socket_path.clone();
+                let std_stream =
+                    tokio::task::spawn_blocking(move || uds_windows::UnixStream::connect(&path))
+                        .await
+                        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))??;
+
+                // Convert AF_UNIX SOCKET handle to tokio-compatible async stream.
+                // Windows IOCP doesn't distinguish AF_UNIX from AF_INET at the handle level,
+                // so we can safely wrap it as a TcpStream for async I/O.
+                // This is the same technique used by VS Code Remote and Docker Desktop.
+                let raw = std_stream.into_raw_socket();
+                let tcp_stream = unsafe { std::net::TcpStream::from_raw_socket(raw) };
+                tcp_stream.set_nonblocking(true)?;
+                let tokio_stream = tokio::net::TcpStream::from_std(tcp_stream)?;
+                Ok::<_, std::io::Error>(TokioIo::new(tokio_stream))
+            }
+        }))
         .await?;
 
-    tracing::debug!("Connected via TCP");
+    tracing::debug!("Connected via Unix socket (Windows AF_UNIX)");
     Ok(channel)
 }
