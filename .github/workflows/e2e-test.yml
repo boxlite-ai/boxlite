@@ -46,7 +46,7 @@ concurrency:
 env:
   AWS_REGION: us-east-1
   AWS_ROLE_ARN: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/boxlite-e2e-github-actions
-  EC2_INSTANCE_TYPE: c8i.2xlarge
+  EC2_INSTANCE_TYPE: c8i.xlarge
   EC2_AMI_ID: ami-0a0e5d9c7acc336f1  # Ubuntu 24.04 LTS x86_64 (us-east-1)
   EC2_SUBNET_ID: ${{ vars.AWS_SUBNET_ID }}
   EC2_SECURITY_GROUP_ID: ${{ vars.AWS_SECURITY_GROUP_ID }}
