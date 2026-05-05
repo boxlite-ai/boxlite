@@ -69,6 +69,7 @@ print(response.text)
 """
 
     async with boxlite.CodeBox() as codebox:
+        await codebox.install_package("requests")
         result = await codebox.run(code)
         print(result)
 
@@ -83,10 +84,13 @@ python codebox.py
 ```
 
 **What's happening:**
-1. CodeBox automatically installs required packages (requests)
+1. The example installs the `requests` dependency inside the CodeBox
 2. Executes the code in complete isolation
 3. Returns the output
 4. Your host system remains completely safe
+
+When running code that imports third-party packages, install them inside the
+CodeBox first so the example behaves the same in clean images and reused boxes.
 
 ## Running Examples
 
