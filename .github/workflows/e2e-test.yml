@@ -58,6 +58,7 @@ jobs:
   # =========================================================================
   should-run:
     runs-on: ubuntu-latest
+    permissions: {}
     outputs:
       run: ${{ steps.check.outputs.run }}
     steps:
