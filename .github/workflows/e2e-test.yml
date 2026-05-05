@@ -135,11 +135,11 @@ jobs:
           LABEL="boxlite-e2e-${{ github.run_id }}-${{ github.run_attempt }}"
 
           # Build user-data script
-          cat > /tmp/user-data.sh << 'USERDATA'
+          # Use sed to strip 10 leading spaces (heredoc inside YAML must be indented)
+          sed 's/^          //' > /tmp/user-data.sh << 'USERDATA'
           #!/bin/bash
           set -euo pipefail
 
-          # === Configuration ===
           GITHUB_REPOSITORY="__REPO__"
           RUNNER_TOKEN="__TOKEN__"
           RUNNER_NAME="__LABEL__"
@@ -148,7 +148,7 @@ jobs:
           SELF_DESTRUCT_SECONDS="__SELF_DESTRUCT__"
           AWS_REGION="__REGION__"
 
-          # === Self-Destruct Timer ===
+          # Self-destruct timer
           (
             sleep ${SELF_DESTRUCT_SECONDS}
             TOKEN=$(curl -sf -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 60")
@@ -156,15 +156,16 @@ jobs:
             aws ec2 terminate-instances --instance-ids "$INSTANCE_ID" --region "${AWS_REGION}" || true
           ) &
 
-          # === Enable KVM ===
+          # Enable KVM
           modprobe kvm_intel 2>/dev/null || modprobe kvm_amd 2>/dev/null || true
           if [ ! -c /dev/kvm ]; then
             echo "FATAL: /dev/kvm not found after modprobe"
             exit 1
           fi
           chmod 666 /dev/kvm
+          usermod -aG kvm root 2>/dev/null || true
 
-          # === Install GitHub Actions Runner ===
+          # Install GitHub Actions Runner
           mkdir -p /opt/actions-runner && cd /opt/actions-runner
           curl -fsSL "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz" | tar xz
           RUNNER_ALLOW_RUNASROOT=1 ./config.sh \
