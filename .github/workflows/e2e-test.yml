@@ -275,6 +275,7 @@ jobs:
 
       - name: Setup and run integration tests
         run: |
+          apt-get update -qq && apt-get install -y -qq make sudo
           make setup
           make test:integration
 
