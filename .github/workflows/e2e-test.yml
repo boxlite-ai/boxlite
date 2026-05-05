@@ -1,25 +1,25 @@
-# Run VM-based E2E integration tests on an ephemeral AWS EC2 runner.
+# Run VM-based E2E integration tests on a persistent AWS EC2 runner.
 #
 # GitHub-hosted runners do not support nested virtualization / KVM.
-# This workflow provisions an AWS EC2 instance (Intel Nitro with KVM support),
-# runs all integration tests that require real VMs, then terminates the instance.
+# This workflow starts a pre-configured EC2 instance, runs integration tests,
+# then stops it. The instance is never terminated — build caches persist.
 #
 # Architecture:
 #   start-runner (ubuntu-latest)  →  e2e-tests (self-hosted)  →  stop-runner (ubuntu-latest)
-#     Create EC2 instance              Build + run tests             Terminate instance
-#     Register ephemeral runner        35-min timeout                Deregister runner
-#     Poll until online                                              if: always()
+#     Start stopped EC2               Build + run tests             Stop EC2
+#     Wait for runner online           35-min timeout               if: always()
 #
-# Cost: ~$0.34/hr (c8i.2xlarge). Typical run: 15-25 min → ~$0.09-0.14 per run.
+# Concurrency: only ONE e2e run at a time (single persistent instance).
+# Queued runs wait; in-progress runs are cancelled by newer pushes.
+#
+# Cost: ~$0.17/hr (c8i.xlarge) only while running + ~$4/mo EBS storage.
+# Subsequent runs skip setup/compilation (cached) → ~5-10 min → ~$0.03/run.
 #
 # Authentication:
 #   AWS: GitHub OIDC → AWS STS (no stored AWS credentials)
 #   GitHub: GitHub App → short-lived installation token (no PAT)
 #
-# Setup (one command, auto-detects default VPC):
-#   ./scripts/ci/setup-ci-runner.sh
-#
-# This provisions all AWS resources and configures GitHub variables/secrets.
+# Setup: ./scripts/ci/setup-ci-runner.sh
 name: E2E Tests
 
 on:
@@ -37,26 +37,41 @@ on:
   pull_request:
     types: [labeled, synchronize]
     branches: [main]
+    paths:
+      - 'src/boxlite/**'
+      - 'src/shared/**'
+      - 'src/cli/**'
+      - 'src/guest/**'
+      - 'sdks/**'
+      - '**/Cargo.toml'
+      - 'Cargo.lock'
   workflow_dispatch:
+    inputs:
+      debug:
+        description: 'Open SSH session on failure (via tmate)'
+        type: boolean
+        default: false
 
+# Single global concurrency group — only one e2e run at a time.
+# The persistent instance can only serve one job. Newer pushes cancel older runs.
 concurrency:
-  group: e2e-${{ github.event.pull_request.number || github.ref }}
+  group: e2e-runner
   cancel-in-progress: true
 
 env:
   AWS_REGION: us-east-1
   AWS_ROLE_ARN: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/boxlite-e2e-github-actions
-  EC2_INSTANCE_TYPE: c8i.xlarge
-  EC2_AMI_ID: ami-05cf1e9f73fbad2e2  # Ubuntu 24.04 LTS x86_64 (us-east-1, 2026-04-24)
+  EC2_INSTANCE_ID: ${{ vars.EC2_E2E_INSTANCE_ID }}
+  EC2_INSTANCE_TYPE: c8i.4xlarge
+  EC2_AMI_ID: ami-05cf1e9f73fbad2e2
   EC2_SUBNET_ID: ${{ vars.AWS_SUBNET_ID }}
   EC2_SECURITY_GROUP_ID: ${{ vars.AWS_SECURITY_GROUP_ID }}
   RUNNER_VERSION: '2.334.0'
-  MAX_RUNNER_WAIT_SECONDS: '300'
-  SELF_DESTRUCT_SECONDS: '2700'
+  RUNNER_LABEL: boxlite-e2e
 
 jobs:
   # =========================================================================
-  # Gate: only run for push-to-main, manual dispatch, or PRs with 'e2e' label
+  # Gate: PRs require 'e2e-test' label (only maintainers can add it)
   # =========================================================================
   should-run:
     runs-on: ubuntu-latest
@@ -66,23 +81,19 @@ jobs:
       - name: Check trigger conditions
         id: check
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          elif [ "${{ github.event_name }}" = "push" ]; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          elif [ "${{ github.event_name }}" = "pull_request" ]; then
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
             LABELS='${{ toJson(github.event.pull_request.labels.*.name) }}'
-            if echo "$LABELS" | jq -e 'index("e2e")' > /dev/null 2>&1; then
+            if echo "$LABELS" | jq -e 'index("e2e-test")' > /dev/null 2>&1; then
               echo "run=true" >> "$GITHUB_OUTPUT"
             else
               echo "run=false" >> "$GITHUB_OUTPUT"
             fi
           else
-            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "run=true" >> "$GITHUB_OUTPUT"
           fi
 
   # =========================================================================
-  # Job 1: Provision EC2 instance and register ephemeral runner
+  # Job 1: Start the persistent EC2 instance and wait for runner
   # =========================================================================
   start-runner:
     name: Start E2E Runner
@@ -93,9 +104,7 @@ jobs:
       id-token: write
       contents: read
     outputs:
-      label: ${{ steps.launch-instance.outputs.label }}
-      instance-id: ${{ steps.launch-instance.outputs.instance-id }}
-      runner-id: ${{ steps.wait-for-runner.outputs.runner-id }}
+      instance-id: ${{ steps.ensure-instance.outputs.instance-id }}
     steps:
       - name: Generate GitHub App token
         id: app-token
@@ -111,132 +120,154 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: e2e-start-${{ github.run_id }}
 
-      - name: Generate runner registration token
-        id: reg-token
+      - name: Start or create EC2 instance
+        id: ensure-instance
         run: |
-          HTTP_CODE=$(curl -s -o /tmp/reg-response.json -w "%{http_code}" -X POST \
-            -H "Authorization: token ${{ steps.app-token.outputs.token }}" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/${{ github.repository }}/actions/runners/registration-token")
+          INSTANCE_ID="${{ env.EC2_INSTANCE_ID }}"
 
-          if [ "$HTTP_CODE" != "201" ]; then
-            echo "::error::Runner registration token request failed (HTTP $HTTP_CODE)"
-            cat /tmp/reg-response.json >&2
-            exit 1
+          # Fallback: discover by tag if variable is empty
+          if [ -z "$INSTANCE_ID" ]; then
+            INSTANCE_ID=$(aws ec2 describe-instances \
+              --filters "Name=tag:Name,Values=boxlite-e2e" "Name=instance-state-name,Values=running,stopped,stopping,pending" \
+              --query "Reservations[0].Instances[0].InstanceId" --output text 2>/dev/null || echo "")
+            [ "$INSTANCE_ID" = "None" ] && INSTANCE_ID=""
           fi
 
-          TOKEN=$(jq -r .token /tmp/reg-response.json)
-          echo "::add-mask::$TOKEN"
-          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
-
-      - name: Launch EC2 instance
-        id: launch-instance
-        run: |
-          LABEL="boxlite-e2e-${{ github.run_id }}-${{ github.run_attempt }}"
-
-          # Build user-data script
-          # Use sed to strip 10 leading spaces (heredoc inside YAML must be indented)
-          sed 's/^          //' > /tmp/user-data.sh << 'USERDATA'
-          #!/bin/bash
-          set -euo pipefail
-
-          GITHUB_REPOSITORY="__REPO__"
-          RUNNER_TOKEN="__TOKEN__"
-          RUNNER_NAME="__LABEL__"
-          RUNNER_LABELS="__LABEL__,self-hosted,linux,x64,kvm"
-          RUNNER_VERSION="__RUNNER_VERSION__"
-          SELF_DESTRUCT_SECONDS="__SELF_DESTRUCT__"
-          AWS_REGION="__REGION__"
-
-          # Self-destruct timer
-          (
-            sleep ${SELF_DESTRUCT_SECONDS}
-            TOKEN=$(curl -sf -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 60")
-            INSTANCE_ID=$(curl -sf -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/instance-id)
-            aws ec2 terminate-instances --instance-ids "$INSTANCE_ID" --region "${AWS_REGION}" || true
-          ) &
-
-          # Enable KVM
-          modprobe kvm_intel 2>/dev/null || modprobe kvm_amd 2>/dev/null || true
-          if [ ! -c /dev/kvm ]; then
-            echo "FATAL: /dev/kvm not found after modprobe"
-            exit 1
-          fi
-          chmod 666 /dev/kvm
-          usermod -aG kvm root 2>/dev/null || true
-
-          # Install GitHub Actions Runner
-          mkdir -p /opt/actions-runner && cd /opt/actions-runner
-          curl -fsSL "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz" | tar xz
-          RUNNER_ALLOW_RUNASROOT=1 ./config.sh \
-            --url "https://github.com/${GITHUB_REPOSITORY}" \
-            --token "${RUNNER_TOKEN}" \
-            --name "${RUNNER_NAME}" \
-            --labels "${RUNNER_LABELS}" \
-            --ephemeral --unattended --disableupdate
-          RUNNER_ALLOW_RUNASROOT=1 ./run.sh
-          USERDATA
-
-          # Substitute placeholders
-          sed -i "s|__REPO__|${{ github.repository }}|g" /tmp/user-data.sh
-          sed -i "s|__TOKEN__|${{ steps.reg-token.outputs.token }}|g" /tmp/user-data.sh
-          sed -i "s|__LABEL__|${LABEL}|g" /tmp/user-data.sh
-          sed -i "s|__RUNNER_VERSION__|${{ env.RUNNER_VERSION }}|g" /tmp/user-data.sh
-          sed -i "s|__SELF_DESTRUCT__|${{ env.SELF_DESTRUCT_SECONDS }}|g" /tmp/user-data.sh
-          sed -i "s|__REGION__|${{ env.AWS_REGION }}|g" /tmp/user-data.sh
-
-          # Launch instance (NestedVirtualization=enabled required for /dev/kvm on c8i)
-          RESPONSE=$(aws ec2 run-instances \
-            --instance-type "${{ env.EC2_INSTANCE_TYPE }}" \
-            --image-id "${{ env.EC2_AMI_ID }}" \
-            --subnet-id "${{ env.EC2_SUBNET_ID }}" \
-            --security-group-ids "${{ env.EC2_SECURITY_GROUP_ID }}" \
-            --iam-instance-profile Name=boxlite-e2e-runner \
-            --user-data file:///tmp/user-data.sh \
-            --cpu-options "NestedVirtualization=enabled" \
-            --block-device-mappings '[{"DeviceName":"/dev/sda1","Ebs":{"VolumeSize":50,"VolumeType":"gp3","DeleteOnTermination":true}}]' \
-            --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=${LABEL}},{Key=Purpose,Value=boxlite-e2e},{Key=GitHubRunId,Value=${{ github.run_id }}}]" \
-            --instance-initiated-shutdown-behavior terminate \
-            --metadata-options "HttpTokens=required,HttpEndpoint=enabled" \
-            --output json)
-
-          INSTANCE_ID=$(echo "$RESPONSE" | jq -r '.Instances[0].InstanceId')
-          if [ -z "$INSTANCE_ID" ] || [ "$INSTANCE_ID" = "null" ]; then
-            echo "::error::Failed to launch EC2 instance"
-            echo "$RESPONSE" >&2
-            exit 1
+          # Check if instance exists and get its state
+          if [ -n "$INSTANCE_ID" ]; then
+            STATE=$(aws ec2 describe-instances \
+              --instance-ids "$INSTANCE_ID" \
+              --query "Reservations[0].Instances[0].State.Name" --output text 2>/dev/null || echo "not-found")
+          else
+            STATE="not-found"
           fi
 
-          echo "Instance launched: $INSTANCE_ID (name: $LABEL)"
-          echo "instance-id=${INSTANCE_ID}" >> "$GITHUB_OUTPUT"
-          echo "label=${LABEL}" >> "$GITHUB_OUTPUT"
+          if [ "$STATE" = "running" ]; then
+            echo "Instance already running"
+            echo "instance-id=$INSTANCE_ID" >> "$GITHUB_OUTPUT"
 
-          # Wait for instance to be running
-          aws ec2 wait instance-running --instance-ids "$INSTANCE_ID"
-          echo "Instance is running"
+          elif [ "$STATE" = "stopped" ]; then
+            echo "Starting instance..."
+            aws ec2 start-instances --instance-ids "$INSTANCE_ID"
+            aws ec2 wait instance-running --instance-ids "$INSTANCE_ID"
+            echo "Instance started"
+            echo "instance-id=$INSTANCE_ID" >> "$GITHUB_OUTPUT"
 
-      - name: Wait for runner to come online
-        id: wait-for-runner
-        run: |
-          LABEL="${{ steps.launch-instance.outputs.label }}"
-          TIMEOUT=${{ env.MAX_RUNNER_WAIT_SECONDS }}
-          ELAPSED=0
-          INTERVAL=15
+          elif [ "$STATE" = "stopping" ] || [ "$STATE" = "pending" ]; then
+            echo "Instance in transitional state ($STATE), waiting..."
+            aws ec2 wait instance-stopped --instance-ids "$INSTANCE_ID" 2>/dev/null || \
+              aws ec2 wait instance-running --instance-ids "$INSTANCE_ID" 2>/dev/null || true
+            # Re-check and start if stopped
+            STATE=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" \
+              --query "Reservations[0].Instances[0].State.Name" --output text)
+            if [ "$STATE" = "stopped" ]; then
+              aws ec2 start-instances --instance-ids "$INSTANCE_ID"
+              aws ec2 wait instance-running --instance-ids "$INSTANCE_ID"
+            elif [ "$STATE" != "running" ]; then
+              echo "::error::Instance stuck in state: $STATE"
+              exit 1
+            fi
+            echo "instance-id=$INSTANCE_ID" >> "$GITHUB_OUTPUT"
 
-          echo "Waiting for runner '${LABEL}' to come online (timeout: ${TIMEOUT}s)..."
+          else
+            echo "Instance not found or terminated. Creating new one..."
 
-          while [ $ELAPSED -lt $TIMEOUT ]; do
-            RUNNERS=$(curl -sf \
+            # Generate runner registration token for user-data
+            REG_TOKEN=$(curl -sf -X POST \
               -H "Authorization: token ${{ steps.app-token.outputs.token }}" \
               -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/${{ github.repository }}/actions/runners" 2>/dev/null || echo '{"runners":[]}')
+              "https://api.github.com/repos/${{ github.repository }}/actions/runners/registration-token" \
+              | jq -r .token)
 
-            RUNNER_ID=$(echo "$RUNNERS" | jq -r ".runners[] | select(.name == \"$LABEL\") | .id // empty")
-            STATUS=$(echo "$RUNNERS" | jq -r ".runners[] | select(.name == \"$LABEL\") | .status // empty")
+            # Build user-data
+            sed 's/^            //' > /tmp/user-data.sh << 'USERDATA'
+            #!/bin/bash
+            set -euo pipefail
+            export HOME=/root
+
+            # Enable KVM
+            modprobe kvm_intel 2>/dev/null || modprobe kvm_amd 2>/dev/null || true
+            chmod 666 /dev/kvm 2>/dev/null || true
+            usermod -aG kvm root 2>/dev/null || true
+
+            # Install base tools
+            apt-get update -qq && apt-get install -y -qq make sudo git curl jq
+
+            # Clone and setup boxlite
+            if [ ! -d /opt/boxlite ]; then
+              git clone --recursive https://github.com/__REPO__.git /opt/boxlite
+            fi
+            cd /opt/boxlite && git pull --recurse-submodules || true
+            make setup
+            source "$HOME/.cargo/env"
+
+            # Install runner
+            RUNNER_VERSION="__RUNNER_VERSION__"
+            mkdir -p /opt/actions-runner && cd /opt/actions-runner
+            if [ ! -f ./config.sh ]; then
+              curl -fsSL "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz" | tar xz
+            fi
+            RUNNER_ALLOW_RUNASROOT=1 ./config.sh \
+              --url "https://github.com/__REPO__" \
+              --token "__REG_TOKEN__" \
+              --name "boxlite-e2e" \
+              --labels "self-hosted,linux,x64,kvm,boxlite-e2e" \
+              --unattended --disableupdate --replace || true
+            # Install as systemd service
+            ./svc.sh install root || true
+            ./svc.sh start || true
+            USERDATA
+
+            sed -i "s|__REPO__|${{ github.repository }}|g" /tmp/user-data.sh
+            sed -i "s|__RUNNER_VERSION__|${{ env.RUNNER_VERSION }}|g" /tmp/user-data.sh
+            sed -i "s|__REG_TOKEN__|${REG_TOKEN}|g" /tmp/user-data.sh
+
+            # Launch instance
+            INSTANCE_ID=$(aws ec2 run-instances \
+              --instance-type "${{ env.EC2_INSTANCE_TYPE }}" \
+              --image-id "${{ env.EC2_AMI_ID }}" \
+              --subnet-id "${{ env.EC2_SUBNET_ID }}" \
+              --security-group-ids "${{ env.EC2_SECURITY_GROUP_ID }}" \
+              --iam-instance-profile Name=boxlite-e2e-runner \
+              --cpu-options "NestedVirtualization=enabled" \
+              --user-data file:///tmp/user-data.sh \
+              --block-device-mappings '[{"DeviceName":"/dev/sda1","Ebs":{"VolumeSize":50,"VolumeType":"gp3","DeleteOnTermination":false}}]' \
+              --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=boxlite-e2e},{Key=Purpose,Value=boxlite-e2e}]" \
+              --metadata-options "HttpTokens=required,HttpEndpoint=enabled" \
+              --query "Instances[0].InstanceId" --output text)
+
+            echo "Created instance: $INSTANCE_ID"
+            aws ec2 wait instance-running --instance-ids "$INSTANCE_ID"
+            echo "instance-id=$INSTANCE_ID" >> "$GITHUB_OUTPUT"
+
+            # Save instance ID for future runs (must succeed or we'll orphan the instance)
+            if ! gh variable set EC2_E2E_INSTANCE_ID --body "$INSTANCE_ID" -R "${{ github.repository }}"; then
+              echo "::error::Failed to save instance ID. Terminating orphaned instance."
+              aws ec2 terminate-instances --instance-ids "$INSTANCE_ID"
+              exit 1
+            fi
+          fi
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+
+      - name: Wait for runner to come online
+        run: |
+          TIMEOUT=180
+          ELAPSED=0
+          INTERVAL=10
+
+          echo "Waiting for runner '${{ env.RUNNER_LABEL }}' to come online..."
+
+          while [ $ELAPSED -lt $TIMEOUT ]; do
+            STATUS=$(curl -sf \
+              -H "Authorization: token ${{ steps.app-token.outputs.token }}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${{ github.repository }}/actions/runners" \
+              | jq -r '.runners[] | select(.labels[].name == "${{ env.RUNNER_LABEL }}") | .status // empty' \
+              2>/dev/null || echo "")
 
             if [ "$STATUS" = "online" ]; then
-              echo "Runner is online (id: $RUNNER_ID)"
-              echo "runner-id=$RUNNER_ID" >> "$GITHUB_OUTPUT"
+              echo "Runner is online"
               exit 0
             fi
 
@@ -249,23 +280,34 @@ jobs:
           exit 1
 
   # =========================================================================
-  # Job 2: Run all integration tests on the self-hosted runner
+  # Job 2: Run integration tests on the persistent runner
   # =========================================================================
   e2e-tests:
     name: E2E Integration Tests
     needs: start-runner
     runs-on:
       - self-hosted
-      - ${{ needs.start-runner.outputs.label }}
+      - boxlite-e2e
     timeout-minutes: 35
     env:
       CARGO_TERM_COLOR: always
       CARGO_INCREMENTAL: '0'
+      HOME: /root
     steps:
+      - name: Clean workspace (persistent runner)
+        run: |
+          rm -rf /tmp/boxlite-* 2>/dev/null || true
+          if [ -d "$GITHUB_WORKSPACE/.git" ]; then
+            cd "$GITHUB_WORKSPACE"
+            git clean -ffd 2>/dev/null || true
+            git checkout -- . 2>/dev/null || true
+          fi
+
       - name: Checkout code
         uses: actions/checkout@v5
         with:
           submodules: recursive
+          clean: false
 
       - name: Verify KVM access
         run: |
@@ -273,18 +315,32 @@ jobs:
             echo "::error::/dev/kvm not accessible"; exit 1
           }
 
-      - name: Setup and run integration tests
-        env:
-          HOME: /root
+      - name: Run integration tests
         run: |
-          apt-get update -qq && apt-get install -y -qq make sudo
-          make setup
-          source "$HOME/.cargo/env"
+          source "$HOME/.cargo/env" 2>/dev/null || true
           export PATH="/usr/local/go/bin:$HOME/go/bin:$PATH"
           make test:integration
 
+      - name: Upload test logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-test-logs-${{ github.run_id }}
+          path: |
+            target/nextest/
+            /tmp/boxlite-*/
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Debug via SSH on failure
+        if: failure() && inputs.debug
+        uses: mxschmitt/action-tmate@v3
+        with:
+          limit-access-to-actor: true
+          timeout-minutes: 30
+
   # =========================================================================
-  # Job 3: Terminate instance and deregister runner (always runs)
+  # Job 3: Stop the instance (always runs)
   # =========================================================================
   stop-runner:
     name: Stop E2E Runner
@@ -295,13 +351,6 @@ jobs:
       contents: read
     if: always() && needs.start-runner.outputs.instance-id != ''
     steps:
-      - name: Generate GitHub App token
-        id: app-token
-        uses: actions/create-github-app-token@v1
-        with:
-          app-id: ${{ vars.GH_APP_ID }}
-          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
-
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -309,20 +358,14 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: e2e-stop-${{ github.run_id }}
 
-      - name: Terminate EC2 instance
+      - name: Stop EC2 instance
+        if: ${{ !(needs.e2e-tests.result == 'failure' && inputs.debug) }}
         run: |
-          echo "Terminating instance ${{ needs.start-runner.outputs.instance-id }}..."
-          aws ec2 terminate-instances \
-            --instance-ids "${{ needs.start-runner.outputs.instance-id }}" \
-            && echo "Instance terminated successfully" \
-            || echo "::warning::Failed to terminate instance (may have been self-destructed)"
+          echo "Stopping instance ${{ needs.start-runner.outputs.instance-id }}..."
+          aws ec2 stop-instances --instance-ids "${{ needs.start-runner.outputs.instance-id }}" \
+            && echo "Instance stopping" \
+            || echo "::warning::Failed to stop instance"
 
-      - name: Deregister GitHub runner
-        if: needs.start-runner.outputs.runner-id != ''
-        run: |
-          curl -sf -X DELETE \
-            -H "Authorization: token ${{ steps.app-token.outputs.token }}" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/${{ github.repository }}/actions/runners/${{ needs.start-runner.outputs.runner-id }}" \
-            && echo "Runner deregistered" \
-            || echo "::warning::Runner already deregistered (ephemeral auto-cleanup)"
+      - name: Skip stop (debug mode — tests failed with SSH active)
+        if: ${{ needs.e2e-tests.result == 'failure' && inputs.debug }}
+        run: echo "::warning::Instance left running for SSH debug session. Will auto-stop after 30 min idle."

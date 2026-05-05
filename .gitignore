@@ -174,3 +174,4 @@ Cargo.lock
 /apps/libs/computer-use/test-computer-use
 /apps/libs/computer-use/boxlite-computer-use
 /runner
+.claude/scheduled_tasks.lock

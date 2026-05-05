@@ -43,6 +43,24 @@ test\:changed\:c:
 test\:changed\:go:
 	@$(MAKE) test:unit:go
 
+# Integration-only for changed components (used by E2E CI on PRs).
+test\:integration\:changed:
+ifeq ($(CHANGED_COMPONENTS),)
+	@echo "📋 No changed components detected — skipping integration tests."
+else
+	@echo "📋 Running integration tests for changed components: $(CHANGED_COMPONENTS)"
+	@echo ""
+	@$(foreach comp,$(sort $(CHANGED_COMPONENTS)), \
+		$(if $(filter rust,$(comp)),$(MAKE) test:integration:rust &&,) \
+		$(if $(filter cli,$(comp)),$(MAKE) test:integration:cli &&,) \
+		$(if $(filter python,$(comp)),$(MAKE) test:integration:python &&,) \
+		$(if $(filter node,$(comp)),$(MAKE) test:integration:node &&,) \
+		$(if $(filter c,$(comp)),$(MAKE) test:integration:c &&,) \
+	) true
+	@echo ""
+	@echo "✅ Changed-component integration tests passed"
+endif
+
 # Full matrix: all unit suites + all integration suites.
 test\:all:
 	@echo "📋 Running full test matrix (unit → integration)"
