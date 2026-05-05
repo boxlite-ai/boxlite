@@ -400,9 +400,26 @@ step_configure_github() {
 
     print_section "GitHub App (runner registration)"
 
+    local owner="${REPO%%/*}"
+
+    # If credentials exist, verify the app is actually installed and working
     if gh secret list -R "$REPO" | grep -q "^GH_APP_PRIVATE_KEY"; then
-        print_info "GH_APP_PRIVATE_KEY already exists, skipping"
-        return 0
+        print_step "Verifying existing app... "
+        local app_id_val
+        app_id_val=$(gh variable get GH_APP_ID -R "$REPO" 2>/dev/null || echo "")
+        if [ -n "$app_id_val" ]; then
+            # Check if the app has an active installation on this repo
+            local install_check
+            install_check=$(gh api "/repos/${REPO}/installation" 2>/dev/null | jq -r '.app_id // empty' 2>/dev/null || echo "")
+            if [ "$install_check" = "$app_id_val" ]; then
+                print_success "App installed and working (ID: $app_id_val)"
+                return 0
+            fi
+        fi
+        print_error "App credentials exist but app is not installed on ${REPO}"
+        print_info "Cleaning up stale credentials and recreating..."
+        gh secret delete GH_APP_PRIVATE_KEY -R "$REPO" 2>/dev/null || true
+        gh variable delete GH_APP_ID -R "$REPO" 2>/dev/null || true
     fi
 
     print_info "Creating GitHub App via manifest flow..."
@@ -411,7 +428,6 @@ step_configure_github() {
 
     local callback_port=9876
     local callback_url="http://localhost:${callback_port}"
-    local owner="${REPO%%/*}"
 
     # Build the manifest JSON
     # hook_attributes.url is required by the API even if unused
