@@ -64,7 +64,7 @@ env:
   EC2_INSTANCE_ID: ${{ vars.EC2_E2E_INSTANCE_ID }}
   EC2_INSTANCE_TYPE: c8i.4xlarge
   EC2_AMI_ID: ami-05cf1e9f73fbad2e2
-  EC2_SUBNET_ID: ${{ vars.AWS_SUBNET_ID }}
+  EC2_SUBNET_IDS: ${{ vars.AWS_SUBNET_IDS || vars.AWS_SUBNET_ID }}
   EC2_SECURITY_GROUP_ID: ${{ vars.AWS_SECURITY_GROUP_ID }}
   RUNNER_VERSION: '2.334.0'
   RUNNER_LABEL: boxlite-e2e
@@ -213,19 +213,36 @@ jobs:
             sed -i "s|__RUNNER_VERSION__|${{ env.RUNNER_VERSION }}|g" /tmp/user-data.sh
             sed -i "s|__REG_TOKEN__|${REG_TOKEN}|g" /tmp/user-data.sh
 
-            # Launch instance
-            INSTANCE_ID=$(aws ec2 run-instances \
-              --instance-type "${{ env.EC2_INSTANCE_TYPE }}" \
-              --image-id "${{ env.EC2_AMI_ID }}" \
-              --subnet-id "${{ env.EC2_SUBNET_ID }}" \
-              --security-group-ids "${{ env.EC2_SECURITY_GROUP_ID }}" \
-              --iam-instance-profile Name=boxlite-e2e-runner \
-              --cpu-options "NestedVirtualization=enabled" \
-              --user-data file:///tmp/user-data.sh \
-              --block-device-mappings '[{"DeviceName":"/dev/sda1","Ebs":{"VolumeSize":50,"VolumeType":"gp3","DeleteOnTermination":false}}]' \
-              --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=boxlite-e2e},{Key=Purpose,Value=boxlite-e2e}]" \
-              --metadata-options "HttpTokens=required,HttpEndpoint=enabled" \
-              --query "Instances[0].InstanceId" --output text)
+            # Launch instance — try each subnet (AZ) until one has capacity
+            INSTANCE_ID=""
+            IFS=',' read -ra SUBNET_LIST <<< "${{ env.EC2_SUBNET_IDS }}"
+            for SUBNET in "${SUBNET_LIST[@]}"; do
+              SUBNET=$(echo "$SUBNET" | xargs)
+              echo "Attempting launch in subnet $SUBNET..."
+              if RESULT=$(aws ec2 run-instances \
+                --instance-type "${{ env.EC2_INSTANCE_TYPE }}" \
+                --image-id "${{ env.EC2_AMI_ID }}" \
+                --subnet-id "$SUBNET" \
+                --security-group-ids "${{ env.EC2_SECURITY_GROUP_ID }}" \
+                --iam-instance-profile Name=boxlite-e2e-runner \
+                --cpu-options "NestedVirtualization=enabled" \
+                --user-data file:///tmp/user-data.sh \
+                --block-device-mappings '[{"DeviceName":"/dev/sda1","Ebs":{"VolumeSize":50,"VolumeType":"gp3","DeleteOnTermination":false}}]' \
+                --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=boxlite-e2e},{Key=Purpose,Value=boxlite-e2e}]" \
+                --metadata-options "HttpTokens=required,HttpEndpoint=enabled" \
+                --query "Instances[0].InstanceId" --output text 2>&1); then
+                INSTANCE_ID="$RESULT"
+                echo "Launched $INSTANCE_ID in subnet $SUBNET"
+                break
+              else
+                echo "::warning::Subnet $SUBNET unavailable: $RESULT"
+              fi
+            done
+
+            if [ -z "$INSTANCE_ID" ]; then
+              echo "::error::Failed to launch instance in any availability zone"
+              exit 1
+            fi
 
             echo "Created instance: $INSTANCE_ID"
             aws ec2 wait instance-running --instance-ids "$INSTANCE_ID"
