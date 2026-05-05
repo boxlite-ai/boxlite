@@ -241,6 +241,8 @@ jobs:
   # =========================================================================
   e2e-tests:
     name: E2E Integration Tests
+    permissions:
+      contents: read
     needs: start-runner
     runs-on:
       - self-hosted
