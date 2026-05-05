@@ -12,7 +12,9 @@
 #
 # Cost: ~$0.34/hr (c8i.2xlarge). Typical run: 15-25 min → ~$0.09-0.14 per run.
 #
-# Authentication: GitHub OIDC → AWS STS (no stored AWS credentials).
+# Authentication:
+#   AWS: GitHub OIDC → AWS STS (no stored AWS credentials)
+#   GitHub: GitHub App → short-lived installation token (no PAT)
 #
 # Setup (one command, auto-detects default VPC):
 #   ./scripts/ci/setup-ci-runner.sh
@@ -58,7 +60,6 @@ jobs:
   # =========================================================================
   should-run:
     runs-on: ubuntu-latest
-    permissions: {}
     outputs:
       run: ${{ steps.check.outputs.run }}
     steps:
@@ -96,6 +97,13 @@ jobs:
       instance-id: ${{ steps.launch-instance.outputs.instance-id }}
       runner-id: ${{ steps.wait-for-runner.outputs.runner-id }}
     steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.GH_APP_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -106,16 +114,18 @@ jobs:
       - name: Generate runner registration token
         id: reg-token
         run: |
-          RESPONSE=$(curl -sf -X POST \
-            -H "Authorization: token ${{ secrets.GH_PAT }}" \
+          HTTP_CODE=$(curl -s -o /tmp/reg-response.json -w "%{http_code}" -X POST \
+            -H "Authorization: token ${{ steps.app-token.outputs.token }}" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/${{ github.repository }}/actions/runners/registration-token")
-          TOKEN=$(echo "$RESPONSE" | jq -r .token)
-          if [ "$TOKEN" = "null" ] || [ -z "$TOKEN" ]; then
-            echo "::error::Failed to get runner registration token"
-            echo "$RESPONSE" >&2
+
+          if [ "$HTTP_CODE" != "201" ]; then
+            echo "::error::Runner registration token request failed (HTTP $HTTP_CODE)"
+            cat /tmp/reg-response.json >&2
             exit 1
           fi
+
+          TOKEN=$(jq -r .token /tmp/reg-response.json)
           echo "::add-mask::$TOKEN"
           echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
 
@@ -215,7 +225,7 @@ jobs:
 
           while [ $ELAPSED -lt $TIMEOUT ]; do
             RUNNERS=$(curl -sf \
-              -H "Authorization: token ${{ secrets.GH_PAT }}" \
+              -H "Authorization: token ${{ steps.app-token.outputs.token }}" \
               -H "Accept: application/vnd.github+json" \
               "https://api.github.com/repos/${{ github.repository }}/actions/runners" 2>/dev/null || echo '{"runners":[]}')
 
@@ -241,8 +251,6 @@ jobs:
   # =========================================================================
   e2e-tests:
     name: E2E Integration Tests
-    permissions:
-      contents: read
     needs: start-runner
     runs-on:
       - self-hosted
@@ -335,6 +343,13 @@ jobs:
       contents: read
     if: always() && needs.start-runner.outputs.instance-id != ''
     steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.GH_APP_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -354,7 +369,7 @@ jobs:
         if: needs.start-runner.outputs.runner-id != ''
         run: |
           curl -sf -X DELETE \
-            -H "Authorization: token ${{ secrets.GH_PAT }}" \
+            -H "Authorization: token ${{ steps.app-token.outputs.token }}" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/${{ github.repository }}/actions/runners/${{ needs.start-runner.outputs.runner-id }}" \
             && echo "Runner deregistered" \

@@ -98,14 +98,49 @@ step_detect_config() {
     ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
     print_success "$ACCOUNT_ID"
 
-    # GitHub repository (derive from origin remote to avoid multi-remote ambiguity)
+    # GitHub repository (from git remote)
     print_step "GitHub repository... "
-    REPO=$(git remote get-url origin | sed 's|.*github.com[:/]||;s|\.git$||')
+    local remotes
+    remotes=$(git remote)
+    local remote_count
+    remote_count=$(echo "$remotes" | wc -l | tr -d ' ')
+
+    if [ "$remote_count" -gt 1 ]; then
+        echo ""
+        print_info "Multiple remotes detected:"
+        local i=1
+        local -a remote_list=()
+        while IFS= read -r r; do
+            remote_list+=("$r")
+            local url
+            url=$(git remote get-url "$r")
+            echo "  ${i}) ${r} → ${url}"
+            i=$((i + 1))
+        done <<< "$remotes"
+        echo ""
+        read -rp "  Select remote (name or number) [default: origin]: " SELECTED_REMOTE
+        SELECTED_REMOTE="${SELECTED_REMOTE:-origin}"
+
+        # If user entered a number, resolve to remote name
+        if [[ "$SELECTED_REMOTE" =~ ^[0-9]+$ ]]; then
+            local idx=$((SELECTED_REMOTE - 1))
+            if [ "$idx" -ge 0 ] && [ "$idx" -lt "${#remote_list[@]}" ]; then
+                SELECTED_REMOTE="${remote_list[$idx]}"
+            else
+                print_error "Invalid selection: $SELECTED_REMOTE"
+                exit 1
+            fi
+        fi
+    else
+        SELECTED_REMOTE="origin"
+    fi
+
+    REPO=$(git remote get-url "$SELECTED_REMOTE" | sed 's|.*github.com[:/]||;s|\.git$||')
     if [ -z "$REPO" ]; then
-        print_error "Cannot detect repo from 'origin' remote"
+        print_error "Cannot detect repo from '${SELECTED_REMOTE}' remote"
         exit 1
     fi
-    print_success "$REPO"
+    print_success "$REPO (via ${SELECTED_REMOTE})"
 
     # VPC
     if [ -z "$VPC_ID" ]; then
@@ -363,43 +398,219 @@ step_configure_github() {
     gh variable set AWS_SECURITY_GROUP_ID --body "$SG_ID" -R "$REPO"
     print_info "AWS_SECURITY_GROUP_ID = $SG_ID"
 
-    print_section "GitHub repository secret (GH_PAT)"
+    print_section "GitHub App (runner registration)"
 
-    if gh secret list -R "$REPO" | grep -q "^GH_PAT"; then
-        print_info "GH_PAT already exists, skipping"
+    if gh secret list -R "$REPO" | grep -q "^GH_APP_PRIVATE_KEY"; then
+        print_info "GH_APP_PRIVATE_KEY already exists, skipping"
+        return 0
+    fi
+
+    print_info "Creating GitHub App via manifest flow..."
+    print_info "A browser window will open. Click 'Create GitHub App' to proceed."
+    echo ""
+
+    local callback_port=9876
+    local callback_url="http://localhost:${callback_port}"
+    local owner="${REPO%%/*}"
+
+    # Build the manifest JSON
+    # hook_attributes.url is required by the API even if unused
+    local manifest
+    manifest=$(jq -n \
+        --arg name "boxlite-e2e-runner" \
+        --arg url "https://github.com/${REPO}" \
+        --arg redirect_url "$callback_url" \
+        '{
+            name: $name,
+            url: $url,
+            public: false,
+            redirect_url: $redirect_url,
+            hook_attributes: { url: $url, active: false },
+            default_permissions: { administration: "write" },
+            default_events: []
+        }')
+
+    # HTML-encode the manifest for safe embedding in a form input
+    local manifest_escaped
+    manifest_escaped=$(echo "$manifest" | python3 -c "import sys,html; print(html.escape(sys.stdin.read().strip()))")
+
+    # Determine if owner is an org or user to pick the correct endpoint
+    local app_create_url
+    if gh api "/orgs/${owner}" &>/dev/null; then
+        app_create_url="https://github.com/organizations/${owner}/settings/apps/new?state=boxlite-e2e"
     else
-        # Get repo ID for pre-filled token creation URL
-        local repo_id
-        repo_id=$(gh repo view "$REPO" --json databaseId -q .databaseId 2>/dev/null || echo "")
+        app_create_url="https://github.com/settings/apps/new?state=boxlite-e2e"
+    fi
 
-        print_info "A fine-grained PAT is needed for runner registration."
-        print_info "Required permission: Administration → Read and write"
-        print_info "Scope: this repository only"
-        echo ""
+    # Create HTML form that auto-submits the manifest to GitHub
+    local html_file="/tmp/boxlite-app-manifest.html"
+    cat > "$html_file" << HTMLEOF
+<!DOCTYPE html>
+<html><body>
+<p>Redirecting to GitHub to create the app...</p>
+<form id="form" method="post" action="${app_create_url}">
+<input type="hidden" name="manifest" value="${manifest_escaped}">
+</form>
+<script>document.getElementById('form').submit();</script>
+</body></html>
+HTMLEOF
 
-        if [ -n "$repo_id" ]; then
-            local token_url="https://github.com/settings/personal-access-tokens/new?scoped_to=${repo_id}"
-            print_info "Create one here (permission pre-filled is not supported, select manually):"
-            echo "  ${token_url}"
+    # Start a one-shot HTTP listener to catch the callback
+    local code_file="/tmp/boxlite-app-code"
+    rm -f "$code_file"
+
+    # Use Python to run a simple callback server (SO_REUSEADDR to avoid port conflicts)
+    python3 -c "
+import http.server, urllib.parse, sys, threading, socket
+
+class ReusableServer(http.server.HTTPServer):
+    allow_reuse_address = True
+    allow_reuse_port = True
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        query = urllib.parse.urlparse(self.path).query
+        params = urllib.parse.parse_qs(query)
+        code = params.get('code', [''])[0]
+        with open('$code_file', 'w') as f:
+            f.write(code)
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/html')
+        self.end_headers()
+        self.wfile.write(b'<html><body><h2>Done! You can close this tab.</h2></body></html>')
+        threading.Thread(target=self.server.shutdown).start()
+    def log_message(self, *args):
+        pass
+
+server = ReusableServer(('localhost', $callback_port), Handler)
+server.serve_forever()
+" &
+    local server_pid=$!
+
+    # Open browser
+    if command_exists open; then
+        open "$html_file"
+    elif command_exists xdg-open; then
+        xdg-open "$html_file"
+    else
+        print_warning "Cannot open browser. Open this file manually: $html_file"
+    fi
+
+    # Wait for callback (up to 2 minutes)
+    print_info "Waiting for GitHub callback..."
+    local elapsed=0
+    while [ ! -s "$code_file" ] && [ $elapsed -lt 120 ]; do
+        sleep 2
+        elapsed=$((elapsed + 2))
+    done
+
+    # Cleanup server
+    kill "$server_pid" 2>/dev/null || true
+    wait "$server_pid" 2>/dev/null || true
+
+    if [ ! -s "$code_file" ]; then
+        print_error "Timed out waiting for GitHub callback"
+        exit 1
+    fi
+
+    local code
+    code=$(cat "$code_file")
+    rm -f "$code_file" "$html_file"
+
+    # Exchange code for app credentials
+    print_info "Exchanging code for app credentials..."
+    local app_response
+    app_response=$(curl -sf -X POST \
+        -H "Accept: application/vnd.github+json" \
+        "https://api.github.com/app-manifests/${code}/conversions")
+
+    local app_id pem app_slug
+    app_id=$(echo "$app_response" | jq -r '.id')
+    pem=$(echo "$app_response" | jq -r '.pem')
+    app_slug=$(echo "$app_response" | jq -r '.slug')
+
+    if [ -z "$app_id" ] || [ "$app_id" = "null" ]; then
+        print_error "Failed to create GitHub App"
+        echo "$app_response" >&2
+        exit 1
+    fi
+
+    print_success "Created GitHub App: $app_slug (ID: $app_id)"
+
+    # Store credentials
+    gh variable set GH_APP_ID --body "$app_id" -R "$REPO"
+    print_info "GH_APP_ID = $app_id"
+
+    echo "$pem" | gh secret set GH_APP_PRIVATE_KEY -R "$REPO"
+    print_success "GH_APP_PRIVATE_KEY stored"
+
+    # Install the app on the repository automatically via API
+    print_info "Installing app on ${REPO}..."
+
+    # Generate a JWT from the private key to authenticate as the app
+    local jwt
+    jwt=$(python3 -c "
+import json, time, base64, hashlib, hmac
+try:
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import padding
+    import jwt as pyjwt
+    key = serialization.load_pem_private_key('''$pem'''.encode(), password=None)
+    now = int(time.time())
+    payload = {'iat': now - 60, 'exp': now + 600, 'iss': $app_id}
+    token = pyjwt.encode(payload, key, algorithm='RS256')
+    print(token)
+except ImportError:
+    # Fallback: manual JWT construction with openssl
+    import subprocess, os
+    header = base64.urlsafe_b64encode(json.dumps({'alg':'RS256','typ':'JWT'}).encode()).rstrip(b'=').decode()
+    now = int(time.time())
+    payload_data = json.dumps({'iat': now - 60, 'exp': now + 600, 'iss': $app_id})
+    payload_b64 = base64.urlsafe_b64encode(payload_data.encode()).rstrip(b'=').decode()
+    signing_input = f'{header}.{payload_b64}'
+    pem_file = '/tmp/boxlite-app-key.pem'
+    with open(pem_file, 'w') as f:
+        f.write('''$pem''')
+    result = subprocess.run(
+        ['openssl', 'dgst', '-sha256', '-sign', pem_file],
+        input=signing_input.encode(), capture_output=True)
+    os.unlink(pem_file)
+    sig = base64.urlsafe_b64encode(result.stdout).rstrip(b'=').decode()
+    print(f'{signing_input}.{sig}')
+")
+
+    if [ -z "$jwt" ]; then
+        print_warning "Could not generate JWT. Install manually: https://github.com/apps/${app_slug}/installations/new"
+        read -rp "  Press Enter after installing the app in the browser..."
+        return 0
+    fi
+
+    # Get the repo ID
+    local repo_id
+    repo_id=$(gh api "/repos/${REPO}" --jq .id)
+
+    # Create installation targeting this repo
+    local install_response
+    install_response=$(curl -sf -X POST \
+        -H "Authorization: Bearer ${jwt}" \
+        -H "Accept: application/vnd.github+json" \
+        "https://api.github.com/app/installations" \
+        -d "{\"repository_selection\":\"selected\",\"target_id\":$(gh api "/orgs/${owner}" --jq .id 2>/dev/null || gh api "/users/${owner}" --jq .id),\"target_type\":\"Organization\",\"repositories\":[\"${REPO##*/}\"]}" 2>&1 || echo "")
+
+    if echo "$install_response" | jq -e '.id' &>/dev/null; then
+        print_success "App installed (installation ID: $(echo "$install_response" | jq -r '.id'))"
+    else
+        # Installation via API may not be supported for all account types — fall back to browser
+        print_warning "Auto-install not available. Opening browser..."
+        local install_url="https://github.com/apps/${app_slug}/installations/new"
+        if command_exists open; then
+            open "$install_url"
+        elif command_exists xdg-open; then
+            xdg-open "$install_url"
         else
-            print_info "Create one at: https://github.com/settings/personal-access-tokens/new"
+            print_info "Open: $install_url"
         fi
-
-        echo ""
-        print_info "Steps: 1) Open link above"
-        print_info "       2) Set token name: boxlite-e2e-runner"
-        print_info "       3) Repository access → Only select repositories → ${REPO}"
-        print_info "       4) Permissions → Repository → Administration → Read and write"
-        print_info "       5) Generate token, copy it"
-        echo ""
-        read -rsp "  Paste your GitHub PAT (input hidden): " GH_PAT_VALUE
-        echo ""
-        if [ -n "$GH_PAT_VALUE" ]; then
-            echo "$GH_PAT_VALUE" | gh secret set GH_PAT -R "$REPO"
-            print_success "GH_PAT set"
-        else
-            print_warning "Skipped (empty input). Set manually: gh secret set GH_PAT"
-        fi
+        read -rp "  Press Enter after installing the app in the browser..."
     fi
 }
 
