@@ -248,6 +248,7 @@ fn run_shim(mut config: InstanceSpec, timing: impl Fn(&str)) -> BoxliteResult<()
 }
 
 /// Timeout for graceful shutdown before force kill (in seconds).
+#[cfg(unix)]
 const GRACEFUL_SHUTDOWN_TIMEOUT_SECS: u64 = 5;
 
 /// Timeout for guest RPC shutdown (filesystem sync) in seconds.

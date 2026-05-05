@@ -13,6 +13,7 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 
 /// Unix convention: exit code for signal-terminated process = 128 + signal number.
+#[cfg(unix)]
 const SIGNAL_EXIT_CODE_BASE: i32 = 128;
 
 /// Exit code for Rust panics.
