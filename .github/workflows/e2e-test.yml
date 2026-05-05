@@ -274,9 +274,12 @@ jobs:
           }
 
       - name: Setup and run integration tests
+        env:
+          HOME: /root
         run: |
           apt-get update -qq && apt-get install -y -qq make sudo
           make setup
+          source "$HOME/.cargo/env"
           make test:integration
 
   # =========================================================================
