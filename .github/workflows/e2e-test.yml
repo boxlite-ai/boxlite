@@ -180,43 +180,34 @@ jobs:
               | jq -r .token)
 
             # Build user-data
-            sed 's/^            //' > /tmp/user-data.sh << 'USERDATA'
-            #!/bin/bash
-            set -euo pipefail
-            export HOME=/root
-
-            # Enable KVM
-            modprobe kvm_intel 2>/dev/null || modprobe kvm_amd 2>/dev/null || true
-            chmod 666 /dev/kvm 2>/dev/null || true
-            usermod -aG kvm root 2>/dev/null || true
-
-            # Install base tools
-            apt-get update -qq && apt-get install -y -qq make sudo git curl jq
-
-            # Clone and setup boxlite
-            if [ ! -d /opt/boxlite ]; then
-              git clone --recursive https://github.com/__REPO__.git /opt/boxlite
-            fi
-            cd /opt/boxlite && git pull --recurse-submodules || true
-            make setup
-            source "$HOME/.cargo/env"
-
-            # Install runner
-            RUNNER_VERSION="__RUNNER_VERSION__"
-            mkdir -p /opt/actions-runner && cd /opt/actions-runner
-            if [ ! -f ./config.sh ]; then
-              curl -fsSL "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz" | tar xz
-            fi
-            RUNNER_ALLOW_RUNASROOT=1 ./config.sh \
-              --url "https://github.com/__REPO__" \
-              --token "__REG_TOKEN__" \
-              --name "boxlite-e2e" \
-              --labels "self-hosted,linux,x64,kvm,boxlite-e2e" \
-              --unattended --disableupdate --replace || true
-            # Install as systemd service
-            ./svc.sh install root || true
-            ./svc.sh start || true
-            USERDATA
+            cat > /tmp/user-data.sh << 'USERDATA'
+          #!/bin/bash
+          set -euo pipefail
+          export HOME=/root
+          modprobe kvm_intel 2>/dev/null || modprobe kvm_amd 2>/dev/null || true
+          chmod 666 /dev/kvm 2>/dev/null || true
+          usermod -aG kvm root 2>/dev/null || true
+          apt-get update -qq && apt-get install -y -qq make sudo git curl jq
+          if [ ! -d /opt/boxlite ]; then
+            git clone --recursive https://github.com/__REPO__.git /opt/boxlite
+          fi
+          cd /opt/boxlite && git pull --recurse-submodules || true
+          make setup
+          source "$HOME/.cargo/env"
+          RUNNER_VERSION="__RUNNER_VERSION__"
+          mkdir -p /opt/actions-runner && cd /opt/actions-runner
+          if [ ! -f ./config.sh ]; then
+            curl -fsSL "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz" | tar xz
+          fi
+          RUNNER_ALLOW_RUNASROOT=1 ./config.sh \
+            --url "https://github.com/__REPO__" \
+            --token "__REG_TOKEN__" \
+            --name "boxlite-e2e" \
+            --labels "self-hosted,linux,x64,kvm,boxlite-e2e" \
+            --unattended --disableupdate --replace || true
+          ./svc.sh install root || true
+          ./svc.sh start || true
+          USERDATA
 
             sed -i "s|__REPO__|${{ github.repository }}|g" /tmp/user-data.sh
             sed -i "s|__RUNNER_VERSION__|${{ env.RUNNER_VERSION }}|g" /tmp/user-data.sh
