@@ -86,6 +86,7 @@ type boxConfig struct {
 	name       string
 	cpus       int
 	memoryMiB  int
+	diskSizeGB int
 	rootfsPath string
 	env        [][2]string
 	volumes    []volumeEntry
@@ -117,6 +118,15 @@ func WithCPUs(n int) BoxOption {
 // WithMemory sets the memory limit in MiB.
 func WithMemory(mib int) BoxOption {
 	return func(c *boxConfig) { c.memoryMiB = mib }
+}
+
+// WithDiskSize sets the per-box COW disk virtual size in GB.
+// When unset, the COW disk inherits the base ext4 image size, which is
+// content-fitted (~256 MB minimum). Set this to give the sandbox runtime
+// write headroom; the guest's ext4 is automatically resized via resize2fs
+// on first boot.
+func WithDiskSize(gb int) BoxOption {
+	return func(c *boxConfig) { c.diskSizeGB = gb }
 }
 
 // WithRootfsPath prefers a local OCI image layout directory over pulling from a registry.
@@ -233,6 +243,9 @@ func buildCOptions(image string, cfg *boxConfig) (*C.CBoxliteOptions, error) {
 	}
 	if cfg.memoryMiB > 0 {
 		C.boxlite_options_set_memory(cOpts, C.int(cfg.memoryMiB))
+	}
+	if cfg.diskSizeGB > 0 {
+		C.boxlite_options_set_disk_size_gb(cOpts, C.int(cfg.diskSizeGB))
 	}
 	if cfg.workDir != "" {
 		cDir := toCString(cfg.workDir)

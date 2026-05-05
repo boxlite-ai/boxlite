@@ -343,6 +343,8 @@ void boxlite_options_set_cpus(CBoxliteOptions *opts, int cpus);
 
 void boxlite_options_set_memory(CBoxliteOptions *opts, int memory_mib);
 
+void boxlite_options_set_disk_size_gb(CBoxliteOptions *opts, int disk_size_gb);
+
 void boxlite_options_set_workdir(CBoxliteOptions *opts, const char *workdir);
 
 void boxlite_options_add_env(CBoxliteOptions *opts, const char *key, const char *val);

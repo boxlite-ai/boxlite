@@ -5,10 +5,6 @@
 
 /// <reference path="./.sst/platform/config.d.ts" />
 
-import { readFileSync } from "fs";
-import { dirname, resolve } from "path";
-import { fileURLToPath } from "url";
-
 // ─────────────────────────────────────────────────────────────────────────────
 // BoxLite control plane on AWS (ap-southeast-1).
 //
@@ -516,15 +512,18 @@ export default $config({
 // ── runner bootstrap ─────────────────────────────────────────────────────────
 // EC2 user-data: downloads prebuilt runner binary from GitHub Releases
 // and runs it directly with BoxLite VM isolation.
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const RUNNER_VERSION = readFileSync(resolve(__dirname, "../../Cargo.toml"), "utf-8")
-  .match(/^version\s*=\s*"(.+?)"/m)![1];
-
-function buildRunnerUserData(input: {
+async function buildRunnerUserData(input: {
   apiUrl: string;
   token: string;
   registryUrl: string;
-}): string {
+}): Promise<string> {
+  const { readFileSync } = await import("fs");
+  const { resolve } = await import("path");
+
+  // SST invokes from apps/infra/ as cwd; Cargo.toml lives at repo root.
+  const RUNNER_VERSION = readFileSync(resolve(process.cwd(), "../../Cargo.toml"), "utf-8")
+    .match(/^version\s*=\s*"(.+?)"/m)![1];
+
   const registryHost = input.registryUrl.replace(/^https?:\/\//, "").replace(/\/$/, "");
 
   const script = `#!/bin/bash

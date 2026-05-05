@@ -46,6 +46,14 @@ pub unsafe extern "C" fn boxlite_options_set_memory(opts: *mut CBoxliteOptions, 
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_options_set_disk_size_gb(
+    opts: *mut CBoxliteOptions,
+    disk_size_gb: c_int,
+) {
+    options_set_disk_size_gb(opts, disk_size_gb)
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_options_set_workdir(
     opts: *mut CBoxliteOptions,
     workdir: *const c_char,
@@ -210,6 +218,14 @@ pub unsafe fn options_set_memory(handle: *mut OptionsHandle, memory_mib: c_int) 
     unsafe {
         if !handle.is_null() && memory_mib > 0 {
             (*handle).options.memory_mib = Some(memory_mib as u32);
+        }
+    }
+}
+
+pub unsafe fn options_set_disk_size_gb(handle: *mut OptionsHandle, disk_size_gb: c_int) {
+    unsafe {
+        if !handle.is_null() && disk_size_gb > 0 {
+            (*handle).options.disk_size_gb = Some(disk_size_gb as u64);
         }
     }
 }

@@ -135,11 +135,12 @@ func (c *Client) Close() error {
 // Create creates a new sandbox (VM) from the given image and configuration.
 // Returns the box ID and daemon version.
 func (c *Client) Create(ctx context.Context, sandboxDto dto.CreateSandboxDTO) (string, string, error) {
-	cpus := int(sandboxDto.CpuQuota / 100_000)
+	// API sends cores / GB / GB as small integers (see apps/api Sandbox entity).
+	cpus := int(sandboxDto.CpuQuota)
 	if cpus < 1 {
 		cpus = 1
 	}
-	memoryMiB := int(sandboxDto.MemoryQuota / (1024 * 1024))
+	memoryMiB := int(sandboxDto.MemoryQuota * 1024)
 	if memoryMiB < 128 {
 		memoryMiB = 128
 	}
@@ -151,7 +152,7 @@ func (c *Client) Create(ctx context.Context, sandboxDto dto.CreateSandboxDTO) (s
 		boxlite.WithDetach(true),
 	}
 	if sandboxDto.StorageQuota > 0 {
-		c.logger.DebugContext(ctx, "storage quota ignored because the Go SDK does not expose disk sizing", "sandbox", sandboxDto.Id)
+		opts = append(opts, boxlite.WithDiskSize(int(sandboxDto.StorageQuota)))
 	}
 
 	for k, v := range sandboxDto.Env {

@@ -36,13 +36,14 @@ func (c *Client) Resize(ctx context.Context, sandboxId string, resizeDto dto.Res
 		return fmt.Errorf("failed to destroy box during resize: %w", err)
 	}
 
+	// API sends cores / GB / GB as small integers (see apps/api ResizeSandboxDto).
 	cpus := info.CPUs
 	if resizeDto.Cpu > 0 {
 		cpus = int(resizeDto.Cpu)
 	}
 	memoryMiB := info.MemoryMiB
 	if resizeDto.Memory > 0 {
-		memoryMiB = int(resizeDto.Memory / (1024 * 1024))
+		memoryMiB = int(resizeDto.Memory * 1024)
 	}
 
 	opts := []boxlite.BoxOption{
@@ -55,7 +56,7 @@ func (c *Client) Resize(ctx context.Context, sandboxId string, resizeDto dto.Res
 	}
 
 	if resizeDto.Disk > 0 {
-		c.logger.DebugContext(ctx, "disk resize ignored because the Go SDK does not expose disk sizing", "sandbox", sandboxId)
+		opts = append(opts, boxlite.WithDiskSize(int(resizeDto.Disk)))
 	}
 
 	newBox, err := c.runtime.Create(ctx, info.Image, opts...)
