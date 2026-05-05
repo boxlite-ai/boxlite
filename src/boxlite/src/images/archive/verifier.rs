@@ -110,6 +110,7 @@ mod tests {
         assert!(!verifier.verify_reader(&b"some bytes"[..], None).unwrap());
     }
 
+    #[cfg(unix)]
     #[test]
     fn verify_tarball_gzipped_matches() {
         use sha2::Digest;
@@ -129,6 +130,7 @@ mod tests {
         assert!(verifier.verify_tarball(&path).unwrap());
     }
 
+    #[cfg(unix)]
     #[test]
     fn verify_tarball_uncompressed_matches() {
         use sha2::Digest;
@@ -144,6 +146,7 @@ mod tests {
         assert!(verifier.verify_tarball(&path).unwrap());
     }
 
+    #[cfg(unix)]
     #[test]
     fn verify_tarball_wrong_hash() {
         let tmp = tempfile::tempdir().unwrap();

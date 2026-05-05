@@ -165,7 +165,8 @@ impl ImageObject {
 
         let extracted = self.blob_source.extract_layers(&digests).await?;
 
-        // Verify DiffIDs if available
+        // Verify DiffIDs if available (requires tarball decompression, unix-only)
+        #[cfg(unix)]
         self.verify_diff_ids()?;
 
         Ok(extracted)
@@ -176,6 +177,7 @@ impl ImageObject {
     /// DiffIDs are SHA256 hashes of the uncompressed layer tar content.
     /// This ensures the decompressed filesystem content matches what the
     /// image author intended.
+    #[cfg(unix)]
     fn verify_diff_ids(&self) -> BoxliteResult<()> {
         use crate::images::archive::LayerVerifier;
 
