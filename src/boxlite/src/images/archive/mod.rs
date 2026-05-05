@@ -16,9 +16,12 @@ mod metadata;
 mod override_stat;
 #[cfg(unix)]
 mod safe_root;
+#[cfg(unix)]
 mod time;
+#[cfg(unix)]
 mod verifier;
 
 #[cfg(unix)]
 pub use extractor::LayerExtractor;
+#[cfg(unix)]
 pub use verifier::LayerVerifier;
