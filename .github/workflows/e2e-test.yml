@@ -184,7 +184,7 @@ jobs:
           sed -i "s|__SELF_DESTRUCT__|${{ env.SELF_DESTRUCT_SECONDS }}|g" /tmp/user-data.sh
           sed -i "s|__REGION__|${{ env.AWS_REGION }}|g" /tmp/user-data.sh
 
-          # Launch instance
+          # Launch instance (NestedVirtualization=enabled required for /dev/kvm on c8i)
           RESPONSE=$(aws ec2 run-instances \
             --instance-type "${{ env.EC2_INSTANCE_TYPE }}" \
             --image-id "${{ env.EC2_AMI_ID }}" \
@@ -192,6 +192,7 @@ jobs:
             --security-group-ids "${{ env.EC2_SECURITY_GROUP_ID }}" \
             --iam-instance-profile Name=boxlite-e2e-runner \
             --user-data file:///tmp/user-data.sh \
+            --cpu-options "NestedVirtualization=enabled" \
             --block-device-mappings '[{"DeviceName":"/dev/sda1","Ebs":{"VolumeSize":50,"VolumeType":"gp3","DeleteOnTermination":true}}]' \
             --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=${LABEL}},{Key=Purpose,Value=boxlite-e2e},{Key=GitHubRunId,Value=${{ github.run_id }}}]" \
             --instance-initiated-shutdown-behavior terminate \
