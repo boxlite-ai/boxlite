@@ -129,6 +129,54 @@ Runs code quality checks.
 4. `node` - Run Node lint and format checks via `make lint:node` and `make fmt:check:node`
 5. `c` - Run C SDK lint and format checks via `make lint:c` and `make fmt:check:c`
 
+### `e2e-test.yml`
+
+Runs VM-based E2E integration tests on an ephemeral AWS EC2 self-hosted runner.
+
+**Why:** GitHub-hosted runners (including larger paid runners) do not support `/dev/kvm`. BoxLite integration tests need real VMs via libkrun.
+
+**Architecture:** Three-job ephemeral pattern:
+1. `start-runner` (ubuntu-latest) — launches an AWS EC2 c8i.2xlarge instance, registers an ephemeral GitHub Actions runner
+2. `e2e-tests` (self-hosted) — builds runtime, runs all integration test suites
+3. `stop-runner` (ubuntu-latest, `if: always()`) — terminates instance, deregisters runner
+
+**Triggers:**
+- Push to `main` (path-filtered to `src/`, `sdks/`, `Cargo.*`)
+- Pull request with `e2e` label (cost-gated)
+- Manual dispatch (`workflow_dispatch`)
+
+**Cost:** ~$0.34/hr (c8i.2xlarge). Typical run: 15-25 min → ~$0.09-0.14 per run.
+
+**Safety mechanisms:**
+- `--ephemeral` runner auto-deregisters after one job
+- `if: always()` ensures cleanup on failure/cancellation
+- 45-minute self-destruct timer on the instance (EC2 self-termination)
+- Runner deregistration API call (belt-and-suspenders)
+- 35-minute job timeout prevents runaway tests
+- `instance-initiated-shutdown-behavior: terminate` auto-cleans on shutdown
+
+**Authentication:** GitHub OIDC → AWS STS (no stored AWS credentials).
+
+**Required secret:**
+- `GH_PAT` - GitHub PAT with `repo` scope (for runner registration API)
+
+**Required variables** (Settings → Variables → Actions):
+- `AWS_ACCOUNT_ID` - AWS account ID
+- `AWS_SUBNET_ID` - Subnet with auto-assign public IP
+- `AWS_SECURITY_GROUP_ID` - Security group allowing outbound HTTPS
+
+**Required AWS resources** (provisioned by `scripts/ci/setup-aws-oidc.sh`):
+- OIDC identity provider (`token.actions.githubusercontent.com`)
+- IAM role `boxlite-e2e-github-actions` with trust policy for this repo
+- IAM instance profile `boxlite-e2e-runner` with `ec2:TerminateInstances` on self
+- Subnet with internet access + security group (outbound 443)
+
+**Jobs:**
+1. `should-run` - Gate check (label present on PR?)
+2. `start-runner` - Launch EC2 c8i.2xlarge, register runner, wait for online
+3. `e2e-tests` - Build runtime, run Rust/CLI/Python/Node/C integration tests
+4. `stop-runner` - Terminate instance, deregister runner
+
 ## Trigger Behavior
 
 | Change | warm-caches | build-runtime | build-wheels | build-node |
@@ -179,6 +227,7 @@ Additional platforms (darwin-x64, linux-arm64-gnu) can be added to `config.yml` 
 - `CARGO_REGISTRY_TOKEN` - crates.io API token for publishing Rust crates
 - `PYPI_API_TOKEN` - PyPI API token for publishing Python wheels
 - `NPM_TOKEN` - npm access token for publishing Node.js packages
+- `GH_PAT` - GitHub PAT with `repo` scope (for self-hosted runner registration)
 
 Set these in repository Settings → Secrets and variables → Actions.
 
