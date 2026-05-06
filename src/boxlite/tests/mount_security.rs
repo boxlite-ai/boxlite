@@ -1,3 +1,4 @@
+#![cfg(unix)]
 //! Integration tests for mount security: UID mapping feasibility and baseline behavior.
 //!
 //! The primary goal is to verify whether the guest VM kernel supports

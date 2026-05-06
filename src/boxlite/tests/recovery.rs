@@ -1,3 +1,4 @@
+#![cfg(unix)]
 //! Integration tests for runtime recovery scenarios.
 //!
 //! Verifies that BoxliteRuntime correctly recovers box state on restart:
