@@ -727,6 +727,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn test_extract_layer_preserves_whiteout_markers_for_cache() {
         let temp_dir = tempfile::tempdir().unwrap();
         let store = ImageStorage::new(temp_dir.path().to_path_buf()).unwrap();
