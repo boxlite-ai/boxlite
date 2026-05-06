@@ -5,6 +5,7 @@ use super::sandbox::{PlatformSandbox, Sandbox};
 use crate::runtime::advanced_options::SecurityOptions;
 use crate::runtime::layout::BoxFilesystemLayout;
 use crate::runtime::options::VolumeSpec;
+#[cfg(unix)]
 use std::os::fd::RawFd;
 
 /// Builder for constructing a [`Jailer`].
@@ -27,6 +28,7 @@ pub struct JailerBuilder {
     volumes: Vec<VolumeSpec>,
     box_id: Option<String>,
     layout: Option<BoxFilesystemLayout>,
+    #[cfg(unix)]
     preserved_fds: Vec<(RawFd, i32)>,
 }
 
@@ -44,6 +46,7 @@ impl JailerBuilder {
             volumes: Vec::new(),
             box_id: None,
             layout: None,
+            #[cfg(unix)]
             preserved_fds: Vec::new(),
         }
     }
@@ -98,6 +101,7 @@ impl JailerBuilder {
     /// The pre_exec hook dup2s source to target before FD cleanup runs.
     /// All FDs above the highest target are closed; target FDs are kept.
     /// Used for watchdog pipe inheritance across fork.
+    #[cfg(unix)]
     pub fn with_preserved_fd(mut self, source: RawFd, target: i32) -> Self {
         self.preserved_fds.push((source, target));
         self
@@ -143,6 +147,7 @@ impl JailerBuilder {
             volumes: self.volumes,
             box_id,
             layout,
+            #[cfg(unix)]
             preserved_fds: self.preserved_fds,
         })
     }

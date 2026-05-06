@@ -1,4 +1,8 @@
-//! Virtiofs mount helper.
+//! Virtiofs / 9p mount helper.
+//!
+//! Tries virtiofs first (Unix-hosted VMs), then falls back to 9p
+//! (Windows-hosted VMs with WHPX). The guest binary is the same on all
+//! hosts, so it auto-detects the available filesystem type at runtime.
 
 use std::path::Path;
 
@@ -8,10 +12,12 @@ use nix::mount::{mount, MsFlags};
 pub struct VirtiofsMount;
 
 impl VirtiofsMount {
-    /// Mount virtiofs tag to mount point.
+    /// Mount a shared filesystem tag to mount point.
+    ///
+    /// Tries virtiofs first, then falls back to 9p (virtio transport).
     pub fn mount(tag: &str, mount_point: &Path, read_only: bool) -> BoxliteResult<()> {
         tracing::info!(
-            "Mounting virtiofs: {} → {} ({})",
+            "Mounting shared fs: {} -> {} ({})",
             tag,
             mount_point.display(),
             if read_only { "ro" } else { "rw" }
@@ -31,28 +37,41 @@ impl VirtiofsMount {
             flags |= MsFlags::MS_RDONLY;
         }
 
-        mount(
+        // Try virtiofs first (Hypervisor.framework / KVM hosts)
+        match mount(
             Some(tag),
             mount_point,
             Some("virtiofs"),
             flags,
             None::<&str>,
+        ) {
+            Ok(()) => {
+                tracing::info!("Mounted virtiofs: {} -> {}", tag, mount_point.display());
+                return Ok(());
+            }
+            Err(e) => {
+                tracing::debug!("virtiofs mount failed ({}), trying 9p...", e);
+            }
+        }
+
+        // Fallback to 9p (WHPX hosts)
+        mount(
+            Some(tag),
+            mount_point,
+            Some("9p"),
+            flags,
+            Some("trans=virtio,version=9p2000.L"),
         )
         .map_err(|e| {
             BoxliteError::Storage(format!(
-                "Failed to mount virtiofs {} to {}: {}",
+                "Failed to mount {} at {} (tried virtiofs and 9p): {}",
                 tag,
                 mount_point.display(),
                 e
             ))
         })?;
 
-        tracing::info!(
-            "Mounted virtiofs: {} → {} ({})",
-            tag,
-            mount_point.display(),
-            if read_only { "ro" } else { "rw" }
-        );
+        tracing::info!("Mounted 9p: {} -> {}", tag, mount_point.display());
         Ok(())
     }
 }

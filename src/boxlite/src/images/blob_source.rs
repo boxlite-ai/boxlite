@@ -12,8 +12,11 @@
 //! This prevents cache poisoning attacks where a malicious local bundle could
 //! contaminate the trusted store cache.
 
-use std::path::{Path, PathBuf};
+#[cfg(any(unix, test))]
+use std::path::Path;
+use std::path::PathBuf;
 
+#[cfg(unix)]
 use crate::images::archive::LayerExtractor;
 use crate::images::storage::ImageStorage;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
@@ -74,6 +77,7 @@ impl BlobSource {
     /// This method is async because layer extraction uses `rayon::par_iter()` for
     /// parallel CPU-bound work, which can block for seconds. Using `spawn_blocking`
     /// moves this work to a dedicated thread pool, freeing the Tokio executor.
+    #[cfg(unix)]
     pub async fn extract_layers(&self, digests: &[String]) -> BoxliteResult<Vec<PathBuf>> {
         let source = self.clone();
         let digests = digests.to_vec();
@@ -119,6 +123,7 @@ impl StoreBlobSource {
     }
 
     /// Get extracted layer paths, extracting if needed.
+    #[cfg(unix)]
     pub fn extract_layers(&self, digests: &[String]) -> BoxliteResult<Vec<PathBuf>> {
         use rayon::prelude::*;
 
@@ -160,6 +165,7 @@ pub struct LocalBundleBlobSource {
     /// Path to the OCI bundle directory
     bundle_path: PathBuf,
     /// Path to namespaced cache directory
+    #[allow(dead_code)] // Used by cfg-gated extract_layers and test-only extracted_path
     cache_dir: PathBuf,
 }
 
@@ -193,12 +199,14 @@ impl LocalBundleBlobSource {
     }
 
     /// Get path to extracted layer in cache.
+    #[cfg(any(unix, test))]
     fn extracted_path(&self, digest: &str) -> PathBuf {
         let filename = digest.replace(':', "-");
         self.cache_dir.join("extracted").join(filename)
     }
 
     /// Get extracted layer paths, extracting if needed.
+    #[cfg(unix)]
     pub fn extract_layers(&self, digests: &[String]) -> BoxliteResult<Vec<PathBuf>> {
         use rayon::prelude::*;
 
@@ -233,6 +241,7 @@ impl LocalBundleBlobSource {
     }
 
     /// Extract layer with atomic temp directory pattern.
+    #[cfg(unix)]
     fn extract_layer_atomic(
         &self,
         digest: &str,
@@ -554,6 +563,7 @@ mod tests {
         assert!(config_json.contains("linux"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_local_bundle_extract_layers() {
         let temp_dir = tempfile::tempdir().unwrap();
@@ -582,6 +592,7 @@ mod tests {
         assert!(extracted[0].to_string_lossy().contains("extracted"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_local_bundle_extract_layers_cached() {
         let temp_dir = tempfile::tempdir().unwrap();
@@ -601,6 +612,7 @@ mod tests {
         assert_eq!(extracted1, extracted2);
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_local_bundle_extract_layers_preserves_whiteout_markers() {
         let temp_dir = tempfile::tempdir().unwrap();
@@ -682,6 +694,7 @@ mod tests {
         assert_eq!(source2.cache_dir, cache_dir2);
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_same_bundle_content_change_uses_new_cache() {
         // Simulates: user modifies a local bundle, rebuilds it

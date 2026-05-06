@@ -80,9 +80,43 @@ impl RuntimeLock {
 
         #[cfg(not(unix))]
         {
-            // Windows: Use LockFile API
-            // TODO: Implement Windows file locking if needed
-            compile_error!("Windows file locking not yet implemented");
+            #[cfg(target_os = "windows")]
+            {
+                use std::os::windows::io::AsRawHandle;
+                use windows_sys::Win32::Storage::FileSystem::{
+                    LOCKFILE_EXCLUSIVE_LOCK, LOCKFILE_FAIL_IMMEDIATELY, LockFileEx,
+                };
+                use windows_sys::Win32::System::IO::OVERLAPPED;
+
+                let handle = file.as_raw_handle();
+                let mut overlapped: OVERLAPPED = unsafe { std::mem::zeroed() };
+
+                let result = unsafe {
+                    LockFileEx(
+                        handle as _,
+                        LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY,
+                        0,
+                        u32::MAX,
+                        u32::MAX,
+                        &mut overlapped,
+                    )
+                };
+
+                if result == 0 {
+                    let err = std::io::Error::last_os_error();
+                    return Err(BoxliteError::Internal(format!(
+                        "Another BoxliteRuntime is already using directory: {}\n\
+                         Only one runtime instance can use a BOXLITE_HOME directory at a time. ({})",
+                        home_dir.display(),
+                        err
+                    )));
+                }
+            }
+
+            #[cfg(not(target_os = "windows"))]
+            {
+                let _ = &file;
+            }
         }
 
         tracing::debug!(lock_path = %lock_path.display(), "Acquired runtime lock");

@@ -202,6 +202,7 @@ impl FilesystemLayout {
         std::fs::create_dir_all(self.image_layout().disk_images_dir())
             .map_err(|e| BoxliteError::Storage(format!("failed to create disk-images dir: {e}")))?;
 
+        #[cfg(unix)]
         self.validate_same_filesystem()?;
 
         Ok(())
@@ -211,6 +212,7 @@ impl FilesystemLayout {
     ///
     /// This is required for atomic `rename(2)` in staged install operations.
     /// Refuse to start if directories span multiple filesystems.
+    #[cfg(unix)]
     fn validate_same_filesystem(&self) -> BoxliteResult<()> {
         use std::os::unix::fs::MetadataExt;
 
@@ -855,6 +857,7 @@ mod tests {
         assert!(layout.boxes_dir().exists());
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_prepare_validates_same_filesystem() {
         let dir = tempfile::TempDir::new().unwrap();

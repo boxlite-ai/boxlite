@@ -8,9 +8,11 @@
 //! - [`InMemoryLockManager`]: Single-process locks for testing
 //! - [`FileLockManager`]: Cross-process locks using flock(2)
 
+#[cfg(unix)]
 mod file;
 mod memory;
 
+#[cfg(unix)]
 pub use file::FileLockManager;
 pub use memory::InMemoryLockManager;
 
@@ -197,6 +199,7 @@ pub(crate) fn lock_exhausted() -> BoxliteError {
     BoxliteError::Internal("all locks have been allocated".to_string())
 }
 
+#[cfg(unix)]
 pub(crate) fn lock_not_found(id: LockId) -> BoxliteError {
     BoxliteError::NotFound(format!("lock {}", id))
 }
@@ -252,6 +255,7 @@ mod tests {
         test_lock_manager(&manager);
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_file_manager() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");

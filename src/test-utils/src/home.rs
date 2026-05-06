@@ -48,7 +48,7 @@ impl PerTestBoxHome {
     /// (image pull, rootfs warm-up). This is the primary constructor.
     pub fn new() -> Self {
         let cache = SharedResources::global();
-        let temp = TempDir::new_in("/tmp").expect("create temp dir");
+        let temp = TempDir::new_in(std::env::temp_dir()).expect("create temp dir");
         let path = temp.path().to_path_buf();
         let linked = cache.link_into(&path);
         Self {
@@ -63,7 +63,7 @@ impl PerTestBoxHome {
     /// For non-VM tests (locking behavior, config validation, shutdown tests).
     /// Does not trigger image pulls or rootfs builds.
     pub fn isolated() -> Self {
-        let temp = TempDir::new_in("/tmp").expect("create temp dir");
+        let temp = TempDir::new_in(std::env::temp_dir()).expect("create temp dir");
         let path = temp.path().to_path_buf();
         Self {
             path,
@@ -108,8 +108,8 @@ mod tests {
         let home = PerTestBoxHome::isolated();
         assert!(home.path.exists(), "home dir should exist");
         assert!(
-            home.path.starts_with("/tmp"),
-            "should be under /tmp: {:?}",
+            home.path.starts_with(std::env::temp_dir()),
+            "should be under temp dir: {:?}",
             home.path
         );
     }

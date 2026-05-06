@@ -50,34 +50,11 @@ impl LibraryLoadPath {
     }
 
     #[cfg(target_os = "windows")]
-    fn get(addr: Option<*const libc::c_void>) -> Option<PathBuf> {
-        use std::ffi::OsString;
-        use std::os::windows::ffi::OsStringExt;
-        use std::ptr;
-        use winapi::um::libloaderapi::GetModuleFileNameW;
-        use winapi::um::libloaderapi::GetModuleHandleExW;
-        use winapi::um::winnt::HANDLE;
-
-        let mut handle: HANDLE = ptr::null_mut();
-        let flags = 0x00000004; // GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS
-        let ok = unsafe {
-            GetModuleHandleExW(
-                flags,
-                addr.unwrap_or(Self::get as *const libc::c_void),
-                &mut handle,
-            )
-        };
-        if ok == 0 {
-            return None;
-        }
-
-        let mut buffer = [0u16; 260];
-        let len = unsafe { GetModuleFileNameW(handle, buffer.as_mut_ptr(), buffer.len() as u32) };
-        if len == 0 {
-            return None;
-        }
-
-        Some(PathBuf::from(OsString::from_wide(&buffer[..len as usize])))
+    fn get(_addr: Option<*const libc::c_void>) -> Option<PathBuf> {
+        // TODO: Implement via GetModuleFileNameW when windows-sys is available
+        // For now, library path detection is not needed on Windows
+        // (libkrun is statically linked via WHPX)
+        None
     }
 }
 
@@ -128,6 +105,11 @@ pub fn configure_library_env(cmd: &mut Command, addr: *const libc::c_void) {
         let lib_path = paths.join(":");
         cmd.env("LD_LIBRARY_PATH", &lib_path);
         tracing::debug!(path = %lib_path, "Set LD_LIBRARY_PATH");
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = &cmd; // suppress unused warning
     }
 }
 

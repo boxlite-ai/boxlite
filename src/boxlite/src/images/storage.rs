@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 
 use oci_client::manifest::OciManifest;
 
+#[cfg(unix)]
 use crate::images::archive::LayerExtractor;
 use crate::runtime::layout::ImageFilesystemLayout;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
@@ -183,6 +184,7 @@ impl ImageStorage {
     /// Get path to extracted layer directory.
     ///
     /// **Mutability**: Immutable - pure path computation, no I/O.
+    #[cfg(any(unix, test))]
     pub fn layer_extracted_path(&self, digest: &str) -> PathBuf {
         let filename = digest.replace(':', "-");
         self.layout.extracted_dir().join(filename)
@@ -205,6 +207,7 @@ impl ImageStorage {
     /// - If we process whiteouts on layer1 alone, .wh.sh is removed but sh isn't deleted
     /// - When copying layer1 on top of layer0: .wh.sh triggers deletion of sh
     /// - Correct: keep .wh.sh in cached layer1, process during copy operation
+    #[cfg(unix)]
     pub fn extract_layer(&self, digest: &str, tarball_path: &Path) -> BoxliteResult<()> {
         let extracted_path = self.layer_extracted_path(digest);
 
@@ -724,6 +727,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn test_extract_layer_preserves_whiteout_markers_for_cache() {
         let temp_dir = tempfile::tempdir().unwrap();
         let store = ImageStorage::new(temp_dir.path().to_path_buf()).unwrap();

@@ -53,9 +53,19 @@ impl PipelineTask<InitCtx> for GuestConnectTask {
             let exit_file = layout.exit_file_path();
             let console_log = layout.console_output_path();
             let stderr_file = layout.stderr_file_path();
+            // Use transports from vmm_spawn if available (pipeline flow),
+            // otherwise derive from config (reattach flow — Unix only).
+            let transport = ctx
+                .transport
+                .clone()
+                .unwrap_or_else(|| ctx.config.transport.clone());
+            let ready_transport = ctx
+                .ready_transport
+                .clone()
+                .unwrap_or_else(|| Transport::unix(ctx.config.ready_socket_path.clone()));
             (
-                ctx.config.transport.clone(),
-                Transport::unix(ctx.config.ready_socket_path.clone()),
+                transport,
+                ready_transport,
                 ctx.skip_guest_wait,
                 ctx.guard.handler_pid(),
                 exit_file,
@@ -99,9 +109,11 @@ impl PipelineTask<InitCtx> for GuestConnectTask {
 /// Wait for guest to signal readiness, racing against shim process death.
 ///
 /// Uses `tokio::select!` to detect three conditions:
-/// 1. Guest connects to ready socket (success)
+/// 1. Guest connects to ready listener (success)
 /// 2. Shim process exits unexpectedly (fast failure with diagnostic)
 /// 3. 30s timeout expires (slow failure fallback)
+///
+/// Uses AF_UNIX sockets on all platforms (including Windows via uds_windows).
 async fn wait_for_guest_ready(
     ready_transport: &Transport,
     shim_pid: Option<u32>,
@@ -110,46 +122,130 @@ async fn wait_for_guest_ready(
     stderr_file: &Path,
     box_id: &str,
 ) -> BoxliteResult<()> {
-    let ready_socket_path = match ready_transport {
-        Transport::Unix { socket_path } => socket_path,
-        _ => {
-            return Err(BoxliteError::Engine(
-                "ready transport must be Unix socket".into(),
-            ));
+    match ready_transport {
+        Transport::Unix { socket_path } => {
+            wait_for_guest_ready_unix(
+                socket_path,
+                shim_pid,
+                exit_file,
+                console_log,
+                stderr_file,
+                box_id,
+            )
+            .await
         }
-    };
+        _ => Err(BoxliteError::Engine(
+            "ready transport must be Unix socket".into(),
+        )),
+    }
+}
 
+/// Unix socket ready listener (all platforms).
+#[cfg(unix)]
+async fn wait_for_guest_ready_unix(
+    socket_path: &Path,
+    shim_pid: Option<u32>,
+    exit_file: &Path,
+    console_log: &Path,
+    stderr_file: &Path,
+    box_id: &str,
+) -> BoxliteResult<()> {
     // Remove stale socket if exists
-    if ready_socket_path.exists() {
-        let _ = std::fs::remove_file(ready_socket_path);
+    if socket_path.exists() {
+        let _ = std::fs::remove_file(socket_path);
     }
 
-    // Create listener for ready notification
-    let listener = tokio::net::UnixListener::bind(ready_socket_path).map_err(|e| {
+    let listener = tokio::net::UnixListener::bind(socket_path).map_err(|e| {
         BoxliteError::Engine(format!(
             "Failed to bind ready socket {}: {}",
-            ready_socket_path.display(),
+            socket_path.display(),
             e
         ))
     })?;
 
     tracing::debug!(
-        socket = %ready_socket_path.display(),
+        socket = %socket_path.display(),
         "Listening for guest ready notification"
     );
 
-    // Race: guest ready signal vs shim death vs timeout
+    race_ready_signal(
+        async { listener.accept().await.map(|_| ()) },
+        shim_pid,
+        exit_file,
+        console_log,
+        stderr_file,
+        box_id,
+    )
+    .await
+}
+
+/// Unix socket ready listener (Windows via uds_windows).
+#[cfg(windows)]
+async fn wait_for_guest_ready_unix(
+    socket_path: &Path,
+    shim_pid: Option<u32>,
+    exit_file: &Path,
+    console_log: &Path,
+    stderr_file: &Path,
+    box_id: &str,
+) -> BoxliteResult<()> {
+    // Remove stale socket if exists
+    if socket_path.exists() {
+        let _ = std::fs::remove_file(socket_path);
+    }
+
+    let path = socket_path.to_path_buf();
+
+    tracing::debug!(
+        socket = %socket_path.display(),
+        "Listening for guest ready notification (Windows AF_UNIX)"
+    );
+
+    // Use uds_windows in a blocking task for the accept
+    let accept_path = path.clone();
+    race_ready_signal(
+        async move {
+            tokio::task::spawn_blocking(move || {
+                let listener = uds_windows::UnixListener::bind(&accept_path)?;
+                listener.accept().map(|_| ())
+            })
+            .await
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?
+        },
+        shim_pid,
+        exit_file,
+        console_log,
+        stderr_file,
+        box_id,
+    )
+    .await
+}
+
+/// Race a ready signal future against shim death and timeout.
+///
+/// Shared logic for both Unix socket and TCP ready listeners.
+async fn race_ready_signal<F>(
+    accept_fut: F,
+    shim_pid: Option<u32>,
+    exit_file: &Path,
+    console_log: &Path,
+    stderr_file: &Path,
+    box_id: &str,
+) -> BoxliteResult<()>
+where
+    F: std::future::Future<Output = Result<(), std::io::Error>>,
+{
     let timeout = Duration::from_secs(30);
 
     tokio::select! {
-        result = tokio::time::timeout(timeout, listener.accept()) => {
+        result = tokio::time::timeout(timeout, accept_fut) => {
             match result {
-                Ok(Ok((_stream, _addr))) => {
-                    tracing::debug!("Guest signaled ready via socket connection");
+                Ok(Ok(())) => {
+                    tracing::debug!("Guest signaled ready");
                     Ok(())
                 }
                 Ok(Err(e)) => Err(BoxliteError::Engine(format!(
-                    "Ready socket accept failed: {}", e
+                    "Ready listener accept failed: {}", e
                 ))),
                 Err(_) => Err(BoxliteError::Engine(format!(
                     "Box {box_id} failed to start: timeout after {}s\n\n\
@@ -167,7 +263,6 @@ async fn wait_for_guest_ready(
             }
         }
         exit_code = wait_for_process_exit(shim_pid) => {
-            // Parse exit file and present user-friendly message
             let report = CrashReport::from_exit_file(
                 exit_file,
                 console_log,
@@ -176,7 +271,6 @@ async fn wait_for_guest_ready(
                 exit_code,
             );
 
-            // Log raw debug info for troubleshooting
             if !report.debug_info.is_empty() {
                 tracing::error!(
                     "Box crash details (raw stderr):\n{}",
@@ -226,6 +320,7 @@ mod tests {
     // ─────────────────────────────────────────────────────────────────────
 
     /// Guest connects to the ready socket → success.
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_guest_ready_success() {
         let dir = tempfile::tempdir().unwrap();
@@ -255,9 +350,9 @@ mod tests {
         assert!(result.is_ok(), "Expected success, got: {:?}", result);
     }
 
-    /// Non-Unix transport should be rejected immediately.
+    /// Unsupported transport (Vsock) should be rejected immediately.
     #[tokio::test]
-    async fn test_guest_ready_rejects_non_unix_transport() {
+    async fn test_guest_ready_rejects_unsupported_transport() {
         let dir = tempfile::tempdir().unwrap();
         let exit_file = dir.path().join("exit");
         let console_log = dir.path().join("console.log");
@@ -283,6 +378,7 @@ mod tests {
     }
 
     /// Stale socket file is cleaned up before binding.
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_guest_ready_cleans_stale_socket() {
         let dir = tempfile::tempdir().unwrap();
@@ -322,6 +418,7 @@ mod tests {
 
     /// When the shim process dies (invalid PID), the death branch fires
     /// before the 30s timeout, producing a diagnostic error.
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_guest_ready_detects_shim_death() {
         let dir = tempfile::tempdir().unwrap();

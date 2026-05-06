@@ -198,10 +198,9 @@ fn development_mode_disables_jailer() {
 
 /// Verify SecurityOptions::standard() enables the jailer on Linux/macOS.
 #[test]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn standard_mode_enables_jailer() {
     let opts = SecurityOptions::standard();
-
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
     assert!(
         opts.jailer_enabled,
         "Standard mode should enable jailer on Linux/macOS"

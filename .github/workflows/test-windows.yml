@@ -1,0 +1,59 @@
+# Windows compile, lint, and unit test checks.
+#
+# GitHub runners do not have WHPX/Hyper-V, so we use BOXLITE_DEPS_STUB=1
+# to stub out native dependencies (libkrun, libgvproxy) and verify:
+# - All cfg(windows) code compiles
+# - Clippy passes on Windows target
+# - Unit tests pass (633 tests, all platform-independent)
+name: Windows
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**/*.rs'
+      - '**/Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/test-windows.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/**/*.rs'
+      - '**/Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/test-windows.yml'
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: '0'
+  BOXLITE_DEPS_STUB: '1'
+
+jobs:
+  windows-check:
+    name: Windows compile + clippy + tests
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          components: clippy
+
+      - name: Install protobuf
+        run: choco install protoc -y
+
+      - name: Cargo check (all crates)
+        # Exclude boxlite-guest (Linux-only, has compile_error! on non-Linux)
+        run: cargo check --workspace --all-targets --exclude boxlite-guest
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --exclude boxlite-guest -- -D warnings
+
+      - name: Unit tests (boxlite)
+        run: cargo test -p boxlite --no-default-features --lib
+
+      - name: Unit tests (boxlite-shared)
+        run: cargo test -p boxlite-shared --lib

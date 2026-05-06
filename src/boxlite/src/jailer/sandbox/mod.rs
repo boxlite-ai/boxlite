@@ -30,6 +30,8 @@
 #[cfg(target_os = "linux")]
 mod bwrap;
 mod composite;
+#[cfg(target_os = "windows")]
+mod job_object;
 #[cfg(target_os = "linux")]
 mod landlock;
 #[cfg(target_os = "macos")]
@@ -38,6 +40,8 @@ pub mod seatbelt;
 #[cfg(target_os = "linux")]
 pub use bwrap::BwrapSandbox;
 pub use composite::CompositeSandbox;
+#[cfg(target_os = "windows")]
+pub use job_object::JobSandbox;
 #[cfg(target_os = "linux")]
 pub use landlock::LandlockSandbox;
 #[cfg(target_os = "macos")]
@@ -78,6 +82,14 @@ pub trait Sandbox: Send + Sync {
     /// set — use `cmd.get_program()` / `cmd.get_args()` to extract them
     /// if needed (e.g., to wrap with bwrap).
     fn apply(&self, ctx: &SandboxContext, cmd: &mut Command);
+
+    /// Post-spawn hook for platform-specific child process setup.
+    ///
+    /// Called after `cmd.spawn()` with the child process handle.
+    /// Default: no-op. Windows uses this for Job Object assignment.
+    fn post_spawn(&self, _child: &std::process::Child) -> BoxliteResult<()> {
+        Ok(())
+    }
 
     /// Name for logging.
     fn name(&self) -> &'static str;
@@ -147,6 +159,7 @@ impl SandboxContext<'_> {
 ///
 /// On Linux: [`CompositeSandbox`] combining bwrap (namespaces) + Landlock (filesystem ACL).
 /// On macOS: [`SeatbeltSandbox`] (sandbox-exec).
+/// On Windows: [`JobSandbox`] (Job Object kill-on-close + resource limits).
 /// On other: [`NoopSandbox`] (passthrough).
 #[cfg(target_os = "linux")]
 pub type PlatformSandbox = CompositeSandbox;
@@ -154,7 +167,10 @@ pub type PlatformSandbox = CompositeSandbox;
 #[cfg(target_os = "macos")]
 pub type PlatformSandbox = SeatbeltSandbox;
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(target_os = "windows")]
+pub type PlatformSandbox = JobSandbox;
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 pub type PlatformSandbox = NoopSandbox;
 
 // ============================================================================

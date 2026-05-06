@@ -34,6 +34,7 @@ pub mod qcow2 {
 }
 
 /// Ext4 filesystem configuration
+#[cfg(any(unix, windows))]
 pub mod ext4 {
     /// Ext4 block size in bytes
     pub const BLOCK_SIZE: u64 = 4096;

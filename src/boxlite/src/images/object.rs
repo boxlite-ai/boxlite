@@ -154,6 +154,7 @@ impl ImageObject {
     /// // extracted[1] = /images/extracted/sha256:def.../  (layer 1)
     /// // extracted[2] = /images/extracted/sha256:ghi.../  (layer 2)
     /// ```
+    #[cfg(unix)]
     pub async fn layer_extracted(&self) -> BoxliteResult<Vec<PathBuf>> {
         let digests: Vec<String> = self
             .manifest
@@ -164,7 +165,8 @@ impl ImageObject {
 
         let extracted = self.blob_source.extract_layers(&digests).await?;
 
-        // Verify DiffIDs if available
+        // Verify DiffIDs if available (requires tarball decompression, unix-only)
+        #[cfg(unix)]
         self.verify_diff_ids()?;
 
         Ok(extracted)
@@ -175,6 +177,7 @@ impl ImageObject {
     /// DiffIDs are SHA256 hashes of the uncompressed layer tar content.
     /// This ensures the decompressed filesystem content matches what the
     /// image author intended.
+    #[cfg(unix)]
     fn verify_diff_ids(&self) -> BoxliteResult<()> {
         use crate::images::archive::LayerVerifier;
 
@@ -227,6 +230,7 @@ impl ImageObject {
     ///
     /// This is used as a cache key for base disks - same layers = same base disk.
     /// Uses SHA256 hash of concatenated layer digests.
+    #[cfg(any(unix, windows))]
     pub(crate) fn compute_image_digest(&self) -> String {
         use sha2::{Digest, Sha256};
 

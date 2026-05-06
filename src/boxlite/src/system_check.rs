@@ -56,10 +56,17 @@ impl SystemCheck {
             Ok(Self {})
         }
 
-        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        #[cfg(target_os = "windows")]
+        {
+            let probe = WhpxProbe;
+            probe.startup_check()?;
+            Ok(Self {})
+        }
+
+        #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
         {
             Err(BoxliteError::Unsupported(
-                "BoxLite only supports Linux and macOS".into(),
+                "BoxLite only supports Linux, macOS, and Windows".into(),
             ))
         }
     }
@@ -81,7 +88,12 @@ pub(crate) fn hypervisor_probe() -> Box<dyn HypervisorProbe> {
         Box::new(KvmProbe)
     }
 
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(target_os = "windows")]
+    {
+        Box::new(WhpxProbe)
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     {
         Box::new(NoopProbe)
     }
@@ -348,16 +360,138 @@ fn check_hypervisor_framework() -> BoxliteResult<()> {
     }
 }
 
+// ── Windows: WHPX ───────────────────────────────────────────────────────
+
+#[cfg(target_os = "windows")]
+struct WhpxProbe;
+
+#[cfg(target_os = "windows")]
+impl HypervisorProbe for WhpxProbe {
+    fn startup_check(&self) -> BoxliteResult<()> {
+        check_whpx_available()
+    }
+
+    fn diagnose_create_failure(&self, error: BoxliteError) -> BoxliteError {
+        // Re-probe WHPX to refine the error.
+        match check_whpx_available() {
+            Ok(()) => {
+                tracing::debug!("WHPX diagnostic: hypervisor available, failure was post-creation");
+                error
+            }
+            Err(whpx_err) => {
+                tracing::error!("WHPX diagnostic: {whpx_err}");
+                whpx_err
+            }
+        }
+    }
+}
+
+/// Check WHPX availability via dynamic loading of WinHvPlatform.dll.
+///
+/// Uses `LoadLibraryW` + `GetProcAddress` instead of static linking so
+/// the boxlite library can load on Windows systems without WHPX installed
+/// and report a clear error instead of a cryptic DLL-not-found crash.
+#[cfg(target_os = "windows")]
+fn check_whpx_available() -> BoxliteResult<()> {
+    use std::ffi::c_void;
+    use windows_sys::Win32::Foundation::FreeLibrary;
+    use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
+
+    // WHvCapabilityCodeHypervisorPresent = 0
+    const HYPERVISOR_PRESENT: i32 = 0;
+
+    // RAII guard for the loaded DLL handle (HMODULE = *mut c_void in windows-sys 0.59+).
+    struct DllGuard(*mut c_void);
+    impl Drop for DllGuard {
+        fn drop(&mut self) {
+            unsafe {
+                FreeLibrary(self.0);
+            }
+        }
+    }
+
+    // Load WinHvPlatform.dll dynamically.
+    let dll_name: Vec<u16> = "WinHvPlatform.dll\0".encode_utf16().collect();
+    let module = unsafe { LoadLibraryW(dll_name.as_ptr()) };
+    if module.is_null() {
+        return Err(BoxliteError::Unsupported(
+            "Windows Hypervisor Platform (WHPX) is not installed\n\n\
+             Suggestions:\n\
+             - Enable WHPX in Windows Features:\n\
+               Settings > Apps > Optional features > More Windows features\n\
+               > check 'Windows Hypervisor Platform'\n\
+             - Or via PowerShell (admin):\n\
+               Enable-WindowsOptionalFeature -Online -FeatureName HypervisorPlatform\n\
+             - Restart Windows after enabling"
+                .into(),
+        ));
+    }
+    let _guard = DllGuard(module);
+
+    let func_name = b"WHvGetCapability\0";
+    let func = unsafe { GetProcAddress(module, func_name.as_ptr()) };
+    let func = func.ok_or_else(|| {
+        BoxliteError::Unsupported(
+            "WinHvPlatform.dll found but WHvGetCapability is missing. \
+             The WHPX installation may be corrupted."
+                .into(),
+        )
+    })?;
+
+    // WHvGetCapability(code, buffer, buffer_size, written_size) -> HRESULT
+    type WhvGetCapabilityFn = unsafe extern "system" fn(i32, *mut c_void, u32, *mut u32) -> i32;
+    let whv_get_capability: WhvGetCapabilityFn = unsafe { std::mem::transmute(func) };
+
+    // Query HypervisorPresent (result is BOOL = i32).
+    let mut present: i32 = 0;
+    let hr = unsafe {
+        whv_get_capability(
+            HYPERVISOR_PRESENT,
+            &mut present as *mut _ as *mut c_void,
+            std::mem::size_of::<i32>() as u32,
+            std::ptr::null_mut(),
+        )
+    };
+
+    if hr < 0 {
+        return Err(BoxliteError::Unsupported(format!(
+            "WHPX capability query failed (HRESULT 0x{:08X})\n\n\
+             Suggestions:\n\
+             - Enable hardware virtualization in BIOS/UEFI\n\
+               (Intel VT-x or AMD-V)\n\
+             - Enable Windows Hypervisor Platform in Windows Features\n\
+             - Restart Windows after enabling",
+            hr as u32
+        )));
+    }
+
+    if present == 0 {
+        return Err(BoxliteError::Unsupported(
+            "WHPX reports hypervisor not present\n\n\
+             Suggestions:\n\
+             - Enable hardware virtualization in BIOS/UEFI\n\
+               (Intel VT-x or AMD-V)\n\
+             - Ensure Hyper-V or Windows Hypervisor Platform is enabled\n\
+             - Restart Windows after enabling\n\
+             - Check: systeminfo | findstr \"Hyper-V\""
+                .into(),
+        ));
+    }
+
+    tracing::info!("WHPX hypervisor detected and available");
+    Ok(())
+}
+
 // ── Unsupported platforms ──────────────────────────────────────────────────
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 struct NoopProbe;
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 impl HypervisorProbe for NoopProbe {
     fn startup_check(&self) -> BoxliteResult<()> {
         Err(BoxliteError::Unsupported(
-            "BoxLite only supports Linux and macOS".into(),
+            "BoxLite only supports Linux, macOS, and Windows".into(),
         ))
     }
 
@@ -398,6 +532,42 @@ mod tests {
         // Should be some form of error (original or refined)
         let msg = result.to_string();
         assert!(!msg.is_empty());
+    }
+
+    #[cfg(target_os = "windows")]
+    mod whpx_tests {
+        use super::super::*;
+
+        #[test]
+        fn whpx_probe_startup_reports_status() {
+            let probe = WhpxProbe;
+            match probe.startup_check() {
+                Ok(()) => {} // WHPX is available
+                Err(e) => {
+                    let msg = e.to_string();
+                    assert!(
+                        msg.contains("WHPX")
+                            || msg.contains("Hypervisor")
+                            || msg.contains("WinHvPlatform"),
+                        "Error should mention WHPX: {msg}"
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn whpx_diagnose_preserves_error_when_healthy() {
+            let probe = WhpxProbe;
+            // If WHPX is healthy, diagnose should return the original error
+            if probe.startup_check().is_ok() {
+                let original = BoxliteError::Engine("test error".into());
+                let result = probe.diagnose_create_failure(original);
+                assert!(
+                    result.to_string().contains("test error"),
+                    "Should preserve original error when WHPX is healthy"
+                );
+            }
+        }
     }
 
     #[cfg(target_os = "macos")]

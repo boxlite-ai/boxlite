@@ -1,3 +1,4 @@
+#![cfg(unix)]
 //! Integration tests for LiteBox::copy_into / copy_out.
 //!
 //! All tests share a single VM to avoid 18 separate VM boot cycles.

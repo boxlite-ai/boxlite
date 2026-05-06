@@ -1,0 +1,93 @@
+# Windows E2E integration tests on self-hosted WHPX runners.
+#
+# GitHub-hosted runners lack Hyper-V/WHPX, so real VM tests require
+# self-hosted machines with hardware virtualization enabled.
+#
+# Triggered manually via workflow_dispatch. Intended for pre-release
+# validation and reliability regression testing.
+name: Windows E2E (Manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      rounds:
+        description: 'Number of stability test rounds'
+        default: '5'
+        type: string
+      suite:
+        description: 'Test suite to run'
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - stability
+          - functional
+          - performance
+      skip_perf:
+        description: 'Skip performance suite (faster)'
+        type: boolean
+        default: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: '0'
+
+jobs:
+  windows-e2e:
+    name: WHPX E2E (${{ matrix.machine }})
+    runs-on: [self-hosted, windows, whpx, '${{ matrix.machine }}']
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        machine: [win10, win11]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Install protobuf
+        run: choco install protoc -y
+
+      - name: Kill stale shim processes
+        run: |
+          taskkill /F /IM boxlite-shim.exe 2>$null
+          exit 0
+        shell: pwsh
+
+      - name: Build shim
+        run: cargo build -p boxlite --bin boxlite-shim --features krun,gvproxy
+
+      - name: Install Python SDK
+        run: pip install -e sdks/python/
+
+      - name: Run E2E tests
+        run: |
+          $suite = "${{ inputs.suite }}"
+          $rounds = "${{ inputs.rounds }}"
+          $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+          $outfile = "e2e-results-${{ matrix.machine }}-${timestamp}.json"
+
+          $args = @("scripts/test/cross_platform_e2e.py", "--rounds", $rounds, "--json", $outfile)
+          if ($suite -ne "all") {
+            $args += @("--suite", $suite)
+          }
+          python @args
+
+          Write-Host "Results saved to $outfile"
+        shell: pwsh
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: whpx-e2e-${{ matrix.machine }}
+          path: e2e-results-*.json
+          retention-days: 14

@@ -1,3 +1,4 @@
+#![cfg(unix)]
 //! Proof-of-concept test for SIGSTOP/SIGCONT VM quiesce.
 //!
 //! Validates that sending SIGSTOP to the shim process freezes the VM

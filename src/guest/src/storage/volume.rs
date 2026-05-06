@@ -65,7 +65,22 @@ pub fn mount_volume(vol: &Volume) -> BoxliteResult<()> {
         Some(volume::Source::Virtiofs(virtiofs)) => {
             let mount_point =
                 resolve_mount_point(&virtiofs.tag, &vol.mount_point, &vol.container_id);
-            VirtiofsMount::mount(&virtiofs.tag, &mount_point, virtiofs.read_only)
+            match VirtiofsMount::mount(&virtiofs.tag, &mount_point, virtiofs.read_only) {
+                Ok(()) => Ok(()),
+                Err(e) if virtiofs.tag == mount_tags::SHARED => {
+                    // SHARED mount is optional — on hosts without virtiofs/9p support
+                    // (e.g., WHPX without matching kernel modules), fall back to a
+                    // plain directory. Block devices mount into subdirs and still work.
+                    tracing::warn!(
+                        "SHARED filesystem mount failed ({}), using plain directory at {}",
+                        e,
+                        mount_point.display()
+                    );
+                    std::fs::create_dir_all(&mount_point).ok();
+                    Ok(())
+                }
+                Err(e) => Err(e),
+            }
         }
         Some(volume::Source::BlockDevice(block)) => {
             let mount_point = Path::new(&vol.mount_point);

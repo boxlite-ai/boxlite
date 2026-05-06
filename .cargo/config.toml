@@ -3,3 +3,10 @@ rustflags = ["-C", "target-feature=+crt-static", "-C", "link-arg=-Wl,-z,stack-si
 
 [target.x86_64-unknown-linux-musl]
 rustflags = ["-C", "target-feature=+crt-static", "-C", "link-arg=-Wl,-z,stack-size=2097152"]
+
+# Windows MSVC: allow duplicate symbols when linking libkrun staticlib into Rust binaries.
+# libkrun is built as a staticlib (bundles Rust stdlib) for C consumers, but when linked
+# into a Rust binary the stdlib symbols collide. /FORCE:MULTIPLE resolves this safely
+# since both copies are identical.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "link-arg=/FORCE:MULTIPLE"]

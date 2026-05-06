@@ -13,6 +13,7 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 
 /// Unix convention: exit code for signal-terminated process = 128 + signal number.
+#[cfg(unix)]
 const SIGNAL_EXIT_CODE_BASE: i32 = 128;
 
 /// Exit code for Rust panics.
@@ -27,12 +28,15 @@ static EXIT_FILE_PATH: OnceLock<PathBuf> = OnceLock::new();
 pub struct CrashCapture;
 
 impl CrashCapture {
-    /// Install crash capture mechanisms (panic hook + signal handlers).
+    /// Install crash capture mechanisms (panic hook + crash handlers).
     ///
     /// - `exit_file`: Where to write crash info (JSON format)
     pub fn install(exit_file: PathBuf) {
         install_panic_hook(exit_file.clone());
+        #[cfg(unix)]
         install_signal_handlers(exit_file);
+        #[cfg(windows)]
+        install_exception_handler(exit_file);
     }
 }
 
@@ -68,6 +72,7 @@ fn install_panic_hook(exit_file: PathBuf) {
 }
 
 /// Install Unix signal handlers to catch C library crashes.
+#[cfg(unix)]
 fn install_signal_handlers(exit_file: PathBuf) {
     let _ = EXIT_FILE_PATH.set(exit_file);
 
@@ -85,6 +90,7 @@ fn install_signal_handlers(exit_file: PathBuf) {
 /// Note: We intentionally don't read stderr here. Signal handlers should be
 /// minimal and avoid async-signal-unsafe operations. CrashReport reads stderr
 /// directly from the file when formatting the error message.
+#[cfg(unix)]
 extern "C" fn crash_signal_handler(sig: libc::c_int) {
     let signal = match sig {
         libc::SIGABRT => "SIGABRT",
@@ -109,4 +115,61 @@ extern "C" fn crash_signal_handler(sig: libc::c_int) {
         libc::signal(sig, libc::SIG_DFL);
         libc::raise(sig);
     }
+}
+
+/// Install Windows Structured Exception Handler for unhandled crashes.
+///
+/// Uses `SetUnhandledExceptionFilter` to catch ACCESS_VIOLATION,
+/// STACK_OVERFLOW, ILLEGAL_INSTRUCTION, etc. The handler writes
+/// crash info as JSON to the exit file, then lets Windows terminate
+/// the process with the default handler.
+#[cfg(windows)]
+fn install_exception_handler(exit_file: PathBuf) {
+    let _ = EXIT_FILE_PATH.set(exit_file);
+
+    use windows_sys::Win32::System::Diagnostics::Debug::SetUnhandledExceptionFilter;
+
+    unsafe {
+        SetUnhandledExceptionFilter(Some(crash_exception_handler));
+    }
+}
+
+/// Windows exception handler that writes JSON crash info to exit file.
+///
+/// Minimal operations only — exception filters run in a constrained
+/// context similar to Unix signal handlers.
+#[cfg(windows)]
+unsafe extern "system" fn crash_exception_handler(
+    info: *const windows_sys::Win32::System::Diagnostics::Debug::EXCEPTION_POINTERS,
+) -> i32 {
+    use windows_sys::Win32::Foundation::{
+        EXCEPTION_ACCESS_VIOLATION, EXCEPTION_ILLEGAL_INSTRUCTION, EXCEPTION_STACK_OVERFLOW,
+    };
+    // EXCEPTION_CONTINUE_SEARCH — let default handler terminate the process
+    const EXCEPTION_CONTINUE_SEARCH: i32 = 0;
+
+    let code = if !info.is_null() {
+        unsafe { (*(*info).ExceptionRecord).ExceptionCode }
+    } else {
+        0
+    };
+
+    let signal = match code {
+        EXCEPTION_ACCESS_VIOLATION => "ACCESS_VIOLATION",
+        EXCEPTION_STACK_OVERFLOW => "STACK_OVERFLOW",
+        EXCEPTION_ILLEGAL_INSTRUCTION => "ILLEGAL_INSTRUCTION",
+        _ => "UNKNOWN_EXCEPTION",
+    };
+
+    if let Some(exit_file) = EXIT_FILE_PATH.get() {
+        let exit_info = ExitInfo::Signal {
+            exit_code: code as i32,
+            signal: signal.to_string(),
+        };
+        if let Ok(json) = serde_json::to_string(&exit_info) {
+            let _ = std::fs::write(exit_file, json);
+        }
+    }
+
+    EXCEPTION_CONTINUE_SEARCH
 }

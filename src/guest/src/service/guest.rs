@@ -10,7 +10,7 @@ use boxlite_shared::{
     QuiesceResponse, ShutdownRequest, ShutdownResponse, ThawRequest, ThawResponse,
 };
 use tonic::{Request, Response, Status};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 #[tonic::async_trait]
 impl GuestService for GuestServer {
@@ -54,19 +54,19 @@ impl GuestService for GuestServer {
         // Step 2: Configure network (if specified)
         if let Some(network) = req.network {
             info!("Configuring network interface: {}", network.interface);
-            if let Err(e) = crate::network::configure_network_from_config(
+            match crate::network::configure_network_from_config(
                 &network.interface,
                 network.ip.as_deref(),
                 network.gateway.as_deref(),
             )
             .await
             {
-                error!("Failed to configure network: {}", e);
-                return Ok(Response::new(GuestInitResponse {
-                    result: Some(guest_init_response::Result::Error(GuestInitError {
-                        reason: format!("Failed to configure network: {}", e),
-                    })),
-                }));
+                Ok(()) => info!("Network configured successfully"),
+                Err(e) => {
+                    // Network failure is non-fatal: box works without networking.
+                    // This handles: no gvproxy, no virtio-net device, interface not found, etc.
+                    warn!("Network configuration failed (non-fatal, box will run without networking): {}", e);
+                }
             }
         }
 

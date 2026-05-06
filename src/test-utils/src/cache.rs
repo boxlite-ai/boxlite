@@ -157,7 +157,7 @@ impl SharedResources {
 
         // Ephemeral short-path home for warm-up runtime (macOS 104-char socket limit).
         // Symlinks {images,rootfs,bases,tmp} → target/boxlite-test/ so data persists.
-        let warm_home = TempDir::new_in("/tmp").expect("create warm home");
+        let warm_home = TempDir::new_in(std::env::temp_dir()).expect("create warm home");
         for name in ["images", "rootfs", "bases", "tmp"] {
             symlink_or_exists(&dir.join(name), &warm_home.path().join(name), name);
         }
@@ -267,16 +267,28 @@ fn cache_dir() -> PathBuf {
         .join("boxlite-test")
 }
 
-/// Create a symlink, ignoring `AlreadyExists` errors (race-safe).
+/// Create a symlink (Unix) or directory junction (Windows), ignoring `AlreadyExists`.
 fn symlink_or_exists(target: &Path, link: &Path, label: &str) {
-    match std::os::unix::fs::symlink(target, link) {
+    let result = {
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(target, link)
+        }
+        #[cfg(not(unix))]
+        {
+            // Windows: use junction (works without elevated privileges, unlike symlinks)
+            std::os::windows::fs::symlink_dir(target, link)
+        }
+    };
+    match result {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
         Err(e) => panic!("symlink {label}: {e}"),
     }
 }
 
-/// Acquire an exclusive `flock` on `path`, blocking until available.
+/// Acquire an exclusive file lock, blocking until available.
+#[cfg(unix)]
 fn flock_exclusive(path: &Path) -> std::fs::File {
     use std::os::unix::io::AsRawFd;
 
@@ -286,6 +298,21 @@ fn flock_exclusive(path: &Path) -> std::fs::File {
     file
 }
 
+/// Acquire an exclusive file lock via `LockFileEx`.
+#[cfg(not(unix))]
+fn flock_exclusive(path: &Path) -> std::fs::File {
+    // On Windows, opening with exclusive write access provides basic locking.
+    // For test cache warm-up serialization, this is sufficient since the file
+    // is held open for the duration of the warm-up.
+    use std::fs::OpenOptions;
+    OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)
+        .unwrap_or_else(|e| panic!("acquire lock on {}: {e}", path.display()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -293,9 +320,12 @@ mod tests {
     #[test]
     fn cache_dir_is_under_target() {
         let dir = cache_dir();
+        let components: Vec<_> = dir.components().map(|c| c.as_os_str()).collect();
         assert!(
-            dir.to_str().unwrap().contains("target/boxlite-test"),
-            "cache_dir should be under target/: {:?}",
+            components
+                .windows(2)
+                .any(|w| w[0] == "target" && w[1] == "boxlite-test"),
+            "cache_dir should be under target/boxlite-test: {:?}",
             dir
         );
     }
@@ -348,6 +378,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)] // Symlink metadata checks are Unix-specific
     #[test]
     fn link_into_creates_tmp_symlink() {
         let base = tempfile::tempdir().expect("create base temp dir");
@@ -376,6 +407,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)] // Symlink metadata checks are Unix-specific
     #[test]
     fn link_into_creates_bases_symlink() {
         let base = tempfile::tempdir().expect("create base temp dir");

@@ -47,7 +47,7 @@ impl std::fmt::Debug for Zygote {
     }
 }
 
-/// What to build. Serialized over IPC to the zygote.
+/// What to build (tenant/exec container). Serialized over IPC to the zygote.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub(crate) struct BuildSpec {
     pub container_id: String,
@@ -60,10 +60,28 @@ pub(crate) struct BuildSpec {
     pub gid: u32,
 }
 
+/// What to build (init container). Serialized over IPC to the zygote.
+///
+/// Init containers use `.as_init(bundle_path)` instead of `.as_tenant()`.
+/// The OCI spec (config.json) is already written to the bundle directory.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub(crate) struct InitBuildSpec {
+    pub container_id: String,
+    pub state_root: PathBuf,
+    pub bundle_path: PathBuf,
+}
+
 /// Build outcome. Invalid states are unrepresentable.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub(crate) enum BuildResult {
     Spawned { pid: i32 },
+    Failed { error: String },
+}
+
+/// Init build outcome. Init containers don't return a PID from build().
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub(crate) enum InitBuildResult {
+    Ok,
     Failed { error: String },
 }
 
@@ -91,8 +109,11 @@ pub(crate) enum WaitResult {
 /// The parent's Mutex ensures only one request is in-flight at a time.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 enum ZygoteRequest {
-    /// Build a new container process. May include SCM_RIGHTS fds for stdio pipes.
+    /// Build a new tenant/exec container process. May include SCM_RIGHTS fds for stdio pipes.
     Build(BuildSpec),
+    /// Build a new init container. May include SCM_RIGHTS fds for stdio pipes.
+    /// Uses .as_init(bundle_path) instead of .as_tenant().
+    InitBuild(InitBuildSpec),
     /// Wait for a container process to exit and return its exit status.
     /// The zygote must handle this because it's the parent of all container
     /// processes (they were created by clone3() inside the zygote).
@@ -106,6 +127,7 @@ enum ZygoteRequest {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 enum ZygoteResponse {
     Build(BuildResult),
+    InitBuild(InitBuildResult),
     Wait(WaitResult),
 }
 
@@ -163,6 +185,26 @@ impl Zygote {
         }
     }
 
+    /// Build an init container via the zygote. Returns success/failure.
+    ///
+    /// Init containers use `.as_init(bundle_path)` and `.with_detach(true)`,
+    /// unlike tenant containers which use `.as_tenant()` and return a PID.
+    /// Blocks until the build completes (use from `spawn_blocking`).
+    pub fn build_init(&self, spec: InitBuildSpec, fds: Option<[RawFd; 3]>) -> BoxliteResult<()> {
+        let sock = self.sock.lock().unwrap();
+        let fd = sock.as_raw_fd();
+        send_request(fd, &ZygoteRequest::InitBuild(spec), fds)?;
+        match recv_response(fd)? {
+            ZygoteResponse::InitBuild(InitBuildResult::Ok) => Ok(()),
+            ZygoteResponse::InitBuild(InitBuildResult::Failed { error }) => {
+                Err(BoxliteError::Internal(error))
+            }
+            other => Err(BoxliteError::Internal(format!(
+                "expected InitBuild response, got: {other:?}"
+            ))),
+        }
+    }
+
     /// Wait for a container process to exit. Returns exit status.
     ///
     /// Container processes are direct children of the zygote (created by
@@ -209,6 +251,13 @@ fn serve(sock: OwnedFd) -> ! {
             Ok((ZygoteRequest::Build(spec), fds)) => {
                 let result = do_build(spec, fds);
                 if let Err(e) = send_response(fd, &ZygoteResponse::Build(result)) {
+                    eprintln!("[zygote] send_response failed: {e}");
+                    std::process::exit(1);
+                }
+            }
+            Ok((ZygoteRequest::InitBuild(spec), fds)) => {
+                let result = do_init_build(spec, fds);
+                if let Err(e) = send_response(fd, &ZygoteResponse::InitBuild(result)) {
                     eprintln!("[zygote] send_response failed: {e}");
                     std::process::exit(1);
                 }
@@ -273,6 +322,46 @@ fn do_build(spec: BuildSpec, fds: Option<[RawFd; 3]>) -> BuildResult {
     match build_fn() {
         Ok(pid) => BuildResult::Spawned { pid: pid.as_raw() },
         Err(error) => BuildResult::Failed { error },
+    }
+}
+
+/// Execute an init container build. Called inside the zygote (single-threaded).
+///
+/// Init containers use `.as_init(bundle_path)` with `.with_detach(true)`.
+/// The OCI spec (config.json) must already exist in the bundle directory.
+/// Unlike tenant builds, init builds return () on success (no PID).
+fn do_init_build(spec: InitBuildSpec, fds: Option<[RawFd; 3]>) -> InitBuildResult {
+    let build_fn = || -> Result<(), String> {
+        let mut builder = ContainerBuilder::new(spec.container_id.clone(), SyscallType::default())
+            .with_root_path(spec.state_root.clone())
+            .map_err(|e| format!("Failed to set container root path: {e}"))?
+            .validate_id()
+            .map_err(|e| format!("Invalid container ID: {e}"))?;
+
+        if let Some(raw_fds) = fds {
+            // SAFETY: fds were received via SCM_RIGHTS, we own them exclusively.
+            let stdin = unsafe { OwnedFd::from_raw_fd(raw_fds[0]) };
+            let stdout = unsafe { OwnedFd::from_raw_fd(raw_fds[1]) };
+            let stderr = unsafe { OwnedFd::from_raw_fd(raw_fds[2]) };
+            builder = builder
+                .with_stdin(stdin)
+                .with_stdout(stdout)
+                .with_stderr(stderr);
+        }
+
+        builder
+            .as_init(&spec.bundle_path)
+            .with_systemd(false)
+            .with_detach(true)
+            .build()
+            .map_err(|e| format!("init build failed: {e}"))?;
+
+        Ok(())
+    };
+
+    match build_fn() {
+        Ok(()) => InitBuildResult::Ok,
+        Err(error) => InitBuildResult::Failed { error },
     }
 }
 
@@ -452,6 +541,40 @@ mod tests {
         }
     }
 
+    fn sample_init_spec() -> InitBuildSpec {
+        InitBuildSpec {
+            container_id: "init-container-456".to_string(),
+            state_root: PathBuf::from("/run/youki"),
+            bundle_path: PathBuf::from("/containers/init-container-456"),
+        }
+    }
+
+    #[test]
+    fn init_build_spec_serde_roundtrip() {
+        let spec = sample_init_spec();
+        let json = serde_json::to_vec(&spec).unwrap();
+        let decoded: InitBuildSpec = serde_json::from_slice(&json).unwrap();
+        assert_eq!(spec, decoded);
+    }
+
+    #[test]
+    fn init_build_result_ok_serde_roundtrip() {
+        let result = InitBuildResult::Ok;
+        let json = serde_json::to_vec(&result).unwrap();
+        let decoded: InitBuildResult = serde_json::from_slice(&json).unwrap();
+        assert_eq!(result, decoded);
+    }
+
+    #[test]
+    fn init_build_result_failed_serde_roundtrip() {
+        let result = InitBuildResult::Failed {
+            error: "init build failed: cgroup error".to_string(),
+        };
+        let json = serde_json::to_vec(&result).unwrap();
+        let decoded: InitBuildResult = serde_json::from_slice(&json).unwrap();
+        assert_eq!(result, decoded);
+    }
+
     #[test]
     fn build_spec_serde_roundtrip() {
         let spec = sample_spec();
@@ -519,6 +642,17 @@ mod tests {
         match decoded {
             ZygoteRequest::Build(spec) => assert_eq!(spec, sample_spec()),
             other => panic!("expected Build, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn zygote_request_init_build_serde_roundtrip() {
+        let request = ZygoteRequest::InitBuild(sample_init_spec());
+        let json = serde_json::to_vec(&request).unwrap();
+        let decoded: ZygoteRequest = serde_json::from_slice(&json).unwrap();
+        match decoded {
+            ZygoteRequest::InitBuild(spec) => assert_eq!(spec, sample_init_spec()),
+            other => panic!("expected InitBuild, got: {other:?}"),
         }
     }
 
@@ -623,6 +757,77 @@ mod tests {
         write(recv_w1, b"test1").unwrap();
         let n = read(r1.as_raw_fd(), &mut buf).unwrap();
         assert_eq!(&buf[..n], b"test1");
+    }
+
+    #[test]
+    fn ipc_send_recv_init_build_request() {
+        let (a, b) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .unwrap();
+        let fd_a = a.as_raw_fd();
+        let fd_b = b.as_raw_fd();
+
+        let spec = sample_init_spec();
+        send_request(fd_a, &ZygoteRequest::InitBuild(spec.clone()), None).unwrap();
+
+        let (received, fds) = recv_request(fd_b).unwrap();
+        match received {
+            ZygoteRequest::InitBuild(recv_spec) => assert_eq!(spec, recv_spec),
+            other => panic!("expected InitBuild request, got: {other:?}"),
+        }
+        assert!(fds.is_none());
+    }
+
+    #[test]
+    fn ipc_send_recv_init_build_response_ok() {
+        let (a, b) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .unwrap();
+        let fd_a = a.as_raw_fd();
+        let fd_b = b.as_raw_fd();
+
+        let response = ZygoteResponse::InitBuild(InitBuildResult::Ok);
+        send_response(fd_a, &response).unwrap();
+
+        let received = recv_response(fd_b).unwrap();
+        match received {
+            ZygoteResponse::InitBuild(InitBuildResult::Ok) => {}
+            other => panic!("expected InitBuild(Ok) response, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ipc_send_recv_init_build_response_failed() {
+        let (a, b) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .unwrap();
+        let fd_a = a.as_raw_fd();
+        let fd_b = b.as_raw_fd();
+
+        let response = ZygoteResponse::InitBuild(InitBuildResult::Failed {
+            error: "cgroup detection failed".to_string(),
+        });
+        send_response(fd_a, &response).unwrap();
+
+        let received = recv_response(fd_b).unwrap();
+        match received {
+            ZygoteResponse::InitBuild(InitBuildResult::Failed { error }) => {
+                assert_eq!(error, "cgroup detection failed");
+            }
+            other => panic!("expected InitBuild(Failed) response, got: {other:?}"),
+        }
     }
 
     #[test]

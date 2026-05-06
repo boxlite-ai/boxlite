@@ -8,7 +8,8 @@ use crate::images::ContainerImageConfig;
 use crate::net::constants::{GATEWAY_IP, GUEST_CIDR, GUEST_INTERFACE};
 use crate::pipeline::PipelineTask;
 use crate::portal::GuestSession;
-use crate::portal::interfaces::{ContainerRootfsInitConfig, GuestInitConfig, NetworkInitConfig};
+use crate::portal::interfaces::NetworkInitConfig;
+use crate::portal::interfaces::{ContainerRootfsInitConfig, GuestInitConfig};
 use crate::runtime::options::NetworkSpec;
 use crate::runtime::types::ContainerID;
 use crate::volumes::{ContainerMount, GuestVolumeManager};
@@ -110,6 +111,9 @@ async fn run_guest_init(
     // Build guest volumes from volume manager
     let guest_volumes = volume_mgr.build_guest_mounts();
 
+    // Configure guest network when networking is enabled.
+    // Gvproxy creates a virtio-net device (eth0) on all platforms;
+    // the guest configures it with a static IP via rtnetlink.
     let network = match network_spec {
         NetworkSpec::Enabled { .. } => Some(NetworkInitConfig {
             interface: GUEST_INTERFACE.to_string(),

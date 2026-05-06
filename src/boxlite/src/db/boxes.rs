@@ -337,7 +337,14 @@ fn get_boot_id() -> String {
 
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
-        uuid::Uuid::new_v4().to_string()
+        // Cache the boot ID so it's consistent within a process.
+        // On restart, a new UUID is generated — which conservatively resets
+        // stale boxes (safe: better to reset than to miss a real reboot).
+        use std::sync::OnceLock;
+        static BOOT_ID: OnceLock<String> = OnceLock::new();
+        BOOT_ID
+            .get_or_init(|| uuid::Uuid::new_v4().to_string())
+            .clone()
     }
 }
 

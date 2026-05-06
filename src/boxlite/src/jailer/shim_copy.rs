@@ -100,6 +100,8 @@ pub fn copy_shim_to_box(shim_path: &Path, box_dir: &Path) -> BoxliteResult<PathB
     }
 
     // Copy libkrunfw so dlopen can find it via the shim's rpath.
+    // Windows: no libkrunfw (direct kernel boot via WHPX).
+    #[cfg(unix)]
     if let Some(shim_dir) = shim_path.parent() {
         copy_libkrunfw(shim_dir, &bin_dir)?;
     }
@@ -107,6 +109,7 @@ pub fn copy_shim_to_box(shim_path: &Path, box_dir: &Path) -> BoxliteResult<PathB
     Ok(dest_shim)
 }
 
+#[cfg(unix)]
 /// Copy libkrunfw from the shim's directory to `dest_dir`.
 ///
 /// libkrun loads libkrunfw via `dlopen` at runtime.  On macOS the shim's
