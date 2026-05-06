@@ -1,9 +1,7 @@
 //! Subprocess spawning for boxlite-shim binary.
 
-use std::{
-    path::Path,
-    process::{Child, Stdio},
-};
+use std::{path::Path, process::Stdio};
+use tokio::process::Child;
 
 use crate::jailer::{Jail, JailerBuilder};
 use crate::runtime::layout::BoxFilesystemLayout;
@@ -62,7 +60,7 @@ impl<'a> ShimSpawner<'a> {
     ///
     /// # Returns
     /// * `SpawnedShim` containing the child process and optional keepalive
-    pub fn spawn(&self, config_json: &str, detach: bool) -> BoxliteResult<SpawnedShim> {
+    pub async fn spawn(&self, config_json: &str, detach: bool) -> BoxliteResult<SpawnedShim> {
         // 1. Create watchdog pipe (non-detached only)
         let (keepalive, child_setup) = if !detach {
             let (k, s) = watchdog::create()?;
@@ -89,10 +87,10 @@ impl<'a> ShimSpawner<'a> {
 
         // 4. Build isolated command — no CLI args, config sent via stdin pipe
         let no_args: &[String] = &[];
-        let mut cmd = jail.command(self.binary_path, no_args);
+        let mut cmd = tokio::process::Command::from(jail.command(self.binary_path, no_args));
 
         // 5. Configure environment
-        self.configure_env(&mut cmd);
+        self.configure_env(cmd.as_std_mut());
 
         // 6. Configure stdio
         // stdin=piped: config JSON is sent via stdin to avoid /proc/cmdline exposure
@@ -120,8 +118,8 @@ impl<'a> ShimSpawner<'a> {
         // (>16KB on macOS, >64KB on Linux), write_all blocks until the child
         // drains the buffer — which it does as its first action in main().
         if let Some(mut stdin) = child.stdin.take() {
-            use std::io::Write;
-            stdin.write_all(config_json.as_bytes()).map_err(|e| {
+            use tokio::io::AsyncWriteExt;
+            stdin.write_all(config_json.as_bytes()).await.map_err(|e| {
                 BoxliteError::Engine(format!("Failed to write config to shim stdin: {e}"))
             })?;
             drop(stdin); // close write end — shim sees EOF

@@ -170,9 +170,9 @@ impl CleanupGuard {
         self.handler.take()
     }
 
-    /// Get the PID of the VM subprocess, if a handler is registered.
-    pub fn handler_pid(&self) -> Option<u32> {
-        self.handler.as_ref().map(|h| h.pid())
+    /// Get a reference to the VM handler, if registered.
+    pub fn handler_ref(&self) -> Option<&dyn VmmHandler> {
+        self.handler.as_deref()
     }
 
     /// Disarm the guard (call on success).

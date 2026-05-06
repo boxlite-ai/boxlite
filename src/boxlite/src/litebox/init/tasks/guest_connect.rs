@@ -11,7 +11,8 @@ use crate::litebox::CrashReport;
 use crate::pipeline::PipelineTask;
 use crate::portal::GuestSession;
 use crate::runtime::layout::{BoxFilesystemLayout, FsLayoutConfig};
-use crate::util::{ProcessExit, ProcessMonitor};
+use crate::util::ProcessExit;
+use crate::vmm::controller::VmmHandler;
 use async_trait::async_trait;
 use boxlite_shared::Transport;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
@@ -26,15 +27,7 @@ impl PipelineTask<InitCtx> for GuestConnectTask {
         let task_name = self.name();
         let box_id = task_start(&ctx, task_name).await;
 
-        let (
-            transport,
-            ready_transport,
-            skip_guest_wait,
-            shim_pid,
-            exit_file,
-            console_log,
-            stderr_file,
-        ) = {
+        let (transport, ready_transport, skip_guest_wait, exit_file, console_log, stderr_file) = {
             let ctx = ctx.lock().await;
             // Use pipeline layout if available, otherwise construct from box_home
             // (reattach scenario: layout not set because FilesystemTask didn't run)
@@ -57,7 +50,6 @@ impl PipelineTask<InitCtx> for GuestConnectTask {
                 ctx.config.transport.clone(),
                 Transport::unix(ctx.config.ready_socket_path.clone()),
                 ctx.skip_guest_wait,
-                ctx.guard.handler_pid(),
                 exit_file,
                 console_log,
                 stderr_file,
@@ -70,9 +62,11 @@ impl PipelineTask<InitCtx> for GuestConnectTask {
             tracing::debug!(box_id = %box_id, "Skipping guest ready wait (reattach)");
         } else {
             tracing::debug!(box_id = %box_id, "Waiting for guest to be ready");
+            let ctx_guard = ctx.lock().await;
+            let handler = ctx_guard.guard.handler_ref();
             wait_for_guest_ready(
                 &ready_transport,
-                shim_pid,
+                handler,
                 &exit_file,
                 &console_log,
                 &stderr_file,
@@ -104,7 +98,7 @@ impl PipelineTask<InitCtx> for GuestConnectTask {
 /// 3. 30s timeout expires (slow failure fallback)
 async fn wait_for_guest_ready(
     ready_transport: &Transport,
-    shim_pid: Option<u32>,
+    handler: Option<&dyn VmmHandler>,
     exit_file: &Path,
     console_log: &Path,
     stderr_file: &Path,
@@ -166,7 +160,7 @@ async fn wait_for_guest_ready(
                 ))),
             }
         }
-        exit_code = wait_for_process_exit(shim_pid) => {
+        exit_code = wait_for_process_exit(handler) => {
             // Parse exit file and present user-friendly message
             let report = CrashReport::from_exit_file(
                 exit_file,
@@ -191,29 +185,24 @@ async fn wait_for_guest_ready(
 
 /// Async poll until a process exits. Returns exit code when process terminates.
 /// If pid is None, never resolves (lets other select! branches win).
-async fn wait_for_process_exit(pid: Option<u32>) -> Option<i32> {
-    let Some(pid) = pid else {
-        // No PID to monitor — pend forever, let timeout branch handle it
-        return std::future::pending().await;
+async fn wait_for_process_exit(handler: Option<&dyn VmmHandler>) -> Option<i32> {
+    let h = match handler {
+        Some(h) => h,
+        None => return std::future::pending().await,
     };
-
-    let monitor = ProcessMonitor::new(pid);
-    match monitor.wait_for_exit().await {
-        ProcessExit::Code(code) => {
+    match h.wait_for_exit().await {
+        Ok(ProcessExit::Code(code)) => {
             tracing::warn!(
-                pid = pid,
                 exit_code = code,
                 "VM subprocess exited unexpectedly during startup"
             );
             Some(code)
         }
-        ProcessExit::Unknown => {
-            tracing::warn!(
-                pid = pid,
-                "VM subprocess exited (not our child, exit code unknown)"
-            );
+        Ok(ProcessExit::Unknown) => {
+            tracing::warn!("VM subprocess exited (exit code unknown)");
             None
         }
+        Err(e) => panic!("wait_for_exit failed: {}", e),
     }
 }
 
@@ -242,7 +231,7 @@ mod tests {
             let _ = tokio::net::UnixStream::connect(&connect_path).await;
         });
 
-        // No shim PID to monitor (None = never triggers death branch)
+        // No handler to monitor (None = never triggers death branch)
         let result = wait_for_guest_ready(
             &transport,
             None,
@@ -320,10 +309,10 @@ mod tests {
         );
     }
 
-    /// When the shim process dies (invalid PID), the death branch fires
-    /// before the 30s timeout, producing a diagnostic error.
+    /// When the handler reports exit (event-driven), death branch fires
+    /// immediately without polling.
     #[tokio::test]
-    async fn test_guest_ready_detects_shim_death() {
+    async fn test_guest_ready_detects_shim_death_via_handler() {
         let dir = tempfile::tempdir().unwrap();
         let socket_path = dir.path().join("ready.sock");
         let exit_file = dir.path().join("exit");
@@ -331,14 +320,12 @@ mod tests {
         let stderr_file = dir.path().join("shim.stderr");
         let transport = Transport::unix(socket_path);
 
-        // Use a PID that doesn't exist — wait_for_process_exit will
-        // detect it as dead on the first poll interval.
-        let dead_pid = Some(999_999_999u32);
+        let handler = MockHandler::with_code(1);
 
         let start = std::time::Instant::now();
         let result = wait_for_guest_ready(
             &transport,
-            dead_pid,
+            Some(&handler),
             &exit_file,
             &console_log,
             &stderr_file,
@@ -351,97 +338,118 @@ mod tests {
         let err = result.unwrap_err().to_string();
         assert!(
             err.contains("test-box failed to start"),
-            "Expected user-friendly error with box_id, got: {}",
+            "Expected user-friendly error, got: {}",
             err
         );
 
-        // Should complete in ~500ms (one poll interval), not 30s
+        // Event-driven: should complete in <50ms, not ~500ms poll interval
         assert!(
-            elapsed < Duration::from_secs(5),
-            "Should detect dead process quickly, took {:?}",
+            elapsed < Duration::from_millis(200),
+            "Event-driven path should be instant, took {:?}",
             elapsed
         );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Mock handler for event-driven path testing
+    // ─────────────────────────────────────────────────────────────────────
+
+    use crate::vmm::controller::VmmMetrics;
+
+    struct MockHandler {
+        exit_code: Option<i32>, // Some = Code, None = Unknown
+        should_error: bool,
+    }
+
+    impl MockHandler {
+        fn with_code(code: i32) -> Self {
+            Self {
+                exit_code: Some(code),
+                should_error: false,
+            }
+        }
+        fn with_unknown() -> Self {
+            Self {
+                exit_code: None,
+                should_error: false,
+            }
+        }
+        fn with_error() -> Self {
+            Self {
+                exit_code: None,
+                should_error: true,
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl VmmHandler for MockHandler {
+        fn stop(&mut self) -> BoxliteResult<()> {
+            Ok(())
+        }
+        fn metrics(&self) -> BoxliteResult<VmmMetrics> {
+            Ok(VmmMetrics::default())
+        }
+        fn is_running(&self) -> bool {
+            true
+        }
+        fn pid(&self) -> u32 {
+            12345
+        }
+        async fn wait_for_exit(&self) -> BoxliteResult<ProcessExit> {
+            if self.should_error {
+                return Err(BoxliteError::Engine("mock error".into()));
+            }
+            Ok(match self.exit_code {
+                Some(code) => ProcessExit::Code(code),
+                None => ProcessExit::Unknown,
+            })
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────────
     // wait_for_process_exit tests
     // ─────────────────────────────────────────────────────────────────────
 
-    /// None PID → future never resolves (pends forever).
-    /// Verify by racing against a short timeout.
+    /// Handler returns exit code → event-driven path resolves immediately.
     #[tokio::test]
-    async fn test_wait_for_process_exit_none_pid_pends() {
-        let result =
-            tokio::time::timeout(Duration::from_millis(200), wait_for_process_exit(None)).await;
+    async fn test_wait_for_process_exit_handler_code() {
+        let handler = MockHandler::with_code(42);
 
-        // Should timeout because None pid pends forever
-        assert!(
-            result.is_err(),
-            "None pid should pend forever, but it resolved"
-        );
-    }
-
-    /// Dead PID resolves within one poll interval (~500ms).
-    #[tokio::test]
-    async fn test_wait_for_process_exit_dead_pid_resolves() {
         let start = std::time::Instant::now();
-        wait_for_process_exit(Some(999_999_999)).await;
+        let code = wait_for_process_exit(Some(&handler)).await;
         let elapsed = start.elapsed();
 
-        // Should complete within ~600ms (500ms poll + small overhead)
+        assert_eq!(code, Some(42));
         assert!(
-            elapsed < Duration::from_secs(2),
-            "Dead PID should resolve quickly, took {:?}",
+            elapsed < Duration::from_millis(50),
+            "Event-driven path should resolve immediately, took {:?}",
             elapsed
         );
     }
 
-    /// Live PID (current process) should NOT resolve within a short window.
+    /// Handler returns Unknown → event-driven path resolves immediately with None.
     #[tokio::test]
-    async fn test_wait_for_process_exit_live_pid_pends() {
-        let current_pid = std::process::id();
+    async fn test_wait_for_process_exit_handler_unknown() {
+        let handler = MockHandler::with_unknown();
 
-        let result = tokio::time::timeout(
-            Duration::from_millis(700),
-            wait_for_process_exit(Some(current_pid)),
-        )
-        .await;
+        let start = std::time::Instant::now();
+        let code = wait_for_process_exit(Some(&handler)).await;
+        let elapsed = start.elapsed();
 
-        // Current process is alive, so this should timeout
-        assert!(result.is_err(), "Live PID should not resolve");
+        assert_eq!(code, None);
+        assert!(
+            elapsed < Duration::from_millis(50),
+            "Event-driven path should resolve immediately, took {:?}",
+            elapsed
+        );
     }
 
-    /// Zombie PID should resolve quickly (treated as not alive).
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    /// Handler errors → panics to expose the bug.
     #[tokio::test]
-    async fn test_wait_for_process_exit_zombie_pid_resolves() {
-        struct PidReaper {
-            pid: libc::pid_t,
-        }
-
-        impl Drop for PidReaper {
-            fn drop(&mut self) {
-                let mut status = 0;
-                let _ = unsafe { libc::waitpid(self.pid, &mut status, 0) };
-            }
-        }
-
-        let child_pid = unsafe { libc::fork() };
-        assert!(child_pid >= 0, "fork() failed");
-        if child_pid == 0 {
-            unsafe { libc::_exit(0) };
-        }
-        let _reaper = PidReaper { pid: child_pid };
-
-        let result = tokio::time::timeout(
-            Duration::from_secs(2),
-            wait_for_process_exit(Some(child_pid as u32)),
-        )
-        .await;
-
-        assert!(
-            result.is_ok(),
-            "Zombie PID should resolve quickly, got timeout"
-        );
+    #[should_panic(expected = "wait_for_exit failed")]
+    async fn test_wait_for_process_exit_handler_error_panics() {
+        let handler = MockHandler::with_error();
+        wait_for_process_exit(Some(&handler)).await;
     }
 }

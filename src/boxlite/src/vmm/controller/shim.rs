@@ -1,7 +1,9 @@
 //! ShimController and ShimHandler - Universal process management for all Box engines.
 
-use std::{path::PathBuf, process::Child, sync::Mutex, time::Instant};
+use std::{path::PathBuf, sync::Mutex, time::Instant};
+use tokio::process::Child;
 
+use crate::util::ProcessExit;
 use crate::{
     BoxID,
     runtime::layout::BoxFilesystemLayout,
@@ -30,7 +32,7 @@ pub struct ShimHandler {
     /// Child process handle for proper lifecycle management.
     /// When we spawn the process, we keep the Child to properly wait() on stop.
     /// When we attach to an existing process, this is None.
-    process: Option<Child>,
+    process: Mutex<Option<Child>>,
     /// Watchdog keepalive. Dropping closes the pipe write end, delivering
     /// POLLHUP to the shim and triggering graceful shutdown.
     /// Defense-in-depth: even if `stop()` is never called, dropping the
@@ -49,11 +51,11 @@ impl ShimHandler {
     /// proper lifecycle management. The keepalive keeps the watchdog pipe
     /// alive; dropping it triggers shim shutdown.
     pub fn from_spawned(spawned: SpawnedShim, box_id: BoxID) -> Self {
-        let pid = spawned.child.id();
+        let pid = spawned.child.id().expect("valid pid");
         Self {
             pid,
             box_id,
-            process: Some(spawned.child),
+            process: Mutex::new(Some(spawned.child)),
             keepalive: spawned.keepalive,
             metrics_sys: Mutex::new(sysinfo::System::new()),
         }
@@ -71,13 +73,14 @@ impl ShimHandler {
         Self {
             pid,
             box_id,
-            process: None,
+            process: Mutex::new(None),
             keepalive: None,
             metrics_sys: Mutex::new(sysinfo::System::new()),
         }
     }
 }
 
+#[async_trait::async_trait]
 impl VmmHandlerTrait for ShimHandler {
     fn pid(&self) -> u32 {
         self.pid
@@ -89,9 +92,16 @@ impl VmmHandlerTrait for ShimHandler {
         // preventing qcow2 corruption.
         const GRACEFUL_SHUTDOWN_TIMEOUT_MS: u64 = 2000;
 
-        if let Some(mut process) = self.process.take() {
+        let process = self
+            .process
+            .lock()
+            .map_err(|e| BoxliteError::Internal(format!("process lock poisoned: {}", e)))?
+            .take();
+        if let Some(mut process) = process {
             // Step 1: Send SIGTERM for graceful shutdown
-            let pid = process.id();
+            let pid = process
+                .id()
+                .ok_or_else(|| BoxliteError::Engine("child pid unavailable".into()))?;
             unsafe {
                 libc::kill(pid as i32, libc::SIGTERM);
             }
@@ -108,8 +118,7 @@ impl VmmHandlerTrait for ShimHandler {
                         // Still running, check timeout
                         if start.elapsed().as_millis() > GRACEFUL_SHUTDOWN_TIMEOUT_MS as u128 {
                             // Timeout - force kill
-                            let _ = process.kill();
-                            let _ = process.wait();
+                            process.start_kill()?;
                             return Ok(());
                         }
                         // Brief sleep before checking again
@@ -117,8 +126,7 @@ impl VmmHandlerTrait for ShimHandler {
                     }
                     Err(_) => {
                         // Error checking status - try to kill anyway
-                        let _ = process.kill();
-                        let _ = process.wait();
+                        process.start_kill()?;
                         return Ok(());
                     }
                 }
@@ -195,6 +203,24 @@ impl VmmHandlerTrait for ShimHandler {
 
     fn is_running(&self) -> bool {
         crate::util::is_process_alive(self.pid)
+    }
+
+    async fn wait_for_exit(&self) -> BoxliteResult<ProcessExit> {
+        let mut child = self
+            .process
+            .lock()
+            .map_err(|e| BoxliteError::Internal(format!("process lock poisoned: {}", e)))?
+            .take();
+        let status = child
+            .as_mut()
+            .ok_or_else(|| BoxliteError::Engine("child handle already consumed".into()))?
+            .wait()
+            .await
+            .map_err(|e| BoxliteError::Engine(format!("wait failed: {}", e)))?;
+        Ok(match status.code() {
+            Some(code) => ProcessExit::Code(code),
+            None => ProcessExit::Unknown,
+        })
     }
 }
 
@@ -329,7 +355,7 @@ impl VmmController for ShimController {
             self.box_id.as_str(),
             &self.options,
         );
-        let spawned = spawner.spawn(&config_json, config.detach)?;
+        let spawned = spawner.spawn(&config_json, config.detach).await?;
         // spawn_duration: time to create Box subprocess
         let shim_spawn_duration = shim_spawn_start.elapsed();
 
