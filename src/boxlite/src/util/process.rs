@@ -244,31 +244,31 @@ fn is_process_zombie_macos(pid: u32) -> bool {
     info.pbi_status == libc::SZOMB
 }
 
-/// Verify that a PID belongs to a boxlite-shim process for the given box.
+/// Check whether a PID belongs to a boxlite-shim process.
 ///
-/// This prevents PID reuse attacks where a PID is recycled for a different process.
+/// Used during recovery to verify that a PID from the PID file is still our
+/// shim process (not a PID recycled by the OS for a different program).
 ///
 /// # Implementation
-/// * **Linux**: Read `/proc/{pid}/cmdline` and check for "boxlite-shim" + box_id
+/// * **Linux**: Read `/proc/{pid}/cmdline` and check for "boxlite-shim" binary name.
+///   The shim receives config via stdin (not CLI args), so the box_id is not in cmdline.
 /// * **macOS**: Use `sysinfo` crate to get process name and check for "boxlite-shim"
 ///
 /// # Arguments
 /// * `pid` - Process ID to verify
-/// * `box_id` - Expected box ID in the command line
 ///
 /// # Returns
-/// * `true` - PID is our boxlite-shim process
-/// * `false` - PID is different process or doesn't exist
-pub fn is_same_process(pid: u32, box_id: &str) -> bool {
+/// * `true` - PID is a boxlite-shim process
+/// * `false` - PID is a different process or doesn't exist
+pub fn is_boxlite_shim(pid: u32) -> bool {
     #[cfg(target_os = "linux")]
     {
-        is_same_process_linux(pid, box_id)
+        is_boxlite_shim_linux(pid)
     }
 
     #[cfg(target_os = "macos")]
     {
-        let _ = box_id; // Unused on macOS
-        is_same_process_macos(pid)
+        is_boxlite_shim_macos(pid)
     }
 
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
@@ -280,25 +280,24 @@ pub fn is_same_process(pid: u32, box_id: &str) -> bool {
 }
 
 #[cfg(target_os = "linux")]
-fn is_same_process_linux(pid: u32, box_id: &str) -> bool {
+fn is_boxlite_shim_linux(pid: u32) -> bool {
     use std::fs;
 
     let cmdline_path = format!("/proc/{}/cmdline", pid);
 
     match fs::read_to_string(&cmdline_path) {
         Ok(cmdline) => {
-            // cmdline is null-separated, split by \0 for proper parsing
-            let args: Vec<&str> = cmdline.split('\0').collect();
-
-            // Check if any arg contains "boxlite-shim" and cmdline contains box_id
-            args.iter().any(|arg| arg.contains("boxlite-shim")) && cmdline.contains(box_id)
+            // cmdline is null-separated, split by \0 for proper parsing.
+            // The first arg is the binary path (e.g., /path/to/boxlite-shim).
+            // The shim is launched with no CLI args — config is sent via stdin.
+            cmdline.split('\0').any(|arg| arg.contains("boxlite-shim"))
         }
         Err(_) => false, // Process doesn't exist or no permission
     }
 }
 
 #[cfg(target_os = "macos")]
-fn is_same_process_macos(pid: u32) -> bool {
+fn is_boxlite_shim_macos(pid: u32) -> bool {
     use sysinfo::{Pid, System};
 
     let mut sys = System::new();
@@ -381,11 +380,11 @@ mod tests {
     }
 
     #[test]
-    fn test_is_same_process_current() {
+    fn test_is_boxlite_shim_current() {
         let current_pid = std::process::id();
 
         // Current process is not boxlite-shim, so should return false
-        let result = is_same_process(current_pid, "test123");
+        let result = is_boxlite_shim(current_pid);
 
         // On non-Linux/macOS systems, this will return true (fallback)
         #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -393,10 +392,10 @@ mod tests {
     }
 
     #[test]
-    fn test_is_same_process_invalid() {
+    fn test_is_boxlite_shim_invalid() {
         // Invalid PID should return false
-        assert!(!is_same_process(0, "test123"));
-        assert!(!is_same_process(u32::MAX, "test123"));
+        assert!(!is_boxlite_shim(0));
+        assert!(!is_boxlite_shim(u32::MAX));
     }
 
     #[test]

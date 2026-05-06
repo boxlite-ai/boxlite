@@ -1055,7 +1055,7 @@ impl RuntimeImpl {
 
     /// Recover boxes from persistent storage on runtime startup.
     fn recover_boxes(&self) -> BoxliteResult<()> {
-        use crate::util::{is_process_alive, is_same_process};
+        use crate::util::{is_boxlite_shim, is_process_alive};
 
         // Check for system reboot and reset active boxes
         self.box_manager.check_and_handle_reboot()?;
@@ -1196,7 +1196,7 @@ impl RuntimeImpl {
             if pid_file.exists() {
                 match crate::util::read_pid_file(&pid_file) {
                     Ok(pid) => {
-                        if is_process_alive(pid) && is_same_process(pid, box_id.as_str()) {
+                        if is_process_alive(pid) && is_boxlite_shim(pid) {
                             // Process is alive and it's our boxlite-shim - box stays Running
                             state.set_pid(Some(pid));
                             state.set_status(BoxStatus::Running);

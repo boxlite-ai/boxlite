@@ -3,7 +3,7 @@
 //! Tests the PID file as single source of truth for process tracking:
 //! - PID file creation, correctness, and deletion
 //! - Cleanup on stop, force remove, and box directory removal
-//! - Process validation via is_same_process
+//! - Process validation via is_boxlite_shim
 
 mod common;
 
@@ -11,7 +11,7 @@ use boxlite::BoxliteRuntime;
 use boxlite::litebox::BoxCommand;
 use boxlite::runtime::options::BoxliteOptions;
 use boxlite::runtime::types::BoxStatus;
-use boxlite::util::{is_process_alive, is_same_process, read_pid_file};
+use boxlite::util::{is_boxlite_shim, is_process_alive, read_pid_file};
 use std::path::{Path, PathBuf};
 
 // ============================================================================
@@ -76,10 +76,9 @@ async fn pid_file_contains_correct_pid() {
 
     // Verify it's our boxlite-shim
     assert!(
-        is_same_process(pid_from_file, handle.id().as_str()),
-        "PID {} should belong to boxlite-shim for box {}",
-        pid_from_file,
-        handle.id()
+        is_boxlite_shim(pid_from_file),
+        "PID {} should belong to boxlite-shim",
+        pid_from_file
     );
 
     // Cleanup
@@ -262,7 +261,7 @@ async fn box_directory_cleanup_includes_pid_file() {
 // ============================================================================
 
 #[tokio::test]
-async fn is_same_process_validates_boxlite_shim() {
+async fn is_boxlite_shim_validates_shim_process() {
     let home = boxlite_test_utils::home::PerTestBoxHome::new();
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
@@ -279,14 +278,14 @@ async fn is_same_process_validates_boxlite_shim() {
 
     // Should be true for actual shim
     assert!(
-        is_same_process(pid, handle.id().as_str()),
-        "is_same_process should return true for actual shim process"
+        is_boxlite_shim(pid),
+        "is_boxlite_shim should return true for actual shim process"
     );
 
     // Should be false for current test process
     assert!(
-        !is_same_process(std::process::id(), handle.id().as_str()),
-        "is_same_process should return false for non-shim process"
+        !is_boxlite_shim(std::process::id()),
+        "is_boxlite_shim should return false for non-shim process"
     );
 
     // Cleanup

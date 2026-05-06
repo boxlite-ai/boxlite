@@ -1,5 +1,11 @@
 PHONY_TARGETS += test
 
+# Allow duplicate symbols from libkrun.a (contains Rust stdlib symbols).
+# This is needed when krun feature is enabled for tests (Linux only).
+ifeq ($(shell uname -s),Linux)
+export RUSTFLAGS := -C link-arg=-Wl,--allow-multiple-definition
+endif
+
 # Default test target runs only changed components.
 test:
 	@$(MAKE) test:changed
