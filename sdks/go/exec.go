@@ -1,10 +1,8 @@
 package boxlite
 
 /*
-#include "boxlite.h"
+#include "bridge.h"
 #include <stdlib.h>
-
-extern void goBoxliteOutputCallback(char* text, int is_stderr, void* user_data);
 */
 import "C"
 import (
@@ -12,6 +10,8 @@ import (
 	"context"
 	"io"
 	"runtime/cgo"
+	"sync"
+	"sync/atomic"
 	"unsafe"
 )
 
@@ -31,14 +31,87 @@ type ExecutionOptions struct {
 	OnStderr func([]byte)
 }
 
+// executionStreamState holds the user-provided sinks for streaming output
+// plus a "released" flag. A single instance is shared between the stdout,
+// stderr, and exit callback registrations on the C side.
+//
+// Lifetime: the cgo.Handle wrapping this state is intentionally leaked for
+// the lifetime of the Runtime. Stream events (stdout/stderr) and the exit
+// event are pushed concurrently by independent Rust pumps with no global
+// ordering guarantee between them, so deleting the handle from any one
+// callback could race a sibling callback's value lookup. The released
+// flag short-circuits any post-exit stream events that still arrive.
+//
+// Memory overhead is bounded: each execution adds one map entry plus the
+// state struct (a few writers, two atomics, and a mutex).
+type executionStreamState struct {
+	mu       sync.Mutex
+	stdout   io.Writer
+	stderr   io.Writer
+	onStdout func([]byte)
+	onStderr func([]byte)
+
+	released atomic.Bool
+}
+
+func newExecutionStreamState(opts ExecutionOptions) *executionStreamState {
+	return &executionStreamState{
+		stdout:   opts.Stdout,
+		stderr:   opts.Stderr,
+		onStdout: opts.OnStdout,
+		onStderr: opts.OnStderr,
+	}
+}
+
+func (s *executionStreamState) deliverStdout(data []byte) {
+	if s.released.Load() {
+		return
+	}
+	s.mu.Lock()
+	stdout := s.stdout
+	cb := s.onStdout
+	s.mu.Unlock()
+	if cb != nil {
+		cb(data)
+	}
+	if stdout != nil {
+		_, _ = stdout.Write(data)
+	}
+}
+
+func (s *executionStreamState) deliverStderr(data []byte) {
+	if s.released.Load() {
+		return
+	}
+	s.mu.Lock()
+	stderr := s.stderr
+	cb := s.onStderr
+	s.mu.Unlock()
+	if cb != nil {
+		cb(data)
+	}
+	if stderr != nil {
+		_, _ = stderr.Write(data)
+	}
+}
+
+func (s *executionStreamState) deliverExit(_ int) {
+	s.released.Store(true)
+}
+
+func (s *executionStreamState) markReleased() {
+	s.released.Store(true)
+}
+
 // Execution is a handle to a running command.
 type Execution struct {
-	handle            *C.CExecutionHandle
-	callbackHandle    cgo.Handle
-	hasCallbackHandle bool
+	handle      *C.CExecutionHandle
+	streamState *executionStreamState
 
 	// Stdin writes bytes to the running command's standard input.
 	Stdin io.Writer
+
+	closeOnce sync.Once
 }
 
 type executionStdin struct {
@@ -72,7 +145,12 @@ func (b *Box) Exec(ctx context.Context, name string, arg ...string) (*ExecResult
 }
 
 // StartExecution starts a command and returns a streaming execution handle.
+//
+// boxlite_box_exec is synchronous on the C side; once it returns, we
+// register stream callbacks (which post events into the runtime queue).
 func (b *Box) StartExecution(_ context.Context, name string, args []string, opts *ExecutionOptions) (*Execution, error) {
+	b.runtime.ensureDrainRunning()
+
 	cCmd := toCString(name)
 	defer C.free(unsafe.Pointer(cCmd))
 
@@ -96,46 +174,52 @@ func (b *Box) StartExecution(_ context.Context, name string, args []string, opts
 		tty:          boolToCInt(cfg.TTY),
 	}
 
-	var callback *[0]byte
-	var userData unsafe.Pointer
-	var callbackHandle cgo.Handle
-	hasCallbackHandle := cfg.Stdout != nil || cfg.Stderr != nil || cfg.OnStdout != nil || cfg.OnStderr != nil
-	if hasCallbackHandle {
-		writers := &callbackWriters{
-			stdout:   cfg.Stdout,
-			stderr:   cfg.Stderr,
-			onStdout: cfg.OnStdout,
-			onStderr: cfg.OnStderr,
-		}
-		callbackHandle = cgo.NewHandle(writers)
-		callback = (*[0]byte)(C.goBoxliteOutputCallback)
-		userData = handleToPtr(callbackHandle)
-	}
-
 	var handle *C.CExecutionHandle
 	var cerr C.CBoxliteError
-	code := C.boxlite_execute(
-		b.handle,
-		&cCommand,
-		callback,
-		userData,
-		&handle,
-		&cerr,
-	)
+	code := C.boxlite_box_exec(b.handle, &cCommand, &handle, &cerr)
 	if code != C.Ok {
-		if hasCallbackHandle {
-			callbackHandle.Delete()
-		}
 		return nil, freeError(&cerr)
 	}
 
+	state := newExecutionStreamState(cfg)
+	streamHandle := cgo.NewHandle(state)
+
+	if err := registerExecutionCallbacks(handle, streamHandle); err != nil {
+		// On registration failure free the C handle (this aborts any pumps
+		// already started) and mark the stream state released so any
+		// remaining in-flight events short-circuit. We deliberately leak
+		// the cgo.Handle here: deleting it could race with a stream
+		// callback that has already entered drain and looked up the value.
+		state.markReleased()
+		C.boxlite_execution_free(handle)
+		return nil, err
+	}
+
 	execution := &Execution{
-		handle:            handle,
-		callbackHandle:    callbackHandle,
-		hasCallbackHandle: hasCallbackHandle,
+		handle:      handle,
+		streamState: state,
 	}
 	execution.Stdin = &executionStdin{execution: execution}
 	return execution, nil
+}
+
+// registerExecutionCallbacks wires stdout, stderr, and exit on the C side
+// using a single shared cgo.Handle so the exit callback (dispatched last)
+// can Delete it without racing the stream callbacks.
+func registerExecutionCallbacks(handle *C.CExecutionHandle, streamHandle cgo.Handle) error {
+	udPtr := handleToPtr(streamHandle)
+
+	var cerr C.CBoxliteError
+	if code := C.boxlite_execution_on_stdout(handle, C.cbStdout(), udPtr, &cerr); code != C.Ok {
+		return freeError(&cerr)
+	}
+	if code := C.boxlite_execution_on_stderr(handle, C.cbStderr(), udPtr, &cerr); code != C.Ok {
+		return freeError(&cerr)
+	}
+	if code := C.boxlite_execution_on_exit(handle, C.cbExit(), udPtr, &cerr); code != C.Ok {
+		return freeError(&cerr)
+	}
+	return nil
 }
 
 // Write writes bytes to the running command's standard input.
@@ -147,65 +231,96 @@ func (e *Execution) Write(p []byte) (int, error) {
 }
 
 // Wait waits for the command to finish and returns its exit code.
-func (e *Execution) Wait(_ context.Context) (int, error) {
+//
+// boxlite_execution_wait runs as its own async task on the C side and
+// pushes a wait completion event into the runtime queue, dispatched here
+// by the drain goroutine.
+func (e *Execution) Wait(ctx context.Context) (int, error) {
 	if e.handle == nil {
 		return 0, &Error{Code: ErrInvalidState, Message: "execution is closed"}
 	}
 
-	var exitCode C.int
+	ch := make(chan executionWaitResult, 1)
+	h := cgo.NewHandle(ch)
+
 	var cerr C.CBoxliteError
-	code := C.boxlite_execution_wait(e.handle, &exitCode, &cerr)
-	e.releaseCallback()
+	code := C.boxlite_execution_wait(e.handle, C.cbExecutionWait(), handleToPtr(h), &cerr)
 	if code != C.Ok {
+		h.Delete()
 		return 0, freeError(&cerr)
 	}
 
-	return int(exitCode), nil
+	select {
+	case res := <-ch:
+		return res.exitCode, res.err
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	}
 }
 
 // Kill terminates the running command.
-func (e *Execution) Kill(_ context.Context) error {
+func (e *Execution) Kill(ctx context.Context) error {
 	if e.handle == nil {
 		return &Error{Code: ErrInvalidState, Message: "execution is closed"}
 	}
 
+	ch := make(chan error, 1)
+	h := cgo.NewHandle(ch)
+
 	var cerr C.CBoxliteError
-	code := C.boxlite_execution_kill(e.handle, &cerr)
+	code := C.boxlite_execution_kill(e.handle, C.cbExecutionKill(), handleToPtr(h), &cerr)
 	if code != C.Ok {
+		h.Delete()
 		return freeError(&cerr)
 	}
-	return nil
+
+	select {
+	case err := <-ch:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // ResizeTTY changes the terminal size for TTY-enabled executions.
-func (e *Execution) ResizeTTY(_ context.Context, rows, cols int) error {
+func (e *Execution) ResizeTTY(ctx context.Context, rows, cols int) error {
 	if e.handle == nil {
 		return &Error{Code: ErrInvalidState, Message: "execution is closed"}
 	}
 
+	ch := make(chan error, 1)
+	h := cgo.NewHandle(ch)
+
 	var cerr C.CBoxliteError
-	code := C.boxlite_execution_resize_tty(e.handle, C.int(rows), C.int(cols), &cerr)
+	code := C.boxlite_execution_resize_tty(e.handle, C.int(rows), C.int(cols), C.cbExecutionResize(), handleToPtr(h), &cerr)
 	if code != C.Ok {
+		h.Delete()
 		return freeError(&cerr)
 	}
-	return nil
+
+	select {
+	case err := <-ch:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
-// Close releases the execution handle.
+// Close releases the execution handle and signals the stream state that
+// no further deliveries are expected. The cgo.Handle backing the stream
+// state is intentionally not Deleted here (see executionStreamState for
+// rationale).
 func (e *Execution) Close() error {
-	if e.handle != nil {
-		C.boxlite_execution_free(e.handle)
-		e.handle = nil
-	}
-	e.releaseCallback()
+	e.closeOnce.Do(func() {
+		if e.streamState != nil {
+			e.streamState.markReleased()
+		}
+		if e.handle != nil {
+			C.boxlite_execution_free(e.handle)
+			e.handle = nil
+		}
+	})
 	return nil
-}
-
-func (e *Execution) releaseCallback() {
-	if e.hasCallbackHandle {
-		e.callbackHandle.Delete()
-		e.hasCallbackHandle = false
-	}
 }
 
 func (s *executionStdin) Write(p []byte) (int, error) {
@@ -217,10 +332,10 @@ func (s *executionStdin) Write(p []byte) (int, error) {
 	}
 
 	var cerr C.CBoxliteError
-	code := C.boxlite_execution_write(
+	code := C.boxlite_execution_write_stdin(
 		s.execution.handle,
-		(*C.char)(unsafe.Pointer(&p[0])),
-		C.int(len(p)),
+		(*C.uint8_t)(unsafe.Pointer(&p[0])),
+		C.size_t(len(p)),
 		&cerr,
 	)
 	if code != C.Ok {
@@ -292,10 +407,6 @@ func (c *Cmd) CombinedOutput(ctx context.Context) ([]byte, error) {
 // ExitCode returns the exit code of the command. Only valid after Run completes.
 func (c *Cmd) ExitCode() int {
 	return c.exitCode
-}
-
-func handleToPtr(h cgo.Handle) unsafe.Pointer {
-	return *(*unsafe.Pointer)(unsafe.Pointer(&h))
 }
 
 type bytesCollector struct {

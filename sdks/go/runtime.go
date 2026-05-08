@@ -2,12 +2,14 @@
 package boxlite
 
 /*
-#include "boxlite.h"
+#include "bridge.h"
 #include <stdlib.h>
 */
 import "C"
 import (
 	"context"
+	"runtime/cgo"
+	"sync"
 	"time"
 	"unsafe"
 )
@@ -17,9 +19,18 @@ func Version() string {
 	return C.GoString(C.boxlite_version())
 }
 
+// drainTimeoutMs caps each blocking call to boxlite_runtime_drain so the
+// drain goroutine wakes up periodically to check the stop signal even when
+// no events are flowing.
+const drainTimeoutMs = 100
+
 // Runtime manages BoxLite boxes. Create one with NewRuntime.
 type Runtime struct {
 	handle *C.CBoxliteRuntime
+
+	drainOnce sync.Once
+	drainStop chan struct{}
+	drainDone chan struct{}
 }
 
 // NewRuntime creates a new BoxLite runtime.
@@ -58,30 +69,52 @@ func NewRuntime(opts ...RuntimeOption) (*Runtime, error) {
 }
 
 // Close releases the runtime. Implements io.Closer.
+//
+// Stops the drain goroutine and frees the underlying C runtime handle.
+// boxlite_runtime_free wakes the drain thread if it is currently blocked
+// inside the C drain call, so this returns promptly.
 func (r *Runtime) Close() error {
-	if r.handle != nil {
-		C.boxlite_runtime_free(r.handle)
-		r.handle = nil
+	if r.handle == nil {
+		return nil
 	}
+
+	r.stopDrain()
+	C.boxlite_runtime_free(r.handle)
+	r.handle = nil
 	return nil
 }
 
 // Shutdown gracefully stops all boxes in this runtime.
-func (r *Runtime) Shutdown(_ context.Context, timeout time.Duration) error {
+func (r *Runtime) Shutdown(ctx context.Context, timeout time.Duration) error {
+	r.ensureDrainRunning()
+
 	secs := int(timeout.Seconds())
-	if secs <= 0 {
+	if secs < 0 {
 		secs = 0
 	}
+
+	ch := make(chan error, 1)
+	h := cgo.NewHandle(ch)
+
 	var cerr C.CBoxliteError
-	code := C.boxlite_runtime_shutdown(r.handle, C.int(secs), &cerr)
+	code := C.boxlite_runtime_shutdown(r.handle, C.int(secs), C.cbRuntimeShutdown(), handleToPtr(h), &cerr)
 	if code != C.Ok {
+		h.Delete()
 		return freeError(&cerr)
 	}
-	return nil
+
+	select {
+	case err := <-ch:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // Create creates and returns a new box.
-func (r *Runtime) Create(_ context.Context, image string, opts ...BoxOption) (*Box, error) {
+func (r *Runtime) Create(ctx context.Context, image string, opts ...BoxOption) (*Box, error) {
+	r.ensureDrainRunning()
+
 	cfg := &boxConfig{}
 	for _, o := range opts {
 		o(cfg)
@@ -92,68 +125,143 @@ func (r *Runtime) Create(_ context.Context, image string, opts ...BoxOption) (*B
 		return nil, err
 	}
 
-	var boxHandle *C.CBoxHandle
+	ch := make(chan handleResult[*C.CBoxHandle], 1)
+	h := cgo.NewHandle(ch)
+
 	var cerr C.CBoxliteError
-	code := C.boxlite_create_box(r.handle, cOpts, &boxHandle, &cerr)
+	code := C.boxlite_create_box(r.handle, cOpts, C.cbCreateBox(), handleToPtr(h), &cerr)
 	if code != C.Ok {
+		h.Delete()
+		// boxlite_create_box consumes opts on success but not on synchronous failure.
 		C.boxlite_options_free(cOpts)
 		return nil, freeError(&cerr)
 	}
 
-	cID := C.boxlite_box_id(boxHandle)
-	id := ""
-	if cID != nil {
-		id = C.GoString(cID)
-		freeBoxliteString(cID)
+	select {
+	case res := <-ch:
+		if res.err != nil {
+			return nil, res.err
+		}
+		return newBoxFromHandle(r, res.value, cfg.name), nil
+	case <-ctx.Done():
+		// Handle is freed by the eventual callback; the box handle will leak
+		// if the C side succeeds, but we honour ctx cancellation per Go norms.
+		return nil, ctx.Err()
 	}
-
-	return &Box{handle: boxHandle, id: id, name: cfg.name}, nil
 }
 
 // Get retrieves an existing box by ID or name.
-func (r *Runtime) Get(_ context.Context, idOrName string) (*Box, error) {
+func (r *Runtime) Get(ctx context.Context, idOrName string) (*Box, error) {
+	r.ensureDrainRunning()
+
 	cID := toCString(idOrName)
 	defer C.free(unsafe.Pointer(cID))
 
-	var boxHandle *C.CBoxHandle
+	ch := make(chan handleResult[*C.CBoxHandle], 1)
+	h := cgo.NewHandle(ch)
+
 	var cerr C.CBoxliteError
-	code := C.boxlite_get(r.handle, cID, &boxHandle, &cerr)
+	code := C.boxlite_get(r.handle, cID, C.cbGetBox(), handleToPtr(h), &cerr)
 	if code != C.Ok {
+		h.Delete()
 		return nil, freeError(&cerr)
 	}
 
-	cBoxID := C.boxlite_box_id(boxHandle)
-	id := ""
-	if cBoxID != nil {
-		id = C.GoString(cBoxID)
-		freeBoxliteString(cBoxID)
+	select {
+	case res := <-ch:
+		if res.err != nil {
+			return nil, res.err
+		}
+		return newBoxFromHandle(r, res.value, ""), nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
-
-	return &Box{handle: boxHandle, id: id}, nil
 }
 
 // Remove removes a box by ID or name.
-func (r *Runtime) Remove(_ context.Context, idOrName string) error {
-	cID := toCString(idOrName)
-	defer C.free(unsafe.Pointer(cID))
-
-	var cerr C.CBoxliteError
-	code := C.boxlite_remove(r.handle, cID, 0, &cerr)
-	if code != C.Ok {
-		return freeError(&cerr)
-	}
-	return nil
+func (r *Runtime) Remove(ctx context.Context, idOrName string) error {
+	return r.removeBox(ctx, idOrName, false)
 }
 
 // ForceRemove forcefully removes a box (stops it first if running).
-func (r *Runtime) ForceRemove(_ context.Context, idOrName string) error {
+func (r *Runtime) ForceRemove(ctx context.Context, idOrName string) error {
+	return r.removeBox(ctx, idOrName, true)
+}
+
+func (r *Runtime) removeBox(ctx context.Context, idOrName string, force bool) error {
+	r.ensureDrainRunning()
+
 	cID := toCString(idOrName)
 	defer C.free(unsafe.Pointer(cID))
 
+	ch := make(chan error, 1)
+	h := cgo.NewHandle(ch)
+
+	forceFlag := C.int(0)
+	if force {
+		forceFlag = 1
+	}
+
 	var cerr C.CBoxliteError
-	code := C.boxlite_remove(r.handle, cID, 1, &cerr)
+	code := C.boxlite_remove(r.handle, cID, forceFlag, C.cbRemoveBox(), handleToPtr(h), &cerr)
 	if code != C.Ok {
+		h.Delete()
 		return freeError(&cerr)
 	}
-	return nil
+
+	select {
+	case err := <-ch:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// ensureDrainRunning lazily starts the drain goroutine.
+//
+// The drain goroutine repeatedly calls boxlite_runtime_drain, which fires
+// any pending registered callbacks on the goroutine's OS thread (a Go-owned
+// M). Because the M is already a Go thread, callbacks like pipe writes or
+// channel sends do not need to hijack a new thread.
+func (r *Runtime) ensureDrainRunning() {
+	r.drainOnce.Do(func() {
+		r.drainStop = make(chan struct{})
+		r.drainDone = make(chan struct{})
+		go r.drainLoop()
+	})
+}
+
+func (r *Runtime) drainLoop() {
+	defer close(r.drainDone)
+	for {
+		select {
+		case <-r.drainStop:
+			return
+		default:
+		}
+
+		var cerr C.CBoxliteError
+		// Block in C up to drainTimeoutMs waiting for events. When the
+		// runtime is freed elsewhere, libboxlite signals the queue so this
+		// returns immediately.
+		_ = C.boxlite_runtime_drain(r.handle, C.int(drainTimeoutMs), &cerr)
+		if cerr.code != C.Ok {
+			C.boxlite_error_free(&cerr)
+		}
+	}
+}
+
+func (r *Runtime) stopDrain() {
+	if r.drainStop == nil {
+		return
+	}
+	select {
+	case <-r.drainStop:
+		return
+	default:
+	}
+	close(r.drainStop)
+	if r.drainDone != nil {
+		<-r.drainDone
+	}
 }

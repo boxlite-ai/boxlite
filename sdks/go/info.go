@@ -1,11 +1,12 @@
 package boxlite
 
 /*
-#include "boxlite.h"
+#include "bridge.h"
 */
 import "C"
 import (
 	"context"
+	"runtime/cgo"
 	"time"
 	"unsafe"
 )
@@ -34,6 +35,9 @@ type BoxInfo struct {
 }
 
 // Info returns information about the box.
+//
+// boxlite_box_info is synchronous on the C side (it reads cached fields on
+// the handle), so no drain participation is required.
 func (b *Box) Info(_ context.Context) (*BoxInfo, error) {
 	var cInfo *C.CBoxInfo
 	var cerr C.CBoxliteError
@@ -51,21 +55,50 @@ func (b *Box) Info(_ context.Context) (*BoxInfo, error) {
 }
 
 // ListInfo lists all boxes.
-func (r *Runtime) ListInfo(_ context.Context) ([]BoxInfo, error) {
-	var cList *C.CBoxInfoList
+func (r *Runtime) ListInfo(ctx context.Context) ([]BoxInfo, error) {
+	r.ensureDrainRunning()
+
+	ch := make(chan infoListResult, 1)
+	h := cgo.NewHandle(ch)
+
 	var cerr C.CBoxliteError
-	code := C.boxlite_list_info(r.handle, &cList, &cerr)
+	code := C.boxlite_list_info(r.handle, C.cbInfoList(), handleToPtr(h), &cerr)
 	if code != C.Ok {
+		h.Delete()
 		return nil, freeError(&cerr)
 	}
-	defer C.boxlite_free_box_info_list(cList)
 
-	items := unsafe.Slice(cList.items, int(cList.count))
-	result := make([]BoxInfo, len(items))
-	for i := range items {
-		result[i] = cBoxInfoToGo(&items[i])
+	select {
+	case res := <-ch:
+		return res.value, res.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
-	return result, nil
+}
+
+// GetInfo retrieves info for a box by ID or name without attaching a handle.
+func (r *Runtime) GetInfo(ctx context.Context, idOrName string) (*BoxInfo, error) {
+	r.ensureDrainRunning()
+
+	cID := toCString(idOrName)
+	defer C.free(unsafe.Pointer(cID))
+
+	ch := make(chan infoResult, 1)
+	h := cgo.NewHandle(ch)
+
+	var cerr C.CBoxliteError
+	code := C.boxlite_get_info(r.handle, cID, C.cbInfo(), handleToPtr(h), &cerr)
+	if code != C.Ok {
+		h.Delete()
+		return nil, freeError(&cerr)
+	}
+
+	select {
+	case res := <-ch:
+		return res.value, res.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 func cBoxInfoToGo(info *C.CBoxInfo) BoxInfo {
@@ -81,4 +114,18 @@ func cBoxInfoToGo(info *C.CBoxInfo) BoxInfo {
 		MemoryMiB: int(info.memory_mib),
 		CreatedAt: time.Unix(int64(info.created_at), 0),
 	}
+}
+
+// convertBoxInfoList materialises a CBoxInfoList* into Go BoxInfo slice.
+// The caller is responsible for freeing the C list afterwards.
+func convertBoxInfoList(list *C.CBoxInfoList) []BoxInfo {
+	if list == nil || list.count == 0 || list.items == nil {
+		return nil
+	}
+	items := unsafe.Slice(list.items, int(list.count))
+	out := make([]BoxInfo, len(items))
+	for i := range items {
+		out[i] = cBoxInfoToGo(&items[i])
+	}
+	return out
 }

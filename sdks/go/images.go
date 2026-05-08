@@ -1,13 +1,14 @@
 package boxlite
 
 /*
-#include "boxlite.h"
+#include "bridge.h"
 #include <stdlib.h>
 */
 import "C"
 
 import (
 	"context"
+	"runtime/cgo"
 	"time"
 	"unsafe"
 )
@@ -31,7 +32,8 @@ type ImagePullResult struct {
 
 // Images is a runtime-scoped handle for image operations.
 type Images struct {
-	handle *C.CBoxliteImageHandle
+	runtime *Runtime
+	handle  *C.CBoxliteImageHandle
 }
 
 func closedImagesError() error {
@@ -39,6 +41,10 @@ func closedImagesError() error {
 }
 
 // Images returns a runtime-scoped handle for image operations.
+//
+// The C-side image handle is created synchronously; async operations
+// (Pull, List) post events into the parent runtime's event queue and are
+// dispatched by the runtime drain goroutine.
 func (r *Runtime) Images() (*Images, error) {
 	var handle *C.CBoxliteImageHandle
 	var cerr C.CBoxliteError
@@ -47,48 +53,78 @@ func (r *Runtime) Images() (*Images, error) {
 		return nil, freeError(&cerr)
 	}
 
-	return &Images{handle: handle}, nil
+	return &Images{runtime: r, handle: handle}, nil
 }
 
 // Pull pulls an image and returns metadata about the cached result.
-func (i *Images) Pull(_ context.Context, reference string) (*ImagePullResult, error) {
+func (i *Images) Pull(ctx context.Context, reference string) (*ImagePullResult, error) {
 	if i == nil || i.handle == nil {
 		return nil, closedImagesError()
 	}
+	i.runtime.ensureDrainRunning()
 
 	cReference := toCString(reference)
 	defer C.free(unsafe.Pointer(cReference))
 
-	var cResult *C.CImagePullResult
+	ch := make(chan imagePullResult, 1)
+	h := cgo.NewHandle(ch)
+
 	var cerr C.CBoxliteError
-	code := C.boxlite_image_pull(i.handle, cReference, &cResult, &cerr)
+	code := C.boxlite_image_pull(i.handle, cReference, C.cbImagePull(), handleToPtr(h), &cerr)
 	if code != C.Ok {
+		h.Delete()
 		return nil, freeError(&cerr)
 	}
-	defer C.boxlite_free_image_pull_result(cResult)
 
-	return &ImagePullResult{
-		Reference:    cString(cResult.reference),
-		ConfigDigest: cString(cResult.config_digest),
-		LayerCount:   int(cResult.layer_count),
-	}, nil
+	select {
+	case res := <-ch:
+		return res.value, res.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 // List lists cached images for this runtime.
-func (i *Images) List(_ context.Context) ([]ImageInfo, error) {
+func (i *Images) List(ctx context.Context) ([]ImageInfo, error) {
 	if i == nil || i.handle == nil {
 		return nil, closedImagesError()
 	}
+	i.runtime.ensureDrainRunning()
 
-	var cList *C.CImageInfoList
+	ch := make(chan imageListResult, 1)
+	h := cgo.NewHandle(ch)
+
 	var cerr C.CBoxliteError
-	code := C.boxlite_image_list(i.handle, &cList, &cerr)
+	code := C.boxlite_image_list(i.handle, C.cbImageList(), handleToPtr(h), &cerr)
 	if code != C.Ok {
+		h.Delete()
 		return nil, freeError(&cerr)
 	}
-	defer C.boxlite_free_image_info_list(cList)
 
-	items := unsafe.Slice(cList.items, int(cList.count))
+	select {
+	case res := <-ch:
+		return res.value, res.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// Close releases the image handle.
+func (i *Images) Close() error {
+	if i != nil && i.handle != nil {
+		C.boxlite_image_free(i.handle)
+		i.handle = nil
+	}
+	return nil
+}
+
+// convertImageInfoList materialises a CImageInfoList* into Go ImageInfo
+// slice. The caller is responsible for freeing the C list afterwards.
+func convertImageInfoList(list *C.CImageInfoList) []ImageInfo {
+	if list == nil || list.count == 0 || list.items == nil {
+		return nil
+	}
+	items := unsafe.Slice(list.items, int(list.count))
 	images := make([]ImageInfo, len(items))
 	for idx := range items {
 		var size *uint64
@@ -105,15 +141,5 @@ func (i *Images) List(_ context.Context) ([]ImageInfo, error) {
 			SizeBytes:  size,
 		}
 	}
-
-	return images, nil
-}
-
-// Close releases the image handle.
-func (i *Images) Close() error {
-	if i != nil && i.handle != nil {
-		C.boxlite_image_free(i.handle)
-		i.handle = nil
-	}
-	return nil
+	return images
 }

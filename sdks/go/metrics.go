@@ -1,10 +1,13 @@
 package boxlite
 
 /*
-#include "boxlite.h"
+#include "bridge.h"
 */
 import "C"
-import "context"
+import (
+	"context"
+	"runtime/cgo"
+)
 
 // RuntimeMetrics holds aggregate runtime metrics.
 type RuntimeMetrics struct {
@@ -32,32 +35,58 @@ type BoxMetrics struct {
 }
 
 // Metrics returns aggregate runtime metrics.
-func (r *Runtime) Metrics(_ context.Context) (*RuntimeMetrics, error) {
-	var cm C.CRuntimeMetrics
+func (r *Runtime) Metrics(ctx context.Context) (*RuntimeMetrics, error) {
+	r.ensureDrainRunning()
+
+	ch := make(chan runtimeMetricsResult, 1)
+	h := cgo.NewHandle(ch)
+
 	var cerr C.CBoxliteError
-	code := C.boxlite_runtime_metrics(r.handle, &cm, &cerr)
+	code := C.boxlite_runtime_metrics(r.handle, C.cbRuntimeMetrics(), handleToPtr(h), &cerr)
 	if code != C.Ok {
+		h.Delete()
 		return nil, freeError(&cerr)
 	}
-	return &RuntimeMetrics{
-		BoxesCreatedTotal:     int(cm.boxes_created_total),
-		BoxesFailedTotal:      int(cm.boxes_failed_total),
-		RunningBoxes:          int(cm.num_running_boxes),
-		TotalCommandsExecuted: int(cm.total_commands_executed),
-		TotalExecErrors:       int(cm.total_exec_errors),
-	}, nil
+
+	select {
+	case res := <-ch:
+		if res.err != nil {
+			return nil, res.err
+		}
+		return res.value, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 // Metrics returns real-time metrics for this box.
-func (b *Box) Metrics(_ context.Context) (*BoxMetrics, error) {
-	var cm C.CBoxMetrics
+func (b *Box) Metrics(ctx context.Context) (*BoxMetrics, error) {
+	b.runtime.ensureDrainRunning()
+
+	ch := make(chan boxMetricsResult, 1)
+	h := cgo.NewHandle(ch)
+
 	var cerr C.CBoxliteError
-	code := C.boxlite_box_metrics(b.handle, &cm, &cerr)
+	code := C.boxlite_box_metrics(b.handle, C.cbBoxMetrics(), handleToPtr(h), &cerr)
 	if code != C.Ok {
+		h.Delete()
 		return nil, freeError(&cerr)
 	}
 
-	return &BoxMetrics{
+	select {
+	case res := <-ch:
+		if res.err != nil {
+			return nil, res.err
+		}
+		return res.value, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// cBoxMetricsToGo converts the C struct to its Go counterpart.
+func cBoxMetricsToGo(cm *C.CBoxMetrics) BoxMetrics {
+	return BoxMetrics{
 		CPUPercent:           float64(cm.cpu_percent),
 		MemoryBytes:          int64(cm.memory_bytes),
 		CommandsExecuted:     int(cm.commands_executed),
@@ -70,5 +99,16 @@ func (b *Box) Metrics(_ context.Context) (*BoxMetrics, error) {
 		NetworkBytesReceived: int64(cm.network_bytes_received),
 		NetworkTCPConns:      int(cm.network_tcp_connections),
 		NetworkTCPErrors:     int(cm.network_tcp_errors),
-	}, nil
+	}
+}
+
+// cRuntimeMetricsToGo converts the C struct to its Go counterpart.
+func cRuntimeMetricsToGo(cm *C.CRuntimeMetrics) RuntimeMetrics {
+	return RuntimeMetrics{
+		BoxesCreatedTotal:     int(cm.boxes_created_total),
+		BoxesFailedTotal:      int(cm.boxes_failed_total),
+		RunningBoxes:          int(cm.num_running_boxes),
+		TotalCommandsExecuted: int(cm.total_commands_executed),
+		TotalExecErrors:       int(cm.total_exec_errors),
+	}
 }
