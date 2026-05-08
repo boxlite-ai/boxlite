@@ -27,7 +27,6 @@ use crash_capture::CrashCapture;
 #[allow(unused_imports)]
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
-#[cfg(feature = "gvproxy")]
 use boxlite::net::gvproxy::GvproxyInstance;
 
 // No CLI args — all config (including engine type) is read from stdin pipe.
@@ -140,7 +139,6 @@ fn run_shim(mut config: InstanceSpec, timing: impl Fn(&str)) -> BoxliteResult<()
     // gvproxy provides virtio-net (eth0) to the guest - required even without port mappings.
     // The gvproxy instance is leaked intentionally - it must live for the entire
     // duration of the VM. When the shim process exits, OS cleans up all resources.
-    #[cfg(feature = "gvproxy")]
     if let Some(ref net_config) = config.network_config {
         let (gvproxy, endpoint) = GvproxyInstance::from_config(net_config)?;
         config.network_backend_endpoint = Some(endpoint);

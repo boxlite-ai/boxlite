@@ -122,7 +122,7 @@ image pulling, Box startup) is deferred until first use.
 Universal subprocess-based Box controller. Spawns `boxlite-shim` binary in a subprocess to isolate
 Box process takeover from the host application.
 
-**Source:** `boxlite/src/vmm/controller/shim.rs`, `boxlite/src/bin/shim.rs`
+**Source:** `boxlite/src/vmm/controller/shim.rs`, `shim/src/main.rs`
 
 **Why subprocess isolation:**
 

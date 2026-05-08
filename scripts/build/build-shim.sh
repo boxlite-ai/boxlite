@@ -83,11 +83,6 @@ build_shim_binary() {
         build_flag="--release"
     fi
 
-    # Shim doesn't use embedded-runtime (it IS the binary that gets embedded).
-    # Disable it to avoid the chicken-and-egg: can't embed shim while building shim.
-    # krun: statically link libkrun.a (only shim needs this, not boxlite-cli)
-    local features="--no-default-features --features gvproxy,krun"
-
     if [ "$OS" = "linux" ]; then
         # Go c-archive crashes with musl TLS; use glibc + crt-static instead.
         # relocation-model=static avoids static-pie which is incompatible with Go c-archive relocations.
@@ -100,10 +95,10 @@ build_shim_binary() {
         local target="${arch}-unknown-linux-gnu"
         export RUSTFLAGS="-C target-feature=+crt-static -C relocation-model=static -C link-arg=-Wl,-z,stack-size=2097152 -C link-arg=-Wl,--allow-multiple-definition"
         echo "🎯 Static glibc binary (crt-static + relocation-model=static)"
-        cargo build $build_flag --bin boxlite-shim --target "$target" $features
+        cargo build $build_flag -p boxlite-shim --target "$target"
         cp "$PROJECT_ROOT/target/$target/$PROFILE/boxlite-shim" "$SHIM_BINARY_PATH"
     else
-        cargo build $build_flag --bin boxlite-shim $features
+        cargo build $build_flag -p boxlite-shim
     fi
 }
 

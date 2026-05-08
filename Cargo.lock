@@ -560,6 +560,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "boxlite-shim"
+version = "0.9.3"
+dependencies = [
+ "boxlite",
+ "boxlite-shared",
+ "chrono",
+ "libc",
+ "serde_json",
+ "signal-hook",
+ "tokio",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "boxlite-test-utils"
 version = "0.1.0"
 dependencies = [

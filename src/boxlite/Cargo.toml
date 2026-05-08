@@ -19,10 +19,6 @@ name = "boxlite"
 path = "src/lib.rs"
 crate-type = ["rlib"]
 
-[[bin]]
-name = "boxlite-shim"
-path = "src/bin/shim/main.rs"
-
 [features]
 default = ["embedded-runtime", "krunfw", "e2fsprogs", "bubblewrap"]
 libslirp = []                                               # Uses external libslirp-helper binary

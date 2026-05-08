@@ -4,6 +4,7 @@ members = [
     "src/cli",
     "src/shared",
     "src/guest",
+    "src/shim",
     "src/test-utils",
     "src/deps/bubblewrap-sys",
     "src/deps/e2fsprogs-sys",

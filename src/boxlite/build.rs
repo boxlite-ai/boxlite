@@ -851,7 +851,12 @@ impl EmbeddedManifest {
 
         let enabled = env::var("CARGO_FEATURE_EMBEDDED_RUNTIME").is_ok();
 
-        if !enabled || matches!(mode, DepsMode::Stub) {
+        if !enabled {
+            Self::write_manifest_rs(&manifest_path, &[]);
+            return;
+        }
+
+        if matches!(mode, DepsMode::Stub) {
             Self::emit_manifest(&manifest_path, &[]);
             return;
         }
@@ -1017,11 +1022,10 @@ impl EmbeddedManifest {
 
 /// Sign a macOS binary with the hypervisor entitlement (ad-hoc).
 ///
-/// `cargo test -p boxlite` implicitly rebuilds the `boxlite-shim` bin target,
-/// which wipes whatever signature `scripts/build/sign.sh` put on it, so the
-/// copy `copy_prebuilt_binary` made into the runtime dir would land unsigned
-/// and every VM-dependent test would fail with "Hypervisor.framework access
-/// denied". Doing the signing here makes the embed step self-sufficient.
+/// A freshly built shim can be unsigned even when a previous build output was
+/// signed by `scripts/build/sign.sh`. Signing the runtime-dir copy here makes
+/// the embed step self-sufficient and prevents VM startup failures with
+/// "Hypervisor.framework access denied".
 fn sign_shim_with_entitlements(binary: &Path) {
     const ENTITLEMENTS: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
