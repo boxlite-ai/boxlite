@@ -1,12 +1,21 @@
 use crate::error::error_to_c_error;
-use crate::images::CImagePullResult;
 use crate::*;
 use boxlite::BoxliteError;
 use boxlite::runtime::BoxliteRuntime;
 use std::ffi::{CStr, CString};
+use std::os::raw::c_void;
 use std::path::PathBuf;
 use std::ptr;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+extern "C" fn noop_shutdown_cb(_err: *mut FFIError, _ud: *mut c_void) {}
+extern "C" fn noop_image_pull_cb(
+    _r: *mut crate::images::CImagePullResult,
+    _err: *mut FFIError,
+    _ud: *mut c_void,
+) {
+}
 
 fn unique_test_home(prefix: &str) -> PathBuf {
     let unique = SystemTime::now()
@@ -210,7 +219,8 @@ fn test_runtime_images_unsupported_on_rest_runtime() {
     let mut runtime_handle = crate::runtime::RuntimeHandle {
         runtime,
         tokio_rt,
-        liveness: std::sync::Arc::new(crate::runtime::RuntimeLiveness::new()),
+        liveness: Arc::new(crate::runtime::RuntimeLiveness::new()),
+        queue: Arc::new(crate::event_queue::EventQueue::new()),
     };
     let mut image_handle: *mut crate::images::ImageHandle = ptr::null_mut();
     let mut error = FFIError::default();
@@ -238,8 +248,19 @@ fn test_runtime_images_rejected_after_shutdown() {
     let mut error = FFIError::default();
     let mut image_handle: *mut crate::images::ImageHandle = ptr::null_mut();
 
-    let shutdown_code = unsafe { boxlite_runtime_shutdown(runtime, 0, &mut error as *mut _) };
+    let shutdown_code = unsafe {
+        boxlite_runtime_shutdown(
+            runtime,
+            0,
+            noop_shutdown_cb,
+            ptr::null_mut(),
+            &mut error as *mut _,
+        )
+    };
     assert_eq!(shutdown_code, BoxliteErrorCode::Ok);
+    // Drain the shutdown completion event so the spawned task isn't leaked
+    // when the runtime is freed below.
+    let _ = unsafe { boxlite_runtime_drain(runtime, 1000, &mut error as *mut _) };
     unsafe { boxlite_error_free(&mut error as *mut _) };
 
     let code = unsafe {
@@ -281,17 +302,16 @@ fn test_image_pull_rejected_after_boxlite_runtime_free() {
     }
 
     let image_ref = CString::new("alpine:latest").expect("image ref cstring");
-    let mut pull_result: *mut CImagePullResult = ptr::null_mut();
     let pull_code = unsafe {
         boxlite_image_pull(
             image_handle,
             image_ref.as_ptr(),
-            &mut pull_result as *mut _,
+            noop_image_pull_cb,
+            ptr::null_mut(),
             &mut error as *mut _,
         )
     };
     assert_eq!(pull_code, BoxliteErrorCode::Stopped);
-    assert!(pull_result.is_null());
     assert!(!error.message.is_null());
     let message = unsafe { CStr::from_ptr(error.message) }
         .to_string_lossy()

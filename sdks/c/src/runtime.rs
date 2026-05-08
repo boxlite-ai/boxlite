@@ -1,19 +1,35 @@
 //! Runtime management for BoxLite FFI
 //!
-//! Provides Tokio runtime and BoxliteRuntime handle management.
+//! Provides Tokio runtime, BoxliteRuntime handle management, and the
+//! per-runtime event queue + drain that drives the post-and-drain callback API.
 
+use std::os::raw::{c_char, c_int, c_void};
+use std::ptr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use tokio::runtime::Runtime as TokioRuntime;
 
+use boxlite::BoxliteError;
 use boxlite::runtime::BoxliteRuntime;
+use boxlite::runtime::options::{
+    BoxliteOptions, ImageRegistry, ImageRegistryAuth, RegistryTransport,
+};
 
-/// Opaque handle to a BoxliteRuntime instance with associated Tokio runtime
+use crate::error::{BoxliteErrorCode, FFIError, error_to_code, null_pointer_error, write_error};
+use crate::event_queue::{CRuntimeShutdownCb, EventQueue, RuntimeEvent, push_event};
+use crate::images::ImageHandle;
+use crate::util::c_str_to_string;
+use crate::{CBoxliteError, CBoxliteImageHandle, CBoxliteRuntime};
+
+/// Opaque handle to a BoxliteRuntime instance with its Tokio runtime and the
+/// per-runtime event queue used by the post-and-drain callback API.
 pub struct RuntimeHandle {
     pub runtime: BoxliteRuntime,
     pub tokio_rt: Arc<TokioRuntime>,
     pub liveness: Arc<RuntimeLiveness>,
+    pub queue: Arc<EventQueue>,
 }
 
 /// Shared runtime liveness for FFI-owned handles.
@@ -52,18 +68,6 @@ pub fn create_tokio_runtime() -> Result<Arc<TokioRuntime>, String> {
         .map(Arc::new)
         .map_err(|e| format!("Failed to create async runtime: {}", e))
 }
-
-use std::os::raw::{c_char, c_int};
-
-use boxlite::BoxliteError;
-use boxlite::runtime::options::{
-    BoxliteOptions, ImageRegistry, ImageRegistryAuth, RegistryTransport,
-};
-
-use crate::error::{BoxliteErrorCode, FFIError, error_to_code, null_pointer_error, write_error};
-use crate::images::ImageHandle;
-use crate::util::c_str_to_string;
-use crate::{CBoxliteError, CBoxliteImageHandle, CBoxliteRuntime};
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -115,19 +119,48 @@ pub unsafe extern "C" fn boxlite_runtime_images(
     runtime_images(runtime, out_handle, out_error)
 }
 
+/// Async + callback variant of runtime shutdown.
+///
+/// Spawns a Tokio task that calls `BoxliteRuntime::shutdown` and posts a
+/// `RuntimeEvent::Shutdown` to the runtime queue. Marks liveness as closed
+/// synchronously so subsequent ops fail fast.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_runtime_shutdown(
     runtime: *mut CBoxliteRuntime,
-    timeout: c_int,
+    timeout_secs: c_int,
+    cb: CRuntimeShutdownCb,
+    user_data: *mut c_void,
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
-    let timeout_opt = if timeout == 0 { None } else { Some(timeout) };
-    shutdown_runtime(runtime, timeout_opt, out_error)
+    let timeout_opt = if timeout_secs == 0 {
+        None
+    } else {
+        Some(timeout_secs)
+    };
+    shutdown_runtime(runtime, timeout_opt, cb, user_data, out_error)
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_runtime_free(runtime: *mut CBoxliteRuntime) {
     runtime_free(runtime)
+}
+
+/// Drain pending callbacks for `runtime`, dispatching them on the calling
+/// thread. The queue lock is released before any user code runs.
+///
+/// `timeout_ms`:
+///   - `0`  : non-blocking poll
+///   - `< 0`: block indefinitely until at least one event is available
+///   - `> 0`: block up to that many milliseconds
+///
+/// Returns the number of dispatched events, or `-1` on error.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_runtime_drain(
+    runtime: *mut CBoxliteRuntime,
+    timeout_ms: c_int,
+    out_error: *mut CBoxliteError,
+) -> c_int {
+    drain(runtime, timeout_ms, out_error)
 }
 
 unsafe fn runtime_new(
@@ -143,7 +176,6 @@ unsafe fn runtime_new(
             return BoxliteErrorCode::InvalidArgument;
         }
 
-        // Create tokio runtime
         let tokio_rt = match create_tokio_runtime() {
             Ok(rt) => rt,
             Err(e) => {
@@ -153,7 +185,6 @@ unsafe fn runtime_new(
             }
         };
 
-        // Parse options
         let mut options = BoxliteOptions::default();
         if !home_dir.is_null() {
             match c_str_to_string(home_dir) {
@@ -175,7 +206,6 @@ unsafe fn runtime_new(
                 }
             };
 
-        // Create runtime
         let runtime = match BoxliteRuntime::new(options) {
             Ok(rt) => rt,
             Err(e) => {
@@ -188,7 +218,8 @@ unsafe fn runtime_new(
         *out_runtime = Box::into_raw(Box::new(RuntimeHandle {
             runtime,
             tokio_rt,
-            liveness: std::sync::Arc::new(RuntimeLiveness::new()),
+            liveness: Arc::new(RuntimeLiveness::new()),
+            queue: Arc::new(EventQueue::new()),
         }));
         BoxliteErrorCode::Ok
     }
@@ -300,6 +331,7 @@ unsafe fn runtime_images(
                     handle,
                     tokio_rt: runtime_ref.tokio_rt.clone(),
                     liveness: runtime_ref.liveness.clone(),
+                    queue: runtime_ref.queue.clone(),
                 }));
                 BoxliteErrorCode::Ok
             }
@@ -315,6 +347,8 @@ unsafe fn runtime_images(
 unsafe fn shutdown_runtime(
     runtime: *mut RuntimeHandle,
     timeout: Option<i32>,
+    cb: CRuntimeShutdownCb,
+    user_data: *mut c_void,
     out_error: *mut FFIError,
 ) -> BoxliteErrorCode {
     unsafe {
@@ -326,26 +360,282 @@ unsafe fn shutdown_runtime(
         let runtime_ref = &*runtime;
         runtime_ref.liveness.mark_closed();
 
-        let result = runtime_ref
-            .tokio_rt
-            .block_on(runtime_ref.runtime.shutdown(timeout));
+        let queue = runtime_ref.queue.clone();
+        let tokio_rt = runtime_ref.tokio_rt.clone();
+        let user_data_addr = user_data as usize;
+        let runtime_clone = runtime_ref.runtime.clone();
 
-        match result {
-            Ok(()) => BoxliteErrorCode::Ok,
-            Err(e) => {
-                let code = error_to_code(&e);
-                write_error(out_error, e);
-                code
-            }
-        }
+        tokio_rt.spawn(async move {
+            let result = runtime_clone.shutdown(timeout).await;
+            push_event(
+                &queue,
+                RuntimeEvent::Shutdown {
+                    cb,
+                    user_data: user_data_addr,
+                    result,
+                },
+            )
+            .await;
+        });
+
+        BoxliteErrorCode::Ok
     }
 }
 
 unsafe fn runtime_free(runtime: *mut RuntimeHandle) {
     if !runtime.is_null() {
         unsafe {
-            (*runtime).liveness.mark_closed();
-            drop(Box::from_raw(runtime));
+            let handle = Box::from_raw(runtime);
+            handle.liveness.mark_closed();
+            // Wake any thread blocked in drain so it can return promptly.
+            handle.queue.cv.notify_all();
+            drop(handle);
+        }
+    }
+}
+
+unsafe fn drain(rt: *mut RuntimeHandle, timeout_ms: c_int, out_error: *mut FFIError) -> c_int {
+    unsafe {
+        if rt.is_null() {
+            write_error(out_error, null_pointer_error("runtime"));
+            return -1;
+        }
+        let rt = &*rt;
+
+        let deadline = if timeout_ms < 0 {
+            None
+        } else {
+            Some(Instant::now() + Duration::from_millis(timeout_ms as u64))
+        };
+
+        let mut count: c_int = 0;
+        loop {
+            // ─── Pop one event ───
+            let event_opt: Option<RuntimeEvent> = {
+                let mut g = rt.queue.inner.lock().unwrap();
+                let mut popped: Option<RuntimeEvent> = None;
+                while popped.is_none() {
+                    if let Some(ev) = g.pop_front() {
+                        popped = Some(ev);
+                        break;
+                    }
+                    match deadline {
+                        None => g = rt.queue.cv.wait(g).unwrap(),
+                        Some(d) => {
+                            let now = Instant::now();
+                            if now >= d {
+                                return count;
+                            }
+                            let (new_g, _timeout) = rt.queue.cv.wait_timeout(g, d - now).unwrap();
+                            g = new_g;
+                            if g.is_empty() && Instant::now() >= d {
+                                return count;
+                            }
+                        }
+                    }
+                }
+                popped
+            };
+
+            let Some(event) = event_opt else {
+                return count;
+            };
+
+            // ─── Lock RELEASED — dispatch to user callback ───
+            dispatch_event(event);
+            count = count.saturating_add(1);
+        }
+    }
+}
+
+unsafe fn dispatch_event(event: RuntimeEvent) {
+    unsafe {
+        match event {
+            RuntimeEvent::Stdout {
+                cb,
+                user_data,
+                data,
+            } => cb(data.as_ptr(), data.len(), user_data as *mut c_void),
+            RuntimeEvent::Stderr {
+                cb,
+                user_data,
+                data,
+            } => cb(data.as_ptr(), data.len(), user_data as *mut c_void),
+            RuntimeEvent::Exit {
+                cb,
+                user_data,
+                exit_code,
+            } => cb(exit_code, user_data as *mut c_void),
+            RuntimeEvent::CreateBox {
+                cb,
+                user_data,
+                result,
+            } => dispatch_handle_event::<crate::CBoxHandle>(result, user_data, cb),
+            RuntimeEvent::StartBox {
+                cb,
+                user_data,
+                result,
+            } => dispatch_unit_event(result, user_data, cb),
+            RuntimeEvent::StopBox {
+                cb,
+                user_data,
+                result,
+            } => dispatch_unit_event(result, user_data, cb),
+            RuntimeEvent::GetBox {
+                cb,
+                user_data,
+                result,
+            } => dispatch_handle_event::<crate::CBoxHandle>(result, user_data, cb),
+            RuntimeEvent::RemoveBox {
+                cb,
+                user_data,
+                result,
+            } => dispatch_unit_event(result, user_data, cb),
+            RuntimeEvent::ImagePull {
+                cb,
+                user_data,
+                result,
+            } => dispatch_handle_event::<crate::CImagePullResult>(result, user_data, cb),
+            RuntimeEvent::ImageList {
+                cb,
+                user_data,
+                result,
+            } => dispatch_handle_event::<crate::CImageInfoList>(result, user_data, cb),
+            RuntimeEvent::Copy {
+                cb,
+                user_data,
+                result,
+            } => dispatch_unit_event(result, user_data, cb),
+            RuntimeEvent::Info {
+                cb,
+                user_data,
+                result,
+            } => dispatch_handle_event::<crate::CBoxInfo>(result, user_data, cb),
+            RuntimeEvent::InfoList {
+                cb,
+                user_data,
+                result,
+            } => dispatch_handle_event::<crate::CBoxInfoList>(result, user_data, cb),
+            RuntimeEvent::Metrics {
+                cb,
+                user_data,
+                result,
+            } => dispatch_value_event::<crate::CBoxMetrics>(result, user_data, cb),
+            RuntimeEvent::RtMetrics {
+                cb,
+                user_data,
+                result,
+            } => dispatch_value_event::<crate::CRuntimeMetrics>(result, user_data, cb),
+            RuntimeEvent::Shutdown {
+                cb,
+                user_data,
+                result,
+            } => dispatch_unit_event(result, user_data, cb),
+            RuntimeEvent::Wait {
+                cb,
+                user_data,
+                result,
+            } => {
+                let mut err = FFIError::default();
+                let exit_code = match result {
+                    Ok(code) => code,
+                    Err(e) => {
+                        err = crate::error::error_to_c_error(e);
+                        -1
+                    }
+                };
+                cb(exit_code, &mut err, user_data as *mut c_void);
+                if !err.message.is_null() {
+                    crate::boxlite_error_free(&mut err);
+                }
+            }
+            RuntimeEvent::Kill {
+                cb,
+                user_data,
+                result,
+            } => dispatch_unit_event(result, user_data, cb),
+            RuntimeEvent::Resize {
+                cb,
+                user_data,
+                result,
+            } => dispatch_unit_event(result, user_data, cb),
+        }
+    }
+}
+
+/// Callback shape for events that carry only a possible error: `(err, ud)`.
+type UnitCb = extern "C" fn(*mut FFIError, *mut c_void);
+
+/// Callback shape for events carrying an owned out-pointer + possible error.
+type HandleCb<T> = extern "C" fn(*mut T, *mut FFIError, *mut c_void);
+
+unsafe fn dispatch_unit_event(result: Result<(), BoxliteError>, user_data: usize, cb: UnitCb) {
+    unsafe {
+        let mut err = FFIError::default();
+        if let Err(e) = result {
+            err = crate::error::error_to_c_error(e);
+        }
+        cb(&mut err as *mut _, user_data as *mut c_void);
+        if !err.message.is_null() {
+            crate::boxlite_error_free(&mut err);
+        }
+    }
+}
+
+/// Dispatch a "handle pointer + error" event. The `result` carries a
+/// `*mut T` encoded as `usize` (so the event is `Send`); on success the
+/// callback receives the pointer and a zeroed error; on failure it receives
+/// a null pointer and a populated error.
+unsafe fn dispatch_handle_event<T>(
+    result: Result<usize, BoxliteError>,
+    user_data: usize,
+    cb: HandleCb<T>,
+) {
+    unsafe {
+        let mut err = FFIError::default();
+        let ptr = match result {
+            Ok(addr) => addr as *mut T,
+            Err(e) => {
+                err = crate::error::error_to_c_error(e);
+                ptr::null_mut()
+            }
+        };
+        cb(ptr, &mut err as *mut _, user_data as *mut c_void);
+        if !err.message.is_null() {
+            crate::boxlite_error_free(&mut err);
+        }
+    }
+}
+
+/// Dispatch a "value-by-pointer + error" event for events whose success
+/// payload is a value-typed C struct (e.g. CBoxMetrics). Stack-allocates
+/// the value, hands a pointer to it to the callback, then drops it.
+unsafe fn dispatch_value_event<T>(
+    result: Result<T, BoxliteError>,
+    user_data: usize,
+    cb: HandleCb<T>,
+) {
+    unsafe {
+        let mut err = FFIError::default();
+        match result {
+            Ok(mut value) => {
+                cb(
+                    &mut value as *mut T,
+                    &mut err as *mut _,
+                    user_data as *mut c_void,
+                );
+            }
+            Err(e) => {
+                err = crate::error::error_to_c_error(e);
+                cb(
+                    ptr::null_mut(),
+                    &mut err as *mut _,
+                    user_data as *mut c_void,
+                );
+            }
+        }
+        if !err.message.is_null() {
+            crate::boxlite_error_free(&mut err);
         }
     }
 }

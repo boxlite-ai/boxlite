@@ -1,14 +1,18 @@
 //! Box information types and operations for the BoxLite C SDK.
+//!
+//! `boxlite_box_info` is synchronous (reads cached fields on the handle).
+//! `boxlite_get_info` and `boxlite_list_info` are async + callback.
 
 use std::ffi::CString;
-use std::os::raw::{c_char, c_int};
+use std::os::raw::{c_char, c_int, c_void};
 use std::ptr;
 
 use boxlite::BoxliteError;
 use boxlite::runtime::types::BoxStatus;
 
 use crate::box_handle::BoxHandle;
-use crate::error::{BoxliteErrorCode, FFIError, error_to_code, null_pointer_error, write_error};
+use crate::error::{BoxliteErrorCode, FFIError, null_pointer_error, write_error};
+use crate::event_queue::{CBoxInfoCb, CBoxInfoListCb, RuntimeEvent, push_event};
 use crate::runtime::RuntimeHandle;
 use crate::{CBoxHandle, CBoxliteError, CBoxliteRuntime};
 
@@ -132,19 +136,21 @@ pub unsafe extern "C" fn boxlite_box_info(
 pub unsafe extern "C" fn boxlite_get_info(
     runtime: *mut CBoxliteRuntime,
     id_or_name: *const c_char,
-    out_info: *mut *mut CBoxInfo,
+    cb: CBoxInfoCb,
+    user_data: *mut c_void,
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
-    box_info_by_id(runtime, id_or_name, out_info, out_error)
+    box_info_by_id(runtime, id_or_name, cb, user_data, out_error)
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_list_info(
     runtime: *mut CBoxliteRuntime,
-    out_list: *mut *mut CBoxInfoList,
+    cb: CBoxInfoListCb,
+    user_data: *mut c_void,
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
-    box_list(runtime, out_list, out_error)
+    box_list(runtime, cb, user_data, out_error)
 }
 
 #[unsafe(no_mangle)]
@@ -181,17 +187,14 @@ unsafe fn box_info(
 
 unsafe fn box_info_by_id(
     runtime: *mut RuntimeHandle,
-    id_or_name: *const std::os::raw::c_char,
-    out_info: *mut *mut CBoxInfo,
+    id_or_name: *const c_char,
+    cb: CBoxInfoCb,
+    user_data: *mut c_void,
     out_error: *mut FFIError,
 ) -> BoxliteErrorCode {
     unsafe {
         if runtime.is_null() {
             write_error(out_error, null_pointer_error("runtime"));
-            return BoxliteErrorCode::InvalidArgument;
-        }
-        if out_info.is_null() {
-            write_error(out_error, null_pointer_error("out_info"));
             return BoxliteErrorCode::InvalidArgument;
         }
 
@@ -204,32 +207,39 @@ unsafe fn box_info_by_id(
         };
 
         let runtime_ref = &*runtime;
-        let result = runtime_ref
-            .tokio_rt
-            .block_on(runtime_ref.runtime.get_info(&id_or_name));
+        let runtime_clone = runtime_ref.runtime.clone();
+        let queue = runtime_ref.queue.clone();
+        let user_data_addr = user_data as usize;
 
-        match result {
-            Ok(Some(info)) => {
-                *out_info = Box::into_raw(Box::new(CBoxInfo::from_box_info(&info)));
-                BoxliteErrorCode::Ok
-            }
-            Ok(None) => {
-                let err = BoxliteError::NotFound(format!("Box not found: {id_or_name}"));
-                write_error(out_error, err);
-                BoxliteErrorCode::NotFound
-            }
-            Err(e) => {
-                let code = error_to_code(&e);
-                write_error(out_error, e);
-                code
-            }
-        }
+        runtime_ref.tokio_rt.spawn(async move {
+            let result = match runtime_clone.get_info(&id_or_name).await {
+                Ok(Some(info)) => {
+                    Ok(Box::into_raw(Box::new(CBoxInfo::from_box_info(&info))) as usize)
+                }
+                Ok(None) => Err(BoxliteError::NotFound(format!(
+                    "Box not found: {id_or_name}"
+                ))),
+                Err(e) => Err(e),
+            };
+            push_event(
+                &queue,
+                RuntimeEvent::Info {
+                    cb,
+                    user_data: user_data_addr,
+                    result,
+                },
+            )
+            .await;
+        });
+
+        BoxliteErrorCode::Ok
     }
 }
 
 unsafe fn box_list(
     runtime: *mut RuntimeHandle,
-    out_list: *mut *mut CBoxInfoList,
+    cb: CBoxInfoListCb,
+    user_data: *mut c_void,
     out_error: *mut FFIError,
 ) -> BoxliteErrorCode {
     unsafe {
@@ -237,31 +247,31 @@ unsafe fn box_list(
             write_error(out_error, null_pointer_error("runtime"));
             return BoxliteErrorCode::InvalidArgument;
         }
-        if out_list.is_null() {
-            write_error(out_error, null_pointer_error("out_list"));
-            return BoxliteErrorCode::InvalidArgument;
-        }
 
         let runtime_ref = &*runtime;
-        let result = runtime_ref
-            .tokio_rt
-            .block_on(runtime_ref.runtime.list_info());
+        let runtime_clone = runtime_ref.runtime.clone();
+        let queue = runtime_ref.queue.clone();
+        let user_data_addr = user_data as usize;
 
-        match result {
-            Ok(boxes) => {
+        runtime_ref.tokio_rt.spawn(async move {
+            let result = runtime_clone.list_info().await.map(|boxes| {
                 let mut items: Vec<CBoxInfo> = boxes.iter().map(CBoxInfo::from_box_info).collect();
                 let count = items.len() as c_int;
                 let ptr = items.as_mut_ptr();
                 std::mem::forget(items);
+                Box::into_raw(Box::new(CBoxInfoList { items: ptr, count })) as usize
+            });
+            push_event(
+                &queue,
+                RuntimeEvent::InfoList {
+                    cb,
+                    user_data: user_data_addr,
+                    result,
+                },
+            )
+            .await;
+        });
 
-                *out_list = Box::into_raw(Box::new(CBoxInfoList { items: ptr, count }));
-                BoxliteErrorCode::Ok
-            }
-            Err(e) => {
-                let code = error_to_code(&e);
-                write_error(out_error, e);
-                code
-            }
-        }
+        BoxliteErrorCode::Ok
     }
 }

@@ -1,7 +1,12 @@
 //! Box handle operations for the BoxLite C SDK.
+//!
+//! All async lifecycle operations follow the post-and-drain pattern: each C
+//! function spawns a Tokio task that performs the underlying async Rust call
+//! and pushes a typed `RuntimeEvent` to the runtime's queue. Callbacks fire
+//! later from `boxlite_runtime_drain` on the user's thread.
 
 use std::ffi::CString;
-use std::os::raw::{c_char, c_int};
+use std::os::raw::{c_char, c_int, c_void};
 use std::ptr;
 use std::sync::Arc;
 
@@ -11,46 +16,58 @@ use boxlite::BoxID;
 use boxlite::BoxliteError;
 use boxlite::litebox::LiteBox;
 
-use crate::error::{BoxliteErrorCode, FFIError, error_to_code, null_pointer_error, write_error};
+use crate::error::{BoxliteErrorCode, FFIError, null_pointer_error, write_error};
+use crate::event_queue::{
+    CBoxCreateBoxCb, CBoxGetBoxCb, CBoxRemoveBoxCb, CBoxStartBoxCb, CBoxStopBoxCb, EventQueue,
+    RuntimeEvent, push_event,
+};
 use crate::options::OptionsHandle;
 use crate::runtime::RuntimeHandle;
 use crate::util::c_str_to_string;
 use crate::{CBoxHandle, CBoxliteError, CBoxliteOptions, CBoxliteRuntime};
 
 /// Opaque handle to a running box.
+///
+/// `handle` is wrapped in `Arc` so it can be cloned into Tokio tasks for
+/// async lifecycle ops.
 pub struct BoxHandle {
-    pub handle: LiteBox,
+    pub handle: Arc<LiteBox>,
     #[allow(dead_code)]
     pub box_id: BoxID,
     pub tokio_rt: Arc<TokioRuntime>,
+    pub queue: Arc<EventQueue>,
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_create_box(
     runtime: *mut CBoxliteRuntime,
     opts: *mut CBoxliteOptions,
-    out_box: *mut *mut CBoxHandle,
+    cb: CBoxCreateBoxCb,
+    user_data: *mut c_void,
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
-    create_box(runtime, opts, out_box, out_error)
+    create_box(runtime, opts, cb, user_data, out_error)
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_stop_box(
     handle: *mut CBoxHandle,
+    cb: CBoxStopBoxCb,
+    user_data: *mut c_void,
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
-    stop_box(handle, out_error)
+    stop_box(handle, cb, user_data, out_error)
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_get(
     runtime: *mut CBoxliteRuntime,
     id_or_name: *const c_char,
-    out_handle: *mut *mut CBoxHandle,
+    cb: CBoxGetBoxCb,
+    user_data: *mut c_void,
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
-    attach_box(runtime, id_or_name, out_handle, out_error)
+    attach_box(runtime, id_or_name, cb, user_data, out_error)
 }
 
 #[unsafe(no_mangle)]
@@ -58,17 +75,21 @@ pub unsafe extern "C" fn boxlite_remove(
     runtime: *mut CBoxliteRuntime,
     id_or_name: *const c_char,
     force: c_int,
+    cb: CBoxRemoveBoxCb,
+    user_data: *mut c_void,
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
-    remove_box(runtime, id_or_name, force != 0, out_error)
+    remove_box(runtime, id_or_name, force != 0, cb, user_data, out_error)
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_start_box(
     handle: *mut CBoxHandle,
+    cb: CBoxStartBoxCb,
+    user_data: *mut c_void,
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
-    start_box(handle, out_error)
+    start_box(handle, cb, user_data, out_error)
 }
 
 #[unsafe(no_mangle)]
@@ -84,7 +105,8 @@ pub unsafe extern "C" fn boxlite_box_free(handle: *mut CBoxHandle) {
 unsafe fn create_box(
     runtime: *mut RuntimeHandle,
     opts: *mut OptionsHandle,
-    out_box: *mut *mut BoxHandle,
+    cb: CBoxCreateBoxCb,
+    user_data: *mut c_void,
     out_error: *mut FFIError,
 ) -> BoxliteErrorCode {
     unsafe {
@@ -96,39 +118,51 @@ unsafe fn create_box(
             write_error(out_error, null_pointer_error("opts"));
             return BoxliteErrorCode::InvalidArgument;
         }
-        if out_box.is_null() {
-            write_error(out_error, null_pointer_error("out_box"));
-            return BoxliteErrorCode::InvalidArgument;
-        }
 
-        let runtime_ref = &mut *runtime;
+        let runtime_ref = &*runtime;
         let opts_handle = Box::from_raw(opts);
-        let result = runtime_ref.tokio_rt.block_on(
-            runtime_ref
-                .runtime
-                .create(opts_handle.options, opts_handle.name),
-        );
+        let runtime_clone = runtime_ref.runtime.clone();
+        let tokio_rt = runtime_ref.tokio_rt.clone();
+        let queue = runtime_ref.queue.clone();
+        let user_data_addr = user_data as usize;
+        let task_tokio_rt = tokio_rt.clone();
+        let task_queue = queue.clone();
 
-        match result {
-            Ok(handle) => {
-                let box_id = handle.id().clone();
-                *out_box = Box::into_raw(Box::new(BoxHandle {
-                    handle,
-                    box_id,
-                    tokio_rt: runtime_ref.tokio_rt.clone(),
-                }));
-                BoxliteErrorCode::Ok
-            }
-            Err(e) => {
-                let code = error_to_code(&e);
-                write_error(out_error, e);
-                code
-            }
-        }
+        tokio_rt.spawn(async move {
+            let result = runtime_clone
+                .create(opts_handle.options, opts_handle.name)
+                .await
+                .map(|handle| {
+                    let box_id = handle.id().clone();
+                    let boxed = Box::new(BoxHandle {
+                        handle: Arc::new(handle),
+                        box_id,
+                        tokio_rt: task_tokio_rt,
+                        queue: task_queue.clone(),
+                    });
+                    Box::into_raw(boxed) as usize
+                });
+            push_event(
+                &queue,
+                RuntimeEvent::CreateBox {
+                    cb,
+                    user_data: user_data_addr,
+                    result,
+                },
+            )
+            .await;
+        });
+
+        BoxliteErrorCode::Ok
     }
 }
 
-unsafe fn stop_box(handle: *mut BoxHandle, out_error: *mut FFIError) -> BoxliteErrorCode {
+unsafe fn stop_box(
+    handle: *mut BoxHandle,
+    cb: CBoxStopBoxCb,
+    user_data: *mut c_void,
+    out_error: *mut FFIError,
+) -> BoxliteErrorCode {
     unsafe {
         if handle.is_null() {
             write_error(out_error, null_pointer_error("handle"));
@@ -136,24 +170,32 @@ unsafe fn stop_box(handle: *mut BoxHandle, out_error: *mut FFIError) -> BoxliteE
         }
 
         let handle_ref = &*handle;
+        let lite = handle_ref.handle.clone();
+        let queue = handle_ref.queue.clone();
+        let user_data_addr = user_data as usize;
 
-        // Block on async stop using the stored tokio runtime
-        let result = handle_ref.tokio_rt.block_on(handle_ref.handle.stop());
-        match result {
-            Ok(_) => BoxliteErrorCode::Ok,
-            Err(e) => {
-                let code = error_to_code(&e);
-                write_error(out_error, e);
-                code
-            }
-        }
+        handle_ref.tokio_rt.spawn(async move {
+            let result = lite.stop().await;
+            push_event(
+                &queue,
+                RuntimeEvent::StopBox {
+                    cb,
+                    user_data: user_data_addr,
+                    result,
+                },
+            )
+            .await;
+        });
+
+        BoxliteErrorCode::Ok
     }
 }
 
 unsafe fn attach_box(
     runtime: *mut RuntimeHandle,
     id_or_name: *const c_char,
-    out_handle: *mut *mut BoxHandle,
+    cb: CBoxGetBoxCb,
+    user_data: *mut c_void,
     out_error: *mut FFIError,
 ) -> BoxliteErrorCode {
     unsafe {
@@ -161,12 +203,6 @@ unsafe fn attach_box(
             write_error(out_error, null_pointer_error("runtime"));
             return BoxliteErrorCode::InvalidArgument;
         }
-        if out_handle.is_null() {
-            write_error(out_error, null_pointer_error("out_handle"));
-            return BoxliteErrorCode::InvalidArgument;
-        }
-
-        let runtime_ref = &*runtime;
 
         let id_str = match c_str_to_string(id_or_name) {
             Ok(s) => s,
@@ -176,31 +212,41 @@ unsafe fn attach_box(
             }
         };
 
-        let result = runtime_ref
-            .tokio_rt
-            .block_on(runtime_ref.runtime.get(&id_str));
+        let runtime_ref = &*runtime;
+        let runtime_clone = runtime_ref.runtime.clone();
+        let tokio_rt = runtime_ref.tokio_rt.clone();
+        let queue = runtime_ref.queue.clone();
+        let user_data_addr = user_data as usize;
+        let task_tokio_rt = tokio_rt.clone();
+        let task_queue = queue.clone();
 
-        match result {
-            Ok(Some(handle)) => {
-                let box_id = handle.id().clone();
-                *out_handle = Box::into_raw(Box::new(BoxHandle {
-                    handle,
-                    box_id,
-                    tokio_rt: runtime_ref.tokio_rt.clone(),
-                }));
-                BoxliteErrorCode::Ok
-            }
-            Ok(None) => {
-                let err = BoxliteError::NotFound(format!("Box not found: {}", id_str));
-                write_error(out_error, err);
-                BoxliteErrorCode::NotFound
-            }
-            Err(e) => {
-                let code = error_to_code(&e);
-                write_error(out_error, e);
-                code
-            }
-        }
+        tokio_rt.spawn(async move {
+            let result = match runtime_clone.get(&id_str).await {
+                Ok(Some(handle)) => {
+                    let box_id = handle.id().clone();
+                    let boxed = Box::new(BoxHandle {
+                        handle: Arc::new(handle),
+                        box_id,
+                        tokio_rt: task_tokio_rt,
+                        queue: task_queue.clone(),
+                    });
+                    Ok(Box::into_raw(boxed) as usize)
+                }
+                Ok(None) => Err(BoxliteError::NotFound(format!("Box not found: {id_str}"))),
+                Err(e) => Err(e),
+            };
+            push_event(
+                &queue,
+                RuntimeEvent::GetBox {
+                    cb,
+                    user_data: user_data_addr,
+                    result,
+                },
+            )
+            .await;
+        });
+
+        BoxliteErrorCode::Ok
     }
 }
 
@@ -208,6 +254,8 @@ unsafe fn remove_box(
     runtime: *mut RuntimeHandle,
     id_or_name: *const c_char,
     force: bool,
+    cb: CBoxRemoveBoxCb,
+    user_data: *mut c_void,
     out_error: *mut FFIError,
 ) -> BoxliteErrorCode {
     unsafe {
@@ -215,8 +263,6 @@ unsafe fn remove_box(
             write_error(out_error, null_pointer_error("runtime"));
             return BoxliteErrorCode::InvalidArgument;
         }
-
-        let runtime_ref = &*runtime;
 
         let id_str = match c_str_to_string(id_or_name) {
             Ok(s) => s,
@@ -226,22 +272,34 @@ unsafe fn remove_box(
             }
         };
 
-        let result = runtime_ref
-            .tokio_rt
-            .block_on(runtime_ref.runtime.remove(&id_str, force));
+        let runtime_ref = &*runtime;
+        let runtime_clone = runtime_ref.runtime.clone();
+        let queue = runtime_ref.queue.clone();
+        let user_data_addr = user_data as usize;
 
-        match result {
-            Ok(_) => BoxliteErrorCode::Ok,
-            Err(e) => {
-                let code = error_to_code(&e);
-                write_error(out_error, e);
-                code
-            }
-        }
+        runtime_ref.tokio_rt.spawn(async move {
+            let result = runtime_clone.remove(&id_str, force).await.map(|_| ());
+            push_event(
+                &queue,
+                RuntimeEvent::RemoveBox {
+                    cb,
+                    user_data: user_data_addr,
+                    result,
+                },
+            )
+            .await;
+        });
+
+        BoxliteErrorCode::Ok
     }
 }
 
-unsafe fn start_box(handle: *mut BoxHandle, out_error: *mut FFIError) -> BoxliteErrorCode {
+unsafe fn start_box(
+    handle: *mut BoxHandle,
+    cb: CBoxStartBoxCb,
+    user_data: *mut c_void,
+    out_error: *mut FFIError,
+) -> BoxliteErrorCode {
     unsafe {
         if handle.is_null() {
             write_error(out_error, null_pointer_error("handle"));
@@ -249,15 +307,24 @@ unsafe fn start_box(handle: *mut BoxHandle, out_error: *mut FFIError) -> Boxlite
         }
 
         let handle_ref = &*handle;
+        let lite = handle_ref.handle.clone();
+        let queue = handle_ref.queue.clone();
+        let user_data_addr = user_data as usize;
 
-        match handle_ref.tokio_rt.block_on(handle_ref.handle.start()) {
-            Ok(_) => BoxliteErrorCode::Ok,
-            Err(e) => {
-                let code = error_to_code(&e);
-                write_error(out_error, e);
-                code
-            }
-        }
+        handle_ref.tokio_rt.spawn(async move {
+            let result = lite.start().await;
+            push_event(
+                &queue,
+                RuntimeEvent::StartBox {
+                    cb,
+                    user_data: user_data_addr,
+                    result,
+                },
+            )
+            .await;
+        });
+
+        BoxliteErrorCode::Ok
     }
 }
 

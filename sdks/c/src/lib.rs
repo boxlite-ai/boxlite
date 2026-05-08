@@ -10,6 +10,7 @@
 mod box_handle;
 mod copy;
 mod error;
+mod event_queue;
 mod exec;
 mod images;
 mod info;
@@ -39,6 +40,7 @@ pub type BoxliteCommand = exec::BoxliteCommand;
 pub use box_handle::*;
 pub use copy::*;
 pub use error::*;
+pub use event_queue::*;
 pub use exec::*;
 pub use images::*;
 pub use info::*;

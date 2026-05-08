@@ -1,7 +1,10 @@
 //! Image operations for the BoxLite C SDK.
+//!
+//! Async methods (`boxlite_image_pull`, `boxlite_image_list`) follow the
+//! post-and-drain pattern; results are dispatched on the user's drain thread.
 
 use std::ffi::CString;
-use std::os::raw::{c_char, c_int};
+use std::os::raw::{c_char, c_int, c_void};
 use std::ptr;
 use std::sync::Arc;
 
@@ -10,6 +13,7 @@ use tokio::runtime::Runtime as TokioRuntime;
 use boxlite::ImageHandle as CoreImageHandle;
 
 use crate::error::{BoxliteErrorCode, FFIError, error_to_code, null_pointer_error, write_error};
+use crate::event_queue::{CBoxImageListCb, CBoxImagePullCb, EventQueue, RuntimeEvent, push_event};
 use crate::runtime::RuntimeLiveness;
 use crate::{CBoxliteError, CBoxliteImageHandle};
 
@@ -18,6 +22,7 @@ pub struct ImageHandle {
     pub handle: CoreImageHandle,
     pub tokio_rt: Arc<TokioRuntime>,
     pub liveness: Arc<RuntimeLiveness>,
+    pub queue: Arc<EventQueue>,
 }
 
 #[repr(C)]
@@ -127,19 +132,21 @@ unsafe fn free_str(s: *mut c_char) {
 pub unsafe extern "C" fn boxlite_image_pull(
     handle: *mut CBoxliteImageHandle,
     image_ref: *const c_char,
-    out_result: *mut *mut CImagePullResult,
+    cb: CBoxImagePullCb,
+    user_data: *mut c_void,
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
-    image_pull(handle, image_ref, out_result, out_error)
+    image_pull(handle, image_ref, cb, user_data, out_error)
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_image_list(
     handle: *mut CBoxliteImageHandle,
-    out_list: *mut *mut CImageInfoList,
+    cb: CBoxImageListCb,
+    user_data: *mut c_void,
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
-    image_list(handle, out_list, out_error)
+    image_list(handle, cb, user_data, out_error)
 }
 
 #[unsafe(no_mangle)]
@@ -161,16 +168,13 @@ pub unsafe extern "C" fn boxlite_free_image_pull_result(result: *mut CImagePullR
 
 unsafe fn image_list(
     handle: *mut ImageHandle,
-    out_list: *mut *mut CImageInfoList,
+    cb: CBoxImageListCb,
+    user_data: *mut c_void,
     out_error: *mut FFIError,
 ) -> BoxliteErrorCode {
     unsafe {
         if handle.is_null() {
             write_error(out_error, null_pointer_error("handle"));
-            return BoxliteErrorCode::InvalidArgument;
-        }
-        if out_list.is_null() {
-            write_error(out_error, null_pointer_error("out_list"));
             return BoxliteErrorCode::InvalidArgument;
         }
 
@@ -181,41 +185,44 @@ unsafe fn image_list(
             return code;
         }
 
-        let result = handle_ref.tokio_rt.block_on(handle_ref.handle.list());
+        let core_handle = handle_ref.handle.clone();
+        let queue = handle_ref.queue.clone();
+        let user_data_addr = user_data as usize;
 
-        match result {
-            Ok(image_list) => {
+        handle_ref.tokio_rt.spawn(async move {
+            let result = core_handle.list().await.map(|image_list| {
                 let mut items: Vec<CImageInfo> =
                     image_list.iter().map(CImageInfo::from_image_info).collect();
                 let count = items.len() as c_int;
                 let ptr = items.as_mut_ptr();
                 std::mem::forget(items);
+                Box::into_raw(Box::new(CImageInfoList { items: ptr, count })) as usize
+            });
+            push_event(
+                &queue,
+                RuntimeEvent::ImageList {
+                    cb,
+                    user_data: user_data_addr,
+                    result,
+                },
+            )
+            .await;
+        });
 
-                *out_list = Box::into_raw(Box::new(CImageInfoList { items: ptr, count }));
-                BoxliteErrorCode::Ok
-            }
-            Err(e) => {
-                let code = error_to_code(&e);
-                write_error(out_error, e);
-                code
-            }
-        }
+        BoxliteErrorCode::Ok
     }
 }
 
 unsafe fn image_pull(
     handle: *mut ImageHandle,
-    image_ref: *const std::os::raw::c_char,
-    out_result: *mut *mut CImagePullResult,
+    image_ref: *const c_char,
+    cb: CBoxImagePullCb,
+    user_data: *mut c_void,
     out_error: *mut FFIError,
 ) -> BoxliteErrorCode {
     unsafe {
         if handle.is_null() {
             write_error(out_error, null_pointer_error("handle"));
-            return BoxliteErrorCode::InvalidArgument;
-        }
-        if out_result.is_null() {
-            write_error(out_error, null_pointer_error("out_result"));
             return BoxliteErrorCode::InvalidArgument;
         }
 
@@ -234,24 +241,29 @@ unsafe fn image_pull(
             return code;
         }
 
-        let result = handle_ref
-            .tokio_rt
-            .block_on(handle_ref.handle.pull(&image_ref));
+        let core_handle = handle_ref.handle.clone();
+        let queue = handle_ref.queue.clone();
+        let user_data_addr = user_data as usize;
 
-        match result {
-            Ok(image) => {
-                *out_result = Box::into_raw(Box::new(CImagePullResult::new(
+        handle_ref.tokio_rt.spawn(async move {
+            let result = core_handle.pull(&image_ref).await.map(|image| {
+                Box::into_raw(Box::new(CImagePullResult::new(
                     image.reference(),
                     image.config_digest(),
                     image.layer_count(),
-                )));
-                BoxliteErrorCode::Ok
-            }
-            Err(e) => {
-                let code = error_to_code(&e);
-                write_error(out_error, e);
-                code
-            }
-        }
+                ))) as usize
+            });
+            push_event(
+                &queue,
+                RuntimeEvent::ImagePull {
+                    cb,
+                    user_data: user_data_addr,
+                    result,
+                },
+            )
+            .await;
+        });
+
+        BoxliteErrorCode::Ok
     }
 }

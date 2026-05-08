@@ -9,6 +9,9 @@
 #include <stdint.h>
 #include <stdlib.h>
 
+// Maximum number of buffered events before producer tasks yield.
+#define QUEUE_CAPACITY 4096
+
 // Error codes returned by BoxLite C API functions.
 //
 // These codes map directly to Rust's BoxliteError variants,
@@ -64,6 +67,9 @@ typedef enum BoxliteRegistryTransport {
 } BoxliteRegistryTransport;
 
 // Opaque handle to a running box.
+//
+// `handle` is wrapped in `Arc` so it can be cloned into Tokio tasks for
+// async lifecycle ops.
 typedef struct BoxHandle BoxHandle;
 
 // Opaque handle for Runner API (auto-manages runtime)
@@ -77,7 +83,8 @@ typedef struct ImageHandle ImageHandle;
 
 typedef struct OptionsHandle OptionsHandle;
 
-// Opaque handle to a BoxliteRuntime instance with associated Tokio runtime
+// Opaque handle to a BoxliteRuntime instance with its Tokio runtime and the
+// per-runtime event queue used by the post-and-drain callback API.
 typedef struct RuntimeHandle RuntimeHandle;
 
 typedef struct RuntimeHandle CBoxliteRuntime;
@@ -98,6 +105,24 @@ typedef struct FFIError {
 } FFIError;
 
 typedef struct FFIError CBoxliteError;
+
+// Box creation completion.
+typedef void (*CBoxCreateBoxCb)(CBoxHandle*, CBoxliteError*, void*);
+
+// Box stop completion.
+typedef void (*CBoxStopBoxCb)(CBoxliteError*, void*);
+
+// Box attach (get) completion.
+typedef void (*CBoxGetBoxCb)(CBoxHandle*, CBoxliteError*, void*);
+
+// Box remove completion.
+typedef void (*CBoxRemoveBoxCb)(CBoxliteError*, void*);
+
+// Box start completion.
+typedef void (*CBoxStartBoxCb)(CBoxliteError*, void*);
+
+// Copy (into / out of) completion.
+typedef void (*CBoxCopyCb)(CBoxliteError*, void*);
 
 // C-compatible command descriptor with all BoxCommand options.
 //
@@ -126,6 +151,24 @@ typedef struct BoxliteCommand {
 
 typedef struct ExecutionHandle CExecutionHandle;
 
+// Streaming stdout chunk callback.
+typedef void (*CBoxStdoutCb)(const uint8_t*, size_t, void*);
+
+// Streaming stderr chunk callback.
+typedef void (*CBoxStderrCb)(const uint8_t*, size_t, void*);
+
+// Process exit callback (fired once per execution).
+typedef void (*CBoxExitCb)(int, void*);
+
+// Execution wait completion (carries exit code on success).
+typedef void (*CExecutionWaitCb)(int, CBoxliteError*, void*);
+
+// Execution kill completion.
+typedef void (*CExecutionKillCb)(CBoxliteError*, void*);
+
+// Execution PTY resize completion.
+typedef void (*CExecutionResizeCb)(CBoxliteError*, void*);
+
 typedef struct BoxRunner CBoxliteSimple;
 
 // Result structure for runner command execution
@@ -145,6 +188,9 @@ typedef struct CImagePullResult {
   int layer_count;
 } CImagePullResult;
 
+// Image pull completion.
+typedef void (*CBoxImagePullCb)(struct CImagePullResult*, CBoxliteError*, void*);
+
 typedef struct CImageInfo {
   char *reference;
   char *repository;
@@ -160,6 +206,9 @@ typedef struct CImageInfoList {
   int count;
 } CImageInfoList;
 
+// Image list completion.
+typedef void (*CBoxImageListCb)(struct CImageInfoList*, CBoxliteError*, void*);
+
 typedef struct CBoxInfo {
   char *id;
   char *name;
@@ -172,10 +221,16 @@ typedef struct CBoxInfo {
   int64_t created_at;
 } CBoxInfo;
 
+// Box info completion.
+typedef void (*CBoxInfoCb)(struct CBoxInfo*, CBoxliteError*, void*);
+
 typedef struct CBoxInfoList {
   struct CBoxInfo *items;
   int count;
 } CBoxInfoList;
+
+// Box info list completion.
+typedef void (*CBoxInfoListCb)(struct CBoxInfoList*, CBoxliteError*, void*);
 
 typedef struct CBoxMetrics {
   double cpu_percent;
@@ -192,6 +247,9 @@ typedef struct CBoxMetrics {
   int network_tcp_errors;
 } CBoxMetrics;
 
+// Per-box metrics completion.
+typedef void (*CBoxMetricsCb)(struct CBoxMetrics*, CBoxliteError*, void*);
+
 typedef struct CRuntimeMetrics {
   int boxes_created_total;
   int boxes_failed_total;
@@ -199,6 +257,9 @@ typedef struct CRuntimeMetrics {
   int total_commands_executed;
   int total_exec_errors;
 } CRuntimeMetrics;
+
+// Runtime metrics completion.
+typedef void (*CRuntimeMetricsCb)(struct CRuntimeMetrics*, CBoxliteError*, void*);
 
 typedef struct BoxliteImageRegistry {
   const char *host;
@@ -210,28 +271,41 @@ typedef struct BoxliteImageRegistry {
   const char *bearer_token;
 } BoxliteImageRegistry;
 
+// Runtime shutdown completion.
+typedef void (*CRuntimeShutdownCb)(CBoxliteError*, void*);
+
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
 
 enum BoxliteErrorCode boxlite_create_box(CBoxliteRuntime *runtime,
                                          CBoxliteOptions *opts,
-                                         CBoxHandle **out_box,
+                                         CBoxCreateBoxCb cb,
+                                         void *user_data,
                                          CBoxliteError *out_error);
 
-enum BoxliteErrorCode boxlite_stop_box(CBoxHandle *handle, CBoxliteError *out_error);
+enum BoxliteErrorCode boxlite_stop_box(CBoxHandle *handle,
+                                       CBoxStopBoxCb cb,
+                                       void *user_data,
+                                       CBoxliteError *out_error);
 
 enum BoxliteErrorCode boxlite_get(CBoxliteRuntime *runtime,
                                   const char *id_or_name,
-                                  CBoxHandle **out_handle,
+                                  CBoxGetBoxCb cb,
+                                  void *user_data,
                                   CBoxliteError *out_error);
 
 enum BoxliteErrorCode boxlite_remove(CBoxliteRuntime *runtime,
                                      const char *id_or_name,
                                      int force,
+                                     CBoxRemoveBoxCb cb,
+                                     void *user_data,
                                      CBoxliteError *out_error);
 
-enum BoxliteErrorCode boxlite_start_box(CBoxHandle *handle, CBoxliteError *out_error);
+enum BoxliteErrorCode boxlite_start_box(CBoxHandle *handle,
+                                        CBoxStartBoxCb cb,
+                                        void *user_data,
+                                        CBoxliteError *out_error);
 
 char *boxlite_box_id(CBoxHandle *handle);
 
@@ -240,36 +314,59 @@ void boxlite_box_free(CBoxHandle *handle);
 enum BoxliteErrorCode boxlite_copy_into(CBoxHandle *handle,
                                         const char *host_src,
                                         const char *guest_dst,
+                                        CBoxCopyCb cb,
+                                        void *user_data,
                                         CBoxliteError *out_error);
 
 enum BoxliteErrorCode boxlite_copy_out(CBoxHandle *handle,
                                        const char *guest_src,
                                        const char *host_dst,
+                                       CBoxCopyCb cb,
+                                       void *user_data,
                                        CBoxliteError *out_error);
 
 void boxlite_error_free(CBoxliteError *error);
 
-enum BoxliteErrorCode boxlite_execute(CBoxHandle *handle,
-                                      const struct BoxliteCommand *cmd,
-                                      void (*callback)(const char*, int, void*),
-                                      void *user_data,
-                                      CExecutionHandle **out_execution,
-                                      CBoxliteError *out_error);
+enum BoxliteErrorCode boxlite_box_exec(CBoxHandle *handle,
+                                       const struct BoxliteCommand *cmd,
+                                       CExecutionHandle **out_execution,
+                                       CBoxliteError *out_error);
 
-enum BoxliteErrorCode boxlite_execution_write(CExecutionHandle *execution,
-                                              const char *data,
-                                              int len,
-                                              CBoxliteError *out_error);
+enum BoxliteErrorCode boxlite_execution_on_stdout(CExecutionHandle *execution,
+                                                  CBoxStdoutCb cb,
+                                                  void *user_data,
+                                                  CBoxliteError *out_error);
+
+enum BoxliteErrorCode boxlite_execution_on_stderr(CExecutionHandle *execution,
+                                                  CBoxStderrCb cb,
+                                                  void *user_data,
+                                                  CBoxliteError *out_error);
+
+enum BoxliteErrorCode boxlite_execution_on_exit(CExecutionHandle *execution,
+                                                CBoxExitCb cb,
+                                                void *user_data,
+                                                CBoxliteError *out_error);
+
+enum BoxliteErrorCode boxlite_execution_write_stdin(CExecutionHandle *execution,
+                                                    const uint8_t *data,
+                                                    size_t len,
+                                                    CBoxliteError *out_error);
 
 enum BoxliteErrorCode boxlite_execution_wait(CExecutionHandle *execution,
-                                             int *out_exit_code,
+                                             CExecutionWaitCb cb,
+                                             void *user_data,
                                              CBoxliteError *out_error);
 
-enum BoxliteErrorCode boxlite_execution_kill(CExecutionHandle *execution, CBoxliteError *out_error);
+enum BoxliteErrorCode boxlite_execution_kill(CExecutionHandle *execution,
+                                             CExecutionKillCb cb,
+                                             void *user_data,
+                                             CBoxliteError *out_error);
 
 enum BoxliteErrorCode boxlite_execution_resize_tty(CExecutionHandle *execution,
                                                    int rows,
                                                    int cols,
+                                                   CExecutionResizeCb cb,
+                                                   void *user_data,
                                                    CBoxliteError *out_error);
 
 void boxlite_execution_free(CExecutionHandle *execution);
@@ -293,11 +390,13 @@ void boxlite_result_free(CBoxliteExecResult *result);
 
 enum BoxliteErrorCode boxlite_image_pull(CBoxliteImageHandle *handle,
                                          const char *image_ref,
-                                         struct CImagePullResult **out_result,
+                                         CBoxImagePullCb cb,
+                                         void *user_data,
                                          CBoxliteError *out_error);
 
 enum BoxliteErrorCode boxlite_image_list(CBoxliteImageHandle *handle,
-                                         struct CImageInfoList **out_list,
+                                         CBoxImageListCb cb,
+                                         void *user_data,
                                          CBoxliteError *out_error);
 
 void boxlite_image_free(CBoxliteImageHandle *handle);
@@ -312,11 +411,13 @@ enum BoxliteErrorCode boxlite_box_info(CBoxHandle *handle,
 
 enum BoxliteErrorCode boxlite_get_info(CBoxliteRuntime *runtime,
                                        const char *id_or_name,
-                                       struct CBoxInfo **out_info,
+                                       CBoxInfoCb cb,
+                                       void *user_data,
                                        CBoxliteError *out_error);
 
 enum BoxliteErrorCode boxlite_list_info(CBoxliteRuntime *runtime,
-                                        struct CBoxInfoList **out_list,
+                                        CBoxInfoListCb cb,
+                                        void *user_data,
                                         CBoxliteError *out_error);
 
 void boxlite_free_box_info(struct CBoxInfo *info);
@@ -324,11 +425,13 @@ void boxlite_free_box_info(struct CBoxInfo *info);
 void boxlite_free_box_info_list(struct CBoxInfoList *list);
 
 enum BoxliteErrorCode boxlite_box_metrics(CBoxHandle *handle,
-                                          struct CBoxMetrics *out_metrics,
+                                          CBoxMetricsCb cb,
+                                          void *user_data,
                                           CBoxliteError *out_error);
 
 enum BoxliteErrorCode boxlite_runtime_metrics(CBoxliteRuntime *runtime,
-                                              struct CRuntimeMetrics *out_metrics,
+                                              CRuntimeMetricsCb cb,
+                                              void *user_data,
                                               CBoxliteError *out_error);
 
 enum BoxliteErrorCode boxlite_options_new(const char *image,
@@ -391,11 +494,29 @@ enum BoxliteErrorCode boxlite_runtime_images(CBoxliteRuntime *runtime,
                                              CBoxliteImageHandle **out_handle,
                                              CBoxliteError *out_error);
 
+// Async + callback variant of runtime shutdown.
+//
+// Spawns a Tokio task that calls `BoxliteRuntime::shutdown` and posts a
+// `RuntimeEvent::Shutdown` to the runtime queue. Marks liveness as closed
+// synchronously so subsequent ops fail fast.
 enum BoxliteErrorCode boxlite_runtime_shutdown(CBoxliteRuntime *runtime,
-                                               int timeout,
+                                               int timeout_secs,
+                                               CRuntimeShutdownCb cb,
+                                               void *user_data,
                                                CBoxliteError *out_error);
 
 void boxlite_runtime_free(CBoxliteRuntime *runtime);
+
+// Drain pending callbacks for `runtime`, dispatching them on the calling
+// thread. The queue lock is released before any user code runs.
+//
+// `timeout_ms`:
+//   - `0`  : non-blocking poll
+//   - `< 0`: block indefinitely until at least one event is available
+//   - `> 0`: block up to that many milliseconds
+//
+// Returns the number of dispatched events, or `-1` on error.
+int boxlite_runtime_drain(CBoxliteRuntime *runtime, int timeout_ms, CBoxliteError *out_error);
 
 void boxlite_free_string(char *s);
 

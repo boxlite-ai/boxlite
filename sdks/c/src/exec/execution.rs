@@ -1,67 +1,122 @@
+//! Execution handle for the BoxLite C SDK (post-and-drain callback model).
+//!
+//! `boxlite_box_exec` synchronously creates a handle. Streaming callbacks
+//! (`_on_stdout`, `_on_stderr`, `_on_exit`) are registered by the user; on
+//! first registration the corresponding pump task is lazily spawned and
+//! pushes events to the parent runtime's `EventQueue`. Lifecycle async ops
+//! (`_wait`, `_kill`, `_resize_tty`) follow the same post-and-drain pattern
+//! as box-handle ops.
+//!
+//! Stdin writes are synchronous: they are routed through the in-process
+//! channel inside `ExecStdin::write` and never block on a Tokio worker.
+
 use futures::StreamExt;
-use std::ffi::CString;
-use std::os::raw::{c_char, c_int, c_void};
+use std::os::raw::{c_int, c_void};
 use std::ptr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use tokio::runtime::Runtime as TokioRuntime;
 use tokio::task::JoinHandle;
 
-use boxlite::{BoxliteError, ExecStdin, Execution};
+use boxlite::{BoxliteError, ExecStderr, ExecStdin, ExecStdout, Execution};
 
 use super::command::{BoxliteCommand, parse_boxlite_command};
 use crate::box_handle::BoxHandle;
 use crate::error::{BoxliteErrorCode, FFIError, error_to_code, null_pointer_error, write_error};
+use crate::event_queue::{
+    CBoxExitCb, CBoxStderrCb, CBoxStdoutCb, CExecutionKillCb, CExecutionResizeCb, CExecutionWaitCb,
+    EventQueue, RuntimeEvent, push_event,
+};
 use crate::{CBoxHandle, CBoxliteError, CExecutionHandle};
-
-pub type OutputCallback = extern "C" fn(*const c_char, c_int, *mut c_void);
 
 /// Opaque handle to a running command execution.
 pub struct ExecutionHandle {
-    execution: Option<Execution>,
+    /// The underlying `Execution`. `None` once `_free` has consumed it.
+    execution: Arc<Mutex<Option<Execution>>>,
+    /// Stdin stream (taken at exec creation; held until `_free` drops it).
     stdin: Option<ExecStdin>,
-    output_task: Option<JoinHandle<()>>,
-    completed: bool,
+    /// Streams pending pump-task spawn. Each is moved out on first cb register.
+    pending_stdout: Option<ExecStdout>,
+    pending_stderr: Option<ExecStderr>,
+    /// Spawned pumps; aborted on `_free`.
+    pumps: Mutex<Vec<JoinHandle<()>>>,
+    /// Shared runtime queue for posting stream / lifecycle events.
+    queue: Arc<EventQueue>,
+    /// Tokio runtime handle for spawning pumps and lifecycle tasks.
     tokio_rt: Arc<TokioRuntime>,
+    /// True after `_wait` or the exit pump observes process termination,
+    /// preventing redundant kill on `_free`.
+    completed: Arc<Mutex<bool>>,
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn boxlite_execute(
+pub unsafe extern "C" fn boxlite_box_exec(
     handle: *mut CBoxHandle,
     cmd: *const BoxliteCommand,
-    callback: Option<extern "C" fn(*const c_char, c_int, *mut c_void)>,
-    user_data: *mut c_void,
     out_execution: *mut *mut CExecutionHandle,
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
-    execute(handle, cmd, callback, user_data, out_execution, out_error)
+    box_exec(handle, cmd, out_execution, out_error)
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn boxlite_execution_write(
+pub unsafe extern "C" fn boxlite_execution_on_stdout(
     execution: *mut CExecutionHandle,
-    data: *const c_char,
-    len: c_int,
+    cb: CBoxStdoutCb,
+    user_data: *mut c_void,
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
-    execution_write(execution, data, len, out_error)
+    register_stdout(execution, cb, user_data, out_error)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_execution_on_stderr(
+    execution: *mut CExecutionHandle,
+    cb: CBoxStderrCb,
+    user_data: *mut c_void,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    register_stderr(execution, cb, user_data, out_error)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_execution_on_exit(
+    execution: *mut CExecutionHandle,
+    cb: CBoxExitCb,
+    user_data: *mut c_void,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    register_exit(execution, cb, user_data, out_error)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_execution_write_stdin(
+    execution: *mut CExecutionHandle,
+    data: *const u8,
+    len: usize,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    write_stdin(execution, data, len, out_error)
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_execution_wait(
     execution: *mut CExecutionHandle,
-    out_exit_code: *mut c_int,
+    cb: CExecutionWaitCb,
+    user_data: *mut c_void,
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
-    execution_wait(execution, out_exit_code, out_error)
+    execution_wait(execution, cb, user_data, out_error)
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boxlite_execution_kill(
     execution: *mut CExecutionHandle,
+    cb: CExecutionKillCb,
+    user_data: *mut c_void,
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
-    execution_kill(execution, out_error)
+    execution_kill(execution, cb, user_data, out_error)
 }
 
 #[unsafe(no_mangle)]
@@ -69,9 +124,11 @@ pub unsafe extern "C" fn boxlite_execution_resize_tty(
     execution: *mut CExecutionHandle,
     rows: c_int,
     cols: c_int,
+    cb: CExecutionResizeCb,
+    user_data: *mut c_void,
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
-    execution_resize_tty(execution, rows, cols, out_error)
+    execution_resize_tty(execution, rows, cols, cb, user_data, out_error)
 }
 
 #[unsafe(no_mangle)]
@@ -79,11 +136,9 @@ pub unsafe extern "C" fn boxlite_execution_free(execution: *mut CExecutionHandle
     execution_free(execution)
 }
 
-unsafe fn execute(
+unsafe fn box_exec(
     handle: *mut BoxHandle,
     cmd: *const BoxliteCommand,
-    callback: Option<OutputCallback>,
-    user_data: *mut c_void,
     out_execution: *mut *mut ExecutionHandle,
     out_error: *mut FFIError,
 ) -> BoxliteErrorCode {
@@ -102,7 +157,7 @@ unsafe fn execute(
         }
         *out_execution = ptr::null_mut();
 
-        let handle_ref = &mut *handle;
+        let handle_ref = &*handle;
         let command = match parse_boxlite_command(&*cmd) {
             Ok(command) => command,
             Err(e) => {
@@ -112,27 +167,28 @@ unsafe fn execute(
             }
         };
 
-        let tokio_rt = handle_ref.tokio_rt.clone();
-        let execution_rt = tokio_rt.clone();
-        let result = tokio_rt.block_on(async {
-            let mut execution = handle_ref.handle.exec(command).await?;
-            let stdin = execution.stdin();
-            let stdout = execution.stdout();
-            let stderr = execution.stderr();
-            let output_task = spawn_output_task(&tokio_rt, stdout, stderr, callback, user_data);
-
-            Ok::<ExecutionHandle, BoxliteError>(ExecutionHandle {
-                execution: Some(execution),
-                stdin,
-                output_task: Some(output_task),
-                completed: false,
-                tokio_rt: execution_rt,
-            })
-        });
+        // Synchronous handle creation: block on the underlying exec call,
+        // which only sets up channels; it does not spawn the process loop.
+        let lite = handle_ref.handle.clone();
+        let result = handle_ref.tokio_rt.block_on(lite.exec(command));
 
         match result {
-            Ok(execution) => {
-                *out_execution = Box::into_raw(Box::new(execution));
+            Ok(mut execution) => {
+                let stdin = execution.stdin();
+                let stdout = execution.stdout();
+                let stderr = execution.stderr();
+
+                let exec_handle = ExecutionHandle {
+                    execution: Arc::new(Mutex::new(Some(execution))),
+                    stdin,
+                    pending_stdout: stdout,
+                    pending_stderr: stderr,
+                    pumps: Mutex::new(Vec::new()),
+                    queue: handle_ref.queue.clone(),
+                    tokio_rt: handle_ref.tokio_rt.clone(),
+                    completed: Arc::new(Mutex::new(false)),
+                };
+                *out_execution = Box::into_raw(Box::new(exec_handle));
                 BoxliteErrorCode::Ok
             }
             Err(e) => {
@@ -144,58 +200,99 @@ unsafe fn execute(
     }
 }
 
-fn spawn_output_task(
-    tokio_rt: &Arc<TokioRuntime>,
-    mut stdout: Option<boxlite::ExecStdout>,
-    mut stderr: Option<boxlite::ExecStderr>,
-    callback: Option<OutputCallback>,
+unsafe fn register_stdout(
+    execution: *mut ExecutionHandle,
+    cb: CBoxStdoutCb,
     user_data: *mut c_void,
-) -> JoinHandle<()> {
-    let user_data = user_data as usize;
-    tokio_rt.spawn(async move {
-        loop {
-            tokio::select! {
-                Some(line) = async {
-                    match &mut stdout {
-                        Some(stream) => stream.next().await,
-                        None => None,
-                    }
-                } => {
-                    write_streaming_output(callback, line, 0, user_data);
-                }
-                Some(line) = async {
-                    match &mut stderr {
-                        Some(stream) => stream.next().await,
-                        None => None,
-                    }
-                } => {
-                    write_streaming_output(callback, line, 1, user_data);
-                }
-                else => break,
-            }
+    out_error: *mut FFIError,
+) -> BoxliteErrorCode {
+    unsafe {
+        if execution.is_null() {
+            write_error(out_error, null_pointer_error("execution"));
+            return BoxliteErrorCode::InvalidArgument;
         }
-    })
-}
+        let exec_ref = &mut *execution;
+        let Some(stream) = exec_ref.pending_stdout.take() else {
+            write_error(
+                out_error,
+                BoxliteError::InvalidState(
+                    "stdout callback already registered or stream unavailable".to_string(),
+                ),
+            );
+            return BoxliteErrorCode::InvalidState;
+        };
 
-fn write_streaming_output(
-    callback: Option<OutputCallback>,
-    line: String,
-    is_stderr: c_int,
-    user_data: usize,
-) {
-    let Some(callback) = callback else {
-        return;
-    };
-
-    if let Ok(text) = CString::new(line) {
-        callback(text.as_ptr(), is_stderr, user_data as *mut c_void);
+        let queue = exec_ref.queue.clone();
+        let user_data_addr = user_data as usize;
+        let pump = exec_ref
+            .tokio_rt
+            .spawn(stdout_pump(stream, cb, user_data_addr, queue));
+        exec_ref.pumps.lock().unwrap().push(pump);
+        BoxliteErrorCode::Ok
     }
 }
 
-unsafe fn execution_write(
+unsafe fn register_stderr(
     execution: *mut ExecutionHandle,
-    data: *const c_char,
-    len: c_int,
+    cb: CBoxStderrCb,
+    user_data: *mut c_void,
+    out_error: *mut FFIError,
+) -> BoxliteErrorCode {
+    unsafe {
+        if execution.is_null() {
+            write_error(out_error, null_pointer_error("execution"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+        let exec_ref = &mut *execution;
+        let Some(stream) = exec_ref.pending_stderr.take() else {
+            write_error(
+                out_error,
+                BoxliteError::InvalidState(
+                    "stderr callback already registered or stream unavailable".to_string(),
+                ),
+            );
+            return BoxliteErrorCode::InvalidState;
+        };
+
+        let queue = exec_ref.queue.clone();
+        let user_data_addr = user_data as usize;
+        let pump = exec_ref
+            .tokio_rt
+            .spawn(stderr_pump(stream, cb, user_data_addr, queue));
+        exec_ref.pumps.lock().unwrap().push(pump);
+        BoxliteErrorCode::Ok
+    }
+}
+
+unsafe fn register_exit(
+    execution: *mut ExecutionHandle,
+    cb: CBoxExitCb,
+    user_data: *mut c_void,
+    out_error: *mut FFIError,
+) -> BoxliteErrorCode {
+    unsafe {
+        if execution.is_null() {
+            write_error(out_error, null_pointer_error("execution"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+        let exec_ref = &*execution;
+        let exec_arc = exec_ref.execution.clone();
+        let queue = exec_ref.queue.clone();
+        let user_data_addr = user_data as usize;
+        let completed = exec_ref.completed.clone();
+        let pump =
+            exec_ref
+                .tokio_rt
+                .spawn(exit_pump(exec_arc, cb, user_data_addr, queue, completed));
+        exec_ref.pumps.lock().unwrap().push(pump);
+        BoxliteErrorCode::Ok
+    }
+}
+
+unsafe fn write_stdin(
+    execution: *mut ExecutionHandle,
+    data: *const u8,
+    len: usize,
     out_error: *mut FFIError,
 ) -> BoxliteErrorCode {
     unsafe {
@@ -207,19 +304,12 @@ unsafe fn execution_write(
             write_error(out_error, null_pointer_error("data"));
             return BoxliteErrorCode::InvalidArgument;
         }
-        if len < 0 {
-            write_error(
-                out_error,
-                BoxliteError::InvalidArgument("len must be non-negative".to_string()),
-            );
-            return BoxliteErrorCode::InvalidArgument;
-        }
         if len == 0 {
             return BoxliteErrorCode::Ok;
         }
 
-        let execution_ref = &mut *execution;
-        let Some(stdin) = execution_ref.stdin.as_mut() else {
+        let exec_ref = &mut *execution;
+        let Some(stdin) = exec_ref.stdin.as_mut() else {
             write_error(
                 out_error,
                 BoxliteError::InvalidState("execution stdin is closed".to_string()),
@@ -227,8 +317,11 @@ unsafe fn execution_write(
             return BoxliteErrorCode::InvalidState;
         };
 
-        let bytes = std::slice::from_raw_parts(data.cast::<u8>(), len as usize);
-        match execution_ref.tokio_rt.block_on(stdin.write(bytes)) {
+        let bytes = std::slice::from_raw_parts(data, len);
+        // ExecStdin::write is async only because the trait is async; the
+        // underlying send is non-blocking (mpsc::UnboundedSender::send), so
+        // block_on returns immediately on the calling thread.
+        match exec_ref.tokio_rt.block_on(stdin.write(bytes)) {
             Ok(()) => BoxliteErrorCode::Ok,
             Err(e) => {
                 let code = error_to_code(&e);
@@ -241,7 +334,8 @@ unsafe fn execution_write(
 
 unsafe fn execution_wait(
     execution: *mut ExecutionHandle,
-    out_exit_code: *mut c_int,
+    cb: CExecutionWaitCb,
+    user_data: *mut c_void,
     out_error: *mut FFIError,
 ) -> BoxliteErrorCode {
     unsafe {
@@ -249,45 +343,33 @@ unsafe fn execution_wait(
             write_error(out_error, null_pointer_error("execution"));
             return BoxliteErrorCode::InvalidArgument;
         }
-        if out_exit_code.is_null() {
-            write_error(out_error, null_pointer_error("out_exit_code"));
-            return BoxliteErrorCode::InvalidArgument;
-        }
 
-        let execution_ref = &mut *execution;
-        let Some(execution) = execution_ref.execution.as_mut() else {
-            write_error(
-                out_error,
-                BoxliteError::InvalidState("execution has been freed".to_string()),
-            );
-            return BoxliteErrorCode::InvalidState;
-        };
+        let exec_ref = &*execution;
+        let exec_arc = exec_ref.execution.clone();
+        let queue = exec_ref.queue.clone();
+        let user_data_addr = user_data as usize;
 
-        let result = execution_ref.tokio_rt.block_on(async {
-            let result = execution.wait().await;
-            if let Some(task) = execution_ref.output_task.take() {
-                let _ = task.await;
-            }
-            result
+        exec_ref.tokio_rt.spawn(async move {
+            let result = wait_on_clone(&exec_arc).await;
+            push_event(
+                &queue,
+                RuntimeEvent::Wait {
+                    cb,
+                    user_data: user_data_addr,
+                    result,
+                },
+            )
+            .await;
         });
 
-        match result {
-            Ok(status) => {
-                execution_ref.completed = true;
-                *out_exit_code = status.exit_code;
-                BoxliteErrorCode::Ok
-            }
-            Err(e) => {
-                let code = error_to_code(&e);
-                write_error(out_error, e);
-                code
-            }
-        }
+        BoxliteErrorCode::Ok
     }
 }
 
 unsafe fn execution_kill(
     execution: *mut ExecutionHandle,
+    cb: CExecutionKillCb,
+    user_data: *mut c_void,
     out_error: *mut FFIError,
 ) -> BoxliteErrorCode {
     unsafe {
@@ -296,23 +378,25 @@ unsafe fn execution_kill(
             return BoxliteErrorCode::InvalidArgument;
         }
 
-        let execution_ref = &mut *execution;
-        let Some(execution) = execution_ref.execution.as_mut() else {
-            write_error(
-                out_error,
-                BoxliteError::InvalidState("execution has been freed".to_string()),
-            );
-            return BoxliteErrorCode::InvalidState;
-        };
+        let exec_ref = &*execution;
+        let exec_arc = exec_ref.execution.clone();
+        let queue = exec_ref.queue.clone();
+        let user_data_addr = user_data as usize;
 
-        match execution_ref.tokio_rt.block_on(execution.kill()) {
-            Ok(()) => BoxliteErrorCode::Ok,
-            Err(e) => {
-                let code = error_to_code(&e);
-                write_error(out_error, e);
-                code
-            }
-        }
+        exec_ref.tokio_rt.spawn(async move {
+            let result = kill_on_clone(&exec_arc).await;
+            push_event(
+                &queue,
+                RuntimeEvent::Kill {
+                    cb,
+                    user_data: user_data_addr,
+                    result,
+                },
+            )
+            .await;
+        });
+
+        BoxliteErrorCode::Ok
     }
 }
 
@@ -320,6 +404,8 @@ unsafe fn execution_resize_tty(
     execution: *mut ExecutionHandle,
     rows: c_int,
     cols: c_int,
+    cb: CExecutionResizeCb,
+    user_data: *mut c_void,
     out_error: *mut FFIError,
 ) -> BoxliteErrorCode {
     unsafe {
@@ -335,26 +421,27 @@ unsafe fn execution_resize_tty(
             return BoxliteErrorCode::InvalidArgument;
         }
 
-        let execution_ref = &mut *execution;
-        let Some(execution) = execution_ref.execution.as_ref() else {
-            write_error(
-                out_error,
-                BoxliteError::InvalidState("execution has been freed".to_string()),
-            );
-            return BoxliteErrorCode::InvalidState;
-        };
+        let exec_ref = &*execution;
+        let exec_arc = exec_ref.execution.clone();
+        let queue = exec_ref.queue.clone();
+        let user_data_addr = user_data as usize;
+        let rows_u = rows as u32;
+        let cols_u = cols as u32;
 
-        match execution_ref
-            .tokio_rt
-            .block_on(execution.resize_tty(rows as u32, cols as u32))
-        {
-            Ok(()) => BoxliteErrorCode::Ok,
-            Err(e) => {
-                let code = error_to_code(&e);
-                write_error(out_error, e);
-                code
-            }
-        }
+        exec_ref.tokio_rt.spawn(async move {
+            let result = resize_on_clone(&exec_arc, rows_u, cols_u).await;
+            push_event(
+                &queue,
+                RuntimeEvent::Resize {
+                    cb,
+                    user_data: user_data_addr,
+                    result,
+                },
+            )
+            .await;
+        });
+
+        BoxliteErrorCode::Ok
     }
 }
 
@@ -362,38 +449,167 @@ unsafe fn execution_free(execution: *mut ExecutionHandle) {
     if execution.is_null() {
         return;
     }
-
     unsafe {
-        let mut execution = Box::from_raw(execution);
-        if let Some(mut stdin) = execution.stdin.take() {
+        let mut exec_box = Box::from_raw(execution);
+
+        // Close stdin (drops the sender, signalling EOF).
+        if let Some(mut stdin) = exec_box.stdin.take() {
             stdin.close();
         }
 
-        if let Some(mut running) = execution.execution.take()
-            && !execution.completed
-        {
-            let _ = execution.tokio_rt.block_on(async {
-                let _ = running.kill().await;
-                running.wait().await
+        // Abort pump tasks; results in-flight that haven't been pushed are
+        // simply dropped.
+        let pumps = std::mem::take(&mut *exec_box.pumps.lock().unwrap());
+        for pump in &pumps {
+            pump.abort();
+        }
+
+        // If the process never observed completion, kill + wait inside a
+        // best-effort block_on so we don't leak the guest-side process.
+        let completed = *exec_box.completed.lock().unwrap();
+        if !completed {
+            let exec_arc = exec_box.execution.clone();
+            let _ = exec_box.tokio_rt.block_on(async move {
+                let _ = kill_on_clone(&exec_arc).await;
+                wait_on_clone(&exec_arc).await
             });
         }
 
-        if let Some(task) = execution.output_task.take() {
-            task.abort();
-        }
+        // Pumps already aborted above; let the box drop normally.
+        drop(exec_box);
     }
 }
 
+// ─── Pump tasks ────────────────────────────────────────────────────────────
+
+async fn stdout_pump(
+    mut stream: ExecStdout,
+    cb: CBoxStdoutCb,
+    user_data_addr: usize,
+    queue: Arc<EventQueue>,
+) {
+    while let Some(line) = stream.next().await {
+        let mut bytes = line.into_bytes();
+        // Restore the line terminator that the upstream stream stripped, so
+        // the C consumer reassembles a faithful byte stream.
+        bytes.push(b'\n');
+        push_event(
+            &queue,
+            RuntimeEvent::Stdout {
+                cb,
+                user_data: user_data_addr,
+                data: bytes,
+            },
+        )
+        .await;
+    }
+}
+
+async fn stderr_pump(
+    mut stream: ExecStderr,
+    cb: CBoxStderrCb,
+    user_data_addr: usize,
+    queue: Arc<EventQueue>,
+) {
+    while let Some(line) = stream.next().await {
+        let mut bytes = line.into_bytes();
+        bytes.push(b'\n');
+        push_event(
+            &queue,
+            RuntimeEvent::Stderr {
+                cb,
+                user_data: user_data_addr,
+                data: bytes,
+            },
+        )
+        .await;
+    }
+}
+
+async fn exit_pump(
+    exec_arc: Arc<Mutex<Option<Execution>>>,
+    cb: CBoxExitCb,
+    user_data_addr: usize,
+    queue: Arc<EventQueue>,
+    completed: Arc<Mutex<bool>>,
+) {
+    let exit_code = wait_on_clone(&exec_arc).await.unwrap_or(-1);
+    *completed.lock().unwrap() = true;
+    push_event(
+        &queue,
+        RuntimeEvent::Exit {
+            cb,
+            user_data: user_data_addr,
+            exit_code,
+        },
+    )
+    .await;
+}
+
+// ─── Helpers ───────────────────────────────────────────────────────────────
+
+/// Take a snapshot clone of the underlying Execution so multiple async ops
+/// can call `wait`/`kill`/`resize_tty` against the same backend without
+/// tripping borrow rules. `Execution` is internally `Arc<Mutex<...>>`, so
+/// the clone shares state with the original.
+fn snapshot_execution(slot: &Mutex<Option<Execution>>) -> Result<Execution, BoxliteError> {
+    let guard = slot.lock().unwrap();
+    guard
+        .as_ref()
+        .cloned()
+        .ok_or_else(|| BoxliteError::InvalidState("execution has been freed".to_string()))
+}
+
+async fn wait_on_clone(slot: &Mutex<Option<Execution>>) -> Result<i32, BoxliteError> {
+    let mut clone = snapshot_execution(slot)?;
+    clone.wait().await.map(|status| status.exit_code)
+}
+
+async fn kill_on_clone(slot: &Mutex<Option<Execution>>) -> Result<(), BoxliteError> {
+    let mut clone = snapshot_execution(slot)?;
+    clone.kill().await
+}
+
+async fn resize_on_clone(
+    slot: &Mutex<Option<Execution>>,
+    rows: u32,
+    cols: u32,
+) -> Result<(), BoxliteError> {
+    let clone = snapshot_execution(slot)?;
+    clone.resize_tty(rows, cols).await
+}
+
+// ─── Tests ─────────────────────────────────────────────────────────────────
+
 #[cfg(test)]
 mod tests {
+    use std::ffi::CString;
     use std::ptr;
 
     use super::*;
+    use crate::event_queue::EventQueue;
+    use std::sync::Arc;
 
-    extern "C" fn noop_callback(_: *const c_char, _: c_int, _: *mut c_void) {}
+    extern "C" fn noop_stdout(_: *const u8, _: usize, _: *mut c_void) {}
+    extern "C" fn noop_unit(_: *mut FFIError, _: *mut c_void) {}
+    extern "C" fn noop_wait(_: c_int, _: *mut FFIError, _: *mut c_void) {}
+
+    fn empty_handle() -> ExecutionHandle {
+        let runtime = crate::runtime::create_tokio_runtime().expect("runtime");
+        ExecutionHandle {
+            execution: Arc::new(Mutex::new(None)),
+            stdin: None,
+            pending_stdout: None,
+            pending_stderr: None,
+            pumps: Mutex::new(Vec::new()),
+            queue: Arc::new(EventQueue::new()),
+            tokio_rt: runtime,
+            completed: Arc::new(Mutex::new(false)),
+        }
+    }
 
     #[test]
-    fn execute_rejects_null_handle() {
+    fn box_exec_rejects_null_handle() {
         let command = CString::new("/bin/sh").expect("command cstring");
         let cmd = BoxliteCommand {
             command: command.as_ptr(),
@@ -410,11 +626,9 @@ mod tests {
         let mut error = FFIError::default();
 
         let code = unsafe {
-            boxlite_execute(
+            boxlite_box_exec(
                 ptr::null_mut(),
                 &cmd as *const _,
-                Some(noop_callback),
-                ptr::null_mut(),
                 &mut execution as *mut _,
                 &mut error as *mut _,
             )
@@ -427,61 +641,92 @@ mod tests {
     }
 
     #[test]
-    fn execution_write_rejects_null_execution() {
+    fn write_stdin_rejects_null_execution() {
         let mut error = FFIError::default();
-        let data = CString::new("hello").expect("data cstring");
-
         let code = unsafe {
-            boxlite_execution_write(ptr::null_mut(), data.as_ptr(), 5, &mut error as *mut _)
+            boxlite_execution_write_stdin(ptr::null_mut(), b"hello".as_ptr(), 5, &mut error)
         };
-
         assert_eq!(code, BoxliteErrorCode::InvalidArgument);
         assert!(!error.message.is_null());
         unsafe { crate::boxlite_error_free(&mut error as *mut _) };
     }
 
     #[test]
-    fn execution_write_rejects_negative_len() {
-        let runtime = crate::runtime::create_tokio_runtime().expect("runtime");
-        let mut execution = ExecutionHandle {
-            execution: None,
-            stdin: None,
-            output_task: None,
-            completed: false,
-            tokio_rt: runtime,
-        };
+    fn write_stdin_rejects_closed_stdin() {
+        let mut handle = empty_handle();
         let mut error = FFIError::default();
-
         let code = unsafe {
-            boxlite_execution_write(
-                &mut execution as *mut _,
-                ptr::null(),
-                -1,
-                &mut error as *mut _,
+            boxlite_execution_write_stdin(&mut handle as *mut _, b"hello".as_ptr(), 5, &mut error)
+        };
+        assert_eq!(code, BoxliteErrorCode::InvalidState);
+        assert!(!error.message.is_null());
+        unsafe { crate::boxlite_error_free(&mut error as *mut _) };
+    }
+
+    #[test]
+    fn resize_rejects_invalid_dimensions() {
+        let mut handle = empty_handle();
+        let mut error = FFIError::default();
+        let code = unsafe {
+            boxlite_execution_resize_tty(
+                &mut handle as *mut _,
+                0,
+                80,
+                noop_unit,
+                ptr::null_mut(),
+                &mut error,
             )
         };
-
         assert_eq!(code, BoxliteErrorCode::InvalidArgument);
         assert!(!error.message.is_null());
         unsafe { crate::boxlite_error_free(&mut error as *mut _) };
     }
 
     #[test]
-    fn execution_resize_rejects_invalid_dimensions() {
-        let runtime = crate::runtime::create_tokio_runtime().expect("runtime");
-        let mut execution = ExecutionHandle {
-            execution: None,
-            stdin: None,
-            output_task: None,
-            completed: false,
-            tokio_rt: runtime,
-        };
+    fn register_stdout_rejects_null() {
         let mut error = FFIError::default();
-
         let code = unsafe {
-            boxlite_execution_resize_tty(&mut execution as *mut _, 0, 80, &mut error as *mut _)
+            boxlite_execution_on_stdout(ptr::null_mut(), noop_stdout, ptr::null_mut(), &mut error)
         };
+        assert_eq!(code, BoxliteErrorCode::InvalidArgument);
+        assert!(!error.message.is_null());
+        unsafe { crate::boxlite_error_free(&mut error as *mut _) };
+    }
 
+    #[test]
+    fn register_stdout_rejects_double_register() {
+        let mut handle = empty_handle();
+        let mut error = FFIError::default();
+        let code = unsafe {
+            boxlite_execution_on_stdout(
+                &mut handle as *mut _,
+                noop_stdout,
+                ptr::null_mut(),
+                &mut error,
+            )
+        };
+        // pending_stdout is None on the empty handle so this returns InvalidState.
+        assert_eq!(code, BoxliteErrorCode::InvalidState);
+        unsafe { crate::boxlite_error_free(&mut error as *mut _) };
+    }
+
+    #[test]
+    fn wait_rejects_null_execution() {
+        let mut error = FFIError::default();
+        let code = unsafe {
+            boxlite_execution_wait(ptr::null_mut(), noop_wait, ptr::null_mut(), &mut error)
+        };
+        assert_eq!(code, BoxliteErrorCode::InvalidArgument);
+        assert!(!error.message.is_null());
+        unsafe { crate::boxlite_error_free(&mut error as *mut _) };
+    }
+
+    #[test]
+    fn kill_rejects_null_execution() {
+        let mut error = FFIError::default();
+        let code = unsafe {
+            boxlite_execution_kill(ptr::null_mut(), noop_unit, ptr::null_mut(), &mut error)
+        };
         assert_eq!(code, BoxliteErrorCode::InvalidArgument);
         assert!(!error.message.is_null());
         unsafe { crate::boxlite_error_free(&mut error as *mut _) };
