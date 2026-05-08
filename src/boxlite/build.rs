@@ -1295,10 +1295,4 @@ fn main() {
 
     // Generate embedded runtime manifest (include_bytes! for self-contained SDKs)
     EmbeddedManifest::new(&runtime_dir).generate(&mode, &cargo);
-
-    // Set rpath for boxlite-shim
-    #[cfg(target_os = "macos")]
-    println!("cargo:rustc-link-arg=-Wl,-rpath,@loader_path");
-    #[cfg(target_os = "linux")]
-    println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN");
 }
