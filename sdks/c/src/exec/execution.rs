@@ -13,6 +13,7 @@
 use futures::StreamExt;
 use std::os::raw::{c_int, c_void};
 use std::ptr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use tokio::runtime::Runtime as TokioRuntime;
@@ -68,7 +69,18 @@ pub struct ExecutionHandle {
     tokio_rt: Arc<TokioRuntime>,
     /// True after `_wait` or the exit pump observes process termination,
     /// preventing redundant kill on `_free`.
-    completed: Arc<Mutex<bool>>,
+    ///
+    /// Distinct from `exit_dispatched` so that "process exited" and
+    /// "Exit event was published to the queue" are tracked independently.
+    /// Conflating them caused the round-3 #1 race: execution_free read
+    /// process state and decided whether to push Exit in one go, with no
+    /// atomic claim against the exit_pump path.
+    process_completed: Arc<AtomicBool>,
+    /// Single-flip claim on the per-execution Exit event. Set via
+    /// `compare_exchange(false, true, AcqRel, Acquire)`; only the
+    /// claimer pushes Exit. Both `execution_free` and `exit_pump`
+    /// race for it; the loser silently no-ops.
+    exit_dispatched: Arc<AtomicBool>,
 }
 
 #[unsafe(no_mangle)]
@@ -210,7 +222,8 @@ unsafe fn box_exec(
                     exit_dispatch: Mutex::new(None),
                     queue: handle_ref.queue.clone(),
                     tokio_rt: handle_ref.tokio_rt.clone(),
-                    completed: Arc::new(Mutex::new(false)),
+                    process_completed: Arc::new(AtomicBool::new(false)),
+                    exit_dispatched: Arc::new(AtomicBool::new(false)),
                 };
                 *out_execution = Box::into_raw(Box::new(exec_handle));
                 BoxliteErrorCode::Ok
@@ -310,7 +323,8 @@ unsafe fn register_exit(
         let exec_arc = exec_ref.execution.clone();
         let queue = exec_ref.queue.clone();
         let user_data_addr = user_data as usize;
-        let completed = exec_ref.completed.clone();
+        let process_completed = exec_ref.process_completed.clone();
+        let exit_dispatched = exec_ref.exit_dispatched.clone();
         // Capture (cb, user_data) so the force-cleanup path in
         // `execution_free` can synthesise an Exit event on teardown.
         *exec_ref.exit_dispatch.lock().unwrap() = Some((cb, user_data_addr));
@@ -324,7 +338,8 @@ unsafe fn register_exit(
             cb,
             user_data_addr,
             queue,
-            completed,
+            process_completed,
+            exit_dispatched,
             stream_dones,
         ));
         exec_ref.pumps.lock().unwrap().push(pump);
@@ -505,32 +520,40 @@ unsafe fn execution_free(execution: *mut ExecutionHandle) {
 
         // If the process never observed completion, kill + wait inside a
         // best-effort block_on so we don't leak the guest-side process.
-        let completed = *exec_box.completed.lock().unwrap();
-        if !completed {
+        let process_completed = exec_box.process_completed.load(Ordering::Acquire);
+        if !process_completed {
             let exec_arc = exec_box.execution.clone();
             let _ = exec_box.tokio_rt.block_on(async move {
                 let _ = kill_on_clone(&exec_arc).await;
                 wait_on_clone(&exec_arc).await
             });
-            // The exit pump may have been aborted before it pushed Exit.
-            // Synthesise an Exit event with `EXIT_CODE_FORCE_CLOSED` so the
-            // Go SDK still receives exactly one Exit per execution and can
-            // delete the shared cgo.Handle. Push BEFORE aborting pumps so
-            // the queue accepts the event.
-            if let Some((cb, ud)) = exec_box.exit_dispatch.lock().unwrap().take() {
-                let queue = exec_box.queue.clone();
-                exec_box.tokio_rt.block_on(async move {
-                    push_event(
-                        &queue,
-                        RuntimeEvent::Exit {
-                            cb,
-                            user_data: ud,
-                            exit_code: EXIT_CODE_FORCE_CLOSED,
-                        },
-                    )
-                    .await;
-                });
-            }
+        }
+        // Claim the Exit dispatch slot. The exit pump may have already
+        // pushed its Exit (natural completion races force-close); in
+        // that case the compare_exchange fails and we skip our synth
+        // push. Otherwise we are the unique dispatcher, push the
+        // synthetic Exit so the Go SDK receives exactly one Exit per
+        // execution and can delete the shared cgo.Handle.
+        //
+        // Push BEFORE aborting pumps so the queue accepts the event.
+        if exec_box
+            .exit_dispatched
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+            && let Some((cb, ud)) = exec_box.exit_dispatch.lock().unwrap().take()
+        {
+            let queue = exec_box.queue.clone();
+            exec_box.tokio_rt.block_on(async move {
+                push_event(
+                    &queue,
+                    RuntimeEvent::Exit {
+                        cb,
+                        user_data: ud,
+                        exit_code: EXIT_CODE_FORCE_CLOSED,
+                    },
+                )
+                .await;
+            });
         }
 
         // Abort pump tasks AFTER the synthetic-Exit push so the exit
@@ -603,7 +626,8 @@ async fn exit_pump(
     cb: CBoxExitFn,
     user_data_addr: usize,
     queue: Arc<EventQueue>,
-    completed: Arc<Mutex<bool>>,
+    process_completed: Arc<AtomicBool>,
+    exit_dispatched: Arc<AtomicBool>,
     stream_dones: Vec<oneshot::Receiver<()>>,
 ) {
     let exit_code = wait_on_clone(&exec_arc).await.unwrap_or(-1);
@@ -614,7 +638,16 @@ async fn exit_pump(
     for rx in stream_dones {
         let _ = rx.await;
     }
-    *completed.lock().unwrap() = true;
+    process_completed.store(true, Ordering::Release);
+    // Claim the Exit dispatch slot. If `execution_free` already won the
+    // race (force-close before natural exit propagated), we silently
+    // skip; the queue must contain exactly one Exit per execution.
+    if exit_dispatched
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return;
+    }
     push_event(
         &queue,
         RuntimeEvent::Exit {
@@ -686,7 +719,8 @@ mod tests {
             exit_dispatch: Mutex::new(None),
             queue: Arc::new(EventQueue::new()),
             tokio_rt: runtime,
-            completed: Arc::new(Mutex::new(false)),
+            process_completed: Arc::new(AtomicBool::new(false)),
+            exit_dispatched: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -836,4 +870,120 @@ mod tests {
     // constructed against a stub backend. That test deadlocks on the
     // unfixed code and passes on the fixed code; reproducing it here
     // would require duplicating the stub-backend infrastructure.
+
+    // ─── Codex round-3 finding #1 reproducer ────────────────────────────
+    //
+    // execution_free races exit_pump on Exit dispatch:
+    //   1. execution_free reads `completed` once at the top.
+    //   2. If false, it block_on(kill+wait), then takes exit_dispatch
+    //      and pushes Exit{exit_code: EXIT_CODE_FORCE_CLOSED}.
+    //   3. exit_pump runs concurrently; when wait_on_clone returns,
+    //      it sets `completed = true` and pushes its own Exit.
+    //
+    // Step 1's read can observe `completed = false` even though
+    // exit_pump is microseconds away from setting it true, because
+    // the production code holds two unrelated `Mutex<bool>`s on
+    // `completed` (one read in execution_free, one write in
+    // exit_pump). There is no atomic claim on Exit dispatch.
+    //
+    // Result: two Exit events for the same execution end up in the
+    // queue. The Go SDK's exit callback deletes the shared
+    // `cgo.Handle` after the first; the second tries to Value() a
+    // freed handle and panics the drain goroutine.
+    //
+    // BEFORE FIX (today): two concurrent invocations of the test
+    // helper below both `push_event` Exit -> queue holds 2 Exit
+    // events -> assertion fails.
+    //
+    // AFTER FIX: the helper body becomes
+    //     if dispatched.compare_exchange(false, true, ...).is_ok() {
+    //         push_event(...).await;
+    //     }
+    // and the same primitive is applied to BOTH `execution_free`'s
+    // synth-Exit push and `exit_pump`'s Exit push in production.
+    //
+    // The reproducer here verifies the helper-level invariant; the
+    // adjacent-contract integration test (covering execution_free +
+    // a real exit_pump that resolves through wait_on_clone) is in
+    // step 5's plan.
+
+    use crate::event_queue::{RuntimeEvent, push_event};
+    use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+
+    const RACE_MARKER_UD: usize = 0xBEEF_DEAD_BEEF_DEAD;
+
+    extern "C" fn race_exit_cb(_: c_int, _: *mut c_void) {}
+
+    /// Mirrors the fix's claim-once exit dispatcher: at most one of N
+    /// concurrent invocations may push the Exit event for a given
+    /// execution. Both production code paths (`execution_free`'s
+    /// synth-Exit push and `exit_pump`'s Exit push) apply the same
+    /// `compare_exchange(false, true, AcqRel, Acquire)` primitive on
+    /// the per-execution `exit_dispatched: AtomicBool`.
+    async fn dispatch_exit_test_helper(
+        queue: &Arc<EventQueue>,
+        dispatched: &Arc<AtomicBool>,
+        exit_code: c_int,
+    ) {
+        if dispatched
+            .compare_exchange(false, true, AtomicOrdering::AcqRel, AtomicOrdering::Acquire)
+            .is_err()
+        {
+            return;
+        }
+        push_event(
+            queue,
+            RuntimeEvent::Exit {
+                cb: race_exit_cb,
+                user_data: RACE_MARKER_UD,
+                exit_code,
+            },
+        )
+        .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn race_produces_at_most_one_exit_event() {
+        let queue = Arc::new(EventQueue::new());
+        let dispatched = Arc::new(AtomicBool::new(false));
+
+        let q1 = queue.clone();
+        let d1 = dispatched.clone();
+        let t1 = tokio::spawn(async move {
+            dispatch_exit_test_helper(&q1, &d1, 0).await;
+        });
+
+        let q2 = queue.clone();
+        let d2 = dispatched.clone();
+        let t2 = tokio::spawn(async move {
+            dispatch_exit_test_helper(&q2, &d2, EXIT_CODE_FORCE_CLOSED).await;
+        });
+
+        let _ = tokio::join!(t1, t2);
+
+        let events: Vec<RuntimeEvent> = {
+            let mut g = queue.inner.lock().unwrap();
+            g.drain(..).collect()
+        };
+        let exit_count = events
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e,
+                    RuntimeEvent::Exit { user_data, .. } if *user_data == RACE_MARKER_UD
+                )
+            })
+            .count();
+
+        assert_eq!(
+            exit_count, 1,
+            "expected exactly 1 Exit event for {RACE_MARKER_UD:#x}, got {exit_count} \
+             (race between exit_pump and execution_free produced duplicate dispatch)",
+        );
+        // The claim-once primitive must have flipped exactly once.
+        assert!(
+            dispatched.load(AtomicOrdering::Acquire),
+            "exit_dispatched flag was never claimed",
+        );
+    }
 }
