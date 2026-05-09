@@ -40,8 +40,9 @@ func TestAbandonAsync_RunsCleanupOnSuccess(t *testing.T) {
 	ch := make(chan handleResult[int], 1)
 	h := cgo.NewHandle(ch)
 	cleanupRan := make(chan int, 1)
+	closing := make(chan struct{}) // never fires
 
-	abandonAsync(ch, h, func(v int) { cleanupRan <- v })
+	abandonAsync(ch, h, closing, func(v int) { cleanupRan <- v })
 
 	// Simulate the eventual Tokio task completion.
 	ch <- handleResult[int]{value: 42, err: nil}
@@ -65,8 +66,9 @@ func TestAbandonAsync_SkipsCleanupOnError(t *testing.T) {
 	ch := make(chan handleResult[int], 1)
 	h := cgo.NewHandle(ch)
 	cleanupRan := make(chan int, 1)
+	closing := make(chan struct{})
 
-	abandonAsync(ch, h, func(v int) { cleanupRan <- v })
+	abandonAsync(ch, h, closing, func(v int) { cleanupRan <- v })
 
 	ch <- handleResult[int]{err: &Error{Code: ErrInternal, Message: "boom"}}
 
@@ -84,8 +86,9 @@ func TestAbandonAsync_SkipsCleanupOnError(t *testing.T) {
 func TestAbandonAsyncErr_DeletesHandle(t *testing.T) {
 	ch := make(chan error, 1)
 	h := cgo.NewHandle(ch)
+	closing := make(chan struct{})
 
-	abandonAsyncErr(ch, h)
+	abandonAsyncErr(ch, h, closing)
 	ch <- nil
 
 	time.Sleep(100 * time.Millisecond)
@@ -95,9 +98,62 @@ func TestAbandonAsyncErr_DeletesHandle(t *testing.T) {
 func TestDrainAndDelete_DeletesHandle(t *testing.T) {
 	ch := make(chan infoListResult, 1)
 	h := cgo.NewHandle(ch)
+	closing := make(chan struct{})
 
-	drainAndDelete(ch, h)
+	drainAndDelete(ch, h, closing)
 	ch <- infoListResult{}
+
+	time.Sleep(100 * time.Millisecond)
+	expectAlreadyDeleted(t, h)
+}
+
+// ─── Round-3 #3: Close wakes detached cleanup goroutines ───────────────────
+
+func TestAbandonAsync_RespondsToCloseSignal(t *testing.T) {
+	ch := make(chan handleResult[int], 1)
+	h := cgo.NewHandle(ch)
+	closing := make(chan struct{})
+	cleanupRan := make(chan int, 1)
+
+	abandonAsync(ch, h, closing, func(v int) { cleanupRan <- v })
+
+	// Close fires while ch is empty. The detached goroutine must wake on
+	// `<-closing` instead of waiting forever for a result that the C side
+	// will never deliver (because the runtime is closing).
+	close(closing)
+
+	// Cleanup MUST NOT run on the closing path — the runtime is going
+	// away, all its boxes/images are about to be released by
+	// boxlite_runtime_free anyway.
+	select {
+	case v := <-cleanupRan:
+		t.Fatalf("cleanup ran on closing path with value %d; expected skip", v)
+	case <-time.After(100 * time.Millisecond):
+		// expected
+	}
+
+	expectAlreadyDeleted(t, h)
+}
+
+func TestAbandonAsyncErr_RespondsToCloseSignal(t *testing.T) {
+	ch := make(chan error, 1)
+	h := cgo.NewHandle(ch)
+	closing := make(chan struct{})
+
+	abandonAsyncErr(ch, h, closing)
+	close(closing)
+
+	time.Sleep(100 * time.Millisecond)
+	expectAlreadyDeleted(t, h)
+}
+
+func TestDrainAndDelete_RespondsToCloseSignal(t *testing.T) {
+	ch := make(chan infoListResult, 1)
+	h := cgo.NewHandle(ch)
+	closing := make(chan struct{})
+
+	drainAndDelete(ch, h, closing)
+	close(closing)
 
 	time.Sleep(100 * time.Millisecond)
 	expectAlreadyDeleted(t, h)

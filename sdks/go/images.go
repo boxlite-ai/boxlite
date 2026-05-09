@@ -80,8 +80,11 @@ func (i *Images) Pull(ctx context.Context, reference string) (*ImagePullResult, 
 	case res := <-ch:
 		return res.value, res.err
 	case <-ctx.Done():
-		drainAndDelete(ch, h)
+		drainAndDelete(ch, h, i.runtime.closing)
 		return nil, ctx.Err()
+	case <-i.runtime.closing:
+		drainAndDelete(ch, h, i.runtime.closing)
+		return nil, ErrRuntimeClosed
 	}
 }
 
@@ -106,8 +109,11 @@ func (i *Images) List(ctx context.Context) ([]ImageInfo, error) {
 	case res := <-ch:
 		return res.value, res.err
 	case <-ctx.Done():
-		drainAndDelete(ch, h)
+		drainAndDelete(ch, h, i.runtime.closing)
 		return nil, ctx.Err()
+	case <-i.runtime.closing:
+		drainAndDelete(ch, h, i.runtime.closing)
+		return nil, ErrRuntimeClosed
 	}
 }
 

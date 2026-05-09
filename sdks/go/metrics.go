@@ -55,8 +55,11 @@ func (r *Runtime) Metrics(ctx context.Context) (*RuntimeMetrics, error) {
 		}
 		return res.value, nil
 	case <-ctx.Done():
-		drainAndDelete(ch, h)
+		drainAndDelete(ch, h, r.closing)
 		return nil, ctx.Err()
+	case <-r.closing:
+		drainAndDelete(ch, h, r.closing)
+		return nil, ErrRuntimeClosed
 	}
 }
 
@@ -81,8 +84,11 @@ func (b *Box) Metrics(ctx context.Context) (*BoxMetrics, error) {
 		}
 		return res.value, nil
 	case <-ctx.Done():
-		drainAndDelete(ch, h)
+		drainAndDelete(ch, h, b.runtime.closing)
 		return nil, ctx.Err()
+	case <-b.runtime.closing:
+		drainAndDelete(ch, h, b.runtime.closing)
+		return nil, ErrRuntimeClosed
 	}
 }
 

@@ -64,3 +64,13 @@ func IsStopped(err error) bool {
 	var e *Error
 	return errors.As(err, &e) && e.Code == ErrStopped
 }
+
+// ErrRuntimeClosed is returned by async operations when Runtime.Close is
+// called while the operation is in flight. Callers select on r.closing
+// alongside their result channel and ctx.Done(); when closing fires, the
+// operation returns this sentinel rather than blocking forever waiting
+// for a result that the now-dead drain goroutine cannot deliver.
+var ErrRuntimeClosed = &Error{
+	Code:    ErrInvalidState,
+	Message: "runtime closed",
+}

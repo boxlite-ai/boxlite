@@ -107,6 +107,10 @@ func (s *executionStreamState) markReleased() {
 type Execution struct {
 	handle      *C.CExecutionHandle
 	streamState *executionStreamState
+	// closing is the parent runtime's close-broadcast channel; Wait/Kill/
+	// ResizeTTY select on it so they unblock when Runtime.Close is called
+	// while they're parked on their result channel.
+	closing <-chan struct{}
 
 	// Stdin writes bytes to the running command's standard input.
 	Stdin io.Writer
@@ -198,6 +202,7 @@ func (b *Box) StartExecution(_ context.Context, name string, args []string, opts
 	execution := &Execution{
 		handle:      handle,
 		streamState: state,
+		closing:     b.runtime.closing,
 	}
 	execution.Stdin = &executionStdin{execution: execution}
 	return execution, nil
@@ -254,8 +259,11 @@ func (e *Execution) Wait(ctx context.Context) (int, error) {
 	case res := <-ch:
 		return res.exitCode, res.err
 	case <-ctx.Done():
-		drainAndDelete(ch, h)
+		drainAndDelete(ch, h, e.closing)
 		return 0, ctx.Err()
+	case <-e.closing:
+		drainAndDelete(ch, h, e.closing)
+		return 0, ErrRuntimeClosed
 	}
 }
 
@@ -279,8 +287,11 @@ func (e *Execution) Kill(ctx context.Context) error {
 	case err := <-ch:
 		return err
 	case <-ctx.Done():
-		abandonAsyncErr(ch, h)
+		abandonAsyncErr(ch, h, e.closing)
 		return ctx.Err()
+	case <-e.closing:
+		abandonAsyncErr(ch, h, e.closing)
+		return ErrRuntimeClosed
 	}
 }
 
@@ -304,8 +315,11 @@ func (e *Execution) ResizeTTY(ctx context.Context, rows, cols int) error {
 	case err := <-ch:
 		return err
 	case <-ctx.Done():
-		abandonAsyncErr(ch, h)
+		abandonAsyncErr(ch, h, e.closing)
 		return ctx.Err()
+	case <-e.closing:
+		abandonAsyncErr(ch, h, e.closing)
+		return ErrRuntimeClosed
 	}
 }
 

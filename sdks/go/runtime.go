@@ -31,6 +31,14 @@ type Runtime struct {
 	drainOnce sync.Once
 	drainStop chan struct{}
 	drainDone chan struct{}
+
+	// closing is closed by Close before stopDrain runs. In-flight async
+	// operations select on it alongside their result channel and ctx.Done();
+	// closing fires waking them up so they return ErrRuntimeClosed instead
+	// of blocking forever waiting on the drain goroutine that's about to
+	// stop.
+	closing     chan struct{}
+	closingOnce sync.Once
 }
 
 // NewRuntime creates a new BoxLite runtime.
@@ -65,19 +73,34 @@ func NewRuntime(opts ...RuntimeOption) (*Runtime, error) {
 		return nil, freeError(&cerr)
 	}
 
-	return &Runtime{handle: handle}, nil
+	return &Runtime{
+		handle:  handle,
+		closing: make(chan struct{}),
+	}, nil
 }
 
 // Close releases the runtime. Implements io.Closer.
 //
-// Stops the drain goroutine and frees the underlying C runtime handle.
-// boxlite_runtime_free wakes the drain thread if it is currently blocked
-// inside the C drain call, so this returns promptly.
+// Order matters: closing the `r.closing` channel first wakes every in-flight
+// async caller (Create, Pull, Shutdown, etc.) that's parked on its result
+// channel. They observe ErrRuntimeClosed and return promptly, releasing
+// their cgo.Handles via abandonAsync. Only then do we stop the drain
+// goroutine and free the C runtime handle — at that point no Go caller is
+// still depending on the drain to deliver a result.
+//
+// Without this ordering, an in-flight caller with a non-cancellable ctx
+// would block forever after stopDrain killed the only goroutine that
+// pumps events from C to its result channel.
 func (r *Runtime) Close() error {
 	if r.handle == nil {
 		return nil
 	}
 
+	r.closingOnce.Do(func() {
+		if r.closing != nil {
+			close(r.closing)
+		}
+	})
 	r.stopDrain()
 	C.boxlite_runtime_free(r.handle)
 	r.handle = nil
@@ -107,8 +130,11 @@ func (r *Runtime) Shutdown(ctx context.Context, timeout time.Duration) error {
 	case err := <-ch:
 		return err
 	case <-ctx.Done():
-		abandonAsyncErr(ch, h)
+		abandonAsyncErr(ch, h, r.closing)
 		return ctx.Err()
+	case <-r.closing:
+		abandonAsyncErr(ch, h, r.closing)
+		return ErrRuntimeClosed
 	}
 }
 
@@ -148,8 +174,11 @@ func (r *Runtime) Create(ctx context.Context, image string, opts ...BoxOption) (
 		// Caller's ctx fired before the create completed. The Tokio task is
 		// still running on the C side; if it succeeds, abandonAsync force-
 		// removes the orphan box so we don't leak a live VM.
-		abandonAsync(ch, h, r.forceRemoveOrphanBox)
+		abandonAsync(ch, h, r.closing, r.forceRemoveOrphanBox)
 		return nil, ctx.Err()
+	case <-r.closing:
+		abandonAsync(ch, h, r.closing, r.forceRemoveOrphanBox)
+		return nil, ErrRuntimeClosed
 	}
 }
 
@@ -170,6 +199,12 @@ func (r *Runtime) Get(ctx context.Context, idOrName string) (*Box, error) {
 		return nil, freeError(&cerr)
 	}
 
+	freeOrphanHandle := func(handle *C.CBoxHandle) {
+		if handle != nil {
+			C.boxlite_box_free(handle)
+		}
+	}
+
 	select {
 	case res := <-ch:
 		if res.err != nil {
@@ -180,12 +215,11 @@ func (r *Runtime) Get(ctx context.Context, idOrName string) (*Box, error) {
 		// Get attaches to an existing box; if the C side succeeds after
 		// cancel, the returned CBoxHandle is just memory we need to free.
 		// No live resource to destroy.
-		abandonAsync(ch, h, func(handle *C.CBoxHandle) {
-			if handle != nil {
-				C.boxlite_box_free(handle)
-			}
-		})
+		abandonAsync(ch, h, r.closing, freeOrphanHandle)
 		return nil, ctx.Err()
+	case <-r.closing:
+		abandonAsync(ch, h, r.closing, freeOrphanHandle)
+		return nil, ErrRuntimeClosed
 	}
 }
 
@@ -224,8 +258,11 @@ func (r *Runtime) removeBox(ctx context.Context, idOrName string, force bool) er
 	case err := <-ch:
 		return err
 	case <-ctx.Done():
-		abandonAsyncErr(ch, h)
+		abandonAsyncErr(ch, h, r.closing)
 		return ctx.Err()
+	case <-r.closing:
+		abandonAsyncErr(ch, h, r.closing)
+		return ErrRuntimeClosed
 	}
 }
 
@@ -284,21 +321,33 @@ func (r *Runtime) stopDrain() {
 // optional resource cleanup (force-remove orphan VMs, free orphan handles).
 // The wait runs in a detached goroutine so the caller returns ctx.Err()
 // immediately, honouring Go context norms.
-func abandonAsync[T any](ch chan handleResult[T], h cgo.Handle, cleanup func(T)) {
+//
+// `closing` is the runtime's close-broadcast channel. If Close fires before
+// the Tokio task delivers, the goroutine wakes up and Deletes the handle
+// without orphan-cleanup — the runtime is going away, all its boxes/images
+// are about to be released by boxlite_runtime_free anyway.
+func abandonAsync[T any](ch chan handleResult[T], h cgo.Handle, closing <-chan struct{}, cleanup func(T)) {
 	go func() {
-		res := <-ch
-		h.Delete()
-		if res.err == nil && cleanup != nil {
-			cleanup(res.value)
+		select {
+		case res := <-ch:
+			h.Delete()
+			if res.err == nil && cleanup != nil {
+				cleanup(res.value)
+			}
+		case <-closing:
+			h.Delete()
 		}
 	}()
 }
 
 // abandonAsyncErr is the variant for async ops whose channel only carries
 // `error` (no resource value).
-func abandonAsyncErr(ch chan error, h cgo.Handle) {
+func abandonAsyncErr(ch chan error, h cgo.Handle, closing <-chan struct{}) {
 	go func() {
-		<-ch
+		select {
+		case <-ch:
+		case <-closing:
+		}
 		h.Delete()
 	}()
 }
@@ -307,9 +356,12 @@ func abandonAsyncErr(ch chan error, h cgo.Handle) {
 // channel that has no orphan resource to clean up (info/metrics/etc.). The
 // caller's ctx already fired; we just need to drain the result and reclaim
 // the cgo.Handle slot when the Tokio task eventually completes.
-func drainAndDelete[T any](ch <-chan T, h cgo.Handle) {
+func drainAndDelete[T any](ch <-chan T, h cgo.Handle, closing <-chan struct{}) {
 	go func() {
-		<-ch
+		select {
+		case <-ch:
+		case <-closing:
+		}
 		h.Delete()
 	}()
 }
