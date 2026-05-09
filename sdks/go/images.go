@@ -67,12 +67,12 @@ func (i *Images) Pull(ctx context.Context, reference string) (*ImagePullResult, 
 	defer C.free(unsafe.Pointer(cReference))
 
 	ch := make(chan imagePullResult, 1)
-	h := cgo.NewHandle(ch)
+	h := registerHandleForDispatch(cgo.NewHandle(ch))
 
 	var cerr C.CBoxliteError
 	code := C.boxlite_image_pull(i.handle, cReference, C.cbImagePull(), handleToPtr(h), &cerr)
 	if code != C.Ok {
-		h.Delete()
+		deleteHandleForDispatch(h)
 		return nil, freeError(&cerr)
 	}
 
@@ -96,12 +96,12 @@ func (i *Images) List(ctx context.Context) ([]ImageInfo, error) {
 	i.runtime.ensureDrainRunning()
 
 	ch := make(chan imageListResult, 1)
-	h := cgo.NewHandle(ch)
+	h := registerHandleForDispatch(cgo.NewHandle(ch))
 
 	var cerr C.CBoxliteError
 	code := C.boxlite_image_list(i.handle, C.cbImageList(), handleToPtr(h), &cerr)
 	if code != C.Ok {
-		h.Delete()
+		deleteHandleForDispatch(h)
 		return nil, freeError(&cerr)
 	}
 

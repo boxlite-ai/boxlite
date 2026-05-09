@@ -38,7 +38,7 @@ func expectAlreadyDeleted(t *testing.T, h cgo.Handle) {
 
 func TestAbandonAsync_RunsCleanupOnSuccess(t *testing.T) {
 	ch := make(chan handleResult[int], 1)
-	h := cgo.NewHandle(ch)
+	h := registerHandleForDispatch(cgo.NewHandle(ch))
 	cleanupRan := make(chan int, 1)
 	closing := make(chan struct{}) // never fires
 
@@ -64,7 +64,7 @@ func TestAbandonAsync_RunsCleanupOnSuccess(t *testing.T) {
 
 func TestAbandonAsync_SkipsCleanupOnError(t *testing.T) {
 	ch := make(chan handleResult[int], 1)
-	h := cgo.NewHandle(ch)
+	h := registerHandleForDispatch(cgo.NewHandle(ch))
 	cleanupRan := make(chan int, 1)
 	closing := make(chan struct{})
 
@@ -85,7 +85,7 @@ func TestAbandonAsync_SkipsCleanupOnError(t *testing.T) {
 
 func TestAbandonAsyncErr_DeletesHandle(t *testing.T) {
 	ch := make(chan error, 1)
-	h := cgo.NewHandle(ch)
+	h := registerHandleForDispatch(cgo.NewHandle(ch))
 	closing := make(chan struct{})
 
 	abandonAsyncErr(ch, h, closing)
@@ -97,7 +97,7 @@ func TestAbandonAsyncErr_DeletesHandle(t *testing.T) {
 
 func TestDrainAndDelete_DeletesHandle(t *testing.T) {
 	ch := make(chan infoListResult, 1)
-	h := cgo.NewHandle(ch)
+	h := registerHandleForDispatch(cgo.NewHandle(ch))
 	closing := make(chan struct{})
 
 	drainAndDelete(ch, h, closing)
@@ -111,7 +111,7 @@ func TestDrainAndDelete_DeletesHandle(t *testing.T) {
 
 func TestAbandonAsync_RespondsToCloseSignal(t *testing.T) {
 	ch := make(chan handleResult[int], 1)
-	h := cgo.NewHandle(ch)
+	h := registerHandleForDispatch(cgo.NewHandle(ch))
 	closing := make(chan struct{})
 	cleanupRan := make(chan int, 1)
 
@@ -137,7 +137,7 @@ func TestAbandonAsync_RespondsToCloseSignal(t *testing.T) {
 
 func TestAbandonAsyncErr_RespondsToCloseSignal(t *testing.T) {
 	ch := make(chan error, 1)
-	h := cgo.NewHandle(ch)
+	h := registerHandleForDispatch(cgo.NewHandle(ch))
 	closing := make(chan struct{})
 
 	abandonAsyncErr(ch, h, closing)
@@ -149,7 +149,7 @@ func TestAbandonAsyncErr_RespondsToCloseSignal(t *testing.T) {
 
 func TestDrainAndDelete_RespondsToCloseSignal(t *testing.T) {
 	ch := make(chan infoListResult, 1)
-	h := cgo.NewHandle(ch)
+	h := registerHandleForDispatch(cgo.NewHandle(ch))
 	closing := make(chan struct{})
 
 	drainAndDelete(ch, h, closing)

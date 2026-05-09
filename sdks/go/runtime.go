@@ -117,12 +117,12 @@ func (r *Runtime) Shutdown(ctx context.Context, timeout time.Duration) error {
 	}
 
 	ch := make(chan error, 1)
-	h := cgo.NewHandle(ch)
+	h := registerHandleForDispatch(cgo.NewHandle(ch))
 
 	var cerr C.CBoxliteError
 	code := C.boxlite_runtime_shutdown(r.handle, C.int(secs), C.cbRuntimeShutdown(), handleToPtr(h), &cerr)
 	if code != C.Ok {
-		h.Delete()
+		deleteHandleForDispatch(h)
 		return freeError(&cerr)
 	}
 
@@ -153,12 +153,12 @@ func (r *Runtime) Create(ctx context.Context, image string, opts ...BoxOption) (
 	}
 
 	ch := make(chan handleResult[*C.CBoxHandle], 1)
-	h := cgo.NewHandle(ch)
+	h := registerHandleForDispatch(cgo.NewHandle(ch))
 
 	var cerr C.CBoxliteError
 	code := C.boxlite_create_box(r.handle, cOpts, C.cbCreateBox(), handleToPtr(h), &cerr)
 	if code != C.Ok {
-		h.Delete()
+		deleteHandleForDispatch(h)
 		// boxlite_create_box consumes opts on success but not on synchronous failure.
 		C.boxlite_options_free(cOpts)
 		return nil, freeError(&cerr)
@@ -190,12 +190,12 @@ func (r *Runtime) Get(ctx context.Context, idOrName string) (*Box, error) {
 	defer C.free(unsafe.Pointer(cID))
 
 	ch := make(chan handleResult[*C.CBoxHandle], 1)
-	h := cgo.NewHandle(ch)
+	h := registerHandleForDispatch(cgo.NewHandle(ch))
 
 	var cerr C.CBoxliteError
 	code := C.boxlite_get(r.handle, cID, C.cbGetBox(), handleToPtr(h), &cerr)
 	if code != C.Ok {
-		h.Delete()
+		deleteHandleForDispatch(h)
 		return nil, freeError(&cerr)
 	}
 
@@ -240,7 +240,7 @@ func (r *Runtime) removeBox(ctx context.Context, idOrName string, force bool) er
 	defer C.free(unsafe.Pointer(cID))
 
 	ch := make(chan error, 1)
-	h := cgo.NewHandle(ch)
+	h := registerHandleForDispatch(cgo.NewHandle(ch))
 
 	forceFlag := C.int(0)
 	if force {
@@ -250,7 +250,7 @@ func (r *Runtime) removeBox(ctx context.Context, idOrName string, force bool) er
 	var cerr C.CBoxliteError
 	code := C.boxlite_remove(r.handle, cID, forceFlag, C.cbRemoveBox(), handleToPtr(h), &cerr)
 	if code != C.Ok {
-		h.Delete()
+		deleteHandleForDispatch(h)
 		return freeError(&cerr)
 	}
 
@@ -315,6 +315,64 @@ func (r *Runtime) stopDrain() {
 	}
 }
 
+// activeHandles registers every per-async-op `cgo.Handle` created by
+// the SDK. The registry exists to coordinate between the dispatch
+// callback path (bridge_callback.go's `defer h.Delete()` after
+// receiving the C-side result) and the closing branch in
+// `abandonAsync` / `abandonAsyncErr` / `drainAndDelete` (added by
+// round-3 #3). Both paths used to call `h.Delete()` unconditionally;
+// during `Runtime.Close` the drain goroutine could still be
+// dispatching a queued event whose callback Value/Delete'd the same
+// handle that the closing branch was Deleting in parallel —
+// double-Delete or Value-after-Delete would panic the process.
+//
+// Single-path ownership: each path claims the handle via
+// `claimHandleForDispatch`. The first caller's `LoadAndDelete`
+// returns true — they own the Value/Delete. Subsequent callers
+// receive false and silently no-op. Exactly one Delete per handle,
+// regardless of interleaving.
+var activeHandles sync.Map
+
+// registerHandleForDispatch records a freshly-created cgo.Handle in
+// the active-handles registry. Call this immediately after
+// `cgo.NewHandle(...)` at every async-op call site so that dispatch
+// callbacks and the closing branch can race for the claim safely.
+//
+// Returns the handle unchanged for fluent use:
+//
+//	h := registerHandleForDispatch(cgo.NewHandle(ch))
+func registerHandleForDispatch(h cgo.Handle) cgo.Handle {
+	activeHandles.Store(uintptr(h), struct{}{})
+	return h
+}
+
+// claimHandleForDispatch is the single-path ownership gate for a
+// per-async-op cgo.Handle. Both the dispatch callback (in
+// bridge_callback.go) and `abandonAsync`'s closing/ch branches must
+// call this BEFORE doing anything with the handle. The first caller
+// to claim wins (returns true); subsequent callers no-op (return
+// false).
+//
+// `LoadAndDelete` is atomic — the registry entry exists exactly once
+// per handle, and only one of N concurrent callers receives `loaded
+// == true`. The losers exit without touching the handle, so neither
+// Value() nor Delete() runs on a freed handle.
+func claimHandleForDispatch(h cgo.Handle) bool {
+	_, loaded := activeHandles.LoadAndDelete(uintptr(h))
+	return loaded
+}
+
+// deleteHandleForDispatch claims and deletes the handle. Safe to call from
+// any path; idempotent across N concurrent callers (only the claimer's
+// h.Delete() runs). Used on synchronous-failure paths (C call returned an
+// error code without spawning a Tokio task) and from the abandonAsync /
+// abandonAsyncErr / drainAndDelete closing branches.
+func deleteHandleForDispatch(h cgo.Handle) {
+	if claimHandleForDispatch(h) {
+		h.Delete()
+	}
+}
+
 // abandonAsync runs after the caller's context cancelled but the C-side
 // Tokio task is still in flight. The Tokio task always completes and posts
 // to ch; we wait, free the cgo.Handle to reclaim the table slot, and run
@@ -330,12 +388,20 @@ func abandonAsync[T any](ch chan handleResult[T], h cgo.Handle, closing <-chan s
 	go func() {
 		select {
 		case res := <-ch:
-			h.Delete()
+			// The dispatch callback (in bridge_callback.go) already
+			// `defer h.Delete()`'d after sending on ch. claim here is
+			// idempotent: if the dispatch claimed first we silently
+			// no-op, and if our claim wins (rare — only if the
+			// dispatch's claim raced our wakeup), we Delete.
+			deleteHandleForDispatch(h)
 			if res.err == nil && cleanup != nil {
 				cleanup(res.value)
 			}
 		case <-closing:
-			h.Delete()
+			// Dispatch may still race us through the drain goroutine
+			// that's running between Close's close(closing) and
+			// stopDrain. claim coordinates the single Delete.
+			deleteHandleForDispatch(h)
 		}
 	}()
 }
@@ -348,7 +414,7 @@ func abandonAsyncErr(ch chan error, h cgo.Handle, closing <-chan struct{}) {
 		case <-ch:
 		case <-closing:
 		}
-		h.Delete()
+		deleteHandleForDispatch(h)
 	}()
 }
 
@@ -362,7 +428,7 @@ func drainAndDelete[T any](ch <-chan T, h cgo.Handle, closing <-chan struct{}) {
 		case <-ch:
 		case <-closing:
 		}
-		h.Delete()
+		deleteHandleForDispatch(h)
 	}()
 }
 

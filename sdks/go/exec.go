@@ -246,12 +246,12 @@ func (e *Execution) Wait(ctx context.Context) (int, error) {
 	}
 
 	ch := make(chan executionWaitResult, 1)
-	h := cgo.NewHandle(ch)
+	h := registerHandleForDispatch(cgo.NewHandle(ch))
 
 	var cerr C.CBoxliteError
 	code := C.boxlite_execution_wait(e.handle, C.cbExecutionWait(), handleToPtr(h), &cerr)
 	if code != C.Ok {
-		h.Delete()
+		deleteHandleForDispatch(h)
 		return 0, freeError(&cerr)
 	}
 
@@ -274,12 +274,12 @@ func (e *Execution) Kill(ctx context.Context) error {
 	}
 
 	ch := make(chan error, 1)
-	h := cgo.NewHandle(ch)
+	h := registerHandleForDispatch(cgo.NewHandle(ch))
 
 	var cerr C.CBoxliteError
 	code := C.boxlite_execution_kill(e.handle, C.cbExecutionKill(), handleToPtr(h), &cerr)
 	if code != C.Ok {
-		h.Delete()
+		deleteHandleForDispatch(h)
 		return freeError(&cerr)
 	}
 
@@ -302,12 +302,12 @@ func (e *Execution) ResizeTTY(ctx context.Context, rows, cols int) error {
 	}
 
 	ch := make(chan error, 1)
-	h := cgo.NewHandle(ch)
+	h := registerHandleForDispatch(cgo.NewHandle(ch))
 
 	var cerr C.CBoxliteError
 	code := C.boxlite_execution_resize_tty(e.handle, C.int(rows), C.int(cols), C.cbExecutionResize(), handleToPtr(h), &cerr)
 	if code != C.Ok {
-		h.Delete()
+		deleteHandleForDispatch(h)
 		return freeError(&cerr)
 	}
 

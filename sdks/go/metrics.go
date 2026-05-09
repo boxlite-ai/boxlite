@@ -39,12 +39,12 @@ func (r *Runtime) Metrics(ctx context.Context) (*RuntimeMetrics, error) {
 	r.ensureDrainRunning()
 
 	ch := make(chan runtimeMetricsResult, 1)
-	h := cgo.NewHandle(ch)
+	h := registerHandleForDispatch(cgo.NewHandle(ch))
 
 	var cerr C.CBoxliteError
 	code := C.boxlite_runtime_metrics(r.handle, C.cbRuntimeMetrics(), handleToPtr(h), &cerr)
 	if code != C.Ok {
-		h.Delete()
+		deleteHandleForDispatch(h)
 		return nil, freeError(&cerr)
 	}
 
@@ -68,12 +68,12 @@ func (b *Box) Metrics(ctx context.Context) (*BoxMetrics, error) {
 	b.runtime.ensureDrainRunning()
 
 	ch := make(chan boxMetricsResult, 1)
-	h := cgo.NewHandle(ch)
+	h := registerHandleForDispatch(cgo.NewHandle(ch))
 
 	var cerr C.CBoxliteError
 	code := C.boxlite_box_metrics(b.handle, C.cbBoxMetrics(), handleToPtr(h), &cerr)
 	if code != C.Ok {
-		h.Delete()
+		deleteHandleForDispatch(h)
 		return nil, freeError(&cerr)
 	}
 

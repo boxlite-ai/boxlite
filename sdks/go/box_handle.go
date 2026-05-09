@@ -44,12 +44,12 @@ func (b *Box) Start(ctx context.Context) error {
 	b.runtime.ensureDrainRunning()
 
 	ch := make(chan error, 1)
-	h := cgo.NewHandle(ch)
+	h := registerHandleForDispatch(cgo.NewHandle(ch))
 
 	var cerr C.CBoxliteError
 	code := C.boxlite_start_box(b.handle, C.cbStartBox(), handleToPtr(h), &cerr)
 	if code != C.Ok {
-		h.Delete()
+		deleteHandleForDispatch(h)
 		return freeError(&cerr)
 	}
 
@@ -70,12 +70,12 @@ func (b *Box) Stop(ctx context.Context) error {
 	b.runtime.ensureDrainRunning()
 
 	ch := make(chan error, 1)
-	h := cgo.NewHandle(ch)
+	h := registerHandleForDispatch(cgo.NewHandle(ch))
 
 	var cerr C.CBoxliteError
 	code := C.boxlite_stop_box(b.handle, C.cbStopBox(), handleToPtr(h), &cerr)
 	if code != C.Ok {
-		h.Delete()
+		deleteHandleForDispatch(h)
 		return freeError(&cerr)
 	}
 

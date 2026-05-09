@@ -59,12 +59,12 @@ func (r *Runtime) ListInfo(ctx context.Context) ([]BoxInfo, error) {
 	r.ensureDrainRunning()
 
 	ch := make(chan infoListResult, 1)
-	h := cgo.NewHandle(ch)
+	h := registerHandleForDispatch(cgo.NewHandle(ch))
 
 	var cerr C.CBoxliteError
 	code := C.boxlite_list_info(r.handle, C.cbInfoList(), handleToPtr(h), &cerr)
 	if code != C.Ok {
-		h.Delete()
+		deleteHandleForDispatch(h)
 		return nil, freeError(&cerr)
 	}
 
@@ -88,12 +88,12 @@ func (r *Runtime) GetInfo(ctx context.Context, idOrName string) (*BoxInfo, error
 	defer C.free(unsafe.Pointer(cID))
 
 	ch := make(chan infoResult, 1)
-	h := cgo.NewHandle(ch)
+	h := registerHandleForDispatch(cgo.NewHandle(ch))
 
 	var cerr C.CBoxliteError
 	code := C.boxlite_get_info(r.handle, cID, C.cbInfo(), handleToPtr(h), &cerr)
 	if code != C.Ok {
-		h.Delete()
+		deleteHandleForDispatch(h)
 		return nil, freeError(&cerr)
 	}
 

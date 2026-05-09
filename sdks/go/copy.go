@@ -21,12 +21,12 @@ func (b *Box) CopyInto(ctx context.Context, hostSrc, guestDst string) error {
 	defer C.free(unsafe.Pointer(cDst))
 
 	ch := make(chan error, 1)
-	h := cgo.NewHandle(ch)
+	h := registerHandleForDispatch(cgo.NewHandle(ch))
 
 	var cerr C.CBoxliteError
 	code := C.boxlite_copy_into(b.handle, cSrc, cDst, C.cbCopy(), handleToPtr(h), &cerr)
 	if code != C.Ok {
-		h.Delete()
+		deleteHandleForDispatch(h)
 		return freeError(&cerr)
 	}
 
@@ -52,12 +52,12 @@ func (b *Box) CopyOut(ctx context.Context, guestSrc, hostDst string) error {
 	defer C.free(unsafe.Pointer(cDst))
 
 	ch := make(chan error, 1)
-	h := cgo.NewHandle(ch)
+	h := registerHandleForDispatch(cgo.NewHandle(ch))
 
 	var cerr C.CBoxliteError
 	code := C.boxlite_copy_out(b.handle, cSrc, cDst, C.cbCopy(), handleToPtr(h), &cerr)
 	if code != C.Ok {
-		h.Delete()
+		deleteHandleForDispatch(h)
 		return freeError(&cerr)
 	}
 

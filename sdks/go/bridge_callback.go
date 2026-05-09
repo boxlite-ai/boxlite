@@ -112,6 +112,13 @@ func goBoxliteOnImagePull(res *C.CImagePullResult, errPtr *C.CBoxliteError, user
 	if h == 0 {
 		return
 	}
+	// Claim the handle before any Value/Delete. Both this dispatch path
+	// and abandonAsync's closing branch race for it during Runtime.Close
+	// (round-4 finding A); the loser silently no-ops, ensuring exactly
+	// one Value+Delete pair per handle.
+	if !claimHandleForDispatch(h) {
+		return
+	}
 	defer h.Delete()
 	ch, ok := h.Value().(chan imagePullResult)
 	if !ok {
@@ -135,6 +142,13 @@ func goBoxliteOnImagePull(res *C.CImagePullResult, errPtr *C.CBoxliteError, user
 func goBoxliteOnImageList(list *C.CImageInfoList, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
 	h := ptrToHandle(userData)
 	if h == 0 {
+		return
+	}
+	// Claim the handle before any Value/Delete. Both this dispatch path
+	// and abandonAsync's closing branch race for it during Runtime.Close
+	// (round-4 finding A); the loser silently no-ops, ensuring exactly
+	// one Value+Delete pair per handle.
+	if !claimHandleForDispatch(h) {
 		return
 	}
 	defer h.Delete()
@@ -161,6 +175,13 @@ func goBoxliteOnInfo(info *C.CBoxInfo, errPtr *C.CBoxliteError, userData unsafe.
 	if h == 0 {
 		return
 	}
+	// Claim the handle before any Value/Delete. Both this dispatch path
+	// and abandonAsync's closing branch race for it during Runtime.Close
+	// (round-4 finding A); the loser silently no-ops, ensuring exactly
+	// one Value+Delete pair per handle.
+	if !claimHandleForDispatch(h) {
+		return
+	}
 	defer h.Delete()
 	ch, ok := h.Value().(chan infoResult)
 	if !ok {
@@ -183,6 +204,13 @@ func goBoxliteOnInfo(info *C.CBoxInfo, errPtr *C.CBoxliteError, userData unsafe.
 func goBoxliteOnInfoList(list *C.CBoxInfoList, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
 	h := ptrToHandle(userData)
 	if h == 0 {
+		return
+	}
+	// Claim the handle before any Value/Delete. Both this dispatch path
+	// and abandonAsync's closing branch race for it during Runtime.Close
+	// (round-4 finding A); the loser silently no-ops, ensuring exactly
+	// one Value+Delete pair per handle.
+	if !claimHandleForDispatch(h) {
 		return
 	}
 	defer h.Delete()
@@ -209,6 +237,13 @@ func goBoxliteOnBoxMetrics(m *C.CBoxMetrics, errPtr *C.CBoxliteError, userData u
 	if h == 0 {
 		return
 	}
+	// Claim the handle before any Value/Delete. Both this dispatch path
+	// and abandonAsync's closing branch race for it during Runtime.Close
+	// (round-4 finding A); the loser silently no-ops, ensuring exactly
+	// one Value+Delete pair per handle.
+	if !claimHandleForDispatch(h) {
+		return
+	}
 	defer h.Delete()
 	ch, ok := h.Value().(chan boxMetricsResult)
 	if !ok {
@@ -230,6 +265,13 @@ func goBoxliteOnBoxMetrics(m *C.CBoxMetrics, errPtr *C.CBoxliteError, userData u
 func goBoxliteOnRuntimeMetrics(m *C.CRuntimeMetrics, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
 	h := ptrToHandle(userData)
 	if h == 0 {
+		return
+	}
+	// Claim the handle before any Value/Delete. Both this dispatch path
+	// and abandonAsync's closing branch race for it during Runtime.Close
+	// (round-4 finding A); the loser silently no-ops, ensuring exactly
+	// one Value+Delete pair per handle.
+	if !claimHandleForDispatch(h) {
 		return
 	}
 	defer h.Delete()
@@ -264,6 +306,13 @@ func goBoxliteOnExecutionWait(exitCode C.int, errPtr *C.CBoxliteError, userData 
 	if h == 0 {
 		return
 	}
+	// Claim the handle before any Value/Delete. Both this dispatch path
+	// and abandonAsync's closing branch race for it during Runtime.Close
+	// (round-4 finding A); the loser silently no-ops, ensuring exactly
+	// one Value+Delete pair per handle.
+	if !claimHandleForDispatch(h) {
+		return
+	}
 	defer h.Delete()
 	ch, ok := h.Value().(chan executionWaitResult)
 	if !ok {
@@ -294,6 +343,13 @@ func deliverUnitResult(userData unsafe.Pointer, errPtr *C.CBoxliteError) {
 	if h == 0 {
 		return
 	}
+	// Claim the handle before any Value/Delete. Both this dispatch path
+	// and abandonAsync's closing branch race for it during Runtime.Close
+	// (round-4 finding A); the loser silently no-ops, ensuring exactly
+	// one Value+Delete pair per handle.
+	if !claimHandleForDispatch(h) {
+		return
+	}
 	defer h.Delete()
 	ch, ok := h.Value().(chan error)
 	if !ok {
@@ -307,6 +363,13 @@ func deliverUnitResult(userData unsafe.Pointer, errPtr *C.CBoxliteError) {
 func deliverHandleResult[T any](userData unsafe.Pointer, value T, errPtr *C.CBoxliteError) {
 	h := ptrToHandle(userData)
 	if h == 0 {
+		return
+	}
+	// Claim the handle before any Value/Delete. Both this dispatch path
+	// and abandonAsync's closing branch race for it during Runtime.Close
+	// (round-4 finding A); the loser silently no-ops, ensuring exactly
+	// one Value+Delete pair per handle.
+	if !claimHandleForDispatch(h) {
 		return
 	}
 	defer h.Delete()
