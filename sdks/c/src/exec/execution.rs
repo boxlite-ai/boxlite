@@ -51,8 +51,18 @@ pub struct ExecutionHandle {
     /// Streams pending pump-task spawn. Each is moved out on first cb register.
     pending_stdout: Option<ExecStdout>,
     pending_stderr: Option<ExecStderr>,
-    /// Spawned pumps; aborted on `_free`.
+    /// Spawned **stream** pumps (stdout/stderr); aborted on `_free`.
+    /// The exit pump is tracked separately in `exit_pump_handle` so that
+    /// `_free` can wait for an in-flight Exit push to complete instead of
+    /// aborting it mid-yield (round-4 finding B).
     pumps: Mutex<Vec<JoinHandle<()>>>,
+    /// Spawned exit pump task. Held outside `pumps` because, once the
+    /// pump has claimed `exit_dispatched`, its `push_event` may yield
+    /// cooperatively under queue backpressure. Aborting it during that
+    /// yield window would lose the Exit event entirely. `_free` instead
+    /// waits-for-completion (with a bounded timeout) when the pump has
+    /// claimed dispatch.
+    exit_pump_handle: Mutex<Option<JoinHandle<()>>>,
     /// One receiver per registered stream pump. `register_exit` drains this
     /// list and `exit_pump` awaits each before pushing the Exit event so
     /// the Exit callback is strictly the last one for the execution.
@@ -218,6 +228,7 @@ unsafe fn box_exec(
                     pending_stdout: stdout,
                     pending_stderr: stderr,
                     pumps: Mutex::new(Vec::new()),
+                    exit_pump_handle: Mutex::new(None),
                     stream_done_rx: Mutex::new(Vec::new()),
                     exit_dispatch: Mutex::new(None),
                     queue: handle_ref.queue.clone(),
@@ -342,7 +353,13 @@ unsafe fn register_exit(
             exit_dispatched,
             stream_dones,
         ));
-        exec_ref.pumps.lock().unwrap().push(pump);
+        // Track exit_pump separately from stream pumps so `_free` can wait
+        // for an in-flight Exit push instead of aborting it mid-yield
+        // (round-4 finding B). API forbids re-registration; if a previous
+        // exit_pump is somehow still here, abort it.
+        if let Some(prev) = exec_ref.exit_pump_handle.lock().unwrap().replace(pump) {
+            prev.abort();
+        }
         BoxliteErrorCode::Ok
     }
 }
@@ -528,38 +545,55 @@ unsafe fn execution_free(execution: *mut ExecutionHandle) {
                 wait_on_clone(&exec_arc).await
             });
         }
-        // Claim the Exit dispatch slot. The exit pump may have already
-        // pushed its Exit (natural completion races force-close); in
-        // that case the compare_exchange fails and we skip our synth
-        // push. Otherwise we are the unique dispatcher, push the
-        // synthetic Exit so the Go SDK receives exactly one Exit per
-        // execution and can delete the shared cgo.Handle.
+        // Race exit dispatch with `exit_pump`. Two outcomes:
         //
-        // Push BEFORE aborting pumps so the queue accepts the event.
-        if exec_box
+        //  1. We win the claim. Push the synthetic Exit ourselves.
+        //     `exit_pump`'s compare_exchange will fail when it gets there
+        //     and it returns without pushing — safe to abort it next.
+        //
+        //  2. `exit_pump` already won. Its push may still be yielding on
+        //     a saturated queue (round-4 finding B). Wait for the task to
+        //     finish so the Exit actually reaches the queue, with a
+        //     bounded timeout so a stuck drainer cannot hang teardown.
+        //
+        // Push (or wait) BEFORE aborting any pumps so the dispatch is
+        // preserved.
+        let we_claimed_dispatch = exec_box
             .exit_dispatched
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
-            && let Some((cb, ud)) = exec_box.exit_dispatch.lock().unwrap().take()
-        {
-            let queue = exec_box.queue.clone();
-            exec_box.tokio_rt.block_on(async move {
-                push_event(
-                    &queue,
-                    RuntimeEvent::Exit {
-                        cb,
-                        user_data: ud,
-                        exit_code: EXIT_CODE_FORCE_CLOSED,
-                    },
-                )
-                .await;
-            });
+            .is_ok();
+        let exit_pump_handle = exec_box.exit_pump_handle.lock().unwrap().take();
+        if we_claimed_dispatch {
+            if let Some((cb, ud)) = exec_box.exit_dispatch.lock().unwrap().take() {
+                let queue = exec_box.queue.clone();
+                exec_box.tokio_rt.block_on(async move {
+                    push_event(
+                        &queue,
+                        RuntimeEvent::Exit {
+                            cb,
+                            user_data: ud,
+                            exit_code: EXIT_CODE_FORCE_CLOSED,
+                        },
+                    )
+                    .await;
+                });
+            }
+            // exit_pump (if any) lost the race; aborting it is safe — it
+            // will not push because compare_exchange failed.
+            if let Some(pump) = exit_pump_handle {
+                pump.abort();
+            }
+        } else if let Some(pump) = exit_pump_handle {
+            // exit_pump claimed; wait (bounded) for its push to complete.
+            // Without this, aborting mid-yield would lose the Exit event.
+            const EXIT_PUMP_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+            let _ = exec_box
+                .tokio_rt
+                .block_on(async move { tokio::time::timeout(EXIT_PUMP_WAIT, pump).await });
         }
 
-        // Abort pump tasks AFTER the synthetic-Exit push so the exit
-        // dispatch is preserved. Stream pumps that haven't drained get
-        // their oneshot tx dropped — exit_pump's rx.await sees Err and
-        // moves on, no deadlock.
+        // Abort the stream pumps. Their oneshot tx dropping causes any
+        // upstream rx.await (in already-completed exit_pump) to no-op.
         let pumps = std::mem::take(&mut *exec_box.pumps.lock().unwrap());
         for pump in &pumps {
             pump.abort();
@@ -713,6 +747,7 @@ mod tests {
             pending_stdout: None,
             pending_stderr: None,
             pumps: Mutex::new(Vec::new()),
+            exit_pump_handle: Mutex::new(None),
             stream_done_rx: Mutex::new(Vec::new()),
             exit_dispatch: Mutex::new(None),
             queue: Arc::new(EventQueue::new()),

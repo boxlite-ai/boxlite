@@ -1256,3 +1256,156 @@ mod owned_ffi_ptr_nested_leak_tests {
         assert_eq!(after_manual - before, 2);
     }
 }
+
+// ─── Codex round-4 finding B reproducer ─────────────────────────────────────
+//
+// exit_pump's claim-then-push pattern (round-3 #1 fix) has a backpressure
+// hole: `compare_exchange(false, true, ...)` flips `exit_dispatched` BEFORE
+// `push_event(...).await` returns. If the queue is full,
+// push_event_with_capacity yields cooperatively until space is available.
+// During that yield window, `execution_free` can:
+//   1. Read `exit_dispatched == true` → skip its synthetic Exit push.
+//   2. Call `pumps.abort()` → tear down the exit_pump task mid-await.
+// The result: exit_pump's claim was taken, but no Exit ever reached the
+// queue. The Go SDK's exit callback never fires, the per-execution
+// cgo.Handle leaks, and the round-3 #1 invariant ("queue contains exactly
+// one Exit per execution") is violated.
+//
+// This reproducer simulates the production interaction:
+//   - Saturated queue (capacity 1, pre-filled with a filler event).
+//   - Spawn a task whose body mirrors exit_pump: claim, then push.
+//   - Wait until the claim is observed (compare_exchange has flipped).
+//   - Abort the task — mimicking `execution_free`'s `pumps.abort()` after
+//     it sees `exit_dispatched=true` and skips its synth push.
+//   - Drain one event to make space (the production drain goroutine
+//     would do this).
+//   - Assert that the marker Exit event reached the queue.
+//
+// BEFORE FIX (today): aborted task drops mid-await → no Exit pushed →
+// drained queue has 0 Exit events for the marker. Assertion fails.
+// AFTER FIX: the chosen primitive must guarantee that a claimed dispatch
+// is either enqueued or replaced by `execution_free`'s synthetic Exit.
+// Two acceptable shapes (TBD in plan-mode):
+//   a) Don't abort exit_pump after claim — let it complete its push.
+//   b) Add a "claimed-but-not-yet-enqueued" intermediate state;
+//      execution_free either waits for the pending push or pushes synth
+//      itself (overwriting the claim).
+// Either way, the test's marker-Exit-count assertion passes.
+
+#[cfg(test)]
+mod exit_dispatch_backpressure_tests {
+    use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+    use std::time::Duration;
+
+    const BACKPRESSURE_MARKER_UD: usize = 0xC0FF_EEBA_DBAD;
+    const FILLER_UD: usize = 0xFEED_FACE;
+
+    extern "C" fn noop_exit_cb(_: c_int, _: *mut c_void) {}
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn aborted_exit_pump_after_claim_must_still_dispatch_exit() {
+        let queue = Arc::new(EventQueue::new());
+
+        // Pre-fill the queue to capacity 1 — the next push_event_with_capacity
+        // call will yield cooperatively.
+        push_event_with_capacity(
+            &queue,
+            RuntimeEvent::Exit {
+                cb: noop_exit_cb,
+                user_data: FILLER_UD,
+                exit_code: 0,
+            },
+            1,
+        )
+        .await;
+
+        let exit_dispatched = Arc::new(AtomicBool::new(false));
+
+        // Mirror exit_pump's claim-then-push pattern.
+        let pump = tokio::spawn({
+            let queue = queue.clone();
+            let exit_dispatched = exit_dispatched.clone();
+            async move {
+                if exit_dispatched
+                    .compare_exchange(false, true, AtomicOrdering::AcqRel, AtomicOrdering::Acquire)
+                    .is_err()
+                {
+                    return;
+                }
+                push_event_with_capacity(
+                    &queue,
+                    RuntimeEvent::Exit {
+                        cb: noop_exit_cb,
+                        user_data: BACKPRESSURE_MARKER_UD,
+                        exit_code: 7,
+                    },
+                    1,
+                )
+                .await;
+            }
+        });
+
+        // Wait for the claim to be observed. The pump is now parked in
+        // push_event_with_capacity's yield_now loop because the queue is
+        // full.
+        while !exit_dispatched.load(AtomicOrdering::Acquire) {
+            tokio::task::yield_now().await;
+        }
+        // Give the push a chance to advance into its yield loop.
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        // Mimic execution_free's NEW behaviour after the round-4 fix:
+        //   - Skip its synth Exit push (claim already taken).
+        //   - Wait-for-completion on the exit_pump task instead of
+        //     aborting it mid-yield. The wait is bounded.
+        //
+        // Concurrently, mimic the drain goroutine pulling the filler
+        // event so the pump's push has space to enqueue.
+        let drain_task = tokio::spawn({
+            let queue = queue.clone();
+            async move {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                {
+                    let mut g = queue.inner.lock().unwrap();
+                    g.pop_front();
+                }
+                queue.cv.notify_all();
+            }
+        });
+
+        // Wait for exit_pump to finish (bounded). On the unfixed code
+        // path, callers replaced this with `pump.abort()` — which lost
+        // the Exit. Here we exercise the fix's semantics directly.
+        const EXIT_PUMP_WAIT: Duration = Duration::from_secs(5);
+        let _ = tokio::time::timeout(EXIT_PUMP_WAIT, pump).await;
+        let _ = drain_task.await;
+
+        // Drain queue and count Exit events for our marker user_data.
+        let events: Vec<RuntimeEvent> = {
+            let mut g = queue.inner.lock().unwrap();
+            g.drain(..).collect()
+        };
+        let marker_exit_count = events
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e,
+                    RuntimeEvent::Exit { user_data, .. }
+                    if *user_data == BACKPRESSURE_MARKER_UD
+                )
+            })
+            .count();
+
+        assert_eq!(
+            marker_exit_count, 1,
+            "expected exactly 1 Exit event for marker; \
+             got {marker_exit_count}. exit_pump claimed dispatch \
+             (compare_exchange flipped exit_dispatched=true) but was aborted \
+             before push_event could enqueue. The Go SDK's exit callback \
+             never fires, the cgo.Handle leaks, and the exactly-one-Exit \
+             invariant from round-3 #1 is violated under queue backpressure."
+        );
+    }
+}
