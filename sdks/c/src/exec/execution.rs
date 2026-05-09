@@ -545,6 +545,24 @@ unsafe fn execution_free(execution: *mut ExecutionHandle) {
                 wait_on_clone(&exec_arc).await
             });
         }
+        // Abort stream pumps FIRST — round-6 finding 1. Otherwise a
+        // pump that's mid-yield on push_event can enqueue Stdout/Stderr
+        // AFTER the synthetic Exit lands, violating the round-3 #1
+        // "Exit is strictly last" invariant. The Go exit callback
+        // deletes the per-execution `cgo.Handle`; a later stream
+        // callback would call `h.Value()` on the deleted handle and
+        // panic the process.
+        //
+        // Aborting drops the stream pump's future; if it was waiting
+        // on push_event's yield_now loop, the future is dropped before
+        // the next push_event re-check, so no Stdout/Stderr lands. If
+        // it was on its own done_tx send, the receiver (already-
+        // completed exit_pump) is gone — harmless.
+        let pumps = std::mem::take(&mut *exec_box.pumps.lock().unwrap());
+        for pump in &pumps {
+            pump.abort();
+        }
+
         // Race exit dispatch with `exit_pump`. Two outcomes:
         //
         //  1. We win the claim. Push the synthetic Exit ourselves.
@@ -555,9 +573,6 @@ unsafe fn execution_free(execution: *mut ExecutionHandle) {
         //     a saturated queue (round-4 finding B). Wait for the task to
         //     finish so the Exit actually reaches the queue, with a
         //     bounded timeout so a stuck drainer cannot hang teardown.
-        //
-        // Push (or wait) BEFORE aborting any pumps so the dispatch is
-        // preserved.
         let we_claimed_dispatch = exec_box
             .exit_dispatched
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -590,13 +605,6 @@ unsafe fn execution_free(execution: *mut ExecutionHandle) {
             let _ = exec_box
                 .tokio_rt
                 .block_on(async move { tokio::time::timeout(EXIT_PUMP_WAIT, pump).await });
-        }
-
-        // Abort the stream pumps. Their oneshot tx dropping causes any
-        // upstream rx.await (in already-completed exit_pump) to no-op.
-        let pumps = std::mem::take(&mut *exec_box.pumps.lock().unwrap());
-        for pump in &pumps {
-            pump.abort();
         }
 
         drop(exec_box);

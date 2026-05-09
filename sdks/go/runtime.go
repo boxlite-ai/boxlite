@@ -373,6 +373,32 @@ func deleteHandleForDispatch(h cgo.Handle) {
 	}
 }
 
+// claimOrFreePayload is the dispatch-callback gate that ALSO frees the
+// C-side payload when the claim has already been taken (e.g. by
+// abandonAsync's closing branch during Runtime.Close). Without freeing
+// here the payload leaks, because Rust has already transferred
+// ownership via `OwnedFfiPtr::take()` before invoking the callback —
+// the only Rust-side reclamation path is the Drop on `OwnedFfiPtr`,
+// which Rust no longer owns.
+//
+// Returns true iff the caller wins the claim and should proceed with
+// `defer h.Delete()` + `h.Value()`. Returns false otherwise; in the
+// false branch the helper has already invoked `free(payload)` and the
+// caller MUST NOT touch the handle.
+//
+// `payload` may be nil (some callbacks have no payload — error-only
+// notifications); `free` may be nil if the payload doesn't need
+// reclamation.
+func claimOrFreePayload[P any](h cgo.Handle, payload *P, free func(*P)) bool {
+	if claimHandleForDispatch(h) {
+		return true
+	}
+	if payload != nil && free != nil {
+		free(payload)
+	}
+	return false
+}
+
 // abandonAsync runs after the caller's context cancelled but the C-side
 // Tokio task is still in flight. The Tokio task always completes and posts
 // to ch; we wait, free the cgo.Handle to reclaim the table slot, and run

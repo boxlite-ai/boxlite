@@ -74,14 +74,50 @@ func dispatchExit(exitCode int, h cgo.Handle) {
 
 // ─── Box lifecycle callbacks ───────────────────────────────────────────────
 
+// freeBoxHandlePayload reclaims a *CBoxHandle that the C side
+// `OwnedFfiPtr::take()`'d before invoking the dispatch callback. Used
+// by the claim-failure branch in goBoxliteOnCreateBox /
+// goBoxliteOnGetBox so the live VM (Create) or the attached handle
+// (Get) does NOT leak when Runtime.Close races a queued success.
+func freeBoxHandlePayload(b **C.CBoxHandle) {
+	if b == nil || *b == nil {
+		return
+	}
+	C.boxlite_box_free(*b)
+}
+
 //export goBoxliteOnCreateBox
 func goBoxliteOnCreateBox(box *C.CBoxHandle, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
-	deliverHandleResult[*C.CBoxHandle](userData, box, errPtr)
+	h := ptrToHandle(userData)
+	if h == 0 {
+		return
+	}
+	if !claimOrFreePayload(h, &box, freeBoxHandlePayload) {
+		return
+	}
+	defer h.Delete()
+	ch, ok := h.Value().(chan handleResult[*C.CBoxHandle])
+	if !ok {
+		return
+	}
+	ch <- handleResult[*C.CBoxHandle]{value: box, err: errorFromCError(errPtr)}
 }
 
 //export goBoxliteOnGetBox
 func goBoxliteOnGetBox(box *C.CBoxHandle, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
-	deliverHandleResult[*C.CBoxHandle](userData, box, errPtr)
+	h := ptrToHandle(userData)
+	if h == 0 {
+		return
+	}
+	if !claimOrFreePayload(h, &box, freeBoxHandlePayload) {
+		return
+	}
+	defer h.Delete()
+	ch, ok := h.Value().(chan handleResult[*C.CBoxHandle])
+	if !ok {
+		return
+	}
+	ch <- handleResult[*C.CBoxHandle]{value: box, err: errorFromCError(errPtr)}
 }
 
 //export goBoxliteOnStartBox
@@ -112,11 +148,14 @@ func goBoxliteOnImagePull(res *C.CImagePullResult, errPtr *C.CBoxliteError, user
 	if h == 0 {
 		return
 	}
-	// Claim the handle before any Value/Delete. Both this dispatch path
-	// and abandonAsync's closing branch race for it during Runtime.Close
-	// (round-4 finding A); the loser silently no-ops, ensuring exactly
-	// one Value+Delete pair per handle.
-	if !claimHandleForDispatch(h) {
+	// Claim the handle and free the payload on claim-failure. Round-6
+	// finding 2: without freeing here the C-allocated CImagePullResult
+	// leaks when Runtime.Close races a queued success callback.
+	if !claimOrFreePayload(h, &res, func(r **C.CImagePullResult) {
+		if r != nil && *r != nil {
+			C.boxlite_free_image_pull_result(*r)
+		}
+	}) {
 		return
 	}
 	defer h.Delete()
@@ -144,11 +183,11 @@ func goBoxliteOnImageList(list *C.CImageInfoList, errPtr *C.CBoxliteError, userD
 	if h == 0 {
 		return
 	}
-	// Claim the handle before any Value/Delete. Both this dispatch path
-	// and abandonAsync's closing branch race for it during Runtime.Close
-	// (round-4 finding A); the loser silently no-ops, ensuring exactly
-	// one Value+Delete pair per handle.
-	if !claimHandleForDispatch(h) {
+	if !claimOrFreePayload(h, &list, func(l **C.CImageInfoList) {
+		if l != nil && *l != nil {
+			C.boxlite_free_image_info_list(*l)
+		}
+	}) {
 		return
 	}
 	defer h.Delete()
@@ -175,11 +214,11 @@ func goBoxliteOnInfo(info *C.CBoxInfo, errPtr *C.CBoxliteError, userData unsafe.
 	if h == 0 {
 		return
 	}
-	// Claim the handle before any Value/Delete. Both this dispatch path
-	// and abandonAsync's closing branch race for it during Runtime.Close
-	// (round-4 finding A); the loser silently no-ops, ensuring exactly
-	// one Value+Delete pair per handle.
-	if !claimHandleForDispatch(h) {
+	if !claimOrFreePayload(h, &info, func(i **C.CBoxInfo) {
+		if i != nil && *i != nil {
+			C.boxlite_free_box_info(*i)
+		}
+	}) {
 		return
 	}
 	defer h.Delete()
@@ -206,11 +245,11 @@ func goBoxliteOnInfoList(list *C.CBoxInfoList, errPtr *C.CBoxliteError, userData
 	if h == 0 {
 		return
 	}
-	// Claim the handle before any Value/Delete. Both this dispatch path
-	// and abandonAsync's closing branch race for it during Runtime.Close
-	// (round-4 finding A); the loser silently no-ops, ensuring exactly
-	// one Value+Delete pair per handle.
-	if !claimHandleForDispatch(h) {
+	if !claimOrFreePayload(h, &list, func(l **C.CBoxInfoList) {
+		if l != nil && *l != nil {
+			C.boxlite_free_box_info_list(*l)
+		}
+	}) {
 		return
 	}
 	defer h.Delete()
