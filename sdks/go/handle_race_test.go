@@ -1,7 +1,7 @@
 package boxlite
 
-// Codex round-4 finding A reproducer: cgo.Handle ownership in the
-// round-3 #3 fix has TWO paths that both call h.Delete():
+// cgo.Handle ownership must be single-path under Runtime.Close races.
+// Two paths both want to Delete the per-async-op handle:
 //
 //   - The dispatch path (bridge_callback.go): every callback handler
 //     calls `h := ptrToHandle(userData); _ = h.Value(); h.Delete()`.
@@ -11,25 +11,15 @@ package boxlite
 // Runtime.Close fires `r.closing` BEFORE stopDrain returns. During the
 // up-to-100ms drain blocking call between close(r.closing) and stopDrain
 // completing, the drain goroutine may still dispatch a queued C event
-// whose callback calls h.Value() and h.Delete() for the same userData
-// that abandonAsync's closing branch is also Deleting. cgo.Handle.Delete
-// panics on double-Delete, and Value() panics if Delete already ran.
-// Either branch winning the race produces a panic, turning a clean
-// shutdown into a process crash.
+// whose callback calls h.Value()/h.Delete() for the same userData that
+// the closing branch is Deleting. cgo.Handle panics on double-Delete
+// and on Value-after-Delete; either would crash the process.
 //
-// Stress reproducer: simulate both paths racing on the same handle.
-// Each iteration creates a handle, spawns "dispatch" (Value+Delete) and
-// "closing-branch" (Delete) goroutines concurrently, and counts panics
-// across N iterations.
-//
-// BEFORE FIX (today): both paths call Delete() unconditionally. With
-// enough iterations, the race produces panics deterministically. Test
-// fails with "got N panics across M iterations; cgo.Handle ownership
-// is not single-path under round-4 fix".
-//
-// AFTER FIX: a single-path ownership primitive (claim-once on a global
-// handle registry) ensures exactly one path proceeds with the
-// Value/Delete pair; the loser silently no-ops. Zero panics.
+// Stress test: each iteration creates a handle, spawns "dispatch"
+// (Value+Delete) and "closing-branch" (Delete) goroutines concurrently,
+// and counts panics across N iterations. The single-path primitive
+// (claim-once on a global handle registry) must produce zero panics
+// and exactly one Delete per handle.
 
 import (
 	"runtime/cgo"
@@ -114,7 +104,7 @@ func TestHandleOwnership_NoDoubleDeleteRaceDuringClose(t *testing.T) {
 				"not single-path. Both the dispatch path (Value+Delete) and "+
 				"abandonAsync's closing branch (Delete) call into the same "+
 				"handle without coordination, so Runtime.Close racing a "+
-				"queued callback can panic the process (round-4 finding A).",
+				"queued callback can panic the process.",
 			c, iterations,
 		)
 	}

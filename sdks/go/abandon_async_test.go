@@ -1,18 +1,12 @@
 package boxlite
 
-// Codex finding #2 reproducer: every async Go SDK method used to leak its
-// `cgo.Handle` (and, for `Runtime.Create`, an entire live VM) when the
-// caller's context cancelled before the C-side Tokio task completed.
-// `abandonAsync` / `abandonAsyncErr` / `drainAndDelete` move that cleanup
-// onto a detached goroutine so the caller still returns ctx.Err() promptly
-// AND the cgo-side resources are reclaimed.
-//
-// BEFORE FIX: no helper existed; the cancel branch simply returned
-// `ctx.Err()` and never deleted the handle. These tests would have failed
-// to compile (helpers absent) — the actual cgo.Handle leak is observable
-// only at scale; the helper-level tests verify the cleanup contract.
-// AFTER FIX: each test asserts the helper deletes the handle and runs the
-// optional cleanup with the right value/error semantics.
+// Async cancel paths must reclaim the cgo.Handle (and any value carried
+// to a cleanup hook). Without `abandonAsync` / `abandonAsyncErr` /
+// `drainAndDelete`, a caller whose context cancelled before the C-side
+// Tokio task completed would leak its `cgo.Handle` (and, for
+// `Runtime.Create`, an entire live VM). These helpers move that cleanup
+// onto a detached goroutine so the caller still returns ctx.Err()
+// promptly AND the cgo-side resources are reclaimed.
 
 import (
 	"runtime/cgo"
@@ -107,7 +101,7 @@ func TestDrainAndDelete_DeletesHandle(t *testing.T) {
 	expectAlreadyDeleted(t, h)
 }
 
-// ─── Round-3 #3: Close wakes detached cleanup goroutines ───────────────────
+// ─── Close wakes detached cleanup goroutines ──────────────────────────────
 
 func TestAbandonAsync_RespondsToCloseSignal(t *testing.T) {
 	ch := make(chan handleResult[int], 1)
@@ -159,25 +153,15 @@ func TestDrainAndDelete_RespondsToCloseSignal(t *testing.T) {
 	expectAlreadyDeleted(t, h)
 }
 
-// ─── Round-2 Codex finding #3 regression guard ─────────────────────────────
+// ─── Per-execution cgo.Handle is deleted on Exit dispatch ─────────────────
 //
-// Round-1 deliberately leaked the per-execution `cgo.Handle` because the
-// stdout/stderr/exit callbacks on the C side were not strictly ordered, so
-// deleting the handle in the exit callback would race a concurrent stream
-// callback. Round-2 fix has two parts:
-//   - Rust: `exit_pump` now awaits each stream pump's `oneshot::Sender<()>`
-//     before pushing the Exit event, and `execution_free` synthesises an
-//     Exit on teardown so abort paths still terminate the dispatch chain.
-//   - Go: `goBoxliteOnExit` calls `h.Delete()` on the way out.
-//
-// The test directly invokes `goBoxliteOnExit` against a fresh cgo.Handle
-// and verifies the handle is deleted afterwards.
-//
-// BEFORE FIX: handle stays live (Delete on a live handle is a no-op-with-
-// panic; second Delete panics — but the FIRST Delete here would succeed
-// because the helper didn't run).
-// AFTER FIX: helper deletes; test's follow-up Delete panics, which we
-// observe via `expectAlreadyDeleted`.
+// The stdout/stderr/exit callbacks share one per-execution `cgo.Handle`.
+// To avoid Delete-after-use, `exit_pump` awaits each stream pump's
+// `oneshot::Sender<()>` before pushing the Exit event, and `execution_free`
+// synthesises an Exit on teardown so abort paths still terminate the
+// dispatch chain. `goBoxliteOnExit` then calls `h.Delete()` on the way
+// out, leaving exactly one Delete per handle. This test invokes the Exit
+// dispatch directly and verifies the handle is deleted afterwards.
 
 func TestExecutionStreamState_HandleDeletedOnExit(t *testing.T) {
 	state := newExecutionStreamState(ExecutionOptions{})
@@ -189,7 +173,7 @@ func TestExecutionStreamState_HandleDeletedOnExit(t *testing.T) {
 	// the test-friendly extraction.)
 	dispatchExit(0, streamHandle)
 
-	// After the round-2 fix, the handle is deleted in goBoxliteOnExit.
+	// goBoxliteOnExit deletes the handle on its way out.
 	expectAlreadyDeleted(t, streamHandle)
 
 	// State should also have observed the exit delivery.

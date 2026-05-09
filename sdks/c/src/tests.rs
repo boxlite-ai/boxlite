@@ -328,17 +328,16 @@ fn test_image_pull_rejected_after_boxlite_runtime_free() {
     let _ = std::fs::remove_dir_all(home_dir);
 }
 
-// ─── Codex finding #3: NULL-callback rejection (Rust side) ─────────────────
+// ─── NULL-callback rejection (Rust side) ───────────────────────────────────
 //
 // Each test passes `None` (cbindgen's encoding for a NULL function pointer
 // from C) and asserts the entrypoint synchronously returns InvalidArgument
 // without spawning a Tokio task that would later try to invoke a NULL fn.
 //
-// BEFORE FIX: typedefs were bare `extern "C" fn(...)` — passing `None`
-// didn't typecheck. The actual UB-on-NULL repro lives in the C-side test
-// (sdks/c/tests/test_null_callback.c) where C semantics allow NULL.
-// AFTER FIX: typedef is `Option<extern "C" fn(...)>`; entrypoint validates
-// `Some(...)` and returns InvalidArgument with a "cb is null" message.
+// The actual UB-on-NULL repro lives in the C-side test
+// (sdks/c/tests/test_null_callback.c) where C semantics allow NULL. Here we
+// rely on `Option<extern "C" fn(...)>` typedefs so the Rust side can express
+// and reject NULL synchronously.
 
 fn assert_null_cb_rejected(code: BoxliteErrorCode, error: &mut FFIError) {
     assert_eq!(code, BoxliteErrorCode::InvalidArgument);

@@ -1,24 +1,15 @@
 package boxlite
 
-// Codex round-6 finding 2 reproducer: when `abandonAsync`'s closing
-// branch claims the cgo.Handle (round-4 #A primitive), a queued success
-// callback that fires AFTER the claim sees `claimHandleForDispatch ==
-// false` and returns WITHOUT freeing the C-side payload. The Rust
-// dispatch path has already transferred ownership of that payload to
-// the Go callback via `OwnedFfiPtr::take()`, so Rust will not reclaim
-// it either. Net: the payload (CBoxHandle for Create/Get,
-// CImagePullResult, CImageInfoList, CBoxInfo, CBoxInfoList) leaks
-// across Runtime.Close.
-//
-// For Create specifically this means a live VM stays alive on the host
-// after Runtime.Close — Codex calls this out as the worst-case impact.
-// `forceRemoveOrphanBox` (the cleanup the result-channel branch would
-// have run) never executes because the goroutine took the closing
-// branch instead.
-//
-// BEFORE FIX: claim-failure path returns silently, payload leaks.
-// AFTER FIX: claim-failure path explicitly frees the payload (each
-// callback knows its payload type and the matching `boxlite_free_*`).
+// Claim-failure path must reclaim the C-side payload. When
+// `abandonAsync`'s closing branch claims the cgo.Handle, a queued
+// success callback that fires AFTER the claim sees
+// `claimHandleForDispatch == false` and returns. If that path doesn't
+// also free the C-side payload, the payload leaks: the Rust dispatch
+// path already transferred ownership to the Go callback via
+// `OwnedFfiPtr::take()`, so Rust will not reclaim it either. For
+// `Runtime.Create` the worst case is a live VM staying alive on the
+// host after Runtime.Close (the result-channel branch would have run
+// `forceRemoveOrphanBox` to clean it up).
 
 import (
 	"runtime/cgo"
@@ -65,7 +56,7 @@ func TestClaimOrFreePayload_FreesPayloadWhenClaimAlreadyTaken(t *testing.T) {
 		t.Fatalf(
 			"expected payload free function to run exactly once on claim-failure; "+
 				"got %d invocations. The C-owned payload leaks because Rust already "+
-				"OwnedFfiPtr::take()'d ownership before the callback ran (round-6 finding 2).",
+				"OwnedFfiPtr::take()'d ownership before the callback ran.",
 			freed.Load(),
 		)
 	}

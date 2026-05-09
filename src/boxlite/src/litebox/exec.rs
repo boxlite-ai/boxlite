@@ -400,16 +400,12 @@ mod tests {
         assert_eq!(cmd.user, None);
     }
 
-    // ─── Codex round-2 finding #1 regression guard ─────────────────────
+    // ─── wait must not block kill ─────────────────────────────────────
     //
-    // `Execution::wait` previously held the inner mutex across
-    // `result_rx.recv().await`. `kill`/`signal`/`resize_tty` need the
-    // same mutex, so a parked wait blocked them indefinitely. Fix
-    // (this PR): wait operates on its own `wait_state` lock domain so
-    // the inner mutex stays available.
-    //
-    // BEFORE FIX: this test deadlocks (wait holds inner; kill awaits
-    // inner forever). AFTER FIX: kill resolves promptly.
+    // `kill`/`signal`/`resize_tty` need the inner mutex. If `wait`
+    // held the inner mutex across `result_rx.recv().await`, a parked
+    // wait would block them indefinitely. wait operates on its own
+    // `wait_state` lock domain so the inner mutex stays available.
 
     use crate::runtime::backend::ExecBackend;
     use async_trait::async_trait;

@@ -2,31 +2,21 @@
 
 package boxlite
 
-// Codex round-3 finding #3 reproducer: Runtime.Close stops the drain
-// goroutine BEFORE calling boxlite_runtime_free. Any concurrent async
-// caller (Create, Get, Shutdown, ImagePull, Info, Metrics, etc.) is
-// blocked on `select { case res := <-ch: case <-ctx.Done(): }`. After
-// stopDrain, the result channel `ch` cannot receive anything because
-// the only goroutine that calls C.boxlite_runtime_drain (and dispatches
-// queued events to the callback that writes to `ch`) is dead. With a
-// non-cancellable ctx, the caller blocks forever and the abandonAsync
-// cleanup goroutine never runs (its detached goroutine waits on the
-// same ch).
+// Runtime.Close must not strand in-flight async callers. Close stops
+// the drain goroutine BEFORE calling boxlite_runtime_free; without a
+// "runtime closed" broadcast, any concurrent async caller (Create, Get,
+// Shutdown, ImagePull, Info, Metrics, etc.) is left blocked on its
+// result channel because the goroutine that drains queued events is
+// dead. With a non-cancellable ctx, the caller would block forever and
+// the abandonAsync cleanup goroutine (which waits on the same ch)
+// never runs.
 //
 // Reproducer choice: ImagePull is the cleanest in-flight async op for
 // this test because Pull's Tokio task spends real wall-clock time on
-// DNS resolution + TCP connection to the registry. Create's Tokio task
-// completes locally in milliseconds (the actual image pull is
-// deferred to start time), so Create cannot reliably reproduce the
-// strand. ImagePull against an unreachable registry guarantees a
+// DNS resolution + TCP connection. Create's Tokio task completes
+// locally in milliseconds (the actual image pull is deferred to start
+// time). Pulling against an unreachable registry guarantees a
 // multi-second in-flight window during which Close races.
-//
-// BEFORE FIX (today): Pull blocks for the full 3-second timeout
-// because the Tokio task pushes its result event into a queue that
-// has no drainer. The test fails with "Pull stranded after Close".
-// AFTER FIX: Close broadcasts a "runtime closed" signal that all
-// in-flight async callers respond to (returning ErrRuntimeClosed
-// or some non-nil error). Pull wakes up within ms.
 
 import (
 	"context"
@@ -91,9 +81,8 @@ func TestRuntimeCloseDoesNotStrandPendingPull(t *testing.T) {
 			time.Since(closeStart), pullErr)
 	case <-time.After(3 * time.Second):
 		elapsed := time.Since(closeStart)
-		t.Fatalf("Pull stranded for %v after Close — broken code blocks "+
-			"forever (round-3 #3): drain goroutine stopped before "+
-			"the result channel could be delivered, and the in-flight "+
-			"caller has no signal to wake on", elapsed)
+		t.Fatalf("Pull stranded for %v after Close: drain goroutine "+
+			"stopped before the result channel could be delivered, and "+
+			"the in-flight caller has no signal to wake on", elapsed)
 	}
 }
