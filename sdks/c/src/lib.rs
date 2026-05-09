@@ -21,6 +21,23 @@ mod runtime;
 mod tests;
 mod util;
 
+/// Test-only counter incremented every time `free_str` reclaims a
+/// `CString::from_raw`'d inner pointer. Used by Codex round-3 finding #4
+/// reproducer tests to verify that `OwnedFfiPtr<T>::drop` for FFI payload
+/// types like `CImagePullResult` actually traverses the struct's nested
+/// allocations rather than only freeing the outer `Box`.
+#[cfg(test)]
+pub(crate) static FREE_STR_CALLS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// Serializes tests that observe `FREE_STR_CALLS` deltas. The counter is
+/// process-global, so without this lock parallel cargo tests interleave
+/// and produce false-positive failures (test A's `before` snapshot
+/// includes test B's increments). Each leak-reproducer test must acquire
+/// `FREE_STR_LOCK` before reading `FREE_STR_CALLS`.
+#[cfg(test)]
+pub(crate) static FREE_STR_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 pub type CBoxliteRuntime = runtime::RuntimeHandle;
 pub type CBoxHandle = box_handle::BoxHandle;
 pub type CBoxliteImageHandle = images::ImageHandle;

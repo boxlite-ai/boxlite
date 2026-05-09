@@ -171,6 +171,17 @@ use std::sync::atomic::AtomicPtr;
 
 pub struct OwnedFfiPtr<T> {
     raw: AtomicPtr<T>,
+    /// Optional type-aware destructor. `None` means the payload is a Rust
+    /// type whose `Drop` impl reclaims everything (e.g. `CBoxHandle` is a
+    /// plain Rust struct — `Box::drop` is sufficient).
+    ///
+    /// `Some(free)` is required for repr(C) FFI structs whose fields are
+    /// `*mut c_char` from `CString::into_raw` or `*mut T` from
+    /// `Vec::into_raw_parts`. `Box::drop` does not run any destructor for
+    /// raw pointers, so without this hook those nested allocations leak.
+    /// Producers wrap such payloads with `new_with(boxed, free_xyz_ptr)`
+    /// where `free_xyz_ptr` is the matching `boxlite_free_*` body.
+    free: Option<unsafe fn(*mut T)>,
     _marker: PhantomData<Box<T>>,
 }
 
@@ -181,13 +192,31 @@ unsafe impl<T> Send for OwnedFfiPtr<T> {}
 unsafe impl<T> Sync for OwnedFfiPtr<T> {}
 
 impl<T> OwnedFfiPtr<T> {
+    /// Wrap a Rust-Drop-sufficient payload (e.g. `CBoxHandle`). Drop runs
+    /// `Box::from_raw(ptr); drop(box);` — fine for any type whose own Drop
+    /// impl reclaims its fields.
     pub fn new(boxed: Box<T>) -> Self {
         Self {
             raw: AtomicPtr::new(Box::into_raw(boxed)),
+            free: None,
             _marker: PhantomData,
         }
     }
-    /// Take ownership back as a raw pointer; Drop becomes a no-op.
+
+    /// Wrap an FFI payload whose nested allocations require a type-aware
+    /// destructor (e.g. `CImagePullResult` has `CString::into_raw`'d
+    /// `reference` + `config_digest` fields that `Box::drop` cannot
+    /// reclaim). `free` is invoked on the raw pointer when Drop runs.
+    pub fn new_with(boxed: Box<T>, free: unsafe fn(*mut T)) -> Self {
+        Self {
+            raw: AtomicPtr::new(Box::into_raw(boxed)),
+            free: Some(free),
+            _marker: PhantomData,
+        }
+    }
+
+    /// Take ownership back as a raw pointer; Drop becomes a no-op (neither
+    /// the default `Box::drop` nor the type-aware `free` runs).
     pub fn take(self) -> *mut T {
         let ptr = self.raw.swap(std::ptr::null_mut(), Ordering::AcqRel);
         std::mem::forget(self);
@@ -198,8 +227,14 @@ impl<T> OwnedFfiPtr<T> {
 impl<T> Drop for OwnedFfiPtr<T> {
     fn drop(&mut self) {
         let ptr = *self.raw.get_mut();
-        if !ptr.is_null() {
-            unsafe { drop(Box::from_raw(ptr)) };
+        if ptr.is_null() {
+            return;
+        }
+        unsafe {
+            match self.free {
+                Some(free) => free(ptr),
+                None => drop(Box::from_raw(ptr)),
+            }
         }
     }
 }
@@ -1014,5 +1049,210 @@ mod owned_ffi_ptr_tests {
         // test never actually pushes; it directly drops, which is the same
         // outcome the close-path produces.
         assert!(queue.is_closed());
+    }
+}
+
+// ─── Codex round-3 finding #4 reproducer ───────────────────────────────────
+//
+// `OwnedFfiPtr<T>::drop` reconstructs a `Box::from_raw(ptr)` and lets the
+// outer `T`'s Drop impl run. For Rust types like `TrackedResource` (used in
+// the existing tests above), this is sufficient because Drop walks the
+// fields and reclaims their resources. For C-ABI repr(C) FFI structs like
+// `CImagePullResult`, `CImageInfoList`, `CBoxInfo`, `CBoxInfoList`, this
+// is INSUFFICIENT: the inner `*mut c_char` fields are `CString::into_raw`'d
+// allocations whose ownership has been forgotten by Rust. Drop runs no
+// destructor for raw pointers, so the inner CStrings leak when the outer
+// Box is reclaimed.
+//
+// The codebase has dedicated `boxlite_free_*` (and internal `free_*_ptr`)
+// functions for each of these payload types — they walk the struct fields
+// and reclaim each inner allocation before dropping the outer Box. The bug
+// is that `OwnedFfiPtr<T>` (the closed-queue safety-net introduced in
+// round-2) ignores those destructors entirely.
+//
+// BEFORE FIX (today): wrapping each leaky payload in `OwnedFfiPtr` and
+// dropping the wrapper increments `FREE_STR_CALLS` by 0 — the inner
+// CString allocations leak. The assertions below fail.
+// AFTER FIX: the fix introduces type-aware reclamation (likely
+// type-specific Owned* wrappers, or a closure-parametric generic that
+// captures the per-type free function). Inner CStrings are reclaimed,
+// `FREE_STR_CALLS` increments by the expected number per payload.
+
+#[cfg(test)]
+mod owned_ffi_ptr_nested_leak_tests {
+    use super::*;
+    use crate::FREE_STR_CALLS;
+    use crate::images::{CImageInfoList, CImagePullResult};
+    use crate::info::{CBoxInfo, CBoxInfoList};
+    use std::ffi::CString;
+    use std::sync::atomic::Ordering as AtomicOrdering;
+
+    fn test_cstr(s: &str) -> *mut std::os::raw::c_char {
+        CString::new(s).unwrap().into_raw()
+    }
+
+    #[test]
+    fn owned_ffi_ptr_image_pull_result_reclaims_inner_cstrings() {
+        let _guard = crate::FREE_STR_LOCK.lock().unwrap();
+        let before = FREE_STR_CALLS.load(AtomicOrdering::SeqCst);
+
+        let payload = Box::new(CImagePullResult {
+            reference: test_cstr("alpine:latest"),
+            config_digest: test_cstr("sha256:deadbeef"),
+            layer_count: 1,
+        });
+
+        let owned = OwnedFfiPtr::new_with(payload, crate::images::free_image_pull_result);
+        drop(owned);
+
+        let after = FREE_STR_CALLS.load(AtomicOrdering::SeqCst);
+        assert_eq!(
+            after - before,
+            2,
+            "OwnedFfiPtr<CImagePullResult>::drop reclaimed {} inner CStrings; \
+             expected 2 (reference + config_digest). Inner allocations leak.",
+            after - before
+        );
+    }
+
+    #[test]
+    fn owned_ffi_ptr_box_info_reclaims_inner_cstrings() {
+        let _guard = crate::FREE_STR_LOCK.lock().unwrap();
+        let before = FREE_STR_CALLS.load(AtomicOrdering::SeqCst);
+
+        let payload = Box::new(CBoxInfo {
+            id: test_cstr("box-id-1"),
+            name: test_cstr("test-box"),
+            image: test_cstr("alpine:latest"),
+            status: test_cstr("running"),
+            running: 1,
+            pid: 0,
+            cpus: 1,
+            memory_mib: 256,
+            created_at: 0,
+        });
+
+        let owned = OwnedFfiPtr::new_with(payload, crate::info::free_box_info_ptr);
+        drop(owned);
+
+        let after = FREE_STR_CALLS.load(AtomicOrdering::SeqCst);
+        assert_eq!(
+            after - before,
+            4,
+            "OwnedFfiPtr<CBoxInfo>::drop reclaimed {} inner CStrings; \
+             expected 4 (id + name + image + status). Inner allocations leak.",
+            after - before
+        );
+    }
+
+    #[test]
+    fn owned_ffi_ptr_image_info_list_reclaims_inner_cstrings() {
+        let _guard = crate::FREE_STR_LOCK.lock().unwrap();
+        let before = FREE_STR_CALLS.load(AtomicOrdering::SeqCst);
+
+        // Build a list with one item carrying 4 CStrings.
+        let mut items_vec = vec![crate::images::CImageInfo {
+            reference: test_cstr("alpine:latest"),
+            repository: test_cstr("alpine"),
+            tag: test_cstr("latest"),
+            id: test_cstr("sha256:deadbeef"),
+            cached_at: 0,
+            size: 0,
+            has_size: 0,
+        }];
+        let items_ptr = items_vec.as_mut_ptr();
+        let items_len = items_vec.len();
+        std::mem::forget(items_vec);
+
+        let payload = Box::new(CImageInfoList {
+            items: items_ptr,
+            count: items_len as std::os::raw::c_int,
+        });
+
+        let owned = OwnedFfiPtr::new_with(payload, crate::images::free_image_info_list);
+        drop(owned);
+
+        let after = FREE_STR_CALLS.load(AtomicOrdering::SeqCst);
+        assert_eq!(
+            after - before,
+            4,
+            "OwnedFfiPtr<CImageInfoList>::drop reclaimed {} inner CStrings; \
+             expected 4 (1 item × 4 fields). Inner allocations leak.",
+            after - before
+        );
+    }
+
+    #[test]
+    fn owned_ffi_ptr_box_info_list_reclaims_inner_cstrings() {
+        let _guard = crate::FREE_STR_LOCK.lock().unwrap();
+        let before = FREE_STR_CALLS.load(AtomicOrdering::SeqCst);
+
+        let mut items_vec = vec![CBoxInfo {
+            id: test_cstr("box-id-2"),
+            name: test_cstr("another-box"),
+            image: test_cstr("ubuntu:24.04"),
+            status: test_cstr("stopped"),
+            running: 0,
+            pid: 0,
+            cpus: 2,
+            memory_mib: 512,
+            created_at: 0,
+        }];
+        let items_ptr = items_vec.as_mut_ptr();
+        let items_len = items_vec.len();
+        std::mem::forget(items_vec);
+
+        let payload = Box::new(CBoxInfoList {
+            items: items_ptr,
+            count: items_len as std::os::raw::c_int,
+        });
+
+        let owned = OwnedFfiPtr::new_with(payload, crate::info::free_box_info_list);
+        drop(owned);
+
+        let after = FREE_STR_CALLS.load(AtomicOrdering::SeqCst);
+        assert_eq!(
+            after - before,
+            4,
+            "OwnedFfiPtr<CBoxInfoList>::drop reclaimed {} inner CStrings; \
+             expected 4 (1 item × 4 fields). Inner allocations leak.",
+            after - before
+        );
+    }
+
+    /// Adjacent contract: `take()` must disarm the type-aware destructor
+    /// just as it disarms `Box::drop`. The C consumer takes ownership of
+    /// the raw pointer on success dispatch and is responsible for calling
+    /// `boxlite_free_*` itself. Calling free in the wrapper would
+    /// double-free.
+    #[test]
+    fn owned_ffi_ptr_with_free_take_disarms_drop() {
+        let _guard = crate::FREE_STR_LOCK.lock().unwrap();
+        let before = FREE_STR_CALLS.load(AtomicOrdering::SeqCst);
+
+        let payload = Box::new(CImagePullResult {
+            reference: test_cstr("alpine:latest"),
+            config_digest: test_cstr("sha256:deadbeef"),
+            layer_count: 1,
+        });
+
+        let owned = OwnedFfiPtr::new_with(payload, crate::images::free_image_pull_result);
+        let raw = owned.take();
+
+        // After take(), neither Box::drop nor free runs. Counter unchanged.
+        let after_take = FREE_STR_CALLS.load(AtomicOrdering::SeqCst);
+        assert_eq!(
+            after_take - before,
+            0,
+            "OwnedFfiPtr::take must NOT invoke the free function — got {} \
+             FREE_STR_CALLS, expected 0. The C consumer would double-free.",
+            after_take - before
+        );
+
+        // Manually run the destructor to clean up (mirrors what the C
+        // consumer does with boxlite_free_image_pull_result).
+        unsafe { crate::images::free_image_pull_result(raw) };
+        let after_manual = FREE_STR_CALLS.load(AtomicOrdering::SeqCst);
+        assert_eq!(after_manual - before, 2);
     }
 }

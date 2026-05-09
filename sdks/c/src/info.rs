@@ -117,6 +117,8 @@ pub unsafe fn free_box_info_list(list: *mut CBoxInfoList) {
 
 unsafe fn free_str(s: *mut c_char) {
     if !s.is_null() {
+        #[cfg(test)]
+        crate::FREE_STR_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         unsafe {
             drop(CString::from_raw(s));
         }
@@ -214,9 +216,10 @@ unsafe fn box_info_by_id(
 
         runtime_ref.tokio_rt.spawn(async move {
             let result = match runtime_clone.get_info(&id_or_name).await {
-                Ok(Some(info)) => Ok(crate::event_queue::OwnedFfiPtr::new(Box::new(
-                    CBoxInfo::from_box_info(&info),
-                ))),
+                Ok(Some(info)) => Ok(crate::event_queue::OwnedFfiPtr::new_with(
+                    Box::new(CBoxInfo::from_box_info(&info)),
+                    free_box_info_ptr,
+                )),
                 Ok(None) => Err(BoxliteError::NotFound(format!(
                     "Box not found: {id_or_name}"
                 ))),
@@ -261,7 +264,10 @@ unsafe fn box_list(
                 let count = items.len() as c_int;
                 let ptr = items.as_mut_ptr();
                 std::mem::forget(items);
-                crate::event_queue::OwnedFfiPtr::new(Box::new(CBoxInfoList { items: ptr, count }))
+                crate::event_queue::OwnedFfiPtr::new_with(
+                    Box::new(CBoxInfoList { items: ptr, count }),
+                    free_box_info_list,
+                )
             });
             push_event(
                 &queue,

@@ -122,6 +122,8 @@ pub unsafe fn free_image_pull_result(result: *mut CImagePullResult) {
 
 unsafe fn free_str(s: *mut c_char) {
     if !s.is_null() {
+        #[cfg(test)]
+        crate::FREE_STR_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         unsafe {
             drop(CString::from_raw(s));
         }
@@ -197,7 +199,10 @@ unsafe fn image_list(
                 let count = items.len() as c_int;
                 let ptr = items.as_mut_ptr();
                 std::mem::forget(items);
-                crate::event_queue::OwnedFfiPtr::new(Box::new(CImageInfoList { items: ptr, count }))
+                crate::event_queue::OwnedFfiPtr::new_with(
+                    Box::new(CImageInfoList { items: ptr, count }),
+                    free_image_info_list,
+                )
             });
             push_event(
                 &queue,
@@ -249,11 +254,14 @@ unsafe fn image_pull(
 
         handle_ref.tokio_rt.spawn(async move {
             let result = core_handle.pull(&image_ref).await.map(|image| {
-                crate::event_queue::OwnedFfiPtr::new(Box::new(CImagePullResult::new(
-                    image.reference(),
-                    image.config_digest(),
-                    image.layer_count(),
-                )))
+                crate::event_queue::OwnedFfiPtr::new_with(
+                    Box::new(CImagePullResult::new(
+                        image.reference(),
+                        image.config_digest(),
+                        image.layer_count(),
+                    )),
+                    free_image_pull_result,
+                )
             });
             push_event(
                 &queue,
