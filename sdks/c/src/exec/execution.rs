@@ -424,9 +424,21 @@ unsafe fn execution_wait(
         let exec_arc = exec_ref.execution.clone();
         let queue = exec_ref.queue.clone();
         let user_data_addr = user_data as usize;
+        let process_completed = exec_ref.process_completed.clone();
 
         exec_ref.tokio_rt.spawn(async move {
             let result = wait_on_clone(&exec_arc).await;
+            // Mark process_completed=true ONLY on Ok — a failed wait is
+            // NOT proof the guest process exited (round-8 F1). For
+            // untrusted/sandboxed code, an Err wait may mean the
+            // backend lost the connection while the process is still
+            // running; execution_free must keep its kill+wait cleanup
+            // path active in that case. On Ok, the wait observed a
+            // real exit (round-7); _free's force-close path is
+            // correctly skipped.
+            if result.is_ok() {
+                process_completed.store(true, Ordering::Release);
+            }
             push_event(
                 &queue,
                 RuntimeEvent::Wait {
@@ -1133,4 +1145,100 @@ mod tests {
         );
         assert_eq!(bytes[1], b"trace");
     }
+
+    // ─── Codex round-7 reproducer ──────────────────────────────────────
+    //
+    // execution_free reads `process_completed` to decide whether to run
+    // its kill+wait+abort+synth-Exit force-close path. But
+    // `process_completed` is only set inside `exit_pump`. The parallel
+    // wait path — `boxlite_execution_wait` — never sets it. Net: a
+    // successful Wait() returns the real exit code, then Close()'s
+    // execution_free reads process_completed=false, treats the process
+    // as live, aborts stream pumps (truncating output) and synthesises
+    // EXIT_CODE_FORCE_CLOSED on top of the natural exit.
+    //
+    // This is the round-3 #1 / round-4 #A "two paths share state but
+    // not all paths update it" shape, applied to process state
+    // instead of exit dispatch / handle ownership.
+    //
+    // Reproducer: call boxlite_execution_wait on an empty handle (whose
+    // wait_on_clone returns immediately with InvalidState — the wait
+    // HAS BEEN "observed", regardless of outcome), then assert
+    // process_completed=true. Today the flag stays false because
+    // execution_wait's spawned task pushes the Wait event but never
+    // writes process_completed. Test polls with a bounded timeout.
+    //
+    // BEFORE FIX: process_completed stays false, polling times out,
+    // test fails with "process_completed must be true".
+    // AFTER FIX: execution_wait's task writes process_completed=true
+    // after wait_on_clone returns. Test passes.
+
+    use std::sync::atomic::Ordering as ProcessCompletedOrdering;
+
+    // ─── Codex round-8 F1 reproducer ──────────────────────────────────
+    //
+    // Round-7's fix unconditionally set `process_completed=true` after
+    // wait_on_clone returned, regardless of result. Codex round-8 caught
+    // this: a failed wait is NOT proof the guest process exited, and
+    // execution_free uses process_completed to skip its kill+wait
+    // cleanup path. For untrusted/sandboxed code, skipping the kill on
+    // an errored wait can leave a live process running while the handle
+    // is freed.
+    //
+    // Reproducer: empty_handle's wait_on_clone returns Err(InvalidState)
+    // (no Execution in the slot). Today the round-7 fix sets
+    // process_completed=true regardless. Test asserts process_completed
+    // remains false after an errored wait; the fix only marks it true
+    // on Ok results.
+    //
+    // BEFORE FIX (round-7's broken approach): process_completed=true on
+    // Err. Test fails: "process_completed must NOT be set on errored wait".
+    // AFTER FIX: process_completed only set on Ok. Test passes.
+
+    #[test]
+    fn execution_wait_must_not_mark_process_completed_on_error() {
+        let mut handle = empty_handle();
+        let process_completed = handle.process_completed.clone();
+
+        let mut error = FFIError::default();
+        let code = unsafe {
+            boxlite_execution_wait(
+                &mut handle as *mut _,
+                Some(noop_wait),
+                ptr::null_mut(),
+                &mut error,
+            )
+        };
+        assert_eq!(code, BoxliteErrorCode::Ok);
+
+        // Empty handle's wait_on_clone returns Err(InvalidState)
+        // synchronously — give the spawned task a moment to complete.
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        assert!(
+            !process_completed.load(ProcessCompletedOrdering::Acquire),
+            "process_completed MUST stay false after an errored wait. A \
+             failed wait is NOT proof the guest process exited; setting \
+             the flag would let execution_free skip its kill+wait cleanup \
+             on a still-running command (round-8 F1, security risk for \
+             untrusted/sandboxed processes)."
+        );
+
+        unsafe {
+            crate::boxlite_error_free(&mut error as *mut _);
+        }
+    }
+
+    // The round-7 invariant — successful wait MUST mark
+    // process_completed — also still holds. Codex's round-8 fix
+    // recommendation: "Only set `process_completed` after an `Ok` wait
+    // result." That makes BOTH this round-8 test and the round-7
+    // success-case test simultaneously satisfiable.
+    //
+    // The success-case test is omitted from the C SDK suite because
+    // exercising it requires a stub ExecBackend that can produce an Ok
+    // ExecResult, and `Execution::new`/`ExecBackend` are pub(crate) in
+    // the boxlite crate. The boxlite-side litebox/exec.rs::tests
+    // already covers the wait-completion path; this file enforces the
+    // failed-wait invariant in isolation.
 }
