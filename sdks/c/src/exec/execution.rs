@@ -571,24 +571,22 @@ unsafe fn execution_free(execution: *mut ExecutionHandle) {
 
 // ─── Pump tasks ────────────────────────────────────────────────────────────
 
-async fn stdout_pump(
-    mut stream: ExecStdout,
+async fn stdout_pump<S>(
+    mut stream: S,
     cb: CBoxStdoutFn,
     user_data_addr: usize,
     queue: Arc<EventQueue>,
     done_tx: oneshot::Sender<()>,
-) {
-    while let Some(line) = stream.next().await {
-        let mut bytes = line.into_bytes();
-        // Restore the line terminator that the upstream stream stripped, so
-        // the C consumer reassembles a faithful byte stream.
-        bytes.push(b'\n');
+) where
+    S: futures::Stream<Item = String> + Unpin,
+{
+    while let Some(chunk) = stream.next().await {
         push_event(
             &queue,
             RuntimeEvent::Stdout {
                 cb,
                 user_data: user_data_addr,
-                data: bytes,
+                data: chunk.into_bytes(),
             },
         )
         .await;
@@ -598,22 +596,22 @@ async fn stdout_pump(
     let _ = done_tx.send(());
 }
 
-async fn stderr_pump(
-    mut stream: ExecStderr,
+async fn stderr_pump<S>(
+    mut stream: S,
     cb: CBoxStderrFn,
     user_data_addr: usize,
     queue: Arc<EventQueue>,
     done_tx: oneshot::Sender<()>,
-) {
-    while let Some(line) = stream.next().await {
-        let mut bytes = line.into_bytes();
-        bytes.push(b'\n');
+) where
+    S: futures::Stream<Item = String> + Unpin,
+{
+    while let Some(chunk) = stream.next().await {
         push_event(
             &queue,
             RuntimeEvent::Stderr {
                 cb,
                 user_data: user_data_addr,
-                data: bytes,
+                data: chunk.into_bytes(),
             },
         )
         .await;
@@ -985,5 +983,111 @@ mod tests {
             dispatched.load(AtomicOrdering::Acquire),
             "exit_dispatched flag was never claimed",
         );
+    }
+
+    // ─── Codex round-3 finding #2 reproducer ────────────────────────────
+    //
+    // stdout_pump and stderr_pump append `b'\n'` to every chunk before
+    // pushing the Stdout/Stderr event. That's wrong: the upstream
+    // contract from `boxlite::portal::interfaces::exec::route_output`
+    // is `String::from_utf8_lossy(&chunk.data).to_string()` —
+    // raw byte chunks (UTF-8 lossy decoded), forwarded as-is, with
+    // NO line splitting and NO newline stripping. The variable name
+    // `line` in the pumps is fiction; chunks are arbitrary boundaries.
+    //
+    // Concrete corruption examples on the unfixed code:
+    //   - `printf hello` (no trailing newline) -> consumer sees
+    //     `hello\n` instead of `hello`.
+    //   - A 1024-byte buffer split into two gRPC chunks -> consumer
+    //     sees an extra `\n` at the chunk boundary, splitting bytes
+    //     that were contiguous on the producer side.
+    //   - Binary or protocol output -> arbitrary `\x0a` injection.
+    //
+    // BEFORE FIX: pumps push `bytes + b'\n'` -> assertions on raw
+    // byte equality fail.
+    // AFTER FIX: pumps push `bytes` unchanged -> assertions pass.
+
+    use futures::stream::iter as stream_iter;
+
+    extern "C" fn noop_stdout_cb(_: *const u8, _: usize, _: *mut c_void) {}
+    extern "C" fn noop_stderr_cb(_: *const u8, _: usize, _: *mut c_void) {}
+
+    fn drain_stdout_bytes(queue: &Arc<EventQueue>) -> Vec<Vec<u8>> {
+        let events: Vec<RuntimeEvent> = {
+            let mut g = queue.inner.lock().unwrap();
+            g.drain(..).collect()
+        };
+        events
+            .into_iter()
+            .filter_map(|e| match e {
+                RuntimeEvent::Stdout { data, .. } => Some(data),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn drain_stderr_bytes(queue: &Arc<EventQueue>) -> Vec<Vec<u8>> {
+        let events: Vec<RuntimeEvent> = {
+            let mut g = queue.inner.lock().unwrap();
+            g.drain(..).collect()
+        };
+        events
+            .into_iter()
+            .filter_map(|e| match e {
+                RuntimeEvent::Stderr { data, .. } => Some(data),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn stdout_pump_forwards_chunks_byte_exact() {
+        let queue = Arc::new(EventQueue::new());
+        let (done_tx, _done_rx) = oneshot::channel::<()>();
+        let chunks = vec![
+            "hello".to_string(),                    // no trailing \n
+            "world".to_string(),                    // boundary chunk
+            "with\ninternal\nnewlines".to_string(), // already-newlined
+            "tab\there\x00null".to_string(),        // control bytes
+        ];
+        let stream = stream_iter(chunks.into_iter());
+
+        stdout_pump(stream, noop_stdout_cb, 0xFEED_DEAD, queue.clone(), done_tx).await;
+
+        let bytes = drain_stdout_bytes(&queue);
+        assert_eq!(bytes.len(), 4, "expected 4 stdout events");
+        assert_eq!(
+            bytes[0], b"hello",
+            "chunk 0 must be forwarded byte-exact (no trailing \\n appended). \
+             Got {:?}",
+            bytes[0]
+        );
+        assert_eq!(bytes[1], b"world");
+        assert_eq!(bytes[2], b"with\ninternal\nnewlines");
+        assert_eq!(
+            bytes[3],
+            "tab\there\x00null".as_bytes(),
+            "control-byte chunk corrupted",
+        );
+    }
+
+    #[tokio::test]
+    async fn stderr_pump_forwards_chunks_byte_exact() {
+        let queue = Arc::new(EventQueue::new());
+        let (done_tx, _done_rx) = oneshot::channel::<()>();
+        let chunks = vec!["error".to_string(), "trace".to_string()];
+        let stream = stream_iter(chunks.into_iter());
+
+        stderr_pump(stream, noop_stderr_cb, 0xCAFE_BABE, queue.clone(), done_tx).await;
+
+        let bytes = drain_stderr_bytes(&queue);
+        assert_eq!(bytes.len(), 2);
+        assert_eq!(
+            bytes[0], b"error",
+            "stderr chunk 0 must be forwarded byte-exact (no trailing \\n). \
+             Got {:?}",
+            bytes[0]
+        );
+        assert_eq!(bytes[1], b"trace");
     }
 }
