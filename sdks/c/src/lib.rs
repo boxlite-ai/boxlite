@@ -22,10 +22,10 @@ mod tests;
 mod util;
 
 /// Test-only counter incremented every time `free_str` reclaims a
-/// `CString::from_raw`'d inner pointer. Used by Codex round-3 finding #4
-/// reproducer tests to verify that `OwnedFfiPtr<T>::drop` for FFI payload
-/// types like `CImagePullResult` actually traverses the struct's nested
-/// allocations rather than only freeing the outer `Box`.
+/// `CString::from_raw`'d inner pointer. Lets nested-leak reproducer
+/// tests verify that `OwnedFfiPtr<T>::drop` for FFI payload types like
+/// `CImagePullResult` actually traverses the struct's nested allocations
+/// rather than only freeing the outer `Box`.
 #[cfg(test)]
 pub(crate) static FREE_STR_CALLS: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);

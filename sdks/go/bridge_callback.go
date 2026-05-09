@@ -148,9 +148,9 @@ func goBoxliteOnImagePull(res *C.CImagePullResult, errPtr *C.CBoxliteError, user
 	if h == 0 {
 		return
 	}
-	// Claim the handle and free the payload on claim-failure. Round-6
-	// finding 2: without freeing here the C-allocated CImagePullResult
-	// leaks when Runtime.Close races a queued success callback.
+	// Claim the handle and free the payload on claim-failure. Without
+	// freeing here, the C-allocated CImagePullResult would leak when
+	// Runtime.Close races a queued success callback.
 	if !claimOrFreePayload(h, &res, func(r **C.CImagePullResult) {
 		if r != nil && *r != nil {
 			C.boxlite_free_image_pull_result(*r)
@@ -276,10 +276,7 @@ func goBoxliteOnBoxMetrics(m *C.CBoxMetrics, errPtr *C.CBoxliteError, userData u
 	if h == 0 {
 		return
 	}
-	// Claim the handle before any Value/Delete. Both this dispatch path
-	// and abandonAsync's closing branch race for it during Runtime.Close
-	// (round-4 finding A); the loser silently no-ops, ensuring exactly
-	// one Value+Delete pair per handle.
+	// Claim before Value/Delete; see claimHandleForDispatch.
 	if !claimHandleForDispatch(h) {
 		return
 	}
@@ -306,10 +303,7 @@ func goBoxliteOnRuntimeMetrics(m *C.CRuntimeMetrics, errPtr *C.CBoxliteError, us
 	if h == 0 {
 		return
 	}
-	// Claim the handle before any Value/Delete. Both this dispatch path
-	// and abandonAsync's closing branch race for it during Runtime.Close
-	// (round-4 finding A); the loser silently no-ops, ensuring exactly
-	// one Value+Delete pair per handle.
+	// Claim before Value/Delete; see claimHandleForDispatch.
 	if !claimHandleForDispatch(h) {
 		return
 	}
@@ -345,10 +339,7 @@ func goBoxliteOnExecutionWait(exitCode C.int, errPtr *C.CBoxliteError, userData 
 	if h == 0 {
 		return
 	}
-	// Claim the handle before any Value/Delete. Both this dispatch path
-	// and abandonAsync's closing branch race for it during Runtime.Close
-	// (round-4 finding A); the loser silently no-ops, ensuring exactly
-	// one Value+Delete pair per handle.
+	// Claim before Value/Delete; see claimHandleForDispatch.
 	if !claimHandleForDispatch(h) {
 		return
 	}
@@ -382,10 +373,7 @@ func deliverUnitResult(userData unsafe.Pointer, errPtr *C.CBoxliteError) {
 	if h == 0 {
 		return
 	}
-	// Claim the handle before any Value/Delete. Both this dispatch path
-	// and abandonAsync's closing branch race for it during Runtime.Close
-	// (round-4 finding A); the loser silently no-ops, ensuring exactly
-	// one Value+Delete pair per handle.
+	// Claim before Value/Delete; see claimHandleForDispatch.
 	if !claimHandleForDispatch(h) {
 		return
 	}
@@ -404,10 +392,7 @@ func deliverHandleResult[T any](userData unsafe.Pointer, value T, errPtr *C.CBox
 	if h == 0 {
 		return
 	}
-	// Claim the handle before any Value/Delete. Both this dispatch path
-	// and abandonAsync's closing branch race for it during Runtime.Close
-	// (round-4 finding A); the loser silently no-ops, ensuring exactly
-	// one Value+Delete pair per handle.
+	// Claim before Value/Delete; see claimHandleForDispatch.
 	if !claimHandleForDispatch(h) {
 		return
 	}

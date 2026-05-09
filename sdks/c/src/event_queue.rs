@@ -159,12 +159,8 @@ pub(crate) type CExecutionResizeFn = extern "C" fn(*mut crate::CBoxliteError, *m
 // to a C callback as a raw pointer. If the wrapper is dropped before the
 // callback fires (e.g. the runtime is freed and the queue is closed mid-
 // flight, so `push_event_with_capacity` discards the event), the underlying
-// allocation is reclaimed instead of leaking.
-//
-// Why this exists: round-1 added a closed-flag short-circuit to push_event
-// that silently dropped events on shutdown. The six lifecycle variants
-// below carry owned heap pointers; without `OwnedFfiPtr`'s Drop those
-// allocations leaked, and (for `CreateBox`) the live VM stayed alive too.
+// allocation is reclaimed instead of leaking — including any nested heap
+// payloads (e.g. a `CreateBox` event holds a live VM whose Drop must run).
 
 use std::marker::PhantomData;
 use std::sync::atomic::AtomicPtr;
@@ -932,18 +928,15 @@ mod close_and_free_tests {
     }
 }
 
-// ─── Round-2 Codex finding #2 regression guard ────────────────────────────
+// ─── OwnedFfiPtr reclaims dropped-event payloads ──────────────────────────
 //
 // `push_event_with_capacity` early-returns when `queue.is_closed()`. The six
 // lifecycle variants whose success payload is a heap-allocated FFI struct
-// (CreateBox, GetBox, ImagePull, ImageList, Info, InfoList) used to encode
-// the pointer as `usize` — a plain integer that has no destructor, so a
-// silently-dropped event leaked the underlying allocation. The fix
-// (`OwnedFfiPtr`) wraps the pointer in a smart-pointer whose Drop reclaims
-// the allocation, but only if the consumer hasn't called `take()` first.
-//
-// The two tests below assert the wrapper's contract directly — that's the
-// invariant the leak-fix relies on.
+// (CreateBox, GetBox, ImagePull, ImageList, Info, InfoList) wrap their
+// pointer in `OwnedFfiPtr<T>`, a smart-pointer whose Drop reclaims the
+// allocation if the dispatch path never called `take()`. The two tests
+// below assert that contract directly — without it, every closed-queue
+// event would leak its payload (and `CreateBox` would leak the live VM).
 
 #[cfg(test)]
 mod owned_ffi_ptr_tests {
@@ -1007,8 +1000,7 @@ mod owned_ffi_ptr_tests {
     }
 
     /// End-to-end guard: an event whose payload is an `OwnedFfiPtr<T>`,
-    /// pushed into a closed queue, must reclaim the allocation. This is the
-    /// shape Codex round-2 finding #2 originally flagged.
+    /// pushed into a closed queue, must reclaim the allocation.
     ///
     /// We use the real `RuntimeEvent::Info` variant because `CBoxInfo` is a
     /// plain repr(C) struct that's trivial to construct in a test.
@@ -1052,7 +1044,7 @@ mod owned_ffi_ptr_tests {
     }
 }
 
-// ─── Codex round-3 finding #4 reproducer ───────────────────────────────────
+// ─── OwnedFfiPtr must reclaim nested CString allocations ──────────────────
 //
 // `OwnedFfiPtr<T>::drop` reconstructs a `Box::from_raw(ptr)` and lets the
 // outer `T`'s Drop impl run. For Rust types like `TrackedResource` (used in
@@ -1061,22 +1053,13 @@ mod owned_ffi_ptr_tests {
 // `CImagePullResult`, `CImageInfoList`, `CBoxInfo`, `CBoxInfoList`, this
 // is INSUFFICIENT: the inner `*mut c_char` fields are `CString::into_raw`'d
 // allocations whose ownership has been forgotten by Rust. Drop runs no
-// destructor for raw pointers, so the inner CStrings leak when the outer
-// Box is reclaimed.
+// destructor for raw pointers, so the inner CStrings would leak when the
+// outer Box is reclaimed unless a type-aware destructor is invoked.
 //
 // The codebase has dedicated `boxlite_free_*` (and internal `free_*_ptr`)
 // functions for each of these payload types — they walk the struct fields
-// and reclaim each inner allocation before dropping the outer Box. The bug
-// is that `OwnedFfiPtr<T>` (the closed-queue safety-net introduced in
-// round-2) ignores those destructors entirely.
-//
-// BEFORE FIX (today): wrapping each leaky payload in `OwnedFfiPtr` and
-// dropping the wrapper increments `FREE_STR_CALLS` by 0 — the inner
-// CString allocations leak. The assertions below fail.
-// AFTER FIX: the fix introduces type-aware reclamation (likely
-// type-specific Owned* wrappers, or a closure-parametric generic that
-// captures the per-type free function). Inner CStrings are reclaimed,
-// `FREE_STR_CALLS` increments by the expected number per payload.
+// and reclaim each inner allocation before dropping the outer Box. The
+// tests below assert `OwnedFfiPtr<T>` invokes the right destructor.
 
 #[cfg(test)]
 mod owned_ffi_ptr_nested_leak_tests {
@@ -1257,40 +1240,23 @@ mod owned_ffi_ptr_nested_leak_tests {
     }
 }
 
-// ─── Codex round-4 finding B reproducer ─────────────────────────────────────
+// ─── Claimed Exit dispatch must enqueue under queue backpressure ──────────
 //
-// exit_pump's claim-then-push pattern (round-3 #1 fix) has a backpressure
-// hole: `compare_exchange(false, true, ...)` flips `exit_dispatched` BEFORE
+// exit_pump's claim-then-push pattern has a backpressure hole:
+// `compare_exchange(false, true, ...)` flips `exit_dispatched` BEFORE
 // `push_event(...).await` returns. If the queue is full,
 // push_event_with_capacity yields cooperatively until space is available.
 // During that yield window, `execution_free` can:
 //   1. Read `exit_dispatched == true` → skip its synthetic Exit push.
-//   2. Call `pumps.abort()` → tear down the exit_pump task mid-await.
+//   2. Abort the exit_pump task mid-await.
 // The result: exit_pump's claim was taken, but no Exit ever reached the
 // queue. The Go SDK's exit callback never fires, the per-execution
-// cgo.Handle leaks, and the round-3 #1 invariant ("queue contains exactly
-// one Exit per execution") is violated.
+// cgo.Handle leaks, and the "exactly one Exit per execution" invariant
+// is violated.
 //
-// This reproducer simulates the production interaction:
-//   - Saturated queue (capacity 1, pre-filled with a filler event).
-//   - Spawn a task whose body mirrors exit_pump: claim, then push.
-//   - Wait until the claim is observed (compare_exchange has flipped).
-//   - Abort the task — mimicking `execution_free`'s `pumps.abort()` after
-//     it sees `exit_dispatched=true` and skips its synth push.
-//   - Drain one event to make space (the production drain goroutine
-//     would do this).
-//   - Assert that the marker Exit event reached the queue.
-//
-// BEFORE FIX (today): aborted task drops mid-await → no Exit pushed →
-// drained queue has 0 Exit events for the marker. Assertion fails.
-// AFTER FIX: the chosen primitive must guarantee that a claimed dispatch
-// is either enqueued or replaced by `execution_free`'s synthetic Exit.
-// Two acceptable shapes (TBD in plan-mode):
-//   a) Don't abort exit_pump after claim — let it complete its push.
-//   b) Add a "claimed-but-not-yet-enqueued" intermediate state;
-//      execution_free either waits for the pending push or pushes synth
-//      itself (overwriting the claim).
-// Either way, the test's marker-Exit-count assertion passes.
+// This reproducer simulates the production interaction with a saturated
+// queue, a claimed-but-pending push, and a wait-for-completion teardown
+// (the fixed behaviour) so the marker Exit reaches the queue.
 
 #[cfg(test)]
 mod exit_dispatch_backpressure_tests {
@@ -1356,7 +1322,7 @@ mod exit_dispatch_backpressure_tests {
         // Give the push a chance to advance into its yield loop.
         tokio::time::sleep(Duration::from_millis(20)).await;
 
-        // Mimic execution_free's NEW behaviour after the round-4 fix:
+        // Mimic execution_free's behaviour:
         //   - Skip its synth Exit push (claim already taken).
         //   - Wait-for-completion on the exit_pump task instead of
         //     aborting it mid-yield. The wait is bounded.
@@ -1405,7 +1371,7 @@ mod exit_dispatch_backpressure_tests {
              (compare_exchange flipped exit_dispatched=true) but was aborted \
              before push_event could enqueue. The Go SDK's exit callback \
              never fires, the cgo.Handle leaks, and the exactly-one-Exit \
-             invariant from round-3 #1 is violated under queue backpressure."
+             invariant is violated under queue backpressure."
         );
     }
 }

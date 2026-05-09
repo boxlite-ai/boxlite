@@ -54,7 +54,7 @@ pub struct ExecutionHandle {
     /// Spawned **stream** pumps (stdout/stderr); aborted on `_free`.
     /// The exit pump is tracked separately in `exit_pump_handle` so that
     /// `_free` can wait for an in-flight Exit push to complete instead of
-    /// aborting it mid-yield (round-4 finding B).
+    /// aborting it mid-yield.
     pumps: Mutex<Vec<JoinHandle<()>>>,
     /// Spawned exit pump task. Held outside `pumps` because, once the
     /// pump has claimed `exit_dispatched`, its `push_event` may yield
@@ -81,10 +81,10 @@ pub struct ExecutionHandle {
     /// preventing redundant kill on `_free`.
     ///
     /// Distinct from `exit_dispatched` so that "process exited" and
-    /// "Exit event was published to the queue" are tracked independently.
-    /// Conflating them caused the round-3 #1 race: execution_free read
-    /// process state and decided whether to push Exit in one go, with no
-    /// atomic claim against the exit_pump path.
+    /// "Exit event was published to the queue" are tracked independently:
+    /// `_free` may need to push a synthetic Exit even when the process
+    /// already exited, and conversely the natural exit pump may push Exit
+    /// before `_free` runs.
     process_completed: Arc<AtomicBool>,
     /// Single-flip claim on the per-execution Exit event. Set via
     /// `compare_exchange(false, true, AcqRel, Acquire)`; only the
@@ -354,9 +354,9 @@ unsafe fn register_exit(
             stream_dones,
         ));
         // Track exit_pump separately from stream pumps so `_free` can wait
-        // for an in-flight Exit push instead of aborting it mid-yield
-        // (round-4 finding B). API forbids re-registration; if a previous
-        // exit_pump is somehow still here, abort it.
+        // for an in-flight Exit push instead of aborting it mid-yield. API
+        // forbids re-registration; if a previous exit_pump is somehow still
+        // here, abort it.
         if let Some(prev) = exec_ref.exit_pump_handle.lock().unwrap().replace(pump) {
             prev.abort();
         }
@@ -429,13 +429,10 @@ unsafe fn execution_wait(
         exec_ref.tokio_rt.spawn(async move {
             let result = wait_on_clone(&exec_arc).await;
             // Mark process_completed=true ONLY on Ok — a failed wait is
-            // NOT proof the guest process exited (round-8 F1). For
-            // untrusted/sandboxed code, an Err wait may mean the
-            // backend lost the connection while the process is still
-            // running; execution_free must keep its kill+wait cleanup
-            // path active in that case. On Ok, the wait observed a
-            // real exit (round-7); _free's force-close path is
-            // correctly skipped.
+            // NOT proof the guest process exited. For untrusted/sandboxed
+            // code, an Err wait may mean the backend lost the connection
+            // while the process is still running, so execution_free must
+            // keep its kill+wait cleanup path active.
             if result.is_ok() {
                 process_completed.store(true, Ordering::Release);
             }
@@ -557,13 +554,12 @@ unsafe fn execution_free(execution: *mut ExecutionHandle) {
                 wait_on_clone(&exec_arc).await
             });
         }
-        // Abort stream pumps FIRST — round-6 finding 1. Otherwise a
-        // pump that's mid-yield on push_event can enqueue Stdout/Stderr
-        // AFTER the synthetic Exit lands, violating the round-3 #1
-        // "Exit is strictly last" invariant. The Go exit callback
-        // deletes the per-execution `cgo.Handle`; a later stream
-        // callback would call `h.Value()` on the deleted handle and
-        // panic the process.
+        // Abort stream pumps FIRST. Otherwise a pump that's mid-yield on
+        // push_event can enqueue Stdout/Stderr AFTER the synthetic Exit
+        // lands, violating the "Exit is strictly last" invariant. The Go
+        // exit callback deletes the per-execution `cgo.Handle`; a later
+        // stream callback would call `h.Value()` on the deleted handle
+        // and panic the process.
         //
         // Aborting drops the stream pump's future; if it was waiting
         // on push_event's yield_now loop, the future is dropped before
@@ -582,9 +578,9 @@ unsafe fn execution_free(execution: *mut ExecutionHandle) {
         //     and it returns without pushing — safe to abort it next.
         //
         //  2. `exit_pump` already won. Its push may still be yielding on
-        //     a saturated queue (round-4 finding B). Wait for the task to
-        //     finish so the Exit actually reaches the queue, with a
-        //     bounded timeout so a stuck drainer cannot hang teardown.
+        //     a saturated queue. Wait for the task to finish so the Exit
+        //     actually reaches the queue, with a bounded timeout so a
+        //     stuck drainer cannot hang teardown.
         let we_claimed_dispatch = exec_box
             .exit_dispatched
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -916,49 +912,26 @@ mod tests {
         unsafe { crate::boxlite_error_free(&mut error as *mut _) };
     }
 
-    // The end-to-end regression guard for the wait-vs-kill deadlock
-    // (Codex round-2 finding #1) lives in
-    // `src/boxlite/src/litebox/exec.rs::tests::wait_does_not_block_kill`,
+    // The end-to-end regression guard for the wait-vs-kill deadlock lives
+    // in `src/boxlite/src/litebox/exec.rs::tests::wait_does_not_block_kill`,
     // where `ExecBackend` is in scope and a real `Execution` can be
-    // constructed against a stub backend. That test deadlocks on the
-    // unfixed code and passes on the fixed code; reproducing it here
-    // would require duplicating the stub-backend infrastructure.
+    // constructed against a stub backend. Reproducing it here would require
+    // duplicating the stub-backend infrastructure.
 
-    // ─── Codex round-3 finding #1 reproducer ────────────────────────────
+    // ─── Exit dispatch must be single-claim under concurrent free + pump ─
     //
-    // execution_free races exit_pump on Exit dispatch:
-    //   1. execution_free reads `completed` once at the top.
-    //   2. If false, it block_on(kill+wait), then takes exit_dispatch
-    //      and pushes Exit{exit_code: EXIT_CODE_FORCE_CLOSED}.
-    //   3. exit_pump runs concurrently; when wait_on_clone returns,
-    //      it sets `completed = true` and pushes its own Exit.
+    // `execution_free` and `exit_pump` both attempt to push the per-
+    // execution Exit event. Without an atomic claim, both can fire and
+    // the queue ends up with two Exit events for the same execution.
+    // The Go SDK's exit callback deletes the shared `cgo.Handle` after
+    // the first; the second tries to Value() a freed handle and panics
+    // the drain goroutine.
     //
-    // Step 1's read can observe `completed = false` even though
-    // exit_pump is microseconds away from setting it true, because
-    // the production code holds two unrelated `Mutex<bool>`s on
-    // `completed` (one read in execution_free, one write in
-    // exit_pump). There is no atomic claim on Exit dispatch.
-    //
-    // Result: two Exit events for the same execution end up in the
-    // queue. The Go SDK's exit callback deletes the shared
-    // `cgo.Handle` after the first; the second tries to Value() a
-    // freed handle and panics the drain goroutine.
-    //
-    // BEFORE FIX (today): two concurrent invocations of the test
-    // helper below both `push_event` Exit -> queue holds 2 Exit
-    // events -> assertion fails.
-    //
-    // AFTER FIX: the helper body becomes
-    //     if dispatched.compare_exchange(false, true, ...).is_ok() {
-    //         push_event(...).await;
-    //     }
-    // and the same primitive is applied to BOTH `execution_free`'s
-    // synth-Exit push and `exit_pump`'s Exit push in production.
-    //
-    // The reproducer here verifies the helper-level invariant; the
-    // adjacent-contract integration test (covering execution_free +
-    // a real exit_pump that resolves through wait_on_clone) is in
-    // step 5's plan.
+    // The fix applies a `compare_exchange(false, true, AcqRel, Acquire)`
+    // claim on a per-execution `exit_dispatched: AtomicBool` in BOTH
+    // production paths. The reproducer below verifies the primitive
+    // directly; integration coverage with a real `Execution` is in
+    // boxlite/src/litebox/exec.rs::tests.
 
     use crate::event_queue::{RuntimeEvent, push_event};
     use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
@@ -1040,27 +1013,19 @@ mod tests {
         );
     }
 
-    // ─── Codex round-3 finding #2 reproducer ────────────────────────────
+    // ─── Stream pumps must forward chunks byte-exact ─────────────────────
     //
-    // stdout_pump and stderr_pump append `b'\n'` to every chunk before
-    // pushing the Stdout/Stderr event. That's wrong: the upstream
-    // contract from `boxlite::portal::interfaces::exec::route_output`
-    // is `String::from_utf8_lossy(&chunk.data).to_string()` —
-    // raw byte chunks (UTF-8 lossy decoded), forwarded as-is, with
-    // NO line splitting and NO newline stripping. The variable name
-    // `line` in the pumps is fiction; chunks are arbitrary boundaries.
+    // The upstream contract from `boxlite::portal::interfaces::exec::
+    // route_output` is `String::from_utf8_lossy(&chunk.data).to_string()` —
+    // raw byte chunks (UTF-8 lossy decoded), forwarded as-is, with NO
+    // line splitting and NO newline stripping. The chunks are arbitrary
+    // boundaries, not lines.
     //
-    // Concrete corruption examples on the unfixed code:
-    //   - `printf hello` (no trailing newline) -> consumer sees
-    //     `hello\n` instead of `hello`.
-    //   - A 1024-byte buffer split into two gRPC chunks -> consumer
-    //     sees an extra `\n` at the chunk boundary, splitting bytes
-    //     that were contiguous on the producer side.
-    //   - Binary or protocol output -> arbitrary `\x0a` injection.
-    //
-    // BEFORE FIX: pumps push `bytes + b'\n'` -> assertions on raw
-    // byte equality fail.
-    // AFTER FIX: pumps push `bytes` unchanged -> assertions pass.
+    // If the pumps appended `b'\n'` to every chunk, callers would see:
+    //   - `printf hello` (no trailing newline) → `hello\n` instead of `hello`.
+    //   - A 1024-byte buffer split into two gRPC chunks → an extra `\n` at
+    //     the chunk boundary, splitting contiguous producer bytes.
+    //   - Binary or protocol output → arbitrary `\x0a` injection.
 
     use futures::stream::iter as stream_iter;
 
@@ -1146,54 +1111,17 @@ mod tests {
         assert_eq!(bytes[1], b"trace");
     }
 
-    // ─── Codex round-7 reproducer ──────────────────────────────────────
-    //
-    // execution_free reads `process_completed` to decide whether to run
-    // its kill+wait+abort+synth-Exit force-close path. But
-    // `process_completed` is only set inside `exit_pump`. The parallel
-    // wait path — `boxlite_execution_wait` — never sets it. Net: a
-    // successful Wait() returns the real exit code, then Close()'s
-    // execution_free reads process_completed=false, treats the process
-    // as live, aborts stream pumps (truncating output) and synthesises
-    // EXIT_CODE_FORCE_CLOSED on top of the natural exit.
-    //
-    // This is the round-3 #1 / round-4 #A "two paths share state but
-    // not all paths update it" shape, applied to process state
-    // instead of exit dispatch / handle ownership.
-    //
-    // Reproducer: call boxlite_execution_wait on an empty handle (whose
-    // wait_on_clone returns immediately with InvalidState — the wait
-    // HAS BEEN "observed", regardless of outcome), then assert
-    // process_completed=true. Today the flag stays false because
-    // execution_wait's spawned task pushes the Wait event but never
-    // writes process_completed. Test polls with a bounded timeout.
-    //
-    // BEFORE FIX: process_completed stays false, polling times out,
-    // test fails with "process_completed must be true".
-    // AFTER FIX: execution_wait's task writes process_completed=true
-    // after wait_on_clone returns. Test passes.
-
     use std::sync::atomic::Ordering as ProcessCompletedOrdering;
 
-    // ─── Codex round-8 F1 reproducer ──────────────────────────────────
+    // ─── Errored wait must NOT mark process_completed ────────────────
     //
-    // Round-7's fix unconditionally set `process_completed=true` after
-    // wait_on_clone returned, regardless of result. Codex round-8 caught
-    // this: a failed wait is NOT proof the guest process exited, and
-    // execution_free uses process_completed to skip its kill+wait
-    // cleanup path. For untrusted/sandboxed code, skipping the kill on
-    // an errored wait can leave a live process running while the handle
-    // is freed.
-    //
-    // Reproducer: empty_handle's wait_on_clone returns Err(InvalidState)
-    // (no Execution in the slot). Today the round-7 fix sets
-    // process_completed=true regardless. Test asserts process_completed
-    // remains false after an errored wait; the fix only marks it true
-    // on Ok results.
-    //
-    // BEFORE FIX (round-7's broken approach): process_completed=true on
-    // Err. Test fails: "process_completed must NOT be set on errored wait".
-    // AFTER FIX: process_completed only set on Ok. Test passes.
+    // execution_free reads `process_completed` to skip its kill+wait
+    // cleanup path. A failed wait is NOT proof the guest process
+    // exited — for untrusted/sandboxed code, an Err wait may mean the
+    // backend lost the connection while the process is still running.
+    // If `_wait`'s spawned task wrote `process_completed=true`
+    // unconditionally, an errored wait would leave a live process
+    // running with no termination on free.
 
     #[test]
     fn execution_wait_must_not_mark_process_completed_on_error() {
@@ -1220,7 +1148,7 @@ mod tests {
             "process_completed MUST stay false after an errored wait. A \
              failed wait is NOT proof the guest process exited; setting \
              the flag would let execution_free skip its kill+wait cleanup \
-             on a still-running command (round-8 F1, security risk for \
+             on a still-running command (security risk for \
              untrusted/sandboxed processes)."
         );
 
@@ -1229,16 +1157,7 @@ mod tests {
         }
     }
 
-    // The round-7 invariant — successful wait MUST mark
-    // process_completed — also still holds. Codex's round-8 fix
-    // recommendation: "Only set `process_completed` after an `Ok` wait
-    // result." That makes BOTH this round-8 test and the round-7
-    // success-case test simultaneously satisfiable.
-    //
-    // The success-case test is omitted from the C SDK suite because
-    // exercising it requires a stub ExecBackend that can produce an Ok
-    // ExecResult, and `Execution::new`/`ExecBackend` are pub(crate) in
-    // the boxlite crate. The boxlite-side litebox/exec.rs::tests
-    // already covers the wait-completion path; this file enforces the
-    // failed-wait invariant in isolation.
+    // Success-case wait coverage lives in boxlite/src/litebox/exec.rs::tests
+    // (requires a stub ExecBackend that can produce Ok results, and
+    // `Execution::new`/`ExecBackend` are pub(crate) in the boxlite crate).
 }

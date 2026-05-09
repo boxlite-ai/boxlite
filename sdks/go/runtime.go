@@ -319,11 +319,10 @@ func (r *Runtime) stopDrain() {
 // the SDK. The registry exists to coordinate between the dispatch
 // callback path (bridge_callback.go's `defer h.Delete()` after
 // receiving the C-side result) and the closing branch in
-// `abandonAsync` / `abandonAsyncErr` / `drainAndDelete` (added by
-// round-3 #3). Both paths used to call `h.Delete()` unconditionally;
-// during `Runtime.Close` the drain goroutine could still be
-// dispatching a queued event whose callback Value/Delete'd the same
-// handle that the closing branch was Deleting in parallel —
+// `abandonAsync` / `abandonAsyncErr` / `drainAndDelete`. Without
+// coordination, during `Runtime.Close` the drain goroutine can still
+// be dispatching a queued event whose callback Value/Delete's the
+// same handle the closing branch is Deleting in parallel —
 // double-Delete or Value-after-Delete would panic the process.
 //
 // Single-path ownership: each path claims the handle via
