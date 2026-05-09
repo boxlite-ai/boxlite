@@ -252,7 +252,7 @@ fn test_runtime_images_rejected_after_shutdown() {
         boxlite_runtime_shutdown(
             runtime,
             0,
-            noop_shutdown_cb,
+            Some(noop_shutdown_cb),
             ptr::null_mut(),
             &mut error as *mut _,
         )
@@ -306,7 +306,7 @@ fn test_image_pull_rejected_after_boxlite_runtime_free() {
         boxlite_image_pull(
             image_handle,
             image_ref.as_ptr(),
-            noop_image_pull_cb,
+            Some(noop_image_pull_cb),
             ptr::null_mut(),
             &mut error as *mut _,
         )
@@ -325,5 +325,87 @@ fn test_image_pull_rejected_after_boxlite_runtime_free() {
         boxlite_error_free(&mut error as *mut _);
         boxlite_image_free(image_handle);
     }
+    let _ = std::fs::remove_dir_all(home_dir);
+}
+
+// ─── Codex finding #3: NULL-callback rejection (Rust side) ─────────────────
+//
+// Each test passes `None` (cbindgen's encoding for a NULL function pointer
+// from C) and asserts the entrypoint synchronously returns InvalidArgument
+// without spawning a Tokio task that would later try to invoke a NULL fn.
+//
+// BEFORE FIX: typedefs were bare `extern "C" fn(...)` — passing `None`
+// didn't typecheck. The actual UB-on-NULL repro lives in the C-side test
+// (sdks/c/tests/test_null_callback.c) where C semantics allow NULL.
+// AFTER FIX: typedef is `Option<extern "C" fn(...)>`; entrypoint validates
+// `Some(...)` and returns InvalidArgument with a "cb is null" message.
+
+fn assert_null_cb_rejected(code: BoxliteErrorCode, error: &mut FFIError) {
+    assert_eq!(code, BoxliteErrorCode::InvalidArgument);
+    assert!(!error.message.is_null());
+    let msg = unsafe { CStr::from_ptr(error.message) }
+        .to_string_lossy()
+        .into_owned();
+    assert!(
+        msg.contains("cb"),
+        "error should mention the callback parameter: {msg}"
+    );
+    unsafe { boxlite_error_free(error as *mut _) };
+}
+
+#[test]
+fn create_box_rejects_null_callback() {
+    let (runtime, home_dir) = unsafe { new_test_runtime_handle("null-cb-create") };
+
+    let image = CString::new("alpine:latest").expect("image cstring");
+    let mut opts: *mut CBoxliteOptions = ptr::null_mut();
+    let mut error = FFIError::default();
+    let opts_code =
+        unsafe { boxlite_options_new(image.as_ptr(), &mut opts as *mut _, &mut error as *mut _) };
+    assert_eq!(opts_code, BoxliteErrorCode::Ok);
+
+    let code =
+        unsafe { boxlite_create_box(runtime, opts, None, ptr::null_mut(), &mut error as *mut _) };
+    assert_null_cb_rejected(code, &mut error);
+
+    // boxlite_create_box only consumes opts on success; on this error path
+    // we still own them and must free.
+    unsafe {
+        boxlite_options_free(opts);
+        boxlite_runtime_free(runtime);
+    }
+    let _ = std::fs::remove_dir_all(home_dir);
+}
+
+#[test]
+fn runtime_metrics_rejects_null_callback() {
+    let (runtime, home_dir) = unsafe { new_test_runtime_handle("null-cb-rtmet") };
+    let mut error = FFIError::default();
+    let code =
+        unsafe { boxlite_runtime_metrics(runtime, None, ptr::null_mut(), &mut error as *mut _) };
+    assert_null_cb_rejected(code, &mut error);
+    unsafe { boxlite_runtime_free(runtime) };
+    let _ = std::fs::remove_dir_all(home_dir);
+}
+
+#[test]
+fn list_info_rejects_null_callback() {
+    let (runtime, home_dir) = unsafe { new_test_runtime_handle("null-cb-listinfo") };
+    let mut error = FFIError::default();
+    let code = unsafe { boxlite_list_info(runtime, None, ptr::null_mut(), &mut error as *mut _) };
+    assert_null_cb_rejected(code, &mut error);
+    unsafe { boxlite_runtime_free(runtime) };
+    let _ = std::fs::remove_dir_all(home_dir);
+}
+
+#[test]
+fn shutdown_rejects_null_callback() {
+    let (runtime, home_dir) = unsafe { new_test_runtime_handle("null-cb-shutdown") };
+    let mut error = FFIError::default();
+    let code = unsafe {
+        boxlite_runtime_shutdown(runtime, 0, None, ptr::null_mut(), &mut error as *mut _)
+    };
+    assert_null_cb_rejected(code, &mut error);
+    unsafe { boxlite_runtime_free(runtime) };
     let _ = std::fs::remove_dir_all(home_dir);
 }

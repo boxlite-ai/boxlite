@@ -254,6 +254,7 @@ func (e *Execution) Wait(ctx context.Context) (int, error) {
 	case res := <-ch:
 		return res.exitCode, res.err
 	case <-ctx.Done():
+		drainAndDelete(ch, h)
 		return 0, ctx.Err()
 	}
 }
@@ -278,6 +279,7 @@ func (e *Execution) Kill(ctx context.Context) error {
 	case err := <-ch:
 		return err
 	case <-ctx.Done():
+		abandonAsyncErr(ch, h)
 		return ctx.Err()
 	}
 }
@@ -302,6 +304,7 @@ func (e *Execution) ResizeTTY(ctx context.Context, rows, cols int) error {
 	case err := <-ch:
 		return err
 	case <-ctx.Done():
+		abandonAsyncErr(ch, h)
 		return ctx.Err()
 	}
 }

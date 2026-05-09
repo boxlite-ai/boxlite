@@ -74,7 +74,7 @@ async fn test_working_dir() {
 async fn test_timeout_kills_long_command() {
     let tb = TestBox::new().await;
 
-    let mut execution = tb
+    let execution = tb
         .handle
         .exec(
             BoxCommand::new("sleep")

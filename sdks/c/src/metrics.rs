@@ -66,6 +66,7 @@ unsafe fn box_metrics(
             write_error(out_error, null_pointer_error("handle"));
             return BoxliteErrorCode::InvalidArgument;
         }
+        let cb = crate::unwrap_cb_or_return!(cb, out_error);
 
         let handle_ref = &*handle;
         let lite = handle_ref.handle.clone();
@@ -113,6 +114,7 @@ unsafe fn runtime_metrics(
             write_error(out_error, null_pointer_error("runtime"));
             return BoxliteErrorCode::InvalidArgument;
         }
+        let cb = crate::unwrap_cb_or_return!(cb, out_error);
 
         let runtime_ref = &*runtime;
         let runtime_clone = runtime_ref.runtime.clone();

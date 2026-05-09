@@ -72,6 +72,7 @@ func (r *Runtime) ListInfo(ctx context.Context) ([]BoxInfo, error) {
 	case res := <-ch:
 		return res.value, res.err
 	case <-ctx.Done():
+		drainAndDelete(ch, h)
 		return nil, ctx.Err()
 	}
 }
@@ -97,6 +98,7 @@ func (r *Runtime) GetInfo(ctx context.Context, idOrName string) (*BoxInfo, error
 	case res := <-ch:
 		return res.value, res.err
 	case <-ctx.Done():
+		drainAndDelete(ch, h)
 		return nil, ctx.Err()
 	}
 }

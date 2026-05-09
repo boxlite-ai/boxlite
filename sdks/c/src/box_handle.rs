@@ -118,6 +118,7 @@ unsafe fn create_box(
             write_error(out_error, null_pointer_error("opts"));
             return BoxliteErrorCode::InvalidArgument;
         }
+        let cb = crate::unwrap_cb_or_return!(cb, out_error);
 
         let runtime_ref = &*runtime;
         let opts_handle = Box::from_raw(opts);
@@ -140,7 +141,7 @@ unsafe fn create_box(
                         tokio_rt: task_tokio_rt,
                         queue: task_queue.clone(),
                     });
-                    Box::into_raw(boxed) as usize
+                    crate::event_queue::OwnedFfiPtr::new(boxed)
                 });
             push_event(
                 &queue,
@@ -168,6 +169,7 @@ unsafe fn stop_box(
             write_error(out_error, null_pointer_error("handle"));
             return BoxliteErrorCode::InvalidArgument;
         }
+        let cb = crate::unwrap_cb_or_return!(cb, out_error);
 
         let handle_ref = &*handle;
         let lite = handle_ref.handle.clone();
@@ -211,6 +213,7 @@ unsafe fn attach_box(
                 return BoxliteErrorCode::InvalidArgument;
             }
         };
+        let cb = crate::unwrap_cb_or_return!(cb, out_error);
 
         let runtime_ref = &*runtime;
         let runtime_clone = runtime_ref.runtime.clone();
@@ -230,7 +233,7 @@ unsafe fn attach_box(
                         tokio_rt: task_tokio_rt,
                         queue: task_queue.clone(),
                     });
-                    Ok(Box::into_raw(boxed) as usize)
+                    Ok(crate::event_queue::OwnedFfiPtr::new(boxed))
                 }
                 Ok(None) => Err(BoxliteError::NotFound(format!("Box not found: {id_str}"))),
                 Err(e) => Err(e),
@@ -271,6 +274,7 @@ unsafe fn remove_box(
                 return BoxliteErrorCode::InvalidArgument;
             }
         };
+        let cb = crate::unwrap_cb_or_return!(cb, out_error);
 
         let runtime_ref = &*runtime;
         let runtime_clone = runtime_ref.runtime.clone();
@@ -305,6 +309,7 @@ unsafe fn start_box(
             write_error(out_error, null_pointer_error("handle"));
             return BoxliteErrorCode::InvalidArgument;
         }
+        let cb = crate::unwrap_cb_or_return!(cb, out_error);
 
         let handle_ref = &*handle;
         let lite = handle_ref.handle.clone();

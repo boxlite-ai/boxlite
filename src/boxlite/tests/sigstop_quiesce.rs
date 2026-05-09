@@ -36,7 +36,7 @@ async fn test_sigstop_sigcont_preserves_vm() {
 
     // Verify box is responsive before SIGSTOP
     let cmd = BoxCommand::new("echo").args(["before-stop"]);
-    let mut exec = litebox.exec(cmd).await.expect("exec before SIGSTOP");
+    let exec = litebox.exec(cmd).await.expect("exec before SIGSTOP");
     let result = exec.wait().await.expect("wait before SIGSTOP");
     assert_eq!(result.exit_code, 0, "command should succeed before SIGSTOP");
 
@@ -66,7 +66,7 @@ async fn test_sigstop_sigcont_preserves_vm() {
 
     // Verify box is still responsive after SIGCONT
     let cmd = BoxCommand::new("echo").args(["after-resume"]);
-    let mut exec = litebox
+    let exec = litebox
         .exec(cmd)
         .await
         .expect("exec after SIGCONT — VM should still be responsive");

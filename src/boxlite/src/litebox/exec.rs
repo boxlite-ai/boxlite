@@ -136,12 +136,13 @@ impl BoxCommand {
 pub struct Execution {
     id: ExecutionId,
     inner: std::sync::Arc<tokio::sync::Mutex<ExecutionInner>>,
+    /// Result-channel state held on a separate lock so a parked `wait()`
+    /// can never block `kill()`/`signal()`/`resize_tty()`.
+    wait_state: std::sync::Arc<WaitState>,
 }
 
 pub(crate) struct ExecutionInner {
     interface: Box<dyn ExecBackend>,
-    result_rx: mpsc::UnboundedReceiver<ExecResult>,
-    cached_result: Option<ExecResult>,
 
     /// Standard input stream (write-only).
     stdin: Option<ExecStdin>,
@@ -151,6 +152,17 @@ pub(crate) struct ExecutionInner {
 
     /// Standard error stream (read-only).
     stderr: Option<ExecStderr>,
+}
+
+/// Independent lock domain for `Execution::wait`. Held only by waiters; never
+/// contended with `interface`-using ops (`kill`, `signal`, `resize_tty`).
+///
+/// `OnceCell::get_or_try_init` ensures the result channel is read at most
+/// once; concurrent waiters past the first one observe the cached value
+/// without ever locking `rx`.
+struct WaitState {
+    cached: tokio::sync::OnceCell<ExecResult>,
+    rx: tokio::sync::Mutex<mpsc::UnboundedReceiver<ExecResult>>,
 }
 
 /// Unique identifier for an execution.
@@ -168,16 +180,19 @@ impl Execution {
     ) -> Self {
         let inner = ExecutionInner {
             interface,
-            result_rx,
-            cached_result: None,
             stdin,
             stdout,
             stderr,
+        };
+        let wait_state = WaitState {
+            cached: tokio::sync::OnceCell::new(),
+            rx: tokio::sync::Mutex::new(result_rx),
         };
 
         Self {
             id: execution_id,
             inner: std::sync::Arc::new(tokio::sync::Mutex::new(inner)),
+            wait_state: std::sync::Arc::new(wait_state),
         }
     }
 
@@ -213,27 +228,22 @@ impl Execution {
     /// Wait for the execution to complete.
     ///
     /// Returns the exit status once the execution finishes. If the result is
-    /// already cached, returns immediately. Otherwise, waits for result from channel.
-    pub async fn wait(&mut self) -> BoxliteResult<ExecResult> {
-        let mut inner = self.inner.lock().await;
-
-        // Check if result is already cached
-        if let Some(result) = &inner.cached_result {
-            return Ok(result.clone());
-        }
-
-        // Try to receive from result channel (non-blocking)
-        if let Ok(status) = inner.result_rx.try_recv() {
-            inner.cached_result = Some(status.clone());
-            return Ok(status);
-        }
-
-        // Await next result
-        let status = inner.result_rx.recv().await.ok_or_else(|| {
-            boxlite_shared::BoxliteError::Internal("Result channel closed".into())
-        })?;
-        inner.cached_result = Some(status.clone());
-        Ok(status)
+    /// already cached, returns immediately. Otherwise, awaits the next value
+    /// from the result channel.
+    ///
+    /// The lock domain is `wait_state`, independent of `inner`, so a parked
+    /// wait does not block `kill`/`signal`/`resize_tty`.
+    pub async fn wait(&self) -> BoxliteResult<ExecResult> {
+        self.wait_state
+            .cached
+            .get_or_try_init(|| async {
+                let mut rx = self.wait_state.rx.lock().await;
+                rx.recv().await.ok_or_else(|| {
+                    boxlite_shared::BoxliteError::Internal("Result channel closed".into())
+                })
+            })
+            .await
+            .cloned()
     }
 
     /// Kill the process (sends SIGKILL).
@@ -388,5 +398,84 @@ mod tests {
     fn test_box_command_user_whitespace_only_becomes_none() {
         let cmd = BoxCommand::new("id").user("  ");
         assert_eq!(cmd.user, None);
+    }
+
+    // ─── Codex round-2 finding #1 regression guard ─────────────────────
+    //
+    // `Execution::wait` previously held the inner mutex across
+    // `result_rx.recv().await`. `kill`/`signal`/`resize_tty` need the
+    // same mutex, so a parked wait blocked them indefinitely. Fix
+    // (this PR): wait operates on its own `wait_state` lock domain so
+    // the inner mutex stays available.
+    //
+    // BEFORE FIX: this test deadlocks (wait holds inner; kill awaits
+    // inner forever). AFTER FIX: kill resolves promptly.
+
+    use crate::runtime::backend::ExecBackend;
+    use async_trait::async_trait;
+    use std::sync::Arc as StdArc;
+    use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+    use tokio::sync::mpsc as tokio_mpsc;
+
+    struct StubExecBackend {
+        kill_observed: StdArc<AtomicBool>,
+    }
+
+    #[async_trait]
+    impl ExecBackend for StubExecBackend {
+        async fn kill(&mut self, _execution_id: &str, _signal: i32) -> BoxliteResult<()> {
+            self.kill_observed.store(true, AtomicOrdering::SeqCst);
+            Ok(())
+        }
+        async fn resize_tty(
+            &mut self,
+            _execution_id: &str,
+            _rows: u32,
+            _cols: u32,
+            _x_pixels: u32,
+            _y_pixels: u32,
+        ) -> BoxliteResult<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn wait_does_not_block_kill() {
+        let (_result_tx, result_rx) = tokio_mpsc::unbounded_channel::<ExecResult>();
+        let kill_observed = StdArc::new(AtomicBool::new(false));
+        let backend = Box::new(StubExecBackend {
+            kill_observed: kill_observed.clone(),
+        });
+
+        let exec = Execution::new(
+            "test-exec".to_string(),
+            backend,
+            result_rx,
+            None,
+            None,
+            None,
+        );
+
+        // Park a `wait` future. With the bug present, `wait` would hold
+        // `inner.lock()` across `recv().await` and `kill` below would
+        // never get the lock.
+        let wait_clone = exec.clone();
+        tokio::spawn(async move {
+            let _ = wait_clone.wait().await;
+        });
+
+        // Give the wait task a tick to grab whatever locks it needs.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // Kill must resolve within bounded time even though wait is
+        // parked. With the bug present, this awaits forever.
+        let result = tokio::time::timeout(std::time::Duration::from_millis(500), exec.signal(9))
+            .await
+            .expect(
+                "kill/signal blocked by parked wait — Execution lock split \
+             regressed; see src/boxlite/src/litebox/exec.rs::wait",
+            );
+        assert!(result.is_ok());
+        assert!(kill_observed.load(AtomicOrdering::SeqCst));
     }
 }

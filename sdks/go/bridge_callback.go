@@ -48,24 +48,28 @@ func goBoxliteOnStderr(data *C.uint8_t, length C.size_t, userData unsafe.Pointer
 
 //export goBoxliteOnExit
 func goBoxliteOnExit(exitCode C.int, userData unsafe.Pointer) {
-	h := ptrToHandle(userData)
+	dispatchExit(int(exitCode), ptrToHandle(userData))
+}
+
+// dispatchExit handles the per-execution Exit callback dispatch logic.
+// Split out from goBoxliteOnExit so unit tests (which can't use cgo) can
+// exercise the same code path.
+//
+// Rust now orders Exit strictly last: exit_pump awaits every stream pump's
+// completion oneshot before pushing the Exit event, and execution_free
+// synthesises an Exit (with EXIT_CODE_FORCE_CLOSED) for the abort path.
+// Therefore no stream callback can fire after the exit callback runs, and
+// it is safe to Delete the shared cgo.Handle here.
+func dispatchExit(exitCode int, h cgo.Handle) {
 	if h == 0 {
 		return
 	}
-	// Do NOT Delete the handle here. Stream events (stdout/stderr) and the
-	// exit event are pushed concurrently from independent Tokio pumps, so
-	// drain order between them is not strictly defined: a final stderr
-	// chunk can arrive after the exit event. Deleting on exit would make
-	// such a chunk panic in cgo.Handle.Value(). The handle is intentionally
-	// leaked for the lifetime of the runtime; the overhead per execution
-	// is bounded (one small struct + one map entry).
-	value := h.Value()
-	if value == nil {
-		return
+	if value := h.Value(); value != nil {
+		if exec, ok := value.(*executionStreamState); ok {
+			exec.deliverExit(exitCode)
+		}
 	}
-	if exec, ok := value.(*executionStreamState); ok {
-		exec.deliverExit(int(exitCode))
-	}
+	h.Delete()
 }
 
 // ─── Box lifecycle callbacks ───────────────────────────────────────────────

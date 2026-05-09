@@ -34,6 +34,7 @@ func (b *Box) CopyInto(ctx context.Context, hostSrc, guestDst string) error {
 	case err := <-ch:
 		return err
 	case <-ctx.Done():
+		abandonAsyncErr(ch, h)
 		return ctx.Err()
 	}
 }
@@ -61,6 +62,7 @@ func (b *Box) CopyOut(ctx context.Context, guestSrc, hostDst string) error {
 	case err := <-ch:
 		return err
 	case <-ctx.Done():
+		abandonAsyncErr(ch, h)
 		return ctx.Err()
 	}
 }

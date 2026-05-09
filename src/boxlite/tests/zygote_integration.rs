@@ -55,7 +55,7 @@ async fn create_concurrent_box(runtime: &BoxliteRuntime) -> Arc<LiteBox> {
     handle.start().await.unwrap();
 
     // Warmup: verify guest is responsive before concurrent tests
-    let mut warmup = handle
+    let warmup = handle
         .exec(BoxCommand::new("echo").arg("warmup"))
         .await
         .expect("warmup exec should succeed — guest not responsive");
@@ -122,7 +122,7 @@ async fn test_zygote_high_concurrency_16() {
         let h = handle.clone();
         tasks.push(tokio::spawn(async move {
             eprintln!("[{:?}] task-{}: calling exec", t0.elapsed(), i);
-            let mut execution = h
+            let execution = h
                 .exec(BoxCommand::new("echo").arg(format!("task-{}", i)))
                 .await?;
             eprintln!(
@@ -169,7 +169,7 @@ async fn test_zygote_repeated_bursts() {
         for i in 0..8 {
             let h = handle.clone();
             tasks.push(tokio::spawn(async move {
-                let mut execution = h
+                let execution = h
                     .exec(BoxCommand::new("echo").arg(format!("r{}-t{}", round, i)))
                     .await?;
                 let result = execution.wait().await?;
@@ -207,7 +207,7 @@ async fn test_zygote_sequential_then_concurrent() {
 
     // Phase 1: 10 sequential execs
     for i in 0..10 {
-        let mut execution = handle
+        let execution = handle
             .exec(BoxCommand::new("echo").arg(format!("seq-{}", i)))
             .await
             .unwrap();
@@ -220,7 +220,7 @@ async fn test_zygote_sequential_then_concurrent() {
     for i in 0..8 {
         let h = handle.clone();
         tasks.push(tokio::spawn(async move {
-            let mut execution = h
+            let execution = h
                 .exec(BoxCommand::new("echo").arg(format!("conc-{}", i)))
                 .await?;
             let result = execution.wait().await?;
@@ -500,7 +500,7 @@ async fn test_zygote_survives_failed_build() {
     let bad_result = handle.exec(BoxCommand::new("/nonexistent/binary")).await;
 
     match bad_result {
-        Ok(mut execution) => {
+        Ok(execution) => {
             // Some runtimes succeed at exec but return non-zero exit
             let result = execution.wait().await;
             eprintln!("nonexistent command result: {:?}", result);
@@ -511,7 +511,7 @@ async fn test_zygote_survives_failed_build() {
     }
 
     // Then: exec a valid command — must succeed
-    let mut execution = handle
+    let execution = handle
         .exec(BoxCommand::new("echo").arg("recovered"))
         .await
         .expect("valid exec should succeed after failed one");
@@ -538,7 +538,7 @@ async fn test_zygote_concurrent_partial_failure() {
     for (i, &code) in expected_codes.iter().enumerate() {
         let h = handle.clone();
         tasks.push(tokio::spawn(async move {
-            let mut execution = h
+            let execution = h
                 .exec(BoxCommand::new("sh").args(["-c", &format!("exit {}", code)]))
                 .await?;
             let result = execution.wait().await?;
@@ -584,7 +584,7 @@ async fn test_zygote_concurrent_with_crash() {
             } else {
                 BoxCommand::new("echo").arg(format!("ok-{}", i))
             };
-            let mut execution = h.exec(cmd).await?;
+            let execution = h.exec(cmd).await?;
             let result = execution.wait().await?;
             Ok::<(usize, i32, bool), BoxliteError>((i, result.exit_code, is_crash))
         }));
@@ -825,7 +825,7 @@ async fn test_zygote_pipe_fd_no_leak() {
 
     // Run 20 execs
     for i in 0..20 {
-        let mut execution = handle
+        let execution = handle
             .exec(BoxCommand::new("echo").arg(format!("leak-test-{}", i)))
             .await
             .unwrap();

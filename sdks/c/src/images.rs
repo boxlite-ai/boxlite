@@ -184,6 +184,7 @@ unsafe fn image_list(
             write_error(out_error, e);
             return code;
         }
+        let cb = crate::unwrap_cb_or_return!(cb, out_error);
 
         let core_handle = handle_ref.handle.clone();
         let queue = handle_ref.queue.clone();
@@ -196,7 +197,7 @@ unsafe fn image_list(
                 let count = items.len() as c_int;
                 let ptr = items.as_mut_ptr();
                 std::mem::forget(items);
-                Box::into_raw(Box::new(CImageInfoList { items: ptr, count })) as usize
+                crate::event_queue::OwnedFfiPtr::new(Box::new(CImageInfoList { items: ptr, count }))
             });
             push_event(
                 &queue,
@@ -240,6 +241,7 @@ unsafe fn image_pull(
             write_error(out_error, e);
             return code;
         }
+        let cb = crate::unwrap_cb_or_return!(cb, out_error);
 
         let core_handle = handle_ref.handle.clone();
         let queue = handle_ref.queue.clone();
@@ -247,11 +249,11 @@ unsafe fn image_pull(
 
         handle_ref.tokio_rt.spawn(async move {
             let result = core_handle.pull(&image_ref).await.map(|image| {
-                Box::into_raw(Box::new(CImagePullResult::new(
+                crate::event_queue::OwnedFfiPtr::new(Box::new(CImagePullResult::new(
                     image.reference(),
                     image.config_digest(),
                     image.layer_count(),
-                ))) as usize
+                )))
             });
             push_event(
                 &queue,

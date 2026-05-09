@@ -31,7 +31,7 @@ async fn test_wait_behavior_on_box_stop() {
     handle.start().await.unwrap();
 
     // Start a long-running command
-    let mut execution = handle
+    let execution = handle
         .exec(BoxCommand::new("sleep").arg("3600"))
         .await
         .unwrap();
@@ -106,7 +106,7 @@ async fn test_wait_behavior_on_runtime_shutdown() {
     handle.start().await.unwrap();
 
     // Start a long-running command
-    let mut execution = handle
+    let execution = handle
         .exec(BoxCommand::new("sleep").arg("3600"))
         .await
         .unwrap();
@@ -238,7 +238,7 @@ async fn test_exec_on_stopped_box() {
     handle.start().await.unwrap();
 
     // Run a quick command first to ensure box is working
-    let mut exec_handle = handle
+    let exec_handle = handle
         .exec(BoxCommand::new("echo").arg("hello"))
         .await
         .unwrap();
@@ -295,7 +295,7 @@ async fn test_existing_execution_after_box_stop() {
     handle.start().await.unwrap();
 
     // Start a quick command and get execution
-    let mut execution = handle
+    let execution = handle
         .exec(BoxCommand::new("echo").arg("hello"))
         .await
         .unwrap();
@@ -336,7 +336,7 @@ async fn test_wait_timing_after_stop() {
     handle.start().await.unwrap();
 
     // Start command that ignores SIGTERM (to test worst case)
-    let mut execution = handle
+    let execution = handle
         .exec(BoxCommand::new("sh").args(["-c", "trap '' TERM; sleep 3600"]))
         .await
         .unwrap();
@@ -395,15 +395,15 @@ async fn test_multiple_executions_on_box_stop() {
     handle.start().await.unwrap();
 
     // Start multiple long-running commands
-    let mut exec1 = handle
+    let exec1 = handle
         .exec(BoxCommand::new("sleep").arg("3600"))
         .await
         .unwrap();
-    let mut exec2 = handle
+    let exec2 = handle
         .exec(BoxCommand::new("sleep").arg("3600"))
         .await
         .unwrap();
-    let mut exec3 = handle
+    let exec3 = handle
         .exec(BoxCommand::new("sleep").arg("3600"))
         .await
         .unwrap();
@@ -485,7 +485,7 @@ async fn test_run_command_returns_stopped_error() {
     handle.start().await.unwrap();
 
     // Run a quick command to verify box works
-    let mut execution = handle
+    let execution = handle
         .exec(BoxCommand::new("echo").arg("hello"))
         .await
         .unwrap();
@@ -642,7 +642,7 @@ async fn test_wait_returns_promptly_on_stop() {
     handle.start().await.unwrap();
 
     // Start a long-running command
-    let mut run = handle
+    let run = handle
         .exec(BoxCommand::new("sleep").arg("3600"))
         .await
         .unwrap();
@@ -706,11 +706,11 @@ async fn test_all_waits_return_on_stop() {
     handle.start().await.unwrap();
 
     // Start multiple long-running commands
-    let mut run1 = handle
+    let run1 = handle
         .exec(BoxCommand::new("sleep").arg("3600"))
         .await
         .unwrap();
-    let mut run2 = handle
+    let run2 = handle
         .exec(BoxCommand::new("sleep").arg("3600"))
         .await
         .unwrap();
@@ -799,11 +799,11 @@ async fn test_runtime_shutdown_stops_all_boxes() {
     handle2.start().await.unwrap();
 
     // Start long-running commands on each
-    let mut run1 = handle1
+    let run1 = handle1
         .exec(BoxCommand::new("sleep").arg("3600"))
         .await
         .unwrap();
-    let mut run2 = handle2
+    let run2 = handle2
         .exec(BoxCommand::new("sleep").arg("3600"))
         .await
         .unwrap();
@@ -879,7 +879,7 @@ async fn test_exec_completes_then_shutdown_is_clean() {
     let handle = runtime.create(common::alpine_opts(), None).await.unwrap();
     handle.start().await.unwrap();
 
-    let mut execution = handle
+    let execution = handle
         .exec(BoxCommand::new("echo").arg("hello"))
         .await
         .unwrap();
@@ -904,7 +904,7 @@ async fn test_sequential_exec_same_box() {
     handle.start().await.unwrap();
 
     // First exec
-    let mut exec1 = handle
+    let exec1 = handle
         .exec(BoxCommand::new("echo").arg("first"))
         .await
         .unwrap();
@@ -912,7 +912,7 @@ async fn test_sequential_exec_same_box() {
     assert_eq!(result1.exit_code, 0);
 
     // Second exec on same box — should also succeed
-    let mut exec2 = handle
+    let exec2 = handle
         .exec(BoxCommand::new("echo").arg("second"))
         .await
         .unwrap();
@@ -937,15 +937,15 @@ async fn test_exec_exit_code_preserved() {
     handle.start().await.unwrap();
 
     // Success (exit 0)
-    let mut exec0 = handle.exec(BoxCommand::new("true")).await.unwrap();
+    let exec0 = handle.exec(BoxCommand::new("true")).await.unwrap();
     assert_eq!(exec0.wait().await.unwrap().exit_code, 0);
 
     // Failure (exit 1)
-    let mut exec1 = handle.exec(BoxCommand::new("false")).await.unwrap();
+    let exec1 = handle.exec(BoxCommand::new("false")).await.unwrap();
     assert_eq!(exec1.wait().await.unwrap().exit_code, 1);
 
     // Custom exit code
-    let mut exec42 = handle
+    let exec42 = handle
         .exec(BoxCommand::new("sh").args(["-c", "exit 42"]))
         .await
         .unwrap();
@@ -970,7 +970,7 @@ async fn test_exec_then_shutdown_sequential() {
 
     // Run 3 commands sequentially
     for i in 0..3 {
-        let mut execution = handle
+        let execution = handle
             .exec(BoxCommand::new("echo").arg(format!("cmd-{}", i)))
             .await
             .unwrap();
@@ -1094,7 +1094,7 @@ async fn create_concurrent_box(runtime: &BoxliteRuntime) -> Arc<LiteBox> {
     handle.start().await.unwrap();
 
     // Warmup: verify guest is responsive before concurrent tests
-    let mut warmup = handle
+    let warmup = handle
         .exec(BoxCommand::new("echo").arg("warmup"))
         .await
         .expect("warmup exec should succeed — guest not responsive");
@@ -1265,7 +1265,7 @@ async fn test_concurrent_exec_exit_codes() {
         let h = handle.clone();
         let task = tokio::spawn(async move {
             eprintln!("[{:?}] task-{}: calling exec", t0.elapsed(), i);
-            let mut execution = h
+            let execution = h
                 .exec(BoxCommand::new("sh").args(["-c", &format!("exit {}", code)]))
                 .await?;
             eprintln!(
@@ -1373,7 +1373,7 @@ async fn test_sequential_exec_after_concurrent() {
     for i in 0..4 {
         let h = handle.clone();
         let task = tokio::spawn(async move {
-            let mut execution = h
+            let execution = h
                 .exec(BoxCommand::new("echo").arg(format!("concurrent-{}", i)))
                 .await?;
             let result = execution.wait().await?;
@@ -1438,7 +1438,7 @@ async fn test_concurrent_exec_high_concurrency() {
         let h = handle.clone();
         let task = tokio::spawn(async move {
             eprintln!("[{:?}] hc-{}: calling exec", t0.elapsed(), i);
-            let mut execution = h
+            let execution = h
                 .exec(BoxCommand::new("echo").arg(format!("high-{}", i)))
                 .await?;
             eprintln!("[{:?}] hc-{}: exec returned, calling wait", t0.elapsed(), i);
@@ -1492,7 +1492,7 @@ async fn test_concurrent_exec_partial_failure() {
         let program = program.to_string();
         let task = tokio::spawn(async move {
             eprintln!("[{:?}] task-{}: calling exec({})", t0.elapsed(), i, program);
-            let mut execution = h.exec(BoxCommand::new(&program).args(args)).await?;
+            let execution = h.exec(BoxCommand::new(&program).args(args)).await?;
             eprintln!(
                 "[{:?}] task-{}: exec returned, calling wait",
                 t0.elapsed(),

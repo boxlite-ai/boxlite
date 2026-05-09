@@ -36,6 +36,7 @@ include_directories(${BOXLITE_INCLUDE_DIR})
 # lives in the Go SDK + runner integration suite.
 set(TEST_TARGETS
     test_simple_api
+    test_null_callback
 )
 
 foreach(TARGET ${TEST_TARGETS})
@@ -67,6 +68,9 @@ endforeach()
 
 # Label integration tests (require VM)
 set_tests_properties(test_simple_api PROPERTIES LABELS "integration")
+# test_null_callback only exercises the FFI argument-validation path;
+# no VM is required, but we still link the runtime dylib.
+set_tests_properties(test_null_callback PROPERTIES LABELS "ffi")
 
 message(STATUS "BoxLite C Tests Configuration:")
 message(STATUS "  Include dir: ${BOXLITE_INCLUDE_DIR}")

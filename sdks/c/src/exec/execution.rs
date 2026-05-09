@@ -16,7 +16,19 @@ use std::ptr;
 use std::sync::{Arc, Mutex};
 
 use tokio::runtime::Runtime as TokioRuntime;
+use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
+
+/// Synthetic exit code emitted when `boxlite_execution_free` tears down a
+/// running execution before the process exits naturally. Distinct from the
+/// `-1` that `wait_on_clone` returns on internal error so consumers (Go SDK
+/// in particular) can distinguish "we forced this" from "wait failed".
+///
+/// Scoped `pub(crate)` so cbindgen does not emit it as a `#define` in the
+/// C header (cbindgen would render `-129` without parens, which fails
+/// clang-tidy's `bugprone-macro-parentheses`). Foreign callers receive
+/// the raw int via the exit callback; they don't need the symbol.
+pub(crate) const EXIT_CODE_FORCE_CLOSED: i32 = -129;
 
 use boxlite::{BoxliteError, ExecStderr, ExecStdin, ExecStdout, Execution};
 
@@ -24,8 +36,8 @@ use super::command::{BoxliteCommand, parse_boxlite_command};
 use crate::box_handle::BoxHandle;
 use crate::error::{BoxliteErrorCode, FFIError, error_to_code, null_pointer_error, write_error};
 use crate::event_queue::{
-    CBoxExitCb, CBoxStderrCb, CBoxStdoutCb, CExecutionKillCb, CExecutionResizeCb, CExecutionWaitCb,
-    EventQueue, RuntimeEvent, push_event,
+    CBoxExitCb, CBoxExitFn, CBoxStderrCb, CBoxStderrFn, CBoxStdoutCb, CBoxStdoutFn,
+    CExecutionKillCb, CExecutionResizeCb, CExecutionWaitCb, EventQueue, RuntimeEvent, push_event,
 };
 use crate::{CBoxHandle, CBoxliteError, CExecutionHandle};
 
@@ -40,6 +52,16 @@ pub struct ExecutionHandle {
     pending_stderr: Option<ExecStderr>,
     /// Spawned pumps; aborted on `_free`.
     pumps: Mutex<Vec<JoinHandle<()>>>,
+    /// One receiver per registered stream pump. `register_exit` drains this
+    /// list and `exit_pump` awaits each before pushing the Exit event so
+    /// the Exit callback is strictly the last one for the execution.
+    stream_done_rx: Mutex<Vec<oneshot::Receiver<()>>>,
+    /// `(cb, user_data)` for the exit callback, captured at register time.
+    /// Used by `_free` to synthesise an Exit event when the process is
+    /// torn down before it would have exited naturally — guarantees the
+    /// Go SDK gets exactly one Exit per execution and can delete the
+    /// shared `cgo.Handle`.
+    exit_dispatch: Mutex<Option<(CBoxExitFn, usize)>>,
     /// Shared runtime queue for posting stream / lifecycle events.
     queue: Arc<EventQueue>,
     /// Tokio runtime handle for spawning pumps and lifecycle tasks.
@@ -184,6 +206,8 @@ unsafe fn box_exec(
                     pending_stdout: stdout,
                     pending_stderr: stderr,
                     pumps: Mutex::new(Vec::new()),
+                    stream_done_rx: Mutex::new(Vec::new()),
+                    exit_dispatch: Mutex::new(None),
                     queue: handle_ref.queue.clone(),
                     tokio_rt: handle_ref.tokio_rt.clone(),
                     completed: Arc::new(Mutex::new(false)),
@@ -211,6 +235,7 @@ unsafe fn register_stdout(
             write_error(out_error, null_pointer_error("execution"));
             return BoxliteErrorCode::InvalidArgument;
         }
+        let cb = crate::unwrap_cb_or_return!(cb, out_error);
         let exec_ref = &mut *execution;
         let Some(stream) = exec_ref.pending_stdout.take() else {
             write_error(
@@ -224,9 +249,11 @@ unsafe fn register_stdout(
 
         let queue = exec_ref.queue.clone();
         let user_data_addr = user_data as usize;
+        let (done_tx, done_rx) = oneshot::channel::<()>();
+        exec_ref.stream_done_rx.lock().unwrap().push(done_rx);
         let pump = exec_ref
             .tokio_rt
-            .spawn(stdout_pump(stream, cb, user_data_addr, queue));
+            .spawn(stdout_pump(stream, cb, user_data_addr, queue, done_tx));
         exec_ref.pumps.lock().unwrap().push(pump);
         BoxliteErrorCode::Ok
     }
@@ -243,6 +270,7 @@ unsafe fn register_stderr(
             write_error(out_error, null_pointer_error("execution"));
             return BoxliteErrorCode::InvalidArgument;
         }
+        let cb = crate::unwrap_cb_or_return!(cb, out_error);
         let exec_ref = &mut *execution;
         let Some(stream) = exec_ref.pending_stderr.take() else {
             write_error(
@@ -256,9 +284,11 @@ unsafe fn register_stderr(
 
         let queue = exec_ref.queue.clone();
         let user_data_addr = user_data as usize;
+        let (done_tx, done_rx) = oneshot::channel::<()>();
+        exec_ref.stream_done_rx.lock().unwrap().push(done_rx);
         let pump = exec_ref
             .tokio_rt
-            .spawn(stderr_pump(stream, cb, user_data_addr, queue));
+            .spawn(stderr_pump(stream, cb, user_data_addr, queue, done_tx));
         exec_ref.pumps.lock().unwrap().push(pump);
         BoxliteErrorCode::Ok
     }
@@ -275,15 +305,28 @@ unsafe fn register_exit(
             write_error(out_error, null_pointer_error("execution"));
             return BoxliteErrorCode::InvalidArgument;
         }
+        let cb = crate::unwrap_cb_or_return!(cb, out_error);
         let exec_ref = &*execution;
         let exec_arc = exec_ref.execution.clone();
         let queue = exec_ref.queue.clone();
         let user_data_addr = user_data as usize;
         let completed = exec_ref.completed.clone();
-        let pump =
-            exec_ref
-                .tokio_rt
-                .spawn(exit_pump(exec_arc, cb, user_data_addr, queue, completed));
+        // Capture (cb, user_data) so the force-cleanup path in
+        // `execution_free` can synthesise an Exit event on teardown.
+        *exec_ref.exit_dispatch.lock().unwrap() = Some((cb, user_data_addr));
+        // Take ownership of all stream-pump completion receivers — exit_pump
+        // awaits each before pushing Exit, so Exit is the strictly-last
+        // event for this execution. Stream registrations after this point
+        // would not be respected; today the API forbids re-registration.
+        let stream_dones = std::mem::take(&mut *exec_ref.stream_done_rx.lock().unwrap());
+        let pump = exec_ref.tokio_rt.spawn(exit_pump(
+            exec_arc,
+            cb,
+            user_data_addr,
+            queue,
+            completed,
+            stream_dones,
+        ));
         exec_ref.pumps.lock().unwrap().push(pump);
         BoxliteErrorCode::Ok
     }
@@ -343,6 +386,7 @@ unsafe fn execution_wait(
             write_error(out_error, null_pointer_error("execution"));
             return BoxliteErrorCode::InvalidArgument;
         }
+        let cb = crate::unwrap_cb_or_return!(cb, out_error);
 
         let exec_ref = &*execution;
         let exec_arc = exec_ref.execution.clone();
@@ -377,6 +421,7 @@ unsafe fn execution_kill(
             write_error(out_error, null_pointer_error("execution"));
             return BoxliteErrorCode::InvalidArgument;
         }
+        let cb = crate::unwrap_cb_or_return!(cb, out_error);
 
         let exec_ref = &*execution;
         let exec_arc = exec_ref.execution.clone();
@@ -420,6 +465,7 @@ unsafe fn execution_resize_tty(
             );
             return BoxliteErrorCode::InvalidArgument;
         }
+        let cb = crate::unwrap_cb_or_return!(cb, out_error);
 
         let exec_ref = &*execution;
         let exec_arc = exec_ref.execution.clone();
@@ -457,13 +503,6 @@ unsafe fn execution_free(execution: *mut ExecutionHandle) {
             stdin.close();
         }
 
-        // Abort pump tasks; results in-flight that haven't been pushed are
-        // simply dropped.
-        let pumps = std::mem::take(&mut *exec_box.pumps.lock().unwrap());
-        for pump in &pumps {
-            pump.abort();
-        }
-
         // If the process never observed completion, kill + wait inside a
         // best-effort block_on so we don't leak the guest-side process.
         let completed = *exec_box.completed.lock().unwrap();
@@ -473,9 +512,36 @@ unsafe fn execution_free(execution: *mut ExecutionHandle) {
                 let _ = kill_on_clone(&exec_arc).await;
                 wait_on_clone(&exec_arc).await
             });
+            // The exit pump may have been aborted before it pushed Exit.
+            // Synthesise an Exit event with `EXIT_CODE_FORCE_CLOSED` so the
+            // Go SDK still receives exactly one Exit per execution and can
+            // delete the shared cgo.Handle. Push BEFORE aborting pumps so
+            // the queue accepts the event.
+            if let Some((cb, ud)) = exec_box.exit_dispatch.lock().unwrap().take() {
+                let queue = exec_box.queue.clone();
+                exec_box.tokio_rt.block_on(async move {
+                    push_event(
+                        &queue,
+                        RuntimeEvent::Exit {
+                            cb,
+                            user_data: ud,
+                            exit_code: EXIT_CODE_FORCE_CLOSED,
+                        },
+                    )
+                    .await;
+                });
+            }
         }
 
-        // Pumps already aborted above; let the box drop normally.
+        // Abort pump tasks AFTER the synthetic-Exit push so the exit
+        // dispatch is preserved. Stream pumps that haven't drained get
+        // their oneshot tx dropped — exit_pump's rx.await sees Err and
+        // moves on, no deadlock.
+        let pumps = std::mem::take(&mut *exec_box.pumps.lock().unwrap());
+        for pump in &pumps {
+            pump.abort();
+        }
+
         drop(exec_box);
     }
 }
@@ -484,9 +550,10 @@ unsafe fn execution_free(execution: *mut ExecutionHandle) {
 
 async fn stdout_pump(
     mut stream: ExecStdout,
-    cb: CBoxStdoutCb,
+    cb: CBoxStdoutFn,
     user_data_addr: usize,
     queue: Arc<EventQueue>,
+    done_tx: oneshot::Sender<()>,
 ) {
     while let Some(line) = stream.next().await {
         let mut bytes = line.into_bytes();
@@ -503,13 +570,17 @@ async fn stdout_pump(
         )
         .await;
     }
+    // Signal the exit pump we're done. Failure (rx dropped) means exit_pump
+    // already completed or was never registered — either way harmless.
+    let _ = done_tx.send(());
 }
 
 async fn stderr_pump(
     mut stream: ExecStderr,
-    cb: CBoxStderrCb,
+    cb: CBoxStderrFn,
     user_data_addr: usize,
     queue: Arc<EventQueue>,
+    done_tx: oneshot::Sender<()>,
 ) {
     while let Some(line) = stream.next().await {
         let mut bytes = line.into_bytes();
@@ -524,16 +595,25 @@ async fn stderr_pump(
         )
         .await;
     }
+    let _ = done_tx.send(());
 }
 
 async fn exit_pump(
     exec_arc: Arc<Mutex<Option<Execution>>>,
-    cb: CBoxExitCb,
+    cb: CBoxExitFn,
     user_data_addr: usize,
     queue: Arc<EventQueue>,
     completed: Arc<Mutex<bool>>,
+    stream_dones: Vec<oneshot::Receiver<()>>,
 ) {
     let exit_code = wait_on_clone(&exec_arc).await.unwrap_or(-1);
+    // Drain stream pumps before pushing Exit so Exit is the strictly-last
+    // event for this execution; the Go SDK relies on this to safely delete
+    // the shared cgo.Handle in its exit handler. Aborted pumps drop their
+    // tx → rx.await returns Err → harmless.
+    for rx in stream_dones {
+        let _ = rx.await;
+    }
     *completed.lock().unwrap() = true;
     push_event(
         &queue,
@@ -561,7 +641,7 @@ fn snapshot_execution(slot: &Mutex<Option<Execution>>) -> Result<Execution, Boxl
 }
 
 async fn wait_on_clone(slot: &Mutex<Option<Execution>>) -> Result<i32, BoxliteError> {
-    let mut clone = snapshot_execution(slot)?;
+    let clone = snapshot_execution(slot)?;
     clone.wait().await.map(|status| status.exit_code)
 }
 
@@ -602,6 +682,8 @@ mod tests {
             pending_stdout: None,
             pending_stderr: None,
             pumps: Mutex::new(Vec::new()),
+            stream_done_rx: Mutex::new(Vec::new()),
+            exit_dispatch: Mutex::new(None),
             queue: Arc::new(EventQueue::new()),
             tokio_rt: runtime,
             completed: Arc::new(Mutex::new(false)),
@@ -672,7 +754,7 @@ mod tests {
                 &mut handle as *mut _,
                 0,
                 80,
-                noop_unit,
+                Some(noop_unit),
                 ptr::null_mut(),
                 &mut error,
             )
@@ -686,7 +768,12 @@ mod tests {
     fn register_stdout_rejects_null() {
         let mut error = FFIError::default();
         let code = unsafe {
-            boxlite_execution_on_stdout(ptr::null_mut(), noop_stdout, ptr::null_mut(), &mut error)
+            boxlite_execution_on_stdout(
+                ptr::null_mut(),
+                Some(noop_stdout),
+                ptr::null_mut(),
+                &mut error,
+            )
         };
         assert_eq!(code, BoxliteErrorCode::InvalidArgument);
         assert!(!error.message.is_null());
@@ -700,7 +787,7 @@ mod tests {
         let code = unsafe {
             boxlite_execution_on_stdout(
                 &mut handle as *mut _,
-                noop_stdout,
+                Some(noop_stdout),
                 ptr::null_mut(),
                 &mut error,
             )
@@ -714,7 +801,12 @@ mod tests {
     fn wait_rejects_null_execution() {
         let mut error = FFIError::default();
         let code = unsafe {
-            boxlite_execution_wait(ptr::null_mut(), noop_wait, ptr::null_mut(), &mut error)
+            boxlite_execution_wait(
+                ptr::null_mut(),
+                Some(noop_wait),
+                ptr::null_mut(),
+                &mut error,
+            )
         };
         assert_eq!(code, BoxliteErrorCode::InvalidArgument);
         assert!(!error.message.is_null());
@@ -725,10 +817,23 @@ mod tests {
     fn kill_rejects_null_execution() {
         let mut error = FFIError::default();
         let code = unsafe {
-            boxlite_execution_kill(ptr::null_mut(), noop_unit, ptr::null_mut(), &mut error)
+            boxlite_execution_kill(
+                ptr::null_mut(),
+                Some(noop_unit),
+                ptr::null_mut(),
+                &mut error,
+            )
         };
         assert_eq!(code, BoxliteErrorCode::InvalidArgument);
         assert!(!error.message.is_null());
         unsafe { crate::boxlite_error_free(&mut error as *mut _) };
     }
+
+    // The end-to-end regression guard for the wait-vs-kill deadlock
+    // (Codex round-2 finding #1) lives in
+    // `src/boxlite/src/litebox/exec.rs::tests::wait_does_not_block_kill`,
+    // where `ExecBackend` is in scope and a real `Execution` can be
+    // constructed against a stub backend. That test deadlocks on the
+    // unfixed code and passes on the fixed code; reproducing it here
+    // would require duplicating the stub-backend infrastructure.
 }

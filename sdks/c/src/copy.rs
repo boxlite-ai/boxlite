@@ -72,6 +72,7 @@ unsafe fn box_copy_into(
                 return BoxliteErrorCode::InvalidArgument;
             }
         };
+        let cb = crate::unwrap_cb_or_return!(cb, out_error);
 
         let handle_ref = &*handle;
         let lite = handle_ref.handle.clone();
@@ -123,6 +124,7 @@ unsafe fn box_copy_out(
                 return BoxliteErrorCode::InvalidArgument;
             }
         };
+        let cb = crate::unwrap_cb_or_return!(cb, out_error);
 
         let handle_ref = &*handle;
         let lite = handle_ref.handle.clone();

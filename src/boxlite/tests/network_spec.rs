@@ -138,7 +138,7 @@ async fn run_stdout(litebox: &boxlite::LiteBox, cmd: &str, args: &[&str]) -> Str
 
 /// Helper: run a command and return its exit status.
 async fn run_exit_code(litebox: &boxlite::LiteBox, cmd: &str, args: &[&str]) -> i32 {
-    let mut ex = litebox
+    let ex = litebox
         .exec(BoxCommand::new(cmd).args(args.iter().map(|s| s.to_string()).collect::<Vec<_>>()))
         .await
         .unwrap();

@@ -161,7 +161,7 @@ async fn test_box_restartable_after_snapshot_create() {
         .expect("start after snapshot create failed");
 
     let cmd = BoxCommand::new("echo").args(["alive"]);
-    let mut exec = litebox.exec(cmd).await.expect("exec failed");
+    let exec = litebox.exec(cmd).await.expect("exec failed");
     let result = exec.wait().await.expect("wait failed");
     assert_eq!(
         result.exit_code, 0,
@@ -232,7 +232,7 @@ async fn test_box_startable_after_snapshot_restore() {
     // Write marker, snapshot, then restore.
     litebox.start().await.expect("start failed");
     let cmd = BoxCommand::new("sh").args(["-c", "echo RESTORE_V1 > /root/ver.txt"]);
-    let mut exec = litebox.exec(cmd).await.expect("exec failed");
+    let exec = litebox.exec(cmd).await.expect("exec failed");
     exec.wait().await.expect("wait failed");
     litebox.stop().await.expect("stop failed");
 

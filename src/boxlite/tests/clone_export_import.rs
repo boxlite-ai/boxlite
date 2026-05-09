@@ -183,14 +183,14 @@ async fn test_clone_running_box() {
     // Cloned box can start and exec independently
     cloned.start().await.expect("Start cloned box");
     let cmd = BoxCommand::new("echo").args(["from-clone"]);
-    let mut exec = cloned.exec(cmd).await.expect("Exec on cloned box");
+    let exec = cloned.exec(cmd).await.expect("Exec on cloned box");
     let result = exec.wait().await.expect("Wait on cloned exec");
     assert_eq!(result.exit_code, 0);
     cloned.stop().await.expect("Stop cloned box");
 
     // Source still works
     let cmd = BoxCommand::new("echo").args(["still-running"]);
-    let mut exec = source.exec(cmd).await.expect("Exec on source after clone");
+    let exec = source.exec(cmd).await.expect("Exec on source after clone");
     let result = exec.wait().await.expect("Wait on source exec");
     assert_eq!(result.exit_code, 0);
 
@@ -227,7 +227,7 @@ async fn test_export_running_box() {
 
     // Source still works after export
     let cmd = BoxCommand::new("echo").args(["after-export"]);
-    let mut exec = source.exec(cmd).await.expect("Exec after export");
+    let exec = source.exec(cmd).await.expect("Exec after export");
     let result = exec.wait().await.expect("Wait after export");
     assert_eq!(result.exit_code, 0);
 
@@ -257,7 +257,7 @@ async fn test_export_import_running_box_roundtrip() {
 
     // Write a marker file inside the running VM
     let cmd = BoxCommand::new("sh").args(["-c", "echo boxlite-test-data > /root/marker.txt"]);
-    let mut exec = source.exec(cmd).await.expect("Write marker file");
+    let exec = source.exec(cmd).await.expect("Write marker file");
     let result = exec.wait().await.expect("Wait for write");
     assert_eq!(result.exit_code, 0, "Marker file write should succeed");
 
@@ -282,7 +282,7 @@ async fn test_export_import_running_box_roundtrip() {
     imported.start().await.expect("Start imported box");
 
     let cmd = BoxCommand::new("cat").args(["/root/marker.txt"]);
-    let mut exec = imported.exec(cmd).await.expect("Read marker file");
+    let exec = imported.exec(cmd).await.expect("Read marker file");
     let result = exec.wait().await.expect("Wait for read");
     assert_eq!(
         result.exit_code, 0,
@@ -318,7 +318,7 @@ async fn test_clone_snapshot_isolation() {
 
     // Write a marker to the source box
     let cmd = BoxCommand::new("sh").args(["-c", "echo snapshot-data > /root/marker.txt"]);
-    let mut exec = source.exec(cmd).await.expect("Write marker");
+    let exec = source.exec(cmd).await.expect("Write marker");
     let result = exec.wait().await.expect("Wait for marker write");
     assert_eq!(result.exit_code, 0);
 
@@ -454,13 +454,13 @@ async fn test_export_under_write_pressure() {
 
     // Verify the box boots and can execute commands (filesystem integrity)
     let cmd = BoxCommand::new("echo").args(["fs-ok"]);
-    let mut exec = imported.exec(cmd).await.expect("Exec on imported box");
+    let exec = imported.exec(cmd).await.expect("Exec on imported box");
     let result = exec.wait().await.expect("Wait on exec");
     assert_eq!(result.exit_code, 0, "Imported box should be functional");
 
     // Verify stress file exists (some data was captured)
     let cmd = BoxCommand::new("test").args(["-f", "/root/stress.bin"]);
-    let mut exec = imported.exec(cmd).await.expect("Check stress file");
+    let exec = imported.exec(cmd).await.expect("Check stress file");
     let result = exec.wait().await.expect("Wait on check");
     assert_eq!(result.exit_code, 0, "Stress file should exist in snapshot");
 

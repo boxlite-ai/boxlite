@@ -57,6 +57,7 @@ func (b *Box) Start(ctx context.Context) error {
 	case err := <-ch:
 		return err
 	case <-ctx.Done():
+		abandonAsyncErr(ch, h)
 		return ctx.Err()
 	}
 }
@@ -79,6 +80,7 @@ func (b *Box) Stop(ctx context.Context) error {
 	case err := <-ch:
 		return err
 	case <-ctx.Done():
+		abandonAsyncErr(ch, h)
 		return ctx.Err()
 	}
 }

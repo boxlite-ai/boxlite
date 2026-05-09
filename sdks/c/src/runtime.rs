@@ -356,6 +356,7 @@ unsafe fn shutdown_runtime(
             write_error(out_error, null_pointer_error("runtime"));
             return BoxliteErrorCode::InvalidArgument;
         }
+        let cb = crate::unwrap_cb_or_return!(cb, out_error);
 
         let runtime_ref = &*runtime;
         runtime_ref.liveness.mark_closed();
@@ -387,64 +388,73 @@ unsafe fn runtime_free(runtime: *mut RuntimeHandle) {
         unsafe {
             let handle = Box::from_raw(runtime);
             handle.liveness.mark_closed();
-            // Wake any thread blocked in drain so it can return promptly.
-            handle.queue.cv.notify_all();
+            // Close the queue: blocked drainers wake and exit on the closed
+            // flag, late events from in-flight Tokio tasks are dropped. The
+            // queue itself stays alive via any drainer's Arc clone until that
+            // drainer returns — no UAF on the queue's mutex/condvar.
+            handle.queue.mark_closed();
             drop(handle);
         }
     }
 }
 
 unsafe fn drain(rt: *mut RuntimeHandle, timeout_ms: c_int, out_error: *mut FFIError) -> c_int {
-    unsafe {
-        if rt.is_null() {
-            write_error(out_error, null_pointer_error("runtime"));
-            return -1;
-        }
-        let rt = &*rt;
+    if rt.is_null() {
+        unsafe { write_error(out_error, null_pointer_error("runtime")) };
+        return -1;
+    }
 
-        let deadline = if timeout_ms < 0 {
-            None
-        } else {
-            Some(Instant::now() + Duration::from_millis(timeout_ms as u64))
-        };
+    // Clone the queue Arc once at entry so the queue's Mutex/Condvar stay
+    // valid for the rest of the call even if `runtime_free` drops the
+    // RuntimeHandle concurrently. After this line we never re-deref `rt`.
+    let queue = unsafe { (*rt).queue.clone() };
 
-        let mut count: c_int = 0;
-        loop {
-            // ─── Pop one event ───
-            let event_opt: Option<RuntimeEvent> = {
-                let mut g = rt.queue.inner.lock().unwrap();
-                let mut popped: Option<RuntimeEvent> = None;
-                while popped.is_none() {
-                    if let Some(ev) = g.pop_front() {
-                        popped = Some(ev);
-                        break;
-                    }
-                    match deadline {
-                        None => g = rt.queue.cv.wait(g).unwrap(),
-                        Some(d) => {
-                            let now = Instant::now();
-                            if now >= d {
-                                return count;
-                            }
-                            let (new_g, _timeout) = rt.queue.cv.wait_timeout(g, d - now).unwrap();
-                            g = new_g;
-                            if g.is_empty() && Instant::now() >= d {
-                                return count;
-                            }
+    let deadline = if timeout_ms < 0 {
+        None
+    } else {
+        Some(Instant::now() + Duration::from_millis(timeout_ms as u64))
+    };
+
+    let mut count: c_int = 0;
+    loop {
+        // ─── Pop one event ───
+        let event_opt: Option<RuntimeEvent> = {
+            let mut g = queue.inner.lock().unwrap();
+            let mut popped: Option<RuntimeEvent> = None;
+            while popped.is_none() {
+                // Honour close — `runtime_free` set this and signalled the cv.
+                if queue.is_closed() {
+                    return count;
+                }
+                if let Some(ev) = g.pop_front() {
+                    popped = Some(ev);
+                    break;
+                }
+                match deadline {
+                    None => g = queue.cv.wait(g).unwrap(),
+                    Some(d) => {
+                        let now = Instant::now();
+                        if now >= d {
+                            return count;
+                        }
+                        let (new_g, _timeout) = queue.cv.wait_timeout(g, d - now).unwrap();
+                        g = new_g;
+                        if g.is_empty() && Instant::now() >= d {
+                            return count;
                         }
                     }
                 }
-                popped
-            };
+            }
+            popped
+        };
 
-            let Some(event) = event_opt else {
-                return count;
-            };
+        let Some(event) = event_opt else {
+            return count;
+        };
 
-            // ─── Lock RELEASED — dispatch to user callback ───
-            dispatch_event(event);
-            count = count.saturating_add(1);
-        }
+        // ─── Lock RELEASED — dispatch to user callback ───
+        unsafe { dispatch_event(event) };
+        count = count.saturating_add(1);
     }
 }
 
@@ -582,19 +592,21 @@ unsafe fn dispatch_unit_event(result: Result<(), BoxliteError>, user_data: usize
     }
 }
 
-/// Dispatch a "handle pointer + error" event. The `result` carries a
-/// `*mut T` encoded as `usize` (so the event is `Send`); on success the
-/// callback receives the pointer and a zeroed error; on failure it receives
-/// a null pointer and a populated error.
+/// Dispatch a "handle pointer + error" event. The `result` carries an
+/// `OwnedFfiPtr<T>` (so the event is `Send` and the underlying allocation
+/// is reclaimed if the event is dropped before dispatch); on success the
+/// callback receives the unwrapped raw pointer (Drop disarmed via `take`)
+/// and a zeroed error; on failure it receives a null pointer and a
+/// populated error.
 unsafe fn dispatch_handle_event<T>(
-    result: Result<usize, BoxliteError>,
+    result: Result<crate::event_queue::OwnedFfiPtr<T>, BoxliteError>,
     user_data: usize,
     cb: HandleCb<T>,
 ) {
     unsafe {
         let mut err = FFIError::default();
         let ptr = match result {
-            Ok(addr) => addr as *mut T,
+            Ok(owned) => owned.take(),
             Err(e) => {
                 err = crate::error::error_to_c_error(e);
                 ptr::null_mut()

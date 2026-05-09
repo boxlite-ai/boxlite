@@ -205,6 +205,7 @@ unsafe fn box_info_by_id(
                 return BoxliteErrorCode::InvalidArgument;
             }
         };
+        let cb = crate::unwrap_cb_or_return!(cb, out_error);
 
         let runtime_ref = &*runtime;
         let runtime_clone = runtime_ref.runtime.clone();
@@ -213,9 +214,9 @@ unsafe fn box_info_by_id(
 
         runtime_ref.tokio_rt.spawn(async move {
             let result = match runtime_clone.get_info(&id_or_name).await {
-                Ok(Some(info)) => {
-                    Ok(Box::into_raw(Box::new(CBoxInfo::from_box_info(&info))) as usize)
-                }
+                Ok(Some(info)) => Ok(crate::event_queue::OwnedFfiPtr::new(Box::new(
+                    CBoxInfo::from_box_info(&info),
+                ))),
                 Ok(None) => Err(BoxliteError::NotFound(format!(
                     "Box not found: {id_or_name}"
                 ))),
@@ -247,6 +248,7 @@ unsafe fn box_list(
             write_error(out_error, null_pointer_error("runtime"));
             return BoxliteErrorCode::InvalidArgument;
         }
+        let cb = crate::unwrap_cb_or_return!(cb, out_error);
 
         let runtime_ref = &*runtime;
         let runtime_clone = runtime_ref.runtime.clone();
@@ -259,7 +261,7 @@ unsafe fn box_list(
                 let count = items.len() as c_int;
                 let ptr = items.as_mut_ptr();
                 std::mem::forget(items);
-                Box::into_raw(Box::new(CBoxInfoList { items: ptr, count })) as usize
+                crate::event_queue::OwnedFfiPtr::new(Box::new(CBoxInfoList { items: ptr, count }))
             });
             push_event(
                 &queue,

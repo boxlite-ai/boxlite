@@ -253,7 +253,7 @@ impl JsExecution {
     /// ```
     #[napi]
     pub async fn wait(&self) -> Result<JsExecResult> {
-        let mut guard = self.execution.lock().await;
+        let guard = self.execution.lock().await;
         let exec_result = guard.wait().await.map_err(map_err)?;
         Ok(JsExecResult {
             exit_code: exec_result.exit_code,

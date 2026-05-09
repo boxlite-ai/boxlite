@@ -78,7 +78,7 @@ async fn write_file(handle: &LiteBox, path: &str, content: &str) {
     let escaped = content.replace('\'', "'\\''");
     let shell_cmd = format!("printf '%s' '{escaped}' > {path}");
     let cmd = BoxCommand::new("sh").args(["-c", &shell_cmd]);
-    let mut exec = handle.exec(cmd).await.expect("write_file: exec failed");
+    let exec = handle.exec(cmd).await.expect("write_file: exec failed");
     let result = exec.wait().await.expect("write_file: wait failed");
     assert_eq!(result.exit_code, 0, "write_file({path}): non-zero exit");
 }
@@ -1212,13 +1212,13 @@ async fn test_clone_write_isolation_from_source() {
 
     // Source should NOT have clone's file
     let cmd = BoxCommand::new("test").args(["-f", "/root/clone-only.txt"]);
-    let mut exec = source.exec(cmd).await.unwrap();
+    let exec = source.exec(cmd).await.unwrap();
     let result = exec.wait().await.unwrap();
     assert_ne!(result.exit_code, 0, "source should not see clone's file");
 
     // Clone should NOT have source's file
     let cmd = BoxCommand::new("test").args(["-f", "/root/source-only.txt"]);
-    let mut exec = cloned.exec(cmd).await.unwrap();
+    let exec = cloned.exec(cmd).await.unwrap();
     let result = exec.wait().await.unwrap();
     assert_ne!(result.exit_code, 0, "clone should not see source's file");
 
@@ -1333,7 +1333,7 @@ async fn test_export_import_preserves_file_contents() {
         "-c",
         "dd if=/dev/zero of=/root/zeroes.bin bs=1024 count=4 2>/dev/null",
     ]);
-    let mut exec = source.exec(cmd).await.unwrap();
+    let exec = source.exec(cmd).await.unwrap();
     let result = exec.wait().await.unwrap();
     assert_eq!(result.exit_code, 0);
     let source = stop_and_refresh(&runtime, source, "export-data-src").await;
@@ -2334,7 +2334,7 @@ async fn test_snapshot_preserves_file_permissions() {
     litebox.start().await.unwrap();
     write_file(&litebox, "/root/script.sh", "#!/bin/sh\necho hi").await;
     let cmd = BoxCommand::new("chmod").args(["755", "/root/script.sh"]);
-    let mut exec = litebox.exec(cmd).await.unwrap();
+    let exec = litebox.exec(cmd).await.unwrap();
     exec.wait().await.unwrap();
 
     // Verify permissions
@@ -2355,7 +2355,7 @@ async fn test_snapshot_preserves_file_permissions() {
     // Modify permissions
     litebox.start().await.unwrap();
     let cmd = BoxCommand::new("chmod").args(["644", "/root/script.sh"]);
-    let mut exec = litebox.exec(cmd).await.unwrap();
+    let exec = litebox.exec(cmd).await.unwrap();
     exec.wait().await.unwrap();
 
     // Restore → permissions should be 755 again
@@ -2388,7 +2388,7 @@ async fn test_snapshot_preserves_nested_directories() {
     // Create deep directory structure
     litebox.start().await.unwrap();
     let cmd = BoxCommand::new("mkdir").args(["-p", "/root/a/b/c/d"]);
-    let mut exec = litebox.exec(cmd).await.unwrap();
+    let exec = litebox.exec(cmd).await.unwrap();
     exec.wait().await.unwrap();
     write_file(&litebox, "/root/a/b/c/d/deep.txt", "deep-data").await;
     write_file(&litebox, "/root/a/top.txt", "top-data").await;
@@ -2403,7 +2403,7 @@ async fn test_snapshot_preserves_nested_directories() {
     // Modify
     litebox.start().await.unwrap();
     let cmd = BoxCommand::new("rm").args(["-rf", "/root/a"]);
-    let mut exec = litebox.exec(cmd).await.unwrap();
+    let exec = litebox.exec(cmd).await.unwrap();
     exec.wait().await.unwrap();
 
     // Restore → structure should be intact
@@ -2472,7 +2472,7 @@ async fn test_export_import_preserves_symlinks() {
     source.start().await.unwrap();
     write_file(&source, "/root/target.txt", "symlink-target").await;
     let cmd = BoxCommand::new("ln").args(["-s", "/root/target.txt", "/root/link.txt"]);
-    let mut exec = source.exec(cmd).await.unwrap();
+    let exec = source.exec(cmd).await.unwrap();
     let result = exec.wait().await.unwrap();
     assert_eq!(result.exit_code, 0);
 

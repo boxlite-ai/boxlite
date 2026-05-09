@@ -154,7 +154,7 @@ impl BoxTestBase {
     /// Does not assert on exit code — returns it for the caller to check.
     pub async fn exec_exit_code(&self, cmd: &str, args: &[&str]) -> i32 {
         let command = BoxCommand::new(cmd).args(args.iter().copied());
-        let mut run = self
+        let run = self
             .bx
             .exec(command)
             .await
@@ -172,7 +172,7 @@ impl BoxTestBase {
     /// Does not assert on exit code.
     pub async fn exec_result(&self, cmd: &str, args: &[&str]) -> ExecResult {
         let command = BoxCommand::new(cmd).args(args.iter().copied());
-        let mut run = self
+        let run = self
             .bx
             .exec(command)
             .await
@@ -188,7 +188,7 @@ impl BoxTestBase {
         let escaped = content.replace('\'', "'\\''");
         let shell_cmd = format!("printf '%s' '{escaped}' > {path}");
         let command = BoxCommand::new("sh").args(["-c", &shell_cmd]);
-        let mut run = self
+        let run = self
             .bx
             .exec(command)
             .await

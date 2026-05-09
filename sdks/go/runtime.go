@@ -107,6 +107,7 @@ func (r *Runtime) Shutdown(ctx context.Context, timeout time.Duration) error {
 	case err := <-ch:
 		return err
 	case <-ctx.Done():
+		abandonAsyncErr(ch, h)
 		return ctx.Err()
 	}
 }
@@ -144,8 +145,10 @@ func (r *Runtime) Create(ctx context.Context, image string, opts ...BoxOption) (
 		}
 		return newBoxFromHandle(r, res.value, cfg.name), nil
 	case <-ctx.Done():
-		// Handle is freed by the eventual callback; the box handle will leak
-		// if the C side succeeds, but we honour ctx cancellation per Go norms.
+		// Caller's ctx fired before the create completed. The Tokio task is
+		// still running on the C side; if it succeeds, abandonAsync force-
+		// removes the orphan box so we don't leak a live VM.
+		abandonAsync(ch, h, r.forceRemoveOrphanBox)
 		return nil, ctx.Err()
 	}
 }
@@ -174,6 +177,14 @@ func (r *Runtime) Get(ctx context.Context, idOrName string) (*Box, error) {
 		}
 		return newBoxFromHandle(r, res.value, ""), nil
 	case <-ctx.Done():
+		// Get attaches to an existing box; if the C side succeeds after
+		// cancel, the returned CBoxHandle is just memory we need to free.
+		// No live resource to destroy.
+		abandonAsync(ch, h, func(handle *C.CBoxHandle) {
+			if handle != nil {
+				C.boxlite_box_free(handle)
+			}
+		})
 		return nil, ctx.Err()
 	}
 }
@@ -213,6 +224,7 @@ func (r *Runtime) removeBox(ctx context.Context, idOrName string, force bool) er
 	case err := <-ch:
 		return err
 	case <-ctx.Done():
+		abandonAsyncErr(ch, h)
 		return ctx.Err()
 	}
 }
@@ -263,5 +275,58 @@ func (r *Runtime) stopDrain() {
 	close(r.drainStop)
 	if r.drainDone != nil {
 		<-r.drainDone
+	}
+}
+
+// abandonAsync runs after the caller's context cancelled but the C-side
+// Tokio task is still in flight. The Tokio task always completes and posts
+// to ch; we wait, free the cgo.Handle to reclaim the table slot, and run
+// optional resource cleanup (force-remove orphan VMs, free orphan handles).
+// The wait runs in a detached goroutine so the caller returns ctx.Err()
+// immediately, honouring Go context norms.
+func abandonAsync[T any](ch chan handleResult[T], h cgo.Handle, cleanup func(T)) {
+	go func() {
+		res := <-ch
+		h.Delete()
+		if res.err == nil && cleanup != nil {
+			cleanup(res.value)
+		}
+	}()
+}
+
+// abandonAsyncErr is the variant for async ops whose channel only carries
+// `error` (no resource value).
+func abandonAsyncErr(ch chan error, h cgo.Handle) {
+	go func() {
+		<-ch
+		h.Delete()
+	}()
+}
+
+// drainAndDelete is the generic variant for async ops with a typed result
+// channel that has no orphan resource to clean up (info/metrics/etc.). The
+// caller's ctx already fired; we just need to drain the result and reclaim
+// the cgo.Handle slot when the Tokio task eventually completes.
+func drainAndDelete[T any](ch <-chan T, h cgo.Handle) {
+	go func() {
+		<-ch
+		h.Delete()
+	}()
+}
+
+// forceRemoveOrphanBox best-effort destroys a box that the C side
+// successfully created after the caller's ctx had already cancelled. We have
+// no caller ctx here, so cap cleanup at 30s with a background context.
+func (r *Runtime) forceRemoveOrphanBox(handle *C.CBoxHandle) {
+	if handle == nil {
+		return
+	}
+	box := newBoxFromHandle(r, handle, "")
+	defer box.Close()
+	cctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	_ = box.Stop(cctx)
+	if id := box.ID(); id != "" {
+		_ = r.ForceRemove(cctx, id)
 	}
 }
