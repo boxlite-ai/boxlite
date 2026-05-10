@@ -248,11 +248,11 @@ jobs:
             aws ec2 wait instance-running --instance-ids "$INSTANCE_ID"
             echo "instance-id=$INSTANCE_ID" >> "$GITHUB_OUTPUT"
 
-            # Save instance ID for future runs (must succeed or we'll orphan the instance)
+            # Try to save instance ID for faster lookup on the next run.
+            # Best-effort: tag-based fallback (Name=boxlite-e2e) handles rediscovery
+            # if this fails (e.g., the auth token lacks variables:write).
             if ! gh variable set EC2_E2E_INSTANCE_ID --body "$INSTANCE_ID" -R "${{ github.repository }}"; then
-              echo "::error::Failed to save instance ID. Terminating orphaned instance."
-              aws ec2 terminate-instances --instance-ids "$INSTANCE_ID"
-              exit 1
+              echo "::warning::Could not persist EC2_E2E_INSTANCE_ID. Future runs will rediscover by tag."
             fi
           fi
         env:

@@ -424,6 +424,35 @@ step_configure_github() {
         gh variable delete GH_APP_ID -R "$REPO" 2>/dev/null || true
     fi
 
+    # Pre-check: GitHub rejects manifest creation with "Name is already taken"
+    # if the slug exists anywhere (any owner, including private Apps). The
+    # rejection happens on the form page, so the OAuth callback never fires
+    # and we'd time out 120s later with no useful message. Detect it now.
+    local app_slug="boxlite-e2e-runner"
+    if [ "$(curl -sI -o /dev/null -w '%{http_code}' "https://github.com/apps/${app_slug}")" = "200" ]; then
+        print_error "An App named '${app_slug}' already exists on GitHub."
+        print_info "Local credentials are missing, so we can't reuse it from this script."
+        print_info "Delete the App, then continue:"
+        local app_settings_url
+        if gh api "/orgs/${owner}" &>/dev/null; then
+            app_settings_url="https://github.com/organizations/${owner}/settings/apps/${app_slug}/advanced"
+        else
+            app_settings_url="https://github.com/settings/apps/${app_slug}/advanced"
+        fi
+        print_info "  ${app_settings_url}"
+        if command_exists open; then
+            open "$app_settings_url"
+        elif command_exists xdg-open; then
+            xdg-open "$app_settings_url"
+        fi
+        read -rp "  Press Enter once the App has been deleted (or Ctrl+C to abort)... "
+        if [ "$(curl -sI -o /dev/null -w '%{http_code}' "https://github.com/apps/${app_slug}")" = "200" ]; then
+            print_error "App still exists. Aborting."
+            exit 1
+        fi
+        print_success "App deleted. Continuing with creation."
+    fi
+
     print_info "Creating GitHub App via manifest flow..."
     print_info "A browser window will open. Click 'Create GitHub App' to proceed."
     echo ""
@@ -434,6 +463,9 @@ step_configure_github() {
     # Build the manifest JSON
     # hook_attributes.url is required by the API even if unused
     local manifest
+    # default_permissions:
+    #   administration:     write — mint runner registration tokens (used by e2e-test.yml)
+    #   actions_variables:  write — persist EC2_E2E_INSTANCE_ID across runs
     manifest=$(jq -n \
         --arg name "boxlite-e2e-runner" \
         --arg url "https://github.com/${REPO}" \
@@ -444,7 +476,10 @@ step_configure_github() {
             public: false,
             redirect_url: $redirect_url,
             hook_attributes: { url: $url, active: false },
-            default_permissions: { administration: "write" },
+            default_permissions: {
+                administration: "write",
+                actions_variables: "write"
+            },
             default_events: []
         }')
 
@@ -514,10 +549,14 @@ server.serve_forever()
         print_warning "Cannot open browser. Open this file manually: $html_file"
     fi
 
-    # Wait for callback (up to 2 minutes)
-    print_info "Waiting for GitHub callback..."
+    # Wait for callback (up to 5 minutes — clicking through GitHub's
+    # "Create GitHub App" confirmation page can be slow if the user is
+    # signed-out or has 2FA prompts).
+    print_info "Waiting for GitHub callback (up to 5 min)..."
+    print_info "  In the browser: click the green 'Create GitHub App' button to confirm."
+    print_info "  If the page shows 'Invalid GitHub App configuration', stop and report the error."
     local elapsed=0
-    while [ ! -s "$code_file" ] && [ $elapsed -lt 120 ]; do
+    while [ ! -s "$code_file" ] && [ $elapsed -lt 300 ]; do
         sleep 2
         elapsed=$((elapsed + 2))
     done
@@ -527,9 +566,14 @@ server.serve_forever()
     wait "$server_pid" 2>/dev/null || true
 
     if [ ! -s "$code_file" ]; then
-        print_error "Timed out waiting for GitHub callback"
+        print_error "Timed out waiting for GitHub callback after ${elapsed}s."
+        print_info "Common causes:"
+        print_info "  - Didn't click 'Create GitHub App' on the GitHub confirmation page"
+        print_info "  - GitHub rejected the manifest (page shows 'Invalid GitHub App configuration')"
+        print_info "  - Browser blocked the redirect to http://localhost:9876"
         exit 1
     fi
+    print_success "Callback received."
 
     local code
     code=$(cat "$code_file")
