@@ -37,11 +37,6 @@ pub(crate) struct ApiClient {
     client_secret: Option<String>,
     token_cache: Arc<RwLock<Option<TokenCache>>>,
     config_cache: Arc<RwLock<Option<SandboxConfigResponse>>>,
-    /// Opt-in cap on SSE-without-meaningful-events from
-    /// `BoxliteRestOptions::sse_silence_max`. `None` (default) means
-    /// no bound. Forwarded to the SSE reader via
-    /// [`ApiClient::sse_silence_max`].
-    sse_silence_max: Option<std::time::Duration>,
 }
 
 impl ApiClient {
@@ -73,15 +68,7 @@ impl ApiClient {
             client_secret: config.client_secret.clone(),
             token_cache: Arc::new(RwLock::new(None)),
             config_cache: Arc::new(RwLock::new(None)),
-            sse_silence_max: config.sse_silence_max,
         })
-    }
-
-    /// Maximum allowed SSE silence (no stdout/stderr/exit events) before
-    /// `Execution::wait()` synthesises a transport-failure result. `None`
-    /// (default) means unbounded — see `BoxliteRestOptions::sse_silence_max`.
-    pub(crate) fn sse_silence_max(&self) -> Option<std::time::Duration> {
-        self.sse_silence_max
     }
 
     /// Build an authorized GET against the streaming client (no total timeout).

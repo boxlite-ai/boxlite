@@ -880,50 +880,8 @@ async fn read_sse_output(
     // Reset back to `None` whenever a real meaningful event arrives,
     // so a fresh idle window starts from the next quiet period.
     let mut last_idle_probe_at: Option<std::time::Instant> = None;
-    // Opt-in cap from `BoxliteRestOptions::sse_silence_max`. `None`
-    // means unbounded (current default). When set, `Execution::wait()`
-    // returns a transport-failure ExecResult after this much silence
-    // (no stdout/stderr/exit events; SSE keepalive comments do NOT
-    // refresh the timer — that's the whole point).
-    let sse_silence_max = client.sse_silence_max();
 
     loop {
-        // Opt-in silence cap. Anchored on `last_meaningful_at` so axum
-        // keepalive comments (`:\n\n` every ~15s) cannot perpetually
-        // refresh the deadline. We check at the top of every loop
-        // iteration so even a stream with sub-cap keepalives is caught.
-        if let Some(max) = sse_silence_max {
-            let elapsed = last_meaningful_at.elapsed();
-            if elapsed >= max {
-                tracing::warn!(
-                    events_seen = event_count,
-                    silence_secs = elapsed.as_secs_f64(),
-                    cap_secs = max.as_secs_f64(),
-                    "SSE silence exceeded sse_silence_max — synthesising transport failure"
-                );
-                {
-                    let mut slot = sse_failure.lock();
-                    if slot.is_none() {
-                        *slot = Some(format!(
-                            "SSE silent for {:.1}s exceeded sse_silence_max ({:.1}s)",
-                            elapsed.as_secs_f64(),
-                            max.as_secs_f64(),
-                        ));
-                    }
-                }
-                let _ = result_tx.send(ExecResult {
-                    exit_code: -1,
-                    error_message: Some(format!(
-                        "SSE silent for {:.1}s (no stdout/stderr/exit events); \
-                         exceeded sse_silence_max={:.1}s — declaring transport failure",
-                        elapsed.as_secs_f64(),
-                        max.as_secs_f64(),
-                    )),
-                });
-                return Ok(true);
-            }
-        }
-
         // External terminal signal: poller saw terminal status. Start
         // the bounded *byte-idle* drain so we can flush any in-flight
         // bytes and then exit even if the server keeps the stream open
@@ -996,18 +954,6 @@ async fn read_sse_output(
                 None => last_meaningful_at.elapsed(),
             };
             SSE_IDLE_POLL.saturating_sub(baseline_elapsed)
-        };
-
-        // Don't sleep through the silence cap. If the configured
-        // budget is shorter than the iteration's natural timeout
-        // (idle-probe / drain), wake up at the deadline so the
-        // top-of-loop check fires precisely instead of late.
-        let timeout_for_iter = match sse_silence_max {
-            Some(max) => {
-                let remaining = max.saturating_sub(last_meaningful_at.elapsed());
-                std::cmp::min(timeout_for_iter, remaining)
-            }
-            None => timeout_for_iter,
         };
 
         let next = match tokio::time::timeout(timeout_for_iter, stream.next()).await {
