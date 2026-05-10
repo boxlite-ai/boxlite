@@ -157,24 +157,31 @@ step_detect_config() {
         print_info "VPC: $VPC_ID"
     fi
 
-    # Subnet
+    # Subnets — gather every subnet in the VPC so the workflow's multi-AZ
+    # loop has the widest possible AZ pool to fall back on when an AZ is
+    # short on capacity (InsufficientInstanceCapacity).
     if [ -z "$SUBNET_ID" ]; then
-        print_step "Public subnet... "
-        SUBNET_ID=$(aws ec2 describe-subnets \
+        print_step "Public subnets... "
+        SUBNET_IDS=$(aws ec2 describe-subnets \
             --filters "Name=vpc-id,Values=${VPC_ID}" "Name=map-public-ip-on-launch,Values=true" \
-            --query "Subnets[0].SubnetId" --output text --region "$REGION" 2>/dev/null || echo "")
-        if [ -z "$SUBNET_ID" ] || [ "$SUBNET_ID" = "None" ]; then
-            SUBNET_ID=$(aws ec2 describe-subnets \
+            --query "Subnets[].SubnetId" --output text --region "$REGION" 2>/dev/null \
+            | tr '[:space:]' ',' | sed 's/,$//; s/^,//')
+        if [ -z "$SUBNET_IDS" ]; then
+            SUBNET_IDS=$(aws ec2 describe-subnets \
                 --filters "Name=vpc-id,Values=${VPC_ID}" \
-                --query "Subnets[0].SubnetId" --output text --region "$REGION" 2>/dev/null || echo "")
+                --query "Subnets[].SubnetId" --output text --region "$REGION" 2>/dev/null \
+                | tr '[:space:]' ',' | sed 's/,$//; s/^,//')
         fi
-        if [ -z "$SUBNET_ID" ] || [ "$SUBNET_ID" = "None" ]; then
-            print_error "No subnet found in VPC $VPC_ID. Provide --subnet-id."
+        if [ -z "$SUBNET_IDS" ]; then
+            print_error "No subnets found in VPC $VPC_ID. Provide --subnet-id."
             exit 1
         fi
-        print_success "$SUBNET_ID"
+        local az_count
+        az_count=$(echo "$SUBNET_IDS" | tr ',' '\n' | wc -l | tr -d ' ')
+        print_success "${SUBNET_IDS} (${az_count} AZs)"
     else
-        print_info "Subnet: $SUBNET_ID"
+        SUBNET_IDS="$SUBNET_ID"
+        print_info "Subnet (override): $SUBNET_ID"
     fi
 
     echo ""
@@ -394,8 +401,12 @@ step_configure_github() {
     gh variable set AWS_ACCOUNT_ID --body "$ACCOUNT_ID" -R "$REPO"
     print_info "AWS_ACCOUNT_ID = $ACCOUNT_ID"
 
-    gh variable set AWS_SUBNET_ID --body "$SUBNET_ID" -R "$REPO"
-    print_info "AWS_SUBNET_ID = $SUBNET_ID"
+    gh variable set AWS_SUBNET_IDS --body "$SUBNET_IDS" -R "$REPO"
+    print_info "AWS_SUBNET_IDS = $SUBNET_IDS"
+    # Drop the legacy single-subnet variable so the workflow's
+    # `vars.AWS_SUBNET_IDS || vars.AWS_SUBNET_ID` fallback can't pick a
+    # narrower (one-AZ) pool by accident.
+    gh variable delete AWS_SUBNET_ID -R "$REPO" 2>/dev/null || true
 
     gh variable set AWS_SECURITY_GROUP_ID --body "$SG_ID" -R "$REPO"
     print_info "AWS_SECURITY_GROUP_ID = $SG_ID"
