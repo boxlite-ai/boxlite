@@ -76,8 +76,9 @@ impl BoxBackend for RestBox {
         let box_id = self.box_id_str();
         let path = format!("/boxes/{}/start", box_id);
         let resp: BoxResponse = self.client.post_empty(&path).await?;
+        let new_info = resp.to_box_info()?;
         let mut info = self.cached_info.write();
-        *info = resp.to_box_info();
+        *info = new_info;
         Ok(())
     }
 
@@ -147,8 +148,9 @@ impl BoxBackend for RestBox {
         let box_id = self.box_id_str();
         let path = format!("/boxes/{}/stop", box_id);
         let resp: BoxResponse = self.client.post_empty(&path).await?;
+        let new_info = resp.to_box_info()?;
         let mut info = self.cached_info.write();
-        *info = resp.to_box_info();
+        *info = new_info;
         Ok(())
     }
 
@@ -241,7 +243,7 @@ impl BoxBackend for RestBox {
         let req = CloneBoxRequest::from_options(&options, name.as_deref());
         let resp: BoxResponse = self.client.post(&path, &req).await?;
 
-        let info = resp.to_box_info();
+        let info = resp.to_box_info()?;
         let rest_box = Arc::new(RestBox::new(self.client.clone(), info));
         let box_backend: Arc<dyn BoxBackend> = rest_box.clone();
         let snapshot_backend: Arc<dyn SnapshotBackend> = rest_box;

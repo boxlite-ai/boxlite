@@ -36,7 +36,7 @@ impl RuntimeBackend for RestRuntime {
     async fn create(&self, options: BoxOptions, name: Option<String>) -> BoxliteResult<LiteBox> {
         let req = CreateBoxRequest::from_options(&options, name);
         let resp: BoxResponse = self.client.post("/boxes", &req).await?;
-        let info = resp.to_box_info();
+        let info = resp.to_box_info()?;
         let rest_box = Arc::new(RestBox::new(self.client.clone(), info));
         Ok(litebox_from_rest(rest_box))
     }
@@ -61,7 +61,7 @@ impl RuntimeBackend for RestRuntime {
         let path = format!("/boxes/{}", id_or_name);
         match self.client.get::<BoxResponse>(&path).await {
             Ok(resp) => {
-                let info = resp.to_box_info();
+                let info = resp.to_box_info()?;
                 let rest_box = Arc::new(RestBox::new(self.client.clone(), info));
                 Ok(Some(litebox_from_rest(rest_box)))
             }
@@ -73,7 +73,7 @@ impl RuntimeBackend for RestRuntime {
     async fn get_info(&self, id_or_name: &str) -> BoxliteResult<Option<BoxInfo>> {
         let path = format!("/boxes/{}", id_or_name);
         match self.client.get::<BoxResponse>(&path).await {
-            Ok(resp) => Ok(Some(resp.to_box_info())),
+            Ok(resp) => Ok(Some(resp.to_box_info()?)),
             Err(BoxliteError::NotFound(_)) => Ok(None),
             Err(e) => Err(e),
         }
@@ -81,7 +81,7 @@ impl RuntimeBackend for RestRuntime {
 
     async fn list_info(&self) -> BoxliteResult<Vec<BoxInfo>> {
         let resp: ListBoxesResponse = self.client.get("/boxes").await?;
-        Ok(resp.boxes.iter().map(|b| b.to_box_info()).collect())
+        resp.boxes.iter().map(|b| b.to_box_info()).collect()
     }
 
     async fn exists(&self, id_or_name: &str) -> BoxliteResult<bool> {
@@ -136,7 +136,7 @@ impl RuntimeBackend for RestRuntime {
             .post_bytes_for_json("/boxes/import", archive_bytes, &query)
             .await?;
 
-        let info = resp.to_box_info();
+        let info = resp.to_box_info()?;
         let rest_box = Arc::new(RestBox::new(self.client.clone(), info));
         Ok(litebox_from_rest(rest_box))
     }

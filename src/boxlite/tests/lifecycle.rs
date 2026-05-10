@@ -3,7 +3,7 @@
 mod common;
 
 use boxlite::BoxliteRuntime;
-use boxlite::runtime::id::BoxID;
+use boxlite::runtime::id::{BoxID, BoxIDMint};
 use boxlite::runtime::options::{BoxOptions, BoxliteOptions};
 use boxlite::runtime::types::BoxStatus;
 
@@ -40,9 +40,11 @@ async fn create_generates_unique_ids() {
     // IDs should be unique
     assert_ne!(box1.id(), box2.id());
 
-    // IDs should be 12-char Base62 format
-    assert_eq!(box1.id().as_str().len(), BoxID::FULL_LENGTH);
-    assert_eq!(box2.id().as_str().len(), BoxID::FULL_LENGTH);
+    // Locally minted IDs are 12-char Base62 (BoxIDMint::MINT_LENGTH).
+    // BoxID::is_valid is permissive about server-issued formats; this
+    // test pins the local mint policy specifically.
+    assert_eq!(box1.id().as_str().len(), BoxIDMint::MINT_LENGTH);
+    assert_eq!(box2.id().as_str().len(), BoxIDMint::MINT_LENGTH);
 
     // Cleanup
     box1.stop().await.unwrap();
