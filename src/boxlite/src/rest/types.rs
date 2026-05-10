@@ -630,9 +630,13 @@ mod tests {
 
     #[test]
     fn test_box_response_to_box_info_unparseable() {
-        // Garbage box_id must produce a propagated error, not a silent mint.
-        let resp = BoxResponse {
-            box_id: "not-an-id".to_string(),
+        // BoxID is opaque server-issued — most strings parse. The only
+        // shapes that must propagate a parse error are the ones that
+        // would corrupt URLs / on-disk paths if accepted: empty, oversized,
+        // or containing path-traversal / URL-unsafe characters. This is
+        // the belt-and-suspenders against the old silent-mint bug.
+        let mk = |bad_id: &str| BoxResponse {
+            box_id: bad_id.to_string(),
             name: None,
             status: "running".to_string(),
             created_at: "2024-01-01T00:00:00Z".to_string(),
@@ -643,7 +647,10 @@ mod tests {
             memory_mib: 256,
             labels: HashMap::new(),
         };
-        assert!(resp.to_box_info().is_err());
+        assert!(mk("").to_box_info().is_err(), "empty");
+        assert!(mk("a/b").to_box_info().is_err(), "slash");
+        assert!(mk("a b").to_box_info().is_err(), "whitespace");
+        assert!(mk("a.b").to_box_info().is_err(), "dot");
     }
 
     #[test]

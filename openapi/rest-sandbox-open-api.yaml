@@ -1014,11 +1014,13 @@ components:
       in: path
       required: true
       description: |
-        Box identifier. Accepts any of:
-        - Full ULID (26 characters, e.g., `01HJK4TNRPQSXYZ8WM6NCVT9R5`)
-        - 12-character Base62 (e.g., `aB3cD4eF5gH6`)
-        - UUID (8-4-4-4-12 hex, e.g., `d406c59d-eb09-4bc3-9b3a-62455c7e8f32`)
-        - User-defined name (e.g., `my-sandbox`)
+        Server-assigned opaque box identifier, or a user-defined name.
+        Clients MUST treat the value as opaque and pass it back verbatim
+        in subsequent box-scoped requests. Examples seen in deployed
+        servers (non-normative): ULID (`01HJK4TNRPQSXYZ8WM6NCVT9R5`),
+        12-character Base62 (`aB3cD4eF5gH6`), UUID
+        (`d406c59d-eb09-4bc3-9b3a-62455c7e8f32`), prefixed (`sb_abc123`),
+        user-defined name (`my-sandbox`).
       schema:
         type: string
         minLength: 1
@@ -1351,14 +1353,15 @@ components:
         box_id:
           type: string
           description: |
-            Server-assigned identifier. Implementations may use any of:
-            - 26-character ULID (`^[0-9A-Z]{26}$`)
-            - 12-character Base62 (`^[0-9A-Za-z]{12}$`)
-            - UUID (`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
-            Clients MUST treat the value as opaque and pass it back verbatim
-            in subsequent box-scoped requests.
-          minLength: 12
-          maxLength: 36
+            Server-assigned opaque identifier. Clients MUST treat the value
+            as opaque and pass it back verbatim in subsequent box-scoped
+            requests. The server is the authority on identifier format —
+            implementations have used 26-character ULID, 12-character
+            Base62, UUID, prefixed strings (`sb_abc123`), and other shapes.
+            Clients should accept any printable URL-/path-safe string up
+            to the documented length bound.
+          minLength: 1
+          maxLength: 128
           example: 01HJK4TNRPQSXYZ8WM6NCVT9R5
         name:
           type: string
