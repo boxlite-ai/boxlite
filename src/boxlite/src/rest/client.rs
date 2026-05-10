@@ -27,12 +27,21 @@ struct TokenCache {
 #[derive(Clone)]
 pub(crate) struct ApiClient {
     http: Client,
+    /// Separate client for long-lived streaming endpoints (SSE).
+    /// No total request timeout — relies on connection-level keepalive
+    /// and the underlying stream's own lifecycle.
+    streaming: Client,
     base_url: String,
     prefix: String,
     client_id: Option<String>,
     client_secret: Option<String>,
     token_cache: Arc<RwLock<Option<TokenCache>>>,
     config_cache: Arc<RwLock<Option<SandboxConfigResponse>>>,
+    /// Opt-in cap on SSE-without-meaningful-events from
+    /// `BoxliteRestOptions::sse_silence_max`. `None` (default) means
+    /// no bound. Forwarded to the SSE reader via
+    /// [`ApiClient::sse_silence_max`].
+    sse_silence_max: Option<std::time::Duration>,
 }
 
 impl ApiClient {
@@ -42,18 +51,45 @@ impl ApiClient {
             .build()
             .map_err(|e| BoxliteError::Config(format!("failed to create HTTP client: {}", e)))?;
 
+        // Streaming client: no overall timeout — SSE/WS streams stay open
+        // for the lifetime of the underlying execution. Connection setup
+        // still uses a sane upper bound.
+        let streaming = Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(30))
+            .build()
+            .map_err(|e| {
+                BoxliteError::Config(format!("failed to create streaming HTTP client: {}", e))
+            })?;
+
         let base_url = config.url.trim_end_matches('/').to_string();
         let prefix = config.effective_prefix().to_string();
 
         Ok(Self {
             http,
+            streaming,
             base_url,
             prefix,
             client_id: config.client_id.clone(),
             client_secret: config.client_secret.clone(),
             token_cache: Arc::new(RwLock::new(None)),
             config_cache: Arc::new(RwLock::new(None)),
+            sse_silence_max: config.sse_silence_max,
         })
+    }
+
+    /// Maximum allowed SSE silence (no stdout/stderr/exit events) before
+    /// `Execution::wait()` synthesises a transport-failure result. `None`
+    /// (default) means unbounded — see `BoxliteRestOptions::sse_silence_max`.
+    pub(crate) fn sse_silence_max(&self) -> Option<std::time::Duration> {
+        self.sse_silence_max
+    }
+
+    /// Build an authorized GET against the streaming client (no total timeout).
+    /// Use only for endpoints that hold a long-lived response body open
+    /// (e.g. SSE `/output`).
+    pub async fn authorized_streaming_get(&self, path: &str) -> BoxliteResult<RequestBuilder> {
+        let builder = self.streaming.get(self.url(path));
+        self.authorize(builder).await
     }
 
     /// Build the full URL for a path under the versioned prefix.
@@ -286,12 +322,6 @@ impl ApiClient {
     #[allow(dead_code)]
     pub fn raw_client(&self) -> &Client {
         &self.http
-    }
-
-    /// Build an authorized GET request (for SSE streaming).
-    pub async fn authorized_get(&self, path: &str) -> BoxliteResult<RequestBuilder> {
-        let builder = self.http.get(self.url(path));
-        self.authorize(builder).await
     }
 
     /// Build an authorized request (for custom operations like file upload/download).

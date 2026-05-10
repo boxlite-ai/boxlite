@@ -53,12 +53,16 @@ impl BoxID {
     /// Length of legacy box IDs (26-char ULID).
     pub const LEGACY_LENGTH: usize = 26;
 
+    /// Length of UUID-format box IDs from REST servers (36 chars, 8-4-4-4-12).
+    pub const UUID_LENGTH: usize = 36;
+
     /// Length of short box ID for display (8 chars).
     pub const SHORT_LENGTH: usize = 8;
 
     /// Parse a BoxID from an existing string.
     ///
-    /// Accepts 12-char Base62 (new format) or 26-char ULID (legacy format).
+    /// Accepts 12-char Base62 (new format), 26-char ULID (legacy format),
+    /// or 36-char UUID (REST server format).
     pub fn parse(s: &str) -> Option<Self> {
         if Self::is_valid(s) {
             Some(Self(s.to_string()))
@@ -67,10 +71,18 @@ impl BoxID {
         }
     }
 
-    /// Check if a string is a valid box ID format (12-char Base62 or 26-char ULID).
+    /// Check if a string is a valid box ID format.
+    ///
+    /// Accepted formats:
+    /// - 12-char Base62 (locally minted)
+    /// - 26-char ULID (legacy)
+    /// - 36-char UUID (REST server, e.g. `d406c59d-eb09-4bc3-9b3a-62455c7e8f32`)
     pub fn is_valid(s: &str) -> bool {
-        (s.len() == Self::FULL_LENGTH || s.len() == Self::LEGACY_LENGTH)
-            && s.bytes().all(|b| b.is_ascii_alphanumeric())
+        match s.len() {
+            Self::FULL_LENGTH | Self::LEGACY_LENGTH => s.bytes().all(|b| b.is_ascii_alphanumeric()),
+            Self::UUID_LENGTH => is_uuid_format(s),
+            _ => false,
+        }
     }
 
     /// Get the full box ID as a string slice.
@@ -117,6 +129,25 @@ impl ToSql for BoxID {
     fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
         Ok(ToSqlOutput::Borrowed(ValueRef::Text(self.0.as_bytes())))
     }
+}
+
+/// Validate a 36-character UUID string of the form 8-4-4-4-12 hex digits.
+fn is_uuid_format(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    if bytes.len() != 36 {
+        return false;
+    }
+    for (i, &b) in bytes.iter().enumerate() {
+        let want_hyphen = matches!(i, 8 | 13 | 18 | 23);
+        if want_hyphen {
+            if b != b'-' {
+                return false;
+            }
+        } else if !b.is_ascii_hexdigit() {
+            return false;
+        }
+    }
+    true
 }
 
 // ============================================================================
@@ -294,6 +325,12 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_uuid() {
+        assert!(BoxID::parse("d406c59d-eb09-4bc3-9b3a-62455c7e8f32").is_some());
+        assert!(BoxID::parse("00000000-0000-0000-0000-000000000000").is_some());
+    }
+
+    #[test]
     fn test_parse_invalid() {
         assert!(BoxID::parse("abc").is_none(), "too short");
         assert!(BoxID::parse("aB3cD4eF5gH6X").is_none(), "13 chars");
@@ -301,6 +338,14 @@ mod tests {
         assert!(
             BoxID::parse("0123456789012345678901234").is_none(),
             "25 chars"
+        );
+        assert!(
+            BoxID::parse("d406c59d-eb09-4bc3-9b3a-62455c7e8f3z").is_none(),
+            "36 chars but non-hex"
+        );
+        assert!(
+            BoxID::parse("d406c59deb09-4bc3-9b3a-62455c7e8f32x").is_none(),
+            "36 chars but hyphens misplaced"
         );
     }
 

@@ -37,6 +37,21 @@ pub struct BoxliteRestOptions {
 
     /// API path prefix (default: "v1").
     pub prefix: Option<String>,
+
+    /// Maximum time the SSE output stream may remain silent (no
+    /// stdout/stderr/exit events; SSE keepalive comments do NOT
+    /// reset this timer) before `Execution::wait()` returns a
+    /// transport-failure result with `exit_code = -1`.
+    ///
+    /// `None` (the default) means *no bound* — a legitimately
+    /// silent long-running command (`sleep 86400`, idle daemon)
+    /// will not be killed by the SDK. Set to `Some(duration)`
+    /// when you have a known time bound (CI, smoke tests, demos)
+    /// and would rather see a transport-failure than a hang in
+    /// the pathological case where the server holds the SSE
+    /// stream open with keepalives but never emits an `exit`
+    /// event.
+    pub sse_silence_max: Option<std::time::Duration>,
 }
 
 impl BoxliteRestOptions {
@@ -47,6 +62,7 @@ impl BoxliteRestOptions {
             client_id: None,
             client_secret: None,
             prefix: None,
+            sse_silence_max: None,
         }
     }
 
@@ -65,6 +81,7 @@ impl BoxliteRestOptions {
             client_id: std::env::var(envs::BOXLITE_REST_CLIENT_ID).ok(),
             client_secret: std::env::var(envs::BOXLITE_REST_CLIENT_SECRET).ok(),
             prefix: std::env::var(envs::BOXLITE_REST_PREFIX).ok(),
+            sse_silence_max: None,
         })
     }
 
@@ -78,6 +95,14 @@ impl BoxliteRestOptions {
     /// Builder-style: set API path prefix (default: "v1").
     pub fn with_prefix(mut self, prefix: String) -> Self {
         self.prefix = Some(prefix);
+        self
+    }
+
+    /// Builder-style: set the SSE silence cap.
+    ///
+    /// See [`BoxliteRestOptions::sse_silence_max`] for semantics.
+    pub fn with_sse_silence_max(mut self, duration: std::time::Duration) -> Self {
+        self.sse_silence_max = Some(duration);
         self
     }
 
@@ -130,5 +155,21 @@ mod tests {
         assert_eq!(opts.client_id.as_deref(), Some("cid"));
         assert_eq!(opts.client_secret.as_deref(), Some("csec"));
         assert_eq!(opts.effective_prefix(), "v3");
+    }
+
+    #[test]
+    fn test_sse_silence_max_default_none() {
+        let opts = BoxliteRestOptions::new("https://api.example.com");
+        assert!(opts.sse_silence_max.is_none());
+    }
+
+    #[test]
+    fn test_with_sse_silence_max() {
+        let opts = BoxliteRestOptions::new("https://api.example.com")
+            .with_sse_silence_max(std::time::Duration::from_secs(120));
+        assert_eq!(
+            opts.sse_silence_max,
+            Some(std::time::Duration::from_secs(120))
+        );
     }
 }

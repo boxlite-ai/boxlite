@@ -208,10 +208,16 @@ pub(crate) struct BoxResponse {
 }
 
 impl BoxResponse {
-    pub fn to_box_info(&self) -> crate::BoxInfo {
-        use crate::runtime::id::{BoxID, BoxIDMint};
+    pub fn to_box_info(&self) -> boxlite_shared::errors::BoxliteResult<crate::BoxInfo> {
+        use crate::runtime::id::BoxID;
+        use boxlite_shared::errors::BoxliteError;
 
-        let id = BoxID::parse(&self.box_id).unwrap_or_else(BoxIDMint::mint);
+        let id = BoxID::parse(&self.box_id).ok_or_else(|| {
+            BoxliteError::Internal(format!(
+                "REST server returned unparseable box_id: {:?} (expected 12-char Base62 or 26-char ULID)",
+                self.box_id
+            ))
+        })?;
 
         let status = parse_box_status(&self.status);
 
@@ -223,7 +229,7 @@ impl BoxResponse {
             .map(|dt| dt.with_timezone(&chrono::Utc))
             .unwrap_or_else(|_| chrono::Utc::now());
 
-        crate::BoxInfo {
+        Ok(crate::BoxInfo {
             id,
             name: self.name.clone(),
             status,
@@ -235,7 +241,7 @@ impl BoxResponse {
             memory_mib: self.memory_mib,
             labels: self.labels.clone(),
             health_status: crate::litebox::HealthStatus::new(), // REST API doesn't provide health status
-        }
+        })
     }
 }
 
@@ -358,6 +364,27 @@ impl ExecRequest {
 #[derive(Debug, Deserialize)]
 pub(crate) struct ExecResponse {
     pub execution_id: String,
+}
+
+/// Mirrors the OpenAPI `ExecutionInfo` schema returned by
+/// `GET /boxes/{box_id}/executions/{exec_id}`.
+#[derive(Debug, Deserialize)]
+pub(crate) struct ExecutionInfoResponse {
+    #[allow(dead_code)]
+    pub execution_id: String,
+    /// One of: `running`, `completed`, `killed`, `timed_out`.
+    pub status: String,
+    pub exit_code: Option<i32>,
+    pub error_message: Option<String>,
+}
+
+impl ExecutionInfoResponse {
+    pub fn is_terminal(&self) -> bool {
+        matches!(
+            self.status.as_str(),
+            "completed" | "killed" | "timed_out" | "failed"
+        )
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -573,11 +600,50 @@ mod tests {
             memory_mib: 512,
             labels: HashMap::new(),
         };
-        let info = resp.to_box_info();
+        let info = resp.to_box_info().expect("valid ULID box_id should parse");
         assert_eq!(info.name.as_deref(), Some("mybox"));
         assert_eq!(info.image, "python:3.11");
         assert_eq!(info.cpus, 2);
         assert_eq!(info.memory_mib, 512);
+    }
+
+    #[test]
+    fn test_box_response_to_box_info_uuid() {
+        // Servers (e.g. dev.boxlite.ai) may return UUIDs as box_id.
+        // Verify the SDK accepts them and round-trips the id verbatim.
+        let resp = BoxResponse {
+            box_id: "d406c59d-eb09-4bc3-9b3a-62455c7e8f32".to_string(),
+            name: Some("uuid-box".to_string()),
+            status: "running".to_string(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            updated_at: "2024-01-01T00:01:00Z".to_string(),
+            pid: Some(5678),
+            image: "alpine:latest".to_string(),
+            cpus: 1,
+            memory_mib: 256,
+            labels: HashMap::new(),
+        };
+        let info = resp.to_box_info().expect("UUID box_id should parse");
+        assert_eq!(info.id.as_str(), "d406c59d-eb09-4bc3-9b3a-62455c7e8f32");
+        assert_eq!(info.name.as_deref(), Some("uuid-box"));
+    }
+
+    #[test]
+    fn test_box_response_to_box_info_unparseable() {
+        // Garbage box_id must produce a propagated error, not a silent mint.
+        let resp = BoxResponse {
+            box_id: "not-an-id".to_string(),
+            name: None,
+            status: "running".to_string(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            updated_at: "2024-01-01T00:01:00Z".to_string(),
+            pid: None,
+            image: "alpine:latest".to_string(),
+            cpus: 1,
+            memory_mib: 256,
+            labels: HashMap::new(),
+        };
+        assert!(resp.to_box_info().is_err());
     }
 
     #[test]
@@ -642,9 +708,9 @@ mod tests {
         };
 
         // Legacy transient statuses map to Unknown (no longer valid)
-        assert_eq!(resp.to_box_info().status, BoxStatus::Unknown);
+        assert_eq!(resp.to_box_info().unwrap().status, BoxStatus::Unknown);
         resp.status = "paused".to_string();
-        assert_eq!(resp.to_box_info().status, BoxStatus::Paused);
+        assert_eq!(resp.to_box_info().unwrap().status, BoxStatus::Paused);
     }
 
     #[test]
