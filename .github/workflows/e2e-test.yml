@@ -187,13 +187,12 @@ jobs:
           modprobe kvm_intel 2>/dev/null || modprobe kvm_amd 2>/dev/null || true
           chmod 666 /dev/kvm 2>/dev/null || true
           usermod -aG kvm root 2>/dev/null || true
-          apt-get update -qq && apt-get install -y -qq make sudo git curl jq
-          if [ ! -d /opt/boxlite ]; then
-            git clone --recursive https://github.com/__REPO__.git /opt/boxlite
-          fi
-          cd /opt/boxlite && git pull --recurse-submodules || true
-          make setup
-          source "$HOME/.cargo/env"
+          # User-data only installs the actions-runner. Build deps
+          # (apt + rustup + cargo-nextest) are installed by the
+          # e2e-tests job's "Install build dependencies" step so they
+          # stream to the GitHub Actions log and don't race the
+          # runner-online poll.
+          apt-get update -qq && apt-get install -y -qq curl jq tar
           RUNNER_VERSION="__RUNNER_VERSION__"
           mkdir -p /opt/actions-runner && cd /opt/actions-runner
           if [ ! -f ./config.sh ]; then
@@ -296,7 +295,7 @@ jobs:
     runs-on:
       - self-hosted
       - boxlite-e2e
-    timeout-minutes: 35
+    timeout-minutes: 50
     env:
       CARGO_TERM_COLOR: always
       CARGO_INCREMENTAL: '0'
@@ -322,6 +321,14 @@ jobs:
           test -c /dev/kvm && test -r /dev/kvm -a -w /dev/kvm && echo "/dev/kvm is accessible" || {
             echo "::error::/dev/kvm not accessible"; exit 1
           }
+
+      - name: Install build dependencies (make setup)
+        run: |
+          # First run on a fresh instance: ~5–10 min (apt + rustup +
+          # cargo-nextest; CI=true so prek install is skipped).
+          # Subsequent runs reuse the persistent EBS volume and are
+          # idempotent fast-paths (~10–30 s).
+          bash scripts/setup/setup-ubuntu.sh
 
       - name: Run integration tests
         run: |
