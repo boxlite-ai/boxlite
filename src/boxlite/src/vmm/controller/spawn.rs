@@ -87,7 +87,7 @@ impl<'a> ShimSpawner<'a> {
         // 3. Setup pre-spawn isolation (cgroups on Linux, no-op on macOS)
         jail.prepare()?;
 
-        // 4. Build isolated command — no CLI args, config sent via stdin pipe
+        // 4. Build isolated command - no CLI args, config sent via stdin pipe
         let no_args: &[String] = &[];
         let mut cmd = jail.command(self.binary_path, no_args);
 
@@ -118,13 +118,13 @@ impl<'a> ShimSpawner<'a> {
         // producer-consumer pattern via the kernel pipe buffer. For typical
         // configs (~2-5KB), write_all completes immediately. For large configs
         // (>16KB on macOS, >64KB on Linux), write_all blocks until the child
-        // drains the buffer — which it does as its first action in main().
+        // drains the buffer - which it does as its first action in main().
         if let Some(mut stdin) = child.stdin.take() {
             use std::io::Write;
             stdin.write_all(config_json.as_bytes()).map_err(|e| {
                 BoxliteError::Engine(format!("Failed to write config to shim stdin: {e}"))
             })?;
-            drop(stdin); // close write end — shim sees EOF
+            drop(stdin); // close write end - shim sees EOF
         }
 
         // 9. Close read end in parent (child inherited it via fork)
@@ -134,6 +134,10 @@ impl<'a> ShimSpawner<'a> {
     }
 
     fn configure_env(&self, cmd: &mut std::process::Command) {
+        // Non-sensitive process marker used by recovery to validate shim PIDs
+        // without putting the full InstanceSpec back into /proc/<pid>/cmdline.
+        cmd.env("BOXLITE_BOX_ID", self.box_id);
+
         // Pass debugging environment variables to subprocess
         if let Ok(rust_log) = std::env::var("RUST_LOG") {
             cmd.env("RUST_LOG", rust_log);
@@ -198,7 +202,7 @@ mod tests {
             &options,
         );
 
-        // No CLI args — config is sent via stdin pipe
+        // No CLI args - config is sent via stdin pipe
         // Just verify the spawner was created without error
         assert_eq!(spawner.box_id, "test-box");
     }
@@ -238,6 +242,10 @@ mod tests {
         let envs: std::collections::HashMap<_, _> = cmd.get_envs().collect();
         let expected = layout.tmp_dir();
 
+        assert_eq!(
+            envs.get(OsStr::new("BOXLITE_BOX_ID")).and_then(|v| *v),
+            Some(OsStr::new("test-box"))
+        );
         assert_eq!(
             envs.get(OsStr::new("TMPDIR")).and_then(|v| *v),
             Some(expected.as_os_str())

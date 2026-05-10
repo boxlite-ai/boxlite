@@ -249,7 +249,8 @@ fn is_process_zombie_macos(pid: u32) -> bool {
 /// This prevents PID reuse attacks where a PID is recycled for a different process.
 ///
 /// # Implementation
-/// * **Linux**: Read `/proc/{pid}/cmdline` and check for "boxlite-shim" + box_id
+/// * **Linux**: Read `/proc/{pid}/cmdline` and `/proc/{pid}/environ`,
+///   then check for a boxlite-shim process tagged with BOXLITE_BOX_ID.
 /// * **macOS**: Use `sysinfo` crate to get process name and check for "boxlite-shim"
 ///
 /// # Arguments
@@ -284,16 +285,25 @@ fn is_same_process_linux(pid: u32, box_id: &str) -> bool {
     use std::fs;
 
     let cmdline_path = format!("/proc/{}/cmdline", pid);
+    let environ_path = format!("/proc/{}/environ", pid);
 
-    match fs::read_to_string(&cmdline_path) {
-        Ok(cmdline) => {
-            // cmdline is null-separated, split by \0 for proper parsing
-            let args: Vec<&str> = cmdline.split('\0').collect();
+    let Ok(cmdline) = fs::read_to_string(&cmdline_path) else {
+        return false;
+    };
 
-            // Check if any arg contains "boxlite-shim" and cmdline contains box_id
-            args.iter().any(|arg| arg.contains("boxlite-shim")) && cmdline.contains(box_id)
-        }
-        Err(_) => false, // Process doesn't exist or no permission
+    // cmdline is null-separated, split by \0 for proper parsing.
+    // The box id is intentionally not passed as an argument anymore because
+    // the full InstanceSpec is sent over stdin to keep secrets out of procfs.
+    let is_shim = cmdline.split('\0').any(|arg| arg.contains("boxlite-shim"));
+
+    if !is_shim {
+        return false;
+    }
+
+    let expected_env = format!("BOXLITE_BOX_ID={box_id}");
+    match fs::read_to_string(&environ_path) {
+        Ok(environ) => environ.split('\0').any(|entry| entry == expected_env),
+        Err(_) => false,
     }
 }
 
@@ -397,6 +407,31 @@ mod tests {
         // Invalid PID should return false
         assert!(!is_same_process(0, "test123"));
         assert!(!is_same_process(u32::MAX, "test123"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_is_same_process_linux_validates_box_id_env() {
+        use std::os::unix::process::CommandExt;
+        use std::process::{Command, Stdio};
+
+        let mut child = Command::new("sleep")
+            .arg0("boxlite-shim")
+            .arg("5")
+            .env("BOXLITE_BOX_ID", "box-env-test")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn test shim process");
+
+        let pid = child.id();
+
+        assert!(is_same_process(pid, "box-env-test"));
+        assert!(!is_same_process(pid, "other-box"));
+
+        let _ = child.kill();
+        let _ = child.wait();
     }
 
     #[test]
