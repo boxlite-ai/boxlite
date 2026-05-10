@@ -27,6 +27,17 @@ pub enum ProcessExit {
     Unknown,
 }
 
+/// Result of validating whether a live PID belongs to a specific box.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProcessIdentity {
+    /// The process is a boxlite shim for the requested box.
+    Matches,
+    /// The PID is missing, reused, or belongs to another box/process.
+    Mismatch,
+    /// The process looks like a live shim, but lacks a box marker.
+    Unverified,
+}
+
 /// Monitors a process for exit, handling both owned and attached cases.
 ///
 /// # Unix Parent/Child Constraint
@@ -261,50 +272,88 @@ fn is_process_zombie_macos(pid: u32) -> bool {
 /// * `true` - PID is our boxlite-shim process
 /// * `false` - PID is different process or doesn't exist
 pub fn is_same_process(pid: u32, box_id: &str) -> bool {
+    process_identity(pid, box_id) == ProcessIdentity::Matches
+}
+
+/// Verify whether a PID belongs to a boxlite-shim process for the given box.
+pub fn process_identity(pid: u32, box_id: &str) -> ProcessIdentity {
     #[cfg(target_os = "linux")]
     {
-        is_same_process_linux(pid, box_id)
+        process_identity_linux(pid, box_id)
     }
 
     #[cfg(target_os = "macos")]
     {
         let _ = box_id; // Unused on macOS
-        is_same_process_macos(pid)
+        if is_same_process_macos(pid) {
+            ProcessIdentity::Matches
+        } else {
+            ProcessIdentity::Mismatch
+        }
     }
 
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         // Fallback: just check if process exists
         // Not ideal but better than nothing
-        is_process_alive(pid)
+        if is_process_alive(pid) {
+            ProcessIdentity::Matches
+        } else {
+            ProcessIdentity::Mismatch
+        }
     }
 }
 
 #[cfg(target_os = "linux")]
-fn is_same_process_linux(pid: u32, box_id: &str) -> bool {
+fn process_identity_linux(pid: u32, box_id: &str) -> ProcessIdentity {
     use std::fs;
 
     let cmdline_path = format!("/proc/{}/cmdline", pid);
     let environ_path = format!("/proc/{}/environ", pid);
 
-    let Ok(cmdline) = fs::read_to_string(&cmdline_path) else {
-        return false;
+    let Ok(cmdline) = fs::read(&cmdline_path) else {
+        return ProcessIdentity::Mismatch;
     };
 
     // cmdline is null-separated, split by \0 for proper parsing.
     // The box id is intentionally not passed as an argument anymore because
     // the full InstanceSpec is sent over stdin to keep secrets out of procfs.
-    let is_shim = cmdline.split('\0').any(|arg| arg.contains("boxlite-shim"));
+    let is_shim = cmdline
+        .split(|byte| *byte == 0)
+        .any(|arg| contains_bytes(arg, b"boxlite-shim"));
 
     if !is_shim {
-        return false;
+        return ProcessIdentity::Mismatch;
     }
 
-    let expected_env = format!("BOXLITE_BOX_ID={box_id}");
-    match fs::read_to_string(&environ_path) {
-        Ok(environ) => environ.split('\0').any(|entry| entry == expected_env),
-        Err(_) => false,
+    let Ok(environ) = fs::read(&environ_path) else {
+        return ProcessIdentity::Unverified;
+    };
+
+    let mut saw_box_marker = false;
+    for entry in environ.split(|byte| *byte == 0) {
+        let Some(value) = entry.strip_prefix(b"BOXLITE_BOX_ID=") else {
+            continue;
+        };
+
+        saw_box_marker = true;
+        if value == box_id.as_bytes() {
+            return ProcessIdentity::Matches;
+        }
     }
+
+    if saw_box_marker {
+        ProcessIdentity::Mismatch
+    } else {
+        ProcessIdentity::Unverified
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack
+        .windows(needle.len())
+        .any(|window| window == needle)
 }
 
 #[cfg(target_os = "macos")]
@@ -427,8 +476,74 @@ mod tests {
 
         let pid = child.id();
 
+        assert_eq!(
+            process_identity(pid, "box-env-test"),
+            ProcessIdentity::Matches
+        );
         assert!(is_same_process(pid, "box-env-test"));
+        assert_eq!(
+            process_identity(pid, "other-box"),
+            ProcessIdentity::Mismatch
+        );
         assert!(!is_same_process(pid, "other-box"));
+
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_process_identity_linux_reads_non_utf8_environ_bytes() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+        use std::os::unix::process::CommandExt;
+        use std::process::{Command, Stdio};
+
+        let mut child = Command::new("sleep")
+            .arg0("boxlite-shim")
+            .arg("5")
+            .env("BAD_UTF8", OsString::from_vec(vec![0x66, 0x80, 0x6f]))
+            .env("BOXLITE_BOX_ID", "box-env-test")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn test shim process");
+
+        let pid = child.id();
+
+        assert_eq!(
+            process_identity(pid, "box-env-test"),
+            ProcessIdentity::Matches
+        );
+        assert!(is_same_process(pid, "box-env-test"));
+
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_process_identity_linux_unverified_without_box_marker() {
+        use std::os::unix::process::CommandExt;
+        use std::process::{Command, Stdio};
+
+        let mut child = Command::new("sleep")
+            .arg0("boxlite-shim")
+            .arg("5")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn legacy shim process");
+
+        let pid = child.id();
+
+        assert_eq!(
+            process_identity(pid, "box-env-test"),
+            ProcessIdentity::Unverified
+        );
+        assert!(!is_same_process(pid, "box-env-test"));
 
         let _ = child.kill();
         let _ = child.wait();

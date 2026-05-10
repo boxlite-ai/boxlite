@@ -1055,7 +1055,7 @@ impl RuntimeImpl {
 
     /// Recover boxes from persistent storage on runtime startup.
     fn recover_boxes(&self) -> BoxliteResult<()> {
-        use crate::util::{is_process_alive, is_same_process};
+        use crate::util::{is_process_alive, process_identity, ProcessIdentity};
 
         // Check for system reboot and reset active boxes
         self.box_manager.check_and_handle_reboot()?;
@@ -1195,8 +1195,11 @@ impl RuntimeImpl {
 
             if pid_file.exists() {
                 match crate::util::read_pid_file(&pid_file) {
-                    Ok(pid) => {
-                        if is_process_alive(pid) && is_same_process(pid, box_id.as_str()) {
+                    Ok(pid) => match (
+                        is_process_alive(pid),
+                        process_identity(pid, box_id.as_str()),
+                    ) {
+                        (true, ProcessIdentity::Matches) => {
                             // Process is alive and it's our boxlite-shim - box stays Running
                             state.set_pid(Some(pid));
                             state.set_status(BoxStatus::Running);
@@ -1205,7 +1208,19 @@ impl RuntimeImpl {
                                 pid = pid,
                                 "Recovered running box from PID file"
                             );
-                        } else {
+                        }
+                        (true, ProcessIdentity::Unverified) => {
+                            // Older detached shims may predate BOXLITE_BOX_ID. Preserve
+                            // the PID file and avoid deleting a live VM we cannot prove.
+                            state.set_pid(Some(pid));
+                            state.set_status(BoxStatus::Unknown);
+                            tracing::warn!(
+                                box_id = %box_id,
+                                pid = pid,
+                                "Box shim is live but unverified, marking as Unknown"
+                            );
+                        }
+                        _ => {
                             // Process died or PID was reused - clean up and mark as Stopped
                             let _ = std::fs::remove_file(&pid_file);
                             state.mark_stop();
@@ -1215,7 +1230,7 @@ impl RuntimeImpl {
                                 "Box process dead, cleaned up stale PID file"
                             );
                         }
-                    }
+                    },
                     Err(e) => {
                         // Can't read PID file - clean up and mark as Stopped
                         let _ = std::fs::remove_file(&pid_file);
@@ -2076,6 +2091,47 @@ mod tests {
         let (_, db_state) = runtime.box_manager.box_by_id(&config.id).unwrap().unwrap();
         assert_eq!(db_state.status, BoxStatus::Stopped);
         assert!(db_state.pid.is_none());
+
+        child.kill().ok();
+        child.wait().ok();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_recovery_marks_unverified_live_shim_unknown() {
+        use std::os::unix::process::CommandExt;
+
+        let (runtime, _dir) = create_test_runtime();
+
+        let mut child = std::process::Command::new("sleep")
+            .arg0("boxlite-shim")
+            .arg("300")
+            .spawn()
+            .expect("Failed to spawn legacy shim process");
+        let pid = child.id();
+
+        let config = test_box_config_in_layout(false, &runtime);
+        let state = running_state(pid);
+
+        let box_dir = runtime.layout.boxes_dir().join(config.id.as_str());
+        std::fs::create_dir_all(&box_dir).expect("Failed to create box directory");
+        let pid_file = box_dir.join("shim.pid");
+        std::fs::write(&pid_file, pid.to_string()).expect("Failed to write PID file");
+
+        runtime
+            .box_manager
+            .add_box(&config, &state)
+            .expect("Failed to add box");
+
+        runtime.recover_boxes().expect("Failed to recover boxes");
+
+        let (_, db_state) = runtime.box_manager.box_by_id(&config.id).unwrap().unwrap();
+        assert_eq!(db_state.status, BoxStatus::Unknown);
+        assert_eq!(db_state.pid, Some(pid));
+        assert!(
+            pid_file.exists(),
+            "Unverified live shim PID file should be preserved"
+        );
 
         child.kill().ok();
         child.wait().ok();
