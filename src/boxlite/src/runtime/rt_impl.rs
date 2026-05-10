@@ -1055,7 +1055,7 @@ impl RuntimeImpl {
 
     /// Recover boxes from persistent storage on runtime startup.
     fn recover_boxes(&self) -> BoxliteResult<()> {
-        use crate::util::{is_process_alive, process_identity, ProcessIdentity};
+        use crate::util::{ProcessIdentity, is_process_alive, process_identity};
 
         // Check for system reboot and reset active boxes
         self.box_manager.check_and_handle_reboot()?;

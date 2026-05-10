@@ -13,7 +13,8 @@ use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, fmt};
 
 pub use process::{
-    ProcessExit, ProcessMonitor, is_process_alive, is_same_process, kill_process, read_pid_file,
+    ProcessExit, ProcessIdentity, ProcessMonitor, is_process_alive, is_same_process, kill_process,
+    process_identity, read_pid_file,
 };
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
