@@ -14,7 +14,9 @@ mod snapshots;
 mod util;
 mod volumes;
 
-use crate::advanced_options::{PyAdvancedBoxOptions, PyHealthCheckOptions, PySecurityOptions};
+use crate::advanced_options::{
+    PyAdvancedBoxOptions, PyHealthCheckOptions, PyRestartPolicy, PySecurityOptions,
+};
 use crate::box_handle::PyBox;
 use crate::exec::{PyExecStderr, PyExecStdin, PyExecStdout, PyExecution};
 use crate::images::{PyImageHandle, PyImageInfo, PyImagePullResult};
@@ -39,6 +41,7 @@ fn boxlite_python(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyNetworkSpec>()?;
     m.add_class::<PySecurityOptions>()?;
     m.add_class::<PyHealthCheckOptions>()?;
+    m.add_class::<PyRestartPolicy>()?;
     m.add_class::<PyAdvancedBoxOptions>()?;
     m.add_class::<PyBoxlite>()?;
     m.add_class::<PyBox>()?;
