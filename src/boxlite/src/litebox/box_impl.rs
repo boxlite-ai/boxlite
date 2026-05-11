@@ -359,6 +359,28 @@ impl BoxImpl {
             if let Ok(mut handler) = live.handler.lock() {
                 handler.stop()?;
             }
+        } else {
+            let (status, pid) = {
+                let state = self.state.read();
+                (state.status, state.pid)
+            };
+
+            if let Some(pid) = pid
+                && !matches!(status, BoxStatus::Configured | BoxStatus::Stopped)
+            {
+                tracing::warn!(
+                    box_id = %self.config.id,
+                    pid = pid,
+                    status = ?status,
+                    "Stopping recovered box process without live state"
+                );
+                if !crate::util::kill_process(pid) {
+                    return Err(BoxliteError::InvalidState(format!(
+                        "failed to kill box process {}",
+                        pid
+                    )));
+                }
+            }
         }
 
         // Clean up PID file (single source of truth)
@@ -622,6 +644,16 @@ impl BoxImpl {
 
         let state = self.state.read().clone();
         let is_first_start = state.status == BoxStatus::Configured;
+
+        if !matches!(
+            state.status,
+            BoxStatus::Configured | BoxStatus::Stopped | BoxStatus::Running
+        ) {
+            return Err(BoxliteError::InvalidState(format!(
+                "Cannot initialize box {} in {} state",
+                self.config.id, state.status
+            )));
+        }
 
         // Retrieve the lock (allocated in create())
         let lock_id = state.lock_id.ok_or_else(|| {

@@ -780,11 +780,11 @@ impl RuntimeImpl {
         if let Some((config, state)) = self.box_manager.box_by_id(id)? {
             // Box exists in database - handle as before
             let mut state = state;
-            if state.status.is_active() {
+            if state.status.is_active() || state.pid.is_some() {
                 if force {
                     // Force mode: kill the process directly
                     if let Some(pid) = state.pid {
-                        tracing::info!(box_id = %id, pid = pid, "Force killing active box");
+                        tracing::info!(box_id = %id, pid = pid, "Force killing box process");
                         crate::util::kill_process(pid);
                     }
                     // Update status to stopped and save
@@ -794,8 +794,8 @@ impl RuntimeImpl {
                 } else {
                     // Non-force mode: error on active box
                     return Err(BoxliteError::InvalidState(format!(
-                        "cannot remove active box {} (status: {:?}). Use force=true to stop first",
-                        id, state.status
+                        "cannot remove box {} with live pid {:?} (status: {:?}). Use force=true to stop first",
+                        id, state.pid, state.status
                     )));
                 }
             }
@@ -1164,6 +1164,7 @@ impl RuntimeImpl {
         for (config, mut state) in persisted {
             let box_id = &config.id;
             let original_status = state.status;
+            let original_pid = state.pid;
 
             // Reclaim the lock for this box if one was allocated
             if let Some(lock_id) = state.lock_id {
@@ -1211,13 +1212,14 @@ impl RuntimeImpl {
                         }
                         (true, ProcessIdentity::Unverified) => {
                             // Older detached shims may predate BOXLITE_BOX_ID. Preserve
-                            // the PID file and avoid deleting a live VM we cannot prove.
+                            // the PID file and recover them as Running so lifecycle ops
+                            // keep treating the live VM as active.
                             state.set_pid(Some(pid));
-                            state.set_status(BoxStatus::Unknown);
+                            state.set_status(BoxStatus::Running);
                             tracing::warn!(
                                 box_id = %box_id,
                                 pid = pid,
-                                "Box shim is live but unverified, marking as Unknown"
+                                "Recovered legacy running box from unmarked shim PID file"
                             );
                         }
                         _ => {
@@ -1255,7 +1257,7 @@ impl RuntimeImpl {
             }
 
             // Save updated state to database if changed
-            if state.status != original_status {
+            if state.status != original_status || state.pid != original_pid {
                 self.box_manager.save_box(box_id, &state)?;
             }
         }
@@ -2098,7 +2100,7 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn test_recovery_marks_unverified_live_shim_unknown() {
+    fn test_recovery_marks_unverified_live_shim_running() {
         use std::os::unix::process::CommandExt;
 
         let (runtime, _dir) = create_test_runtime();
@@ -2126,7 +2128,7 @@ mod tests {
         runtime.recover_boxes().expect("Failed to recover boxes");
 
         let (_, db_state) = runtime.box_manager.box_by_id(&config.id).unwrap().unwrap();
-        assert_eq!(db_state.status, BoxStatus::Unknown);
+        assert_eq!(db_state.status, BoxStatus::Running);
         assert_eq!(db_state.pid, Some(pid));
         assert!(
             pid_file.exists(),
@@ -2135,6 +2137,125 @@ mod tests {
 
         child.kill().ok();
         child.wait().ok();
+    }
+
+    #[test]
+    fn test_remove_box_refuses_live_pid_without_force_even_unknown() {
+        let (runtime, _dir) = create_test_runtime();
+
+        let (pid, mut child) = spawn_dummy_process();
+        let config = test_box_config_in_layout(false, &runtime);
+        let mut state = BoxState::new();
+        state.set_status(BoxStatus::Unknown);
+        state.set_pid(Some(pid));
+        let lock_id = runtime.lock_manager.allocate().expect("Failed to allocate lock");
+        state.set_lock_id(lock_id);
+
+        runtime
+            .box_manager
+            .add_box(&config, &state)
+            .expect("Failed to add box");
+
+        let result = runtime.remove_box(&config.id, false);
+        assert!(result.is_err());
+        assert!(
+            crate::util::is_process_alive(pid),
+            "Non-force remove must not orphan or kill the live process"
+        );
+        assert!(
+            runtime.box_manager.box_by_id(&config.id).unwrap().is_some(),
+            "Box should remain in DB after rejected remove"
+        );
+
+        runtime
+            .remove_box(&config.id, true)
+            .expect("Force remove should kill process and remove box");
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert!(
+            !crate::util::is_process_alive(pid),
+            "Force remove should kill the live process"
+        );
+        assert!(runtime.box_manager.box_by_id(&config.id).unwrap().is_none());
+
+        child.wait().ok();
+    }
+
+    #[tokio::test]
+    async fn test_stop_kills_recovered_pid_without_live_state() {
+        let (runtime, _dir) = create_test_runtime();
+
+        let (pid, mut child) = spawn_dummy_process();
+        let config = test_box_config_in_layout(false, &runtime);
+        let mut state = running_state(pid);
+        let lock_id = runtime.lock_manager.allocate().expect("Failed to allocate lock");
+        state.set_lock_id(lock_id);
+
+        let box_dir = runtime.layout.boxes_dir().join(config.id.as_str());
+        std::fs::create_dir_all(&box_dir).expect("Failed to create box directory");
+        let pid_file = box_dir.join("shim.pid");
+        std::fs::write(&pid_file, pid.to_string()).expect("Failed to write PID file");
+
+        runtime
+            .box_manager
+            .add_box(&config, &state)
+            .expect("Failed to add box");
+
+        let litebox = runtime
+            .get(config.id.as_str())
+            .await
+            .expect("Failed to get box")
+            .expect("Box should exist");
+
+        litebox.stop().await.expect("Stop should succeed");
+
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert!(
+            !crate::util::is_process_alive(pid),
+            "Stop should kill recovered process when no LiveState is cached"
+        );
+        assert!(!pid_file.exists(), "PID file should be removed on stop");
+
+        let (_, db_state) = runtime.box_manager.box_by_id(&config.id).unwrap().unwrap();
+        assert_eq!(db_state.status, BoxStatus::Stopped);
+        assert!(db_state.pid.is_none());
+
+        child.wait().ok();
+    }
+
+    #[tokio::test]
+    async fn test_exec_unknown_state_returns_error_without_panic() {
+        use crate::litebox::BoxCommand;
+
+        let (runtime, _dir) = create_test_runtime();
+
+        let config = test_box_config_in_layout(false, &runtime);
+        let mut state = BoxState::new();
+        state.set_status(BoxStatus::Unknown);
+        let lock_id = runtime.lock_manager.allocate().expect("Failed to allocate lock");
+        state.set_lock_id(lock_id);
+
+        runtime
+            .box_manager
+            .add_box(&config, &state)
+            .expect("Failed to add box");
+
+        let litebox = runtime
+            .get(config.id.as_str())
+            .await
+            .expect("Failed to get box")
+            .expect("Box should exist");
+
+        let result = litebox.exec(BoxCommand::new("true")).await;
+        match result {
+            Err(BoxliteError::InvalidState(msg)) => {
+                assert!(
+                    msg.contains("Cannot initialize box"),
+                    "Expected initialization state error, got: {msg}"
+                );
+            }
+            Err(other) => panic!("Expected InvalidState error, got: {other}"),
+            Ok(_) => panic!("Expected InvalidState error, got success"),
+        }
     }
 
     // ====================================================================

@@ -327,7 +327,7 @@ fn process_identity_linux(pid: u32, box_id: &str) -> ProcessIdentity {
     }
 
     let Ok(environ) = fs::read(&environ_path) else {
-        return ProcessIdentity::Unverified;
+        return ProcessIdentity::Mismatch;
     };
 
     let mut saw_box_marker = false;
