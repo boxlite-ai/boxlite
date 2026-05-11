@@ -2148,7 +2148,10 @@ mod tests {
         let mut state = BoxState::new();
         state.set_status(BoxStatus::Unknown);
         state.set_pid(Some(pid));
-        let lock_id = runtime.lock_manager.allocate().expect("Failed to allocate lock");
+        let lock_id = runtime
+            .lock_manager
+            .allocate()
+            .expect("Failed to allocate lock");
         state.set_lock_id(lock_id);
 
         runtime
@@ -2187,7 +2190,10 @@ mod tests {
         let (pid, mut child) = spawn_dummy_process();
         let config = test_box_config_in_layout(false, &runtime);
         let mut state = running_state(pid);
-        let lock_id = runtime.lock_manager.allocate().expect("Failed to allocate lock");
+        let lock_id = runtime
+            .lock_manager
+            .allocate()
+            .expect("Failed to allocate lock");
         state.set_lock_id(lock_id);
 
         let box_dir = runtime.layout.boxes_dir().join(config.id.as_str());
@@ -2231,7 +2237,10 @@ mod tests {
         let config = test_box_config_in_layout(false, &runtime);
         let mut state = BoxState::new();
         state.set_status(BoxStatus::Unknown);
-        let lock_id = runtime.lock_manager.allocate().expect("Failed to allocate lock");
+        let lock_id = runtime
+            .lock_manager
+            .allocate()
+            .expect("Failed to allocate lock");
         state.set_lock_id(lock_id);
 
         runtime
