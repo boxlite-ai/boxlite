@@ -718,7 +718,7 @@ impl BoxImpl {
 
         // Invalidate cache so new handles get fresh BoxImpl
         self.runtime
-            .invalidate_box_impl(self.id(), self.config.name.as_deref());
+            .invalidate_box_handle(self.id(), self.config.name.as_deref());
 
         for listener in &self.event_listeners {
             listener.on_box_stopped(&self.config.id, None);
