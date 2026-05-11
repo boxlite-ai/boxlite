@@ -24,7 +24,7 @@ pub use exec::{BoxCommand, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execut
 pub(crate) use manager::BoxManager;
 pub use network::{BoxConnection, BoxEndpoint, BoxTunnel, NetworkHandle};
 pub use snapshot::SnapshotHandle;
-pub use state::{BoxState, BoxStatus, HealthState, HealthStatus};
+pub use state::{BoxState, BoxStatus, HealthState, HealthStatus, StopCause, StopInfo};
 
 pub(crate) use box_impl::SharedBoxImpl;
 pub(crate) use init::BoxBuilder;

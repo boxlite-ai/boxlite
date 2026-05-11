@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 /// SIGCONT   → Running (VM resumed)
 /// stop()    → Stopped (VM terminated, can restart)
 /// init err  → Failed (record preserved with error_reason)
+/// crash     → Crashed (health check detected shim death)
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -41,6 +42,14 @@ pub enum BoxStatus {
     /// Box is not running. VM process terminated.
     /// Rootfs is preserved, box can be restarted.
     Stopped,
+
+    /// Box crashed (health check detected shim process death).
+    /// Evaluates restart policy to decide next action.
+    Crashed,
+
+    /// Box is in the process of being restarted after a crash.
+    /// Transient state during backoff wait before new VM start.
+    Restarting,
 
     /// Box VM is frozen via SIGSTOP (all vCPUs and virtio backends paused).
     /// Used during export/snapshot for point-in-time consistency.
@@ -77,31 +86,48 @@ impl BoxStatus {
 
     /// Check if this status represents a transient state.
     pub fn is_transient(&self) -> bool {
-        matches!(self, BoxStatus::Stopping)
+        matches!(self, BoxStatus::Stopping | BoxStatus::Restarting)
+    }
+
+    /// Check if this status requires health check monitoring.
+    /// Only Running boxes have an active VM process that needs monitoring.
+    /// Restarting is a transient state with no VM yet - monitoring starts after transition to Running.
+    pub fn requires_monitoring(&self) -> bool {
+        matches!(self, BoxStatus::Running)
     }
 
     /// Check if start() can be called from this state.
     /// Configured boxes need first start, Stopped and Failed boxes can be retried.
+    /// and Restarting resumes the crash-recovery restart pipeline.
     pub fn can_start(&self) -> bool {
         matches!(
             self,
-            BoxStatus::Configured | BoxStatus::Stopped | BoxStatus::Failed
+            BoxStatus::Configured | BoxStatus::Stopped | BoxStatus::Restarting | BoxStatus::Failed
         )
     }
 
     /// Check if stop() can be called from this state.
-    /// Running and Paused boxes can be stopped.
+    /// Running, Crashed, Restarting, and Paused boxes can be stopped.
+    ///
+    /// `Crashed` has no live VM left, but stop() is still a useful explicit
+    /// transition to acknowledge the crash and mark the box as `Stopped`.
     pub fn can_stop(&self) -> bool {
-        matches!(self, BoxStatus::Running | BoxStatus::Paused)
+        matches!(
+            self,
+            BoxStatus::Running | BoxStatus::Crashed | BoxStatus::Restarting | BoxStatus::Paused
+        )
     }
 
     /// Check if remove() can be called from this state.
-    /// Configured, Stopped, Failed, and Unknown boxes can be removed.
-    /// Failed is included so DESTROY_SANDBOX can clean up boxes whose init failed.
+    /// Configured, Stopped, Crashed, Failed, and Unknown boxes can be removed.
     pub fn can_remove(&self) -> bool {
         matches!(
             self,
-            BoxStatus::Configured | BoxStatus::Stopped | BoxStatus::Failed | BoxStatus::Unknown
+            BoxStatus::Configured
+                | BoxStatus::Stopped
+                | BoxStatus::Crashed
+                | BoxStatus::Failed
+                | BoxStatus::Unknown
         )
     }
 
@@ -136,9 +162,10 @@ impl BoxStatus {
             (Configured, Stopped) |
             (Configured, Failed) |
             (Configured, Unknown) |
-            // Running → Stopping (graceful), Stopped (crash), Paused (SIGSTOP), or Failed (runtime crash)
+            // Running → Stopping (graceful), Crashed (shim died), Paused (SIGSTOP), or Stopped
             (Running, Stopping) |
             (Running, Stopped) |
+            (Running, Crashed) |
             (Running, Paused) |
             (Running, Failed) |
             (Running, Unknown) |
@@ -150,6 +177,14 @@ impl BoxStatus {
             (Stopped, Running) |
             (Stopped, Failed) |
             (Stopped, Unknown) |
+            // Crashed → Stopped (no policy) or Restarting (has policy)
+            (Crashed, Stopped) |
+            (Crashed, Restarting) |
+            (Crashed, Unknown) |
+            // Restarting → Running (success), Stopped (cancelled/max retries)
+            (Restarting, Running) |
+            (Restarting, Stopped) |
+            (Restarting, Unknown) |
             // Paused → Running (SIGCONT resume) or Stopped (killed while paused)
             (Paused, Running) |
             (Paused, Stopped) |
@@ -169,6 +204,8 @@ impl BoxStatus {
             BoxStatus::Running => "running",
             BoxStatus::Stopping => "stopping",
             BoxStatus::Stopped => "stopped",
+            BoxStatus::Crashed => "crashed",
+            BoxStatus::Restarting => "restarting",
             BoxStatus::Paused => "paused",
             BoxStatus::Failed => "failed",
         }
@@ -187,6 +224,8 @@ impl std::str::FromStr for BoxStatus {
             "running" => Ok(BoxStatus::Running),
             "stopping" => Ok(BoxStatus::Stopping),
             "stopped" => Ok(BoxStatus::Stopped),
+            "crashed" => Ok(BoxStatus::Crashed),
+            "restarting" => Ok(BoxStatus::Restarting),
             "paused" => Ok(BoxStatus::Paused),
             "failed" => Ok(BoxStatus::Failed),
             // Legacy: old transient statuses map to Stopped (DB backward compat)
@@ -232,6 +271,48 @@ pub struct BoxState {
     /// keeps existing DB rows readable without migration.
     #[serde(default)]
     pub exit_code: Option<i32>,
+    /// Stop info (valid when status is Stopped/Crashed/Restarting).
+    #[serde(default)]
+    pub stop_info: StopInfo,
+    /// Error message from the last failed auto-restart attempt (cleared on success).
+    #[serde(default)]
+    pub last_restart_error: Option<String>,
+}
+
+/// Why the box stopped.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StopCause {
+    /// User called stop() or normal exit.
+    #[default]
+    Normal,
+    /// Crashed but no restart policy configured.
+    CrashedNoPolicy,
+    /// Restart policy exhausted max attempts.
+    MaxRetriesExceeded,
+    /// System reboot detected.
+    SystemReboot,
+    /// Restart attempt failed (e.g., VM failed to start).
+    RestartFailed,
+    /// Unknown/unexpected stop cause (should not happen in normal operation).
+    Unknown,
+}
+
+/// Stop info for a stopped box (valid when status is Stopped/Crashed).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct StopInfo {
+    /// Why the box stopped.
+    #[serde(default)]
+    pub cause: StopCause,
+    /// Exit code from the shim process (if available).
+    pub exit_code: Option<i32>,
+    /// When the box stopped/crashed (UTC).
+    pub exit_time: Option<DateTime<Utc>>,
+    /// How many restart attempts in the last sequence.
+    #[serde(default)]
+    pub restart_count: u32,
+    /// When the last successful restart happened (UTC).
+    pub restarted_at: Option<DateTime<Utc>>,
 }
 
 /// Health status of a box.
@@ -331,6 +412,8 @@ impl BoxState {
             health_status: HealthStatus::new(),
             error_reason: None,
             exit_code: None,
+            stop_info: StopInfo::default(),
+            last_restart_error: None,
         }
     }
 
@@ -381,6 +464,9 @@ impl BoxState {
     pub fn mark_stop(&mut self) {
         self.status = BoxStatus::Stopped;
         self.pid = None;
+        self.error_reason = None;
+        self.stop_info.cause = StopCause::Normal;
+        self.stop_info.exit_time = Some(Utc::now());
         self.last_updated = Utc::now();
     }
 
@@ -406,6 +492,8 @@ impl BoxState {
     pub fn reset_for_reboot(&mut self) {
         if self.status.is_active() {
             self.status = BoxStatus::Stopped;
+            self.stop_info.cause = StopCause::SystemReboot;
+            self.stop_info.exit_time = Some(Utc::now());
         }
         self.pid = None;
         self.last_updated = Utc::now();
@@ -478,6 +566,7 @@ mod tests {
         assert!(!BoxStatus::Running.can_start());
         assert!(!BoxStatus::Stopping.can_start());
         assert!(BoxStatus::Stopped.can_start());
+        assert!(BoxStatus::Restarting.can_start());
         assert!(!BoxStatus::Paused.can_start());
         assert!(!BoxStatus::Unknown.can_start());
     }
@@ -488,6 +577,8 @@ mod tests {
         assert!(BoxStatus::Running.can_stop());
         assert!(!BoxStatus::Stopping.can_stop());
         assert!(!BoxStatus::Stopped.can_stop());
+        assert!(BoxStatus::Crashed.can_stop());
+        assert!(BoxStatus::Restarting.can_stop());
         assert!(BoxStatus::Paused.can_stop());
         assert!(!BoxStatus::Unknown.can_stop());
     }
@@ -1013,5 +1104,38 @@ mod tests {
         assert_eq!(state.health_status.state, HealthState::None);
         assert_eq!(state.health_status.failures, 0);
         assert!(state.health_status.last_check.is_none());
+    }
+
+    // ====================================================================
+    // requires_monitoring tests
+    // ====================================================================
+
+    #[test]
+    fn test_requires_monitoring_only_running() {
+        // Only Running status requires monitoring
+        assert!(!BoxStatus::Unknown.requires_monitoring());
+        assert!(!BoxStatus::Configured.requires_monitoring());
+        assert!(BoxStatus::Running.requires_monitoring());
+        assert!(!BoxStatus::Stopping.requires_monitoring());
+        assert!(!BoxStatus::Stopped.requires_monitoring());
+        assert!(!BoxStatus::Crashed.requires_monitoring());
+        assert!(!BoxStatus::Restarting.requires_monitoring()); // Transient, no VM yet
+        assert!(!BoxStatus::Paused.requires_monitoring());
+    }
+
+    // ====================================================================
+    // can_start tests (includes restart from Stopped/Restarting)
+    // ====================================================================
+
+    #[test]
+    fn test_can_start_from_stopped_or_crashed() {
+        assert!(!BoxStatus::Unknown.can_start());
+        assert!(BoxStatus::Configured.can_start()); // First start
+        assert!(!BoxStatus::Running.can_start());
+        assert!(!BoxStatus::Stopping.can_start());
+        assert!(BoxStatus::Stopped.can_start()); // Restart
+        assert!(!BoxStatus::Crashed.can_start()); // Must transition to Stopped first
+        assert!(BoxStatus::Restarting.can_start()); // Crash recovery restart
+        assert!(!BoxStatus::Paused.can_start());
     }
 }
