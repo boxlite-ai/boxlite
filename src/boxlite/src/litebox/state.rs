@@ -277,6 +277,13 @@ pub struct BoxState {
     /// Error message from the last failed auto-restart attempt (cleared on success).
     #[serde(default)]
     pub last_restart_error: Option<String>,
+    /// Monotonic lifecycle intent version.
+    ///
+    /// User-visible lifecycle operations bump this value so delayed background
+    /// work, such as crash-restart attempts after backoff, can detect that its
+    /// original decision is stale before committing a new state transition.
+    #[serde(default)]
+    pub lifecycle_epoch: u64,
 }
 
 /// Why the box stopped.
@@ -414,7 +421,19 @@ impl BoxState {
             exit_code: None,
             stop_info: StopInfo::default(),
             last_restart_error: None,
+            lifecycle_epoch: 0,
         }
+    }
+
+    /// Return the current lifecycle intent version.
+    pub fn lifecycle_epoch(&self) -> u64 {
+        self.lifecycle_epoch
+    }
+
+    /// Bump the lifecycle intent version and update the state timestamp.
+    pub fn bump_lifecycle_epoch(&mut self) {
+        self.lifecycle_epoch = self.lifecycle_epoch.saturating_add(1);
+        self.last_updated = Utc::now();
     }
 
     /// Set lock ID and update timestamp.
@@ -467,7 +486,7 @@ impl BoxState {
         self.error_reason = None;
         self.stop_info.cause = StopCause::Normal;
         self.stop_info.exit_time = Some(Utc::now());
-        self.last_updated = Utc::now();
+        self.bump_lifecycle_epoch();
     }
 
     /// Mark the box as Failed with the captured init/runtime error.
@@ -1086,6 +1105,27 @@ mod tests {
         let state = BoxState::new();
         assert_eq!(state.health_status.state, HealthState::None);
         assert_eq!(state.health_status.failures, 0);
+        assert_eq!(state.lifecycle_epoch(), 0);
+    }
+
+    #[test]
+    fn test_lifecycle_epoch_bumps_on_stop() {
+        let mut state = BoxState::new();
+        assert_eq!(state.lifecycle_epoch(), 0);
+
+        state.mark_stop();
+
+        assert_eq!(state.lifecycle_epoch(), 1);
+    }
+
+    #[test]
+    fn test_lifecycle_epoch_saturates() {
+        let mut state = BoxState::new();
+        state.lifecycle_epoch = u64::MAX;
+
+        state.bump_lifecycle_epoch();
+
+        assert_eq!(state.lifecycle_epoch(), u64::MAX);
     }
 
     #[test]
@@ -1104,6 +1144,7 @@ mod tests {
         assert_eq!(state.health_status.state, HealthState::None);
         assert_eq!(state.health_status.failures, 0);
         assert!(state.health_status.last_check.is_none());
+        assert_eq!(state.lifecycle_epoch(), 0);
     }
 
     // ====================================================================

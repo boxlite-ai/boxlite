@@ -53,6 +53,9 @@ impl BoxHandle {
         self.current().info()
     }
 
+    pub(crate) fn swap_current(&self, inner: SharedBoxImpl) -> SharedBoxImpl {
+        std::mem::replace(&mut *self.current.write(), inner)
+    }
 }
 
 #[async_trait]

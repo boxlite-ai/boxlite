@@ -604,6 +604,9 @@ pub struct AdvancedBoxOptions {
     ///
     /// When set, the health check task will evaluate the policy when the
     /// shim process dies and automatically restart the box if the policy allows it.
+    /// For detached boxes, this only applies while a runtime is attached and
+    /// monitoring the box; it is not daemon-style recovery after the embedding
+    /// process exits.
     ///
     /// If `health_check` is not configured but `restart_policy` is, a default
     /// health check is auto-enabled (interval=5s, timeout=10s, retries=3, start_period=60s).
@@ -662,9 +665,9 @@ impl RestartPolicy {
             RestartPolicy::No => false,
             RestartPolicy::Always => true,
             RestartPolicy::OnFailure { max_retries } => {
-                // Only restart on non-zero exit code (explicit failure)
-                // None (no exit file) means normal/clean exit - no restart
-                let is_failure = exit_code.is_some_and(|code| code != 0);
+                // Restart on explicit non-zero exits and unknown exits. Unknown
+                // usually means the shim died before writing structured exit info.
+                let is_failure = exit_code.is_none_or(|code| code != 0);
                 is_failure && restart_count < *max_retries
             }
             RestartPolicy::UnlessStopped => true,
@@ -767,11 +770,11 @@ mod tests {
     }
 
     #[test]
-    fn test_restart_policy_on_failure_no_restart_on_no_exit_file() {
+    fn test_restart_policy_on_failure_restarts_on_unknown_exit() {
         let policy = RestartPolicy::OnFailure { max_retries: 3 };
-        // No exit file (None) means clean/normal exit - no restart
-        assert!(!policy.should_restart(None, 0));
-        assert!(!policy.should_restart(None, 1));
+        // Unknown exit means the shim died before writing structured exit info.
+        assert!(policy.should_restart(None, 0));
+        assert!(policy.should_restart(None, 1));
     }
 
     #[test]

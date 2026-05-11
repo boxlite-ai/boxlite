@@ -102,6 +102,7 @@ pub(crate) struct BoxWatcher {
     box_name: Option<String>,
     exit_file: std::path::PathBuf,
     removes_on_exit: bool,
+    has_restart_policy: bool,
     /// `None` ⇒ exit-only watcher. `Some` ⇒ also probe the guest's health.
     health: Option<HealthProbe>,
 }
@@ -121,6 +122,7 @@ impl BoxWatcher {
                 .layout
                 .container_exit_file(bx.config.container.id.as_str()),
             removes_on_exit: bx.config.options.removes_on_stop(),
+            has_restart_policy: bx.config.options.advanced.restart_policy.is_some(),
             health,
         }
     }
@@ -184,6 +186,24 @@ impl BoxWatcher {
             return;
         };
 
+        // Restart-policy boxes are finalized by the central crash coordinator,
+        // which owns the Crashed/Restarting transitions and handle replacement.
+        // Leave the persisted state Running until it acquires the lifecycle lock.
+        if self.has_restart_policy {
+            let crash_tx = runtime.crash_sender();
+            let box_id = self.box_id.clone();
+            tokio::spawn(async move {
+                if let Err(error) = crash_tx.send(box_id.clone()).await {
+                    tracing::error!(
+                        box_id = %box_id,
+                        error = %error,
+                        "Crash handler channel closed, notification dropped"
+                    );
+                }
+            });
+            return;
+        }
+
         let stopped = {
             let mut state = self.state.write();
 
@@ -234,7 +254,7 @@ impl BoxWatcher {
         // Without it a long-lived runtime keeps handing out the spent handle from
         // its cache, and a remove-on-stop box — the default — that ran to
         // completion is never cleaned up, because nobody called stop() to do it.
-        runtime.invalidate_box_impl(&self.box_id, self.box_name.as_deref());
+        runtime.invalidate_box_handle(&self.box_id, self.box_name.as_deref());
         if self.removes_on_exit
             && let Err(e) = runtime.remove_box(&self.box_id, false)
         {

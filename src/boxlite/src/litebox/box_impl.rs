@@ -231,6 +231,19 @@ impl BoxImpl {
         BoxInfo::new(&self.config, &state)
     }
 
+    /// Abort the watcher task (including its optional health probe).
+    ///
+    /// Used by restart() to retire this implementation before installing a fresh one.
+    pub(crate) fn abort_health_check(&self) {
+        if let Some(task) = self.watcher.get() {
+            tracing::debug!(
+                box_id = %self.config.id,
+                "Aborting box watcher"
+            );
+            task.abort();
+        }
+    }
+
     // ========================================================================
     // OPERATIONS (require LiveState)
     // ========================================================================
@@ -606,6 +619,19 @@ impl BoxImpl {
             return Ok(());
         }
 
+        let lock_id = {
+            let state = self.state.read();
+            if state.status.is_configured() && state.lock_id.is_none() {
+                return Ok(());
+            }
+            state.lock_id.ok_or_else(|| {
+                BoxliteError::Internal(format!(
+                    "box {} is missing lock_id (status: {:?})",
+                    self.config.id, state.status
+                ))
+            })?
+        };
+
         // Abort the box watcher (if armed) so it does not run past stop().
         // `stop()` also cancels the shutdown token the watcher selects on, but the
         // abort stops it immediately even if it is mid-probe. `abort` takes `&self`,
@@ -618,24 +644,34 @@ impl BoxImpl {
             task.abort();
         }
 
-        // Clear health status (box is no longer running)
         {
-            let mut state = self.state.write();
-            state.clear_health_status();
-        }
+            let locker = self.runtime.lock_manager.retrieve(lock_id)?;
+            let _lock_guard = acquire_owned_lock(locker).await?;
 
-        // Cancel the token - signals all in-flight operations to abort
-        self.shutdown_token.cancel();
+            if self.shutdown_token.is_cancelled() && !self.runtime.shutdown_token.is_cancelled() {
+                tracing::debug!(
+                    box_id = %self.config.id,
+                    "Ignoring stop on retired box implementation"
+                );
+                return Ok(());
+            }
+
+            // Clear health status (box is no longer running)
+            {
+                let mut state = self.state.write();
+                state.clear_health_status();
+            }
+
+            // Cancel the token - signals all in-flight operations to abort
+            self.shutdown_token.cancel();
+        }
 
         // Only attempt graceful shutdown for boxes that should have a live
         // shim. Calling live_state() on Configured/Failed would route
-        // through the restart pipeline and spawn a new VM — exactly what
-        // stop() must NOT do.
+        // through the restart pipeline and spawn a new VM.
         let should_attach = self.state.read().status == BoxStatus::Running;
         if should_attach && let Ok(live) = self.live_state().await {
-            // Recovered boxes lazy-attach here via vmm_attach (now
-            // ProcessIdentity-gated). Live boxes hit the cached LiveState.
-            // Either way the teardown is identical:
+            // Recovered boxes lazy-attach here via vmm_attach (ProcessIdentity-gated).
             let guest_shutdown = async {
                 if let Ok(mut guest) = live.guest_session.guest().await {
                     let _ = guest.shutdown().await;
@@ -653,66 +689,66 @@ impl BoxImpl {
                 handler.stop()?;
             }
         }
-        // If live_state() failed (vmm_attach said Absent — shim is gone),
-        // or status wasn't Running, fall through to cleanup.
+        // If live_state() failed (vmm_attach said Absent), or status wasn't
+        // Running, fall through to cleanup without spawning a VM.
 
-        // Clean up PID file (single source of truth)
-        let pid_path = self.layout.pid_file_path();
-        match std::fs::remove_file(&pid_path) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => tracing::warn!(
-                box_id = %self.config.id,
-                path = %pid_path.display(),
-                error = %e,
-                "Failed to remove PID file"
-            ),
-        }
-
-        // Check if box was persisted
-        let was_persisted = self.state.read().lock_id.is_some();
-
-        // Update state
         {
-            let mut state = self.state.write();
+            let locker = self.runtime.lock_manager.retrieve(lock_id)?;
+            let _lock_guard = acquire_owned_lock(locker).await?;
 
-            // Only transition to Stopped if we were Running (or other active state).
-            // If we were Configured (never started), stay Configured so next start()
-            // triggers full initialization (creating disks).
-            if !state.status.is_configured() {
-                // Take the exit code the guest recorded on its way down, as
-                // docker does: `docker stop` leaves ExitCode 137, not 0. The
-                // guest writes the exit file when init dies — including when it
-                // dies because *we* killed it — before it checks whether the
-                // teardown was host-driven. The watcher cannot do this: stop()
-                // cancels its token, and it stands down precisely so it does not
-                // race this path.
-                crate::runtime::rt_impl::record_main_command_exit(
-                    &mut state,
-                    &self
-                        .layout
-                        .container_exit_file(self.config.container.id.as_str()),
-                );
+            // Clean up PID file (single source of truth)
+            let pid_path = self.layout.pid_file_path();
+            match std::fs::remove_file(&pid_path) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => tracing::warn!(
+                    box_id = %self.config.id,
+                    path = %pid_path.display(),
+                    error = %e,
+                    "Failed to remove PID file"
+                ),
             }
 
-            if was_persisted {
-                // Box was persisted - sync to DB
-                // Note: If the box was already removed (e.g., by cleanup after init failure),
-                // this will return NotFound. We ignore that error since the box is already gone.
-                match self.runtime.box_manager.save_box(&self.config.id, &state) {
-                    Ok(()) => {}
-                    Err(BoxliteError::NotFound(_)) => {
-                        tracing::debug!(
-                            box_id = %self.config.id,
-                            "Box already removed from DB during stop (likely cleanup after init failure)"
-                        );
-                        return Ok(());
-                    }
-                    Err(e) => return Err(e),
+            // Check if box was persisted
+            let was_persisted = self.state.read().lock_id.is_some();
+
+            // Update state
+            {
+                let mut state = self.state.write();
+
+                // Only transition to Stopped if we were Running (or other active state).
+                // If we were Configured (never started), stay Configured so next start()
+                // triggers full initialization (creating disks).
+                if !state.status.is_configured() {
+                    // Take the exit code the guest recorded on its way down, as
+                    // docker does: `docker stop` leaves ExitCode 137, not 0.
+                    crate::runtime::rt_impl::record_main_command_exit(
+                        &mut state,
+                        &self
+                            .layout
+                            .container_exit_file(self.config.container.id.as_str()),
+                    );
                 }
-            } else {
-                // Box was never started - persist now so it survives restarts
-                self.runtime.box_manager.add_box(&self.config, &state)?;
+
+                if was_persisted {
+                    // Box was persisted - sync to DB
+                    // Note: If the box was already removed (e.g., by cleanup after init failure),
+                    // this will return NotFound. We ignore that error since the box is already gone.
+                    match self.runtime.box_manager.save_box(&self.config.id, &state) {
+                        Ok(()) => {}
+                        Err(BoxliteError::NotFound(_)) => {
+                            tracing::debug!(
+                                box_id = %self.config.id,
+                                "Box already removed from DB during stop (likely cleanup after init failure)"
+                            );
+                            return Ok(());
+                        }
+                        Err(e) => return Err(e),
+                    }
+                } else {
+                    // Box was never started - persist now so it survives restarts
+                    self.runtime.box_manager.add_box(&self.config, &state)?;
+                }
             }
         }
 
@@ -1031,6 +1067,7 @@ impl BoxImpl {
         // cleanup the VM process and directory.
         let builder = BoxBuilder::new(Arc::clone(&self.runtime), self.config.clone(), state)?;
         let (live_state, mut cleanup_guard) = builder.build().await?;
+        let health_config = self.config.options.advanced.effective_health_check();
 
         // The box is up. If we adopted one whose init was already running, that
         // init needs no `Container.Start`; recording it now keeps
@@ -1057,7 +1094,7 @@ impl BoxImpl {
         // Fetched before the state lock — the await must not run under it — and
         // before publishing Running below.
         let health_guest =
-            if self.config.options.advanced.health_check.is_some() && !adopting_running {
+            if health_config.is_some() && !adopting_running {
                 Some(live_state.guest_session.guest().await?)
             } else {
                 None
@@ -1079,9 +1116,10 @@ impl BoxImpl {
             // clears ExitCode on start too). The guest drops its matching
             // exit file in Container.Init.
             state.exit_code = None;
+            state.stop_info.exit_code = None;
 
-            // Initialize health status if health check is configured
-            if self.config.options.advanced.health_check.is_some() {
+            // Initialize health status if an explicit or restart-policy health check is active.
+            if health_config.is_some() {
                 state.init_health_status();
             }
 
@@ -1096,10 +1134,7 @@ impl BoxImpl {
             let health = health_guest.map(|guest| {
                 super::watcher::HealthProbe::new(
                     guest,
-                    self.config
-                        .options
-                        .advanced
-                        .health_check
+                    health_config
                         .clone()
                         .expect("guest is fetched only when a health check is configured"),
                     state.health_status,
@@ -1198,7 +1233,13 @@ impl BoxImpl {
         {
             let mut state = self.state.write();
             state.force_status(BoxStatus::Paused);
-            let _ = self.runtime.box_manager.save_box(self.id(), &state);
+            if let Err(e) = self.runtime.box_manager.save_box(self.id(), &state) {
+                tracing::warn!(
+                    box_id = %self.id(),
+                    error = %e,
+                    "Failed to persist paused state during quiesce"
+                );
+            }
         }
 
         // Phase 3: Caller's operation
@@ -1215,7 +1256,13 @@ impl BoxImpl {
         if unsafe { libc::kill(pid, 0) } == 0 {
             let mut state = self.state.write();
             state.force_status(BoxStatus::Running);
-            let _ = self.runtime.box_manager.save_box(self.id(), &state);
+            if let Err(e) = self.runtime.box_manager.save_box(self.id(), &state) {
+                tracing::warn!(
+                    box_id = %self.id(),
+                    error = %e,
+                    "Failed to persist running state after quiesce"
+                );
+            }
         }
 
         // Phase 5: Thaw guest I/O (always, best-effort)

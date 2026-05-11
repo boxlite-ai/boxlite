@@ -1,24 +1,32 @@
 use crate::db::{BoxStore, Database};
 use crate::images::{ImageDiskManager, ImageManager};
 use crate::litebox::config::BoxConfig;
-use crate::litebox::{BoxHandle, BoxManager, LiteBox, SharedBoxHandle, SharedBoxImpl};
-use crate::lock::{FileLockManager, LockManager};
+use crate::litebox::{BoxHandle, BoxManager, LiteBox, SharedBoxHandle, SharedBoxImpl, StopCause};
+use crate::lock::{
+    FileLockManager, LockId, LockManager, acquire_owned_lock, acquire_owned_lock_or_cancel,
+};
 use crate::metrics::{RuntimeMetrics, RuntimeMetricsStorage};
 use crate::rootfs::guest::{GuestRootfs, GuestRootfsManager};
+use crate::runtime::advanced_options::{RestartPolicy, calculate_backoff};
 use crate::runtime::id::{BoxID, BoxIDMint};
+use crate::runtime::layout::dirs::EXIT_FILE;
 use crate::runtime::layout::{BoxFilesystemLayout, FilesystemLayout, FsLayoutConfig};
 use crate::runtime::lock::RuntimeLock;
 use crate::runtime::options::{BoxArchive, BoxOptions, BoxliteOptions};
 use crate::runtime::signal_handler::timeout_to_duration;
 use crate::runtime::types::{BoxInfo, BoxState, BoxStatus, ContainerID};
-use crate::vmm::VmmKind;
 use crate::vmm::controller::{ShimHandler, VmmHandler};
+use crate::vmm::{ExitInfo, VmmKind};
 use boxlite_shared::{BoxliteError, BoxliteResult};
 use chrono::Utc;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock, Weak};
-use tokio::sync::OnceCell;
+use tokio::sync::{Mutex as AsyncMutex, OnceCell, mpsc};
+use tokio::task::{Id as TaskId, JoinHandle, JoinSet};
+use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
+
+const CRASH_COORDINATOR_GRACE_PERIOD: std::time::Duration = std::time::Duration::from_secs(5);
 
 fn litebox_from_handle(handle: SharedBoxHandle) -> LiteBox {
     // Every handle this runtime hands out starts following its box's main
@@ -106,6 +114,238 @@ fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::
     Ok(())
 }
 
+fn read_box_exit_code(config: &BoxConfig) -> Option<i32> {
+    let container_exit_file =
+        boxlite_shared::layout::SharedGuestLayout::new(config.box_home.join("shared"))
+            .container(config.container.id.as_str())
+            .exit_file();
+
+    boxlite_shared::layout::ExitRecord::read(&container_exit_file)
+        .map(|record| record.exit_code)
+        .or_else(|| {
+            let shim_exit_file = config.box_home.join(EXIT_FILE);
+            ExitInfo::from_file(&shim_exit_file).map(|info| info.exit_code())
+        })
+}
+
+fn crash_restart_matches_plan(state: &BoxState, expected_epoch: u64) -> bool {
+    state.lifecycle_epoch() == expected_epoch
+        && matches!(state.status, BoxStatus::Crashed | BoxStatus::Restarting)
+}
+
+fn stop_cause_when_restart_denied(
+    restart_policy: Option<&RestartPolicy>,
+    exit_code: Option<i32>,
+    max_retries_exhausted: bool,
+) -> StopCause {
+    match restart_policy {
+        None | Some(RestartPolicy::No) => StopCause::CrashedNoPolicy,
+        Some(RestartPolicy::OnFailure { .. }) if exit_code == Some(0) => StopCause::Normal,
+        Some(RestartPolicy::OnFailure { .. }) if max_retries_exhausted => {
+            StopCause::MaxRetriesExceeded
+        }
+        Some(RestartPolicy::OnFailure { .. }) => {
+            // This branch should be unreachable:
+            // - exit_code != 0 (caught by guard above)
+            // - !max_retries_exhausted (caught by guard above)
+            // For OnFailure, non-zero exit + under max_retries should restart, not deny.
+            tracing::error!(
+                exit_code = ?exit_code,
+                max_retries_exhausted,
+                "BUG: Unreachable branch reached in stop_cause_when_restart_denied"
+            );
+            debug_assert!(false, "Unreachable branch reached");
+            StopCause::Unknown
+        }
+        Some(RestartPolicy::Always) => {
+            // Always policy should never deny restart - this is a bug
+            tracing::error!("BUG: Always policy should not reach stop_cause_when_restart_denied");
+            debug_assert!(false, "Always policy should never deny restart");
+            StopCause::Unknown
+        }
+        Some(RestartPolicy::UnlessStopped) => {
+            // UnlessStopped only denies restart when user explicitly stopped (cause == Normal)
+            // At this point, exit_code == 0 indicates a clean exit from user stop
+            StopCause::Normal
+        }
+    }
+}
+
+struct CrashRestartPlan {
+    restart_policy: Option<RestartPolicy>,
+    expected_epoch: u64,
+    current_restart_count: u32,
+    new_restart_count: u32,
+    exit_code: Option<i32>,
+}
+
+enum RestartOutcome {
+    Stale,
+    Started {
+        box_impl: SharedBoxImpl,
+        lock_id: LockId,
+    },
+}
+
+struct CrashCoordinator {
+    runtime: Weak<RuntimeImpl>,
+    shutdown_token: CancellationToken,
+    force_cancel_token: CancellationToken,
+    crash_rx: mpsc::Receiver<BoxID>,
+    crash_rx_closed: bool,
+    pending_crashes: HashSet<BoxID>,
+    running_crashes: JoinSet<BoxID>,
+    task_boxes: HashMap<TaskId, BoxID>,
+}
+
+impl CrashCoordinator {
+    fn new(runtime: SharedRuntimeImpl, crash_rx: mpsc::Receiver<BoxID>) -> Self {
+        let shutdown_token = runtime.shutdown_token.clone();
+        let force_cancel_token = runtime.crash_force_cancel_token.clone();
+        Self {
+            runtime: Arc::downgrade(&runtime),
+            shutdown_token,
+            force_cancel_token,
+            crash_rx,
+            crash_rx_closed: false,
+            pending_crashes: HashSet::new(),
+            running_crashes: JoinSet::new(),
+            task_boxes: HashMap::new(),
+        }
+    }
+
+    fn spawn(runtime: SharedRuntimeImpl, crash_rx: mpsc::Receiver<BoxID>) -> JoinHandle<()> {
+        tokio::spawn(async move {
+            Self::new(runtime, crash_rx).run().await;
+        })
+    }
+
+    async fn run(mut self) {
+        tracing::info!("Crash coordinator task started");
+        let mut force_cancelled = false;
+
+        loop {
+            if !force_cancelled && self.force_cancel_token.is_cancelled() {
+                self.abort_running_crashes();
+                force_cancelled = true;
+            }
+
+            let accepting_crashes = !self.shutdown_token.is_cancelled() && !self.crash_rx_closed;
+            if (!accepting_crashes || self.crash_rx_closed) && self.running_crashes.is_empty() {
+                break;
+            }
+
+            tokio::select! {
+                crash = self.crash_rx.recv(), if accepting_crashes => {
+                    match crash {
+                        Some(box_id) => {
+                            self.schedule_crash(box_id);
+                        }
+                        None => {
+                            tracing::debug!("Crash notification channel closed");
+                            self.crash_rx_closed = true;
+                        }
+                    }
+                }
+                result = self.running_crashes.join_next_with_id(), if !self.running_crashes.is_empty() => {
+                    if let Some(result) = result {
+                        self.finish_crash_task(result);
+                    }
+                }
+                _ = self.shutdown_token.cancelled(), if !self.shutdown_token.is_cancelled() => {
+                    tracing::debug!("Crash coordinator received shutdown signal");
+                }
+                _ = self.force_cancel_token.cancelled(), if !force_cancelled => {
+                    self.abort_running_crashes();
+                    force_cancelled = true;
+                }
+            }
+        }
+
+        tracing::info!("Crash coordinator task stopped");
+    }
+
+    fn abort_running_crashes(&mut self) {
+        tracing::warn!(
+            task_count = self.running_crashes.len(),
+            "Crash coordinator grace period expired; aborting crash tasks"
+        );
+        self.running_crashes.abort_all();
+    }
+
+    fn schedule_crash(&mut self, box_id: BoxID) -> bool {
+        if !Self::mark_pending_crash(&mut self.pending_crashes, &box_id) {
+            tracing::debug!(
+                box_id = %box_id,
+                "Crash already being handled, skipping duplicate notification"
+            );
+            return false;
+        }
+
+        tracing::info!(box_id = %box_id, "Received crash notification");
+
+        if self.runtime.upgrade().is_none() {
+            tracing::debug!(
+                box_id = %box_id,
+                "Runtime already dropped, skipping crash notification"
+            );
+            self.pending_crashes.remove(&box_id);
+            self.crash_rx_closed = true;
+            return false;
+        }
+
+        let runtime_weak = Weak::clone(&self.runtime);
+        let shutdown_token = self.shutdown_token.clone();
+        let task_box_id = box_id.clone();
+        let abort_handle = self.running_crashes.spawn(async move {
+            RuntimeImpl::handle_box_crash(runtime_weak, shutdown_token, task_box_id.clone()).await;
+            task_box_id
+        });
+        self.task_boxes.insert(abort_handle.id(), box_id);
+        true
+    }
+
+    fn finish_crash_task(&mut self, result: Result<(TaskId, BoxID), tokio::task::JoinError>) {
+        match result {
+            Ok((task_id, returned_box_id)) => {
+                let box_id = self.task_boxes.remove(&task_id).unwrap_or_else(|| {
+                    tracing::error!(
+                        task_id = %task_id,
+                        box_id = %returned_box_id,
+                        "Completed crash task was not tracked"
+                    );
+                    returned_box_id
+                });
+                self.pending_crashes.remove(&box_id);
+            }
+            Err(error) => {
+                let task_id = error.id();
+                if let Some(box_id) = self.task_boxes.remove(&task_id) {
+                    self.pending_crashes.remove(&box_id);
+                    tracing::error!(
+                        task_id = %task_id,
+                        box_id = %box_id,
+                        is_cancelled = error.is_cancelled(),
+                        is_panic = error.is_panic(),
+                        error = %error,
+                        "Crash handler task failed"
+                    );
+                } else {
+                    tracing::error!(
+                        task_id = %task_id,
+                        error = %error,
+                        "Untracked crash handler task failed"
+                    );
+                }
+            }
+        }
+    }
+
+    fn mark_pending_crash(pending_crashes: &mut HashSet<BoxID>, box_id: &BoxID) -> bool {
+        pending_crashes.insert(box_id.clone())
+    }
+}
+
 /// Internal runtime state protected by single lock.
 ///
 /// **Shared via Arc**: This is the actual shared state that can be cloned cheaply.
@@ -176,6 +416,29 @@ pub struct RuntimeImpl {
     /// Use `.is_cancelled()` for sync checks, `.cancelled()` for async select!.
     /// Child tokens are passed to each box via `.child_token()`.
     pub(crate) shutdown_token: CancellationToken,
+
+    // ========================================================================
+    // CRASH HANDLER
+    // ========================================================================
+    /// Channel sender for box crash notifications.
+    /// Used by health check tasks to notify runtime of crashes.
+    crash_tx: mpsc::Sender<BoxID>,
+
+    /// Handle to the crash coordinator task (for graceful shutdown).
+    crash_handler_handle: AsyncMutex<Option<JoinHandle<()>>>,
+
+    /// Requests forced cancellation of supervised crash tasks after the
+    /// cooperative shutdown grace period expires.
+    crash_force_cancel_token: CancellationToken,
+
+    /// Pending crash notification receiver, consumed once when the coordinator starts.
+    pending_crash_rx: std::sync::Mutex<Option<mpsc::Receiver<BoxID>>>,
+
+    /// One-time gate for lazy background task initialization.
+    ///
+    /// `new()` is synchronous and may run outside a Tokio runtime, so background
+    /// tasks are spawned by the first async runtime method instead.
+    services_started: tokio::sync::OnceCell<()>,
 }
 
 /// Synchronized state protected by RwLock.
@@ -188,6 +451,13 @@ pub struct SynchronizedState {
     active_handles_by_id: HashMap<BoxID, Weak<BoxHandle>>,
     /// Cache of active BoxHandle instances by name (only for named boxes).
     active_handles_by_name: HashMap<String, Weak<BoxHandle>>,
+    /// Strong runtime ownership for boxes kept alive by restart policy.
+    ///
+    /// Each entry is keyed by Box ID, so repeated restarts of the same box
+    /// replace the existing handle instead of growing this map. Entries are
+    /// removed when the box is explicitly stopped or removed via
+    /// `invalidate_box_handle`.
+    restart_owned_handles_by_id: HashMap<BoxID, SharedBoxHandle>,
 }
 
 impl RuntimeImpl {
@@ -294,10 +564,14 @@ impl RuntimeImpl {
             ImageDiskManager::new(layout.image_layout().disk_images_dir(), layout.temp_dir());
         let guest_rootfs_mgr = GuestRootfsManager::new(base_disk_mgr.clone(), layout.temp_dir());
 
+        // Create crash notification channel
+        let (crash_tx, crash_rx) = mpsc::channel::<BoxID>(100);
+
         let inner = Arc::new(Self {
             sync_state: RwLock::new(SynchronizedState {
                 active_handles_by_id: HashMap::new(),
                 active_handles_by_name: HashMap::new(),
+                restart_owned_handles_by_id: HashMap::new(),
             }),
             box_manager: BoxManager::new(box_store),
             image_manager,
@@ -312,6 +586,11 @@ impl RuntimeImpl {
             network_factory: crate::net::default_factory(),
             _runtime_lock: runtime_lock,
             shutdown_token: CancellationToken::new(),
+            crash_tx,
+            crash_handler_handle: AsyncMutex::new(None),
+            crash_force_cancel_token: CancellationToken::new(),
+            pending_crash_rx: std::sync::Mutex::new(Some(crash_rx)),
+            services_started: tokio::sync::OnceCell::new(),
         });
 
         tracing::debug!("initialized runtime");
@@ -320,6 +599,555 @@ impl RuntimeImpl {
         inner.recover_boxes()?;
 
         Ok(inner)
+    }
+
+    // ========================================================================
+    // CRASH HANDLER
+    // ========================================================================
+
+    /// Spawn the central crash coordinator task.
+    fn spawn_crash_handler(
+        runtime: SharedRuntimeImpl,
+        crash_rx: mpsc::Receiver<BoxID>,
+    ) -> JoinHandle<()> {
+        CrashCoordinator::spawn(runtime, crash_rx)
+    }
+
+    /// Handle a single box crash (driven by the crash coordinator).
+    async fn handle_box_crash(
+        runtime_weak: Weak<RuntimeImpl>,
+        shutdown_token: CancellationToken,
+        box_id: BoxID,
+    ) {
+        let plan = {
+            let Some(runtime_impl) = runtime_weak.upgrade() else {
+                tracing::debug!(box_id = %box_id, "Runtime dropped before crash handling");
+                return;
+            };
+
+            let Some(plan) = Self::record_crash_and_plan_restart(&runtime_impl, &box_id).await
+            else {
+                return;
+            };
+            plan
+        };
+
+        tracing::info!(
+            box_id = %box_id,
+            restart_count = plan.new_restart_count,
+            exit_code = ?plan.exit_code,
+            "Box crashed, scheduling restart with backoff"
+        );
+
+        Self::run_restart_loop(runtime_weak, shutdown_token, box_id, plan).await;
+    }
+
+    async fn record_crash_and_plan_restart(
+        runtime: &RuntimeImpl,
+        box_id: &BoxID,
+    ) -> Option<CrashRestartPlan> {
+        let state = match runtime.box_manager.box_by_id(box_id) {
+            Ok(Some((_, s))) => s,
+            Ok(None) => {
+                tracing::debug!(box_id = %box_id, "Box not found, ignoring crash");
+                return None;
+            }
+            Err(e) => {
+                tracing::error!(box_id = %box_id, error = %e, "Failed to read box state");
+                return None;
+            }
+        };
+
+        let lock_id = match state.lock_id {
+            Some(id) => id,
+            None => {
+                tracing::warn!(box_id = %box_id, "Box has no lock_id");
+                return None;
+            }
+        };
+
+        let locker = match runtime.lock_manager.retrieve(lock_id) {
+            Ok(l) => l,
+            Err(e) => {
+                tracing::error!(box_id = %box_id, error = %e, "Failed to retrieve lock");
+                return None;
+            }
+        };
+
+        let _lock_guard = match acquire_owned_lock_or_cancel(
+            locker,
+            &runtime.shutdown_token,
+            format!("Runtime is shutting down while waiting to record crash for box {box_id}"),
+        )
+        .await
+        {
+            Ok(guard) => guard,
+            Err(BoxliteError::Stopped(_)) => {
+                tracing::debug!(box_id = %box_id, "Shutdown while waiting for lock");
+                return None;
+            }
+            Err(e) => {
+                tracing::error!(box_id = %box_id, error = %e, "Failed to acquire lock");
+                return None;
+            }
+        };
+
+        let (config, mut state) = match runtime.box_manager.box_by_id(box_id) {
+            Ok(Some((c, s))) => (c, s),
+            Ok(None) => {
+                tracing::debug!(box_id = %box_id, "Box removed before crash handling");
+                return None;
+            }
+            Err(e) => {
+                tracing::error!(box_id = %box_id, error = %e, "Failed to re-read box state");
+                return None;
+            }
+        };
+
+        match state.status {
+            BoxStatus::Running | BoxStatus::Crashed => {}
+            BoxStatus::Restarting => {
+                tracing::debug!(box_id = %box_id, "Box already restarting, ignoring");
+                return None;
+            }
+            _ => {
+                tracing::debug!(
+                    box_id = %box_id,
+                    status = ?state.status,
+                    "Box not running, ignoring crash"
+                );
+                return None;
+            }
+        }
+
+        let exit_code = read_box_exit_code(&config);
+        let restart_policy = config.options.advanced.restart_policy.clone();
+        let current_restart_count = state.stop_info.restart_count;
+        let expected_epoch = state.lifecycle_epoch();
+        let new_restart_count = state.stop_info.restart_count.saturating_add(1);
+        let max_retries_exhausted = matches!(
+            restart_policy.as_ref(),
+            Some(RestartPolicy::OnFailure { max_retries }) if current_restart_count >= *max_retries
+        );
+
+        state.force_status(BoxStatus::Crashed);
+        state.set_pid(None);
+        state.exit_code = exit_code;
+        state.health_status.state = crate::litebox::HealthState::Unhealthy;
+        state.stop_info = crate::litebox::StopInfo {
+            cause: StopCause::CrashedNoPolicy,
+            exit_code,
+            exit_time: Some(Utc::now()),
+            restart_count: new_restart_count,
+            restarted_at: None,
+        };
+
+        if let Err(e) = runtime.box_manager.save_box(box_id, &state) {
+            tracing::error!(box_id = %box_id, error = %e, "Failed to save crashed state");
+        }
+
+        let should_restart = restart_policy
+            .as_ref()
+            .map(|policy| policy.should_restart(exit_code, current_restart_count))
+            .unwrap_or(false);
+
+        if !should_restart {
+            Self::mark_restart_denied(
+                runtime,
+                box_id,
+                state,
+                config.name.as_deref(),
+                restart_policy.as_ref(),
+                exit_code,
+                max_retries_exhausted,
+            );
+            return None;
+        }
+
+        Some(CrashRestartPlan {
+            restart_policy,
+            expected_epoch,
+            current_restart_count,
+            new_restart_count,
+            exit_code,
+        })
+    }
+
+    async fn commit_crash_restart_state(
+        runtime: &RuntimeImpl,
+        box_id: &BoxID,
+        expected_epoch: u64,
+        update_state: impl FnOnce(&mut BoxState),
+    ) -> BoxliteResult<bool> {
+        let Some((_, state)) = runtime.box_manager.box_by_id(box_id)? else {
+            tracing::debug!(
+                box_id = %box_id,
+                "Crash restart state commit skipped because box was removed"
+            );
+            return Ok(false);
+        };
+
+        let lock_id = state
+            .lock_id
+            .ok_or_else(|| BoxliteError::Internal(format!("box {box_id} has no lock_id")))?;
+        let locker = runtime.lock_manager.retrieve(lock_id)?;
+        let _lock_guard = acquire_owned_lock(locker).await?;
+
+        let Some((_, mut state)) = runtime.box_manager.box_by_id(box_id)? else {
+            tracing::debug!(
+                box_id = %box_id,
+                "Crash restart state commit skipped because box was removed"
+            );
+            return Ok(false);
+        };
+
+        if !crash_restart_matches_plan(&state, expected_epoch) {
+            if state.lifecycle_epoch() != expected_epoch {
+                tracing::debug!(
+                    box_id = %box_id,
+                    expected_epoch,
+                    actual_epoch = state.lifecycle_epoch(),
+                    "Crash restart state commit skipped because lifecycle epoch changed"
+                );
+            } else {
+                tracing::debug!(
+                    box_id = %box_id,
+                    status = ?state.status,
+                    "Crash restart state commit skipped because box state changed"
+                );
+            }
+            return Ok(false);
+        }
+
+        update_state(&mut state);
+        runtime.box_manager.save_box(box_id, &state)?;
+        Ok(true)
+    }
+
+    async fn commit_restart_success(
+        runtime: &RuntimeImpl,
+        box_id: &BoxID,
+        expected_epoch: u64,
+        box_impl: &SharedBoxImpl,
+        lock_id: LockId,
+    ) -> BoxliteResult<bool> {
+        let locker = runtime.lock_manager.retrieve(lock_id)?;
+        let _lock_guard = acquire_owned_lock_or_cancel(
+            locker,
+            &runtime.shutdown_token,
+            "Runtime is shutting down while finalizing restarted box",
+        )
+        .await?;
+
+        // The swapped-in BoxImpl is the live source here: update its in-memory
+        // state, then persist that snapshot. A DB-only update would leave
+        // existing handles stale.
+        let final_state = {
+            let mut state = box_impl.state.write();
+            if state.lifecycle_epoch() != expected_epoch || state.status != BoxStatus::Running {
+                tracing::debug!(
+                    box_id = %box_id,
+                    expected_epoch,
+                    actual_epoch = state.lifecycle_epoch(),
+                    status = ?state.status,
+                    "Restart success state commit skipped because box state changed"
+                );
+                return Ok(false);
+            }
+            state.stop_info = crate::litebox::StopInfo::default();
+            state.stop_info.restarted_at = Some(chrono::Utc::now());
+            state.clone()
+        };
+
+        runtime.box_manager.save_box(box_id, &final_state)?;
+        Ok(true)
+    }
+
+    async fn run_restart_loop(
+        runtime_weak: Weak<RuntimeImpl>,
+        shutdown_token: CancellationToken,
+        box_id: BoxID,
+        plan: CrashRestartPlan,
+    ) {
+        let mut attempt = plan.current_restart_count;
+        loop {
+            let backoff = calculate_backoff(attempt);
+            attempt += 1;
+
+            tracing::info!(
+                box_id = %box_id,
+                attempt,
+                backoff_ms = backoff.as_millis() as u64,
+                "Scheduling restart attempt"
+            );
+
+            tokio::select! {
+                _ = tokio::time::sleep(backoff) => {
+                    let Some(this) = runtime_weak.upgrade() else {
+                        tracing::debug!(box_id = %box_id, "Runtime dropped during restart backoff");
+                        return;
+                    };
+
+                    // Re-read state after backoff: a manual stop/remove/restart may have happened.
+                    let current_status = match this.box_manager.box_by_id(&box_id) {
+                        Ok(Some((_, s))) => s.status,
+                        Ok(None) => {
+                            tracing::debug!(box_id = %box_id, "Box removed during backoff");
+                            return;
+                        }
+                        Err(e) => {
+                            tracing::error!(box_id = %box_id, error = %e, "Failed to read state");
+                            return;
+                        }
+                    };
+
+                    match current_status {
+                        BoxStatus::Running => {
+                            tracing::debug!(
+                                box_id = %box_id,
+                                "Box already running (manual restart), skipping auto-restart"
+                            );
+                            return;
+                        }
+                        BoxStatus::Crashed | BoxStatus::Restarting => {}
+                        status => {
+                            tracing::debug!(
+                                box_id = %box_id,
+                                status = ?status,
+                                "Box state changed during backoff, skipping auto-restart"
+                            );
+                            return;
+                        }
+                    }
+
+                    tracing::info!(box_id = %box_id, attempt, "Executing restart");
+
+                    match this.restart(&box_id, plan.expected_epoch).await {
+                        Ok(RestartOutcome::Started { box_impl, lock_id }) => {
+                            match Self::commit_restart_success(
+                                &this,
+                                &box_id,
+                                plan.expected_epoch,
+                                &box_impl,
+                                lock_id,
+                            )
+                            .await
+                            {
+                                Ok(true) => tracing::info!(
+                                    box_id = %box_id,
+                                    attempt,
+                                    "Box restarted successfully"
+                                ),
+                                Ok(false) => {
+                                    tracing::debug!(
+                                        box_id = %box_id,
+                                        attempt,
+                                        "Restart success commit became stale"
+                                    );
+                                    return;
+                                }
+                                Err(e) => tracing::error!(
+                                    box_id = %box_id,
+                                    attempt,
+                                    error = %e,
+                                    "Box restarted but success state commit failed"
+                                ),
+                            }
+                            break;
+                        }
+                        Ok(RestartOutcome::Stale) => {
+                            tracing::debug!(
+                                box_id = %box_id,
+                                attempt,
+                                "Crash restart attempt became stale"
+                            );
+                            return;
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                box_id = %box_id,
+                                attempt,
+                                error = %e,
+                                "Restart attempt failed"
+                            );
+
+                            let should_retry = plan.restart_policy
+                                .as_ref()
+                                .map(|p| p.should_restart(plan.exit_code, attempt))
+                                .unwrap_or(false);
+
+                            if should_retry {
+                                match Self::mark_restart_failed(
+                                    &this,
+                                    &box_id,
+                                    plan.expected_epoch,
+                                    attempt,
+                                )
+                                .await
+                                {
+                                    Ok(true) => {}
+                                    Ok(false) => return,
+                                    Err(e) => tracing::error!(
+                                        box_id = %box_id,
+                                        attempt,
+                                        error = %e,
+                                        "Failed to save restart failure state"
+                                    ),
+                                }
+                            } else {
+                                tracing::info!(box_id = %box_id, attempt, "Max retries exceeded");
+
+                                if let Err(e) = Self::commit_crash_restart_state(
+                                    &this,
+                                    &box_id,
+                                    plan.expected_epoch,
+                                    |state| {
+                                        state.force_status(BoxStatus::Stopped);
+                                        state.stop_info.restart_count = attempt;
+                                        state.stop_info.cause = StopCause::MaxRetriesExceeded;
+                                    },
+                                ).await {
+                                    tracing::error!(
+                                        box_id = %box_id,
+                                        attempt,
+                                        error = %e,
+                                        "Failed to save max-retries-exceeded state"
+                                    );
+                                }
+                                break;  // Give up
+                            }
+                            // Continue loop for retry (_lock_guard dropped here)
+                        }
+                    }
+                    // _lock_guard dropped here
+                }
+                _ = shutdown_token.cancelled() => {
+                    tracing::debug!(box_id = %box_id, "Restart cancelled (shutdown)");
+                    if let Some(this) = runtime_weak.upgrade()
+                        && let Err(e) = Self::commit_crash_restart_state(
+                            &this,
+                            &box_id,
+                            plan.expected_epoch,
+                            |state| {
+                                state.force_status(BoxStatus::Stopped);
+                                state.stop_info.restart_count = attempt;
+                                state.stop_info.cause = StopCause::Normal;
+                            },
+                        ).await {
+                        tracing::error!(
+                            box_id = %box_id,
+                            attempt,
+                            error = %e,
+                            "Failed to save cancelled restart state"
+                        );
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    fn mark_restart_denied(
+        runtime: &RuntimeImpl,
+        box_id: &BoxID,
+        mut state: BoxState,
+        box_name: Option<&str>,
+        restart_policy: Option<&RestartPolicy>,
+        exit_code: Option<i32>,
+        max_retries_exhausted: bool,
+    ) {
+        tracing::info!(
+            box_id = %box_id,
+            policy = ?restart_policy,
+            "No restart policy or max retries exceeded, marking as stopped"
+        );
+
+        state.force_status(BoxStatus::Stopped);
+        state.stop_info.cause =
+            stop_cause_when_restart_denied(restart_policy, exit_code, max_retries_exhausted);
+
+        if let Err(e) = runtime.box_manager.save_box(box_id, &state) {
+            tracing::error!(box_id = %box_id, error = %e, "Failed to save stopped state");
+        }
+
+        runtime.retire_cached_box_after_crash(box_id, box_name, &state);
+    }
+
+    fn retire_cached_box_after_crash(
+        &self,
+        box_id: &BoxID,
+        box_name: Option<&str>,
+        stopped_state: &BoxState,
+    ) {
+        let handle = {
+            let sync = self.sync_state.read().unwrap();
+            sync.active_handles_by_id
+                .get(box_id)
+                .and_then(|weak| weak.upgrade())
+        };
+
+        if let Some(handle) = handle {
+            let box_impl = handle.current();
+            box_impl.abort_health_check();
+            box_impl.shutdown_token.cancel();
+            *box_impl.state.write() = stopped_state.clone();
+        }
+
+        self.invalidate_box_handle(box_id, box_name);
+    }
+
+    async fn mark_restart_failed(
+        runtime: &RuntimeImpl,
+        box_id: &BoxID,
+        expected_epoch: u64,
+        attempt: u32,
+    ) -> BoxliteResult<bool> {
+        Self::commit_crash_restart_state(runtime, box_id, expected_epoch, |state| {
+            state.force_status(BoxStatus::Crashed);
+            state.stop_info.restart_count = attempt;
+            state.stop_info.cause = StopCause::RestartFailed;
+        })
+        .await
+    }
+
+    /// Get crash sender for health check tasks.
+    pub(crate) fn crash_sender(&self) -> mpsc::Sender<BoxID> {
+        self.crash_tx.clone()
+    }
+
+    // ========================================================================
+    // LAZY SERVICES INITIALIZATION
+    // ========================================================================
+
+    /// Ensure the crash coordinator task is started.
+    ///
+    /// This is called lazily on the first async method, guaranteeing a Tokio
+    /// runtime exists. Uses `OnceCell` to record exactly one successful start.
+    async fn ensure_services_started(self: &Arc<Self>) {
+        let _ = self
+            .services_started
+            .get_or_try_init(|| {
+                let rt = Arc::clone(self);
+                async move {
+                    let mut handle_slot = rt.crash_handler_handle.lock().await;
+                    if handle_slot.is_some() {
+                        return Ok(());
+                    }
+                    if rt.shutdown_token.is_cancelled() {
+                        return Err(());
+                    }
+                    let crash_rx = rt
+                        .pending_crash_rx
+                        .lock()
+                        .unwrap()
+                        .take()
+                        .expect("pending_crash_rx consumed twice");
+                    let handle = Self::spawn_crash_handler(Arc::clone(&rt), crash_rx);
+                    *handle_slot = Some(handle);
+                    Ok(())
+                }
+            })
+            .await;
     }
 
     // ========================================================================
@@ -337,6 +1165,7 @@ impl RuntimeImpl {
         options: BoxOptions,
         name: Option<String>,
     ) -> BoxliteResult<LiteBox> {
+        self.ensure_services_started().await;
         let (litebox, _created) = self.create_inner(options, name, false).await?;
         Ok(litebox)
     }
@@ -351,6 +1180,7 @@ impl RuntimeImpl {
         options: BoxOptions,
         name: Option<String>,
     ) -> BoxliteResult<(LiteBox, bool)> {
+        self.ensure_services_started().await;
         self.create_inner(options, name, true).await
     }
 
@@ -363,6 +1193,7 @@ impl RuntimeImpl {
         archive: BoxArchive,
         name: Option<String>,
     ) -> BoxliteResult<LiteBox> {
+        self.ensure_services_started().await;
         super::import::import_box(self, archive, name).await
     }
 
@@ -468,6 +1299,7 @@ impl RuntimeImpl {
     /// If another handle to the same box exists, they share the same BoxImpl
     /// (and thus the same LiveState if initialized).
     pub async fn get(self: &Arc<Self>, id_or_name: &str) -> BoxliteResult<Option<LiteBox>> {
+        self.ensure_services_started().await;
         tracing::trace!(id_or_name = %id_or_name, "RuntimeInnerImpl::get called");
 
         // Check in-memory cache first (for boxes created but not yet persisted)
@@ -530,6 +1362,7 @@ impl RuntimeImpl {
     ///
     /// Checks in-memory cache first (for boxes not yet persisted), then database.
     pub async fn get_info(self: &Arc<Self>, id_or_name: &str) -> BoxliteResult<Option<BoxInfo>> {
+        self.ensure_services_started().await;
         // Check in-memory cache first (for boxes created but not yet persisted)
         {
             let sync = self.sync_state.read().unwrap();
@@ -569,6 +1402,7 @@ impl RuntimeImpl {
     /// Includes both persisted boxes (from database) and in-memory boxes
     /// (created but not yet persisted).
     pub async fn list_info(self: &Arc<Self>) -> BoxliteResult<Vec<BoxInfo>> {
+        self.ensure_services_started().await;
         use std::collections::HashSet;
 
         // Get boxes from database - run on blocking thread pool
@@ -605,6 +1439,7 @@ impl RuntimeImpl {
     ///
     /// Checks in-memory cache first (for boxes not yet persisted), then database.
     pub async fn exists(self: &Arc<Self>, id_or_name: &str) -> BoxliteResult<bool> {
+        self.ensure_services_started().await;
         // Check in-memory cache first
         {
             let sync = self.sync_state.read().unwrap();
@@ -660,13 +1495,18 @@ impl RuntimeImpl {
     /// survive parent process exit and runtime shutdown.
     ///
     /// # Arguments
-    /// * `timeout` - Seconds before force-kill. None=10s, Some(-1)=infinite
+    /// * `timeout` - Total shutdown deadline in seconds. None=10s,
+    ///   Some(-1)=infinite
     ///
     /// # Returns
     /// Ok(()) if all boxes stopped successfully, Err if any box failed to stop.
     pub async fn shutdown(&self, timeout: Option<i32>) -> BoxliteResult<()> {
+        let shutdown_deadline =
+            timeout_to_duration(timeout).map(|duration| Instant::now() + duration);
+
         // Check if already shut down (idempotent)
         if self.shutdown_token.is_cancelled() {
+            self.drain_crash_coordinator(shutdown_deadline).await;
             return Ok(());
         }
 
@@ -688,20 +1528,18 @@ impl RuntimeImpl {
 
         if active_boxes.is_empty() {
             tracing::info!("No active boxes to shutdown");
+            self.drain_crash_coordinator(shutdown_deadline).await;
             return Ok(());
         }
 
         tracing::info!(count = active_boxes.len(), "Stopping active boxes");
 
-        // Convert timeout to duration
-        let timeout_duration = timeout_to_duration(timeout);
-
         // Stop all boxes concurrently
         let stop_futures = active_boxes.iter().map(|box_impl| {
             let box_id = box_impl.id().to_string();
             async move {
-                let result = if let Some(duration) = timeout_duration {
-                    tokio::time::timeout(duration, box_impl.stop()).await
+                let result = if let Some(deadline) = shutdown_deadline {
+                    tokio::time::timeout_at(deadline, box_impl.stop()).await
                 } else {
                     // Infinite timeout
                     Ok(box_impl.stop().await)
@@ -732,12 +1570,71 @@ impl RuntimeImpl {
 
         if errors.is_empty() {
             tracing::info!("Runtime shutdown complete");
+        } else {
+            tracing::warn!("Shutdown completed with errors: {}", errors.join(", "));
+        }
+
+        self.drain_crash_coordinator(shutdown_deadline).await;
+
+        if errors.is_empty() {
             Ok(())
         } else {
             Err(BoxliteError::Internal(format!(
                 "Shutdown completed with errors: {}",
                 errors.join(", ")
             )))
+        }
+    }
+
+    /// Wait for the crash coordinator within the remaining shutdown budget.
+    ///
+    /// If the grace period expires, the coordinator is asked to abort its
+    /// supervised tasks. Its handle remains stored so a later shutdown call can
+    /// reap it without detaching the coordinator.
+    async fn drain_crash_coordinator(&self, shutdown_deadline: Option<Instant>) {
+        let grace_deadline = shutdown_deadline
+            .map(|deadline| deadline.min(Instant::now() + CRASH_COORDINATOR_GRACE_PERIOD));
+
+        let mut crash_handle = match grace_deadline {
+            Some(deadline) => {
+                match tokio::time::timeout_at(deadline, self.crash_handler_handle.lock()).await {
+                    Ok(handle) => handle,
+                    Err(_) => {
+                        self.crash_force_cancel_token.cancel();
+                        tracing::warn!(
+                            "Shutdown deadline reached while waiting to join crash coordinator"
+                        );
+                        return;
+                    }
+                }
+            }
+            None => self.crash_handler_handle.lock().await,
+        };
+
+        let Some(handle) = crash_handle.as_mut() else {
+            return;
+        };
+
+        let join_result = match grace_deadline {
+            Some(deadline) => tokio::time::timeout_at(deadline, &mut *handle).await.ok(),
+            None => Some((&mut *handle).await),
+        };
+
+        match join_result {
+            Some(Ok(())) => {
+                tracing::debug!("Crash coordinator stopped gracefully");
+                *crash_handle = None;
+            }
+            Some(Err(e)) => {
+                tracing::warn!("Crash coordinator panicked: {:?}", e);
+                *crash_handle = None;
+            }
+            None => {
+                self.crash_force_cancel_token.cancel();
+                tracing::warn!(
+                    "Crash coordinator grace period expired; cancellation requested in background"
+                );
+            }
         }
     }
 
@@ -1109,6 +2006,7 @@ impl RuntimeImpl {
         options: BoxOptions,
         initial_status: BoxStatus,
     ) -> BoxliteResult<LiteBox> {
+        self.ensure_services_started().await;
         use crate::litebox::config::ContainerRuntimeConfig;
 
         let box_id = BoxIDMint::mint();
@@ -1379,6 +2277,14 @@ impl RuntimeImpl {
                             "Shim not verifiable (file missing, process dead, or PID reuse); \
                              marked Stopped"
                         );
+                    } else if state.status == BoxStatus::Restarting {
+                        state.force_status(BoxStatus::Stopped);
+                        state.stop_info.cause = StopCause::RestartFailed;
+                        state.stop_info.exit_time = Some(Utc::now());
+                        tracing::warn!(
+                            box_id = %box_id,
+                            "Interrupted restart found during recovery; marked Stopped"
+                        );
                     }
                 }
             }
@@ -1481,6 +2387,112 @@ impl RuntimeImpl {
     }
 
     // ========================================================================
+    // RESTART
+    // ========================================================================
+
+    /// Restart a box after crash handling if the lifecycle epoch still matches.
+    ///
+    /// Creates a fresh BoxImpl, starts it, and swaps it into the stable
+    /// BoxHandle so existing LiteBox handles continue to target the restarted
+    /// VM. The fresh BoxImpl has an empty OnceCell, so start() triggers
+    /// init_live_state() which runs the Restarting execution plan (same as
+    /// Stopped - reuse COW disks, spawn new VM).
+    ///
+    /// This method owns the per-box locking needed for the restart transition.
+    /// It holds the lock only while replacing cached state with Restarting, then
+    /// releases it before start(), because start() acquires the same lock while
+    /// rebuilding the VM.
+    ///
+    /// Returns `RestartOutcome::Stale` when a user lifecycle operation made
+    /// this delayed crash-restart attempt stale before it could start a VM.
+    /// The caller owns the success-state commit after `Started` is returned.
+    async fn restart(
+        self: &Arc<Self>,
+        box_id: &BoxID,
+        expected_epoch: u64,
+    ) -> BoxliteResult<RestartOutcome> {
+        use crate::litebox::BoxStatus;
+
+        tracing::info!(box_id = %box_id, "Restarting box");
+
+        // 1. Look up existing box config and state from DB
+        let Some((_, state)) = self.box_manager.box_by_id(box_id)? else {
+            tracing::debug!(box_id = %box_id, "Crash restart skipped because box was removed");
+            return Ok(RestartOutcome::Stale);
+        };
+
+        let lock_id = state
+            .lock_id
+            .ok_or_else(|| BoxliteError::Internal(format!("box {box_id} has no lock_id")))?;
+        let locker = self.lock_manager.retrieve(lock_id)?;
+
+        let box_impl = {
+            let _lock_guard = acquire_owned_lock_or_cancel(
+                locker,
+                &self.shutdown_token,
+                "Runtime is shutting down while waiting to restart box",
+            )
+            .await?;
+
+            // 2. Re-read under the lock, then replace cached state with Restarting.
+            let Some((config, mut state)) = self.box_manager.box_by_id(box_id)? else {
+                tracing::debug!(box_id = %box_id, "Crash restart skipped because box was removed");
+                return Ok(RestartOutcome::Stale);
+            };
+
+            if !crash_restart_matches_plan(&state, expected_epoch) {
+                if state.lifecycle_epoch() != expected_epoch {
+                    tracing::debug!(
+                        box_id = %box_id,
+                        expected_epoch,
+                        actual_epoch = state.lifecycle_epoch(),
+                        "Crash restart skipped because lifecycle epoch changed"
+                    );
+                } else {
+                    tracing::debug!(
+                        box_id = %box_id,
+                        status = ?state.status,
+                        "Crash restart skipped because box state changed"
+                    );
+                }
+                return Ok(RestartOutcome::Stale);
+            }
+
+            // 3. Get the stable handle and retire its current BoxImpl.
+            // The handle remains cached so existing LiteBox values can observe the
+            // fresh BoxImpl after restart succeeds.
+            let (handle, _) = self.get_or_create_box_handle(config.clone(), state.clone());
+            let old_box_impl = handle.current();
+            old_box_impl.abort_health_check();
+            old_box_impl.shutdown_token.cancel();
+
+            // 4. Update state to Restarting and persist
+            state.force_status(BoxStatus::Restarting);
+            state.set_pid(None);
+            state.clear_health_status();
+            self.box_manager.save_box(box_id, &state)?;
+
+            // 5. Create fresh BoxImpl with updated state. The transition lock is
+            // released at the end of this block before start() takes the same
+            // lock for VM rebuild.
+            let box_impl = self.create_box_impl(config, state);
+            let _old_box_impl = handle.swap_current(Arc::clone(&box_impl));
+            {
+                let mut sync = self.sync_state.write().unwrap();
+                sync.restart_owned_handles_by_id
+                    .insert(box_id.clone(), handle);
+            }
+            box_impl
+        };
+
+        // 6. Call start() on fresh BoxImpl → empty OnceCell → init_live_state()
+        //    BoxBuilder sees status=Restarting → same pipeline as Stopped
+        box_impl.start().await?;
+
+        Ok(RestartOutcome::Started { box_impl, lock_id })
+    }
+
+    // ========================================================================
     // INTERNAL - BOX IMPL CACHE
     // ========================================================================
 
@@ -1556,6 +2568,7 @@ impl RuntimeImpl {
     pub(crate) fn invalidate_box_handle(&self, box_id: &BoxID, box_name: Option<&str>) {
         let mut sync = self.sync_state.write().unwrap();
         sync.active_handles_by_id.remove(box_id);
+        sync.restart_owned_handles_by_id.remove(box_id);
         if let Some(name) = box_name {
             sync.active_handles_by_name.remove(name);
         }
@@ -1793,6 +2806,57 @@ mod tests {
         (runtime, temp_dir)
     }
 
+    fn create_state_commit_test_runtime() -> (SharedRuntimeImpl, TempDir) {
+        let temp_dir = TempDir::new_in("/tmp").expect("Failed to create temp dir");
+        let fs_config = FsLayoutConfig::without_bind_mount();
+        let layout = FilesystemLayout::new(temp_dir.path().to_path_buf(), fs_config);
+        layout.prepare().expect("prepare layout");
+        let runtime_lock = RuntimeLock::acquire(layout.home_dir()).expect("acquire runtime lock");
+        let db = Database::open(&layout.db_dir().join("boxlite.db")).expect("open database");
+        let image_manager = ImageManager::new(layout.images_dir(), db.clone(), vec![])
+            .expect("create image manager");
+        let base_disk_store = crate::db::BaseDiskStore::new(db.clone());
+        let base_disk_mgr =
+            crate::disk::BaseDiskManager::new(layout.bases_dir(), base_disk_store.clone());
+        let snapshot_store = crate::db::SnapshotStore::new(db.clone());
+        let snapshot_mgr = crate::litebox::snapshot_mgr::SnapshotManager::new(snapshot_store);
+        let box_store = BoxStore::new(db);
+        let lock_manager: Arc<dyn LockManager> =
+            Arc::new(FileLockManager::new(layout.locks_dir()).expect("create lock manager"));
+        let image_disk_mgr =
+            ImageDiskManager::new(layout.image_layout().disk_images_dir(), layout.temp_dir());
+        let guest_rootfs_mgr = GuestRootfsManager::new(base_disk_mgr.clone(), layout.temp_dir());
+        let (crash_tx, crash_rx) = mpsc::channel::<BoxID>(100);
+
+        let runtime = Arc::new(RuntimeImpl {
+            sync_state: RwLock::new(SynchronizedState {
+                active_handles_by_id: HashMap::new(),
+                active_handles_by_name: HashMap::new(),
+                restart_owned_handles_by_id: HashMap::new(),
+            }),
+            box_manager: BoxManager::new(box_store),
+            image_manager,
+            layout,
+            image_disk_mgr,
+            guest_rootfs_mgr,
+            guest_rootfs: Arc::new(OnceCell::new()),
+            runtime_metrics: RuntimeMetricsStorage::new(),
+            base_disk_mgr,
+            snapshot_mgr,
+            lock_manager,
+            network_factory: crate::net::default_factory(),
+            _runtime_lock: runtime_lock,
+            shutdown_token: CancellationToken::new(),
+            crash_tx,
+            crash_handler_handle: AsyncMutex::new(None),
+            crash_force_cancel_token: CancellationToken::new(),
+            pending_crash_rx: std::sync::Mutex::new(Some(crash_rx)),
+            services_started: tokio::sync::OnceCell::new(),
+        });
+
+        (runtime, temp_dir)
+    }
+
     /// Create a minimal BoxConfig for testing.
     fn test_box_config(detach: bool) -> BoxConfig {
         BoxConfig {
@@ -1871,6 +2935,78 @@ mod tests {
     // shutdown() tests
     // ====================================================================
 
+    #[test]
+    fn test_new_does_not_start_background_tasks() {
+        let (runtime, _dir) = create_test_runtime();
+
+        // new() is sync — no crash coordinator or recovery tasks should be spawned
+        assert!(runtime.crash_handler_handle.try_lock().unwrap().is_none());
+        assert!(runtime.services_started.get().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_async_call_starts_background_services() {
+        let (runtime, _dir) = create_test_runtime();
+
+        // Before any async call, services are not started
+        assert!(runtime.services_started.get().is_none());
+
+        // Calling an async method triggers lazy initialization
+        runtime.list_info().await.unwrap();
+
+        // Services should now be started
+        assert!(runtime.services_started.get().is_some());
+        assert!(runtime.crash_handler_handle.lock().await.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_cancelled_service_initialization_preserves_crash_receiver() {
+        let (runtime, _dir) = create_state_commit_test_runtime();
+        let handle_slot = runtime.crash_handler_handle.lock().await;
+        let task_runtime = Arc::clone(&runtime);
+        let initialization = tokio::spawn(async move {
+            task_runtime.ensure_services_started().await;
+        });
+        tokio::task::yield_now().await;
+
+        assert!(runtime.pending_crash_rx.lock().unwrap().is_some());
+        initialization.abort();
+        assert!(
+            initialization
+                .await
+                .expect_err("initialization should be cancelled")
+                .is_cancelled()
+        );
+        drop(handle_slot);
+
+        assert!(runtime.services_started.get().is_none());
+        runtime.ensure_services_started().await;
+        assert!(runtime.services_started.get().is_some());
+        assert!(runtime.pending_crash_rx.lock().unwrap().is_none());
+        assert!(runtime.crash_handler_handle.lock().await.is_some());
+
+        runtime.shutdown(None).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_shutdown_during_service_initialization_preserves_crash_receiver() {
+        let (runtime, _dir) = create_state_commit_test_runtime();
+        let handle_slot = runtime.crash_handler_handle.lock().await;
+        let task_runtime = Arc::clone(&runtime);
+        let initialization = tokio::spawn(async move {
+            task_runtime.ensure_services_started().await;
+        });
+        tokio::task::yield_now().await;
+
+        runtime.shutdown_token.cancel();
+        drop(handle_slot);
+        initialization.await.unwrap();
+
+        assert!(runtime.services_started.get().is_none());
+        assert!(runtime.pending_crash_rx.lock().unwrap().is_some());
+        assert!(runtime.crash_handler_handle.lock().await.is_none());
+    }
+
     #[tokio::test]
     async fn test_shutdown_is_idempotent() {
         let (runtime, _dir) = create_test_runtime();
@@ -1896,11 +3032,664 @@ mod tests {
 
     #[tokio::test]
     async fn test_shutdown_with_empty_active_boxes() {
-        let (runtime, _dir) = create_test_runtime();
+        let (runtime, _dir) = create_state_commit_test_runtime();
+        let coordinator_drained = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let task_drained = Arc::clone(&coordinator_drained);
+        let task_shutdown = runtime.shutdown_token.clone();
+        *runtime.crash_handler_handle.lock().await = Some(tokio::spawn(async move {
+            task_shutdown.cancelled().await;
+            task_drained.store(true, std::sync::atomic::Ordering::SeqCst);
+        }));
 
         // No boxes created — shutdown should complete cleanly
         let result = runtime.shutdown(Some(1)).await;
         assert!(result.is_ok());
+        assert!(coordinator_drained.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn test_repeated_shutdown_drains_remaining_crash_coordinator() {
+        let (runtime, _dir) = create_state_commit_test_runtime();
+        runtime.shutdown_token.cancel();
+        let coordinator_drained = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let task_drained = Arc::clone(&coordinator_drained);
+        *runtime.crash_handler_handle.lock().await = Some(tokio::spawn(async move {
+            tokio::task::yield_now().await;
+            task_drained.store(true, std::sync::atomic::Ordering::SeqCst);
+        }));
+
+        runtime.shutdown(None).await.unwrap();
+
+        assert!(coordinator_drained.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn test_shutdown_timeout_does_not_wait_forever_for_crash_coordinator() {
+        let (runtime, _dir) = create_state_commit_test_runtime();
+        let release_coordinator = Arc::new(tokio::sync::Semaphore::new(0));
+        let task_release = Arc::clone(&release_coordinator);
+        *runtime.crash_handler_handle.lock().await = Some(tokio::spawn(async move {
+            let _permit = task_release
+                .acquire()
+                .await
+                .expect("release semaphore open");
+        }));
+
+        tokio::time::timeout(std::time::Duration::from_secs(2), runtime.shutdown(Some(1)))
+            .await
+            .expect("shutdown should respect its timeout")
+            .expect("shutdown should succeed without active boxes");
+        assert!(
+            runtime.crash_handler_handle.lock().await.is_some(),
+            "timed-out coordinator handle must remain supervised"
+        );
+
+        release_coordinator.add_permits(1);
+        runtime
+            .shutdown(Some(1))
+            .await
+            .expect("later shutdown should reap coordinator");
+        assert!(runtime.crash_handler_handle.lock().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_infinite_crash_coordinator_drain_waits_for_task() {
+        let (runtime, _dir) = create_state_commit_test_runtime();
+        let coordinator_drained = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let task_drained = Arc::clone(&coordinator_drained);
+        *runtime.crash_handler_handle.lock().await = Some(tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            task_drained.store(true, std::sync::atomic::Ordering::SeqCst);
+        }));
+
+        runtime.drain_crash_coordinator(None).await;
+
+        assert!(coordinator_drained.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn test_cancelled_drain_keeps_handle_for_concurrent_caller() {
+        let (runtime, _dir) = create_state_commit_test_runtime();
+        let release_coordinator = Arc::new(tokio::sync::Semaphore::new(0));
+        let task_release = Arc::clone(&release_coordinator);
+        let coordinator_drained = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let task_drained = Arc::clone(&coordinator_drained);
+        *runtime.crash_handler_handle.lock().await = Some(tokio::spawn(async move {
+            let _permit = task_release
+                .acquire()
+                .await
+                .expect("release semaphore open");
+            task_drained.store(true, std::sync::atomic::Ordering::SeqCst);
+        }));
+
+        let mut first_drain = Box::pin(runtime.drain_crash_coordinator(None));
+        assert!(
+            futures::poll!(&mut first_drain).is_pending(),
+            "first drain should wait for the coordinator"
+        );
+        assert!(
+            runtime.crash_handler_handle.try_lock().is_err(),
+            "first drain should own the handle lock"
+        );
+
+        let mut second_drain = Box::pin(runtime.drain_crash_coordinator(None));
+        assert!(
+            futures::poll!(&mut second_drain).is_pending(),
+            "concurrent drain must wait for the same coordinator handle"
+        );
+
+        drop(first_drain);
+        release_coordinator.add_permits(1);
+        tokio::time::timeout(std::time::Duration::from_secs(1), second_drain)
+            .await
+            .expect("second drain should take over the coordinator handle");
+
+        assert!(coordinator_drained.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(runtime.crash_handler_handle.lock().await.is_none());
+    }
+
+    // ====================================================================
+    // crash coordinator tests
+    // ====================================================================
+
+    #[test]
+    fn test_crash_coordinator_marks_each_box_pending_once() {
+        let mut pending_crashes = HashSet::new();
+        let box_id = BoxIDMint::mint();
+
+        assert!(CrashCoordinator::mark_pending_crash(
+            &mut pending_crashes,
+            &box_id
+        ));
+        assert!(!CrashCoordinator::mark_pending_crash(
+            &mut pending_crashes,
+            &box_id
+        ));
+        assert_eq!(pending_crashes.len(), 1);
+    }
+
+    #[test]
+    fn test_crash_coordinator_skips_when_runtime_dropped() {
+        let (_tx, rx) = mpsc::channel(1);
+        let mut coordinator = CrashCoordinator {
+            runtime: Weak::new(),
+            shutdown_token: CancellationToken::new(),
+            force_cancel_token: CancellationToken::new(),
+            crash_rx: rx,
+            crash_rx_closed: false,
+            pending_crashes: HashSet::new(),
+            running_crashes: JoinSet::new(),
+            task_boxes: HashMap::new(),
+        };
+        let box_id = BoxIDMint::mint();
+
+        assert!(!coordinator.schedule_crash(box_id));
+        assert!(coordinator.pending_crashes.is_empty());
+        assert!(coordinator.crash_rx_closed);
+        assert!(coordinator.running_crashes.is_empty());
+        assert!(coordinator.task_boxes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_crash_coordinator_force_cancel_aborts_supervised_tasks() {
+        let (runtime, _dir) = create_state_commit_test_runtime();
+        let (tx, rx) = mpsc::channel(1);
+        let mut coordinator = CrashCoordinator::new(runtime, rx);
+        let box_id = BoxIDMint::mint();
+        coordinator.pending_crashes.insert(box_id.clone());
+        let abort_handle = coordinator
+            .running_crashes
+            .spawn(std::future::pending::<BoxID>());
+        coordinator.task_boxes.insert(abort_handle.id(), box_id);
+        coordinator.force_cancel_token.cancel();
+        drop(tx);
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), coordinator.run())
+            .await
+            .expect("forced cancellation should drain crash tasks");
+    }
+
+    #[tokio::test]
+    async fn test_crash_coordinator_cleans_up_completed_task() {
+        let (runtime, _dir) = create_state_commit_test_runtime();
+        let (_tx, rx) = mpsc::channel(1);
+        let mut coordinator = CrashCoordinator::new(runtime, rx);
+        let box_id = BoxIDMint::mint();
+        coordinator.pending_crashes.insert(box_id.clone());
+        let task_box_id = box_id.clone();
+        let abort_handle = coordinator
+            .running_crashes
+            .spawn(async move { task_box_id });
+        coordinator
+            .task_boxes
+            .insert(abort_handle.id(), box_id.clone());
+
+        let result = coordinator
+            .running_crashes
+            .join_next_with_id()
+            .await
+            .expect("completed task");
+        coordinator.finish_crash_task(result);
+
+        assert!(!coordinator.pending_crashes.contains(&box_id));
+        assert!(coordinator.task_boxes.is_empty());
+        assert!(CrashCoordinator::mark_pending_crash(
+            &mut coordinator.pending_crashes,
+            &box_id
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_crash_coordinator_cleans_up_panicked_task() {
+        let (runtime, _dir) = create_state_commit_test_runtime();
+        let (_tx, rx) = mpsc::channel(1);
+        let mut coordinator = CrashCoordinator::new(runtime, rx);
+        let box_id = BoxIDMint::mint();
+        coordinator.pending_crashes.insert(box_id.clone());
+        let abort_handle = coordinator
+            .running_crashes
+            .spawn(async move { panic!("test crash handler panic") });
+        coordinator
+            .task_boxes
+            .insert(abort_handle.id(), box_id.clone());
+
+        let result = coordinator
+            .running_crashes
+            .join_next_with_id()
+            .await
+            .expect("panicked task");
+        coordinator.finish_crash_task(result);
+
+        assert!(!coordinator.pending_crashes.contains(&box_id));
+        assert!(coordinator.task_boxes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_crash_coordinator_cleans_up_cancelled_task() {
+        let (runtime, _dir) = create_state_commit_test_runtime();
+        let (_tx, rx) = mpsc::channel(1);
+        let mut coordinator = CrashCoordinator::new(runtime, rx);
+        let box_id = BoxIDMint::mint();
+        coordinator.pending_crashes.insert(box_id.clone());
+        let task_box_id = box_id.clone();
+        let abort_handle = coordinator.running_crashes.spawn(async move {
+            std::future::pending::<()>().await;
+            task_box_id
+        });
+        coordinator
+            .task_boxes
+            .insert(abort_handle.id(), box_id.clone());
+        abort_handle.abort();
+
+        let result = coordinator
+            .running_crashes
+            .join_next_with_id()
+            .await
+            .expect("cancelled task");
+        coordinator.finish_crash_task(result);
+
+        assert!(!coordinator.pending_crashes.contains(&box_id));
+        assert!(coordinator.task_boxes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_crash_coordinator_drains_supervised_tasks_on_shutdown() {
+        let (runtime, _dir) = create_state_commit_test_runtime();
+        let (_tx, rx) = mpsc::channel(1);
+        let mut coordinator = CrashCoordinator::new(runtime, rx);
+        let box_id = BoxIDMint::mint();
+        coordinator.pending_crashes.insert(box_id.clone());
+        let task_box_id = box_id.clone();
+        let task_shutdown = coordinator.shutdown_token.clone();
+        let abort_handle = coordinator.running_crashes.spawn(async move {
+            task_shutdown.cancelled().await;
+            task_box_id
+        });
+        coordinator.task_boxes.insert(abort_handle.id(), box_id);
+        coordinator.shutdown_token.cancel();
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), coordinator.run())
+            .await
+            .expect("coordinator should drain cancelled crash tasks");
+    }
+
+    // ====================================================================
+    // crash restart epoch tests
+    // ====================================================================
+
+    #[test]
+    fn test_crash_restart_plan_rejects_stale_lifecycle_epoch() {
+        let mut state = BoxState::new();
+        state.force_status(BoxStatus::Crashed);
+        state.lifecycle_epoch = 7;
+
+        assert!(!crash_restart_matches_plan(&state, 6));
+    }
+
+    #[test]
+    fn test_crash_restart_plan_rejects_user_stopped_state() {
+        let mut state = BoxState::new();
+        state.force_status(BoxStatus::Stopped);
+        state.lifecycle_epoch = 3;
+
+        assert!(!crash_restart_matches_plan(&state, 3));
+    }
+
+    #[test]
+    fn test_crash_restart_plan_accepts_current_crashed_state() {
+        let mut state = BoxState::new();
+        state.force_status(BoxStatus::Crashed);
+        state.lifecycle_epoch = 3;
+
+        assert!(crash_restart_matches_plan(&state, 3));
+    }
+
+    #[test]
+    fn test_crash_restart_plan_accepts_current_restarting_state() {
+        let mut state = BoxState::new();
+        state.force_status(BoxStatus::Restarting);
+        state.lifecycle_epoch = 3;
+
+        assert!(crash_restart_matches_plan(&state, 3));
+    }
+
+    fn add_state_commit_test_box(
+        runtime: &RuntimeImpl,
+        status: BoxStatus,
+        lifecycle_epoch: u64,
+    ) -> BoxConfig {
+        let config = test_box_config(false);
+        let mut state = BoxState::new();
+        state.force_status(status);
+        state.lifecycle_epoch = lifecycle_epoch;
+        state.stop_info.cause = StopCause::Normal;
+        let lock_id = runtime.lock_manager.allocate().expect("allocate lock");
+        state.set_lock_id(lock_id);
+
+        runtime
+            .box_manager
+            .add_box(&config, &state)
+            .expect("add box");
+        config
+    }
+
+    #[tokio::test]
+    async fn test_commit_restart_success_resets_stop_info() {
+        let (runtime, _dir) = create_state_commit_test_runtime();
+        let config = test_box_config(false);
+        let mut state = BoxState::new();
+        state.force_status(BoxStatus::Running);
+        state.lifecycle_epoch = 3;
+        state.stop_info.cause = StopCause::RestartFailed;
+        state.stop_info.exit_code = Some(1);
+        state.stop_info.restart_count = 2;
+        let lock_id = runtime.lock_manager.allocate().expect("allocate lock");
+        state.set_lock_id(lock_id);
+        runtime
+            .box_manager
+            .add_box(&config, &state)
+            .expect("add box");
+        let box_impl = runtime.create_box_impl(config.clone(), state);
+
+        let committed =
+            RuntimeImpl::commit_restart_success(&runtime, &config.id, 3, &box_impl, lock_id)
+                .await
+                .expect("commit restart success");
+
+        assert!(committed);
+        let in_memory = box_impl.state.read().clone();
+        let (_, persisted) = runtime
+            .box_manager
+            .box_by_id(&config.id)
+            .expect("load box")
+            .expect("box exists");
+        assert_eq!(in_memory.stop_info.cause, StopCause::Normal);
+        assert_eq!(in_memory.stop_info.exit_code, None);
+        assert_eq!(in_memory.stop_info.restart_count, 0);
+        assert!(in_memory.stop_info.restarted_at.is_some());
+        assert_eq!(persisted.stop_info.cause, in_memory.stop_info.cause);
+        assert_eq!(persisted.stop_info.exit_code, in_memory.stop_info.exit_code);
+        assert_eq!(persisted.stop_info.exit_time, in_memory.stop_info.exit_time);
+        assert_eq!(
+            persisted.stop_info.restart_count,
+            in_memory.stop_info.restart_count
+        );
+        assert_eq!(
+            persisted.stop_info.restarted_at,
+            in_memory.stop_info.restarted_at
+        );
+    }
+
+    #[tokio::test]
+    async fn test_commit_restart_success_rejects_stale_epoch() {
+        let (runtime, _dir) = create_state_commit_test_runtime();
+        let config = test_box_config(false);
+        let mut state = BoxState::new();
+        state.force_status(BoxStatus::Running);
+        state.lifecycle_epoch = 4;
+        state.stop_info.cause = StopCause::RestartFailed;
+        state.stop_info.restart_count = 2;
+        let lock_id = runtime.lock_manager.allocate().expect("allocate lock");
+        state.set_lock_id(lock_id);
+        runtime
+            .box_manager
+            .add_box(&config, &state)
+            .expect("add box");
+        let box_impl = runtime.create_box_impl(config.clone(), state);
+
+        let committed =
+            RuntimeImpl::commit_restart_success(&runtime, &config.id, 3, &box_impl, lock_id)
+                .await
+                .expect("commit restart success");
+
+        assert!(!committed);
+        let in_memory = box_impl.state.read().clone();
+        let (_, persisted) = runtime
+            .box_manager
+            .box_by_id(&config.id)
+            .expect("load box")
+            .expect("box exists");
+        assert_eq!(in_memory.stop_info.cause, StopCause::RestartFailed);
+        assert_eq!(in_memory.stop_info.restart_count, 2);
+        assert_eq!(persisted.stop_info.cause, in_memory.stop_info.cause);
+        assert_eq!(
+            persisted.stop_info.restart_count,
+            in_memory.stop_info.restart_count
+        );
+    }
+
+    #[tokio::test]
+    async fn test_commit_restart_success_rejects_stopped_state() {
+        let (runtime, _dir) = create_state_commit_test_runtime();
+        let config = test_box_config(false);
+        let mut state = BoxState::new();
+        state.force_status(BoxStatus::Stopped);
+        state.lifecycle_epoch = 3;
+        state.stop_info.cause = StopCause::RestartFailed;
+        state.stop_info.restart_count = 2;
+        let lock_id = runtime.lock_manager.allocate().expect("allocate lock");
+        state.set_lock_id(lock_id);
+        runtime
+            .box_manager
+            .add_box(&config, &state)
+            .expect("add box");
+        let box_impl = runtime.create_box_impl(config.clone(), state);
+
+        let committed =
+            RuntimeImpl::commit_restart_success(&runtime, &config.id, 3, &box_impl, lock_id)
+                .await
+                .expect("commit restart success");
+
+        assert!(!committed);
+        let in_memory = box_impl.state.read().clone();
+        let (_, persisted) = runtime
+            .box_manager
+            .box_by_id(&config.id)
+            .expect("load box")
+            .expect("box exists");
+        assert_eq!(in_memory.stop_info.cause, StopCause::RestartFailed);
+        assert_eq!(in_memory.stop_info.restart_count, 2);
+        assert_eq!(persisted.stop_info.cause, in_memory.stop_info.cause);
+        assert_eq!(
+            persisted.stop_info.restart_count,
+            in_memory.stop_info.restart_count
+        );
+    }
+
+    #[tokio::test]
+    async fn test_commit_crash_restart_state_rejects_stale_lifecycle_epoch() {
+        let (runtime, _dir) = create_state_commit_test_runtime();
+        let config = add_state_commit_test_box(&runtime, BoxStatus::Crashed, 4);
+
+        let committed = RuntimeImpl::commit_crash_restart_state(&runtime, &config.id, 3, |state| {
+            state.stop_info.cause = StopCause::RestartFailed;
+        })
+        .await
+        .expect("commit state");
+
+        let (_, saved_state) = runtime
+            .box_manager
+            .box_by_id(&config.id)
+            .expect("load box")
+            .expect("box exists");
+        assert!(!committed);
+        assert_eq!(saved_state.status, BoxStatus::Crashed);
+        assert_eq!(saved_state.stop_info.cause, StopCause::Normal);
+    }
+
+    #[tokio::test]
+    async fn test_commit_crash_restart_state_rejects_stopped_state_at_same_epoch() {
+        let (runtime, _dir) = create_state_commit_test_runtime();
+        let config = add_state_commit_test_box(&runtime, BoxStatus::Stopped, 3);
+
+        let committed = RuntimeImpl::commit_crash_restart_state(&runtime, &config.id, 3, |state| {
+            state.stop_info.cause = StopCause::RestartFailed;
+        })
+        .await
+        .expect("commit state");
+
+        let (_, saved_state) = runtime
+            .box_manager
+            .box_by_id(&config.id)
+            .expect("load box")
+            .expect("box exists");
+        assert!(!committed);
+        assert_eq!(saved_state.status, BoxStatus::Stopped);
+        assert_eq!(saved_state.stop_info.cause, StopCause::Normal);
+    }
+
+    #[tokio::test]
+    async fn test_commit_crash_restart_state_accepts_current_crashed_state() {
+        let (runtime, _dir) = create_state_commit_test_runtime();
+        let config = add_state_commit_test_box(&runtime, BoxStatus::Crashed, 3);
+
+        let committed = RuntimeImpl::commit_crash_restart_state(&runtime, &config.id, 3, |state| {
+            state.force_status(BoxStatus::Stopped);
+            state.stop_info.cause = StopCause::MaxRetriesExceeded;
+        })
+        .await
+        .expect("commit state");
+
+        let (_, saved_state) = runtime
+            .box_manager
+            .box_by_id(&config.id)
+            .expect("load box")
+            .expect("box exists");
+        assert!(committed);
+        assert_eq!(saved_state.status, BoxStatus::Stopped);
+        assert_eq!(saved_state.stop_info.cause, StopCause::MaxRetriesExceeded);
+    }
+
+    #[tokio::test]
+    async fn test_commit_crash_restart_state_accepts_current_restarting_state() {
+        let (runtime, _dir) = create_state_commit_test_runtime();
+        let config = add_state_commit_test_box(&runtime, BoxStatus::Restarting, 3);
+
+        let committed = RuntimeImpl::commit_crash_restart_state(&runtime, &config.id, 3, |state| {
+            state.force_status(BoxStatus::Stopped);
+            state.stop_info.cause = StopCause::Normal;
+        })
+        .await
+        .expect("commit state");
+
+        let (_, saved_state) = runtime
+            .box_manager
+            .box_by_id(&config.id)
+            .expect("load box")
+            .expect("box exists");
+        assert!(committed);
+        assert_eq!(saved_state.status, BoxStatus::Stopped);
+        assert_eq!(saved_state.stop_info.cause, StopCause::Normal);
+    }
+
+    #[tokio::test]
+    async fn test_mark_restart_failed_does_not_overwrite_stale_stopped_state() {
+        let (runtime, _dir) = create_state_commit_test_runtime();
+        let config = test_box_config(false);
+        let mut state = BoxState::new();
+        state.force_status(BoxStatus::Stopped);
+        state.lifecycle_epoch = 4;
+        state.stop_info.cause = StopCause::Normal;
+        let lock_id = runtime.lock_manager.allocate().expect("allocate lock");
+        state.set_lock_id(lock_id);
+
+        runtime
+            .box_manager
+            .add_box(&config, &state)
+            .expect("add box");
+
+        let committed = RuntimeImpl::mark_restart_failed(&runtime, &config.id, 3, 5)
+            .await
+            .expect("mark restart failed");
+
+        let (_, saved_state) = runtime
+            .box_manager
+            .box_by_id(&config.id)
+            .expect("load box")
+            .expect("box exists");
+        assert!(!committed);
+        assert_eq!(saved_state.status, BoxStatus::Stopped);
+        assert_eq!(saved_state.stop_info.cause, StopCause::Normal);
+    }
+
+    #[tokio::test]
+    async fn test_cancelled_crash_restart_does_not_overwrite_stale_stopped_state() {
+        let (runtime, _dir) = create_state_commit_test_runtime();
+        let config = test_box_config(false);
+        let mut state = BoxState::new();
+        state.force_status(BoxStatus::Stopped);
+        state.lifecycle_epoch = 4;
+        state.stop_info.cause = StopCause::SystemReboot;
+        state.stop_info.restart_count = 99;
+        let lock_id = runtime.lock_manager.allocate().expect("allocate lock");
+        state.set_lock_id(lock_id);
+
+        runtime
+            .box_manager
+            .add_box(&config, &state)
+            .expect("add box");
+
+        let shutdown_token = CancellationToken::new();
+        shutdown_token.cancel();
+        RuntimeImpl::run_restart_loop(
+            Arc::downgrade(&runtime),
+            shutdown_token,
+            config.id.clone(),
+            CrashRestartPlan {
+                restart_policy: Some(RestartPolicy::Always),
+                expected_epoch: 3,
+                current_restart_count: 0,
+                new_restart_count: 1,
+                exit_code: Some(1),
+            },
+        )
+        .await;
+
+        let (_, saved_state) = runtime
+            .box_manager
+            .box_by_id(&config.id)
+            .expect("load box")
+            .expect("box exists");
+        assert_eq!(saved_state.status, BoxStatus::Stopped);
+        assert_eq!(saved_state.lifecycle_epoch(), 4);
+        assert_eq!(saved_state.stop_info.cause, StopCause::SystemReboot);
+        assert_eq!(saved_state.stop_info.restart_count, 99);
+    }
+
+    #[test]
+    fn test_restart_denied_stop_cause_for_no_policy() {
+        assert_eq!(
+            stop_cause_when_restart_denied(None, Some(1), false),
+            StopCause::CrashedNoPolicy
+        );
+        assert_eq!(
+            stop_cause_when_restart_denied(Some(&RestartPolicy::No), Some(1), false),
+            StopCause::CrashedNoPolicy
+        );
+    }
+
+    #[test]
+    fn test_restart_denied_stop_cause_for_on_failure_clean_exit() {
+        assert_eq!(
+            stop_cause_when_restart_denied(
+                Some(&RestartPolicy::OnFailure { max_retries: 3 }),
+                Some(0),
+                false,
+            ),
+            StopCause::Normal
+        );
+    }
+
+    #[test]
+    fn test_restart_denied_stop_cause_for_on_failure_max_retries() {
+        assert_eq!(
+            stop_cause_when_restart_denied(
+                Some(&RestartPolicy::OnFailure { max_retries: 3 }),
+                Some(1),
+                true,
+            ),
+            StopCause::MaxRetriesExceeded
+        );
     }
 
     // ====================================================================
