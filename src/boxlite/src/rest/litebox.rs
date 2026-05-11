@@ -32,19 +32,25 @@ use super::types::{
 /// all operations to the remote REST API.
 pub(crate) struct RestBox {
     client: ApiClient,
+    /// The raw box_id string returned by the REST API (may be a UUID).
+    /// Used for URL path construction. Kept separate from `cached_info.id`
+    /// because `BoxID` only accepts 12- or 26-char alphanumeric strings,
+    /// while the REST API returns UUIDs.
+    raw_id: String,
     cached_info: RwLock<BoxInfo>,
 }
 
 impl RestBox {
-    pub fn new(client: ApiClient, info: BoxInfo) -> Self {
+    pub fn new(client: ApiClient, raw_id: String, info: BoxInfo) -> Self {
         Self {
             client,
+            raw_id,
             cached_info: RwLock::new(info),
         }
     }
 
     fn box_id_str(&self) -> String {
-        self.cached_info.read().id.to_string()
+        self.raw_id.clone()
     }
 }
 
@@ -58,6 +64,10 @@ impl BoxBackend for RestBox {
             let info = self.cached_info.data_ptr();
             &(*info).id
         }
+    }
+
+    fn api_id(&self) -> String {
+        self.raw_id.clone()
     }
 
     fn name(&self) -> Option<&str> {
@@ -243,8 +253,9 @@ impl BoxBackend for RestBox {
         let req = CloneBoxRequest::from_options(&options, name.as_deref());
         let resp: BoxResponse = self.client.post(&path, &req).await?;
 
+        let raw_id = resp.box_id.clone();
         let info = resp.to_box_info()?;
-        let rest_box = Arc::new(RestBox::new(self.client.clone(), info));
+        let rest_box = Arc::new(RestBox::new(self.client.clone(), raw_id, info));
         let box_backend: Arc<dyn BoxBackend> = rest_box.clone();
         let snapshot_backend: Arc<dyn SnapshotBackend> = rest_box;
         Ok(crate::LiteBox::new(box_backend, snapshot_backend))

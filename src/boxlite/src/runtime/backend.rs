@@ -70,6 +70,15 @@ pub(crate) trait RuntimeBackend: Send + Sync {
 pub(crate) trait BoxBackend: Send + Sync {
     fn id(&self) -> &BoxID;
 
+    /// Returns the identifier string to use in API/URL calls.
+    ///
+    /// For local boxes this is identical to `id().to_string()`.
+    /// For REST-backed boxes this preserves the raw server-returned ID
+    /// (e.g., a UUID), which may not be a valid `BoxID`.
+    fn api_id(&self) -> String {
+        self.id().to_string()
+    }
+
     fn name(&self) -> Option<&str>;
 
     fn info(&self) -> BoxInfo;

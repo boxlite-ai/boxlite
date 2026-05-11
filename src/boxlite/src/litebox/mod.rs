@@ -74,6 +74,15 @@ impl LiteBox {
         &self.id
     }
 
+    /// Returns the identifier to use when calling external APIs.
+    ///
+    /// For local boxes this equals `id().to_string()`. For REST-backed boxes
+    /// this returns the raw server-issued ID (e.g. a UUID), which may not
+    /// satisfy `BoxID`'s length/charset constraints.
+    pub fn api_id(&self) -> String {
+        self.box_backend.api_id()
+    }
+
     pub fn name(&self) -> Option<&str> {
         self.name.as_deref()
     }

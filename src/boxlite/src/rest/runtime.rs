@@ -36,8 +36,9 @@ impl RuntimeBackend for RestRuntime {
     async fn create(&self, options: BoxOptions, name: Option<String>) -> BoxliteResult<LiteBox> {
         let req = CreateBoxRequest::from_options(&options, name);
         let resp: BoxResponse = self.client.post("/boxes", &req).await?;
+        let raw_id = resp.box_id.clone();
         let info = resp.to_box_info()?;
-        let rest_box = Arc::new(RestBox::new(self.client.clone(), info));
+        let rest_box = Arc::new(RestBox::new(self.client.clone(), raw_id, info));
         Ok(litebox_from_rest(rest_box))
     }
 
@@ -61,8 +62,9 @@ impl RuntimeBackend for RestRuntime {
         let path = format!("/boxes/{}", id_or_name);
         match self.client.get::<BoxResponse>(&path).await {
             Ok(resp) => {
+                let raw_id = resp.box_id.clone();
                 let info = resp.to_box_info()?;
-                let rest_box = Arc::new(RestBox::new(self.client.clone(), info));
+                let rest_box = Arc::new(RestBox::new(self.client.clone(), raw_id, info));
                 Ok(Some(litebox_from_rest(rest_box)))
             }
             Err(BoxliteError::NotFound(_)) => Ok(None),
@@ -136,8 +138,9 @@ impl RuntimeBackend for RestRuntime {
             .post_bytes_for_json("/boxes/import", archive_bytes, &query)
             .await?;
 
+        let raw_id = resp.box_id.clone();
         let info = resp.to_box_info()?;
-        let rest_box = Arc::new(RestBox::new(self.client.clone(), info));
+        let rest_box = Arc::new(RestBox::new(self.client.clone(), raw_id, info));
         Ok(litebox_from_rest(rest_box))
     }
 }

@@ -18,7 +18,7 @@ pub(crate) struct PyBox {
 impl PyBox {
     #[getter]
     fn id(&self) -> PyResult<String> {
-        Ok(self.handle.id().to_string())
+        Ok(self.handle.api_id())
     }
 
     #[getter]

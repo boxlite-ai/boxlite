@@ -205,7 +205,33 @@ func (c *Client) Create(ctx context.Context, sandboxDto dto.CreateSandboxDTO) (s
 	return bx.ID(), "boxlite", nil
 }
 
+// boxStarter is the subset of *boxlite.Box needed by startIdempotent.
+type boxStarter interface {
+	Start(context.Context) error
+	Info(context.Context) (*boxlite.BoxInfo, error)
+}
+
+// startIdempotent calls bx.Start and suppresses the error only when the box is
+// confirmed to be already running. ErrInvalidState from any other state
+// (Stopping/Paused/Unknown) is propagated unchanged.
+func startIdempotent(ctx context.Context, bx boxStarter, sandboxId string, log *slog.Logger) error {
+	if err := bx.Start(ctx); err != nil {
+		if boxlite.IsInvalidState(err) {
+			// Rust start() returns Ok(()) for Running state, so ErrInvalidState means
+			// the box is in a non-startable state. Verify before suppressing.
+			info, infoErr := bx.Info(ctx)
+			if infoErr == nil && info.State == boxlite.StateRunning {
+				log.DebugContext(ctx, "start called on already running box, treating as no-op", "sandbox_id", sandboxId)
+				return nil
+			}
+		}
+		return err
+	}
+	return nil
+}
+
 // Start starts a stopped sandbox and returns the daemon version.
+// Idempotent: if the box is already running, treats the call as a no-op.
 func (c *Client) Start(ctx context.Context, sandboxId string, authToken *string, metadata map[string]string) (string, error) {
 	if err := c.ensureVolumeMountsFromMetadata(ctx, sandboxId, metadata); err != nil {
 		c.logger.ErrorContext(ctx, "failed to ensure volume FUSE mounts", "error", err)
@@ -215,7 +241,8 @@ func (c *Client) Start(ctx context.Context, sandboxId string, authToken *string,
 	if err != nil {
 		return "", err
 	}
-	if err := bx.Start(ctx); err != nil {
+
+	if err := startIdempotent(ctx, bx, sandboxId, c.logger); err != nil {
 		return "", err
 	}
 	return "boxlite", nil
