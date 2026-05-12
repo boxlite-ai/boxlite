@@ -23,7 +23,8 @@ use super::client::ApiClient;
 use super::exec::RestExecControl;
 use super::types::{
     BoxMetricsResponse, BoxResponse, CloneBoxRequest, CreateSnapshotRequest, ExecRequest,
-    ExecResponse, ExportBoxRequest, ListSnapshotsResponse, SnapshotResponse,
+    ExecResponse, ExecutionStatusResponse, ExportBoxRequest, ListSnapshotsResponse,
+    SnapshotResponse,
 };
 
 /// REST-backed box handle.
@@ -97,15 +98,16 @@ impl BoxBackend for RestBox {
         let (stdin_tx, stdin_rx) = mpsc::unbounded_channel::<Vec<u8>>();
         let (result_tx, result_rx) = mpsc::unbounded_channel::<ExecResult>();
 
-        // 3. Spawn SSE reader task for output streaming
-        let sse_client = self.client.clone();
-        let sse_box_id = box_id.clone();
-        let sse_exec_id = execution_id.clone();
+        // 3. Spawn the bidirectional WebSocket pump (stdin + stdout + stderr + exit)
+        let ws_client = self.client.clone();
+        let ws_box_id = box_id.clone();
+        let ws_exec_id = execution_id.clone();
         tokio::spawn(async move {
-            let _ = read_sse_output(
-                &sse_client,
-                &sse_box_id,
-                &sse_exec_id,
+            attach_ws(
+                &ws_client,
+                &ws_box_id,
+                &ws_exec_id,
+                stdin_rx,
                 stdout_tx,
                 stderr_tx,
                 result_tx,
@@ -113,15 +115,7 @@ impl BoxBackend for RestBox {
             .await;
         });
 
-        // 4. Spawn stdin writer task
-        let stdin_client = self.client.clone();
-        let stdin_box_id = box_id.clone();
-        let stdin_exec_id = execution_id.clone();
-        tokio::spawn(async move {
-            forward_stdin(&stdin_client, &stdin_box_id, &stdin_exec_id, stdin_rx).await;
-        });
-
-        // 5. Build Execution handle
+        // 4. Build Execution handle
         let control = RestExecControl::new(self.client.clone(), box_id);
         let stdout = ExecStdout::new(stdout_rx);
         let stderr = ExecStderr::new(stderr_rx);
@@ -129,6 +123,63 @@ impl BoxBackend for RestBox {
 
         Ok(Execution::new(
             execution_id,
+            Box::new(control),
+            result_rx,
+            Some(stdin),
+            Some(stdout),
+            Some(stderr),
+        ))
+    }
+
+    async fn attach(&self, execution_id: &str) -> BoxliteResult<Execution> {
+        let box_id = self.box_id_str();
+
+        // Open the WebSocket synchronously so a rejection (404 reaped /
+        // 409 already-attached) surfaces here, at the caller's `await
+        // box.attach(id)` point — not as an after-the-fact ExecResult
+        // pulled from `wait()`.
+        let path = format!("/boxes/{}/executions/{}/attach", box_id, execution_id);
+        let stream = self.client.connect_ws(&path).await.map_err(|e| match e {
+            BoxliteError::NotFound(msg) => BoxliteError::SessionReaped(format!(
+                "session {} not found — likely reaped after disconnect timeout: {}",
+                execution_id, msg
+            )),
+            BoxliteError::AlreadyExists(msg) => BoxliteError::AlreadyExists(format!(
+                "session {} has another client attached: {}",
+                execution_id, msg
+            )),
+            other => other,
+        })?;
+
+        let (stdout_tx, stdout_rx) = mpsc::unbounded_channel::<String>();
+        let (stderr_tx, stderr_rx) = mpsc::unbounded_channel::<String>();
+        let (stdin_tx, stdin_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let (result_tx, result_rx) = mpsc::unbounded_channel::<ExecResult>();
+
+        let ws_client = self.client.clone();
+        let ws_box_id = box_id.clone();
+        let ws_exec_id = execution_id.to_string();
+        tokio::spawn(async move {
+            attach_ws_pump(
+                &ws_client,
+                &ws_box_id,
+                &ws_exec_id,
+                stream,
+                stdin_rx,
+                stdout_tx,
+                stderr_tx,
+                result_tx,
+            )
+            .await;
+        });
+
+        let control = RestExecControl::new(self.client.clone(), box_id);
+        let stdout = ExecStdout::new(stdout_rx);
+        let stderr = ExecStderr::new(stderr_rx);
+        let stdin = ExecStdin::new(stdin_tx);
+
+        Ok(Execution::new(
+            execution_id.to_string(),
             Box::new(control),
             result_rx,
             Some(stdin),
@@ -364,178 +415,269 @@ impl SnapshotBackend for RestBox {
 }
 
 // ============================================================================
-// SSE Output Streaming
+// WebSocket Attach
 // ============================================================================
+//
+// One bidirectional WebSocket carries stdin (Binary frames), stdout/stderr
+// with a 1-byte channel prefix (0x01 / 0x02), and control messages (text
+// JSON: resize / signal / stdin_eof / exit / error). Wire format is the
+// authoritative one defined by the server attach handler — see plan D1/D2.
 
-/// Read SSE events from the execution output endpoint and forward to channels.
-async fn read_sse_output(
+/// Maximum idle interval before the WS reader gives up on the connection.
+///
+/// The watchdog catches silent CDN/proxy cuts that would otherwise leave the
+/// reader parked forever on `stream.next().await`. Tests override this via
+/// `cfg(test)` so they don't have to wait 45 s to observe a timeout.
+#[cfg(not(test))]
+const WS_WATCHDOG: std::time::Duration = std::time::Duration::from_secs(45);
+#[cfg(test)]
+const WS_WATCHDOG: std::time::Duration = std::time::Duration::from_millis(300);
+
+/// Drive the bidirectional WS attach for a single execution.
+///
+/// Wire contract (mirrors the server's `/executions/{id}/attach` handler):
+///
+/// - Client → Server: binary frames are stdin bytes; text JSON frames are
+///   control (`resize`, `signal`, `stdin_eof`).
+/// - Server → Client: binary frames have a 1-byte channel prefix
+///   (`0x01` = stdout, `0x02` = stderr); text JSON frames are
+///   `{"type":"exit","exit_code":N}` (terminal) or
+///   `{"type":"error","message":"..."}` (informational, connection stays open).
+///
+/// Always emits exactly one `ExecResult` to `result_tx` before returning,
+/// so `Execution::wait()` can never observe a silent close.
+async fn attach_ws(
     client: &ApiClient,
     box_id: &str,
     execution_id: &str,
+    stdin_rx: mpsc::UnboundedReceiver<Vec<u8>>,
     stdout_tx: mpsc::UnboundedSender<String>,
     stderr_tx: mpsc::UnboundedSender<String>,
     result_tx: mpsc::UnboundedSender<ExecResult>,
-) -> BoxliteResult<()> {
-    let path = format!("/boxes/{}/executions/{}/output", box_id, execution_id);
-    let builder = client.authorized_get(&path).await?;
-    let resp = builder
-        .header("Accept", "text/event-stream")
-        .send()
-        .await
-        .map_err(|e| BoxliteError::Internal(format!("SSE connect failed: {}", e)))?;
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
-        return Err(BoxliteError::Internal(format!(
-            "SSE stream failed (HTTP {}): {}",
-            status, text
-        )));
-    }
-
-    // Read SSE stream line by line
-    use futures::StreamExt;
-    let mut stream = resp.bytes_stream();
-    let mut buffer = String::new();
-    let mut current_event = String::new();
-    let mut current_data = String::new();
-
-    while let Some(chunk) = stream.next().await {
-        let chunk =
-            chunk.map_err(|e| BoxliteError::Internal(format!("SSE stream read error: {}", e)))?;
-        buffer.push_str(&String::from_utf8_lossy(&chunk));
-
-        // Process complete lines
-        while let Some(newline_pos) = buffer.find('\n') {
-            let line = buffer[..newline_pos].trim_end_matches('\r').to_string();
-            buffer = buffer[newline_pos + 1..].to_string();
-
-            if line.is_empty() {
-                // Empty line = end of event, dispatch
-                dispatch_sse_event(
-                    &current_event,
-                    &current_data,
-                    &stdout_tx,
-                    &stderr_tx,
-                    &result_tx,
-                );
-                current_event.clear();
-                current_data.clear();
-            } else if let Some(value) = line.strip_prefix("event: ") {
-                current_event = value.to_string();
-            } else if let Some(value) = line.strip_prefix("data: ") {
-                if !current_data.is_empty() {
-                    current_data.push('\n');
-                }
-                current_data.push_str(value);
-            }
-        }
-    }
-
-    // Dispatch any remaining event
-    if !current_event.is_empty() || !current_data.is_empty() {
-        dispatch_sse_event(
-            &current_event,
-            &current_data,
-            &stdout_tx,
-            &stderr_tx,
-            &result_tx,
-        );
-    }
-
-    Ok(())
-}
-
-/// Dispatch a single SSE event to the appropriate channel.
-fn dispatch_sse_event(
-    event: &str,
-    data: &str,
-    stdout_tx: &mpsc::UnboundedSender<String>,
-    stderr_tx: &mpsc::UnboundedSender<String>,
-    result_tx: &mpsc::UnboundedSender<ExecResult>,
 ) {
-    if data.is_empty() {
-        return;
-    }
-
-    match event {
-        "stdout" => {
-            // SSE data is JSON: {"data":"<base64>"} per OpenAPI spec
-            if let Some(decoded) = extract_and_decode_b64(data) {
-                let _ = stdout_tx.send(decoded);
-            }
+    let path = format!("/boxes/{}/executions/{}/attach", box_id, execution_id);
+    let stream = match client.connect_ws(&path).await {
+        Ok(s) => s,
+        Err(e) => {
+            emit_or_fallback(
+                client,
+                box_id,
+                execution_id,
+                &result_tx,
+                format!("WS connect failed: {}", e),
+            )
+            .await;
+            return;
         }
-        "stderr" => {
-            if let Some(decoded) = extract_and_decode_b64(data) {
-                let _ = stderr_tx.send(decoded);
-            }
-        }
-        "exit" => {
-            // Parse exit code from JSON: {"exit_code": 0}
-            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) {
-                let exit_code = parsed
-                    .get("exit_code")
-                    .and_then(|v| v.as_i64())
-                    .unwrap_or(-1) as i32;
-                let error_message = parsed
-                    .get("error")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
-
-                let _ = result_tx.send(ExecResult {
-                    exit_code,
-                    error_message,
-                });
-            }
-        }
-        "error" => {
-            let _ = result_tx.send(ExecResult {
-                exit_code: -1,
-                error_message: Some(data.to_string()),
-            });
-        }
-        _ => {
-            // Ignore unknown event types (keepalive, etc.)
-        }
-    }
+    };
+    attach_ws_pump(
+        client,
+        box_id,
+        execution_id,
+        stream,
+        stdin_rx,
+        stdout_tx,
+        stderr_tx,
+        result_tx,
+    )
+    .await;
 }
 
-/// Extract base64 value from SSE JSON `{"data":"<base64>"}` and decode to UTF-8.
-fn extract_and_decode_b64(data: &str) -> Option<String> {
-    let parsed: serde_json::Value = serde_json::from_str(data).ok()?;
-    let b64 = parsed.get("data")?.as_str()?;
-    base64_decode(b64).ok()
-}
-
-/// Decode base64-encoded SSE data to a UTF-8 string.
-fn base64_decode(data: &str) -> Result<String, BoxliteError> {
-    use base64::Engine;
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(data.trim())
-        .map_err(|e| BoxliteError::Internal(format!("base64 decode error: {}", e)))?;
-    String::from_utf8(bytes)
-        .map_err(|e| BoxliteError::Internal(format!("UTF-8 decode error: {}", e)))
-}
-
-// ============================================================================
-// Stdin Forwarding
-// ============================================================================
-
-/// Forward stdin data from channel to the remote execution input endpoint.
-async fn forward_stdin(
+/// Pump stdin/stdout/stderr/control over an already-open WebSocket. Split
+/// out of `attach_ws` so callers that connect synchronously (e.g.
+/// `RestBox::attach`, which needs to surface 404/409 as typed errors)
+/// can hand in the pre-opened stream.
+#[allow(clippy::too_many_arguments)]
+async fn attach_ws_pump(
     client: &ApiClient,
     box_id: &str,
     execution_id: &str,
+    stream: tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
     mut stdin_rx: mpsc::UnboundedReceiver<Vec<u8>>,
+    stdout_tx: mpsc::UnboundedSender<String>,
+    stderr_tx: mpsc::UnboundedSender<String>,
+    result_tx: mpsc::UnboundedSender<ExecResult>,
 ) {
-    let path = format!("/boxes/{}/executions/{}/input", box_id, execution_id);
-    while let Some(data) = stdin_rx.recv().await {
-        if client.post_bytes(&path, data, false).await.is_err() {
-            break;
+    use futures::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+
+    let (mut sink, mut stream) = stream.split();
+
+    // Stdin pump: forward channel bytes to the WS as binary frames.
+    // Aborting this task on attach termination drops `sink`, which closes
+    // stdin from the client side cleanly.
+    let stdin_task = tokio::spawn(async move {
+        while let Some(bytes) = stdin_rx.recv().await {
+            if sink.send(Message::Binary(bytes)).await.is_err() {
+                break;
+            }
+        }
+        // Best-effort EOF signal; ignore failures because the writer half
+        // may already be closed by the server.
+        let _ = sink
+            .send(Message::Text(r#"{"type":"stdin_eof"}"#.to_string()))
+            .await;
+    });
+
+    // `last_error_message` carries the most recent server-reported error
+    // text so that — if the connection terminates without an `exit` frame —
+    // we surface that message rather than a generic "stream ended" cause.
+    let mut last_error_message: Option<String> = None;
+
+    loop {
+        let next = tokio::time::timeout(WS_WATCHDOG, stream.next()).await;
+        let frame = match next {
+            Err(_) => {
+                emit_or_fallback(
+                    client,
+                    box_id,
+                    execution_id,
+                    &result_tx,
+                    "no WS traffic for watchdog interval (likely connection idle timeout or proxy cut)"
+                        .to_string(),
+                )
+                .await;
+                break;
+            }
+            Ok(None) => {
+                let cause = last_error_message.take().unwrap_or_else(|| {
+                    "WS stream ended before exit frame (likely connection idle timeout or proxy cut)"
+                        .to_string()
+                });
+                emit_or_fallback(client, box_id, execution_id, &result_tx, cause).await;
+                break;
+            }
+            Ok(Some(Err(e))) => {
+                emit_or_fallback(
+                    client,
+                    box_id,
+                    execution_id,
+                    &result_tx,
+                    format!("WS stream read error: {}", e),
+                )
+                .await;
+                break;
+            }
+            Ok(Some(Ok(msg))) => msg,
+        };
+
+        match frame {
+            Message::Binary(bytes) => {
+                if let Some((channel, payload)) = bytes.split_first() {
+                    let text = String::from_utf8_lossy(payload).into_owned();
+                    match *channel {
+                        0x01 => {
+                            let _ = stdout_tx.send(text);
+                        }
+                        0x02 => {
+                            let _ = stderr_tx.send(text);
+                        }
+                        other => {
+                            tracing::warn!(channel = other, "WS attach: unknown channel prefix");
+                        }
+                    }
+                }
+            }
+            Message::Text(text) => match parse_control_frame(&text) {
+                ControlFrame::Exit { exit_code } => {
+                    let _ = result_tx.send(ExecResult {
+                        exit_code,
+                        error_message: None,
+                    });
+                    break;
+                }
+                ControlFrame::Error { message } => {
+                    tracing::warn!(message = %message, "WS attach: server-reported error");
+                    last_error_message = Some(message);
+                }
+                ControlFrame::Unknown => {
+                    tracing::warn!(text = %text, "WS attach: unrecognized text frame");
+                }
+            },
+            Message::Close(_) => {
+                let cause = last_error_message.take().unwrap_or_else(|| {
+                    "WS closed before exit frame (likely connection idle timeout or proxy cut)"
+                        .to_string()
+                });
+                emit_or_fallback(client, box_id, execution_id, &result_tx, cause).await;
+                break;
+            }
+            // Pings are auto-replied by tungstenite; pongs/frames just reset the watchdog.
+            Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => {}
         }
     }
-    // Channel closed = EOF, send close signal
-    let _ = client.post_bytes(&path, vec![], true).await;
+
+    stdin_task.abort();
+}
+
+/// Decoded form of a Server→Client text-JSON frame.
+enum ControlFrame {
+    Exit { exit_code: i32 },
+    Error { message: String },
+    Unknown,
+}
+
+fn parse_control_frame(text: &str) -> ControlFrame {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
+        return ControlFrame::Unknown;
+    };
+    match value.get("type").and_then(|v| v.as_str()) {
+        Some("exit") => {
+            let exit_code = value
+                .get("exit_code")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(-1) as i32;
+            ControlFrame::Exit { exit_code }
+        }
+        Some("error") => {
+            let message = value
+                .get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or("server reported error without message")
+                .to_string();
+            ControlFrame::Error { message }
+        }
+        _ => ControlFrame::Unknown,
+    }
+}
+
+/// Emit a final `ExecResult` when the WS path terminated without an `exit`
+/// frame. Tries the `GET /executions/{id}` status endpoint first so callers
+/// observe the real exit code on a silent connection drop; falls back to a
+/// synthesized error if the status query is unavailable or still running.
+async fn emit_or_fallback(
+    client: &ApiClient,
+    box_id: &str,
+    execution_id: &str,
+    result_tx: &mpsc::UnboundedSender<ExecResult>,
+    cause: String,
+) {
+    let status_path = format!("/boxes/{}/executions/{}", box_id, execution_id);
+    let status_probe = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        client.get::<ExecutionStatusResponse>(&status_path),
+    );
+    if let Ok(Ok(info)) = status_probe.await {
+        match info.status.as_str() {
+            "completed" | "killed" | "timed_out" => {
+                let _ = result_tx.send(ExecResult {
+                    exit_code: info.exit_code.unwrap_or(-1),
+                    error_message: None,
+                });
+                return;
+            }
+            _ => {
+                // Server says the exec is still running — surface the
+                // synthesized cause so the caller sees the disconnect.
+            }
+        }
+    }
+    let _ = result_tx.send(ExecResult {
+        exit_code: -1,
+        error_message: Some(cause),
+    });
 }
 
 // ============================================================================
@@ -648,5 +790,416 @@ fn box_metrics_from_response(resp: &BoxMetricsResponse) -> BoxMetrics {
         stage_box_config_ms: box_config_ms,
         stage_box_spawn_ms: box_spawn_ms,
         stage_container_init_ms: container_init_ms,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Tests for the WebSocket attach pump.
+    //!
+    //! Each test stands up an in-process TCP listener bound to an ephemeral
+    //! port. Per-connection routing inspects the first request line so the
+    //! same listener handles both the WS upgrade (`/attach`) and the HTTP
+    //! status fallback (`GET /executions/{id}`).
+
+    use super::*;
+    use crate::rest::client::ApiClient;
+    use crate::rest::options::BoxliteRestOptions;
+    use futures::{SinkExt, StreamExt};
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::{TcpListener, TcpStream};
+    use tokio::sync::Mutex;
+    use tokio_tungstenite::tungstenite::Message;
+
+    /// Recorded behavior of the in-process test server.
+    #[derive(Default)]
+    struct ServerState {
+        /// Binary frames the server received from the client (stdin bytes).
+        received_stdin: Vec<Vec<u8>>,
+        /// Whether `GET /executions/{id}` was hit and what we replied with.
+        status_calls: u32,
+    }
+
+    /// Shorthand for the `Arc<Mutex<...>>` shared between server and client.
+    type SharedState = Arc<Mutex<ServerState>>;
+
+    /// Read the first HTTP request line + headers off a freshly accepted TCP
+    /// stream. Returns the raw bytes consumed (so the WS upgrade can resume
+    /// from where we left off if needed) and a parsed view of the request.
+    async fn read_request_head(stream: &mut TcpStream) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(1024);
+        let mut tmp = [0u8; 512];
+        loop {
+            let n = match stream.read(&mut tmp).await {
+                Ok(0) => break,
+                Ok(n) => n,
+                Err(_) => break,
+            };
+            buf.extend_from_slice(&tmp[..n]);
+            if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                break;
+            }
+            if buf.len() > 16 * 1024 {
+                break;
+            }
+        }
+        buf
+    }
+
+    /// Build an `ApiClient` pointed at `127.0.0.1:{port}`.
+    fn client_for(port: u16) -> ApiClient {
+        let opts = BoxliteRestOptions::new(format!("http://127.0.0.1:{}", port));
+        ApiClient::new(&opts).expect("ApiClient::new")
+    }
+
+    /// Send a minimal HTTP/1.1 200 OK with a JSON body.
+    async fn write_status_response(stream: &mut TcpStream, body: &str) {
+        let resp = format!(
+            "HTTP/1.1 200 OK\r\n\
+             Content-Type: application/json\r\n\
+             Content-Length: {}\r\n\
+             Connection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        let _ = stream.write_all(resp.as_bytes()).await;
+        let _ = stream.shutdown().await;
+    }
+
+    /// Stream wrapper that replays a buffered prefix before delegating to the
+    /// underlying TcpStream. Lets us peek at the HTTP request line for
+    /// routing while still letting `accept_async` re-parse it.
+    struct ChainedStream {
+        head: Vec<u8>,
+        head_pos: usize,
+        inner: TcpStream,
+    }
+
+    impl tokio::io::AsyncRead for ChainedStream {
+        fn poll_read(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+            buf: &mut tokio::io::ReadBuf<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            if self.head_pos < self.head.len() {
+                let remaining = &self.head[self.head_pos..];
+                let take = remaining.len().min(buf.remaining());
+                buf.put_slice(&remaining[..take]);
+                self.head_pos += take;
+                return std::task::Poll::Ready(Ok(()));
+            }
+            std::pin::Pin::new(&mut self.inner).poll_read(cx, buf)
+        }
+    }
+
+    impl tokio::io::AsyncWrite for ChainedStream {
+        fn poll_write(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+            buf: &[u8],
+        ) -> std::task::Poll<Result<usize, std::io::Error>> {
+            std::pin::Pin::new(&mut self.inner).poll_write(cx, buf)
+        }
+
+        fn poll_flush(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Result<(), std::io::Error>> {
+            std::pin::Pin::new(&mut self.inner).poll_flush(cx)
+        }
+
+        fn poll_shutdown(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Result<(), std::io::Error>> {
+            std::pin::Pin::new(&mut self.inner).poll_shutdown(cx)
+        }
+    }
+
+    /// Install the WS server: peek the head, route by Upgrade header, run
+    /// the per-connection handler. Subsequent connections (after the WS
+    /// upgrade is consumed) reply with `status_body` if provided so the
+    /// `attach_ws` status fallback path can be exercised end-to-end.
+    ///
+    /// The loop runs until the listener is dropped (`server.abort()` from
+    /// the test) — never `return`s on its own — so status probes that
+    /// arrive AFTER the WS connection closes still get answered.
+    async fn run_server<F, Fut>(
+        listener: TcpListener,
+        state: SharedState,
+        status_body: Option<String>,
+        ws_handler: F,
+    ) where
+        F: FnOnce(tokio_tungstenite::WebSocketStream<ChainedStream>, SharedState) -> Fut
+            + Send
+            + 'static,
+        Fut: std::future::Future<Output = ()> + Send + 'static,
+    {
+        let mut ws_handler = Some(ws_handler);
+        loop {
+            let (mut stream, _) = match listener.accept().await {
+                Ok(p) => p,
+                Err(_) => return,
+            };
+            let head = read_request_head(&mut stream).await;
+            let head_str = String::from_utf8_lossy(&head);
+            let is_upgrade = head_str.to_ascii_lowercase().contains("upgrade: websocket");
+            if is_upgrade {
+                if let Some(handler) = ws_handler.take() {
+                    let chained = ChainedStream {
+                        head,
+                        head_pos: 0,
+                        inner: stream,
+                    };
+                    match tokio_tungstenite::accept_async(chained).await {
+                        Ok(ws) => handler(ws, state.clone()).await,
+                        Err(_) => continue,
+                    }
+                }
+                // Already handled the upgrade once; subsequent ones close.
+            } else if let Some(ref body) = status_body {
+                let mut s = state.lock().await;
+                s.status_calls += 1;
+                drop(s);
+                write_status_response(&mut stream, body).await;
+            } else {
+                let _ = stream.shutdown().await;
+            }
+        }
+    }
+
+    // ─── ws_clean_exit_emits_result ───────────────────────────────────────
+    //
+    // Server sends one stdout binary frame, one exit text frame, then
+    // closes. Client must observe `ExecResult { exit_code: 7 }`, the
+    // stdout payload, and stdin bytes must round-trip back as binary.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ws_clean_exit_emits_result() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let state: SharedState = Arc::new(Mutex::new(ServerState::default()));
+        let state_clone = state.clone();
+        let server = tokio::spawn(async move {
+            run_server(listener, state_clone, None, |mut ws, state| async move {
+                // Drain at least one stdin frame BEFORE sending exit so the
+                // assertion below has something to observe — without this
+                // ordering the client may abort its stdin pump before the
+                // bytes traverse the WS.
+                if let Some(Ok(Message::Binary(b))) = ws.next().await {
+                    let mut s = state.lock().await;
+                    s.received_stdin.push(b);
+                }
+                ws.send(Message::Binary(vec![0x01, b'h', b'i']))
+                    .await
+                    .unwrap();
+                ws.send(Message::Text(r#"{"type":"exit","exit_code":7}"#.into()))
+                    .await
+                    .unwrap();
+                let _ = ws.close(None).await;
+            })
+            .await;
+        });
+
+        let client = client_for(port);
+        let (stdout_tx, mut stdout_rx) = mpsc::unbounded_channel::<String>();
+        let (stderr_tx, _stderr_rx) = mpsc::unbounded_channel::<String>();
+        let (stdin_tx, stdin_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let (result_tx, mut result_rx) = mpsc::unbounded_channel::<ExecResult>();
+
+        // Push stdin before the pump runs; it'll be drained as soon as
+        // the WS connection is up.
+        stdin_tx.send(b"hello".to_vec()).unwrap();
+
+        let attach = tokio::spawn(async move {
+            attach_ws(
+                &client, "box1", "exec1", stdin_rx, stdout_tx, stderr_tx, result_tx,
+            )
+            .await;
+        });
+
+        let res = tokio::time::timeout(Duration::from_secs(3), result_rx.recv())
+            .await
+            .expect("result channel timed out")
+            .expect("result channel closed without value");
+        assert_eq!(res.exit_code, 7);
+        assert!(res.error_message.is_none());
+
+        let out = tokio::time::timeout(Duration::from_secs(1), stdout_rx.recv())
+            .await
+            .expect("stdout timed out")
+            .expect("stdout channel closed");
+        assert_eq!(out, "hi");
+
+        attach.await.unwrap();
+        let s = state.lock().await;
+        assert!(
+            s.received_stdin.iter().any(|b| b == b"hello"),
+            "server never observed stdin payload; got {:?}",
+            s.received_stdin
+        );
+        drop(s);
+        server.abort();
+    }
+
+    // ─── ws_close_without_exit_falls_back_to_status ──────────────────────
+    //
+    // Server sends one stdout frame, then closes WITHOUT an exit frame.
+    // The client must hit `GET /executions/{id}` and surface the real exit
+    // code (42) from that response — never a generic "stream closed" error.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ws_close_without_exit_falls_back_to_status() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let state: SharedState = Arc::new(Mutex::new(ServerState::default()));
+        let status_body =
+            r#"{"execution_id":"exec1","status":"completed","exit_code":42}"#.to_string();
+        let state_clone = state.clone();
+        let server = tokio::spawn(async move {
+            run_server(
+                listener,
+                state_clone,
+                Some(status_body),
+                |mut ws, _state| async move {
+                    ws.send(Message::Binary(vec![0x01, b'x'])).await.unwrap();
+                    let _ = ws.close(None).await;
+                },
+            )
+            .await;
+        });
+
+        let client = client_for(port);
+        let (stdout_tx, _stdout_rx) = mpsc::unbounded_channel::<String>();
+        let (stderr_tx, _stderr_rx) = mpsc::unbounded_channel::<String>();
+        let (_stdin_tx, stdin_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let (result_tx, mut result_rx) = mpsc::unbounded_channel::<ExecResult>();
+
+        let attach = tokio::spawn(async move {
+            attach_ws(
+                &client, "box1", "exec1", stdin_rx, stdout_tx, stderr_tx, result_tx,
+            )
+            .await;
+        });
+
+        let res = tokio::time::timeout(Duration::from_secs(3), result_rx.recv())
+            .await
+            .expect("result channel timed out")
+            .expect("result channel closed without value");
+        assert_eq!(
+            res.exit_code, 42,
+            "expected status fallback to surface real exit code"
+        );
+        assert!(res.error_message.is_none());
+
+        attach.await.unwrap();
+        let s = state.lock().await;
+        assert!(
+            s.status_calls >= 1,
+            "status fallback endpoint was never called"
+        );
+        drop(s);
+        server.abort();
+    }
+
+    // ─── ws_watchdog_fires_when_idle ─────────────────────────────────────
+    //
+    // Server accepts the upgrade and then goes silent. The cfg(test)
+    // override keeps WS_WATCHDOG short (~300 ms) so this test finishes
+    // promptly. The emitted ExecResult must name the watchdog as cause —
+    // otherwise we've regressed the silent-stall protection.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ws_watchdog_fires_when_idle() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let state: SharedState = Arc::new(Mutex::new(ServerState::default()));
+        let state_clone = state.clone();
+        let server = tokio::spawn(async move {
+            run_server(listener, state_clone, None, |ws, _state| async move {
+                // Hold the connection open without sending anything.
+                // Wait long enough for the client watchdog to fire and
+                // close the WS from its side.
+                let _kept_alive = ws;
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            })
+            .await;
+        });
+
+        let client = client_for(port);
+        let (stdout_tx, _stdout_rx) = mpsc::unbounded_channel::<String>();
+        let (stderr_tx, _stderr_rx) = mpsc::unbounded_channel::<String>();
+        let (_stdin_tx, stdin_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let (result_tx, mut result_rx) = mpsc::unbounded_channel::<ExecResult>();
+
+        let attach = tokio::spawn(async move {
+            attach_ws(
+                &client, "box1", "exec1", stdin_rx, stdout_tx, stderr_tx, result_tx,
+            )
+            .await;
+        });
+
+        let res = tokio::time::timeout(Duration::from_secs(3), result_rx.recv())
+            .await
+            .expect("watchdog never fired")
+            .expect("result channel closed without value");
+        assert_eq!(res.exit_code, -1);
+        let msg = res.error_message.expect("expected diagnostic message");
+        assert!(msg.contains("watchdog"), "unexpected diagnostic: {:?}", msg);
+
+        attach.await.unwrap();
+        server.abort();
+    }
+
+    // ─── ws_text_error_frame_logs_but_continues ──────────────────────────
+    //
+    // An informational `error` text frame must NOT terminate the
+    // connection. Only the subsequent `exit` frame does. This guards
+    // against treating a recoverable signal-rejection as a terminal error.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ws_text_error_frame_logs_but_continues() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let state: SharedState = Arc::new(Mutex::new(ServerState::default()));
+        let state_clone = state.clone();
+        let server = tokio::spawn(async move {
+            run_server(listener, state_clone, None, |mut ws, _state| async move {
+                ws.send(Message::Text(
+                    r#"{"type":"error","message":"signal not allowed"}"#.into(),
+                ))
+                .await
+                .unwrap();
+                ws.send(Message::Text(r#"{"type":"exit","exit_code":0}"#.into()))
+                    .await
+                    .unwrap();
+                let _ = ws.close(None).await;
+            })
+            .await;
+        });
+
+        let client = client_for(port);
+        let (stdout_tx, _stdout_rx) = mpsc::unbounded_channel::<String>();
+        let (stderr_tx, _stderr_rx) = mpsc::unbounded_channel::<String>();
+        let (_stdin_tx, stdin_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let (result_tx, mut result_rx) = mpsc::unbounded_channel::<ExecResult>();
+
+        let attach = tokio::spawn(async move {
+            attach_ws(
+                &client, "box1", "exec1", stdin_rx, stdout_tx, stderr_tx, result_tx,
+            )
+            .await;
+        });
+
+        let res = tokio::time::timeout(Duration::from_secs(3), result_rx.recv())
+            .await
+            .expect("result channel timed out")
+            .expect("result channel closed without value");
+        assert_eq!(
+            res.exit_code, 0,
+            "informational error frame must not terminate the attach"
+        );
+        assert!(res.error_message.is_none());
+
+        attach.await.unwrap();
+        server.abort();
     }
 }

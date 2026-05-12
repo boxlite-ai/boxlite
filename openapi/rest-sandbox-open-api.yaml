@@ -42,11 +42,16 @@ info:
 
     ## Execution Model
 
-    Command execution is asynchronous:
-    1. `POST /exec` starts an execution and returns an `execution_id`
-    2. `GET /executions/{exec_id}/output` streams stdout/stderr via SSE
-    3. `POST /executions/{exec_id}/input` sends stdin data
-    4. Interactive TTY sessions use `WebSocket /exec/tty`
+    Command execution is two-step:
+    1. `POST /exec` creates the execution and returns an `execution_id`.
+    2. `GET /executions/{exec_id}/attach` upgrades to a bidirectional
+       WebSocket carrying stdin, stdout, stderr, and in-band control
+       (resize, signal, exit). One attach at a time per exec; the exec
+       continues running across WebSocket close so the SDK can reattach.
+
+    Out-of-band control endpoints exist for clients that prefer a REST
+    style: `GET /executions/{exec_id}` (status), `POST .../resize`,
+    `POST .../signal`, `DELETE /executions/{exec_id}` (kill).
   license:
     name: Apache-2.0
     url: https://www.apache.org/licenses/LICENSE-2.0
@@ -526,10 +531,11 @@ paths:
         The box is automatically started if not already running.
 
         Use the returned `execution_id` to:
-        - Stream output: `GET /executions/{exec_id}/output` (SSE)
-        - Send input: `POST /executions/{exec_id}/input`
+        - Attach stdio: `GET /executions/{exec_id}/attach` (WebSocket)
         - Check status: `GET /executions/{exec_id}`
         - Send signal: `POST /executions/{exec_id}/signal`
+        - Resize PTY: `POST /executions/{exec_id}/resize`
+        - Kill: `DELETE /executions/{exec_id}`
       tags: [Execution]
       parameters:
         - $ref: "#/components/parameters/idempotencyKey"
@@ -558,58 +564,6 @@ paths:
         "409":
           $ref: "#/components/responses/ConflictError"
 
-  /{prefix}/boxes/{box_id}/exec/tty:
-    parameters:
-      - $ref: "#/components/parameters/prefix"
-      - $ref: "#/components/parameters/boxId"
-    get:
-      operationId: execTty
-      summary: Interactive TTY session (WebSocket)
-      description: |
-        Opens an interactive terminal session via WebSocket upgrade.
-
-        **Protocol:**
-        - Client → Server: raw stdin bytes (binary frames)
-        - Server → Client: raw PTY output (binary frames)
-        - Client → Server control: `{"type":"resize","cols":120,"rows":40}` (text frame)
-        - Server → Client exit: `{"type":"exit","exit_code":0}` (text frame)
-
-        **Query parameters** configure the initial session.
-      tags: [Execution]
-      parameters:
-        - name: command
-          in: query
-          description: Command to execute (default "bash")
-          schema:
-            type: string
-            default: bash
-        - name: args
-          in: query
-          description: Command arguments (repeated parameter)
-          schema:
-            type: array
-            items:
-              type: string
-          style: form
-          explode: true
-        - name: cols
-          in: query
-          description: Initial terminal columns
-          schema:
-            type: integer
-            default: 80
-        - name: rows
-          in: query
-          description: Initial terminal rows
-          schema:
-            type: integer
-            default: 24
-      responses:
-        "101":
-          description: WebSocket upgrade successful
-        "404":
-          $ref: "#/components/responses/NotFoundError"
-
   /{prefix}/boxes/{box_id}/executions/{exec_id}:
     parameters:
       - $ref: "#/components/parameters/prefix"
@@ -629,83 +583,84 @@ paths:
                 $ref: "#/components/schemas/ExecutionInfo"
         "404":
           $ref: "#/components/responses/NotFoundError"
+    delete:
+      operationId: killExecution
+      summary: Kill execution (SIGKILL + evict)
+      description: |
+        Terminates the execution with SIGKILL and removes it from the
+        server's session map atomically. Use this rather than
+        `POST /signal` with `signal=9` — the signal endpoint rejects
+        SIGKILL because it cannot perform the eviction half of the
+        operation.
 
-  /{prefix}/boxes/{box_id}/executions/{exec_id}/output:
+        On success, any attached WebSocket on `/attach` is closed; the
+        SDK observes an `{"type":"exit","exit_code":...}` text frame
+        followed by a normal close.
+      tags: [Execution]
+      responses:
+        "204":
+          description: Execution killed and evicted.
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+
+  /{prefix}/boxes/{box_id}/executions/{exec_id}/attach:
     parameters:
       - $ref: "#/components/parameters/prefix"
       - $ref: "#/components/parameters/boxId"
       - $ref: "#/components/parameters/execId"
     get:
-      operationId: streamExecutionOutput
-      summary: Stream execution output (SSE)
+      operationId: attachExecution
+      summary: Attach to an execution (WebSocket)
       description: |
-        Returns a Server-Sent Events stream of execution output.
+        Opens a bidirectional WebSocket carrying stdin, stdout, stderr, and
+        in-band control for a previously-created execution. This is the
+        canonical streaming path for an execution.
 
-        **Event types:**
-        - `stdout` — standard output data (base64-encoded)
-        - `stderr` — standard error data (base64-encoded)
-        - `exit` — execution completed with exit code
+        **Single-attach.** Only one client may be attached at a time. A
+        second `GET /attach` to the same `exec_id` while one is connected
+        returns `409 Conflict` (no upgrade). The exec keeps running across
+        WebSocket close — the SDK can reconnect to the same `exec_id` and
+        resume streaming. Orphaned sessions are reaped per the runner's
+        configured policy (default: SIGHUP after 5 min idle).
 
-        **Example SSE stream:**
-        ```
-        event: stdout
-        data: {"data":"SGVsbG8gV29ybGQK"}
+        **Frame protocol.**
 
-        event: stderr
-        data: {"data":"V2FybmluZzogLi4u"}
+        Client → Server:
+        - **Binary frame** — raw bytes appended to the execution's stdin pipe.
+        - **Text frame** (JSON) — control messages:
+          - `{"type":"resize","cols":120,"rows":40}` — terminal resize.
+          - `{"type":"signal","sig":15}` — send a Unix signal. Whitelist
+            matches `POST /signal` (HUP/INT/QUIT/ABRT/USR1/USR2/TERM/WINCH);
+            non-whitelisted signals respond with a `{"type":"error",...}`
+            text frame and the connection stays open.
+          - `{"type":"stdin_eof"}` — close stdin (EOF to the PTY).
 
-        event: exit
-        data: {"exit_code":0,"duration_ms":1523}
-        ```
+        Server → Client:
+        - **Binary frame** — `[channel:u8][payload:bytes]`. Channel is
+          `0x01` for stdout, `0x02` for stderr. TTY-mode executions only
+          emit `0x01` since the kernel merges stdout/stderr into the PTY.
+        - **Text frame** (JSON) — control messages:
+          - `{"type":"exit","exit_code":N}` on process exit. Followed by a
+            normal WebSocket close (1000).
+          - `{"type":"error","message":"..."}` on non-fatal internal errors
+            (e.g., rejected signal value). Connection stays open.
 
-        The stream closes after the `exit` event is sent.
-        Clients can reconnect using the `Last-Event-ID` header.
+        **Keepalive.** The server emits a WebSocket `Ping` control frame
+        every 15 seconds. Clients are expected to respond with `Pong`
+        (most libraries do this automatically). Either side may treat the
+        absence of frames for >45s as a dead connection.
       tags: [Execution]
       responses:
-        "200":
-          description: SSE event stream
-          content:
-            text/event-stream:
-              schema:
-                type: string
-                description: Server-Sent Events stream
-        "404":
-          $ref: "#/components/responses/NotFoundError"
-
-  /{prefix}/boxes/{box_id}/executions/{exec_id}/input:
-    parameters:
-      - $ref: "#/components/parameters/prefix"
-      - $ref: "#/components/parameters/boxId"
-      - $ref: "#/components/parameters/execId"
-    post:
-      operationId: sendExecutionInput
-      summary: Send stdin data to an execution
-      description: |
-        Sends raw bytes to the execution's standard input.
-        Set `X-Close-Stdin: true` header to signal EOF after this write.
-      tags: [Execution]
-      parameters:
-        - name: X-Close-Stdin
-          in: header
-          description: Close stdin after this write (signal EOF)
-          schema:
-            type: boolean
-            default: false
-      requestBody:
-        required: true
-        content:
-          application/octet-stream:
-            schema:
-              type: string
-              format: binary
-              description: Raw stdin bytes
-      responses:
-        "204":
-          description: Input accepted
+        "101":
+          description: WebSocket upgrade successful; bidirectional protocol begins.
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":
-          $ref: "#/components/responses/ConflictError"
+          description: Another client is already attached to this execution.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   /{prefix}/boxes/{box_id}/executions/{exec_id}/signal:
     parameters:
@@ -1222,7 +1177,7 @@ components:
               example: true
             streaming_enabled:
               type: boolean
-              description: Whether SSE output streaming is supported
+              description: Whether WebSocket attach output streaming is supported
               example: true
             snapshots_enabled:
               type: boolean

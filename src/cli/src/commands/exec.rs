@@ -50,6 +50,10 @@ impl BoxExecutor {
             return Ok(());
         }
 
+        if self.args.process.tty {
+            self.args.process.interactive = true;
+        }
+
         // IO handle and signals
         let streamer = StreamManager::new(
             &mut execution,

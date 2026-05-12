@@ -32,6 +32,7 @@ extern void goBoxliteOnRuntimeShutdown(CBoxliteError *err, void *ud);
 
 extern void goBoxliteOnExecutionWait(int exit_code, CBoxliteError *err, void *ud);
 extern void goBoxliteOnExecutionKill(CBoxliteError *err, void *ud);
+extern void goBoxliteOnExecutionSignal(CBoxliteError *err, void *ud);
 extern void goBoxliteOnExecutionResize(CBoxliteError *err, void *ud);
 
 CBoxStdoutCb cbStdout(void) { return (CBoxStdoutCb)goBoxliteOnStdout; }
@@ -58,4 +59,5 @@ CRuntimeShutdownCb cbRuntimeShutdown(void) { return (CRuntimeShutdownCb)goBoxlit
 
 CExecutionWaitCb cbExecutionWait(void) { return (CExecutionWaitCb)goBoxliteOnExecutionWait; }
 CExecutionKillCb cbExecutionKill(void) { return (CExecutionKillCb)goBoxliteOnExecutionKill; }
+CExecutionSignalCb cbExecutionSignal(void) { return (CExecutionSignalCb)goBoxliteOnExecutionSignal; }
 CExecutionResizeCb cbExecutionResize(void) { return (CExecutionResizeCb)goBoxliteOnExecutionResize; }

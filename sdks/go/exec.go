@@ -10,8 +10,10 @@ import (
 	"context"
 	"io"
 	"runtime/cgo"
+	"sort"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unsafe"
 )
 
@@ -22,6 +24,33 @@ type ExecResult struct {
 	Stderr   string
 }
 
+// envMapToFlatPairs flattens an env map into a [k0, v0, k1, v1, ...]
+// slice sorted by key. Sorting makes the C call deterministic across
+// runs, which matters for test reproducibility and for any downstream
+// hashing the runtime might do over the pairs.
+func envMapToFlatPairs(env map[string]string) []string {
+	if len(env) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(env))
+	for k := range env {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	pairs := make([]string, 0, 2*len(env))
+	for _, k := range keys {
+		pairs = append(pairs, k, env[k])
+	}
+	return pairs
+}
+
+// envMapToCStringArray converts an env map to a C string array suitable
+// for `BoxliteCommand.env_pairs`. Returns (nil, 0) for nil/empty input.
+// Caller must free via freeCStringArray.
+func envMapToCStringArray(env map[string]string) (**C.char, int) {
+	return toCStringArray(envMapToFlatPairs(env))
+}
+
 // ExecutionOptions configures a streaming command execution.
 type ExecutionOptions struct {
 	TTY      bool
@@ -29,6 +58,17 @@ type ExecutionOptions struct {
 	Stderr   io.Writer
 	OnStdout func([]byte)
 	OnStderr func([]byte)
+	// Env is the environment given to the executed process. nil/empty
+	// inherits the container default. The map is serialised into a flat
+	// [k0, v0, k1, v1, ...] C array in deterministic key order.
+	Env map[string]string
+	// WorkingDir is the directory the process starts in. Empty inherits
+	// the container default.
+	WorkingDir string
+	// Timeout bounds the wall-clock lifetime of the execution. Zero
+	// means no timeout (the C side treats `timeout_secs <= 0` as
+	// unbounded — see `sdks/c/src/exec/command.rs`).
+	Timeout time.Duration
 }
 
 // executionStreamState holds the user-provided sinks for streaming output
@@ -112,8 +152,10 @@ type Execution struct {
 	// while they're parked on their result channel.
 	closing <-chan struct{}
 
-	// Stdin writes bytes to the running command's standard input.
-	Stdin io.Writer
+	// Stdin writes bytes to the running command's standard input. Closing it
+	// signals EOF to the guest process — the analog of `os/exec.Cmd.StdinPipe()`'s
+	// io.WriteCloser. After Close(), subsequent Write calls return ErrInvalidState.
+	Stdin io.WriteCloser
 
 	closeOnce sync.Once
 }
@@ -166,15 +208,24 @@ func (b *Box) StartExecution(_ context.Context, name string, args []string, opts
 		cfg = *opts
 	}
 
+	envPairs, envCount := envMapToCStringArray(cfg.Env)
+	defer freeCStringArray(envPairs, envCount)
+
+	var cWorkdir *C.char
+	if cfg.WorkingDir != "" {
+		cWorkdir = toCString(cfg.WorkingDir)
+		defer C.free(unsafe.Pointer(cWorkdir))
+	}
+
 	cCommand := C.BoxliteCommand{
 		command:      cCmd,
 		args:         cArgs,
 		argc:         C.int(argc),
-		env_pairs:    nil,
-		env_count:    0,
-		workdir:      nil,
+		env_pairs:    envPairs,
+		env_count:    C.int(envCount),
+		workdir:      cWorkdir,
 		user:         nil,
-		timeout_secs: 0,
+		timeout_secs: C.double(cfg.Timeout.Seconds()),
 		tty:          boolToCInt(cfg.TTY),
 	}
 
@@ -295,6 +346,55 @@ func (e *Execution) Kill(ctx context.Context) error {
 	}
 }
 
+// Signal sends an arbitrary Unix signal (e.g. 1=SIGHUP, 2=SIGINT, 15=SIGTERM)
+// to the running command. Use Kill for SIGKILL+evict semantics; Signal is
+// for graceful and non-terminal signals that should not tear down the
+// per-execution bookkeeping.
+//
+// `sig` must be in the range 1..=64 (1..=31 standard, 32..=64 RT). Out-of-
+// range values are rejected synchronously (no FFI call) so an invalid
+// signal can never reach the Rust runtime. Range validation runs BEFORE
+// the closed-handle check so callers that pass an invalid signal always
+// receive `ErrInvalidArgument` regardless of handle state.
+func (e *Execution) Signal(ctx context.Context, sig int) error {
+	if sig < 1 || sig > 64 {
+		return &Error{
+			Code:    ErrInvalidArgument,
+			Message: "signal must be in 1..=64",
+		}
+	}
+	if e.handle == nil {
+		return &Error{Code: ErrInvalidState, Message: "execution is closed"}
+	}
+
+	ch := make(chan error, 1)
+	h := registerHandleForDispatch(cgo.NewHandle(ch))
+
+	var cerr C.CBoxliteError
+	code := C.boxlite_execution_signal(
+		e.handle,
+		C.int(sig),
+		C.cbExecutionSignal(),
+		handleToPtr(h),
+		&cerr,
+	)
+	if code != C.Ok {
+		deleteHandleForDispatch(h)
+		return freeError(&cerr)
+	}
+
+	select {
+	case err := <-ch:
+		return err
+	case <-ctx.Done():
+		abandonAsyncErr(ch, h, e.closing)
+		return ctx.Err()
+	case <-e.closing:
+		abandonAsyncErr(ch, h, e.closing)
+		return ErrRuntimeClosed
+	}
+}
+
 // ResizeTTY changes the terminal size for TTY-enabled executions.
 func (e *Execution) ResizeTTY(ctx context.Context, rows, cols int) error {
 	if e.handle == nil {
@@ -305,7 +405,7 @@ func (e *Execution) ResizeTTY(ctx context.Context, rows, cols int) error {
 	h := registerHandleForDispatch(cgo.NewHandle(ch))
 
 	var cerr C.CBoxliteError
-	code := C.boxlite_execution_resize_tty(e.handle, C.int(rows), C.int(cols), C.cbExecutionResize(), handleToPtr(h), &cerr)
+	code := C.boxlite_execution_tty_resize(e.handle, C.int(rows), C.int(cols), C.cbExecutionResize(), handleToPtr(h), &cerr)
 	if code != C.Ok {
 		deleteHandleForDispatch(h)
 		return freeError(&cerr)
@@ -349,7 +449,7 @@ func (s *executionStdin) Write(p []byte) (int, error) {
 	}
 
 	var cerr C.CBoxliteError
-	code := C.boxlite_execution_write_stdin(
+	code := C.boxlite_execution_stdin_write(
 		s.execution.handle,
 		(*C.uint8_t)(unsafe.Pointer(&p[0])),
 		C.size_t(len(p)),
@@ -359,6 +459,20 @@ func (s *executionStdin) Write(p []byte) (int, error) {
 		return 0, freeError(&cerr)
 	}
 	return len(p), nil
+}
+
+// Close signals EOF to the guest process's stdin. Idempotent: a second call
+// is a no-op. Mirrors `os/exec.Cmd.StdinPipe()`'s io.WriteCloser contract.
+func (s *executionStdin) Close() error {
+	if s.execution == nil || s.execution.handle == nil {
+		return nil
+	}
+	var cerr C.CBoxliteError
+	code := C.boxlite_execution_stdin_close(s.execution.handle, &cerr)
+	if code != C.Ok {
+		return freeError(&cerr)
+	}
+	return nil
 }
 
 // Command creates a Cmd for streaming execution, mirroring os/exec.Cmd.
@@ -371,12 +485,24 @@ func (b *Box) Command(name string, arg ...string) *Cmd {
 }
 
 // Cmd represents a command to execute inside a box.
-// It mirrors the os/exec.Cmd pattern.
+// It mirrors the os/exec.Cmd pattern: callers configure Env/Dir/Timeout
+// on the struct before invoking Run/Output/CombinedOutput. Zero-value
+// fields inherit the container default — same semantics as os/exec.Cmd
+// with the addition of Timeout, which bounds wall-clock lifetime
+// (zero = unbounded, matching the C-FFI's `timeout_secs <= 0` convention).
 type Cmd struct {
 	Path   string
 	Args   []string
 	Stdout io.Writer
 	Stderr io.Writer
+	// Env is the environment of the executed process. nil/empty inherits
+	// the container default.
+	Env map[string]string
+	// Dir is the working directory inside the container. Empty inherits
+	// the container default. Named Dir (not WorkingDir) to match os/exec.
+	Dir string
+	// Timeout bounds wall-clock lifetime. Zero = no timeout.
+	Timeout time.Duration
 
 	box      *Box
 	exitCode int
@@ -386,8 +512,11 @@ type Cmd struct {
 // Run executes the command. If Stdout/Stderr are set, output is streamed to them.
 func (c *Cmd) Run(ctx context.Context) error {
 	execution, err := c.box.StartExecution(ctx, c.Path, c.Args, &ExecutionOptions{
-		Stdout: c.Stdout,
-		Stderr: c.Stderr,
+		Stdout:     c.Stdout,
+		Stderr:     c.Stderr,
+		Env:        c.Env,
+		WorkingDir: c.Dir,
+		Timeout:    c.Timeout,
 	})
 	if err != nil {
 		return err

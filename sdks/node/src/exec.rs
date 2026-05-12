@@ -253,8 +253,8 @@ impl JsExecution {
     /// ```
     #[napi]
     pub async fn wait(&self) -> Result<JsExecResult> {
-        let guard = self.execution.lock().await;
-        let exec_result = guard.wait().await.map_err(map_err)?;
+        let exec = self.execution.lock().await.clone();
+        let exec_result = exec.wait().await.map_err(map_err)?;
         Ok(JsExecResult {
             exit_code: exec_result.exit_code,
             error_message: exec_result.error_message,
@@ -264,21 +264,21 @@ impl JsExecution {
     /// Kill the running command (send SIGKILL).
     #[napi]
     pub async fn kill(&self) -> Result<()> {
-        let mut guard = self.execution.lock().await;
-        guard.kill().await.map_err(map_err)
+        let exec = self.execution.lock().await.clone();
+        exec.kill().await.map_err(map_err)
     }
 
     /// Resize the TTY window (only works for TTY-enabled executions).
     #[napi(js_name = "resizeTty")]
     pub async fn resize_tty(&self, rows: u32, cols: u32) -> Result<()> {
-        let guard = self.execution.lock().await;
-        guard.resize_tty(rows, cols).await.map_err(map_err)
+        let exec = self.execution.lock().await.clone();
+        exec.resize_tty(rows, cols).await.map_err(map_err)
     }
 
     /// Send a signal to the running process.
     #[napi]
     pub async fn signal(&self, signal: i32) -> Result<()> {
-        let guard = self.execution.lock().await;
-        guard.signal(signal).await.map_err(map_err)
+        let exec = self.execution.lock().await.clone();
+        exec.signal(signal).await.map_err(map_err)
     }
 }

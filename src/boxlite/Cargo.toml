@@ -27,8 +27,9 @@ e2fsprogs = ["dep:e2fsprogs-sys"]                            # Bundled mke2fs fo
 bubblewrap = ["dep:bubblewrap-sys"]                          # Bundled bwrap for sandbox isolation (Linux)
 krunfw = ["dep:libkrun-sys", "libkrun-sys/krunfw"]           # Download libkrunfw firmware for runtime bundling
 krun = ["krunfw", "libkrun-sys/krun"]                        # Build + statically link libkrun.a (only for boxlite-shim)
-rest = ["dep:reqwest", "dep:urlencoding"]                    # REST API client backend
+rest = ["dep:reqwest", "dep:urlencoding", "dep:tokio-tungstenite"]  # REST API client backend
 embedded-runtime = []                                        # Embed runtime binaries via include_bytes!
+test-support = []                                            # Expose internal constructors for cross-crate tests
 
 [dependencies]
 boxlite-shared.workspace = true
@@ -89,6 +90,7 @@ time = "0.3"
 # REST backend (optional)
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"], optional = true, default-features = false }
 urlencoding = { version = "2.1", optional = true }
+tokio-tungstenite = { version = "0.24", optional = true, default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 
 # Linux-specific dependencies for bind mount support
 [target.'cfg(target_os = "linux")'.dependencies]

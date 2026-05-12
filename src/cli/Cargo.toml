@@ -29,7 +29,7 @@ tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 
 # HTTP server (serve subcommand)
 async-stream = "0.3"
-axum = { version = "0.8", features = ["macros"] }
+axum = { version = "0.8", features = ["macros", "ws"] }
 base64 = "0.22"
 tar = "0.4"
 tempfile = "3"
@@ -52,6 +52,7 @@ gtmpl_value = "0.5"
 [build-dependencies]
 
 [dev-dependencies]
+boxlite = { workspace = true, features = ["rest", "test-support"] }
 boxlite-test-utils = { path = "../test-utils" }
 assert_cmd = "2.1.1"
 predicates = "3.1.3"

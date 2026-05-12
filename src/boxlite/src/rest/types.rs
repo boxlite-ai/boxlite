@@ -367,6 +367,17 @@ pub(crate) struct ExecResponse {
     pub execution_id: String,
 }
 
+/// Response from `GET /executions/{exec_id}` (status fallback).
+///
+/// Mirrors the OpenAPI `ExecutionInfo` schema; used by the WS attach
+/// path when the connection terminates without an `exit` frame so
+/// callers still observe the real exit code.
+#[derive(Debug, Deserialize)]
+pub(crate) struct ExecutionStatusResponse {
+    pub status: String,
+    pub exit_code: Option<i32>,
+}
+
 #[derive(Debug, Serialize)]
 pub(crate) struct SignalRequestBody {
     pub signal: i32,

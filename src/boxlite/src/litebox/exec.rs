@@ -246,15 +246,24 @@ impl Execution {
             .cloned()
     }
 
-    /// Kill the process (sends SIGKILL).
-    pub async fn kill(&mut self) -> BoxliteResult<()> {
-        self.signal(9).await // SIGKILL
+    /// Terminate the execution and release server-side resources. For the
+    /// REST backend this is `DELETE /executions/{id}` (atomic kill + evict).
+    /// For the local backend this falls back to `signal(SIGKILL)`.
+    ///
+    /// Takes `&self` because state mutation happens through the internal
+    /// `inner` mutex — there is no Rust-level invariant requiring exclusive
+    /// access to the handle. Callers can share `Execution` via `Arc<Execution>`
+    /// and call `kill()` without a wrapping outer mutex.
+    pub async fn kill(&self) -> BoxliteResult<()> {
+        let mut inner = self.inner.lock().await;
+        inner.interface.kill(&self.id).await
     }
 
-    /// Send a signal to the execution.
+    /// Send a Unix signal to the execution. The execution continues running
+    /// (or not) based on whether the process honors the signal.
     pub async fn signal(&self, signal: i32) -> BoxliteResult<()> {
         let mut inner = self.inner.lock().await;
-        inner.interface.kill(&self.id, signal).await
+        inner.interface.signal(&self.id, signal).await
     }
 
     /// Resize PTY terminal window.
@@ -263,6 +272,60 @@ impl Execution {
     pub async fn resize_tty(&self, rows: u32, cols: u32) -> BoxliteResult<()> {
         let mut inner = self.inner.lock().await;
         inner.interface.resize_tty(&self.id, rows, cols, 0, 0).await
+    }
+
+    /// Build a stub `Execution` for cross-crate tests.
+    ///
+    /// The stub backend no-ops every control operation. Callers drive
+    /// the execution through the returned channel handles:
+    ///  - send to `stdout_tx` / `stderr_tx` to produce output
+    ///  - send to `result_tx` to signal process completion
+    ///  - receive from `stdin_rx` to observe stdin writes
+    #[cfg(feature = "test-support")]
+    #[allow(clippy::type_complexity)]
+    pub fn stub(
+        id: &str,
+    ) -> (
+        Self,
+        mpsc::UnboundedSender<String>,
+        mpsc::UnboundedSender<String>,
+        mpsc::UnboundedReceiver<Vec<u8>>,
+        mpsc::UnboundedSender<ExecResult>,
+    ) {
+        use async_trait::async_trait;
+
+        struct NoopBackend;
+        #[async_trait]
+        impl ExecBackend for NoopBackend {
+            async fn signal(&mut self, _: &str, _: i32) -> BoxliteResult<()> {
+                Ok(())
+            }
+            async fn resize_tty(
+                &mut self,
+                _: &str,
+                _: u32,
+                _: u32,
+                _: u32,
+                _: u32,
+            ) -> BoxliteResult<()> {
+                Ok(())
+            }
+        }
+
+        let (stdout_tx, stdout_rx) = mpsc::unbounded_channel::<String>();
+        let (stderr_tx, stderr_rx) = mpsc::unbounded_channel::<String>();
+        let (stdin_tx, stdin_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let (result_tx, result_rx) = mpsc::unbounded_channel::<ExecResult>();
+
+        let exec = Self::new(
+            id.to_string(),
+            Box::new(NoopBackend),
+            result_rx,
+            Some(ExecStdin::new(stdin_tx)),
+            Some(ExecStdout::new(stdout_rx)),
+            Some(ExecStderr::new(stderr_rx)),
+        );
+        (exec, stdout_tx, stderr_tx, stdin_rx, result_tx)
     }
 }
 
@@ -419,7 +482,7 @@ mod tests {
 
     #[async_trait]
     impl ExecBackend for StubExecBackend {
-        async fn kill(&mut self, _execution_id: &str, _signal: i32) -> BoxliteResult<()> {
+        async fn signal(&mut self, _execution_id: &str, _signal: i32) -> BoxliteResult<()> {
             self.kill_observed.store(true, AtomicOrdering::SeqCst);
             Ok(())
         }

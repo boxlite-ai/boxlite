@@ -25,10 +25,19 @@ impl RestExecControl {
 
 #[async_trait]
 impl ExecBackend for RestExecControl {
-    async fn kill(&mut self, execution_id: &str, signal: i32) -> BoxliteResult<()> {
+    async fn signal(&mut self, execution_id: &str, signal: i32) -> BoxliteResult<()> {
         let path = format!("/boxes/{}/executions/{}/signal", self.box_id, execution_id);
         let body = SignalRequestBody { signal };
         self.client.post_no_content(&path, &body).await
+    }
+
+    /// REST-specific kill: `DELETE /executions/{id}` — atomic terminate +
+    /// evict on the server. Falling back to the trait default (signal=9)
+    /// would only send SIGKILL, leaving the server's exec map entry to be
+    /// reaped later by `cleanupLoop`.
+    async fn kill(&mut self, execution_id: &str) -> BoxliteResult<()> {
+        let path = format!("/boxes/{}/executions/{}", self.box_id, execution_id);
+        self.client.delete(&path).await
     }
 
     async fn resize_tty(

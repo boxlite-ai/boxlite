@@ -3,7 +3,7 @@
  *
  * Demonstrates:
  * - Starting browsers with Playwright Server (chromium, firefox, webkit)
- * - Connection methods: wsEndpoint(), connect()
+ * - Connection methods: playwrightEndpoint(), connect()
  * - Multi-browser support
  */
 
@@ -26,18 +26,18 @@ async function main() {
 
 /**
  * Demonstrates both connection methods:
- * - wsEndpoint() + playwright.connect() - recommended for explicit control
+ * - playwrightEndpoint() + playwright.connect() - recommended for explicit control
  * - connect() - convenience one-liner
  */
 async function connectionMethodsDemo() {
-  // Method 1: wsEndpoint() + explicit Playwright connect (RECOMMENDED)
-  console.log('   Method 1: wsEndpoint() + playwright.connect()');
+  // Method 1: playwrightEndpoint() + explicit Playwright connect (RECOMMENDED)
+  console.log('   Method 1: playwrightEndpoint() + playwright.connect()');
   console.log('   (Recommended - gives you explicit control)\n');
   {
     const box = new BrowserBox({ browser: 'chromium' });
     try {
       // Get WebSocket endpoint
-      const wsEndpoint = await box.wsEndpoint();
+      const wsEndpoint = await box.playwrightEndpoint();
       console.log(`   wsEndpoint: ${wsEndpoint}`);
 
       // Connect using Playwright directly
@@ -90,7 +90,7 @@ async function multiBrowserDemo() {
     });
 
     try {
-      const wsEndpoint = await box.wsEndpoint();
+      const wsEndpoint = await box.playwrightEndpoint();
       console.log(`   Endpoint: ${wsEndpoint}`);
 
       // Connect using the matching browser type from Playwright

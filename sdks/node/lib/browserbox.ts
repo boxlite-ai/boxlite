@@ -461,13 +461,6 @@ export class BrowserBox extends SimpleBox {
   }
 
   /**
-   * @deprecated Use playwrightEndpoint() instead.
-   */
-  async wsEndpoint(timeout?: number): Promise<string> {
-    return this.playwrightEndpoint(timeout);
-  }
-
-  /**
    * Get the WebSocket endpoint for CDP/BiDi connections.
    *
    * This is the generic endpoint that works with Puppeteer, Selenium, or any
@@ -534,25 +527,6 @@ export class BrowserBox extends SimpleBox {
     );
 
     return wsUrl;
-  }
-
-  /**
-   * @deprecated Use endpoint() instead.
-   */
-  async puppeteerEndpoint(timeout?: number): Promise<string> {
-    return this.endpoint(timeout);
-  }
-
-  /**
-   * @deprecated Use endpoint() instead. This method only works with chromium.
-   */
-  async cdpEndpoint(timeout?: number): Promise<string> {
-    if (this._browser !== "chromium") {
-      throw new BoxliteError(
-        `cdpEndpoint() only works with chromium. For ${this._browser}, use endpoint() instead.`,
-      );
-    }
-    return this.endpoint(timeout);
   }
 
   /**

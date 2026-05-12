@@ -68,7 +68,7 @@ impl ApiClient {
     }
 
     /// Get a valid Bearer token, refreshing if needed.
-    async fn get_token(&self) -> BoxliteResult<Option<String>> {
+    pub(crate) async fn get_token(&self) -> BoxliteResult<Option<String>> {
         let (client_id, client_secret) = match (&self.client_id, &self.client_secret) {
             (Some(id), Some(secret)) => (id.clone(), secret.clone()),
             _ => return Ok(None),
@@ -282,16 +282,48 @@ impl ApiClient {
         }
     }
 
-    /// Get the raw reqwest client (for SSE streaming).
-    #[allow(dead_code)]
-    pub fn raw_client(&self) -> &Client {
-        &self.http
-    }
+    /// Open an authenticated WebSocket connection at the given REST path.
+    ///
+    /// Translates the http(s) URL to ws(s), attaches the OAuth2 Bearer header
+    /// when configured, and returns the upgraded stream.
+    pub(crate) async fn connect_ws(
+        &self,
+        path: &str,
+    ) -> BoxliteResult<
+        tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+    > {
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+        use tokio_tungstenite::tungstenite::http::HeaderValue;
 
-    /// Build an authorized GET request (for SSE streaming).
-    pub async fn authorized_get(&self, path: &str) -> BoxliteResult<RequestBuilder> {
-        let builder = self.http.get(self.url(path));
-        self.authorize(builder).await
+        let http_url = self.url(path);
+        let ws_url = if let Some(rest) = http_url.strip_prefix("https://") {
+            format!("wss://{}", rest)
+        } else if let Some(rest) = http_url.strip_prefix("http://") {
+            format!("ws://{}", rest)
+        } else {
+            return Err(BoxliteError::Internal(format!(
+                "WS connect: unsupported URL scheme in {}",
+                http_url
+            )));
+        };
+
+        let mut request = ws_url
+            .as_str()
+            .into_client_request()
+            .map_err(|e| BoxliteError::Internal(format!("WS request build failed: {}", e)))?;
+
+        if let Some(token) = self.get_token().await? {
+            let value = HeaderValue::from_str(&format!("Bearer {}", token))
+                .map_err(|e| BoxliteError::Internal(format!("WS auth header invalid: {}", e)))?;
+            request.headers_mut().insert("Authorization", value);
+        }
+
+        let (stream, _resp) = tokio_tungstenite::connect_async(request)
+            .await
+            .map_err(map_ws_error)?;
+        Ok(stream)
     }
 
     /// Build an authorized request (for custom operations like file upload/download).
@@ -302,26 +334,6 @@ impl ApiClient {
     ) -> BoxliteResult<RequestBuilder> {
         let builder = self.http.request(method, self.url(path));
         self.authorize(builder).await
-    }
-
-    /// Send raw bytes as POST body (for stdin input).
-    pub async fn post_bytes(
-        &self,
-        path: &str,
-        data: Vec<u8>,
-        close_stdin: bool,
-    ) -> BoxliteResult<()> {
-        let mut builder = self
-            .http
-            .post(self.url(path))
-            .header("Content-Type", "application/octet-stream")
-            .body(data);
-
-        if close_stdin {
-            builder = builder.header("X-Close-Stdin", "true");
-        }
-
-        self.send_no_content(builder).await
     }
 
     pub async fn get_config(&self) -> BoxliteResult<SandboxConfigResponse> {
@@ -393,6 +405,38 @@ impl ApiClient {
             .body(data);
         self.send_json(builder).await
     }
+}
+
+/// Map a tungstenite connect error to a typed `BoxliteError`. The WS
+/// upgrade returns HTTP status codes for rejections (404 for a missing
+/// session, 409 for an already-attached one); callers want to see those
+/// as `NotFound` / `AlreadyExists` rather than generic `Internal` so
+/// they can map onward to `SessionReaped`.
+fn map_ws_error(err: tokio_tungstenite::tungstenite::Error) -> BoxliteError {
+    use tokio_tungstenite::tungstenite::Error as TgErr;
+    if let TgErr::Http(resp) = &err {
+        let status = resp.status();
+        let body = resp
+            .body()
+            .as_ref()
+            .map(|b| String::from_utf8_lossy(b).into_owned())
+            .unwrap_or_default();
+        return match status.as_u16() {
+            404 => BoxliteError::NotFound(if body.is_empty() {
+                "session not found".to_string()
+            } else {
+                body
+            }),
+            409 => BoxliteError::AlreadyExists(if body.is_empty() {
+                "another client is already attached".to_string()
+            } else {
+                body
+            }),
+            401 | 403 => BoxliteError::Config(format!("WS auth rejected ({}): {}", status, body)),
+            _ => BoxliteError::Internal(format!("WS upgrade failed (HTTP {}): {}", status, body)),
+        };
+    }
+    BoxliteError::Internal(format!("WS connect failed: {}", err))
 }
 
 fn ensure_capability(name: &str, enabled: Option<bool>) -> BoxliteResult<()> {

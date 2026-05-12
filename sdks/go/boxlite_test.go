@@ -109,6 +109,86 @@ func TestExecutionCloseIsIdempotent(t *testing.T) {
 	}
 }
 
+// TestExecutionSignalRejectsClosedExecution: Signal on a nil-handle
+// Execution must return an InvalidState error before any FFI call. This
+// guards the contract symmetry with Kill — both must early-return when
+// the underlying C handle has been freed.
+func TestExecutionSignalRejectsClosedExecution(t *testing.T) {
+	execution := &Execution{}
+
+	err := execution.Signal(t.Context(), 15)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+
+	var boxliteErr *Error
+	if !errors.As(err, &boxliteErr) {
+		t.Fatalf("expected *Error, got %T", err)
+	}
+	if boxliteErr.Code != ErrInvalidState {
+		t.Fatalf("Code: got %d, want %d", boxliteErr.Code, ErrInvalidState)
+	}
+}
+
+// TestExecutionSignalRejectsOutOfRangeSignal: signal numbers outside
+// 1..=64 must be rejected synchronously, before any FFI call. This is
+// the layer-2 mirror of `signal_rejects_out_of_range_*` in the Rust
+// C-FFI tests; the Go SDK validates first so an invalid signal can
+// never reach the Rust runtime. Range validation runs before the
+// closed-handle check so the empty Execution (handle==nil) is fine.
+func TestExecutionSignalRejectsOutOfRangeSignal(t *testing.T) {
+	execution := &Execution{}
+
+	cases := []struct {
+		name string
+		sig  int
+	}{
+		{"zero", 0},
+		{"negative", -1},
+		{"above_max", 65},
+		{"way_above_max", 1024},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := execution.Signal(t.Context(), tc.sig)
+			if err == nil {
+				t.Fatalf("expected error for signal=%d", tc.sig)
+			}
+			var boxliteErr *Error
+			if !errors.As(err, &boxliteErr) {
+				t.Fatalf("expected *Error, got %T", err)
+			}
+			if boxliteErr.Code != ErrInvalidArgument {
+				t.Fatalf("Code: got %d, want %d", boxliteErr.Code, ErrInvalidArgument)
+			}
+		})
+	}
+}
+
+// TestExecutionSignalAcceptsBoundarySignals: signal numbers at the
+// 1 and 64 boundaries must NOT be rejected by the range check. With
+// handle==nil they fall through to the closed-execution check
+// (InvalidState), proving the range validation accepted them.
+func TestExecutionSignalAcceptsBoundarySignals(t *testing.T) {
+	execution := &Execution{}
+
+	for _, sig := range []int{1, 15, 64} {
+		err := execution.Signal(t.Context(), sig)
+		if err == nil {
+			t.Fatalf("expected closed-execution error for signal=%d", sig)
+		}
+		var boxliteErr *Error
+		if !errors.As(err, &boxliteErr) {
+			t.Fatalf("signal=%d: expected *Error, got %T", sig, err)
+		}
+		// Range check accepted the signal → fell through to handle check.
+		if boxliteErr.Code != ErrInvalidState {
+			t.Fatalf("signal=%d Code: got %d, want %d (range check should accept %d)",
+				sig, boxliteErr.Code, ErrInvalidState, sig)
+		}
+	}
+}
+
 // ============================================================================
 // Options
 // ============================================================================

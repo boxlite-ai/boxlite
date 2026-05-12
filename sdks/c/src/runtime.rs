@@ -564,6 +564,11 @@ unsafe fn dispatch_event(event: RuntimeEvent) {
                 user_data,
                 result,
             } => dispatch_unit_event(result, user_data, cb),
+            RuntimeEvent::Signal {
+                cb,
+                user_data,
+                result,
+            } => dispatch_unit_event(result, user_data, cb),
             RuntimeEvent::Resize {
                 cb,
                 user_data,

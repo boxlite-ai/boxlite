@@ -7,6 +7,8 @@
 import {
   Controller,
   All,
+  Get,
+  Delete,
   Param,
   Req,
   Res,
@@ -59,44 +61,6 @@ export class BoxliteProxyController {
     )
   }
 
-  @All(':boxId/executions/:execId/output')
-  async proxyExecOutput(
-    @AuthContext() authContext: OrganizationAuthContext,
-    @Param('boxId') boxId: string,
-    @Param('execId') execId: string,
-    @Req() req: Request,
-    @Res() res: Response,
-    @Next() next: NextFunction,
-  ) {
-    return this.streamFromRunner(
-      authContext,
-      boxId,
-      `/v1/boxes/${boxId}/executions/${execId}/output`,
-      req,
-      res,
-      next,
-    )
-  }
-
-  @All(':boxId/executions/:execId/input')
-  async proxyExecInput(
-    @AuthContext() authContext: OrganizationAuthContext,
-    @Param('boxId') boxId: string,
-    @Param('execId') execId: string,
-    @Req() req: Request,
-    @Res() res: Response,
-    @Next() next: NextFunction,
-  ) {
-    return this.proxyToRunner(
-      authContext,
-      boxId,
-      `/v1/boxes/${boxId}/executions/${execId}/input`,
-      req,
-      res,
-      next,
-    )
-  }
-
   @All(':boxId/executions/:execId/signal')
   async proxyExecSignal(
     @AuthContext() authContext: OrganizationAuthContext,
@@ -132,6 +96,64 @@ export class BoxliteProxyController {
       req,
       res,
       next,
+    )
+  }
+
+  @Get(':boxId/executions/:execId')
+  async proxyExecStatus(
+    @AuthContext() authContext: OrganizationAuthContext,
+    @Param('boxId') boxId: string,
+    @Param('execId') execId: string,
+    @Req() req: Request,
+    @Res() res: Response,
+    @Next() next: NextFunction,
+  ) {
+    return this.proxyToRunner(
+      authContext,
+      boxId,
+      `/v1/boxes/${boxId}/executions/${execId}`,
+      req,
+      res,
+      next,
+    )
+  }
+
+  @Delete(':boxId/executions/:execId')
+  async proxyExecKill(
+    @AuthContext() authContext: OrganizationAuthContext,
+    @Param('boxId') boxId: string,
+    @Param('execId') execId: string,
+    @Req() req: Request,
+    @Res() res: Response,
+    @Next() next: NextFunction,
+  ) {
+    return this.proxyToRunner(
+      authContext,
+      boxId,
+      `/v1/boxes/${boxId}/executions/${execId}`,
+      req,
+      res,
+      next,
+    )
+  }
+
+  @Get(':boxId/executions/:execId/attach')
+  async proxyExecAttach(
+    @AuthContext() authContext: OrganizationAuthContext,
+    @Param('boxId') boxId: string,
+    @Param('execId') execId: string,
+    @Req() req: Request,
+    @Res() res: Response,
+    @Next() next: NextFunction,
+  ) {
+    return this.proxyToRunner(
+      authContext,
+      boxId,
+      `/v1/boxes/${boxId}/executions/${execId}/attach`,
+      req,
+      res,
+      next,
+      { ws: true },
     )
   }
 
@@ -181,6 +203,7 @@ export class BoxliteProxyController {
     req: Request,
     res: Response,
     next: NextFunction,
+    opts?: { ws?: boolean },
   ) {
     const sandbox = await this.sandboxService.findOneByIdOrName(
       boxId,
@@ -205,6 +228,7 @@ export class BoxliteProxyController {
       secure: false,
       changeOrigin: true,
       autoRewrite: true,
+      ws: opts?.ws ?? false,
       pathRewrite: () => targetPath,
       on: {
         proxyReq: (proxyReq: any, originalReq: any) => {
@@ -218,86 +242,4 @@ export class BoxliteProxyController {
     return createProxyMiddleware(proxyOptions)(req, res, next)
   }
 
-  private async streamFromRunner(
-    authContext: OrganizationAuthContext,
-    boxId: string,
-    targetPath: string,
-    req: Request,
-    res: Response,
-    next: NextFunction,
-  ) {
-    try {
-      const sandbox = await this.sandboxService.findOneByIdOrName(
-        boxId,
-        authContext.organizationId,
-      )
-      if (!sandbox) {
-        throw new NotFoundException(`Box ${boxId} not found`)
-      }
-
-      const runner = await this.runnerService.findOne(sandbox.runnerId)
-      if (!runner) {
-        throw new NotFoundException(`Runner for box ${boxId} not found`)
-      }
-
-      const targetBaseUrl = runner.apiUrl || runner.proxyUrl
-      if (!targetBaseUrl) {
-        throw new NotFoundException(
-          `Runner endpoint for box ${boxId} not found`,
-        )
-      }
-
-      const targetUrl = new URL(targetPath, targetBaseUrl)
-      const runnerResponse = await fetch(targetUrl, {
-        method: req.method,
-        headers: {
-          Authorization: `Bearer ${runner.apiKey}`,
-          Accept: req.header('accept') || 'text/event-stream',
-        },
-      })
-
-      res.status(runnerResponse.status)
-      runnerResponse.headers.forEach((value, key) => {
-        if (
-          !['connection', 'content-length', 'transfer-encoding'].includes(
-            key.toLowerCase(),
-          )
-        ) {
-          res.setHeader(key, value)
-        }
-      })
-
-      if (!runnerResponse.body) {
-        res.end()
-        return
-      }
-
-      const reader = runnerResponse.body.getReader()
-      try {
-        while (true) {
-          const { done, value } = await reader.read()
-          if (done) {
-            break
-          }
-          if (value && !res.write(Buffer.from(value))) {
-            await new Promise((resolve) => res.once('drain', resolve))
-          }
-        }
-      } finally {
-        reader.releaseLock()
-        res.end()
-      }
-    } catch (error) {
-      if (res.headersSent) {
-        this.logger.error(
-          `Runner stream failed after response started for box ${boxId}: ${error}`,
-        )
-        if (!res.writableEnded) {
-          res.end()
-        }
-        return
-      }
-      next(error)
-    }
-  }
 }

@@ -57,9 +57,7 @@ curl -s -X POST http://localhost:8080/v1/demo/boxes/$BOX_ID/exec \
   -H "Content-Type: application/json" \
   -d '{"command":"echo","args":["hello world"]}' | python3 -m json.tool
 
-# Stream output (SSE)
-curl -N http://localhost:8080/v1/demo/boxes/$BOX_ID/executions/$EXEC_ID/output \
-  -H "Authorization: Bearer $TOKEN"
+# Stream output (WebSocket /attach — see SDK)
 
 # Runtime metrics
 curl -s http://localhost:8080/v1/demo/metrics \
@@ -70,7 +68,7 @@ curl -s -X DELETE http://localhost:8080/v1/demo/boxes/$BOX_ID \
   -H "Authorization: Bearer $TOKEN" -w "%{http_code}\n"
 ```
 
-## Implemented Endpoints (22 of 24)
+## Implemented Endpoints (20 of 22)
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -85,8 +83,6 @@ curl -s -X DELETE http://localhost:8080/v1/demo/boxes/$BOX_ID \
 | `/{prefix}/boxes/{id}/stop` | POST | Stop box |
 | `/{prefix}/boxes/{id}/exec` | POST | Execute command |
 | `/{prefix}/boxes/{id}/executions/{eid}` | GET | Execution status |
-| `/{prefix}/boxes/{id}/executions/{eid}/output` | GET | SSE stream |
-| `/{prefix}/boxes/{id}/executions/{eid}/input` | POST | Send stdin |
 | `/{prefix}/boxes/{id}/executions/{eid}/signal` | POST | Send signal |
 | `/{prefix}/boxes/{id}/executions/{eid}/resize` | POST | Resize TTY |
 | `/{prefix}/boxes/{id}/files` | PUT | Upload files |

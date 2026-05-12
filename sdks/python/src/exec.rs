@@ -169,8 +169,7 @@ impl PyExecution {
         let execution = Arc::clone(&self.execution);
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let execution_mut = unsafe { &mut *(Arc::as_ptr(&execution) as *mut Execution) };
-            let exec_result = execution_mut.wait().await.map_err(map_err)?;
+            let exec_result = execution.wait().await.map_err(map_err)?;
             Ok(PyExecResult {
                 exit_code: exec_result.exit_code,
                 error_message: exec_result.error_message,
@@ -182,8 +181,7 @@ impl PyExecution {
         let execution = Arc::clone(&self.execution);
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let execution_mut = unsafe { &mut *(Arc::as_ptr(&execution) as *mut Execution) };
-            execution_mut.kill().await.map_err(map_err)?;
+            execution.kill().await.map_err(map_err)?;
             Ok(())
         })
     }
@@ -196,6 +194,16 @@ impl PyExecution {
 
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             execution.resize_tty(rows, cols).await.map_err(map_err)?;
+            Ok(())
+        })
+    }
+
+    /// Send a POSIX signal to the running process.
+    fn signal<'a>(&self, py: Python<'a>, signal: i32) -> PyResult<Bound<'a, PyAny>> {
+        let execution = Arc::clone(&self.execution);
+
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            execution.signal(signal).await.map_err(map_err)?;
             Ok(())
         })
     }

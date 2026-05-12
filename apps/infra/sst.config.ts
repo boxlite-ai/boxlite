@@ -195,7 +195,7 @@ export default $config({
             (origins ?? []).map((o: any) => ({
               ...o,
               customOriginConfig: o.customOriginConfig
-                ? { ...o.customOriginConfig, originProtocolPolicy: "https-only" }
+                ? { ...o.customOriginConfig, originProtocolPolicy: "https-only", originReadTimeout: 60 }
                 : o.customOriginConfig,
             })),
           );

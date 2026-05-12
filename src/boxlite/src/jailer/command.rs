@@ -1,8 +1,7 @@
-//! Command building for isolated process execution.
-//!
-//! **Deprecated**: This module's logic has moved to the [`Jail`](super::Jail)
-//! trait and [`Sandbox`](super::Sandbox) implementations. This file exists
-//! only for tests that verify the `Jail` trait contract.
+//! Contract tests for the [`Jail`](super::Jail) trait and the
+//! [`Sandbox`](super::Sandbox) implementations. No production code lives
+//! here — the trait surface is exercised through `Jail::command()` and
+//! `Jail::prepare()` to keep their behavioral guarantees nailed down.
 
 #[cfg(test)]
 mod tests {

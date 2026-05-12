@@ -115,8 +115,10 @@ impl ExecutionInterface {
         Ok(ExecProtocol::map_wait_response(response))
     }
 
-    /// Kill execution (send signal).
-    pub async fn kill(&mut self, execution_id: &str, signal: i32) -> BoxliteResult<()> {
+    /// Send a signal to an execution. Despite the underlying gRPC method
+    /// being named `kill`, this is a generic signal-sending operation —
+    /// pass `9` for SIGKILL, `15` for SIGTERM, `2` for SIGINT, etc.
+    pub async fn signal(&mut self, execution_id: &str, signal: i32) -> BoxliteResult<()> {
         let request = KillRequest {
             execution_id: execution_id.to_string(),
             signal,
@@ -128,7 +130,9 @@ impl ExecutionInterface {
             Ok(())
         } else {
             Err(BoxliteError::Internal(
-                response.error.unwrap_or_else(|| "Kill failed".to_string()),
+                response
+                    .error
+                    .unwrap_or_else(|| "Signal failed".to_string()),
             ))
         }
     }
@@ -172,9 +176,12 @@ impl ExecutionInterface {
 
 #[async_trait::async_trait]
 impl crate::runtime::backend::ExecBackend for ExecutionInterface {
-    async fn kill(&mut self, execution_id: &str, signal: i32) -> BoxliteResult<()> {
-        self.kill(execution_id, signal).await
+    async fn signal(&mut self, execution_id: &str, signal: i32) -> BoxliteResult<()> {
+        self.signal(execution_id, signal).await
     }
+
+    // kill() uses the trait default (signal(id, SIGKILL)) — local backend
+    // has no separate "evict" step beyond the kernel-level signal.
 
     async fn resize_tty(
         &mut self,

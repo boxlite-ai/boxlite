@@ -61,6 +61,9 @@ pub enum BoxliteErrorCode {
     UnsupportedEngine = 19,
     /// System resource limit reached
     ResourceExhausted = 20,
+    /// Interactive execution session was reaped server-side after disconnect.
+    /// Reattach is no longer possible — start a new exec.
+    SessionReaped = 21,
 }
 
 /// Extended error information for C API.
@@ -107,6 +110,7 @@ pub fn error_to_code(err: &BoxliteError) -> BoxliteErrorCode {
         BoxliteError::RpcTransport(_) => BoxliteErrorCode::RpcTransport,
         BoxliteError::MetadataError(_) => BoxliteErrorCode::Metadata,
         BoxliteError::ResourceExhausted(_) => BoxliteErrorCode::ResourceExhausted,
+        BoxliteError::SessionReaped(_) => BoxliteErrorCode::SessionReaped,
     }
 }
 

@@ -86,6 +86,20 @@ impl PyBox {
         })
     }
 
+    /// Reattach to a running execution by id. Returns a fresh
+    /// `Execution` wired to a new WebSocket; the caller discards any
+    /// previous handle for the same id. Raises if the server reports
+    /// the session is no longer attachable.
+    fn attach<'a>(&self, py: Python<'a>, execution_id: String) -> PyResult<Bound<'a, PyAny>> {
+        let handle = Arc::clone(&self.handle);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let execution = handle.attach(&execution_id).await.map_err(map_err)?;
+            Ok(PyExecution {
+                execution: Arc::new(execution),
+            })
+        })
+    }
+
     /// Start the box (initialize VM).
     fn start<'a>(&self, py: Python<'a>) -> PyResult<Bound<'a, PyAny>> {
         let handle = Arc::clone(&self.handle);

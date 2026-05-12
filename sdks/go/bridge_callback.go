@@ -359,6 +359,11 @@ func goBoxliteOnExecutionKill(errPtr *C.CBoxliteError, userData unsafe.Pointer) 
 	deliverUnitResult(userData, errPtr)
 }
 
+//export goBoxliteOnExecutionSignal
+func goBoxliteOnExecutionSignal(errPtr *C.CBoxliteError, userData unsafe.Pointer) {
+	deliverUnitResult(userData, errPtr)
+}
+
 //export goBoxliteOnExecutionResize
 func goBoxliteOnExecutionResize(errPtr *C.CBoxliteError, userData unsafe.Pointer) {
 	deliverUnitResult(userData, errPtr)

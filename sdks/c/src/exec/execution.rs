@@ -38,7 +38,8 @@ use crate::box_handle::BoxHandle;
 use crate::error::{BoxliteErrorCode, FFIError, error_to_code, null_pointer_error, write_error};
 use crate::event_queue::{
     CBoxExitCb, CBoxExitFn, CBoxStderrCb, CBoxStderrFn, CBoxStdoutCb, CBoxStdoutFn,
-    CExecutionKillCb, CExecutionResizeCb, CExecutionWaitCb, EventQueue, RuntimeEvent, push_event,
+    CExecutionKillCb, CExecutionResizeCb, CExecutionSignalCb, CExecutionWaitCb, EventQueue,
+    RuntimeEvent, push_event,
 };
 use crate::{CBoxHandle, CBoxliteError, CExecutionHandle};
 
@@ -134,13 +135,27 @@ pub unsafe extern "C" fn boxlite_execution_on_exit(
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn boxlite_execution_write_stdin(
+pub unsafe extern "C" fn boxlite_execution_stdin_write(
     execution: *mut CExecutionHandle,
     data: *const u8,
     len: usize,
     out_error: *mut CBoxliteError,
 ) -> BoxliteErrorCode {
     write_stdin(execution, data, len, out_error)
+}
+
+/// Close the execution's stdin stream, signaling EOF to the guest process.
+///
+/// Synchronous and idempotent: dropping the stdin sender closes the underlying
+/// mpsc channel; subsequent writes return `InvalidState`; a second close is a
+/// no-op. Used by clients that want to terminate input without killing the
+/// process (e.g. `cat`/`wc`/`sort` waiting on stdin EOF).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_execution_stdin_close(
+    execution: *mut CExecutionHandle,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    close_stdin(execution, out_error)
 }
 
 #[unsafe(no_mangle)]
@@ -163,8 +178,24 @@ pub unsafe extern "C" fn boxlite_execution_kill(
     execution_kill(execution, cb, user_data, out_error)
 }
 
+/// Send an arbitrary Unix signal to the execution. `sig` is the signal
+/// number (e.g. 2 = SIGINT, 15 = SIGTERM). `boxlite_execution_kill`
+/// remains the dedicated SIGKILL+evict entrypoint; this function is for
+/// graceful and non-terminal signals (HUP/INT/TERM/WINCH/...) that should
+/// not tear down the per-execution bookkeeping.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn boxlite_execution_resize_tty(
+pub unsafe extern "C" fn boxlite_execution_signal(
+    execution: *mut CExecutionHandle,
+    sig: c_int,
+    cb: CExecutionSignalCb,
+    user_data: *mut c_void,
+    out_error: *mut CBoxliteError,
+) -> BoxliteErrorCode {
+    execution_signal(execution, sig, cb, user_data, out_error)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn boxlite_execution_tty_resize(
     execution: *mut CExecutionHandle,
     rows: c_int,
     cols: c_int,
@@ -364,6 +395,27 @@ unsafe fn register_exit(
     }
 }
 
+unsafe fn close_stdin(
+    execution: *mut ExecutionHandle,
+    out_error: *mut FFIError,
+) -> BoxliteErrorCode {
+    unsafe {
+        if execution.is_null() {
+            write_error(out_error, null_pointer_error("execution"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+
+        let exec_ref = &mut *execution;
+        // Taking the Option drops the underlying ExecStdin, which drops the
+        // mpsc sender. The guest portal sees EOF on the next recv. Idempotent
+        // when called twice: the second call observes `None` and is a no-op.
+        if let Some(mut stdin) = exec_ref.stdin.take() {
+            stdin.close();
+        }
+        BoxliteErrorCode::Ok
+    }
+}
+
 unsafe fn write_stdin(
     execution: *mut ExecutionHandle,
     data: *const u8,
@@ -474,6 +526,52 @@ unsafe fn execution_kill(
             push_event(
                 &queue,
                 RuntimeEvent::Kill {
+                    cb,
+                    user_data: user_data_addr,
+                    result,
+                },
+            )
+            .await;
+        });
+
+        BoxliteErrorCode::Ok
+    }
+}
+
+unsafe fn execution_signal(
+    execution: *mut ExecutionHandle,
+    sig: c_int,
+    cb: CExecutionSignalCb,
+    user_data: *mut c_void,
+    out_error: *mut FFIError,
+) -> BoxliteErrorCode {
+    unsafe {
+        if execution.is_null() {
+            write_error(out_error, null_pointer_error("execution"));
+            return BoxliteErrorCode::InvalidArgument;
+        }
+        // Reject obviously invalid signal numbers synchronously. Linux
+        // signal numbers are in 1..=64 (1..=31 standard, 32..=64 RT). 0 is
+        // reserved for "validate target" via kill(0) and is not exposed here.
+        if !(1..=64).contains(&sig) {
+            write_error(
+                out_error,
+                BoxliteError::InvalidArgument(format!("signal must be in 1..=64, got {sig}")),
+            );
+            return BoxliteErrorCode::InvalidArgument;
+        }
+        let cb = crate::unwrap_cb_or_return!(cb, out_error);
+
+        let exec_ref = &*execution;
+        let exec_arc = exec_ref.execution.clone();
+        let queue = exec_ref.queue.clone();
+        let user_data_addr = user_data as usize;
+
+        exec_ref.tokio_rt.spawn(async move {
+            let result = signal_on_clone(&exec_arc, sig).await;
+            push_event(
+                &queue,
+                RuntimeEvent::Signal {
                     cb,
                     user_data: user_data_addr,
                     result,
@@ -727,8 +825,13 @@ async fn wait_on_clone(slot: &Mutex<Option<Execution>>) -> Result<i32, BoxliteEr
 }
 
 async fn kill_on_clone(slot: &Mutex<Option<Execution>>) -> Result<(), BoxliteError> {
-    let mut clone = snapshot_execution(slot)?;
+    let clone = snapshot_execution(slot)?;
     clone.kill().await
+}
+
+async fn signal_on_clone(slot: &Mutex<Option<Execution>>, sig: c_int) -> Result<(), BoxliteError> {
+    let clone = snapshot_execution(slot)?;
+    clone.signal(sig).await
 }
 
 async fn resize_on_clone(
@@ -809,7 +912,7 @@ mod tests {
     fn write_stdin_rejects_null_execution() {
         let mut error = FFIError::default();
         let code = unsafe {
-            boxlite_execution_write_stdin(ptr::null_mut(), b"hello".as_ptr(), 5, &mut error)
+            boxlite_execution_stdin_write(ptr::null_mut(), b"hello".as_ptr(), 5, &mut error)
         };
         assert_eq!(code, BoxliteErrorCode::InvalidArgument);
         assert!(!error.message.is_null());
@@ -821,7 +924,7 @@ mod tests {
         let mut handle = empty_handle();
         let mut error = FFIError::default();
         let code = unsafe {
-            boxlite_execution_write_stdin(&mut handle as *mut _, b"hello".as_ptr(), 5, &mut error)
+            boxlite_execution_stdin_write(&mut handle as *mut _, b"hello".as_ptr(), 5, &mut error)
         };
         assert_eq!(code, BoxliteErrorCode::InvalidState);
         assert!(!error.message.is_null());
@@ -829,11 +932,34 @@ mod tests {
     }
 
     #[test]
+    fn close_stdin_rejects_null_execution() {
+        let mut error = FFIError::default();
+        let code = unsafe { boxlite_execution_stdin_close(ptr::null_mut(), &mut error) };
+        assert_eq!(code, BoxliteErrorCode::InvalidArgument);
+        assert!(!error.message.is_null());
+        unsafe { crate::boxlite_error_free(&mut error as *mut _) };
+    }
+
+    #[test]
+    fn close_stdin_is_idempotent_when_already_closed() {
+        let mut handle = empty_handle();
+        let mut error = FFIError::default();
+        // First call: stdin is already None on empty_handle(), so this is a no-op.
+        let code = unsafe { boxlite_execution_stdin_close(&mut handle as *mut _, &mut error) };
+        assert_eq!(code, BoxliteErrorCode::Ok);
+        assert!(error.message.is_null());
+        // Second call: still a no-op, still Ok.
+        let code = unsafe { boxlite_execution_stdin_close(&mut handle as *mut _, &mut error) };
+        assert_eq!(code, BoxliteErrorCode::Ok);
+        assert!(error.message.is_null());
+    }
+
+    #[test]
     fn resize_rejects_invalid_dimensions() {
         let mut handle = empty_handle();
         let mut error = FFIError::default();
         let code = unsafe {
-            boxlite_execution_resize_tty(
+            boxlite_execution_tty_resize(
                 &mut handle as *mut _,
                 0,
                 80,
@@ -910,6 +1036,157 @@ mod tests {
         assert_eq!(code, BoxliteErrorCode::InvalidArgument);
         assert!(!error.message.is_null());
         unsafe { crate::boxlite_error_free(&mut error as *mut _) };
+    }
+
+    // ─── boxlite_execution_signal entrypoint ─────────────────────────────
+    //
+    // The Rust `Execution::signal(sig)` method exists on the boxlite crate;
+    // these tests guard the FFI shim that exposes it to C/Go callers. The
+    // real-execution coverage (signal actually reaches the guest process)
+    // lives in the boxlite crate's own tests where a stub backend is in
+    // scope; reproducing it here would require importing private types.
+
+    #[test]
+    fn signal_rejects_null_execution() {
+        let mut error = FFIError::default();
+        let code = unsafe {
+            boxlite_execution_signal(
+                ptr::null_mut(),
+                15, // SIGTERM
+                Some(noop_unit),
+                ptr::null_mut(),
+                &mut error,
+            )
+        };
+        assert_eq!(code, BoxliteErrorCode::InvalidArgument);
+        assert!(!error.message.is_null());
+        unsafe { crate::boxlite_error_free(&mut error as *mut _) };
+    }
+
+    #[test]
+    fn signal_rejects_out_of_range_low() {
+        let mut handle = empty_handle();
+        let mut error = FFIError::default();
+        let code = unsafe {
+            boxlite_execution_signal(
+                &mut handle as *mut _,
+                0,
+                Some(noop_unit),
+                ptr::null_mut(),
+                &mut error,
+            )
+        };
+        assert_eq!(code, BoxliteErrorCode::InvalidArgument);
+        assert!(!error.message.is_null());
+        unsafe { crate::boxlite_error_free(&mut error as *mut _) };
+    }
+
+    #[test]
+    fn signal_rejects_out_of_range_high() {
+        let mut handle = empty_handle();
+        let mut error = FFIError::default();
+        let code = unsafe {
+            boxlite_execution_signal(
+                &mut handle as *mut _,
+                65,
+                Some(noop_unit),
+                ptr::null_mut(),
+                &mut error,
+            )
+        };
+        assert_eq!(code, BoxliteErrorCode::InvalidArgument);
+        assert!(!error.message.is_null());
+        unsafe { crate::boxlite_error_free(&mut error as *mut _) };
+    }
+
+    #[test]
+    fn signal_rejects_negative() {
+        let mut handle = empty_handle();
+        let mut error = FFIError::default();
+        let code = unsafe {
+            boxlite_execution_signal(
+                &mut handle as *mut _,
+                -1,
+                Some(noop_unit),
+                ptr::null_mut(),
+                &mut error,
+            )
+        };
+        assert_eq!(code, BoxliteErrorCode::InvalidArgument);
+        assert!(!error.message.is_null());
+        unsafe { crate::boxlite_error_free(&mut error as *mut _) };
+    }
+
+    #[test]
+    fn signal_rejects_null_callback() {
+        let mut handle = empty_handle();
+        let mut error = FFIError::default();
+        let code = unsafe {
+            boxlite_execution_signal(&mut handle as *mut _, 15, None, ptr::null_mut(), &mut error)
+        };
+        assert_eq!(code, BoxliteErrorCode::InvalidArgument);
+        assert!(!error.message.is_null());
+        unsafe { crate::boxlite_error_free(&mut error as *mut _) };
+    }
+
+    /// End-to-end FFI dispatch: a valid signal call against the empty
+    /// handle (whose `execution` slot is `None`) routes through the
+    /// async path and emits a `Signal` event with an `InvalidState`
+    /// error. Verifies the spawn → push_event → drain wiring works
+    /// without depending on a real boxlite backend.
+    #[test]
+    fn signal_dispatches_signal_event_through_queue() {
+        let mut handle = empty_handle();
+        let queue = handle.queue.clone();
+        let tokio_rt = handle.tokio_rt.clone();
+        let mut error = FFIError::default();
+
+        let code = unsafe {
+            boxlite_execution_signal(
+                &mut handle as *mut _,
+                15,
+                Some(noop_unit),
+                ptr::null_mut(),
+                &mut error,
+            )
+        };
+        assert_eq!(code, BoxliteErrorCode::Ok);
+        unsafe { crate::boxlite_error_free(&mut error as *mut _) };
+
+        // Drive the spawned async task to completion. Use a bounded poll
+        // loop with a short sleep — block_on on a multi-thread runtime
+        // schedules the spawned task on a worker, so the test thread
+        // simply needs to wait for the queue to receive the event.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            {
+                let g = queue.inner.lock().unwrap();
+                if !g.is_empty() {
+                    break;
+                }
+            }
+            if std::time::Instant::now() >= deadline {
+                break;
+            }
+            tokio_rt.block_on(async {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            });
+        }
+
+        let events: Vec<RuntimeEvent> = {
+            let mut g = queue.inner.lock().unwrap();
+            g.drain(..).collect()
+        };
+        let signal_count = events
+            .iter()
+            .filter(|e| matches!(e, RuntimeEvent::Signal { .. }))
+            .count();
+        assert_eq!(
+            signal_count, 1,
+            "expected exactly 1 Signal event from boxlite_execution_signal; \
+             got {signal_count}. The FFI entrypoint did not route through \
+             the runtime event queue."
+        );
     }
 
     // The end-to-end regression guard for the wait-vs-kill deadlock lives

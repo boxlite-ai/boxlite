@@ -78,6 +78,20 @@ pub(crate) trait BoxBackend: Send + Sync {
 
     async fn exec(&self, command: BoxCommand) -> BoxliteResult<Execution>;
 
+    /// Reattach to an already-running execution by id. The returned
+    /// `Execution` carries fresh stdin/stdout/stderr/result channels
+    /// wired to a new WebSocket; the caller discards any prior handle
+    /// for the same id. Returns `BoxliteError::SessionReaped` if the
+    /// server reports the session is no longer attachable.
+    ///
+    /// Default impl returns `Unsupported` — backends that don't model
+    /// long-lived attachable sessions (local in-process) don't need it.
+    async fn attach(&self, _execution_id: &str) -> BoxliteResult<Execution> {
+        Err(BoxliteError::Unsupported(
+            "this backend does not support reattaching to existing executions".into(),
+        ))
+    }
+
     async fn metrics(&self) -> BoxliteResult<BoxMetrics>;
 
     async fn stop(&self) -> BoxliteResult<()>;
@@ -130,13 +144,25 @@ pub(crate) trait SnapshotBackend: Send + Sync {
     async fn restore(&self, name: &str) -> BoxliteResult<()>;
 }
 
-/// Backend abstraction for execution control (kill, resize).
+/// Backend abstraction for execution control (signal, kill, resize).
 ///
-/// Local backend is implemented by `ExecutionInterface`.
-/// REST backend delegates to HTTP API calls.
+/// Local backend is implemented by `ExecutionInterface`. REST backend
+/// delegates to HTTP API calls.
+///
+/// `signal(id, n)` sends signal `n` to the execution and returns; the exec
+/// continues running (or not) based on whether the process honors the signal.
+/// `kill(id)` is the explicit terminate-and-evict verb — for the REST
+/// backend it issues `DELETE /executions/{id}`; for the local backend it
+/// defaults to `signal(id, SIGKILL)`. Splitting them lets callers ask for
+/// SIGINT/SIGTERM/SIGHUP without the request body being silently coerced
+/// to SIGKILL on the server side (the historical bug).
 #[async_trait]
 pub(crate) trait ExecBackend: Send + Sync {
-    async fn kill(&mut self, execution_id: &str, signal: i32) -> BoxliteResult<()>;
+    async fn signal(&mut self, execution_id: &str, signal: i32) -> BoxliteResult<()>;
+
+    async fn kill(&mut self, execution_id: &str) -> BoxliteResult<()> {
+        self.signal(execution_id, 9).await
+    }
 
     async fn resize_tty(
         &mut self,

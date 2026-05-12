@@ -149,6 +149,13 @@ pub(crate) type CExecutionWaitFn = extern "C" fn(c_int, *mut crate::CBoxliteErro
 pub type CExecutionKillCb = Option<extern "C" fn(*mut crate::CBoxliteError, *mut c_void)>;
 pub(crate) type CExecutionKillFn = extern "C" fn(*mut crate::CBoxliteError, *mut c_void);
 
+/// Execution signal completion. Distinct typedef from `CExecutionKillCb`
+/// even though the shape is identical so callers can route SIGKILL (kill)
+/// and arbitrary-signal (signal) callbacks to different handlers without
+/// relying on positional inference.
+pub type CExecutionSignalCb = Option<extern "C" fn(*mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CExecutionSignalFn = extern "C" fn(*mut crate::CBoxliteError, *mut c_void);
+
 /// Execution PTY resize completion.
 pub type CExecutionResizeCb = Option<extern "C" fn(*mut crate::CBoxliteError, *mut c_void)>;
 pub(crate) type CExecutionResizeFn = extern "C" fn(*mut crate::CBoxliteError, *mut c_void);
@@ -337,6 +344,11 @@ pub enum RuntimeEvent {
     },
     Kill {
         cb: CExecutionKillFn,
+        user_data: usize,
+        result: Result<(), BoxliteError>,
+    },
+    Signal {
+        cb: CExecutionSignalFn,
         user_data: usize,
         result: Result<(), BoxliteError>,
     },
@@ -754,7 +766,7 @@ mod phase2_regression_tests {
     }
 }
 
-// ─── Codex adversarial review reproducers ──────────────────────────────────
+// ─── Event-queue regression reproducers ───────────────────────────────────
 //
 // These tests are structured so a single test fails on the unfixed code and
 // passes after the fix. See plans/we-should-redesign-the-temporal-moth.md

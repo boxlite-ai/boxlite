@@ -74,6 +74,14 @@ pub enum BoxliteError {
     /// System resource limit reached (e.g., VM address spaces exhausted).
     #[error("resource exhausted: {0}")]
     ResourceExhausted(String),
+
+    /// An interactive execution session was reaped server-side after the
+    /// client disconnected and did not reconnect within the grace window
+    /// (default 5 min idle → SIGHUP, escalating to SIGKILL; 24h hard cap).
+    /// Reattach via the same `execution_id` is no longer possible — start
+    /// a new exec instead.
+    #[error("session reaped: {0}")]
+    SessionReaped(String),
 }
 
 // Implement From for common error types to enable `?` operator

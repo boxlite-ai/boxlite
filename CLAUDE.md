@@ -1,750 +1,96 @@
 # CLAUDE.md
 
-This document provides project context for AI-assisted development with Claude Code.
-
 ## Project Overview
 
-**BoxLite** is an embeddable virtual machine runtime for secure, isolated code execution environments.
-
-**Key Concept:** Think "SQLite for sandboxing" - a lightweight library embedded directly in applications without requiring a daemon or root privileges.
-
-**What it does:**
-- Hardware-level VM isolation (KVM on Linux, Hypervisor.framework on macOS)
-- Runs OCI containers inside lightweight VMs
-- Async-first API for running multiple isolated environments concurrently
-
-**Primary use cases:**
-- AI Agent Sandbox - Safe execution environment for untrusted AI-generated code
-- Serverless Multi-tenant Runtime - Isolated environments per customer/request
-- Regulated Environments - Hardware-level isolation for compliance
-
-**For detailed overview, architecture, and use cases, see:**
-- [README.md](./README.md) - Project overview, features, quick start
-- [docs/architecture/README.md](./docs/architecture/README.md) - Comprehensive architecture documentation
+- [README.md](./README.md) — features, quick start, supported platforms
+- [docs/architecture/README.md](./docs/architecture/README.md) — components, use cases
+- [sdks/python/README.md](./sdks/python/README.md) — Python SDK (3.10+, PyO3 bindings, async API)
+- [sdks/node/README.md](./sdks/node/README.md) — Node.js/TypeScript SDK (18+, napi-rs bindings)
+- [sdks/go/README.md](./sdks/go/README.md) — Go SDK (1.24+, CGO + prebuilt native library)
+- [sdks/c/README.md](./sdks/c/README.md) — C SDK (C11, cbindgen FFI, Simple + Native API)
 
 ## Tech Stack
 
-**Core:**
-- Rust (async, Tokio runtime)
-- libkrun hypervisor (KVM/Hypervisor.framework)
-- libcontainer (OCI runtime)
-- gRPC (tonic) for host-guest communication
-
-**SDKs:**
-- Python (PyO3, Python 3.10+)
-- C (FFI, early stage)
-- Node.js (napi-rs, Node.js 18+)
-
-**For complete tech stack details, see:**
-- [docs/architecture/README.md](./docs/architecture/README.md#tech-stack) - Detailed component breakdown
+- [docs/architecture/README.md#tech-stack](./docs/architecture/README.md#tech-stack) 
 
 ## Project Structure
 
-**High-level layout:**
-```
-src/
-  boxlite/            # Core runtime (Rust) - 19 modules
-  shared/             # Shared types and protocol
-  cli/                # CLI binary
-  server/             # Distributed server
-  ffi/                # FFI layer for SDKs
-  guest/              # Guest agent (runs inside VM)
-  test-utils/         # Test utilities
-  deps/               # Vendored C sys crates
-    bubblewrap-sys/
-    e2fsprogs-sys/
-    libgvproxy-sys/
-    libkrun-sys/
-sdks/
-  python/             # Python SDK (PyO3)
-  c/                  # C SDK (FFI)
-  node/               # Node.js SDK (napi-rs)
-examples/python/      # Python examples (7 categorized subdirectories)
-docs/                 # Documentation
-scripts/              # Build and setup scripts
-```
-
-**Key modules in `src/boxlite/src/`:**
-- `runtime/` - BoxliteRuntime, main entry point
-- `litebox/` - LiteBox handle, command execution
-- `vmm/` - VM manager (libkrun, shim controller)
-- `jailer/` - Security isolation (seccomp, sandbox-exec, namespaces)
-- `portal/` - Host-guest gRPC communication
-- `images/` - OCI image management
-- `net/`, `volumes/`, `disk/` - Networking, storage, disks
-- `db/` - SQLite persistence
-
-**Runtime data directory (`~/.boxlite/`):**
-- `images/` - OCI image cache
-- `boxes/` - Per-box data (config, disks)
-- `db/` - SQLite databases
-
-**For detailed project structure, see:**
-- [CONTRIBUTING.md](./CONTRIBUTING.md#project-structure) - Directory layout and organization
-- [docs/architecture/README.md](./docs/architecture/README.md) - Component architecture
+- [CONTRIBUTING.md](./CONTRIBUTING.md#project-structure) — directory layout
+- [docs/architecture/README.md](./docs/architecture/README.md) — component architecture
 
 ## Common Commands
 
-**Quick reference:**
-```bash
-make setup          # Install dependencies (auto-detects OS)
-make dev:python     # Build Python SDK locally
-make test           # Run Rust tests
-make fmt            # Format code
-make dist:python    # Build portable Python wheel
-```
-
-**For complete command reference and Makefile targets, see:**
-- [Makefile](./Makefile) - All available targets with descriptions (run `make help`)
-- [CONTRIBUTING.md](./CONTRIBUTING.md#building-from-source) - Development workflow
-- [docs/guides/README.md](./docs/guides/README.md#building-from-source) - Platform-specific build instructions
+- `make help` — list all targets ([Makefile](./Makefile))
+- Always use `make` targets for build, test, lint, format, setup, and distribution. Do not run `cargo`, `npm`, `python`, `go`, or `cbindgen` directly when a make target exists — the Makefile encapsulates correct flags, cross-compilation, environment setup, and ordering.
 
 ## Code Style
 
-**Rust:** Follow [docs/development/rust-style.md](./docs/development/rust-style.md) which includes:
-- [Microsoft Rust Guidelines](https://microsoft.github.io/rust-guidelines) - external reference
-- `cargo fmt` for formatting, `cargo clippy` for linting (enforced in CI)
-- Async-first (Tokio runtime)
-- Error handling via centralized `BoxliteError` enum
-- `Send + Sync` for public types
-
-Key guidelines to internalize:
-- **M-PANIC-IS-STOP**: Panics terminate, don't use for error handling
-- **M-CONCISE-NAMES**: Avoid "Service", "Manager", "Factory" in type names
-- **M-UNSAFE**: Minimize and document all unsafe blocks
-
-**Python:**
-- Async/await for all I/O
-- Context managers (`async with`) for automatic cleanup
-- Type hints encouraged
-
-**For complete code style guidelines, see:**
-- [docs/development/rust-style.md](./docs/development/rust-style.md) - Rust style guide with Microsoft guidelines
-- [src/shared/src/errors.rs](./src/shared/src/errors.rs) - Error handling patterns
-
-## Workflows
-
-**Development workflow:**
-1. Create feature branch from `main`
-2. Make changes, add tests, update docs
-3. Run `cargo test && make fmt`
-4. Open Pull Request
-5. Address code review feedback
-6. Squash merge to main
-
-**Testing:**
-- Rust: `cargo test` (unit + integration)
-- Python: `pytest` with real VM integration tests
-
-**For complete workflows, see:**
-- [CONTRIBUTING.md](./CONTRIBUTING.md#how-to-contribute) - PR process, testing, release
-- [.github/workflows/](../.github/workflows/) - CI/CD pipelines
-
-## Important Notes
-
-### Critical for AI Assistants
-
-**Platform support:**
-- ✅ macOS ARM64 (Apple Silicon), Linux x86_64/ARM64, Windows (via WSL2)
-- ❌ macOS Intel (not supported)
-
-**Before building:**
-- ⚠️ **MUST** run `git submodule update --init --recursive` (vendored dependencies)
-- Check platform requirements in [README.md](./README.md#supported-platforms)
-
-**Architecture quirks:**
-- **Shim process**: boxlite-shim isolates boxes (libkrun does process takeover)
-- **Jailer**: OS-level sandbox (seccomp/sandbox-exec) wraps shim for defense-in-depth
-- **gRPC communication**: Host-guest communication via vsock (not TCP)
-- **~/.boxlite directory**: All runtime data stored here (images, boxes, db)
-
-**Git workflow:**
-- **NEVER use `--no-verify`** to bypass git hooks without explicit user permission. If hooks fail, fix the root cause or ask the user for guidance.
-
-**When writing code:**
-- All I/O is async (Tokio runtime)
-- Errors use centralized `BoxliteError` enum (see `src/shared/src/errors.rs`)
-- Python SDK requires Python 3.10+
-- Examples: categorized Python examples in `examples/python/` (7 subdirectories)
-
-**Common pitfalls:**
-- Forgetting to initialize submodules → build fails
-- Running on Intel Mac → UnsupportedEngine error
-- Not handling async/await properly → runtime errors
-- Exceeding resource limits → box killed (OOM)
-
-### Documentation Map
-
-When users ask questions, direct them to:
-
-| Question Type | Reference |
-|--------------|-----------|
-| "How do I install?" | [docs/getting-started/README.md](./docs/getting-started/README.md) |
-| "How does it work?" | [docs/architecture/README.md](./docs/architecture/README.md) |
-| "What can I configure?" | [docs/reference/README.md](./docs/reference/README.md) |
-| "How do I...?" | [docs/guides/README.md](./docs/guides/README.md) |
-| "Why is it failing?" | [docs/faq.md](./docs/faq.md) |
-| "Python API reference" | [sdks/python/README.md](./sdks/python/README.md) |
-| "How to contribute?" | [CONTRIBUTING.md](./CONTRIBUTING.md) |
-
-### Quick Debugging
-
-When helping users debug:
-1. Enable logging: `RUST_LOG=debug python script.py`
-2. Check `~/.boxlite/` disk space and permissions
-3. Verify platform support (KVM on Linux, Hypervisor.framework on macOS)
-4. See [docs/faq.md](./docs/faq.md#troubleshooting) for common issues
-
-## Mandatory Code Design Rules
-
-**CRITICAL: These rules are MANDATORY for all code contributions.**
-
-### Meta-Principle
-
-**0. DON'T BE YES MAN** - Challenge assumptions, question designs, identify flaws
-
-- **Challenge yourself too, not just the user**
-- Before implementing: "Does this already exist?" (search first)
-- Before adding logic: "Does this layer need to know this?"
-- After writing: "What breaks if I delete this?"
-
-### Core Principles (Must Know)
-
-**1. Single Responsibility** - One function, one job
-**2. Boring Code** - Obvious > clever
-**3. Search Before Implement** - grep before writing, read before coding
-**4. Only What's Used** - No future-proofing, delete dead code immediately
-**5. DRY** - Don't Repeat Yourself (single source of truth)
-**6. Explicit Errors** - Self-documenting error messages
-
-### Supporting Principles (Reference When Needed)
-
-**7. Minimal Knowledge** - Components only know interfaces, not internals
-**8. No Premature Optimization** - Measure first, optimize later
-**9. Explicit Paths** - Calculate from known roots, never assume
-**10. Prepare Before Execute** - Setup before irreversible operations
-**11. Validate Early** - Check preconditions before expensive work
-**12. Thoughtful Naming** - Consider 5+ alternatives, choose the clearest
-**13. Structured Code** - Organized hierarchy, clear layers, predictable organization
-**14. Idiomatic by Default** - Follow each language's standard patterns and libraries first; only diverge with a clear, documented reason
-**15. No Sleep for Events** - Never use `sleep` to wait on events (especially > 10ms). Use proper event-driven mechanisms (channels, waitpid, condition variables, futures) instead.
-
-### Quick Examples
-
-**DON'T BE YES MAN**
-
-Critical thinking is mandatory. Challenge assumptions, identify flaws, propose better alternatives.
-
-```
-// ❌ Yes Man behavior
-User: "Let's add a Supervisor component to track metrics"
-AI: "Great idea! I'll implement it right away."
-[Creates empty struct with no implementation, violates YAGNI]
-
-// ✅ Critical thinking
-User: "Let's add a Supervisor component to track metrics"
-AI: "Wait - what data would Supervisor need? The process handle is in ShimController.
-     Creating a separate component means duplicating PID tracking (violates DRY).
-     Supervisor has no access to the data it needs. This design won't work.
-
-     Better approach: ShimController already owns the process, it should provide metrics.
-     Do you want me to implement metrics() in ShimController instead?"
-```
-
-**Real example from this codebase:**
-
-- Initial design had empty `Supervisor` struct that did nothing
-- Yes-man would have kept it or implemented it wrong
-- Critical analysis identified: violates YAGNI, DRY, and "Delete Legacy Code"
-- Solution: Delete Supervisor, add metrics to ShimController (owns the process)
-
-**When to push back:**
-
-- Design violates any of the 15 golden rules
-- User requests create duplicate state/logic
-- Implementation requires blocking operations (sleep, sync I/O in async contexts)
-- Code adds complexity without clear benefit
-- "Future-proofing" that isn't needed now (YAGNI)
-
-**How to push back:**
-
-1. Identify specific rule violations
-2. Explain why current approach won't work
-3. Propose concrete alternative
-4. Let user decide
-
-**Remember:** Respectful disagreement > harmful agreement. Your job is to build good code, not to please.
-
-**Single Responsibility**
-
-```rust
-// ❌ One function doing everything
-fn setup_and_start_vm(image: &str) -> Result<VM> { /* ... */ }
-
-// ✅ Each function has one job
-fn pull_image(image: &str) -> Result<Manifest> { /* ... */ }
-fn create_workspace(manifest: &Manifest) -> Result<Workspace> { /* ... */ }
-fn start_vm(workspace: &Workspace) -> Result<VM> { /* ... */ }
-```
-
-**Boring Code**
-
-```rust
-// ❌ Clever, hard to understand
-fn metrics(&self) -> RawMetrics {
-    self.process.as_ref()
-        .and_then(|p| System::new().process(Pid::from(p.id())))
-        .map(|proc| RawMetrics { cpu: proc.cpu_usage(), mem: proc.memory() })
-        .unwrap_or_default()
-}
-
-// ✅ Boring, obvious
-fn metrics(&self) -> RawMetrics {
-    if let Some(ref process) = self.process {
-        let mut sys = System::new();
-        sys.refresh_process(pid);
-        if let Some(proc_info) = sys.process(pid) {
-            return RawMetrics {
-                cpu_percent: Some(proc_info.cpu_usage()),
-                memory_bytes: Some(proc_info.memory()),
-            };
-        }
-    }
-    RawMetrics::default()
-}
-```
-
-**DRY (Don't Repeat Yourself)**
-
-```rust
-// ❌ Duplicated constants
-const VSOCK_PORT: u32 = 2695;  // host
-const VSOCK_PORT: u32 = 2695;  // guest
-
-// ✅ Shared in boxlite-core
-use boxlite_core::VSOCK_GUEST_PORT;
-```
-
-**Search Before Implement**
-
-BEFORE writing ANY code, search for existing implementations:
-
-```bash
-# ❌ Writing transformation without searching
-# (adds duplicate unix→vsock transformation in litebox.rs)
-
-# ✅ Search first, find existing code
-$ grep -r "transform.*guest" src/boxlite/src/
-src/boxlite/src/engines/krun/engine.rs:113:fn transform_guest_args(...)
-# → Found it! Use existing code, don't duplicate.
-```
-
-```rust
-// ❌ Duplicate logic in wrong layer
-impl BoxInitializer {
-    fn create_guest_entrypoint(&self, transport: &Transport) -> GuestEntrypoint {
-        // Why does litebox know about krun's unix→vsock transformation?
-        let guest_transport = match transport {
-            Transport::Unix { .. } => Transport::vsock(2695),  // Already in krun/engine.rs!
-            ...
-        };
-    }
-}
-
-// ✅ Let existing engine code handle it
-impl BoxInitializer {
-    fn create_guest_entrypoint(&self, transport: &Transport) -> GuestEntrypoint {
-        // Pass transport as-is, krun engine will transform if needed
-        let uri = transport.to_uri();
-        format!("exec boxlite-guest --listen {}", uri)
-    }
-}
-
-// Engine already has the transformation (discovered via grep)
-impl EngineKrun {
-    fn transform_guest_args(args: Vec<String>) -> Vec<String> {
-        // Krun-specific: unix:// → vsock:// transformation
-    }
-}
-```
-
-**Search patterns to try:**
-
-- Similar functionality: `grep -r "transform.*args" src/`
-- Function names: `grep -r "function_name" src/`
-- Constants/config: `grep -r "VSOCK_PORT\|2695" src/`
-- Layer ownership: `grep -r "GUEST_AGENT" src/` (shows which modules use it)
-
-**Explicit Path Calculation**
-
-```rust
-// ❌ Assumes relationship
-let box_dir = rootfs_dir.join(box_id);
-
-// ✅ Calculate from known root
-let home_dir = rootfs_dir.parent().ok_or(...) ?;
-let box_dir = home_dir.join(dirs::BOXES_DIR).join(box_id);
-```
-
-**Only What's Used**
-
-```rust
-// ❌ Adding "future-proof" code
-pub struct Supervisor {
-    // Empty - we might need this later!
-}
-
-// ❌ Keeping "just in case" code
-// fn old_extract_layers() { ... }  // Commented out, might need later?
-
-// ✅ Only implement what's needed now
-// If Supervisor isn't used, don't create it
-// If old code isn't called, delete it (it's in git history)
-```
-
-**Prepare Before Execute**
-
-```rust
-// ❌ Setup mixed with critical operation
-fn start_vm() -> Result<()> {
-    let ctx = create_ctx()?;
-    ctx.start();  // Process takeover - can't recover from errors!
-}
-
-// ✅ All setup before point of no return
-std::fs::create_dir_all( & socket_dir) ?;  // Can fail safely
-let ctx = create_ctx() ?;                 // Can fail safely
-ctx.configure() ?;                        // Can fail safely
-ctx.start();                             // Point of no return
-```
-
-**Explicit Error Context**
-
-```rust
-// ❌ Generic error
-std::fs::create_dir_all( & dir) ?;
-
-// ✅ Self-documenting
-std::fs::create_dir_all( & socket_dir).map_err( | e| {
-BoxliteError::Storage(format ! (
-"Failed to create socket directory {}: {}", socket_dir.display(), e
-))
-}) ?;
-```
-
-**Thoughtful Naming**
-
-```rust
-// ❌ Unclear, abbreviated
-fn proc_data(d: &[u8]) -> Vec<u8> { /* ... */ }
-fn get_stuff() -> Result<Thing> { /* ... */ }
-
-// ✅ Clear, self-documenting (considered alternatives first)
-// Alternatives considered: handle_layers, merge_layers, combine_layers, stack_layers
-fn extract_and_merge_layers(tarballs: &[PathBuf], dest: &Path) -> Result<()> { /* ... */ }
-
-// Alternatives considered: fetch_config, load_config, read_config, get_config
-fn parse_container_config(manifest: &Manifest) -> Result<ContainerConfig> { /* ... */ }
-```
-
-**Naming Process**:
-
-1. Write down 5+ name candidates
-2. Consider: verb clarity, noun specificity, context
-3. Ask: "If I read this in 6 months, would it be obvious?"
-4. Choose the name that needs the least explanation
-
-**Minimal Knowledge**
-
-```rust
-// ❌ Component knows about other's internals
-mod krun_engine {
-    use crate::networking::constants::GUEST_MAC;
-
-    fn configure_network(&self, socket_path: &str) {
-        // Engine directly imports networking constant
-        self.ctx.add_net_path(socket_path, GUEST_MAC);
-    }
-}
-
-// ✅ Component only knows interface
-mod krun_engine {
-    fn configure_network(&self, socket_path: &str, mac_address: [u8; 6]) {
-        // Engine receives mac_address as parameter, doesn't know where it comes from
-        self.ctx.add_net_path(socket_path, mac_address);
-    }
-}
-
-// Backend provides the configuration
-mod gvproxy_backend {
-    use crate::networking::constants::GUEST_MAC;
-
-    fn endpoint(&self) -> NetworkBackendEndpoint {
-        NetworkBackendEndpoint::UnixSocket {
-            path: self.socket_path.clone(),
-            mac_address: GUEST_MAC,  // Backend knows the constant
-        }
-    }
-}
-```
-
-**Why this matters:**
-
-- Loose coupling: Components don't know each other's internals
-- Independent evolution: Backend and engine can change independently
-- Testability: Components can be tested in isolation
-
-**Anti-pattern: Knowledge Leaks**
-
-```rust
-// ❌ litebox.rs knowing about krun's socket bridging
-impl BoxInitializer {
-    fn create_guest_entrypoint(&self) -> GuestEntrypoint {
-        // Why does litebox know about krun's unix→vsock transformation?
-        let guest_transport = match transport {
-            Transport::Unix { .. } => Transport::vsock(2695),  // ← Krun implementation detail!
-            ...
-        };
-    }
-}
-
-// ✅ Let the engine handle its own implementation details
-impl BoxInitializer {
-    fn create_guest_entrypoint(&self, transport: &Transport) -> GuestEntrypoint {
-        // Pass transport as-is, let engine transform if needed
-        let uri = transport.to_uri();
-        format!("exec boxlite-guest --listen {}", uri)
-    }
-}
-
-// Engine handles the transformation
-impl EngineKrun {
-    fn transform_guest_args(args: Vec<String>) -> Vec<String> {
-        // Krun-specific: unix:// → vsock:// transformation
-    }
-}
-```
-
-**Ask before adding logic:**
-
-- Does THIS component need to know this detail?
-- Would removing this knowledge make the system more flexible?
-- Is this an implementation detail of a different layer?
-
-**Minimal Knowledge applies to EVERYTHING:**
-
-- ✅ Code (imports, function calls, direct references)
-- ✅ **Comments** (what implementation details are revealed)
-- ✅ Documentation (API contracts, design docs)
-
-```rust
-// ❌ Comment reveals implementation details
-fn create_guest_entrypoint(&self, transport: &Transport) -> GuestEntrypoint {
-    // Pass transport as-is - krun engine will transform unix:// to vsock://
-    // (see krun/engine.rs::transform_guest_args)
-    // ↑ Why does litebox know krun's transformation logic?
-    let uri = transport.to_uri();
-}
-
-// ✅ Comment maintains abstraction
-fn create_guest_entrypoint(&self, transport: &Transport) -> GuestEntrypoint {
-    // Engine handles any transport-specific transformations
-    // ↑ Generic, no implementation details leaked
-    let uri = transport.to_uri();
-}
-```
-
-**Why comments matter:**
-
-- Comments create **documentation coupling** (if implementation changes, comment is wrong)
-- Revealing "how" instead of "why" leaks abstractions
-- Future readers learn the wrong patterns
-
-**Structured Code**
-
-```rust
-// ❌ Flat, disorganized
-mod rootfs {
-    pub fn prepare() { ... }
-    pub fn extract() { ... }
-    pub fn mount() { ... }
-    pub fn unmount() { ... }
-    pub fn process_whiteouts() { ... }
-    pub struct PreparedRootfs {
-        ...
-    }
-    pub struct SimpleRootfs {
-        ...
-    }
-}
-
-// ✅ Hierarchical, organized by responsibility
-mod rootfs {
-    mod operations;  // Low-level primitives
-    mod prepared;    // High-level orchestration (uses operations)
-    mod simple;      // Alternative implementation
-
-    pub use operations::{extract_layer_tarball, mount_overlayfs_from_layers};
-    pub use prepared::PreparedRootfs;
-    pub use simple::SimpleRootfs;
-}
-```
-
-**Structure Principles**:
-
-1. **Clear Hierarchy**: operations → prepared → public API
-2. **Separation of Concerns**: Each module has ONE purpose
-3. **Progressive Disclosure**: High-level API first, details hidden
-4. **Predictable Organization**: Similar things organized similarly
-5. **Explicit Dependencies**: Imports show relationships
-6. **Testable Isolation**: Each layer can be tested independently
-
-**File Organization Pattern**:
-
-```
-src/
-  ├── lib.rs              // Public API only
-  ├── errors.rs           // Shared error types
-  ├── feature/
-  │   ├── mod.rs          // Public interface + re-exports
-  │   ├── operations.rs   // Low-level primitives
-  │   ├── types.rs        // Feature-specific types
-  │   └── impl.rs         // High-level implementation
-```
-
-### Pre-Submission Checklist
-
-**Pre-Implementation (BEFORE writing code):**
-
-- [ ] Searched for similar functionality (`grep -r "pattern" src/`)
-- [ ] Read ALL files that would be affected (completely, not skimmed)
-- [ ] Identified correct layer for new logic (ownership analysis)
-- [ ] Verified no duplicate logic exists
-- [ ] Questioned: "Does this component need to know this?"
-- [ ] Applied Rule #0 to OWN design (not just user's request)
-
-**Meta-Principle:**
-
-- [ ] Design was critically evaluated (not yes-man accepted)
-
-**Core Principles:**
-
-- [ ] Each function has single responsibility (one job)
-- [ ] Code is boring and obvious (not clever)
-- [ ] Only code that's actually used exists (no future-proofing, no dead code)
-- [ ] No duplicated knowledge (DRY - single source of truth)
-- [ ] Every error has full context (self-documenting)
-
-**Supporting Principles:**
-
-- [ ] Components only know interfaces (minimal knowledge / loose coupling)
-- [ ] No optimization without measurement
-- [ ] Paths calculated from known roots (never assume)
-- [ ] Setup completed before irreversible operations
-- [ ] Preconditions validated early
-- [ ] Names considered carefully (5+ alternatives evaluated)
-- [ ] Code has clear hierarchy and predictable organization
-
-**Guiding principles**:
-
-- "Does this design actually make sense, or am I just agreeing?"
-- "Is this the simplest thing that could possibly work?"
-- "If I delete this, can I recreate it from git history?"
-
-**Post-Coding (AFTER writing code, BEFORE submitting):**
-
-This is the #1 critical requirement. Every code change MUST pass all of the following:
-
-- [ ] **Unit & integration tests cover all points** — every new behavior, edge case, and error path must have a corresponding test. This is the number one priority.
-  - **Tests must exercise actual code** — every test must directly call the real boxlite code it covers. Tests that only verify language/framework behavior (e.g., testing `tokio::select!` with mock sleeps) are not acceptable.
-  - **Integration tests are mandatory** — don't skip because of VM/hardware dependencies. The test infrastructure handles that (uses real `alpine:latest`, temp dirs). Integration tests validate that code changes actually work end-to-end.
-  - **Test patterns**: Unit tests in `#[cfg(test)] mod tests` within the source file. Integration tests in `src/boxlite/tests/` or `src/cli/tests/`.
-- [ ] **All tests pass** — both new and existing tests. Run: `cargo test -p <package>` (or the relevant test command for the language)
-- [ ] **Clippy clean** — `cargo clippy -p <package> --tests -- -D warnings` (zero warnings)
-- [ ] **Format clean** — `cargo fmt --check` for Rust, `ruff format --check` / `ruff check` for Python
-- [ ] If any of the above fail, fix before proceeding — do not submit code with failing tests or lint warnings
-
----
-
-## Lessons from Real Mistakes
-
-### Case Study: Duplicate Transformation Logic
-
-**The Mistake:**
-Added `unix://` → `vsock://` transformation in `litebox.rs` when it already existed in `krun/engine.rs`.
-
-**Why it happened:**
-
-- Didn't search before implementing (violated Rule #3)
-- Became "yes man" to own design (violated Rule #0)
-- Didn't question which layer should own the logic (violated Rule #7)
-- Treated rules as post-commit review, not pre-commit design
-
-**How rules should have prevented it:**
-
-| Rule                             | What Should Have Happened                                   |
-|----------------------------------|-------------------------------------------------------------|
-| **#0 (Don't Be Yes Man)**        | "Does this already exist?" → Search first                   |
-| **#3 (Search Before Implement)** | `grep -r "transform.*vsock" src/` → Found in krun/engine.rs |
-| **#5 (DRY)**                     | Check for existing transformation logic                     |
-| **#7 (Minimal Knowledge)**       | "Why does litebox know about krun details?" → Wrong layer   |
-
-**What would have caught it:**
-
-```bash
-# BEFORE writing transformation code:
-$ grep -r "transform.*vsock" src/boxlite/src/
-src/boxlite/src/engines/krun/engine.rs:113:fn transform_guest_args
-# → Found it! Don't duplicate.
-
-# BEFORE adding krun-specific logic to litebox:
-$ grep -r "GUEST_AGENT_PORT" src/boxlite/src/
-# → Only in krun/ directory
-# → This is a krun detail, doesn't belong in litebox.rs
-```
-
-**The Fix:**
-
-```rust
-// ❌ WRONG: litebox.rs duplicating krun logic
-fn create_guest_entrypoint(&self, transport: &Transport) -> GuestEntrypoint {
-    let guest_transport = match transport {
-        Transport::Unix { .. } => Transport::vsock(2695),  // Duplicate!
-        ...
-    };
-}
-
-// ✅ RIGHT: Pass as-is, let engine handle it
-fn create_guest_entrypoint(&self, transport: &Transport) -> GuestEntrypoint {
-    let uri = transport.to_uri();  // krun/engine.rs transforms later
-    format!("exec boxlite-guest --listen {}", uri)
-}
-```
-
-**Key Lesson:**
-Rules are not a QA checklist to run after coding. They are a **design thinking framework** to apply BEFORE and DURING coding. Always:
-
-1. Search first (`grep`)
-2. Read affected files completely
-3. Question ownership/layering
-4. THEN code
-
----
-
-## How to Use These Rules
-
-**❌ WRONG: Checklist after coding**
-
-1. Write code
-2. Check if it follows rules
-3. Fix violations
-
-**✅ RIGHT: Active thinking before coding**
-
-1. Search for existing solutions (`grep -r "pattern" src/`)
-2. Read affected files completely (don't skim)
-3. Analyze ownership/layering ("Who should know this?")
-4. Question necessity ("What breaks if I don't add this?")
-5. THEN code (following rules)
-
-**The rules are not a QA checklist—they're a design thinking framework.**
+- [docs/development/rust-style.md](./docs/development/rust-style.md)
+
+## Workflow
+
+Every change goes: understand → research → design → implement → test → verify. Leave the code easier to read, test, and change than you found it. Make small, deliberate changes that directly support the task; don't rewrite or reformat unrelated code.
+
+**Understand**
+
+- Read this file, the nearest README/CONTRIBUTING, relevant docs, and the actual source before editing.
+- Identify the smallest behavioral change that satisfies the request.
+- Check the existing naming, module layout, test style, logging, and error-handling conventions in the affected area.
+- Look for nearby tests or scripts that already define expected behavior.
+- Reproduce-before-fix: when fixing a bug, write the failing test first, observe it fail, then fix. Do not create tests that don't actually test project code. A test that only exercises stdlib or framework code is not a real test.
+- If docs and implementation disagree, capture the conflict and ask before making architectural assumptions.
+
+**Research**
+
+- Cite real `file:line` refs from similar projects. The user routinely asks "research other projects" if this step is skipped.
+
+**Design**
+
+- Don't be yes-man — challenge assumptions (yours too); ask whether a layer needs to know what you're about to teach it.
+- Search before implement — `grep` for existing code first.
+- Single responsibility — one function, one reason to change.
+- One level of abstraction per function — don't mix orchestration with parsing, validation, persistence, rendering.
+- **High cohesion, loose coupling via struct facade:** group related state + behavior into a struct; expose 1-2 `pub` entry points; keep internals + helpers private (minimizes cross-module knowledge). *Anti-pattern:* scattered free `pub fn`s callers must stitch together — leaks call order, helper graph, and shared state into every call site; every new caller re-learns the workflow. *Example:* [`ImageManager`](src/boxlite/src/images/manager.rs) exposes `new`/`pull`/`list`/`load_from_local` and hides `Arc<ImageStore>`, blob sources, manifest handling. *Exception:* stateless utilities (e.g., [`jailer/common/`](src/boxlite/src/jailer/common/) async-signal-safe helpers).
+- Co-locate related code — fields, methods, and helpers that work together stay in the same file/module.
+- DRY when it's the same rule, policy, or transformation. Tolerate small local duplication when an abstraction would hide important local behavior.
+- Validation at the boundary — untrusted inputs get checked where they enter; trust internal code.
+- Composition over inheritance / framework magic.
+- Only what's used — no future-proofing; delete dead code immediately.
+- No premature optimization — measure first.
+
+**Implement**
+
+- Boring code — obvious > clever. Code is read more than written.
+- Names reveal intent, domain, and units. Booleans are predicates (`is_ready`, `has_token`, `can_retry`). Avoid `data`/`info`/`tmp`/`thing`/`handle`/`process` outside tiny scopes. Don't reuse one variable for two concepts in the same scope.
+- Guard clauses + early returns over deeply nested control flow.
+- Short argument lists. Group related values into typed options. Don't use boolean flags that make one function do two workflows — split them.
+- Visible side effects: network calls, file writes, process exec, DB mutations should be explicit at the call site.
+- Explicit errors — fail fast on missing config / invalid inputs; include operation, resource id, endpoint/status, input shape. Preserve the original cause when wrapping. Never swallow silently. Mask secrets in errors and logs.
+- Explicit paths — calculate from known roots, never assume.
+- Prepare before execute — setup before irreversible operations.
+- No `sleep` for events — channels/waitpid/futures.
+- Concurrency: timeouts, retries, cancellation explicit for external work. No unbounded queues/concurrency/memory. Close/release files, sockets, clients, browser handles, subprocesses. Retry loops must be idempotent (or document why safe).
+- Security: no secrets in commits, logs, or test fixtures. Validate before SQL/shell/URL/path/HTML/prompt. Avoid shell execution with untrusted input.
+- Comments explain *why*, not *what*: non-obvious intent, hidden constraints, deliberate trade-offs. Delete comments that restate the code or preserve dead decisions. Update nearby comments when behavior changes. Don't paste long excerpts from books, tickets, or logs.
+- Follow the repository's existing formatter, linter, language level, and module style. Keep diffs focused — no whitespace churn outside touched lines. Add a new dependency only when it materially reduces risk or complexity.
+
+**Test**
+
+- Every test must reference a project symbol — no framework- or standard-library-only filler. Self-check: "name the project symbol this test calls." Filler tests would stay green if the production fix were ripped out.
+- Add or update tests when behavior changes around branching, parsing, retries, security checks, or boundaries.
+- Prefer focused tests that prove the *right* reason for the change.
+- Do not create tests that don't actually test project code. A test that only exercises stdlib or framework code is not a real test.
+- Temporary tests that don't reference a project symbol must be written to a temporary directory — they are not production tests.
+- Never weaken a test to force it green — fix the code under test, not the assertion.
+
+**Verify** (before reporting done)
+
+- Run the smallest relevant verification first (`make test`, package-scoped test), then broaden if risk justifies.
+- Don't claim tests passed unless they actually ran. If verification can't run, state the blocker and the residual risk.
+
+**Cross-cutting** (apply at every phase)
+
+- Verify external findings against the working tree before acting. `/codex:adversarial-review`, lint, and PR comments work from a snapshot — they may name deleted code. `git grep` and `git diff` first.
+- Honor scope reduction: "drop X" means drop X. Don't bundle adjacent improvements unprompted.
+
+Adapted from Clean Code (Robert C. Martin) via the polygala-inc AGENTS.md distillation.

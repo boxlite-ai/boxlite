@@ -31,6 +31,7 @@ extern CRuntimeShutdownCb cbRuntimeShutdown(void);
 
 extern CExecutionWaitCb cbExecutionWait(void);
 extern CExecutionKillCb cbExecutionKill(void);
+extern CExecutionSignalCb cbExecutionSignal(void);
 extern CExecutionResizeCb cbExecutionResize(void);
 
 #endif // BOXLITE_GO_BRIDGE_H

@@ -69,6 +69,12 @@ impl BoxRunner {
             return Ok(());
         }
 
+        // --tty implies --interactive when stdin is a terminal
+        // (validate_flags already ensures stdin is a terminal when --tty is set)
+        if self.args.process.tty {
+            self.args.process.interactive = true;
+        }
+
         // IO streaming and signal handling via shared StreamManager
         let streamer = StreamManager::new(
             &mut execution,

@@ -98,6 +98,16 @@ impl LiteBox {
         self.box_backend.exec(command).await
     }
 
+    /// Reattach to a running execution by id, returning a fresh
+    /// `Execution` handle. The caller discards any previous handle for
+    /// the same id. Used after a transient WebSocket drop to resume
+    /// stdio without restarting the underlying process. Returns
+    /// `BoxliteError::SessionReaped` if the session is no longer
+    /// attachable on the server side.
+    pub async fn attach(&self, execution_id: &str) -> BoxliteResult<Execution> {
+        self.box_backend.attach(execution_id).await
+    }
+
     pub async fn metrics(&self) -> BoxliteResult<BoxMetrics> {
         self.box_backend.metrics().await
     }

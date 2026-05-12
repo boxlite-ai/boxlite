@@ -164,8 +164,9 @@ func (a *ApiServer) Start(ctx context.Context) error {
 	boxliteApi := protected.Group("/v1/boxes")
 	{
 		boxliteApi.POST("/:boxId/exec", controllers.BoxliteExec)
-		boxliteApi.GET("/:boxId/executions/:execId/output", controllers.BoxliteExecOutput)
-		boxliteApi.POST("/:boxId/executions/:execId/input", controllers.BoxliteExecInput)
+		boxliteApi.GET("/:boxId/executions/:execId", controllers.BoxliteGetExecution)
+		boxliteApi.DELETE("/:boxId/executions/:execId", controllers.BoxliteExecKill)
+		boxliteApi.GET("/:boxId/executions/:execId/attach", controllers.BoxliteExecAttach)
 		boxliteApi.POST("/:boxId/executions/:execId/signal", controllers.BoxliteExecSignal)
 		boxliteApi.POST("/:boxId/executions/:execId/resize", controllers.BoxliteExecResize)
 		boxliteApi.PUT("/:boxId/files", controllers.BoxliteFileUpload)

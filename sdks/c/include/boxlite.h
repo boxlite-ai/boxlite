@@ -59,6 +59,9 @@ typedef enum BoxliteErrorCode {
   UnsupportedEngine = 19,
   // System resource limit reached
   ResourceExhausted = 20,
+  // Interactive execution session was reaped server-side after disconnect.
+  // Reattach is no longer possible — start a new exec.
+  SessionReaped = 21,
 } BoxliteErrorCode;
 
 typedef enum BoxliteRegistryTransport {
@@ -165,6 +168,12 @@ typedef void (*CExecutionWaitCb)(int, CBoxliteError*, void*);
 
 // Execution kill completion.
 typedef void (*CExecutionKillCb)(CBoxliteError*, void*);
+
+// Execution signal completion. Distinct typedef from `CExecutionKillCb`
+// even though the shape is identical so callers can route SIGKILL (kill)
+// and arbitrary-signal (signal) callbacks to different handlers without
+// relying on positional inference.
+typedef void (*CExecutionSignalCb)(CBoxliteError*, void*);
 
 // Execution PTY resize completion.
 typedef void (*CExecutionResizeCb)(CBoxliteError*, void*);
@@ -347,9 +356,18 @@ enum BoxliteErrorCode boxlite_execution_on_exit(CExecutionHandle *execution,
                                                 void *user_data,
                                                 CBoxliteError *out_error);
 
-enum BoxliteErrorCode boxlite_execution_write_stdin(CExecutionHandle *execution,
+enum BoxliteErrorCode boxlite_execution_stdin_write(CExecutionHandle *execution,
                                                     const uint8_t *data,
                                                     size_t len,
+                                                    CBoxliteError *out_error);
+
+// Close the execution's stdin stream, signaling EOF to the guest process.
+//
+// Synchronous and idempotent: dropping the stdin sender closes the underlying
+// mpsc channel; subsequent writes return `InvalidState`; a second close is a
+// no-op. Used by clients that want to terminate input without killing the
+// process (e.g. `cat`/`wc`/`sort` waiting on stdin EOF).
+enum BoxliteErrorCode boxlite_execution_stdin_close(CExecutionHandle *execution,
                                                     CBoxliteError *out_error);
 
 enum BoxliteErrorCode boxlite_execution_wait(CExecutionHandle *execution,
@@ -362,7 +380,18 @@ enum BoxliteErrorCode boxlite_execution_kill(CExecutionHandle *execution,
                                              void *user_data,
                                              CBoxliteError *out_error);
 
-enum BoxliteErrorCode boxlite_execution_resize_tty(CExecutionHandle *execution,
+// Send an arbitrary Unix signal to the execution. `sig` is the signal
+// number (e.g. 2 = SIGINT, 15 = SIGTERM). `boxlite_execution_kill`
+// remains the dedicated SIGKILL+evict entrypoint; this function is for
+// graceful and non-terminal signals (HUP/INT/TERM/WINCH/...) that should
+// not tear down the per-execution bookkeeping.
+enum BoxliteErrorCode boxlite_execution_signal(CExecutionHandle *execution,
+                                               int sig,
+                                               CExecutionSignalCb cb,
+                                               void *user_data,
+                                               CBoxliteError *out_error);
+
+enum BoxliteErrorCode boxlite_execution_tty_resize(CExecutionHandle *execution,
                                                    int rows,
                                                    int cols,
                                                    CExecutionResizeCb cb,
