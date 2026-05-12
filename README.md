@@ -202,9 +202,13 @@ Installs to `$HOME/.local/bin/boxlite`. The runtime is embedded in the
 binary — no extra setup. Override the install dir or pin a version:
 
 ```bash
-BOXLITE_VERSION=v0.9.4 BOXLITE_INSTALL_DIR=/usr/local/bin \
-  curl -fsSL https://github.com/boxlite-ai/boxlite/releases/latest/download/install.sh | sh
+curl -fsSL https://github.com/boxlite-ai/boxlite/releases/latest/download/install.sh \
+  | BOXLITE_VERSION=v0.9.4 BOXLITE_INSTALL_DIR=/usr/local/bin sh
 ```
+
+The env-var prefix has to sit on the `sh` side of the pipe — variables
+placed before `curl` only decorate the curl process and never reach the
+installer.
 
 Each release also publishes raw tarballs (`boxlite-cli-vX.Y.Z-<target>.tar.gz`),
 matching `.sha256` sidecars, a combined `SHA256SUMS`, and sigstore-backed
