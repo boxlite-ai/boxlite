@@ -1,0 +1,15 @@
+# Cloudflare Worker that serves the boxlite-cli installer at sh.boxlite.ai.
+# See README.md in this directory for setup and deploy.
+
+name = "sh-boxlite-ai"
+main = "src/index.ts"
+compatibility_date = "2026-01-01"
+
+# Cloudflare manages boxlite.ai DNS; custom_domain=true makes it auto-create
+# the sh.boxlite.ai DNS record and TLS cert on first deploy.
+routes = [
+  { pattern = "sh.boxlite.ai", custom_domain = true }
+]
+
+[observability]
+enabled = true

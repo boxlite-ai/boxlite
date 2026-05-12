@@ -195,14 +195,19 @@ func main() {
 **Install (Linux & macOS Apple Silicon):**
 
 ```bash
-curl -fsSL https://github.com/boxlite-ai/boxlite/releases/latest/download/install.sh | sh
+curl -fsSL https://sh.boxlite.ai | sh
 ```
 
 Installs to `$HOME/.local/bin/boxlite`. The runtime is embedded in the
-binary — no extra setup. Override the install dir or pin a version:
+binary — no extra setup. `sh.boxlite.ai` is a thin Cloudflare Worker that
+serves the same `install.sh` published on every GitHub Release; the long
+form `https://github.com/boxlite-ai/boxlite/releases/latest/download/install.sh`
+is the verifiable upstream and is what `gh attestation verify` covers.
+
+Override the install dir or pin a version:
 
 ```bash
-curl -fsSL https://github.com/boxlite-ai/boxlite/releases/latest/download/install.sh \
+curl -fsSL https://sh.boxlite.ai \
   | BOXLITE_VERSION=v0.9.4 BOXLITE_INSTALL_DIR=/usr/local/bin sh
 ```
 
@@ -217,7 +222,7 @@ the release page, look up the digest in the release's attested
 `SHA256SUMS` and pass it in explicitly:
 
 ```bash
-curl -fsSL https://github.com/boxlite-ai/boxlite/releases/latest/download/install.sh \
+curl -fsSL https://sh.boxlite.ai \
   | BOXLITE_VERSION=v0.9.4 \
     BOXLITE_EXPECTED_SHA256=<sha256-of-boxlite-cli-vX.Y.Z-target.tar.gz> sh
 ```
