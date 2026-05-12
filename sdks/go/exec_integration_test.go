@@ -58,8 +58,15 @@ func TestIntegrationExecEnvWorkingDirTimeout(t *testing.T) {
 	rt := newTestRuntime(t)
 	box := createStartedBoxOrSkip(t, rt, "alpine:latest", WithAutoRemove(false))
 
+	// Short-lived commands (printenv, pwd) can exit so fast that
+	// execution.Wait() returns before the SDK's async stdout pump has
+	// delivered the final bytes. Padding the command with a brief sleep
+	// gives the pump a deterministic drain window without depending on
+	// host-side timing — better than a wall-clock sleep in the test.
+	const drainPad = " && sleep 0.1"
+
 	t.Run("Env reaches the guest process", func(t *testing.T) {
-		cmd := box.Command("printenv", "BOXLITE_TEST_KEY")
+		cmd := box.Command("sh", "-c", "printenv BOXLITE_TEST_KEY"+drainPad)
 		cmd.Env = map[string]string{
 			"BOXLITE_TEST_KEY":   "bar-from-test",
 			"BOXLITE_TEST_OTHER": "unused",
@@ -76,7 +83,7 @@ func TestIntegrationExecEnvWorkingDirTimeout(t *testing.T) {
 	})
 
 	t.Run("Dir sets the working directory in the guest", func(t *testing.T) {
-		cmd := box.Command("pwd")
+		cmd := box.Command("sh", "-c", "pwd"+drainPad)
 		cmd.Dir = "/tmp"
 		var out bytes.Buffer
 		cmd.Stdout = &out
