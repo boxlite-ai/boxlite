@@ -5,10 +5,30 @@
 #   curl -fsSL https://github.com/boxlite-ai/boxlite/releases/latest/download/install.sh | sh
 #
 # Environment variables:
-#   BOXLITE_VERSION       Pin a specific tag (default: this script's CURRENT_VERSION)
-#   BOXLITE_INSTALL_DIR   Install dir (default: $HOME/.local/bin)
-#   BOXLITE_DEBUG=1       Print every command
-#   BOXLITE_QUIET=1       Silence info output
+#   BOXLITE_VERSION           Pin a specific tag (default: this script's CURRENT_VERSION)
+#   BOXLITE_INSTALL_DIR       Install dir (default: $HOME/.local/bin)
+#   BOXLITE_EXPECTED_SHA256   Out-of-band expected digest for the CLI tarball.
+#                             Overrides every other source of expected checksum
+#                             below. Use this when pinning a version: it is the
+#                             only mode whose trust root is independent of the
+#                             release page (caller-supplied, e.g. read from
+#                             SHA256SUMS verified with `gh attestation verify`).
+#   BOXLITE_DEBUG=1           Print every command
+#   BOXLITE_QUIET=1           Silence info output
+#
+# Trust model for the expected-checksum lookup (highest authority first):
+#   1. BOXLITE_EXPECTED_SHA256, if set. Caller has obtained this digest out of
+#      band (recommended for pinned installs).
+#   2. The CHECKSUM_* constants embedded in this script at release time, when
+#      the requested version equals CURRENT_VERSION. These constants share a
+#      sigstore attestation with install.sh itself, so verifying install.sh
+#      before piping it transitively pins the CLI tarball.
+#   3. The `<artifact>.sha256` sidecar fetched from the target release. This
+#      is a TLS-trust-only anchor — anyone who can replace the tarball in a
+#      release can replace this sidecar too. Used as a fallback when the
+#      requested version does not match CURRENT_VERSION and no out-of-band
+#      digest was supplied. A warning is emitted in this mode so the user
+#      knows they are in the weaker trust tier.
 #
 # The runtime (boxlite-shim, boxlite-guest, libkrunfw) is embedded in the
 # binary via include_bytes!; nothing else needs to be installed.
@@ -117,15 +137,40 @@ main() {
   base_url="https://github.com/${REPO}/releases/download/${version}"
 
   tmpdir=$(mktemp -d)
-  trap 'rm -rf "$tmpdir"' EXIT INT TERM
+  # Staged binary lives inside install_dir so the final rename is on the same
+  # filesystem (rename(2) is atomic). $$ avoids collisions between concurrent
+  # installs; the final `mv -f` is still last-writer-wins, which matches the
+  # prior behavior.
+  staged=""
+  cleanup() {
+    rm -rf "$tmpdir"
+    [ -n "$staged" ] && rm -f "$staged"
+    return 0
+  }
+  trap cleanup EXIT INT TERM
 
   info "Downloading $archive ..."
   download "${base_url}/${archive}" "${tmpdir}/${archive}"
 
-  if [ "$version" = "$CURRENT_VERSION" ]; then
+  # Resolve the expected digest in the order documented at the top of this
+  # script: caller-supplied → embedded (current version) → remote sidecar.
+  if [ -n "${BOXLITE_EXPECTED_SHA256-}" ]; then
+    expected="$BOXLITE_EXPECTED_SHA256"
+    info "Using BOXLITE_EXPECTED_SHA256 as the expected digest."
+  elif [ "$version" = "$CURRENT_VERSION" ]; then
     expected=$(embedded_checksum_for "$target")
     [ -n "$expected" ] || error "no embedded checksum for target $target"
   else
+    # Pinned to a different version, no out-of-band digest. Surface the
+    # weaker trust boundary so callers know they should verify SHA256SUMS
+    # via `gh attestation verify` and pass BOXLITE_EXPECTED_SHA256 if they
+    # require an integrity guarantee independent of the release page.
+    info "warning: BOXLITE_VERSION=${version} differs from this installer's"
+    info "         CURRENT_VERSION=${CURRENT_VERSION}, and BOXLITE_EXPECTED_SHA256"
+    info "         is unset. Falling back to the remote .sha256 sidecar, which"
+    info "         shares its trust root with the tarball. For a stronger"
+    info "         guarantee, verify SHA256SUMS (covered by build provenance"
+    info "         attestation) and re-run with BOXLITE_EXPECTED_SHA256=<digest>."
     info "Fetching checksum for $version ..."
     download "${base_url}/${archive}.sha256" "${tmpdir}/${archive}.sha256"
     expected=$(awk '{print $1}' < "${tmpdir}/${archive}.sha256")
@@ -139,10 +184,20 @@ main() {
   # --no-same-owner: don't restore the CI runner's UID into the extracted
   # binary (matters when the user runs this as root for /usr/local/bin).
   tar --no-same-owner -xzf "${tmpdir}/${archive}" -C "$tmpdir" boxlite
+  # Atomic replace: stage inside install_dir (same filesystem so rename(2)
+  # is atomic) then mv -f over the target. GNU coreutils install(1) on
+  # Linux opens an existing destination with O_TRUNC and writes in place
+  # (see coreutils src/copy.c), so a failed mid-copy would corrupt the
+  # existing binary. macOS BSD install already uses a temp file internally,
+  # but we apply the same pattern on both for portability.
+  staged="${install_dir}/.boxlite.tmp.$$"
+  rm -f "$staged"
   # install(1) sets owner to the calling user and mode 0755 explicitly, so a
   # sudoed install ends up owned by root rather than whatever was in the
   # tarball. Present on macOS BSD and GNU coreutils.
-  install -m 0755 "${tmpdir}/boxlite" "${install_dir}/boxlite"
+  install -m 0755 "${tmpdir}/boxlite" "$staged"
+  mv -f "$staged" "${install_dir}/boxlite"
+  staged=""  # final file is in place; cleanup must not touch it
 
   info ""
   info "✓ Installed boxlite ${version} to ${install_dir}/boxlite"

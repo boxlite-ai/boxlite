@@ -17,9 +17,12 @@ on:
       - 'sdks/c/**'
       - 'sdks/go/**'
       - 'make/quality.mk'
+      - 'make/test.mk'
       - '.pre-commit-config.yaml'
       - '.github/workflows/lint.yml'
       - '.github/workflows/config.yml'
+      - '.github/workflows/build-runtime.yml'
+      - 'scripts/release/**'
   pull_request:
     branches: [ main ]
     paths:
@@ -36,9 +39,12 @@ on:
       - 'sdks/c/**'
       - 'sdks/go/**'
       - 'make/quality.mk'
+      - 'make/test.mk'
       - '.pre-commit-config.yaml'
       - '.github/workflows/lint.yml'
       - '.github/workflows/config.yml'
+      - '.github/workflows/build-runtime.yml'
+      - 'scripts/release/**'
 
 jobs:
   config:
@@ -55,6 +61,7 @@ jobs:
       c: ${{ steps.filter.outputs.c }}
       go: ${{ steps.filter.outputs.go }}
       quality: ${{ steps.filter.outputs.quality }}
+      install_script: ${{ steps.filter.outputs.install_script }}
     steps:
       - uses: actions/checkout@v5
       - uses: dorny/paths-filter@v3
@@ -83,6 +90,10 @@ jobs:
               - 'make/quality.mk'
               - '.pre-commit-config.yaml'
               - '.github/workflows/lint.yml'
+            install_script:
+              - 'scripts/release/**'
+              - '.github/workflows/build-runtime.yml'
+              - 'make/test.mk'
 
   rustfmt:
     name: Check Rust formatting
@@ -271,3 +282,15 @@ jobs:
         with:
           working-directory: sdks/go
           args: --timeout=5m --build-tags boxlite_dev
+
+  install_script:
+    name: Installer script smoke test
+    needs: changes
+    if: ${{ needs.changes.outputs.install_script == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Run installer script smoke test
+        run: make test:install-script

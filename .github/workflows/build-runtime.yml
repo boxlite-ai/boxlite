@@ -208,19 +208,15 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: Generate per-file .sha256 sidecars
+      # Per-tarball sidecars come first so the install.sh render step can read
+      # them to embed checksums for the fast path.
+      - name: Generate per-tarball .sha256 sidecars
         working-directory: dist
         run: |
           for f in boxlite-runtime-*.tar.gz boxlite-cli-*.tar.gz; do
             sha256sum "$f" > "$f.sha256"
           done
           ls -1 *.sha256
-
-      - name: Generate SHA256SUMS
-        working-directory: dist
-        run: |
-          sha256sum boxlite-runtime-*.tar.gz boxlite-cli-*.tar.gz > SHA256SUMS
-          cat SHA256SUMS
 
       - name: Render install.sh for this release
         working-directory: dist
@@ -255,7 +251,35 @@ jobs:
             echo "ERROR: install.sh still contains placeholders" >&2
             exit 1
           fi
+          # Gate the release on a rendered-script syntax check; a broken
+          # installer would otherwise only surface on user machines.
+          sh -n install.sh
           head -25 install.sh
+
+      # install.sh sidecar lives in the same integrity envelope as the
+      # tarballs: users who pipe `curl ... install.sh | sh` are running this
+      # script as their own user, so the wrapper itself must be verifiable
+      # (sha256 + sigstore attestation), not just its tarball payload.
+      - name: Generate install.sh.sha256 sidecar
+        working-directory: dist
+        run: |
+          sha256sum install.sh > install.sh.sha256
+          cat install.sh.sha256
+
+      - name: Generate SHA256SUMS
+        working-directory: dist
+        run: |
+          sha256sum boxlite-runtime-*.tar.gz boxlite-cli-*.tar.gz install.sh > SHA256SUMS
+          cat SHA256SUMS
+
+      # Final gate against installer regressions before the release goes
+      # public. The lint workflow also runs this on PRs touching the
+      # template; this re-run validates the actually-rendered dist/install.sh
+      # (placeholders substituted, real digests embedded).
+      - name: Validate rendered installer
+        env:
+          BOXLITE_INSTALL_TEMPLATE: dist/install.sh
+        run: bash scripts/release/test_install.sh
 
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v2
@@ -263,6 +287,7 @@ jobs:
           subject-path: |
             dist/boxlite-runtime-*.tar.gz
             dist/boxlite-cli-*.tar.gz
+            dist/install.sh
 
       - name: Upload to release
         uses: softprops/action-gh-release@v2
@@ -273,6 +298,7 @@ jobs:
             dist/*.sha256
             dist/SHA256SUMS
             dist/install.sh
+            dist/install.sh.sha256
           fail_on_unmatched_files: true
 
   # Publish Rust crates to crates.io after runtime tarballs are on GitHub Release.

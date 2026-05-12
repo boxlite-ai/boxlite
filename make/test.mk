@@ -253,3 +253,10 @@ test\:unit\:go:
 # Go SDK full suite.
 test\:all\:go:
 	@$(MAKE) test:unit:go
+
+# Installer-script smoke test: structural assertions on the rendered
+# install.sh (atomic replace, integrity envelope, pinned-install trust
+# tiers). Runs in a couple of seconds, no toolchain required beyond sh.
+test\:install-script:
+	@echo "🧪 Running installer script smoke test..."
+	@bash scripts/release/test_install.sh

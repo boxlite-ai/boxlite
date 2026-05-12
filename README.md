@@ -210,6 +210,18 @@ The env-var prefix has to sit on the `sh` side of the pipe — variables
 placed before `curl` only decorate the curl process and never reach the
 installer.
 
+When pinning a non-latest version, the installer falls back to the remote
+`.sha256` sidecar in that release for the expected digest. That anchor
+shares its trust root with the tarball, so for a guarantee independent of
+the release page, look up the digest in the release's attested
+`SHA256SUMS` and pass it in explicitly:
+
+```bash
+curl -fsSL https://github.com/boxlite-ai/boxlite/releases/latest/download/install.sh \
+  | BOXLITE_VERSION=v0.9.4 \
+    BOXLITE_EXPECTED_SHA256=<sha256-of-boxlite-cli-vX.Y.Z-target.tar.gz> sh
+```
+
 Each release also publishes raw tarballs (`boxlite-cli-vX.Y.Z-<target>.tar.gz`),
 matching `.sha256` sidecars, a combined `SHA256SUMS`, and sigstore-backed
 build provenance attestations. To verify a manually-downloaded artifact:
@@ -218,6 +230,21 @@ build provenance attestations. To verify a manually-downloaded artifact:
 sha256sum -c "boxlite-cli-${VERSION}-${TARGET}.tar.gz.sha256"
 gh attestation verify "boxlite-cli-${VERSION}-${TARGET}.tar.gz" \
   --repo boxlite-ai/boxlite
+```
+
+For users who want to verify the installer **before** executing it (the
+`curl … | sh` shortcut can't self-verify, since the script runs as it is
+piped in), `install.sh` is also covered by `SHA256SUMS`, an
+`install.sh.sha256` sidecar, and the same sigstore attestation:
+
+```bash
+curl -fsSL -o install.sh \
+  "https://github.com/boxlite-ai/boxlite/releases/latest/download/install.sh"
+curl -fsSL -o install.sh.sha256 \
+  "https://github.com/boxlite-ai/boxlite/releases/latest/download/install.sh.sha256"
+sha256sum -c install.sh.sha256
+gh attestation verify install.sh --repo boxlite-ai/boxlite
+sh ./install.sh
 ```
 
 **From crates.io:**
