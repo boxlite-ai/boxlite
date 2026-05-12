@@ -192,6 +192,22 @@ func main() {
 
 ### Install
 
+**Prebuilt binary** — download the self-contained CLI for your platform from
+[Releases](https://github.com/boxlite-ai/boxlite/releases/latest). The runtime
+is embedded in the binary, so no extra setup is needed.
+
+```bash
+VERSION=v0.9.3                # pick a tag from the Releases page
+TARGET=aarch64-apple-darwin   # or x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu
+curl -fsSL "https://github.com/boxlite-ai/boxlite/releases/download/${VERSION}/boxlite-cli-${VERSION}-${TARGET}.tar.gz" \
+  | tar -xz -C /usr/local/bin
+```
+
+A `SHA256SUMS` file is published alongside each release for integrity
+verification.
+
+**From crates.io:**
+
 ```bash
 cargo install boxlite-cli
 ```
