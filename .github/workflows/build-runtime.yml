@@ -199,6 +199,9 @@ jobs:
       attestations: write
 
     steps:
+      - name: Checkout (for scripts/install.sh.template)
+        uses: actions/checkout@v4
+
       - name: Download all build artifacts
         uses: actions/download-artifact@v4
         with:
@@ -219,6 +222,41 @@ jobs:
           sha256sum boxlite-runtime-*.tar.gz boxlite-cli-*.tar.gz > SHA256SUMS
           cat SHA256SUMS
 
+      - name: Render install.sh for this release
+        working-directory: dist
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          # github.ref_name on a tag push is the bare tag (e.g. "v0.9.4");
+          # on a release event, the release's tag_name is exposed the same way.
+          VERSION="$REF_NAME"
+          case "$VERSION" in
+            v*) ;;
+            *)  VERSION="v$VERSION" ;;  # normalize for safety
+          esac
+
+          sha_for() {
+            awk '{print $1}' < "boxlite-cli-${VERSION}-$1.tar.gz.sha256"
+          }
+          DARWIN_ARM64=$(sha_for aarch64-apple-darwin)
+          LINUX_X64=$(sha_for x86_64-unknown-linux-gnu)
+          LINUX_ARM64=$(sha_for aarch64-unknown-linux-gnu)
+
+          sed \
+            -e "s|__VERSION__|${VERSION}|g" \
+            -e "s|__SHA_AARCH64_APPLE_DARWIN__|${DARWIN_ARM64}|g" \
+            -e "s|__SHA_X86_64_UNKNOWN_LINUX_GNU__|${LINUX_X64}|g" \
+            -e "s|__SHA_AARCH64_UNKNOWN_LINUX_GNU__|${LINUX_ARM64}|g" \
+            ../scripts/install.sh.template > install.sh
+          chmod +x install.sh
+
+          # Sanity-check substitution succeeded.
+          if grep -q '__VERSION__\|__SHA_' install.sh; then
+            echo "ERROR: install.sh still contains placeholders" >&2
+            exit 1
+          fi
+          head -25 install.sh
+
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v2
         with:
@@ -234,6 +272,7 @@ jobs:
             dist/boxlite-cli-*.tar.gz
             dist/*.sha256
             dist/SHA256SUMS
+            dist/install.sh
           fail_on_unmatched_files: true
 
   # Publish Rust crates to crates.io after runtime tarballs are on GitHub Release.

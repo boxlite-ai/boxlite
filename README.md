@@ -192,20 +192,23 @@ func main() {
 
 ### Install
 
-**Prebuilt binary** — download the self-contained CLI for your platform from
-[Releases](https://github.com/boxlite-ai/boxlite/releases/latest). The runtime
-is embedded in the binary, so no extra setup is needed.
+**Install (Linux & macOS Apple Silicon):**
 
 ```bash
-VERSION=v0.9.3                # pick a tag from the Releases page
-TARGET=aarch64-apple-darwin   # or x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu
-curl -fsSL "https://github.com/boxlite-ai/boxlite/releases/download/${VERSION}/boxlite-cli-${VERSION}-${TARGET}.tar.gz" \
-  | tar -xz -C /usr/local/bin
+curl -fsSL https://github.com/boxlite-ai/boxlite/releases/latest/download/install.sh | sh
 ```
 
-Each tarball ships a matching `.sha256` sidecar (and a combined
-`SHA256SUMS`) for integrity, plus a sigstore-backed build provenance
-attestation. To verify:
+Installs to `$HOME/.local/bin/boxlite`. The runtime is embedded in the
+binary — no extra setup. Override the install dir or pin a version:
+
+```bash
+BOXLITE_VERSION=v0.9.4 BOXLITE_INSTALL_DIR=/usr/local/bin \
+  curl -fsSL https://github.com/boxlite-ai/boxlite/releases/latest/download/install.sh | sh
+```
+
+Each release also publishes raw tarballs (`boxlite-cli-vX.Y.Z-<target>.tar.gz`),
+matching `.sha256` sidecars, a combined `SHA256SUMS`, and sigstore-backed
+build provenance attestations. To verify a manually-downloaded artifact:
 
 ```bash
 sha256sum -c "boxlite-cli-${VERSION}-${TARGET}.tar.gz.sha256"
