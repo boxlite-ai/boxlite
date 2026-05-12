@@ -5,10 +5,43 @@ package boxlite
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 )
+
+// createStartedBoxOrSkip mirrors createStartedBox but skips (rather than
+// fails) when the failure mode is an infrastructure prerequisite — image
+// pull (ErrStorage / ErrImage) or network reach (ErrNetwork). Used by
+// integration tests that the pre-push hook may run in network-restricted
+// environments where docker.io is unreachable.
+func createStartedBoxOrSkip(t *testing.T, rt *Runtime, image string, opts ...BoxOption) *Box {
+	t.Helper()
+
+	ctx := context.Background()
+	box, err := rt.Create(ctx, image, opts...)
+	if err != nil {
+		var e *Error
+		if errors.As(err, &e) && (e.Code == ErrStorage || e.Code == ErrImage || e.Code == ErrNetwork) {
+			t.Skipf("infrastructure prerequisite unavailable (code=%d): %v", e.Code, err)
+		}
+		t.Fatalf("Create: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = box.Stop(ctx)
+		_ = rt.ForceRemove(ctx, box.ID())
+		_ = box.Close()
+	})
+	if err := box.Start(ctx); err != nil {
+		var e *Error
+		if errors.As(err, &e) && (e.Code == ErrStorage || e.Code == ErrImage || e.Code == ErrNetwork) {
+			t.Skipf("infrastructure prerequisite unavailable on Start (code=%d): %v", e.Code, err)
+		}
+		t.Fatalf("Start: %v", err)
+	}
+	return box
+}
 
 // TestIntegrationExecEnvWorkingDirTimeout proves that the three fields
 // added to ExecutionOptions and Cmd in this commit actually reach the
@@ -23,7 +56,7 @@ import (
 //   - Timeout:    Cmd.Timeout -> StartExecution -> timeout_secs -> SIGKILL
 func TestIntegrationExecEnvWorkingDirTimeout(t *testing.T) {
 	rt := newTestRuntime(t)
-	box := createStartedBox(t, rt, "alpine:latest", WithAutoRemove(false))
+	box := createStartedBoxOrSkip(t, rt, "alpine:latest", WithAutoRemove(false))
 
 	t.Run("Env reaches the guest process", func(t *testing.T) {
 		cmd := box.Command("printenv", "BOXLITE_TEST_KEY")
