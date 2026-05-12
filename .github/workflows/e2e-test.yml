@@ -310,6 +310,56 @@ jobs:
             git checkout -- . 2>/dev/null || true
           fi
 
+      - name: Stage prior-run logs for rescue
+        # If a previous run died mid-step (e.g. Worker ENOSPC), its logs
+        # are still on this persistent runner under /var/log/boxlite-ci/.
+        # Move them aside so the upload step below can ship them as a
+        # separate artifact, then clear them off the runner volume.
+        #
+        # Namespace key is "<run_id>-<run_attempt>": reruns of the same
+        # workflow share github.run_id and only github.run_attempt
+        # increments, so run_id alone would let attempt N misidentify
+        # attempt N-1's directory as its own and skip rescuing it.
+        env:
+          GH_RUN_ID: ${{ github.run_id }}
+          GH_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -u
+          BASE=/var/log/boxlite-ci
+          STAGE=/tmp/boxlite-rescue
+          CURRENT="${GH_RUN_ID}-${GH_RUN_ATTEMPT}"
+          rm -rf "$STAGE" && mkdir -p "$STAGE"
+          if [ -d "$BASE" ]; then
+            for d in "$BASE"/*; do
+              [ -d "$d" ] || continue
+              [ "$(basename "$d")" = "$CURRENT" ] && continue
+              mv "$d" "$STAGE/"
+            done
+          fi
+
+      - name: Upload rescued prior-run logs
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-test-logs-rescued-${{ github.run_id }}-${{ github.run_attempt }}
+          path: /tmp/boxlite-rescue/
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Pre-flight runner cleanup (runner internals only — never caches)
+        # Housekeeping for actions-runner's own diagnostic logs so they
+        # don't accumulate over the runner's lifetime. Build/image caches
+        # (~/.boxlite/, ~/.cargo/, target/) are LEFT ALONE — they are why
+        # this runner is persistent.
+        #
+        # Triggered by run 25726812554 where _diag was the canary for a
+        # 50→500GB root-volume migration: _diag was the first write to
+        # hit ENOSPC, but the actual disk fill came from build artifacts
+        # under _work/.../target/, not from _diag itself. This step is
+        # preventative housekeeping, not the fix for that incident.
+        run: |
+          find /opt/actions-runner/_diag -maxdepth 1 -type f -name 'Worker_*.log' -mtime +1 -delete 2>/dev/null || true
+          find /opt/actions-runner/_diag -maxdepth 1 -type f -name 'Runner_*.log' -mtime +1 -delete 2>/dev/null || true
+
       - name: Checkout code
         uses: actions/checkout@v5
         with:
@@ -330,20 +380,57 @@ jobs:
           # idempotent fast-paths (~10–30 s).
           bash scripts/setup/setup-ubuntu.sh
 
+      - name: Disk-space precheck
+        # Fail loud before the runner Worker hits ENOSPC on _diag writes.
+        # Validate the df output is parseable BEFORE the disk-threshold
+        # comparison, so a contract change in df doesn't surface as a
+        # fake "Only  GB free" error.
+        run: |
+          set -euo pipefail
+          DF_AVAIL=$(df --output=avail -BG / | tail -n 1)
+          DF_PCENT=$(df --output=pcent / | tail -n 1)
+          FREE_GB=$(printf '%s' "$DF_AVAIL" | tr -dc '0-9')
+          USED_PCT=$(printf '%s' "$DF_PCENT" | tr -dc '0-9')
+          if ! [[ "$FREE_GB" =~ ^[0-9]+$ ]] || ! [[ "$USED_PCT" =~ ^[0-9]+$ ]]; then
+            echo "::error::Could not parse df output (FREE_GB='${FREE_GB}' USED_PCT='${USED_PCT}') — df contract may have changed."
+            echo "Raw df --output=avail -BG / tail: ${DF_AVAIL}"
+            echo "Raw df --output=pcent  /  tail: ${DF_PCENT}"
+            exit 1
+          fi
+          echo "Root volume: ${FREE_GB} GB free (${USED_PCT}% used)"
+          if [ "${FREE_GB}" -lt 20 ]; then
+            echo "::error::Only ${FREE_GB} GB free on / — refusing to run integration tests."
+            echo "::error::Manual cleanup needed on the persistent runner."
+            exit 1
+          fi
+
       - name: Run integration tests
+        env:
+          GH_RUN_ID: ${{ github.run_id }}
+          GH_RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           source "$HOME/.cargo/env" 2>/dev/null || true
           export PATH="/usr/local/go/bin:$HOME/go/bin:$PATH"
-          make test:integration
+          LOG_DIR="/var/log/boxlite-ci/${GH_RUN_ID}-${GH_RUN_ATTEMPT}"
+          mkdir -p "$LOG_DIR"
+          # tee to persistent volume so logs survive runner Worker death.
+          # The next run's Stage step rescues + uploads "$LOG_DIR".
+          set -o pipefail
+          make test:integration 2>&1 | tee "${LOG_DIR}/integration.log"
 
-      - name: Upload test logs on failure
-        if: failure()
+      - name: Upload test logs on failure or cancellation
+        # `failure()` alone misses cancelled jobs (concurrency cancellation,
+        # host reboot, timeout — all surface as `cancelled()`, not failure).
+        # We want logs for every non-success outcome.
+        if: failure() || cancelled()
         uses: actions/upload-artifact@v4
         with:
-          name: e2e-test-logs-${{ github.run_id }}
+          name: e2e-test-logs-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             target/nextest/
             /tmp/boxlite-*/
+            !/tmp/boxlite-rescue/
+            /var/log/boxlite-ci/${{ github.run_id }}-${{ github.run_attempt }}/
           retention-days: 7
           if-no-files-found: ignore
 
