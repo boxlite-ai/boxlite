@@ -19,15 +19,15 @@ exclude = ["build/tmp", "target", ".venv", "examples/*/.venv"]
 resolver = "2"
 
 [workspace.dependencies]
-boxlite = { path = "src/boxlite", version = "0.9.3" }
-boxlite-shared = { path = "src/shared", version = "0.9.3" }
-bubblewrap-sys = { path = "src/deps/bubblewrap-sys", version = "0.9.3" }
-e2fsprogs-sys = { path = "src/deps/e2fsprogs-sys", version = "0.9.3" }
-libgvproxy-sys = { path = "src/deps/libgvproxy-sys", version = "0.9.3" }
-libkrun-sys = { path = "src/deps/libkrun-sys", version = "0.9.3" }
+boxlite = { path = "src/boxlite", version = "0.9.4" }
+boxlite-shared = { path = "src/shared", version = "0.9.4" }
+bubblewrap-sys = { path = "src/deps/bubblewrap-sys", version = "0.9.4" }
+e2fsprogs-sys = { path = "src/deps/e2fsprogs-sys", version = "0.9.4" }
+libgvproxy-sys = { path = "src/deps/libgvproxy-sys", version = "0.9.4" }
+libkrun-sys = { path = "src/deps/libkrun-sys", version = "0.9.4" }
 
 [workspace.package]
-version = "0.9.3"
+version = "0.9.4"
 edition = "2024"
 authors = ["Dorian Zheng <https://github.com/dorianzheng>"]
 license = "Apache-2.0"
