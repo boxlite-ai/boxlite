@@ -8,6 +8,8 @@
 - [sdks/node/README.md](./sdks/node/README.md) — Node.js/TypeScript SDK (18+, napi-rs bindings)
 - [sdks/go/README.md](./sdks/go/README.md) — Go SDK (1.24+, CGO + prebuilt native library)
 - [sdks/c/README.md](./sdks/c/README.md) — C SDK (C11, cbindgen FFI, Simple + Native API)
+- [src/cli/README.md](./src/cli/README.md) — `boxlite` CLI quick start and commands reference
+- [docs/reference/README.md](./docs/reference/README.md) — SDK API references (Python, Node, Rust, C) and CLI reference
 
 ## Tech Stack
 

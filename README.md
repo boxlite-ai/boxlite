@@ -185,6 +185,31 @@ func main() {
 </details>
 
 
+## CLI Quick Start
+
+<details>
+<summary>View guide</summary>
+
+### Install
+
+```bash
+curl -fsSL https://sh.boxlite.ai | sh
+```
+
+Installs to `$HOME/.local/bin/boxlite`. The runtime is embedded in the
+binary — no extra setup. For alternatives (`cargo install boxlite-cli`,
+version pinning, custom install dir) and release-artifact verification,
+see the [CLI Reference's Installation & Verification section](./docs/reference/cli/README.md#installation--verification).
+
+### Run
+
+```bash
+boxlite run python:slim python -c "print('Hello from BoxLite!')"
+```
+
+</details>
+
+
 ## REST API Quick Start
 
 <details>
@@ -192,71 +217,9 @@ func main() {
 
 ### Install
 
-**Install (Linux & macOS Apple Silicon):**
-
-```bash
-curl -fsSL https://sh.boxlite.ai | sh
-```
-
-Installs to `$HOME/.local/bin/boxlite`. The runtime is embedded in the
-binary — no extra setup. `sh.boxlite.ai` is a thin Cloudflare Worker that
-serves the same `install.sh` published on every GitHub Release; the long
-form `https://github.com/boxlite-ai/boxlite/releases/latest/download/install.sh`
-is the verifiable upstream and is what `gh attestation verify` covers.
-
-Override the install dir or pin a version:
-
-```bash
-curl -fsSL https://sh.boxlite.ai \
-  | BOXLITE_VERSION=v0.9.4 BOXLITE_INSTALL_DIR=/usr/local/bin sh
-```
-
-The env-var prefix has to sit on the `sh` side of the pipe — variables
-placed before `curl` only decorate the curl process and never reach the
-installer.
-
-When pinning a non-latest version, the installer falls back to the remote
-`.sha256` sidecar in that release for the expected digest. That anchor
-shares its trust root with the tarball, so for a guarantee independent of
-the release page, look up the digest in the release's attested
-`SHA256SUMS` and pass it in explicitly:
-
-```bash
-curl -fsSL https://sh.boxlite.ai \
-  | BOXLITE_VERSION=v0.9.4 \
-    BOXLITE_EXPECTED_SHA256=<sha256-of-boxlite-cli-vX.Y.Z-target.tar.gz> sh
-```
-
-Each release also publishes raw tarballs (`boxlite-cli-vX.Y.Z-<target>.tar.gz`),
-matching `.sha256` sidecars, a combined `SHA256SUMS`, and sigstore-backed
-build provenance attestations. To verify a manually-downloaded artifact:
-
-```bash
-sha256sum -c "boxlite-cli-${VERSION}-${TARGET}.tar.gz.sha256"
-gh attestation verify "boxlite-cli-${VERSION}-${TARGET}.tar.gz" \
-  --repo boxlite-ai/boxlite
-```
-
-For users who want to verify the installer **before** executing it (the
-`curl … | sh` shortcut can't self-verify, since the script runs as it is
-piped in), `install.sh` is also covered by `SHA256SUMS`, an
-`install.sh.sha256` sidecar, and the same sigstore attestation:
-
-```bash
-curl -fsSL -o install.sh \
-  "https://github.com/boxlite-ai/boxlite/releases/latest/download/install.sh"
-curl -fsSL -o install.sh.sha256 \
-  "https://github.com/boxlite-ai/boxlite/releases/latest/download/install.sh.sha256"
-sha256sum -c install.sh.sha256
-gh attestation verify install.sh --repo boxlite-ai/boxlite
-sh ./install.sh
-```
-
-**From crates.io:**
-
-```bash
-cargo install boxlite-cli
-```
+Install the `boxlite` CLI — see [CLI Quick Start](#cli-quick-start). The
+REST server ships with the same binary. For release-artifact verification,
+see the [CLI Reference's Installation & Verification section](./docs/reference/cli/README.md#installation--verification).
 
 ### Start the server
 
@@ -346,7 +309,7 @@ For details, see [Architecture](./docs/architecture/).
 
 ## Documentation
 
-- API Reference — Coming soon
+- [API & CLI Reference](./docs/reference/) — SDK API references (Python, Node.js, Rust, C) and the `boxlite` CLI reference
 - [Examples](./examples/) — Sample code for common use cases
 - [Architecture](./docs/architecture/) — How BoxLite works under the hood
 

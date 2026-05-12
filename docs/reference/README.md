@@ -13,6 +13,12 @@ Complete API documentation for each SDK:
 | **Rust** | [Rust API Reference](rust/README.md) | Core runtime, stream APIs, security options |
 | **C** | [C API Reference](c/README.md) | FFI bindings, typed options, callback streaming |
 
+## CLI Reference
+
+| Surface | Documentation | Description |
+|---------|---------------|-------------|
+| **`boxlite`** | [CLI Reference](cli/README.md) | All subcommands, global flags, volume/port grammar, installation & verification, exit codes |
+
 ---
 
 ## Quick Reference
@@ -77,6 +83,21 @@ For complete C API documentation, see **[C API Reference](c/README.md)**.
 | `boxlite_create_box` | Create a new box |
 | `boxlite_execute` | Run command with streaming |
 | `boxlite_stop_box` | Stop and free box |
+
+### CLI
+
+For the complete CLI reference, see **[CLI Reference](cli/README.md)**.
+
+**Common subcommands:**
+
+| Command | Description |
+|---------|-------------|
+| `boxlite run` | Create a box from an image and run a command |
+| `boxlite exec` | Run a command inside a running box |
+| `boxlite list` | List boxes (aliases: `ls`, `ps`) |
+| `boxlite cp` | Copy files between host and box |
+| `boxlite inspect` | Show detailed box info (JSON, YAML, or Go template) |
+| `boxlite serve` | Start the long-running REST API server |
 
 ## Configuration Reference
 

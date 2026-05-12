@@ -27,6 +27,16 @@ The BoxLite CLI (`boxlite`) lets you create, run, and manage BoxLite boxes from 
 
 ## Installation
 
+### One-line install (Linux & macOS Apple Silicon)
+
+```bash
+curl -fsSL https://sh.boxlite.ai | sh
+```
+
+Installs to `$HOME/.local/bin/boxlite`. For version pinning, a custom
+install dir, and release-artifact verification (sigstore, `SHA256SUMS`,
+`gh attestation verify`), see the [CLI Reference's Installation & Verification section](../../docs/reference/cli/README.md#installation--verification).
+
 ### cargo install (from source)
 
 ```bash
@@ -111,6 +121,10 @@ boxlite images
 ```
 
 ## Commands Reference
+
+> For an exhaustive man-page-style reference (shared flag groups, volume/port grammar,
+> exit codes, configuration file format), see the
+> [CLI Reference](../../docs/reference/cli/README.md).
 
 ### Global flags
 
