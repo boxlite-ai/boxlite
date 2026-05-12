@@ -199,7 +199,7 @@ jobs:
       attestations: write
 
     steps:
-      - name: Checkout (for scripts/install.sh.template)
+      - name: Checkout (for scripts/release/install.sh.template)
         uses: actions/checkout@v4
 
       - name: Download all build artifacts
@@ -247,7 +247,7 @@ jobs:
             -e "s|__SHA_AARCH64_APPLE_DARWIN__|${DARWIN_ARM64}|g" \
             -e "s|__SHA_X86_64_UNKNOWN_LINUX_GNU__|${LINUX_X64}|g" \
             -e "s|__SHA_AARCH64_UNKNOWN_LINUX_GNU__|${LINUX_ARM64}|g" \
-            ../scripts/install.sh.template > install.sh
+            ../scripts/release/install.sh.template > install.sh
           chmod +x install.sh
 
           # Sanity-check substitution succeeded.
