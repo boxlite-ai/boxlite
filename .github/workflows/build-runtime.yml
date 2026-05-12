@@ -192,6 +192,8 @@ jobs:
     if: github.event_name == 'release' || startsWith(github.ref, 'refs/tags/')
     permissions:
       contents: write
+      id-token: write
+      attestations: write
 
     steps:
       - name: Download all build artifacts
@@ -200,11 +202,26 @@ jobs:
           path: dist
           merge-multiple: true
 
+      - name: Generate per-file .sha256 sidecars
+        working-directory: dist
+        run: |
+          for f in boxlite-runtime-*.tar.gz boxlite-cli-*.tar.gz; do
+            sha256sum "$f" > "$f.sha256"
+          done
+          ls -1 *.sha256
+
       - name: Generate SHA256SUMS
         working-directory: dist
         run: |
           sha256sum boxlite-runtime-*.tar.gz boxlite-cli-*.tar.gz > SHA256SUMS
           cat SHA256SUMS
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/boxlite-runtime-*.tar.gz
+            dist/boxlite-cli-*.tar.gz
 
       - name: Upload to release
         uses: softprops/action-gh-release@v2
@@ -212,6 +229,7 @@ jobs:
           files: |
             dist/boxlite-runtime-*.tar.gz
             dist/boxlite-cli-*.tar.gz
+            dist/*.sha256
             dist/SHA256SUMS
           fail_on_unmatched_files: true
 

@@ -203,8 +203,15 @@ curl -fsSL "https://github.com/boxlite-ai/boxlite/releases/download/${VERSION}/b
   | tar -xz -C /usr/local/bin
 ```
 
-A `SHA256SUMS` file is published alongside each release for integrity
-verification.
+Each tarball ships a matching `.sha256` sidecar (and a combined
+`SHA256SUMS`) for integrity, plus a sigstore-backed build provenance
+attestation. To verify:
+
+```bash
+sha256sum -c "boxlite-cli-${VERSION}-${TARGET}.tar.gz.sha256"
+gh attestation verify "boxlite-cli-${VERSION}-${TARGET}.tar.gz" \
+  --repo boxlite-ai/boxlite
+```
 
 **From crates.io:**
 
