@@ -5,8 +5,11 @@
 package controllers
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
+	"sync"
+	"time"
 
 	"github.com/boxlite-ai/runner/pkg/runner"
 	"github.com/gin-gonic/gin"
@@ -16,6 +19,21 @@ import (
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
 }
+
+// WebSocket keepalive tuning for handleWebSocketTerminal.
+//
+// AWS ALB User Guide (HTTP 408 troubleshooting) requires "at least 1 byte of
+// data before each idle timeout period elapses" or the connection is silently
+// RST'd. We send a WS Ping every 15 s as the application-layer heartbeat —
+// real TCP bytes through the proxy chain, which both the AWS ALB and any
+// intermediate hops count as activity.
+//
+// Mirrors the pattern in boxlite_exec_attach.go::runKeepalive (PR #505) so
+// both WS handlers in this package follow the same shape.
+const (
+	terminalKeepaliveInterval = 15 * time.Second
+	terminalWriteDeadline     = 20 * time.Second
+)
 
 // ProxyRequest handles toolbox/terminal requests.
 // For WebSocket: bridges to an interactive TTY session via BoxLite exec.
@@ -81,13 +99,28 @@ func handleWebSocketTerminal(ctx *gin.Context, r *runner.Runner, sandboxId strin
 	}
 	defer ws.Close()
 
-	// Create a writer that sends data to the WebSocket
-	wsWriter := &wsOutputWriter{conn: ws}
+	// Serialize all writes to the WS conn. gorilla/websocket panics on
+	// concurrent writers; the stdout writer and the keepalive goroutine
+	// both write and must share this mutex.
+	var writeMu sync.Mutex
+	wsWriter := &wsOutputWriter{conn: ws, mu: &writeMu}
+
+	// Bound the keepalive goroutine to the request lifetime; cancel it when
+	// the terminal handler returns so the ticker doesn't leak.
+	keepaliveCtx, cancelKeepalive := context.WithCancel(ctx.Request.Context())
+	defer cancelKeepalive()
+	go runTerminalKeepalive(keepaliveCtx, ws, &writeMu, logger)
 
 	execution, err := r.Boxlite.StartExecution(ctx.Request.Context(), sandboxId, "/bin/sh", nil, wsWriter, wsWriter, true)
 	if err != nil {
 		logger.Warn("failed to start terminal execution", "sandbox", sandboxId, "error", err)
-		ws.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseInternalServerErr, err.Error()))
+		writeMu.Lock()
+		_ = ws.WriteControl(
+			websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseInternalServerErr, err.Error()),
+			time.Now().Add(terminalWriteDeadline),
+		)
+		writeMu.Unlock()
 		return
 	}
 	defer execution.Close()
@@ -110,14 +143,49 @@ func handleWebSocketTerminal(ctx *gin.Context, r *runner.Runner, sandboxId strin
 	}
 }
 
-// wsOutputWriter implements io.Writer by sending text messages over WebSocket
+// runTerminalKeepalive sends a WebSocket Ping every terminalKeepaliveInterval
+// to keep the connection alive through any intermediate hop with an idle
+// timer. Mirrors apps/runner/pkg/api/controllers/boxlite_exec_attach.go's
+// runKeepalive — see that file's commentary on AWS ALB HTTP 408 troubleshooting.
+//
+// Exits cleanly when ctx is cancelled or when a ping write fails.
+func runTerminalKeepalive(ctx context.Context, conn *websocket.Conn, writeMu *sync.Mutex, logger *slog.Logger) {
+	ticker := time.NewTicker(terminalKeepaliveInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			writeMu.Lock()
+			deadline := time.Now().Add(terminalWriteDeadline)
+			err := conn.WriteControl(websocket.PingMessage, nil, deadline)
+			writeMu.Unlock()
+			if err != nil {
+				if ctx.Err() == nil {
+					logger.Debug("terminal keepalive ping failed", "error", err)
+				}
+				return
+			}
+		}
+	}
+}
+
+// wsOutputWriter implements io.Writer by sending text messages over WebSocket.
+// All writes are serialized through `mu` because gorilla/websocket forbids
+// concurrent writers and the keepalive goroutine writes Pings on the same conn.
 type wsOutputWriter struct {
 	conn *websocket.Conn
+	mu   *sync.Mutex
 }
 
 func (w *wsOutputWriter) Write(p []byte) (int, error) {
-	err := w.conn.WriteMessage(websocket.TextMessage, p)
-	if err != nil {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if err := w.conn.SetWriteDeadline(time.Now().Add(terminalWriteDeadline)); err != nil {
+		return 0, err
+	}
+	if err := w.conn.WriteMessage(websocket.TextMessage, p); err != nil {
 		return 0, err
 	}
 	return len(p), nil
