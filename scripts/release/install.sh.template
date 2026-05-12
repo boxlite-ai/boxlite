@@ -3,6 +3,7 @@
 #
 # Usage:
 #   curl -fsSL https://sh.boxlite.ai | sh
+#   curl -fsSL https://github.com/boxlite-ai/boxlite/releases/latest/download/install.sh | sh
 #
 # Environment variables:
 #   BOXLITE_VERSION           Pin a specific tag (default: this script's CURRENT_VERSION)
