@@ -136,9 +136,13 @@ main() {
 
   info "Extracting to ${install_dir} ..."
   mkdir -p "$install_dir"
-  tar -xzf "${tmpdir}/${archive}" -C "$tmpdir" boxlite
-  mv -f "${tmpdir}/boxlite" "${install_dir}/boxlite"
-  chmod +x "${install_dir}/boxlite"
+  # --no-same-owner: don't restore the CI runner's UID into the extracted
+  # binary (matters when the user runs this as root for /usr/local/bin).
+  tar --no-same-owner -xzf "${tmpdir}/${archive}" -C "$tmpdir" boxlite
+  # install(1) sets owner to the calling user and mode 0755 explicitly, so a
+  # sudoed install ends up owned by root rather than whatever was in the
+  # tarball. Present on macOS BSD and GNU coreutils.
+  install -m 0755 "${tmpdir}/boxlite" "${install_dir}/boxlite"
 
   info ""
   info "✓ Installed boxlite ${version} to ${install_dir}/boxlite"
