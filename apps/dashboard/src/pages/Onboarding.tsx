@@ -8,6 +8,7 @@ import pythonIcon from '@/assets/python.svg'
 import typescriptIcon from '@/assets/typescript.svg'
 import CodeBlock from '@/components/CodeBlock'
 import { Button } from '@/components/ui/button'
+import { CopyableValue } from '@/components/ui/copyable-value'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { BOXLITE_DOCS_URL } from '@/constants/ExternalLinks'
@@ -185,32 +186,39 @@ const Onboarding: React.FC = () => {
                     page.
                   </p>
                   {createdApiKey ? (
-                    <div className="p-4 flex justify-between items-center rounded-md bg-green-100 text-green-600 dark:bg-green-900/50 dark:text-green-400">
-                      <span className="overflow-x-auto pr-2 cursor-text select-all">
-                        {isApiKeyRevealed ? createdApiKey.value : getMaskedToken(createdApiKey.value)}
-                      </span>
-                      <div className="flex items-center space-x-3 pl-3">
-                        {isApiKeyRevealed ? (
-                          <EyeOff
-                            className="w-4 h-4 cursor-pointer hover:text-green-400 dark:hover:text-green-200 transition-colors"
-                            onClick={() => setIsApiKeyRevealed(false)}
-                          />
-                        ) : (
-                          <Eye
-                            className="w-4 h-4 cursor-pointer hover:text-green-400 dark:hover:text-green-200 transition-colors"
-                            onClick={() => setIsApiKeyRevealed(true)}
-                          />
-                        )}
-                        {isApiKeyCopied ? (
-                          <Check className="w-4 h-4" />
-                        ) : (
-                          <ClipboardIcon
-                            className="w-4 h-4 cursor-pointer hover:text-green-400 dark:hover:text-green-200 transition-colors"
-                            onClick={() => copyToClipboard(createdApiKey.value)}
-                          />
-                        )}
-                      </div>
-                    </div>
+                    <CopyableValue
+                      className="p-4"
+                      displayValue={isApiKeyRevealed ? createdApiKey.value : getMaskedToken(createdApiKey.value)}
+                      actionsClassName="gap-3"
+                      actions={
+                        <>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon-xs"
+                            aria-label={isApiKeyRevealed ? 'Hide API key' : 'Reveal API key'}
+                            className="h-6 w-6 text-current hover:bg-green-200/70 hover:text-current dark:hover:bg-green-800/70"
+                            onClick={() => setIsApiKeyRevealed(!isApiKeyRevealed)}
+                          >
+                            {isApiKeyRevealed ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                          </Button>
+                          {isApiKeyCopied ? (
+                            <Check className="h-4 w-4 shrink-0" />
+                          ) : (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon-xs"
+                              aria-label="Copy API key"
+                              className="h-6 w-6 text-current hover:bg-green-200/70 hover:text-current dark:hover:bg-green-800/70"
+                              onClick={() => copyToClipboard(createdApiKey.value)}
+                            >
+                              <ClipboardIcon className="h-4 w-4" />
+                            </Button>
+                          )}
+                        </>
+                      }
+                    />
                   ) : (
                     <form
                       onSubmit={async (e) => {

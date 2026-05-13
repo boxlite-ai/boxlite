@@ -27,6 +27,7 @@ import { DEFAULT_PAGE_SIZE } from '@/constants/Pagination'
 import { LocalStorageKey } from '@/enums/LocalStorageKey'
 import { RoutePath } from '@/enums/RoutePath'
 import { SnapshotFilters, SnapshotQueryParams, useSnapshotsQuery } from '@/hooks/queries/useSnapshotsQuery'
+import { CopyableValue } from '@/components/ui/copyable-value'
 import { useApi } from '@/hooks/useApi'
 import { useConfig } from '@/hooks/useConfig'
 import { useNotificationSocket } from '@/hooks/useNotificationSocket'
@@ -52,7 +53,6 @@ import {
   SshAccessDto,
 } from '@boxlite-ai/api-client'
 import { QueryKey, useQueryClient } from '@tanstack/react-query'
-import { Check, Copy } from 'lucide-react'
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAuth } from 'react-oidc-context'
 import { useNavigate } from 'react-router-dom'
@@ -1056,15 +1056,13 @@ const Sandboxes: React.FC = () => {
                   />
                 </div>
               ) : (
-                <div className="p-3 flex justify-between items-center rounded-md bg-green-100 text-green-600 dark:bg-green-900/50 dark:text-green-400">
-                  <span className="overflow-x-auto pr-2 cursor-text select-all">{sshAccess.sshCommand}</span>
-                  {(copied === 'SSH Command' && <Check className="w-4 h-4" />) || (
-                    <Copy
-                      className="w-4 h-4 cursor-pointer"
-                      onClick={() => copyToClipboard(sshAccess.sshCommand, 'SSH Command')}
-                    />
-                  )}
-                </div>
+                <CopyableValue
+                  displayValue={sshAccess.sshCommand}
+                  copyValue={sshAccess.sshCommand}
+                  copyLabel="SSH command"
+                  copied={copied === 'SSH Command'}
+                  onCopy={(value) => copyToClipboard(value, 'SSH Command')}
+                />
               )}
             </div>
             <AlertDialogFooter>

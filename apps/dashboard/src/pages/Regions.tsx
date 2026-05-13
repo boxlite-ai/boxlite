@@ -38,12 +38,12 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
+import { CopyableValue } from '@/components/ui/copyable-value'
 import { toast } from 'sonner'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { handleApiError } from '@/lib/error-handling'
 import { useRegions } from '@/hooks/useRegions'
 import { getMaskedToken } from '@/lib/utils'
-import { Copy } from 'lucide-react'
 import { PageContent, PageHeader, PageLayout, PageTitle } from '@/components/PageLayout'
 
 const Regions: React.FC = () => {
@@ -68,7 +68,6 @@ const Regions: React.FC = () => {
   const [regeneratedSnapshotManagerCreds, setRegeneratedSnapshotManagerCreds] =
     useState<SnapshotManagerCredentials | null>(null)
   const [regionForRegenerate, setRegionForRegenerate] = useState<Region | null>(null)
-  const [copied, setCopied] = useState(false)
   const [isApiKeyRevealed, setIsApiKeyRevealed] = useState(false)
   const [isSnapshotManagerPasswordRevealed, setIsSnapshotManagerPasswordRevealed] = useState(false)
 
@@ -244,8 +243,6 @@ const Regions: React.FC = () => {
   const copyToClipboard = async (text: string) => {
     try {
       await navigator.clipboard.writeText(text)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
       toast.success('Copied to clipboard')
     } catch (err) {
       console.error('Failed to copy text:', err)
@@ -358,7 +355,6 @@ const Regions: React.FC = () => {
           if (!isOpen) {
             setRegionForRegenerate(null)
             setRegeneratedApiKey(null)
-            setCopied(false)
             setIsApiKeyRevealed(false)
           }
         }}
@@ -379,19 +375,16 @@ const Regions: React.FC = () => {
               )}
               {regeneratedApiKey && (
                 <div className="space-y-4 mt-4">
-                  <div className="p-3 flex justify-between items-center rounded-md bg-green-100 text-green-600 dark:bg-green-900/50 dark:text-green-400">
-                    <span
-                      className="overflow-x-auto pr-2 cursor-text select-all"
-                      onMouseEnter={() => setIsApiKeyRevealed(true)}
-                      onMouseLeave={() => setIsApiKeyRevealed(false)}
-                    >
-                      {isApiKeyRevealed ? regeneratedApiKey : getMaskedToken(regeneratedApiKey)}
-                    </span>
-                    <Copy
-                      className="w-4 h-4 cursor-pointer flex-shrink-0 text-muted-foreground hover:text-foreground transition-colors"
-                      onClick={() => copyToClipboard(regeneratedApiKey)}
-                    />
-                  </div>
+                  <CopyableValue
+                    displayValue={isApiKeyRevealed ? regeneratedApiKey : getMaskedToken(regeneratedApiKey)}
+                    copyValue={regeneratedApiKey}
+                    copyLabel="proxy API key"
+                    onCopy={copyToClipboard}
+                    valueProps={{
+                      onMouseEnter: () => setIsApiKeyRevealed(true),
+                      onMouseLeave: () => setIsApiKeyRevealed(false),
+                    }}
+                  />
                 </div>
               )}
             </AlertDialogDescription>
@@ -415,7 +408,6 @@ const Regions: React.FC = () => {
                   setShowRegenerateProxyApiKeyDialog(false)
                   setRegionForRegenerate(null)
                   setRegeneratedApiKey(null)
-                  setCopied(false)
                   setIsApiKeyRevealed(false)
                 }}
                 className="bg-secondary text-secondary-foreground hover:bg-secondary/80"
@@ -435,7 +427,6 @@ const Regions: React.FC = () => {
           if (!isOpen) {
             setRegionForRegenerate(null)
             setRegeneratedApiKey(null)
-            setCopied(false)
             setIsApiKeyRevealed(false)
           }
         }}
@@ -456,19 +447,16 @@ const Regions: React.FC = () => {
               )}
               {regeneratedApiKey && (
                 <div className="space-y-4 mt-4">
-                  <div className="p-3 flex justify-between items-center rounded-md bg-green-100 text-green-600 dark:bg-green-900/50 dark:text-green-400">
-                    <span
-                      className="overflow-x-auto pr-2 cursor-text select-all"
-                      onMouseEnter={() => setIsApiKeyRevealed(true)}
-                      onMouseLeave={() => setIsApiKeyRevealed(false)}
-                    >
-                      {isApiKeyRevealed ? regeneratedApiKey : getMaskedToken(regeneratedApiKey)}
-                    </span>
-                    <Copy
-                      className="w-4 h-4 cursor-pointer flex-shrink-0 text-muted-foreground hover:text-foreground transition-colors"
-                      onClick={() => copyToClipboard(regeneratedApiKey)}
-                    />
-                  </div>
+                  <CopyableValue
+                    displayValue={isApiKeyRevealed ? regeneratedApiKey : getMaskedToken(regeneratedApiKey)}
+                    copyValue={regeneratedApiKey}
+                    copyLabel="SSH gateway API key"
+                    onCopy={copyToClipboard}
+                    valueProps={{
+                      onMouseEnter: () => setIsApiKeyRevealed(true),
+                      onMouseLeave: () => setIsApiKeyRevealed(false),
+                    }}
+                  />
                 </div>
               )}
             </AlertDialogDescription>
@@ -492,7 +480,6 @@ const Regions: React.FC = () => {
                   setShowRegenerateSshGatewayApiKeyDialog(false)
                   setRegionForRegenerate(null)
                   setRegeneratedApiKey(null)
-                  setCopied(false)
                   setIsApiKeyRevealed(false)
                 }}
                 className="bg-secondary text-secondary-foreground hover:bg-secondary/80"
@@ -512,7 +499,6 @@ const Regions: React.FC = () => {
           if (!isOpen) {
             setRegionForRegenerate(null)
             setRegeneratedSnapshotManagerCreds(null)
-            setCopied(false)
             setIsSnapshotManagerPasswordRevealed(false)
           }
         }}
@@ -537,33 +523,29 @@ const Regions: React.FC = () => {
                 <div className="space-y-4 mt-4">
                   <div>
                     <span className="text-xs text-muted-foreground">Username</span>
-                    <div className="p-3 flex justify-between items-center rounded-md bg-green-100 text-green-600 dark:bg-green-900/50 dark:text-green-400">
-                      <span className="overflow-x-auto pr-2 cursor-text select-all">
-                        {regeneratedSnapshotManagerCreds.username}
-                      </span>
-                      <Copy
-                        className="w-4 h-4 cursor-pointer flex-shrink-0 text-muted-foreground hover:text-foreground transition-colors"
-                        onClick={() => copyToClipboard(regeneratedSnapshotManagerCreds.username)}
-                      />
-                    </div>
+                    <CopyableValue
+                      displayValue={regeneratedSnapshotManagerCreds.username}
+                      copyValue={regeneratedSnapshotManagerCreds.username}
+                      copyLabel="snapshot manager username"
+                      onCopy={copyToClipboard}
+                    />
                   </div>
                   <div>
                     <span className="text-xs text-muted-foreground">Password</span>
-                    <div className="p-3 flex justify-between items-center rounded-md bg-green-100 text-green-600 dark:bg-green-900/50 dark:text-green-400">
-                      <span
-                        className="overflow-x-auto pr-2 cursor-text select-all"
-                        onMouseEnter={() => setIsSnapshotManagerPasswordRevealed(true)}
-                        onMouseLeave={() => setIsSnapshotManagerPasswordRevealed(false)}
-                      >
-                        {isSnapshotManagerPasswordRevealed
+                    <CopyableValue
+                      displayValue={
+                        isSnapshotManagerPasswordRevealed
                           ? regeneratedSnapshotManagerCreds.password
-                          : getMaskedToken(regeneratedSnapshotManagerCreds.password)}
-                      </span>
-                      <Copy
-                        className="w-4 h-4 cursor-pointer flex-shrink-0 text-muted-foreground hover:text-foreground transition-colors"
-                        onClick={() => copyToClipboard(regeneratedSnapshotManagerCreds.password)}
-                      />
-                    </div>
+                          : getMaskedToken(regeneratedSnapshotManagerCreds.password)
+                      }
+                      copyValue={regeneratedSnapshotManagerCreds.password}
+                      copyLabel="snapshot manager password"
+                      onCopy={copyToClipboard}
+                      valueProps={{
+                        onMouseEnter: () => setIsSnapshotManagerPasswordRevealed(true),
+                        onMouseLeave: () => setIsSnapshotManagerPasswordRevealed(false),
+                      }}
+                    />
                   </div>
                 </div>
               )}
@@ -588,7 +570,6 @@ const Regions: React.FC = () => {
                   setShowRegenerateSnapshotManagerCredsDialog(false)
                   setRegionForRegenerate(null)
                   setRegeneratedSnapshotManagerCreds(null)
-                  setCopied(false)
                   setIsSnapshotManagerPasswordRevealed(false)
                 }}
                 className="bg-secondary text-secondary-foreground hover:bg-secondary/80"

@@ -7,6 +7,7 @@
 import React, { useState } from 'react'
 import { CreateRegion, CreateRegionResponse } from '@boxlite-ai/api-client'
 import { Button } from '@/components/ui/button'
+import { CopyableValue } from '@/components/ui/copyable-value'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -20,7 +21,7 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog'
 import { toast } from 'sonner'
-import { Plus, Copy } from 'lucide-react'
+import { Plus } from 'lucide-react'
 import { getMaskedToken } from '@/lib/utils'
 
 const DEFAULT_FORM_DATA = {
@@ -140,76 +141,70 @@ export const CreateRegionDialog: React.FC<CreateRegionDialogProps> = ({
             {createdRegion.proxyApiKey && (
               <div className="space-y-3">
                 <Label htmlFor="proxy-api-key">Proxy API Key</Label>
-                <div className="p-3 flex justify-between items-center rounded-md bg-green-100 text-green-600 dark:bg-green-900/50 dark:text-green-400">
-                  <span
-                    className="overflow-x-auto pr-2 cursor-text select-all"
-                    onMouseEnter={() => setIsProxyApiKeyRevealed(true)}
-                    onMouseLeave={() => setIsProxyApiKeyRevealed(false)}
-                  >
-                    {isProxyApiKeyRevealed ? createdRegion.proxyApiKey : getMaskedToken(createdRegion.proxyApiKey)}
-                  </span>
-                  <Copy
-                    className="w-4 h-4 cursor-pointer text-muted-foreground hover:text-foreground transition-colors"
-                    onClick={() => copyToClipboard(createdRegion.proxyApiKey!)}
-                  />
-                </div>
+                <CopyableValue
+                  displayValue={
+                    isProxyApiKeyRevealed ? createdRegion.proxyApiKey : getMaskedToken(createdRegion.proxyApiKey)
+                  }
+                  copyValue={createdRegion.proxyApiKey}
+                  copyLabel="proxy API key"
+                  onCopy={copyToClipboard}
+                  valueProps={{
+                    onMouseEnter: () => setIsProxyApiKeyRevealed(true),
+                    onMouseLeave: () => setIsProxyApiKeyRevealed(false),
+                  }}
+                />
               </div>
             )}
 
             {createdRegion.sshGatewayApiKey && (
               <div className="space-y-3">
                 <Label htmlFor="ssh-gateway-api-key">SSH Gateway API Key</Label>
-                <div className="p-3 flex justify-between items-center rounded-md bg-green-100 text-green-600 dark:bg-green-900/50 dark:text-green-400">
-                  <span
-                    className="overflow-x-auto pr-2 cursor-text select-all"
-                    onMouseEnter={() => setIsSshGatewayApiKeyRevealed(true)}
-                    onMouseLeave={() => setIsSshGatewayApiKeyRevealed(false)}
-                  >
-                    {isSshGatewayApiKeyRevealed
+                <CopyableValue
+                  displayValue={
+                    isSshGatewayApiKeyRevealed
                       ? createdRegion.sshGatewayApiKey
-                      : getMaskedToken(createdRegion.sshGatewayApiKey)}
-                  </span>
-                  <Copy
-                    className="w-4 h-4 cursor-pointer text-muted-foreground hover:text-foreground transition-colors"
-                    onClick={() => copyToClipboard(createdRegion.sshGatewayApiKey!)}
-                  />
-                </div>
+                      : getMaskedToken(createdRegion.sshGatewayApiKey)
+                  }
+                  copyValue={createdRegion.sshGatewayApiKey}
+                  copyLabel="SSH gateway API key"
+                  onCopy={copyToClipboard}
+                  valueProps={{
+                    onMouseEnter: () => setIsSshGatewayApiKeyRevealed(true),
+                    onMouseLeave: () => setIsSshGatewayApiKeyRevealed(false),
+                  }}
+                />
               </div>
             )}
 
             {createdRegion.snapshotManagerUsername && (
               <div className="space-y-3">
                 <Label htmlFor="snapshot-manager-username">Snapshot manager username</Label>
-                <div className="p-3 flex justify-between items-center rounded-md bg-green-100 text-green-600 dark:bg-green-900/50 dark:text-green-400">
-                  <span className="overflow-x-auto pr-2 cursor-text select-all">
-                    {createdRegion.snapshotManagerUsername}
-                  </span>
-                  <Copy
-                    className="w-4 h-4 cursor-pointer text-muted-foreground hover:text-foreground transition-colors"
-                    onClick={() => copyToClipboard(createdRegion.snapshotManagerUsername!)}
-                  />
-                </div>
+                <CopyableValue
+                  displayValue={createdRegion.snapshotManagerUsername}
+                  copyValue={createdRegion.snapshotManagerUsername}
+                  copyLabel="snapshot manager username"
+                  onCopy={copyToClipboard}
+                />
               </div>
             )}
 
             {createdRegion.snapshotManagerPassword && (
               <div className="space-y-3">
                 <Label htmlFor="snapshot-manager-password">Snapshot manager password</Label>
-                <div className="p-3 flex justify-between items-center rounded-md bg-green-100 text-green-600 dark:bg-green-900/50 dark:text-green-400">
-                  <span
-                    className="overflow-x-auto pr-2 cursor-text select-all"
-                    onMouseEnter={() => setIsSnapshotManagerPasswordRevealed(true)}
-                    onMouseLeave={() => setIsSnapshotManagerPasswordRevealed(false)}
-                  >
-                    {isSnapshotManagerPasswordRevealed
+                <CopyableValue
+                  displayValue={
+                    isSnapshotManagerPasswordRevealed
                       ? createdRegion.snapshotManagerPassword
-                      : getMaskedToken(createdRegion.snapshotManagerPassword)}
-                  </span>
-                  <Copy
-                    className="w-4 h-4 cursor-pointer text-muted-foreground hover:text-foreground transition-colors"
-                    onClick={() => copyToClipboard(createdRegion.snapshotManagerPassword!)}
-                  />
-                </div>
+                      : getMaskedToken(createdRegion.snapshotManagerPassword)
+                  }
+                  copyValue={createdRegion.snapshotManagerPassword}
+                  copyLabel="snapshot manager password"
+                  onCopy={copyToClipboard}
+                  valueProps={{
+                    onMouseEnter: () => setIsSnapshotManagerPasswordRevealed(true),
+                    onMouseLeave: () => setIsSnapshotManagerPasswordRevealed(false),
+                  }}
+                />
               </div>
             )}
           </div>

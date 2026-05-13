@@ -7,6 +7,7 @@
 import React, { useState, useEffect } from 'react'
 import { Region, CreateRunner, CreateRunnerResponse } from '@boxlite-ai/api-client'
 import { Button } from '@/components/ui/button'
+import { CopyableValue } from '@/components/ui/copyable-value'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -21,7 +22,7 @@ import {
 } from '@/components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { toast } from 'sonner'
-import { Plus, Copy } from 'lucide-react'
+import { Plus } from 'lucide-react'
 import { getMaskedToken } from '@/lib/utils'
 
 const DEFAULT_FORM_DATA = {
@@ -135,19 +136,16 @@ export const CreateRunnerDialog: React.FC<CreateRunnerDialogProps> = ({ regions,
           <div className="space-y-6">
             <div className="space-y-3">
               <Label htmlFor="token">Token</Label>
-              <div className="p-3 flex justify-between items-center rounded-md bg-green-100 text-green-600 dark:bg-green-900/50 dark:text-green-400">
-                <span
-                  className="overflow-x-auto pr-2 cursor-text select-all"
-                  onMouseEnter={() => setIsTokenRevealed(true)}
-                  onMouseLeave={() => setIsTokenRevealed(false)}
-                >
-                  {isTokenRevealed ? createdRunner.apiKey : getMaskedToken(createdRunner.apiKey)}
-                </span>
-                <Copy
-                  className="w-4 h-4 cursor-pointer text-muted-foreground hover:text-foreground transition-colors"
-                  onClick={() => copyToClipboard(createdRunner.apiKey)}
-                />
-              </div>
+              <CopyableValue
+                displayValue={isTokenRevealed ? createdRunner.apiKey : getMaskedToken(createdRunner.apiKey)}
+                copyValue={createdRunner.apiKey}
+                copyLabel="runner token"
+                onCopy={copyToClipboard}
+                valueProps={{
+                  onMouseEnter: () => setIsTokenRevealed(true),
+                  onMouseLeave: () => setIsTokenRevealed(false),
+                }}
+              />
               <p className="text-sm text-muted-foreground">
                 Save this token securely. You won't be able to see it again.
               </p>

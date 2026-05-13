@@ -5,9 +5,9 @@
  */
 
 import { useState } from 'react'
-import { Check, Copy } from 'lucide-react'
 import { Organization, Region } from '@boxlite-ai/api-client'
 import { Button } from '@/components/ui/button'
+import { CopyableValue } from '@/components/ui/copyable-value'
 import {
   Dialog,
   DialogClose,
@@ -102,15 +102,13 @@ export const CreateOrganizationDialog: React.FC<CreateOrganizationDialogProps> =
           <div className="space-y-6">
             <div className="space-y-3">
               <Label htmlFor="organization-id">Organization ID</Label>
-              <div className="p-3 flex justify-between items-center rounded-md bg-green-100 text-green-600 dark:bg-green-900/50 dark:text-green-400">
-                <span className="overflow-x-auto pr-2 cursor-text select-all">{createdOrg.id}</span>
-                {(copied === 'Organization ID' && <Check className="w-4 h-4" />) || (
-                  <Copy
-                    className="w-4 h-4 cursor-pointer"
-                    onClick={() => copyToClipboard(createdOrg.id, 'Organization ID')}
-                  />
-                )}
-              </div>
+              <CopyableValue
+                displayValue={createdOrg.id}
+                copyValue={createdOrg.id}
+                copyLabel="organization ID"
+                copied={copied === 'Organization ID'}
+                onCopy={(value) => copyToClipboard(value, 'Organization ID')}
+              />
             </div>
 
             {createdOrg.defaultRegionId && (
