@@ -3,6 +3,7 @@ package controllers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/boxlite-ai/runner/internal"
 	"github.com/boxlite-ai/runner/pkg/boxlite"
 	"github.com/gin-gonic/gin"
 )
@@ -289,6 +291,149 @@ func TestBoxliteExecSignalDuringReaping(t *testing.T) {
 		strings.NewReader(`{"signal":15}`), BoxliteExecSignal)
 	if w.Code != http.StatusConflict {
 		t.Fatalf("signal during reaping: expected 409, got %d body=%s", w.Code, w.Body.String())
+	}
+}
+
+// Compat /output reproducer: an execution started before an old-SDK client
+// hits /output must be killed and evicted — not left running in the sandbox.
+// Against the pre-fix code this test fails because execManager.Get still finds
+// the exec after BoxliteExecOutputCompat returns.
+func TestBoxliteExecOutputCompatKillsRunningExec(t *testing.T) {
+	mgr := withFreshExecManager(t)
+	stub := &signalCapturingExec{}
+	seedManagedExecForBox(mgr, "exec-compat", "box", stub)
+
+	// Confirm the exec is registered before calling the compat handler.
+	if _, ok := mgr.Get("exec-compat"); !ok {
+		t.Fatal("precondition: exec-compat not found in manager")
+	}
+
+	w := runHandler(http.MethodGet,
+		"/v1/boxes/:boxId/executions/:execId/output",
+		"/v1/boxes/box/executions/exec-compat/output",
+		nil, BoxliteExecOutputCompat)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("compat: expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "exit_code") {
+		t.Fatalf("compat: expected SSE exit event in body, got %s", w.Body.String())
+	}
+
+	// The execution must have been evicted — it cannot still be running after
+	// the caller has received a terminal exit event.
+	if _, ok := mgr.Get("exec-compat"); ok {
+		t.Fatal("exec-compat is still registered after compat /output response: split-brain risk")
+	}
+}
+
+// Compat /output with no prior exec is safe — /output may arrive before /exec
+// in pathological ordering (e.g. race) or the exec already exited. The handler
+// must not panic and must still return the upgrade SSE event.
+func TestBoxliteExecOutputCompatNoExecIsSafe(t *testing.T) {
+	withFreshExecManager(t)
+
+	w := runHandler(http.MethodGet,
+		"/v1/boxes/:boxId/executions/:execId/output",
+		"/v1/boxes/box/executions/nonexistent/output",
+		nil, BoxliteExecOutputCompat)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("no-exec compat: expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "exit_code") {
+		t.Fatalf("no-exec compat: expected SSE exit event in body, got %s", w.Body.String())
+	}
+}
+
+// The primary user-facing contract of the compat /output endpoint: old-SDK callers
+// must receive a well-formed SSE exit event that (a) carries exit_code -1, (b) carries
+// an "error" field with an actionable upgrade message that includes the server's version,
+// and (c) uses the correct Content-Type so the old SDK's SSE parser fires at all.
+func TestBoxliteExecOutputCompatResponseContract(t *testing.T) {
+	withFreshExecManager(t)
+
+	w := runHandler(http.MethodGet,
+		"/v1/boxes/:boxId/executions/:execId/output",
+		"/v1/boxes/box/executions/nonexistent/output",
+		nil, BoxliteExecOutputCompat)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+
+	ct := w.Header().Get("Content-Type")
+	if !strings.HasPrefix(ct, "text/event-stream") {
+		t.Fatalf("expected Content-Type text/event-stream, got %q", ct)
+	}
+
+	body := w.Body.String()
+
+	if !strings.Contains(body, "event: exit\n") {
+		t.Fatalf("SSE event name must be 'exit'; body=%s", body)
+	}
+
+	// Extract the data line and parse the JSON payload.
+	var dataLine string
+	for _, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(line, "data: ") {
+			dataLine = strings.TrimPrefix(line, "data: ")
+			break
+		}
+	}
+	if dataLine == "" {
+		t.Fatalf("no SSE data line found in body=%s", body)
+	}
+
+	var payload struct {
+		ExitCode int    `json:"exit_code"`
+		Error    string `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(dataLine), &payload); err != nil {
+		t.Fatalf("SSE data is not valid JSON: %v; data=%s", err, dataLine)
+	}
+	if payload.ExitCode != -1 {
+		t.Fatalf("expected exit_code=-1, got %d", payload.ExitCode)
+	}
+	if payload.Error == "" {
+		t.Fatalf("error field must not be empty")
+	}
+	if !strings.Contains(payload.Error, internal.Version) {
+		t.Fatalf("error message must contain server version %q; got %q", internal.Version, payload.Error)
+	}
+	if !strings.Contains(strings.ToLower(payload.Error), "upgrade") {
+		t.Fatalf("error message must contain upgrade instructions; got %q", payload.Error)
+	}
+}
+
+// Kill-failure reproducer: when ExecManager.Kill returns an error the compat
+// handler must not emit the terminal SSE exit event — doing so would produce a
+// split-brain where the old SDK sees a done exec while the process is still
+// running in the sandbox. The handler must instead return a non-2xx error.
+// Against the pre-fix code this test fails because the handler returns 200.
+func TestBoxliteExecOutputCompatKillFailureReturnsError(t *testing.T) {
+	mgr := withFreshExecManager(t)
+	stub := &signalCapturingExec{killErr: fmt.Errorf("simulated kill failure")}
+	seedManagedExecForBox(mgr, "exec-killfail", "box", stub)
+
+	w := runHandler(http.MethodGet,
+		"/v1/boxes/:boxId/executions/:execId/output",
+		"/v1/boxes/box/executions/exec-killfail/output",
+		nil, BoxliteExecOutputCompat)
+
+	if w.Code == http.StatusOK {
+		t.Fatalf("kill failure: handler must not return 200 (split-brain risk); body=%s", w.Body.String())
+	}
+
+	// The SSE terminal event must NOT appear in the body. Emitting "event: exit"
+	// while the process is still alive is the split-brain we are preventing.
+	if strings.Contains(w.Body.String(), "event: exit") {
+		t.Fatalf("kill failure: SSE exit event must not be emitted when kill fails; body=%s", w.Body.String())
+	}
+
+	// The exec must still be registered — Kill did not evict it.
+	if _, ok := mgr.Get("exec-killfail"); !ok {
+		t.Fatal("kill failure: exec was evicted despite Kill returning an error — inconsistent state")
 	}
 }
 
