@@ -25,7 +25,7 @@ use crate::event_listener::EventListener;
 use crate::fs::BindMountHandle;
 use crate::litebox::BoxTunnel;
 use crate::litebox::copy::CopyOptions;
-use crate::lock::LockGuard;
+use crate::lock::acquire_owned_lock;
 use crate::metrics::{BoxMetrics, BoxMetricsStorage};
 use crate::net::NetworkBackend;
 use crate::portal::GuestSession;
@@ -1021,9 +1021,9 @@ impl BoxImpl {
             is_first_start
         );
 
-        // Hold the lock for the duration of build operations.
-        // LockGuard acquires lock on creation and releases on drop.
-        let _guard = LockGuard::new(&*locker);
+        // Hold the lock for the duration of build operations without blocking
+        // a Tokio worker while another lifecycle operation owns it.
+        let _guard = acquire_owned_lock(locker).await?;
 
         // Build the box (lock is held)
         // The returned cleanup_guard stays armed until we disarm it after all

@@ -17,6 +17,7 @@ pub use memory::InMemoryLockManager;
 use std::sync::Arc;
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
+use tokio_util::sync::CancellationToken;
 
 /// Unique identifier for a lock.
 ///
@@ -192,6 +193,83 @@ impl Drop for LockGuard<'_> {
     }
 }
 
+/// Owned RAII guard for async lock acquisition.
+///
+/// Unlike [`LockGuard`], this guard owns an `Arc<dyn Locker>`, so it can be
+/// created inside `spawn_blocking` and moved across async boundaries.
+pub struct OwnedLockGuard {
+    lock: Arc<dyn Locker>,
+}
+
+impl OwnedLockGuard {
+    /// Create a new owned guard, blocking the current thread until the lock is acquired.
+    pub fn new(lock: Arc<dyn Locker>) -> Self {
+        lock.lock();
+        Self { lock }
+    }
+
+    /// Try to create a new owned guard without blocking.
+    ///
+    /// Returns `None` if the lock is already held.
+    pub fn try_new(lock: Arc<dyn Locker>) -> Option<Self> {
+        if lock.try_lock() {
+            Some(Self { lock })
+        } else {
+            None
+        }
+    }
+}
+
+impl Drop for OwnedLockGuard {
+    fn drop(&mut self) {
+        self.lock.unlock();
+    }
+}
+
+/// Acquire a lock from async code without spinning on a Tokio worker thread.
+pub async fn acquire_owned_lock(lock: Arc<dyn Locker>) -> BoxliteResult<OwnedLockGuard> {
+    if let Some(guard) = OwnedLockGuard::try_new(Arc::clone(&lock)) {
+        return Ok(guard);
+    }
+
+    tokio::task::spawn_blocking(move || OwnedLockGuard::new(lock))
+        .await
+        .map_err(|e| BoxliteError::Internal(format!("lock acquisition task failed: {}", e)))
+}
+
+/// Acquire a lock from async code, aborting the wait if shutdown is requested.
+///
+/// The blocking lock acquisition itself cannot be cancelled once started. If
+/// shutdown wins the select, the blocking task is detached; when it eventually
+/// acquires the lock, its returned guard is dropped and releases the lock.
+pub async fn acquire_owned_lock_or_cancel(
+    lock: Arc<dyn Locker>,
+    shutdown_token: &CancellationToken,
+    shutdown_message: impl Into<String>,
+) -> BoxliteResult<OwnedLockGuard> {
+    if shutdown_token.is_cancelled() {
+        return Err(BoxliteError::Stopped(shutdown_message.into()));
+    }
+
+    if let Some(guard) = OwnedLockGuard::try_new(Arc::clone(&lock)) {
+        return Ok(guard);
+    }
+
+    let shutdown_message = shutdown_message.into();
+    let lock_task = tokio::task::spawn_blocking(move || OwnedLockGuard::new(lock));
+
+    tokio::select! {
+        result = lock_task => {
+            result.map_err(|e| {
+                BoxliteError::Internal(format!("lock acquisition task failed: {}", e))
+            })
+        }
+        _ = shutdown_token.cancelled() => {
+            Err(BoxliteError::Stopped(shutdown_message))
+        }
+    }
+}
+
 // Error helpers
 pub(crate) fn lock_exhausted() -> BoxliteError {
     BoxliteError::Internal("all locks have been allocated".to_string())
@@ -216,6 +294,7 @@ pub(crate) fn lock_invalid(id: LockId, max: u32) -> BoxliteError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
 
     fn test_lock_manager(manager: &dyn LockManager) {
         // Allocate a lock
@@ -275,5 +354,35 @@ mod tests {
 
         assert!(lock.try_lock(), "should be able to acquire released lock");
         lock.unlock();
+    }
+
+    #[tokio::test]
+    async fn test_acquire_owned_lock_releases_on_drop() {
+        let manager = InMemoryLockManager::new(16);
+        let id = manager.allocate().expect("allocate");
+        let lock = manager.retrieve(id).expect("retrieve");
+
+        {
+            let _guard = acquire_owned_lock(Arc::clone(&lock)).await.unwrap();
+            assert!(!lock.try_lock(), "should not acquire while guard is held");
+        }
+
+        assert!(lock.try_lock(), "should acquire after guard is dropped");
+        lock.unlock();
+    }
+
+    #[tokio::test]
+    async fn test_acquire_owned_lock_or_cancel_respects_pre_cancelled_token() {
+        let manager = InMemoryLockManager::new(16);
+        let id = manager.allocate().expect("allocate");
+        let lock = manager.retrieve(id).expect("retrieve");
+        let token = CancellationToken::new();
+        token.cancel();
+
+        match acquire_owned_lock_or_cancel(lock, &token, "shutdown while waiting").await {
+            Ok(_) => panic!("pre-cancelled token should abort lock acquisition"),
+            Err(BoxliteError::Stopped(msg)) => assert_eq!(msg, "shutdown while waiting"),
+            Err(err) => panic!("unexpected error: {err}"),
+        }
     }
 }
