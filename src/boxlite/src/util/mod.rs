@@ -12,6 +12,7 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, fmt};
 
+pub(crate) use process::install_zombie_reaper;
 pub use process::{
     ProcessExit, ProcessMonitor, is_process_alive, is_same_process, kill_process, read_pid_file,
 };

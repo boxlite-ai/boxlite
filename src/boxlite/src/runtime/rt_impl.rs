@@ -230,6 +230,11 @@ impl RuntimeImpl {
 
         tracing::debug!("initialized runtime");
 
+        // Install daemon-wide SIGCHLD reaper so failed/abandoned shim children
+        // don't accumulate as <defunct> zombies under the runner process.
+        // Idempotent: safe to call from multiple runtime constructors.
+        crate::util::install_zombie_reaper();
+
         // Recover boxes from database
         inner.recover_boxes()?;
 

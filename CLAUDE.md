@@ -78,6 +78,7 @@ Every change goes: understand → research → design → implement → test →
 
 **Test**
 
+- A test is only meaningful when there's something that could go wrong between the data being produced and the assertion being made. If the test builds the value it then asserts on (e.g., `format!`-ing a string and then asserting that the same string contains a substring it just put in), the assertion is tautological — nothing crossed a boundary, so nothing is being tested. The data must come from production code under test, not from the test body itself.
 - Every test must reference a project symbol — no framework- or standard-library-only filler. Self-check: "name the project symbol this test calls." Filler tests would stay green if the production fix were ripped out.
 - Add or update tests when behavior changes around branching, parsing, retries, security checks, or boundaries.
 - Prefer focused tests that prove the *right* reason for the change.

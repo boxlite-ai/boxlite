@@ -616,6 +616,10 @@ Type=simple
 ExecStart=/usr/local/bin/boxlite-runner
 Restart=always
 RestartSec=5
+# Give the runner time to gracefully stop all VMs on SIGTERM (it budgets 30s
+# internally via Client.Shutdown(); 60s here leaves headroom for in-flight
+# HTTP handlers + the deferred Close).
+TimeoutStopSec=60
 Environment=BOXLITE_API_URL=${input.apiUrl.replace(/\/$/, "")}/api
 Environment=BOXLITE_RUNNER_TOKEN=${input.token}
 Environment=API_VERSION=2

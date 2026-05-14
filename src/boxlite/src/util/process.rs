@@ -109,6 +109,56 @@ impl ProcessMonitor {
     }
 }
 
+/// Spawn a daemon-wide SIGCHLD reaper thread (idempotent, install-once).
+///
+/// `ProcessMonitor` only reaps the single PID it was constructed for, so
+/// repeated init-pipeline retries leak earlier shim children as `<defunct>`
+/// zombies (observed: 7+ on the prod runner after CL84LvGx7RBE's repeated
+/// failures). The reaper races with `ProcessMonitor::try_wait`; the loser
+/// sees ECHILD, which `try_wait` already returns as `ProcessExit::Unknown`.
+/// Callers that need the exit code must read the shim's exit file, not the
+/// reaped status.
+#[cfg(unix)]
+pub(crate) fn install_zombie_reaper() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    static REAPER_INSTALLED: AtomicBool = AtomicBool::new(false);
+    if REAPER_INSTALLED
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return;
+    }
+
+    let _ = std::thread::Builder::new()
+        .name("boxlite-zombie-reaper".into())
+        .spawn(|| {
+            loop {
+                std::thread::sleep(Duration::from_secs(5));
+                loop {
+                    let mut status: i32 = 0;
+                    let reaped = unsafe { libc::waitpid(-1, &mut status, libc::WNOHANG) };
+                    if reaped > 0 {
+                        tracing::trace!(
+                            pid = reaped,
+                            exit_code = decode_wait_status(status),
+                            "zombie-reaper: reaped child"
+                        );
+                        // Loop to drain any other zombies that finished concurrently.
+                        continue;
+                    }
+                    // 0 = no zombies right now; -1 = ECHILD (no children to wait on).
+                    break;
+                }
+            }
+        });
+}
+
+#[cfg(not(unix))]
+pub(crate) fn install_zombie_reaper() {
+    // No-op: zombie reaping is a Unix concept.
+}
+
 /// Decode waitpid status into exit code using Unix conventions.
 ///
 /// - Normal exit: returns `WEXITSTATUS` (0-255)
@@ -378,6 +428,53 @@ mod tests {
         }
 
         panic!("Exited child remained reported as alive while still existing");
+    }
+
+    /// The daemon-wide reaper must consume zombies that no `ProcessMonitor`
+    /// reaps — repeated init-pipeline failures otherwise leak shim zombies
+    /// under the runner process (the CL84LvGx7RBE incident showed 7+).
+    ///
+    /// Reverting `install_zombie_reaper` (or its `waitpid(-1, WNOHANG)` call)
+    /// flips this red: without a global reaper, `kill(pid, 0)` keeps returning
+    /// 0 for the full poll window because the zombie is never consumed.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn install_zombie_reaper_consumes_unwaited_child() {
+        use std::time::{Duration, Instant};
+
+        // Idempotent — production calls this from `RuntimeImpl::new`, but the
+        // unit-test binary may not have constructed a runtime yet.
+        install_zombie_reaper();
+
+        // Use raw fork() like the sibling zombie test (line 405) so the parent
+        // has no `Child` handle that might auto-wait or close a pidfd.
+        let child_pid = unsafe { libc::fork() };
+        assert!(child_pid >= 0, "fork() failed");
+        if child_pid == 0 {
+            unsafe { libc::_exit(0) };
+        }
+        let pid_i32 = child_pid;
+
+        // Reaper sleeps up to 5s between cycles; 8s is the worst case plus
+        // a small buffer.
+        let deadline = Instant::now() + Duration::from_secs(8);
+        while Instant::now() < deadline {
+            let exists = unsafe { libc::kill(pid_i32, 0) } == 0;
+            if !exists {
+                // kill returned -1 (ESRCH) — the PID is gone. Production
+                // reaper called waitpid(-1) and consumed the zombie.
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+
+        // Best-effort cleanup so we don't leak the zombie if the test failed.
+        let mut status = 0;
+        let _ = unsafe { libc::waitpid(pid_i32, &mut status, libc::WNOHANG) };
+        panic!(
+            "child pid {pid_i32} was not reaped within 8s; \
+             install_zombie_reaper is missing or its waitpid(-1) loop is broken"
+        );
     }
 
     #[test]
