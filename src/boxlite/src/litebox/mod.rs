@@ -116,6 +116,27 @@ impl LiteBox {
         self.box_backend.stop().await
     }
 
+    /// Pause the box (freeze VM via SIGSTOP).
+    ///
+    /// Quiesces guest filesystems, then sends SIGSTOP to freeze all vCPUs.
+    /// The box keeps its memory and state but consumes zero CPU.
+    ///
+    /// This is idempotent - calling pause() on a Paused box is a no-op.
+    /// Use resume() to continue execution.
+    pub async fn pause(&self) -> BoxliteResult<()> {
+        self.box_backend.pause().await
+    }
+
+    /// Resume a paused box (SIGCONT + thaw).
+    ///
+    /// Sends SIGCONT to resume vCPUs and thaws guest filesystems.
+    /// The box continues from exactly where it was paused.
+    ///
+    /// This is idempotent - calling resume() on a Running box is a no-op.
+    pub async fn resume(&self) -> BoxliteResult<()> {
+        self.box_backend.resume().await
+    }
+
     /// Copy files/directories from host into the container rootfs.
     pub async fn copy_into(
         &self,

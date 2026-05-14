@@ -17,10 +17,14 @@ use serde::{Deserialize, Serialize};
 /// ```text
 /// create()  → Configured (persisted to DB, no VM)
 /// start()   → Running (VM initialized)
-/// SIGSTOP   → Paused (VM frozen, used during export/snapshot)
-/// SIGCONT   → Running (VM resumed)
+/// pause()   → Paused (VM frozen via SIGSTOP — zero CPU, memory preserved)
+/// resume()  → Running (VM resumed via SIGCONT)
 /// stop()    → Stopped (VM terminated, can restart)
 /// ```
+///
+/// The Paused state is used both by the user-facing `pause()`/`resume()` API
+/// and internally by the quiesce bracket (`with_quiesce_async`) during
+/// export/snapshot/clone operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum BoxStatus {
@@ -42,7 +46,8 @@ pub enum BoxStatus {
     Stopped,
 
     /// Box VM is frozen via SIGSTOP (all vCPUs and virtio backends paused).
-    /// Used during export/snapshot for point-in-time consistency.
+    /// Used by user-facing `pause()`/`resume()` API and internally during
+    /// export/snapshot for point-in-time consistency.
     /// Equivalent to Docker's cgroup freezer pause.
     Paused,
 }
@@ -95,6 +100,26 @@ impl BoxStatus {
         )
     }
 
+    /// Check if calling `pause()` from this state would cause a meaningful
+    /// state transition (i.e., enter `Paused` from `Running`).
+    ///
+    /// Note: the public `pause()` API is idempotent and may be safely invoked
+    /// from `Paused` as a no-op. This predicate intentionally returns `true`
+    /// only when a transition `Running -> Paused` is allowed.
+    pub fn can_pause(&self) -> bool {
+        matches!(self, BoxStatus::Running)
+    }
+
+    /// Check if calling `resume()` from this state would cause a meaningful
+    /// state transition (i.e., leave `Paused` and enter `Running`).
+    ///
+    /// Note: the public `resume()` API is idempotent and may be safely invoked
+    /// from `Running` as a no-op. This predicate intentionally returns `true`
+    /// only when a transition `Paused -> Running` is allowed.
+    pub fn can_resume(&self) -> bool {
+        matches!(self, BoxStatus::Paused)
+    }
+
     /// Check if exec() can be called from this state.
     /// Configured and Stopped will trigger implicit start().
     pub fn can_exec(&self) -> bool {
@@ -126,8 +151,9 @@ impl BoxStatus {
             // Stopped → Running (restart)
             (Stopped, Running) |
             (Stopped, Unknown) |
-            // Paused → Running (SIGCONT resume) or Stopped (killed while paused)
+            // Paused → Running (SIGCONT resume), Stopping (graceful stop), or Stopped (killed while paused)
             (Paused, Running) |
+            (Paused, Stopping) |
             (Paused, Stopped) |
             (Paused, Unknown)
         )
@@ -192,6 +218,11 @@ pub struct BoxState {
     /// Health status.
     #[serde(default)]
     pub health_status: HealthStatus,
+    /// Whether guest I/O was successfully quiesced (FIFREEZE) during pause().
+    /// Runtime-only: not persisted to DB. Used by `with_quiesce_async` to decide
+    /// whether to skip its own quiesce when the box is already paused.
+    #[serde(skip)]
+    pub quiesced: bool,
 }
 
 /// Health status of a box.
@@ -289,6 +320,7 @@ impl BoxState {
             last_updated: Utc::now(),
             lock_id: None,
             health_status: HealthStatus::new(),
+            quiesced: false,
         }
     }
 
@@ -339,6 +371,7 @@ impl BoxState {
     pub fn mark_stop(&mut self) {
         self.status = BoxStatus::Stopped;
         self.pid = None;
+        self.quiesced = false;
         self.last_updated = Utc::now();
     }
 
@@ -351,6 +384,7 @@ impl BoxState {
             self.status = BoxStatus::Stopped;
         }
         self.pid = None;
+        self.quiesced = false;
         self.last_updated = Utc::now();
     }
 
@@ -862,5 +896,127 @@ mod tests {
         assert_eq!(state.health_status.state, HealthState::None);
         assert_eq!(state.health_status.failures, 0);
         assert!(state.health_status.last_check.is_none());
+    }
+
+    // ========================================================================
+    // Pause/Resume State Tests
+    // ========================================================================
+
+    #[test]
+    fn test_status_can_pause() {
+        assert!(!BoxStatus::Configured.can_pause());
+        assert!(BoxStatus::Running.can_pause());
+        assert!(!BoxStatus::Stopping.can_pause());
+        assert!(!BoxStatus::Stopped.can_pause());
+        assert!(!BoxStatus::Paused.can_pause());
+        assert!(!BoxStatus::Unknown.can_pause());
+    }
+
+    #[test]
+    fn test_status_can_resume() {
+        assert!(!BoxStatus::Configured.can_resume());
+        assert!(!BoxStatus::Running.can_resume());
+        assert!(!BoxStatus::Stopping.can_resume());
+        assert!(!BoxStatus::Stopped.can_resume());
+        assert!(BoxStatus::Paused.can_resume());
+        assert!(!BoxStatus::Unknown.can_resume());
+    }
+
+    #[test]
+    fn test_pause_resume_cycle() {
+        let mut state = BoxState::new();
+
+        // Configured → Running
+        assert!(state.transition_to(BoxStatus::Running).is_ok());
+        assert_eq!(state.status, BoxStatus::Running);
+
+        // Running → Paused
+        assert!(state.transition_to(BoxStatus::Paused).is_ok());
+        assert_eq!(state.status, BoxStatus::Paused);
+
+        // Paused → Running (resume)
+        assert!(state.transition_to(BoxStatus::Running).is_ok());
+        assert_eq!(state.status, BoxStatus::Running);
+
+        // Running → Paused → Running (second cycle)
+        assert!(state.transition_to(BoxStatus::Paused).is_ok());
+        assert!(state.transition_to(BoxStatus::Running).is_ok());
+        assert_eq!(state.status, BoxStatus::Running);
+    }
+
+    #[test]
+    fn test_paused_to_stopped() {
+        let mut state = BoxState::new();
+        state.force_status(BoxStatus::Paused);
+
+        // Paused → Stopped (stop while paused)
+        assert!(state.transition_to(BoxStatus::Stopped).is_ok());
+        assert_eq!(state.status, BoxStatus::Stopped);
+    }
+
+    #[test]
+    fn test_stopped_cannot_pause() {
+        // Stopped boxes cannot be paused — must start first
+        assert!(!BoxStatus::Stopped.can_transition_to(BoxStatus::Paused));
+    }
+
+    #[test]
+    fn test_configured_cannot_pause() {
+        // Configured boxes cannot be paused — must start first
+        assert!(!BoxStatus::Configured.can_transition_to(BoxStatus::Paused));
+    }
+
+    #[test]
+    fn test_paused_cannot_exec() {
+        // Exec is blocked while paused
+        assert!(!BoxStatus::Paused.can_exec());
+    }
+
+    #[test]
+    fn test_paused_can_stop() {
+        // Stop is allowed from Paused state
+        assert!(BoxStatus::Paused.can_stop());
+    }
+
+    #[test]
+    fn test_paused_cannot_start() {
+        // Start is not allowed from Paused state (use resume instead)
+        assert!(!BoxStatus::Paused.can_start());
+    }
+
+    #[test]
+    fn test_paused_to_stopping() {
+        // Paused → Stopping is valid (graceful stop from paused state)
+        assert!(BoxStatus::Paused.can_transition_to(BoxStatus::Stopping));
+        let mut state = BoxState::new();
+        state.force_status(BoxStatus::Paused);
+        assert!(state.transition_to(BoxStatus::Stopping).is_ok());
+        assert_eq!(state.status, BoxStatus::Stopping);
+    }
+
+    #[test]
+    fn test_paused_cannot_remove() {
+        // Paused boxes cannot be removed (must stop first)
+        assert!(!BoxStatus::Paused.can_remove());
+    }
+
+    #[test]
+    fn test_new_state_quiesced_is_false() {
+        let state = BoxState::new();
+        assert!(!state.quiesced);
+    }
+
+    #[test]
+    fn test_mark_stop_clears_quiesced() {
+        let mut state = BoxState::new();
+        state.status = BoxStatus::Paused;
+        state.pid = Some(123);
+        state.quiesced = true;
+
+        state.mark_stop();
+
+        assert!(!state.quiesced);
+        assert_eq!(state.status, BoxStatus::Stopped);
+        assert_eq!(state.pid, None);
     }
 }

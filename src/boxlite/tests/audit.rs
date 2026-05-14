@@ -49,3 +49,69 @@ fn multiple_listeners_all_receive_events() {
     assert_eq!(l1.events().len(), 1);
     assert_eq!(l2.events().len(), 1);
 }
+
+#[test]
+fn audit_event_listener_records_pause_resume() {
+    let listener = AuditEventListener::new();
+    let id = BoxIDMint::mint();
+
+    listener.on_box_created(&id);
+    listener.on_box_started(&id);
+    listener.on_box_paused(&id);
+    listener.on_box_resumed(&id);
+    listener.on_box_stopped(&id, Some(0));
+
+    let events = listener.events();
+    assert_eq!(events.len(), 5);
+    assert!(matches!(events[0].kind, AuditEventKind::BoxCreated));
+    assert!(matches!(events[1].kind, AuditEventKind::BoxStarted));
+    assert!(matches!(events[2].kind, AuditEventKind::BoxPaused));
+    assert!(matches!(events[3].kind, AuditEventKind::BoxResumed));
+    assert!(matches!(
+        events[4].kind,
+        AuditEventKind::BoxStopped { exit_code: Some(0) }
+    ));
+}
+
+#[test]
+fn pause_resume_via_trait_object() {
+    let listener: Arc<dyn EventListener> = Arc::new(AuditEventListener::new());
+    let id = BoxIDMint::mint();
+
+    // Verify pause/resume work through dyn trait object
+    listener.on_box_paused(&id);
+    listener.on_box_resumed(&id);
+}
+
+#[test]
+fn multiple_listeners_all_receive_pause_resume() {
+    let l1 = Arc::new(AuditEventListener::new());
+    let l2 = Arc::new(AuditEventListener::new());
+    let listeners: Vec<Arc<dyn EventListener>> = vec![l1.clone(), l2.clone()];
+
+    let id = BoxIDMint::mint();
+    for listener in &listeners {
+        listener.on_box_paused(&id);
+        listener.on_box_resumed(&id);
+    }
+
+    assert_eq!(l1.events().len(), 2);
+    assert_eq!(l2.events().len(), 2);
+    assert!(matches!(l1.events()[0].kind, AuditEventKind::BoxPaused));
+    assert!(matches!(l1.events()[1].kind, AuditEventKind::BoxResumed));
+}
+
+#[test]
+fn pause_resume_events_have_correct_box_id() {
+    let listener = AuditEventListener::new();
+    let id1 = BoxIDMint::mint();
+    let id2 = BoxIDMint::mint();
+
+    listener.on_box_paused(&id1);
+    listener.on_box_resumed(&id2);
+
+    let events = listener.events();
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0].box_id, id1);
+    assert_eq!(events[1].box_id, id2);
+}

@@ -677,6 +677,55 @@ export class SimpleBox {
   }
 
   /**
+   * Pause the box (freeze VM, zero CPU, state preserved).
+   *
+   * Quiesces guest filesystems, then sends SIGSTOP to freeze all vCPUs.
+   * The box keeps its memory and state but consumes zero CPU.
+   *
+   * Idempotent: calling pause() on a Paused box is a no-op.
+   * Use resume() to continue execution.
+   *
+   * Does nothing if the box was never created.
+   *
+   * @example
+   * ```typescript
+   * await box.pause();
+   * // Box is frozen — zero CPU, memory preserved
+   * await box.resume();
+   * ```
+   */
+  async pause(): Promise<void> {
+    if (!this._box) {
+      return;
+    }
+    await this._box.pause();
+  }
+
+  /**
+   * Resume the box from paused state.
+   *
+   * Sends SIGCONT to resume vCPUs and thaws guest filesystems.
+   * The box continues from exactly where it was paused.
+   *
+   * Idempotent: calling resume() on a Running box is a no-op.
+   *
+   * Does nothing if the box was never created.
+   *
+   * @example
+   * ```typescript
+   * await box.pause();
+   * // ... do something while box is frozen ...
+   * await box.resume();
+   * ```
+   */
+  async resume(): Promise<void> {
+    if (!this._box) {
+      return;
+    }
+    await this._box.resume();
+  }
+
+  /**
    * Stop the box.
    *
    * Sends a graceful shutdown signal to the VM. If `autoRemove` is true
