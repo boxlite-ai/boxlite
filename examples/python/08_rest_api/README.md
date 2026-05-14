@@ -35,7 +35,7 @@ Then run examples from this directory:
 python connect_and_list.py
 ```
 
-For env-based client configuration (`use_env_config.py`), set:
+For env-based client configuration (`use_env_config.py`), set OAuth2 client credentials:
 
 ```bash
 BOXLITE_REST_URL=http://localhost:8080
@@ -44,3 +44,14 @@ BOXLITE_REST_CLIENT_SECRET=test-secret
 # Optional (default in SDK is v1):
 BOXLITE_REST_PREFIX=v1
 ```
+
+Or use a long-lived API key (alternative to the client_id/secret pair):
+
+```bash
+BOXLITE_REST_URL=http://localhost:8080
+BOXLITE_API_KEY=your-api-key
+```
+
+`BoxliteRestOptions.from_env()` picks up either credential style. The
+`BOXLITE_API_KEY` path is the recommended option for most users; the
+OAuth2 pair is intended for machine-to-machine integrations.
