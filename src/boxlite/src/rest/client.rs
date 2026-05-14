@@ -1,4 +1,4 @@
-//! HTTP client with OAuth2 token management.
+//! HTTP client for the BoxLite REST API.
 
 use std::sync::Arc;
 
@@ -10,28 +10,27 @@ use tokio::sync::RwLock;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use super::error::{map_http_error, map_http_status};
-use super::options::BoxliteRestOptions;
-use super::types::{ErrorResponse, SandboxConfigResponse, TokenRequest, TokenResponse};
+use super::options::{BoxliteRestOptions, Credential, OAuthTokens};
+use super::types::{
+    ErrorResponse, OAuthErrorBody, OAuthTokenForm, OAuthTokenResponse, Principal,
+    SandboxConfigResponse,
+};
 
-/// Cached OAuth2 token with expiry.
-struct TokenCache {
-    token: String,
-    /// Expiry as seconds since epoch.
-    expires_at: u64,
-}
+const OAUTH_CLIENT_ID: &str = "boxlite-cli";
+const REFRESH_LEEWAY: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// HTTP client for the BoxLite REST API.
 ///
-/// Handles base URL construction, OAuth2 token caching/refresh,
-/// and error response parsing.
+/// Handles base URL construction, bearer auth (API keys or OAuth tokens
+/// with lazy refresh), and error response parsing.
 #[derive(Clone)]
 pub(crate) struct ApiClient {
     http: Client,
     base_url: String,
     prefix: String,
-    client_id: Option<String>,
-    client_secret: Option<String>,
-    token_cache: Arc<RwLock<Option<TokenCache>>>,
+    /// Bearer credential. Wrapped in `Arc<RwLock<...>>` because the OAuth
+    /// variant gets mutated on refresh. `None` = unauthenticated.
+    credential: Arc<RwLock<Option<Credential>>>,
     config_cache: Arc<RwLock<Option<SandboxConfigResponse>>>,
 }
 
@@ -49,9 +48,7 @@ impl ApiClient {
             http,
             base_url,
             prefix,
-            client_id: config.client_id.clone(),
-            client_secret: config.client_secret.clone(),
-            token_cache: Arc::new(RwLock::new(None)),
+            credential: Arc::new(RwLock::new(config.credential.clone())),
             config_cache: Arc::new(RwLock::new(None)),
         })
     }
@@ -67,81 +64,98 @@ impl ApiClient {
         format!("{}/{}{}", self.base_url, self.prefix, path)
     }
 
-    /// Get a valid Bearer token, refreshing if needed.
-    pub(crate) async fn get_token(&self) -> BoxliteResult<Option<String>> {
-        let (client_id, client_secret) = match (&self.client_id, &self.client_secret) {
-            (Some(id), Some(secret)) => (id.clone(), secret.clone()),
-            _ => return Ok(None),
+    /// Get the current bearer token, refreshing the OAuth access token if
+    /// it is within [`REFRESH_LEEWAY`] of expiring. `None` means the
+    /// client has no credential configured.
+    ///
+    /// After a successful refresh, the rotated tokens are persisted into
+    /// `self.credential` so subsequent calls see the new access_token.
+    /// (Persistence to disk is the caller's responsibility — see
+    /// [`Self::current_credential`].)
+    pub(crate) async fn current_bearer(&self) -> BoxliteResult<Option<String>> {
+        let snapshot = {
+            let guard = self.credential.read().await;
+            guard.clone()
         };
-
-        // Check cached token
-        {
-            let cache = self.token_cache.read().await;
-            if let Some(ref cached) = *cache {
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs();
-                // Refresh 60 seconds before expiry
-                if now + 60 < cached.expires_at {
-                    return Ok(Some(cached.token.clone()));
+        match snapshot {
+            None => Ok(None),
+            Some(Credential::ApiKey { key }) => Ok(Some(key)),
+            Some(Credential::OAuth(tokens)) => {
+                if needs_refresh(&tokens) {
+                    let new_tokens = self.refresh_oauth(&tokens.refresh_token).await?;
+                    let access = new_tokens.access_token.clone();
+                    *self.credential.write().await = Some(Credential::OAuth(new_tokens));
+                    Ok(Some(access))
+                } else {
+                    Ok(Some(tokens.access_token))
                 }
             }
         }
+    }
 
-        // Refresh token
-        let token_url = self.url_root("/oauth/tokens");
-        let req = TokenRequest {
-            grant_type: "client_credentials",
-            client_id: &client_id,
-            client_secret: &client_secret,
+    /// Return the current credential snapshot. The CLI calls this after
+    /// operations to detect whether the SDK refreshed OAuth tokens
+    /// in-memory and persist the rotation to disk.
+    #[allow(dead_code)] // Wired through BoxliteRuntime in a follow-up.
+    pub async fn current_credential(&self) -> Option<Credential> {
+        self.credential.read().await.clone()
+    }
+
+    /// Exchange a refresh_token for fresh OAuth tokens via
+    /// `POST /v1/oauth/token` (RFC 8628 §3.4 refresh_token grant). On
+    /// `invalid_grant` (token was reused / revoked / family invalidated),
+    /// the credential becomes unusable; the caller is expected to delete
+    /// the profile and prompt re-login.
+    async fn refresh_oauth(&self, refresh_token: &str) -> BoxliteResult<OAuthTokens> {
+        let form = OAuthTokenForm {
+            grant_type: "refresh_token",
+            device_code: None,
+            refresh_token: Some(refresh_token),
+            client_id: OAUTH_CLIENT_ID,
         };
-
         let resp = self
             .http
-            .post(&token_url)
-            .form(&req)
+            .post(self.url_root("/oauth/token"))
+            .form(&form)
             .send()
             .await
-            .map_err(|e| BoxliteError::Config(format!("token request failed: {}", e)))?;
+            .map_err(|e| BoxliteError::Config(format!("oauth refresh failed: {e}")))?;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
+        let status = resp.status();
+        if !status.is_success() {
             let text = resp.text().await.unwrap_or_default();
+            let kind = serde_json::from_str::<OAuthErrorBody>(&text)
+                .map(|b| b.error)
+                .unwrap_or_else(|_| "unknown_error".into());
             return Err(BoxliteError::Config(format!(
-                "token exchange failed (HTTP {}): {}",
-                status, text
+                "oauth refresh rejected ({status} / {kind}): {text}"
             )));
         }
 
-        let token_resp: TokenResponse = resp
+        let token_resp: OAuthTokenResponse = resp
             .json()
             .await
-            .map_err(|e| BoxliteError::Config(format!("failed to parse token response: {}", e)))?;
+            .map_err(|e| BoxliteError::Config(format!("failed to parse token response: {e}")))?;
 
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-
-        let token = token_resp.access_token.clone();
-        let expires_at = now + token_resp.expires_in;
-
-        let mut cache = self.token_cache.write().await;
-        *cache = Some(TokenCache {
-            token: token.clone(),
-            expires_at,
-        });
-
-        Ok(Some(token))
+        Ok(OAuthTokens {
+            access_token: token_resp.access_token,
+            // Servers MAY rotate the refresh_token (recommended) or keep
+            // the same one. When omitted, reuse the prior value.
+            refresh_token: token_resp
+                .refresh_token
+                .unwrap_or_else(|| refresh_token.to_string()),
+            expires_at: std::time::SystemTime::now()
+                + std::time::Duration::from_secs(token_resp.expires_in),
+        })
     }
 
-    /// Add auth header to a request builder.
+    /// Add auth header to a request builder. Refreshes OAuth tokens
+    /// lazily — this method may make an extra HTTP call to
+    /// `POST /v1/oauth/token`.
     async fn authorize(&self, builder: RequestBuilder) -> BoxliteResult<RequestBuilder> {
-        if let Some(token) = self.get_token().await? {
-            Ok(builder.bearer_auth(token))
-        } else {
-            Ok(builder)
+        match self.current_bearer().await? {
+            Some(bearer) => Ok(builder.bearer_auth(bearer)),
+            None => Ok(builder),
         }
     }
 
@@ -314,8 +328,8 @@ impl ApiClient {
             .into_client_request()
             .map_err(|e| BoxliteError::Internal(format!("WS request build failed: {}", e)))?;
 
-        if let Some(token) = self.get_token().await? {
-            let value = HeaderValue::from_str(&format!("Bearer {}", token))
+        if let Some(bearer) = self.current_bearer().await? {
+            let value = HeaderValue::from_str(&format!("Bearer {}", bearer))
                 .map_err(|e| BoxliteError::Internal(format!("WS auth header invalid: {}", e)))?;
             request.headers_mut().insert("Authorization", value);
         }
@@ -334,6 +348,13 @@ impl ApiClient {
     ) -> BoxliteResult<RequestBuilder> {
         let builder = self.http.request(method, self.url(path));
         self.authorize(builder).await
+    }
+
+    /// Fetch the principal (identity + scopes) for the configured credential.
+    /// Calls `GET /v1/me`.
+    #[allow(dead_code)] // Wired through BoxliteRuntime + CLI `auth status` in a follow-up.
+    pub async fn get_principal(&self) -> BoxliteResult<Principal> {
+        self.get_root("/me").await
     }
 
     pub async fn get_config(&self) -> BoxliteResult<SandboxConfigResponse> {
@@ -409,6 +430,12 @@ impl ApiClient {
 
 /// Map a tungstenite connect error to a typed `BoxliteError`. The WS
 /// upgrade returns HTTP status codes for rejections (404 for a missing
+/// Is this OAuth access token within [`REFRESH_LEEWAY`] of expiring?
+fn needs_refresh(tokens: &OAuthTokens) -> bool {
+    let deadline = std::time::SystemTime::now() + REFRESH_LEEWAY;
+    tokens.expires_at <= deadline
+}
+
 /// session, 409 for an already-attached one); callers want to see those
 /// as `NotFound` / `AlreadyExists` rather than generic `Internal` so
 /// they can map onward to `SessionReaped`.

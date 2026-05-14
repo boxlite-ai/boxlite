@@ -19,20 +19,17 @@ use boxlite::{
 /// Create a REST-backed runtime pointing at the reference server.
 fn rest_runtime() -> BoxliteRuntime {
     let url = std::env::var("BOXLITE_REST_URL").unwrap_or_else(|_| "http://localhost:8080".into());
-    BoxliteRuntime::rest(
-        BoxliteRestOptions::new(&url).with_credentials("test-client".into(), "test-secret".into()),
-    )
-    .expect("failed to create REST runtime")
+    let api_key = std::env::var("BOXLITE_API_KEY").unwrap_or_else(|_| "test-key".into());
+    BoxliteRuntime::rest(BoxliteRestOptions::new(&url).with_api_key(api_key))
+        .expect("failed to create REST runtime")
 }
 
 // ── Auth ────────────────────────────────────────────────────────────────
 
 #[tokio::test]
 async fn test_rest_auth() {
-    // Simply creating the runtime and listing boxes exercises the OAuth2 flow.
+    // Listing boxes exercises the bearer-auth path end-to-end.
     let rt = rest_runtime();
-    // list_info exercises the full OAuth2 token acquisition + authenticated request flow.
-    // If auth is broken, this will fail with an error.
     let _boxes = rt
         .list_info()
         .await

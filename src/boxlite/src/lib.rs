@@ -60,7 +60,9 @@ pub use runtime::types::ContainerID;
 pub use runtime::types::{BoxInfo, BoxState, BoxStateInfo, BoxStatus};
 
 #[cfg(feature = "rest")]
-pub use rest::options::BoxliteRestOptions;
+pub use rest::options::{BoxliteRestOptions, Credential, OAuthTokens};
+#[cfg(feature = "rest")]
+pub use rest::types::{Principal, PrincipalType};
 
 /// Initialize tracing for Boxlite using the provided filesystem layout.
 ///

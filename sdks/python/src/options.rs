@@ -784,8 +784,7 @@ fn parse_protocol<S: AsRef<str>>(s: S) -> PortProtocol {
 ///     opts = BoxliteRestOptions(url="https://api.example.com")
 ///     opts = BoxliteRestOptions(
 ///         url="https://api.example.com",
-///         client_id="my-client",
-///         client_secret="my-secret",
+///         api_key="opaque-dashboard-key",
 ///     )
 ///     opts = BoxliteRestOptions.from_env()
 ///
@@ -795,9 +794,7 @@ pub(crate) struct PyBoxliteRestOptions {
     #[pyo3(get, set)]
     pub(crate) url: String,
     #[pyo3(get, set)]
-    pub(crate) client_id: Option<String>,
-    #[pyo3(get, set)]
-    pub(crate) client_secret: Option<String>,
+    pub(crate) api_key: Option<String>,
     #[pyo3(get, set)]
     pub(crate) prefix: Option<String>,
 }
@@ -805,41 +802,39 @@ pub(crate) struct PyBoxliteRestOptions {
 #[pymethods]
 impl PyBoxliteRestOptions {
     #[new]
-    #[pyo3(signature = (url, client_id=None, client_secret=None, prefix=None))]
-    fn new(
-        url: String,
-        client_id: Option<String>,
-        client_secret: Option<String>,
-        prefix: Option<String>,
-    ) -> Self {
+    #[pyo3(signature = (url, api_key=None, prefix=None))]
+    fn new(url: String, api_key: Option<String>, prefix: Option<String>) -> Self {
         Self {
             url,
-            client_id,
-            client_secret,
+            api_key,
             prefix,
         }
     }
 
     /// Create BoxliteRestOptions from environment variables.
     ///
-    /// Reads: BOXLITE_REST_URL (required), BOXLITE_REST_CLIENT_ID,
-    ///        BOXLITE_REST_CLIENT_SECRET, BOXLITE_REST_PREFIX
+    /// Reads: BOXLITE_REST_URL (required), BOXLITE_API_KEY, BOXLITE_REST_PREFIX.
+    /// OAuth tokens are NOT env-injected (they're short-lived and CLI-managed).
     #[staticmethod]
     fn from_env() -> PyResult<Self> {
+        use boxlite::Credential;
         let opts = BoxliteRestOptions::from_env().map_err(crate::util::map_err)?;
+        let api_key = match opts.credential {
+            Some(Credential::ApiKey { key }) => Some(key),
+            _ => None,
+        };
         Ok(Self {
             url: opts.url,
-            client_id: opts.client_id,
-            client_secret: opts.client_secret,
+            api_key,
             prefix: opts.prefix,
         })
     }
 
     fn __repr__(&self) -> String {
         format!(
-            "BoxliteRestOptions(url={:?}, client_id={:?}, prefix={:?})",
+            "BoxliteRestOptions(url={:?}, api_key={:?}, prefix={:?})",
             self.url,
-            self.client_id.as_deref().map(|_| "***"),
+            self.api_key.as_deref().map(|_| "***"),
             self.prefix,
         )
     }
@@ -848,8 +843,9 @@ impl PyBoxliteRestOptions {
 impl From<PyBoxliteRestOptions> for BoxliteRestOptions {
     fn from(py_opts: PyBoxliteRestOptions) -> Self {
         let mut opts = BoxliteRestOptions::new(py_opts.url);
-        opts.client_id = py_opts.client_id;
-        opts.client_secret = py_opts.client_secret;
+        if let Some(key) = py_opts.api_key {
+            opts = opts.with_api_key(key);
+        }
         opts.prefix = py_opts.prefix;
         opts
     }

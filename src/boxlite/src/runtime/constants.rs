@@ -22,13 +22,11 @@ pub mod envs {
     #[cfg(feature = "rest")]
     pub const BOXLITE_REST_URL: &str = "BOXLITE_REST_URL";
 
-    /// OAuth2 client ID (optional).
+    /// Opaque API key, sent directly as `Authorization: Bearer <key>`. Flat
+    /// name (not `BOXLITE_REST_API_KEY`) matches industry convention —
+    /// `STRIPE_API_KEY`, `HEROKU_API_KEY`, `GH_TOKEN`.
     #[cfg(feature = "rest")]
-    pub const BOXLITE_REST_CLIENT_ID: &str = "BOXLITE_REST_CLIENT_ID";
-
-    /// OAuth2 client secret (optional).
-    #[cfg(feature = "rest")]
-    pub const BOXLITE_REST_CLIENT_SECRET: &str = "BOXLITE_REST_CLIENT_SECRET";
+    pub const BOXLITE_API_KEY: &str = "BOXLITE_API_KEY";
 
     /// API path prefix (default: "v1").
     #[cfg(feature = "rest")]

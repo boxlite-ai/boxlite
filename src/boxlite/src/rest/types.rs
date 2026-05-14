@@ -30,22 +30,89 @@ pub(crate) struct ErrorModel {
 }
 
 // ============================================================================
-// Authentication
+// Authentication — Principal
 // ============================================================================
 
-#[derive(Debug, Serialize)]
-pub(crate) struct TokenRequest<'a> {
-    pub grant_type: &'a str,
-    pub client_id: &'a str,
-    pub client_secret: &'a str,
+/// Identity payload returned by `GET /v1/me`. Matches the `Principal` schema
+/// in `openapi/rest-sandbox-open-api.yaml`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Principal {
+    /// Stable opaque principal identifier. Treat as opaque — server may
+    /// change format (UUID/ULID/Base62) without notice.
+    pub sub: String,
+
+    /// `user` for interactive dashboard-issued keys, `service_account` for
+    /// automation keys. Sum type, not nullable user fields.
+    pub principal_type: PrincipalType,
+
+    /// Email of the user behind the key. Absent for service accounts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+
+    /// Human-readable label. Optional.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+
+    /// Tenant/workspace prefix the credential is bound to. Used by CLI to
+    /// populate `--prefix` defaults.
+    pub prefix: String,
+
+    /// Granted scope strings (`boxes:read`, `boxes:write`, etc.).
+    pub scopes: Vec<String>,
+
+    /// Optional expiry. `None` for long-lived dashboard-issued keys.
+    #[serde(default)]
+    pub expires_at: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-pub(crate) struct TokenResponse {
+/// Discriminator for [`Principal::principal_type`]. Wire form is
+/// `snake_case` per the OpenAPI schema's `enum: [user, service_account]`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PrincipalType {
+    User,
+    ServiceAccount,
+}
+
+// ============================================================================
+// OAuth device flow (RFC 8628) wire types
+// ============================================================================
+
+/// Form-encoded request to `POST /v1/oauth/token`. Matches the
+/// `OAuthTokenRequest` schema in the OpenAPI spec.
+#[derive(Debug, Serialize)]
+pub(crate) struct OAuthTokenForm<'a> {
+    pub grant_type: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device_code: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refresh_token: Option<&'a str>,
+    pub client_id: &'a str,
+}
+
+/// Response from `POST /v1/oauth/token`. Matches `OAuthTokenResponse`.
+#[derive(Debug, Deserialize, Clone)]
+pub(crate) struct OAuthTokenResponse {
     pub access_token: String,
     #[allow(dead_code)]
     pub token_type: String,
     pub expires_in: u64,
+    #[serde(default)]
+    pub refresh_token: Option<String>,
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub scope: Option<String>,
+}
+
+/// RFC 6749 §5.2 / RFC 8628 §3.5 error body. The `error` string drives
+/// CLI polling behavior for device flow (`authorization_pending` =
+/// keep polling; `slow_down` = increase interval).
+#[derive(Debug, Deserialize)]
+pub(crate) struct OAuthErrorBody {
+    pub error: String,
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub error_description: Option<String>,
 }
 
 // ============================================================================
