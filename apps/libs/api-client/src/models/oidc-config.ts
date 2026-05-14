@@ -38,4 +38,10 @@ export interface OidcConfig {
      * @memberof OidcConfig
      */
     'audience': string;
+    /**
+     * OIDC end-session endpoint. Set when the IdP does not advertise one via discovery (e.g. Dex) and BoxLite hosts a compatible logout endpoint.
+     * @type {string}
+     * @memberof OidcConfig
+     */
+    'endSessionEndpoint'?: string;
 }

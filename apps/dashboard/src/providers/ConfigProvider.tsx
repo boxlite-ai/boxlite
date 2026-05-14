@@ -53,6 +53,11 @@ export function ConfigProvider(props: Props) {
         window.dispatchEvent(new PopStateEvent('popstate'))
       },
       post_logout_redirect_uri: window.location.origin,
+      // For IdPs (e.g. Dex) that don't advertise end_session_endpoint via discovery,
+      // the API exposes a compatible endpoint and reports it here.
+      ...(config.oidc.endSessionEndpoint && {
+        metadataSeed: { end_session_endpoint: config.oidc.endSessionEndpoint },
+      }),
     }
   }, [config])
 

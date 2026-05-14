@@ -87,7 +87,7 @@ function App() {
   const config = useConfig()
   const location = useLocation()
   const posthog = usePostHog()
-  const { error: authError, isAuthenticated, user, signoutRedirect } = useAuth()
+  const { error: authError, isAuthenticated, user, removeUser } = useAuth()
 
   useEffect(() => {
     if (isAuthenticated && user && posthog?.get_distinct_id() !== user.profile.sub) {
@@ -127,7 +127,14 @@ function App() {
             <DialogDescription>{authError.message}</DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button onClick={() => signoutRedirect()}>Go Back</Button>
+            <Button
+              onClick={async () => {
+                await removeUser()
+                window.location.assign(RoutePath.LANDING)
+              }}
+            >
+              Go Back
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

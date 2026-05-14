@@ -4,11 +4,13 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+import { HttpModule } from '@nestjs/axios'
 import { Global, Module, DynamicModule } from '@nestjs/common'
 import { ConfigModule as NestConfigModule, ConfigModuleOptions } from '@nestjs/config'
 import { TypedConfigService } from './typed-config.service'
 import { configuration } from './configuration'
 import { ConfigController } from './config.controller'
+import { OidcMetadataService } from './oidc-metadata.service'
 
 @Global()
 @Module({
@@ -17,10 +19,11 @@ import { ConfigController } from './config.controller'
       isGlobal: true,
       load: [() => configuration],
     }),
+    HttpModule,
   ],
   controllers: [ConfigController],
-  providers: [TypedConfigService],
-  exports: [TypedConfigService],
+  providers: [TypedConfigService, OidcMetadataService],
+  exports: [TypedConfigService, OidcMetadataService],
 })
 export class TypedConfigModule {
   static forRoot(options: Partial<ConfigModuleOptions> = {}): DynamicModule {
@@ -30,9 +33,10 @@ export class TypedConfigModule {
         NestConfigModule.forRoot({
           ...options,
         }),
+        HttpModule,
       ],
-      providers: [TypedConfigService],
-      exports: [TypedConfigService],
+      providers: [TypedConfigService, OidcMetadataService],
+      exports: [TypedConfigService, OidcMetadataService],
     }
   }
 }

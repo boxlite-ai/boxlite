@@ -289,6 +289,18 @@ export default $config({
           OIDC_MANAGEMENT_API_CLIENT_SECRET: process.env.OIDC_MANAGEMENT_API_CLIENT_SECRET!,
           OIDC_MANAGEMENT_API_AUDIENCE: process.env.OIDC_MANAGEMENT_API_AUDIENCE!,
         }),
+        // RP-initiated logout fallback. Safe to set unconditionally: the API
+        // probes the IdP's discovery doc at startup and only exposes this URL
+        // to the dashboard when the IdP itself lacks end_session_endpoint
+        // (e.g. Dex). For Auth0/Okta the API hides this and the SPA uses the
+        // IdP's real endpoint advertised in /.well-known/openid-configuration.
+        OIDC_END_SESSION_ENDPOINT: envOr(
+          "OIDC_END_SESSION_ENDPOINT",
+          `https://${stackDomain}/api/auth/end-session`,
+        ),
+        ...(process.env.OIDC_POST_LOGOUT_REDIRECT_ALLOWLIST && {
+          OIDC_POST_LOGOUT_REDIRECT_ALLOWLIST: process.env.OIDC_POST_LOGOUT_REDIRECT_ALLOWLIST,
+        }),
 
         // S3 (API signs STS creds for per-sandbox buckets)
         S3_ENDPOINT: $interpolate`https://s3.${aws.getRegionOutput().name}.amazonaws.com`,
@@ -321,7 +333,7 @@ export default $config({
         // (index.html + /assets/*) still serve through the CF Router at the
         // root domain. CORS on the API is already `origin: true` so the
         // cross-origin dashboard→API path works without further changes.
-        DASHBOARD_URL: envOr("DASHBOARD_URL", ""),
+        DASHBOARD_URL: envOr("DASHBOARD_URL", `https://${stackDomain}`),
         APP_URL: envOr("APP_URL", ""),
         DASHBOARD_BASE_API_URL: envOr("DASHBOARD_BASE_API_URL", `https://api.${stackDomain}`),
 

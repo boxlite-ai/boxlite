@@ -118,9 +118,20 @@ layers per AWS's "WebSocket through ALB" guidance:
 If you raise or lower the ALB idle, keep the Node `keepAliveTimeout`
 strictly greater than it.
 
-## Auth0 setup
+## OIDC provider setup (Auth0 example)
 
-The stack delegates all authentication to an external OIDC provider. For Auth0:
+The stack delegates all authentication to an external OIDC provider. The API
+validates JWTs via JWKS and probes the issuer's `/.well-known/openid-configuration`
+once at startup. Any standards-compliant IdP works (Auth0, Okta, Keycloak, Dex,
+Cognito, etc.) — the only hard requirement is that the JWKS URL be reachable
+from the API container.
+
+For IdPs that don't advertise `end_session_endpoint` in their discovery doc
+(Dex is the common case — see `dexidp/dex#1697`), the dashboard's logout flow
+transparently falls back through BoxLite's own `/api/auth/end-session` route.
+No operator action needed; the API auto-detects and the dashboard auto-uses it.
+
+For Auth0 specifically:
 
 1. **SPA Application** — create in Auth0, set callback/logout URLs to `https://<STACK_DOMAIN>`
 2. **Custom API** — identifier becomes `OIDC_AUDIENCE` (e.g. `https://dev.boxlite.ai/api`)
@@ -129,7 +140,15 @@ The stack delegates all authentication to an external OIDC provider. For Auth0:
    `functions/auth0/setCustomClaims.onExecutePostLogin.js`, copied from upstream BoxLite
    with its AGPL-3.0 SPDX header preserved.
    Deploy → Actions → Flows → Login → drag onto flow → Apply.
-4. **Machine-to-Machine app** (optional, for account linking) — authorize for Auth0 Management API
+4. **RP-Initiated Logout End Session Endpoint Discovery** — required so the SPA's
+   logout fully terminates the Auth0 session (otherwise the browser silently
+   re-authenticates via the still-alive Auth0 cookie and "Sign out" looks like a
+   page refresh). Dashboard → Settings → Advanced → "Login and Logout" → enable
+   the toggle. For tenants created on or after 14 November 2023 this is the
+   default; older tenants need the manual flip. After enabling, restart the API
+   service so its cached discovery probe re-fetches and stops emitting the
+   BoxLite fallback. ([Auth0 docs](https://auth0.com/docs/authenticate/login/logout/log-users-out-of-auth0))
+5. **Machine-to-Machine app** (optional, for account linking) — authorize for Auth0 Management API
    with permissions: `read:users`, `update:users`, `read:connections`,
    `create:guardian_enrollment_tickets`, `read:connections_options`.
 
@@ -252,7 +271,9 @@ follows that. Not yet implemented.
                           │  (nested KVM, privileged)     │
                           └───────────────────────────────┘
 
-Auth: Auth0 (external) ← OIDC tokens validated by Api via JWKS
+Auth: OIDC provider (Auth0/Okta/Keycloak/Dex/…) ← Api validates JWT via JWKS;
+      /api/auth/end-session provides RP-initiated-logout fallback for IdPs
+      that don't advertise end_session_endpoint in discovery
 ```
 
 ## Troubleshooting
@@ -263,8 +284,17 @@ Auth: Auth0 (external) ← OIDC tokens validated by Api via JWKS
 from an earlier failed deploy. If `runningCount == desiredCount` the service
 is fine; ignore it.
 
-**Api crashes with `Failed to fetch OpenID configuration`** — `OIDC_ISSUER_BASE_URL`
-has a trailing slash causing `//` in the discovery URL. Remove the trailing slash.
+**Api crashes with `Failed to fetch OpenID configuration`** — the API can't
+reach `<OIDC_ISSUER_BASE_URL>/.well-known/openid-configuration`. Check network
+egress from the API container to the IdP, and confirm `OIDC_ISSUER_BASE_URL`
+points at a working host. Trailing slashes are normalized automatically.
+
+**Dashboard shows `Authentication Error: No end session endpoint` on logout** —
+the API's IdP-discovery probe failed at startup, so the dashboard never
+received the `end_session_endpoint` fallback. Check API logs for the
+`OIDC discovery probe failed; treating as 'unknown' (fail-closed)` warning;
+fix the underlying connectivity to the IdP and the next `/api/config` request
+self-heals.
 
 **"Organization is suspended: Please verify your email address"** — Auth0 access_token
 missing `email_verified` claim. Deploy the Post-Login Action described above.
