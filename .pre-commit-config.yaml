@@ -49,3 +49,15 @@ repos:
             .*/Cargo\.toml$|
             Cargo\.lock$
           )
+
+      - id: yarn-lock-sync
+        name: apps/yarn.lock in sync with apps/package.json
+        entry: make lint:yarn-lock
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
+        # apps/yarn.lock is gitignored, so this only fires on package.json
+        # changes. Catches the case where a dep is added/changed locally
+        # without running `yarn install` to refresh the working-tree lockfile
+        # that `sst deploy` then Docker-COPYs into the image.
+        files: ^apps/package\.json$

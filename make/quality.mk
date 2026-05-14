@@ -1,4 +1,4 @@
-PHONY_TARGETS += fmt lint clippy
+PHONY_TARGETS += fmt lint clippy lint\:yarn-lock
 
 # Smart format: only format changed components.
 fmt:
@@ -116,6 +116,16 @@ lint\:fix:
 		. .venv/bin/activate && cd sdks/python && ruff check --fix .; \
 	fi
 	@$(MAKE) lint
+
+# Verify apps/yarn.lock is in sync with apps/package.json. apps/yarn.lock is
+# gitignored, so this guards the developer's local working tree — which is
+# what `sst deploy` Docker-COPYs at build time. Mirrors the --immutable flag
+# the Dockerfile itself uses, so a local pass means the Docker yarn install
+# will also pass.
+lint\:yarn-lock:
+	@echo "📋 Checking apps/yarn.lock is in sync with apps/package.json..."
+	@cd apps && yarn install --immutable
+	@echo "✅ apps/yarn.lock is in sync"
 
 lint\:rust:
 	@$(MAKE) clippy
