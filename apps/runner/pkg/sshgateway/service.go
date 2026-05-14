@@ -241,6 +241,29 @@ func (s *Service) handleRequest(ctx context.Context, st *sessionState, req *ssh.
 		_ = req.Reply(true, nil)
 		st.runExec(ctx, "exec")
 
+	case "subsystem":
+		// Modern OpenSSH scp defaults to the SFTP subsystem (RFC 4254 §6.5).
+		// Spawn an sftp-server binary inside the VM; its stdio gets wired
+		// to the SSH channel just like a regular exec. We probe common
+		// install paths in order (alpine: /usr/lib/ssh; debian-ish:
+		// /usr/lib/openssh; RHEL-ish: /usr/libexec) and fall through to
+		// PATH lookup so unusual layouts still work. If the VM ships
+		// neither, runExec surfaces "executable not found" and the client
+		// can retry with `scp -O` (legacy protocol over `exec`).
+		name, ok := parseStringPayload(req.Payload)
+		if !ok || name != "sftp" {
+			_ = req.Reply(false, nil)
+			return
+		}
+		st.cmd = "/bin/sh"
+		st.args = []string{"-c",
+			"exec $(command -v sftp-server 2>/dev/null || " +
+				"ls /usr/lib/openssh/sftp-server /usr/lib/ssh/sftp-server /usr/libexec/sftp-server /usr/libexec/openssh/sftp-server 2>/dev/null | head -n1)"}
+		// No TTY for binary-protocol subsystems.
+		st.withTTY = false
+		_ = req.Reply(true, nil)
+		st.runExec(ctx, "subsystem:sftp")
+
 	case "window-change":
 		dims := parseWindowChange(req.Payload)
 		if dims.rows > 0 && dims.cols > 0 {
