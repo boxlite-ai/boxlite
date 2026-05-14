@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
 import { BOXLITE_DOCS_URL } from '@/constants/ExternalLinks'
@@ -25,17 +25,8 @@ export function SandboxTerminalTab({ sandbox }: { sandbox: Sandbox }) {
     isLoading,
     isError,
     isFetching,
-    existingSession,
     reset,
   } = useTerminalSessionQuery(sandbox.id, running && activated)
-
-  // Auto-reconnect: if activated and session is expired, refetch
-  useEffect(() => {
-    if (!activated || !existingSession) return
-    if (existingSession.expiresAt <= Date.now()) {
-      reset()
-    }
-  }, [activated, existingSession, reset])
 
   const handleConnect = () => {
     activateTerminal(sandbox.id)

@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { useEffect } from 'react'
 import { Button } from '@/components/ui/button'
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
 import { BOXLITE_DOCS_URL } from '@/constants/ExternalLinks'
@@ -42,17 +41,8 @@ export function SandboxVncTab({ sandbox }: { sandbox: Sandbox }) {
     data: session,
     isLoading: sessionLoading,
     isError: sessionError,
-    existingSession,
     reset,
   } = useVncSessionQuery(sandbox.id, vncReady)
-
-  // Auto-reconnect: if session is expired, refetch
-  useEffect(() => {
-    if (!existingSession) return
-    if (existingSession.expiresAt <= Date.now()) {
-      reset()
-    }
-  }, [existingSession, reset])
 
   const isStarting =
     startMutation.isPending ||

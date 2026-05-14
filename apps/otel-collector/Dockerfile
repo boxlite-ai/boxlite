@@ -27,6 +27,10 @@ COPY apps/common-go/go.mod apps/common-go/go.sum apps/common-go/
 RUN head -1 apps/go.work > apps/go.work.tmp && printf '\nuse (\n\t./otel-collector/exporter\n\t./api-client-go\n\t./common-go\n)\n' >> apps/go.work.tmp && mv apps/go.work.tmp apps/go.work
 
 ENV NX_DAEMON=false
+# nx-go runs `go build` from /boxlite (WORKDIR), but go.work lives at apps/go.work.
+# Without GOWORK, Go walks upward from /boxlite and finds no module file. Point
+# GOWORK at the workspace file so module resolution succeeds.
+ENV GOWORK=/boxlite/apps/go.work
 
 RUN go -C apps/otel-collector/exporter mod download && \
     go -C apps/api-client-go mod download && \

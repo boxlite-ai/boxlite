@@ -240,6 +240,8 @@ pkg/api/controllers/boxlite_exec_attach.go
 └─ BoxliteExecAttach(ctx)                     GET /attach   (WebSocket upgrade)
    ├─ ManagedExec.MarkConnected()             409 if slot already taken
    └─ runAttachLoop(parentCtx, conn, exec)    4 goroutines, fail-fast cancel
+      ├─ conn.SetReadDeadline(now + 45s)      45s = 3 × Ping interval; trips ReadMessage on dead peer
+      ├─ conn.SetPongHandler(reset deadline)  each received Pong pushes deadline forward
       ├─ pumpSubscriberChannel() × {1,2}      stdout 0x01 / stderr 0x02 frames (subscribed to ManagedExec broadcaster)
       ├─ readClientFrames()                   binary → stdin; text JSON → control
       │  └─ handleControlFrame()              resize | signal (whitelist) | stdin_eof

@@ -577,6 +577,71 @@ func TestBoxliteExecAttach_SignalFrameAllowedDelivered(t *testing.T) {
 	}
 }
 
+// A client that never pongs (suppressed via SetPingHandler that swallows
+// pings) must be evicted within ~3 keepalive intervals so the single-attach
+// slot is released. Without pong-based liveness the server's tiny ping write
+// fits in the kernel send buffer indefinitely on a half-open TCP and the slot
+// is held for 10-15 minutes.
+func TestBoxliteExecAttach_PongTimeoutEvictsDeadClient(t *testing.T) {
+	restore := setKeepaliveIntervalForTest(50 * time.Millisecond)
+	defer restore()
+
+	stub := newStubAttachExec()
+	cleanup := withStubExec(t, "exec-deadpong", stub)
+	defer cleanup()
+
+	srv := newAttachServer(t)
+	defer srv.Close()
+
+	conn, _, err := dialAttach(t, srv, "exec-deadpong")
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+
+	// Suppress the client-side auto-pong so the server never sees a Pong.
+	// Returning nil from the handler tells gorilla to drop the ping silently.
+	conn.SetPingHandler(func(string) error { return nil })
+
+	// Drive ReadMessage so gorilla's internal control-frame dispatch runs
+	// (pings would otherwise queue). Read frames until the server gives up.
+	readErr := make(chan error, 1)
+	go func() {
+		_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				readErr <- err
+				return
+			}
+		}
+	}()
+
+	// pongWait = 3 * 50ms = 150ms; expect MarkDisconnected within ~500ms.
+	deadline := time.After(1500 * time.Millisecond)
+	for {
+		if stub.disconnect.Load() > 0 {
+			return // success: handler tore down and released the slot
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("server did not detect dead client within 1.5s (disconnect=%d, readErr=%v)",
+				stub.disconnect.Load(), tryReceive(readErr))
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+}
+
+// tryReceive returns the channel value if available, otherwise nil — used to
+// avoid blocking when surfacing context in a failure message.
+func tryReceive(ch <-chan error) error {
+	select {
+	case v := <-ch:
+		return v
+	default:
+		return nil
+	}
+}
+
 // Sanity guard: handler returns 404 if exec id is unknown (resolver returns false).
 func TestBoxliteExecAttach_NotFound(t *testing.T) {
 	prev := resolveAttachExec

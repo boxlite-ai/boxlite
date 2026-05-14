@@ -33,6 +33,9 @@ import { SandboxDesiredState } from '../sandbox/enums/sandbox-desired-state.enum
 import { BoxResponseDto, ListBoxesResponseDto } from './dto/box-response.dto'
 import { CreateBoxDto } from './dto/create-box.dto'
 import { sandboxToBoxResponse, createBoxToCreateSandbox } from './mappers/sandbox-to-box.mapper'
+import { Audit, MASKED_AUDIT_VALUE, TypedRequest } from '../audit/decorators/audit.decorator'
+import { AuditAction } from '../audit/enums/audit-action.enum'
+import { AuditTarget } from '../audit/enums/audit-target.enum'
 
 @ApiTags('BoxLite REST')
 @Controller('v1/:prefix/boxes')
@@ -48,6 +51,29 @@ export class BoxliteBoxController {
 
   @Post()
   @HttpCode(201)
+  @Audit({
+    action: AuditAction.CREATE,
+    targetType: AuditTarget.SANDBOX,
+    targetIdFromResult: (result: BoxResponseDto) => result?.box_id,
+    requestMetadata: {
+      body: (req: TypedRequest<CreateBoxDto>) => ({
+        name: req.body?.name,
+        image: req.body?.image,
+        user: req.body?.user,
+        env: req.body?.env
+          ? Object.fromEntries(Object.keys(req.body?.env).map((key) => [key, MASKED_AUDIT_VALUE]))
+          : undefined,
+        cpus: req.body?.cpus,
+        memory_mib: req.body?.memory_mib,
+        disk_size_gb: req.body?.disk_size_gb,
+        working_dir: req.body?.working_dir,
+        entrypoint: req.body?.entrypoint,
+        cmd: req.body?.cmd,
+        auto_remove: req.body?.auto_remove,
+        detach: req.body?.detach,
+      }),
+    },
+  })
   async createBox(
     @AuthContext() authContext: OrganizationAuthContext,
     @Body() dto: CreateBoxDto,
@@ -103,6 +129,11 @@ export class BoxliteBoxController {
 
   @Delete(':boxId')
   @HttpCode(204)
+  @Audit({
+    action: AuditAction.DELETE,
+    targetType: AuditTarget.SANDBOX,
+    targetIdFromRequest: (req) => req.params.boxId,
+  })
   async removeBox(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
@@ -111,6 +142,12 @@ export class BoxliteBoxController {
   }
 
   @Post(':boxId/start')
+  @Audit({
+    action: AuditAction.START,
+    targetType: AuditTarget.SANDBOX,
+    targetIdFromRequest: (req) => req.params.boxId,
+    targetIdFromResult: (result: BoxResponseDto) => result?.box_id,
+  })
   async startBox(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
@@ -142,6 +179,12 @@ export class BoxliteBoxController {
   }
 
   @Post(':boxId/stop')
+  @Audit({
+    action: AuditAction.STOP,
+    targetType: AuditTarget.SANDBOX,
+    targetIdFromRequest: (req) => req.params.boxId,
+    targetIdFromResult: (result: BoxResponseDto) => result?.box_id,
+  })
   async stopBox(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,

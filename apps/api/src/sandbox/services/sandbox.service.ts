@@ -1330,6 +1330,15 @@ export class SandboxService {
   }
 
   async stop(sandboxIdOrName: string, organizationId?: string, force?: boolean): Promise<Sandbox> {
+    // Capture the JS call stack so we can identify the code path that hit
+    // sandboxService.stop() — the audit log only records the leaf endpoint,
+    // not which internal mechanism (cron / event handler / sync loop) routed
+    // here. Frames below the SandboxService entry are the interesting ones.
+    const stack = new Error().stack?.split('\n').slice(2, 8).join(' | ') || '<no stack>'
+    this.logger.warn(
+      `[stop-trace] sandbox=${sandboxIdOrName} organizationId=${organizationId ?? 'undefined'} force=${force ?? false} caller=${stack}`,
+    )
+
     const sandbox = await this.findOneByIdOrName(sandboxIdOrName, organizationId)
 
     this.assertSandboxNotErrored(sandbox)
@@ -1355,6 +1364,10 @@ export class SandboxService {
       updateData,
       whereCondition: { pending: false, state: sandbox.state },
     })
+
+    this.logger.warn(
+      `[stop-trace] sandbox=${sandbox.id} desiredState set to ${updateData.desiredState} (autoDeleteInterval=${sandbox.autoDeleteInterval})`,
+    )
 
     if (sandbox.autoDeleteInterval === 0) {
       this.eventEmitter.emit(SandboxEvents.DESTROYED, new SandboxDestroyedEvent(updatedSandbox))

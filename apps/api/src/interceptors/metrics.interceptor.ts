@@ -152,13 +152,18 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
             break
           case '/api/sandbox/:sandboxIdOrName/start':
           case '/api/workspace/:workspaceId/start':
-            this.captureStartSandbox(props, request.params.sandboxIdOrName || request.params.workspaceId)
+          case '/api/v1/:prefix/boxes/:boxId/start':
+            this.captureStartSandbox(
+              props,
+              request.params.sandboxIdOrName || request.params.workspaceId || request.params.boxId,
+            )
             break
           case '/api/sandbox/:sandboxIdOrName/stop':
           case '/api/workspace/:workspaceId/stop':
+          case '/api/v1/:prefix/boxes/:boxId/stop':
             this.captureStopSandbox(
               props,
-              request.params.sandboxIdOrName || request.params.workspaceId,
+              request.params.sandboxIdOrName || request.params.workspaceId || request.params.boxId,
               request.query?.force === 'true',
             )
             break
@@ -237,7 +242,11 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
         switch (request.route.path) {
           case '/api/sandbox/:sandboxIdOrName':
           case '/api/workspace/:workspaceId':
-            this.captureDeleteSandbox(props, request.params.sandboxIdOrName || request.params.workspaceId)
+          case '/api/v1/:prefix/boxes/:boxId':
+            this.captureDeleteSandbox(
+              props,
+              request.params.sandboxIdOrName || request.params.workspaceId || request.params.boxId,
+            )
             break
           case '/api/snapshots/:snapshotId':
             this.captureDeleteSnapshot(props, request.params.snapshotId)

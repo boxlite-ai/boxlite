@@ -27,7 +27,10 @@ import { MicroserviceOptions, Transport } from '@nestjs/microservices'
 import { Partitioners } from 'kafkajs'
 import { isApiEnabled, isWorkerEnabled } from './common/utils/app-mode'
 import cluster from 'node:cluster'
+import type { IncomingMessage } from 'http'
+import type { Socket } from 'net'
 import { Logger as PinoLogger, LoggerErrorInterceptor } from 'nestjs-pino'
+import { BoxliteWsProxyService } from './boxlite-rest/boxlite-ws-proxy.service'
 
 // https options
 const httpsEnabled = process.env.CERT_PATH && process.env.CERT_KEY_PATH
@@ -147,6 +150,44 @@ async function bootstrap() {
   if (isApiEnabled()) {
     await app.listen(port, host)
     Logger.log(`🚀 BoxLite API is running on: http://${host}:${port}/${globalPrefix}`)
+
+    // Node's http.Server keep-alive must outlast the ALB's idle_timeout. Per
+    // AWS ALB User Guide HTTP 502 troubleshooting: "Check whether the keep-alive
+    // duration of the target is shorter than the idle timeout value of the load
+    // balancer." Node 18+ defaults keepAliveTimeout to 5s; we set ALB idle to
+    // "1 hour" (sst.config.ts Api service.loadBalancer). 65 min keepalive and
+    // 66 min headersTimeout (which must be >= keepAliveTimeout) cover the gap.
+    const httpServer = app.getHttpServer()
+    httpServer.keepAliveTimeout = 65 * 60 * 1000
+    httpServer.headersTimeout = 66 * 60 * 1000
+
+    // WebSocket upgrade routing for the BoxLite REST `/attach` endpoint.
+    // NestJS controllers only fire on Express's `request` event; WS upgrades
+    // arrive as `upgrade` events on the underlying Node http server and
+    // bypass middleware/guards. http-proxy-middleware's `ws: true` per-request
+    // pattern in BoxliteProxyController doesn't catch these — http-proxy
+    // requires `server.on('upgrade', proxy.upgrade)` to be wired at bootstrap
+    // (see its README "External WebSocket upgrade" section). Without this,
+    // Node defaults to closing the socket and the upstream ALB returns 502.
+    //
+    // The notification gateway (apps/api/src/notification/gateways/notification.gateway.ts)
+    // registers `@WebSocketGateway({ path: '/api/socket.io/' })` and attaches
+    // its own upgrade listener to the same http.Server. We must let those
+    // paths fall through to socket.io rather than destroying the socket out
+    // from under it; everything else is unauthenticated traffic and gets
+    // closed here.
+    const wsProxy = app.get(BoxliteWsProxyService)
+    httpServer.on('upgrade', (req: IncomingMessage, socket: Socket, head: Buffer) => {
+      if (wsProxy.matchAttachPath(req.url)) {
+        void wsProxy.upgrade(req, socket, head)
+        return
+      }
+      if (req.url?.startsWith('/api/socket.io/')) {
+        // Handled by NotificationGateway's socket.io upgrade listener.
+        return
+      }
+      socket.destroy()
+    })
   } else {
     await app.init()
     app.flushLogs()

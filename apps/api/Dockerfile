@@ -11,7 +11,7 @@ WORKDIR /boxlite
 COPY apps/package.json apps/yarn.lock apps/.yarnrc.yml ./
 RUN yarn install --immutable
 
-COPY apps/nx.json apps/tsconfig.base.json ./
+COPY apps/nx.json apps/tsconfig.base.json apps/NOTICE ./
 
 ARG CACHE_BUST=1
 ENV NX_DAEMON=false

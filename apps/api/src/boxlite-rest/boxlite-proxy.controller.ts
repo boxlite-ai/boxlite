@@ -137,25 +137,11 @@ export class BoxliteProxyController {
     )
   }
 
-  @Get(':boxId/executions/:execId/attach')
-  async proxyExecAttach(
-    @AuthContext() authContext: OrganizationAuthContext,
-    @Param('boxId') boxId: string,
-    @Param('execId') execId: string,
-    @Req() req: Request,
-    @Res() res: Response,
-    @Next() next: NextFunction,
-  ) {
-    return this.proxyToRunner(
-      authContext,
-      boxId,
-      `/v1/boxes/${boxId}/executions/${execId}/attach`,
-      req,
-      res,
-      next,
-      { ws: true },
-    )
-  }
+  // /executions/:execId/attach is a WebSocket-only route. Real WS upgrades
+  // bypass Express entirely and are handled by BoxliteWsProxyService via the
+  // `server.on('upgrade', ...)` hook registered in main.ts. Plain HTTP GETs
+  // to this path (callers that forgot the Upgrade headers) fall through to
+  // a NestJS 404, which is the correct answer.
 
   @All(':boxId/files')
   async proxyFiles(
@@ -212,6 +198,15 @@ export class BoxliteProxyController {
     if (!sandbox) {
       throw new NotFoundException(`Box ${boxId} not found`)
     }
+
+    // Mirror legacy toolbox.deprecated.service.ts:111 — any SDK-initiated proxy
+    // call counts as user activity, so the autostop cron does not reap an
+    // actively used sandbox. Best-effort: never block the proxy on this.
+    this.sandboxService
+      .updateLastActivityAt(sandbox.id, new Date())
+      .catch((err) =>
+        this.logger.warn(`updateLastActivityAt failed for ${sandbox.id}: ${err}`),
+      )
 
     const runner = await this.runnerService.findOne(sandbox.runnerId)
     if (!runner) {

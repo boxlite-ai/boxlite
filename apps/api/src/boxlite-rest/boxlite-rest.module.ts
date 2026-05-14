@@ -13,6 +13,7 @@ import { BoxliteAuthController } from './boxlite-auth.controller'
 import { BoxliteConfigController } from './boxlite-config.controller'
 import { BoxliteBoxController } from './boxlite-box.controller'
 import { BoxliteProxyController } from './boxlite-proxy.controller'
+import { BoxliteWsProxyService } from './boxlite-ws-proxy.service'
 
 @Module({
   imports: [SandboxModule, AuthModule, ApiKeyModule, OrganizationModule],
@@ -22,5 +23,7 @@ import { BoxliteProxyController } from './boxlite-proxy.controller'
     BoxliteBoxController,
     BoxliteProxyController,
   ],
+  providers: [BoxliteWsProxyService],
+  exports: [BoxliteWsProxyService],
 })
 export class BoxliteRestModule {}

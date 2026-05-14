@@ -169,6 +169,19 @@ const maxAttachFrameBytes = 1 * 1024 * 1024 // 1 MiB
 
 func runAttachLoop(parentCtx context.Context, conn *websocket.Conn, exec attachExec) {
 	conn.SetReadLimit(maxAttachFrameBytes)
+
+	// Detect a dead client via Pong liveness: a tiny Ping write fits in
+	// the kernel send buffer and returns success even when the peer is
+	// gone, so WriteControl alone cannot surface a half-open TCP. Instead
+	// require a Pong (or any frame) within pongWait, otherwise the
+	// reader's ReadMessage trips its ReadDeadline and the loop tears
+	// down — releasing the single-attach slot for the next client.
+	pongWait := 3 * keepaliveInterval()
+	_ = conn.SetReadDeadline(time.Now().Add(pongWait))
+	conn.SetPongHandler(func(string) error {
+		return conn.SetReadDeadline(time.Now().Add(pongWait))
+	})
+
 	loopCtx, cancel := context.WithCancel(parentCtx)
 	defer cancel()
 
@@ -234,7 +247,7 @@ func runAttachLoop(parentCtx context.Context, conn *websocket.Conn, exec attachE
 	sideWg.Add(1)
 	go func() {
 		defer sideWg.Done()
-		readClientFrames(loopCtx, conn, exec, &writeMu, fail)
+		readClientFrames(loopCtx, conn, exec, &writeMu, pongWait, fail)
 	}()
 
 	// keepalive ping ticker
@@ -322,8 +335,12 @@ func pumpSubscriberChannel(ctx context.Context, conn *websocket.Conn, writeMu *s
 }
 
 // readClientFrames reads frames from the WebSocket and routes them to the
-// exec: binary → stdin, text JSON → control verbs.
-func readClientFrames(ctx context.Context, conn *websocket.Conn, exec attachExec, writeMu *sync.Mutex, fail func(error)) {
+// exec: binary → stdin, text JSON → control verbs. Pongs are dispatched by
+// gorilla inside ReadMessage and reset the deadline via the handler set on
+// runAttachLoop; we additionally bump the deadline on every successful
+// data/control read so an active session stays alive without depending on
+// the pong cadence alone.
+func readClientFrames(ctx context.Context, conn *websocket.Conn, exec attachExec, writeMu *sync.Mutex, pongWait time.Duration, fail func(error)) {
 	for {
 		if ctx.Err() != nil {
 			return
@@ -336,6 +353,7 @@ func readClientFrames(ctx context.Context, conn *websocket.Conn, exec attachExec
 			fail(fmt.Errorf("read client frame: %w", err))
 			return
 		}
+		_ = conn.SetReadDeadline(time.Now().Add(pongWait))
 
 		switch mt {
 		case websocket.BinaryMessage:

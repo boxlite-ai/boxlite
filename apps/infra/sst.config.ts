@@ -238,6 +238,17 @@ export default $config({
         domain: serviceDomain("api"),
         rules: [{ listen: "443/https", forward: `${PORTS.API}/http` }],
       },
+      // AWS ALB default idle_timeout is 60s; per AWS docs (HTTP 408 troubleshooting),
+      // raise to match expected WebSocket session length so SDK exec attaches survive
+      // multi-minute idle pauses. SST doesn't surface this directly — use transform
+      // to set the underlying aws.lb.LoadBalancer's idleTimeout attribute.
+      // Paired with Node `keepAliveTimeout` in apps/api/src/main.ts (AWS HTTP 502
+      // guidance: target keep-alive must be >= LB idle).
+      transform: {
+        loadBalancer: (lbArgs) => {
+          lbArgs.idleTimeout = 3600;
+        },
+      },
       link: [db, redis, storage],
       scaling: { min: 1, max: 4 },
       environment: {
@@ -295,17 +306,24 @@ export default $config({
         PROXY_API_KEY: envOr("PROXY_API_KEY", proxyApiKey.result),
         PROXY_TEMPLATE_URL: envOr("PROXY_TEMPLATE_URL", `https://proxy.${stackDomain}`),
 
-        // SSH Gateway
-        SSH_GATEWAY_URL: envOr("SSH_GATEWAY_URL", `ssh://localhost:${PORTS.SSH_GATEWAY}`),
+        // SSH Gateway — friendly hostname `ssh.<stackDomain>` is provisioned
+        // as a Cloudflare CNAME pointing at the SshGateway NLB further below.
+        SSH_GATEWAY_URL: envOr("SSH_GATEWAY_URL", `ssh://ssh.${stackDomain}:${PORTS.SSH_GATEWAY}`),
         SSH_GATEWAY_API_KEY: envOr("SSH_GATEWAY_API_KEY", sshGatewayApiKey.result),
 
         // Admin
         ADMIN_API_KEY: envOr("ADMIN_API_KEY", adminApiKey.result),
 
-        // Dashboard (empty → dashboard uses relative /api/* paths)
+        // Dashboard — point its API client at the direct `api.<stackDomain>`
+        // ALB hostname so long-lived /attach WS, build-log SSE, and file
+        // uploads bypass CloudFront (CF imposes a 10-min hard WS cap and a
+        // 60s origin-read timeout that breaks streaming). Static SPA assets
+        // (index.html + /assets/*) still serve through the CF Router at the
+        // root domain. CORS on the API is already `origin: true` so the
+        // cross-origin dashboard→API path works without further changes.
         DASHBOARD_URL: envOr("DASHBOARD_URL", ""),
         APP_URL: envOr("APP_URL", ""),
-        DASHBOARD_BASE_API_URL: envOr("DASHBOARD_BASE_API_URL", ""),
+        DASHBOARD_BASE_API_URL: envOr("DASHBOARD_BASE_API_URL", `https://api.${stackDomain}`),
 
         // Docker registries (both default to the in-cluster SnapshotManager)
         ...registryEnv("TRANSIENT", registry.url),
@@ -348,6 +366,14 @@ export default $config({
         rules: [{ listen: "443/https", forward: `${PORTS.PROXY}/http` }],
         health: { [`${PORTS.PROXY}/http`]: httpHealth("/health") },
       },
+      // Same reasoning as the Api LB: bump idle to 1h so dashboard iframe
+      // terminals (https://22222-<sbx>.proxy.<stack>/) survive idle pauses
+      // until the runner-side keepalive in handleWebSocketTerminal lands.
+      transform: {
+        loadBalancer: (lbArgs) => {
+          lbArgs.idleTimeout = 3600;
+        },
+      },
       environment: {
         PROXY_PORT: String(PORTS.PROXY),
         PROXY_PROTOCOL: envOr("PROXY_PROTOCOL", "http"),
@@ -360,8 +386,11 @@ export default $config({
       },
     });
 
-    // SSH Gateway: `ssh <sandbox>@gateway:2222` proxies to the sandbox.
-    new sst.aws.Service("SshGateway", {
+    // SSH Gateway: `ssh <sandbox>@ssh.<stackDomain>:2222` proxies to the sandbox.
+    // The NLB has no domain field (TCP listeners don't take ACM certs); instead we
+    // attach a Cloudflare CNAME directly via cloudflareDns.createAlias below so users
+    // get a stable, memorable hostname instead of the auto-generated NLB DNS name.
+    const sshGateway = new sst.aws.Service("SshGateway", {
       cluster,
       image: { context: "../..", dockerfile: "apps/ssh-gateway/Dockerfile", cache: false },
       loadBalancer: { rules: [{ listen: `${PORTS.SSH_GATEWAY}/tcp`, forward: `${PORTS.SSH_GATEWAY}/tcp` }] },
@@ -372,6 +401,16 @@ export default $config({
         SSH_HOST_KEY: envOr("SSH_HOST_KEY_B64", ""),
       },
     });
+
+    cloudflareDns.createAlias(
+      "SshGateway",
+      {
+        name: `ssh.${stackDomain}`,
+        aliasName: sshGateway.nodes.loadBalancer.dnsName,
+        aliasZone: sshGateway.nodes.loadBalancer.zoneId,
+      },
+      {},
+    );
 
     // ─── 8. OBSERVABILITY ────────────────────────────────────────────────────
     new sst.aws.Service("Jaeger", {
@@ -494,6 +533,20 @@ export default $config({
       ([apiUrl, token, registryUrl]) => buildRunnerUserData({ apiUrl, token, registryUrl }),
     );
 
+    // Runner holds load-bearing sandbox state (/var/lib/boxlite + in-memory
+    // libkrun VMs). Two Pulumi resource options keep it persistent across
+    // routine deploys:
+    //
+    //   ignoreChanges: drift in `ami` (Ubuntu publishes new AMIs monthly)
+    //   and `userDataBase64` (Cargo.toml version bumps rewrite the embedded
+    //   RUNNER_VERSION) no longer triggers replacement. The new runner
+    //   binary lands via `scripts/deploy/runner-update-binary.sh` (SSM Run
+    //   Command) instead of by recreating the EC2.
+    //
+    //   protect: refuses any deletion attempt, including an errant
+    //   `pulumi destroy` or stack-wide teardown. Deliberate decommission
+    //   requires editing this file to `protect: false`, deploying that
+    //   change, then `pulumi destroy --target ...Runner`.
     new aws.ec2.Instance("Runner", {
       ami: ubuntuAmi.then((a) => a.id),
       instanceType: RUNNER.instanceType,
@@ -502,9 +555,11 @@ export default $config({
       cpuOptions: { nestedVirtualization: "enabled" },
       associatePublicIpAddress: true,
       userDataBase64: runnerUserData,
-      userDataReplaceOnChange: true,
       rootBlockDevice: { volumeSize: RUNNER.rootDiskGB },
       tags: { Name: "boxlite-runner" },
+    }, {
+      ignoreChanges: ["ami", "userDataBase64"],
+      protect: true,
     });
   },
 });

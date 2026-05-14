@@ -139,6 +139,10 @@ export class SandboxManager implements TrackableJobExecutions, OnApplicationShut
                 updateData.desiredState = SandboxDesiredState.STOPPED
               }
 
+              this.logger.log(
+                `Auto-stopping sandbox ${sandbox.id}: autoStopInterval=${sandbox.autoStopInterval}min, autoDeleteInterval=${sandbox.autoDeleteInterval}`,
+              )
+
               try {
                 await this.sandboxRepository.updateWhere(sandbox.id, {
                   updateData,
@@ -183,6 +187,7 @@ export class SandboxManager implements TrackableJobExecutions, OnApplicationShut
           desiredState: SandboxDesiredState.STOPPED,
         })
         .andWhere('sandbox.pending != true')
+        .andWhere('sandbox."autoArchiveInterval" != 0')
         .andWhere('activity."lastActivityAt" < NOW() - INTERVAL \'1 minute\' * sandbox."autoArchiveInterval"')
         .orderBy('sandbox."lastBackupAt"', 'ASC')
         .limit(100)
@@ -195,6 +200,10 @@ export class SandboxManager implements TrackableJobExecutions, OnApplicationShut
           if (!acquired) {
             return
           }
+
+          this.logger.log(
+            `Auto-archiving sandbox ${sandbox.id}: autoArchiveInterval=${sandbox.autoArchiveInterval}min`,
+          )
 
           try {
             const updateData: Partial<Sandbox> = {
@@ -260,6 +269,10 @@ export class SandboxManager implements TrackableJobExecutions, OnApplicationShut
               if (!acquired) {
                 return
               }
+
+              this.logger.log(
+                `Auto-deleting sandbox ${sandbox.id}: autoDeleteInterval=${sandbox.autoDeleteInterval}min`,
+              )
 
               try {
                 const updateData = Sandbox.getSoftDeleteUpdate(sandbox)

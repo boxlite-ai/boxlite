@@ -25,6 +25,10 @@ COPY apps/snapshot-manager/go.mod apps/snapshot-manager/go.sum apps/snapshot-man
 RUN head -1 apps/go.work > apps/go.work.tmp && printf '\nuse (\n\t./snapshot-manager\n)\n' >> apps/go.work.tmp && mv apps/go.work.tmp apps/go.work
 
 ENV NX_DAEMON=false
+# nx-go runs `go build` from /boxlite (WORKDIR), but go.work lives at apps/go.work.
+# Without GOWORK, Go walks upward from /boxlite and finds no module file. Point
+# GOWORK at the workspace file so module resolution succeeds.
+ENV GOWORK=/boxlite/apps/go.work
 
 RUN cd apps/snapshot-manager && go mod download
 

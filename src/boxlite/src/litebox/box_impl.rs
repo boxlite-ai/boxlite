@@ -359,6 +359,14 @@ impl BoxImpl {
             if let Ok(mut handler) = live.handler.lock() {
                 handler.stop()?;
             }
+        } else if let Some(pid) = self.state.read().pid {
+            // Recovered box path: this BoxImpl was constructed for a box that
+            // was already Running before this runtime instance started, so
+            // self.live was never initialized. The original shim process is
+            // still alive under state.pid — signal it directly, otherwise the
+            // box transitions to Stopped while the process keeps running and
+            // we leak an orphan.
+            crate::util::kill_process(pid);
         }
 
         // Clean up PID file (single source of truth)
@@ -1129,5 +1137,123 @@ impl crate::runtime::backend::BoxBackend for BoxImpl {
         dest: &std::path::Path,
     ) -> BoxliteResult<crate::runtime::options::BoxArchive> {
         BoxImpl::export_box(self, options, dest).await
+    }
+}
+
+// ============================================================================
+// TESTS
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::litebox::config::ContainerRuntimeConfig;
+    use crate::runtime::id::BoxIDMint;
+    use crate::runtime::options::{BoxOptions, BoxliteOptions, RootfsSpec};
+    use crate::runtime::rt_impl::RuntimeImpl;
+    use crate::runtime::types::ContainerID;
+    use crate::util::is_process_alive;
+    use crate::vmm::VmmKind;
+    use boxlite_shared::Transport;
+    use chrono::Utc;
+    use tempfile::TempDir;
+
+    /// RAII guard so a panic between spawn and the end of the test still
+    /// reaps the helper process — without it a failed assertion would leak a
+    /// `sleep 300` for five minutes.
+    struct ChildGuard(std::process::Child);
+
+    impl Drop for ChildGuard {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    // Regression test for the silent-orphan bug in stop().
+    //
+    // Invariant: when stop() is called on a box whose self.live is None (the
+    // recovered-box path — process started by a prior runtime instance, live
+    // state never re-initialized in this one), the shim process recorded in
+    // state.pid must be terminated. Otherwise the box transitions to Stopped
+    // while the process keeps running and the runtime loses track of it.
+    #[tokio::test]
+    async fn test_stop_recovered_box_kills_orphan_process() {
+        // Stand-in for a recovered shim: a sleeping process whose PID we'll record.
+        let child = ChildGuard(
+            std::process::Command::new("sleep")
+                .arg("300")
+                .spawn()
+                .expect("spawn dummy process"),
+        );
+        let pid = child.0.id();
+
+        let temp_dir = TempDir::new_in("/tmp").expect("create temp dir");
+        let runtime = RuntimeImpl::new(BoxliteOptions {
+            home_dir: temp_dir.path().to_path_buf(),
+            image_registries: vec![],
+        })
+        .expect("create runtime");
+
+        // Build a BoxConfig whose box_home lives under the runtime's layout.
+        let id = BoxIDMint::mint();
+        let box_home = runtime.layout.boxes_dir().join(id.as_str());
+        let config = BoxConfig {
+            id: id.clone(),
+            name: None,
+            created_at: Utc::now(),
+            container: ContainerRuntimeConfig {
+                id: ContainerID::new(),
+            },
+            options: BoxOptions {
+                rootfs: RootfsSpec::Image("alpine:latest".into()),
+                detach: false,
+                auto_remove: false,
+                ..Default::default()
+            },
+            engine_kind: VmmKind::Libkrun,
+            transport: Transport::Unix {
+                socket_path: "/tmp/test.sock".into(),
+            },
+            box_home: box_home.clone(),
+            ready_socket_path: std::path::PathBuf::from("/tmp/test-ready.sock"),
+        };
+
+        // Simulate a recovered Running box: status=Running, pid set, lock + pid file present.
+        let mut state = BoxState::new();
+        state.status = BoxStatus::Running;
+        state.pid = Some(pid);
+        let lock_id = runtime.lock_manager.allocate().expect("allocate lock");
+        state.set_lock_id(lock_id);
+
+        std::fs::create_dir_all(&box_home).expect("create box dir");
+        let pid_file = box_home.join("shim.pid");
+        std::fs::write(&pid_file, pid.to_string()).expect("write pid file");
+
+        runtime
+            .box_manager
+            .add_box(&config, &state)
+            .expect("add box to manager");
+
+        // runtime.get returns a fresh LiteBox — its inner BoxImpl has self.live = OnceCell::new().
+        // This is the precondition that exercises the recovered-box branch in stop().
+        let litebox = runtime
+            .get(config.id.as_str())
+            .await
+            .expect("get box")
+            .expect("box exists");
+
+        litebox.stop().await.expect("stop should succeed");
+
+        // Give SIGKILL a moment to land.
+        std::thread::sleep(std::time::Duration::from_millis(200));
+
+        assert!(
+            !is_process_alive(pid),
+            "stop() must kill the recovered shim process when self.live is None"
+        );
+
+        // ChildGuard's Drop reaps the (now-dead) child.
+        drop(child);
     }
 }

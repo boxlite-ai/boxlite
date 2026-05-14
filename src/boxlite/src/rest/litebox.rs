@@ -433,6 +433,25 @@ const WS_WATCHDOG: std::time::Duration = std::time::Duration::from_secs(45);
 #[cfg(test)]
 const WS_WATCHDOG: std::time::Duration = std::time::Duration::from_millis(300);
 
+/// Total wall-clock budget for reconnecting after a transient WS disconnect.
+///
+/// Aligned with the runner's `defaultReconnectGrace = 5 minutes` (Phase 4 reaper
+/// in `exec_manager.go`) — we want to reattach before the runner SIGHUPs the
+/// orphaned exec. Tests use a much shorter budget to keep them fast.
+#[cfg(not(test))]
+const WS_RECONNECT_BUDGET: std::time::Duration = std::time::Duration::from_secs(270);
+#[cfg(test)]
+const WS_RECONNECT_BUDGET: std::time::Duration = std::time::Duration::from_secs(1);
+
+// Initial backoff is intentionally larger than the runner's WS keepalive
+// interval (15s in apps/runner/.../boxlite_exec_attach.go). The most common
+// reattach failure is the old server-side `runAttachLoop` not yet having
+// observed our TCP RST — `MarkConnected` then returns 409 until the server's
+// own keepalive Ping write fails and cleanup runs. Sleeping past that
+// interval avoids burning the reconnect budget on guaranteed-409 retries.
+const WS_RECONNECT_BACKOFF_INITIAL: std::time::Duration = std::time::Duration::from_secs(15);
+const WS_RECONNECT_BACKOFF_MAX: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Drive the bidirectional WS attach for a single execution.
 ///
 /// Wire contract (mirrors the server's `/executions/{id}/attach` handler):
@@ -483,16 +502,21 @@ async fn attach_ws(
     .await;
 }
 
-/// Pump stdin/stdout/stderr/control over an already-open WebSocket. Split
-/// out of `attach_ws` so callers that connect synchronously (e.g.
-/// `RestBox::attach`, which needs to surface 404/409 as typed errors)
-/// can hand in the pre-opened stream.
+/// Pump stdin/stdout/stderr/control over a WebSocket attach. On transient
+/// disconnects (watchdog timeout, close frame, stream error) the pump probes
+/// the server's view of the execution; if the exec is still running it
+/// reconnects within `WS_RECONNECT_BUDGET` (aligned with the runner's
+/// Phase-4-reaper grace period) before falling back to an error result.
+///
+/// stdin is forwarded inline via `tokio::select!` instead of a separate
+/// spawned task so the WS sink can be replaced on each reconnect without
+/// losing buffered stdin bytes.
 #[allow(clippy::too_many_arguments)]
 async fn attach_ws_pump(
     client: &ApiClient,
     box_id: &str,
     execution_id: &str,
-    stream: tokio_tungstenite::WebSocketStream<
+    initial_stream: tokio_tungstenite::WebSocketStream<
         tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
     >,
     mut stdin_rx: mpsc::UnboundedReceiver<Vec<u8>>,
@@ -501,115 +525,226 @@ async fn attach_ws_pump(
     result_tx: mpsc::UnboundedSender<ExecResult>,
 ) {
     use futures::{SinkExt, StreamExt};
+    use std::time::Instant;
     use tokio_tungstenite::tungstenite::Message;
 
-    let (mut sink, mut stream) = stream.split();
+    let path = format!("/boxes/{}/executions/{}/attach", box_id, execution_id);
 
-    // Stdin pump: forward channel bytes to the WS as binary frames.
-    // Aborting this task on attach termination drops `sink`, which closes
-    // stdin from the client side cleanly.
-    let stdin_task = tokio::spawn(async move {
-        while let Some(bytes) = stdin_rx.recv().await {
-            if sink.send(Message::Binary(bytes)).await.is_err() {
-                break;
-            }
-        }
-        // Best-effort EOF signal; ignore failures because the writer half
-        // may already be closed by the server.
-        let _ = sink
-            .send(Message::Text(r#"{"type":"stdin_eof"}"#.to_string()))
-            .await;
-    });
-
-    // `last_error_message` carries the most recent server-reported error
-    // text so that — if the connection terminates without an `exit` frame —
-    // we surface that message rather than a generic "stream ended" cause.
+    // State persisted across reconnects:
+    //
+    // - `last_error_message` surfaces the most recent server-reported text
+    //   error if we end up emitting a fallback ExecResult.
+    // - `user_closed_stdin` remembers whether the SDK consumer dropped its
+    //   stdin sender. On reconnect we immediately send `stdin_eof` on the
+    //   fresh sink so the new server-side attach gets the same signal.
     let mut last_error_message: Option<String> = None;
+    let mut user_closed_stdin = false;
+    let mut reconnect_budget = WS_RECONNECT_BUDGET;
 
-    loop {
-        let next = tokio::time::timeout(WS_WATCHDOG, stream.next()).await;
-        let frame = match next {
-            Err(_) => {
-                emit_or_fallback(
-                    client,
-                    box_id,
-                    execution_id,
-                    &result_tx,
-                    "no WS traffic for watchdog interval (likely connection idle timeout or proxy cut)"
-                        .to_string(),
-                )
-                .await;
-                break;
-            }
-            Ok(None) => {
-                let cause = last_error_message.take().unwrap_or_else(|| {
-                    "WS stream ended before exit frame (likely connection idle timeout or proxy cut)"
-                        .to_string()
-                });
-                emit_or_fallback(client, box_id, execution_id, &result_tx, cause).await;
-                break;
-            }
-            Ok(Some(Err(e))) => {
-                emit_or_fallback(
-                    client,
-                    box_id,
-                    execution_id,
-                    &result_tx,
-                    format!("WS stream read error: {}", e),
-                )
-                .await;
-                break;
-            }
-            Ok(Some(Ok(msg))) => msg,
+    let mut current_stream = Some(initial_stream);
+
+    'session: loop {
+        let stream = match current_stream.take() {
+            Some(s) => s,
+            None => unreachable!("stream populated at top of loop"),
         };
+        let (mut sink, mut read) = stream.split();
 
-        match frame {
-            Message::Binary(bytes) => {
-                if let Some((channel, payload)) = bytes.split_first() {
-                    let text = String::from_utf8_lossy(payload).into_owned();
-                    match *channel {
-                        0x01 => {
-                            let _ = stdout_tx.send(text);
+        // If the user closed stdin during a previous attach, propagate the
+        // EOF to this fresh server-side handler immediately. Best-effort.
+        if user_closed_stdin {
+            let _ = sink
+                .send(Message::Text(r#"{"type":"stdin_eof"}"#.to_string()))
+                .await;
+        }
+
+        // Cause that ended the inner loop — used by the reconnect/fallback path.
+        let disconnect_cause: String;
+
+        // Inner pump loop. Reads from WS and forwards stdin from the
+        // SDK-side channel. Returns by setting `disconnect_cause` and
+        // breaking when the WS becomes unusable; returns immediately from
+        // the function on a clean Exit frame.
+        loop {
+            tokio::select! {
+                // Forward stdin bytes from the SDK consumer to the WS sink.
+                // Disabled once we've observed stdin EOF — the WS reader is
+                // still running so we keep waiting for the exit frame.
+                stdin_msg = stdin_rx.recv(), if !user_closed_stdin => {
+                    match stdin_msg {
+                        Some(bytes) => {
+                            if sink.send(Message::Binary(bytes)).await.is_err() {
+                                disconnect_cause = "stdin write failed (sink closed)".to_string();
+                                break;
+                            }
                         }
-                        0x02 => {
-                            let _ = stderr_tx.send(text);
-                        }
-                        other => {
-                            tracing::warn!(channel = other, "WS attach: unknown channel prefix");
+                        None => {
+                            // SDK consumer dropped the stdin sender.
+                            user_closed_stdin = true;
+                            let _ = sink
+                                .send(Message::Text(r#"{"type":"stdin_eof"}"#.to_string()))
+                                .await;
+                            // Continue reading — server still owes us an exit frame.
                         }
                     }
                 }
+                next = tokio::time::timeout(WS_WATCHDOG, read.next()) => {
+                    let frame = match next {
+                        Err(_) => {
+                            disconnect_cause = "no WS traffic for watchdog interval (likely connection idle timeout or proxy cut)".to_string();
+                            break;
+                        }
+                        Ok(None) => {
+                            disconnect_cause = last_error_message.clone().unwrap_or_else(|| {
+                                "WS stream ended before exit frame (likely connection idle timeout or proxy cut)".to_string()
+                            });
+                            break;
+                        }
+                        Ok(Some(Err(e))) => {
+                            disconnect_cause = format!("WS stream read error: {}", e);
+                            break;
+                        }
+                        Ok(Some(Ok(msg))) => msg,
+                    };
+
+                    match frame {
+                        Message::Binary(bytes) => {
+                            if let Some((channel, payload)) = bytes.split_first() {
+                                let text = String::from_utf8_lossy(payload).into_owned();
+                                match *channel {
+                                    0x01 => {
+                                        let _ = stdout_tx.send(text);
+                                    }
+                                    0x02 => {
+                                        let _ = stderr_tx.send(text);
+                                    }
+                                    other => {
+                                        tracing::warn!(channel = other, "WS attach: unknown channel prefix");
+                                    }
+                                }
+                            }
+                        }
+                        Message::Text(text) => match parse_control_frame(&text) {
+                            ControlFrame::Exit { exit_code } => {
+                                let _ = result_tx.send(ExecResult {
+                                    exit_code,
+                                    error_message: None,
+                                });
+                                return;
+                            }
+                            ControlFrame::Error { message } => {
+                                tracing::warn!(message = %message, "WS attach: server-reported error");
+                                last_error_message = Some(message);
+                            }
+                            ControlFrame::Unknown => {
+                                tracing::warn!(text = %text, "WS attach: unrecognized text frame");
+                            }
+                        },
+                        Message::Close(_) => {
+                            disconnect_cause = last_error_message.clone().unwrap_or_else(|| {
+                                "WS closed before exit frame (likely connection idle timeout or proxy cut)".to_string()
+                            });
+                            break;
+                        }
+                        // Pings are auto-replied by tungstenite; pongs/frames just reset the watchdog.
+                        Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => {}
+                    }
+                }
             }
-            Message::Text(text) => match parse_control_frame(&text) {
-                ControlFrame::Exit { exit_code } => {
-                    let _ = result_tx.send(ExecResult {
-                        exit_code,
-                        error_message: None,
-                    });
-                    break;
-                }
-                ControlFrame::Error { message } => {
-                    tracing::warn!(message = %message, "WS attach: server-reported error");
-                    last_error_message = Some(message);
-                }
-                ControlFrame::Unknown => {
-                    tracing::warn!(text = %text, "WS attach: unrecognized text frame");
-                }
-            },
-            Message::Close(_) => {
-                let cause = last_error_message.take().unwrap_or_else(|| {
-                    "WS closed before exit frame (likely connection idle timeout or proxy cut)"
-                        .to_string()
-                });
-                emit_or_fallback(client, box_id, execution_id, &result_tx, cause).await;
-                break;
+        }
+
+        // We disconnected without seeing an Exit frame. Probe the server to
+        // distinguish "exec really finished" from "transient WS drop".
+        match probe_execution_status(client, box_id, execution_id).await {
+            ProbeResult::Terminal(result) => {
+                let _ = result_tx.send(result);
+                return;
             }
-            // Pings are auto-replied by tungstenite; pongs/frames just reset the watchdog.
-            Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => {}
+            ProbeResult::StillRunning | ProbeResult::Unavailable => {
+                // Try to reconnect within the remaining budget.
+            }
+        }
+
+        // Reconnect attempt loop with exponential backoff.
+        let mut backoff = WS_RECONNECT_BACKOFF_INITIAL;
+        let reconnect_start = Instant::now();
+        loop {
+            if reconnect_budget.is_zero() {
+                tracing::warn!(
+                    box_id,
+                    execution_id,
+                    cause = %disconnect_cause,
+                    "WS attach reconnect budget exhausted",
+                );
+                emit_or_fallback(client, box_id, execution_id, &result_tx, disconnect_cause).await;
+                return;
+            }
+
+            let sleep_for = backoff.min(reconnect_budget);
+            tokio::time::sleep(sleep_for).await;
+            reconnect_budget = reconnect_budget.saturating_sub(sleep_for);
+
+            match client.connect_ws(&path).await {
+                Ok(new_stream) => {
+                    tracing::info!(
+                        box_id,
+                        execution_id,
+                        reconnect_after_ms = reconnect_start.elapsed().as_millis() as u64,
+                        prior_cause = %disconnect_cause,
+                        "WS attach reconnected",
+                    );
+                    current_stream = Some(new_stream);
+                    continue 'session;
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        box_id,
+                        execution_id,
+                        error = %e,
+                        "WS attach reconnect failed; will retry",
+                    );
+                    backoff = (backoff * 2).min(WS_RECONNECT_BACKOFF_MAX);
+                }
+            }
         }
     }
+}
 
-    stdin_task.abort();
+/// Outcome of probing `/executions/{id}` after a WS disconnect.
+enum ProbeResult {
+    /// Server reported a terminal status (`completed`/`killed`/`timed_out`).
+    /// The pump should emit this `ExecResult` and stop reconnecting.
+    Terminal(ExecResult),
+    /// Server reports the exec is still active. Pump should attempt reconnect.
+    StillRunning,
+    /// Probe failed (timeout, network, etc.). Pump retries reconnect anyway —
+    /// the API might be temporarily unavailable but the runner could recover.
+    Unavailable,
+}
+
+/// Probe the server's view of an execution. Mirrors the legacy
+/// [`emit_or_fallback`] status query but returns a structured result so the
+/// pump can decide whether to reconnect.
+async fn probe_execution_status(
+    client: &ApiClient,
+    box_id: &str,
+    execution_id: &str,
+) -> ProbeResult {
+    let status_path = format!("/boxes/{}/executions/{}", box_id, execution_id);
+    let status_probe = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        client.get::<ExecutionStatusResponse>(&status_path),
+    );
+    match status_probe.await {
+        Ok(Ok(info)) => match info.status.as_str() {
+            "completed" | "killed" | "timed_out" => ProbeResult::Terminal(ExecResult {
+                exit_code: info.exit_code.unwrap_or(-1),
+                error_message: None,
+            }),
+            _ => ProbeResult::StillRunning,
+        },
+        _ => ProbeResult::Unavailable,
+    }
 }
 
 /// Decoded form of a Server→Client text-JSON frame.
