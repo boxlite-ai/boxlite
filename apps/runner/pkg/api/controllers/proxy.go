@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/boxlite-ai/runner/pkg/runner"
+	"github.com/boxlite-ai/runner/pkg/shellutil"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 )
@@ -111,7 +112,8 @@ func handleWebSocketTerminal(ctx *gin.Context, r *runner.Runner, sandboxId strin
 	defer cancelKeepalive()
 	go runTerminalKeepalive(keepaliveCtx, ws, &writeMu, logger)
 
-	execution, err := r.Boxlite.StartExecution(ctx.Request.Context(), sandboxId, "/bin/sh", nil, wsWriter, wsWriter, true)
+	shellCmd, shellArgs := shellutil.DefaultInteractiveShell()
+	execution, err := r.Boxlite.StartExecution(ctx.Request.Context(), sandboxId, shellCmd, shellArgs, wsWriter, wsWriter, true)
 	if err != nil {
 		logger.Warn("failed to start terminal execution", "sandbox", sandboxId, "error", err)
 		writeMu.Lock()

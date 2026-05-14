@@ -16,6 +16,7 @@ import (
 
 	boxlitesdk "github.com/boxlite-ai/boxlite/sdks/go"
 	blclient "github.com/boxlite-ai/runner/pkg/boxlite"
+	"github.com/boxlite-ai/runner/pkg/shellutil"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -147,16 +148,20 @@ func (s *Service) handleChannel(ctx context.Context, newChannel ssh.NewChannel, 
 		return
 	}
 
+	// When a client opens a session without an explicit `exec` request
+	// (typical interactive ssh), pick the best available shell at exec
+	// time via the shared launcher used by the dashboard terminal too.
+	defaultCmd, defaultArgs := shellutil.DefaultInteractiveShell()
+
 	state := &sessionState{
 		log:           s.log,
 		boxlite:       s.boxlite,
 		sandboxId:     sandboxId,
 		clientChannel: clientChannel,
-		// Default command if the client opens a session without `exec` —
-		// most ssh clients send `pty-req` then `shell`, which lands here.
-		cmd:  "/bin/bash",
-		rows: 24,
-		cols: 80,
+		cmd:           defaultCmd,
+		args:          defaultArgs,
+		rows:          24,
+		cols:          80,
 	}
 
 	execCtx, cancelExec := context.WithCancel(ctx)
