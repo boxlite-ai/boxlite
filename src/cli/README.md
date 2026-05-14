@@ -120,6 +120,23 @@ boxlite pull alpine:latest
 boxlite images
 ```
 
+## Connecting to the cloud
+
+To target a remote BoxLite REST server (e.g. `https://dev.boxlite.ai/api`) instead of the local runtime, sign in with `boxlite auth login`. Credential precedence is **env vars > stored file > unauthenticated** (local runtime). The `--url` flag overrides the URL specifically without affecting credentials.
+
+```bash
+# Interactive
+boxlite auth login
+
+# CI / scripted (API key from stdin)
+echo "$KEY" | boxlite auth login --api-key-stdin --url https://dev.boxlite.ai/api
+
+# CI via env vars only
+BOXLITE_API_KEY=$KEY BOXLITE_REST_URL=https://dev.boxlite.ai/api boxlite list
+```
+
+Credentials are stored at `~/.config/boxlite/credentials.toml` (perms `0600`).
+
 ## Commands Reference
 
 > For an exhaustive man-page-style reference (shared flag groups, volume/port grammar,
@@ -136,6 +153,64 @@ Available for all commands:
 | `--home PATH` | BoxLite home directory (default: `~/.boxlite`). Overridden by `BOXLITE_HOME` |
 | `--registry REGISTRY` | Image registry (repeatable; prepended to config) |
 | `--config PATH` | JSON config file path (e.g. for `image_registries`) |
+
+### `boxlite auth login`
+
+Log in to a BoxLite REST server. Two auth modes:
+
+  - **API key** — paste a dashboard-issued opaque key. Long-lived, org-scoped, good for CI / server-side automation / SDK integrations.
+  - **Browser (`--web`)** — RFC 8628 OAuth 2.0 Device Authorization Grant. The CLI prints a `user_code` and opens a verification URL in your default browser; you complete the flow there. Returns a short-lived `access_token` plus a `refresh_token` the SDK rotates lazily. Good for interactive day-to-day use.
+
+Credentials are stored at `~/.config/boxlite/credentials.toml` (perms `0600`).
+
+**Usage:** `boxlite auth login [OPTIONS]`
+
+| Option | Description |
+|--------|-------------|
+| `--url URL` | Server URL (default: `https://dev.boxlite.ai/api`) |
+| `--api-key-stdin` | Read a long-lived API key from stdin (one line). No flag arg — prevents `ps` leakage |
+| `--web` | Run the browser device flow instead of pasting an API key |
+| `--no-launch-browser` | With `--web`, print the activation URL but don't auto-launch a browser. Useful for headless / SSH sessions |
+
+**Examples:**
+
+```bash
+# Interactive — prompts for method
+boxlite auth login
+
+# Browser device flow
+boxlite auth login --web
+
+# API key from stdin (CI-friendly; nothing on argv)
+echo "$KEY" | boxlite auth login --api-key-stdin --url https://dev.boxlite.ai/api
+
+# Browser flow, headless host (no auto-open)
+boxlite auth login --web --no-launch-browser
+```
+
+### `boxlite auth logout`
+
+Remove stored credentials at `~/.config/boxlite/credentials.toml`. Prompts for confirmation unless `--yes` is given.
+
+**Usage:** `boxlite auth logout [OPTIONS]`
+
+| Option | Short | Description |
+|--------|-------|-------------|
+| `--yes` | `-y` | Skip the confirmation prompt |
+
+### `boxlite auth status`
+
+Print the current authentication state: the logged-in URL, credential mode (API key vs OAuth client credentials), source (stored file vs env var), and identity (`client_id` if OAuth). The secret material is never printed.
+
+**Usage:** `boxlite auth status`
+
+**Example output:**
+
+```
+Logged in to:    https://dev.boxlite.ai/api
+Credential:      API key (from ~/.config/boxlite/credentials.toml)
+Identity:        (opaque key — no identity available)
+```
 
 ### `boxlite run`
 
@@ -362,6 +437,7 @@ Then reload your shell or source the file.
 | Variable | Description |
 |----------|-------------|
 | `BOXLITE_HOME` | Runtime home directory (default: `~/.boxlite`). Overridden by `--home`. |
+| `BOXLITE_API_KEY` | Long-lived API key sent as `Authorization: Bearer`. Overrides any stored credentials. |
 | `RUST_LOG` | Log level: `trace`, `debug`, `info`, `warn`, `error`. Use `RUST_LOG=debug` for troubleshooting. |
 
 ## Configuration file
