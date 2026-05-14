@@ -746,11 +746,14 @@ async fn get_or_fetch_box(state: &AppState, box_id: &str) -> Result<Arc<LiteBox>
 // ============================================================================
 
 fn build_router(state: Arc<AppState>) -> Router {
-    use handlers::{advanced, auth, boxes, config, executions, files, metrics, snapshots};
+    use handlers::{advanced, auth, boxes, config, executions, files, me, metrics, snapshots};
 
     Router::new()
-        // Auth & config (no tenant prefix)
-        .route("/v1/oauth/tokens", post(auth::oauth_token))
+        // Auth & identity (no tenant prefix)
+        .route("/v1/oauth/device_code", post(auth::device_code))
+        .route("/v1/oauth/token", post(auth::token))
+        .route("/v1/oauth/revoke", post(auth::revoke))
+        .route("/v1/me", get(me::get_me))
         .route("/v1/config", get(config::get_config))
         // Runtime metrics
         .route("/v1/default/metrics", get(metrics::runtime_metrics))
