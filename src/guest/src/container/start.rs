@@ -274,9 +274,17 @@ pub(crate) fn cleanup_bundle_directory(bundle_path: &std::path::Path) {
 pub(crate) fn load_container_status(
     container_state_path: &Path,
 ) -> BoxliteResult<libcontainer::container::ContainerStatus> {
-    let container = LibContainer::load(container_state_path.to_path_buf()).map_err(|e| {
+    let mut container = LibContainer::load(container_state_path.to_path_buf()).map_err(|e| {
         BoxliteError::Internal(format!(
             "Failed to load container from {}: {}",
+            container_state_path.display(),
+            e
+        ))
+    })?;
+
+    container.refresh_status().map_err(|e| {
+        BoxliteError::Internal(format!(
+            "Failed to refresh container status from {}: {}",
             container_state_path.display(),
             e
         ))

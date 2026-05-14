@@ -3,7 +3,7 @@
 //! Creates and manages qcow2 disk images for Box block devices.
 
 use std::fs::OpenOptions;
-use std::io::Write;
+use std::io::{ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -1040,6 +1040,25 @@ pub fn read_backing_chain(path: &Path) -> Vec<PathBuf> {
     let mut current = path.to_path_buf();
 
     for _ in 0..MAX_BACKING_CHAIN_DEPTH {
+        match has_qcow2_magic(&current) {
+            Ok(true) => {}
+            Ok(false) => {
+                tracing::debug!(
+                    path = %current.display(),
+                    "Reached non-qcow2 backing file; ending backing chain"
+                );
+                break;
+            }
+            Err(e) => {
+                tracing::warn!(
+                    path = %current.display(),
+                    error = %e,
+                    "Failed to inspect qcow2 backing path — returning partial chain"
+                );
+                break;
+            }
+        }
+
         match read_backing_file_path(&current) {
             Ok(Some(backing)) => {
                 let backing_path = PathBuf::from(backing);
@@ -1062,6 +1081,26 @@ pub fn read_backing_chain(path: &Path) -> Vec<PathBuf> {
     }
 
     chain
+}
+
+/// Return true when `path` starts with the QCOW2 magic (`QFI\xfb`).
+///
+/// Raw backing files are valid terminal nodes in a qcow2 backing chain, so a
+/// non-qcow2 magic is not an error here.
+fn has_qcow2_magic(path: &Path) -> BoxliteResult<bool> {
+    let mut file = std::fs::File::open(path)
+        .map_err(|e| BoxliteError::Storage(format!("Failed to open {}: {}", path.display(), e)))?;
+
+    let mut magic_buf = [0u8; 4];
+    match file.read_exact(&mut magic_buf) {
+        Ok(()) => Ok(u32::from_be_bytes(magic_buf) == QCOW2_MAGIC),
+        Err(e) if e.kind() == ErrorKind::UnexpectedEof => Ok(false),
+        Err(e) => Err(BoxliteError::Storage(format!(
+            "Failed to read magic from {}: {}",
+            path.display(),
+            e
+        ))),
+    }
 }
 
 /// Check if `target` appears in the backing chain of `chain_root`.
@@ -1402,6 +1441,28 @@ mod tests {
     fn test_read_backing_file_path_nonexistent_file() {
         let result = read_backing_file_path(Path::new("/nonexistent/file.qcow2"));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_has_qcow2_magic_treats_raw_disk_as_chain_terminal() {
+        let dir = TempDir::new().unwrap();
+        let raw_path = dir.path().join("base.ext4");
+        std::fs::write(&raw_path, vec![0u8; 4096]).unwrap();
+
+        assert!(!has_qcow2_magic(&raw_path).unwrap());
+    }
+
+    #[test]
+    fn test_read_backing_chain_stops_at_raw_backing_file() {
+        let dir = TempDir::new().unwrap();
+        let qcow2_path = dir.path().join("child.qcow2");
+        let raw_path = dir.path().join("base.ext4");
+        std::fs::write(&raw_path, vec![0u8; 4096]).unwrap();
+        write_qcow2_with_backing(&qcow2_path, Some(&raw_path.to_string_lossy()));
+
+        let chain = read_backing_chain(&qcow2_path);
+
+        assert_eq!(chain, vec![raw_path]);
     }
 
     #[test]
