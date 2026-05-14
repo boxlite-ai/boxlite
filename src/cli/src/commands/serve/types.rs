@@ -106,26 +106,6 @@ pub(super) struct ResizeRequest {
 }
 
 // ============================================================================
-// Auth Types
-// ============================================================================
-
-#[derive(Deserialize)]
-pub(super) struct TokenForm {
-    pub grant_type: String,
-    #[allow(dead_code)]
-    pub client_id: String,
-    #[allow(dead_code)]
-    pub client_secret: String,
-}
-
-#[derive(Serialize)]
-pub(super) struct TokenResponse {
-    pub access_token: String,
-    pub token_type: String,
-    pub expires_in: u64,
-}
-
-// ============================================================================
 // Config Types
 // ============================================================================
 

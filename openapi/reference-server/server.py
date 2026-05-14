@@ -261,29 +261,37 @@ def error_response(status: int, message: str, error_type: str) -> JSONResponse:
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
-def create_token(client_id: str, scopes: str = "") -> dict:
-    config = get_server_config()
-    now = time.time()
-    payload = {
-        "sub": client_id,
-        "iat": now,
-        "exp": now + config.jwt_expiry_seconds,
-        "scope": scopes
-        or "boxes:read boxes:write boxes:exec images:read images:write runtime:admin",
-    }
-    token = jwt.encode(payload, config.jwt_secret, algorithm=JWT_ALGORITHM)
-    return {
-        "access_token": token,
-        "token_type": "bearer",
-        "expires_in": config.jwt_expiry_seconds,
-        "scope": payload["scope"],
-    }
+# --- Auth: device-flow stubs + format-agnostic Bearer acceptance ---
+#
+# The reference server accepts ANY non-empty Bearer token. Real validation
+# is the production gateway's job (see plan §9 — pluggable validators).
+#
+# Device-flow stubs auto-complete so the CLI's `--web` flow can be exercised
+# locally without standing up the full IdP.
+
+LOCAL_USER_CODE = "LOCAL-DEV"
+LOCAL_ACCESS_TOKEN = "blo_local_dev_access_token"
+LOCAL_REFRESH_TOKEN = "blr_local_dev_refresh_token"
+LOCAL_PRINCIPAL = {
+    "sub": "local-anonymous",
+    "principal_type": "service_account",
+    "email": "local@boxlite.local",
+    "display_name": "Local development",
+    "prefix": "default",
+    "scopes": [
+        "box:read", "box:write", "box:exec", "box:delete",
+        "image:read", "image:write",
+        "snapshot:read", "snapshot:write", "snapshot:delete",
+        "me:read",
+    ],
+    "expires_at": None,
+}
 
 
 async def require_auth(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
 ) -> dict:
-    if credentials is None:
+    if credentials is None or not credentials.credentials:
         raise HTTPException(
             status_code=401,
             detail={
@@ -294,34 +302,9 @@ async def require_auth(
                 }
             },
         )
-    try:
-        config = get_server_config()
-        payload = jwt.decode(
-            credentials.credentials, config.jwt_secret, algorithms=[JWT_ALGORITHM]
-        )
-        return payload
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(
-            status_code=401,
-            detail={
-                "error": {
-                    "message": "token expired",
-                    "type": "UnauthorizedError",
-                    "code": 401,
-                }
-            },
-        )
-    except jwt.InvalidTokenError:
-        raise HTTPException(
-            status_code=401,
-            detail={
-                "error": {
-                    "message": "invalid token",
-                    "type": "UnauthorizedError",
-                    "code": 401,
-                }
-            },
-        )
+    # Format-agnostic: any non-empty bearer is accepted. The full server
+    # validates against its issuance store; this reference server doesn't.
+    return {"sub": "local-anonymous"}
 
 
 # ============================================================================
@@ -559,22 +542,57 @@ async def get_config():
     }
 
 
-@app.post("/v1/oauth/tokens")
-async def get_token(request: Request):
-    config = get_server_config()
+@app.post("/v1/oauth/device_code")
+async def device_code(request: Request):
+    """RFC 8628 §3.1 — start a device authorization flow. Auto-completes."""
+    _body = await request.form()
+    return {
+        "device_code": "local-device-code",
+        "user_code": LOCAL_USER_CODE,
+        "verification_uri": "http://localhost:8080/activate",
+        "verification_uri_complete": f"http://localhost:8080/activate?user_code={LOCAL_USER_CODE}",
+        "expires_in": 600,
+        "interval": 1,
+    }
+
+
+@app.post("/v1/oauth/token")
+async def oauth_token(request: Request):
+    """RFC 8628 §3.4 + RFC 6749 §6 — exchange device_code or refresh_token."""
     body = await request.form()
     grant_type = body.get("grant_type")
-    client_id = body.get("client_id")
-    client_secret = body.get("client_secret")
-    scope = body.get("scope", "")
 
-    if grant_type != "client_credentials":
-        return error_response(400, "unsupported grant_type", "InvalidArgumentError")
+    if grant_type == "urn:ietf:params:oauth:grant-type:device_code":
+        if not body.get("device_code"):
+            return error_response(400, "missing device_code", "invalid_request")
+    elif grant_type == "refresh_token":
+        if not body.get("refresh_token"):
+            return error_response(400, "missing refresh_token", "invalid_request")
+    else:
+        return error_response(
+            400, f"unsupported_grant_type: {grant_type}", "unsupported_grant_type"
+        )
 
-    if client_id != config.client_id or client_secret != config.client_secret:
-        return error_response(401, "invalid client credentials", "UnauthorizedError")
+    return {
+        "access_token": LOCAL_ACCESS_TOKEN,
+        "token_type": "Bearer",
+        "expires_in": 900,
+        "refresh_token": LOCAL_REFRESH_TOKEN,
+        "scope": " ".join(LOCAL_PRINCIPAL["scopes"]),
+    }
 
-    return create_token(client_id, scope)
+
+@app.post("/v1/oauth/revoke")
+async def oauth_revoke(request: Request):
+    """RFC 7009 §2.2 — always 200, idempotent."""
+    _body = await request.form()
+    return {}
+
+
+@app.get("/v1/me")
+async def get_me(_auth: dict = Depends(require_auth)):
+    """Identity + scopes for the calling credential."""
+    return LOCAL_PRINCIPAL
 
 
 # ============================================================================
