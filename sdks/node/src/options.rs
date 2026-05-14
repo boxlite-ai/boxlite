@@ -438,12 +438,9 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
 pub struct JsBoxliteRestOptions {
     /// REST API base URL.
     pub url: String,
-    /// OAuth2 client ID (optional).
-    #[napi(js_name = "clientId")]
-    pub client_id: Option<String>,
-    /// OAuth2 client secret (optional).
-    #[napi(js_name = "clientSecret")]
-    pub client_secret: Option<String>,
+    /// Opaque dashboard-issued API key (sent as `Authorization: Bearer <key>`).
+    #[napi(js_name = "apiKey")]
+    pub api_key: Option<String>,
     /// URL path prefix (optional).
     pub prefix: Option<String>,
 }
@@ -451,8 +448,9 @@ pub struct JsBoxliteRestOptions {
 impl From<JsBoxliteRestOptions> for BoxliteRestOptions {
     fn from(js_opts: JsBoxliteRestOptions) -> Self {
         let mut opts = BoxliteRestOptions::new(js_opts.url);
-        opts.client_id = js_opts.client_id;
-        opts.client_secret = js_opts.client_secret;
+        if let Some(key) = js_opts.api_key {
+            opts = opts.with_api_key(key);
+        }
         opts.prefix = js_opts.prefix;
         opts
     }
@@ -568,16 +566,18 @@ mod tests {
 
     #[test]
     fn rest_options_from_js_all_fields() {
+        use boxlite::Credential;
         let js = JsBoxliteRestOptions {
             url: "https://api.example.com".into(),
-            client_id: Some("cid".into()),
-            client_secret: Some("csec".into()),
+            api_key: Some("opaque-key".into()),
             prefix: Some("/v1".into()),
         };
         let opts: BoxliteRestOptions = js.into();
         assert_eq!(opts.url, "https://api.example.com");
-        assert_eq!(opts.client_id.as_deref(), Some("cid"));
-        assert_eq!(opts.client_secret.as_deref(), Some("csec"));
+        match opts.credential {
+            Some(Credential::ApiKey { key }) => assert_eq!(key, "opaque-key"),
+            other => panic!("expected ApiKey, got is_some={}", other.is_some()),
+        }
         assert_eq!(opts.prefix.as_deref(), Some("/v1"));
     }
 
@@ -585,14 +585,12 @@ mod tests {
     fn rest_options_from_js_url_only() {
         let js = JsBoxliteRestOptions {
             url: "https://api.example.com".into(),
-            client_id: None,
-            client_secret: None,
+            api_key: None,
             prefix: None,
         };
         let opts: BoxliteRestOptions = js.into();
         assert_eq!(opts.url, "https://api.example.com");
-        assert!(opts.client_id.is_none());
-        assert!(opts.client_secret.is_none());
+        assert!(opts.credential.is_none());
         assert!(opts.prefix.is_none());
     }
 

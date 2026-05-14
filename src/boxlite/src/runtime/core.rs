@@ -98,7 +98,7 @@ impl BoxliteRuntime {
     ///
     /// let runtime = BoxliteRuntime::rest(
     ///     BoxliteRestOptions::new("https://api.example.com")
-    ///         .with_credentials("client-id".into(), "secret".into())
+    ///         .with_api_key("blk_live_opaque".into())
     /// )?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
