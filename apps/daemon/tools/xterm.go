@@ -14,6 +14,11 @@ import (
 	"runtime"
 )
 
+// Pinned to the last release of the legacy `xterm` npm package.
+// xterm moved to `@xterm/xterm` from v6.x onwards; v6.0.0 also shipped a
+// touch-scroll regression (xtermjs/xterm.js#5489, fixed only in v7.0.0
+// via #5563). Do not bump to 6.x. If we ever migrate to @xterm/xterm,
+// target >=7.0.0 and re-verify touch scrolling on mobile.
 const (
 	XTERM_VERSION     = "5.3.0"
 	XTERM_FIT_VERSION = "0.8.0"

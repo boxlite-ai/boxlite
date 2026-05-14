@@ -7,12 +7,14 @@ import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
 import { BOXLITE_DOCS_URL } from '@/constants/ExternalLinks'
+import { RoutePath } from '@/enums/RoutePath'
 import { useTerminalSessionQuery } from '@/hooks/queries/useTerminalSessionQuery'
 import { useSandboxSessionContext } from '@/hooks/useSandboxSessionContext'
 import { isStoppable } from '@/lib/utils/sandbox'
 import { Sandbox } from '@boxlite-ai/api-client'
 import { Spinner } from '@/components/ui/spinner'
 import { Play, RefreshCw, TerminalSquare } from 'lucide-react'
+import { SandboxTerminalFrame } from './SandboxTerminalFrame'
 
 export function SandboxTerminalTab({ sandbox }: { sandbox: Sandbox }) {
   const running = isStoppable(sandbox)
@@ -35,7 +37,7 @@ export function SandboxTerminalTab({ sandbox }: { sandbox: Sandbox }) {
 
   if (!running) {
     return (
-      <div className="flex-1 flex flex-col p-4">
+      <div className="flex-1 flex flex-col p-2 sm:p-4">
         <div className="flex-1 min-h-0 rounded-md border border-border flex">
           <Empty className="border-0">
             <EmptyHeader>
@@ -57,10 +59,10 @@ export function SandboxTerminalTab({ sandbox }: { sandbox: Sandbox }) {
     )
   }
 
-  // Not yet activated — show connect button
+  // Not yet activated - show connect button
   if (!activated) {
     return (
-      <div className="flex-1 flex flex-col p-4">
+      <div className="flex-1 flex flex-col p-2 sm:p-4">
         <div className="flex-1 min-h-0 rounded-md border border-border flex">
           <Empty className="border-0">
             <EmptyHeader>
@@ -89,7 +91,7 @@ export function SandboxTerminalTab({ sandbox }: { sandbox: Sandbox }) {
   // Loading / fetching
   if (isLoading || isFetching) {
     return (
-      <div className="flex-1 flex flex-col p-4">
+      <div className="flex-1 flex flex-col p-2 sm:p-4">
         <div className="flex-1 min-h-0 rounded-md border border-border flex items-center justify-center gap-2 text-muted-foreground">
           <Spinner className="size-4" />
           <span className="text-sm">Connecting...</span>
@@ -101,7 +103,7 @@ export function SandboxTerminalTab({ sandbox }: { sandbox: Sandbox }) {
   // Error
   if (isError || !session) {
     return (
-      <div className="flex-1 flex flex-col p-4">
+      <div className="flex-1 flex flex-col p-2 sm:p-4">
         <div className="flex-1 min-h-0 rounded-md border border-border flex">
           <Empty className="border-0">
             <EmptyHeader>
@@ -119,10 +121,11 @@ export function SandboxTerminalTab({ sandbox }: { sandbox: Sandbox }) {
   }
 
   // Active session
+  const fullscreenHref = RoutePath.SANDBOX_TERMINAL.replace(':sandboxId', sandbox.id)
   return (
-    <div className="flex-1 flex flex-col p-4">
-      <div className="flex-1 min-h-0 rounded-md border border-border bg-black overflow-hidden p-1">
-        <iframe title="Sandbox terminal" src={session.url} className="w-full h-full border-0" />
+    <div className="flex-1 flex flex-col p-2 sm:p-4">
+      <div className="relative flex-1 min-h-0 rounded-md border border-border bg-black overflow-hidden p-1">
+        <SandboxTerminalFrame sessionUrl={session.url} fullscreenHref={fullscreenHref} className="h-full" />
       </div>
     </div>
   )

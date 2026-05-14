@@ -2,6 +2,10 @@
 <html>
   <head>
     <title>Web Terminal</title>
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content"
+    />
     <link rel="stylesheet" href="/xterm.css" />
     <script src="/xterm.js"></script>
     <script src="/xterm-addon-fit.js"></script>
@@ -10,26 +14,166 @@
       body {
         margin: 0;
         padding: 0;
-        height: 100vh;
         background: #000;
+        color: #fff;
+        overscroll-behavior: none;
+      }
+      html,
+      body {
+        height: 100svh;
+        height: 100dvh;
+      }
+      body {
+        display: flex;
+        flex-direction: column;
       }
       #terminal {
-        height: 100%;
+        flex: 1 1 auto;
+        min-height: 0;
         width: 100%;
+      }
+      .xterm-viewport {
+        overflow-y: auto !important;
+      }
+      /* Mirrors dashboard dark tokens; iframe boundaries prevent cascade. */
+      :root {
+        --foreground: 40 18% 92%;
+        --secondary: 220 11% 14%;
+        --secondary-foreground: 40 18% 92%;
+        --accent: 220 11% 16%;
+        --accent-foreground: 40 18% 92%;
+        --border: 220 10% 20%;
+        --primary: 40 18% 92%;
+        --primary-foreground: 220 16% 8%;
+        --ring: 40 18% 92%;
+        --radius: 0.375rem;
+      }
+      #softkeys {
+        display: none;
+        flex-wrap: nowrap;
+        align-items: center;
+        gap: 6px;
+        background: rgba(0, 0, 0, 0.92);
+        border-top: 1px solid hsl(var(--border));
+        overflow-x: auto;
+        overscroll-behavior: contain;
+        -webkit-user-select: none;
+        user-select: none;
+        padding: 6px 6px calc(6px + env(safe-area-inset-bottom, 0px));
+      }
+      #softkeys button {
+        flex: 0 0 auto;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 36px;
+        height: 32px;
+        padding: 0 12px;
+        font-size: 13px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-weight: 500;
+        color: hsl(var(--secondary-foreground));
+        background: hsl(var(--secondary));
+        border: 1px solid hsl(var(--border));
+        border-radius: calc(var(--radius) - 1px);
+        transition:
+          background-color 120ms ease,
+          color 120ms ease,
+          border-color 120ms ease,
+          box-shadow 120ms ease;
+        touch-action: manipulation;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      @media (hover: hover) {
+        #softkeys button:hover {
+          background: hsl(var(--accent));
+          color: hsl(var(--accent-foreground));
+        }
+      }
+      #softkeys button:active {
+        background: hsl(var(--accent));
+      }
+      #softkeys button:focus-visible {
+        outline: none;
+        border-color: hsl(var(--ring));
+        box-shadow: 0 0 0 2px hsl(var(--ring) / 0.25);
+      }
+      #softkeys button.armed,
+      #softkeys button.locked,
+      #softkeys button.trackpad-active {
+        background: hsl(var(--primary));
+        color: hsl(var(--primary-foreground));
+        border-color: hsl(var(--primary));
+      }
+      #softkeys button.locked {
+        box-shadow: 0 0 0 2px hsl(var(--ring) / 0.35);
+      }
+      @media (max-width: 768px), (pointer: coarse) {
+        #softkeys {
+          display: flex;
+        }
       }
     </style>
   </head>
   <body>
     <div id="terminal"></div>
+    <div id="softkeys" role="toolbar" aria-label="Terminal keys"></div>
     <script>
+      const params = new URLSearchParams(window.location.search)
+      const imeOff = params.get('ime') === 'off'
+      const isNarrow = window.matchMedia('(max-width: 768px)').matches
+
+      // Font size is the only parent-persisted terminal preference. User
+      // snippets or custom key sequences are not transferred into the iframe.
+      function loadFontSize() {
+        const fromParam = parseInt(params.get('fs') || '', 10)
+        if (Number.isFinite(fromParam) && fromParam >= 8 && fromParam <= 32) return fromParam
+        // localStorage access can throw under privacy-hardened browsers or
+        // when the iframe is denied storage. Don't let that halt boot.
+        try {
+          const saved = parseInt(localStorage.getItem('terminal-font-size') || '', 10)
+          if (Number.isFinite(saved) && saved >= 8 && saved <= 32) return saved
+        } catch (_) {
+          /* storage blocked */
+        }
+        return isNarrow ? 16 : 14
+      }
+
+      const DEFAULT_SOFTKEYS = [
+        { id: 'Esc', label: 'Esc', seq: '\x1b' },
+        { id: 'Tab', label: 'Tab', seq: '\t' },
+        { id: 'Ctrl', label: 'Ctrl', modifier: true },
+        { id: 'Alt', label: 'Alt', modifier: true },
+        { id: 'Up', label: '↑', seq: '\x1b[A' },
+        { id: 'Down', label: '↓', seq: '\x1b[B' },
+        { id: 'Left', label: '←', seq: '\x1b[D' },
+        { id: 'Right', label: '→', seq: '\x1b[C' },
+        { id: 'Pipe', label: '|', seq: '|' },
+        { id: 'Slash', label: '/', seq: '/' },
+        { id: 'Tilde', label: '~', seq: '~' },
+        {
+          id: 'Trackpad',
+          label: '↕',
+          action: 'trackpad',
+          title: 'Drag to move cursor',
+        },
+        {
+          id: 'Kbd',
+          label: '⌨',
+          action: 'toggle-keyboard',
+          title: 'Show/hide keyboard',
+        },
+      ]
+
+      // ---------------- Terminal init ----------------
+      let currentFontSize = loadFontSize()
       const term = new Terminal({
         cursorBlink: true,
-        fontSize: 14,
-        fontFamily: 'monospace',
-        theme: {
-          background: '#000000',
-          foreground: '#ffffff',
-        },
+        fontSize: currentFontSize,
+        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+        scrollback: 5000,
+        theme: { background: '#000000', foreground: '#ffffff' },
       })
 
       const fitAddon = new FitAddon.FitAddon()
@@ -37,56 +181,434 @@
       term.open(document.getElementById('terminal'))
       fitAddon.fit()
 
-      // Connect to WebSocket
+      // Android IME desync workaround - xtermjs/xterm.js#2403
+      const helperTextarea = document.querySelector('.xterm-helper-textarea')
+      if (helperTextarea) {
+        helperTextarea.setAttribute('autocorrect', 'off')
+        helperTextarea.setAttribute('autocapitalize', 'off')
+        helperTextarea.setAttribute('spellcheck', 'false')
+        helperTextarea.setAttribute('autocomplete', 'off')
+        helperTextarea.setAttribute('enterkeyhint', 'send')
+        if (imeOff) helperTextarea.setAttribute('type', 'password')
+      }
+
+      // Chromium-only: precise keyboard insets via env(keyboard-inset-height)
+      if ('virtualKeyboard' in navigator) {
+        try {
+          navigator.virtualKeyboard.overlaysContent = true
+        } catch (_) {}
+      }
+
+      // ---------------- Outbound send (buffered until WS opens) ----------------
+      // Defined here so soft-keys / trackpad click handlers can call it
+      // synchronously. Swapped in-place by socket.onopen below.
+      const pendingSend = []
+      let send = (s) => pendingSend.push(s)
+
+      // ---------------- Soft-keys toolbar ----------------
+      const softkeysEl = document.getElementById('softkeys')
+      const armed = new Set()
+      const locked = new Set()
+      const modifierButtons = new Map()
+
+      function refreshModifierVisuals() {
+        for (const [id, btn] of modifierButtons) {
+          btn.classList.toggle('armed', armed.has(id))
+          btn.classList.toggle('locked', locked.has(id))
+        }
+      }
+
+      function handleModifierTap(id) {
+        if (locked.has(id)) {
+          locked.delete(id)
+          armed.delete(id)
+        } else if (armed.has(id)) {
+          armed.delete(id)
+          locked.add(id)
+        } else {
+          armed.add(id)
+        }
+        refreshModifierVisuals()
+      }
+
+      // Consume one-shot armed modifiers (locked stays). Called from both
+      // applyModifiers (after a real transformation) AND after a paste
+      // path that bypassed applyModifiers - otherwise armed Ctrl would
+      // survive across the paste and corrupt the next typed key.
+      function consumeArmedModifiers() {
+        let changed = false
+        if (armed.has('Ctrl') && !locked.has('Ctrl')) {
+          armed.delete('Ctrl')
+          changed = true
+        }
+        if (armed.has('Alt') && !locked.has('Alt')) {
+          armed.delete('Alt')
+          changed = true
+        }
+        if (changed) refreshModifierVisuals()
+      }
+
+      function applyModifiers(seq) {
+        let out = seq
+        if (armed.has('Ctrl') || locked.has('Ctrl')) {
+          if (out.length === 1) {
+            const upper = out.toUpperCase()
+            const code = upper.charCodeAt(0)
+            if (code >= 0x40 && code <= 0x5f) out = String.fromCharCode(code & 0x1f)
+            else if (code >= 0x61 && code <= 0x7a) out = String.fromCharCode(code - 0x60)
+          }
+        }
+        if (armed.has('Alt') || locked.has('Alt')) out = '\x1b' + out
+        consumeArmedModifiers()
+        return out
+      }
+
+      // ---------------- D1: Hold-to-move-cursor trackpad button ----------------
+      function wireTrackpad(btn) {
+        let st = null
+        const onPointerDown = (e) => {
+          e.preventDefault()
+          try {
+            btn.setPointerCapture(e.pointerId)
+          } catch (_) {}
+          st = { x: e.clientX, y: e.clientY, ax: 0, ay: 0, id: e.pointerId }
+          btn.classList.add('trackpad-active')
+        }
+        const onPointerMove = (e) => {
+          if (!st || st.id !== e.pointerId) return
+          const dx = e.clientX - st.x
+          const dy = e.clientY - st.y
+          // Empirical sensitivity: ~12 px per cell horizontally, ~16 px vertically
+          const tx = Math.trunc(dx / 12)
+          const ty = Math.trunc(dy / 16)
+          while (st.ax < tx) {
+            send(applyModifiers('\x1b[C'))
+            st.ax++
+          }
+          while (st.ax > tx) {
+            send(applyModifiers('\x1b[D'))
+            st.ax--
+          }
+          while (st.ay < ty) {
+            send(applyModifiers('\x1b[B'))
+            st.ay++
+          }
+          while (st.ay > ty) {
+            send(applyModifiers('\x1b[A'))
+            st.ay--
+          }
+        }
+        const onPointerUp = (e) => {
+          if (!st || st.id !== e.pointerId) return
+          try {
+            btn.releasePointerCapture(e.pointerId)
+          } catch (_) {}
+          st = null
+          btn.classList.remove('trackpad-active')
+        }
+        btn.addEventListener('pointerdown', onPointerDown)
+        btn.addEventListener('pointermove', onPointerMove)
+        btn.addEventListener('pointerup', onPointerUp)
+        btn.addEventListener('pointercancel', onPointerUp)
+      }
+
+      // ---------------- Tap activation (touch-safe) ----------------
+      // We preventDefault touchstart on every soft-key so tapping the toolbar
+      // doesn't steal focus from the xterm helper textarea and dismiss the
+      // on-screen keyboard. iOS Safari / Android Chrome treat that cancelled
+      // touchstart as a cancelled tap and suppress the synthesised click -
+      // which would silently kill every modifier/arrow/Esc/Paste button on
+      // the exact devices this UI targets. We dispatch on pointerup-within-
+      // bounds instead, and route through a mouse-click fallback for desktop
+      // users who never trigger pointer events.
+      function attachTap(btn, onActivate) {
+        let handled = false
+        let active = false
+        btn.addEventListener('pointerdown', (e) => {
+          if (e.pointerType === 'mouse' && e.button !== 0) return
+          active = true
+          handled = false
+        })
+        btn.addEventListener('pointerup', (e) => {
+          if (!active) return
+          active = false
+          const r = btn.getBoundingClientRect()
+          if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) return
+          handled = true
+          e.preventDefault()
+          onActivate(e)
+        })
+        btn.addEventListener('pointercancel', () => {
+          active = false
+        })
+        btn.addEventListener('click', (e) => {
+          e.preventDefault()
+          if (handled) {
+            handled = false
+            return
+          }
+          onActivate(e)
+        })
+      }
+
+      // ---------------- Build soft-keys row ----------------
+      function rebuildSoftkeys() {
+        softkeysEl.replaceChildren()
+        modifierButtons.clear()
+        armed.clear()
+        locked.clear()
+        for (const key of DEFAULT_SOFTKEYS) {
+          if (!key || typeof key !== 'object' || !key.id) continue
+          const btn = document.createElement('button')
+          btn.type = 'button'
+          btn.textContent = key.label || key.id
+          btn.dataset.id = key.id
+          if (key.title) btn.title = key.title
+          if (key.modifier) modifierButtons.set(key.id, btn)
+          // Prevent stealing focus and dismissing the keyboard
+          btn.addEventListener('mousedown', (e) => e.preventDefault())
+          btn.addEventListener('touchstart', (e) => e.preventDefault(), {
+            passive: false,
+          })
+
+          if (key.action === 'trackpad') {
+            wireTrackpad(btn)
+            softkeysEl.appendChild(btn)
+            continue
+          }
+
+          attachTap(btn, () => {
+            if (key.modifier) return handleModifierTap(key.id)
+            if (key.action === 'toggle-keyboard') {
+              if (helperTextarea) {
+                if (document.activeElement === helperTextarea) helperTextarea.blur()
+                else helperTextarea.focus()
+              }
+              return
+            }
+            if (key.seq) send(applyModifiers(key.seq))
+          })
+          softkeysEl.appendChild(btn)
+        }
+      }
+
+      rebuildSoftkeys()
+
+      // ---------------- Paste-in-flight tracking ----------------
+      // Modifier transformation rules (see term.onData below):
+      //   * OS-keyboard typing -> applyModifiers, so softkey-armed Ctrl + a
+      //     typed 'c' becomes \x03.
+      //   * Paste from ANY source (dashboard-button postMessage, native
+      //     Cmd+V on the helper textarea, right-click paste) -> bytes go
+      //     out raw. xterm.paste wraps the payload in bracketed-paste
+      //     sequences (`\e[200~ ... \e[201~`) when the remote shell enabled
+      //     `\e[?2004h`; re-mapping the first byte with Ctrl or prefixing
+      //     ESC for locked Alt would corrupt the wrapper and let embedded
+      //     newlines run as shell commands.
+      //
+      // Track via a refcount. Set by (a) the inbound message handler
+      // before it calls term.paste, (b) a capture-phase document `paste`
+      // listener so we increment BEFORE xterm's own bubble-phase handler
+      // synchronously invokes term.paste -> onData.
+      let pasteInFlight = 0
+      document.addEventListener(
+        'paste',
+        () => {
+          pasteInFlight++
+          // The native paste event triggers xterm's textarea handler
+          // synchronously in the bubble phase; onData fires inside the
+          // same task. A macrotask `setTimeout(_, 0)` clears the flag
+          // after the synchronous chain settles. We also consume any
+          // armed (one-shot) Ctrl/Alt so a user who armed a modifier
+          // and then pasted doesn't have the modifier silently apply
+          // to the next typed key.
+          setTimeout(() => {
+            pasteInFlight = Math.max(0, pasteInFlight - 1)
+            if (pasteInFlight === 0) consumeArmedModifiers()
+          }, 0)
+        },
+        true,
+      )
+
+      // ---------------- Inbound parent bridge ----------------
+      // Paste text is read by a dashboard-rendered button under dashboard
+      // user activation, then posted here. The iframe never asks the parent
+      // to read clipboard and receives no user-supplied layout/snippet data.
+      window.addEventListener('message', (event) => {
+        if (event.source !== window.parent) return
+        const data = event.data
+        if (!data || typeof data !== 'object') return
+
+        if (data.source === 'boxlite-terminal' && data.type === 'paste') {
+          if (typeof data.text !== 'string' || data.text.length === 0) return
+          // Route through xterm's paste() so bracketed-paste mode wraps
+          // the payload with `\e[200~ ... \e[201~` when the remote shell
+          // enabled it. Increment pasteInFlight so the onData handler
+          // above sends the bytes raw (no Ctrl/Alt transformation).
+          pasteInFlight++
+          try {
+            term.paste(data.text)
+          } finally {
+            pasteInFlight = Math.max(0, pasteInFlight - 1)
+            if (pasteInFlight === 0) consumeArmedModifiers()
+          }
+          return
+        }
+      })
+
+      // Empty liveness ping; no secrets are sent.
+      function announceReady() {
+        try {
+          if (window.parent && window.parent !== window) {
+            window.parent.postMessage({ source: 'boxlite-terminal', type: 'ready' }, '*')
+          }
+        } catch (_) {}
+      }
+      announceReady()
+      window.addEventListener('load', announceReady)
+
+      // ---------------- WebSocket ----------------
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
       const socket = new WebSocket(`${protocol}//${window.location.host}/ws`)
+      socket.binaryType = 'arraybuffer'
+
+      // Register input handlers immediately. `send` was hoisted earlier so
+      // soft-key / trackpad handlers share the same buffering path.
+      // Paste-in-flight gating is documented above the pasteInFlight decl.
+      term.onData((data) => send(pasteInFlight > 0 ? data : applyModifiers(data)))
+      term.onResize((size) => send(JSON.stringify({ rows: size.rows, cols: size.cols })))
+
+      socket.onmessage = (event) => {
+        if (event.data instanceof ArrayBuffer) term.write(new Uint8Array(event.data))
+        else term.write(event.data)
+      }
 
       socket.onopen = () => {
         console.log('WebSocket connected')
-
-        // WebSocket -> Terminal
-        socket.onmessage = (event) => {
-          // Remove the Uint8Array conversion
-          term.write(event.data)
-        }
-
-        // Handle xterm data
-        term.onData((data) => {
-          socket.send(data)
-        })
-
-        // Handle resize
-        term.onResize((size) => {
-          socket.send(
-            JSON.stringify({
-              rows: size.rows,
-              cols: size.cols,
-            }),
-          )
-        })
-
-        // Initial size
-        socket.send(
-          JSON.stringify({
-            rows: term.rows,
-            cols: term.cols,
-          }),
-        )
-      }
-
-      // WebSocket -> Terminal
-      socket.onmessage = (event) => {
-        term.write(new Uint8Array(event.data))
+        send = (s) => socket.send(s)
+        // Initial size + flush anything buffered before open
+        send(JSON.stringify({ rows: term.rows, cols: term.cols }))
+        for (const s of pendingSend) socket.send(s)
+        pendingSend.length = 0
       }
 
       socket.onclose = () => {
+        // Re-buffer further keystrokes rather than throwing.
+        send = (s) => pendingSend.push(s)
         term.write('\r\nConnection closed\r\n')
       }
 
-      // Handle window resize
-      window.addEventListener('resize', () => {
-        fitAddon.fit()
-      })
+      // ---------------- Refit chain ----------------
+      let fitScheduled = false
+      function scheduleFit() {
+        if (fitScheduled) return
+        fitScheduled = true
+        requestAnimationFrame(() => {
+          fitScheduled = false
+          try {
+            fitAddon.fit()
+            // Coder workaround: first call can overflow; second normalizes.
+            fitAddon.fit()
+            term.scrollToBottom()
+          } catch (_) {}
+        })
+      }
+
+      window.addEventListener('resize', scheduleFit)
+      window.addEventListener('orientationchange', scheduleFit)
+
+      const mount = document.getElementById('terminal')
+      if (typeof ResizeObserver !== 'undefined') {
+        new ResizeObserver(scheduleFit).observe(mount)
+      }
+
+      if (window.visualViewport) {
+        const applyVV = () => {
+          window.scrollTo(0, 0)
+          if (window.visualViewport) document.body.style.height = `${window.visualViewport.height}px`
+          scheduleFit()
+        }
+        window.visualViewport.addEventListener('resize', applyVV)
+        window.visualViewport.addEventListener('scroll', applyVV)
+        applyVV()
+      }
+
+      // ---------------- D2: Pinch-to-zoom font size ----------------
+      // Touch events on the terminal mount. xterm.js handles single-touch
+      // scrolling natively, so we only act when 2+ fingers are down.
+      ;(function () {
+        let pinchStart = 0
+        let pinchStartSize = currentFontSize
+        let saveTimer = 0
+
+        const persist = () => {
+          if (saveTimer) clearTimeout(saveTimer)
+          saveTimer = setTimeout(() => {
+            try {
+              localStorage.setItem('terminal-font-size', String(currentFontSize))
+            } catch (_) {}
+            // The iframe origin is throwaway (per-session token subdomain);
+            // notify the parent dashboard so it can persist on its stable
+            // origin and replay via the ?fs= query param on next session.
+            try {
+              if (window.parent && window.parent !== window) {
+                window.parent.postMessage(
+                  {
+                    source: 'boxlite-terminal',
+                    type: 'pref',
+                    key: 'fontSize',
+                    value: currentFontSize,
+                  },
+                  '*',
+                )
+              }
+            } catch (_) {}
+          }, 250)
+        }
+
+        mount.addEventListener(
+          'touchstart',
+          (e) => {
+            if (e.touches.length === 2) {
+              const [a, b] = e.touches
+              pinchStart = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY)
+              pinchStartSize = currentFontSize
+            }
+          },
+          { passive: true },
+        )
+
+        mount.addEventListener(
+          'touchmove',
+          (e) => {
+            if (e.touches.length === 2 && pinchStart > 0) {
+              e.preventDefault()
+              const [a, b] = e.touches
+              const dist = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY)
+              const next = Math.max(8, Math.min(32, Math.round(pinchStartSize * (dist / pinchStart))))
+              if (next !== currentFontSize) {
+                currentFontSize = next
+                term.options.fontSize = next
+                scheduleFit()
+              }
+            }
+          },
+          { passive: false },
+        )
+
+        const release = () => {
+          if (pinchStart > 0) persist()
+          pinchStart = 0
+        }
+        mount.addEventListener('touchend', release)
+        mount.addEventListener('touchcancel', release)
+
+        // iOS Safari fires non-standard gesture events alongside touch events;
+        // suppress them so the page itself doesn't pinch-zoom underneath us.
+        ;['gesturestart', 'gesturechange', 'gestureend'].forEach((evt) => {
+          mount.addEventListener(evt, (e) => e.preventDefault())
+        })
+      })()
     </script>
   </body>
 </html>

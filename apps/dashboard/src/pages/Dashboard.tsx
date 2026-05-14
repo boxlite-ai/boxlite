@@ -53,7 +53,11 @@ function useDashboardCommands() {
     ],
     [],
   )
-  useRegisterCommands(helpCommands, { groupId: 'help', groupLabel: 'Help', groupOrder: 2 })
+  useRegisterCommands(helpCommands, {
+    groupId: 'help',
+    groupLabel: 'Help',
+    groupOrder: 2,
+  })
 
   const globalCommands: CommandConfig[] = useMemo(
     () => [
@@ -66,7 +70,11 @@ function useDashboardCommands() {
     ],
     [theme, setTheme],
   )
-  useRegisterCommands(globalCommands, { groupId: 'global', groupLabel: 'Global', groupOrder: 5 })
+  useRegisterCommands(globalCommands, {
+    groupId: 'global',
+    groupLabel: 'Global',
+    groupOrder: 5,
+  })
 }
 
 const Dashboard: React.FC = () => {
@@ -137,14 +145,20 @@ const Dashboard: React.FC = () => {
   }
 
   return (
-    <div className={cn('relative w-full', isBannerVisible ? 'pt-16 md:pt-12' : '')}>
+    <div
+      className={cn(
+        'relative w-full [--app-content-height:calc(100svh_-_3.5rem)]',
+        isBannerVisible &&
+          'pt-16 [--app-banner-height:4rem] [--app-content-height:calc(100svh_-_3.5rem_-_var(--app-banner-height))] md:pt-12 md:[--app-banner-height:3rem]',
+      )}
+    >
       {isBannerVisible && bannerText && (
         <AnnouncementBanner text={bannerText} onDismiss={handleDismissBanner} learnMoreUrl={bannerLearnMoreUrl} />
       )}
       <SidebarProvider isBannerVisible={false} defaultOpen={true} className="flex-col">
         <Sidebar isBannerVisible={isBannerVisible} billingEnabled={!!config.billingApiUrl} version={config.version} />
         <SidebarInset className="min-h-0 overflow-visible">
-          <div className="w-full min-h-[calc(100svh-3.5rem)] overscroll-none">
+          <div className="w-full min-h-[var(--app-content-height,calc(100svh_-_3.5rem))] overscroll-none">
             <Outlet />
             <CommandPalette />
           </div>

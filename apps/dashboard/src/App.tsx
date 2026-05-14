@@ -18,7 +18,7 @@ import { OrganizationRolePermissionsEnum, OrganizationUserRoleEnum } from '@boxl
 import { useFeatureFlagEnabled, usePostHog } from 'posthog-js/react'
 import React, { Suspense, useEffect } from 'react'
 import { useAuth } from 'react-oidc-context'
-import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
+import { Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom'
 import { BannerProvider } from './components/Banner'
 import { CommandPaletteProvider } from './components/CommandPalette'
 import LoadingFallback from './components/LoadingFallback'
@@ -56,9 +56,10 @@ import Volumes from './pages/Volumes'
 import Wallet from './pages/Wallet'
 import WebhookEndpointDetails from './pages/WebhookEndpointDetails'
 import Webhooks from './pages/Webhooks'
-import { SandboxDetails } from './components/sandboxes'
+import { SandboxDetails, SandboxTerminalFullscreen, SandboxVncFullscreen } from './components/sandboxes'
 import { ApiProvider } from './providers/ApiProvider'
 import { RegionsProvider } from './providers/RegionsProvider'
+import { SandboxSessionProvider } from './providers/SandboxSessionProvider'
 import { SvixProvider } from './providers/SvixProvider'
 
 // Simple redirection components for external URLs
@@ -78,11 +79,14 @@ const SlackRedirect = () => {
   return null
 }
 
+// Same-origin OIDC silent-renew iframes are legitimate, so frame refusal
+// belongs in deployment headers. The terminal Paste action also refuses to
+// read clipboard when the dashboard itself is framed.
+
 function App() {
   const config = useConfig()
   const location = useLocation()
   const posthog = usePostHog()
-
   const { error: authError, isAuthenticated, user, signoutRedirect } = useAuth()
 
   useEffect(() => {
@@ -163,7 +167,22 @@ function App() {
         <Route index element={<Navigate to={`${getRouteSubPath(RoutePath.SANDBOXES)}${location.search}`} replace />} />
         <Route path={getRouteSubPath(RoutePath.KEYS)} element={<Keys />} />
         <Route path={getRouteSubPath(RoutePath.SANDBOXES)} element={<Sandboxes />} />
-        <Route path={getRouteSubPath(RoutePath.SANDBOX_DETAILS)} element={<SandboxDetails />} />
+        {/* Pathless layout route: a single SandboxSessionProvider fiber
+            persists across the three sandbox routes, so activation state
+            (e.g. "terminal connected") survives navigation between the
+            details view and its fullscreen siblings. Per-route providers
+            held state in a useRef that died with each unmount. */}
+        <Route
+          element={
+            <SandboxSessionProvider>
+              <Outlet />
+            </SandboxSessionProvider>
+          }
+        >
+          <Route path={getRouteSubPath(RoutePath.SANDBOX_TERMINAL)} element={<SandboxTerminalFullscreen />} />
+          <Route path={getRouteSubPath(RoutePath.SANDBOX_VNC)} element={<SandboxVncFullscreen />} />
+          <Route path={getRouteSubPath(RoutePath.SANDBOX_DETAILS)} element={<SandboxDetails />} />
+        </Route>
         <Route path={getRouteSubPath(RoutePath.SNAPSHOTS)} element={<Snapshots />} />
         <Route path={getRouteSubPath(RoutePath.REGISTRIES)} element={<Registries />} />
         <Route
