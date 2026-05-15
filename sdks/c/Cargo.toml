@@ -15,7 +15,7 @@ crate-type = ["cdylib", "staticlib"]
 default = []
 
 [dependencies]
-boxlite = { workspace = true }
+boxlite = { workspace = true, features = ["rest"] }
 futures = "0.3"
 tokio = { version = "1.37", features = ["rt", "rt-multi-thread"] }
 

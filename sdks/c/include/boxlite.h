@@ -511,6 +511,29 @@ void boxlite_options_set_cmd(CBoxliteOptions *opts, const char *const *args, int
 
 void boxlite_options_free(CBoxliteOptions *opts);
 
+// Create a runtime that connects to a remote BoxLite REST server.
+//
+// # Arguments
+// - `url`: REST API base URL (required, e.g. `https://api.example.com`).
+// - `api_key`: opaque API key sent as `Authorization: Bearer`. Pass
+//   `NULL` for an unauthenticated runtime.
+// - `prefix`: API path prefix. Pass `NULL` for the server default
+//   (`v1`).
+// - `out_runtime`: receives the runtime handle on success.
+// - `out_error`: receives error code + message on failure (nullable).
+//
+// Returns `BoxliteErrorCode::Ok` on success. The handle is freed with
+// `boxlite_runtime_free`.
+//
+// # Safety
+// All pointer arguments must be valid or `NULL` as documented;
+// `out_runtime` must be non-NULL.
+enum BoxliteErrorCode boxlite_rest_runtime_new(const char *url,
+                                               const char *api_key,
+                                               const char *prefix,
+                                               CBoxliteRuntime **out_runtime,
+                                               CBoxliteError *out_error);
+
 const char *boxlite_version(void);
 
 enum BoxliteErrorCode boxlite_runtime_new(const char *home_dir,

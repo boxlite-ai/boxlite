@@ -16,6 +16,7 @@ mod images;
 mod info;
 mod metrics;
 mod options;
+mod rest;
 mod runtime;
 #[cfg(test)]
 mod tests;
