@@ -972,27 +972,17 @@ mod tests {
     }
 
     #[test]
-    fn auth_login_api_key_stdin_conflicts_with_web() {
-        // --api-key-stdin and --web pick different credential paths and
-        // cannot be combined in a single invocation.
-        let err = Cli::try_parse_from(["boxlite", "auth", "login", "--api-key-stdin", "--web"])
-            .expect_err("should reject mixed auth modes");
-        let msg = err.to_string();
-        assert!(
-            msg.contains("cannot be used") || msg.contains("conflicts"),
-            "expected conflict error, got: {msg}"
-        );
-    }
-
-    #[test]
-    fn auth_login_no_launch_browser_requires_web() {
-        // --no-launch-browser only makes sense in the device-flow path.
-        let err = Cli::try_parse_from(["boxlite", "auth", "login", "--no-launch-browser"])
-            .expect_err("should reject --no-launch-browser without --web");
-        let msg = err.to_string();
-        assert!(
-            msg.contains("required") || msg.contains("requires"),
-            "expected 'requires' error, got: {msg}"
-        );
+    fn auth_login_api_key_stdin_parses() {
+        // --api-key-stdin is the only non-interactive credential path
+        // after the device-flow removal; it must parse cleanly.
+        let cli = Cli::try_parse_from(["boxlite", "auth", "login", "--api-key-stdin"])
+            .expect("--api-key-stdin should parse");
+        let Commands::Auth(args) = cli.command else {
+            panic!("expected Commands::Auth");
+        };
+        let AuthCommand::Login(login) = args.command else {
+            panic!("expected AuthCommand::Login");
+        };
+        assert!(login.api_key_stdin);
     }
 }
