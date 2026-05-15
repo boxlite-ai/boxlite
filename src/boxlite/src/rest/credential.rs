@@ -98,7 +98,7 @@ mod tests {
     fn debug_redacts_key() {
         let cred = ApiKeyCredential::new("super-secret-key");
         let dbg = format!("{:?}", cred);
-        assert!(!dbg.contains("super-secret-key"), "Debug leaked key: {dbg}");
+        assert!(!dbg.contains("super-secret-key"), "Debug leaked key");
         assert!(dbg.contains("REDACTED"));
     }
 
@@ -109,7 +109,7 @@ mod tests {
             expires_at: None,
         };
         let dbg = format!("{:?}", tok);
-        assert!(!dbg.contains("leak-me"), "Debug leaked token: {dbg}");
+        assert!(!dbg.contains("leak-me"), "Debug leaked token");
     }
 
     /// Forward-compat: an arbitrary `Credential` impl with rotating tokens

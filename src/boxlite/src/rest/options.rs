@@ -148,7 +148,7 @@ mod tests {
         let dbg = format!("{:?}", opts);
         assert!(
             !dbg.contains("opaque-key-1234"),
-            "Debug output leaked api_key: {dbg}"
+            "Debug output leaked api_key"
         );
         assert!(dbg.contains("REDACTED"));
     }

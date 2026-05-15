@@ -49,7 +49,10 @@ pub async fn run(args: LoginArgs) -> Result<()> {
     validate(&profile).await?;
     credentials::save(&profile).context("saving credentials")?;
 
-    println!("Logged in to {} (API key)", profile.url);
+    // Don't log profile.url — CodeQL flags the success line as
+    // cleartext logging of sensitive info (the profile carries the
+    // api_key). Mirrors the upstream autofix in a6184a92.
+    println!("Logged in (API key)");
     Ok(())
 }
 
