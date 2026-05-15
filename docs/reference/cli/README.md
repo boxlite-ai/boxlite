@@ -153,13 +153,13 @@ To target a remote BoxLite REST server instead of the local runtime, sign in wit
 boxlite auth login
 
 # CI / scripted (API key from stdin)
-echo "$KEY" | boxlite auth login --api-key-stdin --url https://dev.boxlite.ai/api
+echo "$KEY" | boxlite auth login --api-key-stdin --url https://<your-server>
 
 # CI via env vars only
-BOXLITE_API_KEY=$KEY BOXLITE_REST_URL=https://dev.boxlite.ai/api boxlite list
+BOXLITE_API_KEY=$KEY BOXLITE_REST_URL=https://<your-server> boxlite list
 ```
 
-Credentials are stored at `~/.config/boxlite/credentials.toml` (perms `0600`). See [`boxlite auth login`](#boxlite-auth-login), [`boxlite auth logout`](#boxlite-auth-logout), and [`boxlite auth status`](#boxlite-auth-status) for the full command surface.
+Credentials are stored at `~/.boxlite/credentials.toml` (perms `0600`). See [`boxlite auth login`](#boxlite-auth-login), [`boxlite auth logout`](#boxlite-auth-logout), and [`boxlite auth status`](#boxlite-auth-status) for the full command surface.
 
 ---
 
@@ -169,36 +169,25 @@ Credentials are stored at `~/.config/boxlite/credentials.toml` (perms `0600`). S
 
 **Synopsis:** `boxlite auth login [OPTIONS]`
 
-Log in to a BoxLite REST server. Two auth paths:
-
-- **API key** — paste a dashboard-issued opaque key (long-lived, org-scoped). Best for CI / server-side automation / SDK integrations.
-- **Browser (`--web`)** — RFC 8628 OAuth 2.0 Device Authorization Grant. The CLI prints a `user_code` and opens a verification URL in your default browser; you complete the flow there. Returns a short-lived `access_token` plus a `refresh_token` the SDK rotates lazily. Best for interactive day-to-day use.
-
-Credentials are stored at `~/.config/boxlite/credentials.toml` (perms `0600`).
+Log in to a BoxLite REST server using a dashboard-issued opaque API key.
+Long-lived, org-scoped. Credentials are stored at
+`~/.boxlite/credentials.toml` (perms `0600`).
 
 **Options:**
 
 | Flag | Description |
 |------|-------------|
-| `--url URL` | Server URL (default: `https://dev.boxlite.ai/api`) |
-| `--api-key-stdin` | Read a long-lived API key from stdin (one line). No flag value — prevents `ps` leakage. |
-| `--web` | Run the browser device flow (RFC 8628) instead of pasting an API key. |
-| `--no-launch-browser` | With `--web`, print the activation URL but don't auto-launch a browser. Useful in SSH sessions / headless hosts where the browser is on a different machine. |
+| `--url URL` | Server URL (default: `http://localhost:8100`, matching `boxlite serve`) |
+| `--api-key-stdin` | Read the API key from stdin (one line). The flag takes no value, so the secret never appears on argv. |
 
 **Examples:**
 
 ```bash
-# Interactive — prompts for method
+# Interactive — prompts for the API key with hidden input
 boxlite auth login
 
-# Browser device flow
-boxlite auth login --web
-
 # API key from stdin (CI-friendly)
-echo "$KEY" | boxlite auth login --api-key-stdin --url https://dev.boxlite.ai/api
-
-# Browser flow, headless host
-boxlite auth login --web --no-launch-browser
+echo "$KEY" | boxlite auth login --api-key-stdin --url https://<your-server>
 ```
 
 ---
@@ -207,7 +196,7 @@ boxlite auth login --web --no-launch-browser
 
 **Synopsis:** `boxlite auth logout [OPTIONS]`
 
-Delete the stored credentials file at `~/.config/boxlite/credentials.toml`. Prompts for confirmation unless `--yes` is given. Prints `Logged out` on success, or `Not logged in` if no file exists.
+Delete the stored credentials file at `~/.boxlite/credentials.toml`. Prompts for confirmation unless `--yes` is given. Prints `Logged out` on success, or `Not logged in` if no file exists.
 
 **Options:**
 
@@ -221,14 +210,15 @@ Delete the stored credentials file at `~/.config/boxlite/credentials.toml`. Prom
 
 **Synopsis:** `boxlite auth status`
 
-Print the current authentication state without revealing the secret. Reports the logged-in URL, credential mode (API key vs OAuth client credentials), the source (stored file vs env var), and the identity (`client_id` if OAuth, otherwise a placeholder for opaque keys). If neither the file nor env vars are present, prints `Not logged in.`
+Print the current authentication state without revealing the secret. Reports
+the logged-in URL and the source (stored file vs env var). If neither the
+file nor env vars are present, prints `Not logged in.`
 
 **Example output:**
 
 ```
-Logged in to:    https://dev.boxlite.ai/api
-Credential:      API key (from ~/.config/boxlite/credentials.toml)
-Identity:        (opaque key — no identity available)
+Logged in to:    http://localhost:8100
+Credential:      API key (from ~/.boxlite/credentials.toml)
 ```
 
 When the env var override is active:

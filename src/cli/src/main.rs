@@ -2,6 +2,7 @@ mod cli;
 mod commands;
 mod config;
 mod credentials;
+mod defaults;
 mod formatter;
 pub mod terminal;
 pub mod util;

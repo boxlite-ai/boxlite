@@ -261,17 +261,11 @@ def error_response(status: int, message: str, error_type: str) -> JSONResponse:
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
-# --- Auth: device-flow stubs + format-agnostic Bearer acceptance ---
+# --- Auth: format-agnostic Bearer acceptance ---
 #
 # The reference server accepts ANY non-empty Bearer token. Real validation
 # is the production gateway's job (see plan §9 — pluggable validators).
-#
-# Device-flow stubs auto-complete so the CLI's `--web` flow can be exercised
-# locally without standing up the full IdP.
 
-LOCAL_USER_CODE = "LOCAL-DEV"
-LOCAL_ACCESS_TOKEN = "blo_local_dev_access_token"
-LOCAL_REFRESH_TOKEN = "blr_local_dev_refresh_token"
 LOCAL_PRINCIPAL = {
     "sub": "local-anonymous",
     "principal_type": "service_account",
@@ -540,53 +534,6 @@ async def get_config():
             "idempotency_key_lifetime": "PT24H",
         },
     }
-
-
-@app.post("/v1/oauth/device_code")
-async def device_code(request: Request):
-    """RFC 8628 §3.1 — start a device authorization flow. Auto-completes."""
-    await request.form()
-    return {
-        "device_code": "local-device-code",
-        "user_code": LOCAL_USER_CODE,
-        "verification_uri": "http://localhost:8080/activate",
-        "verification_uri_complete": f"http://localhost:8080/activate?user_code={LOCAL_USER_CODE}",
-        "expires_in": 600,
-        "interval": 1,
-    }
-
-
-@app.post("/v1/oauth/token")
-async def oauth_token(request: Request):
-    """RFC 8628 §3.4 + RFC 6749 §6 — exchange device_code or refresh_token."""
-    body = await request.form()
-    grant_type = body.get("grant_type")
-
-    if grant_type == "urn:ietf:params:oauth:grant-type:device_code":
-        if not body.get("device_code"):
-            return error_response(400, "missing device_code", "invalid_request")
-    elif grant_type == "refresh_token":
-        if not body.get("refresh_token"):
-            return error_response(400, "missing refresh_token", "invalid_request")
-    else:
-        return error_response(
-            400, f"unsupported_grant_type: {grant_type}", "unsupported_grant_type"
-        )
-
-    return {
-        "access_token": LOCAL_ACCESS_TOKEN,
-        "token_type": "Bearer",
-        "expires_in": 900,
-        "refresh_token": LOCAL_REFRESH_TOKEN,
-        "scope": " ".join(LOCAL_PRINCIPAL["scopes"]),
-    }
-
-
-@app.post("/v1/oauth/revoke")
-async def oauth_revoke(request: Request):
-    """RFC 7009 §2.2 — always 200, idempotent."""
-    await request.form()
-    return {}
 
 
 @app.get("/v1/me")

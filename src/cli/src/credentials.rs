@@ -1,78 +1,26 @@
 //! Credential file I/O for `boxlite auth {login,logout,status}`.
 //!
-//! Stores the `default` profile at `~/.config/boxlite/credentials.toml`
-//! (XDG-aware via `$XDG_CONFIG_HOME`). The `[profiles.default]` table is
-//! reserved from day one so that adding a `--profile NAME` flag later does
-//! not require a file-format migration.
+//! Stores the `default` profile at `<BOXLITE_HOME>/credentials.toml`
+//! (defaults to `~/.boxlite/credentials.toml`, matching the `~/.aws/credentials`
+//! / `~/.docker/config.json` / `~/.kube/config` convention used by infra
+//! tools). The `[profiles.default]` table is reserved from day one so that
+//! adding a `--profile NAME` flag later does not require a file-format
+//! migration.
 
 use std::fs;
 use std::path::PathBuf;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, anyhow};
-use boxlite::{BoxliteRestOptions, OAuthTokens};
-use chrono::{DateTime, Utc};
-use directories::ProjectDirs;
+use boxlite::BoxliteRestOptions;
 use serde::{Deserialize, Serialize};
 
 /// Credential set for a single profile.
-///
-/// The two credential paths (`api_key` and `oauth`) are mutually exclusive
-/// at the application layer: `login` writes one, `into_rest_options` reads
-/// whichever is present (OAuth takes precedence if both somehow appear).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Profile {
     pub url: String,
-    /// Long-lived dashboard-issued API key. Mutually exclusive with `oauth`.
+    /// Long-lived dashboard-issued API key.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub api_key: Option<String>,
-    /// OAuth device-flow tokens. Mutually exclusive with `api_key`.
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub oauth: Option<OAuthCredentials>,
-}
-
-/// OAuth tokens persisted to the credentials file. `expires_at` is RFC 3339
-/// UTC so it round-trips cleanly through TOML.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct OAuthCredentials {
-    pub access_token: String,
-    pub refresh_token: String,
-    pub expires_at: String,
-}
-
-impl OAuthCredentials {
-    pub fn from_sdk(tokens: &OAuthTokens) -> Self {
-        Self {
-            access_token: tokens.access_token.clone(),
-            refresh_token: tokens.refresh_token.clone(),
-            expires_at: rfc3339_from_system_time(tokens.expires_at),
-        }
-    }
-
-    pub fn to_sdk(&self) -> OAuthTokens {
-        OAuthTokens {
-            access_token: self.access_token.clone(),
-            refresh_token: self.refresh_token.clone(),
-            expires_at: system_time_from_rfc3339(&self.expires_at)
-                .unwrap_or_else(|| SystemTime::now() - Duration::from_secs(1)),
-        }
-    }
-}
-
-fn rfc3339_from_system_time(st: SystemTime) -> String {
-    let dt: DateTime<Utc> = st.into();
-    dt.to_rfc3339()
-}
-
-fn system_time_from_rfc3339(s: &str) -> Option<SystemTime> {
-    DateTime::parse_from_rfc3339(s).ok().map(|dt| {
-        let secs = dt.timestamp();
-        if secs >= 0 {
-            UNIX_EPOCH + Duration::from_secs(secs as u64)
-        } else {
-            UNIX_EPOCH - Duration::from_secs((-secs) as u64)
-        }
-    })
 }
 
 /// On-disk file shape: `[profiles.<name>]` tables. v1 only reads/writes
@@ -87,32 +35,25 @@ const DEFAULT_PROFILE: &str = "default";
 
 /// Absolute path to the credentials file.
 ///
-/// Resolution order: `$XDG_CONFIG_HOME/boxlite/credentials.toml` →
-/// `ProjectDirs::from("", "", "boxlite").config_dir()/credentials.toml`
-/// (`~/.config/boxlite/...` on Linux, `~/Library/Application Support/...`
-/// on macOS, `%AppData%\...` on Windows). XDG is honored first on all
-/// platforms because the docs and CI rely on `$XDG_CONFIG_HOME` as the
-/// single override knob.
+/// Resolution order: `$BOXLITE_HOME/credentials.toml` →
+/// `~/.boxlite/credentials.toml`. Matches the AWS / Docker / kubectl
+/// convention of consolidating per-tool state under a single dotdir, and
+/// keeps the credentials co-located with the rest of `$BOXLITE_HOME`
+/// (images, runtime state) so `--home PATH` users have one place to look.
 pub fn path() -> Result<PathBuf> {
-    if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
-        let xdg = PathBuf::from(xdg);
-        if xdg.is_absolute() {
-            return Ok(xdg.join("boxlite").join("credentials.toml"));
+    if let Some(env_home) = std::env::var_os("BOXLITE_HOME") {
+        let env_home = PathBuf::from(env_home);
+        if env_home.is_absolute() {
+            return Ok(env_home.join("credentials.toml"));
         }
     }
-    let dirs = ProjectDirs::from("", "", "boxlite")
-        .ok_or_else(|| anyhow!("could not determine config directory for boxlite"))?;
-    Ok(dirs.config_dir().join("credentials.toml"))
+    let home =
+        dirs::home_dir().ok_or_else(|| anyhow!("could not determine home directory for $HOME"))?;
+    Ok(home.join(".boxlite").join("credentials.toml"))
 }
 
 /// Load the `default` profile. `Ok(None)` when the file does not exist;
 /// parse errors propagate.
-///
-/// Migration: if the raw TOML contains legacy `client_id` / `client_secret`
-/// keys (from the pre-`/v1/me` OAuth2 client_credentials shape), they are
-/// dropped silently — the on-disk profile is returned with only `url` +
-/// `api_key`. A warning is emitted exactly once per load so the user knows
-/// to re-run `boxlite auth login`.
 pub fn load() -> Result<Option<Profile>> {
     let file_path = path()?;
     if !file_path.exists() {
@@ -120,13 +61,6 @@ pub fn load() -> Result<Option<Profile>> {
     }
     let raw = fs::read_to_string(&file_path)
         .with_context(|| format!("reading credentials file {}", file_path.display()))?;
-    if raw.contains("client_id") || raw.contains("client_secret") {
-        tracing::warn!(
-            "Legacy `client_id`/`client_secret` entries in {} are ignored. \
-             Re-run `boxlite auth login` to store a dashboard API key.",
-            file_path.display()
-        );
-    }
     let parsed: CredentialsFile = toml::from_str(&raw)
         .with_context(|| format!("parsing credentials file {}", file_path.display()))?;
     Ok(parsed.profiles.get(DEFAULT_PROFILE).cloned())
@@ -175,13 +109,10 @@ pub fn delete() -> Result<bool> {
     }
 }
 
-/// Convert a stored `Profile` into `BoxliteRestOptions`. OAuth wins if
-/// both fields are set (defense against corrupted on-disk state).
+/// Convert a stored `Profile` into `BoxliteRestOptions`.
 pub fn into_rest_options(profile: Profile) -> BoxliteRestOptions {
     let mut options = BoxliteRestOptions::new(profile.url);
-    if let Some(oauth) = profile.oauth {
-        options = options.with_oauth_tokens(oauth.to_sdk());
-    } else if let Some(key) = profile.api_key {
+    if let Some(key) = profile.api_key {
         options = options.with_api_key(key);
     }
     options
@@ -233,28 +164,29 @@ fn write_secure(path: &std::path::Path, data: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::defaults::LOCAL_SERVE_URL;
     use boxlite::Credential;
     use std::sync::Mutex;
     use tempfile::TempDir;
 
     // `std::env::set_var` mutates process-global state. Serializing the
-    // tests that touch `$XDG_CONFIG_HOME` keeps them deterministic when
-    // run with `--test-threads >= 2`.
+    // tests that touch `$BOXLITE_HOME` keeps them deterministic when run
+    // with `--test-threads >= 2`.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
-    /// RAII guard restoring `$XDG_CONFIG_HOME` on drop so one test cannot
+    /// RAII guard restoring `$BOXLITE_HOME` on drop so one test cannot
     /// leak its override into another's view of `path()`.
-    struct XdgGuard {
+    struct BoxliteHomeGuard {
         previous: Option<std::ffi::OsString>,
         _lock: std::sync::MutexGuard<'static, ()>,
     }
 
-    impl XdgGuard {
+    impl BoxliteHomeGuard {
         fn set(dir: &std::path::Path) -> Self {
             let lock = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-            let previous = std::env::var_os("XDG_CONFIG_HOME");
+            let previous = std::env::var_os("BOXLITE_HOME");
             // SAFETY: tests serialize on ENV_LOCK before mutating env vars.
-            unsafe { std::env::set_var("XDG_CONFIG_HOME", dir) };
+            unsafe { std::env::set_var("BOXLITE_HOME", dir) };
             Self {
                 previous,
                 _lock: lock,
@@ -262,13 +194,13 @@ mod tests {
         }
     }
 
-    impl Drop for XdgGuard {
+    impl Drop for BoxliteHomeGuard {
         fn drop(&mut self) {
             // SAFETY: still holding ENV_LOCK via `_lock`.
             unsafe {
                 match self.previous.take() {
-                    Some(value) => std::env::set_var("XDG_CONFIG_HOME", value),
-                    None => std::env::remove_var("XDG_CONFIG_HOME"),
+                    Some(value) => std::env::set_var("BOXLITE_HOME", value),
+                    None => std::env::remove_var("BOXLITE_HOME"),
                 }
             }
         }
@@ -276,28 +208,15 @@ mod tests {
 
     fn sample_api_key_profile() -> Profile {
         Profile {
-            url: "https://dev.boxlite.ai/api".to_string(),
+            url: LOCAL_SERVE_URL.to_string(),
             api_key: Some("opaque-key-123".to_string()),
-            oauth: None,
-        }
-    }
-
-    fn sample_oauth_profile() -> Profile {
-        Profile {
-            url: "https://dev.boxlite.ai/api".to_string(),
-            api_key: None,
-            oauth: Some(OAuthCredentials {
-                access_token: "blo_acc".into(),
-                refresh_token: "blr_ref".into(),
-                expires_at: "2099-01-01T00:00:00+00:00".into(),
-            }),
         }
     }
 
     #[test]
     fn round_trip_default_profile() {
         let tmp = TempDir::new().unwrap();
-        let _guard = XdgGuard::set(tmp.path());
+        let _guard = BoxliteHomeGuard::set(tmp.path());
 
         let profile = sample_api_key_profile();
         save(&profile).expect("save");
@@ -308,7 +227,7 @@ mod tests {
     #[test]
     fn load_missing_returns_none() {
         let tmp = TempDir::new().unwrap();
-        let _guard = XdgGuard::set(tmp.path());
+        let _guard = BoxliteHomeGuard::set(tmp.path());
 
         assert!(load().expect("load ok").is_none());
     }
@@ -316,7 +235,7 @@ mod tests {
     #[test]
     fn delete_idempotent() {
         let tmp = TempDir::new().unwrap();
-        let _guard = XdgGuard::set(tmp.path());
+        let _guard = BoxliteHomeGuard::set(tmp.path());
 
         save(&sample_api_key_profile()).expect("save");
         assert!(delete().expect("first delete"), "first call removed file");
@@ -331,7 +250,7 @@ mod tests {
     fn save_sets_0600_perms() {
         use std::os::unix::fs::PermissionsExt;
         let tmp = TempDir::new().unwrap();
-        let _guard = XdgGuard::set(tmp.path());
+        let _guard = BoxliteHomeGuard::set(tmp.path());
 
         save(&sample_api_key_profile()).expect("save");
         let file_path = path().expect("path");
@@ -356,29 +275,10 @@ mod tests {
     #[test]
     fn into_rest_options_no_creds_is_none() {
         let profile = Profile {
-            url: "https://dev.boxlite.ai/api".to_string(),
+            url: LOCAL_SERVE_URL.to_string(),
             api_key: None,
-            oauth: None,
         };
         let options = into_rest_options(profile);
         assert!(options.credential.is_none());
-    }
-
-    #[test]
-    fn into_rest_options_oauth_path() {
-        use boxlite::Credential;
-        let profile = sample_oauth_profile();
-        let options = into_rest_options(profile);
-        assert!(matches!(options.credential, Some(Credential::OAuth(_))));
-    }
-
-    #[test]
-    fn oauth_round_trip_through_disk() {
-        let tmp = TempDir::new().unwrap();
-        let _guard = XdgGuard::set(tmp.path());
-        let profile = sample_oauth_profile();
-        save(&profile).expect("save");
-        let loaded = load().expect("load").expect("profile present");
-        assert_eq!(loaded, profile);
     }
 }

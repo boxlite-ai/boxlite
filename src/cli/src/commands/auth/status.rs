@@ -4,15 +4,10 @@
 use anyhow::{Context, Result};
 
 use crate::credentials;
+use crate::defaults::LOCAL_SERVE_URL;
 
 const API_KEY_ENV: &str = "BOXLITE_API_KEY";
 const URL_ENV: &str = "BOXLITE_REST_URL";
-const DEFAULT_URL: &str = "https://dev.boxlite.ai/api";
-
-enum CredentialKind {
-    ApiKey,
-    OAuth { expires_at: String },
-}
 
 enum Source {
     /// `BOXLITE_API_KEY` set in the environment.
@@ -23,7 +18,6 @@ enum Source {
 
 struct Identity {
     url: String,
-    kind: CredentialKind,
     source: Source,
 }
 
@@ -36,33 +30,23 @@ pub fn run() -> Result<()> {
         }
     };
 
-    let credential_label = match &identity.kind {
-        CredentialKind::ApiKey => "API key".to_string(),
-        CredentialKind::OAuth { expires_at } => {
-            format!("OAuth (access_token expires {expires_at})")
-        }
-    };
     let source_label = match identity.source {
         Source::EnvApiKey => format!("{} env var", API_KEY_ENV),
         Source::File { path_display } => path_display,
     };
 
     println!("Logged in to:    {}", identity.url);
-    println!(
-        "Credential:      {} (from {})",
-        credential_label, source_label
-    );
+    println!("Credential:      API key (from {})", source_label);
     Ok(())
 }
 
 /// Resolve the active credential source. Env vars win over the file (matches
 /// the runtime precedence used by `from_env()`).
 fn resolve_identity() -> Result<Option<Identity>> {
-    if let Ok(_key) = std::env::var(API_KEY_ENV) {
-        let url = std::env::var(URL_ENV).unwrap_or_else(|_| DEFAULT_URL.to_string());
+    if std::env::var(API_KEY_ENV).is_ok() {
+        let url = std::env::var(URL_ENV).unwrap_or_else(|_| LOCAL_SERVE_URL.to_string());
         return Ok(Some(Identity {
             url,
-            kind: CredentialKind::ApiKey,
             source: Source::EnvApiKey,
         }));
     }
@@ -72,17 +56,10 @@ fn resolve_identity() -> Result<Option<Identity>> {
         return Ok(None);
     };
     let path = credentials::path().context("resolving credentials path")?;
-    let path_display = path.display().to_string();
-    let kind = if let Some(oauth) = profile.oauth.as_ref() {
-        CredentialKind::OAuth {
-            expires_at: oauth.expires_at.clone(),
-        }
-    } else {
-        CredentialKind::ApiKey
-    };
     Ok(Some(Identity {
         url: profile.url,
-        kind,
-        source: Source::File { path_display },
+        source: Source::File {
+            path_display: path.display().to_string(),
+        },
     }))
 }

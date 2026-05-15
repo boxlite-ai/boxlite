@@ -50,9 +50,6 @@ comfy-table = "7.2.1"
 # Credentials store (auth login/logout/status)
 rpassword = "7"
 toml = "0.8"
-directories = "5"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
-webbrowser = "1"
 
 gtmpl = "0.7"
 gtmpl_value = "0.5"

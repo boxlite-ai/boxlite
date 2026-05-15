@@ -6,7 +6,6 @@
 
 use clap::{Args, Subcommand};
 
-pub mod device;
 pub mod login;
 pub mod logout;
 pub mod status;

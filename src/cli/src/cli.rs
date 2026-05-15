@@ -219,8 +219,6 @@ impl GlobalFlags {
         {
             opts = opts.with_api_key(key);
         } else if let Some(profile) = stored {
-            // Reuse the credentials module's profile→options conversion so the
-            // precedence rule (api_key > client_credentials) is in one place.
             opts = crate::credentials::into_rest_options(profile);
             // The conversion above also sets the URL from the profile; the
             // caller's --url already won via the precedence check above, so

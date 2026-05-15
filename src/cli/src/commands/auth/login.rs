@@ -1,14 +1,13 @@
-//! `boxlite auth login` — interactive or piped credential setup.
+//! `boxlite auth login` — interactive or piped API-key setup.
 //!
 //! Modes:
-//! - `--api-key-stdin`               : single-line API key on stdin
-//! - `--client-id ID --client-secret-stdin` : OAuth2 client_credentials pair
-//! - no flags                        : interactive prompts (rpassword for secrets)
+//! - `--api-key-stdin` : single-line API key on stdin (CI-friendly; no argv leak)
+//! - no flags          : interactive `rpassword` prompt
 //!
-//! After collecting a credential, we validate it by issuing a single
-//! authenticated call against the server (`runtime.list_info()` → `GET /boxes`).
-//! A `BoxliteError::Config("auth: ...")` from the client surfaces as a 401/403
-//! and is reported as a credential error instead of being silently saved.
+//! After collecting a key we validate it by issuing one authenticated call
+//! against the server (`runtime.list_info()` → `GET /boxes`). A
+//! `BoxliteError::Config("auth: ...")` from the client surfaces as 401/403
+//! and is reported as a credential error rather than being silently saved.
 
 use std::io::{BufRead, Write};
 
@@ -17,60 +16,40 @@ use boxlite::BoxliteRuntime;
 use clap::Args;
 
 use crate::credentials::{self, Profile};
+use crate::defaults::LOCAL_SERVE_URL;
 
-const DEFAULT_URL: &str = "https://dev.boxlite.ai/api";
 const URL_ENV: &str = "BOXLITE_REST_URL";
 
 #[derive(Args, Debug, Clone)]
 pub struct LoginArgs {
-    /// Server URL (default: https://dev.boxlite.ai/api).
+    /// Server URL. Defaults to `LOCAL_SERVE_URL` (matching `boxlite serve`).
     #[arg(long)]
     pub url: Option<String>,
 
-    /// Read a long-lived API key from stdin (one line).
-    #[arg(long, conflicts_with = "web")]
-    pub api_key_stdin: bool,
-
-    /// Open the browser and run the OAuth 2.0 device authorization flow
-    /// (RFC 8628). Returned tokens are persisted to `~/.config/boxlite/credentials.toml`.
+    /// Read a long-lived API key from stdin (one line). The flag takes no
+    /// value, so the secret never appears on argv.
     #[arg(long)]
-    pub web: bool,
-
-    /// When combined with `--web`, do not launch a browser automatically;
-    /// just print the activation URL. Useful for headless / SSH sessions.
-    #[arg(long, requires = "web")]
-    pub no_launch_browser: bool,
+    pub api_key_stdin: bool,
 }
 
 pub async fn run(args: LoginArgs) -> Result<()> {
-    let non_interactive = args.api_key_stdin || args.web;
-    let url = resolve_url(args.url.as_deref(), non_interactive)?;
+    let url = resolve_url(args.url.as_deref(), args.api_key_stdin)?;
 
-    let profile = if args.web {
-        let oauth = super::device::login(&url, args.no_launch_browser)
-            .await
-            .context("running browser device-flow login")?;
-        Profile {
-            url: url.clone(),
-            api_key: None,
-            oauth: Some(oauth),
-        }
-    } else if args.api_key_stdin {
-        let api_key = read_stdin_line("API key")?;
-        Profile {
-            url: url.clone(),
-            api_key: Some(api_key),
-            oauth: None,
-        }
+    let api_key = if args.api_key_stdin {
+        read_stdin_line("API key")?
     } else {
-        prompt_profile(&url)?
+        prompt_api_key()?
+    };
+
+    let profile = Profile {
+        url: url.clone(),
+        api_key: Some(api_key),
     };
 
     validate(&profile).await?;
     credentials::save(&profile).context("saving credentials")?;
 
-    let mode = credential_mode(&profile);
-    println!("Logged in {}", mode);
+    println!("Logged in to {} (API key)", profile.url);
     Ok(())
 }
 
@@ -90,39 +69,18 @@ fn resolve_url(flag: Option<&str>, non_interactive: bool) -> Result<String> {
         return Ok(env_url);
     }
     if non_interactive {
-        return Ok(DEFAULT_URL.to_string());
+        return Ok(LOCAL_SERVE_URL.to_string());
     }
-    prompt_with_default("Server URL", DEFAULT_URL)
+    prompt_with_default("Server URL", LOCAL_SERVE_URL)
 }
 
-fn prompt_profile(url: &str) -> Result<Profile> {
-    let url = prompt_with_default("Server URL", url)?;
-    println!("Auth method:");
-    println!("  1) API key");
-    println!("  2) OAuth client credentials");
-    let choice = prompt_with_default("Choose", "1")?;
-    let trimmed = choice.trim();
-    match trimmed {
-        "1" | "" => {
-            let key =
-                rpassword::prompt_password("API key: ").context("reading API key from terminal")?;
-            let key = key.trim().to_string();
-            if key.is_empty() {
-                bail!("API key cannot be empty");
-            }
-            Ok(Profile {
-                url,
-                api_key: Some(key),
-                oauth: None,
-            })
-        }
-        "2" => {
-            bail!(
-                "OAuth client_credentials grant is no longer supported. Use option 1 (API key) or `boxlite auth login --web` for browser device-flow login."
-            );
-        }
-        other => bail!("invalid auth method choice: {:?}", other),
+fn prompt_api_key() -> Result<String> {
+    let key = rpassword::prompt_password("API key: ").context("reading API key from terminal")?;
+    let key = key.trim().to_string();
+    if key.is_empty() {
+        bail!("API key cannot be empty");
     }
+    Ok(key)
 }
 
 fn prompt_with_default(label: &str, default: &str) -> Result<String> {
@@ -160,13 +118,9 @@ fn read_stdin_line(label: &str) -> Result<String> {
 }
 
 /// Issue one authenticated request to confirm the credential is accepted.
-///
-/// We use `list_info()` (→ `GET /boxes`) because it is the cheapest
-/// authenticated public API on `BoxliteRuntime`. The OAuth path triggers a
-/// `/oauth/tokens` exchange on the first call; the Token path sends the bearer
-/// directly. Either way, a 401/403 surfaces as
-/// `BoxliteError::Config("auth: ...")` — we match on that to give a focused
-/// "authentication failed" error rather than a generic HTTP one.
+/// `list_info()` (→ `GET /boxes`) is the cheapest authenticated public API.
+/// A 401/403 surfaces as `BoxliteError::Config("auth: ...")` — we match on
+/// that string to give a focused error rather than a generic HTTP one.
 async fn validate(profile: &Profile) -> Result<()> {
     let opts = credentials::into_rest_options(profile.clone());
     let runtime = BoxliteRuntime::rest(opts)
@@ -189,13 +143,5 @@ async fn validate(profile: &Profile) -> Result<()> {
                 ))
             }
         }
-    }
-}
-
-fn credential_mode(profile: &Profile) -> &'static str {
-    if profile.api_key.is_some() {
-        "(API key)"
-    } else {
-        "(OAuth client credentials)"
     }
 }

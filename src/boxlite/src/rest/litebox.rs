@@ -222,7 +222,6 @@ impl BoxBackend for RestBox {
         let builder = self
             .client
             .authorized_request(Method::PUT, &path)
-            .await?
             .header("Content-Type", "application/x-tar")
             .body(tar_bytes);
 
@@ -256,7 +255,6 @@ impl BoxBackend for RestBox {
         let builder = self
             .client
             .authorized_request(Method::GET, &path)
-            .await?
             .header("Accept", "application/x-tar");
 
         let resp = builder

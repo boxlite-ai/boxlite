@@ -25,6 +25,7 @@ use boxlite::{
 };
 
 use crate::cli::GlobalFlags;
+use crate::defaults::{LOCAL_SERVE_HOST, LOCAL_SERVE_PORT};
 
 use self::types::{BoxResponse, CreateBoxRequest, ErrorBody, ErrorDetail, ExecRequest};
 
@@ -34,12 +35,12 @@ use self::types::{BoxResponse, CreateBoxRequest, ErrorBody, ErrorDetail, ExecReq
 
 #[derive(Args, Debug)]
 pub struct ServeArgs {
-    /// Port to listen on
-    #[arg(long, default_value = "8100")]
+    /// Port to listen on. Defaults to `LOCAL_SERVE_PORT`.
+    #[arg(long, default_value_t = LOCAL_SERVE_PORT)]
     pub port: u16,
 
-    /// Host/address to bind to
-    #[arg(long, default_value = "0.0.0.0")]
+    /// Host/address to bind to. Defaults to `LOCAL_SERVE_HOST`.
+    #[arg(long, default_value_t = LOCAL_SERVE_HOST.to_string())]
     pub host: String,
 }
 
@@ -601,12 +602,6 @@ async fn try_kill_and_evict(state: &AppState, id: &str, active: &Arc<ActiveExecu
 }
 
 // ============================================================================
-// Error Constants
-// ============================================================================
-
-const ERROR_AUTH: &str = "AuthError";
-
-// ============================================================================
 // Conversions
 // ============================================================================
 
@@ -746,13 +741,10 @@ async fn get_or_fetch_box(state: &AppState, box_id: &str) -> Result<Arc<LiteBox>
 // ============================================================================
 
 fn build_router(state: Arc<AppState>) -> Router {
-    use handlers::{advanced, auth, boxes, config, executions, files, me, metrics, snapshots};
+    use handlers::{advanced, boxes, config, executions, files, me, metrics, snapshots};
 
     Router::new()
-        // Auth & identity (no tenant prefix)
-        .route("/v1/oauth/device_code", post(auth::device_code))
-        .route("/v1/oauth/token", post(auth::token))
-        .route("/v1/oauth/revoke", post(auth::revoke))
+        // Identity (no tenant prefix)
         .route("/v1/me", get(me::get_me))
         .route("/v1/config", get(config::get_config))
         // Runtime metrics

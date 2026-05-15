@@ -40,18 +40,13 @@ info:
     `Authorization: Bearer` header (RFC 6750). The server is **bearer-
     format-agnostic** — any token its validation pipeline can verify is
     accepted. See the `BearerAuth` security scheme for the supported token
-    sources, which include BoxLite-issued API keys and OAuth tokens, plus
-    (configurable per deployment) federated SSO JWTs, third-party OIDC
-    tokens, and customer-issued gateway tokens.
+    sources, which include BoxLite-issued API keys, plus (configurable per
+    deployment) federated SSO JWTs, third-party OIDC tokens, and customer-
+    issued gateway tokens.
 
-    The CLI's `boxlite auth login` provides the two BoxLite-issued paths:
-    `--api-key-stdin` for dashboard API keys, and `--web` for the OAuth 2.0
-    device authorization flow (RFC 8628). The device-flow wire endpoints
-    (`/v1/oauth/device_code`, `/v1/oauth/token`, `/v1/oauth/revoke`) are
-    not documented in this spec because they follow the published IETF
-    RFCs verbatim — see RFC 8628 §3.1, RFC 6749 §4.4, and RFC 7009.
-    Other token sources are configured at the customer's gateway or IdP
-    layer.
+    Token acquisition is out of scope for this contract: dashboard API
+    keys are issued by the BoxLite dashboard; other token sources are
+    configured at the customer's gateway or IdP layer.
 
     Validate a freshly-acquired token via `GET /v1/me`.
 
@@ -62,7 +57,7 @@ info:
     2. `GET /executions/{exec_id}/attach` upgrades to a bidirectional
        WebSocket carrying stdin, stdout, stderr, and in-band control
        (resize, signal, exit). One attach at a time per exec; the exec
-       continues running across WebSocket close so the SDK can reattach.
+       continues running across WebSocket close so a client can reattach.
 
     Out-of-band control endpoints exist for clients that prefer a REST
     style: `GET /executions/{exec_id}` (status), `POST .../resize`,
@@ -140,10 +135,10 @@ paths:
       operationId: getCurrentPrincipal
       summary: Identity and scopes for the calling credential
       description: |
-        Returns the principal (user or service account) and granted scopes for
-        the Bearer credential in the request. Used by `boxlite auth login` to
-        validate freshly-pasted keys and by `boxlite auth status` to render
-        the identity banner.
+        Returns the principal (user or service account) and granted scopes
+        for the Bearer credential in the request. Typical uses: validating
+        a freshly-issued credential, and rendering an identity / scopes
+        banner for the current session.
       tags: [Authentication]
       responses:
         "200":
@@ -597,7 +592,7 @@ paths:
         operation.
 
         On success, any attached WebSocket on `/attach` is closed; the
-        SDK observes an `{"type":"exit","exit_code":...}` text frame
+        client observes an `{"type":"exit","exit_code":...}` text frame
         followed by a normal close.
       tags: [Execution]
       responses:
@@ -622,7 +617,7 @@ paths:
         **Single-attach.** Only one client may be attached at a time. A
         second `GET /attach` to the same `exec_id` while one is connected
         returns `409 Conflict` (no upgrade). The exec keeps running across
-        WebSocket close — the SDK can reconnect to the same `exec_id` and
+        WebSocket close — a client can reconnect to the same `exec_id` and
         resume streaming. Orphaned sessions are reaped per the runner's
         configured policy (default: SIGHUP after 5 min idle).
 
@@ -944,18 +939,10 @@ components:
         validation pipeline is pluggable; new sources can be added without
         client changes.
 
-          1. **BoxLite-issued** (always enabled). Tokens minted by this
-             server come in three kinds:
-               - `blk_live_…` / `blk_test_…` — dashboard-issued API keys.
-                 Long-lived, org-scoped, survives teammate offboarding.
-                 Use for CI, server-side automation, SDK integrations.
-                 Issued at `https://app.boxlite.ai/settings/api-keys`.
-               - `blo_…` — OAuth access tokens from the device-flow grant
-                 (RFC 8628). 15-minute lifetime. Acts as the specific user
-                 who authorized via `boxlite auth login --web`.
-               - `blr_…` — OAuth refresh tokens. Used by the CLI to rotate
-                 access tokens (RFC 6749 §6); never sent as `Authorization:
-                 Bearer` for resource calls.
+          1. **BoxLite-issued** (always enabled). Dashboard-issued API keys
+             (`blk_live_…` / `blk_test_…`) — long-lived, org-scoped,
+             survives teammate offboarding. Issued at
+             `https://app.boxlite.ai/settings/api-keys`.
           2. **Federated SSO / enterprise JWTs** (optional, per-deployment).
              JWTs issued by a configured enterprise IdP (Okta, Auth0,
              Azure AD, Google Workspace). Validated against the IdP's JWKS;
@@ -971,11 +958,9 @@ components:
              token in a configured format, and BoxLite trusts the upstream
              chain.
 
-        Clients (SDKs, CLI) treat all of these identically — opaque strings
-        carried in `Authorization: Bearer`. The CLI's `boxlite auth login`
-        provides the two BoxLite-issued paths (API key paste, OAuth device
-        flow); other sources are configured at the customer's gateway or
-        IdP layer.
+        All sources are treated identically by clients — opaque strings
+        carried in `Authorization: Bearer`. Token acquisition is out of
+        scope for this contract.
 
   # -------------------------------------------------------------------------
   # Parameters
@@ -1238,10 +1223,11 @@ components:
     Principal:
       type: object
       description: |
-        Identity and scope payload returned by `GET /v1/me`. The CLI uses
-        `email`/`display_name` to render `Logged in as ...` after a successful
-        `boxlite auth login`, and `scopes` to surface under-scoped credentials
-        at login time rather than mid-flow.
+        Identity and scope payload returned by `GET /v1/me`. Clients
+        typically use `email` / `display_name` to render an identity
+        banner after credential validation, and inspect `scopes` so
+        under-scoped credentials surface at validation time rather than
+        mid-flow.
       required: [sub, principal_type, prefix, scopes]
       properties:
         sub:
@@ -1255,8 +1241,8 @@ components:
           enum: [user, service_account]
           description: |
             `user` for interactive dashboard-issued keys; `service_account`
-            for automation keys. Modeled as a sum type rather than a nullable
-            `user_id` field so the SDK can dispatch by variant.
+            for automation keys. Modeled as an enum rather than a nullable
+            `user_id` field so clients can dispatch by variant.
         email:
           type: string
           format: email
@@ -1269,17 +1255,19 @@ components:
         prefix:
           type: string
           description: |
-            Tenant/workspace prefix the credential is bound to. The CLI uses
-            this to populate `--prefix` defaults on subsequent calls.
+            Tenant/workspace prefix the credential is bound to. Clients
+            typically use this as the default `{prefix}` path parameter
+            for subsequent calls.
         scopes:
           type: array
           items:
             type: string
             example: "boxes:read"
           description: |
-            Granted scope strings (`boxes:read`, `boxes:write`, etc.). The
-            CLI checks these at login so under-scoped credentials surface
-            immediately rather than at first use.
+            Granted scope strings (`boxes:read`, `boxes:write`, etc.).
+            Clients typically check these at credential-validation time
+            so under-scoped credentials surface immediately rather than
+            at first use.
         expires_at:
           type: string
           format: date-time

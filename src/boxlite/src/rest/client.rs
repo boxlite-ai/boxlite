@@ -10,27 +10,20 @@ use tokio::sync::RwLock;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use super::error::{map_http_error, map_http_status};
-use super::options::{BoxliteRestOptions, Credential, OAuthTokens};
-use super::types::{
-    ErrorResponse, OAuthErrorBody, OAuthTokenForm, OAuthTokenResponse, Principal,
-    SandboxConfigResponse,
-};
-
-const OAUTH_CLIENT_ID: &str = "boxlite-cli";
-const REFRESH_LEEWAY: std::time::Duration = std::time::Duration::from_secs(60);
+use super::options::{BoxliteRestOptions, Credential};
+use super::types::{ErrorResponse, SandboxConfigResponse};
 
 /// HTTP client for the BoxLite REST API.
 ///
-/// Handles base URL construction, bearer auth (API keys or OAuth tokens
-/// with lazy refresh), and error response parsing.
+/// Handles base URL construction, bearer auth (API keys), and error
+/// response parsing.
 #[derive(Clone)]
 pub(crate) struct ApiClient {
     http: Client,
     base_url: String,
     prefix: String,
-    /// Bearer credential. Wrapped in `Arc<RwLock<...>>` because the OAuth
-    /// variant gets mutated on refresh. `None` = unauthenticated.
-    credential: Arc<RwLock<Option<Credential>>>,
+    /// Bearer credential. `None` = unauthenticated.
+    credential: Option<Credential>,
     config_cache: Arc<RwLock<Option<SandboxConfigResponse>>>,
 }
 
@@ -48,7 +41,7 @@ impl ApiClient {
             http,
             base_url,
             prefix,
-            credential: Arc::new(RwLock::new(config.credential.clone())),
+            credential: config.credential.clone(),
             config_cache: Arc::new(RwLock::new(None)),
         })
     }
@@ -64,104 +57,26 @@ impl ApiClient {
         format!("{}/{}{}", self.base_url, self.prefix, path)
     }
 
-    /// Get the current bearer token, refreshing the OAuth access token if
-    /// it is within [`REFRESH_LEEWAY`] of expiring. `None` means the
-    /// client has no credential configured.
-    ///
-    /// After a successful refresh, the rotated tokens are persisted into
-    /// `self.credential` so subsequent calls see the new access_token.
-    /// (Persistence to disk is the caller's responsibility — see
-    /// [`Self::current_credential`].)
-    pub(crate) async fn current_bearer(&self) -> BoxliteResult<Option<String>> {
-        let snapshot = {
-            let guard = self.credential.read().await;
-            guard.clone()
-        };
-        match snapshot {
-            None => Ok(None),
-            Some(Credential::ApiKey { key }) => Ok(Some(key)),
-            Some(Credential::OAuth(tokens)) => {
-                if needs_refresh(&tokens) {
-                    let new_tokens = self.refresh_oauth(&tokens.refresh_token).await?;
-                    let access = new_tokens.access_token.clone();
-                    *self.credential.write().await = Some(Credential::OAuth(new_tokens));
-                    Ok(Some(access))
-                } else {
-                    Ok(Some(tokens.access_token))
-                }
-            }
+    /// Get the configured bearer token. `None` means the client has no
+    /// credential configured.
+    fn current_bearer(&self) -> Option<&str> {
+        match &self.credential {
+            None => None,
+            Some(Credential::ApiKey { key }) => Some(key),
         }
     }
 
-    /// Return the current credential snapshot. The CLI calls this after
-    /// operations to detect whether the SDK refreshed OAuth tokens
-    /// in-memory and persist the rotation to disk.
-    #[allow(dead_code)] // Wired through BoxliteRuntime in a follow-up.
-    pub async fn current_credential(&self) -> Option<Credential> {
-        self.credential.read().await.clone()
-    }
-
-    /// Exchange a refresh_token for fresh OAuth tokens via
-    /// `POST /v1/oauth/token` (RFC 8628 §3.4 refresh_token grant). On
-    /// `invalid_grant` (token was reused / revoked / family invalidated),
-    /// the credential becomes unusable; the caller is expected to delete
-    /// the profile and prompt re-login.
-    async fn refresh_oauth(&self, refresh_token: &str) -> BoxliteResult<OAuthTokens> {
-        let form = OAuthTokenForm {
-            grant_type: "refresh_token",
-            device_code: None,
-            refresh_token: Some(refresh_token),
-            client_id: OAUTH_CLIENT_ID,
-        };
-        let resp = self
-            .http
-            .post(self.url_root("/oauth/token"))
-            .form(&form)
-            .send()
-            .await
-            .map_err(|e| BoxliteError::Config(format!("oauth refresh failed: {e}")))?;
-
-        let status = resp.status();
-        if !status.is_success() {
-            let text = resp.text().await.unwrap_or_default();
-            let kind = serde_json::from_str::<OAuthErrorBody>(&text)
-                .map(|b| b.error)
-                .unwrap_or_else(|_| "unknown_error".into());
-            return Err(BoxliteError::Config(format!(
-                "oauth refresh rejected ({status} / {kind}): {text}"
-            )));
-        }
-
-        let token_resp: OAuthTokenResponse = resp
-            .json()
-            .await
-            .map_err(|e| BoxliteError::Config(format!("failed to parse token response: {e}")))?;
-
-        Ok(OAuthTokens {
-            access_token: token_resp.access_token,
-            // Servers MAY rotate the refresh_token (recommended) or keep
-            // the same one. When omitted, reuse the prior value.
-            refresh_token: token_resp
-                .refresh_token
-                .unwrap_or_else(|| refresh_token.to_string()),
-            expires_at: std::time::SystemTime::now()
-                + std::time::Duration::from_secs(token_resp.expires_in),
-        })
-    }
-
-    /// Add auth header to a request builder. Refreshes OAuth tokens
-    /// lazily — this method may make an extra HTTP call to
-    /// `POST /v1/oauth/token`.
-    async fn authorize(&self, builder: RequestBuilder) -> BoxliteResult<RequestBuilder> {
-        match self.current_bearer().await? {
-            Some(bearer) => Ok(builder.bearer_auth(bearer)),
-            None => Ok(builder),
+    /// Add auth header to a request builder.
+    fn authorize(&self, builder: RequestBuilder) -> RequestBuilder {
+        match self.current_bearer() {
+            Some(bearer) => builder.bearer_auth(bearer),
+            None => builder,
         }
     }
 
     /// Send a request and parse a JSON response.
     async fn send_json<T: DeserializeOwned>(&self, builder: RequestBuilder) -> BoxliteResult<T> {
-        let builder = self.authorize(builder).await?;
+        let builder = self.authorize(builder);
         let resp = builder
             .send()
             .await
@@ -179,7 +94,7 @@ impl ApiClient {
 
     /// Send a request and expect no response body (204).
     async fn send_no_content(&self, builder: RequestBuilder) -> BoxliteResult<()> {
-        let builder = self.authorize(builder).await?;
+        let builder = self.authorize(builder);
         let resp = builder
             .send()
             .await
@@ -251,7 +166,7 @@ impl ApiClient {
         body: &B,
     ) -> BoxliteResult<Vec<u8>> {
         let builder = self.http.post(self.url(path)).json(body);
-        let builder = self.authorize(builder).await?;
+        let builder = self.authorize(builder);
         let resp = builder
             .send()
             .await
@@ -281,7 +196,7 @@ impl ApiClient {
 
     pub async fn head_exists(&self, path: &str) -> BoxliteResult<bool> {
         let builder = self.http.head(self.url(path));
-        let builder = self.authorize(builder).await?;
+        let builder = self.authorize(builder);
         let resp = builder
             .send()
             .await
@@ -298,7 +213,7 @@ impl ApiClient {
 
     /// Open an authenticated WebSocket connection at the given REST path.
     ///
-    /// Translates the http(s) URL to ws(s), attaches the OAuth2 Bearer header
+    /// Translates the http(s) URL to ws(s), attaches the Bearer header
     /// when configured, and returns the upgraded stream.
     pub(crate) async fn connect_ws(
         &self,
@@ -328,7 +243,7 @@ impl ApiClient {
             .into_client_request()
             .map_err(|e| BoxliteError::Internal(format!("WS request build failed: {}", e)))?;
 
-        if let Some(bearer) = self.current_bearer().await? {
+        if let Some(bearer) = self.current_bearer() {
             let value = HeaderValue::from_str(&format!("Bearer {}", bearer))
                 .map_err(|e| BoxliteError::Internal(format!("WS auth header invalid: {}", e)))?;
             request.headers_mut().insert("Authorization", value);
@@ -341,20 +256,9 @@ impl ApiClient {
     }
 
     /// Build an authorized request (for custom operations like file upload/download).
-    pub async fn authorized_request(
-        &self,
-        method: Method,
-        path: &str,
-    ) -> BoxliteResult<RequestBuilder> {
+    pub fn authorized_request(&self, method: Method, path: &str) -> RequestBuilder {
         let builder = self.http.request(method, self.url(path));
-        self.authorize(builder).await
-    }
-
-    /// Fetch the principal (identity + scopes) for the configured credential.
-    /// Calls `GET /v1/me`.
-    #[allow(dead_code)] // Wired through BoxliteRuntime + CLI `auth status` in a follow-up.
-    pub async fn get_principal(&self) -> BoxliteResult<Principal> {
-        self.get_root("/me").await
+        self.authorize(builder)
     }
 
     pub async fn get_config(&self) -> BoxliteResult<SandboxConfigResponse> {
@@ -430,12 +334,6 @@ impl ApiClient {
 
 /// Map a tungstenite connect error to a typed `BoxliteError`. The WS
 /// upgrade returns HTTP status codes for rejections (404 for a missing
-/// Is this OAuth access token within [`REFRESH_LEEWAY`] of expiring?
-fn needs_refresh(tokens: &OAuthTokens) -> bool {
-    let deadline = std::time::SystemTime::now() + REFRESH_LEEWAY;
-    tokens.expires_at <= deadline
-}
-
 /// session, 409 for an already-attached one); callers want to see those
 /// as `NotFound` / `AlreadyExists` rather than generic `Internal` so
 /// they can map onward to `SessionReaped`.
