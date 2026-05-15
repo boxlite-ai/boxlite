@@ -1,14 +1,21 @@
-"""Unit tests for the Credential abstraction (no runtime needed).
+"""Tests for the Credential abstraction.
 
 Verifies: a `Credential` ABC with `ApiKeyCredential` virtual-registered,
 `get_token()` returning a redacted `AccessToken`, and `from_env()`
 discovery.
+
+Marked `integration` because these exercise the native PyO3 classes
+(`boxlite.ApiKeyCredential` / `BoxliteRestOptions`); the CI unit job
+does not build the extension, so native-dependent tests run in the
+integration job (same convention as test_options.py / test_images.py).
 """
 
 from __future__ import annotations
 
 import boxlite
 import pytest
+
+pytestmark = pytest.mark.integration
 
 
 def test_api_key_credential_get_token():
