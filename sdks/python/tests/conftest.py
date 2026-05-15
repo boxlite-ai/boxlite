@@ -13,6 +13,18 @@ import pytest
 
 import boxlite
 
+# Pull through mirrors before falling back to docker.io. Anonymous
+# Docker Hub pulls are rate-limited (100/6h per IP) and intermittently
+# return "Not authorized" under CI/hook load, flaking any image-pulling
+# integration test. Mirrors absorb the bulk of pulls so docker.io is a
+# last resort. Kept in sync with sdks/node/tests/integration-setup.ts.
+_TEST_REGISTRIES = [
+    boxlite.ImageRegistry(host="docker.m.daocloud.io", search=True),
+    boxlite.ImageRegistry(host="docker.xuanyuan.me", search=True),
+    boxlite.ImageRegistry(host="docker.1ms.run", search=True),
+    boxlite.ImageRegistry(host="docker.io", search=True),
+]
+
 
 @pytest.fixture(scope="session")
 def shared_runtime():
@@ -21,7 +33,7 @@ def shared_runtime():
     This fixture creates a single Boxlite runtime that is reused across
     the entire test session, avoiding lock contention between tests.
     """
-    rt = boxlite.Boxlite(boxlite.Options())
+    rt = boxlite.Boxlite(boxlite.Options(image_registries=_TEST_REGISTRIES))
     yield rt
     # Runtime cleanup happens when Python garbage collects the object
 
