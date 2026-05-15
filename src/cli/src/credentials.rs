@@ -165,7 +165,6 @@ fn write_secure(path: &std::path::Path, data: &[u8]) -> Result<()> {
 mod tests {
     use super::*;
     use crate::defaults::LOCAL_SERVE_URL;
-    use boxlite::Credential;
     use std::sync::Mutex;
     use tempfile::TempDir;
 
@@ -259,17 +258,14 @@ mod tests {
         assert_eq!(mode, 0o600, "file mode should be 0600, got {:o}", mode);
     }
 
-    #[test]
-    fn into_rest_options_uses_api_key() {
+    #[tokio::test]
+    async fn into_rest_options_uses_api_key() {
         let profile = sample_api_key_profile();
         let options = into_rest_options(profile);
-        match options.credential {
-            Some(Credential::ApiKey { key }) => assert_eq!(key, "opaque-key-123"),
-            other => panic!(
-                "expected Credential::ApiKey, got is_some={}",
-                other.is_some()
-            ),
-        }
+        let cred = options.credential.expect("credential set");
+        let tok = cred.get_token().await.expect("get_token");
+        assert_eq!(tok.token, "opaque-key-123");
+        assert!(tok.expires_at.is_none(), "API keys must not carry expiry");
     }
 
     #[test]

@@ -1,32 +1,12 @@
 //! Configuration for connecting to a remote BoxLite REST API server.
 
 use std::fmt;
-
-use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
+use super::credential::{ApiKeyCredential, Credential};
 use crate::runtime::constants::envs;
-
-/// Bearer credential for the REST API.
-///
-/// The wire form is always `Authorization: Bearer <token>`. The server is
-/// bearer-format-agnostic — customers fronting BoxLite with their own auth
-/// layer can put any opaque bearer here; the SDK doesn't validate format.
-///
-/// Marked `#[non_exhaustive]` so additional auth modes (e.g. OAuth device
-/// flow) can be added without breaking downstream Rust callers. FFI layers
-/// keep flat per-mode fields (`api_key`, future `oauth`, …) and translate
-/// here in their `From` impls — the sum stays internal to Rust.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-#[non_exhaustive]
-pub enum Credential {
-    /// Opaque long-lived API key (`blk_live_…` from the BoxLite dashboard,
-    /// or any other opaque bearer recognized by the server's validation
-    /// pipeline).
-    ApiKey { key: String },
-}
 
 /// Configuration for connecting to a remote BoxLite REST API server.
 ///
@@ -40,7 +20,7 @@ pub enum Credential {
 ///
 /// // With an API key (long-lived bearer)
 /// let opts = BoxliteRestOptions::new("https://api.example.com")
-///     .with_api_key("blk_live_opaque".into());
+///     .with_api_key("blk_live_opaque");
 ///
 /// // From environment variables
 /// let opts = BoxliteRestOptions::from_env().unwrap();
@@ -51,7 +31,7 @@ pub struct BoxliteRestOptions {
     pub url: String,
 
     /// Bearer credential. `None` = unauthenticated.
-    pub credential: Option<Credential>,
+    pub credential: Option<Arc<dyn Credential>>,
 
     /// API path prefix (default: "v1").
     pub prefix: Option<String>,
@@ -79,7 +59,7 @@ impl BoxliteRestOptions {
 
         let credential = std::env::var(envs::BOXLITE_API_KEY)
             .ok()
-            .map(|key| Credential::ApiKey { key });
+            .map(|key| Arc::new(ApiKeyCredential::new(key)) as Arc<dyn Credential>);
 
         let prefix = std::env::var(envs::BOXLITE_REST_PREFIX).ok();
 
@@ -90,14 +70,15 @@ impl BoxliteRestOptions {
         })
     }
 
-    /// Builder-style: set an opaque API key.
-    pub fn with_api_key(mut self, key: String) -> Self {
-        self.credential = Some(Credential::ApiKey { key });
+    /// Builder-style: set an opaque API key. Convenience wrapper that
+    /// constructs an [`ApiKeyCredential`] internally.
+    pub fn with_api_key(mut self, key: impl Into<String>) -> Self {
+        self.credential = Some(Arc::new(ApiKeyCredential::new(key)));
         self
     }
 
-    /// Builder-style: set the full credential value (typed).
-    pub fn with_credential(mut self, credential: Credential) -> Self {
+    /// Builder-style: set any [`Credential`] implementation.
+    pub fn with_credential(mut self, credential: Arc<dyn Credential>) -> Self {
         self.credential = Some(credential);
         self
     }
@@ -116,21 +97,14 @@ impl BoxliteRestOptions {
 
 impl fmt::Debug for BoxliteRestOptions {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Full-mask redaction. Token length and last-4 both leak signal —
-        // a length channel narrows brute-force search, a suffix can
-        // correlate with a leaked token.
-        let mut s = f.debug_struct("BoxliteRestOptions");
-        s.field("url", &self.url);
-        match &self.credential {
-            None => {
-                s.field("credential", &Option::<()>::None);
-            }
-            Some(Credential::ApiKey { .. }) => {
-                s.field("credential", &"ApiKey([REDACTED])");
-            }
-        }
-        s.field("prefix", &self.prefix);
-        s.finish()
+        // The inner `dyn Credential` Debug impl is responsible for
+        // redacting its own secret material (verified in credential.rs
+        // tests). `Option<Arc<dyn Credential>>` Debug delegates to it.
+        f.debug_struct("BoxliteRestOptions")
+            .field("url", &self.url)
+            .field("credential", &self.credential)
+            .field("prefix", &self.prefix)
+            .finish()
     }
 }
 
@@ -138,22 +112,21 @@ impl fmt::Debug for BoxliteRestOptions {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_new_minimal() {
+    #[tokio::test]
+    async fn test_new_minimal() {
         let opts = BoxliteRestOptions::new("https://api.example.com");
         assert_eq!(opts.url, "https://api.example.com");
         assert!(opts.credential.is_none());
         assert!(opts.prefix.is_none());
     }
 
-    #[test]
-    fn test_with_api_key() {
-        let opts =
-            BoxliteRestOptions::new("https://api.example.com").with_api_key("blk_live_x".into());
-        match opts.credential {
-            Some(Credential::ApiKey { key }) => assert_eq!(key, "blk_live_x"),
-            other => panic!("expected ApiKey, got is_some={}", other.is_some()),
-        }
+    #[tokio::test]
+    async fn test_with_api_key() {
+        let opts = BoxliteRestOptions::new("https://api.example.com").with_api_key("blk_live_x");
+        let cred = opts.credential.expect("credential set");
+        let tok = cred.get_token().await.expect("get_token");
+        assert_eq!(tok.token, "blk_live_x");
+        assert!(tok.expires_at.is_none());
     }
 
     #[test]
@@ -170,8 +143,8 @@ mod tests {
 
     #[test]
     fn test_debug_redacts_api_key() {
-        let opts = BoxliteRestOptions::new("https://api.example.com")
-            .with_api_key("opaque-key-1234".into());
+        let opts =
+            BoxliteRestOptions::new("https://api.example.com").with_api_key("opaque-key-1234");
         let dbg = format!("{:?}", opts);
         assert!(
             !dbg.contains("opaque-key-1234"),

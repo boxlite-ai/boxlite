@@ -10,20 +10,20 @@ Demonstrates:
 
 Prerequisites:
     make dev:python
-    cd openapi/reference-server && uv run --active server.py --port 8080
+    boxlite serve --port 8100
 """
 
 import asyncio
 
-from boxlite import Boxlite, BoxOptions, BoxliteRestOptions
+from boxlite import ApiKeyCredential, Boxlite, BoxOptions, BoxliteRestOptions
 
 
-SERVER_URL = "http://localhost:8080"
+SERVER_URL = "http://localhost:8100"
 
 
 def connect() -> Boxlite:
     return Boxlite.rest(BoxliteRestOptions(
-        url=SERVER_URL, client_id="test-client", client_secret="test-secret",
+        url=SERVER_URL, credential=ApiKeyCredential("local-dev-key"),
     ))
 
 

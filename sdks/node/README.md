@@ -92,6 +92,31 @@ main();
 
 ## API Reference
 
+### Remote BoxLite server (REST)
+
+Connect to a remote BoxLite server instead of the local runtime. Auth
+uses an Azure-style credential class: construct an `ApiKeyCredential`
+and pass it positionally — `Boxlite.rest(url, credential)` mirrors
+`new KeyClient(vaultUrl, credential)` from `@azure/identity`.
+
+```typescript
+import { JsBoxlite, ApiKeyCredential } from '@boxlite-ai/boxlite';
+
+const rt = JsBoxlite.rest(
+  'http://localhost:8100',
+  new ApiKeyCredential('your-api-key'),
+);
+const boxes = await rt.listInfo();
+
+// Env discovery — returns null when BOXLITE_API_KEY is unset:
+const cred = ApiKeyCredential.fromEnv();
+const rt2 = JsBoxlite.rest('http://localhost:8100', cred ?? undefined);
+```
+
+`ApiKeyCredential` structurally satisfies the exported `Credential`
+interface; functions can type their parameter as `Credential` and
+accept any future credential kind without a signature change.
+
 ### Runtime Registry Options
 
 ```typescript

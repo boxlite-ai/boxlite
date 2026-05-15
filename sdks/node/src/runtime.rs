@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use boxlite::{BoxArchive, BoxOptions, BoxliteRuntime};
+use boxlite::{BoxArchive, BoxOptions, BoxliteRestOptions, BoxliteRuntime};
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
@@ -8,7 +8,7 @@ use crate::box_handle::JsBox;
 use crate::images::JsImageHandle;
 use crate::info::JsBoxInfo;
 use crate::metrics::JsRuntimeMetrics;
-use crate::options::{JsBoxOptions, JsBoxliteRestOptions, JsOptions, js_options_into_core};
+use crate::options::{ApiKeyCredential, JsBoxOptions, JsOptions, js_options_into_core};
 use crate::util::map_err;
 
 /// BoxLite runtime instance.
@@ -77,9 +77,24 @@ impl JsBoxlite {
     }
 
     /// Create a runtime that connects to a remote BoxLite REST backend.
+    ///
+    /// `credential` is an `ApiKeyCredential` (or any future credential
+    /// class). Positional `(url, credential?, prefix?)` mirrors Azure's
+    /// `new KeyClient(vaultUrl, credential)`.
     #[napi(factory)]
-    pub fn rest(options: JsBoxliteRestOptions) -> Result<Self> {
-        let runtime = BoxliteRuntime::rest(options.into()).map_err(map_err)?;
+    pub fn rest(
+        url: String,
+        credential: Option<&ApiKeyCredential>,
+        prefix: Option<String>,
+    ) -> Result<Self> {
+        let mut opts = BoxliteRestOptions::new(url);
+        if let Some(cred) = credential {
+            opts = opts.with_api_key(cred.core_key().to_string());
+        }
+        if let Some(p) = prefix {
+            opts = opts.with_prefix(p);
+        }
+        let runtime = BoxliteRuntime::rest(opts).map_err(map_err)?;
         Ok(Self {
             runtime: Arc::new(runtime),
         })

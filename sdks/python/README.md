@@ -158,6 +158,32 @@ for image in await runtime.images.list():
     print(image.repository, image.tag, image.id)
 ```
 
+### Remote BoxLite server (REST)
+
+Connect to a remote BoxLite server instead of the local runtime. Auth
+uses an Azure-style credential class: `ApiKeyCredential` is a concrete
+implementation of the `Credential` ABC.
+
+```python
+from boxlite import Boxlite, BoxliteRestOptions, ApiKeyCredential
+
+rt = Boxlite.rest(BoxliteRestOptions(
+    url="http://localhost:8100",
+    credential=ApiKeyCredential("your-api-key"),
+))
+boxes = await rt.list_info()
+
+# Env discovery — returns None when BOXLITE_API_KEY is unset:
+cred = ApiKeyCredential.from_env()
+
+# Or read everything (BOXLITE_REST_URL + BOXLITE_API_KEY) from the env:
+rt = Boxlite.rest(BoxliteRestOptions.from_env())
+```
+
+`isinstance(ApiKeyCredential(k), Credential)` is `True` (registered as
+a virtual subclass), so code can type-check against the `Credential`
+ABC and accept any future credential kind unchanged.
+
 ### Box Configuration
 
 #### `boxlite.BoxOptions`

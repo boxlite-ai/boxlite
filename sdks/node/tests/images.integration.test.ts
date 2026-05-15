@@ -17,7 +17,7 @@ function newIsolatedRuntime() {
 
 describe("runtime image handle integration", { timeout: 120_000 }, () => {
   test("REST runtime rejects image handle access", () => {
-    const runtime = JsBoxlite.rest({ url: "http://localhost:1" });
+    const runtime = JsBoxlite.rest("http://localhost:1");
 
     expect(() => runtime.images).toThrow(/Image operations not supported/);
   });

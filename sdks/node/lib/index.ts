@@ -33,6 +33,10 @@ export type {
 export const JsBoxlite = getJsBoxlite();
 export type { CopyOptions } from "./copy.js";
 
+// Credential abstraction (Azure-style: structural `Credential` interface
+// + concrete `ApiKeyCredential` class).
+export { ApiKeyCredential, type Credential, type AccessToken } from "./auth.js";
+
 // Export native module loader for advanced use cases
 export { getNativeModule, getJsBoxlite };
 
