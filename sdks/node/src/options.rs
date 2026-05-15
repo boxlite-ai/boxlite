@@ -445,7 +445,7 @@ pub struct JsAccessToken {
 /// Long-lived opaque API key credential.
 ///
 /// Concrete implementation of the `Credential` interface (see
-/// `lib/auth.ts`). Pass an instance to `Boxlite.rest(url, credential)`.
+/// `lib/credential.ts`). Pass an instance to `Boxlite.rest(url, credential)`.
 #[napi]
 #[derive(Clone)]
 pub struct ApiKeyCredential {

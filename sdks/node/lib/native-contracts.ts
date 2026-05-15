@@ -124,7 +124,7 @@ export interface JsAccessToken {
 }
 
 /** Native API-key credential class. Concrete implementation of the
- *  `Credential` interface (see ./auth). */
+ *  `Credential` interface (see ./credential). */
 export interface ApiKeyCredential {
   getToken(): JsAccessToken;
 }

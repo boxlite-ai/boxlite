@@ -799,7 +799,7 @@ impl PyAccessToken {
 /// Long-lived opaque API key credential.
 ///
 /// Concrete implementation of the `Credential` ABC (see
-/// ``boxlite.auth``). Registered as a virtual subclass there, so
+/// ``boxlite.credential``). Registered as a virtual subclass there, so
 /// ``isinstance(ApiKeyCredential(k), Credential)`` is True.
 ///
 /// Example::

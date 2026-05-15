@@ -75,7 +75,7 @@ try:
         "ExportOptions",
     ]
     # Credential abstraction (ABC + virtual-registered native classes)
-    from .auth import Credential  # noqa: F401
+    from .credential import Credential  # noqa: F401
 
     __all__.append("Credential")
 except ImportError as e:
