@@ -70,7 +70,7 @@ pub async fn run(args: LoginArgs) -> Result<()> {
     credentials::save(&profile).context("saving credentials")?;
 
     let mode = credential_mode(&profile);
-    println!("Logged in to {} {}", profile.url, mode);
+    println!("Logged in {}", mode);
     Ok(())
 }
 
