@@ -545,7 +545,7 @@ async def get_config():
 @app.post("/v1/oauth/device_code")
 async def device_code(request: Request):
     """RFC 8628 §3.1 — start a device authorization flow. Auto-completes."""
-    _body = await request.form()
+    await request.form()
     return {
         "device_code": "local-device-code",
         "user_code": LOCAL_USER_CODE,
@@ -585,7 +585,7 @@ async def oauth_token(request: Request):
 @app.post("/v1/oauth/revoke")
 async def oauth_revoke(request: Request):
     """RFC 7009 §2.2 — always 200, idempotent."""
-    _body = await request.form()
+    await request.form()
     return {}
 
 

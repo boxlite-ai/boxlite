@@ -254,11 +254,11 @@ mod tests {
         let dbg = format!("{:?}", opts);
         assert!(
             !dbg.contains("blo_secret-access"),
-            "Debug output leaked access_token: {dbg}"
+            "Debug output leaked access_token"
         );
         assert!(
             !dbg.contains("blr_secret-refresh"),
-            "Debug output leaked refresh_token: {dbg}"
+            "Debug output leaked refresh_token"
         );
     }
 }
