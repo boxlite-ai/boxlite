@@ -36,17 +36,22 @@ info:
 
     ## Authentication
 
-    All endpoints (except `GET /v1/config` and the `/v1/oauth/*` endpoints)
-    require an opaque token in the `Authorization: Bearer` header (RFC 6750).
-    The server is **bearer-format-agnostic** — any token its validation
-    pipeline can verify is accepted. See the `BearerAuth` security scheme
-    for the supported token sources, which include BoxLite-issued API keys
-    and OAuth tokens, plus (configurable per deployment) federated SSO JWTs,
-    third-party OIDC tokens, and customer-issued gateway tokens.
+    All endpoints (except `GET /v1/config`) require an opaque token in the
+    `Authorization: Bearer` header (RFC 6750). The server is **bearer-
+    format-agnostic** — any token its validation pipeline can verify is
+    accepted. See the `BearerAuth` security scheme for the supported token
+    sources, which include BoxLite-issued API keys and OAuth tokens, plus
+    (configurable per deployment) federated SSO JWTs, third-party OIDC
+    tokens, and customer-issued gateway tokens.
 
-    The CLI's `boxlite auth login` provides the two BoxLite-issued paths
-    (`--api-key-stdin` for API keys, `--web` for OAuth device flow). Other
-    sources are configured at the customer's gateway or IdP layer.
+    The CLI's `boxlite auth login` provides the two BoxLite-issued paths:
+    `--api-key-stdin` for dashboard API keys, and `--web` for the OAuth 2.0
+    device authorization flow (RFC 8628). The device-flow wire endpoints
+    (`/v1/oauth/device_code`, `/v1/oauth/token`, `/v1/oauth/revoke`) are
+    not documented in this spec because they follow the published IETF
+    RFCs verbatim — see RFC 8628 §3.1, RFC 6749 §4.4, and RFC 7009.
+    Other token sources are configured at the customer's gateway or IdP
+    layer.
 
     Validate a freshly-acquired token via `GET /v1/me`.
 
@@ -149,101 +154,6 @@ paths:
                 $ref: "#/components/schemas/Principal"
         "401":
           $ref: "#/components/responses/UnauthorizedError"
-
-  /oauth/device_code:
-    post:
-      operationId: initiateDeviceAuthorization
-      summary: Begin the OAuth 2.0 device authorization flow (RFC 8628)
-      description: |
-        CLI calls this without credentials to start a device-flow login. The
-        response contains a short `user_code` the human pastes into the
-        verification URL (or opens the `verification_uri_complete` directly),
-        plus a `device_code` the CLI polls `/v1/oauth/token` with.
-
-        Device flow is preferred over loopback PKCE because BoxLite users
-        often run the CLI inside containers / SSH sessions / remote dev pods
-        where binding `127.0.0.1` for a callback fails.
-      tags: [Authentication]
-      security: []
-      requestBody:
-        required: true
-        content:
-          application/x-www-form-urlencoded:
-            schema:
-              $ref: "#/components/schemas/DeviceAuthorizationRequest"
-      responses:
-        "200":
-          description: Device flow initiated
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/DeviceAuthorizationResponse"
-
-  /oauth/token:
-    post:
-      operationId: exchangeOAuthToken
-      summary: Exchange a device_code (or refresh_token) for an access token
-      description: |
-        Handles two grant types:
-          - `urn:ietf:params:oauth:grant-type:device_code` (RFC 8628 §3.4):
-            CLI polls this after `/v1/oauth/device_code` until the user
-            authorizes in their browser. Returns
-            `authorization_pending` / `slow_down` (HTTP 400) until ready.
-          - `refresh_token` (RFC 6749 §6): rotates the refresh token and
-            returns a fresh access token. The previous refresh_token is
-            invalidated; reusing it triggers family invalidation (Auth0
-            pattern) — all tokens in the chain are revoked.
-
-        No `client_secret` is accepted; the CLI is a public OAuth client.
-      tags: [Authentication]
-      security: []
-      requestBody:
-        required: true
-        content:
-          application/x-www-form-urlencoded:
-            schema:
-              $ref: "#/components/schemas/OAuthTokenRequest"
-      responses:
-        "200":
-          description: Token issued successfully
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/OAuthTokenResponse"
-        "400":
-          description: |
-            Standard OAuth 2.0 error responses (RFC 6749 §5.2 + RFC 8628 §3.5):
-              - `authorization_pending` — user has not yet authorized; CLI
-                should continue polling.
-              - `slow_down` — polling too frequently; increase interval by 5s.
-              - `expired_token` — device_code expired; restart the flow.
-              - `access_denied` — user explicitly denied.
-              - `invalid_grant` — refresh_token rejected (reused, revoked, or
-                family invalidated).
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/OAuthError"
-
-  /oauth/revoke:
-    post:
-      operationId: revokeOAuthToken
-      summary: Revoke an OAuth token (RFC 7009)
-      description: |
-        Logout. Revokes the supplied token (and its family, if it is a
-        refresh token). Always returns 200 per RFC 7009 §2.2 — never leaks
-        whether the token existed.
-      tags: [Authentication]
-      security: []
-      requestBody:
-        required: true
-        content:
-          application/x-www-form-urlencoded:
-            schema:
-              $ref: "#/components/schemas/OAuthRevokeRequest"
-      responses:
-        "200":
-          description: Revoked (always returned, idempotent)
 
   # -------------------------------------------------------------------------
   # Boxes
@@ -1040,12 +950,12 @@ components:
                  Long-lived, org-scoped, survives teammate offboarding.
                  Use for CI, server-side automation, SDK integrations.
                  Issued at `https://app.boxlite.ai/settings/api-keys`.
-               - `blo_…` — OAuth access tokens from `POST /v1/oauth/token`
-                 (device-flow grant). 15-minute lifetime. Acts as the
-                 specific user who authorized via `boxlite auth login --web`.
-               - `blr_…` — OAuth refresh tokens. Only sent to
-                 `POST /v1/oauth/token` (`grant_type=refresh_token`), never
-                 as `Authorization: Bearer` for resource calls.
+               - `blo_…` — OAuth access tokens from the device-flow grant
+                 (RFC 8628). 15-minute lifetime. Acts as the specific user
+                 who authorized via `boxlite auth login --web`.
+               - `blr_…` — OAuth refresh tokens. Used by the CLI to rotate
+                 access tokens (RFC 6749 §6); never sent as `Authorization:
+                 Bearer` for resource calls.
           2. **Federated SSO / enterprise JWTs** (optional, per-deployment).
              JWTs issued by a configured enterprise IdP (Okta, Auth0,
              Azure AD, Google Workspace). Validated against the IdP's JWKS;
@@ -1377,156 +1287,6 @@ components:
           description: |
             Optional expiry. `null` for long-lived dashboard-issued keys;
             ISO 8601 timestamp for rotating credentials.
-
-    DeviceAuthorizationRequest:
-      type: object
-      required: [client_id]
-      properties:
-        client_id:
-          type: string
-          description: |
-            Public client identifier. The BoxLite CLI uses the literal
-            value `boxlite-cli`. No `client_secret` — public client.
-          example: boxlite-cli
-        scope:
-          type: string
-          description: |
-            Space-delimited scope list (RFC 6749 §3.3). Defaults to the
-            full set the CLI needs.
-          example: "box:read box:write box:exec image:read image:write me:read"
-
-    DeviceAuthorizationResponse:
-      type: object
-      required: [device_code, user_code, verification_uri, expires_in, interval]
-      description: |
-        RFC 8628 §3.2 device authorization response.
-      properties:
-        device_code:
-          type: string
-          description: Opaque code the CLI polls `/oauth/token` with.
-        user_code:
-          type: string
-          description: |
-            Short human-typeable code (8 chars, dash-separated). The user
-            enters this at `verification_uri`.
-          example: "WDJB-MJHT"
-        verification_uri:
-          type: string
-          format: uri
-          description: URL the user opens to authorize.
-          example: "https://app.boxlite.ai/activate"
-        verification_uri_complete:
-          type: string
-          format: uri
-          description: |
-            Optional URL that embeds `user_code` for one-click activation.
-            The CLI displays this as a clickable link when available.
-          example: "https://app.boxlite.ai/activate?user_code=WDJB-MJHT"
-        expires_in:
-          type: integer
-          description: Lifetime of `device_code` in seconds.
-          example: 600
-        interval:
-          type: integer
-          description: Minimum seconds between polls of `/oauth/token`.
-          example: 5
-
-    OAuthTokenRequest:
-      type: object
-      required: [grant_type]
-      description: |
-        Form-encoded request to `POST /oauth/token`. The `grant_type`
-        determines which other fields are required.
-      properties:
-        grant_type:
-          type: string
-          enum:
-            - "urn:ietf:params:oauth:grant-type:device_code"
-            - "refresh_token"
-          description: |
-            `device_code` grant requires `device_code` + `client_id`.
-            `refresh_token` grant requires `refresh_token` + `client_id`.
-        device_code:
-          type: string
-          description: Required when grant_type is `device_code`.
-        refresh_token:
-          type: string
-          description: Required when grant_type is `refresh_token`.
-        client_id:
-          type: string
-          description: Public client identifier (e.g., `boxlite-cli`).
-
-    OAuthTokenResponse:
-      type: object
-      required: [access_token, token_type, expires_in]
-      description: RFC 6749 §5.1 token response.
-      properties:
-        access_token:
-          type: string
-          description: |
-            Opaque bearer token starting with `blo_`. Send as
-            `Authorization: Bearer <access_token>` to resource endpoints.
-          example: "blo_AbCdEfGhIjKlMnOpQrStUvWxYz012345"
-        token_type:
-          type: string
-          enum: [Bearer]
-        expires_in:
-          type: integer
-          description: Access token lifetime in seconds.
-          example: 900
-        refresh_token:
-          type: string
-          description: |
-            Opaque token starting with `blr_`. Stored by the CLI and used
-            to obtain a fresh `access_token`. Rotated on every refresh.
-          example: "blr_ZyXwVuTsRqPoNmLkJiHgFeDcBa543210"
-        scope:
-          type: string
-          description: Granted scopes (space-delimited).
-
-    OAuthRevokeRequest:
-      type: object
-      required: [token]
-      description: RFC 7009 §2.1 token revocation request.
-      properties:
-        token:
-          type: string
-          description: |
-            The access_token or refresh_token to revoke. If a refresh_token
-            is provided, the entire token family is invalidated.
-        token_type_hint:
-          type: string
-          enum: [access_token, refresh_token]
-          description: |
-            Optional hint to speed up server-side lookup. Servers MUST
-            still extend the search to the other type if the hinted lookup
-            fails (§4.1.2).
-
-    OAuthError:
-      type: object
-      required: [error]
-      description: RFC 6749 §5.2 / RFC 8628 §3.5 error response.
-      properties:
-        error:
-          type: string
-          enum:
-            - authorization_pending
-            - slow_down
-            - expired_token
-            - access_denied
-            - invalid_grant
-            - invalid_request
-            - invalid_client
-            - unauthorized_client
-            - unsupported_grant_type
-            - invalid_scope
-        error_description:
-          type: string
-          description: Human-readable explanation, optional per §5.2.
-        error_uri:
-          type: string
-          format: uri
-          description: Optional URL to a page explaining the error.
 
     # =======================================================================
     # Error Model
