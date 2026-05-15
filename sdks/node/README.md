@@ -94,10 +94,9 @@ main();
 
 ### Remote BoxLite server (REST)
 
-Connect to a remote BoxLite server instead of the local runtime. Auth
-uses an Azure-style credential class: construct an `ApiKeyCredential`
-and pass it positionally — `Boxlite.rest(url, credential)` mirrors
-`new KeyClient(vaultUrl, credential)` from `@azure/identity`.
+Connect to a remote BoxLite server instead of the local runtime.
+Construct an `ApiKeyCredential` and pass it positionally:
+`Boxlite.rest(url, credential)`.
 
 ```typescript
 import { JsBoxlite, ApiKeyCredential } from '@boxlite-ai/boxlite';

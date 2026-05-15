@@ -305,9 +305,8 @@ export interface JsBoxliteConstructor {
   new (options: JsOptions): JsBoxlite;
   withDefaultConfig(): JsBoxlite;
   initDefault(options: JsOptions): void;
-  /** Connect to a remote BoxLite REST server. Positional
-   *  `(url, credential?, prefix?)` mirrors Azure's
-   *  `new KeyClient(vaultUrl, credential)`. */
+  /** Connect to a remote BoxLite REST server.
+   *  Positional `(url, credential?, prefix?)`. */
   rest(
     url: string,
     credential?: ApiKeyCredential | null,

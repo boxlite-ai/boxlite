@@ -79,8 +79,7 @@ impl JsBoxlite {
     /// Create a runtime that connects to a remote BoxLite REST backend.
     ///
     /// `credential` is an `ApiKeyCredential` (or any future credential
-    /// class). Positional `(url, credential?, prefix?)` mirrors Azure's
-    /// `new KeyClient(vaultUrl, credential)`.
+    /// class). Positional `(url, credential?, prefix?)`.
     #[napi(factory)]
     pub fn rest(
         url: String,

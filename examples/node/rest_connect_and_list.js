@@ -3,7 +3,7 @@
  *
  * Demonstrates:
  * - Creating a REST-backed runtime with Boxlite.rest()
- * - API-key authentication via ApiKeyCredential (Azure-style)
+ * - API-key authentication via ApiKeyCredential
  * - Listing existing boxes
  *
  * Prerequisites:
@@ -19,8 +19,7 @@ const API_KEY = 'local-dev-key'; // reference server accepts any non-empty beare
 async function main() {
   console.log('=== REST API: Connect and List Boxes ===\n');
 
-  // Positional (url, credential) mirrors Azure's
-  // `new KeyClient(vaultUrl, credential)`.
+  // Positional: (url, credential).
   const rt = JsBoxlite.rest(SERVER_URL, new ApiKeyCredential(API_KEY));
   console.log(`  Connected to ${SERVER_URL}`);
 

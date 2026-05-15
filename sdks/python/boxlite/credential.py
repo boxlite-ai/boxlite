@@ -3,9 +3,7 @@
 `Credential` is an abstract base class. Concrete credentials are
 implemented in the native extension (PyO3 classes can't inherit a
 Python ABC across the FFI boundary), so they are registered as
-*virtual subclasses* via ``abc.register``. This mirrors
-``azure-identity``, where ``TokenCredential`` is an ABC and concrete
-credentials (``ClientSecretCredential`` etc.) are virtual-registered.
+*virtual subclasses* via ``abc.register``.
 
 The practical effect: ``isinstance(ApiKeyCredential(k), Credential)``
 is ``True``, and a future ``OAuthCredential`` registers the same way —

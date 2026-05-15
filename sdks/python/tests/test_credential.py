@@ -1,8 +1,8 @@
 """Unit tests for the Credential abstraction (no runtime needed).
 
-Verifies the Azure-style shape: a `Credential` ABC with `ApiKeyCredential`
-virtual-registered, `get_token()` returning a redacted `AccessToken`,
-and `from_env()` discovery.
+Verifies: a `Credential` ABC with `ApiKeyCredential` virtual-registered,
+`get_token()` returning a redacted `AccessToken`, and `from_env()`
+discovery.
 """
 
 from __future__ import annotations

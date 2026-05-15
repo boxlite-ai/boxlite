@@ -161,7 +161,7 @@ for image in await runtime.images.list():
 ### Remote BoxLite server (REST)
 
 Connect to a remote BoxLite server instead of the local runtime. Auth
-uses an Azure-style credential class: `ApiKeyCredential` is a concrete
+uses a credential class: `ApiKeyCredential` is a concrete
 implementation of the `Credential` ABC.
 
 ```python

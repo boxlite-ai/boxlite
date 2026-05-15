@@ -1,13 +1,12 @@
 //! Credential abstraction for the REST API.
 //!
-//! Modeled on Azure's `TokenCredential`: a credential is a *token factory*
-//! that returns a token plus its expiry. The SDK core
-//! ([`super::client::ApiClient::current_bearer`]) owns the decision of when
-//! to re-request based on `expires_at` + a refresh leeway. This keeps the
-//! trait `&self`-friendly — the trivial [`ApiKeyCredential`] needs no
-//! interior mutability — while leaving room for a future refreshing impl
-//! (e.g. OAuth) to manage its own rotation behind interior mutability
-//! inside that impl only.
+//! A credential is a *token factory* that returns a token plus its
+//! expiry. The SDK core ([`super::client::ApiClient::current_bearer`])
+//! owns the decision of when to re-request based on `expires_at` + a
+//! refresh leeway. This keeps the trait `&self`-friendly — the trivial
+//! [`ApiKeyCredential`] needs no interior mutability — while leaving
+//! room for a future refreshing impl (e.g. OAuth) to manage its own
+//! rotation behind interior mutability inside that impl only.
 
 use std::fmt::{self, Debug};
 use std::time::SystemTime;

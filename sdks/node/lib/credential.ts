@@ -1,8 +1,7 @@
 /**
  * Credential abstraction for the BoxLite REST client.
  *
- * `Credential` is a structural interface — exactly how `@azure/identity`
- * exports `TokenCredential`: every credential class (today
+ * `Credential` is a structural interface: every credential class (today
  * `ApiKeyCredential`, a future `OAuthCredential`) structurally satisfies
  * it without a nominal `implements`. Callers type against `Credential`
  * and never change when new credential kinds are added.
