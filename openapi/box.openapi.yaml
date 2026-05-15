@@ -15,18 +15,16 @@
 ---
 openapi: 3.1.1
 info:
-  title: BoxLite Cloud Sandbox REST API
+  title: BoxLite Box API
   version: 0.1.0
   description: |
-    RESTful API for the BoxLite cloud sandbox service.
-
-    BoxLite provides hardware-level VM isolation for secure, isolated code execution.
-    This API exposes sandbox lifecycle management, command execution, file transfer,
-    and image management as a multi-tenant cloud service.
+    HTTP API for BoxLite boxes — hardware-isolated VMs for secure code
+    execution. Exposes box lifecycle management, command execution, file
+    transfer, and image management as a multi-tenant service.
 
     ## Design Principles
 
-    This specification follows industry-standard REST API patterns:
+    This specification follows industry-standard HTTP API patterns:
     - Versioned prefix (`/v1/`) for graceful API evolution
     - Multi-tenancy via `{prefix}` path segment (organization/workspace)
     - Capability discovery via `GET /v1/config`
@@ -59,9 +57,10 @@ info:
        (resize, signal, exit). One attach at a time per exec; the exec
        continues running across WebSocket close so a client can reattach.
 
-    Out-of-band control endpoints exist for clients that prefer a REST
-    style: `GET /executions/{exec_id}` (status), `POST .../resize`,
-    `POST .../signal`, `DELETE /executions/{exec_id}` (kill).
+    Out-of-band control endpoints exist for clients that prefer a
+    request/response style: `GET /executions/{exec_id}` (status),
+    `POST .../resize`, `POST .../signal`, `DELETE /executions/{exec_id}`
+    (kill).
   license:
     name: Apache-2.0
     url: https://www.apache.org/licenses/LICENSE-2.0
@@ -71,7 +70,7 @@ info:
 
 servers:
   - url: "{scheme}://{host}/v1"
-    description: BoxLite Sandbox API v1
+    description: BoxLite Box API v1
     variables:
       scheme:
         default: https
@@ -91,7 +90,7 @@ tags:
   - name: Authentication
     description: Credential validation and identity lookup
   - name: Boxes
-    description: Sandbox box lifecycle management
+    description: Box lifecycle management
   - name: Execution
     description: Command execution and streaming
   - name: Files
@@ -159,9 +158,9 @@ paths:
 
     post:
       operationId: createBox
-      summary: Create a new sandbox box
+      summary: Create a new box
       description: |
-        Creates a new sandbox box with the specified configuration.
+        Creates a new box with the specified configuration.
         The box starts in `configured` status. Call `POST /start` to
         initialize the VM, or it will start lazily on first `exec`.
       tags: [Boxes]
@@ -991,7 +990,7 @@ components:
         servers (non-normative): ULID (`01HJK4TNRPQSXYZ8WM6NCVT9R5`),
         12-character Base62 (`aB3cD4eF5gH6`), UUID
         (`d406c59d-eb09-4bc3-9b3a-62455c7e8f32`), prefixed (`sb_abc123`),
-        user-defined name (`my-sandbox`).
+        user-defined name (`my-box`).
       schema:
         type: string
         minLength: 1
@@ -1339,7 +1338,7 @@ components:
     # =======================================================================
     Box:
       type: object
-      description: Sandbox box metadata (maps to BoxInfo)
+      description: Box metadata (maps to BoxInfo)
       required: [box_id, status, created_at, updated_at, image, cpus, memory_mib]
       properties:
         box_id:
@@ -1359,7 +1358,7 @@ components:
           type: string
           nullable: true
           description: User-defined name (unique within prefix)
-          example: my-sandbox
+          example: my-box
         status:
           $ref: "#/components/schemas/BoxStatus"
         created_at:
@@ -1423,7 +1422,7 @@ components:
           minLength: 1
           maxLength: 128
           pattern: "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
-          example: dev-sandbox
+          example: dev-box
         image:
           type: string
           description: OCI image reference

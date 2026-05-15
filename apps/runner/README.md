@@ -38,7 +38,7 @@ the request path), see [`docs/architecture/README.md`](../../docs/architecture/R
 If you want the SDK side, see
 [`src/boxlite/src/rest/litebox.rs`](../../src/boxlite/src/rest/litebox.rs).
 If you want the formal API schema, see
-[`openapi/rest-sandbox-open-api.yaml`](../../openapi/rest-sandbox-open-api.yaml).
+[`openapi/box.openapi.yaml`](../../openapi/box.openapi.yaml).
 
 ---
 
@@ -672,4 +672,4 @@ scripts/build/fix-go-symbols.sh target/debug/libboxlite.a
   - `src/boxlite/src/rest/litebox.rs::tests::ws_*` — SDK WS pump
 
 - **Spec**:
-  - [`openapi/rest-sandbox-open-api.yaml`](../../openapi/rest-sandbox-open-api.yaml) — formal API schema
+  - [`openapi/box.openapi.yaml`](../../openapi/box.openapi.yaml) — formal API schema

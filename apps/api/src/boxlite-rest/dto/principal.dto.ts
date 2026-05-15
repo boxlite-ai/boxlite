@@ -6,7 +6,7 @@
 
 /**
  * Identity payload returned by `GET /v1/me`. Wire shape matches the
- * `Principal` schema in `openapi/rest-sandbox-open-api.yaml`.
+ * `Principal` schema in `openapi/box.openapi.yaml`.
  */
 export class PrincipalDto {
   /** Stable opaque principal identifier; treat as opaque. */

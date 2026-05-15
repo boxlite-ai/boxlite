@@ -22,7 +22,7 @@ import { PrincipalDto } from './dto/principal.dto'
  * The CLI uses this to validate freshly-pasted keys and to render the
  * `Logged in as` banner.
  *
- * Spec: `openapi/rest-sandbox-open-api.yaml` § GET /me.
+ * Spec: `openapi/box.openapi.yaml` § GET /me.
  */
 @ApiTags('BoxLite REST')
 @Controller('v1')

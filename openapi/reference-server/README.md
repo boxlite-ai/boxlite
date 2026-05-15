@@ -1,6 +1,6 @@
-# BoxLite REST API Reference Server
+# BoxLite Box API Reference Server
 
-Reference implementation of the [BoxLite Cloud Sandbox REST API](../rest-sandbox-open-api.yaml).
+Reference implementation of the [BoxLite Box API](../box.openapi.yaml).
 Use this to validate client implementations against the spec.
 
 **Not production-ready** — no persistence, single-tenant.

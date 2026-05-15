@@ -13,8 +13,8 @@
 """
 BoxLite REST API Reference Server
 
-Reference implementation of the BoxLite Cloud Sandbox REST API.
-Implements the OpenAPI spec at ../rest-sandbox-open-api.yaml.
+Reference implementation of the BoxLite Box API.
+Implements the OpenAPI spec at ../box.openapi.yaml.
 
 Purpose: showcase the API and validate client implementations.
 NOT production-ready — no persistence, no real auth, single-tenant.
@@ -487,7 +487,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="BoxLite Cloud Sandbox REST API",
+    title="BoxLite Box API",
     version="0.1.0",
     lifespan=lifespan,
 )
