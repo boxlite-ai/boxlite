@@ -1,5 +1,45 @@
 PHONY_TARGETS += test
 
+# Mirrors GitHub Actions strategy.fail-fast. Default false: aggregator
+# targets run every sub-suite even if an earlier one fails, then exit
+# non-zero with a summary of which suites failed. Set FAIL_FAST=true to
+# abort at the first failing suite (original behavior).
+FAIL_FAST ?= false
+export FAIL_FAST
+
+# Scope a run by test name: make <target> FILTER=<pattern>. Empty = full
+# suite. Works for every test target. FILTER is mapped to each runner's
+# native name selector, so match semantics are per-runner (nextest/ctest/
+# go: regex, pytest -k / vitest -t: expression/substring).
+export FILTER
+
+NEXTEST_FILTER   = $(if $(FILTER),-E 'test(~$(FILTER))',)
+CARGOTEST_FILTER = $(if $(FILTER),$(FILTER),)
+PYTEST_FILTER    = $(if $(FILTER),-k '$(FILTER)',)
+VITEST_FILTER    = $(if $(FILTER),-t '$(FILTER)',)
+CTEST_FILTER     = $(if $(FILTER),-R '$(FILTER)',)
+GOTEST_FILTER    = $(if $(FILTER),-run '$(FILTER)',)
+
+# $(call run_suites,<space-separated make targets>)
+# Runs each target via a recursive $(MAKE). With FAIL_FAST=false the loop
+# continues past failures and exits non-zero at the end listing the
+# failed targets; with FAIL_FAST=true it breaks on the first failure.
+define run_suites
+	@rc=0; failed=""; \
+	for t in $(1); do \
+		echo ""; \
+		if ! $(MAKE) $$t; then \
+			rc=1; failed="$$failed $$t"; \
+			if [ "$(FAIL_FAST)" = "true" ]; then break; fi; \
+		fi; \
+	done; \
+	echo ""; \
+	if [ $$rc -ne 0 ]; then \
+		echo "❌ Failed suites:$$failed"; \
+		exit 1; \
+	fi
+endef
+
 # Default test target runs only changed components.
 test:
 	@$(MAKE) test:changed
@@ -11,10 +51,7 @@ ifeq ($(CHANGED_COMPONENTS),)
 	@echo "   (Use 'make test:all' to run the full test matrix)"
 else
 	@echo "📋 Changed components: $(CHANGED_COMPONENTS)"
-	@echo ""
-	@$(foreach comp,$(sort $(CHANGED_COMPONENTS)), \
-		$(MAKE) test:changed:$(comp) && \
-	) true
+	$(call run_suites,$(addprefix test:changed:,$(sort $(CHANGED_COMPONENTS))))
 	@echo ""
 	@echo "✅ All changed-component tests passed"
 endif
@@ -49,14 +86,12 @@ ifeq ($(CHANGED_COMPONENTS),)
 	@echo "📋 No changed components detected — skipping integration tests."
 else
 	@echo "📋 Running integration tests for changed components: $(CHANGED_COMPONENTS)"
-	@echo ""
-	@$(foreach comp,$(sort $(CHANGED_COMPONENTS)), \
-		$(if $(filter rust,$(comp)),$(MAKE) test:integration:rust &&,) \
-		$(if $(filter cli,$(comp)),$(MAKE) test:integration:cli &&,) \
-		$(if $(filter python,$(comp)),$(MAKE) test:integration:python &&,) \
-		$(if $(filter node,$(comp)),$(MAKE) test:integration:node &&,) \
-		$(if $(filter c,$(comp)),$(MAKE) test:integration:c &&,) \
-	) true
+	$(call run_suites,$(strip \
+		$(if $(filter rust,$(CHANGED_COMPONENTS)),test:integration:rust) \
+		$(if $(filter cli,$(CHANGED_COMPONENTS)),test:integration:cli) \
+		$(if $(filter python,$(CHANGED_COMPONENTS)),test:integration:python) \
+		$(if $(filter node,$(CHANGED_COMPONENTS)),test:integration:node) \
+		$(if $(filter c,$(CHANGED_COMPONENTS)),test:integration:c)))
 	@echo ""
 	@echo "✅ Changed-component integration tests passed"
 endif
@@ -64,81 +99,54 @@ endif
 # Full matrix: all unit suites + all integration suites.
 test\:all:
 	@echo "📋 Running full test matrix (unit → integration)"
-	@echo ""
-	$(MAKE) test:unit
-	@echo ""
-	$(MAKE) test:integration
+	$(call run_suites,test:unit test:integration)
 	@echo ""
 	@echo "✅ All tests passed (full matrix)"
 
 # Unit matrix.
 test\:unit:
 	@echo "── Unit tests (core, sdk) ──"
-	@echo ""
-	$(MAKE) test:unit:core
-	@echo ""
-	$(MAKE) test:unit:sdk
+	$(call run_suites,test:unit:core test:unit:sdk)
 	@echo ""
 	@echo "✅ Unit test matrix passed"
 
 # Integration matrix.
 test\:integration:
 	@echo "── Integration tests (core, sdk) ──"
-	@echo ""
-	$(MAKE) test:integration:core
-	@echo ""
-	$(MAKE) test:integration:sdk
+	$(call run_suites,test:integration:core test:integration:sdk)
 	@echo ""
 	@echo "✅ Integration test matrix passed"
 
 # Core unit suites: Rust unit + FFI unit.
 test\:unit\:core:
 	@echo "── Core unit suites (rust, ffi) ──"
-	@echo ""
-	$(MAKE) test:unit:rust
-	@echo ""
-	$(MAKE) test:unit:ffi
+	$(call run_suites,test:unit:rust test:unit:ffi)
 
 # Core integration suites: Rust integration + CLI integration.
 test\:integration\:core:
 	@echo "── Core integration suites (rust, cli) ──"
-	@echo ""
-	$(MAKE) test:integration:rust
-	@echo ""
-	$(MAKE) test:integration:cli
+	$(call run_suites,test:integration:rust test:integration:cli)
 
 # SDK unit suites: Python unit + Node unit + C unit + Go unit.
 test\:unit\:sdk:
 	@echo "── SDK unit suites (python, node, c, go) ──"
-	@echo ""
-	$(MAKE) test:unit:python
-	@echo ""
-	$(MAKE) test:unit:node
-	@echo ""
-	$(MAKE) test:unit:c
-	@echo ""
-	$(MAKE) test:unit:go
+	$(call run_suites,test:unit:python test:unit:node test:unit:c test:unit:go)
 
 # SDK integration suites: Python integration + Node integration + C SDK test suite.
 test\:integration\:sdk:
 	@echo "── SDK integration suites (python, node, c) ──"
-	@echo ""
-	$(MAKE) test:integration:python
-	@echo ""
-	$(MAKE) test:integration:node
-	@echo ""
-	$(MAKE) test:integration:c
+	$(call run_suites,test:integration:python test:integration:node test:integration:c)
 
 # Rust unit tests (parallel via nextest, fallback to serial cargo test).
 # --no-default-features disables gvproxy to avoid Go runtime link issues.
 test\:unit\:rust:
 	@echo "🧪 Running Rust unit tests..."
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
-		cargo nextest run -p boxlite --no-default-features --lib; \
-		cargo nextest run -p boxlite-shared --lib; \
+		cargo nextest run -p boxlite --no-default-features --lib $(NEXTEST_FILTER); \
+		cargo nextest run -p boxlite-shared --lib $(NEXTEST_FILTER); \
 	else \
-		cargo test -p boxlite --no-default-features --lib -- --test-threads=1; \
-		cargo test -p boxlite-shared --lib -- --test-threads=1; \
+		cargo test -p boxlite --no-default-features --lib -- --test-threads=1 $(CARGOTEST_FILTER); \
+		cargo test -p boxlite-shared --lib -- --test-threads=1 $(CARGOTEST_FILTER); \
 	fi
 
 # Pre-warm Rust integration test image cache (internal helper, still callable).
@@ -155,42 +163,41 @@ test\:warm-cache\:rust: runtime\:debug
 	@echo "✅ Rust integration image cache ready"
 
 # Rust integration tests (requires VM environment).
-# Pass FILTER=<pattern> to run a subset, e.g. make test:integration:rust FILTER=copy
+# FILTER works here and on every test target, e.g. make test:integration:rust FILTER=copy
 test\:integration\:rust: runtime\:debug test\:warm-cache\:rust
 	@echo "🧪 Running Rust integration tests (requires VM)..."
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
 		cargo nextest run -p boxlite --features krun,gvproxy --test '*' --no-fail-fast --profile vm \
-			$(if $(FILTER),-E 'test(~$(FILTER))',); \
+			$(NEXTEST_FILTER); \
 	else \
 		cargo test -p boxlite --features krun,gvproxy --test '*' --no-fail-fast -- --test-threads=1 --nocapture \
-			$(if $(FILTER),$(FILTER),); \
+			$(CARGOTEST_FILTER); \
 	fi
 
 # BoxLite C SDK unit tests.
 test\:unit\:ffi:
 	@echo "🧪 Running BoxLite C SDK unit tests..."
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
-		cargo nextest run -p boxlite-c; \
+		cargo nextest run -p boxlite-c $(NEXTEST_FILTER); \
 	else \
-		cargo test -p boxlite-c; \
+		cargo test -p boxlite-c $(CARGOTEST_FILTER); \
 	fi
 
 # CLI integration tests.
-# Pass FILTER=<pattern> to run a subset.
 test\:integration\:cli: runtime\:debug
 	@echo "🧪 Running CLI integration tests..."
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
 		cargo nextest run -p boxlite-cli --tests --profile vm --no-fail-fast \
-		$(if $(FILTER),-E 'test($(FILTER))',); \
+		$(NEXTEST_FILTER); \
 	else \
 		cargo test -p boxlite-cli --tests --no-fail-fast -- --test-threads=4 \
-		$(if $(FILTER),$(FILTER),); \
+		$(CARGOTEST_FILTER); \
 	fi
 
 # Python SDK unit tests.
 test\:unit\:python: _ensure-python-deps
 	@echo "🧪 Running Python SDK unit tests..."
-	@. .venv/bin/activate && cd sdks/python && python -m pytest tests/ -v -m "not integration"
+	@. .venv/bin/activate && cd sdks/python && python -m pytest tests/ -v -m "not integration" $(PYTEST_FILTER)
 
 # Python SDK integration tests.
 test\:integration\:python:
@@ -198,28 +205,26 @@ test\:integration\:python:
 	@echo "🧪 Running Python SDK integration tests..."
 	@BOXLITE_HOME=$$(mktemp -d /tmp/boxlite-test-python-XXXXXX) && \
 	 trap "rm -rf $$BOXLITE_HOME" EXIT && \
-	 . .venv/bin/activate && cd sdks/python && BOXLITE_HOME=$$BOXLITE_HOME python -m pytest tests/ -v -m "integration"
+	 . .venv/bin/activate && cd sdks/python && BOXLITE_HOME=$$BOXLITE_HOME python -m pytest tests/ -v -m "integration" $(PYTEST_FILTER)
 
 # Python SDK full suite.
 test\:all\:python:
-	@$(MAKE) test:unit:python
-	@$(MAKE) test:integration:python
+	$(call run_suites,test:unit:python test:integration:python)
 
 # Node.js SDK unit tests.
 test\:unit\:node: _ensure-node-deps
 	@echo "🧪 Running Node.js SDK unit tests..."
-	@cd sdks/node && npm test
+	@cd sdks/node && npm test -- $(VITEST_FILTER)
 
 # Node.js SDK integration tests (requires VM environment).
 test\:integration\:node:
 	@$(MAKE) dev:node
 	@echo "🧪 Running Node.js SDK integration tests (requires VM)..."
-	@cd sdks/node && npm run test:integration
+	@cd sdks/node && npm run test:integration -- $(VITEST_FILTER)
 
 # Node.js SDK full suite.
 test\:all\:node:
-	@$(MAKE) test:unit:node
-	@$(MAKE) test:integration:node
+	$(call run_suites,test:unit:node test:integration:node)
 
 # C SDK unit tests (no VM required).
 test\:unit\:c:
@@ -228,7 +233,7 @@ test\:unit\:c:
 	@mkdir -p sdks/c/tests/build
 	@cd sdks/c/tests/build && cmake ..
 	@cd sdks/c/tests/build && cmake --build . -j
-	@cd sdks/c/tests/build && ctest --verbose --output-on-failure -L unit
+	@cd sdks/c/tests/build && ctest --verbose --output-on-failure -L unit $(CTEST_FILTER)
 
 # C SDK integration tests (requires VM environment).
 test\:integration\:c:
@@ -237,18 +242,17 @@ test\:integration\:c:
 	@mkdir -p sdks/c/tests/build
 	@cd sdks/c/tests/build && cmake ..
 	@cd sdks/c/tests/build && cmake --build . -j
-	@cd sdks/c/tests/build && ctest --verbose --output-on-failure -L integration
+	@cd sdks/c/tests/build && ctest --verbose --output-on-failure -L integration $(CTEST_FILTER)
 
 # C SDK full suite.
 test\:all\:c:
-	@$(MAKE) test:unit:c
-	@$(MAKE) test:integration:c
+	$(call run_suites,test:unit:c test:integration:c)
 
 # Go SDK unit tests.
 test\:unit\:go:
 	@echo "🧪 Running Go SDK unit tests..."
 	@$(MAKE) dev:go
-	@cd sdks/go && go test -tags boxlite_dev -v ./...
+	@cd sdks/go && go test -tags boxlite_dev -v $(GOTEST_FILTER) ./...
 
 # Go SDK full suite.
 test\:all\:go:
