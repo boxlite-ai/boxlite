@@ -110,6 +110,7 @@ permission.
 | Advisory | Severity | Affected | Fixed in |
 |----------|----------|----------|----------|
 | [GHSA-g6ww-w5j2-r7x3](https://github.com/boxlite-ai/boxlite/security/advisories/GHSA-g6ww-w5j2-r7x3) — read-only volume remount bypass | Critical | `< 0.9.0` (all SDKs) | **0.9.0** |
+| [GHSA-f396-4rp4-7v2j](https://github.com/boxlite-ai/boxlite/security/advisories/GHSA-f396-4rp4-7v2j) — OCI layer symlink escape → arbitrary host write | Critical | `< 0.9.0` (all SDKs) | **0.9.0** |
 
 If you run any boxlite SDK (PyPI, npm, Go, crates.io) or build from source
 at a version **before 0.9.0**, upgrade to **0.9.0 or later**. There is no
