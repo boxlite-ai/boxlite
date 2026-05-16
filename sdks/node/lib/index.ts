@@ -38,9 +38,9 @@ export type {
 
 // The native REST binding is positional `(url, credential?, prefix?)`.
 // The public surface is the `BoxliteRestOptions` bag — identical in
-// name and shape across the C/Go/Node/Python SDKs. This adapter
-// destructures the bag into the native binding once at module load;
-// every other static/instance member is the native one unchanged.
+// name and shape across the C/Go/Node/Python SDKs. A Proxy substitutes
+// the bag-taking `rest`; every other static/instance member is the
+// native one unchanged.
 // `Omit` over the constructor interface preserves the `withDefaultConfig`
 // / `initDefault` statics but drops both `rest` (a key) and the `new(...)`
 // construct signature (construct signatures are not keys). The
@@ -57,15 +57,34 @@ const positionalRest = nativeBoxlite.rest.bind(nativeBoxlite) as (
   credential?: Credential | null,
   prefix?: string | null,
 ) => JsBoxliteInstance;
-(nativeBoxlite as { rest: unknown }).rest = (options: BoxliteRestOptions) =>
+const restFromBag = (options: BoxliteRestOptions): JsBoxliteInstance =>
   positionalRest(
     options.url,
     options.credential ?? null,
     options.prefix ?? null,
   );
 
-// Re-export native bindings
-export const JsBoxlite = nativeBoxlite as unknown as BoxliteConstructor;
+// napi-rs registers class statics as non-writable AND non-configurable.
+// Reassigning `rest` on the native constructor throws at import; a Proxy
+// *over the native class* is also rejected, because a `get` trap may not
+// substitute a non-configurable, non-writable own data property. So the
+// Proxy target is a fresh function that owns no such property: `rest`
+// resolves to the bag adapter, construction and every other static
+// forward to the native class untouched.
+function boxliteConstructor(): void {}
+export const JsBoxlite = new Proxy(boxliteConstructor, {
+  get(_target, prop, receiver) {
+    if (prop === "rest") return restFromBag;
+    const value = Reflect.get(nativeBoxlite, prop, receiver);
+    return typeof value === "function" ? value.bind(nativeBoxlite) : value;
+  },
+  construct(_target, args) {
+    return Reflect.construct(
+      nativeBoxlite as unknown as new (...args: unknown[]) => object,
+      args,
+    );
+  },
+}) as unknown as BoxliteConstructor;
 export { BoxliteRestOptions } from "./options.js";
 export type { CopyOptions } from "./copy.js";
 
