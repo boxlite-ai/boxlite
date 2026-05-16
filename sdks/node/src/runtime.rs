@@ -82,7 +82,7 @@ impl JsBoxlite {
     /// adaptation lives in the binding (`JsBoxliteRestOptions::into_core`).
     #[napi(factory)]
     pub fn rest(options: &JsBoxliteRestOptions) -> Result<Self> {
-        let runtime = BoxliteRuntime::rest(options.into_core()).map_err(map_err)?;
+        let runtime = BoxliteRuntime::rest(options.into()).map_err(map_err)?;
         Ok(Self {
             runtime: Arc::new(runtime),
         })
