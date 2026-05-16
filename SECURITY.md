@@ -55,8 +55,8 @@ the latest published minor release. We do not back-patch older releases.
 
 | Version | Supported          |
 |---------|--------------------|
-| 0.8.x   | :white_check_mark: |
-| < 0.8   | :x:                |
+| 0.9.x   | :white_check_mark: |
+| < 0.9   | :x:                |
 
 ## Scope
 
@@ -104,6 +104,16 @@ Please make a good-faith effort to avoid privacy violations, data
 destruction, and service disruption while researching. Only interact
 with accounts and systems you own or for which you have explicit
 permission.
+
+## Published Advisories
+
+| Advisory | Severity | Affected | Fixed in |
+|----------|----------|----------|----------|
+| [GHSA-g6ww-w5j2-r7x3](https://github.com/boxlite-ai/boxlite/security/advisories/GHSA-g6ww-w5j2-r7x3) — read-only volume remount bypass | Critical | `< 0.9.0` (all SDKs) | **0.9.0** |
+
+If you run any boxlite SDK (PyPI, npm, Go, crates.io) or build from source
+at a version **before 0.9.0**, upgrade to **0.9.0 or later**. There is no
+workaround for affected versions.
 
 ---
 
