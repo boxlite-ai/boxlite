@@ -43,8 +43,25 @@ pub struct EmbeddedRuntime {
 }
 
 impl EmbeddedRuntime {
-    /// Stale cache directories older than this are deleted after extraction.
-    const STALE_TTL: Duration = Duration::from_secs(7 * 24 * 3600);
+    /// Stale-cache TTL for release builds: cache reclaimed after this much disuse.
+    const STALE_TTL_RELEASE: Duration = Duration::from_secs(7 * 24 * 3600);
+    /// Stale-cache TTL for non-release (debug) builds.
+    const STALE_TTL_DEBUG: Duration = Duration::from_secs(3600);
+
+    /// TTL for a cache dir, classified from *its own* `.complete` stamp.
+    ///
+    /// The stamp's 2nd line records the build profile that created the dir, so
+    /// retention follows the dir's origin — not the profile of whatever process
+    /// happens to run cleanup (both profiles share one parent dir). An
+    /// unreadable / legacy (version-only) / unrecognized stamp falls back to the
+    /// longest TTL: never over-delete a cache we cannot positively classify.
+    fn ttl_for_stamp(stamp: &Path) -> Duration {
+        let profile = std::fs::read_to_string(stamp);
+        match profile.as_deref().map(|s| s.lines().nth(1)) {
+            Ok(Some("debug")) => Self::STALE_TTL_DEBUG,
+            _ => Self::STALE_TTL_RELEASE,
+        }
+    }
 
     /// Get the embedded runtime, extracting on first call.
     ///
@@ -107,7 +124,11 @@ impl EmbeddedRuntime {
         }
 
         // Stamp marks extraction as complete — checked by the fast path above.
-        std::fs::write(tmp.join(".complete"), crate::VERSION)
+        // Line 1: version (human-readable). Line 2: build profile, read back by
+        // `ttl_for_stamp` so each dir is pruned by the TTL of the profile that
+        // created it. `\n` separated; readers use `str::lines` (CRLF-tolerant).
+        let stamp_body = format!("{}\n{}\n", crate::VERSION, env!("BOXLITE_BUILD_PROFILE"));
+        std::fs::write(tmp.join(".complete"), stamp_body)
             .map_err(|e| BoxliteError::Storage(format!("write stamp: {}", e)))?;
 
         // Atomic rename: loser detects winner's dir and cleans up.
@@ -149,7 +170,7 @@ impl EmbeddedRuntime {
         let Ok(entries) = std::fs::read_dir(parent) else {
             return;
         };
-        let cutoff = SystemTime::now() - Self::STALE_TTL;
+        let now = SystemTime::now();
 
         for entry in entries.filter_map(Result::ok) {
             let path = entry.path();
@@ -157,9 +178,12 @@ impl EmbeddedRuntime {
                 continue;
             }
             let stamp = path.join(".complete");
-            let is_stale = std::fs::metadata(&stamp)
-                .and_then(|m| m.modified())
-                .is_ok_and(|mtime| mtime < cutoff);
+            let Ok(mtime) = std::fs::metadata(&stamp).and_then(|m| m.modified()) else {
+                continue;
+            };
+            // Each dir is judged by the TTL of the profile that created it.
+            let ttl = Self::ttl_for_stamp(&stamp);
+            let is_stale = now.duration_since(mtime).is_ok_and(|age| age > ttl);
             if is_stale {
                 tracing::info!(dir = %path.display(), "Removing stale embedded cache");
                 let _ = std::fs::remove_dir_all(&path);
@@ -244,6 +268,41 @@ mod tests {
                 "Debug build dir should include hash suffix"
             );
         }
+    }
+
+    #[test]
+    fn ttl_for_stamp_classifies_by_recorded_profile() {
+        let tmp = tempfile::tempdir().unwrap();
+        let stamp = tmp.path().join(".complete");
+
+        std::fs::write(&stamp, format!("{}\ndebug\n", crate::VERSION)).unwrap();
+        assert_eq!(
+            EmbeddedRuntime::ttl_for_stamp(&stamp),
+            EmbeddedRuntime::STALE_TTL_DEBUG,
+            "debug-stamped dir must use the short TTL"
+        );
+
+        std::fs::write(&stamp, format!("{}\nrelease\n", crate::VERSION)).unwrap();
+        assert_eq!(
+            EmbeddedRuntime::ttl_for_stamp(&stamp),
+            EmbeddedRuntime::STALE_TTL_RELEASE,
+            "release-stamped dir must use the long TTL"
+        );
+
+        // Legacy (pre-change) stamp: version only, no profile line.
+        std::fs::write(&stamp, crate::VERSION).unwrap();
+        assert_eq!(
+            EmbeddedRuntime::ttl_for_stamp(&stamp),
+            EmbeddedRuntime::STALE_TTL_RELEASE,
+            "legacy version-only stamp must fall back to the long TTL"
+        );
+
+        // Missing stamp: unclassifiable, must not be over-deleted.
+        assert_eq!(
+            EmbeddedRuntime::ttl_for_stamp(&tmp.path().join("absent")),
+            EmbeddedRuntime::STALE_TTL_RELEASE,
+            "unreadable stamp must fall back to the long TTL"
+        );
     }
 
     #[test]
