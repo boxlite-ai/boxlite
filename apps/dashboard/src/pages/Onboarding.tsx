@@ -337,18 +337,13 @@ const codeExamples = {
   typescript: {
     install: `npm install boxlite`,
     run: `npx tsx index.mts`,
-    example: `import { Boxlite, BoxliteRestOptions } from 'boxlite'
+    example: `import { JsBoxlite, ApiKeyCredential } from 'boxlite'
 
-// Connect to BoxLite Cloud with OAuth2 client credentials
-const rt = Boxlite.rest(new BoxliteRestOptions({
-  url: 'your-api-url',
-  clientId: 'default',
-  clientSecret: 'your-api-key',
-}))
+// Connect to BoxLite Cloud with your API key
+const rt = JsBoxlite.rest('your-api-url', new ApiKeyCredential('your-api-key'))
 
-// Alternative: long-lived API key via env var.
-// Set BOXLITE_API_KEY=your-api-key and BOXLITE_REST_URL=your-api-url,
-// then use BoxliteRestOptions.fromEnv() (constructor field coming soon).
+// Or discover from the environment (reads BOXLITE_API_KEY):
+// const rt = JsBoxlite.rest('your-api-url', ApiKeyCredential.fromEnv() ?? undefined)
 
 // Create a sandbox
 const box = await rt.create({ image: 'alpine:latest' }, 'my-sandbox')
@@ -367,19 +362,18 @@ await rt.remove(box.id, true)
     install: `pip install boxlite`,
     run: `python main.py`,
     example: `import asyncio
-from boxlite import Boxlite, BoxliteRestOptions, BoxOptions
+from boxlite import Boxlite, BoxliteRestOptions, BoxOptions, ApiKeyCredential
 
 async def main():
-    # Connect to BoxLite Cloud with OAuth2 client credentials
+    # Connect to BoxLite Cloud with your API key
     rt = Boxlite.rest(BoxliteRestOptions(
         url="your-api-url",
-        client_id="default",
-        client_secret="your-api-key",
+        credential=ApiKeyCredential("your-api-key"),
     ))
 
-    # Alternative: long-lived API key via env var.
-    # Set BOXLITE_API_KEY=your-api-key and BOXLITE_REST_URL=your-api-url,
-    # then call BoxliteRestOptions.from_env() (constructor field coming soon).
+    # Or discover from the environment
+    # (reads BOXLITE_REST_URL + BOXLITE_API_KEY):
+    # rt = Boxlite.rest(BoxliteRestOptions.from_env())
 
     # Create a sandbox
     box = await rt.create(BoxOptions(image="alpine:latest"), name="my-sandbox")
