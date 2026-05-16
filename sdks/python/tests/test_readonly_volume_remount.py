@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+import warnings
 
 import pytest
 
@@ -118,5 +119,7 @@ class TestReadonlyVolumeRemountBypass:
             try:
                 os.remove(ro_file)
                 os.rmdir(host_dir)
-            except OSError:
-                pass
+            except OSError as e:
+                # Best-effort cleanup: do not fail the test during teardown,
+                # but surface the issue for debugging.
+                warnings.warn(f"teardown cleanup failed: {e!r}")
