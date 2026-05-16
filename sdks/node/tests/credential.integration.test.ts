@@ -1,5 +1,9 @@
 import { describe, expect, test } from "vitest";
-import { ApiKeyCredential, type Credential } from "../lib/index.js";
+import {
+  ApiKeyCredential,
+  BoxliteRestOptions,
+  type Credential,
+} from "../lib/index.js";
 
 describe("ApiKeyCredential", () => {
   test("getToken returns the key with no expiry", () => {
@@ -28,5 +32,26 @@ describe("ApiKeyCredential", () => {
     // `Credential` accepts ApiKeyCredential with no nominal `implements`.
     const useCredential = (c: Credential): string => c.getToken().token;
     expect(useCredential(new ApiKeyCredential("k"))).toBe("k");
+  });
+});
+
+describe("BoxliteRestOptions", () => {
+  test("carries url, credential, and prefix", () => {
+    const cred = new ApiKeyCredential("blk_live_x");
+    const opts = new BoxliteRestOptions({
+      url: "https://api.example.com",
+      credential: cred,
+      prefix: "v2",
+    });
+    expect(opts.url).toBe("https://api.example.com");
+    expect(opts.credential).toBe(cred);
+    expect(opts.prefix).toBe("v2");
+  });
+
+  test("credential and prefix are optional (unauthenticated)", () => {
+    const opts = new BoxliteRestOptions({ url: "http://localhost:8100" });
+    expect(opts.url).toBe("http://localhost:8100");
+    expect(opts.credential).toBeUndefined();
+    expect(opts.prefix).toBeUndefined();
   });
 });

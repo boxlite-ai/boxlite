@@ -78,6 +78,12 @@ typedef struct BoxHandle BoxHandle;
 // Opaque handle for Runner API (auto-manages runtime)
 typedef struct BoxRunner BoxRunner;
 
+// Opaque credential handle. Wraps a core `Arc<dyn Credential>` so the
+// concrete credential kind (today only `ApiKeyCredential`) is hidden
+// behind one C type, matching the trait/interface surface in the other
+// SDKs.
+typedef struct CredentialHandle CredentialHandle;
+
 // Opaque handle to a running command execution.
 typedef struct ExecutionHandle ExecutionHandle;
 
@@ -85,6 +91,10 @@ typedef struct ExecutionHandle ExecutionHandle;
 typedef struct ImageHandle ImageHandle;
 
 typedef struct OptionsHandle OptionsHandle;
+
+// Opaque REST options handle. Owns a core [`BoxliteRestOptions`] that
+// the setters mutate in place before construction.
+typedef struct RestOptionsHandle RestOptionsHandle;
 
 // Opaque handle to a BoxliteRuntime instance with its Tokio runtime and the
 // per-runtime event queue used by the post-and-drain callback API.
@@ -269,6 +279,10 @@ typedef struct CRuntimeMetrics {
 
 // Runtime metrics completion.
 typedef void (*CRuntimeMetricsCb)(struct CRuntimeMetrics*, CBoxliteError*, void*);
+
+typedef struct CredentialHandle CBoxliteCredential;
+
+typedef struct RestOptionsHandle CBoxliteRestOptions;
 
 typedef struct BoxliteImageRegistry {
   const char *host;
@@ -511,28 +525,87 @@ void boxlite_options_set_cmd(CBoxliteOptions *opts, const char *const *args, int
 
 void boxlite_options_free(CBoxliteOptions *opts);
 
-// Create a runtime that connects to a remote BoxLite REST server.
+// Create an API-key credential.
+//
+// # Arguments
+// - `key`: opaque API key sent as `Authorization: Bearer` (required).
+// - `out_credential`: receives the credential handle on success.
+// - `out_error`: receives error code + message on failure (nullable).
+//
+// Returns `BoxliteErrorCode::Ok` on success. Free the handle with
+// `boxlite_credential_free`.
+//
+// # Safety
+// `out_credential` must be non-NULL; `key` must be a valid C string.
+enum BoxliteErrorCode boxlite_api_key_credential_new(const char *key,
+                                                     CBoxliteCredential **out_credential,
+                                                     CBoxliteError *out_error);
+
+// Free a credential handle. No-op on NULL.
+//
+// # Safety
+// `credential` must be a handle from `boxlite_api_key_credential_new`
+// or NULL, and must not be used after this call.
+void boxlite_credential_free(CBoxliteCredential *credential);
+
+// Create REST options for `url` (no credential, server-default prefix).
 //
 // # Arguments
 // - `url`: REST API base URL (required, e.g. `https://api.example.com`).
-// - `api_key`: opaque API key sent as `Authorization: Bearer`. Pass
-//   `NULL` for an unauthenticated runtime.
-// - `prefix`: API path prefix. Pass `NULL` for the server default
-//   (`v1`).
+// - `out_options`: receives the options handle on success.
+// - `out_error`: receives error code + message on failure (nullable).
+//
+// Returns `BoxliteErrorCode::Ok` on success. Free the handle with
+// `boxlite_rest_options_free`.
+//
+// # Safety
+// `out_options` must be non-NULL; `url` must be a valid C string.
+enum BoxliteErrorCode boxlite_rest_options_new(const char *url,
+                                               CBoxliteRestOptions **out_options,
+                                               CBoxliteError *out_error);
+
+// Attach a credential to the options. The credential's inner reference
+// is cloned into the options, so the caller still owns `credential`
+// and must free it independently with `boxlite_credential_free`.
+// No-op if either pointer is NULL.
+//
+// # Safety
+// `options` and `credential` must be valid handles or NULL.
+void boxlite_rest_options_set_credential(CBoxliteRestOptions *options,
+                                         const CBoxliteCredential *credential);
+
+// Override the API path prefix (server default: `v1`). No-op if
+// `options` is NULL or `prefix` is not a valid C string.
+//
+// # Safety
+// `options` must be a valid handle or NULL; `prefix` a valid C string
+// or NULL.
+void boxlite_rest_options_set_prefix(CBoxliteRestOptions *options, const char *prefix);
+
+// Free a REST options handle. No-op on NULL.
+//
+// # Safety
+// `options` must be a handle from `boxlite_rest_options_new` or NULL,
+// and must not be used after this call.
+void boxlite_rest_options_free(CBoxliteRestOptions *options);
+
+// Create a runtime that connects to a remote BoxLite REST server using
+// the supplied options.
+//
+// # Arguments
+// - `options`: a handle from `boxlite_rest_options_new` (required).
 // - `out_runtime`: receives the runtime handle on success.
 // - `out_error`: receives error code + message on failure (nullable).
 //
-// Returns `BoxliteErrorCode::Ok` on success. The handle is freed with
-// `boxlite_runtime_free`.
+// Returns `BoxliteErrorCode::Ok` on success. The runtime handle is
+// freed with `boxlite_runtime_free`. `options` is unchanged and must
+// still be freed by the caller with `boxlite_rest_options_free`.
 //
 // # Safety
-// All pointer arguments must be valid or `NULL` as documented;
-// `out_runtime` must be non-NULL.
-enum BoxliteErrorCode boxlite_rest_runtime_new(const char *url,
-                                               const char *api_key,
-                                               const char *prefix,
-                                               CBoxliteRuntime **out_runtime,
-                                               CBoxliteError *out_error);
+// `options` and `out_runtime` must be non-NULL.
+enum BoxliteErrorCode boxlite_rest_runtime_new_with_options(const CBoxliteRestOptions *options,
+                                                            CBoxliteRuntime **out_runtime,
+                                                            CBoxliteError *out_error);
 
 const char *boxlite_version(void);
 

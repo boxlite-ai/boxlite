@@ -20,6 +20,13 @@
  */
 
 import { getNativeModule, getJsBoxlite } from "./native.js";
+import { BoxliteRestOptions } from "./options.js";
+import type { Credential } from "./credential.js";
+import type {
+  JsBoxlite as JsBoxliteInstance,
+  JsBoxliteConstructor,
+  JsOptions,
+} from "./native-contracts.js";
 export type {
   ImageHandle,
   ImageInfo,
@@ -29,8 +36,37 @@ export type {
   JsOptions,
 } from "./native-contracts.js";
 
+// The native REST binding is positional `(url, credential?, prefix?)`.
+// The public surface is the `BoxliteRestOptions` bag — identical in
+// name and shape across the C/Go/Node/Python SDKs. This adapter
+// destructures the bag into the native binding once at module load;
+// every other static/instance member is the native one unchanged.
+// `Omit` over the constructor interface preserves the `withDefaultConfig`
+// / `initDefault` statics but drops both `rest` (a key) and the `new(...)`
+// construct signature (construct signatures are not keys). The
+// intersection re-adds the construct signature plus the bag-taking
+// `rest`, leaving every other member native.
+export type BoxliteConstructor = Omit<JsBoxliteConstructor, "rest"> & {
+  new (options: JsOptions): JsBoxliteInstance;
+  rest(options: BoxliteRestOptions): JsBoxliteInstance;
+};
+
+const nativeBoxlite = getJsBoxlite();
+const positionalRest = nativeBoxlite.rest.bind(nativeBoxlite) as (
+  url: string,
+  credential?: Credential | null,
+  prefix?: string | null,
+) => JsBoxliteInstance;
+(nativeBoxlite as { rest: unknown }).rest = (options: BoxliteRestOptions) =>
+  positionalRest(
+    options.url,
+    options.credential ?? null,
+    options.prefix ?? null,
+  );
+
 // Re-export native bindings
-export const JsBoxlite = getJsBoxlite();
+export const JsBoxlite = nativeBoxlite as unknown as BoxliteConstructor;
+export { BoxliteRestOptions } from "./options.js";
 export type { CopyOptions } from "./copy.js";
 
 // Credential abstraction: structural `Credential` interface + concrete

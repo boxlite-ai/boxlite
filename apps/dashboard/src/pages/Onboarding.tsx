@@ -337,13 +337,19 @@ const codeExamples = {
   typescript: {
     install: `npm install boxlite`,
     run: `npx tsx index.mts`,
-    example: `import { JsBoxlite, ApiKeyCredential } from 'boxlite'
+    example: `import { JsBoxlite, BoxliteRestOptions, ApiKeyCredential } from 'boxlite'
 
 // Connect to BoxLite Cloud with your API key
-const rt = JsBoxlite.rest('your-api-url', new ApiKeyCredential('your-api-key'))
+const rt = JsBoxlite.rest(new BoxliteRestOptions({
+  url: 'your-api-url',
+  credential: new ApiKeyCredential('your-api-key'),
+}))
 
 // Or discover from the environment (reads BOXLITE_API_KEY):
-// const rt = JsBoxlite.rest('your-api-url', ApiKeyCredential.fromEnv() ?? undefined)
+// const rt = JsBoxlite.rest(new BoxliteRestOptions({
+//   url: 'your-api-url',
+//   credential: ApiKeyCredential.fromEnv() ?? undefined,
+// }))
 
 // Create a sandbox
 const box = await rt.create({ image: 'alpine:latest' }, 'my-sandbox')

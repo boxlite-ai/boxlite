@@ -11,7 +11,7 @@
  *   boxlite serve --port 8100
  */
 
-import { JsBoxlite, ApiKeyCredential } from '@boxlite-ai/boxlite';
+import { JsBoxlite, BoxliteRestOptions, ApiKeyCredential } from '@boxlite-ai/boxlite';
 
 const SERVER_URL = 'http://localhost:8100';
 const API_KEY = 'local-dev-key'; // reference server accepts any non-empty bearer
@@ -19,8 +19,10 @@ const API_KEY = 'local-dev-key'; // reference server accepts any non-empty beare
 async function main() {
   console.log('=== REST API: Connect and List Boxes ===\n');
 
-  // Positional: (url, credential).
-  const rt = JsBoxlite.rest(SERVER_URL, new ApiKeyCredential(API_KEY));
+  const rt = JsBoxlite.rest(new BoxliteRestOptions({
+    url: SERVER_URL,
+    credential: new ApiKeyCredential(API_KEY),
+  }));
   console.log(`  Connected to ${SERVER_URL}`);
 
   const boxes = await rt.listInfo();
