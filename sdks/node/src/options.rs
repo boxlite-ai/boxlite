@@ -486,6 +486,50 @@ impl ApiKeyCredential {
     }
 }
 
+/// Options for connecting to a remote BoxLite REST server.
+///
+/// The positional→bag adaptation lives here (not in JS): JS constructs
+/// this class, the native `rest` factory consumes it via `into_core`.
+/// Twin of Python's `PyBoxliteRestOptions` (`sdks/python/src/options.rs`).
+#[napi]
+pub struct JsBoxliteRestOptions {
+    url: String,
+    credential: Option<ApiKeyCredential>,
+    prefix: Option<String>,
+}
+
+#[napi]
+impl JsBoxliteRestOptions {
+    #[napi(constructor)]
+    pub fn new(
+        url: String,
+        credential: Option<&ApiKeyCredential>,
+        prefix: Option<String>,
+    ) -> Self {
+        Self {
+            url,
+            credential: credential.cloned(),
+            prefix,
+        }
+    }
+}
+
+impl JsBoxliteRestOptions {
+    /// Crate-internal conversion to the core options, consumed by
+    /// `runtime::JsBoxlite::rest`. Mirrors the prior inline logic and
+    /// Python's `impl From<PyBoxliteRestOptions> for BoxliteRestOptions`.
+    pub(crate) fn into_core(&self) -> boxlite::BoxliteRestOptions {
+        let mut opts = boxlite::BoxliteRestOptions::new(self.url.clone());
+        if let Some(cred) = &self.credential {
+            opts = opts.with_api_key(cred.core_key().to_string());
+        }
+        if let Some(prefix) = &self.prefix {
+            opts = opts.with_prefix(prefix.clone());
+        }
+        opts
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -612,6 +656,26 @@ mod tests {
         assert_eq!(cred.get_token().token, "env-key");
         unsafe { std::env::remove_var("BOXLITE_API_KEY") };
         assert!(ApiKeyCredential::from_env().is_none());
+    }
+
+    #[test]
+    fn rest_options_into_core_maps_fields() {
+        let cred = ApiKeyCredential::new("opaque-key".into());
+        let with_auth = JsBoxliteRestOptions::new(
+            "https://api.example.com".into(),
+            Some(&cred),
+            Some("v2".into()),
+        )
+        .into_core();
+        assert_eq!(with_auth.url, "https://api.example.com");
+        assert_eq!(with_auth.prefix.as_deref(), Some("v2"));
+        assert!(with_auth.credential.is_some());
+
+        let unauthenticated =
+            JsBoxliteRestOptions::new("http://localhost:8100".into(), None, None).into_core();
+        assert_eq!(unauthenticated.url, "http://localhost:8100");
+        assert!(unauthenticated.prefix.is_none());
+        assert!(unauthenticated.credential.is_none());
     }
 
     #[test]

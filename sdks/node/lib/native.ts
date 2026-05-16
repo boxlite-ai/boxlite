@@ -11,6 +11,7 @@
 import type {
   ApiKeyCredentialConstructor,
   JsBoxliteConstructor,
+  NativeBoxliteRestOptionsConstructor,
   NativeModule,
 } from "./native-contracts.js";
 
@@ -39,4 +40,14 @@ export function getJsBoxlite(): JsBoxliteConstructor {
  */
 export function getApiKeyCredential(): ApiKeyCredentialConstructor {
   return getNativeModule().ApiKeyCredential;
+}
+
+/**
+ * Get the native BoxliteRestOptions class from the native module.
+ *
+ * Internal — the public `BoxliteRestOptions` is the pure-TS class in
+ * ./options; this is the binding twin consumed by `JsBoxlite.rest`.
+ */
+export function getNativeBoxliteRestOptions(): NativeBoxliteRestOptionsConstructor {
+  return getNativeModule().JsBoxliteRestOptions;
 }

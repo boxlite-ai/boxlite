@@ -135,6 +135,19 @@ export interface ApiKeyCredentialConstructor {
   fromEnv(): ApiKeyCredential | null;
 }
 
+/** Native REST options class. Internal binding twin — the *public*
+ *  `BoxliteRestOptions` is the pure-TS class in ./options; this opaque
+ *  handle is constructed from it and consumed by `JsBoxlite.rest`. */
+export type NativeBoxliteRestOptions = object;
+
+export interface NativeBoxliteRestOptionsConstructor {
+  new (
+    url: string,
+    credential?: ApiKeyCredential | null,
+    prefix?: string | null,
+  ): NativeBoxliteRestOptions;
+}
+
 export type JsHealthState = "None" | "Starting" | "Healthy" | "Unhealthy";
 
 export interface JsHealthStatus {
@@ -305,17 +318,14 @@ export interface JsBoxliteConstructor {
   new (options: JsOptions): JsBoxlite;
   withDefaultConfig(): JsBoxlite;
   initDefault(options: JsOptions): void;
-  /** Connect to a remote BoxLite REST server.
-   *  Positional `(url, credential?, prefix?)`. */
-  rest(
-    url: string,
-    credential?: ApiKeyCredential | null,
-    prefix?: string | null,
-  ): JsBoxlite;
+  /** Connect to a remote BoxLite REST server. Takes the native
+   *  `BoxliteRestOptions` class (see `NativeBoxliteRestOptions`). */
+  rest(options: NativeBoxliteRestOptions): JsBoxlite;
 }
 
 export interface NativeModule {
   JsBoxlite: JsBoxliteConstructor;
   ApiKeyCredential: ApiKeyCredentialConstructor;
+  JsBoxliteRestOptions: NativeBoxliteRestOptionsConstructor;
   [key: string]: unknown;
 }
