@@ -370,7 +370,7 @@ export class Sandbox implements SandboxDto {
         return
       }
 
-      if (this.state === 'error') {
+      if (this.state === 'error' || this.state === 'build_failed') {
         const errMsg = `Sandbox ${this.id} failed to start with status: ${this.state}, error reason: ${this.errorReason}`
         throw new BoxliteError(errMsg)
       }

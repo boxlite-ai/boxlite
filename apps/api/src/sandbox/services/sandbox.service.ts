@@ -72,6 +72,7 @@ import { PortPreviewUrlDto, SignedPortPreviewUrlDto } from '../dto/port-preview-
 import { RegionService } from '../../region/services/region.service'
 import { DefaultRegionRequiredException } from '../../organization/exceptions/DefaultRegionRequiredException'
 import { SnapshotService } from './snapshot.service'
+import { parseDockerfileForSingleFromRef } from '../utils/dockerfile.util'
 import { RegionType } from '../../region/enums/region-type.enum'
 import { SandboxCreatedEvent } from '../events/sandbox-create.event'
 import { InjectRedis } from '@nestjs-modules/ioredis'
@@ -617,12 +618,130 @@ export class SandboxService {
     return this.toSandboxDto(updatedSandbox)
   }
 
+  // Auto-snapshot path for sandboxes created from a plain image ref. The
+  // dashboard / SDK wrap a string `image` field into a single-FROM Dockerfile;
+  // we recognize that shape and pull instead of build. The sandbox is parked
+  // in PULLING_SNAPSHOT with `runnerId=null`; the state-sync cron picks it up
+  // once the auto-snapshot's ref is populated by snapshot.manager.
+  private async createFromImageRef(
+    createSandboxDto: CreateSandboxDto,
+    organization: Organization,
+    region: Region,
+    imageRef: string,
+  ): Promise<SandboxDto> {
+    let pendingCpuIncrement: number | undefined
+    let pendingMemoryIncrement: number | undefined
+    let pendingDiskIncrement: number | undefined
+
+    try {
+      const sandboxClass = this.getValidatedOrDefaultClass(createSandboxDto.class)
+
+      const cpu = createSandboxDto.cpu || DEFAULT_CPU
+      const mem = createSandboxDto.memory || DEFAULT_MEMORY
+      const disk = createSandboxDto.disk || DEFAULT_DISK
+      const gpu = createSandboxDto.gpu || DEFAULT_GPU
+
+      this.organizationService.assertOrganizationIsNotSuspended(organization)
+
+      const { pendingCpuIncremented, pendingMemoryIncremented, pendingDiskIncremented } =
+        await this.validateOrganizationQuotas(organization, region, cpu, mem, disk)
+
+      if (pendingCpuIncremented) {
+        pendingCpuIncrement = cpu
+      }
+      if (pendingMemoryIncremented) {
+        pendingMemoryIncrement = mem
+      }
+      if (pendingDiskIncremented) {
+        pendingDiskIncrement = disk
+      }
+
+      if (createSandboxDto.volumes && createSandboxDto.volumes.length > 0) {
+        const volumeIdOrNames = createSandboxDto.volumes.map((v) => v.volumeId)
+        await this.volumeService.validateVolumes(organization.id, volumeIdOrNames)
+      }
+
+      const autoSnapshot = await this.snapshotService.ensureAutoSnapshotForImage(organization, region.id, imageRef)
+
+      const sandbox = new Sandbox(region.id, createSandboxDto.name)
+      sandbox.organizationId = organization.id
+      sandbox.class = sandboxClass
+      sandbox.snapshot = autoSnapshot.name
+      sandbox.osUser = createSandboxDto.user || 'boxlite'
+      sandbox.env = createSandboxDto.env || {}
+      sandbox.labels = createSandboxDto.labels || {}
+      sandbox.cpu = cpu
+      sandbox.gpu = gpu
+      sandbox.mem = mem
+      sandbox.disk = disk
+      sandbox.public = createSandboxDto.public || false
+
+      // Park in PULLING_SNAPSHOT with no runner. handleUnassignedRunnerSandbox
+      // will retry while the auto-snapshot's ref is still being computed.
+      sandbox.state = SandboxState.PULLING_SNAPSHOT
+      sandbox.desiredState = SandboxDesiredState.STARTED
+
+      if (createSandboxDto.networkBlockAll !== undefined) {
+        sandbox.networkBlockAll = createSandboxDto.networkBlockAll
+      }
+      if (createSandboxDto.networkAllowList !== undefined) {
+        sandbox.networkAllowList = this.resolveNetworkAllowList(createSandboxDto.networkAllowList)
+      }
+      if (createSandboxDto.autoStopInterval !== undefined) {
+        sandbox.autoStopInterval = this.resolveAutoStopInterval(createSandboxDto.autoStopInterval)
+      }
+      if (createSandboxDto.autoArchiveInterval !== undefined) {
+        sandbox.autoArchiveInterval = this.resolveAutoArchiveInterval(createSandboxDto.autoArchiveInterval)
+      }
+      if (createSandboxDto.autoDeleteInterval !== undefined) {
+        sandbox.autoDeleteInterval = createSandboxDto.autoDeleteInterval
+      }
+      if (createSandboxDto.volumes !== undefined) {
+        sandbox.volumes = this.resolveVolumes(createSandboxDto.volumes)
+      }
+
+      sandbox.pending = true
+
+      const insertedSandbox = await this.sandboxRepository.insert(sandbox)
+
+      this.eventEmitter
+        .emitAsync(SandboxEvents.CREATED, new SandboxCreatedEvent(insertedSandbox))
+        .catch((err) => this.logger.error('Failed to emit SandboxCreatedEvent', err))
+
+      return this.toSandboxDto(insertedSandbox)
+    } catch (error) {
+      await this.rollbackPendingUsage(
+        organization.id,
+        region.id,
+        pendingCpuIncrement,
+        pendingMemoryIncrement,
+        pendingDiskIncrement,
+      )
+
+      if (error.code === '23505') {
+        throw new ConflictException(`Sandbox with name ${createSandboxDto.name} already exists`)
+      }
+
+      throw error
+    }
+  }
+
   async createFromBuildInfo(createSandboxDto: CreateSandboxDto, organization: Organization): Promise<SandboxDto> {
     let pendingCpuIncrement: number | undefined
     let pendingMemoryIncrement: number | undefined
     let pendingDiskIncrement: number | undefined
 
     const region = await this.getValidatedOrDefaultRegion(organization, createSandboxDto.target)
+
+    // Single-FROM dockerfiles (e.g. SDK's `Image.base('alpine:3.22.4')`) don't
+    // need a real build — they translate 1:1 to an image pull, which the runner
+    // supports today. The build path (apps/runner/pkg/boxlite/stubs.go::Build-
+    // Snapshot) is currently a stub. Auto-create a hidden snapshot for the image
+    // and route through the snapshot-pull lifecycle.
+    const singleFromRef = parseDockerfileForSingleFromRef(createSandboxDto.buildInfo?.dockerfileContent)
+    if (singleFromRef) {
+      return this.createFromImageRef(createSandboxDto, organization, region, singleFromRef)
+    }
 
     try {
       const sandboxClass = this.getValidatedOrDefaultClass(createSandboxDto.class)

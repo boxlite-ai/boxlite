@@ -56,6 +56,16 @@ import { LogExecution } from '../../common/decorators/log-execution.decorator'
 import { WithInstrumentation } from '../../common/decorators/otel.decorator'
 
 const IMAGE_NAME_REGEX = /^[a-zA-Z0-9_.\-:]+(\/[a-zA-Z0-9_.\-:]+)*(@sha256:[a-f0-9]{64})?$/
+
+// Snapshot name prefix for auto-created snapshots backing single-FROM Dockerfile
+// builds. Hidden from end users; reused across sandbox creates for the same
+// (org, region, image) tuple.
+const AUTO_IMAGE_SNAPSHOT_PREFIX = '_auto-image'
+
+export function buildAutoImageSnapshotName(regionId: string, imageRef: string): string {
+  return `${AUTO_IMAGE_SNAPSHOT_PREFIX}/${regionId}/${imageRef}`
+}
+
 @Injectable()
 export class SnapshotService {
   private readonly logger = new Logger(SnapshotService.name)
@@ -214,6 +224,65 @@ export class SnapshotService {
       }
     } catch (error) {
       await this.rollbackPendingUsage(organization.id, pendingSnapshotCountIncrement)
+      throw error
+    }
+  }
+
+  // Find or create an auto-snapshot backing a single-FROM Dockerfile (i.e. a
+  // sandbox-create request whose `buildInfo.dockerfileContent` is just
+  // `FROM <imageRef>`). Auto-snapshots are hidden from users and identified by
+  // the `_auto-image/` name prefix; the existing snapshot.manager state machine
+  // transitions them PENDING → PULLING → ACTIVE.
+  //
+  // Concurrent callers for the same (org, region, image) tuple converge on the
+  // same snapshot via the (organizationId, name) UNIQUE constraint.
+  async ensureAutoSnapshotForImage(
+    organization: Organization,
+    regionId: string,
+    imageRef: string,
+  ): Promise<Snapshot> {
+    const imageValidationError = this.validateImageName(imageRef)
+    if (imageValidationError) {
+      throw new BadRequestException(imageValidationError)
+    }
+
+    const snapshotName = buildAutoImageSnapshotName(regionId, imageRef)
+
+    const existing = await this.snapshotRepository.findOne({
+      where: { organizationId: organization.id, name: snapshotName },
+    })
+    if (existing) {
+      return existing
+    }
+
+    this.organizationService.assertOrganizationIsNotSuspended(organization)
+
+    const snapshotId = uuidv4()
+    const snapshot = this.snapshotRepository.create({
+      id: snapshotId,
+      organizationId: organization.id,
+      name: snapshotName,
+      imageName: imageRef,
+      state: SnapshotState.PENDING,
+      hideFromUsers: true,
+      general: false,
+      snapshotRegions: [{ snapshotId, regionId }],
+    })
+
+    try {
+      const saved = await this.snapshotRepository.save(snapshot)
+      this.eventEmitter.emit(SnapshotEvents.CREATED, new SnapshotCreatedEvent(saved))
+      return saved
+    } catch (error) {
+      if (error.code === '23505') {
+        // Lost the race against a concurrent create — re-read the winner.
+        const concurrent = await this.snapshotRepository.findOne({
+          where: { organizationId: organization.id, name: snapshotName },
+        })
+        if (concurrent) {
+          return concurrent
+        }
+      }
       throw error
     }
   }

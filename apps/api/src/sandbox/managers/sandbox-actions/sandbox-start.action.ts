@@ -175,6 +175,12 @@ export class SandboxStartAction extends SandboxAction {
     } else {
       const snapshot = await this.snapshotService.getSnapshotByName(sandbox.snapshot, sandbox.organizationId)
       snapshotRef = snapshot.ref
+      // Auto-snapshots (image-ref sandboxes) start out as PENDING with no ref —
+      // snapshot.manager populates ref once it inspects the registry. Park the
+      // sandbox until then; the 10s sync-states cron will retry.
+      if (!snapshotRef) {
+        return DONT_SYNC_AGAIN
+      }
     }
 
     const declarativeBuildScoreThreshold = this.configService.get('runnerScore.thresholds.declarativeBuild')
