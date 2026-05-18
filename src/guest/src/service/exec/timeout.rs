@@ -20,7 +20,7 @@ pub(super) fn start_timeout_watcher(
 
         // Kill process with SIGKILL
         use nix::sys::signal::Signal;
-        if exec_state.kill(Signal::SIGALRM).await {
+        if exec_state.kill(Signal::SIGKILL).await {
             info!(execution_id = %exec_id, "killed on timeout");
         }
     });
