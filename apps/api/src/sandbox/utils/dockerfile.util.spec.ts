@@ -5,6 +5,10 @@
 
 import { parseDockerfileForSingleFromRef } from './dockerfile.util'
 
+// 64-hex sha256 used in place of the toy `abcd` in earlier fixtures so the
+// test ref matches the shape `validateImageName` enforces in snapshot.service.
+const SAMPLE_DIGEST = 'a'.repeat(64)
+
 describe('parseDockerfileForSingleFromRef', () => {
   describe('matches single-FROM dockerfiles', () => {
     it('extracts a simple image ref', () => {
@@ -24,8 +28,8 @@ describe('parseDockerfileForSingleFromRef', () => {
     })
 
     it('accepts registry-qualified refs with digest', () => {
-      expect(parseDockerfileForSingleFromRef('FROM ghcr.io/example/app@sha256:abcd\n')).toBe(
-        'ghcr.io/example/app@sha256:abcd',
+      expect(parseDockerfileForSingleFromRef(`FROM ghcr.io/example/app@sha256:${SAMPLE_DIGEST}\n`)).toBe(
+        `ghcr.io/example/app@sha256:${SAMPLE_DIGEST}`,
       )
     })
 
@@ -43,6 +47,14 @@ describe('parseDockerfileForSingleFromRef', () => {
 
     it('strips blank lines around FROM', () => {
       expect(parseDockerfileForSingleFromRef('\n\nFROM alpine:3.22.4\n\n')).toBe('alpine:3.22.4')
+    })
+
+    it('handles leading whitespace before FROM', () => {
+      expect(parseDockerfileForSingleFromRef('  FROM alpine:3.22.4\n')).toBe('alpine:3.22.4')
+    })
+
+    it('handles mixed leading + trailing whitespace and tabs', () => {
+      expect(parseDockerfileForSingleFromRef('\t FROM alpine:3.22.4 \n')).toBe('alpine:3.22.4')
     })
   })
 

@@ -8,9 +8,12 @@
 // to end) instead of the snapshot-build path (which is currently a stub in the
 // BoxLite Go runner — see apps/runner/pkg/boxlite/stubs.go::BuildSnapshot).
 
-// Strips Docker-style comments and trailing whitespace; preserves quoted text.
+// Strips Docker-style whole-line comments and surrounding whitespace.
+// Trimming both sides matters because Dockerfile syntax permits indented
+// instructions (e.g. `  FROM alpine`) and a line-start FROM anchor below
+// would otherwise drop them.
 function stripComments(line: string): string {
-  return line.replace(/^\s*#.*$/, '').replace(/\s+$/, '')
+  return line.replace(/^\s*#.*$/, '').trim()
 }
 
 // Returns the ref if `dockerfile` contains exactly one non-empty instruction
