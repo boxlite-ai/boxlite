@@ -231,11 +231,11 @@ Credential:      API key (from BOXLITE_API_KEY env var)
 
 ### `boxlite run`
 
-**Synopsis:** `boxlite run [OPTIONS] IMAGE [COMMAND...]`
+**Synopsis:** `boxlite run [OPTIONS] (IMAGE | --rootfs PATH) [COMMAND...]`
 
 Create a box from an image and run a command. If `COMMAND` is omitted, the box runs `sh` (`src/cli/src/commands/run.rs:138`).
 
-**Options:** Uses [`ProcessFlags`](#processflags) + [`ResourceFlags`](#resourceflags) + [`PublishFlags`](#publishflags) + [`VolumeFlags`](#volumeflags) + [`ManagementFlags`](#managementflags).
+**Options:** Uses [`RootfsFlags`](#rootfsflags) + [`ProcessFlags`](#processflags) + [`ResourceFlags`](#resourceflags) + [`PublishFlags`](#publishflags) + [`VolumeFlags`](#volumeflags) + [`ManagementFlags`](#managementflags).
 
 **Exit behavior:**
 
@@ -251,6 +251,7 @@ boxlite run -it --rm alpine:latest /bin/sh
 boxlite run -d --name web -p 8080:80 nginx:alpine
 boxlite run -v $(pwd):/work -w /work alpine:latest ls -la
 boxlite run --cpus 4 --memory 4096 python:slim python -c "print(2+2)"
+boxlite run --rootfs /var/lib/bundles/myapp -- /app/server
 ```
 
 ---
@@ -281,7 +282,7 @@ boxlite exec -e DEBUG=1 -w /app mybox -- pytest tests/
 
 ### `boxlite create`
 
-**Synopsis:** `boxlite create [OPTIONS] IMAGE`
+**Synopsis:** `boxlite create [OPTIONS] (IMAGE | --rootfs PATH)`
 
 Create a box without running a command. Prints the new box's ID to stdout.
 
@@ -292,7 +293,7 @@ Create a box without running a command. Prints the new box's ID to stdout.
 | `--env KEY=VALUE` | `-e` | Set environment variables (repeatable) |
 | `--workdir PATH` | `-w` | Working directory inside the box |
 
-Also uses [`ResourceFlags`](#resourceflags) + [`PublishFlags`](#publishflags) + [`VolumeFlags`](#volumeflags) + [`ManagementFlags`](#managementflags).
+Also uses [`RootfsFlags`](#rootfsflags) + [`ResourceFlags`](#resourceflags) + [`PublishFlags`](#publishflags) + [`VolumeFlags`](#volumeflags) + [`ManagementFlags`](#managementflags).
 
 > Note: `create` accepts `--env` and `--workdir` directly rather than via `ProcessFlags` (no `-i`/`-t`/`-u` here, since no command is being executed).
 
@@ -301,6 +302,7 @@ Also uses [`ResourceFlags`](#resourceflags) + [`PublishFlags`](#publishflags) + 
 ```bash
 boxlite create --name mybox alpine:latest
 boxlite create -p 8080:80 -v /data:/app/data --name web nginx:alpine
+boxlite create --rootfs /var/lib/bundles/myapp --name offline-box
 ```
 
 ---
@@ -559,6 +561,19 @@ boxlite completion fish > ~/.config/fish/completions/boxlite.fish
 ## Shared Flag Groups
 
 Several commands flatten shared `clap` `Args` structs. Each is documented here once.
+
+### `RootfsFlags`
+
+Used by `run` and `create` (defined at `src/cli/src/cli.rs`).
+
+Selects the source for the box rootfs. Exactly one of `IMAGE` or `--rootfs` is required; clap enforces mutual exclusion at parse time.
+
+| Flag | Description |
+|------|-------------|
+| `IMAGE` (positional) | Registry image reference (e.g. `alpine:latest`). Conflicts with `--rootfs`. |
+| `--rootfs PATH` | Path to a pre-exported OCI bundle directory (contains `oci-layout`, `index.json`, `blobs/`). The CLI verifies the path exists, is a directory, and contains an `oci-layout` file; deeper validation happens in the runtime. Conflicts with `IMAGE`. |
+
+> When combining `--rootfs` with a `COMMAND` on `boxlite run`, use `--` before the command (`boxlite run --rootfs /b -- echo hi`), otherwise the first command word is parsed as `IMAGE` and clap rejects the conflict.
 
 ### `ProcessFlags`
 
