@@ -1,13 +1,12 @@
-use crate::cli::{GlobalFlags, PublishFlags, ResourceFlags, VolumeFlags};
-use boxlite::{BoxOptions, RootfsSpec};
+use crate::cli::{GlobalFlags, PublishFlags, ResourceFlags, RootfsFlags, VolumeFlags};
+use boxlite::BoxOptions;
 use clap::Args;
 
 /// Create a new box
 #[derive(Args, Debug)]
 pub struct CreateArgs {
-    /// Image to create from
-    #[arg(index = 1)]
-    pub image: String,
+    #[command(flatten)]
+    pub rootfs: RootfsFlags,
 
     #[command(flatten)]
     pub management: crate::cli::ManagementFlags,
@@ -49,7 +48,7 @@ impl CreateArgs {
         self.volume.apply_to(&mut options, global.home.as_deref())?;
         options.working_dir = self.workdir.clone();
         crate::cli::apply_env_vars(&self.env, &mut options);
-        options.rootfs = RootfsSpec::Image(self.image.clone());
+        options.rootfs = self.rootfs.resolve()?;
         Ok(options)
     }
 }

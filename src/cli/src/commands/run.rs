@@ -1,10 +1,11 @@
 use crate::cli::{
-    GlobalFlags, ManagementFlags, ProcessFlags, PublishFlags, ResourceFlags, VolumeFlags,
+    GlobalFlags, ManagementFlags, ProcessFlags, PublishFlags, ResourceFlags, RootfsFlags,
+    VolumeFlags,
 };
 use crate::terminal::StreamManager;
 use crate::util::to_shell_exit_code;
 use boxlite::BoxCommand;
-use boxlite::{BoxOptions, BoxliteRuntime, LiteBox, RootfsSpec};
+use boxlite::{BoxOptions, BoxliteRuntime, LiteBox};
 use clap::Args;
 use std::io::{self, IsTerminal};
 
@@ -25,10 +26,10 @@ pub struct RunArgs {
     #[command(flatten)]
     pub management: ManagementFlags,
 
-    #[arg(index = 1)]
-    pub image: String,
+    #[command(flatten)]
+    pub rootfs: RootfsFlags,
 
-    /// Command to run inside the image
+    /// Command to run inside the box (use `--` before COMMAND when using --rootfs)
     #[arg(index = 2, trailing_var_arg = true)]
     pub command: Vec<String>,
 }
@@ -106,7 +107,7 @@ impl BoxRunner {
             options.auto_remove = false;
         }
 
-        options.rootfs = RootfsSpec::Image(self.args.image.clone());
+        options.rootfs = self.args.rootfs.resolve()?;
 
         let litebox = self
             .rt
