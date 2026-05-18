@@ -773,3 +773,75 @@ fn test_run_tty_error_in_pipe() {
         .failure()
         .stderr(predicate::str::contains("input device is not a TTY"));
 }
+
+// ============================================================================
+// --rootfs Argument Tests
+// ============================================================================
+
+#[test]
+fn test_run_rootfs_and_image_mutually_exclusive() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("oci-layout"), "{}").unwrap();
+
+    let mut ctx = common::boxlite();
+    ctx.cmd.args([
+        "run",
+        "--rootfs",
+        dir.path().to_str().unwrap(),
+        "alpine:latest",
+        "echo",
+        "hi",
+    ]);
+    ctx.cmd.assert().failure().stderr(
+        predicate::str::contains("cannot be used with")
+            .or(predicate::str::contains("conflict"))
+            .or(predicate::str::contains("the argument")),
+    );
+}
+
+#[test]
+fn test_run_requires_image_or_rootfs() {
+    let mut ctx = common::boxlite();
+    ctx.cmd.args(["run"]);
+    ctx.cmd.assert().failure().stderr(
+        predicate::str::contains("required")
+            .or(predicate::str::contains("the following required")),
+    );
+}
+
+#[test]
+fn test_run_rootfs_path_missing() {
+    let mut ctx = common::boxlite();
+    ctx.cmd
+        .args(["run", "--rootfs", "/path/that/does/not/exist/boxlite-rootfs"]);
+    ctx.cmd
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("does not exist"));
+}
+
+#[test]
+fn test_run_rootfs_path_not_a_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("regular-file");
+    std::fs::write(&file, b"x").unwrap();
+
+    let mut ctx = common::boxlite();
+    ctx.cmd.args(["run", "--rootfs", file.to_str().unwrap()]);
+    ctx.cmd
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not a directory"));
+}
+
+#[test]
+fn test_run_rootfs_path_missing_oci_layout() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let mut ctx = common::boxlite();
+    ctx.cmd.args(["run", "--rootfs", dir.path().to_str().unwrap()]);
+    ctx.cmd
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("oci-layout"));
+}
