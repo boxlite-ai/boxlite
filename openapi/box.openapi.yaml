@@ -716,47 +716,13 @@ paths:
   # -------------------------------------------------------------------------
   # Files
   # -------------------------------------------------------------------------
+  # Bulk download still returns a tar archive for the requested directory:
+  # callers receive an archive and don't need to issue N requests. Upload uses
+  # per-resource WebDAV verbs below so callers no longer have to tar locally.
   /{prefix}/boxes/{box_id}/files:
     parameters:
       - $ref: "#/components/parameters/prefix"
       - $ref: "#/components/parameters/boxId"
-
-    put:
-      operationId: uploadFiles
-      summary: Upload files into the box
-      description: |
-        Uploads a tar archive and extracts it at the specified path
-        inside the container. The box must be running.
-      tags: [Files]
-      parameters:
-        - name: path
-          in: query
-          required: true
-          description: Destination path inside the container
-          schema:
-            type: string
-          example: /app
-        - name: overwrite
-          in: query
-          description: Overwrite existing files at destination
-          schema:
-            type: boolean
-            default: true
-      requestBody:
-        required: true
-        content:
-          application/x-tar:
-            schema:
-              type: string
-              format: binary
-              description: Tar archive to extract at destination
-      responses:
-        "204":
-          description: Upload successful
-        "404":
-          $ref: "#/components/responses/NotFoundError"
-        "409":
-          $ref: "#/components/responses/ConflictError"
 
     get:
       operationId: downloadFiles
@@ -791,6 +757,78 @@ paths:
           $ref: "#/components/responses/NotFoundError"
         "409":
           $ref: "#/components/responses/ConflictError"
+
+  # Upload uses WebDAV verbs scoped to a concrete container path. Callers do not
+  # tar locally; the SDK walks the host tree and issues MKCOL for each directory
+  # and PUT for each file (see [[Rust client copy_into]] in
+  # src/boxlite/src/rest/litebox.rs).
+  /{prefix}/boxes/{box_id}/files/{path}:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+      - name: path
+        in: path
+        required: true
+        description: |
+          Absolute path inside the container, percent-encoded. The leading
+          slash is implicit; e.g. `app/config.json` targets `/app/config.json`.
+        schema:
+          type: string
+        example: app/config.json
+
+    put:
+      operationId: uploadFile
+      summary: Upload a single file into the box (WebDAV PUT)
+      description: |
+        Writes the request body to the given container path, creating or
+        overwriting the file. Parent directories must already exist — create
+        them with MKCOL first. The box must be running.
+      tags: [Files]
+      parameters:
+        - name: overwrite
+          in: query
+          description: Overwrite an existing file at the destination
+          schema:
+            type: boolean
+            default: true
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+              description: Raw file bytes
+      responses:
+        "201":
+          description: File created
+        "204":
+          description: Existing file overwritten
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          description: |
+            Parent directory does not exist, or overwrite=false and file exists.
+          $ref: "#/components/responses/ConflictError"
+
+    # WebDAV's MKCOL verb is not a standard HTTP method, so OpenAPI 3.1 can't
+    # express it directly. We document it here as a vendor extension on the
+    # same path-item — clients should issue `MKCOL` against this URL.
+    x-webdav-mkcol:
+      operationId: makeCollection
+      method: MKCOL
+      summary: Create a directory inside the box (WebDAV MKCOL)
+      description: |
+        Creates an empty directory at the given container path. Parent
+        directories must already exist. The box must be running.
+      tags: [Files]
+      responses:
+        "201":
+          description: Directory created
+        "405":
+          description: A non-collection resource already exists at this path
+        "409":
+          description: Parent directory does not exist
 
   # -------------------------------------------------------------------------
   # Metrics
