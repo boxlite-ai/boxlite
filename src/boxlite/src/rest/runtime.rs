@@ -9,10 +9,13 @@ use crate::runtime::backend::RuntimeBackend;
 use crate::runtime::options::{BoxArchive, BoxOptions};
 use crate::{BoxInfo, LiteBox};
 
+use super::auth::AuthBackend;
 use super::client::ApiClient;
 use super::litebox::RestBox;
 use super::options::BoxliteRestOptions;
-use super::types::{BoxResponse, CreateBoxRequest, ListBoxesResponse, RuntimeMetricsResponse};
+use super::types::{
+    BoxResponse, CreateBoxRequest, ListBoxesResponse, Principal, RuntimeMetricsResponse,
+};
 
 pub(crate) struct RestRuntime {
     client: ApiClient,
@@ -22,6 +25,13 @@ impl RestRuntime {
     pub fn new(config: &BoxliteRestOptions) -> BoxliteResult<Self> {
         let client = ApiClient::new(config)?;
         Ok(Self { client })
+    }
+}
+
+#[async_trait::async_trait]
+impl AuthBackend for RestRuntime {
+    async fn whoami(&self) -> BoxliteResult<Principal> {
+        self.client.get_me().await
     }
 }
 

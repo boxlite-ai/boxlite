@@ -57,6 +57,11 @@ extern "C" fn shutdown_on_exit() {
 pub struct BoxliteRuntime {
     backend: Arc<dyn RuntimeBackend>,
     image_backend: Option<Arc<dyn ImageBackend>>,
+    /// Identity capability — `Some` only for REST runtimes (an `Arc` view of
+    /// the same `RestRuntime` as `backend`; not a second client). Surfaced
+    /// via `auth()`, mirroring `image_backend` / `images()`.
+    #[cfg(feature = "rest")]
+    auth_backend: Option<Arc<dyn crate::rest::auth::AuthBackend>>,
 }
 
 // ============================================================================
@@ -82,6 +87,8 @@ impl BoxliteRuntime {
         Ok(Self {
             backend: backend_arc,
             image_backend: Some(image_backend),
+            #[cfg(feature = "rest")]
+            auth_backend: None,
         })
     }
 
@@ -104,10 +111,12 @@ impl BoxliteRuntime {
     /// ```
     #[cfg(feature = "rest")]
     pub fn rest(config: crate::rest::options::BoxliteRestOptions) -> BoxliteResult<Self> {
-        let rest_runtime = RestRuntime::new(&config)?;
+        let rest_runtime = Arc::new(RestRuntime::new(&config)?);
+        let auth_backend = Arc::clone(&rest_runtime) as Arc<dyn crate::rest::auth::AuthBackend>;
         Ok(Self {
-            backend: Arc::new(rest_runtime),
+            backend: rest_runtime,
             image_backend: None, // REST runtime doesn't support image operations
+            auth_backend: Some(auth_backend),
         })
     }
 
@@ -407,6 +416,44 @@ impl BoxliteRuntime {
             Some(manager) => Ok(crate::runtime::ImageHandle::new(Arc::clone(manager))),
             None => Err(BoxliteError::Unsupported(
                 "Image operations not supported over REST API".to_string(),
+            )),
+        }
+    }
+
+    /// Get a handle for identity operations (`whoami`).
+    ///
+    /// Returns an [`AuthHandle`](crate::AuthHandle) that resolves the calling
+    /// credential's identity via `GET /v1/me`. Identity is deliberately kept
+    /// off the generic runtime API and off the `RuntimeBackend` trait — this
+    /// accessor mirrors `images()` / `ImageHandle`. The handle is an `Arc`
+    /// view of the same REST backend as box operations (no second client).
+    ///
+    /// # Errors
+    ///
+    /// Returns `BoxliteError::Unsupported` for non-REST runtimes (local
+    /// runtimes have no remote identity).
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use boxlite::{BoxliteRuntime, BoxliteRestOptions};
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let runtime = BoxliteRuntime::rest(
+    ///     BoxliteRestOptions::new("https://api.example.com")
+    ///         .with_api_key("blk_live_opaque"),
+    /// )?;
+    /// let me = runtime.auth()?.whoami().await?;
+    /// println!("{}", me.sub);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[cfg(feature = "rest")]
+    pub fn auth(&self) -> BoxliteResult<crate::rest::auth::AuthHandle> {
+        match &self.auth_backend {
+            Some(backend) => Ok(crate::rest::auth::AuthHandle::new(Arc::clone(backend))),
+            None => Err(BoxliteError::Unsupported(
+                "identity (auth) is only available on REST runtimes".to_string(),
             )),
         }
     }

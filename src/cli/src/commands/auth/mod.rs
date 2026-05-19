@@ -9,6 +9,7 @@ use clap::{Args, Subcommand};
 pub mod login;
 pub mod logout;
 pub mod status;
+pub mod whoami;
 
 #[derive(Args, Debug, Clone)]
 pub struct AuthArgs {
@@ -22,8 +23,10 @@ pub enum AuthCommand {
     Login(login::LoginArgs),
     /// Remove stored credentials.
     Logout(logout::LogoutArgs),
-    /// Show current authentication status.
+    /// Show current authentication status (offline).
     Status,
+    /// Confirm the active credential's identity via `GET /v1/me`.
+    Whoami,
 }
 
 pub async fn run(args: AuthArgs) -> anyhow::Result<()> {
@@ -31,5 +34,6 @@ pub async fn run(args: AuthArgs) -> anyhow::Result<()> {
         AuthCommand::Login(a) => login::run(a).await,
         AuthCommand::Logout(a) => logout::run(a).await,
         AuthCommand::Status => status::run(),
+        AuthCommand::Whoami => whoami::run().await,
     }
 }

@@ -48,6 +48,34 @@ pub(crate) struct SandboxCapabilities {
 }
 
 // ============================================================================
+// Identity
+// ============================================================================
+
+/// Identity + scopes returned by `GET /v1/me` (OpenAPI `Principal`).
+///
+/// Public: surfaced through [`crate::AuthHandle::whoami`]
+/// so the CLI can confirm *who* a credential authenticates as. Field names
+/// are snake_case per the Box API spec
+/// (`required: [sub, principal_type, prefix, scopes]`).
+#[derive(Debug, Deserialize, Clone)]
+pub struct Principal {
+    /// Stable opaque principal id — treat as opaque.
+    pub sub: String,
+    /// `user` for interactive keys; `service_account` for automation.
+    pub principal_type: String,
+    #[serde(default)]
+    pub email: Option<String>,
+    #[serde(default)]
+    pub display_name: Option<String>,
+    /// Tenant/workspace prefix the credential is bound to.
+    pub prefix: String,
+    pub scopes: Vec<String>,
+    /// Optional expiry; `None`/absent for long-lived dashboard keys.
+    #[serde(default)]
+    pub expires_at: Option<String>,
+}
+
+// ============================================================================
 // Box
 // ============================================================================
 
@@ -706,6 +734,39 @@ mod tests {
         assert_eq!(caps.snapshots_enabled, Some(true));
         assert_eq!(caps.clone_enabled, Some(false));
         assert_eq!(caps.export_enabled, Some(true));
+    }
+
+    #[test]
+    fn test_principal_deserialization() {
+        // Required fields only; optional email/display_name/expires_at absent.
+        let json = r#"{
+            "sub": "usr_01ABC",
+            "principal_type": "user",
+            "prefix": "acme",
+            "scopes": ["box:read", "box:write"]
+        }"#;
+        let p: Principal = serde_json::from_str(json).unwrap();
+        assert_eq!(p.sub, "usr_01ABC");
+        assert_eq!(p.principal_type, "user");
+        assert_eq!(p.prefix, "acme");
+        assert_eq!(p.scopes, vec!["box:read", "box:write"]);
+        assert_eq!(p.email, None);
+        assert_eq!(p.display_name, None);
+        assert_eq!(p.expires_at, None);
+
+        let full = r#"{
+            "sub": "svc_1",
+            "principal_type": "service_account",
+            "email": "ci@acme.test",
+            "display_name": "CI",
+            "prefix": "acme",
+            "scopes": [],
+            "expires_at": "2027-01-01T00:00:00Z"
+        }"#;
+        let p: Principal = serde_json::from_str(full).unwrap();
+        assert_eq!(p.email.as_deref(), Some("ci@acme.test"));
+        assert_eq!(p.display_name.as_deref(), Some("CI"));
+        assert_eq!(p.expires_at.as_deref(), Some("2027-01-01T00:00:00Z"));
     }
 
     #[test]
