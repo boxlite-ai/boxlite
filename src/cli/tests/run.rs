@@ -804,16 +804,18 @@ fn test_run_requires_image_or_rootfs() {
     let mut ctx = common::boxlite();
     ctx.cmd.args(["run"]);
     ctx.cmd.assert().failure().stderr(
-        predicate::str::contains("required")
-            .or(predicate::str::contains("the following required")),
+        predicate::str::contains("required").or(predicate::str::contains("the following required")),
     );
 }
 
 #[test]
 fn test_run_rootfs_path_missing() {
     let mut ctx = common::boxlite();
-    ctx.cmd
-        .args(["run", "--rootfs", "/path/that/does/not/exist/boxlite-rootfs"]);
+    ctx.cmd.args([
+        "run",
+        "--rootfs",
+        "/path/that/does/not/exist/boxlite-rootfs",
+    ]);
     ctx.cmd
         .assert()
         .failure()
@@ -839,7 +841,8 @@ fn test_run_rootfs_path_missing_oci_layout() {
     let dir = tempfile::tempdir().unwrap();
 
     let mut ctx = common::boxlite();
-    ctx.cmd.args(["run", "--rootfs", dir.path().to_str().unwrap()]);
+    ctx.cmd
+        .args(["run", "--rootfs", dir.path().to_str().unwrap()]);
     ctx.cmd
         .assert()
         .failure()

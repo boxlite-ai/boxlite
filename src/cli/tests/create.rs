@@ -163,16 +163,18 @@ fn test_create_requires_image_or_rootfs() {
     let mut ctx = common::boxlite();
     ctx.cmd.args(["create"]);
     ctx.cmd.assert().failure().stderr(
-        predicate::str::contains("required")
-            .or(predicate::str::contains("the following required")),
+        predicate::str::contains("required").or(predicate::str::contains("the following required")),
     );
 }
 
 #[test]
 fn test_create_rootfs_path_missing() {
     let mut ctx = common::boxlite();
-    ctx.cmd
-        .args(["create", "--rootfs", "/path/that/does/not/exist/boxlite-rootfs"]);
+    ctx.cmd.args([
+        "create",
+        "--rootfs",
+        "/path/that/does/not/exist/boxlite-rootfs",
+    ]);
     ctx.cmd
         .assert()
         .failure()

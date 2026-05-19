@@ -665,9 +665,7 @@ impl RootfsFlags {
     pub fn resolve(&self) -> anyhow::Result<RootfsSpec> {
         if let Some(path) = &self.rootfs {
             validate_oci_bundle(path)?;
-            Ok(RootfsSpec::RootfsPath(
-                path.to_string_lossy().into_owned(),
-            ))
+            Ok(RootfsSpec::RootfsPath(path.to_string_lossy().into_owned()))
         } else if let Some(image) = &self.image {
             Ok(RootfsSpec::Image(image.clone()))
         } else {
@@ -1116,13 +1114,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("oci-layout"), "{}").unwrap();
         let path_str = dir.path().to_str().unwrap();
-        let result = Cli::try_parse_from([
-            "boxlite",
-            "create",
-            "--rootfs",
-            path_str,
-            "alpine:latest",
-        ]);
+        let result =
+            Cli::try_parse_from(["boxlite", "create", "--rootfs", path_str, "alpine:latest"]);
         assert!(result.is_err(), "expected mutex error when both set");
     }
 
