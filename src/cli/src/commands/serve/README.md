@@ -68,7 +68,7 @@ execute(ServeArgs, GlobalFlags)
 │  │  └──────────────────────────────────────────────┘ │  │
 │  └──────────────────────────────────────────────────┘  │
 │                                                        │
-│  Handlers:  auth · config · boxes · executions         │
+│  Handlers:  me · config · boxes · executions           │
 │             files · metrics · snapshots · advanced     │
 │                                                        │
 │  Background:  reaper_loop  (orphan cleanup)            │
@@ -89,7 +89,7 @@ registry.
 
 | Module       | File                     | Purpose                                                       |
 |--------------|--------------------------|---------------------------------------------------------------|
-| `auth`       | `handlers/auth.rs`       | OAuth2 token endpoint (local passthrough, always succeeds)    |
+| `me`         | `handlers/me.rs`         | `GET /v1/me` — identity for the calling credential            |
 | `config`     | `handlers/config.rs`     | Capability discovery (snapshots, clone, export, import)       |
 | `boxes`      | `handlers/boxes.rs`      | Box CRUD: create, list, get, head, start, stop, remove        |
 | `executions` | `handlers/executions.rs` | Lifecycle: start, status, signal, kill, resize, attach        |
@@ -102,11 +102,11 @@ registry.
 
 All paths are relative to the server root (e.g. `http://localhost:8100`).
 
-### Auth & Config
+### Identity & Config
 
 | Method | Path                 | Handler               | Description                        |
 |--------|----------------------|-----------------------|------------------------------------|
-| POST   | `/v1/oauth/tokens`   | `auth::oauth_token`   | Get bearer token (always succeeds) |
+| GET    | `/v1/me`             | `me::get_me`          | Identity for the calling credential |
 | GET    | `/v1/config`         | `config::get_config`  | Capability discovery               |
 
 ### Box CRUD & Lifecycle

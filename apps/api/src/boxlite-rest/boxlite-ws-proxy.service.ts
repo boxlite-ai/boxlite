@@ -128,9 +128,9 @@ export class BoxliteWsProxyService {
    * sandboxes in that org.
    *
    * JWT (the second strategy in CombinedAuthGuard) is unused here because the
-   * BoxLite SDK's `/oauth/tokens` handler echoes the client_secret straight
-   * back as the access_token, so the Bearer is always the raw API key. If a
-   * real JWT issuer is ever wired in, extend this method to fall through to
+   * gateway has no OAuth token issuer — API keys are the only credential
+   * source today, and the Bearer is always the raw API key. If a real JWT
+   * issuer is ever wired in, extend this method to fall through to
    * `jwtVerify`.
    *
    * Unlike the HTTP path, this does not consult the Redis cache used by

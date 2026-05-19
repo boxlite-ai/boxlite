@@ -19,23 +19,28 @@ cd openapi/reference-server
 uv run --active server.py
 ```
 
-## Test Credentials
+## Authentication
 
-| Field | Value |
-|-------|-------|
-| client_id | `test-client` |
-| client_secret | `test-secret` |
+The reference server accepts **any non-empty Bearer token** — token format and
+validation are out of scope for the contract (see `BearerAuth` in
+`box.openapi.yaml`). Production gateways plug in real validators. Use any
+placeholder locally:
+
+```bash
+TOKEN=demo
+```
 
 ## Quick Test
 
 ```bash
-# Get a token
-TOKEN=$(curl -s -X POST http://localhost:8080/v1/oauth/tokens \
-  -d 'grant_type=client_credentials&client_id=test-client&client_secret=test-secret' \
-  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+TOKEN=demo
 
-# Server config
+# Server config (no auth required)
 curl -s http://localhost:8080/v1/config | python3 -m json.tool
+
+# Identity for the calling credential
+curl -s http://localhost:8080/v1/me \
+  -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
 
 # Create a box
 curl -s -X POST http://localhost:8080/v1/demo/boxes \
@@ -68,12 +73,12 @@ curl -s -X DELETE http://localhost:8080/v1/demo/boxes/$BOX_ID \
   -H "Authorization: Bearer $TOKEN" -w "%{http_code}\n"
 ```
 
-## Implemented Endpoints (20 of 22)
+## Implemented Endpoints
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/v1/config` | GET | Server configuration |
-| `/v1/oauth/tokens` | POST | OAuth2 client credentials |
+| `/v1/me` | GET | Identity for the calling credential |
 | `/{prefix}/boxes` | POST | Create box |
 | `/{prefix}/boxes` | GET | List boxes |
 | `/{prefix}/boxes/{id}` | GET | Get box |
@@ -112,10 +117,6 @@ Use `--env-file` to load a different file.
 | `BOXLITE_SERVER_HOST` | `0.0.0.0` |
 | `BOXLITE_SERVER_PORT` | `8080` |
 | `BOXLITE_SERVER_LOG_LEVEL` | `info` |
-| `BOXLITE_SERVER_JWT_SECRET` | `boxlite-reference-server-secret` |
-| `BOXLITE_SERVER_JWT_EXPIRY_SECONDS` | `3600` |
-| `BOXLITE_SERVER_CLIENT_ID` | `test-client` |
-| `BOXLITE_SERVER_CLIENT_SECRET` | `test-secret` |
 
 ### Runtime Settings (`BOXLITE_RUNTIME_*`)
 
