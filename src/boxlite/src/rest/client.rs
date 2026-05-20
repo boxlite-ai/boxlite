@@ -13,7 +13,8 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use super::credential::{AccessToken, Credential};
 use super::error::{map_http_error, map_http_status};
 use super::options::BoxliteRestOptions;
-use super::types::{ErrorResponse, Principal, SandboxConfigResponse};
+use super::types::{ErrorResponse, SandboxConfigResponse};
+use crate::runtime::auth::Principal;
 
 /// Re-request a token once it is within this leeway of `expires_at`.
 const REFRESH_LEEWAY: Duration = Duration::from_secs(60);

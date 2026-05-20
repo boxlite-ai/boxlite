@@ -32,7 +32,7 @@ mod volumes;
 
 pub use litebox::LiteBox;
 pub use portal::GuestSession;
-pub use runtime::{BoxliteRuntime, ImageHandle};
+pub use runtime::{AuthHandle, BoxliteRuntime, ImageHandle, Principal};
 
 pub use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 pub use disk::DiskInfo;
@@ -60,13 +60,9 @@ pub use runtime::types::ContainerID;
 pub use runtime::types::{BoxInfo, BoxState, BoxStateInfo, BoxStatus};
 
 #[cfg(feature = "rest")]
-pub use rest::auth::AuthHandle;
-#[cfg(feature = "rest")]
 pub use rest::credential::{AccessToken, ApiKeyCredential, Credential};
 #[cfg(feature = "rest")]
 pub use rest::options::BoxliteRestOptions;
-#[cfg(feature = "rest")]
-pub use rest::types::Principal;
 
 /// Initialize tracing for Boxlite using the provided filesystem layout.
 ///

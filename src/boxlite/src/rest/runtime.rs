@@ -9,13 +9,11 @@ use crate::runtime::backend::RuntimeBackend;
 use crate::runtime::options::{BoxArchive, BoxOptions};
 use crate::{BoxInfo, LiteBox};
 
-use super::auth::AuthBackend;
 use super::client::ApiClient;
 use super::litebox::RestBox;
 use super::options::BoxliteRestOptions;
-use super::types::{
-    BoxResponse, CreateBoxRequest, ListBoxesResponse, Principal, RuntimeMetricsResponse,
-};
+use super::types::{BoxResponse, CreateBoxRequest, ListBoxesResponse, RuntimeMetricsResponse};
+use crate::runtime::auth::{AuthBackend, Principal};
 
 pub(crate) struct RestRuntime {
     client: ApiClient,

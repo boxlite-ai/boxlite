@@ -57,11 +57,11 @@ extern "C" fn shutdown_on_exit() {
 pub struct BoxliteRuntime {
     backend: Arc<dyn RuntimeBackend>,
     image_backend: Option<Arc<dyn ImageBackend>>,
-    /// Identity capability — `Some` only for REST runtimes (an `Arc` view of
-    /// the same `RestRuntime` as `backend`; not a second client). Surfaced
-    /// via `auth()`, mirroring `image_backend` / `images()`.
-    #[cfg(feature = "rest")]
-    auth_backend: Option<Arc<dyn crate::rest::auth::AuthBackend>>,
+    /// Identity capability — `Some` only for backends with a notion of
+    /// remote identity (currently REST; an `Arc` view of the same backend,
+    /// not a second client). Surfaced via `auth()`, mirroring
+    /// `image_backend` / `images()`.
+    auth_backend: Option<Arc<dyn crate::runtime::auth::AuthBackend>>,
 }
 
 // ============================================================================
@@ -87,7 +87,6 @@ impl BoxliteRuntime {
         Ok(Self {
             backend: backend_arc,
             image_backend: Some(image_backend),
-            #[cfg(feature = "rest")]
             auth_backend: None,
         })
     }
@@ -112,7 +111,7 @@ impl BoxliteRuntime {
     #[cfg(feature = "rest")]
     pub fn rest(config: crate::rest::options::BoxliteRestOptions) -> BoxliteResult<Self> {
         let rest_runtime = Arc::new(RestRuntime::new(&config)?);
-        let auth_backend = Arc::clone(&rest_runtime) as Arc<dyn crate::rest::auth::AuthBackend>;
+        let auth_backend = Arc::clone(&rest_runtime) as Arc<dyn crate::runtime::auth::AuthBackend>;
         Ok(Self {
             backend: rest_runtime,
             image_backend: None, // REST runtime doesn't support image operations
@@ -448,10 +447,9 @@ impl BoxliteRuntime {
     /// # Ok(())
     /// # }
     /// ```
-    #[cfg(feature = "rest")]
-    pub fn auth(&self) -> BoxliteResult<crate::rest::auth::AuthHandle> {
+    pub fn auth(&self) -> BoxliteResult<crate::runtime::auth::AuthHandle> {
         match &self.auth_backend {
-            Some(backend) => Ok(crate::rest::auth::AuthHandle::new(Arc::clone(backend))),
+            Some(backend) => Ok(crate::runtime::auth::AuthHandle::new(Arc::clone(backend))),
             None => Err(BoxliteError::Unsupported(
                 "identity (auth) is only available on REST runtimes".to_string(),
             )),
