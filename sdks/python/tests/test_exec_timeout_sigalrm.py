@@ -61,7 +61,7 @@ WORKLOAD_S = 8
 GRACE_S = 2.0
 
 
-async def test_exec_timeout_kills_sigalrm_ignoring_process():
+async def test_exec_timeout_kills_sigalrm_ignoring_process(shared_runtime):
     """A workload that ignores SIGALRM must still be killed at the timeout.
 
     Two-pronged assertion — both must hold:
@@ -78,7 +78,7 @@ async def test_exec_timeout_kills_sigalrm_ignoring_process():
     Fix is in ``src/guest/src/service/exec/timeout.rs``: send ``SIGKILL``
     (uncatchable) rather than ``SIGALRM``.
     """
-    async with boxlite.SimpleBox(image="python:3-alpine") as box:
+    async with boxlite.SimpleBox(image="python:3-alpine", runtime=shared_runtime) as box:
         t0 = time.time()
         result = await box.exec(
             "python3",
@@ -102,7 +102,7 @@ async def test_exec_timeout_kills_sigalrm_ignoring_process():
         )
 
 
-async def test_exec_timeout_sigkill_fallback_when_sigterm_ignored():
+async def test_exec_timeout_sigkill_fallback_when_sigterm_ignored(shared_runtime):
     """Stage-3 SIGKILL must terminate a workload that ignores SIGTERM.
 
     Companion to ``test_exec_timeout_kills_sigalrm_ignoring_process``: that
@@ -119,7 +119,7 @@ async def test_exec_timeout_sigkill_fallback_when_sigterm_ignored():
       - t = TIMEOUT_S:           SIGTERM sent, absorbed by SIG_IGN
       - t = TIMEOUT_S + GRACE_S: SIGKILL sent, process dies (exit_code=-9)
     """
-    async with boxlite.SimpleBox(image="python:3-alpine") as box:
+    async with boxlite.SimpleBox(image="python:3-alpine", runtime=shared_runtime) as box:
         t0 = time.time()
         result = await box.exec(
             "python3",
