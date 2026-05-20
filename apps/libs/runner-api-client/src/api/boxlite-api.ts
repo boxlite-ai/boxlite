@@ -18,11 +18,12 @@ import type { AxiosPromise, AxiosInstance, RawAxiosRequestConfig } from 'axios';
 import globalAxios from 'axios';
 // Some imports not used depending on template conditions
 // @ts-ignore
-import { DUMMY_BASE_URL, assertParamExists, setApiKeyToObject, setBasicAuthToObject, setBearerAuthToObject, setOAuthToObject, setSearchParams, serializeDataIfNeeded, toPathString, createRequestFunction, replaceWithSerializableTypeIfNeeded } from '../common';
+import { DUMMY_BASE_URL, assertParamExists, setApiKeyToObject, setBasicAuthToObject, setBearerAuthToObject, setOAuthToObject, setSearchParams, serializeDataIfNeeded, toPathString, createRequestFunction } from '../common';
 // @ts-ignore
 import { BASE_PATH, COLLECTION_FORMATS, type RequestArgs, BaseAPI, RequiredError, operationServerMap } from '../base';
 /**
  * BoxliteApi - axios parameter creator
+ * @export
  */
 export const BoxliteApiAxiosParamCreator = function (configuration?: Configuration) {
     return {
@@ -40,8 +41,8 @@ export const BoxliteApiAxiosParamCreator = function (configuration?: Configurati
             // verify required parameter 'execId' is not null or undefined
             assertParamExists('v1BoxesBoxIdExecutionsExecIdAttachGet', 'execId', execId)
             const localVarPath = `/v1/boxes/{boxId}/executions/{execId}/attach`
-                .replace('{boxId}', encodeURIComponent(String(boxId)))
-                .replace('{execId}', encodeURIComponent(String(execId)));
+                .replace(`{${"boxId"}}`, encodeURIComponent(String(boxId)))
+                .replace(`{${"execId"}}`, encodeURIComponent(String(execId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -56,8 +57,8 @@ export const BoxliteApiAxiosParamCreator = function (configuration?: Configurati
             // authentication Bearer required
             await setApiKeyToObject(localVarHeaderParameter, "Authorization", configuration)
 
-            localVarHeaderParameter['Accept'] = '*/*';
 
+    
             setSearchParams(localVarUrlObj, localVarQueryParameter);
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
             localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
@@ -84,7 +85,7 @@ export const BoxliteApiAxiosParamCreator = function (configuration?: Configurati
             // verify required parameter 'filesNFile' is not null or undefined
             assertParamExists('v1BoxesBoxIdFilesBulkUploadPost', 'filesNFile', filesNFile)
             const localVarPath = `/v1/boxes/{boxId}/files/bulk-upload`
-                .replace('{boxId}', encodeURIComponent(String(boxId)));
+                .replace(`{${"boxId"}}`, encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -104,13 +105,14 @@ export const BoxliteApiAxiosParamCreator = function (configuration?: Configurati
             if (filesNPath !== undefined) { 
                 localVarFormParams.append('files[N].path', filesNPath as any);
             }
-
+    
             if (filesNFile !== undefined) { 
                 localVarFormParams.append('files[N].file', filesNFile as any);
             }
+    
+    
             localVarHeaderParameter['Content-Type'] = 'multipart/form-data';
-            localVarHeaderParameter['Accept'] = 'application/json';
-
+    
             setSearchParams(localVarUrlObj, localVarQueryParameter);
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
             localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
@@ -135,7 +137,7 @@ export const BoxliteApiAxiosParamCreator = function (configuration?: Configurati
             // verify required parameter 'path' is not null or undefined
             assertParamExists('v1BoxesBoxIdFilesGet', 'path', path)
             const localVarPath = `/v1/boxes/{boxId}/files`
-                .replace('{boxId}', encodeURIComponent(String(boxId)));
+                .replace(`{${"boxId"}}`, encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -154,8 +156,8 @@ export const BoxliteApiAxiosParamCreator = function (configuration?: Configurati
                 localVarQueryParameter['path'] = path;
             }
 
-            localVarHeaderParameter['Accept'] = 'application/octet-stream';
 
+    
             setSearchParams(localVarUrlObj, localVarQueryParameter);
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
             localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
@@ -182,7 +184,7 @@ export const BoxliteApiAxiosParamCreator = function (configuration?: Configurati
             // verify required parameter 'body' is not null or undefined
             assertParamExists('v1BoxesBoxIdFilesPut', 'body', body)
             const localVarPath = `/v1/boxes/{boxId}/files`
-                .replace('{boxId}', encodeURIComponent(String(boxId)));
+                .replace(`{${"boxId"}}`, encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -201,8 +203,9 @@ export const BoxliteApiAxiosParamCreator = function (configuration?: Configurati
                 localVarQueryParameter['path'] = path;
             }
 
+
+    
             localVarHeaderParameter['Content-Type'] = 'application/octet-stream';
-            localVarHeaderParameter['Accept'] = 'application/json';
 
             setSearchParams(localVarUrlObj, localVarQueryParameter);
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
@@ -219,6 +222,7 @@ export const BoxliteApiAxiosParamCreator = function (configuration?: Configurati
 
 /**
  * BoxliteApi - functional programming interface
+ * @export
  */
 export const BoxliteApiFp = function(configuration?: Configuration) {
     const localVarAxiosParamCreator = BoxliteApiAxiosParamCreator(configuration)
@@ -286,6 +290,7 @@ export const BoxliteApiFp = function(configuration?: Configuration) {
 
 /**
  * BoxliteApi - factory interface
+ * @export
  */
 export const BoxliteApiFactory = function (configuration?: Configuration, basePath?: string, axios?: AxiosInstance) {
     const localVarFp = BoxliteApiFp(configuration)
@@ -341,6 +346,9 @@ export const BoxliteApiFactory = function (configuration?: Configuration, basePa
 
 /**
  * BoxliteApi - object-oriented interface
+ * @export
+ * @class BoxliteApi
+ * @extends {BaseAPI}
  */
 export class BoxliteApi extends BaseAPI {
     /**
@@ -350,6 +358,7 @@ export class BoxliteApi extends BaseAPI {
      * @param {string} execId Execution ID
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
+     * @memberof BoxliteApi
      */
     public v1BoxesBoxIdExecutionsExecIdAttachGet(boxId: string, execId: string, options?: RawAxiosRequestConfig) {
         return BoxliteApiFp(this.configuration).v1BoxesBoxIdExecutionsExecIdAttachGet(boxId, execId, options).then((request) => request(this.axios, this.basePath));
@@ -363,6 +372,7 @@ export class BoxliteApi extends BaseAPI {
      * @param {File} filesNFile File contents for file index N
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
+     * @memberof BoxliteApi
      */
     public v1BoxesBoxIdFilesBulkUploadPost(boxId: string, filesNPath: string, filesNFile: File, options?: RawAxiosRequestConfig) {
         return BoxliteApiFp(this.configuration).v1BoxesBoxIdFilesBulkUploadPost(boxId, filesNPath, filesNFile, options).then((request) => request(this.axios, this.basePath));
@@ -375,6 +385,7 @@ export class BoxliteApi extends BaseAPI {
      * @param {string} path Source path inside the box
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
+     * @memberof BoxliteApi
      */
     public v1BoxesBoxIdFilesGet(boxId: string, path: string, options?: RawAxiosRequestConfig) {
         return BoxliteApiFp(this.configuration).v1BoxesBoxIdFilesGet(boxId, path, options).then((request) => request(this.axios, this.basePath));
@@ -388,6 +399,7 @@ export class BoxliteApi extends BaseAPI {
      * @param {string} body File contents (raw bytes)
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
+     * @memberof BoxliteApi
      */
     public v1BoxesBoxIdFilesPut(boxId: string, path: string, body: string, options?: RawAxiosRequestConfig) {
         return BoxliteApiFp(this.configuration).v1BoxesBoxIdFilesPut(boxId, path, body, options).then((request) => request(this.axios, this.basePath));
