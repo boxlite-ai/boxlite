@@ -484,11 +484,11 @@ func (m managedExecAttach) Subscribe(bufSize int) (stdout, stderr <-chan []byte,
 }
 
 func (m managedExecAttach) WriteStdin(data []byte) (int, error) { return m.me.AttachWriteStdin(data) }
-func (m managedExecAttach) DoneCh() <-chan struct{}     { return m.me.Done }
-func (m managedExecAttach) ExitCodeValue() int          { return m.me.ExitCode }
-func (m managedExecAttach) IsTTY() bool                 { return m.me.TTY }
-func (m managedExecAttach) Resize(rows, cols int) error { return m.me.AttachResize(rows, cols) }
-func (m managedExecAttach) Signal(sig int) error        { return m.me.AttachSignal(sig) }
-func (m managedExecAttach) CloseStdin() error           { return m.me.AttachCloseStdin() }
-func (m managedExecAttach) MarkConnected() bool         { return m.me.MarkConnected() }
-func (m managedExecAttach) MarkDisconnected()           { m.me.MarkDisconnected() }
+func (m managedExecAttach) DoneCh() <-chan struct{}             { return m.me.Done }
+func (m managedExecAttach) ExitCodeValue() int                  { return m.me.ExitCode }
+func (m managedExecAttach) IsTTY() bool                         { return m.me.TTY }
+func (m managedExecAttach) Resize(rows, cols int) error         { return m.me.AttachResize(rows, cols) }
+func (m managedExecAttach) Signal(sig int) error                { return m.me.AttachSignal(sig) }
+func (m managedExecAttach) CloseStdin() error                   { return m.me.AttachCloseStdin() }
+func (m managedExecAttach) MarkConnected() bool                 { return m.me.MarkConnected() }
+func (m managedExecAttach) MarkDisconnected()                   { m.me.MarkDisconnected() }

@@ -13,16 +13,18 @@ Prerequisites:
 
 import asyncio
 
-from boxlite import ApiKeyCredential, Boxlite, BoxOptions, BoxliteRestOptions
-
+from boxlite import ApiKeyCredential, Boxlite, BoxliteRestOptions, BoxOptions
 
 SERVER_URL = "http://localhost:8100"
 
 
 def connect() -> Boxlite:
-    return Boxlite.rest(BoxliteRestOptions(
-        url=SERVER_URL, credential=ApiKeyCredential("local-dev-key"),
-    ))
+    return Boxlite.rest(
+        BoxliteRestOptions(
+            url=SERVER_URL,
+            credential=ApiKeyCredential("local-dev-key"),
+        )
+    )
 
 
 async def main():

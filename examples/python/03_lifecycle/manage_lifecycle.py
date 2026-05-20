@@ -25,12 +25,7 @@ async def test_stop_and_restart():
     try:
         # Create and start a box (auto_remove=False to allow restart after stop)
         print("Creating box...")
-        box = await runtime.create(boxlite.BoxOptions(
-            image="alpine:latest",
-            cpus=2,
-            memory_mib=512,
-            auto_remove=False
-        ))
+        box = await runtime.create(boxlite.BoxOptions(image="alpine:latest", cpus=2, memory_mib=512, auto_remove=False))
         box_id = box.id
         print(f"  Box created: {box_id}")
 
@@ -141,10 +136,7 @@ async def test_reattach_to_running():
     try:
         # Create and start a box (auto_remove=False for explicit cleanup control)
         print("Creating box...")
-        box = await runtime.create(boxlite.BoxOptions(
-            image="alpine:latest",
-            auto_remove=False
-        ))
+        box = await runtime.create(boxlite.BoxOptions(image="alpine:latest", auto_remove=False))
         box_id = box.id
         print(f"  Box created: {box_id}")
 
@@ -213,10 +205,9 @@ async def test_lifecycle_combinations():
     # Test: Create -> Stop -> Restart -> Stop -> Remove
     print("\n--- Combination: Stop -> Restart -> Stop -> Remove ---")
 
-    box = await runtime.create(boxlite.BoxOptions(
-        image="alpine:latest",
-        auto_remove=False  # Need to preserve box for restart
-    ))
+    box = await runtime.create(
+        boxlite.BoxOptions(image="alpine:latest", auto_remove=False)  # Need to preserve box for restart
+    )
     box_id = box.id
     print(f"Created box: {box_id}")
 
@@ -265,10 +256,7 @@ async def test_force_remove():
     runtime = boxlite.Boxlite.default()
 
     # Create box (auto_remove=False for explicit control)
-    box = await runtime.create(boxlite.BoxOptions(
-        image="alpine:latest",
-        auto_remove=False
-    ))
+    box = await runtime.create(boxlite.BoxOptions(image="alpine:latest", auto_remove=False))
     box_id = box.id
     print(f"Created box: {box_id}")
 

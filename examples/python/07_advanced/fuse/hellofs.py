@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Minimal FUSE filesystem: serves one read-only virtual file /hello.txt."""
 
-import os
-import sys
-import stat
 import errno
+import os
+import stat
+import sys
 
 from fuse import FUSE, FuseOSError, Operations
 
@@ -23,7 +23,7 @@ class HelloFS(Operations):
         return [".", "..", "hello.txt"]
 
     def read(self, path, size, offset, fh):
-        return self.DATA[offset:offset + size]
+        return self.DATA[offset : offset + size]
 
 
 if __name__ == "__main__":

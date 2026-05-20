@@ -17,8 +17,10 @@ try:
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
     from _helpers import setup_logging
 except ImportError:
+
     def setup_logging():
         logging.basicConfig(level=logging.ERROR)
+
 
 logger = logging.getLogger("computerbox_example")
 
@@ -121,8 +123,8 @@ async def example_workflow():
         # Take initial screenshot
         print("📸 Initial screenshot...")
         img1 = await desktop.screenshot()
-        with open("screenshot_1.png", 'wb') as f:
-            f.write(base64.b64decode(img1['data']))
+        with open("screenshot_1.png", "wb") as f:
+            f.write(base64.b64decode(img1["data"]))
         print("   ✓ Saved: screenshot_1.png\n")
 
         # Interact with desktop
@@ -133,8 +135,8 @@ async def example_workflow():
         # Take final screenshot
         print("\n📸 Final screenshot...")
         img2 = await desktop.screenshot()
-        with open("screenshot_2.png", 'wb') as f:
-            f.write(base64.b64decode(img2['data']))
+        with open("screenshot_2.png", "wb") as f:
+            f.write(base64.b64decode(img2["data"]))
         print("   ✓ Saved: screenshot_2.png\n")
 
         print("✓ Workflow completed!")

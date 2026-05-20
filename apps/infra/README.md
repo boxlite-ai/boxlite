@@ -222,9 +222,11 @@ operation by design:
    Runner resource. Run `npx sst deploy --stage <stage>`. This only updates
    the resource metadata; the EC2 is not yet touched.
 3. Destroy the EC2:
+
    ```bash
    npx pulumi destroy --target 'urn:pulumi:<stage>::boxlite::aws:ec2/instance:Instance::Runner'
    ```
+
 4. Edit `sst.config.ts`: change `protect: false` back to `protect: true`. Run
    `npx sst deploy` again — a new Runner is created with fresh state.
 

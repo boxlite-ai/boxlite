@@ -44,10 +44,7 @@ async def main():
 
             # Check file ownership from root
             print("\n[Before] File ownership (root perspective):")
-            result = await box.exec(
-                "stat", "-c", "  %n uid=%u gid=%g",
-                "/workspace/host_file.txt"
-            )
+            result = await box.exec("stat", "-c", "  %n uid=%u gid=%g", "/workspace/host_file.txt")
             print(result.stdout.strip())
 
             # Run as the non-root user
@@ -56,34 +53,26 @@ async def main():
             print(f"  {result.stdout.strip()}")
 
             # Can appuser read the file?
-            result = await box.exec(
-                "cat", "/workspace/host_file.txt",
-                user="1000"
-            )
+            result = await box.exec("cat", "/workspace/host_file.txt", user="1000")
             read_ok = result.exit_code == 0
-            print(f"  Read:  exit={result.exit_code} "
-                  f"{'OK' if read_ok else 'FAIL'}")
+            print(f"  Read:  exit={result.exit_code} " f"{'OK' if read_ok else 'FAIL'}")
 
             # Can appuser write a new file?
             result = await box.exec(
-                "sh", "-c",
+                "sh",
+                "-c",
                 "echo 'written by appuser' > /workspace/from_appuser.txt",
-                user="1000"
+                user="1000",
             )
             write_ok = result.exit_code == 0
-            print(f"  Write: exit={result.exit_code} "
-                  f"{'OK' if write_ok else 'FAIL'}")
+            print(f"  Write: exit={result.exit_code} " f"{'OK' if write_ok else 'FAIL'}")
             if not write_ok:
                 print(f"  stderr: {result.stderr.strip()}")
 
             # Can appuser create a directory?
-            result = await box.exec(
-                "mkdir", "/workspace/appuser_dir",
-                user="1000"
-            )
+            result = await box.exec("mkdir", "/workspace/appuser_dir", user="1000")
             mkdir_ok = result.exit_code == 0
-            print(f"  Mkdir: exit={result.exit_code} "
-                  f"{'OK' if mkdir_ok else 'FAIL'}")
+            print(f"  Mkdir: exit={result.exit_code} " f"{'OK' if mkdir_ok else 'FAIL'}")
             if not mkdir_ok:
                 print(f"  stderr: {result.stderr.strip()}")
 
@@ -91,8 +80,7 @@ async def main():
             appuser_file = os.path.join(tmp_dir, "from_appuser.txt")
             if os.path.exists(appuser_file):
                 file_st = os.stat(appuser_file)
-                print(f"\n[Host] from_appuser.txt: "
-                      f"uid={file_st.st_uid} gid={file_st.st_gid}")
+                print(f"\n[Host] from_appuser.txt: " f"uid={file_st.st_uid} gid={file_st.st_gid}")
                 with open(appuser_file) as f:
                     print(f"  content: {f.read().strip()}")
             else:
@@ -101,9 +89,11 @@ async def main():
             # Show ownership from appuser perspective
             print("\n[Inside] Ownership from appuser perspective:")
             result = await box.exec(
-                "stat", "-c", "  %n uid=%u gid=%g",
+                "stat",
+                "-c",
+                "  %n uid=%u gid=%g",
                 "/workspace/host_file.txt",
-                user="1000"
+                user="1000",
             )
             print(result.stdout.strip())
 

@@ -16,16 +16,18 @@ Prerequisites:
 
 import asyncio
 
-from boxlite import ApiKeyCredential, Boxlite, BoxOptions, BoxliteRestOptions
-
+from boxlite import ApiKeyCredential, Boxlite, BoxliteRestOptions, BoxOptions
 
 SERVER_URL = "http://localhost:8100"
 
 
 def connect() -> Boxlite:
-    return Boxlite.rest(BoxliteRestOptions(
-        url=SERVER_URL, credential=ApiKeyCredential("local-dev-key"),
-    ))
+    return Boxlite.rest(
+        BoxliteRestOptions(
+            url=SERVER_URL,
+            credential=ApiKeyCredential("local-dev-key"),
+        )
+    )
 
 
 async def main():
@@ -61,7 +63,8 @@ async def main():
     # --- Multi-line output (streaming) ---
     print("\n=== Streaming Output ===")
     execution = await box.exec(
-        "sh", args=["-c", "for i in 1 2 3; do echo \"line $i\"; done"],
+        "sh",
+        args=["-c", 'for i in 1 2 3; do echo "line $i"; done'],
     )
     stdout = execution.stdout()
     count = 0
@@ -80,7 +83,8 @@ async def main():
     # --- Environment variables ---
     print("\n=== Per-Command Environment ===")
     execution = await box.exec(
-        "sh", args=["-c", "echo GREETING=$GREETING"],
+        "sh",
+        args=["-c", "echo GREETING=$GREETING"],
         env=[("GREETING", "hello-from-rest")],
     )
     stdout = execution.stdout()

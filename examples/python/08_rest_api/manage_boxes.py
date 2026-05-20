@@ -16,16 +16,18 @@ Prerequisites:
 
 import asyncio
 
-from boxlite import ApiKeyCredential, Boxlite, BoxOptions, BoxliteRestOptions
-
+from boxlite import ApiKeyCredential, Boxlite, BoxliteRestOptions, BoxOptions
 
 SERVER_URL = "http://localhost:8100"
 
 
 def connect() -> Boxlite:
-    return Boxlite.rest(BoxliteRestOptions(
-        url=SERVER_URL, credential=ApiKeyCredential("local-dev-key"),
-    ))
+    return Boxlite.rest(
+        BoxliteRestOptions(
+            url=SERVER_URL,
+            credential=ApiKeyCredential("local-dev-key"),
+        )
+    )
 
 
 async def main():
@@ -55,7 +57,8 @@ async def main():
     # --- Get or Create (idempotent) ---
     print("\n=== Get or Create ===")
     box2, created = await rt.get_or_create(
-        BoxOptions(image="alpine:latest"), name="rest-crud-demo",
+        BoxOptions(image="alpine:latest"),
+        name="rest-crud-demo",
     )
     print(f"  id={box2.id}  newly_created={created}")
 

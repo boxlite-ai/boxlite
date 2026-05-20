@@ -92,7 +92,7 @@ export class RunnerService {
       throw new BadRequestException('Runner name must be between 3 and 255 characters')
     }
 
-    const apiKey = createRunnerDto.apiKey ?? generateApiKeyValue()
+    const apiKey = createRunnerDto.apiKey ?? generateApiKeyValue(this.configService.getOrThrow('apiKey.prefix'), 'svc')
 
     let runner: Runner
 

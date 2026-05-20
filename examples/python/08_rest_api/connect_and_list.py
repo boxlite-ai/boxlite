@@ -16,7 +16,6 @@ import asyncio
 
 from boxlite import ApiKeyCredential, Boxlite, BoxliteRestOptions
 
-
 SERVER_URL = "http://localhost:8100"
 API_KEY = "local-dev-key"  # reference server accepts any non-empty bearer
 

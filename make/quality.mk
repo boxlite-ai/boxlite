@@ -92,9 +92,11 @@ fmt\:check\:c:
 
 # Format the apps/ workspace via the repo's own blessed script
 # (nx run-many format + prettier + markdownlint + format:py).
-fmt\:apps: _ensure-apps-deps
+# Activate the venv so the `format:py` sub-chain (isort/black/nbqa/...) finds
+# its tools on PATH; `_ensure-python-deps` ensures they are installed.
+fmt\:apps: _ensure-apps-deps _ensure-python-deps
 	@echo "🔧 Formatting apps workspace..."
-	@cd apps && yarn format
+	@. .venv/bin/activate && cd apps && yarn format
 
 # apps/ has no `format:check` script; prettier --check over the same TS globs
 # `lint:ts` uses is the check counterpart.

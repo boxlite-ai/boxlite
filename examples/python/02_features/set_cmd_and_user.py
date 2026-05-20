@@ -19,8 +19,10 @@ try:
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
     from _helpers import setup_logging
 except ImportError:
+
     def setup_logging():
         logging.basicConfig(level=logging.ERROR)
+
 
 logger = logging.getLogger("cmd_user_example")
 
@@ -142,9 +144,7 @@ async def example_combined():
     ) as box:
         print(f"Container started: {box.id}")
 
-        result = await box.exec(
-            "python3", "-c", "import os; print(f'Running as uid={os.getuid()}')"
-        )
+        result = await box.exec("python3", "-c", "import os; print(f'Running as uid={os.getuid()}')")
         print(f"Output: {result.stdout.strip()}")
 
 

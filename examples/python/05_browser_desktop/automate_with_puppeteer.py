@@ -13,11 +13,13 @@ Requirements:
 """
 
 import asyncio
+
 import boxlite
 
 # Check if pyppeteer is available
 try:
     import pyppeteer
+
     HAS_PYPPETEER = True
 except ImportError:
     HAS_PYPPETEER = False

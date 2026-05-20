@@ -15,7 +15,8 @@ import { OrganizationEvents } from '../organization/constants/organization-event
 import { OrganizationResourcePermissionsUnassignedEvent } from '../organization/events/organization-resource-permissions-unassigned.event'
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import Redis from 'ioredis'
-import { generateApiKeyHash, generateApiKeyValue } from '../common/utils/api-key'
+import { extractKeyDisplayPrefix, generateApiKeyHash, generateApiKeyValue } from '../common/utils/api-key'
+import { TypedConfigService } from '../config/typed-config.service'
 
 @Injectable()
 export class ApiKeyService {
@@ -26,14 +27,23 @@ export class ApiKeyService {
     private apiKeyRepository: Repository<ApiKey>,
     private readonly redisLockProvider: RedisLockProvider,
     @InjectRedis() private readonly redis: Redis,
+    private readonly configService: TypedConfigService,
   ) {}
 
   private getApiKeyPrefix(value: string): string {
-    return value.substring(0, 3)
+    return extractKeyDisplayPrefix(value)
   }
 
   private getApiKeySuffix(value: string): string {
     return value.slice(-3)
+  }
+
+  // User dashboard keys: env-split class from the deployment mode; the brand
+  // prefix is operator-overridable via API_KEY_PREFIX (default `blk`).
+  private mintApiKeyValue(): string {
+    const prefix = this.configService.getOrThrow('apiKey.prefix')
+    const keyClass = this.configService.get('production') ? 'live' : 'test'
+    return generateApiKeyValue(prefix, keyClass)
   }
 
   async createApiKey(
@@ -49,7 +59,7 @@ export class ApiKeyService {
       throw new ConflictException('API key with this name already exists')
     }
 
-    const value = apiKeyValue || generateApiKeyValue()
+    const value = apiKeyValue || this.mintApiKeyValue()
 
     const apiKey = await this.apiKeyRepository.save({
       organizationId,

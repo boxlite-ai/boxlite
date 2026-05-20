@@ -37,8 +37,7 @@ async def example_default_runtime():
         print(f"  {line.encode('utf-8', errors='replace').strip()}")
 
     exec_result = await execution.wait()
-    print(
-        f"✓ Exit code: {exec_result.exit_code}s")
+    print(f"✓ Exit code: {exec_result.exit_code}s")
 
     # Shutdown box
     await box.stop()
@@ -89,10 +88,7 @@ async def example_streaming_execution():
     print(f"✓ Box created: {box.id}")
 
     # Execute command that produces both stdout and stderr
-    execution = await box.exec(
-        "sh",
-        ["-c", "echo 'to stdout' && echo 'to stderr' >&2 && echo 'more stdout'"]
-    )
+    execution = await box.exec("sh", ["-c", "echo 'to stdout' && echo 'to stderr' >&2 && echo 'more stdout'"])
 
     # Get both streams
     exec_id = execution.id
@@ -110,8 +106,7 @@ async def example_streaming_execution():
         print(f"  stderr: {line.encode('utf-8', errors='replace').strip()}")
 
     exec_result = await execution.wait()
-    print(
-        f"\n✓ Exit code: {exec_result.exit_code}s")
+    print(f"\n✓ Exit code: {exec_result.exit_code}s")
 
     await box.stop()
 
@@ -121,18 +116,13 @@ async def example_environment_variables():
     print("\n\n=== Example 4: Environment Variables ===")
 
     runtime = boxlite.Boxlite.default()
-    box = await runtime.create(boxlite.BoxOptions(
-        image="alpine:latest",
-        env=[("USER", "alice"), ("PROJECT", "boxlite")]
-    ))
+    box = await runtime.create(
+        boxlite.BoxOptions(image="alpine:latest", env=[("USER", "alice"), ("PROJECT", "boxlite")])
+    )
     print(f"✓ Box created with env vars: {box.id}")
 
     # Execute with additional env vars
-    execution = await box.exec(
-        "env",
-        None,
-        [("CUSTOM", "value"), ("FOO", "bar")]
-    )
+    execution = await box.exec("env", None, [("CUSTOM", "value"), ("FOO", "bar")])
 
     stdout = execution.stdout()
     print("\nEnvironment variables:")
@@ -230,9 +220,11 @@ async def example_list_and_info():
     # Create multiple boxes
     boxes = []
     for i in range(3):
-        box = await runtime.create(boxlite.BoxOptions(
-            image="alpine:latest",
-        ))
+        box = await runtime.create(
+            boxlite.BoxOptions(
+                image="alpine:latest",
+            )
+        )
         boxes.append(box)
         print(f"✓ Box {i + 1} created: {box.id}")
 
@@ -265,8 +257,7 @@ async def example_execution_kill():
     print("\n\n=== Example 8: Kill Execution ===")
 
     runtime = boxlite.Boxlite.default()
-    box = await runtime.create(
-        boxlite.BoxOptions(image="alpine:latest", env=[("RUST_LOG", "boxlite=trace,box=trace")]))
+    box = await runtime.create(boxlite.BoxOptions(image="alpine:latest", env=[("RUST_LOG", "boxlite=trace,box=trace")]))
     print(f"✓ Box created: {box.id}")
 
     # Start a long-running command
@@ -283,8 +274,7 @@ async def example_execution_kill():
 
     # Wait for exit
     exec_result = await execution.wait()
-    print(
-        f"✓ Exit code after kill: {exec_result.exit_code}s")
+    print(f"✓ Exit code after kill: {exec_result.exit_code}s")
 
     await box.stop()
 
@@ -306,8 +296,7 @@ async def example_context_manager():
             print(f"  {line.strip()}")
 
         exec_result = await execution.wait()
-        print(
-            f"✓ Execution completed: code={exec_result.exit_code}s")
+        print(f"✓ Execution completed: code={exec_result.exit_code}s")
 
     print("✓ Box automatically shut down on context exit")
 
@@ -318,11 +307,13 @@ async def example_working_directory():
 
     runtime = boxlite.Boxlite.default()
 
-    box = await runtime.create(boxlite.BoxOptions(
-        image="alpine:latest",
-        working_dir="/tmp",
-        ports=[(8080, 80)]  # host:container
-    ))
+    box = await runtime.create(
+        boxlite.BoxOptions(
+            image="alpine:latest",
+            working_dir="/tmp",
+            ports=[(8080, 80)],  # host:container
+        )
+    )
     print(f"✓ Box created: {box.id}")
 
     # Verify working directory

@@ -30,10 +30,10 @@ import time
 
 import boxlite
 
-
 # =============================================================================
 # Display Helpers
 # =============================================================================
+
 
 def print_banner(title: str):
     """Print a prominent banner with title."""
@@ -101,6 +101,7 @@ async def call_with_progress(box, prompt: str) -> str:
 # Configuration
 # =============================================================================
 
+
 def get_oauth_token() -> str | None:
     """Get OAuth token from environment."""
     return os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
@@ -126,6 +127,7 @@ Buy Caffè Americano on Starbucks.com, pause at payment step.
 # Main Demo
 # =============================================================================
 
+
 async def run_demo():
     """Run the Starbucks browser ordering demo."""
     print_welcome()
@@ -136,10 +138,10 @@ async def run_demo():
         return
 
     async with boxlite.SkillBox(
-            oauth_token=oauth_token,
-            memory_mib=4096,
-            name="starbucks-demo",
-            # rootfs_path=get_oci_layout_path(),
+        oauth_token=oauth_token,
+        memory_mib=4096,
+        name="starbucks-demo",
+        # rootfs_path=get_oci_layout_path(),
     ) as box:
         # Wait for desktop
         await box.wait_until_ready()

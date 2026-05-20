@@ -19,8 +19,10 @@ try:
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
     from _helpers import setup_logging
 except ImportError:
+
     def setup_logging():
         logging.basicConfig(level=logging.ERROR)
+
 
 logger = logging.getLogger("custom_registry_example")
 

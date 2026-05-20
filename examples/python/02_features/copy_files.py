@@ -25,10 +25,10 @@ from pathlib import Path
 
 from boxlite import Boxlite, BoxOptions, CopyOptions, SimpleBox
 
-
 # ---------------------------------------------------------------------------
 # Helper: create an in-memory tar archive
 # ---------------------------------------------------------------------------
+
 
 def make_tar(files: dict[str, bytes]) -> bytes:
     """Create an in-memory tar archive from a dict of {path: content}."""
@@ -44,6 +44,7 @@ def make_tar(files: dict[str, bytes]) -> bytes:
 # ---------------------------------------------------------------------------
 # Example 1: copy_in / copy_out  (native API)
 # ---------------------------------------------------------------------------
+
 
 async def example_copy_in_out():
     """Round-trip a file via the native copy_in / copy_out API."""
@@ -72,6 +73,7 @@ async def example_copy_in_out():
     out_dir = Path("/tmp/boxlite_py_copy_out")
     if out_dir.exists():
         import shutil
+
         shutil.rmtree(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -87,6 +89,7 @@ async def example_copy_in_out():
 # Example 2: tar-pipe workaround for tmpfs destinations
 # ---------------------------------------------------------------------------
 
+
 async def example_tmpfs_workaround():
     """Copy files into tmpfs paths (e.g. /tmp) via stdin tar pipe."""
     print("\n=== Example 2: tmpfs workaround (tar via stdin) ===\n")
@@ -94,7 +97,9 @@ async def example_tmpfs_workaround():
     async with SimpleBox("alpine:latest", name="tmpfs-cp-demo") as box:
 
         # --- The problem: copy_in to /tmp silently fails ---
-        import tempfile, os
+        import os
+        import tempfile
+
         with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
             f.write("you won't see me\n")
             host_file = f.name
@@ -102,8 +107,10 @@ async def example_tmpfs_workaround():
         try:
             await box.copy_in(host_file, "/tmp/ghost.txt")
             result = await box.exec("ls", "/tmp/ghost.txt")
-            print(f"copy_in to /tmp:     exit={result.exit_code}  "
-                  f"{'FOUND' if result.exit_code == 0 else 'NOT FOUND (expected)'}")
+            print(
+                f"copy_in to /tmp:     exit={result.exit_code}  "
+                f"{'FOUND' if result.exit_code == 0 else 'NOT FOUND (expected)'}"
+            )
         finally:
             os.unlink(host_file)
 
@@ -123,10 +130,10 @@ async def example_tmpfs_workaround():
         print(f"read /tmp/hello.txt: {result.stdout.strip()}")
 
 
-
 # ---------------------------------------------------------------------------
 # Example 3: sync version of the tmpfs workaround  (requires boxlite[sync])
 # ---------------------------------------------------------------------------
+
 
 def example_tmpfs_workaround_sync():
     """Synchronous version of the tmpfs tar-pipe workaround."""
@@ -153,6 +160,7 @@ def example_tmpfs_workaround_sync():
 # ---------------------------------------------------------------------------
 # Example 4: file-to-file copy (single file to a specific path)
 # ---------------------------------------------------------------------------
+
 
 async def example_file_to_file_copy():
     """Copy a single file to a specific file path, including rename.

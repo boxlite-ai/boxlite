@@ -12,6 +12,7 @@ Prerequisites:
 Usage:
     python claude_in_boxlite_example.py
 """
+
 import asyncio
 import json
 import logging
@@ -24,8 +25,10 @@ try:
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
     from _helpers import setup_logging as _base_setup_logging
 except ImportError:
+
     def _base_setup_logging(**_):
         logging.basicConfig(level=logging.INFO)
+
 
 logger = logging.getLogger("claude_in_boxlite_example")
 
@@ -93,7 +96,7 @@ def display_message(msg: dict, show_debug: bool = False):
                     content_preview = tool_input.get("content", "")[:200]
                     print(f"  {c['dim']}Writing to: {file_path}{c['reset']}")
                     if content_preview:
-                        lines = content_preview.split('\n')[:5]
+                        lines = content_preview.split("\n")[:5]
                         for line in lines:
                             print(f"  {c['dim']}| {line}{c['reset']}")
                         if len(tool_input.get("content", "")) > 200:
@@ -172,12 +175,13 @@ async def setup_claude_box(runtime):
     else:
         # Create new persistent box
         from boxlite import BoxOptions
+
         options = BoxOptions(
             image="node:20-alpine",
             memory_mib=2048,
             disk_size_gb=5,
             auto_remove=False,  # Persist after exit
-            env=[("CLAUDE_CODE_OAUTH_TOKEN", OAUTH_TOKEN)]
+            env=[("CLAUDE_CODE_OAUTH_TOKEN", OAUTH_TOKEN)],
         )
         print(f"Creating new box: {BOX_NAME}")
         box = await runtime.create(options, name=BOX_NAME)
@@ -188,7 +192,7 @@ async def setup_claude_box(runtime):
     execution = await box.exec("npm", ["install", "-g", "@anthropic-ai/claude-code"], None)
     stdout = execution.stdout()
     async for line in stdout:
-        print(line.decode() if isinstance(line, bytes) else line, end='')
+        print(line.decode() if isinstance(line, bytes) else line, end="")
     result = await execution.wait()
 
     if result.exit_code != 0:
@@ -209,7 +213,7 @@ async def setup_claude_box(runtime):
 def parse_ndjson(data: str) -> list:
     """Parse newline-delimited JSON."""
     results = []
-    lines = data.strip().split('\n')
+    lines = data.strip().split("\n")
     logger.debug("parse_ndjson: Input data (%d chars), %d lines", len(data), len(lines))
     for i, line in enumerate(lines):
         line = line.strip()
@@ -226,8 +230,7 @@ def parse_ndjson(data: str) -> list:
     return results
 
 
-async def send_message(stdin, stdout, content: str, session_id: str = "default",
-                       display: bool = True):
+async def send_message(stdin, stdout, content: str, session_id: str = "default", display: bool = True):
     """Send a message and wait for response.
 
     Args:
@@ -246,7 +249,7 @@ async def send_message(stdin, stdout, content: str, session_id: str = "default",
         "type": "user",
         "message": {"role": "user", "content": content},
         "session_id": session_id,
-        "parent_tool_use_id": None
+        "parent_tool_use_id": None,
     }
 
     # Send via stdin
@@ -266,12 +269,14 @@ async def send_message(stdin, stdout, content: str, session_id: str = "default",
     try:
         while True:
             read_count += 1
-            logger.debug("send_message: Read attempt #%d, waiting for stdout.__anext__()...",
-                         read_count)
+            logger.debug(
+                "send_message: Read attempt #%d, waiting for stdout.__anext__()...",
+                read_count,
+            )
             chunk = await asyncio.wait_for(stdout.__anext__(), timeout=120)
 
             if isinstance(chunk, bytes):
-                chunk_str = chunk.decode('utf-8', errors='replace')
+                chunk_str = chunk.decode("utf-8", errors="replace")
                 logger.debug("send_message: Received bytes (%d bytes)", len(chunk))
             else:
                 chunk_str = chunk
@@ -282,14 +287,17 @@ async def send_message(stdin, stdout, content: str, session_id: str = "default",
             logger.debug("send_message: Buffer size: %d chars", len(buffer))
 
             # Process complete lines (split by newline)
-            while '\n' in buffer:
-                line, buffer = buffer.split('\n', 1)
+            while "\n" in buffer:
+                line, buffer = buffer.split("\n", 1)
                 line = line.strip()
                 if not line:
                     continue
 
-                logger.debug("send_message: Processing complete line (%d chars) the msg: %s",
-                             len(line), line)
+                logger.debug(
+                    "send_message: Processing complete line (%d chars) the msg: %s",
+                    len(line),
+                    line,
+                )
 
                 try:
                     parsed_msg = json.loads(line)
@@ -315,8 +323,11 @@ async def send_message(stdin, stdout, content: str, session_id: str = "default",
                     logger.debug("send_message: Line preview: %s...", line[:100])
 
     except asyncio.TimeoutError:
-        logger.debug("send_message: TIMEOUT after %d reads, responses collected: %d", read_count,
-                     len(responses))
+        logger.debug(
+            "send_message: TIMEOUT after %d reads, responses collected: %d",
+            read_count,
+            len(responses),
+        )
         if buffer:
             logger.debug("send_message: Remaining buffer: %d chars", len(buffer))
     except StopAsyncIteration:
@@ -327,7 +338,7 @@ async def send_message(stdin, stdout, content: str, session_id: str = "default",
     # Extract response from result message
     logger.debug("send_message: Total responses collected: %d", len(responses))
     for i, r in enumerate(responses):
-        logger.debug("send_message: Response %d: type=%s", i, r.get('type', 'unknown'))
+        logger.debug("send_message: Response %d: type=%s", i, r.get("type", "unknown"))
 
     # The 'result' message contains the final consolidated response
     result_msg = next((r for r in responses if r.get("type") == "result"), None)
@@ -365,8 +376,14 @@ async def interactive_session(box):
     logger.debug("interactive: Starting Claude CLI process...")
     proc = await box.exec(
         "claude",
-        ["--input-format", "stream-json", "--output-format", "stream-json", "--verbose"],
-        [("CLAUDE_CODE_OAUTH_TOKEN", OAUTH_TOKEN)]
+        [
+            "--input-format",
+            "stream-json",
+            "--output-format",
+            "stream-json",
+            "--verbose",
+        ],
+        [("CLAUDE_CODE_OAUTH_TOKEN", OAUTH_TOKEN)],
     )
     exec_id = proc.id()
     logger.debug("interactive: Process created, id=%s", exec_id)
@@ -404,7 +421,7 @@ async def interactive_session(box):
                 break
 
             user_input = user_input.strip()
-            if user_input.lower() in ('quit', 'exit', 'q'):
+            if user_input.lower() in ("quit", "exit", "q"):
                 break
             if not user_input:
                 continue
@@ -431,9 +448,15 @@ async def demo_multi_turn(box):
     # Start Claude
     execution = await box.exec(
         "claude",
-        ["--dangerously-skip-permissions", "--input-format", "stream-json", "--output-format",
-         "stream-json", "--verbose"],
-        [("CLAUDE_CODE_OAUTH_TOKEN", OAUTH_TOKEN)]
+        [
+            "--dangerously-skip-permissions",
+            "--input-format",
+            "stream-json",
+            "--output-format",
+            "stream-json",
+            "--verbose",
+        ],
+        [("CLAUDE_CODE_OAUTH_TOKEN", OAUTH_TOKEN)],
     )
     stdin = execution.stdin()
     stdout = execution.stdout()
@@ -441,15 +464,13 @@ async def demo_multi_turn(box):
     # Turn 1
     print(f"{COLORS['bold']}Turn 1:{COLORS['reset']} Remember this number: 42")
     print(f"{COLORS['bold']}Claude:{COLORS['reset']}")
-    response1, session_id = await send_message(stdin, stdout,
-                                               "Remember this number: 42. Just say OK.")
+    response1, session_id = await send_message(stdin, stdout, "Remember this number: 42. Just say OK.")
     print()
 
     # Turn 2
     print(f"{COLORS['bold']}Turn 2:{COLORS['reset']} What number did I ask you to remember?")
     print(f"{COLORS['bold']}Claude:{COLORS['reset']}")
-    response2, _ = await send_message(stdin, stdout, "What number did I ask you to remember?",
-                                      session_id)
+    response2, _ = await send_message(stdin, stdout, "What number did I ask you to remember?", session_id)
     print()
 
     # Verify

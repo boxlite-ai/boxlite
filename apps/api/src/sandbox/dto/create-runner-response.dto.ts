@@ -17,7 +17,7 @@ export class CreateRunnerResponseDto {
 
   @ApiProperty({
     description: 'The API key for the runner',
-    example: 'dtn_1234567890',
+    example: 'blk_svc_1234567890',
   })
   apiKey: string
 

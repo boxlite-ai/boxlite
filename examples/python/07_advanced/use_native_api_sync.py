@@ -87,7 +87,7 @@ def example_streaming_execution():
         # Execute command that produces both stdout and stderr
         execution = box.exec(
             "sh",
-            ["-c", "echo 'to stdout' && echo 'to stderr' >&2 && echo 'more stdout'"]
+            ["-c", "echo 'to stdout' && echo 'to stderr' >&2 && echo 'more stdout'"],
         )
 
         # Get both streams
@@ -116,18 +116,11 @@ def example_environment_variables():
     print("\n\n=== Example 4: Environment Variables ===")
 
     with SyncBoxlite.default() as runtime:
-        box = runtime.create(boxlite.BoxOptions(
-            image="alpine:latest",
-            env=[("USER", "alice"), ("PROJECT", "boxlite")]
-        ))
+        box = runtime.create(boxlite.BoxOptions(image="alpine:latest", env=[("USER", "alice"), ("PROJECT", "boxlite")]))
         print(f"✓ Box created with env vars: {box.id}")
 
         # Execute with additional env vars
-        execution = box.exec(
-            "env",
-            None,
-            [("CUSTOM", "value"), ("FOO", "bar")]
-        )
+        execution = box.exec("env", None, [("CUSTOM", "value"), ("FOO", "bar")])
 
         stdout = execution.stdout()
         print("\nEnvironment variables:")
@@ -216,10 +209,7 @@ def example_list_and_info():
         boxes = []
         ts = int(time.time())
         for i in range(3):
-            box = runtime.create(
-                boxlite.BoxOptions(image="alpine:latest"),
-                name=f"test-box-{ts}-{i}"
-            )
+            box = runtime.create(boxlite.BoxOptions(image="alpine:latest"), name=f"test-box-{ts}-{i}")
             boxes.append(box)
             print(f"✓ Box {i + 1} created: {box.id}")
 
@@ -299,11 +289,13 @@ def example_working_directory():
     print("\n\n=== Example 10: Working Directory & Ports ===")
 
     with SyncBoxlite.default() as runtime:
-        box = runtime.create(boxlite.BoxOptions(
-            image="alpine:latest",
-            working_dir="/tmp",
-            ports=[(8080, 80)]  # host:container
-        ))
+        box = runtime.create(
+            boxlite.BoxOptions(
+                image="alpine:latest",
+                working_dir="/tmp",
+                ports=[(8080, 80)],  # host:container
+            )
+        )
         print(f"✓ Box created: {box.id}")
 
         # Verify working directory

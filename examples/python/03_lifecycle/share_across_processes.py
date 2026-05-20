@@ -25,8 +25,7 @@ async def _subprocess_start_box():
     # Use Options() to create a droppable runtime
     runtime = boxlite.Boxlite(boxlite.Options())
 
-    box = await runtime.create(
-        boxlite.BoxOptions(image="alpine:latest", detach=True, auto_remove=False))
+    box = await runtime.create(boxlite.BoxOptions(image="alpine:latest", detach=True, auto_remove=False))
     box_id = box.id
 
     # Execute command to ensure it's fully initialized
@@ -46,8 +45,7 @@ async def _subprocess_start_and_stop_box():
     # Use Options() to create a droppable runtime
     runtime = boxlite.Boxlite(boxlite.Options())
 
-    box = await runtime.create(
-        boxlite.BoxOptions(image="alpine:latest", detach=True, auto_remove=False))
+    box = await runtime.create(boxlite.BoxOptions(image="alpine:latest", detach=True, auto_remove=False))
     box_id = box.id
 
     # Execute command to ensure it's fully initialized
@@ -83,7 +81,7 @@ async def test_cross_process_reattach():
             capture_output=True,
             text=True,
             env=env,
-            timeout=60
+            timeout=60,
         )
 
         if result.returncode != 0:
@@ -140,6 +138,7 @@ async def test_cross_process_reattach():
     except Exception as e:
         print(f"\n  Error: {e}")
         import traceback
+
         traceback.print_exc()
 
     finally:
@@ -178,7 +177,7 @@ async def test_cross_process_restart():
             capture_output=True,
             text=True,
             env=env,
-            timeout=60
+            timeout=60,
         )
 
         if result.returncode != 0:
@@ -234,6 +233,7 @@ async def test_cross_process_restart():
     except Exception as e:
         print(f"\n  Error: {e}")
         import traceback
+
         traceback.print_exc()
 
     finally:

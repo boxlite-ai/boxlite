@@ -26,8 +26,10 @@ try:
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
     from _helpers import setup_logging
 except ImportError:
+
     def setup_logging():
         logging.basicConfig(level=logging.ERROR)
+
 
 logger = logging.getLogger("interactive_claude_example")
 
@@ -72,9 +74,7 @@ async def run_interactive_shell(box, env, shell="/bin/bash"):
             loop = asyncio.get_event_loop()
             while not exited.is_set():
                 try:
-                    read_task = loop.run_in_executor(
-                        None, os.read, sys.stdin.fileno(), 1024
-                    )
+                    read_task = loop.run_in_executor(None, os.read, sys.stdin.fileno(), 1024)
                     done, pending = await asyncio.wait(
                         [
                             asyncio.ensure_future(read_task),
@@ -127,9 +127,7 @@ async def run_interactive_shell(box, env, shell="/bin/bash"):
             return_exceptions=True,
         )
     finally:
-        termios.tcsetattr(
-            sys.stdin.fileno(), termios.TCSADRAIN, old_tty_settings
-        )
+        termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, old_tty_settings)
 
 
 async def main():
@@ -196,6 +194,7 @@ async def main():
     except Exception as e:
         print(f"\nError: {e}", file=sys.stderr)
         import traceback
+
         traceback.print_exc()
         sys.exit(1)
 

@@ -124,7 +124,7 @@ the in-process TTL caches under `pkg/cache/`.
      and push any state mismatch to the API. One-way: **local state is
      authoritative**, the API is the replica being corrected.
    - `metrics.Collector.Start` — periodic CPU and allocation sampling
-     for the `/info` and `/metrics` endpoints (see *Metrics*).
+     for the `/info` and `/metrics` endpoints (see _Metrics_).
    - `sshgateway.Service.Start` — only if `SSH_GATEWAY_ENABLE=true`.
    - `healthcheck.Service.Start` and `poller.Service.Start` — only if
      `BOXLITE_API_VERSION=2`. These push health and pull jobs from the
@@ -160,7 +160,7 @@ crash handling live in the runtime, not the runner.
 | `GET` | `/sandboxes/:id` | `Info` | Combined state + backup state + daemon version |
 
 `Info` is the only endpoint that fans out: it pulls live state from the
-runtime *and* backup state from `BackupInfoCache`, then fetches the guest
+runtime _and_ backup state from `BackupInfoCache`, then fetches the guest
 daemon version only when the sandbox is `STARTED`. See
 [`pkg/services/sandbox.go`](pkg/services/sandbox.go).
 
@@ -201,7 +201,7 @@ the image is ready; `404` means neither image nor cached error exists
 **polls `ImageExists()` every 250 ms** to detect completion, then
 gives the file 1 s of grace to flush before returning. There's no
 explicit "build done" signal from the runtime — the image appearing in
-the local store *is* the signal.
+the local store _is_ the signal.
 
 ### 3. Execution + attach
 
@@ -358,7 +358,7 @@ Notable properties:
   intermediary's idle timeout (CloudFront default 30 s, ALB 60 s,
   Heroku 55 s).
 - **Single-attach.** A second `/attach` to an already-attached exec
-  returns HTTP 409 *before* the WS upgrade. The client should respect
+  returns HTTP 409 _before_ the WS upgrade. The client should respect
   this and surface a "session busy" error rather than retry.
 
 #### Reaping policy
@@ -388,7 +388,7 @@ warning and falls through to `Kill()` immediately. Exercised in
 #### Signal whitelist
 
 `POST /signal` accepts only cooperative signals. SIGKILL goes through
-`DELETE /executions/:id` instead; the signal endpoint *needs* the
+`DELETE /executions/:id` instead; the signal endpoint _needs_ the
 atomic kill+evict that DELETE provides.
 
 | Allowed | Rejected with 400 |

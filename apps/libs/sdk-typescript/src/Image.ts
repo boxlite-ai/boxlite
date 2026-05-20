@@ -68,7 +68,7 @@ export class Image {
   private _dockerfile = ''
   private _contextList: Context[] = []
 
-  // eslint-disable-next-line @typescript-eslint/no-empty-function
+   
   private constructor() {}
 
   get dockerfile(): string {
@@ -369,7 +369,7 @@ export class Image {
       if (contextDir && !originalPath.startsWith(contextDir)) {
         archiveBasePath = contextPath.substring(contextDir.length)
         // Remove leading separators
-        // eslint-disable-next-line no-useless-escape
+         
         archiveBasePath = archiveBasePath.replace(/^[\/\\]+/, '')
       }
       this._contextList.push({ sourcePath: contextPath, archivePath: archiveBasePath })
@@ -411,7 +411,7 @@ export class Image {
         // Remove the path prefix from the context path to get the archive path
         archiveBasePath = contextPath.substring(pathPrefix.length)
         // Remove leading separators
-        // eslint-disable-next-line no-useless-escape
+         
         archiveBasePath = archiveBasePath.replace(/^[\/\\]+/, '')
       }
       img._contextList.push({ sourcePath: contextPath, archivePath: archiveBasePath })

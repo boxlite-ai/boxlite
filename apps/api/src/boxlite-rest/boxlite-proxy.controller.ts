@@ -18,11 +18,7 @@ import {
   NotFoundException,
 } from '@nestjs/common'
 import { ApiTags, ApiBearerAuth } from '@nestjs/swagger'
-import {
-  createProxyMiddleware,
-  fixRequestBody,
-  Options,
-} from 'http-proxy-middleware'
+import { createProxyMiddleware, fixRequestBody, Options } from 'http-proxy-middleware'
 import { Request, Response, NextFunction } from 'express'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { OrganizationResourceActionGuard } from '../organization/guards/organization-resource-action.guard'
@@ -51,14 +47,7 @@ export class BoxliteProxyController {
     @Res() res: Response,
     @Next() next: NextFunction,
   ) {
-    return this.proxyToRunner(
-      authContext,
-      boxId,
-      `/v1/boxes/${boxId}/exec`,
-      req,
-      res,
-      next,
-    )
+    return this.proxyToRunner(authContext, boxId, `/v1/boxes/${boxId}/exec`, req, res, next)
   }
 
   @All(':boxId/executions/:execId/signal')
@@ -70,14 +59,7 @@ export class BoxliteProxyController {
     @Res() res: Response,
     @Next() next: NextFunction,
   ) {
-    return this.proxyToRunner(
-      authContext,
-      boxId,
-      `/v1/boxes/${boxId}/executions/${execId}/signal`,
-      req,
-      res,
-      next,
-    )
+    return this.proxyToRunner(authContext, boxId, `/v1/boxes/${boxId}/executions/${execId}/signal`, req, res, next)
   }
 
   @All(':boxId/executions/:execId/resize')
@@ -89,14 +71,7 @@ export class BoxliteProxyController {
     @Res() res: Response,
     @Next() next: NextFunction,
   ) {
-    return this.proxyToRunner(
-      authContext,
-      boxId,
-      `/v1/boxes/${boxId}/executions/${execId}/resize`,
-      req,
-      res,
-      next,
-    )
+    return this.proxyToRunner(authContext, boxId, `/v1/boxes/${boxId}/executions/${execId}/resize`, req, res, next)
   }
 
   @Get(':boxId/executions/:execId')
@@ -108,14 +83,7 @@ export class BoxliteProxyController {
     @Res() res: Response,
     @Next() next: NextFunction,
   ) {
-    return this.proxyToRunner(
-      authContext,
-      boxId,
-      `/v1/boxes/${boxId}/executions/${execId}`,
-      req,
-      res,
-      next,
-    )
+    return this.proxyToRunner(authContext, boxId, `/v1/boxes/${boxId}/executions/${execId}`, req, res, next)
   }
 
   @Delete(':boxId/executions/:execId')
@@ -127,14 +95,7 @@ export class BoxliteProxyController {
     @Res() res: Response,
     @Next() next: NextFunction,
   ) {
-    return this.proxyToRunner(
-      authContext,
-      boxId,
-      `/v1/boxes/${boxId}/executions/${execId}`,
-      req,
-      res,
-      next,
-    )
+    return this.proxyToRunner(authContext, boxId, `/v1/boxes/${boxId}/executions/${execId}`, req, res, next)
   }
 
   // /executions/:execId/attach is a WebSocket-only route. Real WS upgrades
@@ -151,17 +112,8 @@ export class BoxliteProxyController {
     @Res() res: Response,
     @Next() next: NextFunction,
   ) {
-    const query = req.url.includes('?')
-      ? req.url.substring(req.url.indexOf('?'))
-      : ''
-    return this.proxyToRunner(
-      authContext,
-      boxId,
-      `/v1/boxes/${boxId}/files${query}`,
-      req,
-      res,
-      next,
-    )
+    const query = req.url.includes('?') ? req.url.substring(req.url.indexOf('?')) : ''
+    return this.proxyToRunner(authContext, boxId, `/v1/boxes/${boxId}/files${query}`, req, res, next)
   }
 
   @All(':boxId/metrics')
@@ -172,14 +124,7 @@ export class BoxliteProxyController {
     @Res() res: Response,
     @Next() next: NextFunction,
   ) {
-    return this.proxyToRunner(
-      authContext,
-      boxId,
-      `/v1/boxes/${boxId}/metrics`,
-      req,
-      res,
-      next,
-    )
+    return this.proxyToRunner(authContext, boxId, `/v1/boxes/${boxId}/metrics`, req, res, next)
   }
 
   private async proxyToRunner(
@@ -191,10 +136,7 @@ export class BoxliteProxyController {
     next: NextFunction,
     opts?: { ws?: boolean },
   ) {
-    const sandbox = await this.sandboxService.findOneByIdOrName(
-      boxId,
-      authContext.organizationId,
-    )
+    const sandbox = await this.sandboxService.findOneByIdOrName(boxId, authContext.organizationId)
     if (!sandbox) {
       throw new NotFoundException(`Box ${boxId} not found`)
     }
@@ -204,9 +146,7 @@ export class BoxliteProxyController {
     // actively used sandbox. Best-effort: never block the proxy on this.
     this.sandboxService
       .updateLastActivityAt(sandbox.id, new Date())
-      .catch((err) =>
-        this.logger.warn(`updateLastActivityAt failed for ${sandbox.id}: ${err}`),
-      )
+      .catch((err) => this.logger.warn(`updateLastActivityAt failed for ${sandbox.id}: ${err}`))
 
     const runner = await this.runnerService.findOne(sandbox.runnerId)
     if (!runner) {
@@ -236,5 +176,4 @@ export class BoxliteProxyController {
 
     return createProxyMiddleware(proxyOptions)(req, res, next)
   }
-
 }

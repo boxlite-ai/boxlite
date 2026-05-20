@@ -14,11 +14,13 @@ Requirements:
 """
 
 import asyncio
+
 import boxlite
 
 # Check if playwright is available
 try:
     from playwright.async_api import async_playwright
+
     HAS_PLAYWRIGHT = True
 except ImportError:
     HAS_PLAYWRIGHT = False
