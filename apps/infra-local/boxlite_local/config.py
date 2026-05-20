@@ -7,6 +7,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
+def _parse_int_env(name: str, default: str) -> int:
+    raw = os.environ.get(name, default)
+    try:
+        return int(raw)
+    except ValueError as e:
+        raise ValueError(f"{name} must be an integer, got: {raw!r}") from e
+
+
 @dataclass
 class InfraConfig:
     # host-hub address — inside-box reaches host via this name (Docker host.docker.internal equivalent)
@@ -15,7 +23,7 @@ class InfraConfig:
     # postgres
     pg_host_port: int = 25432
     pg_user: str = "boxlite"
-    pg_password: str = "boxlite"
+    pg_password: str = field(default="boxlite", repr=False)
     pg_db: str = "boxlite"
 
     # persistent data root (per-service subdirs are computed)
@@ -25,7 +33,7 @@ class InfraConfig:
     def load(cls) -> "InfraConfig":
         return cls(
             host_hub=os.environ.get("BOXLITE_HOST_HUB", "host.boxlite.internal"),
-            pg_host_port=int(os.environ.get("BOXLITE_PG_HOST_PORT", "25432")),
+            pg_host_port=_parse_int_env("BOXLITE_PG_HOST_PORT", "25432"),
             pg_user=os.environ.get("BOXLITE_PG_USER", "boxlite"),
             pg_password=os.environ.get("BOXLITE_PG_PASSWORD", "boxlite"),
             pg_db=os.environ.get("BOXLITE_PG_DB", "boxlite"),

@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from boxlite_local.config import InfraConfig
 
 
@@ -38,6 +40,12 @@ def test_load_picks_up_env_overrides(monkeypatch, tmp_path):
     assert cfg.data_dir == tmp_path
 
 
+def test_load_raises_clear_error_on_malformed_int_env(monkeypatch):
+    monkeypatch.setenv("BOXLITE_PG_HOST_PORT", "notanumber")
+    with pytest.raises(ValueError, match="BOXLITE_PG_HOST_PORT must be an integer"):
+        InfraConfig.load()
+
+
 def test_load_falls_back_to_defaults_when_env_unset(monkeypatch):
     for var in (
         "BOXLITE_HOST_HUB", "BOXLITE_PG_HOST_PORT", "BOXLITE_PG_USER",
@@ -49,3 +57,4 @@ def test_load_falls_back_to_defaults_when_env_unset(monkeypatch):
 
     assert cfg.host_hub == "host.boxlite.internal"
     assert cfg.pg_host_port == 25432
+    assert cfg.data_dir == Path.home() / ".boxlite-local" / "data"
