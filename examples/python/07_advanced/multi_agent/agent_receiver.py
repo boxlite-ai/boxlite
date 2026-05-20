@@ -8,10 +8,9 @@ and run with: await box.run_script("/path/to/agent_receiver.py")
 The boxlite_runtime module is automatically injected by BoxRuntime.
 """
 
-import os
+from boxlite_runtime import on_message, on_event, run_forever
 import sys
-
-from boxlite_runtime import on_event, on_message, run_forever
+import os
 
 BOX_NAME = os.environ.get("BOXLITE_BOX_NAME", "unknown")
 

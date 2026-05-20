@@ -29,15 +29,17 @@ async def main():
         # forwards host traffic to the guest's network interface
         # (192.168.127.2), not to loopback.
         await box.exec(
-            "sh",
-            "-c",
-            "nohup python -m http.server 18789 --bind 0.0.0.0 " "> /dev/null 2>&1 &",
+            "sh", "-c",
+            "nohup python -m http.server 18789 --bind 0.0.0.0 "
+            "> /dev/null 2>&1 &"
         )
         await asyncio.sleep(1)  # let the server start
 
         # Verify from the host
         try:
-            with urllib.request.urlopen("http://127.0.0.1:18789/", timeout=5) as resp:
+            with urllib.request.urlopen(
+                "http://127.0.0.1:18789/", timeout=5
+            ) as resp:
                 print(f"Host -> guest: HTTP {resp.status}")
         except Exception as e:
             print(f"Host -> guest FAILED: {e}")

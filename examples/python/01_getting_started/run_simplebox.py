@@ -23,10 +23,8 @@ try:
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
     from _helpers import setup_logging
 except ImportError:
-
     def setup_logging():
         logging.basicConfig(level=logging.ERROR)
-
 
 logger = logging.getLogger("simplebox_example")
 
@@ -66,7 +64,7 @@ async def example_stdout_stderr():
 
         # Command that produces both stdout and stderr
         print("\nRunning command with both stdout and stderr:")
-        result = await box.exec("sh", "-c", 'echo "to stdout" && echo "to stderr" >&2')
+        result = await box.exec('sh', '-c', 'echo "to stdout" && echo "to stderr" >&2')
 
         print(f"Exit code: {result.exit_code}")
         print(f"Stdout: '{result.stdout.strip()}'")
@@ -82,12 +80,12 @@ async def example_environment():
 
         # Execute with custom environment variables
         print("\nSetting FOO=bar and BAZ=qux:")
-        result = await box.exec("env", env={"FOO": "bar", "BAZ": "qux"})
+        result = await box.exec('env', env={'FOO': 'bar', 'BAZ': 'qux'})
 
         print(f"Exit code: {result.exit_code}")
         print("Custom environment variables:")
-        for line in result.stdout.split("\n"):
-            if "FOO=" in line or "BAZ=" in line:
+        for line in result.stdout.split('\n'):
+            if 'FOO=' in line or 'BAZ=' in line:
                 print(f"  {line}")
 
 
@@ -96,9 +94,9 @@ async def example_working_directory():
     print("\n\n=== Example 4: Working Directory ===")
 
     async with boxlite.SimpleBox(
-        image="python:alpine",
-        working_dir="/tmp",
-        env=[("USER", "alice"), ("PROJECT", "data-pipeline")],
+            image="python:alpine",
+            working_dir="/tmp",
+            env=[("USER", "alice"), ("PROJECT", "data-pipeline")]
     ) as box:
         print(f"✓ Container with custom config: {box.id}")
 
@@ -110,7 +108,7 @@ async def example_working_directory():
         # Check environment
         print("\nEnvironment variables:")
         result = await box.exec("env")
-        for line in result.stdout.split("\n"):
+        for line in result.stdout.split('\n'):
             if "USER=" in line or "PROJECT=" in line:
                 print(f"  {line}")
 
@@ -124,7 +122,7 @@ async def example_error_handling():
 
         # Command that fails
         print("\nRunning command that fails:")
-        result = await box.exec("false")
+        result = await box.exec('false')
 
         if result.exit_code != 0:
             print(f"✓ Command failed as expected with exit code: {result.exit_code}")
@@ -133,7 +131,7 @@ async def example_error_handling():
 
         # Command that succeeds
         print("\nRunning command that succeeds:")
-        result = await box.exec("true")
+        result = await box.exec('true')
 
         if result.exit_code == 0:
             print(f"✓ Command succeeded with exit code: {result.exit_code}")
@@ -153,12 +151,16 @@ async def example_reuse_existing():
         return
 
     # First call creates a new box
-    async with boxlite.SimpleBox(image="python:alpine", name=name, reuse_existing=True) as box1:
+    async with boxlite.SimpleBox(
+        image="python:alpine", name=name, reuse_existing=True
+    ) as box1:
         print(f"First open:  id={box1.id}, created={box1.created}")
         await box1.exec("sh", "-c", "echo 'hello' > /tmp/marker")
 
         # Second call with same name reuses the existing box
-        async with boxlite.SimpleBox(image="python:alpine", name=name, reuse_existing=True) as box2:
+        async with boxlite.SimpleBox(
+            image="python:alpine", name=name, reuse_existing=True
+        ) as box2:
             print(f"Second open: id={box2.id}, created={box2.created}")
             result = await box2.exec("cat", "/tmp/marker")
             print(f"Marker file from reused box: {result.stdout.strip()}")
@@ -176,20 +178,19 @@ async def example_pipeline():
         # Step 1: Generate sample data
         print("\n1. Generating sample data...")
         result = await box.exec(
-            "python",
-            "-c",
-            "import json; data = [{'id': i, 'value': i*2} for i in range(5)]; " "print(json.dumps(data, indent=2))",
+            "python", "-c",
+            "import json; data = [{'id': i, 'value': i*2} for i in range(5)]; "
+            "print(json.dumps(data, indent=2))"
         )
         print(result.stdout)
 
         # Step 2: Process data with transformation
         print("2. Processing data...")
         result = await box.exec(
-            "python",
-            "-c",
+            "python", "-c",
             "import json; data = [{'id': i, 'value': i*2} for i in range(5)]; "
             "total = sum(item['value'] for item in data); "
-            "print(f'Total: {total}')",
+            "print(f'Total: {total}')"
         )
         print(result.stdout)
 

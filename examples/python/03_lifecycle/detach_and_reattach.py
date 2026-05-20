@@ -31,12 +31,10 @@ async def demo_auto_remove_true():
 
     # Create box with default auto_remove=True
     print("1. Creating box with auto_remove=True (default)...")
-    box = await runtime.create(
-        boxlite.BoxOptions(
-            image="alpine:latest",
-            auto_remove=True,  # This is the default, shown explicitly for clarity
-        )
-    )
+    box = await runtime.create(boxlite.BoxOptions(
+        image="alpine:latest",
+        auto_remove=True,  # This is the default, shown explicitly for clarity
+    ))
     box_id = box.id
     print(f"   Box created: {box_id}")
 
@@ -79,12 +77,10 @@ async def demo_auto_remove_false():
 
     # Create box with auto_remove=False
     print("1. Creating box with auto_remove=False...")
-    box = await runtime.create(
-        boxlite.BoxOptions(
-            image="alpine:latest",
-            auto_remove=False,  # Preserve box after stop
-        )
-    )
+    box = await runtime.create(boxlite.BoxOptions(
+        image="alpine:latest",
+        auto_remove=False,  # Preserve box after stop
+    ))
     box_id = box.id
     print(f"   Box created: {box_id}")
 
@@ -138,13 +134,11 @@ async def demo_detach_false():
 
     # Create box with default detach=False
     print("1. Creating box with detach=False (default)...")
-    box = await runtime.create(
-        boxlite.BoxOptions(
-            image="alpine:latest",
-            detach=False,  # This is the default
-            auto_remove=True,
-        )
-    )
+    box = await runtime.create(boxlite.BoxOptions(
+        image="alpine:latest",
+        detach=False,  # This is the default
+        auto_remove=True,
+    ))
     box_id = box.id
     print(f"   Box created: {box_id}")
     print("   This box would stop automatically if this process exited.")
@@ -179,13 +173,11 @@ async def demo_detach_true():
 
     # Create box with detach=True
     print("1. Creating box with detach=True...")
-    box = await runtime.create(
-        boxlite.BoxOptions(
-            image="alpine:latest",
-            detach=True,  # Run independently
-            auto_remove=False,  # Keep around for demo
-        )
-    )
+    box = await runtime.create(boxlite.BoxOptions(
+        image="alpine:latest",
+        detach=True,  # Run independently
+        auto_remove=False,  # Keep around for demo
+    ))
     box_id = box.id
     print(f"   Box created: {box_id}")
     print("   This box would continue running if this process exited.")
@@ -224,13 +216,11 @@ async def demo_combined_options():
     # Use case: Ephemeral sandbox for one-off tasks
     print("1. Ephemeral sandbox (auto_remove=True, detach=False):")
     print("   Use case: One-off code execution, testing")
-    box1 = await runtime.create(
-        boxlite.BoxOptions(
-            image="alpine:latest",
-            auto_remove=True,
-            detach=False,
-        )
-    )
+    box1 = await runtime.create(boxlite.BoxOptions(
+        image="alpine:latest",
+        auto_remove=True,
+        detach=False,
+    ))
     result = await box1.exec("echo", ["One-off task"])
     print(f"   Output: {result.stdout()}")
     await box1.stop()
@@ -240,13 +230,11 @@ async def demo_combined_options():
     # Use case: Development/debugging - restart box with same state
     print("2. Development sandbox (auto_remove=False, detach=False):")
     print("   Use case: Iterative development, debugging")
-    box2 = await runtime.create(
-        boxlite.BoxOptions(
-            image="alpine:latest",
-            auto_remove=False,
-            detach=False,
-        )
-    )
+    box2 = await runtime.create(boxlite.BoxOptions(
+        image="alpine:latest",
+        auto_remove=False,
+        detach=False,
+    ))
     box2_id = box2.id
     await box2.exec("touch", ["/tmp/dev-file"])
     await box2.stop()
@@ -262,13 +250,11 @@ async def demo_combined_options():
     # Use case: Long-running service that survives parent exit
     print("3. Background service (auto_remove=False, detach=True):")
     print("   Use case: Long-running services, daemons")
-    box3 = await runtime.create(
-        boxlite.BoxOptions(
-            image="alpine:latest",
-            auto_remove=False,
-            detach=True,
-        )
-    )
+    box3 = await runtime.create(boxlite.BoxOptions(
+        image="alpine:latest",
+        auto_remove=False,
+        detach=True,
+    ))
     box3_id = box3.id
     print(f"   Service box: {box3_id}")
     print("   This box would survive parent process exit")

@@ -33,8 +33,7 @@ async def main():
         # Truncate ID for display
         id_short = info.id[:12] + "..." if len(info.id) > 15 else info.id
         print(
-            f"{name_str:<20} {id_short:<28} {info.state.status:<10} {info.image:<20} {info.cpus:<5} {mem_str:<8} {pid_str:<8}"
-        )
+            f"{name_str:<20} {id_short:<28} {info.state.status:<10} {info.image:<20} {info.cpus:<5} {mem_str:<8} {pid_str:<8}")
 
     print("-" * 105)
     print(f"Total: {len(boxes)} box(es)")

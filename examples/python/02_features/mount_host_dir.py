@@ -18,7 +18,6 @@ try:
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
     from _helpers import setup_logging
 except ImportError:
-
     def setup_logging():
         logging.basicConfig(level=logging.ERROR)
 
@@ -67,9 +66,8 @@ async def main():
             # Write a file from inside the container
             print("--- Writing from container ---")
             await box.exec(
-                "sh",
-                "-c",
-                "echo 'created inside container' > /workspace/from_guest.txt",
+                "sh", "-c",
+                "echo 'created inside container' > /workspace/from_guest.txt"
             )
 
             # Verify on host
@@ -82,7 +80,10 @@ async def main():
 
             # Show file ownership inside container
             print("\n--- File ownership inside container ---")
-            result = await box.exec("stat", "-c", "%n  uid=%u gid=%g", "/workspace/hello.txt")
+            result = await box.exec(
+                "stat", "-c", "%n  uid=%u gid=%g",
+                "/workspace/hello.txt"
+            )
             print(result.stdout)
 
             result = await box.exec("id")

@@ -18,10 +18,8 @@ try:
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
     from _helpers import setup_logging
 except ImportError:
-
     def setup_logging():
         logging.basicConfig(level=logging.ERROR)
-
 
 logger = logging.getLogger("interactivebox_example")
 
@@ -50,7 +48,6 @@ async def main():
     except Exception as e:
         print(f"\nError: {e}", file=sys.stderr)
         import traceback
-
         traceback.print_exc()
         sys.exit(1)
 

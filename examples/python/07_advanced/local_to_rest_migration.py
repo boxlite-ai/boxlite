@@ -24,7 +24,13 @@ import time
 import urllib.request
 
 import boxlite
-from boxlite import ApiKeyCredential, Boxlite, BoxliteRestOptions, BoxOptions, Options
+from boxlite import (
+    ApiKeyCredential,
+    Boxlite,
+    BoxOptions,
+    BoxliteRestOptions,
+    Options,
+)
 
 
 def find_free_port() -> int:
@@ -37,13 +43,7 @@ def find_free_port() -> int:
 def start_server(port: int) -> subprocess.Popen:
     """Start the reference server as a subprocess and wait until ready."""
     server_script = os.path.join(
-        os.path.dirname(__file__),
-        "..",
-        "..",
-        "..",
-        "openapi",
-        "reference-server",
-        "server.py",
+        os.path.dirname(__file__), "..", "..", "..", "openapi", "reference-server", "server.py"
     )
     server_script = os.path.abspath(server_script)
 
@@ -89,12 +89,10 @@ async def main():
     # Use /tmp for shorter paths — macOS has a SUN_LEN limit for Unix sockets.
     local_home = tempfile.mkdtemp(prefix="bl-", dir="/tmp")
     local_rt = Boxlite(Options(home_dir=local_home))
-    rest_rt = Boxlite.rest(
-        BoxliteRestOptions(
-            url=server_url,
-            credential=ApiKeyCredential("test-key"),
-        )
-    )
+    rest_rt = Boxlite.rest(BoxliteRestOptions(
+        url=server_url,
+        credential=ApiKeyCredential("test-key"),
+    ))
 
     source = None
     imported = None

@@ -109,10 +109,10 @@ async def example_custom_config():
     print("\n\n=== Example 6: Custom Configuration ===")
 
     async with boxlite.SkillBox(
-        name="custom-skill-box",
-        memory_mib=4096,  # More memory for complex tasks
-        disk_size_gb=10,  # Larger disk for more packages
-        skills=["anthropics/skills"],
+            name="custom-skill-box",
+            memory_mib=4096,  # More memory for complex tasks
+            disk_size_gb=10,  # Larger disk for more packages
+            skills=["anthropics/skills"],
     ) as skill_box:
         info = skill_box.info()
         print(f"Box name: {info.name}")

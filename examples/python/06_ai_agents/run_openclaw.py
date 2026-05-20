@@ -119,7 +119,8 @@ def poll_ready(box, port: int, timeout: int = 300, interval: int = 2) -> bool:
             lines = list(result.stdout())
             result.wait()
             tcp_out = "".join(
-                (line if isinstance(line, str) else line.decode("utf-8", errors="replace")) for line in lines
+                line if isinstance(line, str) else line.decode("utf-8", errors="replace")
+                for line in lines
             )
 
             if port_hex in tcp_out.upper():
@@ -183,16 +184,11 @@ def main():
                 ("OPENCLAW_GATEWAY_TOKEN", GATEWAY_TOKEN),
             ],
             cmd=[
-                "node",
-                "dist/index.js",
-                "gateway",
+                "node", "dist/index.js", "gateway",
                 "--allow-unconfigured",
-                "--bind",
-                "lan",
-                "--port",
-                str(GATEWAY_PORT),
-                "--token",
-                GATEWAY_TOKEN,
+                "--bind", "lan",
+                "--port", str(GATEWAY_PORT),
+                "--token", GATEWAY_TOKEN,
             ],
             disk_size_gb=10,
             memory_mib=4096,

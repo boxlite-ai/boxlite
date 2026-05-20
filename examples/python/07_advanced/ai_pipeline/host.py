@@ -55,7 +55,6 @@ async def main():
         @reviewer.on_message
         def handle_review(sender, data):
             import sys
-
             from boxlite_runtime import send_message
 
             action = data.get("action")
@@ -78,7 +77,9 @@ async def main():
                     "[reviewer] Syntax looks good, sending to tester...",
                     file=sys.stderr,
                 )
-                test_result = send_message("tester", {"action": "test", "code": code, "tests": tests})
+                test_result = send_message(
+                    "tester", {"action": "test", "code": code, "tests": tests}
+                )
                 print(f"[reviewer] Test result: {test_result}", file=sys.stderr)
 
                 if test_result.get("passed"):
@@ -95,7 +96,9 @@ async def main():
         def reviewer_on_complete(data):
             import sys
 
-            print(f"[reviewer] Pipeline complete: {data.get('status')}", file=sys.stderr)
+            print(
+                f"[reviewer] Pipeline complete: {data.get('status')}", file=sys.stderr
+            )
 
         # ====================================================================
         # TESTER: Executes code in isolation and runs test assertions
@@ -135,7 +138,9 @@ async def main():
             if status == "success":
                 print("[tester] Pipeline succeeded!", file=sys.stderr)
             else:
-                print(f"[tester] Pipeline failed: {data.get('reason')}", file=sys.stderr)
+                print(
+                    f"[tester] Pipeline failed: {data.get('reason')}", file=sys.stderr
+                )
 
         # ====================================================================
         # CODER: Generates code and submits for review (one-shot task)
@@ -143,8 +148,7 @@ async def main():
         @coder.task
         def coder_main():
             import sys
-
-            from boxlite_runtime import publish_event, send_message
+            from boxlite_runtime import send_message, publish_event
 
             print("[coder] Starting code generation agent...", file=sys.stderr)
 
@@ -194,7 +198,9 @@ assert fibonacci(20) == 6765, "fib(20) should be 6765"
             else:
                 reason = review_result.get("reason", "unknown")
                 print(f"[coder] Code rejected: {reason}", file=sys.stderr)
-                publish_event("pipeline_complete", {"status": "failed", "reason": reason})
+                publish_event(
+                    "pipeline_complete", {"status": "failed", "reason": reason}
+                )
 
             print("[coder] Done!", file=sys.stderr)
 

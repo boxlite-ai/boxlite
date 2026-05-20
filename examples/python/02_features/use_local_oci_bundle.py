@@ -69,11 +69,13 @@ async def main():
 
     # Create a box using the local OCI bundle. The Box handle supports the
     # async context manager protocol (auto-start/stop on enter/exit).
-    async with await runtime.create(
-        BoxOptions(
-            rootfs_path=str(bundle_path),  # Use local bundle
-            cpus=1,
-            memory_mib=256,
+    async with (
+        await runtime.create(
+            BoxOptions(
+                rootfs_path=str(bundle_path),  # Use local bundle
+                cpus=1,
+                memory_mib=256,
+            )
         )
     ) as box:
         print(f"Box created: {box.id}")
@@ -82,14 +84,22 @@ async def main():
         result = await box.exec("cat", ["/etc/os-release"])
         print("\n/etc/os-release:")
         async for line in result.stdout():
-            text = line.decode("utf-8", errors="replace") if isinstance(line, (bytes, bytearray)) else str(line)
+            text = (
+                line.decode("utf-8", errors="replace")
+                if isinstance(line, (bytes, bytearray))
+                else str(line)
+            )
             print(text.rstrip())
 
         # Show that the box is running from the local bundle
         result = await box.exec("uname", ["-a"])
         print("\nKernel info:")
         async for line in result.stdout():
-            text = line.decode("utf-8", errors="replace") if isinstance(line, (bytes, bytearray)) else str(line)
+            text = (
+                line.decode("utf-8", errors="replace")
+                if isinstance(line, (bytes, bytearray))
+                else str(line)
+            )
             print(text.rstrip())
 
     print("\nBox cleaned up successfully!")
