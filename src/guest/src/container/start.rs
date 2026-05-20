@@ -292,3 +292,25 @@ pub(crate) fn load_container_status(
 
     Ok(container.status())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use libcontainer::container::{ContainerStatus, State};
+
+    #[test]
+    fn load_container_status_refreshes_stale_persisted_status() {
+        let dir = tempfile::TempDir::new().expect("create temp dir");
+        let state = State::new(
+            "test-container",
+            ContainerStatus::Stopped,
+            Some(i32::try_from(std::process::id()).expect("current pid fits in i32")),
+            dir.path().to_path_buf(),
+        );
+        state.save(dir.path()).expect("save libcontainer state");
+
+        let status = load_container_status(dir.path()).expect("load container status");
+
+        assert_eq!(status, ContainerStatus::Running);
+    }
+}
