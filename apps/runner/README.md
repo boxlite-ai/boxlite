@@ -404,13 +404,14 @@ a feature.
 
 | Method | Path | Controller | Purpose |
 | --- | --- | --- | --- |
-| `PUT` | `/v1/boxes/:boxId/files?path=<dest>` | `BoxliteFileUpload` | Stream tar body → temp file → `CopyInto(box, tmp, dest)` |
-| `GET` | `/v1/boxes/:boxId/files?path=<src>` | `BoxliteFileDownload` | `CopyOut(box, src, tmpDir)` → walk dir, write `application/x-tar` |
+| `PUT` | `/v1/boxes/:boxId/files?path=<dest>` | `BoxliteFileUpload` | Stream raw body → temp file → `CopyInto(box, tmp, dest)` |
+| `GET` | `/v1/boxes/:boxId/files?path=<src>` | `BoxliteFileDownload` | `CopyOut(box, src, tmpPath)` → stream tmp file as `application/octet-stream` |
 | `POST` | `/v1/boxes/:boxId/files/bulk-upload` | `BoxliteFilesBulkUpload` | Multipart `files[N].path` + `files[N].file` pairs → stage each part → `CopyInto` per file |
 
-Tar framing is used by the PUT/GET pair so a single endpoint can move
-files, directories, and symlinks uniformly. Temp files live under
-`os.TempDir()` and are cleaned up before the response returns.
+The PUT/GET pair carries a single file's raw bytes in each direction; the
+underlying SDK `CopyInto`/`CopyOut` tar-frame transparently between host
+and guest. Temp files live under `os.TempDir()` and are cleaned up before
+the response returns.
 
 `bulk-upload` is the high-fanout entry point: a single HTTP call seeds
 many small files at distinct destinations in one request, which matters

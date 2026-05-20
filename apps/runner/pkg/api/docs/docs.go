@@ -1283,13 +1283,14 @@ const docTemplate = `{
         },
         "/v1/boxes/{boxId}/files": {
             "get": {
+                "description": "Streams the contents of a single file inside the box back as raw bytes.",
                 "produces": [
-                    "application/x-tar"
+                    "application/octet-stream"
                 ],
                 "tags": [
                     "boxlite"
                 ],
-                "summary": "Download a file or directory from a box as a tar stream",
+                "summary": "Download a file from a box",
                 "parameters": [
                     {
                         "type": "string",
@@ -1308,7 +1309,7 @@ const docTemplate = `{
                 ],
                 "responses": {
                     "200": {
-                        "description": "tar archive of the requested path",
+                        "description": "file contents",
                         "schema": {
                             "type": "string"
                         }
@@ -1334,6 +1335,7 @@ const docTemplate = `{
                 }
             },
             "put": {
+                "description": "Writes the raw request body to the given path inside the box.",
                 "consumes": [
                     "application/octet-stream"
                 ],
@@ -1358,6 +1360,15 @@ const docTemplate = `{
                         "name": "path",
                         "in": "query",
                         "required": true
+                    },
+                    {
+                        "description": "File contents (raw bytes)",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
                     }
                 ],
                 "responses": {

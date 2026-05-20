@@ -1,7 +1,6 @@
 package controllers
 
 import (
-	"archive/tar"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -15,18 +14,22 @@ import (
 )
 
 // BoxliteFileUpload streams a single file's raw bytes from the request
-// body into a path inside the box.
+// body into a path inside the box. The body is buffered to a host tmp
+// file first because the underlying SDK CopyInto takes a host path, not
+// an io.Reader.
 //
-//	@Summary	Upload a file to a box
-//	@Tags		boxlite
-//	@Accept		application/octet-stream
-//	@Produce	json
-//	@Param		boxId	path	string	true	"Box ID"
-//	@Param		path	query	string	true	"Destination path inside the box"
-//	@Success	204
-//	@Failure	400	{object}	map[string]string	"bad request"
-//	@Failure	500	{object}	map[string]string	"internal error"
-//	@Router		/v1/boxes/{boxId}/files [put]
+//	@Summary		Upload a file to a box
+//	@Description	Writes the raw request body to the given path inside the box.
+//	@Tags			boxlite
+//	@Accept			application/octet-stream
+//	@Produce		json
+//	@Param			boxId	path	string	true	"Box ID"
+//	@Param			path	query	string	true	"Destination path inside the box"
+//	@Param			body	body	string	true	"File contents (raw bytes)"
+//	@Success		204
+//	@Failure		400	{object}	map[string]string	"bad request"
+//	@Failure		500	{object}	map[string]string	"internal error"
+//	@Router			/v1/boxes/{boxId}/files [put]
 func BoxliteFileUpload(ctx *gin.Context) {
 	r, err := runner.GetInstance(nil)
 	if err != nil {
@@ -41,7 +44,7 @@ func BoxliteFileUpload(ctx *gin.Context) {
 		return
 	}
 
-	tmpFile, err := os.CreateTemp("", "boxlite-upload-*.tar")
+	tmpFile, err := os.CreateTemp("", "boxlite-upload-*")
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create temp file"})
 		return
@@ -63,18 +66,22 @@ func BoxliteFileUpload(ctx *gin.Context) {
 	ctx.Status(http.StatusNoContent)
 }
 
-// BoxliteFileDownload reads a path out of the box and streams it back as
-// a tar archive.
+// BoxliteFileDownload reads a single file out of the box and streams its
+// raw bytes back to the caller. The SDK's CopyOut auto-detects file-to-file
+// vs into-directory mode based on whether the host destination already
+// exists as a directory; we hand it a fresh tmp file path so the file lands
+// directly at that path with no tar staging on the runner side.
 //
-//	@Summary	Download a file or directory from a box as a tar stream
-//	@Tags		boxlite
-//	@Produce	application/x-tar
-//	@Param		boxId	path		string				true	"Box ID"
-//	@Param		path	query		string				true	"Source path inside the box"
-//	@Success	200		{string}	binary				"tar archive of the requested path"
-//	@Failure	400		{object}	map[string]string	"bad request"
-//	@Failure	500		{object}	map[string]string	"internal error"
-//	@Router		/v1/boxes/{boxId}/files [get]
+//	@Summary		Download a file from a box
+//	@Description	Streams the contents of a single file inside the box back as raw bytes.
+//	@Tags			boxlite
+//	@Produce		application/octet-stream
+//	@Param			boxId	path		string				true	"Box ID"
+//	@Param			path	query		string				true	"Source path inside the box"
+//	@Success		200		{string}	binary				"file contents"
+//	@Failure		400		{object}	map[string]string	"bad request"
+//	@Failure		500		{object}	map[string]string	"internal error"
+//	@Router			/v1/boxes/{boxId}/files [get]
 func BoxliteFileDownload(ctx *gin.Context) {
 	r, err := runner.GetInstance(nil)
 	if err != nil {
@@ -89,45 +96,35 @@ func BoxliteFileDownload(ctx *gin.Context) {
 		return
 	}
 
-	tmpDir, err := os.MkdirTemp("", "boxlite-download-*")
+	// CopyOut's auto-detect treats a non-existent dest as file-to-file when
+	// the tar carries exactly one regular file. Create the tmp file, then
+	// remove it so the dest path exists in the namespace but not on disk —
+	// CopyOut overwrites it with the box's file bytes.
+	tmpFile, err := os.CreateTemp("", "boxlite-download-*")
 	if err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create temp dir"})
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create temp file"})
 		return
 	}
-	defer os.RemoveAll(tmpDir)
+	tmpPath := tmpFile.Name()
+	tmpFile.Close()
+	defer os.Remove(tmpPath)
 
-	if err := r.Boxlite.CopyOut(ctx.Request.Context(), boxId, srcPath, tmpDir); err != nil {
+	if err := r.Boxlite.CopyOut(ctx.Request.Context(), boxId, srcPath, tmpPath); err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("copy failed: %s", err)})
 		return
 	}
 
-	ctx.Header("Content-Type", "application/x-tar")
+	f, err := os.Open(tmpPath)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "failed to open downloaded file"})
+		return
+	}
+	defer f.Close()
+
+	ctx.Header("Content-Type", "application/octet-stream")
+	ctx.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filepath.Base(srcPath)))
 	ctx.Status(http.StatusOK)
-
-	tw := tar.NewWriter(ctx.Writer)
-	defer tw.Close()
-
-	filepath.Walk(tmpDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
-			return err
-		}
-		relPath, _ := filepath.Rel(tmpDir, path)
-		header, err := tar.FileInfoHeader(info, "")
-		if err != nil {
-			return err
-		}
-		header.Name = relPath
-		if err := tw.WriteHeader(header); err != nil {
-			return err
-		}
-		f, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		defer f.Close()
-		_, err = io.Copy(tw, f)
-		return err
-	})
+	_, _ = io.Copy(ctx.Writer, f)
 }
 
 // stagedBulkUpload pairs a destination path inside the box with a

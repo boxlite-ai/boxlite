@@ -1266,6 +1266,8 @@ paths:
       - boxlite
   /v1/boxes/{boxId}/files:
     get:
+      description: Streams the contents of a single file inside the box back as raw
+        bytes.
       parameters:
       - description: Box ID
         in: path
@@ -1278,10 +1280,10 @@ paths:
         required: true
         type: string
       produces:
-      - application/x-tar
+      - application/octet-stream
       responses:
         "200":
-          description: tar archive of the requested path
+          description: file contents
           schema:
             type: string
         "400":
@@ -1296,12 +1298,13 @@ paths:
             additionalProperties:
               type: string
             type: object
-      summary: Download a file or directory from a box as a tar stream
+      summary: Download a file from a box
       tags:
       - boxlite
     put:
       consumes:
       - application/octet-stream
+      description: Writes the raw request body to the given path inside the box.
       parameters:
       - description: Box ID
         in: path
@@ -1313,6 +1316,12 @@ paths:
         name: path
         required: true
         type: string
+      - description: File contents (raw bytes)
+        in: body
+        name: body
+        required: true
+        schema:
+          type: string
       produces:
       - application/json
       responses:

@@ -122,8 +122,8 @@ export const BoxliteApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         * 
-         * @summary Download a file or directory from a box as a tar stream
+         * Streams the contents of a single file inside the box back as raw bytes.
+         * @summary Download a file from a box
          * @param {string} boxId Box ID
          * @param {string} path Source path inside the box
          * @param {*} [options] Override http request option.
@@ -154,7 +154,7 @@ export const BoxliteApiAxiosParamCreator = function (configuration?: Configurati
                 localVarQueryParameter['path'] = path;
             }
 
-            localVarHeaderParameter['Accept'] = 'application/x-tar';
+            localVarHeaderParameter['Accept'] = 'application/octet-stream';
 
             setSearchParams(localVarUrlObj, localVarQueryParameter);
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
@@ -166,18 +166,21 @@ export const BoxliteApiAxiosParamCreator = function (configuration?: Configurati
             };
         },
         /**
-         * 
+         * Writes the raw request body to the given path inside the box.
          * @summary Upload a file to a box
          * @param {string} boxId Box ID
          * @param {string} path Destination path inside the box
+         * @param {string} body File contents (raw bytes)
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        v1BoxesBoxIdFilesPut: async (boxId: string, path: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+        v1BoxesBoxIdFilesPut: async (boxId: string, path: string, body: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
             // verify required parameter 'boxId' is not null or undefined
             assertParamExists('v1BoxesBoxIdFilesPut', 'boxId', boxId)
             // verify required parameter 'path' is not null or undefined
             assertParamExists('v1BoxesBoxIdFilesPut', 'path', path)
+            // verify required parameter 'body' is not null or undefined
+            assertParamExists('v1BoxesBoxIdFilesPut', 'body', body)
             const localVarPath = `/v1/boxes/{boxId}/files`
                 .replace('{boxId}', encodeURIComponent(String(boxId)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
@@ -198,11 +201,13 @@ export const BoxliteApiAxiosParamCreator = function (configuration?: Configurati
                 localVarQueryParameter['path'] = path;
             }
 
+            localVarHeaderParameter['Content-Type'] = 'application/octet-stream';
             localVarHeaderParameter['Accept'] = 'application/json';
 
             setSearchParams(localVarUrlObj, localVarQueryParameter);
             let headersFromBaseOptions = baseOptions && baseOptions.headers ? baseOptions.headers : {};
             localVarRequestOptions.headers = {...localVarHeaderParameter, ...headersFromBaseOptions, ...options.headers};
+            localVarRequestOptions.data = serializeDataIfNeeded(body, localVarRequestOptions, configuration)
 
             return {
                 url: toPathString(localVarUrlObj),
@@ -248,8 +253,8 @@ export const BoxliteApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
-         * @summary Download a file or directory from a box as a tar stream
+         * Streams the contents of a single file inside the box back as raw bytes.
+         * @summary Download a file from a box
          * @param {string} boxId Box ID
          * @param {string} path Source path inside the box
          * @param {*} [options] Override http request option.
@@ -262,15 +267,16 @@ export const BoxliteApiFp = function(configuration?: Configuration) {
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
-         * 
+         * Writes the raw request body to the given path inside the box.
          * @summary Upload a file to a box
          * @param {string} boxId Box ID
          * @param {string} path Destination path inside the box
+         * @param {string} body File contents (raw bytes)
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        async v1BoxesBoxIdFilesPut(boxId: string, path: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.v1BoxesBoxIdFilesPut(boxId, path, options);
+        async v1BoxesBoxIdFilesPut(boxId: string, path: string, body: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<void>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.v1BoxesBoxIdFilesPut(boxId, path, body, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['BoxliteApi.v1BoxesBoxIdFilesPut']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -308,8 +314,8 @@ export const BoxliteApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.v1BoxesBoxIdFilesBulkUploadPost(boxId, filesNPath, filesNFile, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
-         * @summary Download a file or directory from a box as a tar stream
+         * Streams the contents of a single file inside the box back as raw bytes.
+         * @summary Download a file from a box
          * @param {string} boxId Box ID
          * @param {string} path Source path inside the box
          * @param {*} [options] Override http request option.
@@ -319,15 +325,16 @@ export const BoxliteApiFactory = function (configuration?: Configuration, basePa
             return localVarFp.v1BoxesBoxIdFilesGet(boxId, path, options).then((request) => request(axios, basePath));
         },
         /**
-         * 
+         * Writes the raw request body to the given path inside the box.
          * @summary Upload a file to a box
          * @param {string} boxId Box ID
          * @param {string} path Destination path inside the box
+         * @param {string} body File contents (raw bytes)
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        v1BoxesBoxIdFilesPut(boxId: string, path: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
-            return localVarFp.v1BoxesBoxIdFilesPut(boxId, path, options).then((request) => request(axios, basePath));
+        v1BoxesBoxIdFilesPut(boxId: string, path: string, body: string, options?: RawAxiosRequestConfig): AxiosPromise<void> {
+            return localVarFp.v1BoxesBoxIdFilesPut(boxId, path, body, options).then((request) => request(axios, basePath));
         },
     };
 };
@@ -362,8 +369,8 @@ export class BoxliteApi extends BaseAPI {
     }
 
     /**
-     * 
-     * @summary Download a file or directory from a box as a tar stream
+     * Streams the contents of a single file inside the box back as raw bytes.
+     * @summary Download a file from a box
      * @param {string} boxId Box ID
      * @param {string} path Source path inside the box
      * @param {*} [options] Override http request option.
@@ -374,15 +381,16 @@ export class BoxliteApi extends BaseAPI {
     }
 
     /**
-     * 
+     * Writes the raw request body to the given path inside the box.
      * @summary Upload a file to a box
      * @param {string} boxId Box ID
      * @param {string} path Destination path inside the box
+     * @param {string} body File contents (raw bytes)
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      */
-    public v1BoxesBoxIdFilesPut(boxId: string, path: string, options?: RawAxiosRequestConfig) {
-        return BoxliteApiFp(this.configuration).v1BoxesBoxIdFilesPut(boxId, path, options).then((request) => request(this.axios, this.basePath));
+    public v1BoxesBoxIdFilesPut(boxId: string, path: string, body: string, options?: RawAxiosRequestConfig) {
+        return BoxliteApiFp(this.configuration).v1BoxesBoxIdFilesPut(boxId, path, body, options).then((request) => request(this.axios, this.basePath));
     }
 }
 
