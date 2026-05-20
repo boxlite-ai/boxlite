@@ -55,11 +55,6 @@ export class RegionService {
     private readonly configService: TypedConfigService,
   ) {}
 
-  // Region proxy / ssh-gateway credentials are machine keys: class `svc`,
-  // brand prefix from API_KEY_PREFIX (default `blk`).
-  private mintServiceApiKey(): string {
-    return generateApiKeyValue(this.configService.getOrThrow('apiKey.prefix'), 'svc')
-  }
 
   /**
    * @param createRegionDto - The region details.
@@ -86,8 +81,8 @@ export class RegionService {
     }
 
     try {
-      const proxyApiKey = createRegionDto.proxyUrl ? this.mintServiceApiKey() : undefined
-      const sshGatewayApiKey = createRegionDto.sshGatewayUrl ? this.mintServiceApiKey() : undefined
+      const proxyApiKey = createRegionDto.proxyUrl ? generateApiKeyValue(this.configService.getOrThrow('apiKey.prefix'), 'svc') : undefined
+      const sshGatewayApiKey = createRegionDto.sshGatewayUrl ? generateApiKeyValue(this.configService.getOrThrow('apiKey.prefix'), 'svc') : undefined
 
       const snapshotManagerUsername = createRegionDto.snapshotManagerUrl ? 'boxlite' : undefined
       const snapshotManagerPassword = createRegionDto.snapshotManagerUrl ? generateRandomString(16) : undefined
@@ -366,7 +361,7 @@ export class RegionService {
       throw new BadRequestException('Region does not have a proxy URL configured')
     }
 
-    const newApiKey = this.mintServiceApiKey()
+    const newApiKey = generateApiKeyValue(this.configService.getOrThrow('apiKey.prefix'), 'svc')
     region.proxyApiKeyHash = generateApiKeyHash(newApiKey)
 
     await this.regionRepository.save(region)
@@ -391,7 +386,7 @@ export class RegionService {
       throw new BadRequestException('Region does not have an SSH gateway URL configured')
     }
 
-    const newApiKey = this.mintServiceApiKey()
+    const newApiKey = generateApiKeyValue(this.configService.getOrThrow('apiKey.prefix'), 'svc')
     region.sshGatewayApiKeyHash = generateApiKeyHash(newApiKey)
 
     await this.regionRepository.save(region)

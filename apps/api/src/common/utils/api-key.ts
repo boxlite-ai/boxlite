@@ -82,21 +82,16 @@ export function generateApiKeyValue(prefix: string, keyClass: ApiKeyClass): stri
 /**
  * Hash an API key for at-rest storage / lookup.
  *
- * Uses SHA-256 (not a slow KDF like bcrypt/scrypt/argon2) deliberately.
- * API keys produced by {@link generateApiKeyValue} carry 256 bits of CSPRNG
- * entropy (`crypto.randomBytes(32)`) -- the keyspace is computationally
- * infeasible to brute-force regardless of hash speed. Slow KDFs exist to
- * defend *low-entropy human passwords*; they impose latency on every auth
- * request without adding security for random high-entropy tokens. This
- * implementation is identical to upstream `daytonaio/daytona`'s
- * `apps/api/src/common/utils/api-key.ts` and matches the documented pattern
- * used by Stripe, GitHub, Doppler, and other API-key providers.
- *
- * CodeQL's `js/insufficient-password-hash` traces the random output of
- * `generateApiKeyValue` to this fast hash and (wrongly) labels it a
- * "password"; the suppression below is justified by the entropy argument.
+ * Uses SHA-256 (not a slow KDF like bcrypt/scrypt/argon2) deliberately:
+ * API keys produced by {@link generateApiKeyValue} carry 256 bits of
+ * CSPRNG entropy (`crypto.randomBytes(32)`) -- the keyspace is
+ * computationally infeasible to brute-force regardless of hash speed.
+ * Slow KDFs exist to defend *low-entropy human passwords*; they impose
+ * latency on every auth request without adding security for random
+ * high-entropy tokens. Matches the upstream `daytonaio/daytona`
+ * implementation byte-for-byte and the documented pattern used by
+ * Stripe, GitHub, Doppler, and other API-key providers.
  */
-// codeql[js/insufficient-password-hash]
 export function generateApiKeyHash(value: string): string {
   return crypto.createHash('sha256').update(value).digest('hex')
 }

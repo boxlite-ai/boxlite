@@ -38,14 +38,6 @@ export class ApiKeyService {
     return value.slice(-3)
   }
 
-  // User dashboard keys: env-split class from the deployment mode; the brand
-  // prefix is operator-overridable via API_KEY_PREFIX (default `blk`).
-  private mintApiKeyValue(): string {
-    const prefix = this.configService.getOrThrow('apiKey.prefix')
-    const keyClass = this.configService.get('production') ? 'live' : 'test'
-    return generateApiKeyValue(prefix, keyClass)
-  }
-
   async createApiKey(
     organizationId: string,
     userId: string,
@@ -59,7 +51,14 @@ export class ApiKeyService {
       throw new ConflictException('API key with this name already exists')
     }
 
-    const value = apiKeyValue || this.mintApiKeyValue()
+    // User dashboard keys: env-split class from the deployment mode; the
+    // brand prefix is operator-overridable via API_KEY_PREFIX (default `blk`).
+    const value =
+      apiKeyValue ||
+      generateApiKeyValue(
+        this.configService.getOrThrow('apiKey.prefix'),
+        this.configService.get('production') ? 'live' : 'test',
+      )
 
     const apiKey = await this.apiKeyRepository.save({
       organizationId,
