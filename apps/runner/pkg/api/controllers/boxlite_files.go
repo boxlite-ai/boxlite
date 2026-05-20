@@ -14,6 +14,19 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// BoxliteFileUpload streams a single file's raw bytes from the request
+// body into a path inside the box.
+//
+//	@Summary	Upload a file to a box
+//	@Tags		boxlite
+//	@Accept		application/octet-stream
+//	@Produce	json
+//	@Param		boxId	path	string	true	"Box ID"
+//	@Param		path	query	string	true	"Destination path inside the box"
+//	@Success	204
+//	@Failure	400	{object}	map[string]string	"bad request"
+//	@Failure	500	{object}	map[string]string	"internal error"
+//	@Router		/v1/boxes/{boxId}/files [put]
 func BoxliteFileUpload(ctx *gin.Context) {
 	r, err := runner.GetInstance(nil)
 	if err != nil {
@@ -50,6 +63,18 @@ func BoxliteFileUpload(ctx *gin.Context) {
 	ctx.Status(http.StatusNoContent)
 }
 
+// BoxliteFileDownload reads a path out of the box and streams it back as
+// a tar archive.
+//
+//	@Summary	Download a file or directory from a box as a tar stream
+//	@Tags		boxlite
+//	@Produce	application/x-tar
+//	@Param		boxId	path		string				true	"Box ID"
+//	@Param		path	query		string				true	"Source path inside the box"
+//	@Success	200		{string}	binary				"tar archive of the requested path"
+//	@Failure	400		{object}	map[string]string	"bad request"
+//	@Failure	500		{object}	map[string]string	"internal error"
+//	@Router		/v1/boxes/{boxId}/files [get]
 func BoxliteFileDownload(ctx *gin.Context) {
 	r, err := runner.GetInstance(nil)
 	if err != nil {
@@ -127,6 +152,26 @@ type stagedBulkUpload struct {
 // apps/daemon/pkg/toolbox/fs/upload_files.go and the Daytona endpoint
 // it was modelled on (proxy.app.daytona.io/toolbox/{id}/files/bulk-upload),
 // the original motivation being "hundreds of small files at sandbox init".
+//
+//	@Summary		Bulk-upload many files to a box in one multipart request
+//	@Description	Accepts a multipart/form-data body where each file is described
+//	@Description	by a pair of form fields: files[N].path (string destination
+//	@Description	inside the box) followed by files[N].file (binary contents).
+//	@Description	The .path part must precede its matching .file part. Per-file
+//	@Description	errors are collected rather than aborting the batch: a 400 is
+//	@Description	returned with both the uploaded list and the errors list when
+//	@Description	any file fails; a 200 with only the uploaded list is returned
+//	@Description	on full success.
+//	@Tags			boxlite
+//	@Accept			multipart/form-data
+//	@Produce		json
+//	@Param			boxId			path		string				true	"Box ID"
+//	@Param			files[N].path	formData	string				true	"Destination path inside the box for file index N"
+//	@Param			files[N].file	formData	file				true	"File contents for file index N"
+//	@Success		200				{object}	map[string][]string	"{ uploaded: [destPath, ...] }"
+//	@Failure		400				{object}	map[string][]string	"{ uploaded: [destPath, ...], errors: [perFileError, ...] }"
+//	@Failure		500				{object}	map[string]string	"runner singleton failure"
+//	@Router			/v1/boxes/{boxId}/files/bulk-upload [post]
 func BoxliteFilesBulkUpload(ctx *gin.Context) {
 	boxId := ctx.Param("boxId")
 	if boxId == "" {
