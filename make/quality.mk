@@ -1,4 +1,4 @@
-PHONY_TARGETS += fmt lint clippy lint\:yarn-lock
+PHONY_TARGETS += fmt lint clippy lint\:apps fmt\:apps fmt\:check\:apps
 
 # Smart format: only format changed components.
 fmt:
@@ -18,6 +18,7 @@ fmt\:all:
 	@$(MAKE) fmt:node
 	@$(MAKE) fmt:c
 	@$(MAKE) fmt:go
+	@$(MAKE) fmt:apps
 	@echo "✅ Formatting complete"
 
 # Smart format check: only check changed components.
@@ -38,6 +39,7 @@ fmt\:check\:all:
 	@$(MAKE) fmt:check:node
 	@$(MAKE) fmt:check:c
 	@$(MAKE) fmt:check:go
+	@$(MAKE) fmt:check:apps
 	@echo "✅ Formatting checks passed"
 
 fmt\:rust:
@@ -88,6 +90,18 @@ fmt\:check\:c:
 	fi; \
 	"$$CLANG_FORMAT" --dry-run --Werror sdks/c/tests/*.c
 
+# Format the apps/ workspace via the repo's own blessed script
+# (nx run-many format + prettier + markdownlint + format:py).
+fmt\:apps: _ensure-apps-deps
+	@echo "🔧 Formatting apps workspace..."
+	@cd apps && yarn format
+
+# apps/ has no `format:check` script; prettier --check over the same TS globs
+# `lint:ts` uses is the check counterpart.
+fmt\:check\:apps: _ensure-apps-deps
+	@echo "🔍 Checking apps workspace formatting..."
+	@cd apps && yarn prettier --check "{apps,libs,test}/**/*.{ts,tsx}"
+
 # Smart lint: only lint changed components.
 lint:
 ifeq ($(FMT_COMPONENTS),)
@@ -106,6 +120,7 @@ lint\:all:
 	@$(MAKE) lint:node
 	@$(MAKE) lint:c
 	@$(MAKE) lint:go
+	@$(MAKE) lint:apps
 	@echo "✅ Lint checks passed"
 
 # Safe autofix path: format first, fix Python lint, then verify all lint checks.
@@ -117,15 +132,12 @@ lint\:fix:
 	fi
 	@$(MAKE) lint
 
-# Verify apps/yarn.lock is in sync with apps/package.json. apps/yarn.lock is
-# gitignored, so this guards the developer's local working tree — which is
-# what `sst deploy` Docker-COPYs at build time. Mirrors the --immutable flag
-# the Dockerfile itself uses, so a local pass means the Docker yarn install
-# will also pass.
-lint\:yarn-lock:
-	@echo "📋 Checking apps/yarn.lock is in sync with apps/package.json..."
-	@cd apps && yarn install --immutable
-	@echo "✅ apps/yarn.lock is in sync"
+# Lint the apps/ workspace TypeScript via the repo's own blessed script
+# (eslint "{apps,libs,test}/**/*.{ts,tsx}").
+lint\:apps: _ensure-apps-deps
+	@echo "🔍 Linting apps workspace (TypeScript)..."
+	@cd apps && yarn lint:ts
+	@echo "✅ apps workspace lint passed"
 
 lint\:rust:
 	@$(MAKE) clippy
