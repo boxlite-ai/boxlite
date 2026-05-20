@@ -14,7 +14,7 @@ from .config import InfraConfig
 from .doctor import doctor, format_report
 from .orchestrator import down, ps, up
 from .services import SERVICES
-from .types import DoctorError, Severity
+from .types import DoctorError
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -24,7 +24,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    p_doctor = sub.add_parser("doctor", help="Run preflight checks.")  # noqa: F841
+    sub.add_parser("doctor", help="Run preflight checks.")
 
     p_up = sub.add_parser("up", help="Bring services up.")
     p_up.add_argument("services", nargs="*", help="Subset of services (default: all)")
@@ -34,7 +34,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_down.add_argument("services", nargs="*", help="Subset of services (default: all)")
     p_down.add_argument("--wipe", action="store_true", help="Also remove the data dir")
 
-    p_ps = sub.add_parser("ps", help="List boxlite-local-* boxes.")  # noqa: F841
+    sub.add_parser("ps", help="List boxlite-local-* boxes.")
 
     return parser
 
