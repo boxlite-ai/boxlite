@@ -1,15 +1,12 @@
 PHONY_TARGETS += _ensure-python-deps _ensure-node-deps _ensure-apps-deps
 
-# Ensure Python venv exists + workspace-level lint tool (pylint). pylint is
-# invoked by `apps/package.json`'s `lint:py` script via the `lint:apps`
-# pipeline and must be on PATH through an activated venv.
+# Ensure Python venv exists (lightweight, no package install).
 _ensure-python-deps:
 	@if [ ! -d .venv ]; then \
 		echo "📦 Creating virtual environment..."; \
 		python3 -m venv .venv || { echo "❌ Failed to create virtual environment"; exit 1; }; \
 	fi
 	@. .venv/bin/activate && pip install -q uv && (cd sdks/python && uv pip install --group dev --group sync)
-	@. .venv/bin/activate && pip install -q pylint
 
 # Ensure Node SDK dependencies are installed (lightweight, no build).
 _ensure-node-deps:
