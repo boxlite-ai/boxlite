@@ -46,6 +46,11 @@ def _box_name(service_name: str) -> str:
 
 def build_box_options(spec: ServiceSpec, config: InfraConfig):
     """Pure transform: ServiceSpec + InfraConfig → BoxOptions."""
+    return _build_box_options_with_volumes(spec, config, spec.volumes(config))
+
+
+def _build_box_options_with_volumes(spec: ServiceSpec, config: InfraConfig, volumes):
+    """Same as build_box_options but accepts a pre-computed volumes list to avoid double-evaluation."""
     try:
         from boxlite import BoxOptions
     except ImportError:
@@ -58,9 +63,10 @@ def build_box_options(spec: ServiceSpec, config: InfraConfig):
         auto_remove=spec.auto_remove,
         detach=True,
         ports=spec.ports,
-        volumes=spec.volumes(config),
+        volumes=volumes,
         env=list(spec.env(config).items()),
         cmd=spec.cmd,
+        working_dir=spec.working_dir,
     )
 
 
@@ -74,11 +80,17 @@ def _get_runtime():
 
 async def start_service(runtime, spec: ServiceSpec, config: InfraConfig) -> None:
     name = _box_name(spec.name)
-    opts = build_box_options(spec, config)
+    volumes = spec.volumes(config)
+    opts = _build_box_options_with_volumes(spec, config, volumes)
     config.data_dir.mkdir(parents=True, exist_ok=True)
-    for host_path, _ in spec.volumes(config):
-        # ensure mount source exists so the box doesn't fail to start
-        Path(host_path).mkdir(parents=True, exist_ok=True)
+    for host_path, _ in volumes:
+        p = Path(host_path)
+        # Heuristic: only auto-create directory mounts. Paths with a suffix
+        # (e.g. config.toml) are likely files — caller is responsible for them.
+        # TODO: extend ServiceSpec.volumes to carry mount-type metadata when a
+        # service needs file mounts.
+        if not p.suffix:
+            p.mkdir(parents=True, exist_ok=True)
     box, created = await runtime.get_or_create(opts, name=name)
     if created:
         await box.start()
@@ -125,7 +137,12 @@ async def wait_healthy(box, hc: HealthCheck, *, label: str) -> None:
     cmd, *args = hc.exec
     start = time.monotonic()
     for attempt in range(1, hc.retries + 1):
-        rc, _out, _err = await exec_collect(box, cmd, args)
+        try:
+            rc, _out, _err = await asyncio.wait_for(
+                exec_collect(box, cmd, args), timeout=hc.timeout_s
+            )
+        except asyncio.TimeoutError:
+            rc = -1  # treat as failed probe; continue retry loop
         if rc == 0:
             print(f"  {label}: healthy after {attempt} attempt(s), {time.monotonic() - start:.1f}s")
             return

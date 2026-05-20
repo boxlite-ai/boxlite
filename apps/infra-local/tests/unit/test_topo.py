@@ -45,9 +45,14 @@ def test_diamond_dependency_layered():
 
 
 def test_cycle_raises():
+    import graphlib
     services = {
         "a": _spec("a", depends_on=["b"]),
         "b": _spec("b", depends_on=["a"]),
     }
-    with pytest.raises(Exception):
+    with pytest.raises(graphlib.CycleError):
         topo_sort(services)
+
+
+def test_empty_services_returns_empty_layers():
+    assert topo_sort({}) == []
