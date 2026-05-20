@@ -8,9 +8,10 @@ sessions.
 ## Quick Start
 
 ```bash
-boxlite serve                      # listen on 0.0.0.0:8100
+boxlite serve                      # listen on 0.0.0.0:8100 (permissive)
 boxlite serve --port 9090          # custom port
 boxlite serve --host 127.0.0.1    # bind localhost only
+boxlite serve --api-key dev-key    # require Bearer dev-key (else 401)
 ```
 
 Ctrl-C triggers graceful shutdown (`runtime.shutdown` with a 10 s timeout).
@@ -68,7 +69,7 @@ execute(ServeArgs, GlobalFlags)
 │  │  └──────────────────────────────────────────────┘ │  │
 │  └──────────────────────────────────────────────────┘  │
 │                                                        │
-│  Handlers:  auth · config · boxes · executions         │
+│  Handlers:  config · boxes · executions                │
 │             files · metrics · snapshots · advanced     │
 │                                                        │
 │  Background:  reaper_loop  (orphan cleanup)            │
@@ -89,8 +90,8 @@ registry.
 
 | Module       | File                     | Purpose                                                       |
 |--------------|--------------------------|---------------------------------------------------------------|
-| `auth`       | `handlers/auth.rs`       | OAuth2 token endpoint (local passthrough, always succeeds)    |
 | `config`     | `handlers/config.rs`     | Capability discovery (snapshots, clone, export, import)       |
+| `me`         | `handlers/me.rs`         | Identity of the calling credential (`GET /v1/me`)             |
 | `boxes`      | `handlers/boxes.rs`      | Box CRUD: create, list, get, head, start, stop, remove        |
 | `executions` | `handlers/executions.rs` | Lifecycle: start, status, signal, kill, resize, attach        |
 | `files`      | `handlers/files.rs`      | Tar-based file upload / download into / from boxes            |
@@ -106,8 +107,13 @@ All paths are relative to the server root (e.g. `http://localhost:8100`).
 
 | Method | Path                 | Handler               | Description                        |
 |--------|----------------------|-----------------------|------------------------------------|
-| POST   | `/v1/oauth/tokens`   | `auth::oauth_token`   | Get bearer token (always succeeds) |
-| GET    | `/v1/config`         | `config::get_config`  | Capability discovery               |
+| GET    | `/v1/config`         | `config::get_config`  | Capability discovery (always public) |
+| GET    | `/v1/me`             | `me::get_me`          | Identity of the calling credential |
+
+**Auth.** With `--api-key <KEY>` (or `$BOXLITE_SERVE_API_KEY`) set, every
+route except `GET /v1/config` requires `Authorization: Bearer <KEY>`
+(constant-time match) and returns `401` otherwise. Without it the server is
+permissive (accepts any/no bearer) — the zero-config local-dev default.
 
 ### Box CRUD & Lifecycle
 

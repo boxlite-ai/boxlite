@@ -10,7 +10,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
+use axum::extract::{Request, State};
 use axum::http::StatusCode;
+use axum::http::header::AUTHORIZATION;
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
@@ -42,6 +45,13 @@ pub struct ServeArgs {
     /// Host/address to bind to. Defaults to `LOCAL_SERVE_HOST`.
     #[arg(long, default_value_t = LOCAL_SERVE_HOST.to_string())]
     pub host: String,
+
+    /// Optional expected API key. When set, every route except
+    /// `GET /v1/config` requires `Authorization: Bearer <this>` (constant-time
+    /// match) and returns 401 otherwise. Unset = permissive (accepts any/no
+    /// bearer) — the zero-config local-dev default.
+    #[arg(long, env = "BOXLITE_SERVE_API_KEY")]
+    pub api_key: Option<String>,
 }
 
 // ============================================================================
@@ -56,6 +66,9 @@ struct AppState {
     /// `Arc` so attach sessions can drop the map lock before doing
     /// long-running WS pumping while keeping the exec alive.
     executions: RwLock<HashMap<String, Arc<ActiveExecution>>>,
+    /// Optional expected API key (`--api-key` / `$BOXLITE_SERVE_API_KEY`).
+    /// `None` ⇒ permissive (no auth enforced).
+    api_key: Option<String>,
 }
 
 /// Server-side state for one execution. The underlying `Execution`'s
@@ -706,6 +719,58 @@ fn classify_boxlite_error(err: &boxlite::BoxliteError) -> (StatusCode, &'static 
     }
 }
 
+/// Pure auth decision (unit-tested). `true` = allow. `expected == None` ⇒
+/// permissive (no key configured). `GET /v1/config` is always public
+/// (pre-auth capability discovery). Otherwise the presented bearer must
+/// match `expected` (constant-time).
+fn auth_allows(expected: Option<&str>, path: &str, bearer: Option<&str>) -> bool {
+    let Some(expected) = expected else {
+        return true;
+    };
+    if path == "/v1/config" {
+        return true;
+    }
+    match bearer {
+        Some(tok) => constant_time_eq(tok.as_bytes(), expected.as_bytes()),
+        None => false,
+    }
+}
+
+/// Auth middleware: thin axum adapter over [`auth_allows`]. 401 in the
+/// standard error shape when denied.
+async fn require_api_key(State(state): State<Arc<AppState>>, req: Request, next: Next) -> Response {
+    let bearer = req
+        .headers()
+        .get(AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| {
+            v.strip_prefix("Bearer ")
+                .or_else(|| v.strip_prefix("bearer "))
+        });
+    if auth_allows(state.api_key.as_deref(), req.uri().path(), bearer) {
+        next.run(req).await
+    } else {
+        error_response(
+            StatusCode::UNAUTHORIZED,
+            "invalid or missing API key",
+            "AuthError",
+        )
+    }
+}
+
+/// Length-checked constant-time byte compare — avoids a timing oracle on the
+/// configured token without pulling in a crate.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
 // ============================================================================
 // Box Handle Cache Helper
 // ============================================================================
@@ -823,6 +888,10 @@ fn build_router(state: Arc<AppState>) -> Router {
             "/v1/default/boxes/{box_id}/export",
             post(advanced::export_box),
         )
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_api_key,
+        ))
         .with_state(state)
 }
 
@@ -837,6 +906,7 @@ pub async fn execute(args: ServeArgs, global: &GlobalFlags) -> anyhow::Result<()
         runtime,
         boxes: RwLock::new(HashMap::new()),
         executions: RwLock::new(HashMap::new()),
+        api_key: args.api_key.clone(),
     });
 
     // Phase 5.7: spawn the orphan reaper. Same escalation policy as the
@@ -868,6 +938,35 @@ pub async fn execute(args: ServeArgs, global: &GlobalFlags) -> anyhow::Result<()
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    // --- API-key auth decision (pure; no runtime/network needed) ---
+
+    #[test]
+    fn auth_allows_permissive_when_no_key() {
+        assert!(auth_allows(None, "/v1/default/boxes", None));
+        assert!(auth_allows(None, "/v1/me", Some("anything")));
+    }
+
+    #[test]
+    fn auth_allows_config_public_even_with_key() {
+        assert!(auth_allows(Some("k"), "/v1/config", None));
+    }
+
+    #[test]
+    fn auth_allows_requires_exact_bearer_when_key_set() {
+        assert!(auth_allows(Some("k"), "/v1/me", Some("k")));
+        assert!(!auth_allows(Some("k"), "/v1/me", Some("wrong")));
+        assert!(!auth_allows(Some("k"), "/v1/me", None));
+        assert!(!auth_allows(Some("k"), "/v1/default/boxes", Some("")));
+    }
+
+    #[test]
+    fn constant_time_eq_basic() {
+        assert!(constant_time_eq(b"abc", b"abc"));
+        assert!(!constant_time_eq(b"abc", b"abd"));
+        assert!(!constant_time_eq(b"abc", b"abcd"));
+        assert!(constant_time_eq(b"", b""));
+    }
 
     /// Build an `ActiveExecution` backed by a stub `Execution` whose
     /// stdout/stderr/result channels we control from the test.
