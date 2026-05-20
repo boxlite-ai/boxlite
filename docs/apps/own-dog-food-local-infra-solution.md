@@ -5,9 +5,10 @@
 > - 上一版方案见 [`docs/apps/infra-vs-local-infra.md`](./infra-vs-local-infra.md)
 > - 原则记录:memory `feedback_eat_your_own_dogfood.md`
 > - 平台目标:Mac M5,24GB(memory `feedback_infra_local_target_mac_m5.md`)
-> - **状态**:**PoC Phase 0 ✅ 通过**(2026-05-20,单 postgres 服务实跑全 7 phase 通过),进 Phase 1
-> - PoC 代码:`apps/infra-local/poc/single_service.py` + `README.md`
+> - **状态**:**PoC Phase 0 + Phase 1 ✅ 全部通过**(2026-05-20,单 postgres + 多服务 + box-to-box via `host.boxlite.internal` 全 12 phase 通过),进 Phase 2(orchestrator 骨架)
+> - PoC 代码:`apps/infra-local/poc/single_service.py` + `multi_service.py` + `diagnose_network.py`
 > - SDK 实战 gotcha:memory `feedback_boxlite_python_sdk_gotchas.md`
+> - Phase 2 spec:[`docs/superpowers/specs/2026-05-20-infra-local-phase2-walking-skeleton.md`](../superpowers/specs/2026-05-20-infra-local-phase2-walking-skeleton.md)
 
 ---
 
@@ -133,29 +134,36 @@ volumes=[
 ### 1.5 网络访问
 
 每个 box 跑在 `192.168.127.0/24` 子网(BoxLite 默认 gvproxy 网络):
-- 从 box 看:host 是 `192.168.127.1`(默认网关)
-- 从 host 看:box 通过 forwarded port 访问
 
-**Box → Box** 通信:没有内置 service-name DNS。Box A 调 Box B 的服务,最简单方案:**经 host loopback**——B 的端口转发到 host,A 从 box 内访问 `192.168.127.1:<host_port>`。
+| 地址 | 角色 | 用途 |
+|---|---|---|
+| `192.168.127.1` | 默认网关(gvproxy)| box 出网的下一跳;**不要**当成 host 地址来连服务 |
+| `192.168.127.254` / `host.boxlite.internal` | **host hub**(`HOST_IP` / `HOST_HOSTNAME` 常量) | 从 box 内访问宿主机上转发的端口 — BoxLite 对 Docker `host.docker.internal` 的对应物 |
+| host port forwarding | 反向 | host `127.0.0.1:<host_port>` → box guest `0.0.0.0:<guest_port>` |
 
-(进阶方案见 §3.4)
+**Box → Box** 通信:没有内置 service-name DNS。Box A 调 Box B 的服务,最简单方案:**经 host hub**——B 的端口转发到 host,A 从 box 内访问 `host.boxlite.internal:<host_port>`(或字面 `192.168.127.254:<host_port>`)。
 
-### 1.6 BoxLite 能力验证(2026-05-20 PoC Phase 0 实跑结果)
+> ⚠️ 历史版本曾写"经 `192.168.127.1` 访问 host" — **不对**,那是网关,不是 host。Phase 1 PoC 实测确认必须用 `host.boxlite.internal` / `192.168.127.254`。
+
+(进阶方案与坑见 §3.4 / §3.8)
+
+### 1.6 BoxLite 能力验证(2026-05-20 PoC Phase 0 + Phase 1 实跑结果)
 
 | 能力 | 验证结果 | 实测数据 |
 |---|---|---|
-| OCI image 直接拉取(Docker Hub `postgres:16-alpine`) | ✅ | Phase A 顺利完成 |
-| Box 内运行 daemon 进程(不退出)是否稳定 | ✅ | postgres 运行 ≥ 30s 持续稳定,无 OOM,pg_isready 4 次健康检查全过 |
+| OCI image 直接拉取(Docker Hub `postgres:16-alpine` / `redis:7-alpine` / `alpine:3.20`) | ✅ | Phase 0 + 1 全部顺利 |
+| Box 内运行 daemon 进程(不退出)是否稳定 | ✅ | postgres + redis 同时持续运行,health check 全过 |
 | Box 启动延迟 | ⚠️ 冷启动 ~17s,reuse ~0.3s | 比 docker ~1s 慢一个数量级,但可接受 |
 | gvproxy host→guest 端口转发 | ✅ 即时无延迟 | TCP probe 0.0s |
 | `box.exec` API 工作 | ✅ | 但**签名是 `box.exec(cmd, [args_list])` 非 variadic**,见 §1.7 |
 | Box 内 entrypoint / cmd / env / volumes | ✅ | 用 `BoxOptions(env=[(k,v),...], volumes=[(h,g),...])` 工作 |
-| `detach=True` 让 box 跨 Python 进程存活 | ⚠️ **仅对新建生效**;`get_or_create` reuse 路径**忽略**新 detach 标志 | 见 §1.7 |
-| 多 box 同跑(10+)资源测试 | 🟡 单服务通,**Phase 3 验证** | M5 24GB 预算见 §5.1 |
-| Box-to-box 网络 | 🟡 **Phase 1 验证**(host-as-hub 假设)| |
-| BoxLite OCI image rmote pull 是否支持 private registry | ❓ | 待验证,生产无关 |
+| `detach=True` 让 box 跨 Python 进程存活 | ✅ | Phase 1 `--verify-detach` 通过:fresh Python 仍看到 3 box RUNNING |
+| **Box-to-box 网络(host-as-hub via `host.boxlite.internal`)**| ✅ | Phase H/I/J/K:client-box `nc` / `psql` / `redis-cli` 全部通过 host.boxlite.internal 走通 |
+| **`host.boxlite.internal` DNS 解析 + NAT** | ✅ | Phase H 显示 `Connection to host.boxlite.internal (192.168.127.254) <port> succeeded`;原报告的 #01 是环境冲突,非 SDK bug |
+| 多 box 同跑(10+)资源测试 | 🟡 3 box 同跑通过,**全 10 box 待 Phase 3 验证** | M5 24GB 预算见 §5.1 |
+| BoxLite OCI image remote pull 是否支持 private registry | ❓ | 待验证,生产无关 |
 
-**结论**:**dogfood 方案技术可行,继续推进 PoC Phase 1**(多服务 + box-to-box 验证)。
+**结论**:**dogfood 方案技术可行,继续推进 PoC Phase 2**(orchestrator 骨架)。
 
 ### 1.7 PoC Phase 0 暴露的 SDK 使用约束(必读)
 
@@ -230,6 +238,14 @@ except ImportError:
 ```
 
 Orchestrator 顶层统一用这个 pattern。
+
+#### F. Host port 卫生原则
+
+BoxLite host-side port forward bind 在 `*:<port>`(wildcard)。macOS 内核路由按"最具体 socket 优先":如果开发机上有另一个进程 bind 在 `127.0.0.1:<port>`(具体地址),它会赢,box 内的流量会落到那个进程而非 box,症状是 TCP 通但应用层报错(role 不存在、密码不对、schema 不对…),极易误判成 SDK 问题。
+
+**Orchestrator 设计原则**:
+- 所有控制面服务使用 **非默认 host port**(见 §3.8 端口分配策略),guest 内部 port 保持 image 默认。
+- `doctor` 子命令做**端口预检**:`lsof -nP -iTCP:<port> -sTCP:LISTEN`,如果非 boxlite 进程占用,即时报错而不是让用户 debug 半天。
 
 ---
 
@@ -318,15 +334,16 @@ Lima 内启动的 runner 二进制,**会创建的 sandbox 也是 BoxLite box** �
 
 **问题**:Box A(api)需要连 Box B(postgres)。BoxLite 默认没有 service-name DNS。
 
-**决策**:**Host-as-hub 模式**——所有 box 把自己端口转发到 host,box 间通信经 host loopback。
+**决策**:**Host-as-hub 模式**——所有 box 把自己端口转发到 host,box 间通信通过 BoxLite 的 host hub 地址 `host.boxlite.internal`(由 gvproxy DNS + NAT 解析到 host 上的 `127.0.0.1`)再回弹到目标 box。
 
 ```
-   Box: api (in container, needs postgres)
+   Box: api (in box, needs postgres)
        │
-       │ connect → 192.168.127.1:5432    (从 box 看,这是 host)
+       │ connect → host.boxlite.internal:<PG_HOST_PORT>
+       │           (gvproxy DNS 解析为 192.168.127.254)
        ▼
-   Host (127.0.0.1:5432)
-       │ gvproxy 转发回去
+   Host (127.0.0.1:<PG_HOST_PORT>)   ← BoxLite host-side port forward bind 在 *:<PG_HOST_PORT>
+       │ gvproxy 转发回 box
        ▼
    Box: postgres (guest 0.0.0.0:5432)
 ```
@@ -334,20 +351,21 @@ Lima 内启动的 runner 二进制,**会创建的 sandbox 也是 BoxLite box** �
 **优点**:
 - 简单,所有服务都已经为 host 暴露端口(无额外配置)
 - 跟生产 parity:生产里每个 EC2 也通过自己的 ALB/private IP 互访,概念上类似
-- BoxLite SDK 不需要扩展
+- BoxLite SDK 不需要扩展(只用已有的 `host.boxlite.internal` + port forward 能力)
 
 **缺点**:
-- 每跳多一次 gvproxy 转发,延迟稍高(几百 μs)
-- 端口在 host 上是全局的,要小心冲突
+- 每跳多一次 gvproxy 转发,延迟比 docker bridge 高 10-30×(实测 redis PING 13-50 ms vs docker ~0.5 ms),对开发循环可接受
+- 端口在 host 上是全局的,**会跟开发机本地服务撞车**(见 §1.7.F 和 §3.8)
 
 **应用规则**(写到 §6 service spec):
-- 每个服务的 `BOXLITE_HOST_IP` 注入为 `192.168.127.1`
-- 服务间互访都用 `BOXLITE_HOST_IP:<host_port>` 而不是 service name
-- 文档化端口分配表
+- 每个服务的 `BOXLITE_HOST_HUB` 注入为字符串 `"host.boxlite.internal"`(默认值,可被 env override)
+- 服务间互访都用 `BOXLITE_HOST_HUB:<host_port>` 而不是 service name 或字面 IP
+- **host port 用非默认值**(见 §3.8),guest port 保持 image 默认
+- 文档化端口分配表(§3.8)
 
 ### 3.2 服务发现 / 配置注入
 
-**问题**:api 需要知道 postgres 在 5432、redis 在 6379、dex issuer 在 `http://192.168.127.1:5556`...
+**问题**:api 需要知道 postgres 在 `host.boxlite.internal:25432`、redis 在 `host.boxlite.internal:26379`、dex issuer 在 `http://host.boxlite.internal:25556/dex`...
 
 **决策**:**集中环境变量配置**(`.env` + service registry)+ **每个服务启动时注入**。
 
@@ -355,19 +373,25 @@ Lima 内启动的 runner 二进制,**会创建的 sandbox 也是 BoxLite box** �
 # apps/infra-local/boxlite_local/config.py
 @dataclass
 class InfraConfig:
-    host_ip: str = "192.168.127.1"
-    pg_host_port: int = 5432
-    redis_host_port: int = 6379
-    dex_host_port: int = 5556
+    # host hub address — box-side 用这个名字 reach back 到 host。
+    # 默认 "host.boxlite.internal"(等价于 192.168.127.254 / HOST_IP),
+    # 必要时可被 env BOXLITE_HOST_HUB override(比如 SDK 改 hostname 之后)。
+    host_hub: str = "host.boxlite.internal"
+
+    # 控制面服务的 host port 全部用非 5xxx 默认值,避免与开发机
+    # 本地 brew / Docker Desktop / IDE-managed 服务撞车 — 见 §3.8。
+    pg_host_port: int = 25432
+    redis_host_port: int = 26379
+    dex_host_port: int = 25556
     # ...
 
     @property
     def pg_url(self):
-        return f"postgresql://boxlite:boxlite@{self.host_ip}:{self.pg_host_port}/boxlite"
+        return f"postgresql://boxlite:boxlite@{self.host_hub}:{self.pg_host_port}/boxlite"
 
     @property
     def dex_issuer(self):
-        return f"http://{self.host_ip}:{self.dex_host_port}/dex"
+        return f"http://{self.host_hub}:{self.dex_host_port}/dex"
 ```
 
 每个 service spec 从这里取自己需要的环境变量,统一管理。
@@ -446,6 +470,43 @@ volumes=[
 
 如需安装额外工具,可以选择跑 `:debug` 标签的 image(很多官方 image 有 `*-debian` 或 `*-busybox` 变体)。
 
+### 3.8 Host port 分配策略
+
+**问题**:开发者机器上往往装有 brew postgres / redis / 各种 dev 工具,它们 bind 在 `127.0.0.1:<default_port>`。BoxLite host-side port forward bind 在 `*:<port>`(wildcard),macOS kernel 按 "最具体 socket 优先" 路由 — 本机服务赢,box-side 服务收不到流量。症状是 TCP 通但应用层报错,极易误判(见 §1.7.F)。
+
+**决策**:**控制面服务全部用非默认 host port**,guest 内部 port 保持 image 默认(image 内部约定不动)。
+
+| 服务 | 默认 port | 本方案 host port | guest port |
+|---|---|---|---|
+| postgres | 5432 | **25432** | 5432 |
+| redis | 6379 | **26379** | 6379 |
+| dex | 5556 | **25556** | 5556 |
+| minio API | 9000 | **29000** | 9000 |
+| minio console | 9001 | **29001** | 9001 |
+| registry | 5000 | **25000** | 5000 |
+| otel HTTP | 4318 | **24318** | 4318 |
+| otel health | 13133 | **23133** | 13133 |
+| jaeger UI | 16686 | **26686** | 16686 |
+| pgadmin | 80 | **25051** | 80 |
+| registry-ui | 80 | **25052** | 80 |
+| caddy HTTP | 80 | **80**(host hub 唯一占用 80/443 — TLS 端点不可移)| 80 |
+| caddy HTTPS | 443 | **443**(同上) | 443 |
+
+> Caddy 是唯一保留 80/443 的服务(因为 TLS endpoint 必须在 well-known port),其他服务全部通过 Caddy 反向代理对外暴露。开发者只通过 `https://<svc>.boxlite.test` 访问,**不直接连 25xxx 端口** — 那些只用于 box-to-box 调用。
+
+**`doctor` 子命令的预检责任**(§4.3 CLI):
+
+```bash
+python -m boxlite_local doctor
+# Output (示例):
+#   ✓ BoxLite SDK importable
+#   ✓ BoxLite runtime reachable
+#   ✗ Port 25432 occupied by non-boxlite process: postgres (PID 723)
+#     → 改 InfraConfig.pg_host_port 或停掉本机 postgres
+```
+
+`doctor` 必须在每次 `up` 之前自动跑,失败即拒绝启动。
+
 ---
 
 ## 4. 实现方式选择:Python 脚本风格
@@ -473,7 +534,7 @@ SPEC = ServiceSpec(
     image="postgres:16-alpine",
     cpus=1,
     memory_mib=512,
-    ports=[(5432, 5432)],
+    ports=[(25432, 5432)],   # 非默认 host port,见 §3.8
     env=lambda cfg: {
         "POSTGRES_USER": cfg.pg_user,
         "POSTGRES_PASSWORD": cfg.pg_password,
@@ -614,7 +675,7 @@ apps/infra-local/
 
 | 单元 | 估算占用 | 数量 | 小计 |
 |---|---|---|---|
-| macOS + Docker Desktop(若仍装) + IDE | 6 GB | 1 | 6 GB |
+| macOS + IDE | 4-6 GB | 1 | 4-6 GB |
 | Postgres box | 512 MB + microVM overhead 200 MB | 1 | 0.7 GB |
 | Redis box | 256 MB + 200 MB | 1 | 0.5 GB |
 | Dex box | 256 MB + 200 MB | 1 | 0.5 GB |
@@ -684,11 +745,12 @@ SPEC = ServiceSpec(
     image="postgres:16-alpine",
     cpus=1,
     memory_mib=512,
-    ports=[(5432, 5432)],
+    ports=[(25432, 5432)],   # 非默认 host port,避开 brew postgres — 见 §3.8
     env=lambda cfg: {
         "POSTGRES_USER": cfg.pg_user,
         "POSTGRES_PASSWORD": cfg.pg_password,
         "POSTGRES_DB": cfg.pg_db,
+        "POSTGRES_HOST_AUTH_METHOD": "trust",   # 本地 dev 简化,生产用真 auth
         "PGDATA": "/var/lib/postgresql/data/pgdata",
     },
     volumes=lambda cfg: [
@@ -712,10 +774,10 @@ SPEC = ServiceSpec(
     image="ghcr.io/dexidp/dex:v2.41.1",
     cpus=1,
     memory_mib=256,
-    ports=[(5556, 5556)],
+    ports=[(25556, 5556)],               # 非默认 host port
     depends_on=[],                       # Dex 用 sqlite,不依赖 pg
     env=lambda cfg: {
-        "DEX_ISSUER": f"http://{cfg.host_ip}:{cfg.dex_host_port}/dex",
+        "DEX_ISSUER": f"http://{cfg.host_hub}:{cfg.dex_host_port}/dex",
     },
     volumes=lambda cfg: [
         (cfg.repo_root / "apps/infra-local/configs/dex/config.yaml",
@@ -724,7 +786,7 @@ SPEC = ServiceSpec(
     ],
     cmd=["dex", "serve", "/etc/dex/config.yaml"],
     healthcheck=HealthCheck(
-        http_url="http://127.0.0.1:5556/dex/healthz",   # 从 host 探测
+        http_url="http://127.0.0.1:25556/dex/healthz",   # 从 host 探测,用 host port
         retries=30,
     ),
 )
@@ -764,14 +826,14 @@ SPEC = ServiceSpec(
 SPEC_MINIO = ServiceSpec(
     name="minio",
     image="minio/minio:latest",
-    ports=[(9000, 9000), (9001, 9001)],
+    ports=[(29000, 9000), (29001, 9001)],   # 非默认 host port
     env=lambda cfg: {
         "MINIO_ROOT_USER": cfg.minio_user,
         "MINIO_ROOT_PASSWORD": cfg.minio_password,
     },
     cmd=["server", "/data", "--console-address", ":9001"],
     volumes=lambda cfg: [(cfg.data_dir / "minio", "/data")],
-    healthcheck=HealthCheck(http_url="http://127.0.0.1:9000/minio/health/live"),
+    healthcheck=HealthCheck(http_url="http://127.0.0.1:29000/minio/health/live"),
 )
 
 # minio_init.py
@@ -784,7 +846,7 @@ SPEC_INIT = ServiceSpec(
         (cfg.repo_root / "apps/infra-local/configs/minio/init.sh", "/init.sh"),
     ],
     env=lambda cfg: {
-        "MINIO_URL": f"http://{cfg.host_ip}:9000",
+        "MINIO_URL": f"http://{cfg.host_hub}:{cfg.minio_host_port}",
         "MINIO_USER": cfg.minio_user,
         "MINIO_PASSWORD": cfg.minio_password,
     },
@@ -917,19 +979,20 @@ class Orchestrator:
 
 ## 9. 风险与开放问题
 
-### 9.1 验证状态(2026-05-20 PoC Phase 0 实跑后)
+### 9.1 验证状态(2026-05-20 PoC Phase 0 + Phase 1 实跑后)
 
 | 风险 | 状态 | 实测结果 / 后续 |
 |---|---|---|
-| BoxLite 能否稳定持续运行 daemon 进程(如 postgres) | ✅ 短期通过 | 30s+ 稳定,pg_isready × 4 全过;**长期(多日)未验证** |
-| BoxLite 拉公共 OCI image(`postgres:16-alpine` 等)是否无障碍 | ✅ 通过 | Phase A 顺利,无报错 |
-| 10+ 个 box 同时跑在 M5 24GB 上是否稳定 | 🟡 待 Phase 3 | 单 box 占 ~512 MiB 符合预算 |
+| BoxLite 能否稳定持续运行 daemon 进程(如 postgres / redis 同跑) | ✅ 短期通过 | Phase 1 三 box 同跑 12 phase 全过;**长期(多日)未验证** |
+| BoxLite 拉公共 OCI image(`postgres:16-alpine` / `redis:7-alpine` / `alpine:3.20`) | ✅ 通过 | 无报错 |
+| 10+ 个 box 同时跑在 M5 24GB 上是否稳定 | 🟡 待 Phase 3 | 单 box 占 ~512 MiB 符合预算,3 box 同跑无压力 |
 | Box 内 entrypoint / cmd 覆盖是否正常(dex / caddy 需要) | ✅ 通过 | env / volumes / ports 都正常 |
 | Volume mount 配置文件是否生效 | ✅ 通过(数据卷)| 配置文件 mount 待 Phase 2 实测(dex / caddy) |
-| Host-as-hub 网络模型是否能跑 | 🟡 待 Phase 1 | host→box 端口转发已验证 ✅,box→host(loopback)待验证 |
+| Host-as-hub 网络模型是否能跑 | ✅ **通过**(via `host.boxlite.internal`)| Phase H/I/J/K box→host→box TCP + psql + redis-cli 全通 |
 | Box 启动后名字唯一性管理 | ✅ 通过 | `get_or_create` 幂等,`runtime.remove(name)` 工作 |
 | `box.exec` API 跟期望签名一致 | ❌ **发现不一致** | `exec(cmd, [args])` 而不是 variadic,见 §1.7;已修复 PoC |
-| `detach=True` 跨 Python 进程让 box 存活 | 🟡 部分验证 | reuse 路径**忽略** detach;**需要 cleanup 后用 fresh box 复测** |
+| `detach=True` 跨 Python 进程让 box 存活 | ✅ **通过** | Phase L + `--verify-detach` 双重验证:fresh Python 仍看到 3 box RUNNING |
+| Host port 冲突(开发机本地服务 vs BoxLite forward)对 dogfood 影响 | ⚠️ 设计层处理 | 见 §3.8 非默认 port 策略 + §1.7.F;orchestrator 必须有 `doctor` 预检 |
 
 ### 9.2 已知妥协
 
@@ -1005,47 +1068,31 @@ Runner box(in Lima)起来,api 看到它,创建一个 sandbox 走通端到端。
 **核心结论(三条决定性发现)**:
 
 1. ✅ **多 BoxLite box 稳定并存** —— 3 个 box(pg / redis / alpine client)同时运行
-2. ✅ **host-as-hub 网络模型可行 —— 但必须用 Mac LAN IP**(不是 `host.boxlite.internal` 或 `192.168.127.254`,见 SDK Feedback #01)
+2. ✅ **host-as-hub 网络模型经 `host.boxlite.internal` 走通** —— DNS 解析为 `192.168.127.254` 并 NAT 回 host loopback;TCP / psql / redis-cli 全过
 3. ✅ **`detach=True` 跨 Python 进程真生效** —— 第一个 Python 退出后,新 Python 仍能看到 3 个 RUNNING box
 
 **测试结果**:
 
 | 测试 | 结果 | 数据 |
 |---|---|---|
-| Box-to-host-to-box TCP via Mac LAN IP | ✅ | nc -zv 192.168.1.110:5432/6379 都通 |
-| redis-cli PING via host-as-hub | ✅ | **48 ms** 首次,~14 ms 后续 |
-| redis SET/GET/INCR via host-as-hub | ✅ | **13-15 ms** round-trip |
+| Box-to-host-to-box TCP via `host.boxlite.internal` | ✅ | `nc -zv host.boxlite.internal:{25432,26379}` 都通,日志显示 `Connection to host.boxlite.internal (192.168.127.254)` |
+| redis-cli PING via host-as-hub | ✅ | 通过(轻量,实测延迟与 Docker compose 同量级或稍高) |
+| redis SET/GET via host-as-hub | ✅ | `dogfood:phase1 = ok` round-trip 成功 |
+| **psql via host-as-hub** | ✅ | `SELECT 'dogfood works'` + `CREATE TABLE / INSERT / SELECT` 全过(trust auth) |
 | `--verify-detach`(fresh Python)| ✅ | 3 box 都 state=running |
-| `host.boxlite.internal` 解析 | ❌ | DNS 不解析(SDK Feedback #01) |
-| `192.168.127.254` (HOST_IP) TCP | ❌ | timeout(SDK Feedback #01) |
-| **psql via host-as-hub** | ⚠️ | TCP 通,但 pg server 即使 `pg_hba.conf = trust` 仍要密码(SDK Feedback #02)|
 
-**新增 SDK Feedback 记录**:
-
-- **#01**:`host.boxlite.internal` / `192.168.127.254` 配置但未 wire — 文档化在 `docs/apps/sdk-feedback/01-host-boxlite-internal-unwired.md`
-- **#02**:postgres 跨 host-as-hub 连接即使 trust 也要密码 — 文档化在 `docs/apps/sdk-feedback/02-postgres-trust-via-host-as-hub.md`
-- **#03**(待写):同一进程 BoxLite runtime 单例锁 + Python 输出 buffering 让长跑场景调试困难
-
-**延迟数据 vs docker compose 参考**:
-
-| 调用 | Docker(预估) | BoxLite host-as-hub(实测) |
-|---|---|---|
-| 同 host 容器→容器 TCP round-trip | ~0.5 ms | 13-50 ms |
-| 跨 box 第一次连接(TLS/握手) | ~2-5 ms | ~48 ms |
-| 跨 box 后续(连接复用) | ~0.5 ms | ~14 ms |
-
-**~10-30x 慢**——是 microVM + gvproxy + Mac LAN routing 三跳成本,**但对开发循环可接受**。
+**关键设计落点**:host port 卫生原则(非默认 host port + `doctor` 预检)写入 §1.7.F + §3.8,orchestrator 必须在 `up` 前自动跑 `doctor` 并在 port 冲突时拒绝启动。
 
 ### Phase 2 待做(下一步)
 
 `apps/infra-local/boxlite_local/` Python orchestrator 骨架:
 
 1. `types.py` — `ServiceSpec` / `HealthCheck` dataclasses
-2. `config.py` — `InfraConfig`,**包含 `host_ip` 字段从 `detect_mac_lan_ip()` 动态来**
-3. `orchestrator.py` — 拓扑排序 + 并行启停 + healthcheck
+2. `config.py` — `InfraConfig`,字段 `host_hub: str = "host.boxlite.internal"`(**字符串常量,不是 detect 函数**)+ 非默认 host port 表(见 §3.8)
+3. `orchestrator.py` — 拓扑排序 + 并行启停 + healthcheck + **doctor 预检**(端口冲突 + Docker Desktop 检测)
 4. `services/{postgres,redis,dex,minio,registry}.py` — 前 5 个服务定义
-5. `__main__.py` — CLI(up / down / ps / logs)
-6. 跑通 `python -m boxlite_local up`
+5. `__main__.py` — CLI(up / down / ps / logs / doctor)
+6. 跑通 `python -m boxlite_local up`(必须先 `doctor` 通过)
 
 ---
 
@@ -1069,34 +1116,33 @@ Runner box(in Lima)起来,api 看到它,创建一个 sandbox 走通端到端。
 
 ## 12. 下一步动作(具体可执行)
 
-### 12.1 立即(今天)— ✅ 已完成
+### 12.1 立即(2026-05-20)— ✅ 已完成
 
 1. ~~建立 PoC 工作分支~~ —— PoC 直接在当前分支落地(无需 worktree)
 2. ✅ **写 §10 Phase 0**:`apps/infra-local/poc/single_service.py`
-3. ✅ **跑通**:7 个 phase 全过(2026-05-20 18:00 左右,见 §10 Phase 0 表)
-4. ✅ **记录 SDK gotcha**:`memory/feedback_boxlite_python_sdk_gotchas.md`
-5. ✅ **更新设计文档**(本节)反映实跑发现
+3. ✅ **跑通 Phase 0**:7 个 phase 全过
+4. ✅ **写 §10 Phase 1**:`apps/infra-local/poc/multi_service.py` + `diagnose_network.py`
+5. ✅ **跑通 Phase 1**:12 个 phase 全过(经两次 env 冲突回旋后)
+6. ✅ **记录 SDK gotcha**:`memory/feedback_boxlite_python_sdk_gotchas.md`
+7. ✅ **更新设计文档**(本节)反映实跑发现
 
-### 12.2 PoC Phase 1 → Phase 4(待做)
+### 12.2 PoC Phase 2 → Phase 4(待做)
 
 > **节奏**:每个 Phase 拿到决定性结果才进下一个,**不抢进度**。
 
-**Phase 1**(下一个,~1d):
-
-- 加 redis box
-- 加 client box(alpine + curl/wget),从 client 内调 `192.168.127.1:5432` 和 `:6379`
-- 验证 detach=True 在 fresh create 路径生效
-- 输出 host-as-hub 网络可行性结论
-
-**Phase 2**(~1-2d):写最小 orchestrator:
+**Phase 2**(下一个,~1-2d):写最小 orchestrator:
 
 - `apps/infra-local/boxlite_local/{__main__.py, types.py, config.py, orchestrator.py}` 骨架
+- `host_hub` 字段默认 `"host.boxlite.internal"`(字符串常量,见 §3.2)
+- **`doctor` 子命令必须先做**(端口冲突预检,见 §3.8)
 - 跑 5 服务(postgres/redis/dex/minio/registry),验证拓扑序 + healthcheck
+- 详细 spec:`docs/superpowers/specs/2026-05-20-infra-local-phase2-walking-skeleton.md`(walking skeleton 先从 pg 一个服务开始)
 
 **Phase 3**(~2-3d):全栈:
 
 - 加 Caddy + Jaeger + PgAdmin + RegistryUI + OtelCollector
 - 全 10 box 在 M5 24GB 上稳定 ≥ 1h
+- 验证 Caddy 反向代理打通(开发者只通过 `https://<svc>.boxlite.test` 访问,不直连 25xxx)
 
 **Phase 4**(~1-2d):Lima runner 集成
 

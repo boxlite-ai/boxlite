@@ -9,38 +9,29 @@ NOTE on Python interpreter:
 Goal (gate question for dogfood orchestrator):
     Verify that **multiple BoxLite boxes can coexist** and that a box
     can reach another box's service via the "host-as-hub" network model:
-        client-box → <Mac LAN IP>:host_port → gvproxy → pg-box / redis-box
+        client-box → host.boxlite.internal:host_port → gvproxy → pg-box / redis-box
 
-    Originally we wanted to use `host.boxlite.internal` / `192.168.127.254`
-    (the BoxLite HOST_IP constant), but those are configured-only — not
-    actually wired through gvproxy. See SDK bug:
-        docs/apps/sdk-feedback/01-host-boxlite-internal-unwired.md
-
-    Workaround: detect the Mac's en0/en1 LAN IP at runtime (e.g.
-    192.168.1.110) and use that as the host-hub address. This works
-    because BoxLite port forwards bind to 0.0.0.0 on the Mac side, and
-    macOS reroutes packets sent to its own external IP back to loopback.
-
-    Caveat: fragile when Mac IP changes (Wi-Fi network switch, DHCP
-    renewal, etc.). The proper fix is the upstream SDK bug.
+    `host.boxlite.internal` resolves to BoxLite's `HOST_IP` (192.168.127.254)
+    inside every box and is the canonical "reach the host machine" address —
+    the BoxLite equivalent of Docker's `host.docker.internal`.
 
 Topology:
-    Host (Mac LAN IP, e.g. 192.168.1.110, detected at runtime)
+    Host (reachable from inside boxes as host.boxlite.internal / 192.168.127.254)
       ├─ Box: boxlite-local-pg-poc      postgres:16-alpine    :5432
       ├─ Box: boxlite-local-redis-poc   redis:7-alpine        :6379
       └─ Box: boxlite-local-client-poc  alpine:3.20           (no ports)
               │
               └─ from inside, probe and query both services
-                 via <Mac LAN IP>:{5432,6379}
+                 via host.boxlite.internal:{5432,6379}
 
 Pass criteria:
     [P1] All 3 boxes start (cold start ≤ 60s, reuse ≤ 5s)
-    [P2] Client box: `nc -zv <Mac IP> 5432` → connected
-    [P3] Client box: `nc -zv <Mac IP> 6379` → connected
-    [P4] Client box: `psql -h <Mac IP> ...` real query → row returned
-    [P5] Client box: `redis-cli -h <Mac IP> ...` PING → "PONG"
+    [P2] Client box: `nc -zv host.boxlite.internal 5432` → connected
+    [P3] Client box: `nc -zv host.boxlite.internal 6379` → connected
+    [P4] Client box: `psql -h host.boxlite.internal ...` real query → row returned
+    [P5] Client box: `redis-cli -h host.boxlite.internal ...` PING → "PONG"
     [P6] detach=True survives Python exit
-         (after this script returns, `boxlite-cli list` shows all 3 RUNNING)
+         (after this script returns, `boxlite list` shows all 3 RUNNING)
 
 Cleanup:
     python multi_service.py --cleanup
@@ -51,7 +42,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import socket
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -64,60 +54,30 @@ except ImportError:
     from boxlite.boxlite import Boxlite, BoxOptions  # type: ignore[attr-defined]
 
 
-# ─── Mac LAN IP detection ─────────────────────────────────────────────────
-#
-# Workaround for SDK bug 01-host-boxlite-internal-unwired
-# (`host.boxlite.internal` and `192.168.127.254` are configured in gvproxy but
-# not actually wired to NAT/DNS at runtime). We resolve the Mac's en* LAN IP
-# at startup and use it as the "host hub" address that all boxes route through.
-#
-# This is fragile (Mac IP changes when joining new Wi-Fi networks), but it is
-# the only working option until the SDK bug is fixed.
-# See: docs/apps/sdk-feedback/01-host-boxlite-internal-unwired.md
-#
-def detect_mac_lan_ip() -> str:
-    """Return the Mac's primary LAN IPv4 (en0 / en1 / en2).
-
-    Raises if none found (typically: Wi-Fi off and no ethernet).
-    """
-    for iface in ["en0", "en1", "en2"]:
-        try:
-            r = subprocess.run(
-                ["ipconfig", "getifaddr", iface],
-                capture_output=True, text=True, timeout=2,
-            )
-            ip = r.stdout.strip()
-            if ip and ip.count(".") == 3:
-                return ip
-        except (subprocess.SubprocessError, FileNotFoundError):
-            continue
-    raise RuntimeError(
-        "Could not detect Mac LAN IP on en0/en1/en2. "
-        "Is Wi-Fi off and no ethernet plugged in? "
-        "This PoC relies on the Mac's external IP because "
-        "`host.boxlite.internal` is not wired in BoxLite SDK yet "
-        "(see docs/apps/sdk-feedback/01-host-boxlite-internal-unwired.md)."
-    )
-
-
 # ─── topology ─────────────────────────────────────────────────────────────
 
 PG_NAME       = "boxlite-local-pg-poc"
 PG_IMAGE      = "postgres:16-alpine"
-PG_HOST_PORT  = 5432
+# Use non-standard host ports so the PoC doesn't collide with whatever the
+# user has running locally (e.g. homebrew postgres on 5432, redis on 6379).
+# BoxLite's host-side port forward uses `*:<port>` (wildcard), which on macOS
+# loses the kernel's longest-prefix match against any local service bound to
+# 127.0.0.1:<port> — so traffic from inside boxes silently hits the local
+# service instead of the box. Box-side ports stay at the image defaults.
+PG_HOST_PORT  = 25432
 PG_PASSWORD   = "boxlite"
 
 REDIS_NAME       = "boxlite-local-redis-poc"
 REDIS_IMAGE      = "redis:7-alpine"
-REDIS_HOST_PORT  = 6379
+REDIS_HOST_PORT  = 26379
 
 CLIENT_NAME   = "boxlite-local-client-poc"
 CLIENT_IMAGE  = "alpine:3.20"          # minimal; apk-add psql + redis-cli + nc inside
 
-# HOST_GW is set at runtime by detect_mac_lan_ip(). We do NOT use
-# 192.168.127.254 / host.boxlite.internal because they're broken — see
-# SDK bug 01-host-boxlite-internal-unwired.md.
-HOST_GW: str = ""   # populated in run_poc()
+# BoxLite's host-hub address — `host.boxlite.internal` resolves to HOST_IP
+# (192.168.127.254) inside every box and is served by gvproxy's DNS + NAT.
+# Mirrors Docker's `host.docker.internal`.
+HOST_GW: str = "host.boxlite.internal"
 
 DATA_ROOT = Path.home() / ".boxlite-local-poc"
 PG_DATA   = DATA_ROOT / "pg-data"
@@ -271,9 +231,6 @@ async def setup_client_box(box):
 # ─── main flow ───────────────────────────────────────────────────────────
 
 async def run_poc() -> int:
-    global HOST_GW
-    HOST_GW = detect_mac_lan_ip()
-
     print("=" * 70)
     print("BoxLite dogfood PoC Phase 1 — multi-service + box-to-box")
     print("=" * 70)
@@ -282,7 +239,7 @@ async def run_poc() -> int:
     print(f"  - {PG_NAME}     ({PG_IMAGE})     :{PG_HOST_PORT}")
     print(f"  - {REDIS_NAME}  ({REDIS_IMAGE}) :{REDIS_HOST_PORT}")
     print(f"  - {CLIENT_NAME} ({CLIENT_IMAGE}) no ports → probes via {HOST_GW}")
-    print(f"Host hub IP: {HOST_GW}  (Mac LAN IP — workaround for SDK bug #01)")
+    print(f"Host hub:    {HOST_GW}  (BoxLite SDK constant; resolves to 192.168.127.254)")
     print(f"Data dir:    {DATA_ROOT}")
     print()
 
@@ -293,11 +250,8 @@ async def run_poc() -> int:
     runtime = Boxlite.default()
 
     # Phase A: bring up 3 boxes ─────────────────────────────────────────────
-    # NOTE: We use POSTGRES_HOST_AUTH_METHOD=trust to disable password auth
-    # entirely. Reason: in PoC runs, the password set via POSTGRES_PASSWORD env
-    # didn't actually match what the server used for SCRAM-SHA-256 challenge
-    # (cause not yet identified — possibly SDK Feedback #02 timing). For a
-    # local dev PoC, trust auth is acceptable; production would use real auth.
+    # NOTE: POSTGRES_HOST_AUTH_METHOD=trust disables password auth — acceptable
+    # for a local dev PoC; production would use real auth.
     with Step("Phase A: start postgres box"):
         pg_box = await start_service(
             runtime,
@@ -456,9 +410,9 @@ async def run_poc() -> int:
     print("=" * 70)
     print()
     print("Now manually verify detach=True survives Python exit:")
-    print(f"  boxlite-cli list                                  # should show all 3 RUNNING")
-    print(f"  boxlite-cli exec {CLIENT_NAME} -- redis-cli -h {HOST_GW} PING")
-    print(f"  boxlite-cli exec {CLIENT_NAME} -- psql -h {HOST_GW} -U postgres -d postgres -c 'SELECT count(*) FROM dogfood_phase1;'")
+    print(f"  boxlite list                                  # should show all 3 RUNNING")
+    print(f"  boxlite exec {CLIENT_NAME} -- redis-cli -h {HOST_GW} -p {REDIS_HOST_PORT} PING")
+    print(f"  boxlite exec {CLIENT_NAME} -- psql -h {HOST_GW} -p {PG_HOST_PORT} -U postgres -d postgres -c 'SELECT count(*) FROM dogfood_phase1;'")
     print()
     print(f"Or run the verifier subcommand (in fresh Python invocation):")
     print(f"  python {Path(__file__).name} --verify-detach")
@@ -558,8 +512,8 @@ def main() -> int:
         print("=" * 70)
         print()
         print("Troubleshooting:")
-        print("  - Check state: boxlite-cli list")
-        print("  - Per-box logs: boxlite-cli logs <name>")
+        print("  - Check state: boxlite list")
+        print("  - Per-box logs: boxlite logs <name>")
         print(f"  - Clean slate: python {Path(__file__).name} --cleanup")
         return 1
 
