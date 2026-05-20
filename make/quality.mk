@@ -91,7 +91,7 @@ fmt\:check\:c:
 	"$$CLANG_FORMAT" --dry-run --Werror sdks/c/tests/*.c
 
 # Format the apps/ workspace via the repo's own blessed script
-# (nx run-many format + prettier + markdownlint).
+# (nx run-many format + root-level prettier over TS/JSON/YAML).
 fmt\:apps: _ensure-apps-deps
 	@echo "🔧 Formatting apps workspace..."
 	@cd apps && yarn format
