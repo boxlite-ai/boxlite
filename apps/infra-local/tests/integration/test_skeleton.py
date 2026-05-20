@@ -17,7 +17,7 @@ import pytest
 from boxlite_local.config import InfraConfig
 from boxlite_local.doctor import doctor
 from boxlite_local.execwrap import exec_collect
-from boxlite_local.orchestrator import _get_runtime, down, ps, up
+from boxlite_local.orchestrator import down, get_runtime, ps, up
 from boxlite_local.services import SERVICES
 
 pytestmark = pytest.mark.skipif(
@@ -47,7 +47,8 @@ async def _round_trip(cfg: InfraConfig) -> None:
 
     try:
         # 2. up brings pg to RUNNING + healthy
-        await up(cfg, SERVICES)
+        # skip_doctor=True because we already asserted doctor in step 1
+        await up(cfg, SERVICES, skip_doctor=True)
 
         # 3. ps shows boxlite-local-postgres RUNNING
         rows = await ps(cfg)
@@ -57,12 +58,15 @@ async def _round_trip(cfg: InfraConfig) -> None:
         assert status.lower() == "running", f"unexpected status: {status}"
 
         # 4. pg_isready inside the box confirms server is up
-        runtime = _get_runtime()
+        runtime = get_runtime()
         box = await runtime.get("boxlite-local-postgres")
         rc, out, err = await exec_collect(
             box, "pg_isready", ["-U", "boxlite", "-d", "boxlite", "-t", "1"]
         )
         assert rc == 0, f"pg_isready failed: rc={rc} out={out!r} err={err!r}"
+
+        # Confirm data_dir was actually created by up() — makes the post-down assertion meaningful
+        assert cfg.data_dir.exists(), f"data_dir not created by up(): {cfg.data_dir}"
     finally:
         # 5. down --wipe removes box and data
         await down(cfg, SERVICES, wipe=True)

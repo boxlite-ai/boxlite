@@ -70,7 +70,7 @@ def _build_box_options_with_volumes(spec: ServiceSpec, config: InfraConfig, volu
     )
 
 
-def _get_runtime():
+def get_runtime():
     try:
         from boxlite import Boxlite
     except ImportError:
@@ -165,7 +165,7 @@ async def up(
         print("=" * 60)
         print("WARNING: --skip-doctor was passed — preflight checks bypassed")
         print("=" * 60)
-    runtime = _get_runtime()
+    runtime = get_runtime()
     for layer in topo_sort(services):
         targets = [n for n in layer if only is None or n in only]
         if not targets:
@@ -180,7 +180,7 @@ async def down(
     only: list[str] | None = None,
     wipe: bool = False,
 ) -> None:
-    runtime = _get_runtime()
+    runtime = get_runtime()
     for layer in reversed(topo_sort(services)):
         targets = [n for n in layer if only is None or n in only]
         if not targets:
@@ -193,7 +193,7 @@ async def down(
 
 async def ps(config: InfraConfig) -> list[tuple[str, str, str]]:
     """Return list of (name, status, image) for boxlite-local-* boxes. Also prints."""
-    runtime = _get_runtime()
+    runtime = get_runtime()
     infos = await runtime.list_info()
     rows: list[tuple[str, str, str]] = []
     for info in infos:
