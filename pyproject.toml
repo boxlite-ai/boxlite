@@ -1,25 +1,9 @@
-# Workspace-level Python tooling config (lint/format).
+# Workspace-level Python tooling config.
 #
 # Not a Python package itself -- the SDK's package metadata lives at
-# sdks/python/pyproject.toml. This file exists so isort/black/pylint and
-# friends pick up consistent settings when invoked from the repo root by the
-# `fmt:apps`/`lint:apps` pipeline. Sections mirror upstream
-# `daytonaio/daytona` (the BoxLite fork inherited the format/lint chain but
-# dropped the root config).
-#
-# `[tool.isort] profile = "black"` resolves the isort/black wrapping
-# conflict (without it, isort defaults to line_length=79 and re-wraps
-# single-line imports that black then re-joins, producing a non-idempotent
-# format cycle).
-
-[tool.isort]
-profile = "black"
-line_length = 120
-known_first_party = ["boxlite"]
-
-[tool.black]
-target-version = ['py310']
-line-length = 120
+# sdks/python/pyproject.toml. This file exists so pylint (invoked by the
+# `lint:apps` -> `yarn lint:py` chain) picks up consistent settings when run
+# from the repo root. Disable list mirrors upstream `daytonaio/daytona`.
 
 [tool.pylint]
 max-line-length = 120
@@ -58,19 +42,3 @@ ignore-paths = [
     "^node_modules/.*$",
     "^.*/node_modules/.*$",
 ]
-
-[tool.basedpyright]
-typeCheckingMode = "recommended"
-pythonVersion = "3.9"
-exclude = [
-    "**/.venv",
-    "**/node_modules",
-    "apps",
-    ".nx",
-    "tmp",
-]
-reportUnknownMemberType = "none"
-reportAny = "none"
-reportPrivateUsage = "none"
-reportMissingTypeStubs = "none"
-reportExplicitAny = "none"
