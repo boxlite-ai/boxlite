@@ -135,7 +135,14 @@ impl FilesystemLayout {
     }
 
     pub fn logs_dir(&self) -> PathBuf {
-        self.home_dir.join(dirs::LOGS_DIR)
+        Self::logs_dir_for(&self.home_dir)
+    }
+
+    /// Compute the logs dir for a given home directory without constructing
+    /// a full `FilesystemLayout`. Used by logging init paths that run before
+    /// the runtime (and thus before the layout) is built.
+    pub fn logs_dir_for(home_dir: &Path) -> PathBuf {
+        home_dir.join(dirs::LOGS_DIR)
     }
 
     /// OCI images layers storage: ~/.boxlite/images/layers

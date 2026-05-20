@@ -149,7 +149,7 @@ Available for all commands:
 
 | Flag | Description |
 |------|-------------|
-| `--debug` | Enable debug output |
+| `--debug` | Enable debug output. Precedence: `--debug` > `RUST_LOG` env > default (`warn`). |
 | `--home PATH` | BoxLite home directory (default: `~/.boxlite`). Overridden by `BOXLITE_HOME` |
 | `--registry REGISTRY` | Image registry (repeatable; prepended to config) |
 | `--config PATH` | JSON config file path (e.g. for `image_registries`) |

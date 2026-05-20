@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use boxlite::{BoxArchive, BoxOptions, BoxliteRuntime};
+use boxlite::{BoxArchive, BoxOptions, BoxliteOptions, BoxliteRuntime};
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
@@ -34,7 +34,10 @@ impl JsBoxlite {
     /// ```
     #[napi(constructor)]
     pub fn new(options: JsOptions) -> Result<Self> {
-        let runtime = BoxliteRuntime::new(js_options_into_core(options)?).map_err(map_err)?;
+        let core_opts = js_options_into_core(options)?;
+        // Executable-owned logging init (the library no longer auto-installs a subscriber).
+        let _ = boxlite::init_logging_for(&core_opts.home_dir);
+        let runtime = BoxliteRuntime::new(core_opts).map_err(map_err)?;
 
         Ok(Self {
             runtime: Arc::new(runtime),
@@ -52,6 +55,10 @@ impl JsBoxlite {
     /// ```
     #[napi(factory)]
     pub fn with_default_config() -> Result<Self> {
+        // Executable-owned logging init (the library no longer auto-installs a
+        // subscriber). The default runtime uses `BoxliteOptions::default()`, so
+        // we mirror its home_dir for the log location.
+        let _ = boxlite::init_logging_for(&BoxliteOptions::default().home_dir);
         let runtime = BoxliteRuntime::default_runtime();
         Ok(Self {
             runtime: Arc::new(runtime.clone()),
@@ -73,7 +80,9 @@ impl JsBoxlite {
     /// ```
     #[napi]
     pub fn init_default(options: JsOptions) -> Result<()> {
-        BoxliteRuntime::init_default_runtime(js_options_into_core(options)?).map_err(map_err)
+        let core_opts = js_options_into_core(options)?;
+        let _ = boxlite::init_logging_for(&core_opts.home_dir);
+        BoxliteRuntime::init_default_runtime(core_opts).map_err(map_err)
     }
 
     /// Create a runtime that connects to a remote BoxLite REST backend.

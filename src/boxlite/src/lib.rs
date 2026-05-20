@@ -2,10 +2,12 @@
 //!
 //! This crate provides the host-side API for managing Boxlite sandboxes.
 
+use std::path::Path;
 use std::sync::OnceLock;
 use tracing_subscriber::EnvFilter;
 
-// Global guard for tracing-appender to keep the writer thread alive
+// Global guard for tracing-appender to keep the writer thread alive.
+// Only set when an executable explicitly calls `init_logging_for`.
 static LOG_GUARD: OnceLock<tracing_appender::non_blocking::WorkerGuard> = OnceLock::new();
 
 pub mod event_listener;
@@ -48,7 +50,6 @@ pub use metrics::{BoxMetrics, RuntimeMetrics};
 pub use runtime::advanced_options::{
     AdvancedBoxOptions, HealthCheckOptions, ResourceLimits, SecurityOptions,
 };
-use runtime::layout::FilesystemLayout;
 pub use runtime::options::{
     BoxArchive, BoxOptions, BoxliteOptions, CloneOptions, ExportOptions, ImageRegistry,
     ImageRegistryAuth, NetworkSpec, RegistryTransport, RootfsSpec, Secret, SnapshotOptions,
@@ -64,13 +65,22 @@ pub use rest::credential::{AccessToken, ApiKeyCredential, Credential};
 #[cfg(feature = "rest")]
 pub use rest::options::BoxliteRestOptions;
 
-/// Initialize tracing for Boxlite using the provided filesystem layout.
+/// Opt-in helper for executables (SDK bindings, daemons, embedders) that want
+/// the default Boxlite file logger at `<home_dir>/logs/boxlite.log` with daily
+/// rotation. Honors `RUST_LOG` (defaults to `info` when unset). Idempotent.
 ///
-/// Logs are written to `<layout.home_dir()>/logs/boxlite.log` with daily rotation.
-/// Uses the `RUST_LOG` environment variable for filtering (defaults to `info`).
-/// Idempotent: subsequent calls return immediately once initialized.
-pub fn init_logging_for(layout: &FilesystemLayout) -> BoxliteResult<()> {
-    let logs_dir = layout.logs_dir();
+/// **Libraries must not call this.** The `tracing` crate is explicit that
+/// installing a global default subscriber is the executable's responsibility;
+/// doing it from a library "will cause conflicts when executables that depend
+/// on the library try to set the default later." Boxlite's own CLI installs
+/// its own layered subscriber in `boxlite-cli/src/main.rs` and does not call
+/// this function.
+///
+/// Errors creating the log directory are returned; errors installing the
+/// global default (because one is already set by the host) are swallowed
+/// silently — the host's subscriber wins.
+pub fn init_logging_for(home_dir: &Path) -> BoxliteResult<()> {
+    let logs_dir = crate::runtime::layout::FilesystemLayout::logs_dir_for(home_dir);
     std::fs::create_dir_all(&logs_dir).map_err(|e| {
         BoxliteError::Storage(format!(
             "Failed to create logs directory {}: {}",
@@ -87,8 +97,8 @@ pub fn init_logging_for(layout: &FilesystemLayout) -> BoxliteResult<()> {
             .or_else(|_| EnvFilter::try_new("info"))
             .unwrap_or_else(|_| EnvFilter::new("info"));
 
-        // If global default subscriber is already set, this will return an error.
-        // We ignore it to avoid interfering with host-configured tracing.
+        // If a global default subscriber is already set, `try_init` is a no-op —
+        // the host's subscriber wins, which is the idiomatic outcome.
         util::register_to_tracing(non_blocking, env_filter);
 
         guard
