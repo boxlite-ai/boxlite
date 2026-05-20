@@ -26,7 +26,7 @@ the request path), see [`docs/architecture/README.md`](../../docs/architecture/R
     info-or-error, removal, tag, registry inspect
   - **Execution + attach** — the long-lived stdio bridge (in depth, with
     wire protocol and reaping policy)
-  - **File I/O** — tar-framed upload and download
+  - **File I/O** — single-file upload, download, and bulk multipart upload
   - **Per-box metrics** — CPU / memory / net / exec counters
   - **Runner info** — host CPU / memory / disk + service health
   - **Toolbox proxy** — browser xterm.js over WebSocket
