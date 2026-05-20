@@ -8,6 +8,7 @@ use std::collections::VecDeque;
 use std::os::raw::{c_int, c_void};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex};
+use std::time::Duration;
 
 use boxlite::BoxliteError;
 
@@ -433,7 +434,15 @@ pub(crate) async fn push_event_with_capacity(
                 return;
             }
         }
-        tokio::task::yield_now().await;
+        // Park on timer (not just yield_now): yield_now keeps the task
+        // immediately re-ready, which on a busy single-worker runtime can
+        // starve sibling timer tasks because the worker rarely parks to
+        // poll the timer driver. A short sleep suspends the task on the
+        // timer wheel, letting the worker park and the driver fire other
+        // tasks' timers fairly. Latency added on the rare full-queue path
+        // is bounded by 1 ms (production QUEUE_CAPACITY=4096 fills very
+        // rarely; the regression test forces capacity=4).
+        tokio::time::sleep(Duration::from_millis(1)).await;
     }
 }
 
@@ -685,10 +694,25 @@ mod phase2_regression_tests {
     /// the canary must still make progress while the producer is waiting
     /// for queue space. This proves `push_event_with_capacity` yields
     /// cooperatively rather than spinning or blocking the worker.
+    ///
+    /// Drain is bulk: `boxlite_runtime_drain(rt, 0, …)` empties the queue
+    /// in one call, so the drainer iterates ~14-25 times at 10ms each
+    /// (~150-250ms total), not the ~1000ms a naive "100 events × 10ms"
+    /// estimate would suggest. The canary therefore realistically ticks
+    /// 7-12 times. We assert two AND-ed conditions tolerant to host
+    /// scheduler jitter:
+    ///   1. `progress >= MIN_TICKS` — canary actually ran.
+    ///   2. `max_gap <= MAX_GAP` — no single gap between ticks stalled
+    ///      the worker for too long.
+    /// A producer that busy-spins or blocks the worker fails BOTH (canary
+    /// stops ticking entirely), so the dual check keeps the invariant
+    /// tight without making the test flaky.
     #[test]
     fn pump_yields_when_queue_full() {
         const TEST_CAPACITY: usize = 4;
         const NUM_EVENTS: usize = 100;
+        const MIN_TICKS: u64 = 5;
+        const MAX_GAP_US: u64 = 100_000;
 
         // Single-worker so producer and canary contend for the SAME worker.
         // If the producer didn't yield, the canary would never tick.
@@ -696,12 +720,25 @@ mod phase2_regression_tests {
 
         let canary = Arc::new(AtomicU64::new(0));
         let canary_stop = Arc::new(AtomicU64::new(0));
+        let canary_last_tick_us = Arc::new(AtomicU64::new(0));
+        let canary_max_gap_us = Arc::new(AtomicU64::new(0));
+        let start = Instant::now();
         {
             let rt = unsafe { &*rt_ptr };
             let canary_for_task = canary.clone();
             let stop_for_task = canary_stop.clone();
+            let last_for_task = canary_last_tick_us.clone();
+            let max_gap_for_task = canary_max_gap_us.clone();
             rt.tokio_rt.spawn(async move {
                 while stop_for_task.load(Ordering::Relaxed) == 0 {
+                    let now_us = start.elapsed().as_micros() as u64;
+                    let prev = last_for_task.swap(now_us, Ordering::Relaxed);
+                    if prev > 0 {
+                        let gap = now_us - prev;
+                        if gap > max_gap_for_task.load(Ordering::Relaxed) {
+                            max_gap_for_task.store(gap, Ordering::Relaxed);
+                        }
+                    }
                     canary_for_task.fetch_add(1, Ordering::Relaxed);
                     tokio::time::sleep(Duration::from_millis(20)).await;
                 }
@@ -731,7 +768,7 @@ mod phase2_regression_tests {
             });
         }
 
-        // Drain at a controlled rate: one event every 10ms, on a separate
+        // Drain at a controlled rate: one batch every 10ms, on a separate
         // std thread (so the test thread is free to time the canary).
         let canary_before = canary.load(Ordering::Relaxed);
         let rt_addr = rt_ptr as usize;
@@ -749,17 +786,31 @@ mod phase2_regression_tests {
         });
 
         drainer.join().expect("drainer");
-        let canary_after = canary.load(Ordering::Relaxed);
         canary_stop.store(1, Ordering::Relaxed);
+        let canary_after = canary.load(Ordering::Relaxed);
 
-        // The drain takes >=NUM_EVENTS*10ms = 1000ms. The canary should
-        // have made many ticks during that time IF the producer yielded.
-        // If push_event_with_capacity busy-spinned, the single worker
-        // would have been monopolized and the canary would barely advance.
+        // Include any trailing gap from the canary's last tick to the end
+        // of the drain — catches a stall that started just before drain
+        // returned and would otherwise be hidden.
+        let last_tick_us = canary_last_tick_us.load(Ordering::Relaxed);
+        let now_us = start.elapsed().as_micros() as u64;
+        let trailing_gap_us = if last_tick_us > 0 {
+            now_us.saturating_sub(last_tick_us)
+        } else {
+            0
+        };
+        let max_gap_us = canary_max_gap_us
+            .load(Ordering::Relaxed)
+            .max(trailing_gap_us);
+
         let progress = canary_after.saturating_sub(canary_before);
         assert!(
-            progress >= 10,
-            "canary advanced only {progress} ticks; producer likely busy-spinning instead of yielding"
+            progress >= MIN_TICKS && max_gap_us <= MAX_GAP_US,
+            "canary progress = {progress} ticks (need >= {MIN_TICKS}), \
+             max_gap = {}ms (need <= {}ms); \
+             producer likely busy-spinning instead of yielding",
+            max_gap_us / 1000,
+            MAX_GAP_US / 1000,
         );
 
         unsafe { boxlite_runtime_free(rt_ptr) };
