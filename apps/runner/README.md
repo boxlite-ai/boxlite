@@ -406,10 +406,18 @@ a feature.
 | --- | --- | --- | --- |
 | `PUT` | `/v1/boxes/:boxId/files?path=<dest>` | `BoxliteFileUpload` | Stream tar body → temp file → `CopyInto(box, tmp, dest)` |
 | `GET` | `/v1/boxes/:boxId/files?path=<src>` | `BoxliteFileDownload` | `CopyOut(box, src, tmpDir)` → walk dir, write `application/x-tar` |
+| `POST` | `/v1/boxes/:boxId/files/bulk-upload` | `BoxliteFilesBulkUpload` | Multipart `files[N].path` + `files[N].file` pairs → stage each part → `CopyInto` per file |
 
-Tar framing is used in both directions so a single endpoint can move
+Tar framing is used by the PUT/GET pair so a single endpoint can move
 files, directories, and symlinks uniformly. Temp files live under
 `os.TempDir()` and are cleaned up before the response returns.
+
+`bulk-upload` is the high-fanout entry point: a single HTTP call seeds
+many small files at distinct destinations in one request, which matters
+for sandbox-init workloads where per-file TLS handshakes dominate
+latency. Parse and copy errors are returned per-file in `errors` (HTTP
+400) alongside the `uploaded` list, so one bad pair never aborts a
+batch.
 
 ### 5. Per-box metrics
 

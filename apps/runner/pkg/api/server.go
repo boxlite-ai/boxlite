@@ -171,6 +171,7 @@ func (a *ApiServer) Start(ctx context.Context) error {
 		boxliteApi.POST("/:boxId/executions/:execId/resize", controllers.BoxliteExecResize)
 		boxliteApi.PUT("/:boxId/files", controllers.BoxliteFileUpload)
 		boxliteApi.GET("/:boxId/files", controllers.BoxliteFileDownload)
+		boxliteApi.POST("/:boxId/files/bulk-upload", controllers.BoxliteFilesBulkUpload)
 		boxliteApi.GET("/:boxId/metrics", controllers.BoxliteMetrics)
 	}
 

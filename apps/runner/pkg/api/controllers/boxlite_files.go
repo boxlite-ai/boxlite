@@ -4,9 +4,11 @@ import (
 	"archive/tar"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/boxlite-ai/runner/pkg/runner"
 	"github.com/gin-gonic/gin"
@@ -101,4 +103,159 @@ func BoxliteFileDownload(ctx *gin.Context) {
 		_, err = io.Copy(tw, f)
 		return err
 	})
+}
+
+// stagedBulkUpload pairs a destination path inside the box with a
+// host-side tmp file holding that file's bytes. Callers own the tmp file
+// and must remove it after CopyInto (or on early return).
+type stagedBulkUpload struct {
+	Dest string
+	Src  string
+}
+
+// BoxliteFilesBulkUpload accepts a multipart body of the form
+//
+//	files[0].path = <dest inside box>
+//	files[0].file = <bytes>
+//	files[1].path = ...
+//	files[1].file = ...
+//
+// and copies each file into the box via CopyInto. The endpoint is
+// intentionally tolerant: parsing and copy errors are collected per-file
+// rather than short-circuiting, so a single bad pair does not abort an
+// otherwise-valid batch. This mirrors the daemon-side handler at
+// apps/daemon/pkg/toolbox/fs/upload_files.go and the Daytona endpoint
+// it was modelled on (proxy.app.daytona.io/toolbox/{id}/files/bulk-upload),
+// the original motivation being "hundreds of small files at sandbox init".
+func BoxliteFilesBulkUpload(ctx *gin.Context) {
+	boxId := ctx.Param("boxId")
+	if boxId == "" {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "boxId is required"})
+		return
+	}
+
+	reader, err := ctx.Request.MultipartReader()
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid multipart form"})
+		return
+	}
+
+	staged, errs := parseBulkUploadParts(reader)
+	defer func() {
+		for _, s := range staged {
+			_ = os.Remove(s.Src)
+		}
+	}()
+
+	uploaded := make([]string, 0, len(staged))
+	if len(staged) > 0 {
+		r, err := runner.GetInstance(nil)
+		if err != nil {
+			ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		for _, s := range staged {
+			if err := r.Boxlite.CopyInto(ctx.Request.Context(), boxId, s.Src, s.Dest); err != nil {
+				errs = append(errs, fmt.Sprintf("%s: copy: %v", s.Dest, err))
+				continue
+			}
+			uploaded = append(uploaded, s.Dest)
+		}
+	}
+
+	if len(errs) > 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"uploaded": uploaded, "errors": errs})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"uploaded": uploaded})
+}
+
+// parseBulkUploadParts streams the multipart body, stages each file part
+// to a tmp file paired with its destination, and returns the staged
+// uploads alongside any per-part errors. The caller owns the staged tmp
+// files. Index pairing requires the .path part to appear before its
+// matching .file part — matching the daemon-side handler's contract.
+func parseBulkUploadParts(reader *multipart.Reader) ([]stagedBulkUpload, []string) {
+	dests := make(map[string]string)
+	var staged []stagedBulkUpload
+	var errs []string
+
+	for {
+		part, err := reader.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("reading part: %v", err))
+			continue
+		}
+
+		name := part.FormName()
+		idx := extractBulkUploadIndex(name)
+
+		switch {
+		case strings.HasSuffix(name, ".path"):
+			data, readErr := io.ReadAll(part)
+			part.Close()
+			if readErr != nil {
+				errs = append(errs, fmt.Sprintf("path[%s]: %v", idx, readErr))
+				continue
+			}
+			dest := strings.TrimSpace(string(data))
+			if dest == "" {
+				errs = append(errs, fmt.Sprintf("path[%s]: empty", idx))
+				continue
+			}
+			dests[idx] = dest
+
+		case strings.HasSuffix(name, ".file"):
+			dest, ok := dests[idx]
+			if !ok {
+				part.Close()
+				errs = append(errs, fmt.Sprintf("file[%s]: missing .path metadata (must precede .file)", idx))
+				continue
+			}
+			tmp, stageErr := stageBulkUploadPart(part)
+			part.Close()
+			if stageErr != nil {
+				errs = append(errs, fmt.Sprintf("%s: %v", dest, stageErr))
+				continue
+			}
+			staged = append(staged, stagedBulkUpload{Dest: dest, Src: tmp})
+
+		default:
+			part.Close()
+		}
+	}
+	return staged, errs
+}
+
+// stageBulkUploadPart writes a single part's bytes to a tmp file and
+// returns its path. Returned path is non-empty only when err is nil.
+func stageBulkUploadPart(part *multipart.Part) (string, error) {
+	f, err := os.CreateTemp("", "boxlite-bulk-upload-*")
+	if err != nil {
+		return "", fmt.Errorf("tmp: %w", err)
+	}
+	name := f.Name()
+	if _, err := io.Copy(f, part); err != nil {
+		f.Close()
+		_ = os.Remove(name)
+		return "", fmt.Errorf("write: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(name)
+		return "", fmt.Errorf("close: %w", err)
+	}
+	return name, nil
+}
+
+// extractBulkUploadIndex strips the files[N].path / files[N].file framing
+// to return just N. Field names that don't follow the convention come
+// back unchanged — callers filter those via the .path/.file suffix check.
+func extractBulkUploadIndex(fieldName string) string {
+	s := strings.TrimPrefix(fieldName, "files[")
+	s = strings.TrimSuffix(s, "].path")
+	s = strings.TrimSuffix(s, "].file")
+	return s
 }

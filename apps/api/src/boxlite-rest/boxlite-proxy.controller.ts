@@ -164,6 +164,24 @@ export class BoxliteProxyController {
     )
   }
 
+  @All(':boxId/files/bulk-upload')
+  async proxyFilesBulkUpload(
+    @AuthContext() authContext: OrganizationAuthContext,
+    @Param('boxId') boxId: string,
+    @Req() req: Request,
+    @Res() res: Response,
+    @Next() next: NextFunction,
+  ) {
+    return this.proxyToRunner(
+      authContext,
+      boxId,
+      `/v1/boxes/${boxId}/files/bulk-upload`,
+      req,
+      res,
+      next,
+    )
+  }
+
   @All(':boxId/metrics')
   async proxyMetrics(
     @AuthContext() authContext: OrganizationAuthContext,
