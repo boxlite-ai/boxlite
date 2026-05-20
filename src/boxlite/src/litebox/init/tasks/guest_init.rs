@@ -32,6 +32,7 @@ impl PipelineTask<InitCtx> for GuestInitTask {
             container_mounts,
             network_spec,
             ca_cert_pem,
+            support_docker,
         ) =
             {
                 let mut ctx = ctx.lock().await;
@@ -54,6 +55,7 @@ impl PipelineTask<InitCtx> for GuestInitTask {
                 })?;
                 let network_spec = ctx.config.options.network.clone();
                 let ca_cert_pem = ctx.ca_cert_pem.clone();
+                let support_docker = ctx.config.options.support_docker;
                 (
                     guest_session,
                     container_image_config,
@@ -63,6 +65,7 @@ impl PipelineTask<InitCtx> for GuestInitTask {
                     container_mounts,
                     network_spec,
                     ca_cert_pem,
+                    support_docker,
                 )
             };
 
@@ -75,6 +78,7 @@ impl PipelineTask<InitCtx> for GuestInitTask {
             &container_mounts,
             &network_spec,
             ca_cert_pem.as_deref(),
+            support_docker,
         )
         .await
         .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
@@ -104,6 +108,7 @@ async fn run_guest_init(
     container_mounts: &[ContainerMount],
     network_spec: &NetworkSpec,
     ca_cert_pem: Option<&str>,
+    support_docker: bool,
 ) -> BoxliteResult<()> {
     let container_id_str = container_id.as_str();
 
@@ -141,6 +146,7 @@ async fn run_guest_init(
             rootfs_init.clone(),
             container_mounts.to_vec(),
             ca_certs,
+            support_docker,
         )
         .await?;
     tracing::info!(container_id = %returned_id, "Container initialized");

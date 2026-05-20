@@ -58,6 +58,122 @@ pub fn capability_names() -> Vec<String> {
     .collect()
 }
 
+/// Expanded capability set for boxes started with `--support-docker`.
+///
+/// Equivalent to `docker run --privileged`: every capability the host kernel
+/// recognises, granted to the container process. Required so a docker daemon
+/// inside the box can mount cgroup hierarchies, manipulate network namespaces,
+/// load iptables rules, etc.
+///
+/// SECURITY: This is the full Linux capability set. Code running as root
+/// inside a box with this set can mount arbitrary filesystems, modify
+/// network configuration, write to all of /proc and /sys, and perform every
+/// container-escape primitive that requires capabilities. The microVM
+/// boundary still contains the process — host stays protected by KVM/libkrun
+/// isolation — but the in-VM blast radius is effectively `root`. Only use
+/// this for trusted workloads or where you would otherwise use
+/// `docker run --privileged`.
+pub fn docker_capabilities() -> HashSet<Capability> {
+    [
+        Capability::AuditControl,
+        Capability::AuditRead,
+        Capability::AuditWrite,
+        Capability::BlockSuspend,
+        Capability::Bpf,
+        Capability::CheckpointRestore,
+        Capability::Chown,
+        Capability::DacOverride,
+        Capability::DacReadSearch,
+        Capability::Fowner,
+        Capability::Fsetid,
+        Capability::IpcLock,
+        Capability::IpcOwner,
+        Capability::Kill,
+        Capability::Lease,
+        Capability::LinuxImmutable,
+        Capability::MacAdmin,
+        Capability::MacOverride,
+        Capability::Mknod,
+        Capability::NetAdmin,
+        Capability::NetBindService,
+        Capability::NetBroadcast,
+        Capability::NetRaw,
+        Capability::Perfmon,
+        Capability::Setgid,
+        Capability::Setfcap,
+        Capability::Setpcap,
+        Capability::Setuid,
+        Capability::SysAdmin,
+        Capability::SysBoot,
+        Capability::SysChroot,
+        Capability::SysModule,
+        Capability::SysNice,
+        Capability::SysPacct,
+        Capability::SysPtrace,
+        Capability::SysRawio,
+        Capability::SysResource,
+        Capability::SysTime,
+        Capability::SysTtyConfig,
+        Capability::Syslog,
+        Capability::WakeAlarm,
+    ]
+    .into_iter()
+    .collect()
+}
+
+/// String-name counterpart to `docker_capabilities()` for libcontainer's
+/// tenant-exec builder. Used by the zygote when spawning exec'd processes
+/// inside a `--support-docker` container so they inherit the same expanded
+/// privileges as the init process.
+pub fn docker_capability_names() -> Vec<String> {
+    [
+        "CAP_AUDIT_CONTROL",
+        "CAP_AUDIT_READ",
+        "CAP_AUDIT_WRITE",
+        "CAP_BLOCK_SUSPEND",
+        "CAP_BPF",
+        "CAP_CHECKPOINT_RESTORE",
+        "CAP_CHOWN",
+        "CAP_DAC_OVERRIDE",
+        "CAP_DAC_READ_SEARCH",
+        "CAP_FOWNER",
+        "CAP_FSETID",
+        "CAP_IPC_LOCK",
+        "CAP_IPC_OWNER",
+        "CAP_KILL",
+        "CAP_LEASE",
+        "CAP_LINUX_IMMUTABLE",
+        "CAP_MAC_ADMIN",
+        "CAP_MAC_OVERRIDE",
+        "CAP_MKNOD",
+        "CAP_NET_ADMIN",
+        "CAP_NET_BIND_SERVICE",
+        "CAP_NET_BROADCAST",
+        "CAP_NET_RAW",
+        "CAP_PERFMON",
+        "CAP_SETGID",
+        "CAP_SETFCAP",
+        "CAP_SETPCAP",
+        "CAP_SETUID",
+        "CAP_SYS_ADMIN",
+        "CAP_SYS_BOOT",
+        "CAP_SYS_CHROOT",
+        "CAP_SYS_MODULE",
+        "CAP_SYS_NICE",
+        "CAP_SYS_PACCT",
+        "CAP_SYS_PTRACE",
+        "CAP_SYS_RAWIO",
+        "CAP_SYS_RESOURCE",
+        "CAP_SYS_TIME",
+        "CAP_SYS_TTY_CONFIG",
+        "CAP_SYSLOG",
+        "CAP_WAKE_ALARM",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

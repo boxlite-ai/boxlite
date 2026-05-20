@@ -51,6 +51,11 @@ pub struct Container {
     /// Dropping this closes pipes → init gets EOF → init exits.
     #[allow(dead_code)]
     stdio: ContainerStdio,
+    /// True when the box was started with `--support-docker`. Propagated to
+    /// every exec'd process so they inherit the same expanded capability set
+    /// as the init process — without this, `docker exec`-style commands inside
+    /// a dind box would silently lose CAP_SYS_ADMIN and the like.
+    support_docker: bool,
     /// Flag to track if shutdown() was called (prevents double-kill in Drop).
     is_shutdown: std::sync::atomic::AtomicBool,
 }
@@ -81,6 +86,7 @@ impl Container {
     /// - Failed to create container directory
     /// - Failed to create or start container
     /// - Init process exited immediately
+    #[allow(clippy::too_many_arguments)]
     pub fn start(
         container_id: &str,
         rootfs: impl AsRef<Path>,
@@ -89,6 +95,7 @@ impl Container {
         workdir: impl AsRef<Path>,
         user: &str,
         user_mounts: Vec<UserMount>,
+        support_docker: bool,
     ) -> BoxliteResult<Self> {
         let rootfs = rootfs.as_ref();
         let workdir = workdir.as_ref();
@@ -163,6 +170,7 @@ impl Container {
             gid,
             &layout.containers_dir(),
             &user_mounts,
+            support_docker,
         )?;
 
         // Create stdio pipes before container creation.
@@ -180,6 +188,7 @@ impl Container {
             env: env_map,
             user: (uid, gid),
             stdio,
+            support_docker,
             is_shutdown: std::sync::atomic::AtomicBool::new(false),
         })
     }
@@ -266,6 +275,7 @@ impl Container {
             self.env.clone(),
             self.user,
             self.bundle_path.join("rootfs"),
+            self.support_docker,
         )
     }
 

@@ -255,6 +255,7 @@ impl ContainerService for GuestServer {
             &config.workdir,
             &config.user,
             user_mounts,
+            init_req.support_docker,
         ) {
             Ok(mut container) => {
                 debug!(container_id = %container_id, "Container started, checking if init process is running");

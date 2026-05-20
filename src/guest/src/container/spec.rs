@@ -54,10 +54,11 @@ pub fn create_oci_spec(
     gid: u32,
     bundle_path: &Path,
     user_mounts: &[UserMount],
+    support_docker: bool,
 ) -> BoxliteResult<Spec> {
-    let caps = build_default_capabilities()?;
+    let caps = build_capabilities(support_docker)?;
     let namespaces = build_default_namespaces()?;
-    let mut mounts = build_standard_mounts(bundle_path)?;
+    let mut mounts = build_standard_mounts(bundle_path, support_docker)?;
 
     // Add user-specified bind mounts
     for user_mount in user_mounts {
@@ -264,9 +265,20 @@ fn find_group_in_group_file(rootfs: &str, name: &str) -> BoxliteResult<u32> {
 // Spec Component Builders
 // ====================
 
-/// Build default Linux capabilities matching Docker/OCI defaults.
-fn build_default_capabilities() -> BoxliteResult<oci_spec::runtime::LinuxCapabilities> {
-    let caps = default_capabilities();
+/// Build Linux capabilities for the container's init process.
+///
+/// `support_docker=false` (default): the 14 Docker/OCI defaults — sufficient for
+/// most workloads, excludes CAP_SYS_ADMIN / CAP_NET_ADMIN / CAP_SYS_MODULE / etc.
+///
+/// `support_docker=true`: the full privileged set (see
+/// `capabilities::docker_capabilities`). Required so a dockerd inside the box
+/// can mount cgroups, set up bridge interfaces, install iptables rules, etc.
+fn build_capabilities(support_docker: bool) -> BoxliteResult<oci_spec::runtime::LinuxCapabilities> {
+    let caps = if support_docker {
+        super::capabilities::docker_capabilities()
+    } else {
+        default_capabilities()
+    };
 
     LinuxCapabilitiesBuilder::default()
         .bounding(caps.clone())
@@ -413,7 +425,7 @@ fn build_linux_spec(
 }
 
 /// Build standard mounts for container filesystem
-fn build_standard_mounts(bundle_path: &Path) -> BoxliteResult<Vec<Mount>> {
+fn build_standard_mounts(bundle_path: &Path, support_docker: bool) -> BoxliteResult<Vec<Mount>> {
     let mut mounts = vec![
         // /proc - Process information
         MountBuilder::default()
@@ -483,27 +495,12 @@ fn build_standard_mounts(bundle_path: &Path) -> BoxliteResult<Vec<Mount>> {
             ])
             .build()
             .map_err(|e| BoxliteError::Internal(format!("Failed to build /sys mount: {}", e)))?,
-        // NOTE: /sys/fs/cgroup mount disabled for performance
-        // Mounting cgroup2 filesystem takes ~105ms due to kernel cgroup hierarchy initialization.
-        // This is the main bottleneck in container startup. Since we're inside a VM with
-        // single-tenant isolation, cgroup resource limits provide minimal benefit.
-        // Re-enable if you need to enforce CPU/memory limits within the container.
+        // NOTE: /sys/fs/cgroup mount is disabled by default for performance —
+        // mounting cgroup2 takes ~105ms due to kernel hierarchy initialization,
+        // and a single-tenant VM gets minimal benefit from in-container cgroups.
+        // The `support_docker` profile re-enables it as `rw` below so a docker
+        // daemon inside the box can write cgroup limits for its child containers.
         //
-        // MountBuilder::default()
-        //     .destination("/sys/fs/cgroup")
-        //     .typ("cgroup")
-        //     .source("cgroup")
-        //     .options(vec![
-        //         "nosuid".to_string(),
-        //         "noexec".to_string(),
-        //         "nodev".to_string(),
-        //         "relatime".to_string(),
-        //         "ro".to_string(),
-        //     ])
-        //     .build()
-        //     .map_err(|e| {
-        //         BoxliteError::Internal(format!("Failed to build /sys/fs/cgroup mount: {}", e))
-        //     })?,
         // /tmp - Temporary filesystem
         MountBuilder::default()
             .destination("/tmp")
@@ -517,6 +514,29 @@ fn build_standard_mounts(bundle_path: &Path) -> BoxliteResult<Vec<Mount>> {
             .build()
             .map_err(|e| BoxliteError::Internal(format!("Failed to build /tmp mount: {}", e)))?,
     ];
+
+    // --support-docker: re-enable /sys/fs/cgroup as a writable cgroup2 mount
+    // so the in-box docker daemon can manage cgroup limits for its children.
+    // Costs ~105ms at startup; only paid when the user opts in.
+    if support_docker {
+        mounts.push(
+            MountBuilder::default()
+                .destination("/sys/fs/cgroup")
+                .typ("cgroup2")
+                .source("cgroup")
+                .options(vec![
+                    "nosuid".to_string(),
+                    "noexec".to_string(),
+                    "nodev".to_string(),
+                    "relatime".to_string(),
+                    "rw".to_string(),
+                ])
+                .build()
+                .map_err(|e| {
+                    BoxliteError::Internal(format!("Failed to build /sys/fs/cgroup mount: {}", e))
+                })?,
+        );
+    }
 
     // Bind-mount /etc/hostname, /etc/hosts, /etc/resolv.conf from the bundle
     // dir into the container. Uses rbind + rprivate (matching Docker defaults).

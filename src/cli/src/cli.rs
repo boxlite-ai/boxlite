@@ -623,12 +623,32 @@ pub struct ManagementFlags {
     /// Automatically remove the box when it exits
     #[arg(long)]
     pub rm: bool,
+
+    /// Enable in-box docker / docker-compose support.
+    ///
+    /// Mounts /sys/fs/cgroup as writable cgroup2 inside the container and
+    /// grants the full Linux capability set (CAP_SYS_ADMIN, CAP_NET_ADMIN,
+    /// CAP_SYS_MODULE, etc.) to the container init plus every exec'd
+    /// process. Equivalent to `docker run --privileged` for the in-box
+    /// container.
+    ///
+    /// SECURITY: this widens the in-VM attack surface significantly — any
+    /// process inside the box runs effectively as root with full caps and
+    /// can mount/remount filesystems, manipulate network/iptables, and use
+    /// every cap-gated kernel API. The microVM boundary still contains
+    /// the process (host stays protected by KVM/libkrun isolation), but
+    /// only enable this for trusted workloads or where you would already
+    /// be running `docker run --privileged`. Default is OFF and existing
+    /// boxes are unaffected.
+    #[arg(long)]
+    pub support_docker: bool,
 }
 
 impl ManagementFlags {
     pub fn apply_to(&self, opts: &mut BoxOptions) {
         opts.detach = self.detach;
         opts.auto_remove = self.rm;
+        opts.support_docker = self.support_docker;
     }
 }
 
