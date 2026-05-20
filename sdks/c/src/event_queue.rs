@@ -701,9 +701,11 @@ mod phase2_regression_tests {
     /// estimate would suggest. The canary therefore realistically ticks
     /// 7-12 times. We assert two AND-ed conditions tolerant to host
     /// scheduler jitter:
-    ///   1. `progress >= MIN_TICKS` — canary actually ran.
-    ///   2. `max_gap <= MAX_GAP` — no single gap between ticks stalled
-    ///      the worker for too long.
+    ///
+    /// 1. `progress >= MIN_TICKS` — canary actually ran.
+    /// 2. `max_gap <= MAX_GAP` — no single gap between ticks stalled the
+    ///    worker for too long.
+    ///
     /// A producer that busy-spins or blocks the worker fails BOTH (canary
     /// stops ticking entirely), so the dual check keeps the invariant
     /// tight without making the test flaky.
