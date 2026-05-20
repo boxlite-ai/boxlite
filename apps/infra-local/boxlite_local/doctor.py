@@ -44,7 +44,7 @@ def _parse_lsof_F(output: str) -> list[_LsofRow]:
     for line in output.splitlines():
         if not line:
             continue
-        prefix, _, value = line[0], line[0], line[1:]
+        prefix, value = line[0], line[1:]
         if prefix == "p":
             if pid is not None:
                 rows.append(_LsofRow(pid=pid, cmd=cmd, user=user, name=name))
@@ -125,7 +125,16 @@ def check_port_free(port: int) -> DoctorCheck:
         check=False,
     )
     # lsof exits 1 when nothing is listening. That's the happy path.
+    # If stderr is non-empty on a non-zero exit, lsof actually errored — fail
+    # the check rather than silently report "free".
     if proc.returncode != 0 and not proc.stdout.strip():
+        if proc.stderr.strip():
+            return DoctorCheck(
+                name=name,
+                severity=Severity.FAIL,
+                msg=f"lsof exited {proc.returncode}: {proc.stderr.strip()[:120]}",
+                hint="Check lsof permissions / availability; cannot verify port conflict otherwise.",
+            )
         return DoctorCheck(
             name=name,
             severity=Severity.OK,
@@ -175,6 +184,6 @@ def format_report(report: DoctorReport) -> str:
     lines: list[str] = []
     for c in report.checks:
         lines.append(f"  {marker[c.severity]} {c.name:<24} {c.msg}")
-        if c.severity == Severity.FAIL and c.hint:
+        if c.severity != Severity.OK and c.hint:
             lines.append(f"        → {c.hint}")
     return "\n".join(lines)

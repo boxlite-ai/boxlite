@@ -20,11 +20,18 @@ def test_parse_multiple_listeners():
         "p29538\ncboxlite-s\nLlilongen\nn*:5432\n"
     )
     rows = _parse_lsof_F(out)
-    assert len(rows) == 2
-    assert rows[0].cmd == "postgres"
-    assert rows[0].pid == 723
-    assert rows[1].cmd == "boxlite-s"
-    assert rows[1].pid == 29538
+    assert rows == [
+        _LsofRow(pid=723, cmd="postgres", user="lilongen", name="127.0.0.1:5432"),
+        _LsofRow(pid=29538, cmd="boxlite-s", user="lilongen", name="*:5432"),
+    ]
+
+
+def test_parse_ignores_fd_field():
+    """Real lsof -F output includes f<fd> lines between L and n; parser must skip them."""
+    out = "p39425\ncboxlite-shim\nLlilongen\nf9\nn*:25432\n"
+    assert _parse_lsof_F(out) == [
+        _LsofRow(pid=39425, cmd="boxlite-shim", user="lilongen", name="*:25432"),
+    ]
 
 
 def test_boxlite_listener_is_acceptable():
