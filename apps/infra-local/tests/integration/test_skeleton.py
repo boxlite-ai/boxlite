@@ -41,6 +41,17 @@ def test_walking_skeleton_round_trip(tmp_config: InfraConfig):
 
 
 async def _round_trip(cfg: InfraConfig) -> None:
+    # 0. Guard: refuse to run if any boxlite-local-* box already exists.
+    # Otherwise the finally-block down(wipe=True) would silently destroy
+    # a developer's live state.
+    pre = await ps(cfg)
+    pre_names = [n for n, _, _ in pre]
+    if pre_names:
+        pytest.skip(
+            f"refusing to run: pre-existing boxlite-local-* boxes would be destroyed "
+            f"by the cleanup step ({pre_names}). Run `python -m boxlite_local down --wipe` first."
+        )
+
     # 1. doctor passes on a clean machine
     report = await doctor(cfg, SERVICES, strict=False)
     assert not report.any_fail(), f"doctor failed before up: {report.checks!r}"
