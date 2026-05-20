@@ -78,7 +78,9 @@ async def test_exec_timeout_kills_sigalrm_ignoring_process(shared_runtime):
     Fix is in ``src/guest/src/service/exec/timeout.rs``: send ``SIGKILL``
     (uncatchable) rather than ``SIGALRM``.
     """
-    async with boxlite.SimpleBox(image="python:3-alpine", runtime=shared_runtime) as box:
+    async with boxlite.SimpleBox(
+        image="python:3-alpine", runtime=shared_runtime
+    ) as box:
         t0 = time.time()
         result = await box.exec(
             "python3",
@@ -119,7 +121,9 @@ async def test_exec_timeout_sigkill_fallback_when_sigterm_ignored(shared_runtime
       - t = TIMEOUT_S:           SIGTERM sent, absorbed by SIG_IGN
       - t = TIMEOUT_S + GRACE_S: SIGKILL sent, process dies (exit_code=-9)
     """
-    async with boxlite.SimpleBox(image="python:3-alpine", runtime=shared_runtime) as box:
+    async with boxlite.SimpleBox(
+        image="python:3-alpine", runtime=shared_runtime
+    ) as box:
         t0 = time.time()
         result = await box.exec(
             "python3",

@@ -201,7 +201,9 @@ async def main(runtime=None):
     print("\n[4] Loading malicious image via boxlite.SimpleBox(rootfs_path=…)")
 
     try:
-        async with boxlite.SimpleBox(rootfs_path=OCI_LAYOUT_DIR, runtime=runtime) as box:
+        async with boxlite.SimpleBox(
+            rootfs_path=OCI_LAYOUT_DIR, runtime=runtime
+        ) as box:
             r = await box.exec("sh", "-c", "echo ok")
             print(f"    VM stdout: {r.stdout.strip()}")
     except Exception as e:
