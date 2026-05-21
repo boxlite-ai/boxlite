@@ -161,6 +161,7 @@ Cargo.lock
 /apps/infra/.sst/
 /apps/infra/sst-env.d.ts
 /apps/infra/.env*
+!/apps/infra/.env.example
 /apps/snapshot-manager/data/
 /apps/runner/pkg/daemon/static/*
 !/apps/runner/pkg/daemon/static/.gitkeep
