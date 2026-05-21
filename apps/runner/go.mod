@@ -4,7 +4,7 @@ go 1.25.4
 
 require (
 	github.com/boxlite-ai/boxlite/libs/api-client-go v0.149.0
-	github.com/boxlite-ai/boxlite/sdks/go v0.8.2
+	github.com/boxlite-ai/boxlite/sdks/go v0.9.0
 	github.com/containerd/errdefs v1.0.0
 	github.com/docker/go-units v0.5.0
 	github.com/gin-gonic/gin v1.10.1
