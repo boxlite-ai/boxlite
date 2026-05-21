@@ -214,10 +214,23 @@ SPEC_PGADMIN = ServiceSpec(
         # Skip the password-setup wizard so probes don't redirect forever.
         "PGADMIN_CONFIG_SERVER_MODE": "False",
         "PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED": "False",
+        # Force IPv4 bind (image default is [::]:80 dual-stack).
+        "PGADMIN_LISTEN_ADDRESS": "0.0.0.0",
     },
     depends_on=["postgres"],
+    # KNOWN ISSUE — host-side port forward (25051) doesn't work for pgadmin:
+    # the SDK silently fails to create the shim when the container image's
+    # EXPOSE list includes a privileged port the SDK can't bind on the host
+    # (pgadmin4 exposes 80 AND 443; jaeger/minio/registry only expose either
+    # one non-privileged port or 80 alone, and those work). Until the SDK
+    # behavior is fixed, healthcheck via in-box exec (python3 is preinstalled
+    # in the pgadmin image). The box itself works — to actually USE pgadmin
+    # from the host browser, the SDK bug needs a fix.
     healthcheck=HealthCheck(
-        http_url="http://127.0.0.1:25051/misc/ping",
+        exec=[
+            "python3", "-c",
+            "import urllib.request as u; u.urlopen('http://127.0.0.1/misc/ping', timeout=2).read()",
+        ],
         interval_s=2.0,
         retries=60,                        # pgadmin can take 30s+ to warm up
     ),
