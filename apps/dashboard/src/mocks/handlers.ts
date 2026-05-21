@@ -23,7 +23,11 @@ function maskKey(v: string): string {
   return v.slice(0, 4) + '*'.repeat(v.length - 8) + v.slice(-4)
 }
 const _ORG_ID = '00000000-0000-0000-0000-000000000001'
-const _USER_ID = '1234'
+// Dex wraps static `userID: '1234'` into its connector-prefixed `sub`,
+// not the raw "1234". This base64url is what `user.profile.sub` actually
+// contains in the dashboard's OIDC session — must match for the
+// permission gate to find the member and treat them as OWNER.
+const _USER_ID = 'CgQxMjM0EgVsb2NhbA'
 const _LOCAL_ORG = {
   id: _ORG_ID,
   name: 'Local Dev Org',
@@ -262,7 +266,21 @@ export const handlers = [
     return HttpResponse.json({ ..._LOCAL_ORG, id: params.id })
   }),
   http.get(`${API_URL}/organizations/:id/users`, async () => {
-    return HttpResponse.json([])
+    // The dashboard's permission system finds the current user via
+    // `members.find(m => m.userId === user.profile.sub)`. The OIDC `sub`
+    // for our dex static user `admin@boxlite.dev` is "1234" (from
+    // SPEC_DEX `userID: '1234'`). Returning OWNER role flips
+    // `authenticatedUserHasPermission(...)` to `true` for every check,
+    // which unlocks Create buttons on Snapshots, Volumes, Webhooks, etc.
+    return HttpResponse.json([
+      {
+        userId: _USER_ID,
+        email: 'admin@boxlite.dev',
+        name: 'Local Admin',
+        role: 'owner',
+        assignedRoles: [{ name: 'Owner', permissions: [] }],
+      },
+    ])
   }),
   http.get(`${API_URL}/organizations/:id/invitations`, async () => {
     return HttpResponse.json([])
