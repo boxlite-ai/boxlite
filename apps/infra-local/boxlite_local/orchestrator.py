@@ -113,34 +113,55 @@ def _http_probe(url: str) -> bool:
 # ─── image-cache writable workaround ──────────────────────────────────────
 
 _IMAGE_CACHE = Path.home() / ".boxlite" / "images" / "extracted"
+_TMP_CACHE = Path.home() / ".boxlite" / "tmp"
 
 
 def _ensure_image_cache_writable() -> None:
     """Workaround for SDK rootfs-merge failures on images whose layers contain
-    `r-x` directories (e.g. RHEL UBI-based images like minio/minio:latest).
+    `r-x` directories (e.g. RHEL UBI-based images like minio/minio:latest,
+    minio/mc:latest).
 
     The SDK's per-start rootfs merge tries to write into directories whose
     owner-write bit is unset in the extracted layer cache, which produces
     `RuntimeError: storage error: Failed to ... Permission denied (os error 13)`
     and (sometimes) `RustPanic: rust future panicked: unknown error`.
 
-    This fix walks the extracted cache once per `start_service` call and
-    adds owner-write to every directory. It's idempotent and cheap (~10ms
-    on a populated cache). Remove when the SDK adds owner-write at extract time.
+    Walks `~/.boxlite/images/extracted/` AND `~/.boxlite/tmp/` adding owner-write
+    to every directory. Idempotent + cheap (~10ms on a populated cache).
+    Remove when the SDK relaxes dir perms at extract time.
     """
-    if not _IMAGE_CACHE.exists():
-        return
-    # Use os.walk + os.chmod for speed (avoids spawning chmod -R subprocess).
     import os, stat
-    for root, dirs, _files in os.walk(_IMAGE_CACHE):
-        for d in dirs:
-            p = os.path.join(root, d)
-            try:
-                st = os.stat(p).st_mode
-                if not (st & stat.S_IWUSR):
-                    os.chmod(p, st | stat.S_IWUSR | stat.S_IXUSR | stat.S_IRUSR)
-            except OSError:
-                pass  # best-effort; ignore unreadable entries
+    for root_path in (_IMAGE_CACHE, _TMP_CACHE):
+        if not root_path.exists():
+            continue
+        for root, dirs, _files in os.walk(root_path):
+            for d in dirs:
+                p = os.path.join(root, d)
+                try:
+                    st = os.stat(p).st_mode
+                    if not (st & stat.S_IWUSR):
+                        os.chmod(p, st | stat.S_IWUSR | stat.S_IXUSR | stat.S_IRUSR)
+                except OSError:
+                    pass  # best-effort
+
+
+def _is_rootfs_perm_error(exc: Exception) -> bool:
+    """Detect the SDK's rootfs-merge permission-denied error so we can retry after chmod."""
+    msg = str(exc)
+    return "Permission denied (os error 13)" in msg and "/usr/bin/" in msg
+
+
+async def _start_with_perm_retry(box, label: str) -> None:
+    """Call `box.start()`. If it hits the SDK's r-x rootfs-perm bug, chmod the
+    image cache (which is now populated post-extract) and retry once."""
+    try:
+        await box.start()
+    except Exception as e:
+        if not _is_rootfs_perm_error(e):
+            raise
+        print(f"  {label}: hit SDK rootfs perm error; re-chmodding cache and retrying")
+        _ensure_image_cache_writable()
+        await box.start()
 
 
 # ─── start / stop / wait ──────────────────────────────────────────────────
@@ -171,7 +192,7 @@ async def start_service(runtime, spec: ServiceSpec, config: InfraConfig) -> None
                 pass
             await runtime.remove(name)
             box, _ = await runtime.get_or_create(opts, name=name)
-        await box.start()
+        await _start_with_perm_retry(box, label=spec.name)
         await _wait_one_shot_exit(runtime, name, label=spec.name)
         try:
             await runtime.remove(name)
@@ -181,10 +202,10 @@ async def start_service(runtime, spec: ServiceSpec, config: InfraConfig) -> None
         return
 
     if created:
-        await box.start()
+        await _start_with_perm_retry(box, label=spec.name)
     else:
         try:
-            await box.start()
+            await _start_with_perm_retry(box, label=spec.name)
         except Exception as e:
             if not _is_already_running_error(e):
                 raise
@@ -194,11 +215,17 @@ async def start_service(runtime, spec: ServiceSpec, config: InfraConfig) -> None
 
 
 async def stop_service(runtime, service_name: str) -> bool:
-    """Stop + remove the box for service_name. Idempotent. Returns True iff a box was found."""
+    """Stop + remove the box for service_name. Idempotent. Returns True iff a box was found.
+
+    The SDK's `runtime.get(name)` may either raise or return None for missing
+    boxes depending on version; both mean "nothing to stop" and return False.
+    """
     name = _box_name(service_name)
     try:
         box = await runtime.get(name)
     except Exception:
+        return False
+    if box is None:
         return False
     try:
         await box.stop()
