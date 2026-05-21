@@ -15,6 +15,13 @@ const API_URL = import.meta.env.VITE_API_URL
 
 // ─── synthetic local-dev fixtures ────────────────────────────────────────
 const NOW = new Date()
+
+// Replace all but the first 4 + last 4 chars with `*`, matching how the
+// dashboard masks keys in the list view.
+function maskKey(v: string): string {
+  if (v.length <= 8) return '*'.repeat(v.length)
+  return v.slice(0, 4) + '*'.repeat(v.length - 8) + v.slice(-4)
+}
 const _ORG_ID = '00000000-0000-0000-0000-000000000001'
 const _USER_ID = '1234'
 const _LOCAL_ORG = {
@@ -31,6 +38,10 @@ const _LOCAL_ORG = {
   telemetryEnabled: true,
   maxConcurrentSandboxes: 100,
   maxConcurrentSnapshotBuildings: 10,
+  // Dashboard checks `!selectedOrganization.defaultRegionId` and shows
+  // the "Set Default Region" modal if missing. Set it so we boot directly
+  // into Sandboxes without the blocking modal.
+  defaultRegionId: 'local',
   defaultRegion: 'local',
   role: 'OWNER',
 }
@@ -232,6 +243,18 @@ export const handlers = [
   }),
 
   // ─── core API mocks for "no real API" local-dev flow ─────────────────
+
+  // Paginated empty-list endpoints — must come BEFORE the GET catch-all.
+  // Shape: { items: [], totalItems: 0, totalPages: 0 } expected by
+  // `useSandboxes`, `useSnapshots`, etc.
+  ...['sandboxes', 'snapshots', 'registries', 'volumes', 'audit-logs',
+      'webhooks', 'docker-credentials'].flatMap((resource) => [
+    http.get(`${API_URL}/organizations/:orgId/${resource}`, async () =>
+      HttpResponse.json({ items: [], totalItems: 0, totalPages: 0 })),
+    http.get(`${API_URL}/${resource}`, async () =>
+      HttpResponse.json({ items: [], totalItems: 0, totalPages: 0 })),
+  ]),
+
   http.get(`${API_URL}/organizations`, async () => {
     return HttpResponse.json([_LOCAL_ORG])
   }),
@@ -257,23 +280,112 @@ export const handlers = [
     })
   }),
   http.get(`${API_URL}/regions`, async () => {
-    return HttpResponse.json([{ id: 'local', name: 'Local', isDefault: true }])
+    return HttpResponse.json([])
+  }),
+  http.get(`${API_URL}/shared-regions`, async () => {
+    // Shared regions (the actual endpoint OpenAPI's listSharedRegions hits).
+    return HttpResponse.json([
+      {
+        id: 'local',
+        name: 'Local',
+        organizationId: null,
+        regionType: 'shared',
+        createdAt: NOW.toISOString(),
+        updatedAt: NOW.toISOString(),
+        proxyUrl: 'http://localhost:28080',
+        sshGatewayUrl: null,
+        snapshotManagerUrl: null,
+      },
+    ])
+  }),
+  http.patch(`${API_URL}/organizations/:id`, async ({ params, request }) => {
+    // Setting default region — accept and echo back.
+    const body = await request.json().catch(() => ({}))
+    return HttpResponse.json({ ..._LOCAL_ORG, id: params.id, ...(body as object) })
   }),
 
-  // Catch-all GET for any other /api/* the dashboard probes — return [] for
-  // list-like endpoints so providers don't error out. Local-dev convenience.
+  // ─── API Keys: stateful CRUD (persisted to sessionStorage) ───────────
+  // Survives both Vite HMR of this module AND full page reloads, so
+  // create→navigate→delete actually works in the browser. Clears when the
+  // browser tab is closed.
+  ...((): ReturnType<typeof http.get>[] => {
+    type ApiKey = {
+      name: string
+      userId: string
+      value: string
+      createdAt: string
+      permissions: unknown[]
+      expiresAt: string | null
+    }
+    const KEY = '__msw_api_keys__'
+    const load = (): ApiKey[] => {
+      try { return JSON.parse(sessionStorage.getItem(KEY) ?? '[]') } catch { return [] }
+    }
+    const save = (s: ApiKey[]) => sessionStorage.setItem(KEY, JSON.stringify(s))
+    return [
+      http.get(`${API_URL}/api-keys`, async () =>
+        HttpResponse.json(load().map((k) => ({
+          userId: _USER_ID,            // fallback for old stored keys
+          ...k,
+          value: maskKey(k.value),
+        })))),
+      http.post(`${API_URL}/api-keys`, async ({ request }) => {
+        const body = (await request.json().catch(() => ({}))) as {
+          name?: string
+          permissions?: unknown[]
+          expiresAt?: string
+        }
+        const store = load()
+        const key: ApiKey = {
+          name: body.name ?? `api-key-${store.length + 1}`,
+          userId: _USER_ID,
+          value: `boxlite_sk_local_${Math.random().toString(36).slice(2, 14)}`,
+          createdAt: new Date().toISOString(),
+          permissions: body.permissions ?? [],
+          expiresAt: body.expiresAt ?? null,
+        }
+        store.push(key)
+        save(store)
+        // POST response returns the FULL key value (only chance to see it).
+        return HttpResponse.json(key)
+      }),
+      http.delete(`${API_URL}/api-keys/:name`, async ({ params }) => {
+        const store = load().filter((k) => k.name !== params.name)
+        save(store)
+        return HttpResponse.json({})
+      }),
+      // Dashboard uses deleteApiKeyForUser → /api-keys/{userId}/{name}
+      http.delete(`${API_URL}/api-keys/:userId/:name`, async ({ params }) => {
+        const store = load().filter((k) => k.name !== params.name)
+        save(store)
+        return HttpResponse.json({})
+      }),
+    ]
+  })(),
+
+  // Catch-all GET for any other /api/* the dashboard probes — return shape
+  // appropriate to URL:
+  //  - URL contains "paginated" -> { items:[], totalItems:0, totalPages:0 }
+  //  - else                     -> []
   http.get(`${API_URL}/*`, async ({ request }) => {
     console.log('[MSW catch-all GET]', request.url)
+    if (request.url.includes('paginated')) {
+      return HttpResponse.json({ items: [], totalItems: 0, totalPages: 0 })
+    }
     return HttpResponse.json([])
   }),
 
-  // Catch-all POST/PUT/DELETE — return {} so mutations don't error.
+  // Catch-all POST/PUT/PATCH/DELETE — return {} so mutations don't error.
   http.post(`${API_URL}/*`, async ({ request }) => {
     console.log('[MSW catch-all POST]', request.url)
     return HttpResponse.json({})
   }),
   http.put(`${API_URL}/*`, async ({ request }) => {
     console.log('[MSW catch-all PUT]', request.url)
+    return HttpResponse.json({})
+  }),
+  http.patch(`${API_URL}/*`, async ({ request }) => {
+    console.log('[MSW catch-all PATCH]', request.url)
     return HttpResponse.json({})
   }),
   http.delete(`${API_URL}/*`, async ({ request }) => {
