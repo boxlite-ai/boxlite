@@ -2,34 +2,58 @@
 //! `docker build` complete end-to-end inside the box.
 //!
 //! Gated on `BOXLITE_DIND_TEST=1` because it requires a libkrunfw-dind
-//! blob bundled at build time (`make libkrunfw-dind && cargo build` with
-//! `BOXLITE_LIBKRUNFW_DIND_PATH` set). Without the env var the test
-//! prints a SKIP notice and returns Ok — keeps the default
+//! blob bundled at build time (`make libkrunfw-dind` then a rebuild of
+//! boxlite with `BOXLITE_LIBKRUNFW_DIND_PATH` set). Without the env var
+//! the test prints a SKIP notice and returns Ok — keeps the default
 //! `test:integration:cli` matrix runnable on hosts without the dind
 //! kernel built.
 //!
+//! Architecture under test (NO entrypoint bypass): we let the image's
+//! own `dockerd-entrypoint.sh` run as PID 1 inside the container and
+//! pass its dockerd flags via `--cmd` (i.e., as the box's CMD, not by
+//! replacing ENTRYPOINT). The positional `boxlite run` command tail is
+//! the foreground exec — a probe script that waits for dockerd to come
+//! up and then drives `docker build`. The previous variant of this
+//! test used `--entrypoint sh` to swap the entrypoint out and ran
+//! dockerd manually from the probe; that bypass is no longer needed
+//! now that `--cmd` exists.
+//!
 //! What we assert end-to-end:
-//!   - boxlite spawns a `--support-docker` box that successfully runs
-//!     dockerd (the Phase A caps + cgroup rw work)
+//!   - boxlite spawns a `--support-docker` box whose init process is
+//!     the image's `dockerd-entrypoint.sh` (Phase A caps + cgroup rw
+//!     plus the Phase B dind kernel let it boot)
+//!   - dockerd-entrypoint.sh launches dockerd with our `--bridge=none`
+//!     / `--iptables=false` / `--storage-driver=vfs` flags (needed
+//!     because libcontainer-0.5.7 still bind-remounts `/proc/sys` ro
+//!     under us — see commit fb073bf)
 //!   - dockerd pulls `alpine:3.19` over the box's gvproxy network
 //!   - `docker build --network=host` produces an image with a custom
-//!     tag (the build's RUN step executes a child container, exercising
-//!     containerd shim + the dind kernel's mqueue/netfilter subsystems)
+//!     tag (the build's RUN step executes a child container,
+//!     exercising containerd shim + the dind kernel's mqueue /
+//!     netfilter subsystems)
 //!
-//! Failure here is the right canary for issue #276's regression budget:
-//! every existing capability we depend on (libkrunfw-dind kernel
-//! configs, the entrypoint bypass, the support_docker flag plumbing,
-//! the per-box libkrunfw symlink) is exercised on a real VM.
+//! Failure here is the right canary for issue #276's regression
+//! budget: every existing capability we depend on (the dind kernel,
+//! the per-box libkrunfw symlink, --support-docker plumbing, and now
+//! the `--cmd` plumbing that lets the image's real ENTRYPOINT run as
+//! PID 1) is exercised on a real VM.
 
 use assert_cmd::Command;
 use boxlite_test_utils::home::PerTestBoxHome;
 use std::time::Duration;
 
 const PROBE_SCRIPT: &str = r#"exec > /probe/result.log 2>&1
-dockerd --host=unix:///var/run/docker.sock \
-        --bridge=none --iptables=false --storage-driver=vfs \
-        > /tmp/d.log 2>&1 &
-until [ -S /var/run/docker.sock ]; do sleep 0.5; done
+echo "[probe] waiting for /var/run/docker.sock"
+for i in $(seq 1 180); do
+    [ -S /var/run/docker.sock ] && break
+    sleep 1
+done
+if [ ! -S /var/run/docker.sock ]; then
+    echo "[probe] dockerd socket never appeared after 180s"
+    echo "[exit=124]"
+    exit 124
+fi
+echo "[probe] socket present, running build"
 docker build --network=host -t boxlite-dind-test:1 /probe/ctx
 echo "[exit=$?]"
 "#;
@@ -49,9 +73,10 @@ fn dind_supports_docker_build() {
     }
 
     // ── Stage Dockerfile + probe.sh in a host-visible tempdir ──────────
-    // The box mounts this dir at /probe; the probe script starts dockerd
-    // and runs `docker build` against /probe/ctx. Output lands in
-    // /probe/result.log (which we read on the host after boxlite exits).
+    // The box mounts this dir at /probe; the probe script (the foreground
+    // exec) waits for dockerd to come up and runs `docker build` against
+    // /probe/ctx. Output lands in /probe/result.log which we read on the
+    // host after the run completes.
     let tmp = tempfile::tempdir().expect("create tempdir");
     let ctx_dir = tmp.path().join("ctx");
     std::fs::create_dir(&ctx_dir).expect("mkdir ctx");
@@ -81,24 +106,37 @@ fn dind_supports_docker_build() {
             "run",
             "--rm",
             "--support-docker",
-            "--entrypoint",
-            "sh",
+            // `--cmd` carries the dockerd flags to the image's real
+            // ENTRYPOINT (dockerd-entrypoint.sh). Without these,
+            // dockerd-entrypoint.sh boots dockerd with default bridge/
+            // iptables, which fails because libcontainer-0.5.7 still
+            // bind-remounts /proc/sys as ro under us (commit fb073bf).
+            "--cmd",
+            "--bridge=none",
+            "--cmd",
+            "--iptables=false",
+            "--cmd",
+            "--storage-driver=vfs",
             "--memory",
             "2048",
             "-v",
             &mount,
             "docker:dind",
+            // Foreground exec: probe waits for the dockerd socket
+            // (which `dockerd-entrypoint.sh` running as PID 1 brings
+            // up) and runs `docker build`.
+            "sh",
             "/probe/probe.sh",
         ]);
-    // Note: we do NOT assert on boxlite's exit code. When `--entrypoint`
-    // is set the foreground exec is `sleep infinity` (an artifact of
-    // attaching stdio while the real workload runs as PID 1); when the
-    // entrypoint script exits, the container's PID namespace tears down
-    // and SIGKILL's the sleep — boxlite then reports 137 even though the
-    // init process exited cleanly. The probe script's `[exit=$?]` marker
-    // is what we actually care about. (Tracked as a follow-up: foreground
-    // exit code should follow the init process, not the foreground sleep.)
-    let _ = cmd.assert();
+    // `boxlite run`'s exit code is the probe script's exit code (it
+    // controls the foreground exec, not PID 1). PID 1 (dockerd) keeps
+    // running after the build; the RuntimeImpl Drop on shutdown sends
+    // SIGTERM to the shim, the VM exits, and `--rm` plus recovery on
+    // next runtime start clean up any lingering box record.
+    cmd.assert().success();
+
+    // Capture the probe's recorded result for the test report and the
+    // two assertions below.
     let log_path = tmp.path().join("result.log");
     let log = std::fs::read_to_string(&log_path)
         .unwrap_or_else(|e| panic!("probe never produced {}: {}", log_path.display(), e));

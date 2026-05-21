@@ -636,6 +636,33 @@ pub struct ManagementFlags {
     #[arg(long, value_name = "PROGRAM")]
     pub entrypoint: Option<String>,
 
+    /// Pass arguments to the image's ENTRYPOINT (Docker CMD override).
+    ///
+    /// Repeatable; each `--cmd ARG` adds one positional argument that the
+    /// image's existing ENTRYPOINT receives as `$1`, `$2`, ... Use this
+    /// when you want the image's init to run with custom flags but
+    /// without replacing it (the way `--entrypoint` does).
+    ///
+    /// Gated on `--support-docker`: the lean / non-docker `boxlite run`
+    /// flow has long treated `[COMMAND...]` as a secondary-exec attach
+    /// rather than CMD, so introducing CMD overrides outside the docker
+    /// opt-in would silently re-route stdio for every existing user. The
+    /// gate keeps default behaviour byte-for-byte identical.
+    ///
+    /// Example — run `docker:dind`'s own `dockerd-entrypoint.sh` with
+    /// flags that work under the current libcontainer `/proc/sys`
+    /// hardening:
+    ///   `boxlite run --support-docker \
+    ///       --cmd --bridge=none --cmd --iptables=false \
+    ///       --cmd --storage-driver=vfs docker:dind`
+    #[arg(
+        long = "cmd",
+        value_name = "ARG",
+        allow_hyphen_values = true,
+        conflicts_with = "entrypoint"
+    )]
+    pub cmd: Vec<String>,
+
     /// Enable in-box docker / docker-compose support.
     ///
     /// Mounts /sys/fs/cgroup as writable cgroup2 inside the container and
@@ -664,6 +691,15 @@ impl ManagementFlags {
         if let Some(ep) = &self.entrypoint {
             opts.entrypoint = Some(vec![ep.clone()]);
         }
+        // `--cmd` is gated on `--support-docker` so a stray `--cmd` flag
+        // without the docker opt-in stays a no-op rather than silently
+        // changing CMD for the lean flow. The CLI command's
+        // `validate_flags` rejects that combination at parse-time, but
+        // we double-check here so direct callers (e.g., tests building
+        // ManagementFlags by hand) cannot accidentally widen behaviour.
+        if self.support_docker && !self.cmd.is_empty() {
+            opts.cmd = Some(self.cmd.clone());
+        }
     }
 }
 
@@ -690,6 +726,7 @@ mod tests {
             detach: false,
             rm: false,
             entrypoint: None,
+            cmd: vec![],
             support_docker: false,
         };
         let mut opts = BoxOptions::default();
@@ -709,6 +746,7 @@ mod tests {
             detach: false,
             rm: false,
             entrypoint: None,
+            cmd: vec![],
             support_docker: true,
         };
         let mut opts = BoxOptions::default();
@@ -738,6 +776,7 @@ mod tests {
             detach: true,
             rm: true,
             entrypoint: None,
+            cmd: vec![],
             support_docker: true,
         };
         flags.apply_to(&mut opts);
@@ -757,6 +796,90 @@ mod tests {
         assert!(opts.detach);
         assert!(opts.auto_remove);
         assert!(opts.support_docker);
+    }
+
+    // ─── --cmd flag plumbing ───────────────────────────────────────────
+    //
+    // `--cmd` carries args for the image's existing ENTRYPOINT. It is
+    // strictly opt-in via `--support-docker` so the lean / non-docker
+    // `boxlite run` flow (where positional `[COMMAND...]` is a secondary
+    // exec attach, not Docker CMD) keeps its semantics unchanged. The
+    // tests below pin both halves of that contract:
+    //   1. `--cmd` without `--support-docker` is a no-op at the
+    //      apply_to layer (the run command also rejects this combo at
+    //      validate-time, but apply_to is the last line of defence for
+    //      any direct callers).
+    //   2. `--cmd` with `--support-docker` populates BoxOptions::cmd.
+
+    #[test]
+    fn management_flags_cmd_without_support_docker_is_noop() {
+        let flags = ManagementFlags {
+            name: None,
+            detach: false,
+            rm: false,
+            entrypoint: None,
+            cmd: vec!["--bridge=none".to_string()],
+            support_docker: false,
+        };
+        let mut opts = BoxOptions::default();
+        flags.apply_to(&mut opts);
+        assert!(
+            opts.cmd.is_none(),
+            "--cmd must not affect BoxOptions when --support-docker is OFF"
+        );
+    }
+
+    #[test]
+    fn management_flags_cmd_with_support_docker_sets_cmd() {
+        let flags = ManagementFlags {
+            name: None,
+            detach: false,
+            rm: false,
+            entrypoint: None,
+            cmd: vec![
+                "--bridge=none".to_string(),
+                "--iptables=false".to_string(),
+                "--storage-driver=vfs".to_string(),
+            ],
+            support_docker: true,
+        };
+        let mut opts = BoxOptions::default();
+        flags.apply_to(&mut opts);
+        assert_eq!(
+            opts.cmd.as_deref(),
+            Some(
+                &[
+                    "--bridge=none".to_string(),
+                    "--iptables=false".to_string(),
+                    "--storage-driver=vfs".to_string(),
+                ][..]
+            ),
+            "--cmd args must propagate verbatim to BoxOptions.cmd, in order"
+        );
+    }
+
+    #[test]
+    fn management_flags_empty_cmd_does_not_overwrite_existing() {
+        // Pre-existing BoxOptions::cmd (e.g., set by a config file the CLI
+        // loads before applying flags) must not be wiped by an unset --cmd.
+        let mut opts = BoxOptions {
+            cmd: Some(vec!["preserved".to_string()]),
+            ..BoxOptions::default()
+        };
+        let flags = ManagementFlags {
+            name: None,
+            detach: false,
+            rm: false,
+            entrypoint: None,
+            cmd: vec![],
+            support_docker: true,
+        };
+        flags.apply_to(&mut opts);
+        assert_eq!(
+            opts.cmd,
+            Some(vec!["preserved".to_string()]),
+            "an empty --cmd Vec must leave a previously-set cmd untouched"
+        );
     }
 
     #[test]

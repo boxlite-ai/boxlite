@@ -139,6 +139,17 @@ impl BoxRunner {
                 .args(&["infinity".to_string()])
                 .tty(self.args.process.tty);
         }
+        // `--cmd` (gated on `--support-docker`) routes args to the
+        // image's existing ENTRYPOINT — the workload lives in PID 1.
+        // If the caller didn't also supply a positional foreground
+        // command, fall back to a long sleep so `boxlite run` blocks
+        // on PID 1's lifetime rather than exiting immediately into a
+        // default `sh` shell that would race with init.
+        if !self.args.management.cmd.is_empty() && self.args.command.is_empty() {
+            return BoxCommand::new("sleep")
+                .args(&["infinity".to_string()])
+                .tty(self.args.process.tty);
+        }
         let (program, args) = parse_command_args(&self.args.command);
         BoxCommand::new(program)
             .args(args)
@@ -149,6 +160,15 @@ impl BoxRunner {
         // Check TTY availability if requested
         if self.args.process.tty && !io::stdin().is_terminal() {
             anyhow::bail!("the input device is not a TTY.");
+        }
+
+        // `--cmd` is a docker-in-box concept (it pokes the image's init
+        // PID 1 instead of the secondary-exec stdio attach the lean
+        // flow uses for positional COMMAND…). Reject it without
+        // `--support-docker` so the non-docker flow stays byte-for-byte
+        // identical — there's no path where `--cmd` alone is meaningful.
+        if !self.args.management.cmd.is_empty() && !self.args.management.support_docker {
+            anyhow::bail!("--cmd requires --support-docker");
         }
 
         Ok(())
