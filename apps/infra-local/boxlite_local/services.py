@@ -316,7 +316,14 @@ SPEC_OTEL = ServiceSpec(
 
 
 def _caddyfile(cfg) -> str:
-    """Inline Caddyfile body. Path-based routing because we don't have DNS hijack."""
+    """Inline Caddyfile body. Path-based routing on plain HTTP.
+
+    TLS (`tls internal`) is intentionally NOT used because Caddy's internal
+    issuer can't mint certs for raw IP addresses (`127.0.0.1`), and we don't
+    have DNS hijack yet (no `*.boxlite.test`). Once dns-shim lands, switch
+    `:80` block below to `*.boxlite.test:443 { tls internal ... }` and add
+    redir back.
+    """
     return f"""\
 {{
 \tauto_https off
@@ -324,12 +331,6 @@ def _caddyfile(cfg) -> str:
 }}
 
 :80 {{
-\tredir https://{{host}}{{uri}} permanent
-}}
-
-:443 {{
-\ttls internal
-
 \thandle_path /pgadmin/* {{
 \t\treverse_proxy {cfg.host_hub}:{cfg.pgadmin_host_port}
 \t}}

@@ -9,8 +9,6 @@ import asyncio
 import os
 import shutil
 import tempfile
-import ssl
-import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -104,29 +102,20 @@ async def _round_trip(cfg: InfraConfig) -> None:
             (f"http://127.0.0.1:{cfg.pgadmin_host_port}/misc/ping", "pgadmin"),
             (f"http://127.0.0.1:{cfg.registry_ui_host_port}/", "registry-ui"),
             (f"http://127.0.0.1:{cfg.otel_health_port}/", "otel"),
-            (f"http://127.0.0.1:{cfg.caddy_http_port}/", "caddy-http-redirect-target-ok-on-301"),
+            (f"http://127.0.0.1:{cfg.caddy_http_port}/", "caddy-index"),
         ]:
-            try:
-                with urllib.request.urlopen(url, timeout=5) as resp:
-                    assert 200 <= resp.status < 300, f"{label} bad status: {resp.status} for {url}"
-            except urllib.error.HTTPError as e:
-                # Caddy HTTP port (28080) issues a 301 redirect to HTTPS.
-                # urlopen treats 301 without follow as an error; treat as healthy.
-                if label.startswith("caddy-http") and e.code in (301, 308):
-                    continue
-                raise
+            with urllib.request.urlopen(url, timeout=5) as resp:
+                assert 200 <= resp.status < 300, f"{label} bad status: {resp.status} for {url}"
 
-        # Caddy HTTPS reverse proxy to jaeger and registry. Self-signed cert,
-        # so use an unverified SSL context. Verifies path routing works.
-        ssl_ctx = ssl.create_default_context()
-        ssl_ctx.check_hostname = False
-        ssl_ctx.verify_mode = ssl.CERT_NONE
+        # Caddy reverse proxy via HTTP (TLS is intentionally not enabled —
+        # `tls internal` can't mint certs for raw IPs and we don't have
+        # DNS hijack yet). Verify path routing works.
         for path, label in [
             ("/jaeger/", "caddy-via-jaeger"),
             ("/registry/v2/", "caddy-via-registry"),
         ]:
-            url = f"https://127.0.0.1:{cfg.caddy_https_port}{path}"
-            with urllib.request.urlopen(url, timeout=5, context=ssl_ctx) as resp:
+            url = f"http://127.0.0.1:{cfg.caddy_http_port}{path}"
+            with urllib.request.urlopen(url, timeout=5) as resp:
                 assert 200 <= resp.status < 300, f"{label} bad status: {resp.status} for {url}"
 
     finally:
