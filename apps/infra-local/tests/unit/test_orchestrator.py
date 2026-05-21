@@ -137,3 +137,19 @@ def test_wait_healthy_exec_accepts_callable_with_config():
     )
     asyncio.run(_wait_healthy_exec(box, hc, label="t", config=cfg))
     assert box.calls == [("pg_isready", ["-U", "alice", "-d", "appdb"])]
+
+
+def test_build_box_options_resolves_callable_cmd():
+    """ServiceSpec.cmd may be a callable returning the cmd list (used by Caddy in 3c)."""
+    from boxlite_local.orchestrator import build_box_options
+    from boxlite_local.types import ServiceSpec
+
+    spec = ServiceSpec(
+        name="t",
+        image="alpine:3.20",
+        cmd=lambda cfg: ["sh", "-c", f"echo hub={cfg.host_hub}"],
+    )
+    cfg = InfraConfig(host_hub="custom.host")
+    opts = build_box_options(spec, cfg)
+    # The cmd attribute on BoxOptions is a list[str] — assert resolution happened.
+    assert opts.cmd == ["sh", "-c", "echo hub=custom.host"]

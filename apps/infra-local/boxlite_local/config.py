@@ -61,6 +61,15 @@ class InfraConfig:
     # registry-ui (3b)
     registry_ui_host_port: int = 25052
 
+    # caddy (3c)
+    caddy_http_port: int = 28080
+    caddy_https_port: int = 28443
+
+    # otel-collector (3c)
+    otel_grpc_port: int = 24317
+    otel_http_port: int = 24318
+    otel_health_port: int = 23133
+
     data_dir: Path = field(default_factory=lambda: Path.home() / ".boxlite-local" / "data")
     repo_root: Path = field(default_factory=_detect_repo_root)
 
@@ -83,6 +92,11 @@ class InfraConfig:
             pgadmin_email=os.environ.get("BOXLITE_PGADMIN_EMAIL", "admin@boxlite.dev"),
             pgadmin_password=os.environ.get("BOXLITE_PGADMIN_PASSWORD", "boxlite"),
             registry_ui_host_port=_parse_int_env("BOXLITE_REGISTRY_UI_HOST_PORT", "25052"),
+            caddy_http_port=_parse_int_env("BOXLITE_CADDY_HTTP_PORT", "28080"),
+            caddy_https_port=_parse_int_env("BOXLITE_CADDY_HTTPS_PORT", "28443"),
+            otel_grpc_port=_parse_int_env("BOXLITE_OTEL_GRPC_PORT", "24317"),
+            otel_http_port=_parse_int_env("BOXLITE_OTEL_HTTP_PORT", "24318"),
+            otel_health_port=_parse_int_env("BOXLITE_OTEL_HEALTH_PORT", "23133"),
             data_dir=Path(
                 os.environ.get("BOXLITE_DATA_DIR")
                 or str(Path.home() / ".boxlite-local" / "data")

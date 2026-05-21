@@ -137,3 +137,27 @@ def test_load_picks_up_3b_env_overrides(monkeypatch):
     assert cfg.pgadmin_email == "ops@example.com"
     assert cfg.pgadmin_password == "p2"
     assert cfg.registry_ui_host_port == 15052
+
+
+def test_new_3c_defaults():
+    cfg = InfraConfig()
+    assert cfg.caddy_http_port == 28080
+    assert cfg.caddy_https_port == 28443
+    assert cfg.otel_grpc_port == 24317
+    assert cfg.otel_http_port == 24318
+    assert cfg.otel_health_port == 23133
+
+
+def test_load_picks_up_3c_env_overrides(monkeypatch):
+    monkeypatch.setenv("BOXLITE_CADDY_HTTP_PORT", "18080")
+    monkeypatch.setenv("BOXLITE_CADDY_HTTPS_PORT", "18443")
+    monkeypatch.setenv("BOXLITE_OTEL_GRPC_PORT", "14317")
+    monkeypatch.setenv("BOXLITE_OTEL_HTTP_PORT", "14318")
+    monkeypatch.setenv("BOXLITE_OTEL_HEALTH_PORT", "13133")
+
+    cfg = InfraConfig.load()
+    assert cfg.caddy_http_port == 18080
+    assert cfg.caddy_https_port == 18443
+    assert cfg.otel_grpc_port == 14317
+    assert cfg.otel_http_port == 14318
+    assert cfg.otel_health_port == 13133

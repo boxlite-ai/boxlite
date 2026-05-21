@@ -38,7 +38,7 @@ class ServiceSpec:
     ports: list[tuple[int, int]] = field(default_factory=list)
     env: Callable[["InfraConfig"], dict[str, str]] = field(default=lambda cfg: {})
     volumes: Callable[["InfraConfig"], list[tuple[str, str]]] = field(default=lambda cfg: [])
-    cmd: Optional[list[str]] = None
+    cmd: Optional[list[str] | Callable[["InfraConfig"], list[str]]] = None
     entrypoint: Optional[list[str]] = None   # overrides image entrypoint (e.g. ["sh"]); None keeps image default
     working_dir: Optional[str] = None
     depends_on: list[str] = field(default_factory=list)

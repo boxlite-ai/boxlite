@@ -58,6 +58,7 @@ def _build_box_options_with_volumes(spec: ServiceSpec, config: InfraConfig, volu
     except ImportError:
         from boxlite.boxlite import BoxOptions  # type: ignore
 
+    cmd = spec.cmd(config) if callable(spec.cmd) else spec.cmd
     return BoxOptions(
         image=spec.image,
         cpus=spec.cpus,
@@ -67,7 +68,7 @@ def _build_box_options_with_volumes(spec: ServiceSpec, config: InfraConfig, volu
         ports=spec.ports,
         volumes=volumes,
         env=list(spec.env(config).items()),
-        cmd=spec.cmd,
+        cmd=cmd,
         entrypoint=spec.entrypoint,
         working_dir=spec.working_dir,
     )
