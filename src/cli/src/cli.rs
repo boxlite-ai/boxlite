@@ -623,12 +623,83 @@ pub struct ManagementFlags {
     /// Automatically remove the box when it exits
     #[arg(long)]
     pub rm: bool,
+
+    /// Override the image's ENTRYPOINT directive.
+    ///
+    /// When set, completely replaces the image's ENTRYPOINT for the box's
+    /// init process. Useful for images with an ENTRYPOINT that exits
+    /// (e.g., `docker:dind`'s `dockerd-entrypoint.sh` finishes its TLS
+    /// setup and exits when given no `dockerd` arg → tears down the
+    /// container's PID namespace and kills all exec'd processes).
+    /// Pair with the positional `[COMMAND...]` arg, which becomes the
+    /// args to this entrypoint.
+    #[arg(long, value_name = "PROGRAM")]
+    pub entrypoint: Option<String>,
+
+    /// Pass arguments to the image's ENTRYPOINT (Docker CMD override).
+    ///
+    /// Repeatable; each `--cmd ARG` adds one positional argument that the
+    /// image's existing ENTRYPOINT receives as `$1`, `$2`, ... Use this
+    /// when you want the image's init to run with custom flags but
+    /// without replacing it (the way `--entrypoint` does).
+    ///
+    /// Gated on `--privileged`: the lean / non-docker `boxlite run`
+    /// flow has long treated `[COMMAND...]` as a secondary-exec attach
+    /// rather than CMD, so introducing CMD overrides outside the docker
+    /// opt-in would silently re-route stdio for every existing user. The
+    /// gate keeps default behaviour byte-for-byte identical.
+    ///
+    /// Example — run `docker:dind`'s own `dockerd-entrypoint.sh` with
+    /// flags that work under the current libcontainer `/proc/sys`
+    /// hardening:
+    ///   `boxlite run --privileged \
+    ///       --cmd --bridge=none --cmd --iptables=false \
+    ///       --cmd --storage-driver=vfs docker:dind`
+    #[arg(
+        long = "cmd",
+        value_name = "ARG",
+        allow_hyphen_values = true,
+        conflicts_with = "entrypoint"
+    )]
+    pub cmd: Vec<String>,
+
+    /// Enable in-box docker / docker-compose support.
+    ///
+    /// Mounts /sys/fs/cgroup as writable cgroup2 inside the container and
+    /// grants the full Linux capability set (CAP_SYS_ADMIN, CAP_NET_ADMIN,
+    /// CAP_SYS_MODULE, etc.) to the container init plus every exec'd
+    /// process. Equivalent to `docker run --privileged` for the in-box
+    /// container.
+    ///
+    /// SECURITY: this widens the in-VM attack surface significantly — any
+    /// process inside the box runs effectively as root with full caps and
+    /// can mount/remount filesystems, manipulate network/iptables, and use
+    /// every cap-gated kernel API. The microVM boundary still contains
+    /// the process (host stays protected by KVM/libkrun isolation), but
+    /// only enable this for trusted workloads or where you would already
+    /// be running `docker run --privileged`. Default is OFF and existing
+    /// boxes are unaffected.
+    #[arg(long)]
+    pub privileged: bool,
 }
 
 impl ManagementFlags {
     pub fn apply_to(&self, opts: &mut BoxOptions) {
         opts.detach = self.detach;
         opts.auto_remove = self.rm;
+        opts.privileged = self.privileged;
+        if let Some(ep) = &self.entrypoint {
+            opts.entrypoint = Some(vec![ep.clone()]);
+        }
+        // `--cmd` is gated on `--privileged` so a stray `--cmd` flag
+        // without the docker opt-in stays a no-op rather than silently
+        // changing CMD for the lean flow. The CLI command's
+        // `validate_flags` rejects that combination at parse-time, but
+        // we double-check here so direct callers (e.g., tests building
+        // ManagementFlags by hand) cannot accidentally widen behaviour.
+        if self.privileged && !self.cmd.is_empty() {
+            opts.cmd = Some(self.cmd.clone());
+        }
     }
 }
 
@@ -637,6 +708,193 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    // ─── --privileged flag plumbing ────────────────────────────────
+    //
+    // The CLI flag must default to false and only flip BoxOptions when the
+    // user explicitly passes it. The proto + guest paths take care of the
+    // rest; what THIS module is responsible for is the CLI→BoxOptions hop.
+    // Tests below guard both the default-off invariant (existing users see
+    // no behaviour change) and the explicit-on plumbing.
+
+    #[test]
+    fn management_flags_default_leaves_privileged_false() {
+        // Build a minimal ManagementFlags with only the unrelated fields the
+        // user might set in everyday `boxlite run` invocations.
+        let flags = ManagementFlags {
+            name: None,
+            detach: false,
+            rm: false,
+            entrypoint: None,
+            cmd: vec![],
+            privileged: false,
+        };
+        let mut opts = BoxOptions::default();
+        flags.apply_to(&mut opts);
+        assert!(
+            !opts.privileged,
+            "BoxOptions.privileged must stay false when --privileged \
+             is NOT passed — protects every existing user from a silent \
+             attack-surface widening"
+        );
+    }
+
+    #[test]
+    fn management_flags_propagates_privileged_when_set() {
+        let flags = ManagementFlags {
+            name: None,
+            detach: false,
+            rm: false,
+            entrypoint: None,
+            cmd: vec![],
+            privileged: true,
+        };
+        let mut opts = BoxOptions::default();
+        flags.apply_to(&mut opts);
+        assert!(
+            opts.privileged,
+            "--privileged must flip BoxOptions.privileged so the \
+             guest receives the relaxed-caps + cgroup-rw profile"
+        );
+    }
+
+    #[test]
+    fn management_flags_apply_does_not_clobber_unrelated_options() {
+        // Setting --privileged must NOT silently change any other
+        // BoxOptions field. Verify by populating the options with non-default
+        // values for fields ManagementFlags doesn't own, applying the flag,
+        // and asserting they're preserved.
+        let mut opts = BoxOptions {
+            cpus: Some(4),
+            memory_mib: Some(2048),
+            entrypoint: Some(vec!["dockerd".to_string()]),
+            ..BoxOptions::default()
+        };
+
+        let flags = ManagementFlags {
+            name: None,
+            detach: true,
+            rm: true,
+            entrypoint: None,
+            cmd: vec![],
+            privileged: true,
+        };
+        flags.apply_to(&mut opts);
+
+        assert_eq!(opts.cpus, Some(4), "cpus must not be clobbered");
+        assert_eq!(
+            opts.memory_mib,
+            Some(2048),
+            "memory_mib must not be clobbered"
+        );
+        assert_eq!(
+            opts.entrypoint,
+            Some(vec!["dockerd".to_string()]),
+            "entrypoint must not be clobbered"
+        );
+        // What ManagementFlags DOES own should be updated.
+        assert!(opts.detach);
+        assert!(opts.auto_remove);
+        assert!(opts.privileged);
+    }
+
+    // ─── --cmd flag plumbing ───────────────────────────────────────────
+    //
+    // `--cmd` carries args for the image's existing ENTRYPOINT. It is
+    // strictly opt-in via `--privileged` so the lean / non-docker
+    // `boxlite run` flow (where positional `[COMMAND...]` is a secondary
+    // exec attach, not Docker CMD) keeps its semantics unchanged. The
+    // tests below pin both halves of that contract:
+    //   1. `--cmd` without `--privileged` is a no-op at the
+    //      apply_to layer (the run command also rejects this combo at
+    //      validate-time, but apply_to is the last line of defence for
+    //      any direct callers).
+    //   2. `--cmd` with `--privileged` populates BoxOptions::cmd.
+
+    #[test]
+    fn management_flags_cmd_without_privileged_is_noop() {
+        let flags = ManagementFlags {
+            name: None,
+            detach: false,
+            rm: false,
+            entrypoint: None,
+            cmd: vec!["--bridge=none".to_string()],
+            privileged: false,
+        };
+        let mut opts = BoxOptions::default();
+        flags.apply_to(&mut opts);
+        assert!(
+            opts.cmd.is_none(),
+            "--cmd must not affect BoxOptions when --privileged is OFF"
+        );
+    }
+
+    #[test]
+    fn management_flags_cmd_with_privileged_sets_cmd() {
+        let flags = ManagementFlags {
+            name: None,
+            detach: false,
+            rm: false,
+            entrypoint: None,
+            cmd: vec![
+                "--bridge=none".to_string(),
+                "--iptables=false".to_string(),
+                "--storage-driver=vfs".to_string(),
+            ],
+            privileged: true,
+        };
+        let mut opts = BoxOptions::default();
+        flags.apply_to(&mut opts);
+        assert_eq!(
+            opts.cmd.as_deref(),
+            Some(
+                &[
+                    "--bridge=none".to_string(),
+                    "--iptables=false".to_string(),
+                    "--storage-driver=vfs".to_string(),
+                ][..]
+            ),
+            "--cmd args must propagate verbatim to BoxOptions.cmd, in order"
+        );
+    }
+
+    #[test]
+    fn management_flags_empty_cmd_does_not_overwrite_existing() {
+        // Pre-existing BoxOptions::cmd (e.g., set by a config file the CLI
+        // loads before applying flags) must not be wiped by an unset --cmd.
+        let mut opts = BoxOptions {
+            cmd: Some(vec!["preserved".to_string()]),
+            ..BoxOptions::default()
+        };
+        let flags = ManagementFlags {
+            name: None,
+            detach: false,
+            rm: false,
+            entrypoint: None,
+            cmd: vec![],
+            privileged: true,
+        };
+        flags.apply_to(&mut opts);
+        assert_eq!(
+            opts.cmd,
+            Some(vec!["preserved".to_string()]),
+            "an empty --cmd Vec must leave a previously-set cmd untouched"
+        );
+    }
+
+    #[test]
+    fn box_options_default_has_privileged_false() {
+        // The default constructor is the source of truth for "lean profile".
+        // Multiple SDK plumbings rely on this default; guard it here so any
+        // accidental change tips a unit test instead of silently shipping
+        // a new default behaviour to every box on the planet.
+        let opts = BoxOptions::default();
+        assert!(
+            !opts.privileged,
+            "BoxOptions::default().privileged MUST be false. Changing this \
+             default would silently widen attack surface for every existing user."
+        );
+    }
 
     #[test]
     fn test_apply_env_vars_with_lookup() {
