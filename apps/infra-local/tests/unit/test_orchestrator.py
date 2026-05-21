@@ -76,3 +76,64 @@ def test_already_running_predicate_rejects_unrelated_errors():
     assert _is_already_running_error(Exception("out of memory")) is False
     assert _is_already_running_error(Exception("")) is False
     assert _is_already_running_error(RuntimeError("network timeout")) is False
+
+
+# ─── _wait_healthy_exec callable dispatch ────────────────────────────────
+
+import asyncio
+
+from boxlite_local.config import InfraConfig
+from boxlite_local.orchestrator import _wait_healthy_exec
+from boxlite_local.types import HealthCheck
+
+
+class _FakeExecution:
+    def __init__(self, exit_code):
+        self._rc = exit_code
+
+    def stdout(self):
+        async def _it():
+            if False:
+                yield ""
+        return _it()
+
+    def stderr(self):
+        async def _it():
+            if False:
+                yield ""
+        return _it()
+
+    async def wait(self):
+        class _R: pass
+        r = _R()
+        r.exit_code = self._rc
+        return r
+
+
+class _FakeBox:
+    def __init__(self, exit_code: int = 0):
+        self.calls: list[tuple[str, list[str]]] = []
+        self._rc = exit_code
+
+    async def exec(self, command, args, env=None):
+        self.calls.append((command, list(args)))
+        return _FakeExecution(self._rc)
+
+
+def test_wait_healthy_exec_accepts_literal_list():
+    box = _FakeBox(exit_code=0)
+    cfg = InfraConfig()
+    hc = HealthCheck(exec=["echo", "hello"], retries=1, interval_s=0.0, timeout_s=1.0)
+    asyncio.run(_wait_healthy_exec(box, hc, label="t", config=cfg))
+    assert box.calls == [("echo", ["hello"])]
+
+
+def test_wait_healthy_exec_accepts_callable_with_config():
+    box = _FakeBox(exit_code=0)
+    cfg = InfraConfig(pg_user="alice", pg_db="appdb")
+    hc = HealthCheck(
+        exec=lambda c: ["pg_isready", "-U", c.pg_user, "-d", c.pg_db],
+        retries=1, interval_s=0.0, timeout_s=1.0,
+    )
+    asyncio.run(_wait_healthy_exec(box, hc, label="t", config=cfg))
+    assert box.calls == [("pg_isready", ["-U", "alice", "-d", "appdb"])]

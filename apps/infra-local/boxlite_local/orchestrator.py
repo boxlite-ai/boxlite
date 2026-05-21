@@ -214,7 +214,7 @@ async def start_service(runtime, spec: ServiceSpec, config: InfraConfig) -> None
                 raise
             print(f"  {name}: (already running: {e!r})")
     if spec.healthcheck:
-        await wait_healthy(box, spec.healthcheck, label=spec.name)
+        await wait_healthy(box, spec.healthcheck, label=spec.name, config=config)
 
 
 async def stop_service(runtime, service_name: str) -> bool:
@@ -241,12 +241,12 @@ async def stop_service(runtime, service_name: str) -> bool:
     return True
 
 
-async def wait_healthy(box, hc: HealthCheck, *, label: str) -> None:
+async def wait_healthy(box, hc: HealthCheck, *, label: str, config: InfraConfig) -> None:
     """Dispatch to the probe type set on the healthcheck."""
     if hc.start_period_s:
         await asyncio.sleep(hc.start_period_s)
     if hc.exec is not None:
-        await _wait_healthy_exec(box, hc, label=label)
+        await _wait_healthy_exec(box, hc, label=label, config=config)
     elif hc.http_url is not None:
         await _wait_healthy_http(hc, label=label)
     elif hc.tcp_port is not None:
@@ -255,9 +255,11 @@ async def wait_healthy(box, hc: HealthCheck, *, label: str) -> None:
         raise ValueError(f"{label}: HealthCheck has no probe configured")
 
 
-async def _wait_healthy_exec(box, hc: HealthCheck, *, label: str) -> None:
-    assert hc.exec is not None
-    cmd, *args = hc.exec
+async def _wait_healthy_exec(box, hc: HealthCheck, *, label: str, config: InfraConfig) -> None:
+    raw = hc.exec
+    assert raw is not None
+    cmd_list: list[str] = raw(config) if callable(raw) else raw
+    cmd, *args = cmd_list
     start = time.monotonic()
     for attempt in range(1, hc.retries + 1):
         try:
@@ -265,13 +267,13 @@ async def _wait_healthy_exec(box, hc: HealthCheck, *, label: str) -> None:
                 exec_collect(box, cmd, args), timeout=hc.timeout_s
             )
         except asyncio.TimeoutError:
-            rc = -1  # treat as failed probe; continue retry loop
+            rc = -1
         if rc == 0:
             print(f"  {label}: healthy after {attempt} attempt(s), {time.monotonic() - start:.1f}s")
             return
         await asyncio.sleep(hc.interval_s)
     raise TimeoutError(
-        f"{label}: healthcheck `{' '.join(hc.exec)}` failed after {hc.retries} attempts"
+        f"{label}: healthcheck `{' '.join(cmd_list)}` failed after {hc.retries} attempts"
     )
 
 

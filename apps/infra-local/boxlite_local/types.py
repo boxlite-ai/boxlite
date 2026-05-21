@@ -19,7 +19,7 @@ class Severity(str, Enum):
 @dataclass
 class HealthCheck:
     """Box health probe. One of `exec`, `tcp_port`, `http_url` should be set."""
-    exec: Optional[list[str]] = None
+    exec: Optional[list[str] | Callable[["InfraConfig"], list[str]]] = None
     tcp_port: Optional[int] = None
     http_url: Optional[str] = None
     interval_s: float = 2.0
