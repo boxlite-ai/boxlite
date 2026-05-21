@@ -3,7 +3,9 @@
 //! Creates OCI-compliant runtime specifications following the runtime-spec standard.
 
 use super::capabilities::default_capabilities;
+use super::PRIVILEGED_ANNOTATION;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
+use std::collections::HashMap;
 use std::path::Path;
 
 use oci_spec::runtime::{
@@ -95,13 +97,29 @@ pub fn create_oci_spec(
     let root = build_root_spec(rootfs)?;
     let linux = build_linux_spec(container_id, namespaces, privileged)?;
 
-    SpecBuilder::default()
+    let mut builder = SpecBuilder::default()
         .version("1.0.2")
         .hostname("boxlite")
         .root(root)
         .mounts(mounts)
         .process(process)
-        .linux(linux)
+        .linux(linux);
+
+    // Annotate privileged specs so `BoxliteExecutor` (the libcontainer
+    // workload hook) can detect that the tenant exec needs to undo
+    // libcontainer's tenant-builder-injected OCI default `readonly_paths` /
+    // `masked_paths`. Annotations are preserved by
+    // `TenantContainerBuilder::adapt_spec_for_tenant` (the bug only
+    // rewrites the Linux block) and by `Spec::save` / `Spec::load`, so
+    // this is the one piece of state that reliably survives the tenant
+    // adaptation. See `container/executor.rs` for the full rationale.
+    if privileged {
+        let mut annotations = HashMap::new();
+        annotations.insert(PRIVILEGED_ANNOTATION.to_string(), "true".to_string());
+        builder = builder.annotations(annotations);
+    }
+
+    builder
         .build()
         .map_err(|e| BoxliteError::Internal(format!("Failed to build OCI spec: {}", e)))
 }
@@ -423,35 +441,31 @@ fn build_linux_spec(
     // .cgroups_path(cgroups_path)
 
     // --privileged: explicitly clear masked_paths + readonly_paths so
-    // libcontainer doesn't apply its default /proc hardening (which bind-
-    // mounts /proc/sys ro on top of our writable procfs). dockerd needs
-    // /proc/sys/net/ipv4/ip_forward writable to bring up the default bridge
-    // network — without it network controller init fails:
+    // libcontainer doesn't apply its default /proc hardening to the
+    // **init** container (which would bind-mount /proc/sys ro on top of
+    // our writable procfs). dockerd needs /proc/sys/net/ipv4/ip_forward
+    // writable to bring up the default bridge network — without that
+    // its network controller init fails with
     //   "failed to set IP forwarding ... read-only file system"
     //
     // Empty `Vec` here is meaningful: the OCI spec runtime treats `Some([])`
     // as "no paths" and `None` as "apply runtime defaults". We want the
     // former for `--privileged` (no masking, no readonly), matching
-    // `docker run --privileged` semantics.
+    // `docker run --privileged` semantics. The init container honours
+    // this directly via libcontainer's `process::init::process` setup.
+    //
+    // Tenant execs (the foreground `sleep infinity` spawned by `boxlite
+    // run --entrypoint`, and every subsequent `boxlite exec`) take a
+    // separate path: `libcontainer::container::tenant_builder::
+    // adapt_spec_for_tenant` rebuilds the Linux block from
+    // `LinuxBuilder::default()`, **dropping** the init spec's empty
+    // readonly_paths/masked_paths and re-injecting the OCI defaults.
+    // Those then get applied to the **shared** mount namespace and
+    // break dockerd anyway. Mitigated by `BoxliteExecutor` in
+    // `container/executor.rs`, which umounts the rogue paths just
+    // before execvp when the `io.boxlite.privileged` annotation is
+    // set (see the `SpecBuilder.annotations` call below).
     if privileged {
-        // KNOWN-LIMITATION (Phase B, dockerd default bridge): we set
-        // readonly_paths and masked_paths to empty so dockerd inside the
-        // box can write `/proc/sys/net/ipv4/ip_forward` etc. when bringing
-        // up its default `bridge` network. Verified end-to-end: the OCI
-        // spec written to config.json correctly contains
-        // `readonlyPaths: []` and `maskedPaths: []`, and a reload via
-        // `oci_spec::runtime::Spec::load` returns Some([]) — yet the
-        // container still ends up with `/proc/bus`, `/proc/fs`, `/proc/irq`,
-        // `/proc/sys` bind-mounted ro,nosuid,nodev,noexec by libcontainer-
-        // 0.5.7. Setting these paths to non-existent strings DOES change
-        // behaviour (rootfs prep fails) so the override IS being honoured
-        // somewhere — but the default hardening still slips through.
-        // Root cause TBD; tracked as a follow-up. Workaround: dind users
-        // must pass `dockerd --bridge=none --iptables=false` until this
-        // is resolved (the kernel side works — /proc/sys/net/bridge/ is
-        // populated, iptables rules can be installed via nft_compat —
-        // the only blocker is dockerd's automatic default-bridge setup
-        // hitting the ro /proc/sys).
         builder = builder
             .masked_paths(Vec::<String>::new())
             .readonly_paths(Vec::<String>::new());
@@ -1023,6 +1037,16 @@ mod tests {
             masked
         );
 
+        // The `io.boxlite.privileged` annotation must be set — it's the
+        // signal `BoxliteExecutor` reads to know it must undo the
+        // tenant-builder-injected ro/mask defaults before execvp.
+        let annotations = spec.annotations().as_ref().expect("annotations present");
+        assert_eq!(
+            annotations.get(PRIVILEGED_ANNOTATION).map(String::as_str),
+            Some("true"),
+            "privileged spec must set io.boxlite.privileged=true",
+        );
+
         // Round-trip through JSON: spec is written as config.json and reloaded
         // by libcontainer. Defaults could sneak in at any of those stages.
         let bundle_dir = tempfile::tempdir().unwrap();
@@ -1046,6 +1070,17 @@ mod tests {
                 .expect("masked_paths after reload")
                 .is_empty(),
             "masked_paths must stay empty after JSON round-trip"
+        );
+        // Annotation must survive round-trip too — the tenant builder
+        // re-loads the spec from config.json before calling our executor.
+        assert_eq!(
+            reloaded
+                .annotations()
+                .as_ref()
+                .and_then(|a| a.get(PRIVILEGED_ANNOTATION))
+                .map(String::as_str),
+            Some("true"),
+            "io.boxlite.privileged must survive JSON round-trip",
         );
     }
 

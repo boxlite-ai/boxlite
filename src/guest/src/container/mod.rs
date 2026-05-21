@@ -64,6 +64,8 @@ mod command;
 #[cfg(target_os = "linux")]
 mod console_socket;
 #[cfg(target_os = "linux")]
+mod executor;
+#[cfg(target_os = "linux")]
 mod kill;
 #[cfg(target_os = "linux")]
 mod lifecycle;
@@ -78,6 +80,8 @@ pub(crate) mod zygote;
 
 #[cfg(target_os = "linux")]
 pub(crate) use command::SpawnResult;
+#[cfg(target_os = "linux")]
+pub(crate) use executor::{BoxliteExecutor, PRIVILEGED_ANNOTATION};
 #[cfg(target_os = "linux")]
 pub use lifecycle::Container;
 #[cfg(target_os = "linux")]

@@ -4,6 +4,7 @@
 //! Separated from container.rs to group by lifecycle phase (Prepare → Execute).
 
 use super::spec;
+use super::BoxliteExecutor;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use libcontainer::container::builder::ContainerBuilder;
 use libcontainer::container::Container as LibContainer;
@@ -173,6 +174,7 @@ pub(crate) fn create_container(
     ContainerBuilder::new(container_id.to_string(), SyscallType::default())
         .with_root_path(state_root)
         .map_err(|e| BoxliteError::Internal(format!("Failed to set container root path: {}", e)))?
+        .with_executor(BoxliteExecutor::new())
         .validate_id()
         .map_err(|e| BoxliteError::Internal(format!("Invalid container ID: {}", e)))?
         .as_init(bundle_path)
@@ -214,6 +216,7 @@ pub(crate) fn create_container_with_stdio(
     ContainerBuilder::new(container_id.to_string(), SyscallType::default())
         .with_root_path(state_root)
         .map_err(|e| BoxliteError::Internal(format!("Failed to set container root path: {}", e)))?
+        .with_executor(BoxliteExecutor::new())
         .validate_id()
         .map_err(|e| BoxliteError::Internal(format!("Invalid container ID: {}", e)))?
         .with_stdin(stdio_fds.stdin)

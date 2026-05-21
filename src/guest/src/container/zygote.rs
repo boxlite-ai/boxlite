@@ -12,6 +12,7 @@
 //! See `docs/investigations/concurrent-exec-deadlock.md` for full analysis.
 
 use super::capabilities::{capability_names, docker_capability_names};
+use super::BoxliteExecutor;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use libcontainer::container::builder::ContainerBuilder;
 use libcontainer::syscall::syscall::SyscallType;
@@ -247,6 +248,7 @@ fn do_build(spec: BuildSpec, fds: Option<[RawFd; 3]>) -> BuildResult {
         let mut builder = ContainerBuilder::new(spec.container_id.clone(), SyscallType::default())
             .with_root_path(spec.state_root.clone())
             .map_err(|e| format!("Failed to set container root path: {e}"))?
+            .with_executor(BoxliteExecutor::new())
             .with_console_socket(spec.console_socket.clone())
             .validate_id()
             .map_err(|e| format!("Invalid container ID: {e}"))?;

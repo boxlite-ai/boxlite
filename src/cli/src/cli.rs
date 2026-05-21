@@ -649,12 +649,9 @@ pub struct ManagementFlags {
     /// opt-in would silently re-route stdio for every existing user. The
     /// gate keeps default behaviour byte-for-byte identical.
     ///
-    /// Example — run `docker:dind`'s own `dockerd-entrypoint.sh` with
-    /// flags that work under the current libcontainer `/proc/sys`
-    /// hardening:
-    ///   `boxlite run --privileged \
-    ///       --cmd --bridge=none --cmd --iptables=false \
-    ///       --cmd --storage-driver=vfs docker:dind`
+    /// Example — pass an extra log-level flag to `docker:dind`'s own
+    /// `dockerd-entrypoint.sh`:
+    ///   `boxlite run --privileged --cmd --log-level=debug docker:dind`
     #[arg(
         long = "cmd",
         value_name = "ARG",

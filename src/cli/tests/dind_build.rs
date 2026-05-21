@@ -18,34 +18,34 @@
 //! breaks dind without realising it gets a failing CI signal.
 //!
 //! Architecture under test (NO entrypoint bypass): we let the image's
-//! own `dockerd-entrypoint.sh` run as PID 1 inside the container and
-//! pass its dockerd flags via `--cmd` (i.e., as the box's CMD, not by
-//! replacing ENTRYPOINT). The positional `boxlite run` command tail is
-//! the foreground exec — a probe script that waits for dockerd to come
-//! up and then drives `docker build`. The previous variant of this
-//! test used `--entrypoint sh` to swap the entrypoint out and ran
-//! dockerd manually from the probe; that bypass is no longer needed
-//! now that `--cmd` exists.
+//! own `dockerd-entrypoint.sh` run as PID 1 inside the container, with
+//! **default** dockerd flags — no `--bridge=none`, no `--iptables=false`,
+//! no `--storage-driver=vfs`. The positional `boxlite run` command tail
+//! is the foreground exec — a probe script that waits for dockerd to
+//! come up and then drives `docker build`.
 //!
 //! What we assert end-to-end:
 //!   - boxlite spawns a `--privileged` box whose init process is
 //!     the image's `dockerd-entrypoint.sh` (Phase A caps + cgroup rw
 //!     plus the Phase B dind kernel let it boot)
-//!   - dockerd-entrypoint.sh launches dockerd with our `--bridge=none`
-//!     / `--iptables=false` / `--storage-driver=vfs` flags (needed
-//!     because libcontainer-0.5.7 still bind-remounts `/proc/sys` ro
-//!     under us — see commit fb073bf)
+//!   - dockerd-entrypoint.sh launches dockerd with default bridge +
+//!     iptables + storage; this works because `BoxliteExecutor`
+//!     (`src/guest/src/container/executor.rs`) undoes the OCI default
+//!     ro/mask paths that `libcontainer::container::tenant_builder::
+//!     adapt_spec_for_tenant` re-injects on every tenant exec — so
+//!     dockerd's `/proc/sys/net/ipv4/ip_forward` write succeeds and
+//!     the default `docker0` bridge comes up
 //!   - dockerd pulls `alpine:3.19` over the box's gvproxy network
-//!   - `docker build --network=host` produces an image with a custom
-//!     tag (the build's RUN step executes a child container,
+//!   - `docker build` (no `--network=host`) produces an image with a
+//!     custom tag (the build's RUN step executes a child container,
 //!     exercising containerd shim + the dind kernel's mqueue /
-//!     netfilter subsystems)
+//!     netfilter subsystems via the default bridge)
 //!
 //! Failure here is the right canary for issue #276's regression
 //! budget: every existing capability we depend on (the dind kernel,
-//! the per-box libkrunfw symlink, --privileged plumbing, and now
-//! the `--cmd` plumbing that lets the image's real ENTRYPOINT run as
-//! PID 1) is exercised on a real VM.
+//! the per-box libkrunfw symlink, --privileged plumbing, and the
+//! BoxliteExecutor mitigation for the tenant readonly_paths leak)
+//! is exercised on a real VM.
 
 use assert_cmd::Command;
 use boxlite_test_utils::home::PerTestBoxHome;
@@ -63,7 +63,7 @@ if [ ! -S /var/run/docker.sock ]; then
     exit 124
 fi
 echo "[probe] socket present, running build"
-docker build --network=host -t boxlite-dind-test:1 /probe/ctx
+docker build -t boxlite-dind-test:1 /probe/ctx
 echo "[exit=$?]"
 "#;
 
@@ -114,17 +114,6 @@ fn dind_supports_docker_build() {
             "run",
             "--rm",
             "--privileged",
-            // `--cmd` carries the dockerd flags to the image's real
-            // ENTRYPOINT (dockerd-entrypoint.sh). Without these,
-            // dockerd-entrypoint.sh boots dockerd with default bridge/
-            // iptables, which fails because libcontainer-0.5.7 still
-            // bind-remounts /proc/sys as ro under us (commit fb073bf).
-            "--cmd",
-            "--bridge=none",
-            "--cmd",
-            "--iptables=false",
-            "--cmd",
-            "--storage-driver=vfs",
             "--memory",
             "2048",
             "-v",
@@ -132,7 +121,7 @@ fn dind_supports_docker_build() {
             "docker:dind",
             // Foreground exec: probe waits for the dockerd socket
             // (which `dockerd-entrypoint.sh` running as PID 1 brings
-            // up) and runs `docker build`.
+            // up with default bridge + iptables) and runs `docker build`.
             "sh",
             "/probe/probe.sh",
         ]);
