@@ -236,7 +236,11 @@ SPEC_REGISTRY_UI = ServiceSpec(
     image="joxit/docker-registry-ui:main",
     cpus=1,
     memory_mib=128,
-    ports=[(25052, 80)],
+    # nginx-alpine image EXPOSEs 80 AND 443. Same SDK auto-bind trap as
+    # pgadmin — map both explicitly so 25052 -> 80 shim actually gets bound.
+    # (Earlier in 3b this appeared to work but the shim was leaked from a
+    # prior session; clean state reveals the bug.)
+    ports=[(25052, 80), (25054, 443)],
     env=lambda cfg: {
         "REGISTRY_TITLE": "BoxLite local registry",
         "NGINX_PROXY_PASS_URL": f"http://{cfg.host_hub}:{cfg.registry_host_port}",
@@ -246,7 +250,7 @@ SPEC_REGISTRY_UI = ServiceSpec(
     healthcheck=HealthCheck(
         http_url="http://127.0.0.1:25052/",
         interval_s=2.0,
-        retries=30,
+        retries=90,                        # nginx-alpine entrypoint takes 60-90s
     ),
 )
 
@@ -284,15 +288,6 @@ service:
       exporters: [debug]
 """
 
-_OTEL_ENTRYPOINT = """\
-set -e
-cat > /tmp/otel-config.yaml <<'__CFG__'
-""" + _OTEL_CONFIG + """\
-__CFG__
-exec /otelcol --config /tmp/otel-config.yaml
-"""
-
-
 SPEC_OTEL = ServiceSpec(
     name="otel",
     image="otel/opentelemetry-collector:latest",
@@ -306,8 +301,11 @@ SPEC_OTEL = ServiceSpec(
         (24318, 4318),    # OTLP HTTP
         (23133, 13133),   # health_check
     ],
-    entrypoint=["sh"],
-    cmd=["-c", _OTEL_ENTRYPOINT],
+    # The otelcol image is distroless — no shell. Pass config via env var
+    # using `--config=env:OTEL_CONFIG` (supported since otel-collector v0.79.0).
+    # Image entrypoint is `/otelcol`; cmd becomes its argv.
+    env=lambda cfg: {"OTEL_CONFIG": _OTEL_CONFIG},
+    cmd=["--config=env:OTEL_CONFIG"],
     depends_on=[],
     healthcheck=HealthCheck(
         http_url="http://127.0.0.1:23133/",
