@@ -212,3 +212,22 @@ fn status_is_offline_and_reports_source() {
         .success()
         .stdout(predicate::str::contains("Not logged in."));
 }
+
+/// Regression: `BOXLITE_API_KEY=""` (an empty-but-set env var, easy to
+/// produce from `export BOXLITE_API_KEY=$VAR_THAT_IS_UNSET`) used to make
+/// `auth status` report "Logged in (env)" while every actual authenticated
+/// call would fall back to the stored profile — `whoami` and the runtime
+/// in cli.rs treat empty as "not set". The three views must agree.
+#[test]
+fn status_treats_empty_env_api_key_as_not_logged_in() {
+    let home = TempDir::new().unwrap();
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("boxlite"));
+    cmd.env("BOXLITE_HOME", home.path())
+        .env("BOXLITE_API_KEY", "") // set-but-empty
+        .env_remove("BOXLITE_REST_URL")
+        .timeout(Duration::from_secs(30));
+    cmd.args(["auth", "status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Not logged in."));
+}

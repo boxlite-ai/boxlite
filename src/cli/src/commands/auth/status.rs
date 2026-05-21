@@ -43,7 +43,15 @@ pub fn run() -> Result<()> {
 /// Resolve the active credential source. Env vars win over the file (matches
 /// the runtime precedence used by `from_env()`).
 fn resolve_identity() -> Result<Option<Identity>> {
-    if std::env::var(API_KEY_ENV).is_ok() {
+    // Both `auth whoami` and the runtime in `cli.rs` skip the env path when
+    // `BOXLITE_API_KEY` is set-but-empty (`!key.is_empty()`). `auth status`
+    // used to short-circuit on a bare `is_ok()` check, so an empty value
+    // would report "Logged in (env)" while every subsequent authenticated
+    // command would actually fall back to the stored profile. Mirror the
+    // canonical check here so `status` agrees with `whoami` / the runtime.
+    if let Ok(api_key) = std::env::var(API_KEY_ENV)
+        && !api_key.is_empty()
+    {
         let url = std::env::var(URL_ENV).unwrap_or_else(|_| LOCAL_SERVE_URL.to_string());
         return Ok(Some(Identity {
             url,
