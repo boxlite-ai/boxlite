@@ -1,10 +1,13 @@
 package controllers
 
 import (
+	"context"
 	"fmt"
 	"io"
+	"mime"
 	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"os"
 	"path/filepath"
 	"strings"
@@ -300,4 +303,187 @@ func extractBulkUploadIndex(fieldName string) string {
 	s = strings.TrimSuffix(s, "].path")
 	s = strings.TrimSuffix(s, "].file")
 	return s
+}
+
+// bulkDownloadBoundary is the fixed multipart boundary used on the
+// bulk-download response. Matching the daemon-side handler at
+// apps/daemon/pkg/toolbox/fs/download_files.go means clients that already
+// parse the daemon endpoint can be pointed at the runner endpoint without
+// changes.
+const bulkDownloadBoundary = "BOXLITE-FILE-BOUNDARY"
+
+// FilesBulkDownloadRequest is the JSON body for bulk-download. Defined
+// locally rather than imported from apps/daemon so the runner doesn't pull
+// in the daemon module just for this struct.
+type FilesBulkDownloadRequest struct {
+	Paths []string `json:"paths"`
+}
+
+// BoxliteFilesBulkDownload extracts many files out of a box in one
+// HTTP request and streams them back as a multipart/form-data body. The
+// wire contract mirrors the daemon-side endpoint at
+// apps/daemon/pkg/toolbox/fs/download_files.go: each successful file
+// becomes a `name="file"; filename="<path>"` part, each failure becomes a
+// `name="error"; filename="<path>"` part. A single bad path never aborts
+// the batch — clients must inspect per-part disposition, not HTTP status,
+// to learn whether a specific file succeeded.
+//
+// Headers are committed (status + Content-Type) before any body byte is
+// written, so late failures cannot be upgraded to a non-200 status. This
+// is intentional and matches the daemon contract.
+//
+//	@Summary		Bulk-download many files from a box in one multipart response
+//	@Description	Accepts a JSON body { "paths": [ ... ] } and returns a
+//	@Description	multipart/form-data response with one part per requested
+//	@Description	path. Successful files are emitted as
+//	@Description	`Content-Disposition: form-data; name="file"; filename="<path>"`;
+//	@Description	per-file failures (path not in box, CopyOut failure, open
+//	@Description	failure) are emitted as
+//	@Description	`Content-Disposition: form-data; name="error"; filename="<path>"`
+//	@Description	with the error text as the part body. A single failing path
+//	@Description	never aborts the batch.
+//	@Tags			boxlite
+//	@Accept			application/json
+//	@Produce		multipart/form-data
+//	@Param			boxId	path		string						true	"Box ID"
+//	@Param			body	body		FilesBulkDownloadRequest	true	"Source paths inside the box"
+//	@Success		200		{string}	binary						"multipart/form-data response"
+//	@Failure		400		{object}	map[string]string			"empty/missing paths or invalid JSON"
+//	@Failure		500		{object}	map[string]string			"runner singleton failure"
+//	@Router			/v1/boxes/{boxId}/files/bulk-download [post]
+func BoxliteFilesBulkDownload(ctx *gin.Context) {
+	boxId := ctx.Param("boxId")
+	if boxId == "" {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "boxId is required"})
+		return
+	}
+
+	var req FilesBulkDownloadRequest
+	if err := ctx.BindJSON(&req); err != nil {
+		// BindJSON already wrote a 400 via gin's error middleware. Don't
+		// overwrite it.
+		return
+	}
+	if len(req.Paths) == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{
+			"error": "request body must be {\"paths\": [ ... ]} and non-empty",
+		})
+		return
+	}
+
+	r, err := runner.GetInstance(nil)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	ctx.Header("Content-Type", fmt.Sprintf("multipart/form-data; boundary=%s", bulkDownloadBoundary))
+	ctx.Status(http.StatusOK)
+
+	mw := multipart.NewWriter(ctx.Writer)
+	if err := mw.SetBoundary(bulkDownloadBoundary); err != nil {
+		// Headers are already committed. Best we can do is bail before
+		// streaming and let the client see a truncated body.
+		return
+	}
+	defer mw.Close()
+
+	for _, srcPath := range req.Paths {
+		streamOneBulkDownload(ctx.Request.Context(), r, mw, boxId, srcPath)
+	}
+}
+
+// streamOneBulkDownload extracts a single file from the box to a tmp file
+// and streams it as one multipart part. Errors at any stage are emitted as
+// an error part so the batch continues. The tmp file is removed before
+// return regardless of outcome.
+func streamOneBulkDownload(reqCtx context.Context, r *runner.Runner, mw *multipart.Writer, boxId, srcPath string) {
+	tmpFile, err := os.CreateTemp("", "boxlite-bulk-download-*")
+	if err != nil {
+		writeBulkDownloadErrorPart(mw, srcPath, fmt.Sprintf("tmp: %v", err))
+		return
+	}
+	tmpPath := tmpFile.Name()
+	tmpFile.Close()
+	defer os.Remove(tmpPath)
+
+	if err := r.Boxlite.CopyOut(reqCtx, boxId, srcPath, tmpPath); err != nil {
+		writeBulkDownloadErrorPart(mw, srcPath, fmt.Sprintf("copy: %v", err))
+		return
+	}
+
+	f, err := os.Open(tmpPath)
+	if err != nil {
+		writeBulkDownloadErrorPart(mw, srcPath, fmt.Sprintf("open: %v", err))
+		return
+	}
+	defer f.Close()
+
+	if err := writeBulkDownloadFilePart(reqCtx, mw, srcPath, f); err != nil {
+		// The file part header is already on the wire; we can't promote
+		// this into an error part. Best-effort: emit a follow-up error
+		// part so the client at least learns the stream truncated.
+		writeBulkDownloadErrorPart(mw, srcPath, fmt.Sprintf("stream: %v", err))
+	}
+}
+
+// writeBulkDownloadFilePart writes one successful file as a multipart part
+// and copies its bytes through. The Content-Type is inferred from the
+// extension; unknown types fall back to application/octet-stream so the
+// client doesn't try to interpret arbitrary bytes as text.
+//
+// The part writer is wrapped in a ctxWriter so a client disconnect aborts
+// the io.Copy instead of buffering the rest of a multi-GB file into the
+// dead socket.
+func writeBulkDownloadFilePart(reqCtx context.Context, mw *multipart.Writer, path string, r io.Reader) error {
+	ctype := mime.TypeByExtension(filepath.Ext(path))
+	if ctype == "" {
+		ctype = "application/octet-stream"
+	}
+
+	hdr := textproto.MIMEHeader{}
+	hdr.Set("Content-Type", ctype)
+	hdr.Set("Content-Disposition", fmt.Sprintf(`form-data; name="file"; filename="%s"`, path))
+
+	part, err := mw.CreatePart(hdr)
+	if err != nil {
+		return err
+	}
+
+	_, err = io.Copy(&ctxWriter{ctx: reqCtx, w: part}, r)
+	return err
+}
+
+// writeBulkDownloadErrorPart emits a per-file failure as a multipart part.
+// The disposition uses name="error" so clients can route per-part on the
+// name field without parsing the body. Errors writing the error part are
+// swallowed: we already failed to deliver this file, and a write failure
+// at this point usually means the client is gone.
+func writeBulkDownloadErrorPart(mw *multipart.Writer, path, text string) {
+	hdr := textproto.MIMEHeader{}
+	hdr.Set("Content-Type", "text/plain; charset=utf-8")
+	hdr.Set("Content-Disposition", fmt.Sprintf(`form-data; name="error"; filename="%s"`, path))
+	part, err := mw.CreatePart(hdr)
+	if err != nil {
+		return
+	}
+	_, _ = io.WriteString(part, text)
+}
+
+// ctxWriter wraps an io.Writer so writes abort when the request context
+// is canceled. Mirrors the daemon-side helper at
+// apps/daemon/pkg/toolbox/fs/download_files.go so client disconnect doesn't
+// keep us streaming bytes into a dead socket.
+type ctxWriter struct {
+	ctx context.Context
+	w   io.Writer
+}
+
+func (cw *ctxWriter) Write(p []byte) (int, error) {
+	select {
+	case <-cw.ctx.Done():
+		return 0, cw.ctx.Err()
+	default:
+	}
+	return cw.w.Write(p)
 }

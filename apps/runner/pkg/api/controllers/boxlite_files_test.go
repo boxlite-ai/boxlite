@@ -216,3 +216,73 @@ func TestBoxliteFilesBulkUpload_AllErrorsSkipsRunner(t *testing.T) {
 		t.Errorf("expected per-part error in body, got %s", w.Body.String())
 	}
 }
+
+// runBulkDownloadHandler routes the request through a real gin engine so
+// the JSON binding sees the request the same way it does in production.
+// Mirrors runBulkUploadHandler above.
+func runBulkDownloadHandler(target, contentType, body string) *httptest.ResponseRecorder {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/v1/boxes/:boxId/files/bulk-download", BoxliteFilesBulkDownload)
+	req := httptest.NewRequest(http.MethodPost, target, bytes.NewBufferString(body))
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	return w
+}
+
+func TestBoxliteFilesBulkDownload_InvalidJSONReturns400(t *testing.T) {
+	// Malformed JSON must short-circuit before reaching runner.GetInstance.
+	// gin's BindJSON writes the 400 itself; the handler must not also
+	// commit the multipart Content-Type, otherwise the client gets a
+	// 400 with a body that looks like a multipart preamble.
+	w := runBulkDownloadHandler(
+		"/v1/boxes/box/files/bulk-download",
+		"application/json",
+		`{not json`,
+	)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", w.Code, w.Body.String())
+	}
+	if ct := w.Header().Get("Content-Type"); strings.HasPrefix(ct, "multipart/") {
+		t.Errorf("multipart Content-Type leaked on 400: %q", ct)
+	}
+}
+
+func TestBoxliteFilesBulkDownload_EmptyPathsReturns400(t *testing.T) {
+	// {"paths": []} is well-formed JSON but useless; we reject it
+	// explicitly so the client sees the documented error message rather
+	// than an empty 200 multipart body.
+	w := runBulkDownloadHandler(
+		"/v1/boxes/box/files/bulk-download",
+		"application/json",
+		`{"paths": []}`,
+	)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "non-empty") {
+		t.Errorf("expected 'non-empty' in error body, got %s", w.Body.String())
+	}
+	if ct := w.Header().Get("Content-Type"); strings.HasPrefix(ct, "multipart/") {
+		t.Errorf("multipart Content-Type leaked on 400: %q", ct)
+	}
+}
+
+func TestBoxliteFilesBulkDownload_MissingPathsFieldReturns400(t *testing.T) {
+	// A body without the paths field unmarshals to the zero value (nil
+	// slice). The handler treats that identically to an empty slice.
+	w := runBulkDownloadHandler(
+		"/v1/boxes/box/files/bulk-download",
+		"application/json",
+		`{}`,
+	)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "non-empty") {
+		t.Errorf("expected 'non-empty' in error body, got %s", w.Body.String())
+	}
+}

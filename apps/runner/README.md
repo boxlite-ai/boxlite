@@ -26,7 +26,7 @@ the request path), see [`docs/architecture/README.md`](../../docs/architecture/R
     info-or-error, removal, tag, registry inspect
   - **Execution + attach** — the long-lived stdio bridge (in depth, with
     wire protocol and reaping policy)
-  - **File I/O** — single-file upload, download, and bulk multipart upload
+  - **File I/O** — single-file upload, download, plus bulk multipart upload and bulk multipart download
   - **Per-box metrics** — CPU / memory / net / exec counters
   - **Runner info** — host CPU / memory / disk + service health
   - **Toolbox proxy** — browser xterm.js over WebSocket
@@ -407,6 +407,7 @@ a feature.
 | `PUT` | `/v1/boxes/:boxId/files?path=<dest>` | `BoxliteFileUpload` | Stream raw body → temp file → `CopyInto(box, tmp, dest)` |
 | `GET` | `/v1/boxes/:boxId/files?path=<src>` | `BoxliteFileDownload` | `CopyOut(box, src, tmpPath)` → stream tmp file as `application/octet-stream` |
 | `POST` | `/v1/boxes/:boxId/files/bulk-upload` | `BoxliteFilesBulkUpload` | Multipart `files[N].path` + `files[N].file` pairs → stage each part → `CopyInto` per file |
+| `POST` | `/v1/boxes/:boxId/files/bulk-download` | `BoxliteFilesBulkDownload` | JSON `{paths:[...]}` → `CopyOut` per path → multipart response with one `name="file"` part per success and one `name="error"` part per failure |
 
 The PUT/GET pair carries a single file's raw bytes in each direction; the
 underlying SDK `CopyInto`/`CopyOut` tar-frame transparently between host
@@ -419,6 +420,17 @@ for sandbox-init workloads where per-file TLS handshakes dominate
 latency. Parse and copy errors are returned per-file in `errors` (HTTP
 400) alongside the `uploaded` list, so one bad pair never aborts a
 batch.
+
+`bulk-download` is the symmetric fan-out: one HTTP call extracts many
+files in one streamed `multipart/form-data` response (boundary
+`BOXLITE-FILE-BOUNDARY`). Each requested path becomes one part —
+successes carry `Content-Disposition: form-data; name="file"`, per-file
+failures carry `name="error"` with the error text as the body. Headers
+are committed (200 + multipart Content-Type) before any body byte is
+written, so late failures surface as error parts inside a 200 response,
+not as a status upgrade. The wire contract mirrors the daemon-side
+`/files/bulk-download` so existing clients (e.g. `apps/libs/toolbox-api-client`)
+can be pointed at the box-level endpoint unchanged.
 
 ### 5. Per-box metrics
 
@@ -585,6 +597,8 @@ the Swagger UI (development only).
 | `POST` | `/v1/boxes/:boxId/executions/:execId/resize` | Resize TTY |
 | `PUT` | `/v1/boxes/:boxId/files?path=<dest>` | Upload tar |
 | `GET` | `/v1/boxes/:boxId/files?path=<src>` | Download tar |
+| `POST` | `/v1/boxes/:boxId/files/bulk-upload` | Multipart fan-in: many files in one request |
+| `POST` | `/v1/boxes/:boxId/files/bulk-download` | Multipart fan-out: many files in one response |
 | `GET` | `/v1/boxes/:boxId/metrics` | Per-box metrics |
 
 ---
