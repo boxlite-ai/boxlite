@@ -251,6 +251,161 @@ SPEC_REGISTRY_UI = ServiceSpec(
 )
 
 
+# ─── 3c services ──────────────────────────────────────────────────────────
+
+_OTEL_CONFIG = """\
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+exporters:
+  debug:
+    verbosity: basic
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [debug]
+    metrics:
+      receivers: [otlp]
+      exporters: [debug]
+    logs:
+      receivers: [otlp]
+      exporters: [debug]
+"""
+
+_OTEL_ENTRYPOINT = """\
+set -e
+cat > /tmp/otel-config.yaml <<'__CFG__'
+""" + _OTEL_CONFIG + """\
+__CFG__
+exec /otelcol --config /tmp/otel-config.yaml
+"""
+
+
+SPEC_OTEL = ServiceSpec(
+    name="otel",
+    image="otel/opentelemetry-collector:latest",
+    cpus=1,
+    memory_mib=256,
+    # All EXPOSE'd ports are non-priv (4317, 4318, 13133, 8888), so the SDK
+    # auto-bind doesn't hit the privileged-port bug — but we map explicitly
+    # for cleanliness + parent design §3.8 consistency.
+    ports=[
+        (24317, 4317),    # OTLP gRPC
+        (24318, 4318),    # OTLP HTTP
+        (23133, 13133),   # health_check
+    ],
+    entrypoint=["sh"],
+    cmd=["-c", _OTEL_ENTRYPOINT],
+    depends_on=[],
+    healthcheck=HealthCheck(
+        http_url="http://127.0.0.1:23133/",
+        interval_s=2.0,
+        retries=30,
+    ),
+)
+
+
+def _caddyfile(cfg) -> str:
+    """Inline Caddyfile body. Path-based routing because we don't have DNS hijack."""
+    return f"""\
+{{
+\tauto_https off
+\tadmin 0.0.0.0:2019
+}}
+
+:80 {{
+\tredir https://{{host}}{{uri}} permanent
+}}
+
+:443 {{
+\ttls internal
+
+\thandle_path /pgadmin/* {{
+\t\treverse_proxy {cfg.host_hub}:{cfg.pgadmin_host_port}
+\t}}
+\thandle_path /jaeger/* {{
+\t\treverse_proxy {cfg.host_hub}:{cfg.jaeger_host_port}
+\t}}
+\thandle_path /dex/* {{
+\t\treverse_proxy {cfg.host_hub}:{cfg.dex_host_port}
+\t}}
+\thandle_path /minio-console/* {{
+\t\treverse_proxy {cfg.host_hub}:29001
+\t}}
+\thandle_path /minio/* {{
+\t\treverse_proxy {cfg.host_hub}:{cfg.minio_host_port}
+\t}}
+\thandle_path /registry-ui/* {{
+\t\treverse_proxy {cfg.host_hub}:{cfg.registry_ui_host_port}
+\t}}
+\thandle_path /registry/* {{
+\t\treverse_proxy {cfg.host_hub}:{cfg.registry_host_port}
+\t}}
+
+\thandle / {{
+\t\trespond `boxlite-local Caddy reverse proxy
+
+routes:
+  /pgadmin/        -> pgadmin
+  /jaeger/         -> jaeger
+  /dex/            -> dex (OIDC)
+  /minio/          -> minio S3 API
+  /minio-console/  -> minio console UI
+  /registry-ui/    -> registry UI
+  /registry/       -> docker registry v2
+`
+\t}}
+}}
+"""
+
+
+_CADDY_ENTRYPOINT_TEMPLATE = """\
+set -e
+mkdir -p /etc/caddy
+cat > /etc/caddy/Caddyfile <<'__CFG__'
+{caddyfile}
+__CFG__
+exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+"""
+
+
+SPEC_CADDY = ServiceSpec(
+    name="caddy",
+    image="caddy:2-alpine",
+    cpus=1,
+    memory_mib=256,
+    # caddy:2-alpine EXPOSEs 80, 443, 2019. Map all three explicitly per the
+    # SDK auto-bind workaround (see SPEC_PGADMIN comment). 80/443 -> our
+    # non-priv host ports; 2019 (Caddy admin API) -> 12019.
+    ports=[
+        (28080, 80),
+        (28443, 443),
+        (12019, 2019),
+    ],
+    entrypoint=["sh"],
+    cmd=lambda cfg: ["-c", _CADDY_ENTRYPOINT_TEMPLATE.format(caddyfile=_caddyfile(cfg))],
+    depends_on=["dex", "jaeger", "pgadmin", "minio", "registry", "registry-ui"],
+    healthcheck=HealthCheck(
+        # Caddy admin API on :2019/config/ returns 200 once config loaded.
+        http_url="http://127.0.0.1:12019/config/",
+        interval_s=2.0,
+        retries=30,
+    ),
+)
+
+
 SERVICES: dict[str, ServiceSpec] = {
     "postgres":    SPEC_PG,
     "redis":       SPEC_REDIS,
@@ -261,4 +416,6 @@ SERVICES: dict[str, ServiceSpec] = {
     "jaeger":      SPEC_JAEGER,
     "pgadmin":     SPEC_PGADMIN,
     "registry-ui": SPEC_REGISTRY_UI,
+    "otel":        SPEC_OTEL,
+    "caddy":       SPEC_CADDY,
 }
