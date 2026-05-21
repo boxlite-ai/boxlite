@@ -16,11 +16,7 @@ def _parse_int_env(name: str, default: str) -> int:
 
 
 def _detect_repo_root() -> Path:
-    """Walk up from this file's directory until we find one containing apps/infra-local/.
-
-    Used to compute absolute host paths for config-file volume mounts
-    (e.g. apps/infra-local/configs/minio/init.sh).
-    """
+    """Walk up from this file's directory until we find one containing apps/infra-local/."""
     here = Path(__file__).resolve().parent
     for parent in (here, *here.parents):
         if (parent / "apps" / "infra-local" / "pyproject.toml").exists():
@@ -32,7 +28,6 @@ def _detect_repo_root() -> Path:
 
 @dataclass
 class InfraConfig:
-    # host-hub address — inside-box reaches host via this name
     host_hub: str = "host.boxlite.internal"
 
     # postgres
@@ -45,17 +40,28 @@ class InfraConfig:
     redis_host_port: int = 26379
 
     # minio (3a)
-    minio_host_port: int = 29000           # API port; console is 29001 (pinned in SPEC)
+    minio_host_port: int = 29000
     minio_user: str = "minioadmin"
     minio_password: str = field(default="minioadmin", repr=False)
 
     # registry (3a)
     registry_host_port: int = 25000
 
-    # persistent data root
-    data_dir: Path = field(default_factory=lambda: Path.home() / ".boxlite-local" / "data")
+    # dex (3b)
+    dex_host_port: int = 25556
 
-    # repo root — needed for absolute paths of config-file mounts
+    # jaeger (3b)
+    jaeger_host_port: int = 26686
+
+    # pgadmin (3b)
+    pgadmin_host_port: int = 25051
+    pgadmin_email: str = "admin@boxlite.dev"
+    pgadmin_password: str = field(default="boxlite", repr=False)
+
+    # registry-ui (3b)
+    registry_ui_host_port: int = 25052
+
+    data_dir: Path = field(default_factory=lambda: Path.home() / ".boxlite-local" / "data")
     repo_root: Path = field(default_factory=_detect_repo_root)
 
     @classmethod
@@ -71,6 +77,12 @@ class InfraConfig:
             minio_user=os.environ.get("BOXLITE_MINIO_USER", "minioadmin"),
             minio_password=os.environ.get("BOXLITE_MINIO_PASSWORD", "minioadmin"),
             registry_host_port=_parse_int_env("BOXLITE_REGISTRY_HOST_PORT", "25000"),
+            dex_host_port=_parse_int_env("BOXLITE_DEX_HOST_PORT", "25556"),
+            jaeger_host_port=_parse_int_env("BOXLITE_JAEGER_HOST_PORT", "26686"),
+            pgadmin_host_port=_parse_int_env("BOXLITE_PGADMIN_HOST_PORT", "25051"),
+            pgadmin_email=os.environ.get("BOXLITE_PGADMIN_EMAIL", "admin@boxlite.dev"),
+            pgadmin_password=os.environ.get("BOXLITE_PGADMIN_PASSWORD", "boxlite"),
+            registry_ui_host_port=_parse_int_env("BOXLITE_REGISTRY_UI_HOST_PORT", "25052"),
             data_dir=Path(
                 os.environ.get("BOXLITE_DATA_DIR")
                 or str(Path.home() / ".boxlite-local" / "data")
@@ -80,3 +92,7 @@ class InfraConfig:
     @property
     def pg_url(self) -> str:
         return f"postgresql://{self.pg_user}@{self.host_hub}:{self.pg_host_port}/{self.pg_db}"
+
+    @property
+    def dex_issuer(self) -> str:
+        return f"http://{self.host_hub}:{self.dex_host_port}/dex"

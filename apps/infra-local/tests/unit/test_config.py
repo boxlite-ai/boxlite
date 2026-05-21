@@ -100,3 +100,40 @@ def test_load_raises_clear_error_on_malformed_redis_port_env(monkeypatch):
     import pytest as _pytest
     with _pytest.raises(ValueError, match="BOXLITE_REDIS_HOST_PORT must be an integer"):
         InfraConfig.load()
+
+
+def test_new_3b_defaults():
+    cfg = InfraConfig()
+    assert cfg.dex_host_port == 25556
+    assert cfg.jaeger_host_port == 26686
+    assert cfg.pgadmin_host_port == 25051
+    assert cfg.pgadmin_email == "admin@boxlite.dev"
+    assert cfg.pgadmin_password == "boxlite"
+    assert cfg.registry_ui_host_port == 25052
+
+
+def test_dex_issuer_derives_from_host_hub_and_port():
+    cfg = InfraConfig()
+    assert cfg.dex_issuer == "http://host.boxlite.internal:25556/dex"
+
+
+def test_pgadmin_password_hidden_in_repr():
+    cfg = InfraConfig(pgadmin_password="topsecret")
+    assert "topsecret" not in repr(cfg)
+
+
+def test_load_picks_up_3b_env_overrides(monkeypatch):
+    monkeypatch.setenv("BOXLITE_DEX_HOST_PORT", "15556")
+    monkeypatch.setenv("BOXLITE_JAEGER_HOST_PORT", "16686")
+    monkeypatch.setenv("BOXLITE_PGADMIN_HOST_PORT", "15051")
+    monkeypatch.setenv("BOXLITE_PGADMIN_EMAIL", "ops@example.com")
+    monkeypatch.setenv("BOXLITE_PGADMIN_PASSWORD", "p2")
+    monkeypatch.setenv("BOXLITE_REGISTRY_UI_HOST_PORT", "15052")
+
+    cfg = InfraConfig.load()
+    assert cfg.dex_host_port == 15556
+    assert cfg.jaeger_host_port == 16686
+    assert cfg.pgadmin_host_port == 15051
+    assert cfg.pgadmin_email == "ops@example.com"
+    assert cfg.pgadmin_password == "p2"
+    assert cfg.registry_ui_host_port == 15052
