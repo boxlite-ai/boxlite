@@ -1,12 +1,21 @@
 //! Integration test: `boxlite run --support-docker` actually lets a
 //! `docker build` complete end-to-end inside the box.
 //!
-//! Gated on `BOXLITE_DIND_TEST=1` because it requires a libkrunfw-dind
-//! blob bundled at build time (`make libkrunfw-dind` then a rebuild of
-//! boxlite with `BOXLITE_LIBKRUNFW_DIND_PATH` set). Without the env var
-//! the test prints a SKIP notice and returns Ok — keeps the default
-//! `test:integration:cli` matrix runnable on hosts without the dind
-//! kernel built.
+//! Part of the forced `test:integration:cli` matrix — runs by default.
+//! Prerequisites the make target sets up for us:
+//!   1. `target/dind-kernel/lib64/libkrunfw-dind.so.5` exists (built
+//!      via `make libkrunfw-dind`, which `test:integration:cli` checks
+//!      for and refuses to run without — heavy one-time ~10–20 min
+//!      kernel build, cached thereafter).
+//!   2. `BOXLITE_LIBKRUNFW_DIND_PATH` is exported when cargo builds the
+//!      CLI binary so the dind libkrunfw blob is staged alongside the
+//!      lean one inside the embedded runtime.
+//!
+//! Ignore-condition: set `BOXLITE_SKIP_DIND_TEST=1` to skip with a
+//! SKIP marker (useful on hosts that genuinely cannot run dind — e.g.,
+//! nested-virt unavailable or security profile blocks the cgroup2
+//! mounts the box needs). The default is RUN, not SKIP, so anyone who
+//! breaks dind without realising it gets a failing CI signal.
 //!
 //! Architecture under test (NO entrypoint bypass): we let the image's
 //! own `dockerd-entrypoint.sh` run as PID 1 inside the container and
@@ -62,13 +71,12 @@ const DOCKERFILE: &str = "FROM alpine:3.19\nRUN echo \"built\" > /built.txt\n";
 
 #[test]
 fn dind_supports_docker_build() {
-    if std::env::var("BOXLITE_DIND_TEST").is_err() {
-        eprintln!(
-            "SKIP dind_supports_docker_build: set BOXLITE_DIND_TEST=1 \
-             after `make libkrunfw-dind` + a rebuild of boxlite with \
-             BOXLITE_LIBKRUNFW_DIND_PATH set, so the dind libkrunfw \
-             blob is bundled into the embedded runtime."
-        );
+    // Opt-out ignore-condition (see module docs): hosts that genuinely
+    // cannot run dind set BOXLITE_SKIP_DIND_TEST=1. Default is RUN —
+    // `make test:integration:cli` does not set this, so a regression
+    // in dind support fails the suite.
+    if std::env::var("BOXLITE_SKIP_DIND_TEST").as_deref() == Ok("1") {
+        eprintln!("SKIP dind_supports_docker_build: BOXLITE_SKIP_DIND_TEST=1");
         return;
     }
 

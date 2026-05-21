@@ -232,25 +232,34 @@ test\:unit\:ffi:
 		cargo test -p boxlite-c $(CARGOTEST_FILTER); \
 	fi
 
-# dind end-to-end: spawn a `--support-docker` box, run `docker build`
-# against a tiny `FROM alpine` Dockerfile, assert the build exits 0 and
-# the image lands in dockerd's store. Heavy (real VM + dind kernel +
-# alpine pull from Docker Hub) and gated behind both:
-#   1. a libkrunfw-dind blob bundled at build time
-#      (`make libkrunfw-dind` then `BOXLITE_LIBKRUNFW_DIND_PATH=... make cli`)
-#   2. the BOXLITE_DIND_TEST=1 env var the target sets
-#
-# Not in the default `test:integration` matrix — most CI hosts won't
-# have the dind blob built. Run explicitly when validating Phase B
-# changes or before cutting a release that claims dind support.
-test\:integration\:dind: $(if $(SETUP_DONE),,runtime\:debug)
-	@echo "🧪 Running dind integration test (requires libkrunfw-dind blob bundled)..."
-	@BOXLITE_DIND_TEST=1 cargo test -p boxlite-cli --test dind_build -- --nocapture
+# Thin alias: dind end-to-end is part of the forced `test:integration:cli`
+# matrix; this target just narrows nextest's filter to that one test for
+# fast iteration. Heavy one-time `make libkrunfw-dind` (~10–20 min, cached
+# after) is required — see test:integration:cli below.
+test\:integration\:dind:
+	@$(MAKE) test:integration:cli FILTER=dind_supports_docker_build
 
-# CLI integration tests.
+# CLI integration tests (forced matrix, including dind end-to-end).
+#
+# Prereq: the libkrunfw-dind blob must already be built locally
+# (`make libkrunfw-dind` once, ~10–20 min kernel build, cached after).
+# This target staples it into the CLI by exporting BOXLITE_LIBKRUNFW_DIND_PATH
+# before cargo rebuilds, so the embedded runtime carries both the lean and
+# the dind libkrunfw blobs and dockerd-in-box runs against the right kernel.
+#
+# Ignore-condition: set BOXLITE_SKIP_DIND_TEST=1 to skip the dind test only
+# (the rest of the CLI integration suite still runs). Use this on hosts that
+# cannot run dind for real (e.g., nested-virt unavailable). Default is RUN.
 test\:integration\:cli: $(if $(SETUP_DONE),,runtime\:debug)
 	@echo "🧪 Running CLI integration tests..."
-	@if command -v cargo-nextest >/dev/null 2>&1; then \
+	@if [ ! -f target/dind-kernel/lib64/libkrunfw-dind.so.5 ]; then \
+		echo "❌ libkrunfw-dind.so.5 not found at target/dind-kernel/lib64/" >&2; \
+		echo "   Build it once with: make libkrunfw-dind   (~10–20 min, cached after)" >&2; \
+		echo "   Or skip just the dind test: BOXLITE_SKIP_DIND_TEST=1 make test:integration:cli" >&2; \
+		exit 1; \
+	fi
+	@export BOXLITE_LIBKRUNFW_DIND_PATH="$$PWD/target/dind-kernel/lib64/libkrunfw-dind.so.5" && \
+	if command -v cargo-nextest >/dev/null 2>&1; then \
 		cargo nextest run -p boxlite-cli --tests --profile vm --no-fail-fast \
 		$(NEXTEST_FILTER); \
 	else \
