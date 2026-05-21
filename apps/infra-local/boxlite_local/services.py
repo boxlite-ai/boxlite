@@ -72,6 +72,19 @@ SPEC_MINIO = ServiceSpec(
 )
 
 
+_MINIO_INIT_SCRIPT = """\
+set -eu
+for i in 1 2 3 4 5; do
+  if mc alias set boxlite "$MINIO_URL" "$MINIO_USER" "$MINIO_PASSWORD" 2>/dev/null; then break; fi
+  echo "init: minio not ready yet (attempt $i)"
+  sleep 2
+done
+mc alias set boxlite "$MINIO_URL" "$MINIO_USER" "$MINIO_PASSWORD"
+mc mb --ignore-existing boxlite/boxlite
+echo "init: ok - boxlite bucket ready"
+"""
+
+
 SPEC_MINIO_INIT = ServiceSpec(
     name="minio-init",
     image="minio/mc:latest",
@@ -80,15 +93,16 @@ SPEC_MINIO_INIT = ServiceSpec(
     ports=[],
     one_shot=True,
     depends_on=["minio"],
-    cmd=["/bin/sh", "/init.sh"],
+    # Inline cmd - SDK rejects file-mounts (host path must be a directory).
+    # The script body is the same as apps/infra-local/configs/minio/init.sh
+    # (kept on disk as documentation but not mounted into the box).
+    cmd=["sh", "-c", _MINIO_INIT_SCRIPT],
     env=lambda cfg: {
         "MINIO_URL": f"http://{cfg.host_hub}:{cfg.minio_host_port}",
         "MINIO_USER": cfg.minio_user,
         "MINIO_PASSWORD": cfg.minio_password,
     },
-    volumes=lambda cfg: [
-        (str(cfg.repo_root / "apps/infra-local/configs/minio/init.sh"), "/init.sh"),
-    ],
+    volumes=lambda cfg: [],
     healthcheck=None,
 )
 
