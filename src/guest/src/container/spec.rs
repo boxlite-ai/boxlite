@@ -976,6 +976,79 @@ mod tests {
     // Malformed /etc/passwd lines
     // ==================
 
+    // ==================
+    // Privileged spec: readonly_paths + masked_paths must be Some([]) so
+    // libcontainer's default /proc hardening doesn't bind+remount
+    // /proc/sys, /proc/bus, /proc/fs, /proc/irq as ro inside the box.
+    // See PR #568's "Current limitation: network=host only" — this test
+    // pins the spec-level behaviour the PR claims to produce.
+    // ==================
+
+    #[test]
+    fn test_privileged_clears_readonly_and_masked_paths() {
+        let rootfs = make_test_rootfs();
+        let bundle = tempfile::tempdir().unwrap();
+        // Bundle dir must have the etc files the spec builder bind-mounts
+        // (hostname, hosts, resolv.conf). Create empty placeholders.
+        for f in ["hostname", "hosts", "resolv.conf"] {
+            fs::write(bundle.path().join(f), "").unwrap();
+        }
+
+        let spec = create_oci_spec(
+            "test-container-id",
+            rootfs.path().to_str().unwrap(),
+            &["/bin/sh".to_string()],
+            &["PATH=/usr/bin".to_string()],
+            "/",
+            0,
+            0,
+            bundle.path(),
+            &[],
+            true, // privileged
+        )
+        .expect("build privileged spec");
+
+        let linux = spec.linux().as_ref().expect("linux section present");
+        let ro = linux.readonly_paths().as_ref().expect("readonly_paths set");
+        let masked = linux.masked_paths().as_ref().expect("masked_paths set");
+
+        assert!(
+            ro.is_empty(),
+            "privileged spec must clear readonly_paths, got {:?}",
+            ro
+        );
+        assert!(
+            masked.is_empty(),
+            "privileged spec must clear masked_paths, got {:?}",
+            masked
+        );
+
+        // Round-trip through JSON: spec is written as config.json and reloaded
+        // by libcontainer. Defaults could sneak in at any of those stages.
+        let bundle_dir = tempfile::tempdir().unwrap();
+        spec.save(bundle_dir.path().join("config.json"))
+            .expect("save spec");
+        let reloaded =
+            oci_spec::runtime::Spec::load(bundle_dir.path().join("config.json")).expect("reload");
+        let r_linux = reloaded.linux().as_ref().unwrap();
+        assert!(
+            r_linux
+                .readonly_paths()
+                .as_ref()
+                .expect("readonly_paths after reload")
+                .is_empty(),
+            "readonly_paths must stay empty after JSON round-trip"
+        );
+        assert!(
+            r_linux
+                .masked_paths()
+                .as_ref()
+                .expect("masked_paths after reload")
+                .is_empty(),
+            "masked_paths must stay empty after JSON round-trip"
+        );
+    }
+
     #[test]
     fn test_resolve_user_malformed_passwd_lines_skipped() {
         let dir = tempfile::tempdir().unwrap();
