@@ -110,6 +110,39 @@ def _http_probe(url: str) -> bool:
         return False
 
 
+# ─── image-cache writable workaround ──────────────────────────────────────
+
+_IMAGE_CACHE = Path.home() / ".boxlite" / "images" / "extracted"
+
+
+def _ensure_image_cache_writable() -> None:
+    """Workaround for SDK rootfs-merge failures on images whose layers contain
+    `r-x` directories (e.g. RHEL UBI-based images like minio/minio:latest).
+
+    The SDK's per-start rootfs merge tries to write into directories whose
+    owner-write bit is unset in the extracted layer cache, which produces
+    `RuntimeError: storage error: Failed to ... Permission denied (os error 13)`
+    and (sometimes) `RustPanic: rust future panicked: unknown error`.
+
+    This fix walks the extracted cache once per `start_service` call and
+    adds owner-write to every directory. It's idempotent and cheap (~10ms
+    on a populated cache). Remove when the SDK adds owner-write at extract time.
+    """
+    if not _IMAGE_CACHE.exists():
+        return
+    # Use os.walk + os.chmod for speed (avoids spawning chmod -R subprocess).
+    import os, stat
+    for root, dirs, _files in os.walk(_IMAGE_CACHE):
+        for d in dirs:
+            p = os.path.join(root, d)
+            try:
+                st = os.stat(p).st_mode
+                if not (st & stat.S_IWUSR):
+                    os.chmod(p, st | stat.S_IWUSR | stat.S_IXUSR | stat.S_IRUSR)
+            except OSError:
+                pass  # best-effort; ignore unreadable entries
+
+
 # ─── start / stop / wait ──────────────────────────────────────────────────
 
 async def start_service(runtime, spec: ServiceSpec, config: InfraConfig) -> None:
@@ -117,6 +150,7 @@ async def start_service(runtime, spec: ServiceSpec, config: InfraConfig) -> None
     volumes = spec.volumes(config)
     opts = _build_box_options_with_volumes(spec, config, volumes)
     config.data_dir.mkdir(parents=True, exist_ok=True)
+    _ensure_image_cache_writable()
     for host_path, _ in volumes:
         p = Path(host_path)
         # Heuristic: only auto-create directory mounts. Paths with a suffix
