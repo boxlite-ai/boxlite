@@ -232,6 +232,21 @@ test\:unit\:ffi:
 		cargo test -p boxlite-c $(CARGOTEST_FILTER); \
 	fi
 
+# dind end-to-end: spawn a `--support-docker` box, run `docker build`
+# against a tiny `FROM alpine` Dockerfile, assert the build exits 0 and
+# the image lands in dockerd's store. Heavy (real VM + dind kernel +
+# alpine pull from Docker Hub) and gated behind both:
+#   1. a libkrunfw-dind blob bundled at build time
+#      (`make libkrunfw-dind` then `BOXLITE_LIBKRUNFW_DIND_PATH=... make cli`)
+#   2. the BOXLITE_DIND_TEST=1 env var the target sets
+#
+# Not in the default `test:integration` matrix — most CI hosts won't
+# have the dind blob built. Run explicitly when validating Phase B
+# changes or before cutting a release that claims dind support.
+test\:integration\:dind: $(if $(SETUP_DONE),,runtime\:debug)
+	@echo "🧪 Running dind integration test (requires libkrunfw-dind blob bundled)..."
+	@BOXLITE_DIND_TEST=1 cargo test -p boxlite-cli --test dind_build -- --nocapture
+
 # CLI integration tests.
 test\:integration\:cli: $(if $(SETUP_DONE),,runtime\:debug)
 	@echo "🧪 Running CLI integration tests..."
