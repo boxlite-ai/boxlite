@@ -1,8 +1,7 @@
 """Declarative registry of services the orchestrator manages.
 
-Phase 3a: pg (from Phase 2) + redis + minio + minio-init + registry.
-New services land here as one new SPEC + one new SERVICES entry —
-no autodiscovery yet.
+Phase 3b: 3a stack + dex + jaeger + pgadmin + registry-ui (9 services).
+otel-collector deferred (needs a build-from-repo pipeline).
 """
 
 from __future__ import annotations
@@ -15,20 +14,21 @@ SPEC_PG = ServiceSpec(
     image="postgres:16-alpine",
     cpus=1,
     memory_mib=512,
-    ports=[(25432, 5432)],                       # non-default host port — see parent design §3.8
+    ports=[(25432, 5432)],
     env=lambda cfg: {
         "POSTGRES_USER": cfg.pg_user,
-        "POSTGRES_PASSWORD": cfg.pg_password,    # required by image entrypoint
+        "POSTGRES_PASSWORD": cfg.pg_password,
         "POSTGRES_DB": cfg.pg_db,
-        "POSTGRES_HOST_AUTH_METHOD": "trust",    # local dev only
+        "POSTGRES_HOST_AUTH_METHOD": "trust",
         "PGDATA": "/var/lib/postgresql/data/pgdata",
     },
     volumes=lambda cfg: [
         (str(cfg.data_dir / "pg"), "/var/lib/postgresql/data"),
     ],
     depends_on=[],
+    # Callable healthcheck — passes cfg-derived user/db (validates Phase-2 debt #2 fix).
     healthcheck=HealthCheck(
-        exec=["pg_isready", "-U", "boxlite", "-d", "boxlite", "-t", "1"],
+        exec=lambda cfg: ["pg_isready", "-U", cfg.pg_user, "-d", cfg.pg_db, "-t", "1"],
         interval_s=2.0,
         retries=30,
     ),
@@ -93,12 +93,6 @@ SPEC_MINIO_INIT = ServiceSpec(
     ports=[],
     one_shot=True,
     depends_on=["minio"],
-    # minio/mc's image entrypoint is the `mc` binary, so we override it to `sh`
-    # and pass the bootstrap script via -c. (SDK BoxOptions.entrypoint was added
-    # late; ServiceSpec didn't expose it until 3a.)
-    # The script body is the same as apps/infra-local/configs/minio/init.sh
-    # (kept on disk as documentation; not mounted because the SDK requires
-    # host volume paths to be directories, not files.)
     entrypoint=["sh"],
     cmd=["-c", _MINIO_INIT_SCRIPT],
     env=lambda cfg: {
@@ -127,10 +121,137 @@ SPEC_REGISTRY = ServiceSpec(
 )
 
 
+# ─── 3b services ──────────────────────────────────────────────────────────
+
+_DEX_CONFIG = """\
+issuer: ${DEX_ISSUER}
+storage:
+  type: sqlite3
+  config:
+    file: /var/dex/dex.db
+web:
+  http: 0.0.0.0:5556
+  allowedOrigins: ['*']
+  allowedHeaders: ['x-requested-with']
+staticClients:
+  - id: boxlite
+    redirectURIs:
+      - '${REDIRECT_URI}'
+      - 'http://localhost:3000'
+      - 'http://localhost:5173'
+    name: 'BoxLite'
+    public: true
+enablePasswordDB: true
+staticPasswords:
+  - email: 'admin@boxlite.dev'
+    hash: '$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W'
+    username: 'admin'
+    userID: '1234'
+"""
+
+_DEX_ENTRYPOINT = """\
+set -e
+mkdir -p /var/dex /tmp
+cat > /tmp/dex-config.yaml <<'__CFG__'
+""" + _DEX_CONFIG + """\
+__CFG__
+sed -i "s|\\${DEX_ISSUER}|${DEX_ISSUER}|g" /tmp/dex-config.yaml
+sed -i "s|\\${REDIRECT_URI}|${REDIRECT_URI}|g" /tmp/dex-config.yaml
+exec /usr/local/bin/dex serve /tmp/dex-config.yaml
+"""
+
+
+SPEC_DEX = ServiceSpec(
+    name="dex",
+    image="dexidp/dex:v2.42.0",
+    cpus=1,
+    memory_mib=256,
+    ports=[(25556, 5556)],
+    env=lambda cfg: {
+        "DEX_ISSUER": cfg.dex_issuer,
+        "REDIRECT_URI": "http://localhost:3000",
+    },
+    depends_on=[],
+    # dex image's default entrypoint is /usr/local/bin/dex; override to sh
+    # so we can run the inline script that env-substitutes the config.
+    entrypoint=["sh"],
+    cmd=["-c", _DEX_ENTRYPOINT],
+    healthcheck=HealthCheck(
+        http_url="http://127.0.0.1:25556/dex/.well-known/openid-configuration",
+        interval_s=2.0,
+        retries=30,
+    ),
+)
+
+
+SPEC_JAEGER = ServiceSpec(
+    name="jaeger",
+    image="jaegertracing/all-in-one:1.67.0",
+    cpus=1,
+    memory_mib=512,
+    ports=[(26686, 16686)],
+    env=lambda cfg: {
+        "COLLECTOR_OTLP_ENABLED": "true",
+    },
+    depends_on=[],
+    healthcheck=HealthCheck(
+        http_url="http://127.0.0.1:26686/",
+        interval_s=2.0,
+        retries=30,
+    ),
+)
+
+
+SPEC_PGADMIN = ServiceSpec(
+    name="pgadmin",
+    image="dpage/pgadmin4:9.2.0",
+    cpus=1,
+    memory_mib=512,
+    ports=[(25051, 80)],
+    env=lambda cfg: {
+        "PGADMIN_DEFAULT_EMAIL": cfg.pgadmin_email,
+        "PGADMIN_DEFAULT_PASSWORD": cfg.pgadmin_password,
+        # Skip the password-setup wizard so probes don't redirect forever.
+        "PGADMIN_CONFIG_SERVER_MODE": "False",
+        "PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED": "False",
+    },
+    depends_on=["postgres"],
+    healthcheck=HealthCheck(
+        http_url="http://127.0.0.1:25051/misc/ping",
+        interval_s=2.0,
+        retries=60,                        # pgadmin can take 30s+ to warm up
+    ),
+)
+
+
+SPEC_REGISTRY_UI = ServiceSpec(
+    name="registry-ui",
+    image="joxit/docker-registry-ui:main",
+    cpus=1,
+    memory_mib=128,
+    ports=[(25052, 80)],
+    env=lambda cfg: {
+        "REGISTRY_TITLE": "BoxLite local registry",
+        "NGINX_PROXY_PASS_URL": f"http://{cfg.host_hub}:{cfg.registry_host_port}",
+        "SINGLE_REGISTRY": "true",
+    },
+    depends_on=["registry"],
+    healthcheck=HealthCheck(
+        http_url="http://127.0.0.1:25052/",
+        interval_s=2.0,
+        retries=30,
+    ),
+)
+
+
 SERVICES: dict[str, ServiceSpec] = {
-    "postgres":   SPEC_PG,
-    "redis":      SPEC_REDIS,
-    "minio":      SPEC_MINIO,
-    "minio-init": SPEC_MINIO_INIT,
-    "registry":   SPEC_REGISTRY,
+    "postgres":    SPEC_PG,
+    "redis":       SPEC_REDIS,
+    "minio":       SPEC_MINIO,
+    "minio-init":  SPEC_MINIO_INIT,
+    "registry":    SPEC_REGISTRY,
+    "dex":         SPEC_DEX,
+    "jaeger":      SPEC_JAEGER,
+    "pgadmin":     SPEC_PGADMIN,
+    "registry-ui": SPEC_REGISTRY_UI,
 }
