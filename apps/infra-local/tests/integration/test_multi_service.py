@@ -9,6 +9,8 @@ import asyncio
 import os
 import shutil
 import tempfile
+import ssl
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -35,6 +37,8 @@ _DAEMON_SERVICES = [
     "boxlite-local-jaeger",
     "boxlite-local-pgadmin",
     "boxlite-local-registry-ui",
+    "boxlite-local-otel",
+    "boxlite-local-caddy",
 ]
 _ONE_SHOT_SERVICES = ["boxlite-local-minio-init"]
 
@@ -48,7 +52,7 @@ def tmp_config(monkeypatch):
     shutil.rmtree(tmp, ignore_errors=True)
 
 
-def test_9_service_round_trip(tmp_config: InfraConfig):
+def test_11_service_round_trip(tmp_config: InfraConfig):
     asyncio.run(_round_trip(tmp_config))
 
 
@@ -99,8 +103,30 @@ async def _round_trip(cfg: InfraConfig) -> None:
             (f"http://127.0.0.1:{cfg.jaeger_host_port}/", "jaeger"),
             (f"http://127.0.0.1:{cfg.pgadmin_host_port}/misc/ping", "pgadmin"),
             (f"http://127.0.0.1:{cfg.registry_ui_host_port}/", "registry-ui"),
+            (f"http://127.0.0.1:{cfg.otel_health_port}/", "otel"),
+            (f"http://127.0.0.1:{cfg.caddy_http_port}/", "caddy-http-redirect-target-ok-on-301"),
         ]:
-            with urllib.request.urlopen(url, timeout=5) as resp:
+            try:
+                with urllib.request.urlopen(url, timeout=5) as resp:
+                    assert 200 <= resp.status < 300, f"{label} bad status: {resp.status} for {url}"
+            except urllib.error.HTTPError as e:
+                # Caddy HTTP port (28080) issues a 301 redirect to HTTPS.
+                # urlopen treats 301 without follow as an error; treat as healthy.
+                if label.startswith("caddy-http") and e.code in (301, 308):
+                    continue
+                raise
+
+        # Caddy HTTPS reverse proxy to jaeger and registry. Self-signed cert,
+        # so use an unverified SSL context. Verifies path routing works.
+        ssl_ctx = ssl.create_default_context()
+        ssl_ctx.check_hostname = False
+        ssl_ctx.verify_mode = ssl.CERT_NONE
+        for path, label in [
+            ("/jaeger/", "caddy-via-jaeger"),
+            ("/registry/v2/", "caddy-via-registry"),
+        ]:
+            url = f"https://127.0.0.1:{cfg.caddy_https_port}{path}"
+            with urllib.request.urlopen(url, timeout=5, context=ssl_ctx) as resp:
                 assert 200 <= resp.status < 300, f"{label} bad status: {resp.status} for {url}"
 
     finally:
