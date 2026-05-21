@@ -195,8 +195,10 @@ async def start_service(runtime, spec: ServiceSpec, config: InfraConfig) -> None
             box, _ = await runtime.get_or_create(opts, name=name)
         await _start_with_perm_retry(box, label=spec.name)
         await _wait_one_shot_exit(runtime, name, label=spec.name)
+        # One-shot box's VM is still "running" per SDK even after init exited;
+        # force=True stops the VM as part of remove.
         try:
-            await runtime.remove(name)
+            await runtime.remove(name, force=True)
         except Exception as e:
             print(f"  {name}: one-shot remove failed ({e!r})")
         print(f"  {name}: one-shot completed and removed")
