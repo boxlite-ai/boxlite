@@ -5,10 +5,20 @@
 > - 上一版方案见 [`docs/apps/infra-vs-local-infra.md`](./infra-vs-local-infra.md)
 > - 原则记录:memory `feedback_eat_your_own_dogfood.md`
 > - 平台目标:Mac M5,24GB(memory `feedback_infra_local_target_mac_m5.md`)
-> - **状态**:**PoC Phase 0 + Phase 1 ✅ 全部通过**(2026-05-20,单 postgres + 多服务 + box-to-box via `host.boxlite.internal` 全 12 phase 通过),进 Phase 2(orchestrator 骨架)
+> - **状态**:**Phase 0 + 1 + 2 + 3a/3b/3c/3d ✅ 全部完成**(2026-05-21)。**11-box stack 端到端跑通**:pg / redis / minio / minio-init(one-shot)/ registry / dex / jaeger / pgadmin / registry-ui / otel-collector / caddy。**Caddy 反向代理打通全部上游**(`http://127.0.0.1:28080/<svc>/`)。
+> - 现在的状态:`apps/infra-local/` 是一个 self-contained 的 dev stack。`make up` 一键拉起,`make wipe` 一键清空。35 unit tests + 1 integration test 全绿。
 > - PoC 代码:`apps/infra-local/poc/single_service.py` + `multi_service.py` + `diagnose_network.py`
-> - SDK 实战 gotcha:memory `feedback_boxlite_python_sdk_gotchas.md`
-> - Phase 2 spec:[`docs/superpowers/specs/2026-05-20-infra-local-phase2-walking-skeleton.md`](../superpowers/specs/2026-05-20-infra-local-phase2-walking-skeleton.md)
+> - 实现代码:`apps/infra-local/boxlite_local/`
+> - SDK 实战 gotcha(11 条):memory `feedback_boxlite_python_sdk_gotchas.md` + `apps/infra-local/README.md` § Known limitations
+> - Spec 链:
+>   - Phase 2 walking skeleton: [`docs/superpowers/specs/2026-05-20-infra-local-phase2-walking-skeleton.md`](../superpowers/specs/2026-05-20-infra-local-phase2-walking-skeleton.md)
+>   - Phase 3a foundation: [`docs/superpowers/specs/2026-05-21-infra-local-phase3a-foundation-services.md`](../superpowers/specs/2026-05-21-infra-local-phase3a-foundation-services.md)
+>   - Phase 3b admin-UI + dex: [`docs/superpowers/specs/2026-05-21-infra-local-phase3b-admin-ui-and-observability.md`](../superpowers/specs/2026-05-21-infra-local-phase3b-admin-ui-and-observability.md)
+>   - Phase 3c Caddy + otel: [`docs/superpowers/specs/2026-05-21-infra-local-phase3c-caddy-and-otel.md`](../superpowers/specs/2026-05-21-infra-local-phase3c-caddy-and-otel.md)
+> - 留给后续手动 + sudo 的工作(infra-local 之外):
+>   - **dns-shim** + **mkcert -install**(需 root) → 启用 Caddy TLS + `*.boxlite.test` 域名 UX
+>   - **custom otel-collector binary build**(需要完整 boxlite repo 的 nx/go/node toolchain) → 用 `apps/otel-collector/` 的真正 collector
+>   - **Lima runner**(原 Phase 4) → 跑 sandbox 工作负载
 
 ---
 
