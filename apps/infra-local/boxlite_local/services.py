@@ -235,7 +235,7 @@ SPEC_REGISTRY_UI = ServiceSpec(
     name="registry-ui",
     image="joxit/docker-registry-ui:main",
     cpus=1,
-    memory_mib=128,
+    memory_mib=256,            # 128 OOMs during nginx-alpine entrypoint init
     # nginx-alpine image EXPOSEs 80 AND 443. Same SDK auto-bind trap as
     # pgadmin — map both explicitly so 25052 -> 80 shim actually gets bound.
     # (Earlier in 3b this appeared to work but the shim was leaked from a

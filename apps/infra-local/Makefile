@@ -32,5 +32,11 @@ doctor:                ## run preflight checks (SDK + runtime + port conflicts)
 test:                  ## run unit tests (no BoxLite required)
 	pytest tests/unit -q
 
-itest:                 ## run integration test (requires BoxLite runtime, ~30s)
-	BOXLITE_INTEGRATION=1 pytest tests/integration -v -s
+itest:                 ## run integration smoke test (requires BoxLite runtime, ~30s)
+	BOXLITE_INTEGRATION=1 pytest tests/integration/test_multi_service.py -v -s
+
+e2e:                   ## run comprehensive E2E suite (~60s, ~90s with smoke)
+	BOXLITE_INTEGRATION=1 pytest tests/integration/test_e2e_full.py -v -s
+
+itest-all:             ## run BOTH integration suites (~90s)
+	BOXLITE_INTEGRATION=1 pytest tests/integration -v

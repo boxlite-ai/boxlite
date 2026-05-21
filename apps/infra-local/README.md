@@ -45,7 +45,9 @@ The full make target list:
   ps           list running boxlite-local-* boxes
   doctor       run preflight checks (SDK + runtime + port conflicts)
   test         run unit tests (no BoxLite required)
-  itest        run integration test (requires BoxLite runtime, ~30s)
+  itest        run integration smoke test (requires BoxLite runtime, ~30s)
+  e2e          run comprehensive E2E suite (~60s, ~90s with smoke)
+  itest-all    run BOTH integration suites (~90s)
 ```
 
 ---
@@ -231,12 +233,23 @@ apps/infra-local/
 ├── poc/                              # Phase 1 PoC code (still works, kept as a reference)
 └── tests/
     ├── unit/                         # pure-logic tests (no BoxLite needed)
-    │   ├── test_config.py
-    │   ├── test_doctor_lsof.py
-    │   ├── test_orchestrator.py
-    │   └── test_topo.py
-    └── integration/
-        └── test_multi_service.py     # 11-service round-trip, gated on BOXLITE_INTEGRATION=1
+    │   ├── test_config.py            # 12: InfraConfig + env overrides
+    │   ├── test_doctor_lsof.py       # 5: lsof -F parsing + boxlite-owner predicate
+    │   ├── test_orchestrator.py      # 8: _http_probe, _is_already_running, callable cmd/exec
+    │   └── test_topo.py              # 6: topo_sort layering + cycle detection
+    └── integration/                  # gated on BOXLITE_INTEGRATION=1 (~90s total)
+        ├── test_multi_service.py     # smoke: 11-service round-trip with health endpoints
+        └── test_e2e_full.py          # comprehensive E2E (10 tests, module-scoped stack):
+                                      #   - pg SQL roundtrip (CREATE/INSERT/SELECT)
+                                      #   - redis SET/GET/INCR
+                                      #   - minio S3 PUT/GET via mc client box
+                                      #   - registry v2 catalog API
+                                      #   - dex JWKS keys
+                                      #   - jaeger query API
+                                      #   - otel OTLP HTTP receiver accepts trace
+                                      #   - caddy all 6 reverse-proxy routes
+                                      #   - stack stays healthy after 30s idle
+                                      #   - total memory under 8 GiB budget
 ```
 
 ---
