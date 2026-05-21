@@ -395,6 +395,22 @@ pub struct BoxOptions {
     /// guest; the real value never enters the VM.
     #[serde(default)]
     pub secrets: Vec<Secret>,
+
+    /// Opt-in: relax the in-container security envelope so a docker daemon
+    /// (or other workload that needs `docker run --privileged` semantics)
+    /// can run inside the box. When true the guest:
+    ///   - mounts `/sys/fs/cgroup` as a writable cgroup2 filesystem
+    ///   - grants the full Linux capability set (CAP_SYS_ADMIN,
+    ///     CAP_NET_ADMIN, CAP_SYS_MODULE, etc.) to the container init and
+    ///     every exec'd process
+    ///
+    /// Default `false` preserves the existing lean / locked-down behaviour
+    /// for every existing user — no surprise widening of the attack surface.
+    /// SECURITY: enabling this is equivalent to `docker run --privileged`
+    /// inside the microVM. The microVM boundary still contains escapes,
+    /// but the in-box blast radius effectively becomes root.
+    #[serde(default)]
+    pub privileged: bool,
 }
 
 /// A secret for MITM proxy injection.
@@ -496,6 +512,7 @@ impl Default for BoxOptions {
             cmd: None,
             user: None,
             secrets: Vec::new(),
+            privileged: false,
         }
     }
 }

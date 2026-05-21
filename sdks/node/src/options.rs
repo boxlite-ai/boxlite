@@ -427,6 +427,10 @@ impl TryFrom<JsBoxOptions> for BoxOptions {
             cmd: js_opts.cmd,
             user: js_opts.user,
             secrets,
+            // Not yet plumbed through the Node SDK surface — defaults to the
+            // existing lean behaviour. Add `privileged` to JsBoxOptions
+            // when we expose the CLI's --privileged to Node callers.
+            privileged: false,
         })
     }
 }

@@ -11,7 +11,7 @@
 //!
 //! See `docs/investigations/concurrent-exec-deadlock.md` for full analysis.
 
-use super::capabilities::capability_names;
+use super::capabilities::{capability_names, docker_capability_names};
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use libcontainer::container::builder::ContainerBuilder;
 use libcontainer::syscall::syscall::SyscallType;
@@ -58,6 +58,14 @@ pub(crate) struct BuildSpec {
     pub args: Vec<String>,
     pub uid: u32,
     pub gid: u32,
+    /// Inherited from the parent Container — selects the capability set used
+    /// when the zygote builds the tenant process. `false` (default) gives the
+    /// 14 Docker defaults; `true` gives the full privileged set so dockerd
+    /// inside a `--privileged` box has the caps it needs.
+    /// `#[serde(default)]` so older zygotes (during rolling upgrades) decode
+    /// new payloads without a versioning bump — missing field reads as false.
+    #[serde(default)]
+    pub privileged: bool,
 }
 
 /// Build outcome. Invalid states are unrepresentable.
@@ -254,9 +262,14 @@ fn do_build(spec: BuildSpec, fds: Option<[RawFd; 3]>) -> BuildResult {
                 .with_stderr(stderr);
         }
 
+        let caps = if spec.privileged {
+            docker_capability_names()
+        } else {
+            capability_names()
+        };
         let pid = builder
             .as_tenant()
-            .with_capabilities(capability_names())
+            .with_capabilities(caps)
             .with_no_new_privs(false)
             .with_detach(false)
             .with_cwd(Some(spec.cwd))
@@ -449,6 +462,7 @@ mod tests {
             ],
             uid: 1000,
             gid: 1000,
+            privileged: false,
         }
     }
 
@@ -544,6 +558,7 @@ mod tests {
             args: vec![],
             uid: 0,
             gid: 0,
+            privileged: false,
         };
         let json = serde_json::to_vec(&spec).unwrap();
         let decoded: BuildSpec = serde_json::from_slice(&json).unwrap();
@@ -767,6 +782,7 @@ mod tests {
             args,
             uid: 65534,
             gid: 65534,
+            privileged: false,
         };
 
         send_request(fd_a, &ZygoteRequest::Build(spec.clone()), None).unwrap();
@@ -796,6 +812,7 @@ mod tests {
             args: vec![],
             uid: 0,
             gid: 0,
+            privileged: false,
         };
 
         let (a, _b) = socketpair(
@@ -948,6 +965,7 @@ mod tests {
                     args: vec!["echo".to_string()],
                     uid: 0,
                     gid: 0,
+                    privileged: false,
                 };
                 z.build(spec, None).unwrap()
             }));

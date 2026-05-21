@@ -87,8 +87,33 @@ impl LibraryLoadPath {
 /// discoverable when the subprocess starts. Adds paths from both
 /// dladdr-based detection and the embedded runtime cache.
 pub fn configure_library_env(cmd: &mut Command, addr: *const libc::c_void) {
+    configure_library_env_with_prepend(cmd, addr, &[]);
+}
+
+/// Like [`configure_library_env`] but with caller-supplied directories
+/// PRE-pended to the loader search path. Used by `--privileged` to
+/// inject a per-box dir whose `libkrunfw.so.5` is a symlink to the
+/// fat (dind-capable) blob — dlopen searches in order, so a prepended
+/// dir wins over the embedded-runtime dir holding the lean blob, and
+/// the same shim binary loads the right kernel for each box without
+/// any libkrun changes.
+///
+/// Each prepend path that doesn't exist is silently skipped (callers
+/// already log the underlying cause, e.g. "dind blob not staged").
+pub fn configure_library_env_with_prepend(
+    cmd: &mut Command,
+    addr: *const libc::c_void,
+    prepend: &[PathBuf],
+) {
     // Collect all library directories to add to search path
     let mut lib_dirs: Vec<PathBuf> = Vec::new();
+
+    // 0. Caller-supplied prepends — win over everything else at dlopen time.
+    for dir in prepend {
+        if dir.exists() {
+            lib_dirs.push(dir.clone());
+        }
+    }
 
     // 1. dladdr-based detection (libraries alongside the running binary)
     if let Some(runner_dir) = LibraryLoadPath::get(Some(addr))

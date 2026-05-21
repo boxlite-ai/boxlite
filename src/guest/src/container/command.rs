@@ -65,6 +65,10 @@ pub struct ContainerCommand {
 
     /// PTY configuration (set via with_pty())
     pty_config: Option<PtyConfig>,
+
+    /// Inherited from the parent Container — drives capability set selection
+    /// at zygote build time. See `Container::privileged`.
+    privileged: bool,
 }
 
 impl ContainerCommand {
@@ -78,6 +82,7 @@ impl ContainerCommand {
         env: HashMap<String, String>,
         user: (u32, u32),
         rootfs: PathBuf,
+        privileged: bool,
     ) -> Self {
         Self {
             program: None,
@@ -91,6 +96,7 @@ impl ContainerCommand {
             pty_config: None,
             id,
             state_root,
+            privileged,
         }
     }
 
@@ -386,6 +392,7 @@ impl ContainerCommand {
             args: container_args.clone(),
             uid,
             gid,
+            privileged: self.privileged,
         };
 
         // Blocking IPC to zygote — use spawn_blocking to not block tokio.
@@ -556,6 +563,7 @@ mod tests {
             HashMap::new(),
             (0, 0),
             PathBuf::from("/tmp/rootfs"),
+            false,
         )
     }
 

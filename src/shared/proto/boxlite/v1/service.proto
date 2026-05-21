@@ -208,6 +208,12 @@ message ContainerInitRequest {
   // Additional CA certificates to install in the container trust store.
   // Used for MITM secret substitution — the container trusts the proxy CA.
   repeated CACert ca_certs = 5;
+  // Opt-in `--privileged` flag from BoxOptions. When true the guest
+  // mounts /sys/fs/cgroup as rw and grants the full Linux capability set
+  // to the container init + every exec'd process, so a docker daemon
+  // inside the box has the privileges it needs. Default-false preserves
+  // the existing lean / locked-down behaviour byte-for-byte.
+  bool privileged = 6;
 }
 
 // A CA certificate to add to the container's trust store.

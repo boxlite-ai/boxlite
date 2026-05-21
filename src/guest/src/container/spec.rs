@@ -54,10 +54,11 @@ pub fn create_oci_spec(
     gid: u32,
     bundle_path: &Path,
     user_mounts: &[UserMount],
+    privileged: bool,
 ) -> BoxliteResult<Spec> {
-    let caps = build_default_capabilities()?;
+    let caps = build_capabilities(privileged)?;
     let namespaces = build_default_namespaces()?;
-    let mut mounts = build_standard_mounts(bundle_path)?;
+    let mut mounts = build_standard_mounts(bundle_path, privileged)?;
 
     // Add user-specified bind mounts
     for user_mount in user_mounts {
@@ -92,7 +93,7 @@ pub fn create_oci_spec(
 
     let process = build_process_spec(entrypoint, env, workdir, uid, gid, caps)?;
     let root = build_root_spec(rootfs)?;
-    let linux = build_linux_spec(container_id, namespaces)?;
+    let linux = build_linux_spec(container_id, namespaces, privileged)?;
 
     SpecBuilder::default()
         .version("1.0.2")
@@ -264,9 +265,20 @@ fn find_group_in_group_file(rootfs: &str, name: &str) -> BoxliteResult<u32> {
 // Spec Component Builders
 // ====================
 
-/// Build default Linux capabilities matching Docker/OCI defaults.
-fn build_default_capabilities() -> BoxliteResult<oci_spec::runtime::LinuxCapabilities> {
-    let caps = default_capabilities();
+/// Build Linux capabilities for the container's init process.
+///
+/// `privileged=false` (default): the 14 Docker/OCI defaults — sufficient for
+/// most workloads, excludes CAP_SYS_ADMIN / CAP_NET_ADMIN / CAP_SYS_MODULE / etc.
+///
+/// `privileged=true`: the full privileged set (see
+/// `capabilities::docker_capabilities`). Required so a dockerd inside the box
+/// can mount cgroups, set up bridge interfaces, install iptables rules, etc.
+fn build_capabilities(privileged: bool) -> BoxliteResult<oci_spec::runtime::LinuxCapabilities> {
+    let caps = if privileged {
+        super::capabilities::docker_capabilities()
+    } else {
+        default_capabilities()
+    };
 
     LinuxCapabilitiesBuilder::default()
         .bounding(caps.clone())
@@ -354,6 +366,7 @@ fn build_root_spec(rootfs: &str) -> BoxliteResult<oci_spec::runtime::Root> {
 fn build_linux_spec(
     container_id: &str,
     namespaces: Vec<oci_spec::runtime::LinuxNamespace>,
+    privileged: bool,
 ) -> BoxliteResult<oci_spec::runtime::Linux> {
     // UID/GID mappings for user namespace
     // Map full range of UIDs/GIDs to allow non-root users (nginx=33, etc.)
@@ -401,19 +414,57 @@ fn build_linux_spec(
     // let cgroups_path = format!("/boxlite/{}", container_id);
     let _ = container_id; // Suppress unused warning
 
-    LinuxBuilder::default()
+    let mut builder = LinuxBuilder::default()
         .namespaces(namespaces)
         .uid_mappings(uid_mappings)
-        .gid_mappings(gid_mappings)
-        // .masked_paths(masked_paths)
-        // .readonly_paths(readonly_paths)
-        // .cgroups_path(cgroups_path)
+        .gid_mappings(gid_mappings);
+    // .masked_paths(masked_paths)
+    // .readonly_paths(readonly_paths)
+    // .cgroups_path(cgroups_path)
+
+    // --privileged: explicitly clear masked_paths + readonly_paths so
+    // libcontainer doesn't apply its default /proc hardening (which bind-
+    // mounts /proc/sys ro on top of our writable procfs). dockerd needs
+    // /proc/sys/net/ipv4/ip_forward writable to bring up the default bridge
+    // network — without it network controller init fails:
+    //   "failed to set IP forwarding ... read-only file system"
+    //
+    // Empty `Vec` here is meaningful: the OCI spec runtime treats `Some([])`
+    // as "no paths" and `None` as "apply runtime defaults". We want the
+    // former for `--privileged` (no masking, no readonly), matching
+    // `docker run --privileged` semantics.
+    if privileged {
+        // KNOWN-LIMITATION (Phase B, dockerd default bridge): we set
+        // readonly_paths and masked_paths to empty so dockerd inside the
+        // box can write `/proc/sys/net/ipv4/ip_forward` etc. when bringing
+        // up its default `bridge` network. Verified end-to-end: the OCI
+        // spec written to config.json correctly contains
+        // `readonlyPaths: []` and `maskedPaths: []`, and a reload via
+        // `oci_spec::runtime::Spec::load` returns Some([]) — yet the
+        // container still ends up with `/proc/bus`, `/proc/fs`, `/proc/irq`,
+        // `/proc/sys` bind-mounted ro,nosuid,nodev,noexec by libcontainer-
+        // 0.5.7. Setting these paths to non-existent strings DOES change
+        // behaviour (rootfs prep fails) so the override IS being honoured
+        // somewhere — but the default hardening still slips through.
+        // Root cause TBD; tracked as a follow-up. Workaround: dind users
+        // must pass `dockerd --bridge=none --iptables=false` until this
+        // is resolved (the kernel side works — /proc/sys/net/bridge/ is
+        // populated, iptables rules can be installed via nft_compat —
+        // the only blocker is dockerd's automatic default-bridge setup
+        // hitting the ro /proc/sys).
+        builder = builder
+            .masked_paths(Vec::<String>::new())
+            .readonly_paths(Vec::<String>::new());
+    }
+
+    let linux = builder
         .build()
-        .map_err(|e| BoxliteError::Internal(format!("Failed to build linux spec: {}", e)))
+        .map_err(|e| BoxliteError::Internal(format!("Failed to build linux spec: {}", e)))?;
+    Ok(linux)
 }
 
 /// Build standard mounts for container filesystem
-fn build_standard_mounts(bundle_path: &Path) -> BoxliteResult<Vec<Mount>> {
+fn build_standard_mounts(bundle_path: &Path, privileged: bool) -> BoxliteResult<Vec<Mount>> {
     let mut mounts = vec![
         // /proc - Process information
         MountBuilder::default()
@@ -483,27 +534,12 @@ fn build_standard_mounts(bundle_path: &Path) -> BoxliteResult<Vec<Mount>> {
             ])
             .build()
             .map_err(|e| BoxliteError::Internal(format!("Failed to build /sys mount: {}", e)))?,
-        // NOTE: /sys/fs/cgroup mount disabled for performance
-        // Mounting cgroup2 filesystem takes ~105ms due to kernel cgroup hierarchy initialization.
-        // This is the main bottleneck in container startup. Since we're inside a VM with
-        // single-tenant isolation, cgroup resource limits provide minimal benefit.
-        // Re-enable if you need to enforce CPU/memory limits within the container.
+        // NOTE: /sys/fs/cgroup mount is disabled by default for performance —
+        // mounting cgroup2 takes ~105ms due to kernel hierarchy initialization,
+        // and a single-tenant VM gets minimal benefit from in-container cgroups.
+        // The `privileged` profile re-enables it as `rw` below so a docker
+        // daemon inside the box can write cgroup limits for its child containers.
         //
-        // MountBuilder::default()
-        //     .destination("/sys/fs/cgroup")
-        //     .typ("cgroup")
-        //     .source("cgroup")
-        //     .options(vec![
-        //         "nosuid".to_string(),
-        //         "noexec".to_string(),
-        //         "nodev".to_string(),
-        //         "relatime".to_string(),
-        //         "ro".to_string(),
-        //     ])
-        //     .build()
-        //     .map_err(|e| {
-        //         BoxliteError::Internal(format!("Failed to build /sys/fs/cgroup mount: {}", e))
-        //     })?,
         // /tmp - Temporary filesystem
         MountBuilder::default()
             .destination("/tmp")
@@ -517,6 +553,36 @@ fn build_standard_mounts(bundle_path: &Path) -> BoxliteResult<Vec<Mount>> {
             .build()
             .map_err(|e| BoxliteError::Internal(format!("Failed to build /tmp mount: {}", e)))?,
     ];
+
+    // --privileged: re-enable /sys/fs/cgroup as a writable cgroup2 mount
+    // so the in-box docker daemon can manage cgroup limits for its children.
+    // Costs ~105ms at startup; only paid when the user opts in.
+    if privileged {
+        mounts.push(
+            MountBuilder::default()
+                .destination("/sys/fs/cgroup")
+                .typ("cgroup2")
+                .source("cgroup")
+                .options(vec![
+                    "nosuid".to_string(),
+                    "noexec".to_string(),
+                    "nodev".to_string(),
+                    "relatime".to_string(),
+                    "rw".to_string(),
+                ])
+                .build()
+                .map_err(|e| {
+                    BoxliteError::Internal(format!("Failed to build /sys/fs/cgroup mount: {}", e))
+                })?,
+        );
+
+        // /proc/sys writability comes from clearing readonly_paths in
+        // build_linux_spec (the OCI runtime-spec mechanism). Don't add an
+        // explicit /proc/sys mount here — libcontainer's check_proc_mount
+        // whitelist rejects everything under /proc except a handful of
+        // host-emulated entries (/proc/cpuinfo etc.) and would refuse the
+        // mount with "not a valid mount under /proc".
+    }
 
     // Bind-mount /etc/hostname, /etc/hosts, /etc/resolv.conf from the bundle
     // dir into the container. Uses rbind + rprivate (matching Docker defaults).

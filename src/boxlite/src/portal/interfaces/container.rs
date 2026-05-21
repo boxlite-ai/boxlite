@@ -92,6 +92,7 @@ impl ContainerInterface {
     ///
     /// # Returns
     /// Container ID on success
+    #[allow(clippy::too_many_arguments)]
     pub async fn init(
         &mut self,
         container_id: &str,
@@ -99,6 +100,7 @@ impl ContainerInterface {
         rootfs: ContainerRootfsInitConfig,
         mounts: Vec<ContainerMount>,
         ca_certs: Vec<String>,
+        privileged: bool,
     ) -> BoxliteResult<String> {
         let proto_config = ProtoContainerConfig {
             entrypoint: image_config.final_cmd(),
@@ -139,6 +141,7 @@ impl ContainerInterface {
             rootfs: Some(rootfs.into_proto()),
             mounts: proto_mounts,
             ca_certs: ca_certs.into_iter().map(|pem| CaCert { pem }).collect(),
+            privileged,
         };
 
         let response = self.client.init(request).await?.into_inner();
