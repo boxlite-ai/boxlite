@@ -93,7 +93,7 @@ pub fn create_oci_spec(
 
     let process = build_process_spec(entrypoint, env, workdir, uid, gid, caps)?;
     let root = build_root_spec(rootfs)?;
-    let linux = build_linux_spec(container_id, namespaces)?;
+    let linux = build_linux_spec(container_id, namespaces, support_docker)?;
 
     SpecBuilder::default()
         .version("1.0.2")
@@ -366,6 +366,7 @@ fn build_root_spec(rootfs: &str) -> BoxliteResult<oci_spec::runtime::Root> {
 fn build_linux_spec(
     container_id: &str,
     namespaces: Vec<oci_spec::runtime::LinuxNamespace>,
+    support_docker: bool,
 ) -> BoxliteResult<oci_spec::runtime::Linux> {
     // UID/GID mappings for user namespace
     // Map full range of UIDs/GIDs to allow non-root users (nginx=33, etc.)
@@ -413,15 +414,53 @@ fn build_linux_spec(
     // let cgroups_path = format!("/boxlite/{}", container_id);
     let _ = container_id; // Suppress unused warning
 
-    LinuxBuilder::default()
+    let mut builder = LinuxBuilder::default()
         .namespaces(namespaces)
         .uid_mappings(uid_mappings)
-        .gid_mappings(gid_mappings)
-        // .masked_paths(masked_paths)
-        // .readonly_paths(readonly_paths)
-        // .cgroups_path(cgroups_path)
+        .gid_mappings(gid_mappings);
+    // .masked_paths(masked_paths)
+    // .readonly_paths(readonly_paths)
+    // .cgroups_path(cgroups_path)
+
+    // --support-docker: explicitly clear masked_paths + readonly_paths so
+    // libcontainer doesn't apply its default /proc hardening (which bind-
+    // mounts /proc/sys ro on top of our writable procfs). dockerd needs
+    // /proc/sys/net/ipv4/ip_forward writable to bring up the default bridge
+    // network — without it network controller init fails:
+    //   "failed to set IP forwarding ... read-only file system"
+    //
+    // Empty `Vec` here is meaningful: the OCI spec runtime treats `Some([])`
+    // as "no paths" and `None` as "apply runtime defaults". We want the
+    // former for `--support-docker` (no masking, no readonly), matching
+    // `docker run --privileged` semantics.
+    if support_docker {
+        // KNOWN-LIMITATION (Phase B, dockerd default bridge): we set
+        // readonly_paths and masked_paths to empty so dockerd inside the
+        // box can write `/proc/sys/net/ipv4/ip_forward` etc. when bringing
+        // up its default `bridge` network. Verified end-to-end: the OCI
+        // spec written to config.json correctly contains
+        // `readonlyPaths: []` and `maskedPaths: []`, and a reload via
+        // `oci_spec::runtime::Spec::load` returns Some([]) — yet the
+        // container still ends up with `/proc/bus`, `/proc/fs`, `/proc/irq`,
+        // `/proc/sys` bind-mounted ro,nosuid,nodev,noexec by libcontainer-
+        // 0.5.7. Setting these paths to non-existent strings DOES change
+        // behaviour (rootfs prep fails) so the override IS being honoured
+        // somewhere — but the default hardening still slips through.
+        // Root cause TBD; tracked as a follow-up. Workaround: dind users
+        // must pass `dockerd --bridge=none --iptables=false` until this
+        // is resolved (the kernel side works — /proc/sys/net/bridge/ is
+        // populated, iptables rules can be installed via nft_compat —
+        // the only blocker is dockerd's automatic default-bridge setup
+        // hitting the ro /proc/sys).
+        builder = builder
+            .masked_paths(Vec::<String>::new())
+            .readonly_paths(Vec::<String>::new());
+    }
+
+    let linux = builder
         .build()
-        .map_err(|e| BoxliteError::Internal(format!("Failed to build linux spec: {}", e)))
+        .map_err(|e| BoxliteError::Internal(format!("Failed to build linux spec: {}", e)))?;
+    Ok(linux)
 }
 
 /// Build standard mounts for container filesystem
@@ -536,6 +575,13 @@ fn build_standard_mounts(bundle_path: &Path, support_docker: bool) -> BoxliteRes
                     BoxliteError::Internal(format!("Failed to build /sys/fs/cgroup mount: {}", e))
                 })?,
         );
+
+        // /proc/sys writability comes from clearing readonly_paths in
+        // build_linux_spec (the OCI runtime-spec mechanism). Don't add an
+        // explicit /proc/sys mount here — libcontainer's check_proc_mount
+        // whitelist rejects everything under /proc except a handful of
+        // host-emulated entries (/proc/cpuinfo etc.) and would refuse the
+        // mount with "not a valid mount under /proc".
     }
 
     // Bind-mount /etc/hostname, /etc/hosts, /etc/resolv.conf from the bundle

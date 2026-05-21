@@ -228,6 +228,66 @@ fn download_libkrunfw_so(install_dir: &Path) {
     );
 }
 
+// ── DinD libkrunfw staging (opt-in) ──────────────────────────────────────────
+
+/// Copy the optional "fat" libkrunfw blob (built via `make libkrunfw-dind`)
+/// into the install dir alongside the lean libkrunfw. The blob's filename
+/// is preserved as `libkrunfw-dind.so.5` so dlopen at runtime can pick
+/// between the two by name; per-box selection is handled higher up the
+/// stack (boxlite::vmm reads BoxOptions::support_docker).
+///
+/// No-op when the env var is unset → default builds stay byte-identical
+/// to the existing lean path, which is the `--support-docker` design
+/// contract (don't widen anything for existing users).
+#[cfg(target_os = "linux")]
+fn stage_optional_dind_blob(install_lib_dir: &Path) {
+    // rerun-if-changed isn't enough — env vars need their own watcher so
+    // toggling the var triggers a re-stage.
+    println!("cargo:rerun-if-env-changed=BOXLITE_LIBKRUNFW_DIND_PATH");
+
+    let Ok(src_str) = env::var("BOXLITE_LIBKRUNFW_DIND_PATH") else {
+        return;
+    };
+    let src = PathBuf::from(src_str.trim());
+    if src.as_os_str().is_empty() {
+        println!("cargo:warning=BOXLITE_LIBKRUNFW_DIND_PATH set but empty — skipping dind staging");
+        return;
+    }
+    if !src.exists() {
+        // Hard error: the user explicitly asked for dind but pointed us at
+        // nothing. Silently skipping would produce a build that pretends
+        // support_docker works but loads the lean kernel at runtime.
+        panic!(
+            "BOXLITE_LIBKRUNFW_DIND_PATH={} does not exist. Build it with `make libkrunfw-dind`.",
+            src.display()
+        );
+    }
+
+    let dest = install_lib_dir.join("libkrunfw-dind.so.5");
+    fs::copy(&src, &dest).unwrap_or_else(|e| {
+        panic!(
+            "Failed to stage dind libkrunfw from {} to {}: {}",
+            src.display(),
+            dest.display(),
+            e
+        )
+    });
+    println!(
+        "cargo:warning=Staged dind libkrunfw: {} → {}",
+        src.display(),
+        dest.display()
+    );
+}
+
+#[cfg(not(target_os = "linux"))]
+fn stage_optional_dind_blob(_install_lib_dir: &Path) {
+    // macOS dind support not yet plumbed end-to-end. The CLI flag is
+    // accepted on every platform (caps + cgroup work) but the fat kernel
+    // is Linux-only for now — Apple Silicon needs libkrunfw built with
+    // a different toolchain (kernel.c → .dylib) and a parallel overlay
+    // path. Track in a follow-up; for now silently skip.
+}
+
 // ── Make utilities ───────────────────────────────────────────────────────────
 
 /// Creates a make command with common configuration.
@@ -886,6 +946,14 @@ fn build() {
 
     LibFixup::fix(&libkrunfw_lib_dir, "libkrunfw")
         .unwrap_or_else(|e| panic!("Failed to fix libkrunfw: {}", e));
+
+    // Optionally stage the "fat" libkrunfw next to the lean one for
+    // `boxlite run --support-docker`. Driven by an env var so a normal
+    // build pulls only the lean blob (existing behaviour byte-identical),
+    // and dev users who built the dind kernel via `make libkrunfw-dind`
+    // opt in by exporting BOXLITE_LIBKRUNFW_DIND_PATH before rebuilding.
+    // See dind-configs/README.md.
+    stage_optional_dind_blob(&libkrunfw_lib_dir);
 
     // Expose libkrunfw library directory for downstream bundling
     println!(

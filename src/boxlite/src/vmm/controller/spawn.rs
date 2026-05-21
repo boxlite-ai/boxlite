@@ -1,14 +1,14 @@
 //! Subprocess spawning for boxlite-shim binary.
 
 use std::{
-    path::Path,
+    path::{Path, PathBuf},
     process::{Child, Stdio},
 };
 
 use crate::jailer::{Jail, JailerBuilder};
 use crate::runtime::layout::BoxFilesystemLayout;
 use crate::runtime::options::BoxOptions;
-use crate::util::configure_library_env;
+use crate::util::configure_library_env_with_prepend;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use super::watchdog;
@@ -156,8 +156,115 @@ impl<'a> ShimSpawner<'a> {
             cmd.env("TEMP", &tmp_dir);
         }
 
+        // For `--support-docker` boxes, stage a per-box libs dir whose
+        // libkrunfw.so.5 symlinks to the fat (dind-capable) blob in the
+        // embedded runtime. Prepending this dir to LD_LIBRARY_PATH makes
+        // libkrun's dlopen pick the fat kernel for THIS box only, without
+        // touching the symlink other (lean-profile) boxes load.
+        //
+        // Failure modes fall back to lean with a warning rather than
+        // aborting the box: a user with --support-docker but no dind blob
+        // built still gets the Phase-A caps + cgroup-rw — they just won't
+        // see bridge networks / iptables work. That degradation is OK and
+        // matches the existing behaviour before the dind blob was wired.
+        let dind_libs = if self.options.support_docker {
+            self.stage_dind_libkrunfw().unwrap_or_else(|e| {
+                tracing::warn!(
+                    box_id = %self.box_id,
+                    error = %e,
+                    "Failed to stage dind libkrunfw — falling back to lean kernel. \
+                     Caps + cgroup-rw still apply, but bridge networks won't work. \
+                     Run `make libkrunfw-dind` and rebuild boxlite with \
+                     BOXLITE_LIBKRUNFW_DIND_PATH set."
+                );
+                None
+            })
+        } else {
+            None
+        };
+
         // Set library search paths for bundled dependencies (e.g., libkrunfw.so)
-        configure_library_env(cmd, std::ptr::null());
+        let prepend: Vec<PathBuf> = dind_libs.into_iter().collect();
+        configure_library_env_with_prepend(cmd, std::ptr::null(), &prepend);
+    }
+
+    /// Create `<box_dir>/libs/libkrunfw.so.5` as a symlink to the fat
+    /// libkrunfw blob shipped alongside the lean one. Returns the libs
+    /// dir if the fat blob was staged at build time; returns `Ok(None)`
+    /// when the embedded runtime has no `libkrunfw-dind.so.5` (the
+    /// expected case unless someone ran `make libkrunfw-dind` + rebuilt
+    /// boxlite with BOXLITE_LIBKRUNFW_DIND_PATH set).
+    ///
+    /// The symlink is per-box and lives under the box's working
+    /// directory, so it's torn down whenever boxlite cleans up the box
+    /// — no shared state to garbage-collect.
+    fn stage_dind_libkrunfw(&self) -> BoxliteResult<Option<PathBuf>> {
+        #[cfg(feature = "embedded-runtime")]
+        let runtime_dir = crate::runtime::embedded::EmbeddedRuntime::get()
+            .ok_or_else(|| BoxliteError::Engine("embedded runtime unavailable".to_string()))?
+            .dir()
+            .to_path_buf();
+        #[cfg(not(feature = "embedded-runtime"))]
+        let runtime_dir: PathBuf = return Ok(None);
+
+        let dind_blob = runtime_dir.join("libkrunfw-dind.so.5");
+        if !dind_blob.exists() {
+            return Ok(None);
+        }
+
+        // Per-box libs dir lives next to the rest of the box's runtime
+        // state under root(). The symlink is wiped together with the box
+        // on `boxlite rm` — no shared state to garbage-collect.
+        let libs_dir = self.layout.root().join("libs");
+        std::fs::create_dir_all(&libs_dir).map_err(|e| {
+            BoxliteError::Storage(format!(
+                "Failed to create dind libs dir {}: {}",
+                libs_dir.display(),
+                e
+            ))
+        })?;
+
+        let symlink_path = libs_dir.join("libkrunfw.so.5");
+        // Idempotent: a stale symlink from a prior spawn (e.g. crash + restart)
+        // would otherwise cause symlink() to fail with EEXIST. Symlink only,
+        // never a regular file — if a regular file is sitting at this path,
+        // something else has put it there and we should NOT silently delete.
+        match std::fs::symlink_metadata(&symlink_path) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                std::fs::remove_file(&symlink_path).map_err(|e| {
+                    BoxliteError::Storage(format!(
+                        "Failed to remove stale dind symlink {}: {}",
+                        symlink_path.display(),
+                        e
+                    ))
+                })?;
+            }
+            Ok(_) => {
+                return Err(BoxliteError::Storage(format!(
+                    "Refusing to overwrite non-symlink at {}",
+                    symlink_path.display()
+                )));
+            }
+            Err(_) => {}
+        }
+
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&dind_blob, &symlink_path).map_err(|e| {
+            BoxliteError::Storage(format!(
+                "Failed to symlink {} → {}: {}",
+                symlink_path.display(),
+                dind_blob.display(),
+                e
+            ))
+        })?;
+
+        tracing::info!(
+            box_id = %self.box_id,
+            dind_blob = %dind_blob.display(),
+            libs_dir = %libs_dir.display(),
+            "Staged dind libkrunfw symlink for --support-docker box"
+        );
+        Ok(Some(libs_dir))
     }
 
     fn create_stderr_file(&self) -> BoxliteResult<std::fs::File> {

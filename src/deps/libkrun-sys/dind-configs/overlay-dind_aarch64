@@ -1,0 +1,116 @@
+# Overlay applied on top of config-libkrunfw_x86_64 by `make libkrunfw-dind`.
+# Enables the kernel subsystems Docker needs for bridge networks, NAT, and
+# iptables rule installation — the dind / docker-compose workflows broken
+# under the lean profile (issue #276). Every line is built-in (=y) because
+# the libkrunfw guest has no /lib/modules and can't load loadable modules
+# at runtime.
+
+# ── Bridge networking ─────────────────────────────────────────────────────
+# Docker creates one Linux bridge per network (default `docker0` + one per
+# user-defined network in compose). Each container is wired in via a veth
+# pair (CONFIG_VETH is already on in lean). Bridge netfilter exposes the
+# /proc/sys/net/bridge/bridge-nf-* knobs Docker probes for.
+CONFIG_BRIDGE=y
+CONFIG_BRIDGE_NETFILTER=y
+CONFIG_LLC=y
+CONFIG_STP=y
+
+# ── Netfilter core ────────────────────────────────────────────────────────
+# Foundation that everything else (xtables, NAT, conntrack, nftables) sits
+# on. CONFIG_NETFILTER_ADVANCED unlocks the dependent options that lean
+# can't even reference because the parent is off.
+CONFIG_NETFILTER=y
+CONFIG_NETFILTER_ADVANCED=y
+CONFIG_NF_CONNTRACK=y
+CONFIG_NF_CONNTRACK_PROCFS=y
+CONFIG_NF_LOG_SYSLOG=y
+
+# ── xtables (iptables backend) ────────────────────────────────────────────
+# Docker's iptables driver writes filter/nat rules through ip_tables /
+# ip6_tables which sit on top of the xtables framework. The MATCH/TARGET
+# modules cover the rule shapes Docker ships by default.
+CONFIG_NETFILTER_XTABLES=y
+CONFIG_NETFILTER_XT_MARK=y
+CONFIG_NETFILTER_XT_CONNMARK=y
+CONFIG_NETFILTER_XT_TARGET_MASQUERADE=y
+CONFIG_NETFILTER_XT_TARGET_REDIRECT=y
+CONFIG_NETFILTER_XT_NAT=y
+CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y
+CONFIG_NETFILTER_XT_MATCH_CONNTRACK=y
+CONFIG_NETFILTER_XT_MATCH_IPVS=y
+CONFIG_NETFILTER_XT_MATCH_MULTIPORT=y
+CONFIG_NETFILTER_XT_MATCH_PHYSDEV=y
+
+# ── NAT ───────────────────────────────────────────────────────────────────
+# Docker's port publishing (`-p 8080:80`) and outbound MASQUERADE rely on
+# the netfilter NAT engine. NF_NAT is the core; the iptables / nftables
+# NAT modules expose it through the respective rule shapes.
+CONFIG_NF_NAT=y
+CONFIG_NF_NAT_REDIRECT=y
+CONFIG_NF_NAT_MASQUERADE=y
+
+# ── iptables (legacy backend) ─────────────────────────────────────────────
+# Docker still prefers iptables-legacy on most distros; cover the rule
+# tables it manipulates (filter for DOCKER chains, nat for port mapping
+# and MASQUERADE).
+CONFIG_IP_NF_IPTABLES=y
+CONFIG_IP_NF_FILTER=y
+CONFIG_IP_NF_NAT=y
+CONFIG_IP_NF_TARGET_MASQUERADE=y
+CONFIG_IP_NF_MANGLE=y
+
+# ── ip6tables (IPv6 iptables) ─────────────────────────────────────────────
+# Docker's daemon shows the warning "ip6tables is enabled, but cannot set
+# up ip6tables chains" when these are absent. Enabling them silences the
+# warning and lets IPv6 docker networks work.
+CONFIG_IP6_NF_IPTABLES=y
+CONFIG_IP6_NF_FILTER=y
+CONFIG_IP6_NF_NAT=y
+CONFIG_IP6_NF_TARGET_MASQUERADE=y
+CONFIG_IP6_NF_MANGLE=y
+
+# ── nftables (modern backend) ─────────────────────────────────────────────
+# Docker 24+ on many distros uses nftables for new networks even when
+# iptables-legacy is on for old ones. The nf_tables core + ip/ip6 chain
+# tables let both legacy and nft-mode Docker work.
+CONFIG_NF_TABLES=y
+CONFIG_NF_TABLES_INET=y
+CONFIG_NF_TABLES_IPV4=y
+CONFIG_NF_TABLES_IPV6=y
+CONFIG_NFT_NAT=y
+CONFIG_NFT_MASQ=y
+CONFIG_NFT_REDIR=y
+CONFIG_NFT_CT=y
+CONFIG_NFT_REJECT=y
+CONFIG_NFT_CHAIN_NAT=y
+
+# ── iptables-nft compatibility shim ───────────────────────────────────────
+# On Debian / Alpine the iptables binary that ships in docker:dind is
+# iptables-nft (v1.8.x), which translates legacy iptables rules into the
+# nftables backend. Without NFT_COMPAT the xt_* match extensions (addrtype,
+# conntrack, mark, etc.) can't be used through iptables-nft and dockerd
+# fails to register the bridge driver with:
+#   "Extension addrtype revision 0 not supported, missing kernel module"
+# (observed in #276 reproducer logs when this option is off).
+CONFIG_NFT_COMPAT=y
+
+# ── REJECT target ─────────────────────────────────────────────────────────
+# Used by the DOCKER-ISOLATION chains to drop cross-network traffic; without
+# it dockerd registers the rule but the kernel returns -ENOENT on insertion.
+CONFIG_IP_NF_TARGET_REJECT=y
+CONFIG_IP6_NF_TARGET_REJECT=y
+CONFIG_NETFILTER_XT_MATCH_STATE=y
+
+# ── Net namespace forwarding ──────────────────────────────────────────────
+# Containers on docker bridge need IP forwarding turned on at the netns
+# level. The sysctl /proc/sys/net/ipv4/ip_forward only exists when this
+# is built in.
+CONFIG_NET_NS=y
+
+# ── POSIX message queues ──────────────────────────────────────────────────
+# Every OCI container created by runc/containerd has /dev/mqueue in its
+# default mounts list. Without CONFIG_POSIX_MQUEUE the mount syscall fails
+# with ENODEV ("no such device") and container creation aborts before
+# entrypoint runs — observed under `docker start` on a dind kernel
+# without this enabled.
+CONFIG_POSIX_MQUEUE=y
