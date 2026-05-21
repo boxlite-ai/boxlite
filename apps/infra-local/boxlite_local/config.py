@@ -15,9 +15,24 @@ def _parse_int_env(name: str, default: str) -> int:
         raise ValueError(f"{name} must be an integer, got: {raw!r}") from e
 
 
+def _detect_repo_root() -> Path:
+    """Walk up from this file's directory until we find one containing apps/infra-local/.
+
+    Used to compute absolute host paths for config-file volume mounts
+    (e.g. apps/infra-local/configs/minio/init.sh).
+    """
+    here = Path(__file__).resolve().parent
+    for parent in (here, *here.parents):
+        if (parent / "apps" / "infra-local" / "pyproject.toml").exists():
+            return parent
+    raise RuntimeError(
+        f"could not locate repo root (no apps/infra-local/pyproject.toml found above {here})"
+    )
+
+
 @dataclass
 class InfraConfig:
-    # host-hub address — inside-box reaches host via this name (Docker host.docker.internal equivalent)
+    # host-hub address — inside-box reaches host via this name
     host_hub: str = "host.boxlite.internal"
 
     # postgres
@@ -26,8 +41,22 @@ class InfraConfig:
     pg_password: str = field(default="boxlite", repr=False)
     pg_db: str = "boxlite"
 
-    # persistent data root (per-service subdirs are computed)
+    # redis (3a)
+    redis_host_port: int = 26379
+
+    # minio (3a)
+    minio_host_port: int = 29000           # API port; console is 29001 (pinned in SPEC)
+    minio_user: str = "minioadmin"
+    minio_password: str = field(default="minioadmin", repr=False)
+
+    # registry (3a)
+    registry_host_port: int = 25000
+
+    # persistent data root
     data_dir: Path = field(default_factory=lambda: Path.home() / ".boxlite-local" / "data")
+
+    # repo root — needed for absolute paths of config-file mounts
+    repo_root: Path = field(default_factory=_detect_repo_root)
 
     @classmethod
     def load(cls) -> "InfraConfig":
@@ -37,6 +66,11 @@ class InfraConfig:
             pg_user=os.environ.get("BOXLITE_PG_USER", "boxlite"),
             pg_password=os.environ.get("BOXLITE_PG_PASSWORD", "boxlite"),
             pg_db=os.environ.get("BOXLITE_PG_DB", "boxlite"),
+            redis_host_port=_parse_int_env("BOXLITE_REDIS_HOST_PORT", "26379"),
+            minio_host_port=_parse_int_env("BOXLITE_MINIO_HOST_PORT", "29000"),
+            minio_user=os.environ.get("BOXLITE_MINIO_USER", "minioadmin"),
+            minio_password=os.environ.get("BOXLITE_MINIO_PASSWORD", "minioadmin"),
+            registry_host_port=_parse_int_env("BOXLITE_REGISTRY_HOST_PORT", "25000"),
             data_dir=Path(
                 os.environ.get("BOXLITE_DATA_DIR")
                 or str(Path.home() / ".boxlite-local" / "data")

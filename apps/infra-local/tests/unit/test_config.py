@@ -58,3 +58,45 @@ def test_load_falls_back_to_defaults_when_env_unset(monkeypatch):
     assert cfg.host_hub == "host.boxlite.internal"
     assert cfg.pg_host_port == 25432
     assert cfg.data_dir == Path.home() / ".boxlite-local" / "data"
+
+
+def test_new_3a_defaults():
+    cfg = InfraConfig()
+    assert cfg.redis_host_port == 26379
+    assert cfg.minio_host_port == 29000
+    assert cfg.minio_user == "minioadmin"
+    assert cfg.minio_password == "minioadmin"
+    assert cfg.registry_host_port == 25000
+
+
+def test_minio_password_hidden_in_repr():
+    cfg = InfraConfig(minio_password="hunter2")
+    assert "hunter2" not in repr(cfg)
+
+
+def test_load_picks_up_3a_env_overrides(monkeypatch):
+    monkeypatch.setenv("BOXLITE_REDIS_HOST_PORT", "16379")
+    monkeypatch.setenv("BOXLITE_MINIO_HOST_PORT", "19000")
+    monkeypatch.setenv("BOXLITE_MINIO_USER", "u1")
+    monkeypatch.setenv("BOXLITE_MINIO_PASSWORD", "p1")
+    monkeypatch.setenv("BOXLITE_REGISTRY_HOST_PORT", "15000")
+
+    cfg = InfraConfig.load()
+    assert cfg.redis_host_port == 16379
+    assert cfg.minio_host_port == 19000
+    assert cfg.minio_user == "u1"
+    assert cfg.minio_password == "p1"
+    assert cfg.registry_host_port == 15000
+
+
+def test_repo_root_points_at_repo_with_pyproject_in_apps_infra_local():
+    cfg = InfraConfig()
+    assert (cfg.repo_root / "apps" / "infra-local" / "pyproject.toml").exists(), \
+        f"_detect_repo_root returned wrong dir: {cfg.repo_root}"
+
+
+def test_load_raises_clear_error_on_malformed_redis_port_env(monkeypatch):
+    monkeypatch.setenv("BOXLITE_REDIS_HOST_PORT", "notanumber")
+    import pytest as _pytest
+    with _pytest.raises(ValueError, match="BOXLITE_REDIS_HOST_PORT must be an integer"):
+        InfraConfig.load()
