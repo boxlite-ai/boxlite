@@ -207,7 +207,12 @@ SPEC_PGADMIN = ServiceSpec(
     image="dpage/pgadmin4:9.2.0",
     cpus=1,
     memory_mib=512,
-    ports=[(25051, 80)],
+    # The pgadmin4 image EXPOSEs 80 AND 443. The SDK auto-binds every
+    # EXPOSE'd guest port to the same host port unless we map it explicitly;
+    # auto-binding 443 on the host fails (privileged) and the whole port
+    # forwarding setup silently breaks. Explicitly mapping 443 → an unused
+    # high port short-circuits the auto-bind and restores the 80 → host forward.
+    ports=[(25051, 80), (25053, 443)],     # 25053 is a placeholder for the 443 EXPOSE
     env=lambda cfg: {
         "PGADMIN_DEFAULT_EMAIL": cfg.pgadmin_email,
         "PGADMIN_DEFAULT_PASSWORD": cfg.pgadmin_password,
@@ -218,19 +223,8 @@ SPEC_PGADMIN = ServiceSpec(
         "PGADMIN_LISTEN_ADDRESS": "0.0.0.0",
     },
     depends_on=["postgres"],
-    # KNOWN ISSUE — host-side port forward (25051) doesn't work for pgadmin:
-    # the SDK silently fails to create the shim when the container image's
-    # EXPOSE list includes a privileged port the SDK can't bind on the host
-    # (pgadmin4 exposes 80 AND 443; jaeger/minio/registry only expose either
-    # one non-privileged port or 80 alone, and those work). Until the SDK
-    # behavior is fixed, healthcheck via in-box exec (python3 is preinstalled
-    # in the pgadmin image). The box itself works — to actually USE pgadmin
-    # from the host browser, the SDK bug needs a fix.
     healthcheck=HealthCheck(
-        exec=[
-            "python3", "-c",
-            "import urllib.request as u; u.urlopen('http://127.0.0.1/misc/ping', timeout=2).read()",
-        ],
+        http_url="http://127.0.0.1:25051/misc/ping",
         interval_s=2.0,
         retries=60,                        # pgadmin can take 30s+ to warm up
     ),

@@ -97,19 +97,11 @@ async def _round_trip(cfg: InfraConfig) -> None:
             (f"http://127.0.0.1:{cfg.registry_host_port}/v2/", "registry"),
             (f"http://127.0.0.1:{cfg.dex_host_port}/dex/.well-known/openid-configuration", "dex"),
             (f"http://127.0.0.1:{cfg.jaeger_host_port}/", "jaeger"),
+            (f"http://127.0.0.1:{cfg.pgadmin_host_port}/misc/ping", "pgadmin"),
             (f"http://127.0.0.1:{cfg.registry_ui_host_port}/", "registry-ui"),
         ]:
             with urllib.request.urlopen(url, timeout=5) as resp:
                 assert 200 <= resp.status < 300, f"{label} bad status: {resp.status} for {url}"
-
-        # pgadmin: host-side port forward fails (SDK bug — see SPEC_PGADMIN
-        # comment). Probe via in-box exec instead.
-        pgadmin_box = await runtime.get("boxlite-local-pgadmin")
-        rc, _o, _e = await exec_collect(
-            pgadmin_box, "python3",
-            ["-c", "import urllib.request as u; print(u.urlopen('http://127.0.0.1/misc/ping', timeout=3).status)"],
-        )
-        assert rc == 0, "pgadmin /misc/ping failed via in-box exec"
 
     finally:
         await down(cfg, SERVICES, wipe=True)
