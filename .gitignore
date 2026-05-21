@@ -178,3 +178,10 @@ Cargo.lock
 .claude/scheduled_tasks.lock
 .claude/worktrees/
 .claude/.last-audit.json
+
+# ============================================================================
+# Local dev artifacts (apps/infra-local + dashboard E2E session)
+# ============================================================================
+.playwright-mcp/
+dashboard-*.png
+dex-*.png

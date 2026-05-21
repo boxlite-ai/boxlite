@@ -112,9 +112,11 @@ def test_new_3b_defaults():
     assert cfg.registry_ui_host_port == 25052
 
 
-def test_dex_issuer_derives_from_host_hub_and_port():
+def test_dex_issuer_uses_localhost_for_browser_oidc_flow():
     cfg = InfraConfig()
-    assert cfg.dex_issuer == "http://host.boxlite.internal:25556/dex"
+    # Browser-fetched discovery doc needs a hostname the browser can resolve;
+    # host.boxlite.internal only resolves inside boxes.
+    assert cfg.dex_issuer == "http://localhost:25556/dex"
 
 
 def test_pgadmin_password_hidden_in_repr():

@@ -109,4 +109,12 @@ class InfraConfig:
 
     @property
     def dex_issuer(self) -> str:
-        return f"http://{self.host_hub}:{self.dex_host_port}/dex"
+        # NOTE: the issuer is also what dex publishes in its
+        # `.well-known/openid-configuration`, which the BROWSER fetches via
+        # the dashboard's OIDC flow. The browser can't resolve
+        # `host.boxlite.internal` (only resolvable inside boxes via gvproxy
+        # DNS), so we publish a `localhost` URL. Trade-off: a FUTURE box->dex
+        # flow won't reach `localhost` from inside a box — when that case
+        # appears, this issuer should become a `*.boxlite.test` host backed
+        # by dns-shim + mkcert (out of current autonomous scope).
+        return f"http://localhost:{self.dex_host_port}/dex"
