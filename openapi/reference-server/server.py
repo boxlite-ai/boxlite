@@ -937,34 +937,66 @@ async def resize_execution_tty(
 # ============================================================================
 
 
-@app.put("/v1/{prefix}/boxes/{box_id}/files", status_code=204)
-async def upload_files(
+def _split_parent_basename(container_path: str) -> tuple[str, str] | None:
+    """Split `/a/b/c` into (`/a/b`, `c`). Returns None when no basename."""
+    trimmed = container_path.strip("/")
+    if not trimmed:
+        return None
+    head, _, tail = trimmed.rpartition("/")
+    if not tail:
+        return None
+    parent = "/" + head if head else "/"
+    return parent, tail
+
+
+@app.api_route(
+    "/v1/{prefix}/boxes/{box_id}/files/{path:path}",
+    methods=["PUT", "MKCOL"],
+)
+async def webdav_upload(
     prefix: str,
     box_id: str,
-    path: str = Query(..., description="Destination path inside the container"),
+    path: str,
+    request: Request,
     overwrite: bool = Query(True),
-    request: Request = None,
     _auth: dict = Depends(require_auth),
 ):
+    """WebDAV PUT (single file) / MKCOL (single directory).
+
+    Bulk upload is no longer a tar PUT to /files; callers issue per-resource
+    PUT and MKCOL requests under /files/{path}.
+    """
     box_handle = await get_box_or_404(box_id)
-    body = await request.body()
+    container_path = "/" + path.strip("/")
+    split = _split_parent_basename(container_path)
+    if split is None:
+        return error_response(400, "container path requires a name", "InvalidArgumentError")
+    parent, basename = split
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        tar_path = os.path.join(tmpdir, "upload.tar")
-        with open(tar_path, "wb") as f:
-            f.write(body)
+    method = request.method.upper()
+    if method == "PUT":
+        body = await request.body()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            host_file = os.path.join(tmpdir, basename)
+            with open(host_file, "wb") as f:
+                f.write(body)
+            await box_handle.copy_in(
+                host_file, parent,
+                boxlite.CopyOptions(overwrite=overwrite, include_parent=False),
+            )
+        return Response(status_code=204)
 
-        extract_dir = os.path.join(tmpdir, "extracted")
-        os.makedirs(extract_dir)
-        with tarfile.open(tar_path, "r:*") as tar:
-            tar.extractall(extract_dir)
+    if method == "MKCOL":
+        with tempfile.TemporaryDirectory() as tmpdir:
+            host_dir = os.path.join(tmpdir, basename)
+            os.makedirs(host_dir)
+            await box_handle.copy_in(
+                host_dir, parent,
+                boxlite.CopyOptions(include_parent=True),
+            )
+        return Response(status_code=201)
 
-        await box_handle.copy_in(
-            extract_dir, path,
-            boxlite.CopyOptions(overwrite=overwrite, include_parent=False),
-        )
-
-    return Response(status_code=204)
+    return Response(status_code=405)
 
 
 @app.get("/v1/{prefix}/boxes/{box_id}/files")

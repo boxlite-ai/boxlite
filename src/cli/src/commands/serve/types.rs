@@ -235,3 +235,14 @@ pub(super) struct RemoveQuery {
 pub(super) struct FileQuery {
     pub path: String,
 }
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub(super) struct WebdavQuery {
+    #[serde(default = "default_true")]
+    pub overwrite: bool,
+}
+
+fn default_true() -> bool {
+    true
+}

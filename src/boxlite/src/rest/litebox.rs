@@ -47,6 +47,94 @@ impl RestBox {
     fn box_id_str(&self) -> String {
         self.cached_info.read().id.to_string()
     }
+
+    /// Issue `PUT /boxes/{box_id}/files/{remote}` with the file's bytes as the
+    /// body. `remote` is an absolute container path with a leading `/`.
+    async fn put_file(
+        &self,
+        box_id: &str,
+        host_path: &Path,
+        remote: &str,
+        overwrite: bool,
+    ) -> BoxliteResult<()> {
+        let bytes = tokio::fs::read(host_path).await.map_err(|e| {
+            BoxliteError::Internal(format!("failed to read {}: {}", host_path.display(), e))
+        })?;
+        let url_path = build_webdav_url(box_id, remote);
+        let mut builder = self
+            .client
+            .authorized_request(Method::PUT, &url_path)
+            .await?
+            .header("Content-Type", "application/octet-stream")
+            .body(bytes);
+        if !overwrite {
+            builder = builder.query(&[("overwrite", "false")]);
+        }
+        let resp = builder
+            .send()
+            .await
+            .map_err(|e| BoxliteError::Internal(format!("PUT {} failed: {}", remote, e)))?;
+        let status = resp.status();
+        if status.is_success() {
+            return Ok(());
+        }
+        let text = resp.text().await.unwrap_or_default();
+        Err(BoxliteError::Internal(format!(
+            "PUT {} failed (HTTP {}): {}",
+            remote, status, text
+        )))
+    }
+
+    /// Issue `MKCOL /boxes/{box_id}/files/{remote}`. Treats "already exists"
+    /// (HTTP 405) as success since `copy_into` may target a path whose root
+    /// directory has been created by a previous call.
+    async fn mkcol_idempotent(&self, box_id: &str, remote: &str) -> BoxliteResult<()> {
+        let url_path = build_webdav_url(box_id, remote);
+        let method = Method::from_bytes(b"MKCOL")
+            .expect("MKCOL is a valid HTTP method token");
+        let resp = self
+            .client
+            .authorized_request(method, &url_path)
+            .await?
+            .send()
+            .await
+            .map_err(|e| BoxliteError::Internal(format!("MKCOL {} failed: {}", remote, e)))?;
+        let status = resp.status();
+        if status.is_success() || status.as_u16() == 405 {
+            return Ok(());
+        }
+        let text = resp.text().await.unwrap_or_default();
+        Err(BoxliteError::Internal(format!(
+            "MKCOL {} failed (HTTP {}): {}",
+            remote, status, text
+        )))
+    }
+}
+
+/// Join a base container path with a relative segment, normalizing slashes.
+fn join_container_path(base: &str, rel: &str) -> String {
+    let base = base.trim_end_matches('/');
+    let rel = rel.trim_start_matches('/').replace('\\', "/");
+    if rel.is_empty() {
+        base.to_string()
+    } else {
+        format!("{}/{}", base, rel)
+    }
+}
+
+/// Build the WebDAV URL path for a given container resource.
+///
+/// The resource path is split on `/` and each segment is percent-encoded
+/// separately so that the slashes between segments stay literal.
+fn build_webdav_url(box_id: &str, container_path: &str) -> String {
+    let encoded: String = container_path
+        .trim_start_matches('/')
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .map(|s| urlencoding::encode(s).into_owned())
+        .collect::<Vec<_>>()
+        .join("/");
+    format!("/boxes/{}/files/{}", box_id, encoded)
 }
 
 #[async_trait]
@@ -209,35 +297,52 @@ impl BoxBackend for RestBox {
         &self,
         host_src: &Path,
         container_dst: &str,
-        _opts: CopyOptions,
+        opts: CopyOptions,
     ) -> BoxliteResult<()> {
         let box_id = self.box_id_str();
+        // Preserve the wire semantics of the previous tar-based PUT, where
+        // the reference server extracted the archive at `container_dst` with
+        // include_parent=False regardless of `opts`:
+        //   - file source: result is `container_dst/<host_basename>`
+        //   - directory source: result is `container_dst/<contents...>`
+        let dst_root = container_dst.trim_end_matches('/').to_string();
 
-        // Create tar archive from host path
-        let tar_bytes = create_tar_from_path(host_src)?;
+        if host_src.is_file() {
+            let basename = host_src
+                .file_name()
+                .ok_or_else(|| BoxliteError::Config("source path has no file name".into()))?
+                .to_string_lossy()
+                .into_owned();
+            let dest = join_container_path(&dst_root, &basename);
+            return self.put_file(&box_id, host_src, &dest, opts.overwrite).await;
+        }
 
-        // Upload tar to server
-        let encoded_dst = urlencoding::encode(container_dst);
-        let path = format!("/boxes/{}/files?path={}", box_id, encoded_dst);
-        let builder = self
-            .client
-            .authorized_request(Method::PUT, &path)
-            .await?
-            .header("Content-Type", "application/x-tar")
-            .body(tar_bytes);
+        // Directory: ensure the destination root exists, then walk and emit
+        // MKCOL per dir, PUT per file.
+        self.mkcol_idempotent(&box_id, &dst_root).await?;
 
-        let resp = builder
-            .send()
-            .await
-            .map_err(|e| BoxliteError::Internal(format!("copy_into upload failed: {}", e)))?;
+        let walker = walkdir::WalkDir::new(host_src)
+            .follow_links(opts.follow_symlinks)
+            .sort_by_file_name();
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            return Err(BoxliteError::Internal(format!(
-                "copy_into failed (HTTP {}): {}",
-                status, text
-            )));
+        for entry in walker {
+            let entry = entry
+                .map_err(|e| BoxliteError::Internal(format!("walkdir failed: {}", e)))?;
+            let rel = entry
+                .path()
+                .strip_prefix(host_src)
+                .map_err(|e| BoxliteError::Internal(format!("strip_prefix failed: {}", e)))?;
+            if rel.as_os_str().is_empty() {
+                continue; // skip the root, already created via dst_root
+            }
+            let rel_str = rel.to_string_lossy();
+            let remote = join_container_path(&dst_root, &rel_str);
+            if entry.file_type().is_dir() {
+                self.mkcol_idempotent(&box_id, &remote).await?;
+            } else if entry.file_type().is_file() {
+                self.put_file(&box_id, entry.path(), &remote, opts.overwrite)
+                    .await?;
+            }
         }
         Ok(())
     }
@@ -855,40 +960,6 @@ async fn emit_or_fallback(
 // ============================================================================
 // Tar Helpers
 // ============================================================================
-
-/// Create a tar archive from a host file or directory.
-fn create_tar_from_path(host_src: &Path) -> BoxliteResult<Vec<u8>> {
-    let mut archive = tar::Builder::new(Vec::new());
-
-    if host_src.is_dir() {
-        archive.append_dir_all(".", host_src).map_err(|e| {
-            BoxliteError::Internal(format!(
-                "failed to create tar from {}: {}",
-                host_src.display(),
-                e
-            ))
-        })?;
-    } else {
-        let file_name = host_src
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "file".to_string());
-        let mut file = std::fs::File::open(host_src).map_err(|e| {
-            BoxliteError::Internal(format!("failed to open {}: {}", host_src.display(), e))
-        })?;
-        archive.append_file(&file_name, &mut file).map_err(|e| {
-            BoxliteError::Internal(format!(
-                "failed to add {} to tar: {}",
-                host_src.display(),
-                e
-            ))
-        })?;
-    }
-
-    archive
-        .into_inner()
-        .map_err(|e| BoxliteError::Internal(format!("failed to finalize tar archive: {}", e)))
-}
 
 /// Extract a tar archive to a host directory.
 fn extract_tar_to_path(tar_bytes: &[u8], host_dst: &Path) -> BoxliteResult<()> {

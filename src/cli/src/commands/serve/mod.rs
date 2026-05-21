@@ -15,7 +15,7 @@ use axum::http::StatusCode;
 use axum::http::header::AUTHORIZATION;
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post, put};
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use clap::Args;
 use futures::StreamExt;
@@ -862,9 +862,15 @@ fn build_router(state: Arc<AppState>) -> Router {
             post(executions::resize_tty),
         )
         // Files
+        // Bulk download stays at `/files?path=...` and returns a tar; upload
+        // moved to per-resource WebDAV verbs scoped under `/files/{*path}`.
         .route(
             "/v1/default/boxes/{box_id}/files",
-            put(files::upload_files).get(files::download_files),
+            get(files::download_files),
+        )
+        .route(
+            "/v1/default/boxes/{box_id}/files/{*path}",
+            axum::routing::any(files::webdav_dispatch),
         )
         // Snapshots
         .route(
