@@ -93,10 +93,14 @@ SPEC_MINIO_INIT = ServiceSpec(
     ports=[],
     one_shot=True,
     depends_on=["minio"],
-    # Inline cmd - SDK rejects file-mounts (host path must be a directory).
+    # minio/mc's image entrypoint is the `mc` binary, so we override it to `sh`
+    # and pass the bootstrap script via -c. (SDK BoxOptions.entrypoint was added
+    # late; ServiceSpec didn't expose it until 3a.)
     # The script body is the same as apps/infra-local/configs/minio/init.sh
-    # (kept on disk as documentation but not mounted into the box).
-    cmd=["sh", "-c", _MINIO_INIT_SCRIPT],
+    # (kept on disk as documentation; not mounted because the SDK requires
+    # host volume paths to be directories, not files.)
+    entrypoint=["sh"],
+    cmd=["-c", _MINIO_INIT_SCRIPT],
     env=lambda cfg: {
         "MINIO_URL": f"http://{cfg.host_hub}:{cfg.minio_host_port}",
         "MINIO_USER": cfg.minio_user,

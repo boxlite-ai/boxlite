@@ -68,6 +68,7 @@ def _build_box_options_with_volumes(spec: ServiceSpec, config: InfraConfig, volu
         volumes=volumes,
         env=list(spec.env(config).items()),
         cmd=spec.cmd,
+        entrypoint=spec.entrypoint,
         working_dir=spec.working_dir,
     )
 
@@ -297,14 +298,23 @@ async def _wait_healthy_http(hc: HealthCheck, *, label: str) -> None:
     )
 
 
-async def _wait_one_shot_exit(runtime, name: str, *, label: str, timeout_s: float = 120.0) -> None:
-    """Poll list_info() until the named box is no longer running.
+async def _wait_one_shot_exit(runtime, name: str, *, label: str, timeout_s: float = 60.0) -> None:
+    """Wait until the named one-shot box's init process exits.
 
-    Used for `spec.one_shot=True` services that exit on their own (e.g. minio-init).
-    SDK doesn't expose a direct wait-for-exit, so poll every 1s.
+    SDK's `list_info().state.status` stays "running" as long as the VM is up,
+    independent of whether the OCI container's init process inside has exited.
+    For one-shot bootstrap services we need the init-exit signal — which the
+    SDK only surfaces by failing `box.exec(...)` with a specific error message
+    ("incorrect container status" / "Container init process exited").
+
+    We probe via `box.exec("true")` every second: success means init still
+    running; the specific exit-related failure means we're done.
     """
     start = time.monotonic()
+    last_err: str = ""
     while time.monotonic() - start < timeout_s:
+        # First, fast path: if list_info DOES update (older SDK versions did),
+        # use it.
         infos = await runtime.list_info()
         info = next((i for i in infos if i.name == name), None)
         if info is None:
@@ -313,8 +323,30 @@ async def _wait_one_shot_exit(runtime, name: str, *, label: str, timeout_s: floa
         if status != "running":
             print(f"  {label}: one-shot exited with state={status}")
             return
+
+        # Slow path: probe via exec; init-exited returns a specific error.
+        try:
+            box = await runtime.get(name)
+            if box is not None:
+                exec_collect_was_ok = False
+                try:
+                    rc, _o, _e = await exec_collect(box, "true", [])
+                    exec_collect_was_ok = (rc == 0)
+                except Exception as e:
+                    msg = str(e)
+                    last_err = msg
+                    if "Container init process exited" in msg or "incorrect container status" in msg:
+                        print(f"  {label}: one-shot init process has exited")
+                        return
+                # If exec_collect succeeded, init is still running; loop.
+                _ = exec_collect_was_ok  # quiet linter
+        except Exception:
+            pass
+
         await asyncio.sleep(1.0)
-    raise TimeoutError(f"{label}: one-shot did not exit within {timeout_s}s")
+    # Don't raise — for a one-shot we'd rather force-clean than block the up().
+    print(f"  {label}: one-shot did not signal exit within {timeout_s}s "
+          f"(last exec err: {last_err[:120]!r}); proceeding to remove")
 
 
 # ─── top-level entry points ───────────────────────────────────────────────
