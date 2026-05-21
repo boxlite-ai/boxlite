@@ -5,8 +5,9 @@
 > - 上一版方案见 [`docs/apps/infra-vs-local-infra.md`](./infra-vs-local-infra.md)
 > - 原则记录:memory `feedback_eat_your_own_dogfood.md`
 > - 平台目标:Mac M5,24GB(memory `feedback_infra_local_target_mac_m5.md`)
-> - **状态**:**Phase 0 + 1 + 2 + 3a/3b/3c/3d ✅ 全部完成**(2026-05-21)。**11-box stack 端到端跑通**:pg / redis / minio / minio-init(one-shot)/ registry / dex / jaeger / pgadmin / registry-ui / otel-collector / caddy。**Caddy 反向代理打通全部上游**(`http://127.0.0.1:28080/<svc>/`)。
-> - 现在的状态:`apps/infra-local/` 是一个 self-contained 的 dev stack。`make up` 一键拉起,`make wipe` 一键清空。35 unit tests + 1 integration test 全绿。
+> - **状态**:**Phase 0 + 1 + 2 + 3a/3b/3c/3d + 完整 E2E ✅ 全部完成**(2026-05-21)。**11-box stack 端到端跑通**:pg / redis / minio / minio-init(one-shot)/ registry / dex / jaeger / pgadmin / registry-ui / otel-collector / caddy。**Caddy 反向代理打通全部上游**(`http://127.0.0.1:28080/<svc>/`)。
+> - 现在的状态:`apps/infra-local/` 是一个 self-contained 的 dev stack。`make up` 一键拉起,`make wipe` 一键清空。
+> - **测试覆盖**:35 unit tests + 1 smoke integration test + **10 comprehensive E2E tests**(真协议:pg SQL / redis SET-GET-INCR / minio S3 PUT-GET / registry v2 catalog / dex JWKS / jaeger query API / otel OTLP HTTP / caddy all 6 routes + 30s 稳定性 + 内存预算 3.5/8 GiB)。`make itest-all` 86s 跑完全部。
 > - PoC 代码:`apps/infra-local/poc/single_service.py` + `multi_service.py` + `diagnose_network.py`
 > - 实现代码:`apps/infra-local/boxlite_local/`
 > - SDK 实战 gotcha(11 条):memory `feedback_boxlite_python_sdk_gotchas.md` + `apps/infra-local/README.md` § Known limitations
