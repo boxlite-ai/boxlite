@@ -261,6 +261,7 @@ async def _wait_healthy_exec(box, hc: HealthCheck, *, label: str, config: InfraC
     cmd_list: list[str] = raw(config) if callable(raw) else raw
     cmd, *args = cmd_list
     start = time.monotonic()
+    last_err: str = ""
     for attempt in range(1, hc.retries + 1):
         try:
             rc, _out, _err = await asyncio.wait_for(
@@ -268,12 +269,20 @@ async def _wait_healthy_exec(box, hc: HealthCheck, *, label: str, config: InfraC
             )
         except asyncio.TimeoutError:
             rc = -1
+            last_err = "TimeoutError"
+        except Exception as e:
+            # SDK exec can raise during box startup before init is ready
+            # (e.g. "InitReady, expected IntermediateReady(0)"). Treat any
+            # exec exception as a transient probe failure and retry.
+            rc = -1
+            last_err = f"{type(e).__name__}: {str(e)[:120]}"
         if rc == 0:
             print(f"  {label}: healthy after {attempt} attempt(s), {time.monotonic() - start:.1f}s")
             return
         await asyncio.sleep(hc.interval_s)
     raise TimeoutError(
         f"{label}: healthcheck `{' '.join(cmd_list)}` failed after {hc.retries} attempts"
+        + (f" (last err: {last_err})" if last_err else "")
     )
 
 
