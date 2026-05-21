@@ -10,6 +10,8 @@ from __future__ import annotations
 import asyncio
 import shutil
 import time
+import urllib.error
+import urllib.request
 from graphlib import TopologicalSorter
 from pathlib import Path
 
@@ -50,7 +52,7 @@ def build_box_options(spec: ServiceSpec, config: InfraConfig):
 
 
 def _build_box_options_with_volumes(spec: ServiceSpec, config: InfraConfig, volumes):
-    """Same as build_box_options but accepts a pre-computed volumes list to avoid double-evaluation."""
+    """Same as build_box_options but accepts pre-computed volumes to avoid double-evaluation."""
     try:
         from boxlite import BoxOptions
     except ImportError:
@@ -78,6 +80,38 @@ def get_runtime():
     return Boxlite.default()
 
 
+# ─── exception-narrowing predicate (Phase-2 debt #1) ──────────────────────
+
+_ALREADY_RUNNING_PATTERNS = ("already running", "already started", "already exists")
+
+
+def _is_already_running_error(exc: Exception) -> bool:
+    """Heuristic: SDK doesn't expose a typed exception for 'box is already running'.
+
+    Match on message substring so we can tolerate this specific case while
+    letting all other SDK errors propagate.
+    """
+    msg = str(exc).lower()
+    if not msg:
+        return False
+    return any(p in msg for p in _ALREADY_RUNNING_PATTERNS)
+
+
+# ─── HTTP healthcheck ─────────────────────────────────────────────────────
+
+def _http_probe(url: str) -> bool:
+    """Sync HTTP probe — return True iff status 2xx. Runs in to_thread for async caller."""
+    try:
+        with urllib.request.urlopen(url, timeout=2.0) as resp:
+            return 200 <= resp.status < 300
+    except (urllib.error.URLError, urllib.error.HTTPError, OSError):
+        return False
+    except Exception:
+        return False
+
+
+# ─── start / stop / wait ──────────────────────────────────────────────────
+
 async def start_service(runtime, spec: ServiceSpec, config: InfraConfig) -> None:
     name = _box_name(spec.name)
     volumes = spec.volumes(config)
@@ -86,26 +120,47 @@ async def start_service(runtime, spec: ServiceSpec, config: InfraConfig) -> None
     for host_path, _ in volumes:
         p = Path(host_path)
         # Heuristic: only auto-create directory mounts. Paths with a suffix
-        # (e.g. config.toml) are likely files — caller is responsible for them.
-        # TODO: extend ServiceSpec.volumes to carry mount-type metadata when a
-        # service needs file mounts.
+        # (e.g. init.sh) are likely files — caller is responsible for them.
         if not p.suffix:
             p.mkdir(parents=True, exist_ok=True)
+
     box, created = await runtime.get_or_create(opts, name=name)
+
+    if spec.one_shot:
+        # One-shot services re-run every `up` (idempotent bootstrap).
+        # If an old box exists, drop it first so cmd actually re-executes.
+        if not created:
+            print(f"  {name}: removing stale one-shot box before re-running")
+            try:
+                await box.stop()
+            except Exception:
+                pass
+            await runtime.remove(name)
+            box, _ = await runtime.get_or_create(opts, name=name)
+        await box.start()
+        await _wait_one_shot_exit(runtime, name, label=spec.name)
+        try:
+            await runtime.remove(name)
+        except Exception as e:
+            print(f"  {name}: one-shot remove failed ({e!r})")
+        print(f"  {name}: one-shot completed and removed")
+        return
+
     if created:
         await box.start()
     else:
         try:
             await box.start()
         except Exception as e:
-            # already running is acceptable per SDK contract
+            if not _is_already_running_error(e):
+                raise
             print(f"  {name}: (already running: {e!r})")
     if spec.healthcheck:
         await wait_healthy(box, spec.healthcheck, label=spec.name)
 
 
 async def stop_service(runtime, service_name: str) -> bool:
-    """Stop + remove the box for `service_name`. Idempotent. Returns True iff a box was found."""
+    """Stop + remove the box for service_name. Idempotent. Returns True iff a box was found."""
     name = _box_name(service_name)
     try:
         box = await runtime.get(name)
@@ -123,17 +178,21 @@ async def stop_service(runtime, service_name: str) -> bool:
 
 
 async def wait_healthy(box, hc: HealthCheck, *, label: str) -> None:
-    """Block until the healthcheck passes or retries exhaust.
-
-    Walking skeleton supports only HealthCheck.exec; tcp/http variants are
-    reserved for future services.
-    """
+    """Dispatch to the probe type set on the healthcheck."""
     if hc.start_period_s:
         await asyncio.sleep(hc.start_period_s)
-    if hc.exec is None:
-        raise NotImplementedError(
-            f"{label}: only HealthCheck.exec is implemented in the walking skeleton"
-        )
+    if hc.exec is not None:
+        await _wait_healthy_exec(box, hc, label=label)
+    elif hc.http_url is not None:
+        await _wait_healthy_http(hc, label=label)
+    elif hc.tcp_port is not None:
+        raise NotImplementedError(f"{label}: HealthCheck.tcp_port not implemented in 3a")
+    else:
+        raise ValueError(f"{label}: HealthCheck has no probe configured")
+
+
+async def _wait_healthy_exec(box, hc: HealthCheck, *, label: str) -> None:
+    assert hc.exec is not None
     cmd, *args = hc.exec
     start = time.monotonic()
     for attempt in range(1, hc.retries + 1):
@@ -151,6 +210,53 @@ async def wait_healthy(box, hc: HealthCheck, *, label: str) -> None:
         f"{label}: healthcheck `{' '.join(hc.exec)}` failed after {hc.retries} attempts"
     )
 
+
+async def _wait_healthy_http(hc: HealthCheck, *, label: str) -> None:
+    assert hc.http_url is not None
+    start = time.monotonic()
+    last_err: Exception | None = None
+    for attempt in range(1, hc.retries + 1):
+        try:
+            ok = await asyncio.wait_for(
+                asyncio.to_thread(_http_probe, hc.http_url), timeout=hc.timeout_s
+            )
+        except asyncio.TimeoutError as e:
+            ok = False
+            last_err = e
+        except Exception as e:
+            ok = False
+            last_err = e
+        if ok:
+            print(f"  {label}: healthy after {attempt} attempt(s), {time.monotonic() - start:.1f}s")
+            return
+        await asyncio.sleep(hc.interval_s)
+    raise TimeoutError(
+        f"{label}: HTTP healthcheck `{hc.http_url}` failed after {hc.retries} attempts"
+        + (f" (last err: {last_err!r})" if last_err else "")
+    )
+
+
+async def _wait_one_shot_exit(runtime, name: str, *, label: str, timeout_s: float = 120.0) -> None:
+    """Poll list_info() until the named box is no longer running.
+
+    Used for `spec.one_shot=True` services that exit on their own (e.g. minio-init).
+    SDK doesn't expose a direct wait-for-exit, so poll every 1s.
+    """
+    start = time.monotonic()
+    while time.monotonic() - start < timeout_s:
+        infos = await runtime.list_info()
+        info = next((i for i in infos if i.name == name), None)
+        if info is None:
+            return
+        status = info.state.status.lower()
+        if status != "running":
+            print(f"  {label}: one-shot exited with state={status}")
+            return
+        await asyncio.sleep(1.0)
+    raise TimeoutError(f"{label}: one-shot did not exit within {timeout_s}s")
+
+
+# ─── top-level entry points ───────────────────────────────────────────────
 
 async def up(
     config: InfraConfig,
