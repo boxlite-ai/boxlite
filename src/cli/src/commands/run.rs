@@ -108,6 +108,16 @@ impl BoxRunner {
 
         options.rootfs = RootfsSpec::Image(self.args.image.clone());
 
+        // When the user passes `--entrypoint`, treat the positional command
+        // tail as the cmd args to that entrypoint (matching `docker run
+        // --entrypoint X image arg1 arg2` semantics). Without this the
+        // positional args would only reach a secondary boxlite exec and
+        // the image's init would run with whatever the image declares,
+        // defeating the purpose of overriding the entrypoint.
+        if self.args.management.entrypoint.is_some() && !self.args.command.is_empty() {
+            options.cmd = Some(self.args.command.clone());
+        }
+
         let litebox = self
             .rt
             .create(options, self.args.management.name.clone())
@@ -117,6 +127,18 @@ impl BoxRunner {
     }
 
     fn prepare_command(&self) -> BoxCommand {
+        // When --entrypoint is set, the positional command tail has been
+        // re-routed into BoxOptions::cmd so the container's init process
+        // runs the user's command (matching `docker run --entrypoint X
+        // image arg…`). The foreground exec then just needs to wait for
+        // init to finish; a long sleep does that — when init exits the
+        // container's PID namespace tears down and the sleep gets
+        // SIGKILL'd, letting `boxlite run` return.
+        if self.args.management.entrypoint.is_some() {
+            return BoxCommand::new("sleep")
+                .args(&["infinity".to_string()])
+                .tty(self.args.process.tty);
+        }
         let (program, args) = parse_command_args(&self.args.command);
         BoxCommand::new(program)
             .args(args)

@@ -624,6 +624,18 @@ pub struct ManagementFlags {
     #[arg(long)]
     pub rm: bool,
 
+    /// Override the image's ENTRYPOINT directive.
+    ///
+    /// When set, completely replaces the image's ENTRYPOINT for the box's
+    /// init process. Useful for images with an ENTRYPOINT that exits
+    /// (e.g., `docker:dind`'s `dockerd-entrypoint.sh` finishes its TLS
+    /// setup and exits when given no `dockerd` arg → tears down the
+    /// container's PID namespace and kills all exec'd processes).
+    /// Pair with the positional `[COMMAND...]` arg, which becomes the
+    /// args to this entrypoint.
+    #[arg(long, value_name = "PROGRAM")]
+    pub entrypoint: Option<String>,
+
     /// Enable in-box docker / docker-compose support.
     ///
     /// Mounts /sys/fs/cgroup as writable cgroup2 inside the container and
@@ -649,6 +661,9 @@ impl ManagementFlags {
         opts.detach = self.detach;
         opts.auto_remove = self.rm;
         opts.support_docker = self.support_docker;
+        if let Some(ep) = &self.entrypoint {
+            opts.entrypoint = Some(vec![ep.clone()]);
+        }
     }
 }
 
@@ -657,6 +672,106 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    // ─── --support-docker flag plumbing ────────────────────────────────
+    //
+    // The CLI flag must default to false and only flip BoxOptions when the
+    // user explicitly passes it. The proto + guest paths take care of the
+    // rest; what THIS module is responsible for is the CLI→BoxOptions hop.
+    // Tests below guard both the default-off invariant (existing users see
+    // no behaviour change) and the explicit-on plumbing.
+
+    #[test]
+    fn management_flags_default_leaves_support_docker_false() {
+        // Build a minimal ManagementFlags with only the unrelated fields the
+        // user might set in everyday `boxlite run` invocations.
+        let flags = ManagementFlags {
+            name: None,
+            detach: false,
+            rm: false,
+            entrypoint: None,
+            support_docker: false,
+        };
+        let mut opts = BoxOptions::default();
+        flags.apply_to(&mut opts);
+        assert!(
+            !opts.support_docker,
+            "BoxOptions.support_docker must stay false when --support-docker \
+             is NOT passed — protects every existing user from a silent \
+             attack-surface widening"
+        );
+    }
+
+    #[test]
+    fn management_flags_propagates_support_docker_when_set() {
+        let flags = ManagementFlags {
+            name: None,
+            detach: false,
+            rm: false,
+            entrypoint: None,
+            support_docker: true,
+        };
+        let mut opts = BoxOptions::default();
+        flags.apply_to(&mut opts);
+        assert!(
+            opts.support_docker,
+            "--support-docker must flip BoxOptions.support_docker so the \
+             guest receives the relaxed-caps + cgroup-rw profile"
+        );
+    }
+
+    #[test]
+    fn management_flags_apply_does_not_clobber_unrelated_options() {
+        // Setting --support-docker must NOT silently change any other
+        // BoxOptions field. Verify by populating the options with non-default
+        // values for fields ManagementFlags doesn't own, applying the flag,
+        // and asserting they're preserved.
+        let mut opts = BoxOptions {
+            cpus: Some(4),
+            memory_mib: Some(2048),
+            entrypoint: Some(vec!["dockerd".to_string()]),
+            ..BoxOptions::default()
+        };
+
+        let flags = ManagementFlags {
+            name: None,
+            detach: true,
+            rm: true,
+            entrypoint: None,
+            support_docker: true,
+        };
+        flags.apply_to(&mut opts);
+
+        assert_eq!(opts.cpus, Some(4), "cpus must not be clobbered");
+        assert_eq!(
+            opts.memory_mib,
+            Some(2048),
+            "memory_mib must not be clobbered"
+        );
+        assert_eq!(
+            opts.entrypoint,
+            Some(vec!["dockerd".to_string()]),
+            "entrypoint must not be clobbered"
+        );
+        // What ManagementFlags DOES own should be updated.
+        assert!(opts.detach);
+        assert!(opts.auto_remove);
+        assert!(opts.support_docker);
+    }
+
+    #[test]
+    fn box_options_default_has_support_docker_false() {
+        // The default constructor is the source of truth for "lean profile".
+        // Multiple SDK plumbings rely on this default; guard it here so any
+        // accidental change tips a unit test instead of silently shipping
+        // a new default behaviour to every box on the planet.
+        let opts = BoxOptions::default();
+        assert!(
+            !opts.support_docker,
+            "BoxOptions::default().support_docker MUST be false. Changing this \
+             default would silently widen attack surface for every existing user."
+        );
+    }
 
     #[test]
     fn test_apply_env_vars_with_lookup() {
