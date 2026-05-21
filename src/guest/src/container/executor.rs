@@ -50,12 +50,10 @@
 //! ARE the intended hardening there, and the init spec also carries
 //! them, so the tenant just re-confirms what's already in place.
 
-use std::ffi::CString;
-
 use libcontainer::oci_spec::runtime::Spec;
+use libcontainer::workload::default::DefaultExecutor;
 use libcontainer::workload::{Executor, ExecutorError, ExecutorValidationError};
 use nix::mount::{umount2, MntFlags};
-use nix::unistd;
 
 /// Annotation key set on the OCI spec when boxlite is in
 /// `--privileged` mode. Read by `BoxliteExecutor::exec` to decide
@@ -88,12 +86,24 @@ const DEFAULT_MASKED_PATHS: &[&str] = &[
     "/proc/scsi",
 ];
 
+/// Wraps libcontainer's `DefaultExecutor` to add a single thing: when
+/// the spec carries the `io.boxlite.privileged=true` annotation,
+/// `umount2(MNT_DETACH)` each of the OCI default ro/masked paths
+/// before delegating to `DefaultExecutor::exec` (which does the
+/// `execvp`). For non-privileged specs the pre-step is skipped and
+/// the behaviour collapses exactly to `DefaultExecutor` — same
+/// `validate()`, same `exec()`. The non-`--privileged` flow is
+/// byte-for-byte unchanged.
 #[derive(Clone)]
-pub struct BoxliteExecutor;
+pub struct BoxliteExecutor {
+    inner: DefaultExecutor,
+}
 
 impl BoxliteExecutor {
     pub fn new() -> Self {
-        Self
+        Self {
+            inner: DefaultExecutor {},
+        }
     }
 }
 
@@ -116,38 +126,15 @@ impl Executor for BoxliteExecutor {
                 let _ = umount2(*path, MntFlags::MNT_DETACH);
             }
         }
-
-        // execvp the spec's process args. Mirrors libcontainer's
-        // `workload::default::DefaultExecutor::exec`.
-        let args = spec
-            .process()
-            .as_ref()
-            .and_then(|p| p.args().as_ref())
-            .ok_or(ExecutorError::InvalidArg)?;
-        if args.is_empty() {
-            return Err(ExecutorError::InvalidArg);
-        }
-        let exe = CString::new(args[0].as_bytes()).map_err(|_| ExecutorError::InvalidArg)?;
-        let cargs: Vec<CString> = args
-            .iter()
-            .map(|s| CString::new(s.as_bytes()).unwrap_or_default())
-            .collect();
-        unistd::execvp(&exe, &cargs).map_err(|err| {
-            ExecutorError::Execution(
-                format!("execvp({:?}, {:?}) failed: {}", exe, cargs, err).into(),
-            )
-        })?;
-        unreachable!("execvp does not return on success");
+        self.inner.exec(spec)
     }
 
-    fn validate(&self, _spec: &Spec) -> Result<(), ExecutorValidationError> {
-        // Skip the validation `DefaultExecutor` does: it requires a
-        // `PATH=` env entry and walks it to confirm the executable is
-        // resolvable from the host's filesystem view, which is the
-        // wrong filesystem (the container's rootfs hasn't been pivoted
-        // yet). `execvp` will fail loudly inside `exec` if the binary
-        // is genuinely missing.
-        Ok(())
+    fn validate(&self, spec: &Spec) -> Result<(), ExecutorValidationError> {
+        // Delegate to the same validation libcontainer applied before
+        // this executor existed (PATH env present, executable resolvable
+        // against the spec's PATH). Keeps non-privileged behaviour
+        // identical to a stock libcontainer run.
+        self.inner.validate(spec)
     }
 }
 
