@@ -252,8 +252,8 @@ func parseBulkUploadParts(reader *multipart.Reader) ([]stagedBulkUpload, []strin
 				errs = append(errs, fmt.Sprintf("path[%s]: %v", idx, readErr))
 				continue
 			}
-			dest := strings.TrimSpace(string(data))
-			if dest == "" {
+			dest := string(data)
+			if strings.TrimSpace(dest) == "" {
 				errs = append(errs, fmt.Sprintf("path[%s]: empty", idx))
 				rejected[idx] = true
 				continue
