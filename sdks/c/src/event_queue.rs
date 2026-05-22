@@ -11,6 +11,7 @@ use std::sync::{Condvar, Mutex};
 
 use boxlite::BoxliteError;
 
+use crate::copy::CCopyOutOutcomeList;
 use crate::images::{CImageInfoList, CImagePullResult};
 use crate::info::{CBoxInfo, CBoxInfoList};
 use crate::metrics::{CBoxMetrics, CRuntimeMetrics};
@@ -114,6 +115,15 @@ pub(crate) type CBoxImageListFn =
 /// Copy (into / out of) completion.
 pub type CBoxCopyCb = Option<extern "C" fn(*mut crate::CBoxliteError, *mut c_void)>;
 pub(crate) type CBoxCopyFn = extern "C" fn(*mut crate::CBoxliteError, *mut c_void);
+
+/// Bulk copy-out completion. On success the callback receives an owned
+/// `CCopyOutOutcomeList` (caller must free via `boxlite_free_copy_out_outcome_list`).
+/// On transport-level failure it receives null + a populated error;
+/// per-pair failures are surfaced inside each outcome's `error` field.
+pub type CBoxCopyOutManyCb =
+    Option<extern "C" fn(*mut CCopyOutOutcomeList, *mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CBoxCopyOutManyFn =
+    extern "C" fn(*mut CCopyOutOutcomeList, *mut crate::CBoxliteError, *mut c_void);
 
 /// Box info completion.
 pub type CBoxInfoCb = Option<extern "C" fn(*mut CBoxInfo, *mut crate::CBoxliteError, *mut c_void)>;
@@ -311,6 +321,11 @@ pub enum RuntimeEvent {
         cb: CBoxCopyFn,
         user_data: usize,
         result: Result<(), BoxliteError>,
+    },
+    CopyOutMany {
+        cb: CBoxCopyOutManyFn,
+        user_data: usize,
+        result: Result<OwnedFfiPtr<CCopyOutOutcomeList>, BoxliteError>,
     },
     Info {
         cb: CBoxInfoFn,

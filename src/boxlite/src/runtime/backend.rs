@@ -4,7 +4,7 @@ use std::path::Path;
 
 use async_trait::async_trait;
 
-use crate::litebox::copy::CopyOptions;
+use crate::litebox::copy::{CopyOptions, CopyOutOutcome, CopyOutPair};
 use crate::litebox::snapshot_mgr::SnapshotInfo;
 use crate::litebox::{BoxCommand, Execution, LiteBox};
 use crate::metrics::{BoxMetrics, RuntimeMetrics};
@@ -109,6 +109,25 @@ pub(crate) trait BoxBackend: Send + Sync {
         host_dst: &Path,
         opts: CopyOptions,
     ) -> BoxliteResult<()>;
+
+    /// Bulk copy-out via the `/files/bulk-download` endpoint. Default impl
+    /// fans out to `copy_out` so non-REST backends Just Work. REST overrides
+    /// for one round-trip. Per-pair failures land in the returned Vec; the
+    /// overall `Result` is `Err` only on transport-level failures.
+    async fn copy_out_many(&self, pairs: &[CopyOutPair]) -> BoxliteResult<Vec<CopyOutOutcome>> {
+        let mut out = Vec::with_capacity(pairs.len());
+        for p in pairs {
+            let res = self
+                .copy_out(&p.container_src, &p.host_dst, CopyOptions::default())
+                .await;
+            out.push(CopyOutOutcome {
+                container_src: p.container_src.clone(),
+                host_dst: p.host_dst.clone(),
+                error: res.err().map(|e| e.to_string()),
+            });
+        }
+        Ok(out)
+    }
 
     async fn clone_box(
         &self,

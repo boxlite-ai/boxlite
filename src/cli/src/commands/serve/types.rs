@@ -234,4 +234,23 @@ pub(super) struct RemoveQuery {
 #[derive(Deserialize)]
 pub(super) struct FileQuery {
     pub path: String,
+    /// PUT /files only. Defaults to `true` so existing callers that omit
+    /// the flag keep the old behaviour.
+    #[serde(default = "default_true")]
+    pub overwrite: bool,
+    /// GET /files only. Mirrors the runner's `follow_symlinks` query knob;
+    /// defaults to `false` to match `CopyOptions::default()`.
+    #[serde(default)]
+    pub follow_symlinks: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// Body of POST /v1/default/boxes/{box_id}/files/bulk-download.
+#[derive(Deserialize)]
+pub(super) struct BulkDownloadRequest {
+    #[serde(default)]
+    pub paths: Vec<String>,
 }

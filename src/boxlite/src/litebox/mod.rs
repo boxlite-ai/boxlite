@@ -16,7 +16,7 @@ mod snapshot;
 pub(crate) mod snapshot_mgr;
 mod state;
 
-pub use copy::CopyOptions;
+pub use copy::{CopyOptions, CopyOutOutcome, CopyOutPair};
 pub(crate) use crash_report::CrashReport;
 pub use exec::{BoxCommand, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execution, ExecutionId};
 pub(crate) use manager::BoxManager;
@@ -138,6 +138,21 @@ impl LiteBox {
         self.box_backend
             .copy_out(container_src.as_ref(), host_dst.as_ref(), opts)
             .await
+    }
+
+    /// Bulk copy-out: copy many files in a single round-trip via the
+    /// `/files/bulk-download` endpoint. Outcomes are returned in input
+    /// order regardless of the server's response ordering; inspect
+    /// `outcome.error` per pair to learn which files landed.
+    ///
+    /// Partial failure is the design — a single bad path does not abort
+    /// the batch, and this method returns `Err` only on transport-level
+    /// failures.
+    pub async fn copy_out_many(
+        &self,
+        pairs: &[copy::CopyOutPair],
+    ) -> BoxliteResult<Vec<copy::CopyOutOutcome>> {
+        self.box_backend.copy_out_many(pairs).await
     }
 
     /// Get a snapshot handle for snapshot operations.

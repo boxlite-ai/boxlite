@@ -137,6 +137,36 @@ typedef void (*CBoxStartBoxCb)(CBoxliteError*, void*);
 // Copy (into / out of) completion.
 typedef void (*CBoxCopyCb)(CBoxliteError*, void*);
 
+// One source/destination pair passed into `boxlite_copy_out_many`.
+// Strings are caller-owned; the SDK copies them into Rust `String`s
+// before the call returns, so the caller may free them after
+// `boxlite_copy_out_many` returns control.
+typedef struct CCopyOutPair {
+  const char *container_src;
+  const char *host_dst;
+} CCopyOutPair;
+
+// Per-pair outcome returned from `boxlite_copy_out_many`. `error` is null
+// when the pair succeeded; a heap-allocated UTF-8 C string otherwise.
+// All `*mut c_char` fields are owned by the list and reclaimed by
+// `boxlite_free_copy_out_outcome_list`.
+typedef struct CCopyOutOutcome {
+  char *container_src;
+  char *host_dst;
+  char *error;
+} CCopyOutOutcome;
+
+typedef struct CCopyOutOutcomeList {
+  struct CCopyOutOutcome *items;
+  int count;
+} CCopyOutOutcomeList;
+
+// Bulk copy-out completion. On success the callback receives an owned
+// `CCopyOutOutcomeList` (caller must free via `boxlite_free_copy_out_outcome_list`).
+// On transport-level failure it receives null + a populated error;
+// per-pair failures are surfaced inside each outcome's `error` field.
+typedef void (*CBoxCopyOutManyCb)(struct CCopyOutOutcomeList*, CBoxliteError*, void*);
+
 // C-compatible command descriptor with all BoxCommand options.
 //
 // All string fields are nullable — NULL means "use default".
@@ -347,6 +377,15 @@ enum BoxliteErrorCode boxlite_copy_out(CBoxHandle *handle,
                                        CBoxCopyCb cb,
                                        void *user_data,
                                        CBoxliteError *out_error);
+
+enum BoxliteErrorCode boxlite_copy_out_many(CBoxHandle *handle,
+                                            const struct CCopyOutPair *pairs,
+                                            size_t count,
+                                            CBoxCopyOutManyCb cb,
+                                            void *user_data,
+                                            CBoxliteError *out_error);
+
+void boxlite_free_copy_out_outcome_list(struct CCopyOutOutcomeList *list);
 
 void boxlite_error_free(CBoxliteError *error);
 

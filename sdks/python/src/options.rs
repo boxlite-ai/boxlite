@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use boxlite::BoxliteRestOptions;
-use boxlite::litebox::copy::CopyOptions;
+use boxlite::litebox::copy::{CopyOptions, CopyOutOutcome, CopyOutPair};
 use boxlite::runtime::advanced_options::{HealthCheckOptions, SecurityOptions};
 use boxlite::runtime::constants::images;
 use boxlite::runtime::options::{
@@ -238,6 +238,77 @@ impl From<PyCopyOptions> for CopyOptions {
             overwrite: opt.overwrite,
             follow_symlinks: opt.follow_symlinks,
             include_parent: opt.include_parent,
+        }
+    }
+}
+
+// ============================================================================
+// CopyOutPair / CopyOutOutcome (bulk copy-out)
+// ============================================================================
+
+#[pyclass(name = "CopyOutPair")]
+#[derive(Clone, Debug)]
+pub struct PyCopyOutPair {
+    #[pyo3(get, set)]
+    pub container_src: String,
+    #[pyo3(get, set)]
+    pub host_dst: String,
+}
+
+#[pymethods]
+impl PyCopyOutPair {
+    #[new]
+    fn new(container_src: String, host_dst: String) -> Self {
+        Self {
+            container_src,
+            host_dst,
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "CopyOutPair(container_src={:?}, host_dst={:?})",
+            self.container_src, self.host_dst
+        )
+    }
+}
+
+impl From<&PyCopyOutPair> for CopyOutPair {
+    fn from(p: &PyCopyOutPair) -> Self {
+        CopyOutPair {
+            container_src: p.container_src.clone(),
+            host_dst: PathBuf::from(&p.host_dst),
+        }
+    }
+}
+
+#[pyclass(name = "CopyOutOutcome")]
+#[derive(Clone, Debug)]
+pub struct PyCopyOutOutcome {
+    #[pyo3(get)]
+    pub container_src: String,
+    #[pyo3(get)]
+    pub host_dst: String,
+    #[pyo3(get)]
+    pub error: Option<String>,
+}
+
+#[pymethods]
+impl PyCopyOutOutcome {
+    fn __repr__(&self) -> String {
+        format!(
+            "CopyOutOutcome(container_src={:?}, host_dst={:?}, error={:?})",
+            self.container_src, self.host_dst, self.error
+        )
+    }
+}
+
+impl From<CopyOutOutcome> for PyCopyOutOutcome {
+    fn from(o: CopyOutOutcome) -> Self {
+        Self {
+            container_src: o.container_src,
+            host_dst: o.host_dst.to_string_lossy().into_owned(),
+            error: o.error,
         }
     }
 }

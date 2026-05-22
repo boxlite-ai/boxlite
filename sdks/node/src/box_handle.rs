@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
-use boxlite::{BoxCommand, CloneOptions, ExportOptions, LiteBox};
+use boxlite::{BoxCommand, CloneOptions, CopyOutPair, ExportOptions, LiteBox};
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
-use crate::copy::{JsCopyOptions, into_copy_options};
+use crate::copy::{JsCopyOptions, JsCopyOutOutcome, JsCopyOutPair, into_copy_options};
 use crate::exec::JsExecution;
 use crate::info::JsBoxInfo;
 use crate::metrics::JsBoxMetrics;
@@ -157,6 +157,11 @@ impl JsBox {
     }
 
     /// Copy files from host into the box's container rootfs.
+    ///
+    /// Wire shape (octet-stream PUT for single files, multipart
+    /// `/files/bulk-upload` POST for directories) lives in the Rust REST
+    /// backend at `src/boxlite/src/rest/litebox.rs`. This SDK carries no
+    /// `/files` HTTP code — it delegates through `LiteBox::copy_into`.
     #[napi(js_name = "copyIn")]
     pub async fn copy_in(
         &self,
@@ -186,5 +191,21 @@ impl JsBox {
             .copy_out(&container_src, std::path::Path::new(&host_dest), opts)
             .await
             .map_err(map_err)
+    }
+
+    /// Bulk copy-out: copy many files in one round-trip via the
+    /// `/files/bulk-download` endpoint. Returns one outcome per input
+    /// pair, in input order. Per-file failures are recorded in
+    /// `outcome.error`; this method rejects only on transport-level
+    /// failures.
+    #[napi(js_name = "copyOutMany")]
+    pub async fn copy_out_many(&self, pairs: Vec<JsCopyOutPair>) -> Result<Vec<JsCopyOutOutcome>> {
+        let rust_pairs: Vec<CopyOutPair> = pairs.iter().map(Into::into).collect();
+        let outcomes = self
+            .handle
+            .copy_out_many(&rust_pairs)
+            .await
+            .map_err(map_err)?;
+        Ok(outcomes.into_iter().map(Into::into).collect())
     }
 }

@@ -722,11 +722,11 @@ paths:
       - $ref: "#/components/parameters/boxId"
 
     put:
-      operationId: uploadFiles
-      summary: Upload files into the box
+      operationId: uploadFile
+      summary: Upload a file into the box
       description: |
-        Uploads a tar archive and extracts it at the specified path
-        inside the container. The box must be running.
+        Writes the raw request body to a single file at the specified
+        path inside the container. The box must be running.
       tags: [Files]
       parameters:
         - name: path
@@ -735,21 +735,21 @@ paths:
           description: Destination path inside the container
           schema:
             type: string
-          example: /app
+          example: /app/data.bin
         - name: overwrite
           in: query
-          description: Overwrite existing files at destination
+          description: Overwrite existing file at destination
           schema:
             type: boolean
             default: true
       requestBody:
         required: true
         content:
-          application/x-tar:
+          application/octet-stream:
             schema:
               type: string
               format: binary
-              description: Tar archive to extract at destination
+              description: Raw file bytes to write at destination
       responses:
         "204":
           description: Upload successful
@@ -759,11 +759,11 @@ paths:
           $ref: "#/components/responses/ConflictError"
 
     get:
-      operationId: downloadFiles
-      summary: Download files from the box
+      operationId: downloadFile
+      summary: Download a file from the box
       description: |
-        Downloads files from the specified path inside the container
-        as a tar archive. The box must be running.
+        Streams the raw bytes of a single file at the specified path
+        inside the container. The box must be running.
       tags: [Files]
       parameters:
         - name: path
@@ -772,21 +772,103 @@ paths:
           description: Source path inside the container
           schema:
             type: string
-          example: /app/output
+          example: /app/output/result.bin
         - name: follow_symlinks
           in: query
-          description: Follow symlinks when archiving
+          description: Follow symlinks when reading
           schema:
             type: boolean
             default: false
       responses:
         "200":
-          description: Tar archive of requested path
+          description: Raw file bytes
           content:
-            application/x-tar:
+            application/octet-stream:
               schema:
                 type: string
                 format: binary
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+
+  /{prefix}/boxes/{box_id}/files/bulk-upload:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+
+    post:
+      operationId: bulkUploadFiles
+      summary: Bulk-upload many files into the box in one multipart request
+      description: |
+        Accepts a multipart/form-data body where each file is described
+        by a pair of form fields: `files[N].path` (destination inside
+        the container) followed by `files[N].file` (binary contents).
+        The `.path` part must precede its matching `.file` part. Per-file
+        errors are collected rather than aborting the batch.
+      tags: [Files]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: "#/components/schemas/BulkUploadRequest"
+            encoding:
+              "files[N].file":
+                contentType: application/octet-stream
+      responses:
+        "200":
+          description: All files uploaded successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BulkUploadResponse"
+        "400":
+          description: One or more files failed; partial success is reported in the body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BulkUploadPartialResponse"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+
+  /{prefix}/boxes/{box_id}/files/bulk-download:
+    parameters:
+      - $ref: "#/components/parameters/prefix"
+      - $ref: "#/components/parameters/boxId"
+
+    post:
+      operationId: bulkDownloadFiles
+      summary: Bulk-download many files from the box in one multipart response
+      description: |
+        Accepts a JSON body listing source paths and returns a
+        `multipart/form-data` response (boundary `BOXLITE-FILE-BOUNDARY`)
+        with one part per requested path. Successful files arrive as
+        `Content-Disposition: form-data; name="file"; filename="<path>"`;
+        per-file failures arrive as
+        `form-data; name="error"; filename="<path>"` with the error text
+        as the part body. A single failing path never aborts the batch —
+        clients route per-part on the disposition `name` field.
+      tags: [Files]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BulkDownloadRequest"
+      responses:
+        "200":
+          description: Streamed multipart body containing one part per requested path
+          content:
+            multipart/form-data:
+              schema:
+                type: string
+                format: binary
+                description: Multipart stream with boundary `BOXLITE-FILE-BOUNDARY`
+        "400":
+          $ref: "#/components/responses/BadRequestError"
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":
@@ -1783,6 +1865,68 @@ components:
           minimum: 1
           description: Terminal height in rows
           example: 40
+
+    # =======================================================================
+    # Files
+    # =======================================================================
+    BulkUploadRequest:
+      type: object
+      description: |
+        Multipart body describing N files. For each index N, send a
+        `files[N].path` form field with the destination path, immediately
+        followed by a `files[N].file` form field with the binary contents.
+        OpenAPI cannot express indexed field names directly; clients SHOULD
+        treat the two properties below as families of fields rather than
+        single occurrences.
+      properties:
+        "files[N].path":
+          type: string
+          description: Destination path inside the container for file index N
+          example: /app/data/a.txt
+        "files[N].file":
+          type: string
+          format: binary
+          description: Raw file bytes for file index N
+
+    BulkUploadResponse:
+      type: object
+      required: [uploaded]
+      properties:
+        uploaded:
+          type: array
+          description: Destination paths that were written into the container
+          items:
+            type: string
+          example: [/app/data/a.txt, /app/data/b.txt]
+
+    BulkUploadPartialResponse:
+      type: object
+      required: [uploaded, errors]
+      properties:
+        uploaded:
+          type: array
+          description: Destination paths that were written into the container
+          items:
+            type: string
+          example: [/app/data/a.txt]
+        errors:
+          type: array
+          description: Per-file failure messages for files that were not written
+          items:
+            type: string
+          example: ["/app/data/b.txt: copy: no such file or directory"]
+
+    BulkDownloadRequest:
+      type: object
+      required: [paths]
+      properties:
+        paths:
+          type: array
+          description: Source paths inside the container to extract
+          minItems: 1
+          items:
+            type: string
+          example: [/app/output/a.txt, /app/output/b.txt]
 
     # =======================================================================
     # Metrics

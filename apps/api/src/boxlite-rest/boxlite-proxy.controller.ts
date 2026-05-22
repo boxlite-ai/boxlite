@@ -8,6 +8,7 @@ import {
   Controller,
   All,
   Get,
+  Post,
   Delete,
   Param,
   Req,
@@ -114,6 +115,42 @@ export class BoxliteProxyController {
   ) {
     const query = req.url.includes('?') ? req.url.substring(req.url.indexOf('?')) : ''
     return this.proxyToRunner(authContext, boxId, `/v1/boxes/${boxId}/files${query}`, req, res, next)
+  }
+
+  @Post(':boxId/files/bulk-upload')
+  async proxyFilesBulkUpload(
+    @AuthContext() authContext: OrganizationAuthContext,
+    @Param('boxId') boxId: string,
+    @Req() req: Request,
+    @Res() res: Response,
+    @Next() next: NextFunction,
+  ) {
+    return this.proxyToRunner(
+      authContext,
+      boxId,
+      `/v1/boxes/${boxId}/files/bulk-upload`,
+      req,
+      res,
+      next,
+    )
+  }
+
+  @Post(':boxId/files/bulk-download')
+  async proxyFilesBulkDownload(
+    @AuthContext() authContext: OrganizationAuthContext,
+    @Param('boxId') boxId: string,
+    @Req() req: Request,
+    @Res() res: Response,
+    @Next() next: NextFunction,
+  ) {
+    return this.proxyToRunner(
+      authContext,
+      boxId,
+      `/v1/boxes/${boxId}/files/bulk-download`,
+      req,
+      res,
+      next,
+    )
   }
 
   @All(':boxId/metrics')
