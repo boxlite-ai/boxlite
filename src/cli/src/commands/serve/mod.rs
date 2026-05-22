@@ -667,6 +667,7 @@ fn build_box_options(req: &CreateBoxRequest) -> Result<BoxOptions, boxlite::Boxl
         user: req.user.clone(),
         auto_remove: req.auto_remove.unwrap_or(false),
         detach: req.detach.unwrap_or(true),
+        privileged: req.privileged.unwrap_or(false),
         ..Default::default()
     })
 }
@@ -966,6 +967,50 @@ mod tests {
         assert!(!constant_time_eq(b"abc", b"abd"));
         assert!(!constant_time_eq(b"abc", b"abcd"));
         assert!(constant_time_eq(b"", b""));
+    }
+
+    // --- privileged round-trip across the REST wire (server side) ---
+
+    /// `CreateBoxRequest` must accept `"privileged": true` from JSON and
+    /// `build_box_options` must forward it to `BoxOptions.privileged`.
+    /// Without the field, PR #568 review observed the CLI's
+    /// `--privileged` flag would be silently dropped on the `--url`
+    /// path: client serializes a request without the field, server
+    /// reconstructs `BoxOptions` from the partial DTO, ends up
+    /// allocating a non-privileged box. This pins the wire→options
+    /// path so the regression can't reappear without a failing test.
+    #[test]
+    fn build_box_options_privileged_true_propagates_from_wire() {
+        let req: CreateBoxRequest =
+            serde_json::from_str(r#"{"image":"docker:dind","privileged":true}"#)
+                .expect("deserialize request with privileged=true");
+        let opts = build_box_options(&req).expect("build_box_options");
+        assert!(
+            opts.privileged,
+            "BoxOptions.privileged must reflect the wire DTO's \
+             `\"privileged\": true` — otherwise --privileged is \
+             silently dropped on the remote path"
+        );
+    }
+
+    #[test]
+    fn build_box_options_privileged_absent_defaults_to_false() {
+        // Absence of the field == non-privileged. Don't accidentally
+        // start interpreting `null` or absence as privileged when a
+        // backwards-compat client omits the field.
+        let req: CreateBoxRequest = serde_json::from_str(r#"{"image":"alpine:latest"}"#)
+            .expect("deserialize request without privileged");
+        let opts = build_box_options(&req).expect("build_box_options");
+        assert!(!opts.privileged);
+    }
+
+    #[test]
+    fn build_box_options_privileged_false_explicit_is_false() {
+        let req: CreateBoxRequest =
+            serde_json::from_str(r#"{"image":"alpine:latest","privileged":false}"#)
+                .expect("deserialize request with privileged=false");
+        let opts = build_box_options(&req).expect("build_box_options");
+        assert!(!opts.privileged);
     }
 
     /// Build an `ActiveExecution` backed by a stub `Execution` whose

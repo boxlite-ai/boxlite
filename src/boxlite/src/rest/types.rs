@@ -85,6 +85,13 @@ pub(crate) struct CreateBoxRequest {
     pub detach: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub security: Option<String>,
+    /// Mirrors `boxlite run --privileged`. When set, requests the
+    /// server to allocate a privileged box (caps + cgroup rw + dind
+    /// kernel). Forwarded through `BoxOptions.privileged`. Without
+    /// this field on the wire, a client passing `--privileged` would
+    /// have its request silently downgraded to a non-privileged box.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub privileged: Option<bool>,
 }
 
 impl CreateBoxRequest {
@@ -128,6 +135,11 @@ impl CreateBoxRequest {
             auto_remove: Some(options.auto_remove),
             detach: Some(options.detach),
             security: None, // TODO: map security preset
+            // Forward --privileged through the wire so a CLI client in
+            // `--url` / `BOXLITE_REST_URL` mode doesn't silently lose
+            // the flag and get a non-privileged box back. Only emit
+            // when explicitly set so we don't bloat every request.
+            privileged: if options.privileged { Some(true) } else { None },
         }
     }
 }
@@ -464,6 +476,7 @@ mod tests {
             auto_remove: Some(true),
             detach: None,
             security: None,
+            privileged: None,
         };
         let json = serde_json::to_string(&req).unwrap();
         assert!(json.contains("\"name\":\"mybox\""));
@@ -476,6 +489,7 @@ mod tests {
         // None fields should be skipped
         assert!(!json.contains("rootfs_path"));
         assert!(!json.contains("disk_size_gb"));
+        assert!(!json.contains("privileged"));
     }
 
     #[test]
@@ -515,6 +529,47 @@ mod tests {
         assert_eq!(
             req.secrets.as_ref().unwrap()[0].placeholder,
             "<BOXLITE_SECRET:openai>"
+        );
+    }
+
+    #[test]
+    fn test_create_box_request_from_options_privileged_wire() {
+        use crate::runtime::options::{BoxOptions, RootfsSpec};
+
+        // privileged=true on BoxOptions → privileged: Some(true) on
+        // the wire DTO → JSON includes `"privileged":true`. Without
+        // this round-trip a CLI client in `--url` mode would silently
+        // lose the flag and the remote server would create a normal
+        // (non-privileged) box. Regression guard for PR #568 review
+        // comment about REST DTO drop.
+        let opts = BoxOptions {
+            rootfs: RootfsSpec::Image("docker:dind".into()),
+            privileged: true,
+            ..Default::default()
+        };
+        let req = CreateBoxRequest::from_options(&opts, Some("dind-box".into()));
+        assert_eq!(req.privileged, Some(true));
+        let json = serde_json::to_string(&req).expect("serialize");
+        assert!(
+            json.contains("\"privileged\":true"),
+            "wire JSON must carry privileged=true so the server isn't \
+             silently downgraded to a non-privileged box; got: {json}"
+        );
+
+        // privileged=false on BoxOptions (default) → field omitted on
+        // the wire (skip_serializing_if). Keeps wire payloads compact
+        // and treats absence as the unambiguous "default behaviour".
+        let opts_default = BoxOptions {
+            rootfs: RootfsSpec::Image("alpine:latest".into()),
+            ..Default::default()
+        };
+        let req_default = CreateBoxRequest::from_options(&opts_default, None);
+        assert!(req_default.privileged.is_none());
+        let json_default = serde_json::to_string(&req_default).expect("serialize");
+        assert!(
+            !json_default.contains("privileged"),
+            "wire JSON for non-privileged box must NOT carry the field \
+             at all (Option::skip_serializing_if); got: {json_default}"
         );
     }
 

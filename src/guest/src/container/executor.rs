@@ -38,11 +38,17 @@
 //!      `Spec::load`, so it survives the tenant-builder's spec
 //!      adaptation (which doesn't touch annotations).
 //!   2. When the annotation is `"true"`, `umount2(MNT_DETACH)` each
-//!      of the well-known OCI default ro/masked paths. Errors are
-//!      ignored: `EINVAL` means the path isn't a mount point (init
+//!      of the well-known OCI default ro/masked paths. **Only**
+//!      `EINVAL` and `ENOENT` are treated as expected and silently
+//!      skipped: `EINVAL` means the path isn't a mount point (init
 //!      spec was `Some([])`, nothing was mounted), `ENOENT` means
-//!      the path doesn't exist on this kernel — both expected on
-//!      various paths.
+//!      the path doesn't exist on this kernel. Any other errno —
+//!      `EPERM` / `EACCES` / `EBUSY` / etc. — fails the executor
+//!      immediately rather than silently leaving a stale read-only
+//!      mount in place; otherwise dockerd would fail downstream
+//!      with a confusing "/proc/sys is read-only" error far from the
+//!      root cause (mount namespace state inconsistent with the
+//!      privileged contract).
 //!   3. `execvp` the spec's `process.args`, matching libcontainer's
 //!      `DefaultExecutor` behaviour.
 //!
@@ -53,6 +59,7 @@
 use libcontainer::oci_spec::runtime::Spec;
 use libcontainer::workload::default::DefaultExecutor;
 use libcontainer::workload::{Executor, ExecutorError, ExecutorValidationError};
+use nix::errno::Errno;
 use nix::mount::{umount2, MntFlags};
 
 /// Annotation key set on the OCI spec when boxlite is in
@@ -119,11 +126,30 @@ impl Executor for BoxliteExecutor {
             // MNT_DETACH so a held fd on the mountpoint doesn't EBUSY us;
             // the unmount completes lazily once the fd is closed but the
             // path is already exposed to the parent (rw procfs underneath).
+            //
+            // Only EINVAL ("not a mount point", expected when init spec
+            // didn't mount the path) and ENOENT ("path doesn't exist",
+            // expected on some kernels) are swallowed. Any other errno
+            // surfaces as an `ExecutorError::Other` — the alternative
+            // (silently continuing into execvp with a stale read-only
+            // mount) makes dockerd / overlayfs fail downstream at a
+            // layer far from the root cause. See module docs for why
+            // we don't try to recover from `EPERM` / `EBUSY` / etc.
             for path in DEFAULT_READONLY_PATHS
                 .iter()
                 .chain(DEFAULT_MASKED_PATHS.iter())
             {
-                let _ = umount2(*path, MntFlags::MNT_DETACH);
+                match umount2(*path, MntFlags::MNT_DETACH) {
+                    Ok(()) | Err(Errno::EINVAL) | Err(Errno::ENOENT) => {}
+                    Err(e) => {
+                        return Err(ExecutorError::Other(format!(
+                            "BoxliteExecutor: unexpected umount2 errno on \
+                             `{path}` while undoing OCI default hardening \
+                             for --privileged box: {e} (errno {})",
+                            e as i32
+                        )));
+                    }
+                }
             }
         }
         self.inner.exec(spec)

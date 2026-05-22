@@ -39,6 +39,15 @@ pub(super) struct CreateBoxRequest {
     pub auto_remove: Option<bool>,
     #[serde(default)]
     pub detach: Option<bool>,
+    /// Mirrors `boxlite run --privileged`. Forwarded to
+    /// `BoxOptions.privileged` so dind/`overlay-fs` / cap-relaxed
+    /// boxes are reachable over the REST API. Defaults to `false`
+    /// (matching the non-`--privileged` CLI default). Without this
+    /// field on the wire, a client passing `--privileged` against a
+    /// remote server would have its request silently downgraded to a
+    /// non-privileged box.
+    #[serde(default)]
+    pub privileged: Option<bool>,
 }
 
 #[derive(Deserialize)]

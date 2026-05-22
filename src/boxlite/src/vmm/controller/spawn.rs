@@ -92,7 +92,7 @@ impl<'a> ShimSpawner<'a> {
         let mut cmd = jail.command(self.binary_path, no_args);
 
         // 5. Configure environment
-        self.configure_env(&mut cmd);
+        self.configure_env(&mut cmd)?;
 
         // 6. Configure stdio
         // stdin=piped: config JSON is sent via stdin to avoid /proc/cmdline exposure
@@ -133,7 +133,7 @@ impl<'a> ShimSpawner<'a> {
         Ok(SpawnedShim { child, keepalive })
     }
 
-    fn configure_env(&self, cmd: &mut std::process::Command) {
+    fn configure_env(&self, cmd: &mut std::process::Command) -> BoxliteResult<()> {
         // Pass debugging environment variables to subprocess
         if let Ok(rust_log) = std::env::var("RUST_LOG") {
             cmd.env("RUST_LOG", rust_log);
@@ -162,23 +162,37 @@ impl<'a> ShimSpawner<'a> {
         // libkrun's dlopen pick the fat kernel for THIS box only, without
         // touching the symlink other (lean-profile) boxes load.
         //
-        // Failure modes fall back to lean with a warning rather than
-        // aborting the box: a user with --privileged but no dind blob
-        // built still gets the Phase-A caps + cgroup-rw — they just won't
-        // see bridge networks / iptables work. That degradation is OK and
-        // matches the existing behaviour before the dind blob was wired.
+        // Hard fail on missing/unstageable dind blob when `--privileged`
+        // is set: caps + cgroup rw without the dind kernel produces a
+        // half-working box (no bridge networks, no iptables, no
+        // overlayfs), and dockerd / docker-compose then fail at a layer
+        // far from the root cause — see the original `--privileged`
+        // contract for what this flag advertises. The lean fallback is
+        // still used for non-`--privileged` boxes (they explicitly opt
+        // out of dind).
         let dind_libs = if self.options.privileged {
-            self.stage_dind_libkrunfw().unwrap_or_else(|e| {
-                tracing::warn!(
-                    box_id = %self.box_id,
-                    error = %e,
-                    "Failed to stage dind libkrunfw — falling back to lean kernel. \
-                     Caps + cgroup-rw still apply, but bridge networks won't work. \
-                     Run `make libkrunfw-dind` and rebuild boxlite with \
-                     BOXLITE_LIBKRUNFW_DIND_PATH set."
-                );
-                None
-            })
+            match self.stage_dind_libkrunfw() {
+                Ok(Some(path)) => Some(path),
+                Ok(None) => {
+                    return Err(BoxliteError::Engine(format!(
+                        "--privileged requires a dind-capable libkrunfw, but \
+                         `libkrunfw-dind.so.5` was not found in the embedded \
+                         runtime for box {}. Run `make libkrunfw-dind` and \
+                         rebuild boxlite with `BOXLITE_LIBKRUNFW_DIND_PATH` \
+                         set, then retry.",
+                        self.box_id
+                    )));
+                }
+                Err(e) => {
+                    return Err(BoxliteError::Engine(format!(
+                        "--privileged: failed to stage dind libkrunfw for \
+                         box {}: {}. Caps + cgroup rw alone would leave \
+                         dockerd / overlayfs broken, so the box is not \
+                         started.",
+                        self.box_id, e
+                    )));
+                }
+            }
         } else {
             None
         };
@@ -186,6 +200,8 @@ impl<'a> ShimSpawner<'a> {
         // Set library search paths for bundled dependencies (e.g., libkrunfw.so)
         let prepend: Vec<PathBuf> = dind_libs.into_iter().collect();
         configure_library_env_with_prepend(cmd, std::ptr::null(), &prepend);
+
+        Ok(())
     }
 
     /// Create `<box_dir>/libs/libkrunfw.so.5` as a symlink to the fat
@@ -340,7 +356,7 @@ mod tests {
         );
 
         let mut cmd = std::process::Command::new("/usr/bin/true");
-        spawner.configure_env(&mut cmd);
+        spawner.configure_env(&mut cmd).expect("configure_env");
 
         let envs: std::collections::HashMap<_, _> = cmd.get_envs().collect();
         let expected = layout.tmp_dir();
@@ -390,7 +406,7 @@ mod tests {
         );
 
         let mut cmd = std::process::Command::new("/usr/bin/true");
-        spawner.configure_env(&mut cmd);
+        spawner.configure_env(&mut cmd).expect("configure_env");
 
         let envs: std::collections::HashMap<_, _> = cmd.get_envs().collect();
         assert!(!envs.contains_key(OsStr::new("TMPDIR")));
