@@ -2,14 +2,12 @@
 //! `docker build` complete end-to-end inside the box.
 //!
 //! Part of the forced `test:integration:cli` matrix — runs by default.
-//! Prerequisites the make target sets up for us:
-//!   1. `target/privileged-kernel/lib64/libkrunfw-privileged.so.5` exists (built
-//!      via `make libkrunfw-privileged`, which `test:integration:cli` checks
-//!      for and refuses to run without — heavy one-time ~10–20 min
-//!      kernel build, cached thereafter).
-//!   2. `BOXLITE_LIBKRUNFW_PRIVILEGED_PATH` is exported when cargo builds the
-//!      CLI binary so the privileged libkrunfw blob is staged alongside the
-//!      lean one inside the embedded runtime.
+//! Prerequisite: `target/privileged-kernel/lib64/libkrunfw-privileged.so.5`
+//! exists (built via `make libkrunfw-privileged`, which `test:integration:cli`
+//! checks for and refuses to run without — heavy one-time ~10–20 min kernel
+//! build, cached thereafter). `libkrun-sys/build.rs` auto-detects the blob at
+//! that canonical path and stages it alongside the lean libkrunfw inside the
+//! embedded runtime, so no env var dance is required.
 //!
 //! Ignore-condition: set `BOXLITE_SKIP_DIND_TEST=1` to skip with a
 //! SKIP marker (useful on hosts that genuinely cannot run dind — e.g.,

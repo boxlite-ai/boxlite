@@ -228,40 +228,72 @@ fn download_libkrunfw_so(install_dir: &Path) {
     );
 }
 
-// ── DinD libkrunfw staging (opt-in) ──────────────────────────────────────────
+// ── Privileged libkrunfw staging (opt-in via `make libkrunfw-privileged`) ────
 
-/// Copy the optional "fat" libkrunfw blob (built via `make libkrunfw-privileged`)
-/// into the install dir alongside the lean libkrunfw. The blob's filename
-/// is preserved as `libkrunfw-privileged.so.5` so dlopen at runtime can pick
-/// between the two by name; per-box selection is handled higher up the
-/// stack (boxlite::vmm reads BoxOptions::privileged).
+/// Remove stale `libkrunfw-*.so*` variants from `lib_dir` before bundling.
 ///
-/// No-op when the env var is unset → default builds stay byte-identical
-/// to the existing lean path, which is the `--privileged` design
-/// contract (don't widen anything for existing users).
+/// libkrun-sys's `OUT_DIR` persists across cargo builds as long as the crate
+/// fingerprint is stable. Privileged blobs (and pre-rename `libkrunfw-dind.so.5`
+/// blobs from prior code) staged by earlier runs linger here forever — the
+/// download + LibFixup pipeline only writes lean `libkrunfw.so*`, never deletes
+/// anything. Without this sweep, `stage_optional_privileged_blob` overwriting
+/// `libkrunfw-privileged.so.5` doesn't help: the legacy `libkrunfw-dind.so.5`
+/// still gets bundled into boxlite's embedded runtime.
+///
+/// The lean family (`libkrunfw.so`, `libkrunfw.so.5`, ...) has no dash after
+/// `libkrunfw`, so the `libkrunfw-` prefix is a reliable variant marker. Any
+/// privileged blob this run wants gets re-staged immediately after by
+/// `stage_optional_privileged_blob`.
 #[cfg(target_os = "linux")]
-fn stage_optional_privileged_blob(install_lib_dir: &Path) {
-    // rerun-if-changed isn't enough — env vars need their own watcher so
-    // toggling the var triggers a re-stage.
-    println!("cargo:rerun-if-env-changed=BOXLITE_LIBKRUNFW_PRIVILEGED_PATH");
-
-    let Ok(src_str) = env::var("BOXLITE_LIBKRUNFW_PRIVILEGED_PATH") else {
+fn clean_stale_libkrunfw_variants(lib_dir: &Path) {
+    let Ok(entries) = fs::read_dir(lib_dir) else {
         return;
     };
-    let src = PathBuf::from(src_str.trim());
-    if src.as_os_str().is_empty() {
-        println!("cargo:warning=BOXLITE_LIBKRUNFW_PRIVILEGED_PATH set but empty — skipping privileged kernel staging");
+    for entry in entries.flatten() {
+        let filename = entry.file_name().to_string_lossy().to_string();
+        if filename.starts_with("libkrunfw-") && filename.contains(".so") {
+            match fs::remove_file(entry.path()) {
+                Ok(()) => println!(
+                    "cargo:warning=Removed stale libkrunfw variant: {}",
+                    filename
+                ),
+                Err(e) => println!(
+                    "cargo:warning=Failed to remove stale libkrunfw variant {}: {}",
+                    filename, e
+                ),
+            }
+        }
+    }
+}
+
+/// Copy the optional privileged libkrunfw blob (built via
+/// `make libkrunfw-privileged`) into the install dir alongside the lean
+/// libkrunfw. The filename is preserved as `libkrunfw-privileged.so.5` so
+/// dlopen at runtime picks between the two by name; per-box selection is
+/// handled higher up the stack (`boxlite::vmm` reads
+/// `BoxOptions::privileged`).
+///
+/// Source-of-truth lookup, in order:
+///   1. `BOXLITE_LIBKRUNFW_PRIVILEGED_PATH` env var — explicit override for
+///      packagers / CI that stage the blob outside the workspace tree (e.g.,
+///      shared cache, sysroot). If set and the path is missing, this is a
+///      hard error: silent fallback to canonical would mask the typo.
+///   2. Canonical path
+///      `<workspace>/target/privileged-kernel/lib64/libkrunfw-privileged.so.5`
+///      — the exact location `make libkrunfw-privileged` writes to. Running
+///      that one make target is sufficient to enable `--privileged`; no env
+///      var dance.
+///
+/// No-op when neither is set / present → default builds are byte-identical
+/// to the lean-only path. That's the `--privileged` design contract: don't
+/// widen anything for users who haven't asked for it.
+#[cfg(target_os = "linux")]
+fn stage_optional_privileged_blob(install_lib_dir: &Path) {
+    println!("cargo:rerun-if-env-changed=BOXLITE_LIBKRUNFW_PRIVILEGED_PATH");
+
+    let Some(src) = locate_privileged_blob() else {
         return;
-    }
-    if !src.exists() {
-        // Hard error: the user explicitly asked for privileged kernel but pointed us at
-        // nothing. Silently skipping would produce a build that pretends
-        // privileged works but loads the lean kernel at runtime.
-        panic!(
-            "BOXLITE_LIBKRUNFW_PRIVILEGED_PATH={} does not exist. Build it with `make libkrunfw-privileged`.",
-            src.display()
-        );
-    }
+    };
 
     let dest = install_lib_dir.join("libkrunfw-privileged.so.5");
     fs::copy(&src, &dest).unwrap_or_else(|e| {
@@ -279,12 +311,58 @@ fn stage_optional_privileged_blob(install_lib_dir: &Path) {
     );
 }
 
-// macOS has no `stage_optional_privileged_blob` counterpart on purpose: the only
-// call site is inside `#[cfg(target_os = "linux")] fn build()`, so a
-// macOS stub would be dead code (clippy catches it). The fat kernel is
+/// Resolve the privileged libkrunfw blob to stage, if any. See
+/// `stage_optional_privileged_blob` for the lookup order.
+#[cfg(target_os = "linux")]
+fn locate_privileged_blob() -> Option<PathBuf> {
+    // 1. Explicit env-var override.
+    if let Ok(src_str) = env::var("BOXLITE_LIBKRUNFW_PRIVILEGED_PATH") {
+        let src = PathBuf::from(src_str.trim());
+        if src.as_os_str().is_empty() {
+            println!(
+                "cargo:warning=BOXLITE_LIBKRUNFW_PRIVILEGED_PATH set but empty — \
+                 skipping privileged kernel staging"
+            );
+            return None;
+        }
+        if !src.exists() {
+            panic!(
+                "BOXLITE_LIBKRUNFW_PRIVILEGED_PATH={} does not exist. \
+                 Build it with `make libkrunfw-privileged` (writes to the canonical \
+                 path automatically, no env var needed) or unset the env var to use \
+                 the canonical fallback.",
+                src.display()
+            );
+        }
+        return Some(src);
+    }
+
+    // 2. Canonical fallback: the output path of `make libkrunfw-privileged`.
+    //    libkrun-sys lives at `<workspace>/src/deps/libkrun-sys`, so walking up
+    //    three ancestors of CARGO_MANIFEST_DIR lands on the workspace root.
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").ok()?);
+    let workspace_root = manifest_dir.ancestors().nth(3)?.to_path_buf();
+    let canonical = workspace_root
+        .join("target")
+        .join("privileged-kernel")
+        .join("lib64")
+        .join("libkrunfw-privileged.so.5");
+
+    // Bust cargo's cache when the canonical blob appears, disappears, or
+    // changes mtime, so a post-`make libkrunfw-privileged` rebuild picks it up
+    // without `cargo clean -p libkrun-sys`. Printing rerun-if-changed for a
+    // path that doesn't yet exist is fine — cargo watches it for creation.
+    println!("cargo:rerun-if-changed={}", canonical.display());
+
+    canonical.exists().then_some(canonical)
+}
+
+// macOS has no `stage_optional_privileged_blob` counterpart on purpose: the
+// only call site is inside `#[cfg(target_os = "linux")] fn build()`, so a
+// macOS stub would be dead code (clippy catches it). The privileged kernel is
 // Linux-only for now — Apple Silicon privileged needs libkrunfw built with a
-// different toolchain (kernel.c → .dylib) and a parallel overlay path;
-// re-add a cfg-gated entry point if/when that lands.
+// different toolchain (kernel.c → .dylib) and a parallel overlay path; re-add
+// a cfg-gated entry point if/when that lands.
 
 // ── Make utilities ───────────────────────────────────────────────────────────
 
@@ -942,15 +1020,22 @@ fn build() {
         download_libkrunfw_so(&libkrunfw_install);
     }
 
+    // Flush any privileged/dind blob left in OUT_DIR by a previous build
+    // before LibFixup walks the directory — see clean_stale_libkrunfw_variants
+    // for why this can't wait until the bundle step.
+    clean_stale_libkrunfw_variants(&libkrunfw_lib_dir);
+
     LibFixup::fix(&libkrunfw_lib_dir, "libkrunfw")
         .unwrap_or_else(|e| panic!("Failed to fix libkrunfw: {}", e));
 
-    // Optionally stage the "fat" libkrunfw next to the lean one for
-    // `boxlite run --privileged`. Driven by an env var so a normal
-    // build pulls only the lean blob (existing behaviour byte-identical),
-    // and dev users who built the privileged kernel via `make libkrunfw-privileged`
-    // opt in by exporting BOXLITE_LIBKRUNFW_PRIVILEGED_PATH before rebuilding.
-    // See privileged-configs/README.md.
+    // Optionally stage the privileged libkrunfw next to the lean one for
+    // `boxlite run --privileged`. Auto-detected from
+    // `<workspace>/target/privileged-kernel/lib64/libkrunfw-privileged.so.5`
+    // when `make libkrunfw-privileged` has been run; users who store the blob
+    // elsewhere (CI cache, sysroot) can override with the
+    // BOXLITE_LIBKRUNFW_PRIVILEGED_PATH env var. Skipped silently when neither
+    // applies so normal builds stay byte-identical to the lean-only path. See
+    // privileged-configs/README.md.
     stage_optional_privileged_blob(&libkrunfw_lib_dir);
 
     // Expose libkrunfw library directory for downstream bundling

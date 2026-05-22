@@ -247,9 +247,10 @@ test\:integration\:dind:
 #
 # Prereq: the libkrunfw-privileged blob must already be built locally
 # (`make libkrunfw-privileged` once, ~10–20 min kernel build, cached after).
-# This target staples it into the CLI by exporting BOXLITE_LIBKRUNFW_PRIVILEGED_PATH
-# before cargo rebuilds, so the embedded runtime carries both the lean and
-# the privileged libkrunfw blobs and dockerd-in-box runs against the right kernel.
+# libkrun-sys/build.rs auto-detects it at the canonical path written by that
+# target, so no env var is required for the standard layout. CI or packagers
+# that stage the blob outside the workspace can still set
+# BOXLITE_LIBKRUNFW_PRIVILEGED_PATH as an explicit override.
 #
 # Ignore-condition: set BOXLITE_SKIP_DIND_TEST=1 to skip the dind test only
 # (the rest of the CLI integration suite still runs). Use this on hosts that
@@ -262,8 +263,7 @@ test\:integration\:cli: $(if $(SETUP_DONE),,runtime\:debug)
 		echo "   Or skip just the dind test: BOXLITE_SKIP_DIND_TEST=1 make test:integration:cli" >&2; \
 		exit 1; \
 	fi
-	@export BOXLITE_LIBKRUNFW_PRIVILEGED_PATH="$$PWD/target/privileged-kernel/lib64/libkrunfw-privileged.so.5" && \
-	if command -v cargo-nextest >/dev/null 2>&1; then \
+	@if command -v cargo-nextest >/dev/null 2>&1; then \
 		cargo nextest run -p boxlite-cli --tests --profile vm --no-fail-fast \
 		$(NEXTEST_FILTER); \
 	else \

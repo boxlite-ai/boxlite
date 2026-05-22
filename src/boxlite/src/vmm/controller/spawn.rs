@@ -177,9 +177,9 @@ impl<'a> ShimSpawner<'a> {
                     return Err(BoxliteError::Engine(format!(
                         "--privileged requires a privileged-capable libkrunfw, but \
                          `libkrunfw-privileged.so.5` was not found in the embedded \
-                         runtime for box {}. Run `make libkrunfw-privileged` and \
-                         rebuild boxlite with `BOXLITE_LIBKRUNFW_PRIVILEGED_PATH` \
-                         set, then retry.",
+                         runtime for box {}. Run `make libkrunfw-privileged` (writes \
+                         the blob to the canonical path that libkrun-sys auto-detects) \
+                         and rebuild boxlite, then retry.",
                         self.box_id
                     )));
                 }
@@ -204,12 +204,13 @@ impl<'a> ShimSpawner<'a> {
         Ok(())
     }
 
-    /// Create `<box_dir>/libs/libkrunfw.so.5` as a symlink to the fat
-    /// libkrunfw blob shipped alongside the lean one. Returns the libs
-    /// dir if the fat blob was staged at build time; returns `Ok(None)`
-    /// when the embedded runtime has no `libkrunfw-privileged.so.5` (the
-    /// expected case unless someone ran `make libkrunfw-privileged` + rebuilt
-    /// boxlite with BOXLITE_LIBKRUNFW_PRIVILEGED_PATH set).
+    /// Create `<box_dir>/libs/libkrunfw.so.5` as a symlink to the privileged
+    /// libkrunfw blob shipped alongside the lean one. Returns the libs dir if
+    /// the privileged blob was staged at build time; returns `Ok(None)` when
+    /// the embedded runtime has no `libkrunfw-privileged.so.5` (the expected
+    /// case unless someone ran `make libkrunfw-privileged` and rebuilt boxlite
+    /// — libkrun-sys auto-detects the blob at the canonical path that target
+    /// writes, no env var required).
     ///
     /// The symlink is per-box and lives under the box's working
     /// directory, so it's torn down whenever boxlite cleans up the box

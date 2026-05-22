@@ -207,6 +207,45 @@ fn is_library_file(path: &Path) -> bool {
     false
 }
 
+/// Targeted sweep: removes `libkrunfw-*.so*` files from `runtime_dir` that
+/// don't exist in the fresh `source_dir`. Catches stale variants such as a
+/// pre-rename `libkrunfw-dind.so.5` carried over from earlier cargo runs.
+///
+/// Lean `libkrunfw.so*` files (no dash after `libkrunfw`) aren't variants and
+/// are left alone — only the variant family (`libkrunfw-<variant>.so*`) is
+/// pruned. Anything in `source_dir` is preserved untouched; we only delete
+/// entries in `runtime_dir` that no longer have a source counterpart.
+fn prune_stale_libkrunfw_variants(source_dir: &Path, runtime_dir: &Path) {
+    let source_variants: std::collections::HashSet<String> = fs::read_dir(source_dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|name| name.starts_with("libkrunfw-") && name.contains(".so"))
+        .collect();
+    let Ok(entries) = fs::read_dir(runtime_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let filename = entry.file_name().to_string_lossy().to_string();
+        if filename.starts_with("libkrunfw-")
+            && filename.contains(".so")
+            && !source_variants.contains(&filename)
+        {
+            match fs::remove_file(entry.path()) {
+                Ok(()) => println!(
+                    "cargo:warning=Removed stale bundled libkrunfw variant: {}",
+                    filename
+                ),
+                Err(e) => println!(
+                    "cargo:warning=Failed to remove stale bundled libkrunfw variant {}: {}",
+                    filename, e
+                ),
+            }
+        }
+    }
+}
+
 /// Auto-discovers and bundles all dependencies from -sys crates.
 ///
 /// Convention: Each -sys crate emits `cargo:{NAME}_BOXLITE_DEP=<path>`
@@ -240,7 +279,17 @@ fn bundle_boxlite_deps(runtime_dir: &Path) -> Vec<(String, PathBuf)> {
             );
 
             if source_path.is_dir() {
-                // Directory: copy library files
+                // Directory: copy library files. For libkrunfw specifically,
+                // prune stale variants from runtime_dir first — boxlite's
+                // OUT_DIR is persistent across cargo runs and copy_libs is
+                // additive (only writes; never deletes). Without this, a
+                // pre-rename `libkrunfw-dind.so.5` left over from a prior
+                // build session continues to be bundled into the embedded
+                // runtime indefinitely, even after the source dir stops
+                // producing it.
+                if name == "libkrunfw" {
+                    prune_stale_libkrunfw_variants(source_path, runtime_dir);
+                }
                 match copy_libs(source_path, runtime_dir) {
                     Ok(()) => {
                         collected.push((name, runtime_dir.to_path_buf()));

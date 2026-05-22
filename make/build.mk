@@ -38,14 +38,14 @@ build\:apps: _ensure-apps-deps
 #
 #     target/privileged-kernel/lib64/libkrunfw-privileged.so.5
 #
-# Wire-up: the libkrun-sys build.rs picks this blob up via the
-# BOXLITE_LIBKRUNFW_PRIVILEGED_PATH environment variable (set automatically by this
-# target when invoking downstream builds in the same shell). Without this
-# target ever being run, `--privileged` still applies the userspace
-# changes (cgroup rw + full caps) but the kernel stays lean, so bridge /
-# iptables-dependent features keep failing. With it run + the env var set,
-# the privileged blob is staged alongside the lean one and the runtime picks the
-# right blob per-box.
+# Wire-up: the libkrun-sys build.rs auto-detects this blob at the canonical
+# path above on the next cargo build — no env var required. (Set
+# BOXLITE_LIBKRUNFW_PRIVILEGED_PATH only when the blob lives outside the
+# workspace, e.g., a CI cache or sysroot.) Without this target ever being run,
+# `--privileged` still applies the userspace changes (cgroup rw + full caps)
+# but the kernel stays lean, so bridge / iptables-dependent features keep
+# failing. With it run, the privileged blob is staged alongside the lean one
+# and the runtime picks the right blob per-box.
 #
 # Heavy target (~10–20 min, downloads kernel source). Only run when actively
 # iterating on the privileged kernel feature; not in any other target's dep chain.

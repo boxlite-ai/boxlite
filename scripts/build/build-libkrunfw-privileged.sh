@@ -6,10 +6,11 @@
 #   2. Ensure the libkrunfw submodule is checked out
 #   3. Build the lean config + the privileged overlay → patched .config
 #   4. Run `make` inside vendor/libkrunfw to produce a kernel .so
-#   5. Rename SONAME to libkrunfw-privileged.so.5 and copy to target/privileged-kernel/lib64/
-#   6. Print the env var the caller should set so libkrun-sys/build.rs picks
-#      it up:
-#         export BOXLITE_LIBKRUNFW_PRIVILEGED_PATH=$(pwd)/target/privileged-kernel/lib64/libkrunfw-privileged.so.5
+#   5. Rename SONAME to libkrunfw-privileged.so.5 and copy to
+#      target/privileged-kernel/lib64/ — libkrun-sys/build.rs auto-detects this
+#      canonical path on the next `make runtime:debug` / `cargo build`. Set
+#      BOXLITE_LIBKRUNFW_PRIVILEGED_PATH only when the blob lives outside the
+#      workspace (e.g., CI cache, distro packaging).
 #
 # Why not download a prebuilt: the privileged kernel adds ~2 MB of network
 # subsystems on top of the lean kernel. Until upstream boxlite-ai/libkrunfw
@@ -107,9 +108,11 @@ echo ""
 echo "✅ Built privileged libkrunfw: $PRIVILEGED_BLOB"
 echo "   Size: $(du -h "$PRIVILEGED_BLOB" | cut -f1) (vs lean: $(du -h "$REAL_BLOB" 2>/dev/null | cut -f1 || echo '?'))"
 echo ""
-echo "To make boxlite use it, set this in your shell before rebuilding boxlite:"
+echo "Rebuild boxlite to embed it — libkrun-sys/build.rs auto-detects this path:"
 echo ""
-echo "   export BOXLITE_LIBKRUNFW_PRIVILEGED_PATH=$PRIVILEGED_BLOB"
 echo "   make cli"
 echo ""
 echo "Then \`boxlite run --privileged\` will load this kernel instead of the lean one."
+echo ""
+echo "(Set BOXLITE_LIBKRUNFW_PRIVILEGED_PATH only if the blob lives outside the"
+echo " workspace — e.g., CI cache, packaging sysroot.)"
