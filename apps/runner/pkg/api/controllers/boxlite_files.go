@@ -16,6 +16,12 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// Bulk-upload size caps. Tune by operator capacity.
+const (
+	bulkUploadMaxPathBytes = 4096           // 4 KiB per files[N].path part
+	bulkUploadMaxFileBytes = 256 << 20      // 256 MiB per files[N].file part
+)
+
 // BoxliteFileUpload streams a single file's raw bytes from the request
 // body into a path inside the box. The body is buffered to a host tmp
 // file first because the underlying SDK CopyInto takes a host path, not
@@ -246,10 +252,16 @@ func parseBulkUploadParts(reader *multipart.Reader) ([]stagedBulkUpload, []strin
 
 		switch {
 		case strings.HasSuffix(name, ".path"):
-			data, readErr := io.ReadAll(part)
+			data, readErr := io.ReadAll(io.LimitReader(part, bulkUploadMaxPathBytes+1))
 			part.Close()
 			if readErr != nil {
 				errs = append(errs, fmt.Sprintf("path[%s]: %v", idx, readErr))
+				rejected[idx] = true
+				continue
+			}
+			if len(data) > bulkUploadMaxPathBytes {
+				errs = append(errs, fmt.Sprintf("path[%s]: exceeds %d bytes", idx, bulkUploadMaxPathBytes))
+				rejected[idx] = true
 				continue
 			}
 			dest := string(data)
@@ -293,10 +305,16 @@ func stageBulkUploadPart(part *multipart.Part) (string, error) {
 		return "", fmt.Errorf("tmp: %w", err)
 	}
 	name := f.Name()
-	if _, err := io.Copy(f, part); err != nil {
+	n, err := io.Copy(f, io.LimitReader(part, bulkUploadMaxFileBytes+1))
+	if err != nil {
 		f.Close()
 		_ = os.Remove(name)
 		return "", fmt.Errorf("write: %w", err)
+	}
+	if n > bulkUploadMaxFileBytes {
+		f.Close()
+		_ = os.Remove(name)
+		return "", fmt.Errorf("exceeds %d bytes", bulkUploadMaxFileBytes)
 	}
 	if err := f.Close(); err != nil {
 		_ = os.Remove(name)

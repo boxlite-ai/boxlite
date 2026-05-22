@@ -187,6 +187,58 @@ func TestParseBulkUploadParts_FileBeforePathStillErrors(t *testing.T) {
 	}
 }
 
+// TestParseBulkUploadParts_PathExceedsCap asserts that a multi-KiB .path
+// part is rejected with the cap error rather than read into memory in
+// full — an unbounded io.ReadAll on the .path part is a DoS surface
+// (one large request could exhaust the runner's RAM).
+func TestParseBulkUploadParts_PathExceedsCap(t *testing.T) {
+	huge := strings.Repeat("x", bulkUploadMaxPathBytes+1)
+	body, ct := writeBulkUploadBody(t, []struct{ name, value string }{
+		{"files[0].path", huge},
+		{"files[0].file", "ignored"},
+	})
+
+	staged, errs := parseBulkUploadParts(readerFromMultipart(t, body, ct))
+	t.Cleanup(func() {
+		for _, s := range staged {
+			_ = os.Remove(s.Src)
+		}
+	})
+
+	if len(staged) != 0 {
+		t.Errorf("expected nothing staged when .path exceeds cap, got %v", staged)
+	}
+	if len(errs) != 1 || !strings.Contains(errs[0], "exceeds") {
+		t.Fatalf("expected 1 'exceeds' error for oversized .path, got %v", errs)
+	}
+}
+
+// TestParseBulkUploadParts_FileExceedsCap covers the per-file size cap
+// in stageBulkUploadPart — an unbounded io.Copy on a .file part is a
+// disk-exhaustion surface, multiplied by the number of files per
+// request.
+func TestParseBulkUploadParts_FileExceedsCap(t *testing.T) {
+	huge := strings.Repeat("y", bulkUploadMaxFileBytes+1)
+	body, ct := writeBulkUploadBody(t, []struct{ name, value string }{
+		{"files[0].path", "/tmp/large.bin"},
+		{"files[0].file", huge},
+	})
+
+	staged, errs := parseBulkUploadParts(readerFromMultipart(t, body, ct))
+	t.Cleanup(func() {
+		for _, s := range staged {
+			_ = os.Remove(s.Src)
+		}
+	})
+
+	if len(staged) != 0 {
+		t.Errorf("expected nothing staged when .file exceeds cap, got %v", staged)
+	}
+	if len(errs) != 1 || !strings.Contains(errs[0], "exceeds") {
+		t.Fatalf("expected 1 'exceeds' error for oversized .file, got %v", errs)
+	}
+}
+
 // runBulkUploadHandler routes the request through a real gin engine so
 // the multipart parser sees the request the same way it does in
 // production. Mirrors the pattern in boxlite_exec_test.go.
