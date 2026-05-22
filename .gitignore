@@ -197,3 +197,9 @@ sdks/go/libboxlite.dylib                 # 73 MB, prebuilt from upstream release
 sdks/go/boxlite-c-v*/                    # extracted prebuilt archive
 l2-*.png
 apps/infra-local/.logs/
+
+# Session test screenshots (Playwright runs)
+regions-*.png
+runners-*.png
+term-*.png
+test-*.png
