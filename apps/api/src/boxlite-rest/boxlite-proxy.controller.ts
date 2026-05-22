@@ -28,7 +28,6 @@ import {
   ApiConsumes,
   ApiBody,
   ApiResponse,
-  ApiExcludeEndpoint,
 } from '@nestjs/swagger'
 import {
   createProxyMiddleware,
@@ -62,7 +61,6 @@ export class BoxliteProxyController {
   ) {}
 
   @All(':boxId/exec')
-  @ApiExcludeEndpoint()
   async proxyExec(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
@@ -81,7 +79,6 @@ export class BoxliteProxyController {
   }
 
   @All(':boxId/executions/:execId/signal')
-  @ApiExcludeEndpoint()
   async proxyExecSignal(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
@@ -101,7 +98,6 @@ export class BoxliteProxyController {
   }
 
   @All(':boxId/executions/:execId/resize')
-  @ApiExcludeEndpoint()
   async proxyExecResize(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
@@ -312,7 +308,6 @@ export class BoxliteProxyController {
   }
 
   @All(':boxId/metrics')
-  @ApiExcludeEndpoint()
   async proxyMetrics(
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,

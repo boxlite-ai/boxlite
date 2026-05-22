@@ -19,7 +19,7 @@ import {
   NotFoundException,
   Res,
 } from '@nestjs/common'
-import { ApiTags, ApiBearerAuth, ApiParam } from '@nestjs/swagger'
+import { ApiTags, ApiBearerAuth } from '@nestjs/swagger'
 import { Response } from 'express'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { OrganizationResourceActionGuard } from '../organization/guards/organization-resource-action.guard'
@@ -41,12 +41,6 @@ import { AuditTarget } from '../audit/enums/audit-target.enum'
 @Controller('v1/:prefix/boxes')
 @UseGuards(CombinedAuthGuard, OrganizationResourceActionGuard)
 @ApiBearerAuth()
-@ApiParam({
-  name: 'prefix',
-  required: true,
-  description: 'API version prefix routed to the runner (e.g. v0, v1).',
-  schema: { type: 'string' },
-})
 export class BoxliteBoxController {
   private readonly logger = new Logger(BoxliteBoxController.name)
 

@@ -28,10 +28,9 @@ type BoxLiteRESTAPI interface {
 	BoxliteBoxControllerCreateBox Method for BoxliteBoxControllerCreateBox
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param prefix API version prefix routed to the runner (e.g. v0, v1).
 	@return BoxLiteRESTAPIBoxliteBoxControllerCreateBoxRequest
 	*/
-	BoxliteBoxControllerCreateBox(ctx context.Context, prefix string) BoxLiteRESTAPIBoxliteBoxControllerCreateBoxRequest
+	BoxliteBoxControllerCreateBox(ctx context.Context) BoxLiteRESTAPIBoxliteBoxControllerCreateBoxRequest
 
 	// BoxliteBoxControllerCreateBoxExecute executes the request
 	BoxliteBoxControllerCreateBoxExecute(r BoxLiteRESTAPIBoxliteBoxControllerCreateBoxRequest) (*http.Response, error)
@@ -41,10 +40,9 @@ type BoxLiteRESTAPI interface {
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@param boxId
-	@param prefix API version prefix routed to the runner (e.g. v0, v1).
 	@return BoxLiteRESTAPIBoxliteBoxControllerGetBoxRequest
 	*/
-	BoxliteBoxControllerGetBox(ctx context.Context, boxId string, prefix string) BoxLiteRESTAPIBoxliteBoxControllerGetBoxRequest
+	BoxliteBoxControllerGetBox(ctx context.Context, boxId string) BoxLiteRESTAPIBoxliteBoxControllerGetBoxRequest
 
 	// BoxliteBoxControllerGetBoxExecute executes the request
 	BoxliteBoxControllerGetBoxExecute(r BoxLiteRESTAPIBoxliteBoxControllerGetBoxRequest) (*http.Response, error)
@@ -54,10 +52,9 @@ type BoxLiteRESTAPI interface {
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@param boxId
-	@param prefix API version prefix routed to the runner (e.g. v0, v1).
 	@return BoxLiteRESTAPIBoxliteBoxControllerHeadBoxRequest
 	*/
-	BoxliteBoxControllerHeadBox(ctx context.Context, boxId string, prefix string) BoxLiteRESTAPIBoxliteBoxControllerHeadBoxRequest
+	BoxliteBoxControllerHeadBox(ctx context.Context, boxId string) BoxLiteRESTAPIBoxliteBoxControllerHeadBoxRequest
 
 	// BoxliteBoxControllerHeadBoxExecute executes the request
 	BoxliteBoxControllerHeadBoxExecute(r BoxLiteRESTAPIBoxliteBoxControllerHeadBoxRequest) (*http.Response, error)
@@ -66,10 +63,9 @@ type BoxLiteRESTAPI interface {
 	BoxliteBoxControllerListBoxes Method for BoxliteBoxControllerListBoxes
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param prefix API version prefix routed to the runner (e.g. v0, v1).
 	@return BoxLiteRESTAPIBoxliteBoxControllerListBoxesRequest
 	*/
-	BoxliteBoxControllerListBoxes(ctx context.Context, prefix string) BoxLiteRESTAPIBoxliteBoxControllerListBoxesRequest
+	BoxliteBoxControllerListBoxes(ctx context.Context) BoxLiteRESTAPIBoxliteBoxControllerListBoxesRequest
 
 	// BoxliteBoxControllerListBoxesExecute executes the request
 	BoxliteBoxControllerListBoxesExecute(r BoxLiteRESTAPIBoxliteBoxControllerListBoxesRequest) (*http.Response, error)
@@ -79,10 +75,9 @@ type BoxLiteRESTAPI interface {
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@param boxId
-	@param prefix API version prefix routed to the runner (e.g. v0, v1).
 	@return BoxLiteRESTAPIBoxliteBoxControllerRemoveBoxRequest
 	*/
-	BoxliteBoxControllerRemoveBox(ctx context.Context, boxId string, prefix string) BoxLiteRESTAPIBoxliteBoxControllerRemoveBoxRequest
+	BoxliteBoxControllerRemoveBox(ctx context.Context, boxId string) BoxLiteRESTAPIBoxliteBoxControllerRemoveBoxRequest
 
 	// BoxliteBoxControllerRemoveBoxExecute executes the request
 	BoxliteBoxControllerRemoveBoxExecute(r BoxLiteRESTAPIBoxliteBoxControllerRemoveBoxRequest) (*http.Response, error)
@@ -92,10 +87,9 @@ type BoxLiteRESTAPI interface {
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@param boxId
-	@param prefix API version prefix routed to the runner (e.g. v0, v1).
 	@return BoxLiteRESTAPIBoxliteBoxControllerStartBoxRequest
 	*/
-	BoxliteBoxControllerStartBox(ctx context.Context, boxId string, prefix string) BoxLiteRESTAPIBoxliteBoxControllerStartBoxRequest
+	BoxliteBoxControllerStartBox(ctx context.Context, boxId string) BoxLiteRESTAPIBoxliteBoxControllerStartBoxRequest
 
 	// BoxliteBoxControllerStartBoxExecute executes the request
 	BoxliteBoxControllerStartBoxExecute(r BoxLiteRESTAPIBoxliteBoxControllerStartBoxRequest) (*http.Response, error)
@@ -105,10 +99,9 @@ type BoxLiteRESTAPI interface {
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@param boxId
-	@param prefix API version prefix routed to the runner (e.g. v0, v1).
 	@return BoxLiteRESTAPIBoxliteBoxControllerStopBoxRequest
 	*/
-	BoxliteBoxControllerStopBox(ctx context.Context, boxId string, prefix string) BoxLiteRESTAPIBoxliteBoxControllerStopBoxRequest
+	BoxliteBoxControllerStopBox(ctx context.Context, boxId string) BoxLiteRESTAPIBoxliteBoxControllerStopBoxRequest
 
 	// BoxliteBoxControllerStopBoxExecute executes the request
 	BoxliteBoxControllerStopBoxExecute(r BoxLiteRESTAPIBoxliteBoxControllerStopBoxRequest) (*http.Response, error)
@@ -136,6 +129,45 @@ type BoxLiteRESTAPI interface {
 	BoxliteMeControllerGetMeExecute(r BoxLiteRESTAPIBoxliteMeControllerGetMeRequest) (*http.Response, error)
 
 	/*
+	BoxliteProxyControllerProxyExecDelete Method for BoxliteProxyControllerProxyExecDelete
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@param boxId
+	@param prefix API version prefix routed to the runner (e.g. v0, v1).
+	@return BoxLiteRESTAPIBoxliteProxyControllerProxyExecDeleteRequest
+	*/
+	BoxliteProxyControllerProxyExecDelete(ctx context.Context, boxId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyExecDeleteRequest
+
+	// BoxliteProxyControllerProxyExecDeleteExecute executes the request
+	BoxliteProxyControllerProxyExecDeleteExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyExecDeleteRequest) (*http.Response, error)
+
+	/*
+	BoxliteProxyControllerProxyExecGet Method for BoxliteProxyControllerProxyExecGet
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@param boxId
+	@param prefix API version prefix routed to the runner (e.g. v0, v1).
+	@return BoxLiteRESTAPIBoxliteProxyControllerProxyExecGetRequest
+	*/
+	BoxliteProxyControllerProxyExecGet(ctx context.Context, boxId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyExecGetRequest
+
+	// BoxliteProxyControllerProxyExecGetExecute executes the request
+	BoxliteProxyControllerProxyExecGetExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyExecGetRequest) (*http.Response, error)
+
+	/*
+	BoxliteProxyControllerProxyExecHead Method for BoxliteProxyControllerProxyExecHead
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@param boxId
+	@param prefix API version prefix routed to the runner (e.g. v0, v1).
+	@return BoxLiteRESTAPIBoxliteProxyControllerProxyExecHeadRequest
+	*/
+	BoxliteProxyControllerProxyExecHead(ctx context.Context, boxId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyExecHeadRequest
+
+	// BoxliteProxyControllerProxyExecHeadExecute executes the request
+	BoxliteProxyControllerProxyExecHeadExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyExecHeadRequest) (*http.Response, error)
+
+	/*
 	BoxliteProxyControllerProxyExecKill Method for BoxliteProxyControllerProxyExecKill
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
@@ -150,6 +182,254 @@ type BoxLiteRESTAPI interface {
 	BoxliteProxyControllerProxyExecKillExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyExecKillRequest) (*http.Response, error)
 
 	/*
+	BoxliteProxyControllerProxyExecOptions Method for BoxliteProxyControllerProxyExecOptions
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@param boxId
+	@param prefix API version prefix routed to the runner (e.g. v0, v1).
+	@return BoxLiteRESTAPIBoxliteProxyControllerProxyExecOptionsRequest
+	*/
+	BoxliteProxyControllerProxyExecOptions(ctx context.Context, boxId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyExecOptionsRequest
+
+	// BoxliteProxyControllerProxyExecOptionsExecute executes the request
+	BoxliteProxyControllerProxyExecOptionsExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyExecOptionsRequest) (*http.Response, error)
+
+	/*
+	BoxliteProxyControllerProxyExecPatch Method for BoxliteProxyControllerProxyExecPatch
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@param boxId
+	@param prefix API version prefix routed to the runner (e.g. v0, v1).
+	@return BoxLiteRESTAPIBoxliteProxyControllerProxyExecPatchRequest
+	*/
+	BoxliteProxyControllerProxyExecPatch(ctx context.Context, boxId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyExecPatchRequest
+
+	// BoxliteProxyControllerProxyExecPatchExecute executes the request
+	BoxliteProxyControllerProxyExecPatchExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyExecPatchRequest) (*http.Response, error)
+
+	/*
+	BoxliteProxyControllerProxyExecPost Method for BoxliteProxyControllerProxyExecPost
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@param boxId
+	@param prefix API version prefix routed to the runner (e.g. v0, v1).
+	@return BoxLiteRESTAPIBoxliteProxyControllerProxyExecPostRequest
+	*/
+	BoxliteProxyControllerProxyExecPost(ctx context.Context, boxId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyExecPostRequest
+
+	// BoxliteProxyControllerProxyExecPostExecute executes the request
+	BoxliteProxyControllerProxyExecPostExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyExecPostRequest) (*http.Response, error)
+
+	/*
+	BoxliteProxyControllerProxyExecPut Method for BoxliteProxyControllerProxyExecPut
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@param boxId
+	@param prefix API version prefix routed to the runner (e.g. v0, v1).
+	@return BoxLiteRESTAPIBoxliteProxyControllerProxyExecPutRequest
+	*/
+	BoxliteProxyControllerProxyExecPut(ctx context.Context, boxId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyExecPutRequest
+
+	// BoxliteProxyControllerProxyExecPutExecute executes the request
+	BoxliteProxyControllerProxyExecPutExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyExecPutRequest) (*http.Response, error)
+
+	/*
+	BoxliteProxyControllerProxyExecResizeDelete Method for BoxliteProxyControllerProxyExecResizeDelete
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@param boxId
+	@param execId
+	@param prefix API version prefix routed to the runner (e.g. v0, v1).
+	@return BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizeDeleteRequest
+	*/
+	BoxliteProxyControllerProxyExecResizeDelete(ctx context.Context, boxId string, execId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizeDeleteRequest
+
+	// BoxliteProxyControllerProxyExecResizeDeleteExecute executes the request
+	BoxliteProxyControllerProxyExecResizeDeleteExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizeDeleteRequest) (*http.Response, error)
+
+	/*
+	BoxliteProxyControllerProxyExecResizeGet Method for BoxliteProxyControllerProxyExecResizeGet
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@param boxId
+	@param execId
+	@param prefix API version prefix routed to the runner (e.g. v0, v1).
+	@return BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizeGetRequest
+	*/
+	BoxliteProxyControllerProxyExecResizeGet(ctx context.Context, boxId string, execId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizeGetRequest
+
+	// BoxliteProxyControllerProxyExecResizeGetExecute executes the request
+	BoxliteProxyControllerProxyExecResizeGetExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizeGetRequest) (*http.Response, error)
+
+	/*
+	BoxliteProxyControllerProxyExecResizeHead Method for BoxliteProxyControllerProxyExecResizeHead
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@param boxId
+	@param execId
+	@param prefix API version prefix routed to the runner (e.g. v0, v1).
+	@return BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizeHeadRequest
+	*/
+	BoxliteProxyControllerProxyExecResizeHead(ctx context.Context, boxId string, execId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizeHeadRequest
+
+	// BoxliteProxyControllerProxyExecResizeHeadExecute executes the request
+	BoxliteProxyControllerProxyExecResizeHeadExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizeHeadRequest) (*http.Response, error)
+
+	/*
+	BoxliteProxyControllerProxyExecResizeOptions Method for BoxliteProxyControllerProxyExecResizeOptions
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@param boxId
+	@param execId
+	@param prefix API version prefix routed to the runner (e.g. v0, v1).
+	@return BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizeOptionsRequest
+	*/
+	BoxliteProxyControllerProxyExecResizeOptions(ctx context.Context, boxId string, execId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizeOptionsRequest
+
+	// BoxliteProxyControllerProxyExecResizeOptionsExecute executes the request
+	BoxliteProxyControllerProxyExecResizeOptionsExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizeOptionsRequest) (*http.Response, error)
+
+	/*
+	BoxliteProxyControllerProxyExecResizePatch Method for BoxliteProxyControllerProxyExecResizePatch
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@param boxId
+	@param execId
+	@param prefix API version prefix routed to the runner (e.g. v0, v1).
+	@return BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizePatchRequest
+	*/
+	BoxliteProxyControllerProxyExecResizePatch(ctx context.Context, boxId string, execId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizePatchRequest
+
+	// BoxliteProxyControllerProxyExecResizePatchExecute executes the request
+	BoxliteProxyControllerProxyExecResizePatchExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizePatchRequest) (*http.Response, error)
+
+	/*
+	BoxliteProxyControllerProxyExecResizePost Method for BoxliteProxyControllerProxyExecResizePost
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@param boxId
+	@param execId
+	@param prefix API version prefix routed to the runner (e.g. v0, v1).
+	@return BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizePostRequest
+	*/
+	BoxliteProxyControllerProxyExecResizePost(ctx context.Context, boxId string, execId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizePostRequest
+
+	// BoxliteProxyControllerProxyExecResizePostExecute executes the request
+	BoxliteProxyControllerProxyExecResizePostExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizePostRequest) (*http.Response, error)
+
+	/*
+	BoxliteProxyControllerProxyExecResizePut Method for BoxliteProxyControllerProxyExecResizePut
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@param boxId
+	@param execId
+	@param prefix API version prefix routed to the runner (e.g. v0, v1).
+	@return BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizePutRequest
+	*/
+	BoxliteProxyControllerProxyExecResizePut(ctx context.Context, boxId string, execId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizePutRequest
+
+	// BoxliteProxyControllerProxyExecResizePutExecute executes the request
+	BoxliteProxyControllerProxyExecResizePutExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizePutRequest) (*http.Response, error)
+
+	/*
+	BoxliteProxyControllerProxyExecSignalDelete Method for BoxliteProxyControllerProxyExecSignalDelete
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@param boxId
+	@param execId
+	@param prefix API version prefix routed to the runner (e.g. v0, v1).
+	@return BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalDeleteRequest
+	*/
+	BoxliteProxyControllerProxyExecSignalDelete(ctx context.Context, boxId string, execId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalDeleteRequest
+
+	// BoxliteProxyControllerProxyExecSignalDeleteExecute executes the request
+	BoxliteProxyControllerProxyExecSignalDeleteExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalDeleteRequest) (*http.Response, error)
+
+	/*
+	BoxliteProxyControllerProxyExecSignalGet Method for BoxliteProxyControllerProxyExecSignalGet
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@param boxId
+	@param execId
+	@param prefix API version prefix routed to the runner (e.g. v0, v1).
+	@return BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalGetRequest
+	*/
+	BoxliteProxyControllerProxyExecSignalGet(ctx context.Context, boxId string, execId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalGetRequest
+
+	// BoxliteProxyControllerProxyExecSignalGetExecute executes the request
+	BoxliteProxyControllerProxyExecSignalGetExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalGetRequest) (*http.Response, error)
+
+	/*
+	BoxliteProxyControllerProxyExecSignalHead Method for BoxliteProxyControllerProxyExecSignalHead
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@param boxId
+	@param execId
+	@param prefix API version prefix routed to the runner (e.g. v0, v1).
+	@return BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalHeadRequest
+	*/
+	BoxliteProxyControllerProxyExecSignalHead(ctx context.Context, boxId string, execId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalHeadRequest
+
+	// BoxliteProxyControllerProxyExecSignalHeadExecute executes the request
+	BoxliteProxyControllerProxyExecSignalHeadExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalHeadRequest) (*http.Response, error)
+
+	/*
+	BoxliteProxyControllerProxyExecSignalOptions Method for BoxliteProxyControllerProxyExecSignalOptions
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@param boxId
+	@param execId
+	@param prefix API version prefix routed to the runner (e.g. v0, v1).
+	@return BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalOptionsRequest
+	*/
+	BoxliteProxyControllerProxyExecSignalOptions(ctx context.Context, boxId string, execId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalOptionsRequest
+
+	// BoxliteProxyControllerProxyExecSignalOptionsExecute executes the request
+	BoxliteProxyControllerProxyExecSignalOptionsExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalOptionsRequest) (*http.Response, error)
+
+	/*
+	BoxliteProxyControllerProxyExecSignalPatch Method for BoxliteProxyControllerProxyExecSignalPatch
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@param boxId
+	@param execId
+	@param prefix API version prefix routed to the runner (e.g. v0, v1).
+	@return BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalPatchRequest
+	*/
+	BoxliteProxyControllerProxyExecSignalPatch(ctx context.Context, boxId string, execId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalPatchRequest
+
+	// BoxliteProxyControllerProxyExecSignalPatchExecute executes the request
+	BoxliteProxyControllerProxyExecSignalPatchExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalPatchRequest) (*http.Response, error)
+
+	/*
+	BoxliteProxyControllerProxyExecSignalPost Method for BoxliteProxyControllerProxyExecSignalPost
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@param boxId
+	@param execId
+	@param prefix API version prefix routed to the runner (e.g. v0, v1).
+	@return BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalPostRequest
+	*/
+	BoxliteProxyControllerProxyExecSignalPost(ctx context.Context, boxId string, execId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalPostRequest
+
+	// BoxliteProxyControllerProxyExecSignalPostExecute executes the request
+	BoxliteProxyControllerProxyExecSignalPostExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalPostRequest) (*http.Response, error)
+
+	/*
+	BoxliteProxyControllerProxyExecSignalPut Method for BoxliteProxyControllerProxyExecSignalPut
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@param boxId
+	@param execId
+	@param prefix API version prefix routed to the runner (e.g. v0, v1).
+	@return BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalPutRequest
+	*/
+	BoxliteProxyControllerProxyExecSignalPut(ctx context.Context, boxId string, execId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalPutRequest
+
+	// BoxliteProxyControllerProxyExecSignalPutExecute executes the request
+	BoxliteProxyControllerProxyExecSignalPutExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalPutRequest) (*http.Response, error)
+
+	/*
 	BoxliteProxyControllerProxyExecStatus Method for BoxliteProxyControllerProxyExecStatus
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
@@ -162,6 +442,97 @@ type BoxLiteRESTAPI interface {
 
 	// BoxliteProxyControllerProxyExecStatusExecute executes the request
 	BoxliteProxyControllerProxyExecStatusExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyExecStatusRequest) (*http.Response, error)
+
+	/*
+	BoxliteProxyControllerProxyMetricsDelete Method for BoxliteProxyControllerProxyMetricsDelete
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@param boxId
+	@param prefix API version prefix routed to the runner (e.g. v0, v1).
+	@return BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsDeleteRequest
+	*/
+	BoxliteProxyControllerProxyMetricsDelete(ctx context.Context, boxId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsDeleteRequest
+
+	// BoxliteProxyControllerProxyMetricsDeleteExecute executes the request
+	BoxliteProxyControllerProxyMetricsDeleteExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsDeleteRequest) (*http.Response, error)
+
+	/*
+	BoxliteProxyControllerProxyMetricsGet Method for BoxliteProxyControllerProxyMetricsGet
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@param boxId
+	@param prefix API version prefix routed to the runner (e.g. v0, v1).
+	@return BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsGetRequest
+	*/
+	BoxliteProxyControllerProxyMetricsGet(ctx context.Context, boxId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsGetRequest
+
+	// BoxliteProxyControllerProxyMetricsGetExecute executes the request
+	BoxliteProxyControllerProxyMetricsGetExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsGetRequest) (*http.Response, error)
+
+	/*
+	BoxliteProxyControllerProxyMetricsHead Method for BoxliteProxyControllerProxyMetricsHead
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@param boxId
+	@param prefix API version prefix routed to the runner (e.g. v0, v1).
+	@return BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsHeadRequest
+	*/
+	BoxliteProxyControllerProxyMetricsHead(ctx context.Context, boxId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsHeadRequest
+
+	// BoxliteProxyControllerProxyMetricsHeadExecute executes the request
+	BoxliteProxyControllerProxyMetricsHeadExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsHeadRequest) (*http.Response, error)
+
+	/*
+	BoxliteProxyControllerProxyMetricsOptions Method for BoxliteProxyControllerProxyMetricsOptions
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@param boxId
+	@param prefix API version prefix routed to the runner (e.g. v0, v1).
+	@return BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsOptionsRequest
+	*/
+	BoxliteProxyControllerProxyMetricsOptions(ctx context.Context, boxId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsOptionsRequest
+
+	// BoxliteProxyControllerProxyMetricsOptionsExecute executes the request
+	BoxliteProxyControllerProxyMetricsOptionsExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsOptionsRequest) (*http.Response, error)
+
+	/*
+	BoxliteProxyControllerProxyMetricsPatch Method for BoxliteProxyControllerProxyMetricsPatch
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@param boxId
+	@param prefix API version prefix routed to the runner (e.g. v0, v1).
+	@return BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsPatchRequest
+	*/
+	BoxliteProxyControllerProxyMetricsPatch(ctx context.Context, boxId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsPatchRequest
+
+	// BoxliteProxyControllerProxyMetricsPatchExecute executes the request
+	BoxliteProxyControllerProxyMetricsPatchExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsPatchRequest) (*http.Response, error)
+
+	/*
+	BoxliteProxyControllerProxyMetricsPost Method for BoxliteProxyControllerProxyMetricsPost
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@param boxId
+	@param prefix API version prefix routed to the runner (e.g. v0, v1).
+	@return BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsPostRequest
+	*/
+	BoxliteProxyControllerProxyMetricsPost(ctx context.Context, boxId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsPostRequest
+
+	// BoxliteProxyControllerProxyMetricsPostExecute executes the request
+	BoxliteProxyControllerProxyMetricsPostExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsPostRequest) (*http.Response, error)
+
+	/*
+	BoxliteProxyControllerProxyMetricsPut Method for BoxliteProxyControllerProxyMetricsPut
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@param boxId
+	@param prefix API version prefix routed to the runner (e.g. v0, v1).
+	@return BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsPutRequest
+	*/
+	BoxliteProxyControllerProxyMetricsPut(ctx context.Context, boxId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsPutRequest
+
+	// BoxliteProxyControllerProxyMetricsPutExecute executes the request
+	BoxliteProxyControllerProxyMetricsPutExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsPutRequest) (*http.Response, error)
 
 	/*
 	BulkDownloadBoxFiles Download multiple files from a box in one request
@@ -230,7 +601,6 @@ type BoxLiteRESTAPIService service
 type BoxLiteRESTAPIBoxliteBoxControllerCreateBoxRequest struct {
 	ctx context.Context
 	ApiService BoxLiteRESTAPI
-	prefix string
 	body *map[string]interface{}
 }
 
@@ -247,14 +617,12 @@ func (r BoxLiteRESTAPIBoxliteBoxControllerCreateBoxRequest) Execute() (*http.Res
 BoxliteBoxControllerCreateBox Method for BoxliteBoxControllerCreateBox
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param prefix API version prefix routed to the runner (e.g. v0, v1).
  @return BoxLiteRESTAPIBoxliteBoxControllerCreateBoxRequest
 */
-func (a *BoxLiteRESTAPIService) BoxliteBoxControllerCreateBox(ctx context.Context, prefix string) BoxLiteRESTAPIBoxliteBoxControllerCreateBoxRequest {
+func (a *BoxLiteRESTAPIService) BoxliteBoxControllerCreateBox(ctx context.Context) BoxLiteRESTAPIBoxliteBoxControllerCreateBoxRequest {
 	return BoxLiteRESTAPIBoxliteBoxControllerCreateBoxRequest{
 		ApiService: a,
 		ctx: ctx,
-		prefix: prefix,
 	}
 }
 
@@ -272,7 +640,6 @@ func (a *BoxLiteRESTAPIService) BoxliteBoxControllerCreateBoxExecute(r BoxLiteRE
 	}
 
 	localVarPath := localBasePath + "/v1/{prefix}/boxes"
-	localVarPath = strings.Replace(localVarPath, "{"+"prefix"+"}", url.PathEscape(parameterValueToString(r.prefix, "prefix")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -332,7 +699,6 @@ type BoxLiteRESTAPIBoxliteBoxControllerGetBoxRequest struct {
 	ctx context.Context
 	ApiService BoxLiteRESTAPI
 	boxId string
-	prefix string
 }
 
 func (r BoxLiteRESTAPIBoxliteBoxControllerGetBoxRequest) Execute() (*http.Response, error) {
@@ -344,15 +710,13 @@ BoxliteBoxControllerGetBox Method for BoxliteBoxControllerGetBox
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
  @param boxId
- @param prefix API version prefix routed to the runner (e.g. v0, v1).
  @return BoxLiteRESTAPIBoxliteBoxControllerGetBoxRequest
 */
-func (a *BoxLiteRESTAPIService) BoxliteBoxControllerGetBox(ctx context.Context, boxId string, prefix string) BoxLiteRESTAPIBoxliteBoxControllerGetBoxRequest {
+func (a *BoxLiteRESTAPIService) BoxliteBoxControllerGetBox(ctx context.Context, boxId string) BoxLiteRESTAPIBoxliteBoxControllerGetBoxRequest {
 	return BoxLiteRESTAPIBoxliteBoxControllerGetBoxRequest{
 		ApiService: a,
 		ctx: ctx,
 		boxId: boxId,
-		prefix: prefix,
 	}
 }
 
@@ -371,7 +735,6 @@ func (a *BoxLiteRESTAPIService) BoxliteBoxControllerGetBoxExecute(r BoxLiteRESTA
 
 	localVarPath := localBasePath + "/v1/{prefix}/boxes/{boxId}"
 	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
-	localVarPath = strings.Replace(localVarPath, "{"+"prefix"+"}", url.PathEscape(parameterValueToString(r.prefix, "prefix")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -426,7 +789,6 @@ type BoxLiteRESTAPIBoxliteBoxControllerHeadBoxRequest struct {
 	ctx context.Context
 	ApiService BoxLiteRESTAPI
 	boxId string
-	prefix string
 }
 
 func (r BoxLiteRESTAPIBoxliteBoxControllerHeadBoxRequest) Execute() (*http.Response, error) {
@@ -438,15 +800,13 @@ BoxliteBoxControllerHeadBox Method for BoxliteBoxControllerHeadBox
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
  @param boxId
- @param prefix API version prefix routed to the runner (e.g. v0, v1).
  @return BoxLiteRESTAPIBoxliteBoxControllerHeadBoxRequest
 */
-func (a *BoxLiteRESTAPIService) BoxliteBoxControllerHeadBox(ctx context.Context, boxId string, prefix string) BoxLiteRESTAPIBoxliteBoxControllerHeadBoxRequest {
+func (a *BoxLiteRESTAPIService) BoxliteBoxControllerHeadBox(ctx context.Context, boxId string) BoxLiteRESTAPIBoxliteBoxControllerHeadBoxRequest {
 	return BoxLiteRESTAPIBoxliteBoxControllerHeadBoxRequest{
 		ApiService: a,
 		ctx: ctx,
 		boxId: boxId,
-		prefix: prefix,
 	}
 }
 
@@ -465,7 +825,6 @@ func (a *BoxLiteRESTAPIService) BoxliteBoxControllerHeadBoxExecute(r BoxLiteREST
 
 	localVarPath := localBasePath + "/v1/{prefix}/boxes/{boxId}"
 	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
-	localVarPath = strings.Replace(localVarPath, "{"+"prefix"+"}", url.PathEscape(parameterValueToString(r.prefix, "prefix")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -520,7 +879,6 @@ type BoxLiteRESTAPIBoxliteBoxControllerListBoxesRequest struct {
 	ctx context.Context
 	ApiService BoxLiteRESTAPI
 	pageSize *string
-	prefix string
 }
 
 func (r BoxLiteRESTAPIBoxliteBoxControllerListBoxesRequest) PageSize(pageSize string) BoxLiteRESTAPIBoxliteBoxControllerListBoxesRequest {
@@ -536,14 +894,12 @@ func (r BoxLiteRESTAPIBoxliteBoxControllerListBoxesRequest) Execute() (*http.Res
 BoxliteBoxControllerListBoxes Method for BoxliteBoxControllerListBoxes
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
- @param prefix API version prefix routed to the runner (e.g. v0, v1).
  @return BoxLiteRESTAPIBoxliteBoxControllerListBoxesRequest
 */
-func (a *BoxLiteRESTAPIService) BoxliteBoxControllerListBoxes(ctx context.Context, prefix string) BoxLiteRESTAPIBoxliteBoxControllerListBoxesRequest {
+func (a *BoxLiteRESTAPIService) BoxliteBoxControllerListBoxes(ctx context.Context) BoxLiteRESTAPIBoxliteBoxControllerListBoxesRequest {
 	return BoxLiteRESTAPIBoxliteBoxControllerListBoxesRequest{
 		ApiService: a,
 		ctx: ctx,
-		prefix: prefix,
 	}
 }
 
@@ -561,7 +917,6 @@ func (a *BoxLiteRESTAPIService) BoxliteBoxControllerListBoxesExecute(r BoxLiteRE
 	}
 
 	localVarPath := localBasePath + "/v1/{prefix}/boxes"
-	localVarPath = strings.Replace(localVarPath, "{"+"prefix"+"}", url.PathEscape(parameterValueToString(r.prefix, "prefix")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -620,7 +975,6 @@ type BoxLiteRESTAPIBoxliteBoxControllerRemoveBoxRequest struct {
 	ctx context.Context
 	ApiService BoxLiteRESTAPI
 	boxId string
-	prefix string
 }
 
 func (r BoxLiteRESTAPIBoxliteBoxControllerRemoveBoxRequest) Execute() (*http.Response, error) {
@@ -632,15 +986,13 @@ BoxliteBoxControllerRemoveBox Method for BoxliteBoxControllerRemoveBox
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
  @param boxId
- @param prefix API version prefix routed to the runner (e.g. v0, v1).
  @return BoxLiteRESTAPIBoxliteBoxControllerRemoveBoxRequest
 */
-func (a *BoxLiteRESTAPIService) BoxliteBoxControllerRemoveBox(ctx context.Context, boxId string, prefix string) BoxLiteRESTAPIBoxliteBoxControllerRemoveBoxRequest {
+func (a *BoxLiteRESTAPIService) BoxliteBoxControllerRemoveBox(ctx context.Context, boxId string) BoxLiteRESTAPIBoxliteBoxControllerRemoveBoxRequest {
 	return BoxLiteRESTAPIBoxliteBoxControllerRemoveBoxRequest{
 		ApiService: a,
 		ctx: ctx,
 		boxId: boxId,
-		prefix: prefix,
 	}
 }
 
@@ -659,7 +1011,6 @@ func (a *BoxLiteRESTAPIService) BoxliteBoxControllerRemoveBoxExecute(r BoxLiteRE
 
 	localVarPath := localBasePath + "/v1/{prefix}/boxes/{boxId}"
 	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
-	localVarPath = strings.Replace(localVarPath, "{"+"prefix"+"}", url.PathEscape(parameterValueToString(r.prefix, "prefix")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -714,7 +1065,6 @@ type BoxLiteRESTAPIBoxliteBoxControllerStartBoxRequest struct {
 	ctx context.Context
 	ApiService BoxLiteRESTAPI
 	boxId string
-	prefix string
 }
 
 func (r BoxLiteRESTAPIBoxliteBoxControllerStartBoxRequest) Execute() (*http.Response, error) {
@@ -726,15 +1076,13 @@ BoxliteBoxControllerStartBox Method for BoxliteBoxControllerStartBox
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
  @param boxId
- @param prefix API version prefix routed to the runner (e.g. v0, v1).
  @return BoxLiteRESTAPIBoxliteBoxControllerStartBoxRequest
 */
-func (a *BoxLiteRESTAPIService) BoxliteBoxControllerStartBox(ctx context.Context, boxId string, prefix string) BoxLiteRESTAPIBoxliteBoxControllerStartBoxRequest {
+func (a *BoxLiteRESTAPIService) BoxliteBoxControllerStartBox(ctx context.Context, boxId string) BoxLiteRESTAPIBoxliteBoxControllerStartBoxRequest {
 	return BoxLiteRESTAPIBoxliteBoxControllerStartBoxRequest{
 		ApiService: a,
 		ctx: ctx,
 		boxId: boxId,
-		prefix: prefix,
 	}
 }
 
@@ -753,7 +1101,6 @@ func (a *BoxLiteRESTAPIService) BoxliteBoxControllerStartBoxExecute(r BoxLiteRES
 
 	localVarPath := localBasePath + "/v1/{prefix}/boxes/{boxId}/start"
 	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
-	localVarPath = strings.Replace(localVarPath, "{"+"prefix"+"}", url.PathEscape(parameterValueToString(r.prefix, "prefix")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -808,7 +1155,6 @@ type BoxLiteRESTAPIBoxliteBoxControllerStopBoxRequest struct {
 	ctx context.Context
 	ApiService BoxLiteRESTAPI
 	boxId string
-	prefix string
 }
 
 func (r BoxLiteRESTAPIBoxliteBoxControllerStopBoxRequest) Execute() (*http.Response, error) {
@@ -820,15 +1166,13 @@ BoxliteBoxControllerStopBox Method for BoxliteBoxControllerStopBox
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
  @param boxId
- @param prefix API version prefix routed to the runner (e.g. v0, v1).
  @return BoxLiteRESTAPIBoxliteBoxControllerStopBoxRequest
 */
-func (a *BoxLiteRESTAPIService) BoxliteBoxControllerStopBox(ctx context.Context, boxId string, prefix string) BoxLiteRESTAPIBoxliteBoxControllerStopBoxRequest {
+func (a *BoxLiteRESTAPIService) BoxliteBoxControllerStopBox(ctx context.Context, boxId string) BoxLiteRESTAPIBoxliteBoxControllerStopBoxRequest {
 	return BoxLiteRESTAPIBoxliteBoxControllerStopBoxRequest{
 		ApiService: a,
 		ctx: ctx,
 		boxId: boxId,
-		prefix: prefix,
 	}
 }
 
@@ -847,7 +1191,6 @@ func (a *BoxLiteRESTAPIService) BoxliteBoxControllerStopBoxExecute(r BoxLiteREST
 
 	localVarPath := localBasePath + "/v1/{prefix}/boxes/{boxId}/stop"
 	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
-	localVarPath = strings.Replace(localVarPath, "{"+"prefix"+"}", url.PathEscape(parameterValueToString(r.prefix, "prefix")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -1070,6 +1413,288 @@ func (a *BoxLiteRESTAPIService) BoxliteMeControllerGetMeExecute(r BoxLiteRESTAPI
 	return localVarHTTPResponse, nil
 }
 
+type BoxLiteRESTAPIBoxliteProxyControllerProxyExecDeleteRequest struct {
+	ctx context.Context
+	ApiService BoxLiteRESTAPI
+	boxId string
+	prefix string
+}
+
+func (r BoxLiteRESTAPIBoxliteProxyControllerProxyExecDeleteRequest) Execute() (*http.Response, error) {
+	return r.ApiService.BoxliteProxyControllerProxyExecDeleteExecute(r)
+}
+
+/*
+BoxliteProxyControllerProxyExecDelete Method for BoxliteProxyControllerProxyExecDelete
+
+ @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+ @param boxId
+ @param prefix API version prefix routed to the runner (e.g. v0, v1).
+ @return BoxLiteRESTAPIBoxliteProxyControllerProxyExecDeleteRequest
+*/
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyExecDelete(ctx context.Context, boxId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyExecDeleteRequest {
+	return BoxLiteRESTAPIBoxliteProxyControllerProxyExecDeleteRequest{
+		ApiService: a,
+		ctx: ctx,
+		boxId: boxId,
+		prefix: prefix,
+	}
+}
+
+// Execute executes the request
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyExecDeleteExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyExecDeleteRequest) (*http.Response, error) {
+	var (
+		localVarHTTPMethod   = http.MethodDelete
+		localVarPostBody     interface{}
+		formFiles            []formFile
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "BoxLiteRESTAPIService.BoxliteProxyControllerProxyExecDelete")
+	if err != nil {
+		return nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/v1/{prefix}/boxes/{boxId}/exec"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"prefix"+"}", url.PathEscape(parameterValueToString(r.prefix, "prefix")), -1)
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		return localVarHTTPResponse, newErr
+	}
+
+	return localVarHTTPResponse, nil
+}
+
+type BoxLiteRESTAPIBoxliteProxyControllerProxyExecGetRequest struct {
+	ctx context.Context
+	ApiService BoxLiteRESTAPI
+	boxId string
+	prefix string
+}
+
+func (r BoxLiteRESTAPIBoxliteProxyControllerProxyExecGetRequest) Execute() (*http.Response, error) {
+	return r.ApiService.BoxliteProxyControllerProxyExecGetExecute(r)
+}
+
+/*
+BoxliteProxyControllerProxyExecGet Method for BoxliteProxyControllerProxyExecGet
+
+ @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+ @param boxId
+ @param prefix API version prefix routed to the runner (e.g. v0, v1).
+ @return BoxLiteRESTAPIBoxliteProxyControllerProxyExecGetRequest
+*/
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyExecGet(ctx context.Context, boxId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyExecGetRequest {
+	return BoxLiteRESTAPIBoxliteProxyControllerProxyExecGetRequest{
+		ApiService: a,
+		ctx: ctx,
+		boxId: boxId,
+		prefix: prefix,
+	}
+}
+
+// Execute executes the request
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyExecGetExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyExecGetRequest) (*http.Response, error) {
+	var (
+		localVarHTTPMethod   = http.MethodGet
+		localVarPostBody     interface{}
+		formFiles            []formFile
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "BoxLiteRESTAPIService.BoxliteProxyControllerProxyExecGet")
+	if err != nil {
+		return nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/v1/{prefix}/boxes/{boxId}/exec"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"prefix"+"}", url.PathEscape(parameterValueToString(r.prefix, "prefix")), -1)
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		return localVarHTTPResponse, newErr
+	}
+
+	return localVarHTTPResponse, nil
+}
+
+type BoxLiteRESTAPIBoxliteProxyControllerProxyExecHeadRequest struct {
+	ctx context.Context
+	ApiService BoxLiteRESTAPI
+	boxId string
+	prefix string
+}
+
+func (r BoxLiteRESTAPIBoxliteProxyControllerProxyExecHeadRequest) Execute() (*http.Response, error) {
+	return r.ApiService.BoxliteProxyControllerProxyExecHeadExecute(r)
+}
+
+/*
+BoxliteProxyControllerProxyExecHead Method for BoxliteProxyControllerProxyExecHead
+
+ @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+ @param boxId
+ @param prefix API version prefix routed to the runner (e.g. v0, v1).
+ @return BoxLiteRESTAPIBoxliteProxyControllerProxyExecHeadRequest
+*/
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyExecHead(ctx context.Context, boxId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyExecHeadRequest {
+	return BoxLiteRESTAPIBoxliteProxyControllerProxyExecHeadRequest{
+		ApiService: a,
+		ctx: ctx,
+		boxId: boxId,
+		prefix: prefix,
+	}
+}
+
+// Execute executes the request
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyExecHeadExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyExecHeadRequest) (*http.Response, error) {
+	var (
+		localVarHTTPMethod   = http.MethodHead
+		localVarPostBody     interface{}
+		formFiles            []formFile
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "BoxLiteRESTAPIService.BoxliteProxyControllerProxyExecHead")
+	if err != nil {
+		return nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/v1/{prefix}/boxes/{boxId}/exec"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"prefix"+"}", url.PathEscape(parameterValueToString(r.prefix, "prefix")), -1)
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		return localVarHTTPResponse, newErr
+	}
+
+	return localVarHTTPResponse, nil
+}
+
 type BoxLiteRESTAPIBoxliteProxyControllerProxyExecKillRequest struct {
 	ctx context.Context
 	ApiService BoxLiteRESTAPI
@@ -1115,6 +1740,1754 @@ func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyExecKillExecute(r Box
 	}
 
 	localVarPath := localBasePath + "/v1/{prefix}/boxes/{boxId}/executions/{execId}"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"execId"+"}", url.PathEscape(parameterValueToString(r.execId, "execId")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"prefix"+"}", url.PathEscape(parameterValueToString(r.prefix, "prefix")), -1)
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		return localVarHTTPResponse, newErr
+	}
+
+	return localVarHTTPResponse, nil
+}
+
+type BoxLiteRESTAPIBoxliteProxyControllerProxyExecOptionsRequest struct {
+	ctx context.Context
+	ApiService BoxLiteRESTAPI
+	boxId string
+	prefix string
+}
+
+func (r BoxLiteRESTAPIBoxliteProxyControllerProxyExecOptionsRequest) Execute() (*http.Response, error) {
+	return r.ApiService.BoxliteProxyControllerProxyExecOptionsExecute(r)
+}
+
+/*
+BoxliteProxyControllerProxyExecOptions Method for BoxliteProxyControllerProxyExecOptions
+
+ @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+ @param boxId
+ @param prefix API version prefix routed to the runner (e.g. v0, v1).
+ @return BoxLiteRESTAPIBoxliteProxyControllerProxyExecOptionsRequest
+*/
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyExecOptions(ctx context.Context, boxId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyExecOptionsRequest {
+	return BoxLiteRESTAPIBoxliteProxyControllerProxyExecOptionsRequest{
+		ApiService: a,
+		ctx: ctx,
+		boxId: boxId,
+		prefix: prefix,
+	}
+}
+
+// Execute executes the request
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyExecOptionsExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyExecOptionsRequest) (*http.Response, error) {
+	var (
+		localVarHTTPMethod   = http.MethodOptions
+		localVarPostBody     interface{}
+		formFiles            []formFile
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "BoxLiteRESTAPIService.BoxliteProxyControllerProxyExecOptions")
+	if err != nil {
+		return nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/v1/{prefix}/boxes/{boxId}/exec"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"prefix"+"}", url.PathEscape(parameterValueToString(r.prefix, "prefix")), -1)
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		return localVarHTTPResponse, newErr
+	}
+
+	return localVarHTTPResponse, nil
+}
+
+type BoxLiteRESTAPIBoxliteProxyControllerProxyExecPatchRequest struct {
+	ctx context.Context
+	ApiService BoxLiteRESTAPI
+	boxId string
+	prefix string
+}
+
+func (r BoxLiteRESTAPIBoxliteProxyControllerProxyExecPatchRequest) Execute() (*http.Response, error) {
+	return r.ApiService.BoxliteProxyControllerProxyExecPatchExecute(r)
+}
+
+/*
+BoxliteProxyControllerProxyExecPatch Method for BoxliteProxyControllerProxyExecPatch
+
+ @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+ @param boxId
+ @param prefix API version prefix routed to the runner (e.g. v0, v1).
+ @return BoxLiteRESTAPIBoxliteProxyControllerProxyExecPatchRequest
+*/
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyExecPatch(ctx context.Context, boxId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyExecPatchRequest {
+	return BoxLiteRESTAPIBoxliteProxyControllerProxyExecPatchRequest{
+		ApiService: a,
+		ctx: ctx,
+		boxId: boxId,
+		prefix: prefix,
+	}
+}
+
+// Execute executes the request
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyExecPatchExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyExecPatchRequest) (*http.Response, error) {
+	var (
+		localVarHTTPMethod   = http.MethodPatch
+		localVarPostBody     interface{}
+		formFiles            []formFile
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "BoxLiteRESTAPIService.BoxliteProxyControllerProxyExecPatch")
+	if err != nil {
+		return nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/v1/{prefix}/boxes/{boxId}/exec"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"prefix"+"}", url.PathEscape(parameterValueToString(r.prefix, "prefix")), -1)
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		return localVarHTTPResponse, newErr
+	}
+
+	return localVarHTTPResponse, nil
+}
+
+type BoxLiteRESTAPIBoxliteProxyControllerProxyExecPostRequest struct {
+	ctx context.Context
+	ApiService BoxLiteRESTAPI
+	boxId string
+	prefix string
+}
+
+func (r BoxLiteRESTAPIBoxliteProxyControllerProxyExecPostRequest) Execute() (*http.Response, error) {
+	return r.ApiService.BoxliteProxyControllerProxyExecPostExecute(r)
+}
+
+/*
+BoxliteProxyControllerProxyExecPost Method for BoxliteProxyControllerProxyExecPost
+
+ @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+ @param boxId
+ @param prefix API version prefix routed to the runner (e.g. v0, v1).
+ @return BoxLiteRESTAPIBoxliteProxyControllerProxyExecPostRequest
+*/
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyExecPost(ctx context.Context, boxId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyExecPostRequest {
+	return BoxLiteRESTAPIBoxliteProxyControllerProxyExecPostRequest{
+		ApiService: a,
+		ctx: ctx,
+		boxId: boxId,
+		prefix: prefix,
+	}
+}
+
+// Execute executes the request
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyExecPostExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyExecPostRequest) (*http.Response, error) {
+	var (
+		localVarHTTPMethod   = http.MethodPost
+		localVarPostBody     interface{}
+		formFiles            []formFile
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "BoxLiteRESTAPIService.BoxliteProxyControllerProxyExecPost")
+	if err != nil {
+		return nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/v1/{prefix}/boxes/{boxId}/exec"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"prefix"+"}", url.PathEscape(parameterValueToString(r.prefix, "prefix")), -1)
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		return localVarHTTPResponse, newErr
+	}
+
+	return localVarHTTPResponse, nil
+}
+
+type BoxLiteRESTAPIBoxliteProxyControllerProxyExecPutRequest struct {
+	ctx context.Context
+	ApiService BoxLiteRESTAPI
+	boxId string
+	prefix string
+}
+
+func (r BoxLiteRESTAPIBoxliteProxyControllerProxyExecPutRequest) Execute() (*http.Response, error) {
+	return r.ApiService.BoxliteProxyControllerProxyExecPutExecute(r)
+}
+
+/*
+BoxliteProxyControllerProxyExecPut Method for BoxliteProxyControllerProxyExecPut
+
+ @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+ @param boxId
+ @param prefix API version prefix routed to the runner (e.g. v0, v1).
+ @return BoxLiteRESTAPIBoxliteProxyControllerProxyExecPutRequest
+*/
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyExecPut(ctx context.Context, boxId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyExecPutRequest {
+	return BoxLiteRESTAPIBoxliteProxyControllerProxyExecPutRequest{
+		ApiService: a,
+		ctx: ctx,
+		boxId: boxId,
+		prefix: prefix,
+	}
+}
+
+// Execute executes the request
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyExecPutExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyExecPutRequest) (*http.Response, error) {
+	var (
+		localVarHTTPMethod   = http.MethodPut
+		localVarPostBody     interface{}
+		formFiles            []formFile
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "BoxLiteRESTAPIService.BoxliteProxyControllerProxyExecPut")
+	if err != nil {
+		return nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/v1/{prefix}/boxes/{boxId}/exec"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"prefix"+"}", url.PathEscape(parameterValueToString(r.prefix, "prefix")), -1)
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		return localVarHTTPResponse, newErr
+	}
+
+	return localVarHTTPResponse, nil
+}
+
+type BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizeDeleteRequest struct {
+	ctx context.Context
+	ApiService BoxLiteRESTAPI
+	boxId string
+	execId string
+	prefix string
+}
+
+func (r BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizeDeleteRequest) Execute() (*http.Response, error) {
+	return r.ApiService.BoxliteProxyControllerProxyExecResizeDeleteExecute(r)
+}
+
+/*
+BoxliteProxyControllerProxyExecResizeDelete Method for BoxliteProxyControllerProxyExecResizeDelete
+
+ @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+ @param boxId
+ @param execId
+ @param prefix API version prefix routed to the runner (e.g. v0, v1).
+ @return BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizeDeleteRequest
+*/
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyExecResizeDelete(ctx context.Context, boxId string, execId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizeDeleteRequest {
+	return BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizeDeleteRequest{
+		ApiService: a,
+		ctx: ctx,
+		boxId: boxId,
+		execId: execId,
+		prefix: prefix,
+	}
+}
+
+// Execute executes the request
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyExecResizeDeleteExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizeDeleteRequest) (*http.Response, error) {
+	var (
+		localVarHTTPMethod   = http.MethodDelete
+		localVarPostBody     interface{}
+		formFiles            []formFile
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "BoxLiteRESTAPIService.BoxliteProxyControllerProxyExecResizeDelete")
+	if err != nil {
+		return nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/v1/{prefix}/boxes/{boxId}/executions/{execId}/resize"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"execId"+"}", url.PathEscape(parameterValueToString(r.execId, "execId")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"prefix"+"}", url.PathEscape(parameterValueToString(r.prefix, "prefix")), -1)
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		return localVarHTTPResponse, newErr
+	}
+
+	return localVarHTTPResponse, nil
+}
+
+type BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizeGetRequest struct {
+	ctx context.Context
+	ApiService BoxLiteRESTAPI
+	boxId string
+	execId string
+	prefix string
+}
+
+func (r BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizeGetRequest) Execute() (*http.Response, error) {
+	return r.ApiService.BoxliteProxyControllerProxyExecResizeGetExecute(r)
+}
+
+/*
+BoxliteProxyControllerProxyExecResizeGet Method for BoxliteProxyControllerProxyExecResizeGet
+
+ @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+ @param boxId
+ @param execId
+ @param prefix API version prefix routed to the runner (e.g. v0, v1).
+ @return BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizeGetRequest
+*/
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyExecResizeGet(ctx context.Context, boxId string, execId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizeGetRequest {
+	return BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizeGetRequest{
+		ApiService: a,
+		ctx: ctx,
+		boxId: boxId,
+		execId: execId,
+		prefix: prefix,
+	}
+}
+
+// Execute executes the request
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyExecResizeGetExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizeGetRequest) (*http.Response, error) {
+	var (
+		localVarHTTPMethod   = http.MethodGet
+		localVarPostBody     interface{}
+		formFiles            []formFile
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "BoxLiteRESTAPIService.BoxliteProxyControllerProxyExecResizeGet")
+	if err != nil {
+		return nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/v1/{prefix}/boxes/{boxId}/executions/{execId}/resize"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"execId"+"}", url.PathEscape(parameterValueToString(r.execId, "execId")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"prefix"+"}", url.PathEscape(parameterValueToString(r.prefix, "prefix")), -1)
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		return localVarHTTPResponse, newErr
+	}
+
+	return localVarHTTPResponse, nil
+}
+
+type BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizeHeadRequest struct {
+	ctx context.Context
+	ApiService BoxLiteRESTAPI
+	boxId string
+	execId string
+	prefix string
+}
+
+func (r BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizeHeadRequest) Execute() (*http.Response, error) {
+	return r.ApiService.BoxliteProxyControllerProxyExecResizeHeadExecute(r)
+}
+
+/*
+BoxliteProxyControllerProxyExecResizeHead Method for BoxliteProxyControllerProxyExecResizeHead
+
+ @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+ @param boxId
+ @param execId
+ @param prefix API version prefix routed to the runner (e.g. v0, v1).
+ @return BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizeHeadRequest
+*/
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyExecResizeHead(ctx context.Context, boxId string, execId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizeHeadRequest {
+	return BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizeHeadRequest{
+		ApiService: a,
+		ctx: ctx,
+		boxId: boxId,
+		execId: execId,
+		prefix: prefix,
+	}
+}
+
+// Execute executes the request
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyExecResizeHeadExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizeHeadRequest) (*http.Response, error) {
+	var (
+		localVarHTTPMethod   = http.MethodHead
+		localVarPostBody     interface{}
+		formFiles            []formFile
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "BoxLiteRESTAPIService.BoxliteProxyControllerProxyExecResizeHead")
+	if err != nil {
+		return nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/v1/{prefix}/boxes/{boxId}/executions/{execId}/resize"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"execId"+"}", url.PathEscape(parameterValueToString(r.execId, "execId")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"prefix"+"}", url.PathEscape(parameterValueToString(r.prefix, "prefix")), -1)
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		return localVarHTTPResponse, newErr
+	}
+
+	return localVarHTTPResponse, nil
+}
+
+type BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizeOptionsRequest struct {
+	ctx context.Context
+	ApiService BoxLiteRESTAPI
+	boxId string
+	execId string
+	prefix string
+}
+
+func (r BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizeOptionsRequest) Execute() (*http.Response, error) {
+	return r.ApiService.BoxliteProxyControllerProxyExecResizeOptionsExecute(r)
+}
+
+/*
+BoxliteProxyControllerProxyExecResizeOptions Method for BoxliteProxyControllerProxyExecResizeOptions
+
+ @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+ @param boxId
+ @param execId
+ @param prefix API version prefix routed to the runner (e.g. v0, v1).
+ @return BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizeOptionsRequest
+*/
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyExecResizeOptions(ctx context.Context, boxId string, execId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizeOptionsRequest {
+	return BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizeOptionsRequest{
+		ApiService: a,
+		ctx: ctx,
+		boxId: boxId,
+		execId: execId,
+		prefix: prefix,
+	}
+}
+
+// Execute executes the request
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyExecResizeOptionsExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizeOptionsRequest) (*http.Response, error) {
+	var (
+		localVarHTTPMethod   = http.MethodOptions
+		localVarPostBody     interface{}
+		formFiles            []formFile
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "BoxLiteRESTAPIService.BoxliteProxyControllerProxyExecResizeOptions")
+	if err != nil {
+		return nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/v1/{prefix}/boxes/{boxId}/executions/{execId}/resize"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"execId"+"}", url.PathEscape(parameterValueToString(r.execId, "execId")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"prefix"+"}", url.PathEscape(parameterValueToString(r.prefix, "prefix")), -1)
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		return localVarHTTPResponse, newErr
+	}
+
+	return localVarHTTPResponse, nil
+}
+
+type BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizePatchRequest struct {
+	ctx context.Context
+	ApiService BoxLiteRESTAPI
+	boxId string
+	execId string
+	prefix string
+}
+
+func (r BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizePatchRequest) Execute() (*http.Response, error) {
+	return r.ApiService.BoxliteProxyControllerProxyExecResizePatchExecute(r)
+}
+
+/*
+BoxliteProxyControllerProxyExecResizePatch Method for BoxliteProxyControllerProxyExecResizePatch
+
+ @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+ @param boxId
+ @param execId
+ @param prefix API version prefix routed to the runner (e.g. v0, v1).
+ @return BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizePatchRequest
+*/
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyExecResizePatch(ctx context.Context, boxId string, execId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizePatchRequest {
+	return BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizePatchRequest{
+		ApiService: a,
+		ctx: ctx,
+		boxId: boxId,
+		execId: execId,
+		prefix: prefix,
+	}
+}
+
+// Execute executes the request
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyExecResizePatchExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizePatchRequest) (*http.Response, error) {
+	var (
+		localVarHTTPMethod   = http.MethodPatch
+		localVarPostBody     interface{}
+		formFiles            []formFile
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "BoxLiteRESTAPIService.BoxliteProxyControllerProxyExecResizePatch")
+	if err != nil {
+		return nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/v1/{prefix}/boxes/{boxId}/executions/{execId}/resize"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"execId"+"}", url.PathEscape(parameterValueToString(r.execId, "execId")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"prefix"+"}", url.PathEscape(parameterValueToString(r.prefix, "prefix")), -1)
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		return localVarHTTPResponse, newErr
+	}
+
+	return localVarHTTPResponse, nil
+}
+
+type BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizePostRequest struct {
+	ctx context.Context
+	ApiService BoxLiteRESTAPI
+	boxId string
+	execId string
+	prefix string
+}
+
+func (r BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizePostRequest) Execute() (*http.Response, error) {
+	return r.ApiService.BoxliteProxyControllerProxyExecResizePostExecute(r)
+}
+
+/*
+BoxliteProxyControllerProxyExecResizePost Method for BoxliteProxyControllerProxyExecResizePost
+
+ @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+ @param boxId
+ @param execId
+ @param prefix API version prefix routed to the runner (e.g. v0, v1).
+ @return BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizePostRequest
+*/
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyExecResizePost(ctx context.Context, boxId string, execId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizePostRequest {
+	return BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizePostRequest{
+		ApiService: a,
+		ctx: ctx,
+		boxId: boxId,
+		execId: execId,
+		prefix: prefix,
+	}
+}
+
+// Execute executes the request
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyExecResizePostExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizePostRequest) (*http.Response, error) {
+	var (
+		localVarHTTPMethod   = http.MethodPost
+		localVarPostBody     interface{}
+		formFiles            []formFile
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "BoxLiteRESTAPIService.BoxliteProxyControllerProxyExecResizePost")
+	if err != nil {
+		return nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/v1/{prefix}/boxes/{boxId}/executions/{execId}/resize"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"execId"+"}", url.PathEscape(parameterValueToString(r.execId, "execId")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"prefix"+"}", url.PathEscape(parameterValueToString(r.prefix, "prefix")), -1)
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		return localVarHTTPResponse, newErr
+	}
+
+	return localVarHTTPResponse, nil
+}
+
+type BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizePutRequest struct {
+	ctx context.Context
+	ApiService BoxLiteRESTAPI
+	boxId string
+	execId string
+	prefix string
+}
+
+func (r BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizePutRequest) Execute() (*http.Response, error) {
+	return r.ApiService.BoxliteProxyControllerProxyExecResizePutExecute(r)
+}
+
+/*
+BoxliteProxyControllerProxyExecResizePut Method for BoxliteProxyControllerProxyExecResizePut
+
+ @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+ @param boxId
+ @param execId
+ @param prefix API version prefix routed to the runner (e.g. v0, v1).
+ @return BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizePutRequest
+*/
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyExecResizePut(ctx context.Context, boxId string, execId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizePutRequest {
+	return BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizePutRequest{
+		ApiService: a,
+		ctx: ctx,
+		boxId: boxId,
+		execId: execId,
+		prefix: prefix,
+	}
+}
+
+// Execute executes the request
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyExecResizePutExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyExecResizePutRequest) (*http.Response, error) {
+	var (
+		localVarHTTPMethod   = http.MethodPut
+		localVarPostBody     interface{}
+		formFiles            []formFile
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "BoxLiteRESTAPIService.BoxliteProxyControllerProxyExecResizePut")
+	if err != nil {
+		return nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/v1/{prefix}/boxes/{boxId}/executions/{execId}/resize"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"execId"+"}", url.PathEscape(parameterValueToString(r.execId, "execId")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"prefix"+"}", url.PathEscape(parameterValueToString(r.prefix, "prefix")), -1)
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		return localVarHTTPResponse, newErr
+	}
+
+	return localVarHTTPResponse, nil
+}
+
+type BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalDeleteRequest struct {
+	ctx context.Context
+	ApiService BoxLiteRESTAPI
+	boxId string
+	execId string
+	prefix string
+}
+
+func (r BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalDeleteRequest) Execute() (*http.Response, error) {
+	return r.ApiService.BoxliteProxyControllerProxyExecSignalDeleteExecute(r)
+}
+
+/*
+BoxliteProxyControllerProxyExecSignalDelete Method for BoxliteProxyControllerProxyExecSignalDelete
+
+ @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+ @param boxId
+ @param execId
+ @param prefix API version prefix routed to the runner (e.g. v0, v1).
+ @return BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalDeleteRequest
+*/
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyExecSignalDelete(ctx context.Context, boxId string, execId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalDeleteRequest {
+	return BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalDeleteRequest{
+		ApiService: a,
+		ctx: ctx,
+		boxId: boxId,
+		execId: execId,
+		prefix: prefix,
+	}
+}
+
+// Execute executes the request
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyExecSignalDeleteExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalDeleteRequest) (*http.Response, error) {
+	var (
+		localVarHTTPMethod   = http.MethodDelete
+		localVarPostBody     interface{}
+		formFiles            []formFile
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "BoxLiteRESTAPIService.BoxliteProxyControllerProxyExecSignalDelete")
+	if err != nil {
+		return nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/v1/{prefix}/boxes/{boxId}/executions/{execId}/signal"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"execId"+"}", url.PathEscape(parameterValueToString(r.execId, "execId")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"prefix"+"}", url.PathEscape(parameterValueToString(r.prefix, "prefix")), -1)
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		return localVarHTTPResponse, newErr
+	}
+
+	return localVarHTTPResponse, nil
+}
+
+type BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalGetRequest struct {
+	ctx context.Context
+	ApiService BoxLiteRESTAPI
+	boxId string
+	execId string
+	prefix string
+}
+
+func (r BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalGetRequest) Execute() (*http.Response, error) {
+	return r.ApiService.BoxliteProxyControllerProxyExecSignalGetExecute(r)
+}
+
+/*
+BoxliteProxyControllerProxyExecSignalGet Method for BoxliteProxyControllerProxyExecSignalGet
+
+ @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+ @param boxId
+ @param execId
+ @param prefix API version prefix routed to the runner (e.g. v0, v1).
+ @return BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalGetRequest
+*/
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyExecSignalGet(ctx context.Context, boxId string, execId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalGetRequest {
+	return BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalGetRequest{
+		ApiService: a,
+		ctx: ctx,
+		boxId: boxId,
+		execId: execId,
+		prefix: prefix,
+	}
+}
+
+// Execute executes the request
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyExecSignalGetExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalGetRequest) (*http.Response, error) {
+	var (
+		localVarHTTPMethod   = http.MethodGet
+		localVarPostBody     interface{}
+		formFiles            []formFile
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "BoxLiteRESTAPIService.BoxliteProxyControllerProxyExecSignalGet")
+	if err != nil {
+		return nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/v1/{prefix}/boxes/{boxId}/executions/{execId}/signal"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"execId"+"}", url.PathEscape(parameterValueToString(r.execId, "execId")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"prefix"+"}", url.PathEscape(parameterValueToString(r.prefix, "prefix")), -1)
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		return localVarHTTPResponse, newErr
+	}
+
+	return localVarHTTPResponse, nil
+}
+
+type BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalHeadRequest struct {
+	ctx context.Context
+	ApiService BoxLiteRESTAPI
+	boxId string
+	execId string
+	prefix string
+}
+
+func (r BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalHeadRequest) Execute() (*http.Response, error) {
+	return r.ApiService.BoxliteProxyControllerProxyExecSignalHeadExecute(r)
+}
+
+/*
+BoxliteProxyControllerProxyExecSignalHead Method for BoxliteProxyControllerProxyExecSignalHead
+
+ @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+ @param boxId
+ @param execId
+ @param prefix API version prefix routed to the runner (e.g. v0, v1).
+ @return BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalHeadRequest
+*/
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyExecSignalHead(ctx context.Context, boxId string, execId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalHeadRequest {
+	return BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalHeadRequest{
+		ApiService: a,
+		ctx: ctx,
+		boxId: boxId,
+		execId: execId,
+		prefix: prefix,
+	}
+}
+
+// Execute executes the request
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyExecSignalHeadExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalHeadRequest) (*http.Response, error) {
+	var (
+		localVarHTTPMethod   = http.MethodHead
+		localVarPostBody     interface{}
+		formFiles            []formFile
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "BoxLiteRESTAPIService.BoxliteProxyControllerProxyExecSignalHead")
+	if err != nil {
+		return nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/v1/{prefix}/boxes/{boxId}/executions/{execId}/signal"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"execId"+"}", url.PathEscape(parameterValueToString(r.execId, "execId")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"prefix"+"}", url.PathEscape(parameterValueToString(r.prefix, "prefix")), -1)
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		return localVarHTTPResponse, newErr
+	}
+
+	return localVarHTTPResponse, nil
+}
+
+type BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalOptionsRequest struct {
+	ctx context.Context
+	ApiService BoxLiteRESTAPI
+	boxId string
+	execId string
+	prefix string
+}
+
+func (r BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalOptionsRequest) Execute() (*http.Response, error) {
+	return r.ApiService.BoxliteProxyControllerProxyExecSignalOptionsExecute(r)
+}
+
+/*
+BoxliteProxyControllerProxyExecSignalOptions Method for BoxliteProxyControllerProxyExecSignalOptions
+
+ @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+ @param boxId
+ @param execId
+ @param prefix API version prefix routed to the runner (e.g. v0, v1).
+ @return BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalOptionsRequest
+*/
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyExecSignalOptions(ctx context.Context, boxId string, execId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalOptionsRequest {
+	return BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalOptionsRequest{
+		ApiService: a,
+		ctx: ctx,
+		boxId: boxId,
+		execId: execId,
+		prefix: prefix,
+	}
+}
+
+// Execute executes the request
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyExecSignalOptionsExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalOptionsRequest) (*http.Response, error) {
+	var (
+		localVarHTTPMethod   = http.MethodOptions
+		localVarPostBody     interface{}
+		formFiles            []formFile
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "BoxLiteRESTAPIService.BoxliteProxyControllerProxyExecSignalOptions")
+	if err != nil {
+		return nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/v1/{prefix}/boxes/{boxId}/executions/{execId}/signal"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"execId"+"}", url.PathEscape(parameterValueToString(r.execId, "execId")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"prefix"+"}", url.PathEscape(parameterValueToString(r.prefix, "prefix")), -1)
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		return localVarHTTPResponse, newErr
+	}
+
+	return localVarHTTPResponse, nil
+}
+
+type BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalPatchRequest struct {
+	ctx context.Context
+	ApiService BoxLiteRESTAPI
+	boxId string
+	execId string
+	prefix string
+}
+
+func (r BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalPatchRequest) Execute() (*http.Response, error) {
+	return r.ApiService.BoxliteProxyControllerProxyExecSignalPatchExecute(r)
+}
+
+/*
+BoxliteProxyControllerProxyExecSignalPatch Method for BoxliteProxyControllerProxyExecSignalPatch
+
+ @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+ @param boxId
+ @param execId
+ @param prefix API version prefix routed to the runner (e.g. v0, v1).
+ @return BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalPatchRequest
+*/
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyExecSignalPatch(ctx context.Context, boxId string, execId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalPatchRequest {
+	return BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalPatchRequest{
+		ApiService: a,
+		ctx: ctx,
+		boxId: boxId,
+		execId: execId,
+		prefix: prefix,
+	}
+}
+
+// Execute executes the request
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyExecSignalPatchExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalPatchRequest) (*http.Response, error) {
+	var (
+		localVarHTTPMethod   = http.MethodPatch
+		localVarPostBody     interface{}
+		formFiles            []formFile
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "BoxLiteRESTAPIService.BoxliteProxyControllerProxyExecSignalPatch")
+	if err != nil {
+		return nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/v1/{prefix}/boxes/{boxId}/executions/{execId}/signal"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"execId"+"}", url.PathEscape(parameterValueToString(r.execId, "execId")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"prefix"+"}", url.PathEscape(parameterValueToString(r.prefix, "prefix")), -1)
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		return localVarHTTPResponse, newErr
+	}
+
+	return localVarHTTPResponse, nil
+}
+
+type BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalPostRequest struct {
+	ctx context.Context
+	ApiService BoxLiteRESTAPI
+	boxId string
+	execId string
+	prefix string
+}
+
+func (r BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalPostRequest) Execute() (*http.Response, error) {
+	return r.ApiService.BoxliteProxyControllerProxyExecSignalPostExecute(r)
+}
+
+/*
+BoxliteProxyControllerProxyExecSignalPost Method for BoxliteProxyControllerProxyExecSignalPost
+
+ @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+ @param boxId
+ @param execId
+ @param prefix API version prefix routed to the runner (e.g. v0, v1).
+ @return BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalPostRequest
+*/
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyExecSignalPost(ctx context.Context, boxId string, execId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalPostRequest {
+	return BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalPostRequest{
+		ApiService: a,
+		ctx: ctx,
+		boxId: boxId,
+		execId: execId,
+		prefix: prefix,
+	}
+}
+
+// Execute executes the request
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyExecSignalPostExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalPostRequest) (*http.Response, error) {
+	var (
+		localVarHTTPMethod   = http.MethodPost
+		localVarPostBody     interface{}
+		formFiles            []formFile
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "BoxLiteRESTAPIService.BoxliteProxyControllerProxyExecSignalPost")
+	if err != nil {
+		return nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/v1/{prefix}/boxes/{boxId}/executions/{execId}/signal"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"execId"+"}", url.PathEscape(parameterValueToString(r.execId, "execId")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"prefix"+"}", url.PathEscape(parameterValueToString(r.prefix, "prefix")), -1)
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		return localVarHTTPResponse, newErr
+	}
+
+	return localVarHTTPResponse, nil
+}
+
+type BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalPutRequest struct {
+	ctx context.Context
+	ApiService BoxLiteRESTAPI
+	boxId string
+	execId string
+	prefix string
+}
+
+func (r BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalPutRequest) Execute() (*http.Response, error) {
+	return r.ApiService.BoxliteProxyControllerProxyExecSignalPutExecute(r)
+}
+
+/*
+BoxliteProxyControllerProxyExecSignalPut Method for BoxliteProxyControllerProxyExecSignalPut
+
+ @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+ @param boxId
+ @param execId
+ @param prefix API version prefix routed to the runner (e.g. v0, v1).
+ @return BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalPutRequest
+*/
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyExecSignalPut(ctx context.Context, boxId string, execId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalPutRequest {
+	return BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalPutRequest{
+		ApiService: a,
+		ctx: ctx,
+		boxId: boxId,
+		execId: execId,
+		prefix: prefix,
+	}
+}
+
+// Execute executes the request
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyExecSignalPutExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyExecSignalPutRequest) (*http.Response, error) {
+	var (
+		localVarHTTPMethod   = http.MethodPut
+		localVarPostBody     interface{}
+		formFiles            []formFile
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "BoxLiteRESTAPIService.BoxliteProxyControllerProxyExecSignalPut")
+	if err != nil {
+		return nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/v1/{prefix}/boxes/{boxId}/executions/{execId}/signal"
 	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 	localVarPath = strings.Replace(localVarPath, "{"+"execId"+"}", url.PathEscape(parameterValueToString(r.execId, "execId")), -1)
 	localVarPath = strings.Replace(localVarPath, "{"+"prefix"+"}", url.PathEscape(parameterValueToString(r.prefix, "prefix")), -1)
@@ -1215,6 +3588,664 @@ func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyExecStatusExecute(r B
 	localVarPath := localBasePath + "/v1/{prefix}/boxes/{boxId}/executions/{execId}"
 	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 	localVarPath = strings.Replace(localVarPath, "{"+"execId"+"}", url.PathEscape(parameterValueToString(r.execId, "execId")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"prefix"+"}", url.PathEscape(parameterValueToString(r.prefix, "prefix")), -1)
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		return localVarHTTPResponse, newErr
+	}
+
+	return localVarHTTPResponse, nil
+}
+
+type BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsDeleteRequest struct {
+	ctx context.Context
+	ApiService BoxLiteRESTAPI
+	boxId string
+	prefix string
+}
+
+func (r BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsDeleteRequest) Execute() (*http.Response, error) {
+	return r.ApiService.BoxliteProxyControllerProxyMetricsDeleteExecute(r)
+}
+
+/*
+BoxliteProxyControllerProxyMetricsDelete Method for BoxliteProxyControllerProxyMetricsDelete
+
+ @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+ @param boxId
+ @param prefix API version prefix routed to the runner (e.g. v0, v1).
+ @return BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsDeleteRequest
+*/
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyMetricsDelete(ctx context.Context, boxId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsDeleteRequest {
+	return BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsDeleteRequest{
+		ApiService: a,
+		ctx: ctx,
+		boxId: boxId,
+		prefix: prefix,
+	}
+}
+
+// Execute executes the request
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyMetricsDeleteExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsDeleteRequest) (*http.Response, error) {
+	var (
+		localVarHTTPMethod   = http.MethodDelete
+		localVarPostBody     interface{}
+		formFiles            []formFile
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "BoxLiteRESTAPIService.BoxliteProxyControllerProxyMetricsDelete")
+	if err != nil {
+		return nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/v1/{prefix}/boxes/{boxId}/metrics"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"prefix"+"}", url.PathEscape(parameterValueToString(r.prefix, "prefix")), -1)
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		return localVarHTTPResponse, newErr
+	}
+
+	return localVarHTTPResponse, nil
+}
+
+type BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsGetRequest struct {
+	ctx context.Context
+	ApiService BoxLiteRESTAPI
+	boxId string
+	prefix string
+}
+
+func (r BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsGetRequest) Execute() (*http.Response, error) {
+	return r.ApiService.BoxliteProxyControllerProxyMetricsGetExecute(r)
+}
+
+/*
+BoxliteProxyControllerProxyMetricsGet Method for BoxliteProxyControllerProxyMetricsGet
+
+ @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+ @param boxId
+ @param prefix API version prefix routed to the runner (e.g. v0, v1).
+ @return BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsGetRequest
+*/
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyMetricsGet(ctx context.Context, boxId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsGetRequest {
+	return BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsGetRequest{
+		ApiService: a,
+		ctx: ctx,
+		boxId: boxId,
+		prefix: prefix,
+	}
+}
+
+// Execute executes the request
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyMetricsGetExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsGetRequest) (*http.Response, error) {
+	var (
+		localVarHTTPMethod   = http.MethodGet
+		localVarPostBody     interface{}
+		formFiles            []formFile
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "BoxLiteRESTAPIService.BoxliteProxyControllerProxyMetricsGet")
+	if err != nil {
+		return nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/v1/{prefix}/boxes/{boxId}/metrics"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"prefix"+"}", url.PathEscape(parameterValueToString(r.prefix, "prefix")), -1)
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		return localVarHTTPResponse, newErr
+	}
+
+	return localVarHTTPResponse, nil
+}
+
+type BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsHeadRequest struct {
+	ctx context.Context
+	ApiService BoxLiteRESTAPI
+	boxId string
+	prefix string
+}
+
+func (r BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsHeadRequest) Execute() (*http.Response, error) {
+	return r.ApiService.BoxliteProxyControllerProxyMetricsHeadExecute(r)
+}
+
+/*
+BoxliteProxyControllerProxyMetricsHead Method for BoxliteProxyControllerProxyMetricsHead
+
+ @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+ @param boxId
+ @param prefix API version prefix routed to the runner (e.g. v0, v1).
+ @return BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsHeadRequest
+*/
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyMetricsHead(ctx context.Context, boxId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsHeadRequest {
+	return BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsHeadRequest{
+		ApiService: a,
+		ctx: ctx,
+		boxId: boxId,
+		prefix: prefix,
+	}
+}
+
+// Execute executes the request
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyMetricsHeadExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsHeadRequest) (*http.Response, error) {
+	var (
+		localVarHTTPMethod   = http.MethodHead
+		localVarPostBody     interface{}
+		formFiles            []formFile
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "BoxLiteRESTAPIService.BoxliteProxyControllerProxyMetricsHead")
+	if err != nil {
+		return nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/v1/{prefix}/boxes/{boxId}/metrics"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"prefix"+"}", url.PathEscape(parameterValueToString(r.prefix, "prefix")), -1)
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		return localVarHTTPResponse, newErr
+	}
+
+	return localVarHTTPResponse, nil
+}
+
+type BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsOptionsRequest struct {
+	ctx context.Context
+	ApiService BoxLiteRESTAPI
+	boxId string
+	prefix string
+}
+
+func (r BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsOptionsRequest) Execute() (*http.Response, error) {
+	return r.ApiService.BoxliteProxyControllerProxyMetricsOptionsExecute(r)
+}
+
+/*
+BoxliteProxyControllerProxyMetricsOptions Method for BoxliteProxyControllerProxyMetricsOptions
+
+ @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+ @param boxId
+ @param prefix API version prefix routed to the runner (e.g. v0, v1).
+ @return BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsOptionsRequest
+*/
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyMetricsOptions(ctx context.Context, boxId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsOptionsRequest {
+	return BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsOptionsRequest{
+		ApiService: a,
+		ctx: ctx,
+		boxId: boxId,
+		prefix: prefix,
+	}
+}
+
+// Execute executes the request
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyMetricsOptionsExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsOptionsRequest) (*http.Response, error) {
+	var (
+		localVarHTTPMethod   = http.MethodOptions
+		localVarPostBody     interface{}
+		formFiles            []formFile
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "BoxLiteRESTAPIService.BoxliteProxyControllerProxyMetricsOptions")
+	if err != nil {
+		return nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/v1/{prefix}/boxes/{boxId}/metrics"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"prefix"+"}", url.PathEscape(parameterValueToString(r.prefix, "prefix")), -1)
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		return localVarHTTPResponse, newErr
+	}
+
+	return localVarHTTPResponse, nil
+}
+
+type BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsPatchRequest struct {
+	ctx context.Context
+	ApiService BoxLiteRESTAPI
+	boxId string
+	prefix string
+}
+
+func (r BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsPatchRequest) Execute() (*http.Response, error) {
+	return r.ApiService.BoxliteProxyControllerProxyMetricsPatchExecute(r)
+}
+
+/*
+BoxliteProxyControllerProxyMetricsPatch Method for BoxliteProxyControllerProxyMetricsPatch
+
+ @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+ @param boxId
+ @param prefix API version prefix routed to the runner (e.g. v0, v1).
+ @return BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsPatchRequest
+*/
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyMetricsPatch(ctx context.Context, boxId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsPatchRequest {
+	return BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsPatchRequest{
+		ApiService: a,
+		ctx: ctx,
+		boxId: boxId,
+		prefix: prefix,
+	}
+}
+
+// Execute executes the request
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyMetricsPatchExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsPatchRequest) (*http.Response, error) {
+	var (
+		localVarHTTPMethod   = http.MethodPatch
+		localVarPostBody     interface{}
+		formFiles            []formFile
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "BoxLiteRESTAPIService.BoxliteProxyControllerProxyMetricsPatch")
+	if err != nil {
+		return nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/v1/{prefix}/boxes/{boxId}/metrics"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"prefix"+"}", url.PathEscape(parameterValueToString(r.prefix, "prefix")), -1)
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		return localVarHTTPResponse, newErr
+	}
+
+	return localVarHTTPResponse, nil
+}
+
+type BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsPostRequest struct {
+	ctx context.Context
+	ApiService BoxLiteRESTAPI
+	boxId string
+	prefix string
+}
+
+func (r BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsPostRequest) Execute() (*http.Response, error) {
+	return r.ApiService.BoxliteProxyControllerProxyMetricsPostExecute(r)
+}
+
+/*
+BoxliteProxyControllerProxyMetricsPost Method for BoxliteProxyControllerProxyMetricsPost
+
+ @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+ @param boxId
+ @param prefix API version prefix routed to the runner (e.g. v0, v1).
+ @return BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsPostRequest
+*/
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyMetricsPost(ctx context.Context, boxId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsPostRequest {
+	return BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsPostRequest{
+		ApiService: a,
+		ctx: ctx,
+		boxId: boxId,
+		prefix: prefix,
+	}
+}
+
+// Execute executes the request
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyMetricsPostExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsPostRequest) (*http.Response, error) {
+	var (
+		localVarHTTPMethod   = http.MethodPost
+		localVarPostBody     interface{}
+		formFiles            []formFile
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "BoxLiteRESTAPIService.BoxliteProxyControllerProxyMetricsPost")
+	if err != nil {
+		return nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/v1/{prefix}/boxes/{boxId}/metrics"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
+	localVarPath = strings.Replace(localVarPath, "{"+"prefix"+"}", url.PathEscape(parameterValueToString(r.prefix, "prefix")), -1)
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		return localVarHTTPResponse, newErr
+	}
+
+	return localVarHTTPResponse, nil
+}
+
+type BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsPutRequest struct {
+	ctx context.Context
+	ApiService BoxLiteRESTAPI
+	boxId string
+	prefix string
+}
+
+func (r BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsPutRequest) Execute() (*http.Response, error) {
+	return r.ApiService.BoxliteProxyControllerProxyMetricsPutExecute(r)
+}
+
+/*
+BoxliteProxyControllerProxyMetricsPut Method for BoxliteProxyControllerProxyMetricsPut
+
+ @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+ @param boxId
+ @param prefix API version prefix routed to the runner (e.g. v0, v1).
+ @return BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsPutRequest
+*/
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyMetricsPut(ctx context.Context, boxId string, prefix string) BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsPutRequest {
+	return BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsPutRequest{
+		ApiService: a,
+		ctx: ctx,
+		boxId: boxId,
+		prefix: prefix,
+	}
+}
+
+// Execute executes the request
+func (a *BoxLiteRESTAPIService) BoxliteProxyControllerProxyMetricsPutExecute(r BoxLiteRESTAPIBoxliteProxyControllerProxyMetricsPutRequest) (*http.Response, error) {
+	var (
+		localVarHTTPMethod   = http.MethodPut
+		localVarPostBody     interface{}
+		formFiles            []formFile
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "BoxLiteRESTAPIService.BoxliteProxyControllerProxyMetricsPut")
+	if err != nil {
+		return nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/v1/{prefix}/boxes/{boxId}/metrics"
+	localVarPath = strings.Replace(localVarPath, "{"+"boxId"+"}", url.PathEscape(parameterValueToString(r.boxId, "boxId")), -1)
 	localVarPath = strings.Replace(localVarPath, "{"+"prefix"+"}", url.PathEscape(parameterValueToString(r.prefix, "prefix")), -1)
 
 	localVarHeaderParams := make(map[string]string)

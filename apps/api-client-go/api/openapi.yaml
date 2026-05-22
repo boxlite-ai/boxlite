@@ -8912,14 +8912,6 @@ paths:
         schema:
           type: string
         style: form
-      - description: "API version prefix routed to the runner (e.g. v0, v1)."
-        explode: false
-        in: path
-        name: prefix
-        required: true
-        schema:
-          type: string
-        style: simple
       responses:
         "200":
           description: ""
@@ -8929,15 +8921,7 @@ paths:
       - BoxLite REST
     post:
       operationId: BoxliteBoxController_createBox
-      parameters:
-      - description: "API version prefix routed to the runner (e.g. v0, v1)."
-        explode: false
-        in: path
-        name: prefix
-        required: true
-        schema:
-          type: string
-        style: simple
+      parameters: []
       requestBody:
         content:
           application/json:
@@ -8962,14 +8946,6 @@ paths:
         schema:
           type: string
         style: simple
-      - description: "API version prefix routed to the runner (e.g. v0, v1)."
-        explode: false
-        in: path
-        name: prefix
-        required: true
-        schema:
-          type: string
-        style: simple
       responses:
         "204":
           description: ""
@@ -8979,6 +8955,102 @@ paths:
       - BoxLite REST
     get:
       operationId: BoxliteBoxController_getBox
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    head:
+      operationId: BoxliteBoxController_headBox
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+  /v1/{prefix}/boxes/{boxId}/start:
+    post:
+      operationId: BoxliteBoxController_startBox
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "201":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+  /v1/{prefix}/boxes/{boxId}/stop:
+    post:
+      operationId: BoxliteBoxController_stopBox
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "201":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+  /v1/{prefix}/boxes/{boxId}/exec:
+    delete:
+      operationId: BoxliteProxyController_proxyExec_delete
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - description: "API version prefix routed to the runner (e.g. v0, v1)."
+        explode: false
+        in: path
+        name: prefix
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    get:
+      operationId: BoxliteProxyController_proxyExec_get
       parameters:
       - explode: false
         in: path
@@ -9003,7 +9075,7 @@ paths:
       tags:
       - BoxLite REST
     head:
-      operationId: BoxliteBoxController_headBox
+      operationId: BoxliteProxyController_proxyExec_head
       parameters:
       - explode: false
         in: path
@@ -9027,9 +9099,8 @@ paths:
       - bearer: []
       tags:
       - BoxLite REST
-  /v1/{prefix}/boxes/{boxId}/start:
-    post:
-      operationId: BoxliteBoxController_startBox
+    options:
+      operationId: BoxliteProxyController_proxyExec_options
       parameters:
       - explode: false
         in: path
@@ -9047,15 +9118,14 @@ paths:
           type: string
         style: simple
       responses:
-        "201":
+        "200":
           description: ""
       security:
       - bearer: []
       tags:
       - BoxLite REST
-  /v1/{prefix}/boxes/{boxId}/stop:
-    post:
-      operationId: BoxliteBoxController_stopBox
+    patch:
+      operationId: BoxliteProxyController_proxyExec_patch
       parameters:
       - explode: false
         in: path
@@ -9073,7 +9143,507 @@ paths:
           type: string
         style: simple
       responses:
-        "201":
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    post:
+      operationId: BoxliteProxyController_proxyExec_post
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - description: "API version prefix routed to the runner (e.g. v0, v1)."
+        explode: false
+        in: path
+        name: prefix
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    put:
+      operationId: BoxliteProxyController_proxyExec_put
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - description: "API version prefix routed to the runner (e.g. v0, v1)."
+        explode: false
+        in: path
+        name: prefix
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+  /v1/{prefix}/boxes/{boxId}/executions/{execId}/signal:
+    delete:
+      operationId: BoxliteProxyController_proxyExecSignal_delete
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - description: "API version prefix routed to the runner (e.g. v0, v1)."
+        explode: false
+        in: path
+        name: prefix
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    get:
+      operationId: BoxliteProxyController_proxyExecSignal_get
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - description: "API version prefix routed to the runner (e.g. v0, v1)."
+        explode: false
+        in: path
+        name: prefix
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    head:
+      operationId: BoxliteProxyController_proxyExecSignal_head
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - description: "API version prefix routed to the runner (e.g. v0, v1)."
+        explode: false
+        in: path
+        name: prefix
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    options:
+      operationId: BoxliteProxyController_proxyExecSignal_options
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - description: "API version prefix routed to the runner (e.g. v0, v1)."
+        explode: false
+        in: path
+        name: prefix
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    patch:
+      operationId: BoxliteProxyController_proxyExecSignal_patch
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - description: "API version prefix routed to the runner (e.g. v0, v1)."
+        explode: false
+        in: path
+        name: prefix
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    post:
+      operationId: BoxliteProxyController_proxyExecSignal_post
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - description: "API version prefix routed to the runner (e.g. v0, v1)."
+        explode: false
+        in: path
+        name: prefix
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    put:
+      operationId: BoxliteProxyController_proxyExecSignal_put
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - description: "API version prefix routed to the runner (e.g. v0, v1)."
+        explode: false
+        in: path
+        name: prefix
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+  /v1/{prefix}/boxes/{boxId}/executions/{execId}/resize:
+    delete:
+      operationId: BoxliteProxyController_proxyExecResize_delete
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - description: "API version prefix routed to the runner (e.g. v0, v1)."
+        explode: false
+        in: path
+        name: prefix
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    get:
+      operationId: BoxliteProxyController_proxyExecResize_get
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - description: "API version prefix routed to the runner (e.g. v0, v1)."
+        explode: false
+        in: path
+        name: prefix
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    head:
+      operationId: BoxliteProxyController_proxyExecResize_head
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - description: "API version prefix routed to the runner (e.g. v0, v1)."
+        explode: false
+        in: path
+        name: prefix
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    options:
+      operationId: BoxliteProxyController_proxyExecResize_options
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - description: "API version prefix routed to the runner (e.g. v0, v1)."
+        explode: false
+        in: path
+        name: prefix
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    patch:
+      operationId: BoxliteProxyController_proxyExecResize_patch
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - description: "API version prefix routed to the runner (e.g. v0, v1)."
+        explode: false
+        in: path
+        name: prefix
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    post:
+      operationId: BoxliteProxyController_proxyExecResize_post
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - description: "API version prefix routed to the runner (e.g. v0, v1)."
+        explode: false
+        in: path
+        name: prefix
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    put:
+      operationId: BoxliteProxyController_proxyExecResize_put
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - description: "API version prefix routed to the runner (e.g. v0, v1)."
+        explode: false
+        in: path
+        name: prefix
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
           description: ""
       security:
       - bearer: []
@@ -9294,6 +9864,182 @@ paths:
       security:
       - bearer: []
       summary: Download multiple files from a box in one request
+      tags:
+      - BoxLite REST
+  /v1/{prefix}/boxes/{boxId}/metrics:
+    delete:
+      operationId: BoxliteProxyController_proxyMetrics_delete
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - description: "API version prefix routed to the runner (e.g. v0, v1)."
+        explode: false
+        in: path
+        name: prefix
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    get:
+      operationId: BoxliteProxyController_proxyMetrics_get
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - description: "API version prefix routed to the runner (e.g. v0, v1)."
+        explode: false
+        in: path
+        name: prefix
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    head:
+      operationId: BoxliteProxyController_proxyMetrics_head
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - description: "API version prefix routed to the runner (e.g. v0, v1)."
+        explode: false
+        in: path
+        name: prefix
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    options:
+      operationId: BoxliteProxyController_proxyMetrics_options
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - description: "API version prefix routed to the runner (e.g. v0, v1)."
+        explode: false
+        in: path
+        name: prefix
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    patch:
+      operationId: BoxliteProxyController_proxyMetrics_patch
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - description: "API version prefix routed to the runner (e.g. v0, v1)."
+        explode: false
+        in: path
+        name: prefix
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    post:
+      operationId: BoxliteProxyController_proxyMetrics_post
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - description: "API version prefix routed to the runner (e.g. v0, v1)."
+        explode: false
+        in: path
+        name: prefix
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    put:
+      operationId: BoxliteProxyController_proxyMetrics_put
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - description: "API version prefix routed to the runner (e.g. v0, v1)."
+        explode: false
+        in: path
+        name: prefix
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
       tags:
       - BoxLite REST
 components:
