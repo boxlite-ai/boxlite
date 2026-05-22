@@ -11,6 +11,11 @@ import (
 	"unsafe"
 )
 
+// CopyInto/CopyOut delegate to the Rust core via CGO; the runner /files
+// wire shape (PUT/GET octet-stream, POST bulk-upload/bulk-download
+// multipart) lives in the Rust REST backend at
+// src/boxlite/src/rest/litebox.rs — this SDK carries no /files HTTP code.
+
 // CopyInto copies a host file or directory into the box.
 func (b *Box) CopyInto(ctx context.Context, hostSrc, guestDst string) error {
 	b.runtime.ensureDrainRunning()

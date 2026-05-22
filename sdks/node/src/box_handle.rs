@@ -157,6 +157,11 @@ impl JsBox {
     }
 
     /// Copy files from host into the box's container rootfs.
+    ///
+    /// Wire shape (octet-stream PUT for single files, multipart
+    /// `/files/bulk-upload` POST for directories) lives in the Rust REST
+    /// backend at `src/boxlite/src/rest/litebox.rs`. This SDK carries no
+    /// `/files` HTTP code — it delegates through `LiteBox::copy_into`.
     #[napi(js_name = "copyIn")]
     pub async fn copy_in(
         &self,

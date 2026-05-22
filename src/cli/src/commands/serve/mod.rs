@@ -801,6 +801,14 @@ fn build_router(state: Arc<AppState>) -> Router {
             "/v1/default/boxes/{box_id}/files",
             put(files::upload_files).get(files::download_files),
         )
+        .route(
+            "/v1/default/boxes/{box_id}/files/bulk-upload",
+            post(files::bulk_upload),
+        )
+        .route(
+            "/v1/default/boxes/{box_id}/files/bulk-download",
+            post(files::bulk_download),
+        )
         // Snapshots
         .route(
             "/v1/default/boxes/{box_id}/snapshots",

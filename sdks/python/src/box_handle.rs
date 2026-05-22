@@ -167,6 +167,11 @@ impl PyBox {
     }
 
     /// Copy from host into the box container rootfs.
+    ///
+    /// Wire shape lives entirely in the Rust core — REST mode is implemented
+    /// in `src/boxlite/src/rest/litebox.rs` (octet-stream PUT for single files,
+    /// `POST /files/bulk-upload` multipart for directories). The Python SDK
+    /// carries no `/files` HTTP code; it delegates across the PyO3 FFI here.
     #[pyo3(signature = (host_path, container_dest, copy_options=None))]
     fn copy_in<'a>(
         &self,

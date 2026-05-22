@@ -93,7 +93,7 @@ registry.
 | `config`     | `handlers/config.rs`     | Capability discovery (snapshots, clone, export, import)       |
 | `boxes`      | `handlers/boxes.rs`      | Box CRUD: create, list, get, head, start, stop, remove        |
 | `executions` | `handlers/executions.rs` | Lifecycle: start, status, signal, kill, resize, attach        |
-| `files`      | `handlers/files.rs`      | Tar-based file upload / download into / from boxes            |
+| `files`      | `handlers/files.rs`      | Raw-bytes single-file + multipart bulk file transfer          |
 | `metrics`    | `handlers/metrics.rs`    | Runtime-level and per-box metrics                             |
 | `snapshots`  | `handlers/snapshots.rs`  | Snapshot CRUD + restore                                       |
 | `advanced`   | `handlers/advanced.rs`   | Clone, export, import                                         |
@@ -134,10 +134,12 @@ All paths are relative to the server root (e.g. `http://localhost:8100`).
 
 ### Files
 
-| Method | Path                                 | Handler                | Description                       |
-|--------|--------------------------------------|------------------------|-----------------------------------|
-| PUT    | `/v1/default/boxes/{box_id}/files`   | `files::upload_files`  | Upload tar, extract into box      |
-| GET    | `/v1/default/boxes/{box_id}/files`   | `files::download_files`| Download path as tar              |
+| Method | Path                                                  | Handler                | Description                                          |
+|--------|-------------------------------------------------------|------------------------|------------------------------------------------------|
+| PUT    | `/v1/default/boxes/{box_id}/files`                    | `files::upload_files`  | Upload one file (raw octet-stream body)              |
+| GET    | `/v1/default/boxes/{box_id}/files`                    | `files::download_files`| Download one file (raw octet-stream body)            |
+| POST   | `/v1/default/boxes/{box_id}/files/bulk-upload`        | `files::bulk_upload`   | Bulk upload via multipart/form-data                  |
+| POST   | `/v1/default/boxes/{box_id}/files/bulk-download`      | `files::bulk_download` | Bulk download (JSON paths → multipart response)      |
 
 ### Metrics
 
