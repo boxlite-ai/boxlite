@@ -147,10 +147,16 @@ type stagedBulkUpload struct {
 // and copies each file into the box via CopyInto. The endpoint is
 // intentionally tolerant: parsing and copy errors are collected per-file
 // rather than short-circuiting, so a single bad pair does not abort an
-// otherwise-valid batch. This mirrors the daemon-side handler at
-// apps/daemon/pkg/toolbox/fs/upload_files.go and the Daytona endpoint
-// it was modelled on (proxy.app.daytona.io/toolbox/{id}/files/bulk-upload),
-// the original motivation being "hundreds of small files at sandbox init".
+// otherwise-valid batch.
+//
+// Wire shape DIVERGES from the daemon-side handler at
+// apps/daemon/pkg/toolbox/fs/upload_files.go: the daemon returns 200
+// with an empty body on success and 400 with {"errors":[...]} on
+// failure; this endpoint returns {"uploaded":[...]} on success and
+// {"uploaded":[...], "errors":[...]} on partial failure so callers can
+// tell which files made it without re-querying. The multipart parsing
+// behaviour still mirrors the daemon (files[N].path must precede
+// files[N].file, per-file errors don't abort the batch).
 //
 //	@Summary		Bulk-upload many files to a box in one multipart request
 //	@Description	Accepts a multipart/form-data body where each file is described
