@@ -233,21 +233,7 @@ export class BoxliteProxyController {
       'Per-file errors are collected rather than aborting the batch. Proxied to the runner.',
   })
   @ApiConsumes('multipart/form-data')
-  @ApiBody({
-    description:
-      'Paired files[N].path (string) + files[N].file (binary) parts. The path and file ' +
-      'parts for a given index N belong to the same file; the index space can be sparse.',
-    required: true,
-    schema: {
-      type: 'object',
-      additionalProperties: {
-        oneOf: [
-          { type: 'string', description: 'Destination path for the corresponding files[N].file part.' },
-          { type: 'string', format: 'binary', description: 'Raw file bytes for the corresponding files[N].path part.' },
-        ],
-      },
-    },
-  })
+  // No @ApiBody — files[N].path / files[N].file isn't expressible as an OpenAPI schema; description above documents the contract.
   @ApiResponse({ status: 200, description: 'All files uploaded' })
   @ApiResponse({ status: 400, description: 'Partial success — see body for uploaded + errors lists' })
   async proxyFilesBulkUpload(
