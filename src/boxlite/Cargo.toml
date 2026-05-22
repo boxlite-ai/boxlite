@@ -88,7 +88,7 @@ rcgen = "0.13"
 time = "0.3"
 
 # REST backend (optional)
-reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"], optional = true, default-features = false }
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream", "multipart"], optional = true, default-features = false }
 urlencoding = { version = "2.1", optional = true }
 tokio-tungstenite = { version = "0.24", optional = true, default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 

@@ -47,6 +47,131 @@ impl RestBox {
     fn box_id_str(&self) -> String {
         self.cached_info.read().id.to_string()
     }
+
+    /// Send one file as a raw octet-stream body to PUT /files. Called by
+    /// the file-mode branch of `copy_into`.
+    async fn copy_into_single_file(
+        &self,
+        host_src: &Path,
+        container_dst: &str,
+        opts: &CopyOptions,
+    ) -> BoxliteResult<()> {
+        let box_id = self.box_id_str();
+        let bytes = std::fs::read(host_src).map_err(|e| {
+            BoxliteError::Internal(format!(
+                "copy_into read {} failed: {}",
+                host_src.display(),
+                e
+            ))
+        })?;
+
+        let encoded_dst = urlencoding::encode(container_dst);
+        let path = format!(
+            "/boxes/{}/files?path={}&overwrite={}",
+            box_id, encoded_dst, opts.overwrite
+        );
+        let resp = self
+            .client
+            .authorized_request(Method::PUT, &path)
+            .await?
+            .header("Content-Type", "application/octet-stream")
+            .body(bytes)
+            .send()
+            .await
+            .map_err(|e| BoxliteError::Internal(format!("copy_into upload failed: {}", e)))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(BoxliteError::Internal(format!(
+                "copy_into failed (HTTP {}): {}",
+                status, text
+            )));
+        }
+        Ok(())
+    }
+
+    /// Walk `host_src` and stream each file as a `files[N].path` /
+    /// `files[N].file` pair through POST /files/bulk-upload. The runner
+    /// requires `.path` to precede `.file` for each index; reqwest's
+    /// `multipart::Form` preserves insertion order, so we add them in
+    /// the right sequence here.
+    async fn copy_into_directory(
+        &self,
+        host_src: &Path,
+        container_dst: &str,
+        opts: &CopyOptions,
+    ) -> BoxliteResult<()> {
+        let box_id = self.box_id_str();
+
+        let entries = collect_dir_files(host_src, opts.follow_symlinks)?;
+        if entries.is_empty() {
+            // No regular files under the source — nothing to upload.
+            // Mirrors the local backend, which extracts an empty tar
+            // without touching the destination.
+            return Ok(());
+        }
+
+        let dst_prefix = if opts.include_parent {
+            let base = host_src
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .ok_or_else(|| {
+                    BoxliteError::Config(format!(
+                        "include_parent set but {} has no basename",
+                        host_src.display()
+                    ))
+                })?;
+            join_container_path(container_dst.trim_end_matches('/'), &base)
+        } else {
+            container_dst.trim_end_matches('/').to_string()
+        };
+
+        let mut form = reqwest::multipart::Form::new();
+        for (idx, (abs, rel)) in entries.iter().enumerate() {
+            let rel_posix = rel
+                .to_string_lossy()
+                .replace(std::path::MAIN_SEPARATOR, "/");
+            let dest = join_container_path(&dst_prefix, &rel_posix);
+            let bytes = std::fs::read(abs).map_err(|e| {
+                BoxliteError::Internal(format!(
+                    "copy_into read {} failed: {}",
+                    abs.display(),
+                    e
+                ))
+            })?;
+            form = form.text(format!("files[{}].path", idx), dest);
+            let part = reqwest::multipart::Part::bytes(bytes)
+                .file_name(rel_posix.clone())
+                .mime_str("application/octet-stream")
+                .map_err(|e| {
+                    BoxliteError::Internal(format!("copy_into multipart part: {}", e))
+                })?;
+            form = form.part(format!("files[{}].file", idx), part);
+        }
+
+        let path = format!("/boxes/{}/files/bulk-upload", box_id);
+        let resp = self
+            .client
+            .authorized_request(Method::POST, &path)
+            .await?
+            .multipart(form)
+            .send()
+            .await
+            .map_err(|e| {
+                BoxliteError::Internal(format!("copy_into bulk-upload failed: {}", e))
+            })?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(BoxliteError::Internal(format!(
+                "copy_into bulk-upload failed (HTTP {}): {}",
+                status, text
+            )));
+        }
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -209,57 +334,71 @@ impl BoxBackend for RestBox {
         &self,
         host_src: &Path,
         container_dst: &str,
-        _opts: CopyOptions,
+        opts: CopyOptions,
     ) -> BoxliteResult<()> {
-        let box_id = self.box_id_str();
-
-        // Create tar archive from host path
-        let tar_bytes = create_tar_from_path(host_src)?;
-
-        // Upload tar to server
-        let encoded_dst = urlencoding::encode(container_dst);
-        let path = format!("/boxes/{}/files?path={}", box_id, encoded_dst);
-        let builder = self
-            .client
-            .authorized_request(Method::PUT, &path)
-            .await?
-            .header("Content-Type", "application/x-tar")
-            .body(tar_bytes);
-
-        let resp = builder
-            .send()
-            .await
-            .map_err(|e| BoxliteError::Internal(format!("copy_into upload failed: {}", e)))?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            return Err(BoxliteError::Internal(format!(
-                "copy_into failed (HTTP {}): {}",
-                status, text
-            )));
+        // Wire shape is dictated by the new runner endpoints in
+        // apps/runner/pkg/api/controllers/boxlite_files.go: a regular
+        // file goes through PUT /files (raw octet-stream) and a directory
+        // fans out through POST /files/bulk-upload (multipart with
+        // files[N].path / files[N].file pairs). The legacy single-tar
+        // path is gone, so this method MUST split on host_src metadata
+        // before issuing any request.
+        if container_dst.is_empty() {
+            return Err(BoxliteError::Config(
+                "destination path cannot be empty".into(),
+            ));
         }
-        Ok(())
+
+        let meta = std::fs::metadata(host_src).map_err(|e| {
+            BoxliteError::Internal(format!(
+                "copy_into stat {} failed: {}",
+                host_src.display(),
+                e
+            ))
+        })?;
+
+        if meta.is_file() {
+            self.copy_into_single_file(host_src, container_dst, &opts)
+                .await
+        } else if meta.is_dir() {
+            opts.validate_for_dir()?;
+            self.copy_into_directory(host_src, container_dst, &opts)
+                .await
+        } else {
+            Err(BoxliteError::Config(format!(
+                "copy_into source {} is neither a regular file nor a directory",
+                host_src.display()
+            )))
+        }
     }
 
     async fn copy_out(
         &self,
         container_src: &str,
         host_dst: &Path,
-        _opts: CopyOptions,
+        opts: CopyOptions,
     ) -> BoxliteResult<()> {
-        let box_id = self.box_id_str();
+        // GET /files returns raw octet-stream for a single file; directory
+        // fan-out lives in POST /files/bulk-download which needs an
+        // explicit path list (the runner has no list endpoint). The
+        // single-source/single-destination shape of this trait method can
+        // only express single-file copy under the new contract, so that's
+        // what we do here.
+        if container_src.is_empty() {
+            return Err(BoxliteError::Config("source path cannot be empty".into()));
+        }
 
-        // Download tar from server
+        let box_id = self.box_id_str();
         let encoded_src = urlencoding::encode(container_src);
-        let path = format!("/boxes/{}/files?path={}", box_id, encoded_src);
-        let builder = self
+        let path = format!(
+            "/boxes/{}/files?path={}&follow_symlinks={}",
+            box_id, encoded_src, opts.follow_symlinks
+        );
+        let resp = self
             .client
             .authorized_request(Method::GET, &path)
             .await?
-            .header("Accept", "application/x-tar");
-
-        let resp = builder
+            .header("Accept", "application/octet-stream")
             .send()
             .await
             .map_err(|e| BoxliteError::Internal(format!("copy_out download failed: {}", e)))?;
@@ -273,13 +412,42 @@ impl BoxBackend for RestBox {
             )));
         }
 
-        let tar_bytes = resp
+        let bytes = resp
             .bytes()
             .await
             .map_err(|e| BoxliteError::Internal(format!("copy_out read body failed: {}", e)))?;
 
-        // Extract tar to host path
-        extract_tar_to_path(&tar_bytes, host_dst)
+        // docker-cp style host_dst handling: if it already exists as a
+        // directory, land the file under it with the source basename so
+        // callers can pass either a target file path or a target dir.
+        let target = if host_dst.is_dir() {
+            let basename = std::path::Path::new(container_src)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "downloaded".to_string());
+            host_dst.join(basename)
+        } else {
+            if let Some(parent) = host_dst.parent() {
+                if !parent.as_os_str().is_empty() {
+                    std::fs::create_dir_all(parent).map_err(|e| {
+                        BoxliteError::Internal(format!(
+                            "copy_out create {} failed: {}",
+                            parent.display(),
+                            e
+                        ))
+                    })?;
+                }
+            }
+            host_dst.to_path_buf()
+        };
+
+        std::fs::write(&target, &bytes).map_err(|e| {
+            BoxliteError::Internal(format!(
+                "copy_out write {} failed: {}",
+                target.display(),
+                e
+            ))
+        })
     }
 
     async fn clone_box(
@@ -853,64 +1021,56 @@ async fn emit_or_fallback(
 }
 
 // ============================================================================
-// Tar Helpers
+// Directory walk helpers (bulk-upload)
 // ============================================================================
 
-/// Create a tar archive from a host file or directory.
-fn create_tar_from_path(host_src: &Path) -> BoxliteResult<Vec<u8>> {
-    let mut archive = tar::Builder::new(Vec::new());
-
-    if host_src.is_dir() {
-        archive.append_dir_all(".", host_src).map_err(|e| {
-            BoxliteError::Internal(format!(
-                "failed to create tar from {}: {}",
-                host_src.display(),
-                e
-            ))
+/// Walk `root`, returning `(abs_path, rel_path)` for every regular file
+/// underneath it. `follow_symlinks` toggles whether symlinks are
+/// dereferenced during the walk; non-file entries are skipped because the
+/// new bulk-upload endpoint only accepts file content parts.
+fn collect_dir_files(
+    root: &Path,
+    follow_symlinks: bool,
+) -> BoxliteResult<Vec<(std::path::PathBuf, std::path::PathBuf)>> {
+    let mut out = Vec::new();
+    for entry in walkdir::WalkDir::new(root).follow_links(follow_symlinks) {
+        let entry = entry.map_err(|e| {
+            BoxliteError::Internal(format!("copy_into walk {}: {}", root.display(), e))
         })?;
-    } else {
-        let file_name = host_src
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "file".to_string());
-        let mut file = std::fs::File::open(host_src).map_err(|e| {
-            BoxliteError::Internal(format!("failed to open {}: {}", host_src.display(), e))
-        })?;
-        archive.append_file(&file_name, &mut file).map_err(|e| {
-            BoxliteError::Internal(format!(
-                "failed to add {} to tar: {}",
-                host_src.display(),
-                e
-            ))
-        })?;
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let abs = entry.path().to_path_buf();
+        let rel = entry
+            .path()
+            .strip_prefix(root)
+            .map_err(|e| {
+                BoxliteError::Internal(format!(
+                    "copy_into strip_prefix({}, {}): {}",
+                    entry.path().display(),
+                    root.display(),
+                    e
+                ))
+            })?
+            .to_path_buf();
+        out.push((abs, rel));
     }
-
-    archive
-        .into_inner()
-        .map_err(|e| BoxliteError::Internal(format!("failed to finalize tar archive: {}", e)))
+    Ok(out)
 }
 
-/// Extract a tar archive to a host directory.
-fn extract_tar_to_path(tar_bytes: &[u8], host_dst: &Path) -> BoxliteResult<()> {
-    // Ensure parent directory exists
-    if let Some(parent) = host_dst.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| {
-            BoxliteError::Internal(format!(
-                "failed to create directory {}: {}",
-                parent.display(),
-                e
-            ))
-        })?;
+/// Join a container path (POSIX, forward-slash) with a relative segment,
+/// dropping any empty components. The runner side treats `files[N].path`
+/// as the literal destination, so `/app/data//file` would land at the
+/// wrong place — collapse the join here.
+fn join_container_path(prefix: &str, rel: &str) -> String {
+    let rel = rel.trim_start_matches('/');
+    if rel.is_empty() {
+        prefix.to_string()
+    } else if prefix.is_empty() {
+        format!("/{}", rel)
+    } else {
+        format!("{}/{}", prefix, rel)
     }
-
-    let mut archive = tar::Archive::new(tar_bytes);
-    archive.unpack(host_dst).map_err(|e| {
-        BoxliteError::Internal(format!(
-            "failed to extract tar to {}: {}",
-            host_dst.display(),
-            e
-        ))
-    })
 }
 
 // ============================================================================
