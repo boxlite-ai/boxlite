@@ -62,7 +62,34 @@ if [ ! -S /var/run/docker.sock ]; then
     echo "[exit=124]"
     exit 124
 fi
-echo "[probe] socket present, running build"
+echo "[probe] socket present"
+
+# Pre-pull alpine via the mirror fallback list so BuildKit's later
+# FROM resolution finds it locally. gvproxy's DNS (192.168.127.1:53)
+# can flake on cold boots when contacting registry-1.docker.io
+# directly; the mirrors are reliable from this host. Pull from
+# whichever mirror responds first, then `docker tag` to the
+# canonical name so `FROM alpine:3.19` resolves from the local
+# image store.
+echo "[probe] pre-pull alpine:3.19 (mirror fallback)"
+pull_ok=0
+for reg in docker.m.daocloud.io docker.xuanyuan.me docker.1ms.run docker.io; do
+    if docker pull "$reg/library/alpine:3.19" >/probe/pull.log 2>&1; then
+        docker tag "$reg/library/alpine:3.19" alpine:3.19
+        pull_ok=1
+        echo "[probe] pre-pull ok via $reg"
+        break
+    fi
+    echo "[probe] pull via $reg failed"
+    tail -3 /probe/pull.log
+done
+if [ "$pull_ok" != "1" ]; then
+    echo "[probe] pull never succeeded — every mirror failed"
+    echo "[exit=125]"
+    exit 125
+fi
+
+echo "[probe] running build"
 docker build -t boxlite-dind-test:1 /probe/ctx
 echo "[exit=$?]"
 "#;

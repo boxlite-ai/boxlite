@@ -233,11 +233,15 @@ test\:unit\:ffi:
 	fi
 
 # Thin alias: dind end-to-end is part of the forced `test:integration:cli`
-# matrix; this target just narrows nextest's filter to that one test for
-# fast iteration. Heavy one-time `make libkrunfw-dind` (~10–20 min, cached
-# after) is required — see test:integration:cli below.
+# matrix; this target just narrows nextest's filter to the dind tests for
+# fast iteration. FILTER is a substring (`-E 'test(~dind_)'`) — it catches
+# every test whose name contains `dind_`, currently:
+#   - `dind_supports_docker_build`        (`src/cli/tests/dind_build.rs`)
+#   - `dind_compose_multi_service_network` (`src/cli/tests/dind_compose.rs`)
+# Heavy one-time `make libkrunfw-dind` (~10–20 min, cached after) is
+# required — see test:integration:cli below.
 test\:integration\:dind:
-	@$(MAKE) test:integration:cli FILTER=dind_supports_docker_build
+	@$(MAKE) test:integration:cli FILTER=dind_
 
 # CLI integration tests (forced matrix, including dind end-to-end).
 #
