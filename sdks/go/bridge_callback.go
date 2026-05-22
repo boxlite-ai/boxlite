@@ -177,6 +177,35 @@ func goBoxliteOnImagePull(res *C.CImagePullResult, errPtr *C.CBoxliteError, user
 	ch <- imagePullResult{value: out}
 }
 
+//export goBoxliteOnCopyOutMany
+func goBoxliteOnCopyOutMany(list *C.CCopyOutOutcomeList, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
+	h := ptrToHandle(userData)
+	if h == 0 {
+		return
+	}
+	if !claimOrFreePayload(h, &list, func(l **C.CCopyOutOutcomeList) {
+		if l != nil && *l != nil {
+			C.boxlite_free_copy_out_outcome_list(*l)
+		}
+	}) {
+		return
+	}
+	defer h.Delete()
+	ch, ok := h.Value().(chan copyOutManyResult)
+	if !ok {
+		return
+	}
+	if err := errorFromCError(errPtr); err != nil {
+		ch <- copyOutManyResult{err: err}
+		return
+	}
+	outcomes := convertCopyOutOutcomeList(list)
+	if list != nil {
+		C.boxlite_free_copy_out_outcome_list(list)
+	}
+	ch <- copyOutManyResult{value: outcomes}
+}
+
 //export goBoxliteOnImageList
 func goBoxliteOnImageList(list *C.CImageInfoList, errPtr *C.CBoxliteError, userData unsafe.Pointer) {
 	h := ptrToHandle(userData)
@@ -448,6 +477,11 @@ type imagePullResult struct {
 
 type imageListResult struct {
 	value []ImageInfo
+	err   error
+}
+
+type copyOutManyResult struct {
+	value []CopyOutOutcome
 	err   error
 }
 
