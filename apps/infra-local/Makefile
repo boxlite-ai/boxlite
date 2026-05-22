@@ -7,7 +7,8 @@
 PY ?= python
 
 .PHONY: help up down ps doctor logs wipe itest test install load-schema up-with-schema e2e itest-all \
-        stack-build stack-up stack-down stack-restart stack-status stack-logs stack-reset stack-reset-hard stack-nuke
+        stack-build stack-up stack-down stack-restart stack-status stack-logs stack-reset stack-reset-hard stack-nuke \
+        seed-init-data
 
 help:                  ## show this help
 	@awk -F':.*## ' '/^[a-zA-Z][a-zA-Z0-9_-]*:.*## / { printf "  %-16s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -48,6 +49,9 @@ load-schema:           ## load apps/infra-local/sql/schema-baseline.sql into loc
 up-with-schema:        ## make up + make load-schema (one-shot for a fresh stack)
 	$(MAKE) up
 	$(MAKE) load-schema
+
+seed-init-data:        ## ensure dashboard-required base data (admin org, default region, wait snapshot)
+	./scripts/seed-init-data.sh
 
 # ── L2 stack wrappers (L1 + native API/Runner/Proxy/Dashboard) ───────────────
 

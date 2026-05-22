@@ -169,6 +169,20 @@ for comp in "${COMPONENTS[@]}"; do
 done
 
 echo
+# If api + runner just started, ensure init data is in place + wait for
+# default snapshot. This is the chain dashboard needs to actually let a
+# user click "+ Create Sandbox" successfully. Without it, the page works
+# but the first sandbox-create call 400s ("Snapshot ubuntu:22.04 not
+# found"). Idempotent — skips work that's done.
+case " ${COMPONENTS[*]} " in
+  *" api "*|*" runner "*)
+    log "ensuring init data + default snapshot..."
+    # --no-bounce: api is already alive and we just woke it up;
+    # restarting again would be wasteful.
+    "${SCRIPT_DIR}/seed-init-data.sh" --no-bounce || warn "init-data seed reported issues — see output above"
+    ;;
+esac
+
 ok "stack up — see status with: make stack-status"
 echo "  Dashboard:    http://localhost:${PORT_DASHBOARD}"
 echo "  API:          http://localhost:${PORT_API}/api"
