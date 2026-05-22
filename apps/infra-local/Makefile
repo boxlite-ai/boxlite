@@ -6,7 +6,8 @@
 
 PY ?= python
 
-.PHONY: help up down ps doctor logs wipe itest test install load-schema up-with-schema e2e itest-all
+.PHONY: help up down ps doctor logs wipe itest test install load-schema up-with-schema e2e itest-all \
+        stack-build stack-up stack-down stack-restart stack-status stack-logs stack-reset stack-reset-hard stack-nuke
 
 help:                  ## show this help
 	@awk -F':.*## ' '/^[a-zA-Z][a-zA-Z0-9_-]*:.*## / { printf "  %-16s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -47,3 +48,32 @@ load-schema:           ## load apps/infra-local/sql/schema-baseline.sql into loc
 up-with-schema:        ## make up + make load-schema (one-shot for a fresh stack)
 	$(MAKE) up
 	$(MAKE) load-schema
+
+# ── L2 stack wrappers (L1 + native API/Runner/Proxy/Dashboard) ───────────────
+
+stack-build:           ## build native runner + proxy binaries
+	./scripts/stack-build.sh
+
+stack-up:              ## ensure L1 up + start all L2 native processes (idempotent)
+	./scripts/stack-up.sh $(COMPONENTS)
+
+stack-down:            ## stop all L2 native processes (L1 stays up; add ARGS=--all to stop L1 too)
+	./scripts/stack-down.sh $(ARGS) $(COMPONENTS)
+
+stack-restart:         ## restart one or more L2 components (runner = also rebuild)
+	./scripts/stack-restart.sh $(COMPONENTS)
+
+stack-status:          ## one-screen health check across L1 + L2
+	./scripts/stack-status.sh
+
+stack-logs:            ## tail logs (COMPONENT=api|runner|proxy|dashboard|all)
+	./scripts/stack-logs.sh $(COMPONENT)
+
+stack-reset:           ## wipe L2 runtime state (PG user data + runner home; L1 + schema preserved)
+	./scripts/stack-reset.sh
+
+stack-reset-hard:      ## like stack-reset, but also re-applies prod schema baseline
+	./scripts/stack-reset.sh --hard
+
+stack-nuke:            ## ABSOLUTE NUKE: L1 boxes destroyed + data wiped + logs cleared
+	./scripts/stack-reset.sh --nuke

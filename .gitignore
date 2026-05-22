@@ -196,3 +196,4 @@ sdks/go/libboxlite.a                     # 115 MB, prebuilt from upstream releas
 sdks/go/libboxlite.dylib                 # 73 MB, prebuilt from upstream releases
 sdks/go/boxlite-c-v*/                    # extracted prebuilt archive
 l2-*.png
+apps/infra-local/.logs/
