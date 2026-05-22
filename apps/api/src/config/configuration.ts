@@ -11,6 +11,12 @@ const configuration = {
   runMigrations: process.env.RUN_MIGRATIONS === 'true',
   port: parseInt(process.env.PORT, 10),
   appUrl: process.env.APP_URL,
+  // Internal admin allowlist (POL-14): emails promoted to SystemRole.ADMIN on login.
+  // Add a colleague = append their email here (env INTERNAL_ADMIN_EMAILS) + they re-login.
+  internalAdminEmails: (process.env.INTERNAL_ADMIN_EMAILS || '')
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean),
   database: {
     host: process.env.DB_HOST,
     port: parseInt(process.env.DB_PORT || '5432', 10),
