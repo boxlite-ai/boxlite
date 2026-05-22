@@ -30,21 +30,18 @@ stop_component() {
   fi
   log "stopping $comp (PID $pid)..."
   # SIGTERM first, then SIGKILL after 5s.
-  # Use pgid kill to clean up child workers (e.g. nx → node).
-  local pgid
-  pgid="$(ps -o pgid= -p "$pid" | tr -d ' ')"
-  if [ -n "$pgid" ]; then
-    kill -TERM -"$pgid" 2>/dev/null || true
-  else
-    kill -TERM "$pid" 2>/dev/null || true
-  fi
+  #
+  # IMPORTANT: do NOT `kill -PGID`. stack-up runs all 4 components from the
+  # same parent shell, so they share the launcher's pgid — pgid-kill takes
+  # out unrelated siblings. The per-component pkill-by-name sweep below
+  # handles the actual server children (nx serve → node, etc.).
+  kill -TERM "$pid" 2>/dev/null || true
   local elapsed=0
   while kill -0 "$pid" 2>/dev/null; do
     sleep 1
     elapsed=$((elapsed + 1))
     if [ "$elapsed" -ge 5 ]; then
       log "$comp not responding to SIGTERM, sending SIGKILL"
-      [ -n "$pgid" ] && kill -KILL -"$pgid" 2>/dev/null || true
       kill -KILL "$pid" 2>/dev/null || true
       break
     fi
