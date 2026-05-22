@@ -200,4 +200,85 @@ mod tests {
         assert!(!is_privileged(&spec_with_annotation(Some(""))));
         assert!(!is_privileged(&spec_with_annotation(None)));
     }
+
+    /// Real-errno coverage for the umount2 errno-classification fix
+    /// (PR #568 review comment by nieyy). Inside a non-root process,
+    /// `umount2("/proc/sys", MNT_DETACH)` returns `EPERM`, *not*
+    /// `EINVAL` — empirically verified on Linux 7.0.0 kernel — so the
+    /// privileged exec path hits the "unexpected errno" branch.
+    ///
+    /// Pre-fix: `let _ = umount2(...)` swallowed EPERM and fell through
+    /// to `inner.exec(spec)`, which would `execvp` and produce a much
+    /// less useful "/proc/sys read-only" downstream failure (or no
+    /// error at all, leaving the privileged contract silently
+    /// half-honoured). Post-fix: we surface `ExecutorError::Other`
+    /// carrying the path + errno, blocking the exec entirely.
+    ///
+    /// This test runs as the regular `cargo test` user (non-root), so
+    /// it hits the EPERM path naturally without sudo / seccomp setup.
+    #[test]
+    fn umount2_unexpected_errno_surfaces_as_executor_error() {
+        let executor = BoxliteExecutor::new();
+        let spec = spec_with_annotation(Some("true"));
+
+        let result = executor.exec(&spec);
+
+        match result {
+            Err(ExecutorError::Other(msg)) => {
+                assert!(
+                    msg.contains("unexpected umount2 errno"),
+                    "expected an `unexpected umount2 errno` error, got: {msg}"
+                );
+                assert!(
+                    msg.contains("--privileged"),
+                    "error message must explain this is from the privileged \
+                     unmount path so the operator can correlate it with \
+                     their --privileged invocation; got: {msg}"
+                );
+                // The path that failed should be one of the OCI default
+                // ro/masked paths — anchor on `/proc/` so the test
+                // tolerates the iteration order without lock-step.
+                assert!(
+                    msg.contains("/proc/"),
+                    "error message must carry the path that failed for \
+                     diagnosability; got: {msg}"
+                );
+            }
+            Err(other) => panic!(
+                "expected ExecutorError::Other for unexpected umount2 errno, got {other:?}"
+            ),
+            Ok(()) => panic!(
+                "executor must NOT silently succeed when umount2 returns \
+                 an unexpected errno; that's exactly the pre-fix bug — \
+                 the privileged unmount step was skipped and the box \
+                 would have run with stale ro mounts in place"
+            ),
+        }
+    }
+
+    /// Non-privileged specs must not trigger the umount loop at all.
+    /// Pre-fix behaviour and post-fix behaviour must be identical here
+    /// — the executor delegates straight to `DefaultExecutor::exec`,
+    /// which then `execvp`s. We can't easily assert "no umount
+    /// happened", but the absence of the `unexpected umount2 errno`
+    /// error tells us the loop body was never entered.
+    #[test]
+    fn umount2_loop_skipped_for_non_privileged_specs() {
+        let executor = BoxliteExecutor::new();
+        let spec = spec_with_annotation(None);
+
+        let result = executor.exec(&spec);
+
+        if let Err(ExecutorError::Other(msg)) = &result {
+            assert!(
+                !msg.contains("unexpected umount2 errno"),
+                "non-privileged exec must skip the umount loop entirely; \
+                 got an unexpected umount-related error: {msg}"
+            );
+        }
+        // `result` may still be Err (libcontainer's DefaultExecutor will
+        // try to execvp `/bin/true` and may fail in the test process —
+        // that's fine; what we care about is *which* error path was hit,
+        // and the unmount-loop path must not have been one of them).
+    }
 }
