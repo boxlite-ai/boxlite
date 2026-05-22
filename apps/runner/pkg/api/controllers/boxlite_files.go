@@ -22,6 +22,29 @@ const (
 	bulkUploadMaxFileBytes = 256 << 20      // 256 MiB per files[N].file part
 )
 
+// boxFS is the narrow slice of the runner Boxlite client that the file
+// handlers use. Defined here so tests can drive the happy path through
+// a fake without booting the real SDK singleton.
+type boxFS interface {
+	CopyInto(ctx context.Context, boxId, hostSrc, guestDst string) error
+	CopyOut(ctx context.Context, boxId, guestSrc, hostDst string) error
+}
+
+// boxFSOverride lets tests substitute the boxFS implementation; prod
+// leaves it nil and resolves via runner.GetInstance() at call time.
+var boxFSOverride boxFS
+
+func resolveBoxFS() (boxFS, error) {
+	if boxFSOverride != nil {
+		return boxFSOverride, nil
+	}
+	r, err := runner.GetInstance(nil)
+	if err != nil {
+		return nil, err
+	}
+	return r.Boxlite, nil
+}
+
 // BoxliteFileUpload streams a single file's raw bytes from the request
 // body into a path inside the box. The body is buffered to a host tmp
 // file first because the underlying SDK CopyInto takes a host path, not
@@ -40,7 +63,7 @@ const (
 //	@Failure		500	{object}	map[string]string	"internal error"
 //	@Router			/v1/boxes/{boxId}/files [put]
 func BoxliteFileUpload(ctx *gin.Context) {
-	r, err := runner.GetInstance(nil)
+	fs, err := resolveBoxFS()
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -67,7 +90,7 @@ func BoxliteFileUpload(ctx *gin.Context) {
 	}
 	tmpFile.Close()
 
-	if err := r.Boxlite.CopyInto(ctx.Request.Context(), boxId, tmpFile.Name(), destPath); err != nil {
+	if err := fs.CopyInto(ctx.Request.Context(), boxId, tmpFile.Name(), destPath); err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("copy failed: %s", err)})
 		return
 	}
@@ -92,7 +115,7 @@ func BoxliteFileUpload(ctx *gin.Context) {
 //	@Failure		500		{object}	map[string]string	"internal error"
 //	@Router			/v1/boxes/{boxId}/files [get]
 func BoxliteFileDownload(ctx *gin.Context) {
-	r, err := runner.GetInstance(nil)
+	fs, err := resolveBoxFS()
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -117,7 +140,7 @@ func BoxliteFileDownload(ctx *gin.Context) {
 	tmpFile.Close()
 	defer os.Remove(tmpPath)
 
-	if err := r.Boxlite.CopyOut(ctx.Request.Context(), boxId, srcPath, tmpPath); err != nil {
+	if err := fs.CopyOut(ctx.Request.Context(), boxId, srcPath, tmpPath); err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("copy failed: %s", err)})
 		return
 	}
@@ -205,13 +228,13 @@ func BoxliteFilesBulkUpload(ctx *gin.Context) {
 
 	uploaded := make([]string, 0, len(staged))
 	if len(staged) > 0 {
-		r, err := runner.GetInstance(nil)
+		fs, err := resolveBoxFS()
 		if err != nil {
 			ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
 		for _, s := range staged {
-			if err := r.Boxlite.CopyInto(ctx.Request.Context(), boxId, s.Src, s.Dest); err != nil {
+			if err := fs.CopyInto(ctx.Request.Context(), boxId, s.Src, s.Dest); err != nil {
 				errs = append(errs, fmt.Sprintf("%s: copy: %v", s.Dest, err))
 				continue
 			}
@@ -399,7 +422,7 @@ func BoxliteFilesBulkDownload(ctx *gin.Context) {
 		return
 	}
 
-	r, err := runner.GetInstance(nil)
+	fs, err := resolveBoxFS()
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -417,7 +440,7 @@ func BoxliteFilesBulkDownload(ctx *gin.Context) {
 	defer mw.Close()
 
 	for _, srcPath := range req.Paths {
-		streamOneBulkDownload(ctx.Request.Context(), r, mw, boxId, srcPath)
+		streamOneBulkDownload(ctx.Request.Context(), fs, mw, boxId, srcPath)
 	}
 }
 
@@ -425,7 +448,7 @@ func BoxliteFilesBulkDownload(ctx *gin.Context) {
 // and streams it as one multipart part. Errors at any stage are emitted as
 // an error part so the batch continues. The tmp file is removed before
 // return regardless of outcome.
-func streamOneBulkDownload(reqCtx context.Context, r *runner.Runner, mw *multipart.Writer, boxId, srcPath string) {
+func streamOneBulkDownload(reqCtx context.Context, fs boxFS, mw *multipart.Writer, boxId, srcPath string) {
 	tmpFile, err := os.CreateTemp("", "boxlite-bulk-download-*")
 	if err != nil {
 		writeBulkDownloadErrorPart(mw, srcPath, fmt.Sprintf("tmp: %v", err))
@@ -435,7 +458,7 @@ func streamOneBulkDownload(reqCtx context.Context, r *runner.Runner, mw *multipa
 	tmpFile.Close()
 	defer os.Remove(tmpPath)
 
-	if err := r.Boxlite.CopyOut(reqCtx, boxId, srcPath, tmpPath); err != nil {
+	if err := fs.CopyOut(reqCtx, boxId, srcPath, tmpPath); err != nil {
 		writeBulkDownloadErrorPart(mw, srcPath, fmt.Sprintf("copy: %v", err))
 		return
 	}

@@ -2,15 +2,66 @@ package controllers
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/gin-gonic/gin"
 )
+
+// fakeBoxFS captures CopyInto / CopyOut calls and lets tests stash file
+// content or stage canned bytes for the download path. The hooks (onCopyIn /
+// onCopyOut) run with the mutex held.
+type fakeBoxFS struct {
+	mu         sync.Mutex
+	intoCalls  []fakeCopyCall
+	outCalls   []fakeCopyCall
+	onCopyIn   func(boxId, src, dest string) error
+	onCopyOut  func(boxId, src, dest string) error
+}
+
+type fakeCopyCall struct {
+	boxId, src, dest string
+	srcContents      []byte
+}
+
+func (f *fakeBoxFS) CopyInto(_ context.Context, boxId, hostSrc, guestDst string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	// Snapshot the host tmp file's contents before the handler removes it,
+	// so tests can assert that the request body actually landed on disk.
+	body, _ := os.ReadFile(hostSrc)
+	f.intoCalls = append(f.intoCalls, fakeCopyCall{boxId: boxId, src: hostSrc, dest: guestDst, srcContents: body})
+	if f.onCopyIn != nil {
+		return f.onCopyIn(boxId, hostSrc, guestDst)
+	}
+	return nil
+}
+
+func (f *fakeBoxFS) CopyOut(_ context.Context, boxId, guestSrc, hostDst string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.outCalls = append(f.outCalls, fakeCopyCall{boxId: boxId, src: guestSrc, dest: hostDst})
+	if f.onCopyOut != nil {
+		return f.onCopyOut(boxId, guestSrc, hostDst)
+	}
+	return nil
+}
+
+// installFakeBoxFS swaps in the fake for the duration of the test.
+func installFakeBoxFS(t *testing.T, fake *fakeBoxFS) {
+	t.Helper()
+	prev := boxFSOverride
+	boxFSOverride = fake
+	t.Cleanup(func() { boxFSOverride = prev })
+}
 
 func TestExtractBulkUploadIndex(t *testing.T) {
 	cases := []struct {
@@ -360,5 +411,131 @@ func TestBoxliteFilesBulkDownload_MissingPathsFieldReturns400(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "non-empty") {
 		t.Errorf("expected 'non-empty' in error body, got %s", w.Body.String())
+	}
+}
+
+// runFileUploadHandler routes a single-file PUT through gin like the
+// production engine does, so the handler reads ctx.Request.Body and
+// query params exactly as it would in serve.
+func runFileUploadHandler(target string, body io.Reader) *httptest.ResponseRecorder {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Handle(http.MethodPut, "/v1/boxes/:boxId/files", BoxliteFileUpload)
+	req := httptest.NewRequest(http.MethodPut, target, body)
+	req.Header.Set("Content-Type", "application/octet-stream")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	return w
+}
+
+// runFileDownloadHandler is the GET counterpart.
+func runFileDownloadHandler(target string) *httptest.ResponseRecorder {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Handle(http.MethodGet, "/v1/boxes/:boxId/files", BoxliteFileDownload)
+	req := httptest.NewRequest(http.MethodGet, target, nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	return w
+}
+
+// TestBoxliteFileUpload_RawBytesReachCopyInto pins that a PUT body is
+// written to a host tmp file and that file's path is handed to
+// CopyInto unchanged, with the raw request bytes intact.
+func TestBoxliteFileUpload_RawBytesReachCopyInto(t *testing.T) {
+	fake := &fakeBoxFS{}
+	installFakeBoxFS(t, fake)
+
+	const want = "hello-from-test"
+	w := runFileUploadHandler("/v1/boxes/box-42/files?path=/etc/dest.txt", strings.NewReader(want))
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d body=%s", w.Code, w.Body.String())
+	}
+	if len(fake.intoCalls) != 1 {
+		t.Fatalf("expected exactly 1 CopyInto call, got %d", len(fake.intoCalls))
+	}
+	call := fake.intoCalls[0]
+	if call.boxId != "box-42" {
+		t.Errorf("boxId: want box-42, got %q", call.boxId)
+	}
+	if call.dest != "/etc/dest.txt" {
+		t.Errorf("dest: want /etc/dest.txt, got %q", call.dest)
+	}
+	if string(call.srcContents) != want {
+		t.Errorf("tmp file contents: want %q, got %q", want, string(call.srcContents))
+	}
+}
+
+// TestBoxliteFileDownload_StreamsRawBytes pins that bytes written to the
+// host tmp dest by CopyOut are streamed back in the response body
+// verbatim with the expected octet-stream content type.
+func TestBoxliteFileDownload_StreamsRawBytes(t *testing.T) {
+	const guestBody = "downloaded-bytes"
+	fake := &fakeBoxFS{
+		onCopyOut: func(_ /*boxId*/, _ /*src*/, hostDst string) error {
+			return os.WriteFile(hostDst, []byte(guestBody), 0o644)
+		},
+	}
+	installFakeBoxFS(t, fake)
+
+	w := runFileDownloadHandler("/v1/boxes/box-42/files?path=/etc/foo.txt")
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	if got := w.Body.String(); got != guestBody {
+		t.Errorf("response body: want %q, got %q", guestBody, got)
+	}
+	if ct := w.Header().Get("Content-Type"); ct != "application/octet-stream" {
+		t.Errorf("Content-Type: want application/octet-stream, got %q", ct)
+	}
+	if cd := w.Header().Get("Content-Disposition"); !strings.Contains(cd, "foo.txt") {
+		t.Errorf("Content-Disposition should reference foo.txt, got %q", cd)
+	}
+}
+
+// TestBoxliteFilesBulkUpload_HappyPath pins that two valid pairs are
+// staged, CopyInto runs once per pair, and the response surfaces both
+// destinations under "uploaded" with no "errors" key.
+func TestBoxliteFilesBulkUpload_HappyPath(t *testing.T) {
+	fake := &fakeBoxFS{}
+	installFakeBoxFS(t, fake)
+
+	body, ct := writeBulkUploadBody(t, []struct{ name, value string }{
+		{"files[0].path", "/etc/a.txt"},
+		{"files[0].file", "alpha"},
+		{"files[1].path", "/etc/b.txt"},
+		{"files[1].file", "bravo"},
+	})
+	w := runBulkUploadHandler(http.MethodPost, "/v1/boxes/box-42/files/bulk-upload", ct, body)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	if len(fake.intoCalls) != 2 {
+		t.Fatalf("expected exactly 2 CopyInto calls, got %d", len(fake.intoCalls))
+	}
+	destsByContent := make(map[string]string, 2)
+	for _, c := range fake.intoCalls {
+		destsByContent[string(c.srcContents)] = c.dest
+	}
+	if destsByContent["alpha"] != "/etc/a.txt" {
+		t.Errorf("alpha staged at wrong dest: %q", destsByContent["alpha"])
+	}
+	if destsByContent["bravo"] != "/etc/b.txt" {
+		t.Errorf("bravo staged at wrong dest: %q", destsByContent["bravo"])
+	}
+
+	var resp struct {
+		Uploaded []string `json:"uploaded"`
+		Errors   []string `json:"errors"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v body=%s", err, w.Body.String())
+	}
+	if len(resp.Errors) != 0 {
+		t.Errorf("expected no errors on happy path, got %v", resp.Errors)
+	}
+	if len(resp.Uploaded) != 2 {
+		t.Fatalf("expected 2 uploaded entries, got %v", resp.Uploaded)
 	}
 }
