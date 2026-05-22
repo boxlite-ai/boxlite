@@ -595,8 +595,8 @@ the Swagger UI (development only).
 | `GET` | `/v1/boxes/:boxId/executions/:execId/attach` | WebSocket stdio + control |
 | `POST` | `/v1/boxes/:boxId/executions/:execId/signal` | Cooperative signal (whitelist) |
 | `POST` | `/v1/boxes/:boxId/executions/:execId/resize` | Resize TTY |
-| `PUT` | `/v1/boxes/:boxId/files?path=<dest>` | Upload tar |
-| `GET` | `/v1/boxes/:boxId/files?path=<src>` | Download tar |
+| `PUT` | `/v1/boxes/:boxId/files?path=<dest>` | Upload single file (raw body) |
+| `GET` | `/v1/boxes/:boxId/files?path=<src>` | Download single file (raw body) |
 | `POST` | `/v1/boxes/:boxId/files/bulk-upload` | Multipart fan-in: many files in one request |
 | `POST` | `/v1/boxes/:boxId/files/bulk-download` | Multipart fan-out: many files in one response |
 | `GET` | `/v1/boxes/:boxId/metrics` | Per-box metrics |
