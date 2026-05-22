@@ -10,6 +10,13 @@ from __future__ import annotations
 import boxlite
 import pytest
 
+# Skip entire module if CopyOutPair class is not available (native extension not built)
+if not hasattr(boxlite, "CopyOutPair"):
+    pytest.skip(
+        "boxlite.CopyOutPair not available (rebuild SDK with: make dev:python)",
+        allow_module_level=True,
+    )
+
 
 class TestCopyOutPairConstruction:
     """The new CopyOutPair binding accepts two strings and exposes

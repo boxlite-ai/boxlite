@@ -114,10 +114,7 @@ pub(crate) trait BoxBackend: Send + Sync {
     /// fans out to `copy_out` so non-REST backends Just Work. REST overrides
     /// for one round-trip. Per-pair failures land in the returned Vec; the
     /// overall `Result` is `Err` only on transport-level failures.
-    async fn copy_out_many(
-        &self,
-        pairs: &[CopyOutPair],
-    ) -> BoxliteResult<Vec<CopyOutOutcome>> {
+    async fn copy_out_many(&self, pairs: &[CopyOutPair]) -> BoxliteResult<Vec<CopyOutOutcome>> {
         let mut out = Vec::with_capacity(pairs.len());
         for p in pairs {
             let res = self

@@ -438,10 +438,7 @@ impl BoxBackend for RestBox {
         })
     }
 
-    async fn copy_out_many(
-        &self,
-        pairs: &[CopyOutPair],
-    ) -> BoxliteResult<Vec<CopyOutOutcome>> {
+    async fn copy_out_many(&self, pairs: &[CopyOutPair]) -> BoxliteResult<Vec<CopyOutOutcome>> {
         // Empty input: server returns 400 on empty `paths`; short-circuit
         // on the client side so callers get a stable "no work, no error"
         // semantic. See spec §"REST backend override" rationale.
@@ -464,9 +461,7 @@ impl BoxBackend for RestBox {
             .json(&req_body)
             .send()
             .await
-            .map_err(|e| {
-                BoxliteError::Internal(format!("bulk-download request failed: {e}"))
-            })?;
+            .map_err(|e| BoxliteError::Internal(format!("bulk-download request failed: {e}")))?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -488,9 +483,7 @@ impl BoxBackend for RestBox {
                     .map(|b| b.trim_matches('"').to_string())
             })
             .ok_or_else(|| {
-                BoxliteError::Internal(
-                    "bulk-download: response missing multipart boundary".into(),
-                )
+                BoxliteError::Internal("bulk-download: response missing multipart boundary".into())
             })?;
 
         let body_bytes = resp
@@ -746,10 +739,10 @@ fn strip_quotes(s: &str) -> &str {
 }
 
 fn write_file_atomically(dst: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
-    if let Some(parent) = dst.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)?;
-        }
+    if let Some(parent) = dst.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)?;
     }
     std::fs::write(dst, bytes)
 }
@@ -1891,10 +1884,7 @@ mod copy_out_many_parse_tests {
         let err = parse_bulk_download_response(&pairs, &body, BOUNDARY)
             .expect_err("should error on extra parts");
         let msg = format!("{err}");
-        assert!(
-            msg.contains("more parts than requested"),
-            "got: {msg}"
-        );
+        assert!(msg.contains("more parts than requested"), "got: {msg}");
     }
 
     #[test]
@@ -1948,10 +1938,7 @@ mod copy_out_many_parse_tests {
 
         let outcomes = parse_bulk_download_response(&pairs, &body, BOUNDARY).expect("ok");
         assert_eq!(outcomes.len(), 1);
-        let err = outcomes[0]
-            .error
-            .as_deref()
-            .expect("expected write error");
+        let err = outcomes[0].error.as_deref().expect("expected write error");
         assert!(err.starts_with("write:"), "got: {err}");
 
         let _ = std::fs::remove_file(&blocker);

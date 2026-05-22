@@ -199,10 +199,7 @@ impl JsBox {
     /// `outcome.error`; this method rejects only on transport-level
     /// failures.
     #[napi(js_name = "copyOutMany")]
-    pub async fn copy_out_many(
-        &self,
-        pairs: Vec<JsCopyOutPair>,
-    ) -> Result<Vec<JsCopyOutOutcome>> {
+    pub async fn copy_out_many(&self, pairs: Vec<JsCopyOutPair>) -> Result<Vec<JsCopyOutOutcome>> {
         let rust_pairs: Vec<CopyOutPair> = pairs.iter().map(Into::into).collect();
         let outcomes = self
             .handle

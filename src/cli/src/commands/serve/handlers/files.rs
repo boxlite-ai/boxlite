@@ -404,9 +404,8 @@ fn write_part_headers(body: &mut Vec<u8>, name: &str, filename: &str, content_ty
     body.extend_from_slice(b"--");
     body.extend_from_slice(BULK_DOWNLOAD_BOUNDARY.as_bytes());
     body.extend_from_slice(b"\r\n");
-    let disposition = format!(
-        "Content-Disposition: form-data; name=\"{name}\"; filename=\"{filename}\"\r\n"
-    );
+    let disposition =
+        format!("Content-Disposition: form-data; name=\"{name}\"; filename=\"{filename}\"\r\n");
     body.extend_from_slice(disposition.as_bytes());
     let ctype = format!("Content-Type: {content_type}\r\n\r\n");
     body.extend_from_slice(ctype.as_bytes());

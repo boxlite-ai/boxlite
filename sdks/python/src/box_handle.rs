@@ -229,10 +229,7 @@ impl PyBox {
         let handle = Arc::clone(&self.handle);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let rust_pairs: Vec<CopyOutPair> = pairs.iter().map(Into::into).collect();
-            let outcomes = handle
-                .copy_out_many(&rust_pairs)
-                .await
-                .map_err(map_err)?;
+            let outcomes = handle.copy_out_many(&rust_pairs).await.map_err(map_err)?;
             let py_outcomes: Vec<crate::options::PyCopyOutOutcome> =
                 outcomes.into_iter().map(Into::into).collect();
             Ok(py_outcomes)
