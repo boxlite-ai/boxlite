@@ -100,18 +100,18 @@ export class BoxliteWsProxyService {
       // Best-effort: do not fail the upgrade if this errors.
       this.sandboxService
         .updateLastActivityAt(sandbox.id, new Date())
-        .catch((err) =>
-          this.logger.warn(`updateLastActivityAt failed for ${sandbox.id}: ${err}`),
-        )
+        .catch((err) => this.logger.warn(`updateLastActivityAt failed for ${sandbox.id}: ${err}`))
       const runner = await this.runnerService.findOne(sandbox.runnerId)
       if (!runner) {
         this.respondAndClose(socket, 404, 'Not Found')
         return
       }
       ;(req as IncomingMessage & { __boxliteRunner: Runner }).__boxliteRunner = runner
-      ;(this.proxy as unknown as {
-        upgrade: (req: IncomingMessage, socket: Socket, head: Buffer) => void
-      }).upgrade(req, socket, head)
+      ;(
+        this.proxy as unknown as {
+          upgrade: (req: IncomingMessage, socket: Socket, head: Buffer) => void
+        }
+      ).upgrade(req, socket, head)
     } catch (err) {
       this.logger.warn(`upgrade failed for ${req.url}: ${(err as Error).message}`)
       this.respondAndClose(socket, 404, 'Not Found')
@@ -127,11 +127,11 @@ export class BoxliteWsProxyService {
    * so without it a removed member's surviving key can still attach to
    * sandboxes in that org.
    *
-   * JWT (the second strategy in CombinedAuthGuard) is unused here because the
-   * BoxLite SDK's `/oauth/tokens` handler echoes the client_secret straight
-   * back as the access_token, so the Bearer is always the raw API key. If a
-   * real JWT issuer is ever wired in, extend this method to fall through to
-   * `jwtVerify`.
+   * JWT (the second strategy in CombinedAuthGuard) is unused here because
+   * clients send an opaque, long-lived API key directly as the Bearer
+   * token — there is no token-exchange step. If a JWT issuer is ever
+   * enabled in the auth pipeline, extend this method to fall through to
+   * `jwtVerify` after the API-key check fails.
    *
    * Unlike the HTTP path, this does not consult the Redis cache used by
    * ApiKeyStrategy / OrganizationAccessGuard. Upgrade frequency is low; if

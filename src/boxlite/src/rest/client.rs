@@ -14,6 +14,7 @@ use super::credential::{AccessToken, Credential};
 use super::error::{map_http_error, map_http_status};
 use super::options::BoxliteRestOptions;
 use super::types::{ErrorResponse, SandboxConfigResponse};
+use crate::runtime::auth::Principal;
 
 /// Re-request a token once it is within this leeway of `expires_at`.
 const REFRESH_LEEWAY: Duration = Duration::from_secs(60);
@@ -304,6 +305,14 @@ impl ApiClient {
         let mut cache = self.config_cache.write().await;
         *cache = Some(config.clone());
         Ok(config)
+    }
+
+    /// `GET /v1/me` — identity of the calling credential. Not cached
+    /// (identity is per-credential and cheap; unlike static capabilities).
+    /// A 404 surfaces as `BoxliteError::NotFound` (server without `/v1/me`);
+    /// 401/403 as `BoxliteError::Config("auth: …")` — callers branch on these.
+    pub async fn get_me(&self) -> BoxliteResult<Principal> {
+        self.get_root("/me").await
     }
 
     pub async fn require_snapshots_enabled(&self) -> BoxliteResult<()> {

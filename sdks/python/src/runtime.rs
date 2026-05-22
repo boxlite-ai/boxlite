@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use boxlite::{BoxArchive, BoxOptions, BoxliteRuntime};
+use boxlite::{BoxArchive, BoxOptions, BoxliteOptions, BoxliteRuntime};
 use pyo3::prelude::*;
 
 use crate::box_handle::PyBox;
@@ -19,7 +19,10 @@ pub(crate) struct PyBoxlite {
 impl PyBoxlite {
     #[new]
     fn new(options: PyOptions) -> PyResult<Self> {
-        let runtime = BoxliteRuntime::new(options.into_core()?).map_err(map_err)?;
+        let core_opts = options.into_core()?;
+        // Executable-owned logging init (the library no longer auto-installs a subscriber).
+        let _ = boxlite::init_logging_for(&core_opts.home_dir);
+        let runtime = BoxliteRuntime::new(core_opts).map_err(map_err)?;
 
         Ok(Self {
             runtime: Arc::new(runtime),
@@ -28,6 +31,10 @@ impl PyBoxlite {
 
     #[staticmethod]
     fn default() -> PyResult<Self> {
+        // Executable-owned logging init (the library no longer auto-installs a
+        // subscriber). The default runtime uses `BoxliteOptions::default()`, so
+        // we mirror its home_dir for the log location.
+        let _ = boxlite::init_logging_for(&BoxliteOptions::default().home_dir);
         let runtime = BoxliteRuntime::default_runtime();
         Ok(Self {
             runtime: Arc::new(runtime.clone()),
@@ -56,7 +63,9 @@ impl PyBoxlite {
 
     #[staticmethod]
     fn init_default(options: PyOptions) -> PyResult<()> {
-        BoxliteRuntime::init_default_runtime(options.into_core()?).map_err(map_err)
+        let core_opts = options.into_core()?;
+        let _ = boxlite::init_logging_for(&core_opts.home_dir);
+        BoxliteRuntime::init_default_runtime(core_opts).map_err(map_err)
     }
 
     #[pyo3(signature = (options, name=None))]

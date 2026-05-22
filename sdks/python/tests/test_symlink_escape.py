@@ -157,7 +157,7 @@ def build_oci_layout(out_dir: str) -> None:
 # ── Reporter's PoC main() — reproduced verbatim ───────────────────────────────
 
 
-async def main():
+async def main(runtime=None):
     print("=" * 60)
     print("  PoC: BoxLite OCI Layer Extraction Symlink Escape")
     print("=" * 60)
@@ -201,7 +201,9 @@ async def main():
     print("\n[4] Loading malicious image via boxlite.SimpleBox(rootfs_path=…)")
 
     try:
-        async with boxlite.SimpleBox(rootfs_path=OCI_LAYOUT_DIR) as box:
+        async with boxlite.SimpleBox(
+            rootfs_path=OCI_LAYOUT_DIR, runtime=runtime
+        ) as box:
             r = await box.exec("sh", "-c", "echo ok")
             print(f"    VM stdout: {r.stdout.strip()}")
     except Exception as e:
@@ -222,9 +224,9 @@ async def main():
 # ── Pytest wrapper ────────────────────────────────────────────────────────────
 
 
-async def test_oci_symlink_escape_blocked():
+async def test_oci_symlink_escape_blocked(shared_runtime):
     """GHSA-f396-4rp4-7v2j: reporter's exact PoC must not write outside root."""
-    await main()
+    await main(runtime=shared_runtime)
     assert not os.path.exists(TARGET_FILE), (
         f"GHSA-f396-4rp4-7v2j: host file written via escape symlink at "
         f"{TARGET_FILE} — SafeRoot containment failed"

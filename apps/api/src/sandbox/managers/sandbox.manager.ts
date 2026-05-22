@@ -201,9 +201,7 @@ export class SandboxManager implements TrackableJobExecutions, OnApplicationShut
             return
           }
 
-          this.logger.log(
-            `Auto-archiving sandbox ${sandbox.id}: autoArchiveInterval=${sandbox.autoArchiveInterval}min`,
-          )
+          this.logger.log(`Auto-archiving sandbox ${sandbox.id}: autoArchiveInterval=${sandbox.autoArchiveInterval}min`)
 
           try {
             const updateData: Partial<Sandbox> = {

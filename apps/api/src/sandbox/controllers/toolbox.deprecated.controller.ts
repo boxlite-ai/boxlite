@@ -156,7 +156,6 @@ export class ToolboxController {
   ) {
     const commonProxyOptions: Options = {
       router: async (req: RawBodyRequest<IncomingMessage>) => {
-        // eslint-disable-next-line no-useless-escape
         const sandboxId = req.url.match(/^\/api\/toolbox\/([^\/]+)\/toolbox/)?.[1]
         try {
           const runnerInfo = await this.getRunnerInfo(sandboxId)
@@ -174,7 +173,6 @@ export class ToolboxController {
         return 'http://target-error'
       },
       pathRewrite: (path) => {
-        // eslint-disable-next-line no-useless-escape
         const sandboxId = path.match(/^\/api\/toolbox\/([^\/]+)\/toolbox/)?.[1]
         const routePath = path.split(`/api/toolbox/${sandboxId}/toolbox`)[1]
         const newPath = `/sandboxes/${sandboxId}/toolbox${routePath}`

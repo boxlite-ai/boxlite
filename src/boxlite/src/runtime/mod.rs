@@ -1,4 +1,5 @@
 pub mod advanced_options;
+pub mod auth;
 pub(crate) mod backend;
 pub mod constants;
 pub mod id;
@@ -15,6 +16,7 @@ pub(crate) mod embedded;
 mod import;
 pub(crate) mod rt_impl;
 
+pub use auth::{AuthHandle, Principal};
 pub use core::BoxliteRuntime;
 pub use images::ImageHandle;
 pub(crate) use rt_impl::SharedRuntimeImpl;

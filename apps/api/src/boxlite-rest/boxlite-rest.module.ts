@@ -17,12 +17,7 @@ import { BoxliteWsProxyService } from './boxlite-ws-proxy.service'
 
 @Module({
   imports: [SandboxModule, AuthModule, ApiKeyModule, OrganizationModule],
-  controllers: [
-    BoxliteMeController,
-    BoxliteConfigController,
-    BoxliteBoxController,
-    BoxliteProxyController,
-  ],
+  controllers: [BoxliteMeController, BoxliteConfigController, BoxliteBoxController, BoxliteProxyController],
   providers: [BoxliteWsProxyService],
   exports: [BoxliteWsProxyService],
 })

@@ -193,4 +193,4 @@ Note: if you are running BoxLite MCP Server on Windows OS, add the following to 
 
 ## Support
 
-For more information, visit [boxlite.io](https://boxlite.io) or contact support at support@boxlite.io.
+For more information, visit [boxlite.io](https://boxlite.io) or contact support at <support@boxlite.io>.

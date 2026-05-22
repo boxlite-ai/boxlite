@@ -4,15 +4,17 @@
 //! - `--api-key-stdin` : single-line API key on stdin (CI-friendly; no argv leak)
 //! - no flags          : interactive `rpassword` prompt
 //!
-//! After collecting a key we validate it by issuing one authenticated call
-//! against the server (`runtime.list_info()` → `GET /boxes`). A
-//! `BoxliteError::Config("auth: ...")` from the client surfaces as 401/403
-//! and is reported as a credential error rather than being silently saved.
+//! After collecting a key we validate it via `GET /v1/me` and, on success,
+//! print *who* the credential authenticates as. A 401/403 surfaces as
+//! `BoxliteError::Config("auth: ...")` and is reported as a credential error
+//! rather than being silently saved. Servers without `/v1/me` return 404
+//! (`BoxliteError::NotFound`) — we fall back to `runtime.list_info()`
+//! (`GET /boxes`) so older servers still validate (zero regression).
 
 use std::io::{BufRead, Write};
 
 use anyhow::{Context, Result, anyhow, bail};
-use boxlite::BoxliteRuntime;
+use boxlite::{BoxliteError, BoxliteRuntime, Principal};
 use clap::Args;
 
 use crate::credentials::{self, Profile};
@@ -46,13 +48,20 @@ pub async fn run(args: LoginArgs) -> Result<()> {
         api_key: Some(api_key),
     };
 
-    validate(&profile).await?;
+    let identity = validate(&profile).await?;
     credentials::save(&profile).context("saving credentials")?;
 
-    // Don't log profile.url — CodeQL flags the success line as
-    // cleartext logging of sensitive info (the profile carries the
-    // api_key). Mirrors the upstream autofix in a6184a92.
-    println!("Logged in (API key)");
+    // Don't log profile.url — CodeQL flags the success line as cleartext
+    // logging of sensitive info (the profile carries the api_key). Mirrors
+    // the upstream autofix in a6184a92. The server-returned identity
+    // (email/sub/prefix) is not secret and is safe to print.
+    match identity {
+        Some(p) => {
+            let who = p.email.as_deref().unwrap_or(p.sub.as_str());
+            println!("Logged in as {} (org: {})", who, p.prefix);
+        }
+        None => println!("Logged in (API key)"),
+    }
     Ok(())
 }
 
@@ -120,31 +129,51 @@ fn read_stdin_line(label: &str) -> Result<String> {
     Ok(trimmed)
 }
 
-/// Issue one authenticated request to confirm the credential is accepted.
-/// `list_info()` (→ `GET /boxes`) is the cheapest authenticated public API.
-/// A 401/403 surfaces as `BoxliteError::Config("auth: ...")` — we match on
-/// that string to give a focused error rather than a generic HTTP one.
-async fn validate(profile: &Profile) -> Result<()> {
+/// Confirm the credential against the server. Prefers `GET /v1/me` so we can
+/// report the identity; on a server without that endpoint (404 →
+/// `BoxliteError::NotFound`) falls back to `runtime.list_info()`
+/// (`GET /boxes`) — the cheapest authenticated call — so older servers still
+/// validate. Returns `Some(principal)` when identified, `None` when validated
+/// via the fallback. A 401/403 (`BoxliteError::Config("auth: …")`) or any
+/// other error is reported and the credential is NOT saved.
+async fn validate(profile: &Profile) -> Result<Option<Principal>> {
     let opts = credentials::into_rest_options(profile.clone());
     let runtime = BoxliteRuntime::rest(opts)
         .map_err(|e| anyhow!("failed to construct REST runtime: {}", e))?;
-    match runtime.list_info().await {
-        Ok(_) => Ok(()),
-        Err(err) => {
-            let msg = err.to_string();
-            if msg.contains("auth:") {
-                Err(anyhow!(
-                    "authentication failed against {}: {}",
-                    profile.url,
-                    msg
-                ))
-            } else {
-                Err(anyhow!(
-                    "could not reach {}: {} (credentials not saved)",
-                    profile.url,
-                    msg
-                ))
-            }
-        }
+    let auth = runtime
+        .auth()
+        .map_err(|e| anyhow!("failed to construct REST runtime: {}", e))?;
+    match auth.whoami().await {
+        Ok(principal) => Ok(Some(principal)),
+        // Server without `/v1/me` (404) → fall back to the cheapest
+        // authenticated call so older servers still validate (zero
+        // regression). `list_info` (`GET /boxes`) is a legitimate
+        // box-runtime operation; it reuses the *same* `runtime` — identity
+        // and box ops are two capability views of one REST client.
+        Err(BoxliteError::NotFound(_)) => match runtime.list_info().await {
+            Ok(_) => Ok(None),
+            Err(err) => Err(classify(profile, err)),
+        },
+        Err(err) => Err(classify(profile, err)),
+    }
+}
+
+/// Turn a client error into a focused, non-secret message. 401/403 map to
+/// `BoxliteError::Config("auth: …")`; everything else is treated as a
+/// connectivity/server error. Credentials are not saved in either case.
+fn classify(profile: &Profile, err: BoxliteError) -> anyhow::Error {
+    let msg = err.to_string();
+    if msg.contains("auth:") {
+        anyhow!(
+            "authentication failed against {}: {} (credentials not saved)",
+            profile.url,
+            msg
+        )
+    } else {
+        anyhow!(
+            "could not reach {}: {} (credentials not saved)",
+            profile.url,
+            msg
+        )
     }
 }

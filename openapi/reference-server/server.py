@@ -42,6 +42,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Literal, Optional
 
+import hmac
+
 import jwt
 import uvicorn
 from fastapi import (
@@ -285,6 +287,8 @@ LOCAL_PRINCIPAL = {
 async def require_auth(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
 ) -> dict:
+    # Always-on: a missing/empty bearer is a 401 regardless of config
+    # (enforces the declared BearerAuth scheme's presence — Prism-style).
     if credentials is None or not credentials.credentials:
         raise HTTPException(
             status_code=401,
@@ -296,8 +300,24 @@ async def require_auth(
                 }
             },
         )
-    # Format-agnostic: any non-empty bearer is accepted. The full server
-    # validates against its issuance store; this reference server doesn't.
+    cfg = state.server_config
+    expected = cfg.api_key if cfg is not None else None
+    if expected is not None and not hmac.compare_digest(
+        credentials.credentials, expected
+    ):
+        # Configured expected key + mismatch ⇒ reject (constant-time).
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": {
+                    "message": "invalid api key",
+                    "type": "UnauthorizedError",
+                    "code": 401,
+                }
+            },
+        )
+    # No expected key configured ⇒ accept any non-empty bearer (the
+    # zero-config reference default). Configured ⇒ matched above.
     return {"sub": "local-anonymous"}
 
 
@@ -1053,8 +1073,7 @@ def main():
         log_level=normalize_log_level(args.log_level),
         jwt_secret=env_server_config.jwt_secret,
         jwt_expiry_seconds=env_server_config.jwt_expiry_seconds,
-        client_id=env_server_config.client_id,
-        client_secret=env_server_config.client_secret,
+        api_key=env_server_config.api_key,
     )
 
     state.server_config = server_config

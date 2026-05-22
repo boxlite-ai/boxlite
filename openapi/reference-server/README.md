@@ -19,23 +19,31 @@ cd openapi/reference-server
 uv run --active server.py
 ```
 
-## Test Credentials
+## Authentication
 
-| Field | Value |
-|-------|-------|
-| client_id | `test-client` |
-| client_secret | `test-secret` |
+By default the server accepts **any non-empty `Authorization: Bearer <token>`
+header** (format-agnostic, matching the spec's `BearerAuth` scheme — token
+issuance and real validation are out of scope for a reference server).
+`GET /v1/config` needs no auth; every other endpoint requires a non-empty
+bearer.
+
+Set **`BOXLITE_SERVER_API_KEY`** to require an exact key: the bearer must then
+equal it (constant-time check) or the request gets `401`. A missing/empty
+bearer is always `401` regardless. This lets clients exercise both the success
+and failure auth paths against the reference server.
 
 ## Quick Test
 
 ```bash
-# Get a token
-TOKEN=$(curl -s -X POST http://localhost:8080/v1/oauth/tokens \
-  -d 'grant_type=client_credentials&client_id=test-client&client_secret=test-secret' \
-  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+# The reference server accepts any non-empty bearer
+TOKEN=dev-token
 
-# Server config
+# Server config (no auth required)
 curl -s http://localhost:8080/v1/config | python3 -m json.tool
+
+# Identity + scopes for the calling credential
+curl -s http://localhost:8080/v1/me \
+  -H "Authorization: Bearer $TOKEN" | python3 -m json.tool
 
 # Create a box
 curl -s -X POST http://localhost:8080/v1/demo/boxes \
@@ -73,7 +81,7 @@ curl -s -X DELETE http://localhost:8080/v1/demo/boxes/$BOX_ID \
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/v1/config` | GET | Server configuration |
-| `/v1/oauth/tokens` | POST | OAuth2 client credentials |
+| `/v1/me` | GET | Identity + scopes for the credential |
 | `/{prefix}/boxes` | POST | Create box |
 | `/{prefix}/boxes` | GET | List boxes |
 | `/{prefix}/boxes/{id}` | GET | Get box |
@@ -114,8 +122,7 @@ Use `--env-file` to load a different file.
 | `BOXLITE_SERVER_LOG_LEVEL` | `info` |
 | `BOXLITE_SERVER_JWT_SECRET` | `boxlite-reference-server-secret` |
 | `BOXLITE_SERVER_JWT_EXPIRY_SECONDS` | `3600` |
-| `BOXLITE_SERVER_CLIENT_ID` | `test-client` |
-| `BOXLITE_SERVER_CLIENT_SECRET` | `test-secret` |
+| `BOXLITE_SERVER_API_KEY` | _(unset → permissive; set → exact-match required)_ |
 
 ### Runtime Settings (`BOXLITE_RUNTIME_*`)
 

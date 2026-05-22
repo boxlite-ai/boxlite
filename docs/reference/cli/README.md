@@ -120,7 +120,7 @@ These flags can appear before *or* after the subcommand and apply to every comma
 
 | Flag | Type | Default | Env Var | Description |
 |------|------|---------|---------|-------------|
-| `--debug` | bool | `false` | — | Enable debug output |
+| `--debug` | bool | `false` | `RUST_LOG` (lower precedence than the flag) | Enable debug output. Precedence: `--debug` > `RUST_LOG` env > default (`warn` on stderr, `info` in file when enabled). |
 | `--home PATH` | path | `~/.boxlite` | `BOXLITE_HOME` | BoxLite runtime data directory |
 | `--registry REGISTRY` | string (repeatable) | `[]` | — | Image registry hostname; prepended to the registries from `--config` |
 | `--config PATH` | path | none | — | JSON config file (see [Configuration File](#configuration-file)) |

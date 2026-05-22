@@ -1,6 +1,5 @@
 use crate::db::{BoxStore, Database};
 use crate::images::{ImageDiskManager, ImageManager};
-use crate::init_logging_for;
 use crate::litebox::config::BoxConfig;
 use crate::litebox::{BoxManager, LiteBox, LocalSnapshotBackend, SharedBoxImpl};
 use crate::lock::{FileLockManager, LockManager};
@@ -141,8 +140,6 @@ impl RuntimeImpl {
                 e
             ))
         })?;
-
-        init_logging_for(&layout)?;
 
         let runtime_lock = RuntimeLock::acquire(layout.home_dir()).map_err(|e| {
             BoxliteError::Internal(format!(

@@ -113,6 +113,9 @@ test\:changed\:c:
 test\:changed\:go:
 	@$(MAKE) test:unit:go
 
+test\:changed\:apps:
+	@$(MAKE) test:apps
+
 # Integration-only for changed components (used by E2E CI on PRs).
 test\:integration\:changed:
 ifeq ($(CHANGED_COMPONENTS),)
@@ -132,7 +135,7 @@ endif
 # Full matrix: all unit suites + all integration suites.
 test\:all:
 	@echo "📋 Running full test matrix (unit → integration)"
-	$(call run_suites,test:unit test:integration)
+	$(call run_suites,test:unit test:integration test:apps)
 	@echo ""
 	@echo "✅ All tests passed (full matrix)"
 
@@ -290,6 +293,12 @@ test\:unit\:go:
 # Go SDK full suite.
 test\:all\:go:
 	@$(MAKE) test:unit:go
+
+# apps/ workspace test matrix (all Nx projects). FILTER maps to Jest's
+# --testNamePattern (per-runner semantics, like the other suites).
+test\:apps: _ensure-apps-deps
+	@echo "🧪 Running apps workspace test matrix..."
+	@cd apps && yarn nx run-many --target=test --all --parallel=$$(getconf _NPROCESSORS_ONLN) $(if $(FILTER),-- --testNamePattern '$(FILTER)',)
 
 # Installer-script smoke test: structural assertions on the rendered
 # install.sh (atomic replace, integrity envelope, pinned-install trust

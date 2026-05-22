@@ -1,5 +1,5 @@
 # Detect changed components by diffing against main (or HEAD~1 if on main).
-# Returns a space-separated list of component tags: rust cli ffi python node c
+# Returns a space-separated list of component tags: rust cli ffi python node c go apps
 define detect_changes
 $(shell \
   BRANCH=$$(git rev-parse --abbrev-ref HEAD 2>/dev/null); \
@@ -19,6 +19,7 @@ $(shell \
   echo "$$CHANGED" | grep -q '^sdks/node/' && printf 'node '; \
   echo "$$CHANGED" | grep -q '^sdks/c/' && printf 'c '; \
   echo "$$CHANGED" | grep -q '^sdks/go/' && printf 'go '; \
+  echo "$$CHANGED" | grep -q '^apps/' && printf 'apps '; \
   echo "$$CHANGED" | grep -q '^Cargo\.toml$$' && printf 'rust '; \
   echo "$$CHANGED" | grep -q '^Cargo\.lock$$' && printf 'rust '; \
 )

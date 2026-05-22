@@ -8,10 +8,7 @@ import { Controller, Get, UseGuards } from '@nestjs/common'
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { AuthContext } from '../common/decorators/auth-context.decorator'
-import {
-  AuthContext as AuthCtx,
-  isOrganizationAuthContext,
-} from '../common/interfaces/auth-context.interface'
+import { AuthContext as AuthCtx, isOrganizationAuthContext } from '../common/interfaces/auth-context.interface'
 import { PrincipalDto } from './dto/principal.dto'
 
 /**

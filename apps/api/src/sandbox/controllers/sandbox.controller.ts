@@ -1272,7 +1272,6 @@ export class SandboxController {
   private async waitForSandboxStarted(sandbox: SandboxDto, timeoutSeconds: number): Promise<SandboxDto> {
     let latestSandbox: Sandbox
     const waitForStarted = new Promise<SandboxDto>((resolve, reject) => {
-      // eslint-disable-next-line
       let timeout: NodeJS.Timeout
       const handleStateUpdated = (event: SandboxStateUpdatedEvent) => {
         if (event.sandbox.id !== sandbox.id) {

@@ -52,7 +52,12 @@ export class LogoutController {
 
   private getAllowlist(dashboardUrl: string): string[] {
     const extra = this.configService.get('oidc.postLogoutRedirectAllowlist')
-    const extras = extra ? extra.split(',').map((s) => s.trim()).filter(Boolean) : []
+    const extras = extra
+      ? extra
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : []
     return [dashboardUrl, ...extras].filter(Boolean)
   }
 }

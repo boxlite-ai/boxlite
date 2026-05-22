@@ -202,7 +202,7 @@ export class SnapshotService {
     const terminalStates: SnapshotState[] = [SnapshotState.ACTIVE, SnapshotState.ERROR, SnapshotState.BUILD_FAILED]
     const snapshotRef = { createdSnapshot: createdSnapshot }
     let streamPromise: Promise<void> | undefined
-    // eslint-disable-next-line @typescript-eslint/no-empty-function
+     
     const startLogStreaming = async (onChunk: (chunk: string) => void = () => {}) => {
       if (!streamPromise) {
         const response = await this.snapshotsApi.getSnapshotBuildLogsUrl(createdSnapshot.id)

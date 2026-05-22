@@ -13,6 +13,7 @@ use super::client::ApiClient;
 use super::litebox::RestBox;
 use super::options::BoxliteRestOptions;
 use super::types::{BoxResponse, CreateBoxRequest, ListBoxesResponse, RuntimeMetricsResponse};
+use crate::runtime::auth::{AuthBackend, Principal};
 
 pub(crate) struct RestRuntime {
     client: ApiClient,
@@ -22,6 +23,13 @@ impl RestRuntime {
     pub fn new(config: &BoxliteRestOptions) -> BoxliteResult<Self> {
         let client = ApiClient::new(config)?;
         Ok(Self { client })
+    }
+}
+
+#[async_trait::async_trait]
+impl AuthBackend for RestRuntime {
+    async fn whoami(&self) -> BoxliteResult<Principal> {
+        self.client.get_me().await
     }
 }
 
