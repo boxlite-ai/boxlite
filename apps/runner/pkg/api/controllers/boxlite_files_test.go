@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -477,8 +478,17 @@ func TestBoxliteFilesBulkDownload_HappyPath(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NextPart: %v", err)
 		}
-		// Disposition carries the source path in the filename param.
-		filename := part.FileName()
+		// part.FileName() runs filepath.Base on the filename param (Go
+		// stdlib applies RFC 7578 §4.2 anti-traversal stripping), so a
+		// header of filename="/etc/a.txt" would come back as "a.txt".
+		// The wire contract here is "filename carries the full box-side
+		// path verbatim" (matches daemon and Rust serve handlers), so we
+		// parse Content-Disposition directly to preserve the path.
+		_, params, dispErr := mime.ParseMediaType(part.Header.Get("Content-Disposition"))
+		if dispErr != nil {
+			t.Fatalf("parse Content-Disposition: %v", dispErr)
+		}
+		filename := params["filename"]
 		buf, _ := io.ReadAll(part)
 		part.Close()
 		// The handler emits Content-Disposition name="file" on success

@@ -11,7 +11,7 @@ use tokio::sync::mpsc;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use crate::BoxInfo;
-use crate::litebox::copy::CopyOptions;
+use crate::litebox::copy::{CopyOptions, CopyOutOutcome, CopyOutPair};
 use crate::litebox::snapshot_mgr::SnapshotInfo;
 use crate::litebox::{BoxCommand, ExecResult, ExecStderr, ExecStdin, ExecStdout, Execution};
 use crate::metrics::BoxMetrics;
@@ -438,6 +438,69 @@ impl BoxBackend for RestBox {
         })
     }
 
+    async fn copy_out_many(
+        &self,
+        pairs: &[CopyOutPair],
+    ) -> BoxliteResult<Vec<CopyOutOutcome>> {
+        // Empty input: server returns 400 on empty `paths`; short-circuit
+        // on the client side so callers get a stable "no work, no error"
+        // semantic. See spec §"REST backend override" rationale.
+        if pairs.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let box_id = self.box_id_str();
+        let path = format!("/boxes/{}/files/bulk-download", box_id);
+
+        let req_body = serde_json::json!({
+            "paths": pairs.iter().map(|p| p.container_src.clone()).collect::<Vec<_>>(),
+        });
+
+        let resp = self
+            .client
+            .authorized_request(Method::POST, &path)
+            .await?
+            .header("Accept", "multipart/form-data")
+            .json(&req_body)
+            .send()
+            .await
+            .map_err(|e| {
+                BoxliteError::Internal(format!("bulk-download request failed: {e}"))
+            })?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(BoxliteError::Internal(format!(
+                "bulk-download failed (HTTP {status}): {text}"
+            )));
+        }
+
+        // Extract boundary from Content-Type before consuming the body.
+        let boundary = resp
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|ct| {
+                ct.split(';')
+                    .map(|s| s.trim())
+                    .find_map(|p| p.strip_prefix("boundary="))
+                    .map(|b| b.trim_matches('"').to_string())
+            })
+            .ok_or_else(|| {
+                BoxliteError::Internal(
+                    "bulk-download: response missing multipart boundary".into(),
+                )
+            })?;
+
+        let body_bytes = resp
+            .bytes()
+            .await
+            .map_err(|e| BoxliteError::Internal(format!("bulk-download read body: {e}")))?;
+
+        parse_bulk_download_response(pairs, &body_bytes, &boundary)
+    }
+
     async fn clone_box(
         &self,
         options: CloneOptions,
@@ -511,6 +574,184 @@ impl BoxBackend for RestBox {
 
         Ok(crate::runtime::options::BoxArchive::new(output_path))
     }
+}
+
+/// Parse a bulk-download multipart response body and route each part to
+/// its corresponding `pairs[idx].host_dst` by input index (NOT by
+/// filename — duplicate `container_src` entries are legal and routing by
+/// filename would silently clobber them). Writes successful file parts
+/// to disk and records error parts as text. Returns one outcome per
+/// input pair, in input order.
+///
+/// Returns `Err` on transport-level violations (server returned more
+/// `file`/`error` parts than requested). Per-pair local write failures
+/// are recorded as outcomes, NOT propagated as `Err`.
+fn parse_bulk_download_response(
+    pairs: &[CopyOutPair],
+    body: &[u8],
+    boundary: &str,
+) -> BoxliteResult<Vec<CopyOutOutcome>> {
+    let mut outcomes: Vec<Option<CopyOutOutcome>> = (0..pairs.len()).map(|_| None).collect();
+    let mut idx: usize = 0;
+
+    for part in split_multipart_parts(body, boundary) {
+        let (name, _filename) = parse_disposition(&part.headers);
+        match name.as_deref() {
+            Some("file") | Some("error") => {
+                if idx >= pairs.len() {
+                    return Err(BoxliteError::Internal(format!(
+                        "bulk-download: server returned more parts than requested ({} > {})",
+                        idx + 1,
+                        pairs.len()
+                    )));
+                }
+                let pair = &pairs[idx];
+                let outcome = if name.as_deref() == Some("file") {
+                    match write_file_atomically(&pair.host_dst, &part.body) {
+                        Ok(()) => CopyOutOutcome {
+                            container_src: pair.container_src.clone(),
+                            host_dst: pair.host_dst.clone(),
+                            error: None,
+                        },
+                        Err(e) => CopyOutOutcome {
+                            container_src: pair.container_src.clone(),
+                            host_dst: pair.host_dst.clone(),
+                            error: Some(format!("write: {e}")),
+                        },
+                    }
+                } else {
+                    CopyOutOutcome {
+                        container_src: pair.container_src.clone(),
+                        host_dst: pair.host_dst.clone(),
+                        error: Some(String::from_utf8_lossy(&part.body).into_owned()),
+                    }
+                };
+                outcomes[idx] = Some(outcome);
+                idx += 1;
+            }
+            _ => {
+                // Unknown part name — forward-compat: skip without
+                // advancing idx so future part types don't desync routing.
+            }
+        }
+    }
+
+    let final_outcomes = outcomes
+        .into_iter()
+        .enumerate()
+        .map(|(i, slot)| {
+            slot.unwrap_or_else(|| CopyOutOutcome {
+                container_src: pairs[i].container_src.clone(),
+                host_dst: pairs[i].host_dst.clone(),
+                error: Some("missing from response".into()),
+            })
+        })
+        .collect();
+    Ok(final_outcomes)
+}
+
+/// One parsed multipart part: header lines and body bytes.
+struct ParsedPart {
+    headers: String,
+    body: Vec<u8>,
+}
+
+/// Split a multipart body into parts on the given boundary. The boundary
+/// appears in the body as `--<boundary>` (with leading dashes); the
+/// terminator is `--<boundary>--`. Each part is `headers\r\n\r\nbody\r\n`.
+/// Tiny subset of RFC 2046 — only what bulk-download responses use.
+fn split_multipart_parts(body: &[u8], boundary: &str) -> Vec<ParsedPart> {
+    let delim = format!("--{boundary}");
+    let delim_bytes = delim.as_bytes();
+    let mut parts = Vec::new();
+    let mut cursor = 0;
+
+    let Some(first) = find_bytes(body, delim_bytes, cursor) else {
+        return parts;
+    };
+    cursor = first + delim_bytes.len();
+
+    loop {
+        if body.get(cursor..cursor + 2) == Some(b"--") {
+            break;
+        }
+        if body.get(cursor..cursor + 2) == Some(b"\r\n") {
+            cursor += 2;
+        }
+        let Some(hb) = find_bytes(body, b"\r\n\r\n", cursor) else {
+            break;
+        };
+        let headers = String::from_utf8_lossy(&body[cursor..hb]).into_owned();
+        let body_start = hb + 4;
+        let Some(next) = find_bytes(body, delim_bytes, body_start) else {
+            break;
+        };
+        let body_end = if next >= 2 && &body[next - 2..next] == b"\r\n" {
+            next - 2
+        } else {
+            next
+        };
+        let part_body = body[body_start..body_end].to_vec();
+        parts.push(ParsedPart {
+            headers,
+            body: part_body,
+        });
+        cursor = next + delim_bytes.len();
+    }
+    parts
+}
+
+fn find_bytes(haystack: &[u8], needle: &[u8], from: usize) -> Option<usize> {
+    if needle.is_empty() || from + needle.len() > haystack.len() {
+        return None;
+    }
+    haystack[from..]
+        .windows(needle.len())
+        .position(|w| w == needle)
+        .map(|p| from + p)
+}
+
+/// Returns `(name, filename)` parsed out of the part's Content-Disposition.
+/// Does NOT apply basename stripping to filename — caller may want the
+/// full container path for logging/sanity checks.
+fn parse_disposition(headers: &str) -> (Option<String>, Option<String>) {
+    let mut name = None;
+    let mut filename = None;
+    for line in headers.split("\r\n") {
+        let lower = line.to_ascii_lowercase();
+        if lower.starts_with("content-disposition:") {
+            let raw = match line.find(':') {
+                Some(i) => &line[i + 1..],
+                None => continue,
+            };
+            for param in raw.split(';').map(|s| s.trim()) {
+                if let Some(v) = param.strip_prefix("name=") {
+                    name = Some(strip_quotes(v).to_string());
+                } else if let Some(v) = param.strip_prefix("filename=") {
+                    filename = Some(strip_quotes(v).to_string());
+                }
+            }
+        }
+    }
+    (name, filename)
+}
+
+fn strip_quotes(s: &str) -> &str {
+    let s = s.trim();
+    if s.starts_with('"') && s.ends_with('"') && s.len() >= 2 {
+        &s[1..s.len() - 1]
+    } else {
+        s
+    }
+}
+
+fn write_file_atomically(dst: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    if let Some(parent) = dst.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+    std::fs::write(dst, bytes)
 }
 
 #[async_trait]
@@ -1521,5 +1762,198 @@ mod tests {
 
         attach.await.unwrap();
         server.abort();
+    }
+}
+
+#[cfg(test)]
+mod copy_out_many_parse_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    const BOUNDARY: &str = "BOXLITE-FILE-BOUNDARY";
+
+    fn build_body(parts: &[(&str, &str, &[u8])]) -> Vec<u8> {
+        let mut body = Vec::new();
+        for (name, filename, b) in parts {
+            body.extend_from_slice(format!("--{BOUNDARY}\r\n").as_bytes());
+            body.extend_from_slice(
+                format!(
+                    "Content-Disposition: form-data; name=\"{name}\"; filename=\"{filename}\"\r\n"
+                )
+                .as_bytes(),
+            );
+            body.extend_from_slice(b"Content-Type: application/octet-stream\r\n\r\n");
+            body.extend_from_slice(b);
+            body.extend_from_slice(b"\r\n");
+        }
+        body.extend_from_slice(format!("--{BOUNDARY}--\r\n").as_bytes());
+        body
+    }
+
+    fn tmp(name: &str) -> PathBuf {
+        let mut p = std::env::temp_dir();
+        p.push(format!("boxlite-cot-{}-{}", std::process::id(), name));
+        let _ = std::fs::remove_file(&p);
+        p
+    }
+
+    #[test]
+    fn happy_path_two_files_routed_by_index() {
+        let dst_a = tmp("happy-a");
+        let dst_b = tmp("happy-b");
+        let pairs = vec![
+            CopyOutPair {
+                container_src: "/etc/a.txt".into(),
+                host_dst: dst_a.clone(),
+            },
+            CopyOutPair {
+                container_src: "/etc/b.txt".into(),
+                host_dst: dst_b.clone(),
+            },
+        ];
+        let body = build_body(&[
+            ("file", "/etc/a.txt", b"alpha"),
+            ("file", "/etc/b.txt", b"bravo"),
+        ]);
+
+        let outcomes = parse_bulk_download_response(&pairs, &body, BOUNDARY).expect("ok");
+        assert_eq!(outcomes.len(), 2);
+        assert!(outcomes[0].error.is_none() && outcomes[1].error.is_none());
+        assert_eq!(std::fs::read(&dst_a).unwrap(), b"alpha");
+        assert_eq!(std::fs::read(&dst_b).unwrap(), b"bravo");
+        let _ = std::fs::remove_file(&dst_a);
+        let _ = std::fs::remove_file(&dst_b);
+    }
+
+    #[test]
+    fn duplicate_src_routes_to_distinct_host_dsts() {
+        let dst_x = tmp("dup-x");
+        let dst_y = tmp("dup-y");
+        let pairs = vec![
+            CopyOutPair {
+                container_src: "/etc/a.txt".into(),
+                host_dst: dst_x.clone(),
+            },
+            CopyOutPair {
+                container_src: "/etc/a.txt".into(),
+                host_dst: dst_y.clone(),
+            },
+        ];
+        let body = build_body(&[
+            ("file", "/etc/a.txt", b"first"),
+            ("file", "/etc/a.txt", b"second"),
+        ]);
+
+        let outcomes = parse_bulk_download_response(&pairs, &body, BOUNDARY).expect("ok");
+        assert_eq!(outcomes.len(), 2);
+        assert!(outcomes[0].error.is_none());
+        assert!(outcomes[1].error.is_none());
+        assert_eq!(std::fs::read(&dst_x).unwrap(), b"first");
+        assert_eq!(std::fs::read(&dst_y).unwrap(), b"second");
+        let _ = std::fs::remove_file(&dst_x);
+        let _ = std::fs::remove_file(&dst_y);
+    }
+
+    #[test]
+    fn missing_part_synthesizes_outcome() {
+        let dst = tmp("miss");
+        let pairs = vec![
+            CopyOutPair {
+                container_src: "/etc/a.txt".into(),
+                host_dst: dst.clone(),
+            },
+            CopyOutPair {
+                container_src: "/etc/b.txt".into(),
+                host_dst: PathBuf::from("/tmp/never"),
+            },
+        ];
+        let body = build_body(&[("file", "/etc/a.txt", b"only-a")]);
+
+        let outcomes = parse_bulk_download_response(&pairs, &body, BOUNDARY).expect("ok");
+        assert_eq!(outcomes.len(), 2);
+        assert!(outcomes[0].error.is_none());
+        assert_eq!(outcomes[1].error.as_deref(), Some("missing from response"));
+        assert_eq!(outcomes[1].container_src, "/etc/b.txt");
+        let _ = std::fs::remove_file(&dst);
+    }
+
+    #[test]
+    fn too_many_parts_is_transport_error() {
+        let pairs = vec![CopyOutPair {
+            container_src: "/etc/a.txt".into(),
+            host_dst: tmp("toomany-a"),
+        }];
+        let body = build_body(&[
+            ("file", "/etc/a.txt", b"ok"),
+            ("file", "/etc/b.txt", b"extra"),
+        ]);
+
+        let err = parse_bulk_download_response(&pairs, &body, BOUNDARY)
+            .expect_err("should error on extra parts");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("more parts than requested"),
+            "got: {msg}"
+        );
+    }
+
+    #[test]
+    fn error_part_surfaces_text_body() {
+        let dst = tmp("err");
+        let pairs = vec![CopyOutPair {
+            container_src: "/etc/missing.txt".into(),
+            host_dst: dst.clone(),
+        }];
+        let body = build_body(&[("error", "/etc/missing.txt", b"copy: file not found")]);
+
+        let outcomes = parse_bulk_download_response(&pairs, &body, BOUNDARY).expect("ok");
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].error.as_deref(), Some("copy: file not found"));
+        assert!(!dst.exists());
+    }
+
+    #[test]
+    fn unknown_part_name_skipped_without_advancing_index() {
+        let dst = tmp("forward");
+        let pairs = vec![CopyOutPair {
+            container_src: "/etc/a.txt".into(),
+            host_dst: dst.clone(),
+        }];
+        let body = build_body(&[
+            ("unknown-future-name", "/whatever", b"ignored"),
+            ("file", "/etc/a.txt", b"actual"),
+        ]);
+
+        let outcomes = parse_bulk_download_response(&pairs, &body, BOUNDARY).expect("ok");
+        assert_eq!(outcomes.len(), 1);
+        assert!(outcomes[0].error.is_none());
+        assert_eq!(std::fs::read(&dst).unwrap(), b"actual");
+        let _ = std::fs::remove_file(&dst);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn local_write_failure_recorded_as_outcome_error_not_propagated() {
+        // Create a regular file where we'll try to write under it as if
+        // it were a dir — std::fs::create_dir_all will fail because a
+        // non-directory file occupies the path.
+        let blocker = tmp("blocker-file");
+        std::fs::write(&blocker, b"i am a file").unwrap();
+        let dst_under_file = blocker.join("nested");
+        let pairs = vec![CopyOutPair {
+            container_src: "/etc/a.txt".into(),
+            host_dst: dst_under_file,
+        }];
+        let body = build_body(&[("file", "/etc/a.txt", b"hello")]);
+
+        let outcomes = parse_bulk_download_response(&pairs, &body, BOUNDARY).expect("ok");
+        assert_eq!(outcomes.len(), 1);
+        let err = outcomes[0]
+            .error
+            .as_deref()
+            .expect("expected write error");
+        assert!(err.starts_with("write:"), "got: {err}");
+
+        let _ = std::fs::remove_file(&blocker);
     }
 }

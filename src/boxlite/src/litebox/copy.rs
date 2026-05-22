@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use crate::BoxliteError;
 
 /// Options controlling copy behavior.
@@ -53,4 +55,27 @@ impl CopyOptions {
         }
         Ok(())
     }
+}
+
+/// One source/destination pair for [`LiteBox::copy_out_many`]. The bulk
+/// endpoint emits one part per input; pairing src→dst at the call site
+/// gives the caller per-file destination control and avoids basename
+/// collisions when two srcs share a leaf name.
+#[derive(Debug, Clone)]
+pub struct CopyOutPair {
+    pub container_src: String,
+    pub host_dst: PathBuf,
+}
+
+/// Per-pair outcome from [`LiteBox::copy_out_many`]. `error == None` means
+/// the file was written to `host_dst`. `error == Some(text)` means the
+/// server reported a per-file failure OR the SDK failed to write to disk;
+/// the batch continues either way. The wire returns plain text in
+/// `name="error"` parts, so the SDK preserves the same shape — callers
+/// cannot pattern-match `BoxliteError` variants per pair.
+#[derive(Debug, Clone)]
+pub struct CopyOutOutcome {
+    pub container_src: String,
+    pub host_dst: PathBuf,
+    pub error: Option<String>,
 }

@@ -6,7 +6,7 @@ use crate::metrics::PyBoxMetrics;
 use crate::snapshot_options::{PyCloneOptions, PyExportOptions};
 use crate::snapshots::PySnapshotHandle;
 use crate::util::map_err;
-use boxlite::{BoxCommand, CloneOptions, ExportOptions, LiteBox};
+use boxlite::{BoxCommand, CloneOptions, CopyOutPair, ExportOptions, LiteBox};
 use pyo3::prelude::*;
 
 #[pyclass(name = "Box")]
@@ -212,6 +212,30 @@ impl PyBox {
                 .await
                 .map_err(map_err)?;
             Ok(())
+        })
+    }
+
+    /// Bulk copy-out: copy many files in one round-trip via the
+    /// `/files/bulk-download` endpoint. Returns one outcome per input
+    /// pair in input order. Per-file failures are recorded in
+    /// `outcome.error`; the call itself raises only on transport-level
+    /// failures.
+    #[pyo3(signature = (pairs))]
+    fn copy_out_many<'a>(
+        &self,
+        py: Python<'a>,
+        pairs: Vec<crate::options::PyCopyOutPair>,
+    ) -> PyResult<Bound<'a, PyAny>> {
+        let handle = Arc::clone(&self.handle);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let rust_pairs: Vec<CopyOutPair> = pairs.iter().map(Into::into).collect();
+            let outcomes = handle
+                .copy_out_many(&rust_pairs)
+                .await
+                .map_err(map_err)?;
+            let py_outcomes: Vec<crate::options::PyCopyOutOutcome> =
+                outcomes.into_iter().map(Into::into).collect();
+            Ok(py_outcomes)
         })
     }
 

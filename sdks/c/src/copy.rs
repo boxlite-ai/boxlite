@@ -40,7 +40,7 @@ fn default_copy_options() -> CopyOptions {
         recursive: true,
         overwrite: true,
         follow_symlinks: false,
-        include_parent: false,
+        include_parent: true,
     }
 }
 
