@@ -134,19 +134,13 @@ impl RestBox {
                 .replace(std::path::MAIN_SEPARATOR, "/");
             let dest = join_container_path(&dst_prefix, &rel_posix);
             let bytes = std::fs::read(abs).map_err(|e| {
-                BoxliteError::Internal(format!(
-                    "copy_into read {} failed: {}",
-                    abs.display(),
-                    e
-                ))
+                BoxliteError::Internal(format!("copy_into read {} failed: {}", abs.display(), e))
             })?;
             form = form.text(format!("files[{}].path", idx), dest);
             let part = reqwest::multipart::Part::bytes(bytes)
                 .file_name(rel_posix.clone())
                 .mime_str("application/octet-stream")
-                .map_err(|e| {
-                    BoxliteError::Internal(format!("copy_into multipart part: {}", e))
-                })?;
+                .map_err(|e| BoxliteError::Internal(format!("copy_into multipart part: {}", e)))?;
             form = form.part(format!("files[{}].file", idx), part);
         }
 
@@ -158,9 +152,7 @@ impl RestBox {
             .multipart(form)
             .send()
             .await
-            .map_err(|e| {
-                BoxliteError::Internal(format!("copy_into bulk-upload failed: {}", e))
-            })?;
+            .map_err(|e| BoxliteError::Internal(format!("copy_into bulk-upload failed: {}", e)))?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -427,26 +419,22 @@ impl BoxBackend for RestBox {
                 .unwrap_or_else(|| "downloaded".to_string());
             host_dst.join(basename)
         } else {
-            if let Some(parent) = host_dst.parent() {
-                if !parent.as_os_str().is_empty() {
-                    std::fs::create_dir_all(parent).map_err(|e| {
-                        BoxliteError::Internal(format!(
-                            "copy_out create {} failed: {}",
-                            parent.display(),
-                            e
-                        ))
-                    })?;
-                }
+            if let Some(parent) = host_dst.parent()
+                && !parent.as_os_str().is_empty()
+            {
+                std::fs::create_dir_all(parent).map_err(|e| {
+                    BoxliteError::Internal(format!(
+                        "copy_out create {} failed: {}",
+                        parent.display(),
+                        e
+                    ))
+                })?;
             }
             host_dst.to_path_buf()
         };
 
         std::fs::write(&target, &bytes).map_err(|e| {
-            BoxliteError::Internal(format!(
-                "copy_out write {} failed: {}",
-                target.display(),
-                e
-            ))
+            BoxliteError::Internal(format!("copy_out write {} failed: {}", target.display(), e))
         })
     }
 
