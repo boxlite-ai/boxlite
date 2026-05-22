@@ -40,7 +40,11 @@ pub struct PortMapping {
 ///
 /// This structure encapsulates all configuration needed to create a gvproxy
 /// virtual network, replacing the previous approach of hardcoding values in Go.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// `Debug` is implemented manually (see below) because the derived form would
+/// print the raw `ca_key_pem` — a PKCS8 CA private key — which must never
+/// land in a log file.
+#[derive(Clone, Serialize, Deserialize)]
 pub struct GvproxyConfig {
     /// Unix socket path for the network tap interface.
     /// Caller-provided to ensure each box gets a unique, collision-free path.
@@ -111,6 +115,39 @@ pub struct GvproxySecretConfig {
     pub hosts: Vec<String>,
     pub placeholder: String,
     pub value: String,
+}
+
+impl std::fmt::Debug for GvproxyConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Treat `ca_key_pem` (PKCS8 private key) and `ca_cert_pem` as
+        // sensitive: render only their presence. `secrets` already redacts
+        // via `GvproxySecretConfig::Debug`.
+        f.debug_struct("GvproxyConfig")
+            .field("socket_path", &self.socket_path)
+            .field("subnet", &self.subnet)
+            .field("gateway_ip", &self.gateway_ip)
+            .field("gateway_mac", &self.gateway_mac)
+            .field("guest_ip", &self.guest_ip)
+            .field("host_ip", &self.host_ip)
+            .field("guest_mac", &self.guest_mac)
+            .field("mtu", &self.mtu)
+            .field("port_mappings", &self.port_mappings)
+            .field("dns_zones", &self.dns_zones)
+            .field("dns_search_domains", &self.dns_search_domains)
+            .field("debug", &self.debug)
+            .field("capture_file", &self.capture_file)
+            .field("allow_net", &self.allow_net)
+            .field("secrets", &self.secrets)
+            .field(
+                "ca_cert_pem",
+                &self.ca_cert_pem.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "ca_key_pem",
+                &self.ca_key_pem.as_ref().map(|_| "[REDACTED]"),
+            )
+            .finish()
+    }
 }
 
 impl std::fmt::Debug for GvproxySecretConfig {
