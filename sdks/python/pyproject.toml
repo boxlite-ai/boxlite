@@ -31,12 +31,26 @@ Repository = "https://github.com/boxlite-ai/boxlite"
 Issues = "https://github.com/boxlite-ai/boxlite/issues"
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0", "pytest-asyncio>=0.21", "ruff>=0.4"]
+# `tomli` is needed by `make lint:python` (and other dev tooling) to parse
+# this file. It's stdlib as `tomllib` on Python 3.11+, but the project
+# supports Python 3.10+ — declare the backport explicitly so we don't
+# silently rely on `maturin`/`pytest` pulling it in transitively.
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+    "ruff>=0.4",
+    "tomli>=2.0; python_version < '3.11'",
+]
 sync = ["greenlet>=3.0.0"]
 orchestration = ["cloudpickle>=3.0"]
 
 [dependency-groups]
-dev = ["pytest>=7.0", "pytest-asyncio>=0.21", "ruff>=0.4"]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+    "ruff>=0.4",
+    "tomli>=2.0; python_version < '3.11'",
+]
 sync = ["greenlet>=3.0.0"]
 
 [build-system]
