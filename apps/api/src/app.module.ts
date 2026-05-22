@@ -212,6 +212,21 @@ import { BoxliteRestModule } from './boxlite-rest/boxlite-rest.module'
           host: process.env.POSTHOG_HOST,
         },
         apiKey: process.env.POSTHOG_API_KEY,
+        // Local-dev bootstrap. Only consulted when PostHog isn't configured
+        // (i.e. no POSTHOG_API_KEY). Production with a real PostHog key
+        // ignores these and uses the PostHog control plane.
+        //
+        // All true → matches the "team-internal full-access" rollout state.
+        // Mirrors the dashboard-side defaults in PostHogProviderWrapper.tsx
+        // (LOCAL_DEV_FEATURE_FLAG_DEFAULTS).
+        bootstrapFlags: {
+          organization_infrastructure: true,
+          organization_experiments: true,
+          dashboard_playground: true,
+          dashboard_webhooks: true,
+          'dashboard_create-sandbox': true,
+          sandbox_spending: true,
+        },
       }),
     }),
   ],
