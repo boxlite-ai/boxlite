@@ -244,9 +244,9 @@ mod tests {
                      diagnosability; got: {msg}"
                 );
             }
-            Err(other) => panic!(
-                "expected ExecutorError::Other for unexpected umount2 errno, got {other:?}"
-            ),
+            Err(other) => {
+                panic!("expected ExecutorError::Other for unexpected umount2 errno, got {other:?}")
+            }
             Ok(()) => panic!(
                 "executor must NOT silently succeed when umount2 returns \
                  an unexpected errno; that's exactly the pre-fix bug — \

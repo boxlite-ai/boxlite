@@ -230,9 +230,9 @@ fn download_libkrunfw_so(install_dir: &Path) {
 
 // ── DinD libkrunfw staging (opt-in) ──────────────────────────────────────────
 
-/// Copy the optional "fat" libkrunfw blob (built via `make libkrunfw-dind`)
+/// Copy the optional "fat" libkrunfw blob (built via `make libkrunfw-privileged`)
 /// into the install dir alongside the lean libkrunfw. The blob's filename
-/// is preserved as `libkrunfw-dind.so.5` so dlopen at runtime can pick
+/// is preserved as `libkrunfw-privileged.so.5` so dlopen at runtime can pick
 /// between the two by name; per-box selection is handled higher up the
 /// stack (boxlite::vmm reads BoxOptions::privileged).
 ///
@@ -240,49 +240,49 @@ fn download_libkrunfw_so(install_dir: &Path) {
 /// to the existing lean path, which is the `--privileged` design
 /// contract (don't widen anything for existing users).
 #[cfg(target_os = "linux")]
-fn stage_optional_dind_blob(install_lib_dir: &Path) {
+fn stage_optional_privileged_blob(install_lib_dir: &Path) {
     // rerun-if-changed isn't enough — env vars need their own watcher so
     // toggling the var triggers a re-stage.
-    println!("cargo:rerun-if-env-changed=BOXLITE_LIBKRUNFW_DIND_PATH");
+    println!("cargo:rerun-if-env-changed=BOXLITE_LIBKRUNFW_PRIVILEGED_PATH");
 
-    let Ok(src_str) = env::var("BOXLITE_LIBKRUNFW_DIND_PATH") else {
+    let Ok(src_str) = env::var("BOXLITE_LIBKRUNFW_PRIVILEGED_PATH") else {
         return;
     };
     let src = PathBuf::from(src_str.trim());
     if src.as_os_str().is_empty() {
-        println!("cargo:warning=BOXLITE_LIBKRUNFW_DIND_PATH set but empty — skipping dind staging");
+        println!("cargo:warning=BOXLITE_LIBKRUNFW_PRIVILEGED_PATH set but empty — skipping privileged kernel staging");
         return;
     }
     if !src.exists() {
-        // Hard error: the user explicitly asked for dind but pointed us at
+        // Hard error: the user explicitly asked for privileged kernel but pointed us at
         // nothing. Silently skipping would produce a build that pretends
         // privileged works but loads the lean kernel at runtime.
         panic!(
-            "BOXLITE_LIBKRUNFW_DIND_PATH={} does not exist. Build it with `make libkrunfw-dind`.",
+            "BOXLITE_LIBKRUNFW_PRIVILEGED_PATH={} does not exist. Build it with `make libkrunfw-privileged`.",
             src.display()
         );
     }
 
-    let dest = install_lib_dir.join("libkrunfw-dind.so.5");
+    let dest = install_lib_dir.join("libkrunfw-privileged.so.5");
     fs::copy(&src, &dest).unwrap_or_else(|e| {
         panic!(
-            "Failed to stage dind libkrunfw from {} to {}: {}",
+            "Failed to stage privileged libkrunfw from {} to {}: {}",
             src.display(),
             dest.display(),
             e
         )
     });
     println!(
-        "cargo:warning=Staged dind libkrunfw: {} → {}",
+        "cargo:warning=Staged privileged libkrunfw: {} → {}",
         src.display(),
         dest.display()
     );
 }
 
-// macOS has no `stage_optional_dind_blob` counterpart on purpose: the only
+// macOS has no `stage_optional_privileged_blob` counterpart on purpose: the only
 // call site is inside `#[cfg(target_os = "linux")] fn build()`, so a
 // macOS stub would be dead code (clippy catches it). The fat kernel is
-// Linux-only for now — Apple Silicon dind needs libkrunfw built with a
+// Linux-only for now — Apple Silicon privileged needs libkrunfw built with a
 // different toolchain (kernel.c → .dylib) and a parallel overlay path;
 // re-add a cfg-gated entry point if/when that lands.
 
@@ -948,10 +948,10 @@ fn build() {
     // Optionally stage the "fat" libkrunfw next to the lean one for
     // `boxlite run --privileged`. Driven by an env var so a normal
     // build pulls only the lean blob (existing behaviour byte-identical),
-    // and dev users who built the dind kernel via `make libkrunfw-dind`
-    // opt in by exporting BOXLITE_LIBKRUNFW_DIND_PATH before rebuilding.
-    // See dind-configs/README.md.
-    stage_optional_dind_blob(&libkrunfw_lib_dir);
+    // and dev users who built the privileged kernel via `make libkrunfw-privileged`
+    // opt in by exporting BOXLITE_LIBKRUNFW_PRIVILEGED_PATH before rebuilding.
+    // See privileged-configs/README.md.
+    stage_optional_privileged_blob(&libkrunfw_lib_dir);
 
     // Expose libkrunfw library directory for downstream bundling
     println!(

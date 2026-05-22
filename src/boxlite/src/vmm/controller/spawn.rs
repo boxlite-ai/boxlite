@@ -157,35 +157,35 @@ impl<'a> ShimSpawner<'a> {
         }
 
         // For `--privileged` boxes, stage a per-box libs dir whose
-        // libkrunfw.so.5 symlinks to the fat (dind-capable) blob in the
+        // libkrunfw.so.5 symlinks to the fat (privileged-kernel-capable) blob in the
         // embedded runtime. Prepending this dir to LD_LIBRARY_PATH makes
         // libkrun's dlopen pick the fat kernel for THIS box only, without
         // touching the symlink other (lean-profile) boxes load.
         //
-        // Hard fail on missing/unstageable dind blob when `--privileged`
-        // is set: caps + cgroup rw without the dind kernel produces a
+        // Hard fail on missing/unstageable privileged kernel blob when `--privileged`
+        // is set: caps + cgroup rw without the privileged kernel produces a
         // half-working box (no bridge networks, no iptables, no
         // overlayfs), and dockerd / docker-compose then fail at a layer
         // far from the root cause — see the original `--privileged`
         // contract for what this flag advertises. The lean fallback is
         // still used for non-`--privileged` boxes (they explicitly opt
-        // out of dind).
-        let dind_libs = if self.options.privileged {
-            match self.stage_dind_libkrunfw() {
+        // out of privileged kernel).
+        let privileged_libs = if self.options.privileged {
+            match self.stage_privileged_libkrunfw() {
                 Ok(Some(path)) => Some(path),
                 Ok(None) => {
                     return Err(BoxliteError::Engine(format!(
-                        "--privileged requires a dind-capable libkrunfw, but \
-                         `libkrunfw-dind.so.5` was not found in the embedded \
-                         runtime for box {}. Run `make libkrunfw-dind` and \
-                         rebuild boxlite with `BOXLITE_LIBKRUNFW_DIND_PATH` \
+                        "--privileged requires a privileged-capable libkrunfw, but \
+                         `libkrunfw-privileged.so.5` was not found in the embedded \
+                         runtime for box {}. Run `make libkrunfw-privileged` and \
+                         rebuild boxlite with `BOXLITE_LIBKRUNFW_PRIVILEGED_PATH` \
                          set, then retry.",
                         self.box_id
                     )));
                 }
                 Err(e) => {
                     return Err(BoxliteError::Engine(format!(
-                        "--privileged: failed to stage dind libkrunfw for \
+                        "--privileged: failed to stage privileged libkrunfw for \
                          box {}: {}. Caps + cgroup rw alone would leave \
                          dockerd / overlayfs broken, so the box is not \
                          started.",
@@ -198,7 +198,7 @@ impl<'a> ShimSpawner<'a> {
         };
 
         // Set library search paths for bundled dependencies (e.g., libkrunfw.so)
-        let prepend: Vec<PathBuf> = dind_libs.into_iter().collect();
+        let prepend: Vec<PathBuf> = privileged_libs.into_iter().collect();
         configure_library_env_with_prepend(cmd, std::ptr::null(), &prepend);
 
         Ok(())
@@ -207,14 +207,14 @@ impl<'a> ShimSpawner<'a> {
     /// Create `<box_dir>/libs/libkrunfw.so.5` as a symlink to the fat
     /// libkrunfw blob shipped alongside the lean one. Returns the libs
     /// dir if the fat blob was staged at build time; returns `Ok(None)`
-    /// when the embedded runtime has no `libkrunfw-dind.so.5` (the
-    /// expected case unless someone ran `make libkrunfw-dind` + rebuilt
-    /// boxlite with BOXLITE_LIBKRUNFW_DIND_PATH set).
+    /// when the embedded runtime has no `libkrunfw-privileged.so.5` (the
+    /// expected case unless someone ran `make libkrunfw-privileged` + rebuilt
+    /// boxlite with BOXLITE_LIBKRUNFW_PRIVILEGED_PATH set).
     ///
     /// The symlink is per-box and lives under the box's working
     /// directory, so it's torn down whenever boxlite cleans up the box
     /// — no shared state to garbage-collect.
-    fn stage_dind_libkrunfw(&self) -> BoxliteResult<Option<PathBuf>> {
+    fn stage_privileged_libkrunfw(&self) -> BoxliteResult<Option<PathBuf>> {
         #[cfg(feature = "embedded-runtime")]
         let runtime_dir = crate::runtime::embedded::EmbeddedRuntime::get()
             .ok_or_else(|| BoxliteError::Engine("embedded runtime unavailable".to_string()))?
@@ -223,8 +223,8 @@ impl<'a> ShimSpawner<'a> {
         #[cfg(not(feature = "embedded-runtime"))]
         let runtime_dir: PathBuf = return Ok(None);
 
-        let dind_blob = runtime_dir.join("libkrunfw-dind.so.5");
-        if !dind_blob.exists() {
+        let privileged_blob = runtime_dir.join("libkrunfw-privileged.so.5");
+        if !privileged_blob.exists() {
             return Ok(None);
         }
 
@@ -234,7 +234,7 @@ impl<'a> ShimSpawner<'a> {
         let libs_dir = self.layout.root().join("libs");
         std::fs::create_dir_all(&libs_dir).map_err(|e| {
             BoxliteError::Storage(format!(
-                "Failed to create dind libs dir {}: {}",
+                "Failed to create privileged libs dir {}: {}",
                 libs_dir.display(),
                 e
             ))
@@ -249,7 +249,7 @@ impl<'a> ShimSpawner<'a> {
             Ok(meta) if meta.file_type().is_symlink() => {
                 std::fs::remove_file(&symlink_path).map_err(|e| {
                     BoxliteError::Storage(format!(
-                        "Failed to remove stale dind symlink {}: {}",
+                        "Failed to remove stale privileged symlink {}: {}",
                         symlink_path.display(),
                         e
                     ))
@@ -265,20 +265,20 @@ impl<'a> ShimSpawner<'a> {
         }
 
         #[cfg(unix)]
-        std::os::unix::fs::symlink(&dind_blob, &symlink_path).map_err(|e| {
+        std::os::unix::fs::symlink(&privileged_blob, &symlink_path).map_err(|e| {
             BoxliteError::Storage(format!(
                 "Failed to symlink {} → {}: {}",
                 symlink_path.display(),
-                dind_blob.display(),
+                privileged_blob.display(),
                 e
             ))
         })?;
 
         tracing::info!(
             box_id = %self.box_id,
-            dind_blob = %dind_blob.display(),
+            privileged_blob = %privileged_blob.display(),
             libs_dir = %libs_dir.display(),
-            "Staged dind libkrunfw symlink for --privileged box"
+            "Staged privileged libkrunfw symlink for --privileged box"
         );
         Ok(Some(libs_dir))
     }

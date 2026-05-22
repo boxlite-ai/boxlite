@@ -19,9 +19,9 @@
 //!     `mount --bind` and expecting EPERM).
 //!   - `CAP_NET_ADMIN` is NOT in the effective set (verified by trying
 //!     `ip link add type dummy` and expecting EPERM).
-//!   - The lean libkrunfw is selected, not the dind-capable one
+//!   - The lean libkrunfw is selected, not the privileged-capable one
 //!     (verified by absence of `/proc/sys/net/bridge`, which only
-//!     exists when `CONFIG_BRIDGE_NETFILTER=y` — only the dind kernel
+//!     exists when `CONFIG_BRIDGE_NETFILTER=y` — only the privileged kernel
 //!     carries that).
 //!
 //! Failure here means something in the privileged / dind plumbing
@@ -68,7 +68,7 @@ echo "=== END_KERNEL_FEATURES ==="
 "#;
 
 /// Privileged "full" capability mask we explicitly disallow on non-priv.
-/// The dind path uses `docker_capabilities()` which yields every Linux
+/// The privileged path uses `docker_capabilities()` which yields every Linux
 /// capability the host kernel recognises; the printed `CapEff` is
 /// `000001ffffffffff`. If we ever see that hex on a non-priv box, the
 /// privileged cap set has leaked into the default path.
@@ -170,16 +170,16 @@ fn non_privileged_preserves_oci_default_hardening() {
         stdout
     );
 
-    // ── 8. Lean libkrunfw selected, not the dind kernel ────────────────
-    // Only the dind kernel ships CONFIG_BRIDGE_NETFILTER, which creates
+    // ── 8. Lean libkrunfw selected, not the privileged kernel ────────────────
+    // Only the privileged kernel ships CONFIG_BRIDGE_NETFILTER, which creates
     // /proc/sys/net/bridge/. If it's there on a non-priv box, the per-box
     // libkrunfw selection logic in `src/boxlite/` has incorrectly
     // attached the fat blob to a default box.
     assert!(
         stdout.contains("bridge_dir=absent"),
         "/proc/sys/net/bridge must NOT exist on the lean libkrunfw \
-         (only the dind kernel has CONFIG_BRIDGE_NETFILTER=y); \
-         libkrunfw selection has leaked the dind blob to a non-priv \
+         (only the privileged kernel has CONFIG_BRIDGE_NETFILTER=y); \
+         libkrunfw selection has leaked the privileged kernel blob to a non-priv \
          box:\n{}",
         stdout
     );

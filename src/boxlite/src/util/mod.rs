@@ -93,13 +93,13 @@ pub fn configure_library_env(cmd: &mut Command, addr: *const libc::c_void) {
 /// Like [`configure_library_env`] but with caller-supplied directories
 /// PRE-pended to the loader search path. Used by `--privileged` to
 /// inject a per-box dir whose `libkrunfw.so.5` is a symlink to the
-/// fat (dind-capable) blob — dlopen searches in order, so a prepended
+/// fat (privileged-kernel-capable) blob — dlopen searches in order, so a prepended
 /// dir wins over the embedded-runtime dir holding the lean blob, and
 /// the same shim binary loads the right kernel for each box without
 /// any libkrun changes.
 ///
 /// Each prepend path that doesn't exist is silently skipped (callers
-/// already log the underlying cause, e.g. "dind blob not staged").
+/// already log the underlying cause, e.g. "privileged kernel blob not staged").
 pub fn configure_library_env_with_prepend(
     cmd: &mut Command,
     addr: *const libc::c_void,

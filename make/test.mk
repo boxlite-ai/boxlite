@@ -238,31 +238,31 @@ test\:unit\:ffi:
 # every test whose name contains `dind_`, currently:
 #   - `dind_supports_docker_build`        (`src/cli/tests/dind_build.rs`)
 #   - `dind_compose_multi_service_network` (`src/cli/tests/dind_compose.rs`)
-# Heavy one-time `make libkrunfw-dind` (~10–20 min, cached after) is
+# Heavy one-time `make libkrunfw-privileged` (~10–20 min, cached after) is
 # required — see test:integration:cli below.
 test\:integration\:dind:
 	@$(MAKE) test:integration:cli FILTER=dind_
 
 # CLI integration tests (forced matrix, including dind end-to-end).
 #
-# Prereq: the libkrunfw-dind blob must already be built locally
-# (`make libkrunfw-dind` once, ~10–20 min kernel build, cached after).
-# This target staples it into the CLI by exporting BOXLITE_LIBKRUNFW_DIND_PATH
+# Prereq: the libkrunfw-privileged blob must already be built locally
+# (`make libkrunfw-privileged` once, ~10–20 min kernel build, cached after).
+# This target staples it into the CLI by exporting BOXLITE_LIBKRUNFW_PRIVILEGED_PATH
 # before cargo rebuilds, so the embedded runtime carries both the lean and
-# the dind libkrunfw blobs and dockerd-in-box runs against the right kernel.
+# the privileged libkrunfw blobs and dockerd-in-box runs against the right kernel.
 #
 # Ignore-condition: set BOXLITE_SKIP_DIND_TEST=1 to skip the dind test only
 # (the rest of the CLI integration suite still runs). Use this on hosts that
 # cannot run dind for real (e.g., nested-virt unavailable). Default is RUN.
 test\:integration\:cli: $(if $(SETUP_DONE),,runtime\:debug)
 	@echo "🧪 Running CLI integration tests..."
-	@if [ ! -f target/dind-kernel/lib64/libkrunfw-dind.so.5 ]; then \
-		echo "❌ libkrunfw-dind.so.5 not found at target/dind-kernel/lib64/" >&2; \
-		echo "   Build it once with: make libkrunfw-dind   (~10–20 min, cached after)" >&2; \
+	@if [ ! -f target/privileged-kernel/lib64/libkrunfw-privileged.so.5 ]; then \
+		echo "❌ libkrunfw-privileged.so.5 not found at target/privileged-kernel/lib64/" >&2; \
+		echo "   Build it once with: make libkrunfw-privileged   (~10–20 min, cached after)" >&2; \
 		echo "   Or skip just the dind test: BOXLITE_SKIP_DIND_TEST=1 make test:integration:cli" >&2; \
 		exit 1; \
 	fi
-	@export BOXLITE_LIBKRUNFW_DIND_PATH="$$PWD/target/dind-kernel/lib64/libkrunfw-dind.so.5" && \
+	@export BOXLITE_LIBKRUNFW_PRIVILEGED_PATH="$$PWD/target/privileged-kernel/lib64/libkrunfw-privileged.so.5" && \
 	if command -v cargo-nextest >/dev/null 2>&1; then \
 		cargo nextest run -p boxlite-cli --tests --profile vm --no-fail-fast \
 		$(NEXTEST_FILTER); \

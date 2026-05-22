@@ -3,12 +3,12 @@
 //!
 //! Part of the forced `test:integration:cli` matrix — runs by default.
 //! Prerequisites the make target sets up for us:
-//!   1. `target/dind-kernel/lib64/libkrunfw-dind.so.5` exists (built
-//!      via `make libkrunfw-dind`, which `test:integration:cli` checks
+//!   1. `target/privileged-kernel/lib64/libkrunfw-privileged.so.5` exists (built
+//!      via `make libkrunfw-privileged`, which `test:integration:cli` checks
 //!      for and refuses to run without — heavy one-time ~10–20 min
 //!      kernel build, cached thereafter).
-//!   2. `BOXLITE_LIBKRUNFW_DIND_PATH` is exported when cargo builds the
-//!      CLI binary so the dind libkrunfw blob is staged alongside the
+//!   2. `BOXLITE_LIBKRUNFW_PRIVILEGED_PATH` is exported when cargo builds the
+//!      CLI binary so the privileged libkrunfw blob is staged alongside the
 //!      lean one inside the embedded runtime.
 //!
 //! Ignore-condition: set `BOXLITE_SKIP_DIND_TEST=1` to skip with a
@@ -27,7 +27,7 @@
 //! What we assert end-to-end:
 //!   - boxlite spawns a `--privileged` box whose init process is
 //!     the image's `dockerd-entrypoint.sh` (Phase A caps + cgroup rw
-//!     plus the Phase B dind kernel let it boot)
+//!     plus the Phase B privileged kernel let it boot)
 //!   - dockerd-entrypoint.sh launches dockerd with default bridge +
 //!     iptables + storage; this works because `BoxliteExecutor`
 //!     (`src/guest/src/container/executor.rs`) undoes the OCI default
@@ -38,11 +38,11 @@
 //!   - dockerd pulls `alpine:3.19` over the box's gvproxy network
 //!   - `docker build` (no `--network=host`) produces an image with a
 //!     custom tag (the build's RUN step executes a child container,
-//!     exercising containerd shim + the dind kernel's mqueue /
+//!     exercising containerd shim + the privileged kernel's mqueue /
 //!     netfilter subsystems via the default bridge)
 //!
 //! Failure here is the right canary for issue #276's regression
-//! budget: every existing capability we depend on (the dind kernel,
+//! budget: every existing capability we depend on (the privileged kernel,
 //! the per-box libkrunfw symlink, --privileged plumbing, and the
 //! BoxliteExecutor mitigation for the tenant readonly_paths leak)
 //! is exercised on a real VM.

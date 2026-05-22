@@ -14,7 +14,7 @@
 //! box's ~417 MB writable rootfs limit isn't a factor.
 //!
 //! Failure here flags one of:
-//!   * `docker compose` plugin missing or broken inside dind kernel
+//!   * `docker compose` plugin missing or broken inside privileged kernel
 //!   * compose's per-project bridge networking broken (regression of
 //!     the `BoxliteExecutor` mitigation that lets dockerd's bridge
 //!     setup write `/proc/sys/net/ipv4/ip_forward`)
