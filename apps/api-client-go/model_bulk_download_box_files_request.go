@@ -16,38 +16,37 @@ import (
 	"fmt"
 )
 
-// checks if the DownloadFiles type satisfies the MappedNullable interface at compile time
-var _ MappedNullable = &DownloadFiles{}
+// checks if the BulkDownloadBoxFilesRequest type satisfies the MappedNullable interface at compile time
+var _ MappedNullable = &BulkDownloadBoxFilesRequest{}
 
-// DownloadFiles struct for DownloadFiles
-type DownloadFiles struct {
-	// List of remote file paths to download
+// BulkDownloadBoxFilesRequest struct for BulkDownloadBoxFilesRequest
+type BulkDownloadBoxFilesRequest struct {
 	Paths []string `json:"paths"`
 	AdditionalProperties map[string]interface{}
 }
 
-type _DownloadFiles DownloadFiles
+type _BulkDownloadBoxFilesRequest BulkDownloadBoxFilesRequest
 
-// NewDownloadFiles instantiates a new DownloadFiles object
+// NewBulkDownloadBoxFilesRequest instantiates a new BulkDownloadBoxFilesRequest object
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewDownloadFiles(paths []string) *DownloadFiles {
-	this := DownloadFiles{}
+func NewBulkDownloadBoxFilesRequest(paths []string) *BulkDownloadBoxFilesRequest {
+	this := BulkDownloadBoxFilesRequest{}
 	this.Paths = paths
 	return &this
 }
 
-// NewDownloadFilesWithDefaults instantiates a new DownloadFiles object
+// NewBulkDownloadBoxFilesRequestWithDefaults instantiates a new BulkDownloadBoxFilesRequest object
 // This constructor will only assign default values to properties that have it defined,
 // but it doesn't guarantee that properties required by API are set
-func NewDownloadFilesWithDefaults() *DownloadFiles {
-	this := DownloadFiles{}
+func NewBulkDownloadBoxFilesRequestWithDefaults() *BulkDownloadBoxFilesRequest {
+	this := BulkDownloadBoxFilesRequest{}
 	return &this
 }
 
 // GetPaths returns the Paths field value
-func (o *DownloadFiles) GetPaths() []string {
+func (o *BulkDownloadBoxFilesRequest) GetPaths() []string {
 	if o == nil {
 		var ret []string
 		return ret
@@ -58,7 +57,7 @@ func (o *DownloadFiles) GetPaths() []string {
 
 // GetPathsOk returns a tuple with the Paths field value
 // and a boolean to check if the value has been set.
-func (o *DownloadFiles) GetPathsOk() ([]string, bool) {
+func (o *BulkDownloadBoxFilesRequest) GetPathsOk() ([]string, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -66,11 +65,11 @@ func (o *DownloadFiles) GetPathsOk() ([]string, bool) {
 }
 
 // SetPaths sets field value
-func (o *DownloadFiles) SetPaths(v []string) {
+func (o *BulkDownloadBoxFilesRequest) SetPaths(v []string) {
 	o.Paths = v
 }
 
-func (o DownloadFiles) MarshalJSON() ([]byte, error) {
+func (o BulkDownloadBoxFilesRequest) MarshalJSON() ([]byte, error) {
 	toSerialize,err := o.ToMap()
 	if err != nil {
 		return []byte{}, err
@@ -78,7 +77,7 @@ func (o DownloadFiles) MarshalJSON() ([]byte, error) {
 	return json.Marshal(toSerialize)
 }
 
-func (o DownloadFiles) ToMap() (map[string]interface{}, error) {
+func (o BulkDownloadBoxFilesRequest) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["paths"] = o.Paths
 
@@ -89,7 +88,7 @@ func (o DownloadFiles) ToMap() (map[string]interface{}, error) {
 	return toSerialize, nil
 }
 
-func (o *DownloadFiles) UnmarshalJSON(data []byte) (err error) {
+func (o *BulkDownloadBoxFilesRequest) UnmarshalJSON(data []byte) (err error) {
 	// This validates that all required properties are included in the JSON object
 	// by unmarshalling the object into a generic map with string keys and checking
 	// that every required field exists as a key in the generic map.
@@ -111,15 +110,15 @@ func (o *DownloadFiles) UnmarshalJSON(data []byte) (err error) {
 		}
 	}
 
-	varDownloadFiles := _DownloadFiles{}
+	varBulkDownloadBoxFilesRequest := _BulkDownloadBoxFilesRequest{}
 
-	err = json.Unmarshal(data, &varDownloadFiles)
+	err = json.Unmarshal(data, &varBulkDownloadBoxFilesRequest)
 
 	if err != nil {
 		return err
 	}
 
-	*o = DownloadFiles(varDownloadFiles)
+	*o = BulkDownloadBoxFilesRequest(varBulkDownloadBoxFilesRequest)
 
 	additionalProperties := make(map[string]interface{})
 
@@ -131,38 +130,38 @@ func (o *DownloadFiles) UnmarshalJSON(data []byte) (err error) {
 	return err
 }
 
-type NullableDownloadFiles struct {
-	value *DownloadFiles
+type NullableBulkDownloadBoxFilesRequest struct {
+	value *BulkDownloadBoxFilesRequest
 	isSet bool
 }
 
-func (v NullableDownloadFiles) Get() *DownloadFiles {
+func (v NullableBulkDownloadBoxFilesRequest) Get() *BulkDownloadBoxFilesRequest {
 	return v.value
 }
 
-func (v *NullableDownloadFiles) Set(val *DownloadFiles) {
+func (v *NullableBulkDownloadBoxFilesRequest) Set(val *BulkDownloadBoxFilesRequest) {
 	v.value = val
 	v.isSet = true
 }
 
-func (v NullableDownloadFiles) IsSet() bool {
+func (v NullableBulkDownloadBoxFilesRequest) IsSet() bool {
 	return v.isSet
 }
 
-func (v *NullableDownloadFiles) Unset() {
+func (v *NullableBulkDownloadBoxFilesRequest) Unset() {
 	v.value = nil
 	v.isSet = false
 }
 
-func NewNullableDownloadFiles(val *DownloadFiles) *NullableDownloadFiles {
-	return &NullableDownloadFiles{value: val, isSet: true}
+func NewNullableBulkDownloadBoxFilesRequest(val *BulkDownloadBoxFilesRequest) *NullableBulkDownloadBoxFilesRequest {
+	return &NullableBulkDownloadBoxFilesRequest{value: val, isSet: true}
 }
 
-func (v NullableDownloadFiles) MarshalJSON() ([]byte, error) {
+func (v NullableBulkDownloadBoxFilesRequest) MarshalJSON() ([]byte, error) {
 	return json.Marshal(v.value)
 }
 
-func (v *NullableDownloadFiles) UnmarshalJSON(src []byte) error {
+func (v *NullableBulkDownloadBoxFilesRequest) UnmarshalJSON(src []byte) error {
 	v.isSet = true
 	return json.Unmarshal(src, &v.value)
 }

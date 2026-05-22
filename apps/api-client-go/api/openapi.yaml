@@ -19,7 +19,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/BoxLiteConfiguration'
+                $ref: '#/components/schemas/BoxliteConfiguration'
           description: BoxLite configuration
       summary: Get config
       tags:
@@ -1643,6 +1643,43 @@ paths:
       summary: List all shared regions
       tags:
       - regions
+  /auth/end-session:
+    get:
+      description: "Implements OpenID Connect RP-Initiated Logout 1.0 for IdPs (e.g.\
+        \ Dex) that do not natively advertise end_session_endpoint. Validates the\
+        \ post-logout redirect target, then 302-redirects the browser back to the\
+        \ SPA."
+      operationId: LogoutController_endSession
+      parameters:
+      - explode: true
+        in: query
+        name: post_logout_redirect_uri
+        required: false
+        schema:
+          type: string
+        style: form
+      - explode: true
+        in: query
+        name: id_token_hint
+        required: false
+        schema:
+          type: string
+        style: form
+      - explode: true
+        in: query
+        name: state
+        required: false
+        schema:
+          type: string
+        style: form
+      responses:
+        "302":
+          description: Redirect to post_logout_redirect_uri
+        "400":
+          description: post_logout_redirect_uri not allowed
+      summary: OIDC RP-initiated logout endpoint
+      tags:
+      - auth
   /sandbox:
     get:
       operationId: listSandboxes
@@ -8844,6 +8881,885 @@ paths:
       summary: Get sandbox metrics
       tags:
       - sandbox
+  /v1/me:
+    get:
+      operationId: BoxliteMeController_getMe
+      parameters: []
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+  /v1/config:
+    get:
+      operationId: BoxliteConfigController_getConfig
+      parameters: []
+      responses:
+        "200":
+          description: ""
+      tags:
+      - BoxLite REST
+  /v1/{prefix}/boxes:
+    get:
+      operationId: BoxliteBoxController_listBoxes
+      parameters:
+      - explode: true
+        in: query
+        name: pageSize
+        required: true
+        schema:
+          type: string
+        style: form
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    post:
+      operationId: BoxliteBoxController_createBox
+      parameters: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateBoxDto'
+        required: true
+      responses:
+        "201":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+  /v1/{prefix}/boxes/{boxId}:
+    delete:
+      operationId: BoxliteBoxController_removeBox
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "204":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    get:
+      operationId: BoxliteBoxController_getBox
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    head:
+      operationId: BoxliteBoxController_headBox
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+  /v1/{prefix}/boxes/{boxId}/start:
+    post:
+      operationId: BoxliteBoxController_startBox
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "201":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+  /v1/{prefix}/boxes/{boxId}/stop:
+    post:
+      operationId: BoxliteBoxController_stopBox
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "201":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+  /v1/{prefix}/boxes/{boxId}/exec:
+    delete:
+      operationId: BoxliteProxyController_proxyExec_delete
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    get:
+      operationId: BoxliteProxyController_proxyExec_get
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    head:
+      operationId: BoxliteProxyController_proxyExec_head
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    options:
+      operationId: BoxliteProxyController_proxyExec_options
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    patch:
+      operationId: BoxliteProxyController_proxyExec_patch
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    post:
+      operationId: BoxliteProxyController_proxyExec_post
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    put:
+      operationId: BoxliteProxyController_proxyExec_put
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+  /v1/{prefix}/boxes/{boxId}/executions/{execId}/signal:
+    delete:
+      operationId: BoxliteProxyController_proxyExecSignal_delete
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    get:
+      operationId: BoxliteProxyController_proxyExecSignal_get
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    head:
+      operationId: BoxliteProxyController_proxyExecSignal_head
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    options:
+      operationId: BoxliteProxyController_proxyExecSignal_options
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    patch:
+      operationId: BoxliteProxyController_proxyExecSignal_patch
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    post:
+      operationId: BoxliteProxyController_proxyExecSignal_post
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    put:
+      operationId: BoxliteProxyController_proxyExecSignal_put
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+  /v1/{prefix}/boxes/{boxId}/executions/{execId}/resize:
+    delete:
+      operationId: BoxliteProxyController_proxyExecResize_delete
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    get:
+      operationId: BoxliteProxyController_proxyExecResize_get
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    head:
+      operationId: BoxliteProxyController_proxyExecResize_head
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    options:
+      operationId: BoxliteProxyController_proxyExecResize_options
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    patch:
+      operationId: BoxliteProxyController_proxyExecResize_patch
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    post:
+      operationId: BoxliteProxyController_proxyExecResize_post
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    put:
+      operationId: BoxliteProxyController_proxyExecResize_put
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+  /v1/{prefix}/boxes/{boxId}/executions/{execId}:
+    delete:
+      operationId: BoxliteProxyController_proxyExecKill
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    get:
+      operationId: BoxliteProxyController_proxyExecStatus
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - explode: false
+        in: path
+        name: execId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+  /v1/{prefix}/boxes/{boxId}/files:
+    get:
+      description: Returns the raw file bytes at the given path inside the box. Proxied
+        to the runner.
+      operationId: downloadBoxFile
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - description: Path of the file inside the box
+        explode: true
+        in: query
+        name: path
+        required: true
+        schema: {}
+        style: form
+      responses:
+        "200":
+          description: Raw file bytes
+        "404":
+          description: Box or file not found
+      security:
+      - bearer: []
+      summary: Download a single file from a box
+      tags:
+      - BoxLite REST
+    put:
+      description: Streams the raw request body to the given path inside the box.
+        Proxied to the runner.
+      operationId: uploadBoxFile
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      - description: Destination path inside the box
+        explode: true
+        in: query
+        name: path
+        required: true
+        schema: {}
+        style: form
+      responses:
+        "204":
+          description: File uploaded
+      security:
+      - bearer: []
+      summary: Upload a single file to a box
+      tags:
+      - BoxLite REST
+  /v1/{prefix}/boxes/{boxId}/files/bulk-upload:
+    post:
+      description: "multipart/form-data with paired files[N].path + files[N].file\
+        \ fields per file. Per-file errors are collected rather than aborting the\
+        \ batch. Proxied to the runner."
+      operationId: bulkUploadBoxFiles
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: All files uploaded
+        "400":
+          description: Partial success — see body for uploaded + errors lists
+      security:
+      - bearer: []
+      summary: Upload multiple files to a box in one request
+      tags:
+      - BoxLite REST
+  /v1/{prefix}/boxes/{boxId}/files/bulk-download:
+    post:
+      description: "JSON request {paths:[...]}. Response is multipart/form-data with\
+        \ boundary BOXLITE-FILE-BOUNDARY where each part is name=\"file\"; filename=<path>\
+        \ on success or name=\"error\"; filename=<path> on per-file failure. Proxied\
+        \ to the runner."
+      operationId: bulkDownloadBoxFiles
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/bulkDownloadBoxFiles_request'
+        required: true
+      responses:
+        "200":
+          description: Streamed multipart/form-data with per-file parts
+      security:
+      - bearer: []
+      summary: Download multiple files from a box in one request
+      tags:
+      - BoxLite REST
+  /v1/{prefix}/boxes/{boxId}/metrics:
+    delete:
+      operationId: BoxliteProxyController_proxyMetrics_delete
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    get:
+      operationId: BoxliteProxyController_proxyMetrics_get
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    head:
+      operationId: BoxliteProxyController_proxyMetrics_head
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    options:
+      operationId: BoxliteProxyController_proxyMetrics_options
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    patch:
+      operationId: BoxliteProxyController_proxyMetrics_patch
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    post:
+      operationId: BoxliteProxyController_proxyMetrics_post
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
+    put:
+      operationId: BoxliteProxyController_proxyMetrics_put
+      parameters:
+      - explode: false
+        in: path
+        name: boxId
+        required: true
+        schema:
+          type: string
+        style: simple
+      responses:
+        "200":
+          description: ""
+      security:
+      - bearer: []
+      tags:
+      - BoxLite REST
 components:
   schemas:
     Announcement:
@@ -8887,6 +9803,11 @@ components:
           description: OIDC audience
           example: boxlite-api
           type: string
+        endSessionEndpoint:
+          description: OIDC end-session endpoint. Set when the IdP does not advertise
+            one via discovery (e.g. Dex) and BoxLite hosts a compatible logout endpoint.
+          example: https://api.example.com/api/auth/end-session
+          type: string
       required:
       - audience
       - clientId
@@ -8922,7 +9843,7 @@ components:
           - $ref: '#/components/schemas/RateLimitEntry'
           description: Sandbox lifecycle rate limit
       type: object
-    BoxLiteConfiguration:
+    BoxliteConfiguration:
       example:
         dashboardUrl: https://dashboard.example.com
         rateLimit: ""
@@ -14748,6 +15669,9 @@ components:
       required:
       - series
       type: object
+    CreateBoxDto:
+      properties: {}
+      type: object
     uploadFile_deprecated_request:
       properties:
         file:
@@ -14852,6 +15776,15 @@ components:
               status: down
               message: Could not connect
           type: object
+      type: object
+    bulkDownloadBoxFiles_request:
+      properties:
+        paths:
+          items:
+            type: string
+          type: array
+      required:
+      - paths
       type: object
   securitySchemes:
     bearer:
