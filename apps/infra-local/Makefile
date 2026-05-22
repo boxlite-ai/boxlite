@@ -6,10 +6,10 @@
 
 PY ?= python
 
-.PHONY: help up down ps doctor logs wipe itest test install
+.PHONY: help up down ps doctor logs wipe itest test install load-schema up-with-schema e2e itest-all
 
 help:                  ## show this help
-	@awk -F':.*## ' '/^[a-zA-Z][a-zA-Z0-9_-]*:.*## / { printf "  %-12s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
+	@awk -F':.*## ' '/^[a-zA-Z][a-zA-Z0-9_-]*:.*## / { printf "  %-16s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
 
 install:               ## install the package + test extras
 	$(PY) -m pip install -e ".[test]"
@@ -40,3 +40,10 @@ e2e:                   ## run comprehensive E2E suite (~60s, ~90s with smoke)
 
 itest-all:             ## run BOTH integration suites (~90s)
 	BOXLITE_INTEGRATION=1 pytest tests/integration -v
+
+load-schema:           ## load apps/infra-local/sql/schema-baseline.sql into local pg (run after `make up`)
+	./scripts/apply-schema.sh
+
+up-with-schema:        ## make up + make load-schema (one-shot for a fresh stack)
+	$(MAKE) up
+	$(MAKE) load-schema
