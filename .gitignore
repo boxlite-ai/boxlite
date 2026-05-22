@@ -186,3 +186,12 @@ Cargo.lock
 dashboard-*.png
 dex-*.png
 crud-*.png
+
+# L2 boot artifacts — local-only, not for repo
+apps/apps                                # self-symlink workaround for apps/apps/... path resolution
+apps/.env                                # symlink to apps/api/.env (NestJS env loading)
+apps/api/.env                            # contains secrets (encryption key, runner token)
+apps/api/.swcrc                          # SWC config from attempted compile switch
+sdks/go/libboxlite.a                     # 115 MB, prebuilt from upstream releases
+sdks/go/libboxlite.dylib                 # 73 MB, prebuilt from upstream releases
+sdks/go/boxlite-c-v*/                    # extracted prebuilt archive

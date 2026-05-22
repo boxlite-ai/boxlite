@@ -12,7 +12,7 @@
         "deleteOutputPath": false,
         "main": "apps/api/src/main.ts",
         "tsConfig": "apps/api/tsconfig.app.json",
-        "generatePackageJson": true,
+        "generatePackageJson": false,
         "target": "node",
         "compiler": "tsc",
         "sourceMap": true,
