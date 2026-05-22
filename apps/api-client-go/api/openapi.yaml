@@ -9249,17 +9249,6 @@ paths:
         schema:
           type: string
         style: simple
-      requestBody:
-        content:
-          multipart/form-data:
-            schema:
-              additionalProperties:
-                $ref: '#/components/schemas/bulkUploadBoxFiles_request_value'
-              type: object
-        description: "Paired files[N].path (string) + files[N].file (binary) parts.\
-          \ The path and file parts for a given index N belong to the same file; the\
-          \ index space can be sparse."
-        required: true
       responses:
         "200":
           description: All files uploaded
@@ -15324,13 +15313,6 @@ components:
               message: Could not connect
           type: object
       type: object
-    bulkUploadBoxFiles_request_value:
-      oneOf:
-      - description: "Destination path for the corresponding files[N].file part."
-        type: string
-      - description: "Raw file bytes for the corresponding files[N].path part."
-        format: binary
-        type: string
     bulkDownloadBoxFiles_request:
       properties:
         paths:
