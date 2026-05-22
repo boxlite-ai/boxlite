@@ -152,14 +152,38 @@ func TestParseBulkUploadParts_EmptyPathErrors(t *testing.T) {
 	if len(staged) != 0 {
 		t.Errorf("expected nothing staged for empty path, got %v", staged)
 	}
-	// Two errors: the blank path, then the orphaned file part that now
-	// has no destination to pair against. Reporting both lets clients
-	// fix everything in one round-trip.
-	if len(errs) != 2 {
-		t.Fatalf("expected 2 errors (empty path + orphan file), got %v", errs)
+	// Only the blank-path error: the orphaned .file part is suppressed
+	// because we already rejected this index's .path with a more specific
+	// reason. Reporting "missing .path metadata" alongside "path[N]: empty"
+	// would be misleading — the path did precede the file, it was blank.
+	if len(errs) != 1 {
+		t.Fatalf("expected 1 error (empty path; orphan-file suppressed), got %v", errs)
 	}
 	if !strings.Contains(errs[0], "empty") {
-		t.Errorf("first error should mention empty path, got %q", errs[0])
+		t.Errorf("error should mention empty path, got %q", errs[0])
+	}
+}
+
+// TestParseBulkUploadParts_FileBeforePathStillErrors guards against the
+// rejected-index suppression in EmptyPathErrors swallowing the genuine
+// "missing .path metadata" case where no .path was sent for that index.
+func TestParseBulkUploadParts_FileBeforePathStillErrors(t *testing.T) {
+	body, ct := writeBulkUploadBody(t, []struct{ name, value string }{
+		{"files[0].file", "orphan-with-no-path-ever"},
+	})
+
+	staged, errs := parseBulkUploadParts(readerFromMultipart(t, body, ct))
+	t.Cleanup(func() {
+		for _, s := range staged {
+			_ = os.Remove(s.Src)
+		}
+	})
+
+	if len(staged) != 0 {
+		t.Errorf("expected nothing staged, got %v", staged)
+	}
+	if len(errs) != 1 || !strings.Contains(errs[0], "missing .path metadata") {
+		t.Errorf("expected 1 'missing .path metadata' error, got %v", errs)
 	}
 }
 

@@ -227,6 +227,7 @@ func BoxliteFilesBulkUpload(ctx *gin.Context) {
 // matching .file part — matching the daemon-side handler's contract.
 func parseBulkUploadParts(reader *multipart.Reader) ([]stagedBulkUpload, []string) {
 	dests := make(map[string]string)
+	rejected := make(map[string]bool)
 	var staged []stagedBulkUpload
 	var errs []string
 
@@ -254,6 +255,7 @@ func parseBulkUploadParts(reader *multipart.Reader) ([]stagedBulkUpload, []strin
 			dest := strings.TrimSpace(string(data))
 			if dest == "" {
 				errs = append(errs, fmt.Sprintf("path[%s]: empty", idx))
+				rejected[idx] = true
 				continue
 			}
 			dests[idx] = dest
@@ -262,6 +264,9 @@ func parseBulkUploadParts(reader *multipart.Reader) ([]stagedBulkUpload, []strin
 			dest, ok := dests[idx]
 			if !ok {
 				part.Close()
+				if rejected[idx] {
+					continue
+				}
 				errs = append(errs, fmt.Sprintf("file[%s]: missing .path metadata (must precede .file)", idx))
 				continue
 			}
