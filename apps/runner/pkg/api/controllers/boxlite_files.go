@@ -99,10 +99,9 @@ func BoxliteFileDownload(ctx *gin.Context) {
 		return
 	}
 
-	// CopyOut's auto-detect treats a non-existent dest as file-to-file when
-	// the tar carries exactly one regular file. Create the tmp file, then
-	// remove it so the dest path exists in the namespace but not on disk —
-	// CopyOut overwrites it with the box's file bytes.
+	// CopyOut needs a concrete host path; create a 0-byte tmp file and let
+	// CopyOut overwrite it (default opts include overwrite=true, see
+	// sdks/c/src/copy.rs default_copy_options). defer removes it on exit.
 	tmpFile, err := os.CreateTemp("", "boxlite-download-*")
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create temp file"})
