@@ -519,6 +519,11 @@ unsafe fn dispatch_event(event: RuntimeEvent) {
                 user_data,
                 result,
             } => dispatch_unit_event(result, user_data, cb),
+            RuntimeEvent::CopyOutMany {
+                cb,
+                user_data,
+                result,
+            } => dispatch_handle_event::<crate::copy::CCopyOutOutcomeList>(result, user_data, cb),
             RuntimeEvent::Info {
                 cb,
                 user_data,
