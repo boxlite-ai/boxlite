@@ -2,10 +2,10 @@
 .npmignore
 .openapi-generator-ignore
 api.ts
-api/boxlite-api.ts
 api/default-api.ts
 api/sandbox-api.ts
 api/snapshots-api.ts
+api/toolbox-api.ts
 base.ts
 common.ts
 configuration.ts

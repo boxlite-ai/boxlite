@@ -30,6 +30,7 @@ import {
   BuildSnapshotRequestDTO,
   CreateBackupDTO,
   PullSnapshotRequestDTO,
+  ToolboxApi,
   UpdateNetworkSettingsDTO,
   RecoverSandboxDTO,
 } from '@boxlite-ai/runner-api-client'
@@ -51,6 +52,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
   private sandboxApiClient: SandboxApi
   private snapshotApiClient: SnapshotsApi
   private runnerApiClient: DefaultApi
+  private toolboxApiClient: ToolboxApi
 
   private convertSandboxState(state: EnumsSandboxState): SandboxState {
     switch (state) {
@@ -154,6 +156,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
     this.sandboxApiClient = new SandboxApi(new Configuration(), '', axiosInstance)
     this.snapshotApiClient = new SnapshotsApi(new Configuration(), '', axiosInstance)
     this.runnerApiClient = new DefaultApi(new Configuration(), '', axiosInstance)
+    this.toolboxApiClient = new ToolboxApi(new Configuration(), '', axiosInstance)
   }
 
   async healthCheck(signal?: AbortSignal): Promise<void> {
