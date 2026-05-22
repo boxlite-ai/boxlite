@@ -428,19 +428,33 @@ func BoxliteFilesBulkDownload(ctx *gin.Context) {
 		return
 	}
 
-	ctx.Header("Content-Type", fmt.Sprintf("multipart/form-data; boundary=%s", bulkDownloadBoundary))
-	ctx.Status(http.StatusOK)
-
+	// Construct the multipart writer and set its boundary BEFORE
+	// committing the 200 + Content-Type. multipart.NewWriter does no
+	// I/O until CreatePart, so a SetBoundary failure here can still be
+	// reported as a 500 JSON error. Once we've called ctx.Status no
+	// status upgrade is possible.
 	mw := multipart.NewWriter(ctx.Writer)
 	if err := mw.SetBoundary(bulkDownloadBoundary); err != nil {
-		// Headers are already committed. Best we can do is bail before
-		// streaming and let the client see a truncated body.
+		ctx.JSON(http.StatusInternalServerError, gin.H{
+			"error": fmt.Sprintf("multipart boundary: %v", err),
+		})
 		return
 	}
+
+	ctx.Header("Content-Type", fmt.Sprintf("multipart/form-data; boundary=%s", bulkDownloadBoundary))
+	ctx.Status(http.StatusOK)
 	defer mw.Close()
 
+	reqCtx := ctx.Request.Context()
 	for _, srcPath := range req.Paths {
-		streamOneBulkDownload(ctx.Request.Context(), fs, mw, boxId, srcPath)
+		// Bail early if the client has gone away — ctxWriter aborts
+		// in-flight io.Copy on the *current* part, but without this
+		// check we'd still spend a CopyOut per remaining path before
+		// the next write noticed the disconnect.
+		if err := reqCtx.Err(); err != nil {
+			return
+		}
+		streamOneBulkDownload(reqCtx, fs, mw, boxId, srcPath)
 	}
 }
 

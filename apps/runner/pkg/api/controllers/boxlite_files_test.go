@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -411,6 +412,129 @@ func TestBoxliteFilesBulkDownload_MissingPathsFieldReturns400(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), "non-empty") {
 		t.Errorf("expected 'non-empty' in error body, got %s", w.Body.String())
+	}
+}
+
+// runBulkDownloadHandlerCtx is the request-context-aware variant of
+// runBulkDownloadHandler used by the cancellation test. The default
+// runBulkDownloadHandler builds a request with context.Background(),
+// which cannot be canceled from the test body.
+func runBulkDownloadHandlerCtx(reqCtx context.Context, target, contentType, body string) *httptest.ResponseRecorder {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.POST("/v1/boxes/:boxId/files/bulk-download", BoxliteFilesBulkDownload)
+	req := httptest.NewRequest(http.MethodPost, target, bytes.NewBufferString(body)).WithContext(reqCtx)
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	return w
+}
+
+// TestBoxliteFilesBulkDownload_HappyPath pins that each requested path
+// becomes one `name="file"; filename="<path>"` part in the multipart
+// response, that the bytes CopyOut writes to the host tmp dest end up in
+// the corresponding part body verbatim, and that the response advertises
+// the documented BOXLITE-FILE-BOUNDARY boundary.
+func TestBoxliteFilesBulkDownload_HappyPath(t *testing.T) {
+	contents := map[string]string{
+		"/etc/a.txt": "alpha-bytes",
+		"/etc/b.txt": "bravo-bytes",
+	}
+	fake := &fakeBoxFS{
+		onCopyOut: func(_ /*boxId*/, guestSrc, hostDst string) error {
+			body, ok := contents[guestSrc]
+			if !ok {
+				return fmt.Errorf("unexpected path %q", guestSrc)
+			}
+			return os.WriteFile(hostDst, []byte(body), 0o644)
+		},
+	}
+	installFakeBoxFS(t, fake)
+
+	w := runBulkDownloadHandler(
+		"/v1/boxes/box-42/files/bulk-download",
+		"application/json",
+		`{"paths":["/etc/a.txt","/etc/b.txt"]}`,
+	)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+
+	ct := w.Header().Get("Content-Type")
+	if !strings.HasPrefix(ct, "multipart/form-data") || !strings.Contains(ct, "BOXLITE-FILE-BOUNDARY") {
+		t.Fatalf("Content-Type missing multipart/BOXLITE-FILE-BOUNDARY: %q", ct)
+	}
+
+	mr := multipart.NewReader(w.Body, "BOXLITE-FILE-BOUNDARY")
+	got := make(map[string]string, 2)
+	for {
+		part, err := mr.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("NextPart: %v", err)
+		}
+		// Disposition carries the source path in the filename param.
+		filename := part.FileName()
+		buf, _ := io.ReadAll(part)
+		part.Close()
+		// The handler emits Content-Disposition name="file" on success
+		// and name="error" on failure — distinguish via FormName().
+		if part.FormName() != "file" {
+			t.Errorf("expected name=file part, got name=%q for filename=%q", part.FormName(), filename)
+			continue
+		}
+		got[filename] = string(buf)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 file parts, got %d (%v)", len(got), got)
+	}
+	for path, want := range contents {
+		if got[path] != want {
+			t.Errorf("part %s: want %q, got %q", path, want, got[path])
+		}
+	}
+}
+
+// TestBoxliteFilesBulkDownload_StopsCopyOutAfterContextCanceled pins the
+// early-bail behaviour: when the request context is canceled mid-batch,
+// subsequent iterations of the streaming loop must not invoke CopyOut.
+// The ctxWriter wrapper already aborts an in-flight io.Copy, but without
+// the per-iteration ctx.Err() check the handler would still spend one
+// CopyOut FFI roundtrip per remaining path before the next write
+// noticed the disconnect.
+func TestBoxliteFilesBulkDownload_StopsCopyOutAfterContextCanceled(t *testing.T) {
+	reqCtx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	fake := &fakeBoxFS{
+		onCopyOut: func(_ /*boxId*/, _ /*src*/, hostDst string) error {
+			// Cancel the request mid-batch — simulates client disconnect
+			// after the first file has been extracted. Subsequent loop
+			// iterations must see ctx.Err() != nil and bail out before
+			// calling CopyOut again.
+			cancel()
+			return os.WriteFile(hostDst, []byte("x"), 0o644)
+		},
+	}
+	installFakeBoxFS(t, fake)
+
+	w := runBulkDownloadHandlerCtx(
+		reqCtx,
+		"/v1/boxes/box-42/files/bulk-download",
+		"application/json",
+		`{"paths":["/etc/a.txt","/etc/b.txt","/etc/c.txt"]}`,
+	)
+
+	// Status header was committed before the cancel observation, so the
+	// recorder still shows 200 — the assertion that matters is the
+	// CopyOut call count.
+	_ = w
+	if len(fake.outCalls) != 1 {
+		t.Fatalf("expected exactly 1 CopyOut before bail, got %d (%v)", len(fake.outCalls), fake.outCalls)
 	}
 }
 
