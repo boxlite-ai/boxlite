@@ -232,10 +232,42 @@ test\:unit\:ffi:
 		cargo test -p boxlite-c $(CARGOTEST_FILTER); \
 	fi
 
-# Thin alias: dind end-to-end is part of the forced `test:integration:cli`
-# matrix; this target just narrows nextest's filter to the dind tests for
-# fast iteration. FILTER is a substring (`-E 'test(~dind_)'`) — it catches
-# every test whose name contains `dind_`, currently:
+# CLI integration tests — the default `test:integration:cli` matrix
+# EXCLUDES the privileged-kernel suite (every test named `dind_*`).
+# The dind family alone is ~5 min on a 4-core box and requires a one-
+# time ~10-20 min `make libkrunfw-privileged` kernel build, so it has
+# its own opt-in target (`test:integration:privileged` below). Default
+# matrix stays fast (~30-60 s) and runs without the privileged kernel
+# blob.
+test\:integration\:cli: $(if $(SETUP_DONE),,runtime\:debug)
+	@echo "🧪 Running CLI integration tests (privileged/dind suite excluded — see test:integration:privileged)..."
+	@if command -v cargo-nextest >/dev/null 2>&1; then \
+		cargo nextest run -p boxlite-cli --tests --profile vm --no-fail-fast \
+		-E 'not test(~dind_)' $(NEXTEST_FILTER); \
+	else \
+		cargo test -p boxlite-cli --tests --no-fail-fast -- --test-threads=4 \
+		--skip dind_ $(CARGOTEST_FILTER); \
+	fi
+
+# Privileged-kernel integration tests (dind family). Opt-in, NOT in any
+# aggregator (`test`, `test:integration:core`, …) — run explicitly when
+# changing the privileged kernel config, gvproxy port path, or dockerd
+# integration. Heavy: docker:dind boot ~10s, image pulls + dockerd init
+# bring each test to ~30–50 s; full suite ~80 s with `test-threads=4`.
+#
+# Prereq: the libkrunfw-privileged blob must already be built locally
+# (`make libkrunfw-privileged` once, ~10–20 min kernel build, cached after).
+# libkrun-sys/build.rs auto-detects it at the canonical path written by that
+# target, so no env var is required for the standard layout. CI or packagers
+# that stage the blob outside the workspace can still set
+# BOXLITE_LIBKRUNFW_PRIVILEGED_PATH as an explicit override.
+#
+# Ignore-condition: set BOXLITE_SKIP_DIND_TEST=1 to make individual dind
+# tests SKIP via their own opt-out (kept for hosts that genuinely can't run
+# dind, e.g. nested-virt unavailable); default is RUN.
+#
+# FILTER drills into the privileged suite via a name substring. The current
+# privileged suite:
 #   - `dind_supports_docker_build`              (`src/cli/tests/dind_build.rs`)
 #   - `dind_compose_multi_service_network`      (`src/cli/tests/dind_compose.rs`)
 #   - `dind_port_conflict_fails_fast`           (`src/cli/tests/dind_port_conflict.rs`)
@@ -257,8 +289,8 @@ test\:unit\:ffi:
 #   - dind_multi_image_pull    : explicit `-p 42375:2375 42376:2376` → host:42375/42376
 #   - dind_volume_persistence  : explicit `-p 52375:2375 52376:2376` → host:52375/52376
 #   - dind_exec_into_running   : explicit `-p 62375:2375 62376:2376` → host:62375/62376
-# Any new dind test added here must pick a non-default host port slice
-# the same way (or skip `docker:dind` entirely) or `make test:integration:dind`
+# Any new dind test must pick a non-default host port slice the same way
+# (or skip `docker:dind` entirely) or `make test:integration:privileged`
 # will start failing intermittently with "bind: address already in use".
 #
 # Agent-flavored tests (anything that pulls multiple images, runs
@@ -268,38 +300,20 @@ test\:unit\:ffi:
 # headroom for in-box writes. Without it, the probe ENOSPCs mid-pull
 # and the failure looks like a flaky registry rather than a missing
 # size declaration.
-#
-# Heavy one-time `make libkrunfw-privileged` (~10–20 min, cached after) is
-# required — see test:integration:cli below.
-test\:integration\:dind:
-	@$(MAKE) test:integration:cli FILTER=dind_
-
-# CLI integration tests (forced matrix, including dind end-to-end).
-#
-# Prereq: the libkrunfw-privileged blob must already be built locally
-# (`make libkrunfw-privileged` once, ~10–20 min kernel build, cached after).
-# libkrun-sys/build.rs auto-detects it at the canonical path written by that
-# target, so no env var is required for the standard layout. CI or packagers
-# that stage the blob outside the workspace can still set
-# BOXLITE_LIBKRUNFW_PRIVILEGED_PATH as an explicit override.
-#
-# Ignore-condition: set BOXLITE_SKIP_DIND_TEST=1 to skip the dind test only
-# (the rest of the CLI integration suite still runs). Use this on hosts that
-# cannot run dind for real (e.g., nested-virt unavailable). Default is RUN.
-test\:integration\:cli: $(if $(SETUP_DONE),,runtime\:debug)
-	@echo "🧪 Running CLI integration tests..."
+test\:integration\:privileged: $(if $(SETUP_DONE),,runtime\:debug)
+	@echo "🧪 Running privileged-kernel integration tests (dind family)..."
 	@if [ ! -f target/privileged-kernel/lib64/libkrunfw-privileged.so.5 ]; then \
 		echo "❌ libkrunfw-privileged.so.5 not found at target/privileged-kernel/lib64/" >&2; \
 		echo "   Build it once with: make libkrunfw-privileged   (~10–20 min, cached after)" >&2; \
-		echo "   Or skip just the dind test: BOXLITE_SKIP_DIND_TEST=1 make test:integration:cli" >&2; \
+		echo "   Then re-run: make test:integration:privileged" >&2; \
 		exit 1; \
 	fi
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
 		cargo nextest run -p boxlite-cli --tests --profile vm --no-fail-fast \
-		$(NEXTEST_FILTER); \
+		-E 'test(~dind_)' $(NEXTEST_FILTER); \
 	else \
 		cargo test -p boxlite-cli --tests --no-fail-fast -- --test-threads=4 \
-		$(CARGOTEST_FILTER); \
+		dind_ $(CARGOTEST_FILTER); \
 	fi
 
 # Python SDK unit tests.
