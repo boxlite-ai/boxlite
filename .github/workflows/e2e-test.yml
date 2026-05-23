@@ -380,27 +380,57 @@ jobs:
           # idempotent fast-paths (~10–30 s).
           bash scripts/setup/setup-ubuntu.sh
 
-      - name: Disk-space precheck
-        # Fail loud before the runner Worker hits ENOSPC on _diag writes.
-        # Validate the df output is parseable BEFORE the disk-threshold
-        # comparison, so a contract change in df doesn't surface as a
-        # fake "Only  GB free" error.
+      - name: Disk-pressure cache eviction
+        # Replaces the prior hard-fail precheck (run 25726812554 post-mortem):
+        # at >=THRESHOLD_PCT root use, evict e2e caches in place, re-check,
+        # and only fail if disk is still over threshold afterward. Caches
+        # re-warm on next run. Runner-internals housekeeping is separate
+        # (see "Pre-flight runner cleanup" step above).
+        #
+        # df parse-contract is validated before any comparison so a silent
+        # df format change surfaces as ::error::, not a fake "disk OK".
+        env:
+          THRESHOLD_PCT: '80'
+          MIN_FREE_GB: '20'
         run: |
           set -euo pipefail
-          DF_AVAIL=$(df --output=avail -BG / | tail -n 1)
-          DF_PCENT=$(df --output=pcent / | tail -n 1)
-          FREE_GB=$(printf '%s' "$DF_AVAIL" | tr -dc '0-9')
-          USED_PCT=$(printf '%s' "$DF_PCENT" | tr -dc '0-9')
-          if ! [[ "$FREE_GB" =~ ^[0-9]+$ ]] || ! [[ "$USED_PCT" =~ ^[0-9]+$ ]]; then
-            echo "::error::Could not parse df output (FREE_GB='${FREE_GB}' USED_PCT='${USED_PCT}') — df contract may have changed."
-            echo "Raw df --output=avail -BG / tail: ${DF_AVAIL}"
-            echo "Raw df --output=pcent  /  tail: ${DF_PCENT}"
-            exit 1
-          fi
+
+          read_df() {
+            DF_AVAIL=$(df --output=avail -BG / | tail -n 1)
+            DF_PCENT=$(df --output=pcent / | tail -n 1)
+            FREE_GB=$(printf '%s' "$DF_AVAIL" | tr -dc '0-9')
+            USED_PCT=$(printf '%s' "$DF_PCENT" | tr -dc '0-9')
+            if ! [[ "$FREE_GB" =~ ^[0-9]+$ ]] || ! [[ "$USED_PCT" =~ ^[0-9]+$ ]]; then
+              echo "::error::Could not parse df output (FREE_GB='${FREE_GB}' USED_PCT='${USED_PCT}') — df contract may have changed."
+              echo "Raw df --output=avail -BG / tail: ${DF_AVAIL}"
+              echo "Raw df --output=pcent  /  tail: ${DF_PCENT}"
+              exit 1
+            fi
+          }
+
+          read_df
           echo "Root volume: ${FREE_GB} GB free (${USED_PCT}% used)"
-          if [ "${FREE_GB}" -lt 20 ]; then
-            echo "::error::Only ${FREE_GB} GB free on / — refusing to run integration tests."
-            echo "::error::Manual cleanup needed on the persistent runner."
+
+          if [ "${USED_PCT}" -ge "${THRESHOLD_PCT}" ]; then
+            echo "── Disk >=${THRESHOLD_PCT}% used — evicting e2e caches ──"
+            for path in target/boxlite-test /tmp/boxlite-* "$HOME/.boxlite"; do
+              for resolved in $path; do
+                [ -e "$resolved" ] || continue
+                size=$(du -sh "$resolved" 2>/dev/null | cut -f1 || echo "?")
+                echo "  clearing $resolved (was: $size)"
+                rm -rf "$resolved" 2>/dev/null || true
+              done
+            done
+            read_df
+            echo "Post-eviction: ${FREE_GB} GB free (${USED_PCT}% used)"
+            if [ "${USED_PCT}" -ge "${THRESHOLD_PCT}" ]; then
+              echo "::error::Disk still ${USED_PCT}% used after clearing all e2e caches — manual cleanup needed."
+              exit 1
+            fi
+          fi
+
+          if [ "${FREE_GB}" -lt "${MIN_FREE_GB}" ]; then
+            echo "::error::Only ${FREE_GB} GB free on / (floor=${MIN_FREE_GB}) — refusing to run integration tests."
             exit 1
           fi
 
