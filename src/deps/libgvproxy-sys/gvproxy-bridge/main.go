@@ -409,13 +409,19 @@ func gvproxy_create(configJSON *C.char) C.longlong {
 		}
 	}()
 
-	// Start virtual network in goroutine
+	// `virtualnetwork.New` binds the configured host ports. A bind failure
+	// inside this goroutine used to be logrus-only — gvproxy_create still
+	// returned a valid id, so the real cause surfaced ~20s later as a guest
+	// DNS timeout. `initErr` propagates the bind result to the caller.
+	initErr := make(chan error, 1)
 	go func() {
 		vn, err := virtualnetwork.New(tapConfig)
 		if err != nil {
 			logrus.WithFields(logrus.Fields{"error": err, "id": id}).Error("Failed to create virtual network")
+			initErr <- err
 			return
 		}
+		initErr <- nil
 
 		// Override TCP handler with AllowNet filter and/or MITM secret substitution
 		if len(config.AllowNet) > 0 || instance.secretMatcher != nil {
@@ -498,6 +504,25 @@ func gvproxy_create(configJSON *C.char) C.longlong {
 		}
 		os.Remove(socketPath)
 	}()
+
+	// Block until the netstack init has reported success/failure; on
+	// failure tear down everything gvproxy_create allocated so far
+	// (cancel ctx → kill the metrics goroutine; close listener/conn;
+	// remove the socket file; drop the instances[] entry) and -1 out.
+	if err := <-initErr; err != nil {
+		instance.Cancel()
+		if listener != nil {
+			listener.Close()
+		}
+		if conn != nil {
+			conn.Close()
+		}
+		os.Remove(socketPath)
+		instancesMu.Lock()
+		delete(instances, id)
+		instancesMu.Unlock()
+		return -1
+	}
 
 	logrus.Info("Created gvproxy instance", "id", id, "socket", socketPath, "protocol", protocol)
 	return C.longlong(id)
