@@ -236,23 +236,38 @@ test\:unit\:ffi:
 # matrix; this target just narrows nextest's filter to the dind tests for
 # fast iteration. FILTER is a substring (`-E 'test(~dind_)'`) — it catches
 # every test whose name contains `dind_`, currently:
-#   - `dind_supports_docker_build`        (`src/cli/tests/dind_build.rs`)
-#   - `dind_compose_multi_service_network` (`src/cli/tests/dind_compose.rs`)
-#   - `dind_port_conflict_fails_fast`     (`src/cli/tests/dind_port_conflict.rs`)
+#   - `dind_supports_docker_build`              (`src/cli/tests/dind_build.rs`)
+#   - `dind_compose_multi_service_network`      (`src/cli/tests/dind_compose.rs`)
+#   - `dind_port_conflict_fails_fast`           (`src/cli/tests/dind_port_conflict.rs`)
+#   - `dind_agent_pulls_alpine_python_node`     (`src/cli/tests/dind_multi_image_pull.rs`)
+#   - `dind_named_volume_persists_across_containers`
+#                                               (`src/cli/tests/dind_volume_persistence.rs`)
+#   - `dind_container_run_stats_exec_stop_rm`   (`src/cli/tests/dind_exec_into_running.rs`)
 #
 # Every dind test uses the `docker:dind` image, which EXPOSEs 2375/2376.
 # The `vm` nextest profile runs with `test-threads = 4` so these start
 # concurrently; to stay parallel-safe each test owns a disjoint host port
 # slice:
-#   - dind_build       : no `-p`, EXPOSE auto-publish     → host:2375/2376
-#   - dind_compose     : explicit `-p 12375:2375 12376:2376` → host:12375/12376
-#   - dind_port_conflict: explicit `-p 22375:2375 22376:2376` → host:22375/22376
+#   - dind_build               : no `-p`, EXPOSE auto-publish     → host:2375/2376
+#   - dind_compose             : explicit `-p 12375:2375 12376:2376` → host:12375/12376
+#   - dind_port_conflict       : explicit `-p 22375:2375 22376:2376` → host:22375/22376
 #     (this one deliberately starts TWO boxes on the same 22375/22376 to
 #      verify the second one fails fast — but only 22375/22376 are at
 #      stake, so other dind tests are unaffected.)
+#   - dind_multi_image_pull    : explicit `-p 42375:2375 42376:2376` → host:42375/42376
+#   - dind_volume_persistence  : explicit `-p 52375:2375 52376:2376` → host:52375/52376
+#   - dind_exec_into_running   : explicit `-p 62375:2375 62376:2376` → host:62375/62376
 # Any new dind test added here must pick a non-default host port slice
 # the same way (or skip `docker:dind` entirely) or `make test:integration:dind`
 # will start failing intermittently with "bind: address already in use".
+#
+# Agent-flavored tests (anything that pulls multiple images, runs
+# `apt install`, builds wheels, etc.) MUST declare `--disk-size <GB>`
+# (CLI flag wiring in src/cli/src/cli.rs::ResourceFlags) — the default
+# COW overlay is sized to exactly the base image and offers zero
+# headroom for in-box writes. Without it, the probe ENOSPCs mid-pull
+# and the failure looks like a flaky registry rather than a missing
+# size declaration.
 #
 # Heavy one-time `make libkrunfw-privileged` (~10–20 min, cached after) is
 # required — see test:integration:cli below.
