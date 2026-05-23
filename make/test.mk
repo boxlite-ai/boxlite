@@ -175,15 +175,22 @@ test\:integration\:sdk:
 
 # Rust unit tests (parallel via nextest, fallback to serial cargo test).
 # --no-default-features disables gvproxy to avoid Go runtime link issues.
+#
+# Status accumulation: both crates always run (so a `-p boxlite-shared`
+# regression isn't masked by a `-p boxlite` failure aborting first), but
+# the recipe exits non-zero if EITHER crate failed. POSIX shell otherwise
+# evaluates `cmd_a; cmd_b` as the rc of cmd_b, silently swallowing cmd_a.
 test\:unit\:rust:
 	@echo "🧪 Running Rust unit tests..."
-	@if command -v cargo-nextest >/dev/null 2>&1; then \
-		cargo nextest run -p boxlite --no-default-features --lib $(NEXTEST_FILTER); \
-		cargo nextest run -p boxlite-shared --lib $(NEXTEST_FILTER); \
+	@rc=0; \
+	if command -v cargo-nextest >/dev/null 2>&1; then \
+		cargo nextest run --no-tests=warn -p boxlite --no-default-features --lib $(NEXTEST_FILTER) || rc=$$?; \
+		cargo nextest run --no-tests=warn -p boxlite-shared --lib $(NEXTEST_FILTER) || rc=$$?; \
 	else \
-		cargo test -p boxlite --no-default-features --lib -- --test-threads=1 $(CARGOTEST_FILTER); \
-		cargo test -p boxlite-shared --lib -- --test-threads=1 $(CARGOTEST_FILTER); \
-	fi
+		cargo test -p boxlite --no-default-features --lib -- --test-threads=1 $(CARGOTEST_FILTER) || rc=$$?; \
+		cargo test -p boxlite-shared --lib -- --test-threads=1 $(CARGOTEST_FILTER) || rc=$$?; \
+	fi; \
+	exit $$rc
 
 # Pre-warm Rust integration test image cache (internal helper, still callable).
 test\:warm-cache\:rust: $(if $(SETUP_DONE),,runtime\:debug)
