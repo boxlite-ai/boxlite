@@ -95,16 +95,175 @@ impl ProcessMonitor {
         }
     }
 
-    /// Async poll until the process exits.
+    /// Async wait until the process exits.
     ///
-    /// Polls every 500ms until the process terminates.
+    /// Uses platform-native event-driven mechanisms for near-zero latency:
+    /// - **Linux**: `pidfd_open()` (kernel 5.3+) with Tokio `AsyncFd`
+    /// - **macOS**: `kqueue` + `EVFILT_PROC` + `NOTE_EXIT` with Tokio `AsyncFd`
+    /// - **Fallback**: 100ms polling via `try_wait()` if event-driven setup fails
     pub async fn wait_for_exit(&self) -> ProcessExit {
-        let poll_interval = Duration::from_millis(500);
+        // Fast path: already dead.
+        if let Some(exit) = self.try_wait() {
+            return exit;
+        }
+
+        // Try event-driven detection (platform-specific).
+        #[cfg(target_os = "linux")]
+        if let Some(exit) = self.wait_pidfd().await {
+            return exit;
+        }
+
+        #[cfg(target_os = "macos")]
+        if let Some(exit) = self.wait_kqueue().await {
+            return exit;
+        }
+
+        // Fallback for older kernels or when event-driven setup fails.
+        self.wait_polling().await
+    }
+
+    /// Fallback: poll `try_wait()` at a fixed interval.
+    ///
+    /// Only used when `pidfd_open()` (Linux < 5.3) or `kqueue` setup fails.
+    async fn wait_polling(&self) -> ProcessExit {
+        let poll_interval = Duration::from_millis(100);
         loop {
             if let Some(exit) = self.try_wait() {
                 return exit;
             }
             tokio::time::sleep(poll_interval).await;
+        }
+    }
+
+    /// Linux: event-driven process exit detection via `pidfd_open()`.
+    ///
+    /// Returns a pollable FD that becomes readable when the process exits.
+    /// Available on kernel 5.3+. Returns `None` if unavailable, allowing
+    /// the caller to fall back to polling.
+    #[cfg(target_os = "linux")]
+    async fn wait_pidfd(&self) -> Option<ProcessExit> {
+        use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+        use tokio::io::unix::AsyncFd;
+
+        // SAFETY: pidfd_open() returns a pollable FD for the target process.
+        // Returns -1 with ESRCH (process dead) or ENOSYS (kernel < 5.3).
+        let raw_fd = unsafe { libc::syscall(libc::SYS_pidfd_open, self.pid as i32, 0u32) } as i32;
+        if raw_fd < 0 {
+            return None;
+        }
+
+        // SAFETY: raw_fd is a valid, open FD from pidfd_open(). OwnedFd takes
+        // ownership immediately so all error paths are leak-free.
+        let owned = unsafe { OwnedFd::from_raw_fd(raw_fd) };
+
+        // SAFETY: owned.as_raw_fd() is a valid open FD. fcntl(F_SETFD) and
+        // fcntl(F_SETFL) do not take ownership.
+        unsafe {
+            if libc::fcntl(owned.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC) < 0 {
+                return None; // OwnedFd closes the FD on drop
+            }
+            let flags = libc::fcntl(owned.as_raw_fd(), libc::F_GETFL);
+            if flags < 0 {
+                return None; // OwnedFd closes the FD on drop
+            }
+            if libc::fcntl(owned.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) < 0 {
+                return None; // OwnedFd closes the FD on drop
+            }
+        }
+
+        let async_fd = AsyncFd::new(owned).ok()?;
+
+        // Best-effort fast return: if process died between the initial
+        // try_wait() and pidfd_open(), skip waiting. Not a correctness gate —
+        // the pidfd/readable path also handles this correctly.
+        if !self.is_alive() {
+            return Some(self.try_wait().unwrap_or(ProcessExit::Unknown));
+        }
+
+        // Wait for the pidfd to become readable (process exit).
+        match async_fd.readable().await {
+            Ok(_guard) => Some(self.try_wait().unwrap_or(ProcessExit::Unknown)),
+            Err(_) => None,
+        }
+    }
+
+    /// macOS: event-driven process exit detection via `kqueue` + `EVFILT_PROC`.
+    ///
+    /// Registers a `NOTE_EXIT` event on a kqueue for the target PID. The kqueue
+    /// FD becomes readable when the process exits. Returns `None` if setup fails,
+    /// allowing the caller to fall back to polling.
+    #[cfg(target_os = "macos")]
+    async fn wait_kqueue(&self) -> Option<ProcessExit> {
+        use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+        use tokio::io::unix::AsyncFd;
+
+        // SAFETY: kqueue() creates a new kernel event queue FD.
+        let kq = unsafe { libc::kqueue() };
+        if kq < 0 {
+            return None;
+        }
+
+        // SAFETY: kq is a valid, open FD from kqueue(). OwnedFd takes
+        // ownership immediately so all error paths are leak-free.
+        let owned = unsafe { OwnedFd::from_raw_fd(kq) };
+
+        // Block scope: kevent struct contains *mut c_void (udata field) which
+        // is not Send. Must be dropped before any .await points.
+        {
+            let change = libc::kevent {
+                ident: self.pid as usize,
+                filter: libc::EVFILT_PROC,
+                flags: libc::EV_ADD | libc::EV_ONESHOT,
+                fflags: libc::NOTE_EXIT,
+                data: 0,
+                udata: std::ptr::null_mut(),
+            };
+
+            // SAFETY: kevent() with changelist registers the event filter.
+            // owned.as_raw_fd() is valid. Returns -1 with ESRCH if process dead.
+            let ret = unsafe {
+                libc::kevent(
+                    owned.as_raw_fd(),
+                    &change,
+                    1,
+                    std::ptr::null_mut(),
+                    0,
+                    std::ptr::null(),
+                )
+            };
+            if ret < 0 {
+                return None; // OwnedFd closes the kqueue FD on drop
+            }
+        }
+
+        // SAFETY: owned.as_raw_fd() is a valid open FD. fcntl(F_SETFD) and
+        // fcntl(F_SETFL) do not take ownership.
+        unsafe {
+            if libc::fcntl(owned.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC) < 0 {
+                return None; // OwnedFd closes the kqueue FD on drop
+            }
+            let flags = libc::fcntl(owned.as_raw_fd(), libc::F_GETFL);
+            if flags < 0 {
+                return None; // OwnedFd closes the kqueue FD on drop
+            }
+            if libc::fcntl(owned.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) < 0 {
+                return None; // OwnedFd closes the kqueue FD on drop
+            }
+        }
+
+        let async_fd = AsyncFd::new(owned).ok()?;
+
+        // Best-effort fast return: if process died between the initial
+        // try_wait() and kevent registration, skip waiting. Not a correctness
+        // gate — the kqueue/readable path also handles this correctly.
+        if !self.is_alive() {
+            return Some(self.try_wait().unwrap_or(ProcessExit::Unknown));
+        }
+
+        // Wait for the kqueue FD to become readable (process exit).
+        match async_fd.readable().await {
+            Ok(_guard) => Some(self.try_wait().unwrap_or(ProcessExit::Unknown)),
+            Err(_) => None,
         }
     }
 }
@@ -584,6 +743,144 @@ mod tests {
 
         let result = read_pid_file(file.path());
         assert!(result.is_err());
+    }
+
+    // ========================================================================
+    // Event-driven wait_for_exit tests
+    // ========================================================================
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[tokio::test]
+    #[allow(clippy::zombie_processes)] // wait_for_exit() calls waitpid() internally
+    async fn test_wait_for_exit_captures_exit_code() {
+        use std::process::Command;
+
+        // Spawn a child that exits with code 7
+        let child = Command::new("sh")
+            .arg("-c")
+            .arg("exit 7")
+            .spawn()
+            .expect("Failed to spawn child");
+
+        let monitor = ProcessMonitor::new(child.id());
+        let exit = monitor.wait_for_exit().await;
+        assert_eq!(exit, ProcessExit::Code(7));
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[tokio::test]
+    #[allow(clippy::zombie_processes)]
+    async fn test_wait_for_exit_detects_delayed_exit() {
+        use std::process::Command;
+        use std::time::Instant;
+
+        // Spawn a child that sleeps 200ms then exits
+        let child = Command::new("sh")
+            .arg("-c")
+            .arg("sleep 0.2; exit 3")
+            .spawn()
+            .expect("Failed to spawn child");
+
+        let monitor = ProcessMonitor::new(child.id());
+        let start = Instant::now();
+        let exit = monitor.wait_for_exit().await;
+        let elapsed = start.elapsed();
+
+        assert_eq!(exit, ProcessExit::Code(3));
+        // Event-driven detection should return shortly after the 200ms sleep,
+        // well within 2 seconds (old 500ms polling could take up to 700ms).
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "wait_for_exit took {:?}, expected prompt detection",
+            elapsed
+        );
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[tokio::test]
+    async fn test_wait_for_exit_already_dead_pid() {
+        // Non-existent PID should return Unknown immediately
+        let monitor = ProcessMonitor::new(999999999);
+        let exit = monitor.wait_for_exit().await;
+        assert_eq!(exit, ProcessExit::Unknown);
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[tokio::test]
+    #[allow(clippy::zombie_processes)]
+    async fn test_wait_for_exit_signal_kill() {
+        use std::process::Command;
+
+        // Spawn a long-lived child, then SIGKILL it.
+        // Exercises the WIFSIGNALED decode path through event-driven detection.
+        let child = Command::new("sh")
+            .arg("-c")
+            .arg("sleep 60")
+            .spawn()
+            .expect("Failed to spawn child");
+
+        let pid = child.id();
+        let monitor = ProcessMonitor::new(pid);
+
+        // Give the child a moment to start, then kill it.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(
+            unsafe { libc::kill(pid as i32, libc::SIGKILL) },
+            0,
+            "Failed to send SIGKILL to child process"
+        );
+
+        let exit = monitor.wait_for_exit().await;
+        assert_eq!(exit, ProcessExit::Code(128 + libc::SIGKILL));
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[tokio::test]
+    #[allow(clippy::zombie_processes)]
+    async fn test_wait_for_exit_concurrent_monitors() {
+        use std::process::Command;
+
+        // Spawn 3 children with different exit codes.
+        // Verify concurrent pidfd/kqueue FD registrations all resolve correctly.
+        let codes = [1, 2, 3];
+        let mut monitors = Vec::new();
+
+        for &code in &codes {
+            let child = Command::new("sh")
+                .arg("-c")
+                .arg(format!("exit {code}"))
+                .spawn()
+                .expect("Failed to spawn child");
+            monitors.push(ProcessMonitor::new(child.id()));
+        }
+
+        let (r0, r1, r2) = tokio::join!(
+            monitors[0].wait_for_exit(),
+            monitors[1].wait_for_exit(),
+            monitors[2].wait_for_exit(),
+        );
+
+        assert_eq!(r0, ProcessExit::Code(1));
+        assert_eq!(r1, ProcessExit::Code(2));
+        assert_eq!(r2, ProcessExit::Code(3));
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[tokio::test]
+    #[allow(clippy::zombie_processes)]
+    async fn test_wait_polling_captures_exit_code() {
+        use std::process::Command;
+
+        // Test the polling fallback path directly.
+        let child = Command::new("sh")
+            .arg("-c")
+            .arg("exit 5")
+            .spawn()
+            .expect("Failed to spawn child");
+
+        let monitor = ProcessMonitor::new(child.id());
+        let exit = monitor.wait_polling().await;
+        assert_eq!(exit, ProcessExit::Code(5));
     }
 
     #[test]
