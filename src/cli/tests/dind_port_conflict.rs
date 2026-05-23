@@ -16,74 +16,10 @@
 //! onto 12375/12376) under the `vm` nextest profile.
 
 use assert_cmd::Command;
+use boxlite_test_utils::box_cleanup::BoxCleanup;
 use boxlite_test_utils::home::PerTestBoxHome;
-use std::path::PathBuf;
 use std::process::Command as StdCommand;
 use std::time::{Duration, Instant};
-
-/// RAII cleanup for the detached holder box. Drop runs on panic too,
-/// so an assertion failure in the rest of the test doesn't leak a
-/// libkrun VM holding 22375/22376 across runs (which would then make
-/// the *next* test invocation fail box A's startup with the very
-/// `gvproxy_create failed` we're trying to verify — a confusing
-/// loop).
-struct BoxCleanup {
-    home_path: PathBuf,
-    box_id: String,
-}
-
-impl Drop for BoxCleanup {
-    fn drop(&mut self) {
-        // boxlite removes `<home>/boxes/<box_id>/shim.pid` (and the
-        // rest of the on-disk handoff state) shortly after
-        // `boxlite run -d` daemonizes — the FDs migrate into the
-        // libkrun VM process and the on-disk files are no longer
-        // needed. At Drop time the file is gone, so we can't read
-        // the pid from disk. Instead we scan `/proc/*/fd` for any
-        // process still holding open files under
-        // `<home>/boxes/<box_id>/...` (Linux keeps the original
-        // path on `(deleted)` FDs) — that uniquely identifies the
-        // live libkrun VM for this box. SIGKILL it to free the
-        // host ports.
-        //
-        // `boxlite rm -f` is deliberately NOT used: its recovery
-        // path in src/boxlite/src/runtime/rt_impl.rs mis-identifies
-        // the live shim as dead and removes the pid file without
-        // killing the process (see the May 2026 incident).
-        let needle = format!("/boxes/{}/", self.box_id);
-        let home_prefix = self.home_path.to_string_lossy().into_owned();
-        let mut killed = Vec::<u32>::new();
-        if let Ok(procs) = std::fs::read_dir("/proc") {
-            for proc_entry in procs.flatten() {
-                let Some(name) = proc_entry.file_name().to_str().map(str::to_owned) else {
-                    continue;
-                };
-                let Ok(pid) = name.parse::<u32>() else {
-                    continue;
-                };
-                let fd_dir = proc_entry.path().join("fd");
-                let Ok(fds) = std::fs::read_dir(&fd_dir) else {
-                    continue;
-                };
-                let matched = fds.flatten().any(|fd| {
-                    std::fs::read_link(fd.path())
-                        .map(|tgt| {
-                            let s = tgt.to_string_lossy();
-                            s.starts_with(&home_prefix) && s.contains(&needle)
-                        })
-                        .unwrap_or(false)
-                });
-                if matched {
-                    let _ = StdCommand::new("kill")
-                        .args(["-9", &pid.to_string()])
-                        .output();
-                    killed.push(pid);
-                }
-            }
-        }
-        eprintln!("[cleanup] box {} SIGKILL'd pids={:?}", self.box_id, killed);
-    }
-}
 
 #[test]
 fn dind_port_conflict_fails_fast() {

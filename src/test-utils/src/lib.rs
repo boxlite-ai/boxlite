@@ -6,6 +6,7 @@
 //! - [`config_matrix`] — Multi-configuration test runner
 //! - [`cache`] — Shared image/rootfs cache (`SharedResources`)
 //! - [`home`] — Per-test isolated home directory (`PerTestBoxHome`)
+//! - [`box_cleanup`] — RAII guard that SIGKILLs detached boxes on Drop (`BoxCleanup`)
 //! - [`box_test`] — Per-test fixture with helpers (`BoxTestBase`)
 //! - [`sync_point`] — Async sync points for concurrency testing
 //! - [`fault_injection`] — Fault injection framework
@@ -17,6 +18,7 @@
 //! - [`test_registries()`]: Docker Hub mirror registries for reliable pulls.
 
 pub mod assertions;
+pub mod box_cleanup;
 pub mod box_test;
 pub mod cache;
 pub mod config_matrix;
