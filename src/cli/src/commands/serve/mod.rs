@@ -20,6 +20,8 @@ use axum::{Json, Router};
 use clap::Args;
 use futures::StreamExt;
 use tokio::sync::RwLock;
+use tower_http::catch_panic::CatchPanicLayer;
+use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 
 use boxlite::runtime::options::{NetworkConfig, NetworkMode};
 use boxlite::{
@@ -695,28 +697,59 @@ fn build_box_command(req: &ExecRequest) -> BoxCommand {
 // Error Helpers
 // ============================================================================
 
-fn error_response(status: StatusCode, message: impl Into<String>, error_type: &str) -> Response {
+/// Build a JSON error response with the canonical wire envelope.
+///
+/// `error_type` and `code` are caller-supplied because some sites
+/// (auth middleware, handler timeout, schema-validation rejection) emit
+/// errors that don't correspond to a `BoxliteError` variant. For
+/// `BoxliteError` paths use [`error_from_boxlite`] instead — it dispatches
+/// to the single source of truth in `BoxliteError::http()`.
+fn error_response(
+    status: StatusCode,
+    message: impl Into<String>,
+    error_type: &str,
+    code: &str,
+) -> Response {
     let body = ErrorBody {
         error: ErrorDetail {
             message: message.into(),
             error_type: error_type.to_string(),
-            code: status.as_u16(),
+            code: code.to_string(),
+            request_id: None,
         },
     };
     (status, Json(body)).into_response()
 }
 
-fn classify_boxlite_error(err: &boxlite::BoxliteError) -> (StatusCode, &'static str) {
-    let msg = err.to_string().to_lowercase();
-    if msg.contains("not found") {
-        (StatusCode::NOT_FOUND, "NotFoundError")
-    } else if msg.contains("already") || msg.contains("conflict") {
-        (StatusCode::CONFLICT, "ConflictError")
-    } else if msg.contains("unsupported") {
-        (StatusCode::BAD_REQUEST, "UnsupportedError")
-    } else {
-        (StatusCode::INTERNAL_SERVER_ERROR, "InternalError")
-    }
+/// Map a `BoxliteError` to its canonical HTTP response. Delegates the
+/// (status, type, code) decision to `BoxliteError::http()` so the mapping
+/// is exhaustive at compile time — adding a new variant becomes a build
+/// error in `errors.rs`, never a silent 500.
+fn error_from_boxlite(err: &boxlite::BoxliteError) -> Response {
+    let (code, etype, ecode) = err.http();
+    let status = StatusCode::from_u16(code)
+        .expect("BoxliteError::http() must return a valid HTTP status code");
+    error_response(status, err.to_string(), etype, ecode)
+}
+
+/// Panic handler for [`CatchPanicLayer`]. Turns a handler panic into a
+/// `500 InternalError internal` response with our wire envelope —
+/// otherwise axum's default returns an empty `500 Internal Server Error`
+/// with no body, breaking the client's `map_http_status` 500-vs-Network
+/// distinction.
+fn handle_panic(err: Box<dyn std::any::Any + Send + 'static>) -> Response {
+    let detail = err
+        .downcast_ref::<&'static str>()
+        .map(|s| s.to_string())
+        .or_else(|| err.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "panic in handler".to_string());
+    tracing::error!(panic = %detail, "handler panicked");
+    error_response(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        format!("internal error: {}", detail),
+        "InternalError",
+        "internal",
+    )
 }
 
 /// Pure auth decision (unit-tested). `true` = allow. `expected == None` ⇒
@@ -754,6 +787,7 @@ async fn require_api_key(State(state): State<Arc<AppState>>, req: Request, next:
             StatusCode::UNAUTHORIZED,
             "invalid or missing API key",
             "AuthError",
+            "unauthenticated",
         )
     }
 }
@@ -793,11 +827,9 @@ async fn get_or_fetch_box(state: &AppState, box_id: &str) -> Result<Arc<LiteBox>
             StatusCode::NOT_FOUND,
             format!("box not found: {box_id}"),
             "NotFoundError",
+            "not_found",
         )),
-        Err(e) => {
-            let (status, etype) = classify_boxlite_error(&e);
-            Err(error_response(status, e.to_string(), etype))
-        }
+        Err(e) => Err(error_from_boxlite(&e)),
     }
 }
 
@@ -892,6 +924,23 @@ fn build_router(state: Arc<AppState>) -> Router {
             state.clone(),
             require_api_key,
         ))
+        // Middleware stack (outermost first, applied in reverse):
+        // 1. SetRequestIdLayer — read X-Request-Id from request, or mint
+        //    a UUID. Stored in request extensions for downstream handlers
+        //    and tracing spans.
+        // 2. PropagateRequestIdLayer — copy the request-id onto the
+        //    response headers so clients can correlate to server logs.
+        // 3. CatchPanicLayer — handler panic ⇒ 500 with our envelope.
+        //    Without this, axum returns an empty 500 which the client
+        //    mis-classifies as a proxy/Network error.
+        //
+        // Skipped (intentionally): TimeoutLayer. boxlite handlers have
+        // operation-specific timeouts (signal/kill use 10s, image pulls
+        // can legitimately take minutes). A global request timeout would
+        // break long-running ops.
+        .layer(CatchPanicLayer::custom(handle_panic))
+        .layer(PropagateRequestIdLayer::x_request_id())
+        .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))
         .with_state(state)
 }
 

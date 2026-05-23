@@ -7,7 +7,7 @@ use axum::extract::{Path, State};
 use axum::response::{IntoResponse, Response};
 
 use super::super::types::{BootTimingResponse, BoxMetricsResponse, RuntimeMetricsResponse};
-use super::super::{AppState, classify_boxlite_error, error_response, get_or_fetch_box};
+use super::super::{AppState, error_from_boxlite, get_or_fetch_box};
 
 pub(in crate::commands::serve) async fn runtime_metrics(
     State(state): State<Arc<AppState>>,
@@ -23,10 +23,7 @@ pub(in crate::commands::serve) async fn runtime_metrics(
             total_exec_errors: metrics.total_exec_errors(),
         })
         .into_response(),
-        Err(e) => {
-            let (status, etype) = classify_boxlite_error(&e);
-            error_response(status, e.to_string(), etype)
-        }
+        Err(e) => error_from_boxlite(&e),
     }
 }
 
@@ -72,9 +69,6 @@ pub(in crate::commands::serve) async fn box_metrics(
             })
             .into_response()
         }
-        Err(e) => {
-            let (status, etype) = classify_boxlite_error(&e);
-            error_response(status, e.to_string(), etype)
-        }
+        Err(e) => error_from_boxlite(&e),
     }
 }

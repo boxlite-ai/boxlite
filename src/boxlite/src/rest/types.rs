@@ -20,13 +20,28 @@ pub(crate) struct ErrorResponse {
     pub error: ErrorModel,
 }
 
+/// Wire shape received from the server.
+///
+/// - `message` — human-readable error text.
+/// - `error_type` — stable PascalCase identifier (K8s `Status.reason`
+///   style). Mirrors `BoxliteError::http().1` server-side.
+/// - `code` — stable snake_case machine identifier (Stripe `code` style).
+///   The mapper in [`super::error::map_http_error`] dispatches on this
+///   field; `error_type` is kept for diagnostics / logging.
+/// - `request_id` — propagated from server's `X-Request-Id` middleware
+///   when present; absent on older servers (forward-compat).
 #[derive(Debug, Deserialize)]
 pub(crate) struct ErrorModel {
     pub message: String,
+    /// Preserved for diagnostics / log enrichment; dispatch happens on
+    /// `code` (the snake string).
     #[serde(rename = "type")]
-    pub error_type: String,
     #[allow(dead_code)]
-    pub code: u16,
+    pub error_type: String,
+    pub code: String,
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub request_id: Option<String>,
 }
 
 // ============================================================================
@@ -649,13 +664,15 @@ mod tests {
             "error": {
                 "message": "box not found",
                 "type": "NotFoundError",
-                "code": 404
+                "code": "not_found",
+                "request_id": "req_01HZK"
             }
         }"#;
         let resp: ErrorResponse = serde_json::from_str(json).unwrap();
         assert_eq!(resp.error.message, "box not found");
         assert_eq!(resp.error.error_type, "NotFoundError");
-        assert_eq!(resp.error.code, 404);
+        assert_eq!(resp.error.code, "not_found");
+        assert_eq!(resp.error.request_id.as_deref(), Some("req_01HZK"));
     }
 
     #[test]

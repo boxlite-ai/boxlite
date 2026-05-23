@@ -10,7 +10,7 @@ use axum::response::{IntoResponse, Response};
 use boxlite::SnapshotOptions;
 
 use super::super::types::{CreateSnapshotRequest, ListSnapshotsResponse, SnapshotResponse};
-use super::super::{AppState, classify_boxlite_error, error_response, get_or_fetch_box};
+use super::super::{AppState, error_from_boxlite, error_response, get_or_fetch_box};
 
 fn snapshot_to_response(info: &boxlite::SnapshotInfo) -> SnapshotResponse {
     SnapshotResponse {
@@ -39,10 +39,7 @@ pub(in crate::commands::serve) async fn create_snapshot(
         .await
     {
         Ok(info) => (StatusCode::CREATED, Json(snapshot_to_response(&info))).into_response(),
-        Err(e) => {
-            let (status, etype) = classify_boxlite_error(&e);
-            error_response(status, e.to_string(), etype)
-        }
+        Err(e) => error_from_boxlite(&e),
     }
 }
 
@@ -60,10 +57,7 @@ pub(in crate::commands::serve) async fn list_snapshots(
             let snapshots = snaps.iter().map(snapshot_to_response).collect();
             Json(ListSnapshotsResponse { snapshots }).into_response()
         }
-        Err(e) => {
-            let (status, etype) = classify_boxlite_error(&e);
-            error_response(status, e.to_string(), etype)
-        }
+        Err(e) => error_from_boxlite(&e),
     }
 }
 
@@ -82,11 +76,9 @@ pub(in crate::commands::serve) async fn get_snapshot(
             StatusCode::NOT_FOUND,
             format!("snapshot not found: {name}"),
             "NotFoundError",
+            "not_found",
         ),
-        Err(e) => {
-            let (status, etype) = classify_boxlite_error(&e);
-            error_response(status, e.to_string(), etype)
-        }
+        Err(e) => error_from_boxlite(&e),
     }
 }
 
@@ -101,10 +93,7 @@ pub(in crate::commands::serve) async fn delete_snapshot(
 
     match litebox.snapshots().remove(&name).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => {
-            let (status, etype) = classify_boxlite_error(&e);
-            error_response(status, e.to_string(), etype)
-        }
+        Err(e) => error_from_boxlite(&e),
     }
 }
 
@@ -119,9 +108,6 @@ pub(in crate::commands::serve) async fn restore_snapshot(
 
     match litebox.snapshots().restore(&name).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => {
-            let (status, etype) = classify_boxlite_error(&e);
-            error_response(status, e.to_string(), etype)
-        }
+        Err(e) => error_from_boxlite(&e),
     }
 }

@@ -52,14 +52,16 @@ pub async fn run(profile_name: &str) -> Result<()> {
             "server at {} does not implement GET /v1/me — cannot show identity",
             url
         )),
-        Err(err) => {
-            let msg = err.to_string();
-            if msg.contains("auth:") {
-                Err(anyhow!("authentication failed against {}: {}", url, msg))
-            } else {
-                Err(anyhow!("could not reach {}: {}", url, msg))
-            }
+        Err(BoxliteError::Config(msg)) if msg.starts_with("auth:") => {
+            Err(anyhow!("authentication failed against {}: {}", url, msg))
         }
+        Err(err @ BoxliteError::Network(_)) => Err(anyhow!(
+            "could not reach {}: {}. Check the URL, that the server is \
+             running, and any HTTP_PROXY env vars.",
+            url,
+            err
+        )),
+        Err(err) => Err(anyhow!("could not reach {}: {}", url, err)),
     }
 }
 

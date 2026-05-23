@@ -162,22 +162,31 @@ async fn validate(profile: &Profile) -> Result<Option<Principal>> {
     }
 }
 
-/// Turn a client error into a focused, non-secret message. 401/403 map to
-/// `BoxliteError::Config("auth: …")`; everything else is treated as a
-/// connectivity/server error. Credentials are not saved in either case.
+/// Turn a client error into a focused, non-secret message.
+///
+/// Three buckets: an auth rejection from the server (`Config("auth: …")`
+/// — produced by `map_http_error` for 401/403), a transport-level
+/// failure that never reached the server (`Network(_)` — including the
+/// "bare 5xx → proxy" path in `map_http_status`), and everything else.
+/// We never persist credentials in any of the failure cases.
 fn classify(profile: &Profile, err: BoxliteError) -> anyhow::Error {
-    let msg = err.to_string();
-    if msg.contains("auth:") {
-        anyhow!(
+    match err {
+        BoxliteError::Config(ref msg) if msg.starts_with("auth:") => anyhow!(
             "authentication failed against {}: {} (credentials not saved)",
             profile.url,
             msg
-        )
-    } else {
-        anyhow!(
+        ),
+        ref e @ BoxliteError::Network(_) => anyhow!(
+            "could not reach {}: {} (credentials not saved). \
+             Check that the server is running, the URL is correct, \
+             and any HTTP_PROXY env vars don't shadow this destination.",
+            profile.url,
+            e
+        ),
+        other => anyhow!(
             "could not reach {}: {} (credentials not saved)",
             profile.url,
-            msg
-        )
+            other
+        ),
     }
 }

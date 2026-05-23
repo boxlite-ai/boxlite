@@ -216,12 +216,29 @@ pub(super) struct ErrorBody {
     pub error: ErrorDetail,
 }
 
+/// Wire shape for HTTP error responses.
+///
+/// - `message` — human-readable description with context (for logs and
+///   end-user display).
+/// - `type` — stable PascalCase identifier (K8s `Status.reason` style).
+///   `BoxliteError::http()` is the source of truth in
+///   `boxlite_shared::errors`.
+/// - `code` — stable snake_case machine identifier (Stripe `code` style).
+///   Clients pattern-match on this for typed error handling.
+/// - `request_id` — populated from `X-Request-Id` if propagated by the
+///   middleware; omitted when absent.
+///
+/// The HTTP numeric status lives in the response status line, not in the
+/// body — including it twice (header + body) was the legacy shape and
+/// added no information.
 #[derive(Serialize)]
 pub(super) struct ErrorDetail {
     pub message: String,
     #[serde(rename = "type")]
     pub error_type: String,
-    pub code: u16,
+    pub code: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
 }
 
 // ============================================================================

@@ -10,7 +10,7 @@ use axum::response::{IntoResponse, Response};
 use boxlite::CopyOptions;
 
 use super::super::types::FileQuery;
-use super::super::{AppState, classify_boxlite_error, error_response, get_or_fetch_box};
+use super::super::{AppState, error_from_boxlite, error_response, get_or_fetch_box};
 
 pub(in crate::commands::serve) async fn upload_files(
     State(state): State<Arc<AppState>>,
@@ -31,6 +31,7 @@ pub(in crate::commands::serve) async fn upload_files(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("failed to create temp dir: {e}"),
                 "InternalError",
+                "internal",
             );
         }
     };
@@ -41,6 +42,7 @@ pub(in crate::commands::serve) async fn upload_files(
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("failed to create extract dir: {e}"),
             "InternalError",
+            "internal",
         );
     }
 
@@ -50,6 +52,7 @@ pub(in crate::commands::serve) async fn upload_files(
             StatusCode::BAD_REQUEST,
             format!("failed to extract tar: {e}"),
             "InvalidArgumentError",
+            "invalid_argument",
         );
     }
 
@@ -57,8 +60,7 @@ pub(in crate::commands::serve) async fn upload_files(
         .copy_into(&extract_dir, &query.path, CopyOptions::default())
         .await
     {
-        let (status, etype) = classify_boxlite_error(&e);
-        return error_response(status, e.to_string(), etype);
+        return error_from_boxlite(&e);
     }
 
     StatusCode::NO_CONTENT.into_response()
@@ -81,6 +83,7 @@ pub(in crate::commands::serve) async fn download_files(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("failed to create temp dir: {e}"),
                 "InternalError",
+                "internal",
             );
         }
     };
@@ -89,8 +92,7 @@ pub(in crate::commands::serve) async fn download_files(
         .copy_out(&query.path, temp_dir.path(), CopyOptions::default())
         .await
     {
-        let (status, etype) = classify_boxlite_error(&e);
-        return error_response(status, e.to_string(), etype);
+        return error_from_boxlite(&e);
     }
 
     // Create tar from extracted files
@@ -100,6 +102,7 @@ pub(in crate::commands::serve) async fn download_files(
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("failed to create tar: {e}"),
             "InternalError",
+            "internal",
         );
     }
 
@@ -110,6 +113,7 @@ pub(in crate::commands::serve) async fn download_files(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("failed to finalize tar: {e}"),
                 "InternalError",
+                "internal",
             );
         }
     };

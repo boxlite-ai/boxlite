@@ -9,7 +9,7 @@ use axum::response::{IntoResponse, Response};
 
 use super::super::types::{CreateBoxRequest, ListBoxesResponse, RemoveQuery};
 use super::super::{
-    AppState, box_info_to_response, build_box_options, classify_boxlite_error, error_response,
+    AppState, box_info_to_response, build_box_options, error_from_boxlite, error_response,
     get_or_fetch_box,
 };
 
@@ -20,15 +20,19 @@ pub(in crate::commands::serve) async fn create_box(
     let name = req.name.clone();
     let options = match build_box_options(&req) {
         Ok(options) => options,
-        Err(e) => return error_response(StatusCode::BAD_REQUEST, e.to_string(), "ConfigError"),
+        Err(e) => {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                e.to_string(),
+                "InvalidArgumentError",
+                "invalid_argument",
+            );
+        }
     };
 
     let litebox = match state.runtime.create(options, name).await {
         Ok(b) => b,
-        Err(e) => {
-            let (status, etype) = classify_boxlite_error(&e);
-            return error_response(status, e.to_string(), etype);
-        }
+        Err(e) => return error_from_boxlite(&e),
     };
 
     let info = litebox.info();
@@ -46,10 +50,7 @@ pub(in crate::commands::serve) async fn list_boxes(State(state): State<Arc<AppSt
             let boxes = infos.iter().map(box_info_to_response).collect();
             Json(ListBoxesResponse { boxes }).into_response()
         }
-        Err(e) => {
-            let (status, etype) = classify_boxlite_error(&e);
-            error_response(status, e.to_string(), etype)
-        }
+        Err(e) => error_from_boxlite(&e),
     }
 }
 
@@ -63,11 +64,9 @@ pub(in crate::commands::serve) async fn get_box(
             StatusCode::NOT_FOUND,
             format!("box not found: {box_id}"),
             "NotFoundError",
+            "not_found",
         ),
-        Err(e) => {
-            let (status, etype) = classify_boxlite_error(&e);
-            error_response(status, e.to_string(), etype)
-        }
+        Err(e) => error_from_boxlite(&e),
     }
 }
 
@@ -78,10 +77,7 @@ pub(in crate::commands::serve) async fn head_box(
     match state.runtime.get_info(&box_id).await {
         Ok(Some(_)) => StatusCode::NO_CONTENT.into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => {
-            let (status, etype) = classify_boxlite_error(&e);
-            error_response(status, e.to_string(), etype)
-        }
+        Err(e) => error_from_boxlite(&e),
     }
 }
 
@@ -95,8 +91,7 @@ pub(in crate::commands::serve) async fn start_box(
     };
 
     if let Err(e) = litebox.start().await {
-        let (status, etype) = classify_boxlite_error(&e);
-        return error_response(status, e.to_string(), etype);
+        return error_from_boxlite(&e);
     }
 
     let info = litebox.info();
@@ -113,8 +108,7 @@ pub(in crate::commands::serve) async fn stop_box(
     };
 
     if let Err(e) = litebox.stop().await {
-        let (status, etype) = classify_boxlite_error(&e);
-        return error_response(status, e.to_string(), etype);
+        return error_from_boxlite(&e);
     }
 
     let info = litebox.info();
@@ -131,9 +125,6 @@ pub(in crate::commands::serve) async fn remove_box(
 
     match state.runtime.remove(&box_id, force).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => {
-            let (status, etype) = classify_boxlite_error(&e);
-            error_response(status, e.to_string(), etype)
-        }
+        Err(e) => error_from_boxlite(&e),
     }
 }

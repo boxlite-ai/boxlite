@@ -13,7 +13,7 @@ use futures::StreamExt;
 
 use super::super::types::{ExecRequest, ExecResponse, ResizeRequest, SignalRequest};
 use super::super::{
-    ActiveExecution, AppState, build_box_command, classify_boxlite_error, error_response,
+    ActiveExecution, AppState, build_box_command, error_from_boxlite, error_response,
     get_or_fetch_box,
 };
 
@@ -32,10 +32,7 @@ pub(in crate::commands::serve) async fn start_execution(
 
     let mut execution = match litebox.exec(cmd).await {
         Ok(e) => e,
-        Err(e) => {
-            let (status, etype) = classify_boxlite_error(&e);
-            return error_response(status, e.to_string(), etype);
-        }
+        Err(e) => return error_from_boxlite(&e),
     };
 
     let mut stdin = execution.stdin();
@@ -82,11 +79,13 @@ fn get_active_for_box(
             StatusCode::NOT_FOUND,
             format!("execution not found: {exec_id}"),
             "NotFoundError",
+            "not_found",
         )),
         None => Err(error_response(
             StatusCode::NOT_FOUND,
             format!("execution not found: {exec_id}"),
             "NotFoundError",
+            "not_found",
         )),
     }
 }
@@ -136,7 +135,8 @@ pub(in crate::commands::serve) async fn send_signal(
                  cooperative signals are {:?}",
                 req.signal, ALLOWED_SIGNALS
             ),
-            "ValidationError",
+            "InvalidArgumentError",
+            "invalid_argument",
         );
     }
 
@@ -154,14 +154,12 @@ pub(in crate::commands::serve) async fn send_signal(
     .await;
     match sig_result {
         Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
-        Ok(Err(e)) => {
-            let (status, etype) = classify_boxlite_error(&e);
-            error_response(status, e.to_string(), etype)
-        }
+        Ok(Err(e)) => error_from_boxlite(&e),
         Err(_) => error_response(
             StatusCode::GATEWAY_TIMEOUT,
             "signal delivery timed out",
             "TimeoutError",
+            "timeout",
         ),
     }
 }
@@ -190,14 +188,12 @@ pub(in crate::commands::serve) async fn kill_execution(
             state.executions.write().await.remove(&exec_id);
             StatusCode::NO_CONTENT.into_response()
         }
-        Ok(Err(e)) => {
-            let (status, etype) = classify_boxlite_error(&e);
-            error_response(status, e.to_string(), etype)
-        }
+        Ok(Err(e)) => error_from_boxlite(&e),
         Err(_) => error_response(
             StatusCode::GATEWAY_TIMEOUT,
             "kill timed out; the reaper will retry",
             "TimeoutError",
+            "timeout",
         ),
     }
 }
@@ -216,10 +212,7 @@ pub(in crate::commands::serve) async fn resize_tty(
 
     match active.execution().resize_tty(req.rows, req.cols).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => {
-            let (status, etype) = classify_boxlite_error(&e);
-            error_response(status, e.to_string(), etype)
-        }
+        Err(e) => error_from_boxlite(&e),
     }
 }
 
@@ -254,7 +247,8 @@ pub(in crate::commands::serve) async fn attach_execution(
         return error_response(
             StatusCode::CONFLICT,
             format!("execution {} already has an attached client", exec_id),
-            "ConflictError",
+            "InvalidStateError",
+            "invalid_state",
         );
     }
 

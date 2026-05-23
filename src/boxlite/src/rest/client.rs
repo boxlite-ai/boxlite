@@ -131,10 +131,7 @@ impl ApiClient {
     /// terminal output.
     async fn send_json<T: DeserializeOwned>(&self, builder: RequestBuilder) -> BoxliteResult<T> {
         let builder = self.authorize(builder).await?;
-        let resp = builder
-            .send()
-            .await
-            .map_err(|e| BoxliteError::Internal(format!("HTTP request failed: {}", e)))?;
+        let resp = builder.send().await.map_err(transport_error)?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -170,10 +167,7 @@ impl ApiClient {
     /// Send a request and expect no response body (204).
     async fn send_no_content(&self, builder: RequestBuilder) -> BoxliteResult<()> {
         let builder = self.authorize(builder).await?;
-        let resp = builder
-            .send()
-            .await
-            .map_err(|e| BoxliteError::Internal(format!("HTTP request failed: {}", e)))?;
+        let resp = builder.send().await.map_err(transport_error)?;
 
         let status = resp.status();
         if status.is_success() {
@@ -242,17 +236,11 @@ impl ApiClient {
     ) -> BoxliteResult<Vec<u8>> {
         let builder = self.http.post(self.url(path)).json(body);
         let builder = self.authorize(builder).await?;
-        let resp = builder
-            .send()
-            .await
-            .map_err(|e| BoxliteError::Internal(format!("HTTP request failed: {}", e)))?;
+        let resp = builder.send().await.map_err(transport_error)?;
 
         let status = resp.status();
         if status.is_success() {
-            let bytes = resp
-                .bytes()
-                .await
-                .map_err(|e| BoxliteError::Internal(format!("failed to read response: {}", e)))?;
+            let bytes = resp.bytes().await.map_err(transport_error)?;
             Ok(bytes.to_vec())
         } else {
             self.handle_error::<Vec<u8>>(status, resp).await
@@ -272,10 +260,7 @@ impl ApiClient {
     pub async fn head_exists(&self, path: &str) -> BoxliteResult<bool> {
         let builder = self.http.head(self.url(path));
         let builder = self.authorize(builder).await?;
-        let resp = builder
-            .send()
-            .await
-            .map_err(|e| BoxliteError::Internal(format!("HTTP request failed: {}", e)))?;
+        let resp = builder.send().await.map_err(transport_error)?;
         match resp.status().as_u16() {
             204 | 200 => Ok(true),
             404 => Ok(false),
@@ -419,11 +404,41 @@ impl ApiClient {
     }
 }
 
+/// Convert a `reqwest::Error` into a typed `BoxliteError::Network` with
+/// the underlying cause described in the message. Distinguishes
+/// connect/DNS/TLS failures from request-build failures from timeouts
+/// so the user can act on the diagnosis — a connect refused is "is the
+/// server running?" while a builder error is a client-side bug.
+///
+/// The wrapper preserves the original `reqwest::Error` Display chain
+/// (URL, status, cause) which usually includes the destination host —
+/// invaluable for diagnosing transparent-proxy regressions like the
+/// Clash `:7890` interception that produced bare 502s in
+/// production.
+fn transport_error(err: reqwest::Error) -> BoxliteError {
+    let url_hint = err.url().map(|u| u.as_str().to_string());
+    let kind = if err.is_connect() {
+        "connect failed"
+    } else if err.is_timeout() {
+        "timed out"
+    } else if err.is_request() {
+        "request build failed"
+    } else if err.is_decode() {
+        "response decode failed"
+    } else {
+        "transport error"
+    };
+    let detail = match url_hint {
+        Some(url) => format!("{kind} reaching {url}: {err}"),
+        None => format!("{kind}: {err}"),
+    };
+    BoxliteError::Network(detail)
+}
+
 /// Map a tungstenite connect error to a typed `BoxliteError`. The WS
 /// upgrade returns HTTP status codes for rejections (404 for a missing
-/// session, 409 for an already-attached one); callers want to see those
-/// as `NotFound` / `AlreadyExists` rather than generic `Internal` so
-/// they can map onward to `SessionReaped`.
+/// session, 409 for an already-attached one, 410 once an exec has been
+/// reaped). Symmetric with the REST mapper in [`super::error`].
 fn map_ws_error(err: tokio_tungstenite::tungstenite::Error) -> BoxliteError {
     use tokio_tungstenite::tungstenite::Error as TgErr;
     if let TgErr::Http(resp) = &err {
@@ -444,11 +459,21 @@ fn map_ws_error(err: tokio_tungstenite::tungstenite::Error) -> BoxliteError {
             } else {
                 body
             }),
+            410 => BoxliteError::SessionReaped(if body.is_empty() {
+                "exec session reaped; start a new exec".to_string()
+            } else {
+                body
+            }),
             401 | 403 => BoxliteError::Config(format!("WS auth rejected ({}): {}", status, body)),
+            502..=504 => BoxliteError::Network(format!(
+                "WS upstream returned HTTP {} (proxy or load balancer): {}",
+                status,
+                if body.is_empty() { "<empty>" } else { &body }
+            )),
             _ => BoxliteError::Internal(format!("WS upgrade failed (HTTP {}): {}", status, body)),
         };
     }
-    BoxliteError::Internal(format!("WS connect failed: {}", err))
+    BoxliteError::Network(format!("WS connect failed: {}", err))
 }
 
 fn ensure_capability(name: &str, enabled: Option<bool>) -> BoxliteResult<()> {

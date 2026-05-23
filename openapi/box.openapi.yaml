@@ -1100,7 +1100,8 @@ components:
             error:
               message: "invalid argument: cpus must be between 1 and 32"
               type: InvalidArgumentError
-              code: 400
+              code: invalid_argument
+              request_id: req_01HZK4TNRPQSXYZ8WM6NCVT9R5
 
     UnauthorizedError:
       description: Missing or invalid authentication credentials
@@ -1110,9 +1111,10 @@ components:
             $ref: "#/components/schemas/ErrorResponse"
           example:
             error:
-              message: "invalid or expired access token"
-              type: UnauthorizedError
-              code: 401
+              message: "invalid or missing API key"
+              type: AuthError
+              code: unauthenticated
+              request_id: req_01HZK4TNRPQSXYZ8WM6NCVT9R5
 
     NotFoundError:
       description: Resource not found
@@ -1124,7 +1126,8 @@ components:
             error:
               message: "box not found: 01HJK4TNRPQSXYZ8WM6NCVT9R5"
               type: NotFoundError
-              code: 404
+              code: not_found
+              request_id: req_01HZK4TNRPQSXYZ8WM6NCVT9R5
 
     ConflictError:
       description: Resource state conflict
@@ -1136,7 +1139,8 @@ components:
             error:
               message: "invalid state: box is already running"
               type: InvalidStateError
-              code: 409
+              code: invalid_state
+              request_id: req_01HZK4TNRPQSXYZ8WM6NCVT9R5
 
     UnprocessableEntityError:
       description: Request understood but cannot be processed
@@ -1146,9 +1150,10 @@ components:
             $ref: "#/components/schemas/ErrorResponse"
           example:
             error:
-              message: "image error: failed to pull python:nonexistent"
+              message: "images error: manifest unknown for python:nonexistent"
               type: ImageError
-              code: 422
+              code: image_pull_failed
+              request_id: req_01HZK4TNRPQSXYZ8WM6NCVT9R5
 
   # -------------------------------------------------------------------------
   # Schemas
@@ -1339,9 +1344,22 @@ components:
     ErrorModel:
       type: object
       description: |
-        Standard error response. Maps directly to BoxliteError variants.
-        `UnauthorizedError` is a server-layer error (auth middleware) and does
-        not correspond to a BoxliteError variant in the core library.
+        Standard error response.
+
+        - `message` is human-readable text (English) for logs and
+          developer display.
+        - `type` is a stable PascalCase identifier (K8s `Status.reason`
+          style). Useful for log filtering. The canonical dispatch
+          field is `code`, not `type`.
+        - `code` is the stable snake_case machine identifier (Stripe
+          `code` style). Clients SHOULD pattern-match on `code` for
+          typed error handling.
+        - `request_id` is propagated from the `X-Request-Id` response
+          header. Include this when reporting issues; it round-trips
+          to server logs verbatim.
+
+        The HTTP numeric status is in the response status line, not in
+        the body — duplicating it added no information.
       required: [message, type, code]
       properties:
         message:
@@ -1350,34 +1368,64 @@ components:
           example: "box not found: 01HJK4TNRPQSXYZ8WM6NCVT9R5"
         type:
           type: string
-          description: Error type identifier (matches BoxliteError variants)
+          description: PascalCase error type identifier (matches BoxliteError variants)
           enum:
+            - InvalidArgumentError
             - UnsupportedError
-            - EngineError
-            - ConfigError
-            - StorageError
-            - ImageError
-            - PortalError
-            - NetworkError
-            - RpcError
-            - RpcTransportError
-            - InternalError
-            - ExecutionError
+            - AuthError
             - NotFoundError
+            - SessionReaped
             - AlreadyExistsError
             - InvalidStateError
+            - StoppedError
+            - ImageError
+            - ExecutionError
+            - ResourceExhaustedError
+            - NetworkError
+            - UpstreamUnavailableError
+            - EngineError
+            - StorageError
             - DatabaseError
             - MetadataError
-            - InvalidArgumentError
-            - StoppedError
-            - UnauthorizedError
+            - ConfigError
+            - InternalError
+            - TimeoutError
           example: NotFoundError
         code:
-          type: integer
-          description: HTTP response status code
-          minimum: 400
-          maximum: 599
-          example: 404
+          type: string
+          description: |
+            Stable snake_case machine identifier. Clients should
+            pattern-match on this field for typed error handling.
+          enum:
+            - invalid_argument
+            - unsupported
+            - unauthenticated
+            - permission_denied
+            - not_found
+            - session_reaped
+            - already_exists
+            - invalid_state
+            - stopped
+            - image_pull_failed
+            - execution_failed
+            - resource_exhausted
+            - network_unavailable
+            - upstream_unavailable
+            - engine_unavailable
+            - storage_error
+            - database_error
+            - metadata_error
+            - config_error
+            - internal
+            - timeout
+          example: not_found
+        request_id:
+          type: string
+          description: |
+            Request id propagated from the `X-Request-Id` response
+            header. Mirrors the server log entry — include when
+            reporting issues.
+          example: req_01HZK4TNRPQSXYZ8WM6NCVT9R5
         stack:
           type: array
           description: Stack trace (only included when server debug mode is enabled)
