@@ -322,6 +322,16 @@ pub struct ResourceFlags {
     /// Memory limit (in MiB)
     #[arg(long)]
     pub memory: Option<u32>,
+
+    /// Container rootfs disk size (in GB). The COW overlay is sparse —
+    /// actual on-disk usage grows as the workload writes. The virtual
+    /// size is `max(this, base image size)`; smaller values are ignored.
+    /// Default (unset) sizes the overlay to exactly the base image,
+    /// leaving no headroom — set this for workloads that write
+    /// significant data (in-box `docker pull`, `apt install`, `npm
+    /// install`, build caches, etc.).
+    #[arg(long = "disk-size", value_name = "GB")]
+    pub disk_size_gb: Option<u64>,
 }
 
 impl ResourceFlags {
@@ -334,6 +344,9 @@ impl ResourceFlags {
         }
         if let Some(mem) = self.memory {
             opts.memory_mib = Some(mem);
+        }
+        if let Some(gb) = self.disk_size_gb {
+            opts.disk_size_gb = Some(gb);
         }
     }
 }
@@ -966,12 +979,51 @@ mod tests {
         let flags = ResourceFlags {
             cpus: Some(1000),
             memory: None,
+            disk_size_gb: None,
         };
 
         let mut opts = BoxOptions::default();
         flags.apply_to(&mut opts);
 
         assert_eq!(opts.cpus, Some(255));
+    }
+
+    #[test]
+    fn test_resource_flags_disk_size_plumbed() {
+        // --disk-size <GB> must reach BoxOptions.disk_size_gb verbatim so the
+        // COW overlay in container_rootfs::create_cow_disk picks up
+        // max(user_size, base_image_size). A regression that drops this
+        // flag would leave agent-workflow tests at base-image size and
+        // they'd silently ENOSPC mid-`docker pull`.
+        let flags = ResourceFlags {
+            cpus: None,
+            memory: None,
+            disk_size_gb: Some(10),
+        };
+
+        let mut opts = BoxOptions::default();
+        flags.apply_to(&mut opts);
+
+        assert_eq!(opts.disk_size_gb, Some(10));
+    }
+
+    #[test]
+    fn test_resource_flags_disk_size_default_unset() {
+        // No --disk-size on the command line means BoxOptions.disk_size_gb
+        // stays None — container_rootfs::create_cow_disk's `if let Some`
+        // branch is skipped and the COW disk is exactly the base image
+        // size. This is the documented default; the test pins it so a
+        // refactor that injects a fallback (`unwrap_or(N)`) would fail.
+        let flags = ResourceFlags {
+            cpus: None,
+            memory: None,
+            disk_size_gb: None,
+        };
+
+        let mut opts = BoxOptions::default();
+        flags.apply_to(&mut opts);
+
+        assert_eq!(opts.disk_size_gb, None);
     }
 
     #[test]
