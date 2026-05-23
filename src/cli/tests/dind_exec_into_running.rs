@@ -4,8 +4,9 @@
 //! `docker stop` → `docker rm`. One VM exercises five distinct dockerd
 //! subsystems back-to-back.
 //!
-//! Part of the forced `test:integration:cli` matrix (default RUN). Skip
-//! with `BOXLITE_SKIP_DIND_TEST=1` on hosts without nested virt.
+//! Part of the opt-in `make test:integration:privileged` suite (default
+//! RUN; NOT in the default `make test` matrix). Skip with
+//! `BOXLITE_SKIP_DIND_TEST=1` on hosts without nested virt.
 //!
 //! What this proves end-to-end:
 //!   1. `docker run -d` (detached) actually backgrounds the container

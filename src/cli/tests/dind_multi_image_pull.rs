@@ -2,10 +2,12 @@
 //! `docker:dind` box. Exercises the **prolonged dockerd + large in-box
 //! disk writes** code path that single-image tests don't reach.
 //!
-//! Part of the forced `test:integration:cli` matrix (default RUN).
-//! Skip with `BOXLITE_SKIP_DIND_TEST=1` on hosts without nested virt.
+//! Part of the opt-in `make test:integration:privileged` suite (default
+//! RUN; NOT in the default `make test` matrix). Skip with
+//! `BOXLITE_SKIP_DIND_TEST=1` on hosts without nested virt.
 //! Prereq: `target/privileged-kernel/lib64/libkrunfw-privileged.so.5`
-//! (see `make/test.mk:276` precheck).
+//! (the `test:integration:privileged` target prechecks this blob and
+//! refuses to run without it).
 //!
 //! What this proves end-to-end:
 //!   - `boxlite run --disk-size 10` actually plumbs through to

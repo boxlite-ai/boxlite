@@ -2,8 +2,9 @@
 //! dind box — named volume survives container A's exit and container B
 //! reads back what A wrote.
 //!
-//! Part of the forced `test:integration:cli` matrix (default RUN). Skip
-//! with `BOXLITE_SKIP_DIND_TEST=1` on hosts without nested virt.
+//! Part of the opt-in `make test:integration:privileged` suite (default
+//! RUN; NOT in the default `make test` matrix). Skip with
+//! `BOXLITE_SKIP_DIND_TEST=1` on hosts without nested virt.
 //!
 //! What this proves end-to-end:
 //!   - In-box dockerd's named-volume driver actually persists writes

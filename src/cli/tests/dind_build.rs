@@ -1,11 +1,15 @@
 //! Integration test: `boxlite run --privileged` actually lets a
 //! `docker build` complete end-to-end inside the box.
 //!
-//! Part of the forced `test:integration:cli` matrix — runs by default.
+//! Part of the opt-in `make test:integration:privileged` suite — NOT in
+//! the default `make test` matrix (the lean `test:integration:cli` excludes
+//! every `dind_*` test). Run explicitly when changing the privileged kernel,
+//! gvproxy port path, or dockerd integration.
 //! Prerequisite: `target/privileged-kernel/lib64/libkrunfw-privileged.so.5`
-//! exists (built via `make libkrunfw-privileged`, which `test:integration:cli`
-//! checks for and refuses to run without — heavy one-time ~10–20 min kernel
-//! build, cached thereafter). `libkrun-sys/build.rs` auto-detects the blob at
+//! exists (built via `make libkrunfw-privileged`, which
+//! `test:integration:privileged` checks for and refuses to run without —
+//! heavy one-time ~10–20 min kernel build, cached thereafter).
+//! `libkrun-sys/build.rs` auto-detects the blob at
 //! that canonical path and stages it alongside the lean libkrunfw inside the
 //! embedded runtime, so no env var dance is required.
 //!
@@ -98,7 +102,7 @@ const DOCKERFILE: &str = "FROM alpine:3.19\nRUN echo \"built\" > /built.txt\n";
 fn dind_supports_docker_build() {
     // Opt-out ignore-condition (see module docs): hosts that genuinely
     // cannot run dind set BOXLITE_SKIP_DIND_TEST=1. Default is RUN —
-    // `make test:integration:cli` does not set this, so a regression
+    // `make test:integration:privileged` does not set this, so a regression
     // in dind support fails the suite.
     if std::env::var("BOXLITE_SKIP_DIND_TEST").as_deref() == Ok("1") {
         eprintln!("SKIP dind_supports_docker_build: BOXLITE_SKIP_DIND_TEST=1");

@@ -29,11 +29,20 @@ The release binary is at `./target/release/boxlite`.
 ### `make test` vs `make test:integration:cli`
 
 - **`make test`** runs the strict full matrix (unit + integration) across core and SDK suites.
-- **`make test:integration:cli`** runs only the CLI integration tests. It depends on `runtime:debug` and then:
+- **`make test:integration:cli`** runs the lean CLI integration suite — every
+  test whose name does NOT start with `dind_`. It depends on `runtime:debug`
+  and then:
 
   ```bash
-  cargo test -p boxlite-cli --tests --no-fail-fast -- --test-threads=1
+  cargo test -p boxlite-cli --tests --no-fail-fast -- --test-threads=4 --skip dind_
   ```
+
+  Default and fast (~30–60 s); does not need the privileged kernel blob.
+- **`make test:integration:privileged`** runs only the `dind_*` privileged-kernel
+  suite (docker-in-docker end-to-end). Opt-in — NOT pulled in by `make test`
+  or `test:integration:core`. Requires a one-time `make libkrunfw-privileged`
+  (~10–20 min kernel build, cached after); the target prechecks the blob and
+  refuses to run without it.
 
 When working on the CLI, run both as needed:
 
@@ -84,9 +93,10 @@ fn test_run_exit_code_success() {
 | Command        | Description |
 |----------------|-------------|
 | `make cli`     | Build the CLI (after building the debug runtime). |
-| `make test:integration:cli` | Run CLI integration tests (single-threaded). |
+| `make test:integration:cli` | Run lean CLI integration tests (excludes the `dind_*` privileged suite). |
+| `make test:integration:privileged` | Run the opt-in `dind_*` privileged-kernel suite (requires `make libkrunfw-privileged`). |
 | `make test`    | Run strict full matrix (unit + integration across core + SDK). |
-| `make test:integration:core` | Run core integration suites (Rust + CLI). |
+| `make test:integration:core` | Run core integration suites (Rust + CLI; privileged suite NOT included). |
 | `make fmt`     | Format all supported language surfaces. |
 | `make lint:rust` | Run Rust lint checks (clippy). |
 
