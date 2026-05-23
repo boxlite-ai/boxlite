@@ -9,6 +9,9 @@ import { Button } from '@/components/ui/button'
 import { FallbackProps } from 'react-error-boundary'
 
 export function ErrorBoundaryFallback({ error, resetErrorBoundary }: FallbackProps) {
+  const errorMessage = error instanceof Error ? error.message : String(error)
+  const errorStack = error instanceof Error ? error.stack : undefined
+
   return (
     <Dialog open>
       <DialogContent className="[&>button]:hidden">
@@ -24,17 +27,17 @@ export function ErrorBoundaryFallback({ error, resetErrorBoundary }: FallbackPro
           <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4">
             <h4 className="font-semibold text-red-800 dark:text-red-200 mb-2">Error Details:</h4>
             <p className="text-red-700 dark:text-red-300 font-mono text-sm break-all">
-              {error?.message || 'Unknown error'}
+              {errorMessage || 'Unknown error'}
             </p>
           </div>
 
-          {error?.stack && (
+          {errorStack && (
             <details className="bg-gray-50 dark:bg-gray-900/20 border border-gray-200 dark:border-gray-800 rounded-lg p-4">
               <summary className="cursor-pointer font-semibold text-gray-800 dark:text-gray-200">
                 Stack Trace (click to expand)
               </summary>
               <pre className="text-xs text-gray-700 dark:text-gray-300 overflow-auto max-h-48 font-mono whitespace-pre-wrap mt-2">
-                {error.stack}
+                {errorStack}
               </pre>
             </details>
           )}
