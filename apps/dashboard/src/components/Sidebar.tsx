@@ -22,6 +22,7 @@ import { FeatureFlags } from '@/enums/FeatureFlags'
 import { RoutePath } from '@/enums/RoutePath'
 import { useIsCompactScreen } from '@/hooks/use-mobile'
 import { useWebhookAppPortalAccessQuery } from '@/hooks/queries/useWebhookAppPortalAccessQuery'
+import { useIsSystemAdminQuery } from '@/hooks/queries/useIsSystemAdminQuery'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { useUserOrganizationInvitations } from '@/hooks/useUserOrganizationInvitations'
 import { useWebhooks } from '@/hooks/useWebhooks'
@@ -53,6 +54,7 @@ import {
   SearchIcon,
   Server,
   Settings,
+  ShieldCheck,
   SquareUserRound,
   SunIcon,
   TextSearch,
@@ -112,6 +114,7 @@ export function Sidebar({ isBannerVisible, billingEnabled, version: _version }: 
     useSelectedOrganization()
   const { count: organizationInvitationsCount } = useUserOrganizationInvitations()
   const { isInitialized: webhooksInitialized } = useWebhooks()
+  const { isSystemAdmin } = useIsSystemAdminQuery()
   const webhooksAccess = useWebhookAppPortalAccessQuery(selectedOrganization?.id)
   const orgInfraEnabled = useFeatureFlagEnabled(FeatureFlags.ORGANIZATION_INFRASTRUCTURE)
   const organizationExperimentsEnabled = useFeatureFlagEnabled(FeatureFlags.ORGANIZATION_EXPERIMENTS)
@@ -153,8 +156,16 @@ export function Sidebar({ isBannerVisible, billingEnabled, version: _version }: 
       })
     }
 
+    if (isSystemAdmin) {
+      arr.push({
+        icon: <ShieldCheck size={16} strokeWidth={1.5} />,
+        label: 'Admin',
+        path: RoutePath.ADMIN,
+      })
+    }
+
     return arr
-  }, [authenticatedUserHasPermission])
+  }, [authenticatedUserHasPermission, isSystemAdmin])
 
   const settingsItems = useMemo(() => {
     const arr: SidebarItem[] = [
