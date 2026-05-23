@@ -163,28 +163,29 @@ const Admin: React.FC = () => {
 
   const usersQuery = useQuery<AdminUser[]>({
     queryKey: ['admin', 'users'],
-    queryFn: () => axiosInstance.get('/admin/users').then((r) => r.data),
+    queryFn: () => axiosInstance.get('/admin/overview/users').then((r) => r.data),
   })
 
   const boxesQuery = useQuery<AdminBox[]>({
     queryKey: ['admin', 'boxes'],
-    queryFn: () => axiosInstance.get('/admin/boxes').then((r) => r.data),
+    queryFn: () => axiosInstance.get('/admin/overview/boxes').then((r) => r.data),
   })
 
   const runnersQuery = useQuery<AdminRunner[]>({
     queryKey: ['admin', 'runners'],
-    queryFn: () => axiosInstance.get('/admin/runners').then((r) => r.data),
+    queryFn: () => axiosInstance.get('/admin/overview/runners').then((r) => r.data),
   })
 
   const machinesQuery = useQuery<AdminMachine[]>({
     queryKey: ['admin', 'machines'],
-    queryFn: () => axiosInstance.get('/admin/machines').then((r) => r.data),
+    queryFn: () => axiosInstance.get('/admin/overview/machines').then((r) => r.data),
   })
 
   // ─── Mutations ─────────────────────────────────────────────────────────────
 
   const cordonMutation = useMutation({
-    mutationFn: (runnerId: string) => axiosInstance.patch(`/admin/runners/${runnerId}/scheduling`),
+    mutationFn: (runner: AdminRunner) =>
+      axiosInstance.patch(`/admin/runners/${runner.id}/scheduling`, { unschedulable: !runner.unschedulable }),
     onSuccess: () => {
       toast.success('Runner cordoned')
       queryClient.invalidateQueries({ queryKey: ['admin', 'runners'] })
@@ -193,7 +194,7 @@ const Admin: React.FC = () => {
   })
 
   const drainMutation = useMutation({
-    mutationFn: (runnerId: string) => axiosInstance.patch(`/admin/runners/${runnerId}/draining`),
+    mutationFn: (runnerId: string) => axiosInstance.patch(`/admin/runners/${runnerId}/draining`, { draining: true }),
     onSuccess: () => {
       toast.success('Runner draining')
       queryClient.invalidateQueries({ queryKey: ['admin', 'runners'] })
@@ -473,7 +474,7 @@ const Admin: React.FC = () => {
                                     description: r.unschedulable
                                       ? `Allow runner ${r.id} to accept new sandboxes again?`
                                       : `Prevent runner ${r.id} from accepting new sandboxes?`,
-                                    onConfirm: () => cordonMutation.mutateAsync(r.id),
+                                    onConfirm: () => cordonMutation.mutateAsync(r),
                                   })
                                 }
                               >
@@ -535,8 +536,8 @@ const Admin: React.FC = () => {
                           <TableCell className="font-mono text-xs">{m.host}</TableCell>
                           <TableCell>{m.region}</TableCell>
                           <TableCell>{m.oversellCpu}</TableCell>
-                          <TableCell>{(m.cpuWaterline * 100).toFixed(1)}%</TableCell>
-                          <TableCell>{(m.memWaterline * 100).toFixed(1)}%</TableCell>
+                          <TableCell>{m.cpuWaterline.toFixed(1)}%</TableCell>
+                          <TableCell>{m.memWaterline.toFixed(1)}%</TableCell>
                           <TableCell>{m.sandboxes}</TableCell>
                         </TableRow>
                       ))

@@ -162,6 +162,37 @@ export class AdminRunnerController {
     await this.runnerService.updateSchedulingStatus(id, unschedulable)
   }
 
+  @Patch(':id/draining')
+  @HttpCode(200)
+  @ApiOperation({
+    summary: 'Update runner draining status',
+    operationId: 'adminUpdateRunnerDraining',
+  })
+  @ApiResponse({
+    status: 200,
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'Runner ID',
+    type: String,
+  })
+  @Audit({
+    action: AuditAction.UPDATE_DRAINING,
+    targetType: AuditTarget.RUNNER,
+    targetIdFromRequest: (req) => req.params.id,
+    requestMetadata: {
+      body: (req: TypedRequest<{ draining: boolean }>) => ({
+        draining: req.body?.draining,
+      }),
+    },
+  })
+  async updateDrainingStatus(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body('draining') draining: boolean,
+  ): Promise<void> {
+    await this.runnerService.updateDrainingStatus(id, draining)
+  }
+
   @Delete(':id')
   @HttpCode(204)
   @ApiOperation({
