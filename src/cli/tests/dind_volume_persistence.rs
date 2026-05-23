@@ -113,7 +113,9 @@ echo "[exit=0]"
 #[test]
 fn dind_named_volume_persists_across_containers() {
     if std::env::var("BOXLITE_SKIP_PRIVILEGED_TEST").as_deref() == Ok("1") {
-        eprintln!("SKIP dind_named_volume_persists_across_containers: BOXLITE_SKIP_PRIVILEGED_TEST=1");
+        eprintln!(
+            "SKIP dind_named_volume_persists_across_containers: BOXLITE_SKIP_PRIVILEGED_TEST=1"
+        );
         return;
     }
 
