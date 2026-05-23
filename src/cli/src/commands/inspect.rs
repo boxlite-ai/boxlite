@@ -2,6 +2,7 @@
 
 use crate::cli::GlobalFlags;
 use crate::formatter::{self, GtmplWithJson, OutputFormat, value_from_serde_json};
+use boxlite::runtime::types::{PortMappingSource, ResolvedPortMapping};
 use boxlite::{BoxInfo, BoxStateInfo};
 use clap::Args;
 use serde::Serialize;
@@ -41,6 +42,40 @@ struct InspectPresenter {
     cpus: u8,
     #[serde(rename = "Memory")]
     memory: u64,
+    /// Final port bindings actually in effect — post-EXPOSE-auto-publish and
+    /// post-conflict-resolution. `Source: auto_remap` means the desired host
+    /// port (= guest port) was busy and the runtime fell back to an
+    /// OS-allocated ephemeral on the host while the guest still listens on
+    /// the original guest port. Empty for stopped/failed boxes.
+    #[serde(rename = "Ports")]
+    ports: Vec<InspectPortPresenter>,
+}
+
+#[derive(Debug, Serialize)]
+struct InspectPortPresenter {
+    #[serde(rename = "HostPort")]
+    host_port: u16,
+    #[serde(rename = "GuestPort")]
+    guest_port: u16,
+    #[serde(rename = "Protocol")]
+    protocol: String,
+    #[serde(rename = "Source")]
+    source: &'static str,
+}
+
+impl From<&ResolvedPortMapping> for InspectPortPresenter {
+    fn from(m: &ResolvedPortMapping) -> Self {
+        Self {
+            host_port: m.host_port,
+            guest_port: m.guest_port,
+            protocol: m.protocol.to_string(),
+            source: match m.source {
+                PortMappingSource::User => "user",
+                PortMappingSource::AutoExpose => "auto_expose",
+                PortMappingSource::AutoRemap => "auto_remap",
+            },
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -69,6 +104,11 @@ impl From<&BoxInfo> for InspectPresenter {
             },
             cpus: info.cpus,
             memory: info.memory_mib as u64 * 1024 * 1024,
+            ports: info
+                .port_mappings
+                .iter()
+                .map(InspectPortPresenter::from)
+                .collect(),
         }
     }
 }

@@ -280,6 +280,41 @@ impl AsRef<str> for ContainerID {
     }
 }
 
+/// Origin of a port mapping that ended up in the running box's network config.
+///
+/// Used by `inspect` / `list` (and the auto-remap log line) to explain why a
+/// given `host_port` was chosen. `AutoRemap` is the case where the image's
+/// EXPOSE port collided with a host port already in use and the runtime
+/// fell back to an OS-allocated ephemeral host port — the host now reaches
+/// the guest service via the new port, while the guest still listens on
+/// the original `guest_port`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PortMappingSource {
+    /// Explicit user mapping via `-p host:guest`.
+    User,
+    /// Image EXPOSE auto-published 1:1 (`host_port == guest_port`).
+    AutoExpose,
+    /// Image EXPOSE auto-published but desired host port was busy — fell
+    /// back to an OS-allocated ephemeral host port.
+    AutoRemap,
+}
+
+/// Final, post-conflict-resolution port mapping for a running box.
+///
+/// Unlike `runtime::options::PortSpec` (user input, `host_port` may be
+/// `None`), every `ResolvedPortMapping` carries a concrete `host_port`
+/// because conflict resolution has already happened. Persisted in
+/// `BoxState::port_mappings` so `boxlite inspect`/`list` can show the
+/// real binding even for detached boxes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResolvedPortMapping {
+    pub host_port: u16,
+    pub guest_port: u16,
+    pub protocol: crate::runtime::options::PortProtocol,
+    pub source: PortMappingSource,
+}
+
 /// Public metadata about a box (returned by list operations).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BoxInfo {
@@ -315,6 +350,13 @@ pub struct BoxInfo {
 
     /// Health status.
     pub health_status: HealthStatus,
+
+    /// Final port mappings actually in effect for this box (post-conflict
+    /// resolution). Sourced from `BoxState::port_mappings`; empty for
+    /// records persisted before the field existed and for boxes that
+    /// have never reached `Running`.
+    #[serde(default)]
+    pub port_mappings: Vec<ResolvedPortMapping>,
 }
 
 impl BoxInfo {
@@ -337,6 +379,7 @@ impl BoxInfo {
             memory_mib: config.options.memory_mib.unwrap_or(512),
             labels: HashMap::new(),
             health_status: state.health_status,
+            port_mappings: state.port_mappings.clone(),
         }
     }
 }

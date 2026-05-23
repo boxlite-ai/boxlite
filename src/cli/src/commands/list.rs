@@ -1,6 +1,7 @@
 use crate::cli::GlobalFlags;
 use crate::formatter::{self, OutputFormat};
 use boxlite::BoxInfo;
+use boxlite::runtime::types::ResolvedPortMapping;
 use clap::Args;
 use serde::Serialize;
 use tabled::Tabled;
@@ -39,18 +40,39 @@ struct BoxPresenter {
     #[serde(rename = "CreatedAt")]
     created: String,
 
+    #[tabled(rename = "PORTS")]
+    #[serde(rename = "Ports")]
+    ports: String,
+
     #[tabled(rename = "NAMES")]
     #[serde(rename = "Names")]
     names: String,
 }
 
+/// Render port mappings docker-style for the `PORTS` column.
+///
+/// Format per entry: `0.0.0.0:<host>-><guest>/<proto>`. Multiple entries
+/// joined by `, `. Empty string when there are no mappings (stopped box
+/// or pre-existing DB row without the field).
+fn format_ports(mappings: &[ResolvedPortMapping]) -> String {
+    let mut sorted: Vec<&ResolvedPortMapping> = mappings.iter().collect();
+    sorted.sort_by_key(|m| (m.guest_port, m.host_port));
+    sorted
+        .iter()
+        .map(|m| format!("0.0.0.0:{}->{}/{}", m.host_port, m.guest_port, m.protocol,))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 impl From<BoxInfo> for BoxPresenter {
     fn from(info: BoxInfo) -> Self {
+        let ports = format_ports(&info.port_mappings);
         Self {
             id: info.id.to_string(),
             image: info.image,
             status: format!("{:?}", info.status),
             created: formatter::format_time(&info.created_at),
+            ports,
             names: info.name.unwrap_or_default(),
         }
     }

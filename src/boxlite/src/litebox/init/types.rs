@@ -289,6 +289,10 @@ pub struct InitPipelineContext {
     pub guest_session: Option<GuestSession>,
     /// MITM CA cert PEM (set by vmm_spawn, read by guest_init for Container.Init gRPC).
     pub ca_cert_pem: Option<String>,
+    /// Final port mappings after EXPOSE auto-publish + conflict resolution.
+    /// Set by `vmm_spawn`; taken out in `BoxBuilder::build` to be stored on
+    /// `LiveState` and persisted to `BoxState` at the `Running` transition.
+    pub port_mappings: Option<Vec<crate::runtime::types::ResolvedPortMapping>>,
 
     #[cfg(target_os = "linux")]
     pub bind_mount: Option<BindMountHandle>,
@@ -317,6 +321,7 @@ impl InitPipelineContext {
             container_mounts: None,
             guest_session: None,
             ca_cert_pem: None,
+            port_mappings: None,
             #[cfg(target_os = "linux")]
             bind_mount: None,
         }

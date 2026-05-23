@@ -677,12 +677,21 @@ impl Default for NetworkSpec {
     }
 }
 
-#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum PortProtocol {
     #[default]
     Tcp,
     Udp,
     // Sctp,
+}
+
+impl std::fmt::Display for PortProtocol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PortProtocol::Tcp => write!(f, "tcp"),
+            PortProtocol::Udp => write!(f, "udp"),
+        }
+    }
 }
 
 fn default_protocol() -> PortProtocol {

@@ -246,6 +246,13 @@ impl BoxBuilder {
             #[cfg(target_os = "linux")]
             let bind_mount = ctx.bind_mount.take();
 
+            // Post-conflict-resolution port mappings (`vmm_spawn` populates
+            // this). `box_impl` writes them to `BoxState` alongside the
+            // Running transition so `boxlite inspect`/`list` see the actual
+            // host ports — including any EXPOSE port we auto-remapped to an
+            // OS ephemeral.
+            let port_mappings = ctx.port_mappings.take().unwrap_or_default();
+
             // Take the guard out of context, replacing with a disarmed placeholder.
             // The caller is responsible for disarming the returned guard after all
             // operations succeed (including DB persist).
@@ -261,6 +268,7 @@ impl BoxBuilder {
                 metrics,
                 container_disk,
                 guest_disk,
+                port_mappings,
                 #[cfg(target_os = "linux")]
                 bind_mount,
             );

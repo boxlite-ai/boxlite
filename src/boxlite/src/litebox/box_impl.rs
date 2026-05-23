@@ -61,6 +61,12 @@ pub(crate) struct LiveState {
     #[allow(dead_code)]
     guest_rootfs_disk: Option<Disk>,
 
+    /// Post-conflict-resolution port mappings handed up from
+    /// `vmm_spawn`/`init`. Consumed once at the `Running` transition
+    /// where they're copied onto `BoxState` so `inspect`/`list` can
+    /// surface them; not used for runtime traffic decisions.
+    port_mappings: Vec<crate::runtime::types::ResolvedPortMapping>,
+
     // Platform-specific
     #[cfg(target_os = "linux")]
     #[allow(dead_code)]
@@ -75,6 +81,7 @@ impl LiveState {
         metrics: BoxMetricsStorage,
         container_rootfs_disk: Disk,
         guest_rootfs_disk: Option<Disk>,
+        port_mappings: Vec<crate::runtime::types::ResolvedPortMapping>,
         #[cfg(target_os = "linux")] bind_mount: Option<BindMountHandle>,
     ) -> Self {
         Self {
@@ -83,9 +90,14 @@ impl LiveState {
             metrics,
             _container_rootfs_disk: container_rootfs_disk,
             guest_rootfs_disk,
+            port_mappings,
             #[cfg(target_os = "linux")]
             bind_mount,
         }
+    }
+
+    pub(crate) fn port_mappings(&self) -> &[crate::runtime::types::ResolvedPortMapping] {
+        &self.port_mappings
     }
 }
 
@@ -678,6 +690,14 @@ impl BoxImpl {
             let mut state = self.state.write();
             state.set_pid(Some(pid));
             state.set_status(BoxStatus::Running);
+            // Capture the resolved port mappings from this spawn so
+            // `boxlite inspect`/`list` (and any API consumers) can see the
+            // host_port we actually programmed into gvproxy — including
+            // any EXPOSE port that was auto-remapped to an OS ephemeral
+            // because its desired host port was busy. Cleared again in
+            // `mark_stop` / `mark_failed` so a stopped box never claims
+            // ports it isn't holding.
+            state.port_mappings = live_state.port_mappings().to_vec();
 
             // Initialize health status if health check is configured
             if self.config.options.advanced.health_check.is_some() {

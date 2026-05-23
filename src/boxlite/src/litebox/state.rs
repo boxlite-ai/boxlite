@@ -217,6 +217,16 @@ pub struct BoxState {
     /// Serde default keeps existing DB rows readable without migration.
     #[serde(default)]
     pub error_reason: Option<String>,
+
+    /// Final port mappings in effect for the running box (post-conflict
+    /// resolution: any EXPOSE port that collided with a host port already
+    /// in use has been remapped to an OS-allocated ephemeral port and is
+    /// tagged `AutoRemap`). Written by `vmm_spawn` → `box_impl` at the
+    /// `Running` transition; cleared by `mark_stop` so a stopped box
+    /// doesn't claim host ports it isn't actually holding. Empty on
+    /// pre-existing DB rows via serde default — no migration needed.
+    #[serde(default)]
+    pub port_mappings: Vec<crate::runtime::types::ResolvedPortMapping>,
 }
 
 /// Health status of a box.
@@ -315,6 +325,7 @@ impl BoxState {
             lock_id: None,
             health_status: HealthStatus::new(),
             error_reason: None,
+            port_mappings: Vec::new(),
         }
     }
 
@@ -365,6 +376,13 @@ impl BoxState {
     pub fn mark_stop(&mut self) {
         self.status = BoxStatus::Stopped;
         self.pid = None;
+        // `port_mappings` is deliberately NOT cleared: it describes the
+        // bindings of the LAST run, which matches `docker inspect` on a
+        // stopped container (kept as a forensic record). The next start
+        // overwrites it from `vmm_spawn` → `box_impl` at the Running
+        // transition, so there is no risk of a stale set surviving past
+        // its relevance. Reading the `Status` field tells the user
+        // whether the mappings are currently active.
         self.last_updated = Utc::now();
     }
 
@@ -380,6 +398,9 @@ impl BoxState {
         self.status = BoxStatus::Failed;
         self.error_reason = Some(reason.to_string());
         self.pid = None;
+        // See `mark_stop`: `port_mappings` is preserved as a forensic
+        // record of the failed run; the Status/Error_reason fields
+        // make the "not currently bound" semantics unambiguous.
         self.last_updated = Utc::now();
     }
 
@@ -392,6 +413,8 @@ impl BoxState {
             self.status = BoxStatus::Stopped;
         }
         self.pid = None;
+        // Same as mark_stop: keep the last-known port_mappings as a
+        // forensic record; vmm_spawn rebuilds them on the next start.
         self.last_updated = Utc::now();
     }
 

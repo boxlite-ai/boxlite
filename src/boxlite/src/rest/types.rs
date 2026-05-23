@@ -235,6 +235,10 @@ impl BoxResponse {
             memory_mib: self.memory_mib,
             labels: self.labels.clone(),
             health_status: crate::litebox::HealthStatus::new(), // REST API doesn't provide health status
+            // REST `/list` response does not yet carry the resolved port
+            // mappings — adding that field to the wire schema is a separate
+            // change. Local (non-REST) callers see the real mappings.
+            port_mappings: Vec::new(),
         })
     }
 }
