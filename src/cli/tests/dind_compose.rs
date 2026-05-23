@@ -155,6 +155,15 @@ fn dind_compose_multi_service_network() {
     let mount = format!("{}:/probe", tmp.path().display());
 
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_boxlite"));
+    // Force the dockerd API ports onto different host ports than the
+    // image's EXPOSE-driven default. boxlite auto-publishes image EXPOSE
+    // 1:1 to host (sibling test `dind_build` exercises that path), and
+    // both dind tests use `docker:dind` which EXPOSEs 2375/2376 — running
+    // them concurrently under nextest profile `vm` (-j4) would otherwise
+    // collide on host:2375. Explicit `-p 12375:2375 -p 12376:2376`
+    // suppresses the auto-publish for those guest ports (see
+    // `build_network_config`'s "skip if user-overridden" branch) and
+    // routes the host bind to a distinct port instead.
     // `--registry` mirror: see the equivalent comment in dind_build.rs.
     // Avoids Docker Hub unauthenticated rate limits on both docker:dind
     // and the boxlite-internal debian:bookworm-slim init image.
@@ -169,6 +178,10 @@ fn dind_compose_multi_service_network() {
             "--privileged",
             "--memory",
             "2048",
+            "-p",
+            "12375:2375",
+            "-p",
+            "12376:2376",
             "-v",
             &mount,
             "docker:dind",

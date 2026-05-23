@@ -238,6 +238,22 @@ test\:unit\:ffi:
 # every test whose name contains `dind_`, currently:
 #   - `dind_supports_docker_build`        (`src/cli/tests/dind_build.rs`)
 #   - `dind_compose_multi_service_network` (`src/cli/tests/dind_compose.rs`)
+#   - `dind_port_conflict_fails_fast`     (`src/cli/tests/dind_port_conflict.rs`)
+#
+# Every dind test uses the `docker:dind` image, which EXPOSEs 2375/2376.
+# The `vm` nextest profile runs with `test-threads = 4` so these start
+# concurrently; to stay parallel-safe each test owns a disjoint host port
+# slice:
+#   - dind_build       : no `-p`, EXPOSE auto-publish     → host:2375/2376
+#   - dind_compose     : explicit `-p 12375:2375 12376:2376` → host:12375/12376
+#   - dind_port_conflict: explicit `-p 22375:2375 22376:2376` → host:22375/22376
+#     (this one deliberately starts TWO boxes on the same 22375/22376 to
+#      verify the second one fails fast — but only 22375/22376 are at
+#      stake, so other dind tests are unaffected.)
+# Any new dind test added here must pick a non-default host port slice
+# the same way (or skip `docker:dind` entirely) or `make test:integration:dind`
+# will start failing intermittently with "bind: address already in use".
+#
 # Heavy one-time `make libkrunfw-privileged` (~10–20 min, cached after) is
 # required — see test:integration:cli below.
 test\:integration\:dind:
