@@ -155,9 +155,14 @@ fn dind_compose_multi_service_network() {
     let mount = format!("{}:/probe", tmp.path().display());
 
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_boxlite"));
+    // `--registry` mirror: see the equivalent comment in dind_build.rs.
+    // Avoids Docker Hub unauthenticated rate limits on both docker:dind
+    // and the boxlite-internal debian:bookworm-slim init image.
     cmd.timeout(Duration::from_secs(600))
         .arg("--home")
         .arg(&home_dir.path)
+        .arg("--registry")
+        .arg("docker.m.daocloud.io")
         .args([
             "run",
             "--rm",

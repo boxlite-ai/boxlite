@@ -132,9 +132,20 @@ fn dind_supports_docker_build() {
     // 2-core/2 GB box even with a cold image cache. The dind-blob check
     // gate above already filters out hosts that can't run this in
     // sensible time, so generous but bounded.
+    // `--registry` is a global flag (multi-occurrence, tried in order
+    // before falling back to docker.io). Without this, boxlite pulls
+    // both the box image (docker:dind, ~250 MB) AND its internal init
+    // base image (debian:bookworm-slim, hardcoded in
+    // src/boxlite/src/runtime/constants.rs::INIT_ROOTFS) from
+    // docker.io, which intermittently rate-limits unauthenticated
+    // pulls and produces flaky test failures masquerading as real
+    // errors. The mirror used here is the same one the in-guest
+    // probe script falls back on.
     cmd.timeout(Duration::from_secs(600))
         .arg("--home")
         .arg(&home_dir.path)
+        .arg("--registry")
+        .arg("docker.m.daocloud.io")
         .args([
             "run",
             "--rm",
