@@ -105,7 +105,7 @@ async fn run_cli(cli: Cli) -> anyhow::Result<()> {
         cli::Commands::Logs(args) => commands::logs::execute(args, &global).await,
         cli::Commands::Stats(args) => commands::stats::execute(args, &global).await,
         cli::Commands::Serve(args) => commands::serve::execute(args, &global).await,
-        cli::Commands::Auth(args) => commands::auth::run(args).await,
+        cli::Commands::Auth(args) => commands::auth::run(args, &global).await,
         // Handled in main() before tokio; never reaches run_cli
         cli::Commands::Completion(_) => {
             unreachable!("completion subcommand is handled before tokio in main()")
@@ -113,7 +113,11 @@ async fn run_cli(cli: Cli) -> anyhow::Result<()> {
     };
 
     if let Err(error) = result {
-        eprintln!("Error: {}", error);
+        // `{:#}` prints the anyhow chain (outer context: inner cause: ...),
+        // not just the outer message. Without this, `.with_context()` calls
+        // swallow the underlying reqwest / openidconnect failure that the
+        // user actually needs to see.
+        eprintln!("Error: {:#}", error);
         process::exit(1);
     }
 

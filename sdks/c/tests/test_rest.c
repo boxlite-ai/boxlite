@@ -90,7 +90,7 @@ static void test_rest_credential_and_prefix(void) {
   assert(opts != NULL);
 
   boxlite_rest_options_set_credential(opts, cred);
-  boxlite_rest_options_set_prefix(opts, "v1");
+  boxlite_rest_options_set_path_prefix(opts, "acme");
 
   code = boxlite_rest_runtime_new_with_options(opts, &rt, &error);
   assert(code == Ok);

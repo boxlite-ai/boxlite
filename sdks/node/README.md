@@ -116,6 +116,34 @@ const rt2 = JsBoxlite.rest('http://localhost:8100', cred ?? undefined);
 interface; functions can type their parameter as `Credential` and
 accept any future credential kind without a signature change.
 
+#### Routing prefix (vendor-agnostic)
+
+Box-scoped requests resolve to `{url}/v1/{prefix}/…`. The
+`v1` segment is hardcoded; `path_prefix` is an opaque, deployment-
+defined routing value that the server tells the client to use via
+`Principal.path_prefix` from `GET /v1/me`. The slot's semantics
+are vendor-specific: boxlite cloud uses it for the organization
+id; another deployment may use a workspace name, a region+team
+pair, or any other multi-segment value such as `us-east/team-42`.
+
+```typescript
+import { JsBoxlite, BoxliteRestOptions, ApiKeyCredential } from '@boxlite-ai/boxlite';
+
+const rt = JsBoxlite.rest(new BoxliteRestOptions({
+  url: 'https://api.boxlite.ai/api',
+  credential: new ApiKeyCredential('blk_live_…'),
+  pathPrefix: 'acme',   // → requests hit /v1/acme/boxes
+}));
+```
+
+When `pathPrefix` is unset, the client builds URLs without the
+segment (`/v1/boxes/…`) — the canonical shape for single-tenant
+deployments such as the local `boxlite serve` reference server.
+
+The CLI captures `Principal.path_prefix` at login and caches it
+under the active profile, so subsequent `boxlite` commands route
+correctly without an extra flag.
+
 ### Runtime Registry Options
 
 ```typescript

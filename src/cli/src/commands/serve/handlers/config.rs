@@ -2,11 +2,11 @@
 
 use axum::Json;
 
-use super::super::types::{SandboxCapabilities, SandboxConfigResponse};
+use super::super::types::{ServerCapabilities, ServerConfig};
 
-pub(in crate::commands::serve) async fn get_config() -> Json<SandboxConfigResponse> {
-    Json(SandboxConfigResponse {
-        capabilities: SandboxCapabilities {
+pub(in crate::commands::serve) async fn get_config() -> Json<ServerConfig> {
+    Json(ServerConfig {
+        capabilities: ServerCapabilities {
             snapshots_enabled: true,
             clone_enabled: true,
             export_enabled: true,

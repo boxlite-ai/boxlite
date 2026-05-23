@@ -1,8 +1,9 @@
 //! Integration tests for `boxlite auth {login,whoami,status}` against a
 //! std-only stub HTTP server (zero new deps). Covers the Phase-1 identity
 //! flow: `login` validates via `GET /v1/me` and prints who you are; falls
-//! back to `GET /v1/default/boxes` when `/v1/me` is 404 (zero regression);
-//! 401 fails without writing credentials; `whoami` reflects identity.
+//! back to `GET /v1/boxes` (empty-prefix shape) when `/v1/me` is 404
+//! (zero regression); 401 fails without writing credentials; `whoami`
+//! reflects identity.
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
@@ -80,7 +81,7 @@ impl Stub {
     }
 }
 
-const PRINCIPAL_JSON: &str = r#"{"sub":"usr_1","principal_type":"user","email":"dev@acme.test","display_name":"Dev","prefix":"acme","scopes":["box:read","box:write"]}"#;
+const PRINCIPAL_JSON: &str = r#"{"sub":"usr_1","principal_type":"user","email":"dev@acme.test","display_name":"Dev","path_prefix":"acme","scopes":["box:read","box:write"]}"#;
 const NOT_FOUND_JSON: &str =
     r#"{"error":{"message":"no /v1/me here","type":"NotFoundError","code":404}}"#;
 const AUTH_ERR_JSON: &str = r#"{"error":{"message":"bad key","type":"AuthError","code":401}}"#;
@@ -115,7 +116,7 @@ fn login_success_prints_identity_and_saves() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "Logged in as dev@acme.test (org: acme)",
+            "Logged in as dev@acme.test (path prefix: acme)",
         ));
 
     assert!(
@@ -126,10 +127,14 @@ fn login_success_prints_identity_and_saves() {
 
 #[test]
 fn login_falls_back_to_boxes_when_me_404() {
+    // When /v1/me is 404 (older server), the client falls back to the
+    // cheapest authenticated call: GET /v1/boxes. Stored profile has
+    // no prefix at this point (`/v1/me` failed so nothing to cache),
+    // so the URL builder uses the empty-prefix shape `/v1/boxes`.
     let stub = Stub::start(|_m, path| {
         if path == "/v1/me" {
             (404, NOT_FOUND_JSON.to_string())
-        } else if path.starts_with("/v1/default/boxes") {
+        } else if path.starts_with("/v1/boxes") {
             (200, EMPTY_BOXES_JSON.to_string())
         } else {
             (404, NOT_FOUND_JSON.to_string())
@@ -188,7 +193,7 @@ fn whoami_prints_identity_after_login() {
         .success()
         .stdout(
             predicate::str::contains("Logged in as:    dev@acme.test")
-                .and(predicate::str::contains("Organization:    acme")),
+                .and(predicate::str::contains("Path prefix:     acme")),
         );
 }
 
@@ -199,7 +204,7 @@ fn whoami_not_logged_in_with_no_credentials() {
         .args(["auth", "whoami"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Not logged in."));
+        .stdout(predicate::str::contains("Not logged in"));
 }
 
 #[test]
@@ -210,5 +215,5 @@ fn status_is_offline_and_reports_source() {
         .args(["auth", "status"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Not logged in."));
+        .stdout(predicate::str::contains("Not logged in"));
 }

@@ -3,7 +3,7 @@
 
 use anyhow::{Context, Result};
 
-use crate::credentials;
+use crate::credentials::{self, AuthMethod};
 use crate::defaults::LOCAL_SERVE_URL;
 
 const API_KEY_ENV: &str = "BOXLITE_API_KEY";
@@ -19,39 +19,56 @@ enum Source {
 struct Identity {
     url: String,
     source: Source,
+    /// `None` for env-derived identities (we don't decorate); `Some` for
+    /// file-derived so the user sees whether it's API-key or OIDC and,
+    /// for OIDC, when the access token expires.
+    method: Option<AuthMethod>,
+    expires_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-pub fn run() -> Result<()> {
-    let identity = match resolve_identity()? {
+pub fn run(profile_name: &str) -> Result<()> {
+    let identity = match resolve_identity(profile_name)? {
         Some(id) => id,
         None => {
-            println!("Not logged in.");
+            println!("Not logged in (profile `{}`).", profile_name);
             return Ok(());
         }
     };
 
     let source_label = match identity.source {
         Source::EnvApiKey => format!("{} env var", API_KEY_ENV),
-        Source::File { path_display } => path_display,
+        Source::File { path_display } => format!("{} [{}]", path_display, profile_name),
     };
 
     println!("Logged in to:    {}", identity.url);
-    println!("Credential:      API key (from {})", source_label);
+    let credential_label = match identity.method {
+        Some(AuthMethod::Oidc) => "OIDC bearer token",
+        Some(AuthMethod::ApiKey) | None => "API key",
+    };
+    println!(
+        "Credential:      {} (from {})",
+        credential_label, source_label
+    );
+    if let Some(exp) = identity.expires_at {
+        println!("Expires:         {}", exp.to_rfc3339());
+    }
     Ok(())
 }
 
 /// Resolve the active credential source. Env vars win over the file (matches
 /// the runtime precedence used by `from_env()`).
-fn resolve_identity() -> Result<Option<Identity>> {
+fn resolve_identity(profile_name: &str) -> Result<Option<Identity>> {
     if std::env::var(API_KEY_ENV).is_ok() {
         let url = std::env::var(URL_ENV).unwrap_or_else(|_| LOCAL_SERVE_URL.to_string());
         return Ok(Some(Identity {
             url,
             source: Source::EnvApiKey,
+            method: None,
+            expires_at: None,
         }));
     }
 
-    let profile = credentials::load().context("loading stored credentials")?;
+    let profile = credentials::load_named(profile_name).context("loading stored credentials")?;
     let Some(profile) = profile else {
         return Ok(None);
     };
@@ -61,5 +78,7 @@ fn resolve_identity() -> Result<Option<Identity>> {
         source: Source::File {
             path_display: path.display().to_string(),
         },
+        method: Some(profile.auth_method),
+        expires_at: profile.expires_at,
     }))
 }

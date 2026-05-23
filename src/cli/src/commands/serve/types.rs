@@ -109,13 +109,16 @@ pub(super) struct ResizeRequest {
 // Config Types
 // ============================================================================
 
+/// Server configuration & capabilities — the `GET /v1/config` response
+/// from the local Axum reference server. Mirrors the `ServerConfig`
+/// schema in `openapi/box.openapi.yaml`.
 #[derive(Serialize)]
-pub(super) struct SandboxConfigResponse {
-    pub capabilities: SandboxCapabilities,
+pub(super) struct ServerConfig {
+    pub capabilities: ServerCapabilities,
 }
 
 #[derive(Serialize)]
-pub(super) struct SandboxCapabilities {
+pub(super) struct ServerCapabilities {
     pub snapshots_enabled: bool,
     pub clone_enabled: bool,
     pub export_enabled: bool,

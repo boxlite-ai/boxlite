@@ -3,7 +3,7 @@
  *
  * `BoxliteRestOptions` is the single options bag passed to
  * `JsBoxlite.rest(...)`. The name and shape are intentionally identical
- * across every SDK (C/Go/Node/Python) for cross-SDK parity:
+ * across every SDK (C/Go/Node/Python) for cross-SDK parity.
  *
  * @example
  * ```ts
@@ -12,6 +12,7 @@
  * const rt = JsBoxlite.rest(new BoxliteRestOptions({
  *   url: 'https://api.example.com',
  *   credential: new ApiKeyCredential('blk_live_...'),
+ *   pathPrefix: 'acme',
  * }));
  * ```
  */
@@ -26,16 +27,22 @@ export class BoxliteRestOptions {
   /** Bearer credential. Omit for an unauthenticated runtime. */
   readonly credential?: Credential;
 
-  /** API path prefix (server default: `v1`). */
-  readonly prefix?: string;
+  /**
+   * Routing-slot value substituted into the `{prefix}` URL
+   * segment. Opaque — the server tells the client what to put here
+   * (via `Principal.path_prefix` from `GET /v1/me`). Omit / empty /
+   * null → URL skips the segment (`/v1/boxes/…`) — the single-
+   * tenant deployment shape.
+   */
+  readonly pathPrefix?: string;
 
   constructor(options: {
     url: string;
     credential?: Credential;
-    prefix?: string;
+    pathPrefix?: string;
   }) {
     this.url = options.url;
     this.credential = options.credential;
-    this.prefix = options.prefix;
+    this.pathPrefix = options.pathPrefix;
   }
 }

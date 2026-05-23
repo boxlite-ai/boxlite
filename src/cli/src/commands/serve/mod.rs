@@ -813,79 +813,79 @@ fn build_router(state: Arc<AppState>) -> Router {
         .route("/v1/me", get(me::get_me))
         .route("/v1/config", get(config::get_config))
         // Runtime metrics
-        .route("/v1/default/metrics", get(metrics::runtime_metrics))
+        .route("/v1/metrics", get(metrics::runtime_metrics))
         // Box CRUD (import first — static path before param path)
-        .route("/v1/default/boxes/import", post(advanced::import_box))
+        .route("/v1/boxes/import", post(advanced::import_box))
         .route(
-            "/v1/default/boxes",
+            "/v1/boxes",
             post(boxes::create_box).get(boxes::list_boxes),
         )
         .route(
-            "/v1/default/boxes/{box_id}",
+            "/v1/boxes/{box_id}",
             get(boxes::get_box)
                 .delete(boxes::remove_box)
                 .head(boxes::head_box),
         )
         // Box lifecycle
         .route(
-            "/v1/default/boxes/{box_id}/start",
+            "/v1/boxes/{box_id}/start",
             post(boxes::start_box),
         )
         .route(
-            "/v1/default/boxes/{box_id}/stop",
+            "/v1/boxes/{box_id}/stop",
             post(boxes::stop_box),
         )
         // Box metrics
         .route(
-            "/v1/default/boxes/{box_id}/metrics",
+            "/v1/boxes/{box_id}/metrics",
             get(metrics::box_metrics),
         )
         // Execution
         .route(
-            "/v1/default/boxes/{box_id}/exec",
+            "/v1/boxes/{box_id}/exec",
             post(executions::start_execution),
         )
         .route(
-            "/v1/default/boxes/{box_id}/executions/{exec_id}",
+            "/v1/boxes/{box_id}/executions/{exec_id}",
             get(executions::get_execution).delete(executions::kill_execution),
         )
         .route(
-            "/v1/default/boxes/{box_id}/executions/{exec_id}/attach",
+            "/v1/boxes/{box_id}/executions/{exec_id}/attach",
             get(executions::attach_execution),
         )
         .route(
-            "/v1/default/boxes/{box_id}/executions/{exec_id}/signal",
+            "/v1/boxes/{box_id}/executions/{exec_id}/signal",
             post(executions::send_signal),
         )
         .route(
-            "/v1/default/boxes/{box_id}/executions/{exec_id}/resize",
+            "/v1/boxes/{box_id}/executions/{exec_id}/resize",
             post(executions::resize_tty),
         )
         // Files
         .route(
-            "/v1/default/boxes/{box_id}/files",
+            "/v1/boxes/{box_id}/files",
             put(files::upload_files).get(files::download_files),
         )
         // Snapshots
         .route(
-            "/v1/default/boxes/{box_id}/snapshots",
+            "/v1/boxes/{box_id}/snapshots",
             post(snapshots::create_snapshot).get(snapshots::list_snapshots),
         )
         .route(
-            "/v1/default/boxes/{box_id}/snapshots/{name}",
+            "/v1/boxes/{box_id}/snapshots/{name}",
             get(snapshots::get_snapshot).delete(snapshots::delete_snapshot),
         )
         .route(
-            "/v1/default/boxes/{box_id}/snapshots/{name}/restore",
+            "/v1/boxes/{box_id}/snapshots/{name}/restore",
             post(snapshots::restore_snapshot),
         )
         // Clone & export
         .route(
-            "/v1/default/boxes/{box_id}/clone",
+            "/v1/boxes/{box_id}/clone",
             post(advanced::clone_box),
         )
         .route(
-            "/v1/default/boxes/{box_id}/export",
+            "/v1/boxes/{box_id}/export",
             post(advanced::export_box),
         )
         .layer(middleware::from_fn_with_state(
@@ -943,7 +943,7 @@ mod tests {
 
     #[test]
     fn auth_allows_permissive_when_no_key() {
-        assert!(auth_allows(None, "/v1/default/boxes", None));
+        assert!(auth_allows(None, "/v1/boxes", None));
         assert!(auth_allows(None, "/v1/me", Some("anything")));
     }
 
@@ -957,7 +957,7 @@ mod tests {
         assert!(auth_allows(Some("k"), "/v1/me", Some("k")));
         assert!(!auth_allows(Some("k"), "/v1/me", Some("wrong")));
         assert!(!auth_allows(Some("k"), "/v1/me", None));
-        assert!(!auth_allows(Some("k"), "/v1/default/boxes", Some("")));
+        assert!(!auth_allows(Some("k"), "/v1/boxes", Some("")));
     }
 
     #[test]

@@ -17,7 +17,7 @@ describe("JsBoxlite.rest options-bag adapter", () => {
 
   test("adapts the BoxliteRestOptions bag to the native runtime", () => {
     const runtime = JsBoxlite.rest(
-      new BoxliteRestOptions({ url: "http://127.0.0.1:1", prefix: "v1" }),
+      new BoxliteRestOptions({ url: "http://127.0.0.1:1", pathPrefix: "acme" }),
     );
     try {
       expect(runtime).toBeDefined();

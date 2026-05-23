@@ -862,25 +862,34 @@ pub(crate) struct PyBoxliteRestOptions {
     pub(crate) url: String,
     #[pyo3(get, set)]
     pub(crate) credential: Option<PyApiKeyCredential>,
+    /// Routing-slot value substituted into the `{prefix}` URL
+    /// segment. `None` or empty → URL skips the segment entirely —
+    /// the single-tenant deployment shape. Opaque to the client,
+    /// deployment decides what it means.
     #[pyo3(get, set)]
-    pub(crate) prefix: Option<String>,
+    pub(crate) path_prefix: Option<String>,
 }
 
 #[pymethods]
 impl PyBoxliteRestOptions {
     #[new]
-    #[pyo3(signature = (url, credential=None, prefix=None))]
-    fn new(url: String, credential: Option<PyApiKeyCredential>, prefix: Option<String>) -> Self {
+    #[pyo3(signature = (url, credential=None, path_prefix=None))]
+    fn new(
+        url: String,
+        credential: Option<PyApiKeyCredential>,
+        path_prefix: Option<String>,
+    ) -> Self {
         Self {
             url,
             credential,
-            prefix,
+            path_prefix,
         }
     }
 
     /// Create BoxliteRestOptions from environment variables.
     ///
-    /// Reads: BOXLITE_REST_URL (required), BOXLITE_API_KEY, BOXLITE_REST_PREFIX.
+    /// Reads: BOXLITE_REST_URL (required), BOXLITE_API_KEY,
+    /// BOXLITE_REST_PATH_PREFIX.
     #[staticmethod]
     fn from_env() -> PyResult<Self> {
         let url = std::env::var("BOXLITE_REST_URL").map_err(|_| {
@@ -888,23 +897,24 @@ impl PyBoxliteRestOptions {
                 "BOXLITE_REST_URL not set".into(),
             ))
         })?;
+        let path_prefix = std::env::var("BOXLITE_REST_PATH_PREFIX").ok();
         Ok(Self {
             url,
             credential: PyApiKeyCredential::from_env(),
-            prefix: std::env::var("BOXLITE_REST_PREFIX").ok(),
+            path_prefix,
         })
     }
 
     fn __repr__(&self) -> String {
         format!(
-            "BoxliteRestOptions(url={:?}, credential={}, prefix={:?})",
+            "BoxliteRestOptions(url={:?}, credential={}, path_prefix={:?})",
             self.url,
             if self.credential.is_some() {
                 "ApiKeyCredential(***)"
             } else {
                 "None"
             },
-            self.prefix,
+            self.path_prefix,
         )
     }
 }
@@ -915,7 +925,9 @@ impl From<PyBoxliteRestOptions> for BoxliteRestOptions {
         if let Some(cred) = py_opts.credential {
             opts = opts.with_api_key(cred.key);
         }
-        opts.prefix = py_opts.prefix;
+        if let Some(path_prefix) = py_opts.path_prefix {
+            opts = opts.with_path_prefix(path_prefix);
+        }
         opts
     }
 }

@@ -4,6 +4,11 @@
 //! fixed "local-anonymous" principal regardless of the Bearer header. Useful
 //! for exercising the CLI's `auth status` and login validation against a
 //! local development target.
+//!
+//! Per the vendor-agnostic spec, `prefix: null` signals "this deployment
+//! does not use a routing slot" — `boxlite serve` mounts routes at
+//! `/v1/boxes/...` rather than `/v1/<prefix>/boxes/...`, the canonical
+//! single-tenant deployment shape.
 
 use axum::Json;
 use serde::Serialize;
@@ -14,7 +19,7 @@ pub(in crate::commands::serve) struct Principal {
     principal_type: &'static str,
     email: &'static str,
     display_name: &'static str,
-    prefix: &'static str,
+    prefix: Option<&'static str>,
     scopes: Vec<&'static str>,
     expires_at: Option<&'static str>,
 }
@@ -25,7 +30,7 @@ pub(in crate::commands::serve) async fn get_me() -> Json<Principal> {
         principal_type: "service_account",
         email: "local@boxlite.local",
         display_name: "Local development",
-        prefix: "default",
+        prefix: None,
         scopes: vec![
             "box:read",
             "box:write",

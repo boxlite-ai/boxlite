@@ -8,7 +8,8 @@ import { Controller, Get, UseGuards } from '@nestjs/common'
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger'
 import { CombinedAuthGuard } from '../auth/combined-auth.guard'
 import { AuthContext } from '../common/decorators/auth-context.decorator'
-import { AuthContext as AuthCtx, isOrganizationAuthContext } from '../common/interfaces/auth-context.interface'
+import { AuthContext as AuthCtx } from '../common/interfaces/auth-context.interface'
+import { OrganizationService } from '../organization/services/organization.service'
 import { PrincipalDto } from './dto/principal.dto'
 
 /**
@@ -26,9 +27,11 @@ import { PrincipalDto } from './dto/principal.dto'
 @UseGuards(CombinedAuthGuard)
 @ApiBearerAuth()
 export class BoxliteMeController {
+  constructor(private readonly organizationService: OrganizationService) {}
+
   @Get('me')
-  getMe(@AuthContext() ctx: AuthCtx): PrincipalDto {
-    const orgPrefix = isOrganizationAuthContext(ctx) ? ctx.organizationId : 'default'
+  async getMe(@AuthContext() ctx: AuthCtx): Promise<PrincipalDto> {
+    const pathPrefix = await this.resolvePathPrefix(ctx)
 
     const principalType: 'user' | 'service_account' = ctx.apiKey ? 'service_account' : 'user'
 
@@ -37,7 +40,7 @@ export class BoxliteMeController {
       principal_type: principalType,
       email: ctx.email || undefined,
       display_name: undefined,
-      prefix: orgPrefix,
+      path_prefix: pathPrefix,
       // TODO: source scopes from ctx.apiKey?.scopes once the ApiKey entity
       // has a `scopes` column. For now grant the full set used by the OpenAPI
       // spec's documented scope vocabulary.
@@ -55,5 +58,25 @@ export class BoxliteMeController {
       ],
       expires_at: null,
     }
+  }
+
+  /**
+   * Resolve the routing-slot value for the calling credential.
+   *
+   * API keys carry their org binding directly. OIDC tokens carry no
+   * org claim, so we look it up: prefer the user's personal org;
+   * otherwise the first membership; otherwise `null` (no scope yet —
+   * the field stays present in the response envelope with explicit
+   * `null` per the OpenAPI contract).
+   */
+  private async resolvePathPrefix(ctx: AuthCtx): Promise<string | null> {
+    if (ctx.apiKey?.organizationId) {
+      return ctx.apiKey.organizationId
+    }
+    const orgs = await this.organizationService.findByUser(ctx.userId)
+    if (orgs.length === 0) {
+      return null
+    }
+    return (orgs.find((o) => o.personal) ?? orgs[0]).id
   }
 }
