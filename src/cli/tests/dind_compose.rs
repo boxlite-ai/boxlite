@@ -137,8 +137,8 @@ echo "[exit=$RC]"
 
 #[test]
 fn dind_compose_multi_service_network() {
-    if std::env::var("BOXLITE_SKIP_DIND_TEST").as_deref() == Ok("1") {
-        eprintln!("SKIP dind_compose_multi_service_network: BOXLITE_SKIP_DIND_TEST=1");
+    if std::env::var("BOXLITE_SKIP_PRIVILEGED_TEST").as_deref() == Ok("1") {
+        eprintln!("SKIP dind_compose_multi_service_network: BOXLITE_SKIP_PRIVILEGED_TEST=1");
         return;
     }
 

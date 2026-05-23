@@ -6,7 +6,7 @@
 //!
 //! Part of the opt-in `make test:integration:privileged` suite (default
 //! RUN; NOT in the default `make test` matrix). Skip with
-//! `BOXLITE_SKIP_DIND_TEST=1` on hosts without nested virt.
+//! `BOXLITE_SKIP_PRIVILEGED_TEST=1` on hosts without nested virt.
 //!
 //! What this proves end-to-end:
 //!   1. `docker run -d` (detached) actually backgrounds the container
@@ -161,8 +161,8 @@ echo "[exit=0]"
 
 #[test]
 fn dind_container_run_stats_exec_stop_rm() {
-    if std::env::var("BOXLITE_SKIP_DIND_TEST").as_deref() == Ok("1") {
-        eprintln!("SKIP dind_container_run_stats_exec_stop_rm: BOXLITE_SKIP_DIND_TEST=1");
+    if std::env::var("BOXLITE_SKIP_PRIVILEGED_TEST").as_deref() == Ok("1") {
+        eprintln!("SKIP dind_container_run_stats_exec_stop_rm: BOXLITE_SKIP_PRIVILEGED_TEST=1");
         return;
     }
 

@@ -13,7 +13,7 @@
 //! that canonical path and stages it alongside the lean libkrunfw inside the
 //! embedded runtime, so no env var dance is required.
 //!
-//! Ignore-condition: set `BOXLITE_SKIP_DIND_TEST=1` to skip with a
+//! Ignore-condition: set `BOXLITE_SKIP_PRIVILEGED_TEST=1` to skip with a
 //! SKIP marker (useful on hosts that genuinely cannot run dind — e.g.,
 //! nested-virt unavailable or security profile blocks the cgroup2
 //! mounts the box needs). The default is RUN, not SKIP, so anyone who
@@ -99,13 +99,13 @@ echo "[exit=$?]"
 const DOCKERFILE: &str = "FROM alpine:3.19\nRUN echo \"built\" > /built.txt\n";
 
 #[test]
-fn dind_supports_docker_build() {
+fn dind_docker_build_end_to_end() {
     // Opt-out ignore-condition (see module docs): hosts that genuinely
-    // cannot run dind set BOXLITE_SKIP_DIND_TEST=1. Default is RUN —
+    // cannot run dind set BOXLITE_SKIP_PRIVILEGED_TEST=1. Default is RUN —
     // `make test:integration:privileged` does not set this, so a regression
     // in dind support fails the suite.
-    if std::env::var("BOXLITE_SKIP_DIND_TEST").as_deref() == Ok("1") {
-        eprintln!("SKIP dind_supports_docker_build: BOXLITE_SKIP_DIND_TEST=1");
+    if std::env::var("BOXLITE_SKIP_PRIVILEGED_TEST").as_deref() == Ok("1") {
+        eprintln!("SKIP dind_docker_build_end_to_end: BOXLITE_SKIP_PRIVILEGED_TEST=1");
         return;
     }
 

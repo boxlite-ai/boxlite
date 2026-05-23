@@ -23,8 +23,8 @@ use std::time::{Duration, Instant};
 
 #[test]
 fn dind_port_conflict_fails_fast() {
-    if std::env::var("BOXLITE_SKIP_DIND_TEST").as_deref() == Ok("1") {
-        eprintln!("SKIP dind_port_conflict_fails_fast: BOXLITE_SKIP_DIND_TEST=1");
+    if std::env::var("BOXLITE_SKIP_PRIVILEGED_TEST").as_deref() == Ok("1") {
+        eprintln!("SKIP dind_port_conflict_fails_fast: BOXLITE_SKIP_PRIVILEGED_TEST=1");
         return;
     }
 

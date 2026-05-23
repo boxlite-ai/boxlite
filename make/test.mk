@@ -262,13 +262,13 @@ test\:integration\:cli: $(if $(SETUP_DONE),,runtime\:debug)
 # that stage the blob outside the workspace can still set
 # BOXLITE_LIBKRUNFW_PRIVILEGED_PATH as an explicit override.
 #
-# Ignore-condition: set BOXLITE_SKIP_DIND_TEST=1 to make individual dind
-# tests SKIP via their own opt-out (kept for hosts that genuinely can't run
-# dind, e.g. nested-virt unavailable); default is RUN.
+# Ignore-condition: set BOXLITE_SKIP_PRIVILEGED_TEST=1 to make individual
+# privileged tests SKIP via their own opt-out (kept for hosts that
+# genuinely can't run dind, e.g. nested-virt unavailable); default is RUN.
 #
 # FILTER drills into the privileged suite via a name substring. The current
 # privileged suite:
-#   - `dind_supports_docker_build`              (`src/cli/tests/dind_build.rs`)
+#   - `dind_docker_build_end_to_end`            (`src/cli/tests/dind_build.rs`)
 #   - `dind_compose_multi_service_network`      (`src/cli/tests/dind_compose.rs`)
 #   - `dind_port_conflict_fails_fast`           (`src/cli/tests/dind_port_conflict.rs`)
 #   - `dind_agent_pulls_alpine_python_node`     (`src/cli/tests/dind_multi_image_pull.rs`)

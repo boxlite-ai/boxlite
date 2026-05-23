@@ -4,7 +4,7 @@
 //!
 //! Part of the opt-in `make test:integration:privileged` suite (default
 //! RUN; NOT in the default `make test` matrix). Skip with
-//! `BOXLITE_SKIP_DIND_TEST=1` on hosts without nested virt.
+//! `BOXLITE_SKIP_PRIVILEGED_TEST=1` on hosts without nested virt.
 //! Prereq: `target/privileged-kernel/lib64/libkrunfw-privileged.so.5`
 //! (the `test:integration:privileged` target prechecks this blob and
 //! refuses to run without it).
@@ -85,8 +85,8 @@ echo "[exit=$?]"
 
 #[test]
 fn dind_agent_pulls_alpine_python_node() {
-    if std::env::var("BOXLITE_SKIP_DIND_TEST").as_deref() == Ok("1") {
-        eprintln!("SKIP dind_agent_pulls_alpine_python_node: BOXLITE_SKIP_DIND_TEST=1");
+    if std::env::var("BOXLITE_SKIP_PRIVILEGED_TEST").as_deref() == Ok("1") {
+        eprintln!("SKIP dind_agent_pulls_alpine_python_node: BOXLITE_SKIP_PRIVILEGED_TEST=1");
         return;
     }
 

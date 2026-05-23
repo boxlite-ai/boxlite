@@ -4,7 +4,7 @@
 //!
 //! Part of the opt-in `make test:integration:privileged` suite (default
 //! RUN; NOT in the default `make test` matrix). Skip with
-//! `BOXLITE_SKIP_DIND_TEST=1` on hosts without nested virt.
+//! `BOXLITE_SKIP_PRIVILEGED_TEST=1` on hosts without nested virt.
 //!
 //! What this proves end-to-end:
 //!   - In-box dockerd's named-volume driver actually persists writes
@@ -112,8 +112,8 @@ echo "[exit=0]"
 
 #[test]
 fn dind_named_volume_persists_across_containers() {
-    if std::env::var("BOXLITE_SKIP_DIND_TEST").as_deref() == Ok("1") {
-        eprintln!("SKIP dind_named_volume_persists_across_containers: BOXLITE_SKIP_DIND_TEST=1");
+    if std::env::var("BOXLITE_SKIP_PRIVILEGED_TEST").as_deref() == Ok("1") {
+        eprintln!("SKIP dind_named_volume_persists_across_containers: BOXLITE_SKIP_PRIVILEGED_TEST=1");
         return;
     }
 
