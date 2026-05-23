@@ -64,7 +64,11 @@ cat "$LEAN_CONFIG" "$OVERLAY" > "$MERGED_CONFIG"
 # reads $KCONFIG_NAME) picks up the merged one. Restore on exit so the
 # normal lean build path isn't permanently changed.
 LEAN_BACKUP="$(mktemp)"
-trap 'rm -f "$MERGED_CONFIG" "$LEAN_BACKUP"; cp -f "$LEAN_BACKUP" "$LEAN_CONFIG" 2>/dev/null || true' EXIT
+# Restore BEFORE removing the backup — the previous order rm'd the backup
+# first, then `cp -f $LEAN_BACKUP $LEAN_CONFIG || true` silently no-op'd
+# on the missing source, leaving the submodule's `config-libkrunfw_*`
+# permanently polluted with the overlay's +116 lines after every run.
+trap 'cp -f "$LEAN_BACKUP" "$LEAN_CONFIG" 2>/dev/null || true; rm -f "$MERGED_CONFIG" "$LEAN_BACKUP"' EXIT
 cp "$LEAN_CONFIG" "$LEAN_BACKUP"
 cp "$MERGED_CONFIG" "$LEAN_CONFIG"
 
