@@ -14,6 +14,8 @@ import { AuthContext } from '../common/interfaces/auth-context.interface'
 import { Request } from 'express'
 import { CustomHeaders } from '../common/constants/header.constants'
 import { TypedConfigService } from '../config/typed-config.service'
+import { isInternalAdmin } from '../common/utils/internal-admin'
+import { SystemRole } from '../user/enums/system-role.enum'
 
 interface JwtStrategyConfig {
   jwksUri: string
@@ -85,6 +87,13 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         email: email || '',
       })
       this.logger.debug(`Updated email address for existing user with ID: ${userId}`)
+    }
+
+    // POL-14: promote internal-admin allowlisted emails to SystemRole.ADMIN on login.
+    const adminEmails = this.configService.get('internalAdminEmails') ?? []
+    if (isInternalAdmin(user.email, adminEmails) && user.role !== SystemRole.ADMIN) {
+      user = await this.userService.update(user.id, { role: SystemRole.ADMIN })
+      this.logger.debug(`Promoted ${user.email} to SystemRole.ADMIN via internal admin allowlist`)
     }
 
     const organizationId = request.get(CustomHeaders.ORGANIZATION_ID.name)
