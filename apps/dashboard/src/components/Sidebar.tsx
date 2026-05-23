@@ -298,25 +298,23 @@ export function Sidebar({ isBannerVisible, billingEnabled, version: _version }: 
 
   const commandItems = useMemo(
     () =>
-      primaryItems
-        .concat(secondaryGroups.flatMap((group) => group.items))
-        .concat(
-          {
-            path: RoutePath.ACCOUNT_SETTINGS,
-            label: 'Account Settings',
-            icon: <Settings size={16} strokeWidth={1.5} />,
-          },
-          {
-            path: RoutePath.USER_INVITATIONS,
-            label: 'Invitations',
-            icon: <Mail size={16} strokeWidth={1.5} />,
-          },
-          {
-            path: RoutePath.ONBOARDING,
-            label: 'Onboarding',
-            icon: <ListChecks size={16} strokeWidth={1.5} />,
-          },
-        ),
+      primaryItems.concat(secondaryGroups.flatMap((group) => group.items)).concat(
+        {
+          path: RoutePath.ACCOUNT_SETTINGS,
+          label: 'Account Settings',
+          icon: <Settings size={16} strokeWidth={1.5} />,
+        },
+        {
+          path: RoutePath.USER_INVITATIONS,
+          label: 'Invitations',
+          icon: <Mail size={16} strokeWidth={1.5} />,
+        },
+        {
+          path: RoutePath.ONBOARDING,
+          label: 'Onboarding',
+          icon: <ListChecks size={16} strokeWidth={1.5} />,
+        },
+      ),
     [primaryItems, secondaryGroups],
   )
 
@@ -520,7 +518,10 @@ export function Sidebar({ isBannerVisible, billingEnabled, version: _version }: 
                   Discord
                 </a>
               </DropdownMenuItem>
-              <DropdownMenuItem className="cursor-pointer" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>
+              <DropdownMenuItem
+                className="cursor-pointer"
+                onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+              >
                 {theme === 'dark' ? <SunIcon className="size-4" /> : <MoonIcon className="size-4" />}
                 {theme === 'dark' ? 'Light Mode' : 'Dark Mode'}
               </DropdownMenuItem>
@@ -541,7 +542,10 @@ export function Sidebar({ isBannerVisible, billingEnabled, version: _version }: 
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="min-w-[14rem]">
-                <DropdownMenuItem className="cursor-pointer" onClick={() => openCommandPalette('dashboard_mobile_menu')}>
+                <DropdownMenuItem
+                  className="cursor-pointer"
+                  onClick={() => openCommandPalette('dashboard_mobile_menu')}
+                >
                   <SearchIcon className="size-4" />
                   Search
                 </DropdownMenuItem>

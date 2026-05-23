@@ -1,10 +1,15 @@
 go 1.25.4
 
 use (
-	./runner
-	./daemon
-	./common-go
-	./api-client-go
-	./libs/computer-use
 	../sdks/go
+	./api-client-go
+	./cli
+	./common-go
+	./daemon
+	./libs/computer-use
+	./otel-collector/exporter
+	./proxy
+	./runner
+	./snapshot-manager
+	./ssh-gateway
 )
