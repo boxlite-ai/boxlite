@@ -36,22 +36,22 @@ describe("ApiKeyCredential", () => {
 });
 
 describe("BoxliteRestOptions", () => {
-  test("carries url, credential, and prefix", () => {
+  test("carries url, credential, and pathPrefix", () => {
     const cred = new ApiKeyCredential("blk_live_x");
     const opts = new BoxliteRestOptions({
       url: "https://api.example.com",
       credential: cred,
-      prefix: "v2",
+      pathPrefix: "acme",
     });
     expect(opts.url).toBe("https://api.example.com");
     expect(opts.credential).toBe(cred);
-    expect(opts.prefix).toBe("v2");
+    expect(opts.pathPrefix).toBe("acme");
   });
 
-  test("credential and prefix are optional (unauthenticated)", () => {
+  test("credential and pathPrefix are optional (unauthenticated, empty prefix)", () => {
     const opts = new BoxliteRestOptions({ url: "http://localhost:8100" });
     expect(opts.url).toBe("http://localhost:8100");
     expect(opts.credential).toBeUndefined();
-    expect(opts.prefix).toBeUndefined();
+    expect(opts.pathPrefix).toBeUndefined();
   });
 });

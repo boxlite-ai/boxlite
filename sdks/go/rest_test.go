@@ -8,8 +8,8 @@ import (
 // REST runtime construction performs no network I/O (the HTTP
 // connection is lazy), so these are unit tests: they cross the CGO
 // boundary into the opaque credential + options FFI
-// (boxlite_rest_options_new / _set_credential / _set_prefix /
-// boxlite_rest_runtime_new_with_options) and verify the runtime is
+// (boxlite_rest_options_new / _set_credential / _set_path_prefix
+// / boxlite_rest_runtime_new_with_options) and verify the runtime is
 // constructed and freed.
 
 func TestNewRestURLOnly(t *testing.T) {
@@ -25,17 +25,17 @@ func TestNewRestURLOnly(t *testing.T) {
 	}
 }
 
-func TestNewRestWithCredentialAndPrefix(t *testing.T) {
+func TestNewRestWithCredentialAndPathPrefix(t *testing.T) {
 	rt, err := NewRest(BoxliteRestOptions{
 		URL:        "https://api.example.com",
 		Credential: NewApiKeyCredential("blk_live_example"),
-		Prefix:     "v1",
+		PathPrefix: "acme",
 	})
 	if err != nil {
-		t.Fatalf("NewRest with credential+prefix returned error: %v", err)
+		t.Fatalf("NewRest with credential+path_prefix returned error: %v", err)
 	}
 	if rt == nil {
-		t.Fatal("NewRest with credential+prefix returned nil runtime")
+		t.Fatal("NewRest with credential+path_prefix returned nil runtime")
 	}
 	if err := rt.Close(); err != nil {
 		t.Fatalf("Close() returned error: %v", err)

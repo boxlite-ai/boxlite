@@ -122,20 +122,41 @@ boxlite images
 
 ## Connecting to a remote server
 
-To target a remote BoxLite REST server instead of the local runtime, sign in with `boxlite auth login`. Credential precedence is **env vars > stored file > unauthenticated** (local runtime). The `--url` flag overrides the URL specifically without affecting credentials.
+To target a remote BoxLite REST server instead of the local runtime, sign in
+with `boxlite auth login`. Three login methods are supported:
+
+| Method      | When to use                                            | Token type           |
+|-------------|--------------------------------------------------------|----------------------|
+| `api-key`   | CI / automation, or a server-minted long-lived key     | Opaque `blk_…` key   |
+| `browser`   | Local developer machine with a desktop browser         | OIDC access token    |
+| `device`    | SSH session / headless container with no browser       | OIDC access token    |
+
+Credential precedence is **`BOXLITE_API_KEY` env > stored file > unauthenticated** (local runtime).
+The `--url` flag overrides the URL specifically without affecting credentials.
+Multiple profiles coexist in one file via `--profile <name>` (or `BOXLITE_PROFILE` env var).
 
 ```bash
-# Interactive
-boxlite auth login
+# Browser OIDC against a control plane (default for `auth login` on a TTY).
+# Requires the IdP admin to have registered `http://127.0.0.1:5555/callback`
+# in the SPA application's Allowed Callback URLs — see apps/infra/README.md
+# "OIDC provider setup" for the one-time setup.
+boxlite --profile cloud auth login --url https://<your-control-plane>/api
 
-# CI / scripted (API key from stdin)
-echo "$KEY" | boxlite auth login --api-key-stdin --url https://<your-server>
+# Same target, headless (SSH / no browser): prints a code + URL to type into
+# any browser on another device.
+boxlite --profile cloud auth login --url https://<your-control-plane>/api --no-browser
 
-# CI via env vars only
+# Local boxlite serve with a static API key (unchanged from the original behavior).
+boxlite --profile local auth login --url http://localhost:8100  # interactive paste
+echo "$KEY" | boxlite --profile local auth login --url http://localhost:8100 --api-key-stdin
+
+# CI via env vars only — no `auth login` call needed.
 BOXLITE_API_KEY=$KEY BOXLITE_REST_URL=https://<your-server> boxlite list
 ```
 
-Credentials are stored at `~/.boxlite/credentials.toml` (perms `0600`).
+Credentials are stored at `~/.boxlite/credentials.toml` (perms `0600`). OIDC
+sessions auto-refresh on use when within 5 minutes of expiry; if the refresh
+token is rejected (`invalid_grant`) the CLI prompts you to re-run `auth login`.
 
 ## Commands Reference
 
@@ -153,30 +174,70 @@ Available for all commands:
 | `--home PATH` | BoxLite home directory (default: `~/.boxlite`). Overridden by `BOXLITE_HOME` |
 | `--registry REGISTRY` | Image registry (repeatable; prepended to config) |
 | `--config PATH` | JSON config file path (e.g. for `image_registries`) |
+| `--url URL` | Connect to a remote BoxLite REST server instead of the local runtime. Env: `BOXLITE_REST_URL`. |
+| `--profile NAME` | Named credential profile in `~/.boxlite/credentials.toml`. Lets one machine hold separate logins (e.g. `local` for `boxlite serve`, `cloud` for a remote control plane). Default `default`. Env: `BOXLITE_PROFILE`. |
+| `--path-prefix VALUE` | Routing-slot value for the URL path (`/v1/<prefix>/boxes/...`). Opaque — the server decides what it means (organization, workspace, catalog, …). Captured automatically at `auth login` time from `Principal.path_prefix`. This flag overrides the stored profile's value for credentials with scope over multiple routing values. Unset / empty → URL skips the segment (`/v1/boxes/...`), the canonical shape for single-tenant deployments like `boxlite serve`. Env: `BOXLITE_REST_PATH_PREFIX`. |
 
 ### `boxlite auth login`
 
-Log in to a BoxLite REST server using a dashboard-issued opaque API key.
-Long-lived and org-scoped — good for CI, server-side automation, and SDK
-integrations. Credentials are stored at `~/.boxlite/credentials.toml`
-(perms `0600`).
+Log in to a BoxLite REST server. Supports three flows that all save to
+`~/.boxlite/credentials.toml` (perms `0600`):
+
+- **API key** — paste or stdin. Long-lived, org-scoped. Good for CI, SDK
+  integrations, `boxlite serve` setups.
+- **Browser OIDC** — Authorization Code + PKCE against the IdP that
+  `apps/api` is configured for (Auth0, Dex, Okta, etc.). Opens the system
+  browser; the CLI listens on `127.0.0.1:5555` for the callback. Mints an
+  access token + refresh token; the latter is used to silently refresh
+  within 5 minutes of expiry.
+- **Device code OIDC** — RFC 8628. Headless / SSH-friendly: prints a short
+  code + URL to enter on any browser on another device. Same token type
+  and refresh behavior as the browser flow.
+
+When `--method` is unset, the CLI infers it: piped stdin → `api-key` (CI-safe),
+TTY → interactive picker, `$SSH_CONNECTION` set → silent fallback to `device`.
 
 **Usage:** `boxlite auth login [OPTIONS]`
 
 | Option | Description |
 |--------|-------------|
-| `--url URL` | Server URL (default: `http://localhost:8100`, matching `boxlite serve`) |
-| `--api-key-stdin` | Read the API key from stdin (one line). The flag takes no value, so the secret never appears on argv |
+| `--url URL` | Server URL (default: `http://localhost:8100`, matching `boxlite serve`). For cloud control planes include the `/api` prefix, e.g. `https://api.example.com/api`. |
+| `--method <api-key\|browser\|device>` | Explicit flow choice. Overrides inference. |
+| `--api-key-stdin` | Read the API key from stdin (one line). The flag takes no value, so the secret never appears on argv. Implies `--method api-key`. |
+| `--no-browser` | Skip the browser; use device code instead. Implies `--method device`. |
+| `--callback-port <PORT>` | Local port for the browser-flow callback (default `5555`). **Must match an entry in the IdP's allow-list byte-for-byte** — a different port produces "Callback URL mismatch" exactly like no entry at all. |
+| `--issuer URL` | OIDC issuer URL. Overrides what `GET /api/config` returns. Useful for self-hosted Dex tenants where the discovery is wrong. |
+| `--client-id ID` | OIDC client_id. Overrides `/api/config`. |
+| `--audience VAL` | OIDC audience. Auth0 requires it; Dex tolerates `None`. |
+
+Global flags also apply — most importantly `--profile NAME` to log in to a
+specific credential profile (default `default`).
 
 **Examples:**
 
 ```bash
-# Interactive — prompts for the API key with hidden input
-boxlite auth login
+# Cloud control plane via browser (most common; opens system browser).
+boxlite --profile cloud auth login --url https://<your-control-plane>/api
 
-# API key from stdin (CI-friendly; nothing on argv)
-echo "$KEY" | boxlite auth login --api-key-stdin --url https://<your-server>
+# Same target, headless: prints a code + URL.
+boxlite --profile cloud auth login --url https://<your-control-plane>/api --no-browser
+
+# Local boxlite serve with paste-API-key (interactive).
+boxlite --profile local auth login --url http://localhost:8100
+
+# CI: API key from stdin (nothing on argv).
+echo "$KEY" | boxlite --profile local auth login --url http://localhost:8100 --api-key-stdin
 ```
+
+**Deployment-side setup (one-time, by the IdP admin):**
+
+Browser and device flows fail with "Callback URL mismatch" until the IdP
+knows about the CLI's loopback URL. For Auth0 see
+`apps/infra/README.md` "OIDC provider setup" — add
+`http://127.0.0.1:5555/callback` to the SPA Application's
+**Allowed Callback URLs**. For Dex see `apps/dex/config.yaml` — the same
+URL goes under the `boxlite` static client's `redirectURIs`, plus
+`oauth2.deviceFlow: {}` at the top level for device flow.
 
 ### `boxlite auth logout`
 
@@ -190,16 +251,47 @@ Remove stored credentials at `~/.boxlite/credentials.toml`. Prompts for confirma
 
 ### `boxlite auth status`
 
-Print the current authentication state: the logged-in URL and the source
-(stored file vs env var). The secret material is never printed.
+Print the current authentication state: the logged-in URL, the source
+(stored file vs env var), the credential type (API key vs OIDC), and for
+OIDC sessions the access token's expiry. Offline — no network calls,
+no secret material printed.
 
-**Usage:** `boxlite auth status`
+**Usage:** `boxlite auth status [--profile NAME]`
+
+**Example output (API key):**
+
+```
+Logged in to:    http://localhost:8100
+Credential:      API key (from ~/.boxlite/credentials.toml [local])
+```
+
+**Example output (OIDC session):**
+
+```
+Logged in to:    https://api.boxlite.ai/api
+Credential:      OIDC bearer token (from ~/.boxlite/credentials.toml [cloud])
+Expires:         2026-05-21T15:42:00+00:00
+```
+
+### `boxlite auth whoami`
+
+Confirm the active credential's identity by making one authenticated
+request to `GET /v1/me`. Unlike `auth status` (offline, only reports where
+the credential came from), `whoami` shows the server-resolved principal,
+organization, and scopes. Triggers a silent OIDC refresh if the access
+token is within 5 minutes of expiry.
+
+**Usage:** `boxlite auth whoami [--profile NAME]`
 
 **Example output:**
 
 ```
-Logged in to:    http://localhost:8100
-Credential:      API key (from ~/.boxlite/credentials.toml)
+Logged in as:    dev@acme.test
+Name:            Dev McAcme
+Principal:       auth0|abc123 (user)
+Organization:    acme
+Server:          https://api.boxlite.ai/api
+Scopes:          box:read, box:write, box:exec, image:read, snapshot:read
 ```
 
 ### `boxlite run`

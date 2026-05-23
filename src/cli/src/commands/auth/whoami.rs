@@ -6,23 +6,23 @@
 //! server-resolved identity, organization, and scopes.
 
 use anyhow::{Context, Result, anyhow};
-use boxlite::{BoxliteError, BoxliteRuntime};
+use boxlite::{BoxliteError, BoxliteRestOptions, BoxliteRuntime};
+use secrecy::SecretString;
 
+use crate::commands::auth::oidc::discovery;
 use crate::credentials::{self, Profile};
 use crate::defaults::LOCAL_SERVE_URL;
 
 const API_KEY_ENV: &str = "BOXLITE_API_KEY";
 const URL_ENV: &str = "BOXLITE_REST_URL";
 
-pub async fn run() -> Result<()> {
-    let Some(profile) = resolve_profile()? else {
-        println!("Not logged in.");
+pub async fn run(profile_name: &str) -> Result<()> {
+    let Some(opts) = resolve_options(profile_name).await? else {
+        println!("Not logged in (profile `{}`).", profile_name);
         return Ok(());
     };
-    // Keep the URL for messages — it is not secret (the api_key is, and we
-    // never print that).
-    let url = profile.url.clone();
-    let runtime = BoxliteRuntime::rest(credentials::into_rest_options(profile))
+    let url = opts.url.clone();
+    let runtime = BoxliteRuntime::rest(opts)
         .map_err(|e| anyhow!("failed to construct REST runtime: {}", e))?;
     let auth = runtime
         .auth()
@@ -36,7 +36,9 @@ pub async fn run() -> Result<()> {
                 println!("Name:            {}", name);
             }
             println!("Principal:       {} ({})", p.sub, p.principal_type);
-            println!("Organization:    {}", p.prefix);
+            if let Some(path_prefix) = p.path_prefix.as_deref() {
+                println!("Path prefix:     {}", path_prefix);
+            }
             println!("Server:          {}", url);
             if !p.scopes.is_empty() {
                 println!("Scopes:          {}", p.scopes.join(", "));
@@ -61,18 +63,28 @@ pub async fn run() -> Result<()> {
     }
 }
 
-/// Active credential: `$BOXLITE_API_KEY` (+ `$BOXLITE_REST_URL`) wins over the
-/// stored profile, matching the runtime precedence used elsewhere
-/// (`GlobalFlags::create_runtime`, `auth status`).
-fn resolve_profile() -> Result<Option<Profile>> {
+/// Active credential, ready to attach to a REST runtime.
+///
+/// `$BOXLITE_API_KEY` (+ `$BOXLITE_REST_URL`) wins over the stored profile,
+/// matching the runtime precedence used elsewhere
+/// (`GlobalFlags::create_runtime`, `auth status`). The env path returns a
+/// fresh `BoxliteRestOptions` directly; the file path goes through
+/// [`credentials::load_active`], which is also where OIDC tokens get
+/// refreshed when they are about to expire.
+async fn resolve_options(profile_name: &str) -> Result<Option<BoxliteRestOptions>> {
     if let Ok(api_key) = std::env::var(API_KEY_ENV)
         && !api_key.is_empty()
     {
         let url = std::env::var(URL_ENV).unwrap_or_else(|_| LOCAL_SERVE_URL.to_string());
-        return Ok(Some(Profile {
+        let profile = Profile {
             url,
-            api_key: Some(api_key),
-        }));
+            api_key: Some(SecretString::from(api_key)),
+            ..Profile::default()
+        };
+        return Ok(Some(credentials::into_rest_options(profile)));
     }
-    credentials::load().context("loading stored credentials")
+    let http = discovery::http_client()?;
+    credentials::load_active(profile_name, &http)
+        .await
+        .context("loading stored credentials")
 }

@@ -21,8 +21,18 @@ export class PrincipalDto {
   /** Optional human-readable label. */
   display_name?: string
 
-  /** Tenant/workspace prefix the credential is bound to. */
-  prefix: string
+  /**
+   * Routing-slot value the client substitutes into the `{prefix}`
+   * URL segment on box-scoped requests.
+   *
+   * `null` when the credential has no scope assigned yet (mid-
+   * provisioning service accounts, first OIDC login before org
+   * assignment). The field is always present in the response
+   * envelope per the OpenAPI contract (`nullable: true`); spec-
+   * strict clients (Rust, Java, Go generated code) treat a missing
+   * key vs. an explicit `null` as different shapes.
+   */
+  path_prefix: string | null
 
   /** Granted scope strings (`box:read`, `box:write`, etc.). */
   scopes: string[]

@@ -496,17 +496,25 @@ impl ApiKeyCredential {
 pub struct JsBoxliteRestOptions {
     url: String,
     credential: Option<ApiKeyCredential>,
-    prefix: Option<String>,
+    /// Routing-slot value substituted into the `{prefix}` URL
+    /// segment. `None` or empty → URL skips the segment — the
+    /// single-tenant deployment shape. Opaque to the client,
+    /// deployment decides what it means.
+    path_prefix: Option<String>,
 }
 
 #[napi]
 impl JsBoxliteRestOptions {
     #[napi(constructor)]
-    pub fn new(url: String, credential: Option<&ApiKeyCredential>, prefix: Option<String>) -> Self {
+    pub fn new(
+        url: String,
+        credential: Option<&ApiKeyCredential>,
+        path_prefix: Option<String>,
+    ) -> Self {
         Self {
             url,
             credential: credential.cloned(),
-            prefix,
+            path_prefix,
         }
     }
 }
@@ -520,8 +528,8 @@ impl From<&JsBoxliteRestOptions> for boxlite::BoxliteRestOptions {
         if let Some(cred) = &js.credential {
             opts = opts.with_api_key(cred.core_key().to_string());
         }
-        if let Some(prefix) = &js.prefix {
-            opts = opts.with_prefix(prefix.clone());
+        if let Some(path_prefix) = &js.path_prefix {
+            opts = opts.with_path_prefix(path_prefix.clone());
         }
         opts
     }
@@ -661,10 +669,10 @@ mod tests {
         let with_auth = boxlite::BoxliteRestOptions::from(&JsBoxliteRestOptions::new(
             "https://api.example.com".into(),
             Some(&cred),
-            Some("v2".into()),
+            Some("acme".into()),
         ));
         assert_eq!(with_auth.url, "https://api.example.com");
-        assert_eq!(with_auth.prefix.as_deref(), Some("v2"));
+        assert_eq!(with_auth.path_prefix.as_deref(), Some("acme"));
         assert!(with_auth.credential.is_some());
 
         let unauthenticated = boxlite::BoxliteRestOptions::from(&JsBoxliteRestOptions::new(
@@ -673,7 +681,7 @@ mod tests {
             None,
         ));
         assert_eq!(unauthenticated.url, "http://localhost:8100");
-        assert!(unauthenticated.prefix.is_none());
+        assert!(unauthenticated.path_prefix.is_none());
         assert!(unauthenticated.credential.is_none());
     }
 

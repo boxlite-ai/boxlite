@@ -14,15 +14,23 @@ pub struct LogoutArgs {
     pub yes: bool,
 }
 
-pub async fn run(args: LogoutArgs) -> Result<()> {
+pub async fn run(args: LogoutArgs, profile_name: &str) -> Result<()> {
     let path = credentials::path().context("resolving credentials path")?;
-    if !path.exists() {
-        println!("Not logged in.");
+    let exists = credentials::load_named(profile_name)
+        .ok()
+        .flatten()
+        .is_some();
+    if !exists {
+        println!("Not logged in (profile `{}`).", profile_name);
         return Ok(());
     }
 
     if !args.yes {
-        print!("Remove stored credentials at {}? [y/N]: ", path.display());
+        print!(
+            "Remove stored credentials for profile `{}` at {}? [y/N]: ",
+            profile_name,
+            path.display()
+        );
         std::io::stdout().flush().ok();
         let mut buf = String::new();
         std::io::stdin()
@@ -35,11 +43,11 @@ pub async fn run(args: LogoutArgs) -> Result<()> {
         }
     }
 
-    let removed = credentials::delete()?;
+    let removed = credentials::delete_named(profile_name)?;
     if removed {
-        println!("Logged out");
+        println!("Logged out (profile `{}`)", profile_name);
     } else {
-        println!("Not logged in");
+        println!("Not logged in (profile `{}`)", profile_name);
     }
     Ok(())
 }

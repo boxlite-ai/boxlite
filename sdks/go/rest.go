@@ -25,8 +25,13 @@ type BoxliteRestOptions struct {
 	// only *ApiKeyCredential is supported.
 	Credential Credential
 
-	// Prefix overrides the REST API path prefix (server default: "v1").
-	Prefix string
+	// PathPrefix is the routing-slot value substituted into the
+	// {prefix} URL segment on box-scoped requests. Opaque — the
+	// server tells the client what to use here via
+	// Principal.path_prefix from GET /v1/me. Empty → URL skips the
+	// segment entirely (/v1/boxes/...) — the single-tenant
+	// deployment shape.
+	PathPrefix string
 }
 
 // NewRest creates a runtime that connects to a remote BoxLite REST
@@ -74,10 +79,10 @@ func NewRest(opts BoxliteRestOptions) (*Runtime, error) {
 		C.boxlite_rest_options_set_credential(cOpts, cCred)
 	}
 
-	if opts.Prefix != "" {
-		cPrefix := toCString(opts.Prefix)
-		defer C.free(unsafe.Pointer(cPrefix))
-		C.boxlite_rest_options_set_prefix(cOpts, cPrefix)
+	if opts.PathPrefix != "" {
+		cPathPrefix := toCString(opts.PathPrefix)
+		defer C.free(unsafe.Pointer(cPathPrefix))
+		C.boxlite_rest_options_set_path_prefix(cOpts, cPathPrefix)
 	}
 
 	var handle *C.CBoxliteRuntime

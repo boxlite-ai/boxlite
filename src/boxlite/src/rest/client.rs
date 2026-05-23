@@ -13,7 +13,7 @@ use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use super::credential::{AccessToken, Credential};
 use super::error::{map_http_error, map_http_status};
 use super::options::BoxliteRestOptions;
-use super::types::{ErrorResponse, SandboxConfigResponse};
+use super::types::{ErrorResponse, ServerConfig};
 use crate::runtime::auth::Principal;
 
 /// Re-request a token once it is within this leeway of `expires_at`.
@@ -27,14 +27,19 @@ const REFRESH_LEEWAY: Duration = Duration::from_secs(60);
 pub(crate) struct ApiClient {
     http: Client,
     base_url: String,
-    prefix: String,
+    /// Routing-slot value substituted into the `{prefix}` URL segment
+    /// on box-scoped requests. `None` or empty → URL skips the segment
+    /// entirely (single-tenant / empty-prefix deployment shape).
+    /// Captured at construction from `BoxliteRestOptions::path_prefix`;
+    /// opaque to the client.
+    path_prefix: Option<String>,
     /// Bearer credential. `None` = unauthenticated.
     credential: Option<Arc<dyn Credential>>,
     /// Last token fetched, cached until near expiry. Generic over any
     /// `Credential` impl — API keys (`expires_at == None`) are fetched
     /// once and cached forever.
     cached: Arc<RwLock<Option<AccessToken>>>,
-    config_cache: Arc<RwLock<Option<SandboxConfigResponse>>>,
+    config_cache: Arc<RwLock<Option<ServerConfig>>>,
 }
 
 impl ApiClient {
@@ -45,27 +50,37 @@ impl ApiClient {
             .map_err(|e| BoxliteError::Config(format!("failed to create HTTP client: {}", e)))?;
 
         let base_url = config.url.trim_end_matches('/').to_string();
-        let prefix = config.effective_prefix().to_string();
+        let path_prefix = config.path_prefix.clone();
 
         Ok(Self {
             http,
             base_url,
-            prefix,
+            path_prefix,
             credential: config.credential.clone(),
             cached: Arc::new(RwLock::new(None)),
             config_cache: Arc::new(RwLock::new(None)),
         })
     }
 
-    /// Build the full URL for a path under the versioned prefix.
-    /// e.g., "/sandboxes" → "https://api.example.com/v1/default/sandboxes"
+    /// Build the full URL for a box-scoped path.
+    ///
+    /// With a non-empty `prefix`, produces `{base}/v1/{prefix}{path}`
+    /// (e.g. `https://api.example.com/v1/acme/boxes`). With an unset
+    /// or empty `prefix`, the segment is dropped entirely
+    /// (`https://api.example.com/v1/boxes`) — the single-tenant
+    /// `boxlite serve` shape. Multi-segment prefixes like
+    /// `us-east/team-42` are substituted verbatim.
     fn url(&self, path: &str) -> String {
-        format!("{}/{}/default{}", self.base_url, self.prefix, path)
+        match self.path_prefix.as_deref().filter(|s| !s.is_empty()) {
+            Some(p) => format!("{}/v1/{}{}", self.base_url, p, path),
+            None => format!("{}/v1{}", self.base_url, path),
+        }
     }
 
-    /// Build URL without the tenant prefix (for auth endpoints).
+    /// Build URL without the organization segment (for identity / config
+    /// endpoints — `/v1/me`, `/v1/config`).
     fn url_root(&self, path: &str) -> String {
-        format!("{}/{}{}", self.base_url, self.prefix, path)
+        format!("{}/v1{}", self.base_url, path)
     }
 
     /// Return a usable bearer, re-requesting from the credential when the
@@ -94,7 +109,11 @@ impl ApiClient {
         Ok(Some(bearer))
     }
 
-    /// Add auth header to a request builder.
+    /// Add the bearer-auth header to a request builder.
+    ///
+    /// Authentication is the *only* thing this client sends as a
+    /// per-request header. The routing-slot value is carried in the
+    /// URL path (`/v1/<prefix>/...`) per `openapi/box.openapi.yaml`.
     async fn authorize(&self, builder: RequestBuilder) -> BoxliteResult<RequestBuilder> {
         match self.current_bearer().await? {
             Some(bearer) => Ok(builder.bearer_auth(bearer)),
@@ -103,6 +122,13 @@ impl ApiClient {
     }
 
     /// Send a request and parse a JSON response.
+    ///
+    /// On parse failure, the response body is included (truncated) in the
+    /// error so the caller can see WHICH field mismatched — `reqwest`'s
+    /// default error is just "error decoding response body", which is
+    /// useless when the schema drifts between client and server. The body
+    /// is bounded to 4 KiB so a runaway HTML error page can't blow up
+    /// terminal output.
     async fn send_json<T: DeserializeOwned>(&self, builder: RequestBuilder) -> BoxliteResult<T> {
         let builder = self.authorize(builder).await?;
         let resp = builder
@@ -111,13 +137,34 @@ impl ApiClient {
             .map_err(|e| BoxliteError::Internal(format!("HTTP request failed: {}", e)))?;
 
         let status = resp.status();
-        if status.is_success() {
-            resp.json::<T>()
-                .await
-                .map_err(|e| BoxliteError::Internal(format!("failed to parse response: {}", e)))
-        } else {
-            self.handle_error(status, resp).await
+        if !status.is_success() {
+            return self.handle_error(status, resp).await;
         }
+        // Read the body as bytes once, then parse; this is what lets us
+        // include the body in a parse-failure error without re-issuing the
+        // request.
+        let bytes = resp
+            .bytes()
+            .await
+            .map_err(|e| BoxliteError::Internal(format!("reading response body: {}", e)))?;
+        serde_json::from_slice::<T>(&bytes).map_err(|e| {
+            let preview = String::from_utf8_lossy(&bytes);
+            let preview = if preview.len() > 4096 {
+                format!(
+                    "{}… (truncated, {} bytes total)",
+                    &preview[..4096],
+                    bytes.len()
+                )
+            } else {
+                preview.into_owned()
+            };
+            BoxliteError::Internal(format!(
+                "failed to parse response: {} \n--- response body ({} bytes) ---\n{}\n--- end ---",
+                e,
+                bytes.len(),
+                preview
+            ))
+        })
     }
 
     /// Send a request and expect no response body (204).
@@ -293,7 +340,7 @@ impl ApiClient {
         self.authorize(builder).await
     }
 
-    pub async fn get_config(&self) -> BoxliteResult<SandboxConfigResponse> {
+    pub async fn get_config(&self) -> BoxliteResult<ServerConfig> {
         {
             let cache = self.config_cache.read().await;
             if let Some(config) = cache.as_ref() {
@@ -301,7 +348,7 @@ impl ApiClient {
             }
         }
 
-        let config: SandboxConfigResponse = self.get_root("/config").await?;
+        let config: ServerConfig = self.get_root("/config").await?;
         let mut cache = self.config_cache.write().await;
         *cache = Some(config.clone());
         Ok(config)
@@ -511,5 +558,83 @@ mod tests {
     fn test_ensure_capability_missing() {
         let err = ensure_capability("snapshots", None).unwrap_err();
         assert!(matches!(err, BoxliteError::Unsupported(_)));
+    }
+
+    // ========================================================================
+    // URL shape — vendor-agnostic routing slot.
+    //
+    // Locks in the three shapes the OpenAPI contract supports for the
+    // `{prefix}` slot: single-segment, empty (no slot), and
+    // multi-segment-with-slashes. The single-segment case is what
+    // boxlite cloud uses (org UUID); the empty case is what
+    // `boxlite serve` and single-tenant deployments use; the multi-
+    // segment case unlocks future region+team / workspace shapes per
+    // the spec note in `openapi/box.openapi.yaml`.
+    // ========================================================================
+
+    fn unauthenticated_client(opts: BoxliteRestOptions) -> ApiClient {
+        ApiClient::new(&opts).expect("client")
+    }
+
+    #[test]
+    fn url_substitutes_path_prefix_when_set() {
+        let opts = BoxliteRestOptions::new("https://api.example.com").with_path_prefix("acme");
+        let client = unauthenticated_client(opts);
+        assert_eq!(
+            client.url("/boxes"),
+            "https://api.example.com/v1/acme/boxes",
+            "non-empty prefix must round-trip verbatim into the URL"
+        );
+    }
+
+    #[test]
+    fn url_skips_segment_when_path_prefix_unset() {
+        let opts = BoxliteRestOptions::new("https://api.example.com");
+        let client = unauthenticated_client(opts);
+        assert_eq!(
+            client.url("/boxes"),
+            "https://api.example.com/v1/boxes",
+            "unset prefix must drop the segment — empty-prefix is the canonical \
+             single-tenant deployment shape"
+        );
+    }
+
+    #[test]
+    fn url_skips_segment_when_path_prefix_empty() {
+        let opts = BoxliteRestOptions::new("https://api.example.com").with_path_prefix("");
+        let client = unauthenticated_client(opts);
+        assert_eq!(
+            client.url("/boxes"),
+            "https://api.example.com/v1/boxes",
+            "explicit empty-string prefix is wire-equivalent to unset"
+        );
+    }
+
+    #[test]
+    fn url_passes_multi_segment_path_prefix_verbatim() {
+        // Multi-segment prefix per spec — internal `/` characters are
+        // preserved (allowReserved: true on the path parameter). Unlocks
+        // region+team / catalog routing for vendors that need it.
+        let opts =
+            BoxliteRestOptions::new("https://api.example.com").with_path_prefix("us-east/team-42");
+        let client = unauthenticated_client(opts);
+        assert_eq!(
+            client.url("/boxes"),
+            "https://api.example.com/v1/us-east/team-42/boxes",
+            "multi-segment prefix must pass slashes through verbatim"
+        );
+    }
+
+    #[test]
+    fn url_root_omits_path_prefix_segment() {
+        // `/v1/me`, `/v1/config` are root identity/discovery endpoints
+        // and never include the prefix segment, per spec.
+        let opts = BoxliteRestOptions::new("https://api.example.com").with_path_prefix("acme");
+        let client = unauthenticated_client(opts);
+        assert_eq!(
+            client.url_root("/me"),
+            "https://api.example.com/v1/me",
+            "url_root must skip the prefix segment regardless of its value"
+        );
     }
 }

@@ -33,14 +33,16 @@ pub(crate) struct ErrorModel {
 // Configuration
 // ============================================================================
 
+/// Server configuration & capabilities — the `GET /v1/config` response.
+/// Matches the `ServerConfig` schema in `openapi/box.openapi.yaml`.
 #[derive(Debug, Deserialize, Clone)]
-pub(crate) struct SandboxConfigResponse {
-    pub capabilities: Option<SandboxCapabilities>,
+pub(crate) struct ServerConfig {
+    pub capabilities: Option<ServerCapabilities>,
 }
 
 #[allow(dead_code)] // Constructed via serde::Deserialize
 #[derive(Debug, Deserialize, Clone, Default)]
-pub(crate) struct SandboxCapabilities {
+pub(crate) struct ServerCapabilities {
     pub snapshots_enabled: Option<bool>,
     pub clone_enabled: Option<bool>,
     pub export_enabled: Option<bool>,
@@ -693,7 +695,7 @@ mod tests {
     }
 
     #[test]
-    fn test_sandbox_config_capabilities_deserialization() {
+    fn test_server_config_capabilities_deserialization() {
         let json = r#"{
             "capabilities": {
                 "snapshots_enabled": true,
@@ -701,7 +703,7 @@ mod tests {
                 "export_enabled": true
             }
         }"#;
-        let resp: SandboxConfigResponse = serde_json::from_str(json).unwrap();
+        let resp: ServerConfig = serde_json::from_str(json).unwrap();
         let caps = resp.capabilities.unwrap();
         assert_eq!(caps.snapshots_enabled, Some(true));
         assert_eq!(caps.clone_enabled, Some(false));

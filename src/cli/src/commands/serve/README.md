@@ -119,63 +119,63 @@ permissive (accepts any/no bearer) — the zero-config local-dev default.
 
 | Method | Path                                  | Handler             | Description                    |
 |--------|---------------------------------------|----------------------|-------------------------------|
-| POST   | `/v1/default/boxes`                   | `boxes::create_box`  | Create a new box              |
-| GET    | `/v1/default/boxes`                   | `boxes::list_boxes`  | List all boxes                |
-| GET    | `/v1/default/boxes/{box_id}`          | `boxes::get_box`     | Get box info                  |
-| HEAD   | `/v1/default/boxes/{box_id}`          | `boxes::head_box`    | Check box exists (204 / 404)  |
-| DELETE | `/v1/default/boxes/{box_id}`          | `boxes::remove_box`  | Remove box (`?force=true`)    |
-| POST   | `/v1/default/boxes/{box_id}/start`    | `boxes::start_box`   | Start a stopped box           |
-| POST   | `/v1/default/boxes/{box_id}/stop`     | `boxes::stop_box`    | Stop a running box            |
+| POST   | `/v1/boxes`                   | `boxes::create_box`  | Create a new box              |
+| GET    | `/v1/boxes`                   | `boxes::list_boxes`  | List all boxes                |
+| GET    | `/v1/boxes/{box_id}`          | `boxes::get_box`     | Get box info                  |
+| HEAD   | `/v1/boxes/{box_id}`          | `boxes::head_box`    | Check box exists (204 / 404)  |
+| DELETE | `/v1/boxes/{box_id}`          | `boxes::remove_box`  | Remove box (`?force=true`)    |
+| POST   | `/v1/boxes/{box_id}/start`    | `boxes::start_box`   | Start a stopped box           |
+| POST   | `/v1/boxes/{box_id}/stop`     | `boxes::stop_box`    | Stop a running box            |
 
 ### Command Execution
 
 | Method | Path                                                            | Handler                       | Description                 |
 |--------|-----------------------------------------------------------------|-------------------------------|-----------------------------|
-| POST   | `/v1/default/boxes/{box_id}/exec`                               | `executions::start_execution` | Start a new command         |
-| GET    | `/v1/default/boxes/{box_id}/executions/{id}`                    | `executions::get_execution`   | Get status + exit code      |
-| DELETE | `/v1/default/boxes/{box_id}/executions/{id}`                    | `executions::kill_execution`  | SIGKILL + evict             |
-| GET    | `/v1/default/boxes/{box_id}/executions/{id}/attach`             | `executions::attach_execution`| WebSocket attach (bidi)     |
-| POST   | `/v1/default/boxes/{box_id}/executions/{id}/signal`             | `executions::send_signal`     | Send cooperative signal     |
-| POST   | `/v1/default/boxes/{box_id}/executions/{id}/resize`             | `executions::resize_tty`      | Resize PTY                  |
+| POST   | `/v1/boxes/{box_id}/exec`                               | `executions::start_execution` | Start a new command         |
+| GET    | `/v1/boxes/{box_id}/executions/{id}`                    | `executions::get_execution`   | Get status + exit code      |
+| DELETE | `/v1/boxes/{box_id}/executions/{id}`                    | `executions::kill_execution`  | SIGKILL + evict             |
+| GET    | `/v1/boxes/{box_id}/executions/{id}/attach`             | `executions::attach_execution`| WebSocket attach (bidi)     |
+| POST   | `/v1/boxes/{box_id}/executions/{id}/signal`             | `executions::send_signal`     | Send cooperative signal     |
+| POST   | `/v1/boxes/{box_id}/executions/{id}/resize`             | `executions::resize_tty`      | Resize PTY                  |
 
 ### Files
 
 | Method | Path                                 | Handler                | Description                       |
 |--------|--------------------------------------|------------------------|-----------------------------------|
-| PUT    | `/v1/default/boxes/{box_id}/files`   | `files::upload_files`  | Upload tar, extract into box      |
-| GET    | `/v1/default/boxes/{box_id}/files`   | `files::download_files`| Download path as tar              |
+| PUT    | `/v1/boxes/{box_id}/files`   | `files::upload_files`  | Upload tar, extract into box      |
+| GET    | `/v1/boxes/{box_id}/files`   | `files::download_files`| Download path as tar              |
 
 ### Metrics
 
 | Method | Path                                        | Handler                  | Description               |
 |--------|---------------------------------------------|--------------------------|---------------------------|
-| GET    | `/v1/default/metrics`                       | `metrics::runtime_metrics`| Runtime-wide counters     |
-| GET    | `/v1/default/boxes/{box_id}/metrics`        | `metrics::box_metrics`   | Per-box metrics + boot timing |
+| GET    | `/v1/metrics`                       | `metrics::runtime_metrics`| Runtime-wide counters     |
+| GET    | `/v1/boxes/{box_id}/metrics`        | `metrics::box_metrics`   | Per-box metrics + boot timing |
 
 ### Snapshots
 
 | Method | Path                                                        | Handler                       | Description          |
 |--------|-------------------------------------------------------------|-------------------------------|----------------------|
-| POST   | `/v1/default/boxes/{box_id}/snapshots`                      | `snapshots::create_snapshot`  | Create snapshot      |
-| GET    | `/v1/default/boxes/{box_id}/snapshots`                      | `snapshots::list_snapshots`   | List snapshots       |
-| GET    | `/v1/default/boxes/{box_id}/snapshots/{name}`               | `snapshots::get_snapshot`     | Get snapshot info    |
-| DELETE | `/v1/default/boxes/{box_id}/snapshots/{name}`               | `snapshots::delete_snapshot`  | Delete snapshot      |
-| POST   | `/v1/default/boxes/{box_id}/snapshots/{name}/restore`       | `snapshots::restore_snapshot` | Restore snapshot     |
+| POST   | `/v1/boxes/{box_id}/snapshots`                      | `snapshots::create_snapshot`  | Create snapshot      |
+| GET    | `/v1/boxes/{box_id}/snapshots`                      | `snapshots::list_snapshots`   | List snapshots       |
+| GET    | `/v1/boxes/{box_id}/snapshots/{name}`               | `snapshots::get_snapshot`     | Get snapshot info    |
+| DELETE | `/v1/boxes/{box_id}/snapshots/{name}`               | `snapshots::delete_snapshot`  | Delete snapshot      |
+| POST   | `/v1/boxes/{box_id}/snapshots/{name}/restore`       | `snapshots::restore_snapshot` | Restore snapshot     |
 
 ### Advanced (Clone, Export, Import)
 
 | Method | Path                                        | Handler               | Description                    |
 |--------|---------------------------------------------|-----------------------|--------------------------------|
-| POST   | `/v1/default/boxes/{box_id}/clone`          | `advanced::clone_box` | Clone a box                    |
-| POST   | `/v1/default/boxes/{box_id}/export`         | `advanced::export_box`| Export box as archive          |
-| POST   | `/v1/default/boxes/import`                  | `advanced::import_box`| Import box from archive body   |
+| POST   | `/v1/boxes/{box_id}/clone`          | `advanced::clone_box` | Clone a box                    |
+| POST   | `/v1/boxes/{box_id}/export`         | `advanced::export_box`| Export box as archive          |
+| POST   | `/v1/boxes/import`                  | `advanced::import_box`| Import box from archive body   |
 
 ## Execution Lifecycle
 
 ### Start
 
 ```
-POST /v1/default/boxes/{box_id}/exec
+POST /v1/boxes/{box_id}/exec
   │
   ├─ get_or_fetch_box(state, box_id)          — resolve LiteBox from cache or runtime
   ├─ build_box_command(req)                    — JSON body → BoxCommand
@@ -213,7 +213,7 @@ switches to live broadcast — no gap, no interleaving. Both the backlog append 
 ### Attach (WebSocket)
 
 ```
-GET /v1/default/boxes/{box_id}/executions/{id}/attach
+GET /v1/boxes/{box_id}/executions/{id}/attach
   │
   ├─ mark_connected()                          — claim single-attach slot (409 if taken)
   ├─ WebSocketUpgrade → on_upgrade             — HTTP → WS handshake

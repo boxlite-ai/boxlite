@@ -170,23 +170,28 @@ pub unsafe extern "C" fn boxlite_rest_options_set_credential(
     }
 }
 
-/// Override the API path prefix (server default: `v1`). No-op if
-/// `options` is NULL or `prefix` is not a valid C string.
+/// Set the routing-slot value substituted into the `{prefix}`
+/// URL segment on box-scoped requests. Opaque — the server tells
+/// the client what to use here via `Principal.path_prefix` from
+/// `GET /v1/me`. No-op if `options` is NULL or `path_prefix` is
+/// not a valid C string. When unset, the client builds URLs
+/// without the segment (`/v1/boxes/...`) — the single-tenant
+/// deployment shape.
 ///
 /// # Safety
-/// `options` must be a valid handle or NULL; `prefix` a valid C string
-/// or NULL.
+/// `options` must be a valid handle or NULL; `path_prefix` a valid
+/// C string or NULL.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn boxlite_rest_options_set_prefix(
+pub unsafe extern "C" fn boxlite_rest_options_set_path_prefix(
     options: *mut CBoxliteRestOptions,
-    prefix: *const c_char,
+    path_prefix: *const c_char,
 ) {
     unsafe {
-        if options.is_null() || prefix.is_null() {
+        if options.is_null() || path_prefix.is_null() {
             return;
         }
-        if let Ok(p) = c_str_to_string(prefix) {
-            (*options).opts.prefix = Some(p);
+        if let Ok(p) = c_str_to_string(path_prefix) {
+            (*options).opts.path_prefix = Some(p);
         }
     }
 }

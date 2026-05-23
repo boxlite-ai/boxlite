@@ -574,13 +574,18 @@ enum BoxliteErrorCode boxlite_rest_options_new(const char *url,
 void boxlite_rest_options_set_credential(CBoxliteRestOptions *options,
                                          const CBoxliteCredential *credential);
 
-// Override the API path prefix (server default: `v1`). No-op if
-// `options` is NULL or `prefix` is not a valid C string.
+// Set the routing-slot value substituted into the `{prefix}`
+// URL segment on box-scoped requests. Opaque — the server tells
+// the client what to use here via `Principal.path_prefix` from
+// `GET /v1/me`. No-op if `options` is NULL or `path_prefix` is
+// not a valid C string. When unset, the client builds URLs
+// without the segment (`/v1/boxes/...`) — the single-tenant
+// deployment shape.
 //
 // # Safety
-// `options` must be a valid handle or NULL; `prefix` a valid C string
-// or NULL.
-void boxlite_rest_options_set_prefix(CBoxliteRestOptions *options, const char *prefix);
+// `options` must be a valid handle or NULL; `path_prefix` a valid
+// C string or NULL.
+void boxlite_rest_options_set_path_prefix(CBoxliteRestOptions *options, const char *path_prefix);
 
 // Free a REST options handle. No-op on NULL.
 //

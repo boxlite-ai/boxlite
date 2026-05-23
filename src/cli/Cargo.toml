@@ -45,12 +45,26 @@ serde_yaml = "0.9"
 dirs = "6.0"
 ulid = "1.1"
 tabled = "0.17"
-chrono = "0.4.43"
+chrono = { version = "0.4.43", features = ["serde"] }
 comfy-table = "7.2.1"
 
 # Credentials store (auth login/logout/status)
 rpassword = "7"
 toml = "0.8"
+secrecy = { version = "0.10", features = ["serde"] }
+
+# OIDC / browser-based login for the apps/api control plane
+# `accept-rfc3339-timestamps` enables lenient parsing of ID-token timestamp
+# claims (`updated_at`, `auth_time`) when the IdP returns ISO-8601 strings
+# instead of the OIDC-spec-required Unix seconds. Auth0 famously returns
+# `updated_at` as a string (`"2026-05-21T01:46:18.164Z"`), breaking
+# spec-strict clients; the flag is gated off by default but the maintainer
+# added it specifically for this case (openidconnect-rs PR #55).
+openidconnect = { version = "4", default-features = false, features = ["reqwest", "rustls-tls", "accept-rfc3339-timestamps"] }
+webbrowser = "1"
+dialoguer = "0.11"
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+url = "2"
 
 gtmpl = "0.7"
 gtmpl_value = "0.5"

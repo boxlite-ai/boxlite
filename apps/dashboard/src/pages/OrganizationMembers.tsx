@@ -205,9 +205,7 @@ const OrganizationMembers: React.FC = () => {
         {authenticatedUserIsOwner && (
           <>
             <div className="mb-2 mt-12 flex min-h-10 items-center justify-between">
-              <h2 className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
-                Invitations
-              </h2>
+              <h2 className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Invitations</h2>
             </div>
 
             <OrganizationInvitationTable

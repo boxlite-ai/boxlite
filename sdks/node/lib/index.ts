@@ -65,7 +65,9 @@ class BoxliteWithBagRest extends (nativeBoxlite as unknown as {
       new NativeBoxliteRestOptions(
         options.url,
         options.credential ?? null,
-        options.prefix ?? null,
+        // Positional order matches the napi `JsBoxliteRestOptions::new`
+        // signature: (url, credential, path_prefix).
+        options.pathPrefix ?? null,
       ),
     );
   }

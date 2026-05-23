@@ -55,7 +55,6 @@ export class RegionService {
     private readonly configService: TypedConfigService,
   ) {}
 
-
   /**
    * @param createRegionDto - The region details.
    * @param organizationId - The ID of the organization, or null for regions not associated with an organization.
@@ -81,8 +80,12 @@ export class RegionService {
     }
 
     try {
-      const proxyApiKey = createRegionDto.proxyUrl ? generateApiKeyValue(this.configService.getOrThrow('apiKey.prefix'), 'svc') : undefined
-      const sshGatewayApiKey = createRegionDto.sshGatewayUrl ? generateApiKeyValue(this.configService.getOrThrow('apiKey.prefix'), 'svc') : undefined
+      const proxyApiKey = createRegionDto.proxyUrl
+        ? generateApiKeyValue(this.configService.getOrThrow('apiKey.prefix'), 'svc')
+        : undefined
+      const sshGatewayApiKey = createRegionDto.sshGatewayUrl
+        ? generateApiKeyValue(this.configService.getOrThrow('apiKey.prefix'), 'svc')
+        : undefined
 
       const snapshotManagerUsername = createRegionDto.snapshotManagerUrl ? 'boxlite' : undefined
       const snapshotManagerPassword = createRegionDto.snapshotManagerUrl ? generateRandomString(16) : undefined

@@ -25,12 +25,34 @@ info:
     ## Design Principles
 
     This specification follows industry-standard HTTP API patterns:
-    - Versioned prefix (`/v1/`) for graceful API evolution
-    - Multi-tenancy via `{prefix}` path segment (organization/workspace)
+    - Versioned URL prefix (`/v1/`) for graceful API evolution
+    - Multi-tenancy via an opaque `{prefix}` URL segment
     - Capability discovery via `GET /v1/config`
     - Optional idempotency keys for safe mutation retries
     - Opaque page-token pagination
     - Standard error model with typed error codes
+
+    ## Vendor-agnostic routing — the `{prefix}` slot
+
+    Box-scoped endpoints include a `{prefix}` URL path segment whose
+    semantics are **deployment-defined**. This contract is
+    intentionally silent on what the slot means — a vendor may use it
+    for an organization id, a workspace, a warehouse / catalog, a
+    region+team pair, or any other routing scope. Clients **MUST**
+    treat the value as an opaque substring and substitute it verbatim
+    into the URL, including any internal `/` characters (multi-segment
+    values are supported).
+
+    Clients discover the value to use via `Principal.path_prefix`
+    from `GET /v1/me`. A `null` (or empty) value means the deployment
+    does **not** use a routing slot; clients then build URLs without
+    the segment (`/v1/boxes/…` instead of `/v1/<prefix>/boxes/…`).
+    This is the canonical shape for single-tenant deployments such as
+    the `boxlite serve` local server.
+
+    Identity / discovery endpoints (`GET /v1/me`, `GET /v1/config`)
+    sit at the version root and **never** include the `{prefix}`
+    segment, by spec.
 
     ## Authentication
 
@@ -69,7 +91,7 @@ info:
     url: https://github.com/boxlite-ai/boxlite
 
 servers:
-  - url: "{scheme}://{host}/v1"
+  - url: "{scheme}://{host}{basePath}/v1"
     description: BoxLite Box API v1
     variables:
       scheme:
@@ -77,6 +99,12 @@ servers:
         enum: [https, http]
       host:
         default: api.boxlite.ai
+      basePath:
+        description: |
+          Deployment-defined hostpath prefix. Empty for local servers
+          (`boxlite serve` at `http://localhost:8100/v1/…`); typically
+          `/api` for cloud deployments (`https://api.boxlite.ai/api/v1/…`).
+        default: ""
 
 # ---------------------------------------------------------------------------
 # Security
@@ -124,7 +152,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/SandboxConfig"
+                $ref: "#/components/schemas/ServerConfig"
 
   # -------------------------------------------------------------------------
   # Authentication
@@ -969,14 +997,23 @@ components:
       name: prefix
       in: path
       required: true
+      allowReserved: true
       description: |
-        Organization or workspace identifier for multi-tenancy isolation.
-        All resources are scoped to this prefix.
+        Deployment-defined routing slot. Opaque to the client; the
+        value is whatever the server told the client to use via
+        `Principal.path_prefix` (see `GET /v1/me`), substituted
+        verbatim into the URL. Internal `/` characters are preserved,
+        enabling multi-segment routing values such as
+        `us-east/team-42`.
+
+        The slot's semantics are vendor-specific — boxlite cloud uses
+        it for the organization id; another implementer might use it
+        for a workspace, a catalog, or a region+team pair. Empty /
+        `null` values mean the deployment does not use a routing
+        slot, and clients build URLs without the segment.
       schema:
         type: string
-        minLength: 1
         maxLength: 128
-        pattern: "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
       example: acme-corp
 
     boxId:
@@ -1121,9 +1158,9 @@ components:
     # =======================================================================
     # Configuration
     # =======================================================================
-    SandboxConfig:
+    ServerConfig:
       type: object
-      description: Server configuration and capabilities
+      description: Server configuration and capabilities (the `GET /v1/config` response).
       properties:
         defaults:
           type: object
@@ -1170,9 +1207,9 @@ components:
               type: integer
               description: Maximum allowed disk size in GB
               example: 100
-            max_boxes_per_prefix:
+            max_boxes_per_path_prefix:
               type: integer
-              description: Maximum boxes per organization/workspace
+              description: Maximum boxes per routing-slot scope
               example: 50
             max_concurrent_executions:
               type: integer
@@ -1227,7 +1264,7 @@ components:
         banner after credential validation, and inspect `scopes` so
         under-scoped credentials surface at validation time rather than
         mid-flow.
-      required: [sub, principal_type, prefix, scopes]
+      required: [sub, principal_type, scopes]
       properties:
         sub:
           type: string
@@ -1251,12 +1288,26 @@ components:
         display_name:
           type: string
           description: Human-readable label. Optional.
-        prefix:
+        path_prefix:
           type: string
+          nullable: true
           description: |
-            Tenant/workspace prefix the credential is bound to. Clients
-            typically use this as the default `{prefix}` path parameter
-            for subsequent calls.
+            Routing-slot value the client should substitute into the
+            `{prefix}` URL parameter on box-scoped requests. Opaque
+            to the client — the server decides what goes here (an
+            organization id, a workspace name, a catalog, a multi-
+            segment routing key, etc.).
+
+            `null` when the deployment does not use a routing slot
+            (single-tenant servers such as `boxlite serve`) **or** when
+            the credential has no scope assigned yet (mid-provisioning
+            service accounts, first OIDC login before scope assignment).
+            In either case clients build URLs without the segment
+            (`/v1/boxes/…` rather than `/v1/<prefix>/boxes/…`).
+
+            The field is always present in the response envelope, never
+            omitted; the distinction between absent and explicit `null`
+            is not significant.
         scopes:
           type: array
           items:
@@ -1357,7 +1408,7 @@ components:
         name:
           type: string
           nullable: true
-          description: User-defined name (unique within prefix)
+          description: User-defined name (unique within the routing-slot scope)
           example: my-box
         status:
           $ref: "#/components/schemas/BoxStatus"

@@ -198,6 +198,29 @@ impl VmmHandlerTrait for ShimHandler {
     }
 }
 
+/// Emit the post-spawn TRACE event with the serialized `InstanceSpec`'s
+/// secrets stripped out.
+///
+/// The serialized `InstanceSpec` (`config_json`) carries
+/// `NetworkBackendConfig.secrets` (user-provided secret values) and, when a
+/// MITM proxy is configured, `ca_key_pem` — the PKCS8 CA private key. The
+/// config is deliberately piped via stdin rather than CLI args so those bytes
+/// stay out of `/proc/<pid>/cmdline` (see `spawn.rs:97-99`); serializing them
+/// into a TRACE log would defeat that mitigation.
+///
+/// This helper is the single audited site for that trace event so that
+/// `redacted_box_config_trace_does_not_emit_config_json` can pin the
+/// behavior with a real subscriber capture rather than relying on
+/// source-grep heuristics.
+fn emit_redacted_box_config_trace(engine: VmmKind, box_id: &str, config_json: &str) {
+    tracing::trace!(
+        engine = ?engine,
+        box_id = %box_id,
+        json_bytes = config_json.len(),
+        "Box configuration prepared (raw config not logged; contains secrets)"
+    );
+}
+
 // ============================================================================
 // SHIM CONTROLLER - Spawning operations
 // ============================================================================
@@ -319,7 +342,7 @@ impl VmmController for ShimController {
             "Starting Box subprocess"
         );
         tracing::debug!(binary = %self.binary_path.display(), "Box runner binary");
-        tracing::trace!(config = %config_json, "Box configuration");
+        emit_redacted_box_config_trace(self.engine_type, self.box_id.as_str(), &config_json);
 
         // Measure subprocess spawn time
         let shim_spawn_start = Instant::now();
@@ -356,5 +379,161 @@ impl VmmController for ShimController {
         // Note: Child is dropped here, but process continues running
         // Handler manages it by PID
         Ok(Box::new(handler))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    /// Captures `tracing` output into a shared byte buffer so a test can
+    /// assert what was (and wasn't) written by an event emitted within
+    /// `tracing::subscriber::with_default`.
+    #[derive(Clone)]
+    struct BufWriter(Arc<Mutex<Vec<u8>>>);
+
+    impl std::io::Write for BufWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for BufWriter {
+        type Writer = BufWriter;
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    /// Behavioral regression for the leak fixed in this commit: feed a
+    /// `config_json` whose body contains sentinel CA-key / secret bytes
+    /// into the helper that is the *only* site allowed to emit the
+    /// post-spawn TRACE event, capture every byte the subscriber writes,
+    /// and assert the sentinels never appear — while the redacted fields
+    /// (`box_id`, `json_bytes`) do. If any future change reintroduces
+    /// `config = %config_json` (or any other form that lets the raw bytes
+    /// reach the subscriber), the sentinel assertion fires.
+    #[test]
+    fn redacted_box_config_trace_does_not_emit_config_json() {
+        let buf = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .with_writer(BufWriter(buf.clone()))
+            .with_ansi(false)
+            .finish();
+
+        let key_sentinel = "PKCS8_PRIVATE_KEY_SENTINEL_DO_NOT_LEAK";
+        let secret_sentinel = "USER_SECRET_VALUE_SENTINEL_DO_NOT_LEAK";
+        let config_json = format!(
+            r#"{{"secrets":[{{"name":"db","value":"{}"}}],"ca_key_pem":"-----BEGIN PRIVATE KEY-----\n{}\n-----END PRIVATE KEY-----"}}"#,
+            secret_sentinel, key_sentinel
+        );
+        let expected_len = config_json.len();
+
+        tracing::subscriber::with_default(subscriber, || {
+            emit_redacted_box_config_trace(VmmKind::Libkrun, "test-box-id", &config_json);
+        });
+
+        let output = String::from_utf8(buf.lock().unwrap().clone()).expect("utf8 trace output");
+
+        assert!(
+            !output.contains(key_sentinel),
+            "CA private key sentinel leaked into trace output: {output}"
+        );
+        assert!(
+            !output.contains(secret_sentinel),
+            "user secret sentinel leaked into trace output: {output}"
+        );
+        assert!(
+            output.contains("test-box-id"),
+            "box_id (non-sensitive) should appear in trace output: {output}"
+        );
+        assert!(
+            output.contains(&format!("json_bytes={expected_len}")),
+            "json_bytes redacted summary should appear: {output}"
+        );
+    }
+
+    /// Workspace-wide regression: the behavioral test above pins the helper
+    /// itself. It does **not** pin the invariant that the helper is the
+    /// *only* site emitting `config_json` to a `tracing::*` macro — a new
+    /// `tracing::trace!(config = %config_json, ...)` added anywhere else in
+    /// the workspace (this crate, the shim binary which reads the same
+    /// JSON from stdin, etc.) would slip past it.
+    ///
+    /// `tracing`'s `%` (Display) and `?` (Debug) field-value sigils are
+    /// unambiguous markers for "this expression's formatted output goes
+    /// into the event". Forbid both `%config_json` and `?config_json`
+    /// anywhere in production source under the workspace's `src/`. Test
+    /// code (anything past the first `#[cfg(test)]` in each file) is
+    /// exempt so this patrol can talk about the patterns it catches
+    /// without tripping over itself.
+    #[test]
+    fn no_config_json_in_tracing_sigil_workspace_wide() {
+        fn walk_rs(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            let entries = match std::fs::read_dir(dir) {
+                Ok(e) => e,
+                Err(_) => return,
+            };
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.is_dir() {
+                    walk_rs(&p, out);
+                } else if p.extension().is_some_and(|e| e == "rs") {
+                    out.push(p);
+                }
+            }
+        }
+
+        // CARGO_MANIFEST_DIR points at this crate (src/boxlite); the
+        // workspace root is two levels up, and the workspace-level source
+        // tree (which also includes src/shim, src/cli, …) lives at
+        // <workspace-root>/src.
+        let workspace_src = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("src");
+        let mut files = Vec::new();
+        walk_rs(&workspace_src, &mut files);
+        assert!(
+            !files.is_empty(),
+            "patrol found zero .rs files under {}",
+            workspace_src.display()
+        );
+
+        let forbidden = ["%config_json", "?config_json"];
+        let mut offenders = Vec::new();
+        for path in &files {
+            let src = match std::fs::read_to_string(path) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            // Strip every `#[cfg(test)]` block (only the first one is
+            // sufficient because tests sit at the bottom of a file by
+            // convention; if a project ever puts a `#[cfg(test)]` in the
+            // middle, the patrol still gates everything above the first
+            // such marker).
+            let production = match src.find("#[cfg(test)]") {
+                Some(idx) => &src[..idx],
+                None => &src,
+            };
+            for needle in &forbidden {
+                if production.contains(needle) {
+                    offenders.push(format!("{}: contains {needle:?}", path.display()));
+                }
+            }
+        }
+
+        assert!(
+            offenders.is_empty(),
+            "`config_json` reached a `tracing::*` field sigil in production code — \
+             that string carries secrets and a PKCS8 CA private key. Route the \
+             log through `emit_redacted_box_config_trace` instead.\n  {}",
+            offenders.join("\n  ")
+        );
     }
 }

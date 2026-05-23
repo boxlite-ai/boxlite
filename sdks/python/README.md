@@ -184,6 +184,33 @@ rt = Boxlite.rest(BoxliteRestOptions.from_env())
 a virtual subclass), so code can type-check against the `Credential`
 ABC and accept any future credential kind unchanged.
 
+#### Routing prefix (vendor-agnostic)
+
+Box-scoped requests resolve to `{url}/v1/{prefix}/…`. The
+`v1` segment is hardcoded; `path_prefix` is an opaque, deployment-
+defined routing value that the server tells the client to use via
+`Principal.path_prefix` from `GET /v1/me`. The slot's semantics
+are vendor-specific: boxlite cloud uses it for the organization
+id; another deployment may use a workspace name, a region+team
+pair, or any other multi-segment value such as `us-east/team-42`.
+
+```python
+rt = Boxlite.rest(BoxliteRestOptions(
+    url="https://api.boxlite.ai/api",
+    credential=ApiKeyCredential("blk_live_…"),
+    path_prefix="acme",   # → requests hit /v1/acme/boxes
+))
+```
+
+When `path_prefix` is unset or empty, the client builds URLs
+without the segment (`/v1/boxes/…`) — the canonical shape for
+single-tenant deployments such as the local `boxlite serve`
+reference server.
+
+The CLI captures `Principal.path_prefix` at login and caches it
+under the active profile, so subsequent `boxlite` commands route
+correctly without an extra flag.
+
 ### Box Configuration
 
 #### `boxlite.BoxOptions`

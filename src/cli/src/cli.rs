@@ -159,9 +159,40 @@ pub struct GlobalFlags {
     /// Connect to a remote BoxLite REST API server instead of local runtime.
     #[arg(long, global = true, env = "BOXLITE_REST_URL")]
     pub url: Option<String>,
+
+    /// Named credential profile in `~/.boxlite/credentials.toml`. Lets one
+    /// machine hold separate logins for, e.g., a local `boxlite serve` and a
+    /// remote control plane. Defaults to `default` if neither flag nor env
+    /// is set.
+    #[arg(long, global = true, env = "BOXLITE_PROFILE")]
+    pub profile: Option<String>,
+
+    /// Routing-slot value for the URL path (`/v1/<prefix>/boxes/...`).
+    /// Opaque — the server decides what this means (org id, workspace,
+    /// catalog, …); the value typically comes from the `auth login`
+    /// flow capturing `Principal.path_prefix`. This flag overrides
+    /// the stored profile's path_prefix for users whose credential
+    /// has scope over multiple routing values (e.g. multiple orgs on
+    /// the same account). Unset → uses the stored profile's
+    /// path_prefix, then empty (URL skips the segment —
+    /// `/v1/boxes/...`).
+    #[arg(long = "path-prefix", global = true, env = "BOXLITE_REST_PATH_PREFIX")]
+    pub path_prefix: Option<String>,
 }
 
 impl GlobalFlags {
+    /// Resolve which credential profile to read/write. Order: explicit
+    /// `--profile` flag (which clap also fills from `BOXLITE_PROFILE`) > the
+    /// hard-coded `default` name. Keeping this in one helper means a future
+    /// "tab through last-used profile" UX has exactly one place to change.
+    pub fn resolved_profile(&self) -> String {
+        self.profile
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .unwrap_or(crate::credentials::DEFAULT_PROFILE)
+            .to_string()
+    }
+
     /// Resolve runtime options from config file and CLI overrides (--home, --registry).
     pub fn resolve_runtime_options(&self) -> anyhow::Result<BoxliteOptions> {
         let mut options = if let Some(config_path) = &self.config {
@@ -198,7 +229,9 @@ impl GlobalFlags {
         // URL precedence: --url / BOXLITE_REST_URL (the clap flag covers both) > stored profile > none.
         // Credential precedence: BOXLITE_API_KEY env > stored profile > none.
         // Clap reads BOXLITE_REST_URL into `self.url`, so we don't re-check env here.
-        let stored = crate::credentials::load().ok().flatten();
+        let stored = crate::credentials::load_named(&self.resolved_profile())
+            .ok()
+            .flatten();
 
         let url = self
             .url
@@ -224,6 +257,18 @@ impl GlobalFlags {
             // caller's --url already won via the precedence check above, so
             // re-apply it to make sure it wins over the stored URL.
             opts.url = self.url.clone().unwrap_or(opts.url);
+        }
+
+        // `--path-prefix` flag (or `BOXLITE_REST_PATH_PREFIX` env,
+        // both filled by clap into `self.path_prefix`) overrides
+        // whatever the stored profile brought along — same shape as
+        // `--url` overriding the stored URL above. Leaving
+        // `opts.path_prefix` alone when the flag is unset means the
+        // profile's value wins; if neither is set the URL builder
+        // skips the segment entirely (`/v1/boxes/...`, empty-prefix
+        // shape).
+        if let Some(path_prefix) = self.path_prefix.as_ref().filter(|s| !s.is_empty()) {
+            opts.path_prefix = Some(path_prefix.clone());
         }
 
         BoxliteRuntime::rest(opts).map_err(Into::into)
@@ -692,6 +737,8 @@ mod tests {
             registry: vec!["cli.registry.local".to_string()],
             config: Some(config_path.display().to_string()),
             url: None,
+            profile: None,
+            path_prefix: None,
         };
 
         let options = flags.resolve_runtime_options().unwrap();

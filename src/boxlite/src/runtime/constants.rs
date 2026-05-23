@@ -28,9 +28,14 @@ pub mod envs {
     #[cfg(feature = "rest")]
     pub const BOXLITE_API_KEY: &str = "BOXLITE_API_KEY";
 
-    /// API path prefix (default: "v1").
+    /// Value substituted into the `{prefix}` URL segment on
+    /// box-scoped routes (`/v1/{prefix}/boxes/...`). Opaque
+    /// to the client — deployment decides what it means. When
+    /// unset / empty the client builds URLs without the segment
+    /// (`/v1/boxes/...`) — the canonical single-tenant shape
+    /// used by `boxlite serve` and similar single-scope deployments.
     #[cfg(feature = "rest")]
-    pub const BOXLITE_REST_PREFIX: &str = "BOXLITE_REST_PREFIX";
+    pub const BOXLITE_REST_PATH_PREFIX: &str = "BOXLITE_REST_PATH_PREFIX";
 }
 
 /// Container images used by the runtime
