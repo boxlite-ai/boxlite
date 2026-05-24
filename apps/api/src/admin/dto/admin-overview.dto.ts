@@ -32,6 +32,19 @@ export class AdminOverviewClusterDto {
   oversell: number
 }
 
+@ApiSchema({ name: 'AdminOverviewBoxes' })
+export class AdminOverviewBoxesDto {
+  @ApiProperty({ description: 'Total number of sandboxes across all states', example: 80 })
+  total: number
+
+  @ApiProperty({
+    description: 'Sandbox counts keyed by SandboxState',
+    example: { started: 15, error: 2, build_failed: 1, stopped: 62 },
+    additionalProperties: { type: 'number' },
+  })
+  byState: Record<string, number>
+}
+
 @ApiSchema({ name: 'AdminOverview' })
 export class AdminOverviewDto {
   @ApiProperty({ description: 'Total number of users', example: 120 })
@@ -39,6 +52,9 @@ export class AdminOverviewDto {
 
   @ApiProperty({ description: 'Number of active (started) sandboxes', example: 47 })
   activeBoxes: number
+
+  @ApiProperty({ type: AdminOverviewBoxesDto })
+  boxes: AdminOverviewBoxesDto
 
   @ApiProperty({ type: AdminOverviewRunnersDto })
   runners: AdminOverviewRunnersDto

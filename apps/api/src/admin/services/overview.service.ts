@@ -22,6 +22,11 @@ import {
 // service method — the draining set is always a small subset of runners.
 const ALL_DRAINING_TAKE = 10_000
 
+type SandboxStateCountRow = {
+  state: SandboxState
+  count: string | number
+}
+
 @Injectable()
 export class AdminOverviewService {
   constructor(
@@ -31,10 +36,10 @@ export class AdminOverviewService {
   ) {}
 
   async getOverview(): Promise<AdminOverviewDto> {
-    const [users, runners, startedSandboxes, drainingRunners] = await Promise.all([
+    const [users, runners, boxes, drainingRunners] = await Promise.all([
       this.userService.findAll(),
       this.runnerService.findAllFull(),
-      this.sandboxRepository.find({ where: { state: SandboxState.STARTED } }),
+      this.getBoxStateBreakdown(),
       this.runnerService.findDrainingPaginated(0, ALL_DRAINING_TAKE),
     ])
 
@@ -53,7 +58,8 @@ export class AdminOverviewService {
 
     return {
       users: users.length,
-      activeBoxes: startedSandboxes.length,
+      activeBoxes: boxes.byState[SandboxState.STARTED] ?? 0,
+      boxes,
       runners: {
         online: onlineCount,
         total: runners.length,
@@ -63,6 +69,25 @@ export class AdminOverviewService {
         cpuUtil: avgCpuUtil,
         oversell,
       },
+    }
+  }
+
+  private async getBoxStateBreakdown() {
+    const rows = await this.sandboxRepository
+      .createQueryBuilder('sandbox')
+      .select('sandbox.state', 'state')
+      .addSelect('COUNT(*)', 'count')
+      .groupBy('sandbox.state')
+      .getRawMany<SandboxStateCountRow>()
+
+    const byState = rows.reduce<Record<string, number>>((acc, row) => {
+      acc[row.state] = Number(row.count)
+      return acc
+    }, {})
+
+    return {
+      total: Object.values(byState).reduce((sum, count) => sum + count, 0),
+      byState,
     }
   }
 

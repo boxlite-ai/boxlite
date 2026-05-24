@@ -33,6 +33,10 @@ import { toast } from 'sonner'
 interface AdminOverview {
   users: number
   activeBoxes: number
+  boxes: {
+    total: number
+    byState: Record<string, number>
+  }
   runners: { online: number; total: number; draining: number }
   cluster: { cpuUtil: number; oversell: number }
 }
@@ -145,6 +149,31 @@ function StateBadge({ state }: { state: string }) {
   return <Badge variant={variant}>{state}</Badge>
 }
 
+const boxBreakdownPalette = {
+  started: '#5aac7b',
+  error: '#dd7d70',
+  buildFailed: '#d6a84f',
+  stopped: '#838b97',
+  other: '#444a54',
+}
+
+function getBoxBreakdown(boxes: AdminOverview['boxes']) {
+  const started = boxes.byState.started ?? 0
+  const error = boxes.byState.error ?? 0
+  const buildFailed = boxes.byState.build_failed ?? 0
+  const stopped = boxes.byState.stopped ?? 0
+  const knownTotal = started + error + buildFailed + stopped
+  const other = Math.max(boxes.total - knownTotal, 0)
+
+  return [
+    { key: 'started', label: 'started', count: started, color: boxBreakdownPalette.started },
+    { key: 'error', label: 'error', count: error, color: boxBreakdownPalette.error },
+    { key: 'build_failed', label: 'build failed', count: buildFailed, color: boxBreakdownPalette.buildFailed },
+    { key: 'stopped', label: 'stopped', count: stopped, color: boxBreakdownPalette.stopped },
+    { key: 'other', label: 'other', count: other, color: boxBreakdownPalette.other },
+  ].filter((segment) => segment.count > 0)
+}
+
 // ─── Main component ───────────────────────────────────────────────────────────
 
 const Admin: React.FC = () => {
@@ -213,6 +242,8 @@ const Admin: React.FC = () => {
 
   // ─── 403 gate: redirect non-admins ────────────────────────────────────────
 
+  const boxBreakdown = overviewQuery.data ? getBoxBreakdown(overviewQuery.data.boxes) : []
+
   if (overviewQuery.isError && (overviewQuery.error as { response?: { status?: number } })?.response?.status === 403) {
     return <Navigate to={RoutePath.DASHBOARD} replace />
   }
@@ -266,10 +297,44 @@ const Admin: React.FC = () => {
               </Card>
               <Card>
                 <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-medium text-muted-foreground">Active Boxes</CardTitle>
+                  <CardTitle className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                    Boxes
+                    <Badge variant="secondary" className="text-[10px] font-normal">
+                      total + breakdown
+                    </Badge>
+                  </CardTitle>
                 </CardHeader>
-                <CardContent>
-                  <p className="text-2xl font-bold">{overviewQuery.data.activeBoxes}</p>
+                <CardContent className="space-y-3">
+                  <p className="text-2xl font-bold">
+                    {overviewQuery.data.activeBoxes}{' '}
+                    <span className="text-sm font-normal text-muted-foreground">
+                      active · {overviewQuery.data.boxes.total} total
+                    </span>
+                  </p>
+                  {overviewQuery.data.boxes.total > 0 && (
+                    <>
+                      <div className="flex h-2 overflow-hidden rounded-full bg-muted/40">
+                        {boxBreakdown.map((segment) => (
+                          <div
+                            key={segment.key}
+                            className="h-full"
+                            style={{
+                              width: `${(segment.count / overviewQuery.data.boxes.total) * 100}%`,
+                              backgroundColor: segment.color,
+                            }}
+                          />
+                        ))}
+                      </div>
+                      <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                        {boxBreakdown.map((segment) => (
+                          <span key={segment.key} className="inline-flex items-center gap-1">
+                            <span className="h-2 w-2 rounded-full" style={{ backgroundColor: segment.color }} />
+                            {segment.count} {segment.label}
+                          </span>
+                        ))}
+                      </div>
+                    </>
+                  )}
                 </CardContent>
               </Card>
               <Card>

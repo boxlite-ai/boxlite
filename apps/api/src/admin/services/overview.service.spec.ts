@@ -76,6 +76,15 @@ function makeSandbox(
   }
 }
 
+function makeSandboxStateCountRows(sandboxes: ReturnType<typeof makeSandbox>[]) {
+  const counts = new Map<SandboxState, number>()
+  for (const sandbox of sandboxes) {
+    counts.set(sandbox.state, (counts.get(sandbox.state) ?? 0) + 1)
+  }
+
+  return Array.from(counts.entries()).map(([state, count]) => ({ state, count: String(count) }))
+}
+
 // ─── Build service with stub collaborators ───────────────────────────────────
 
 function buildService(stubs: {
@@ -83,6 +92,7 @@ function buildService(stubs: {
   runners?: ReturnType<typeof makeRunnerDto>[]
   drainingRunners?: ReturnType<typeof makeRunnerDto>[]
   sandboxes?: ReturnType<typeof makeSandbox>[]
+  sandboxStateCounts?: { state: SandboxState; count: string }[]
 }): AdminOverviewService {
   const userService = {
     findAll: jest.fn().mockResolvedValue(stubs.users ?? []),
@@ -93,8 +103,16 @@ function buildService(stubs: {
     findDrainingPaginated: jest.fn().mockResolvedValue(stubs.drainingRunners ?? []),
   } as any
 
+  const sandboxStateCounts = stubs.sandboxStateCounts ?? makeSandboxStateCountRows(stubs.sandboxes ?? [])
+  const sandboxStateCountQuery = {
+    select: jest.fn().mockReturnThis(),
+    addSelect: jest.fn().mockReturnThis(),
+    groupBy: jest.fn().mockReturnThis(),
+    getRawMany: jest.fn().mockResolvedValue(sandboxStateCounts),
+  }
   const sandboxRepository = {
     find: jest.fn().mockResolvedValue(stubs.sandboxes ?? []),
+    createQueryBuilder: jest.fn().mockReturnValue(sandboxStateCountQuery),
   } as any
 
   return new AdminOverviewService(userService, runnerService, sandboxRepository)
@@ -179,6 +197,31 @@ describe('AdminOverviewService', () => {
       const result = await service.getOverview()
 
       expect(result.cluster.cpuUtil).toBeCloseTo(0.6)
+    })
+
+    it('returns box status breakdown with total and counts by state', async () => {
+      const service = buildService({
+        sandboxes: [
+          makeSandbox({ id: 'sb-started', state: SandboxState.STARTED }),
+          makeSandbox({ id: 'sb-error-1', state: SandboxState.ERROR }),
+          makeSandbox({ id: 'sb-error-2', state: SandboxState.ERROR }),
+          makeSandbox({ id: 'sb-build-failed', state: SandboxState.BUILD_FAILED }),
+        ],
+        runners: [],
+        drainingRunners: [],
+      })
+
+      const result = await service.getOverview()
+
+      expect(result.boxes).toEqual({
+        total: 4,
+        byState: {
+          [SandboxState.STARTED]: 1,
+          [SandboxState.ERROR]: 2,
+          [SandboxState.BUILD_FAILED]: 1,
+        },
+      })
+      expect(result.activeBoxes).toBe(1)
     })
   })
 
