@@ -11,6 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -174,6 +175,10 @@ function getBoxBreakdown(boxes: AdminOverview['boxes']) {
   ].filter((segment) => segment.count > 0)
 }
 
+function isReadyRunner(runner: AdminRunner) {
+  return runner.state?.toLowerCase() === 'ready'
+}
+
 // ─── Main component ───────────────────────────────────────────────────────────
 
 const Admin: React.FC = () => {
@@ -243,6 +248,9 @@ const Admin: React.FC = () => {
   // ─── 403 gate: redirect non-admins ────────────────────────────────────────
 
   const boxBreakdown = overviewQuery.data ? getBoxBreakdown(overviewQuery.data.boxes) : []
+  const runners = runnersQuery.data ?? []
+  const onlineRunners = runners.filter(isReadyRunner)
+  const staleRunners = runners.filter((runner) => !isReadyRunner(runner))
 
   if (overviewQuery.isError && (overviewQuery.error as { response?: { status?: number } })?.response?.status === 403) {
     return <Navigate to={RoutePath.DASHBOARD} replace />
@@ -266,6 +274,96 @@ const Admin: React.FC = () => {
     const lower = state?.toLowerCase() ?? ''
     return lower === 'error' || lower === 'failed'
   }
+
+  const renderRunnerTable = (runnerRows: AdminRunner[], emptyText: string) => (
+    <div className="rounded-md border">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>ID</TableHead>
+            <TableHead>State</TableHead>
+            <TableHead>CPU alloc</TableHead>
+            <TableHead>Mem alloc</TableHead>
+            <TableHead>Sandboxes</TableHead>
+            <TableHead>Score</TableHead>
+            <TableHead>Actions</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {runnerRows.length > 0 ? (
+            runnerRows.map((r) => (
+              <TableRow key={r.id}>
+                <TableCell className="font-mono text-xs text-muted-foreground truncate max-w-[8rem]">{r.id}</TableCell>
+                <TableCell>
+                  <div className="flex flex-col gap-1">
+                    <StateBadge state={r.state} />
+                    {r.draining && (
+                      <Badge variant="warning" className="w-fit">
+                        draining
+                      </Badge>
+                    )}
+                    {r.unschedulable && (
+                      <Badge variant="secondary" className="w-fit">
+                        cordoned
+                      </Badge>
+                    )}
+                  </div>
+                </TableCell>
+                <TableCell>
+                  {r.currentAllocatedCpu}/{r.cpu}
+                </TableCell>
+                <TableCell>
+                  {r.currentAllocatedMemoryGiB.toFixed(1)}/{r.memory}
+                </TableCell>
+                <TableCell>{r.currentStartedSandboxes}</TableCell>
+                <TableCell>{r.availabilityScore?.toFixed(2) ?? '—'}</TableCell>
+                <TableCell>
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() =>
+                        openConfirm({
+                          title: r.unschedulable ? 'Un-cordon runner' : 'Cordon runner',
+                          description: r.unschedulable
+                            ? `Allow runner ${r.id} to accept new sandboxes again?`
+                            : `Prevent runner ${r.id} from accepting new sandboxes?`,
+                          onConfirm: () => cordonMutation.mutateAsync(r),
+                        })
+                      }
+                    >
+                      {r.unschedulable ? 'Un-cordon' : 'Cordon'}
+                    </Button>
+                    {!r.draining && (
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        onClick={() =>
+                          openConfirm({
+                            title: 'Drain runner',
+                            description: `Drain runner ${r.id}? Existing sandboxes will be migrated away.`,
+                            onConfirm: () => drainMutation.mutateAsync(r.id),
+                          })
+                        }
+                      >
+                        Drain
+                      </Button>
+                    )}
+                  </div>
+                </TableCell>
+              </TableRow>
+            ))
+          ) : (
+            <TableRow>
+              <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">
+                {emptyText}
+              </TableCell>
+            </TableRow>
+          )}
+        </TableBody>
+      </Table>
+    </div>
+  )
 
   // ─── Render ────────────────────────────────────────────────────────────────
 
@@ -484,96 +582,37 @@ const Admin: React.FC = () => {
           <TabsContent value="runners">
             {runnersQuery.isPending ? (
               <TableSkeleton cols={7} />
-            ) : (
-              <div className="rounded-md border">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>ID</TableHead>
-                      <TableHead>State</TableHead>
-                      <TableHead>CPU alloc</TableHead>
-                      <TableHead>Mem alloc</TableHead>
-                      <TableHead>Sandboxes</TableHead>
-                      <TableHead>Score</TableHead>
-                      <TableHead>Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {runnersQuery.data && runnersQuery.data.length > 0 ? (
-                      runnersQuery.data.map((r) => (
-                        <TableRow key={r.id}>
-                          <TableCell className="font-mono text-xs text-muted-foreground truncate max-w-[8rem]">
-                            {r.id}
-                          </TableCell>
-                          <TableCell>
-                            <div className="flex flex-col gap-1">
-                              <StateBadge state={r.state} />
-                              {r.draining && (
-                                <Badge variant="warning" className="w-fit">
-                                  draining
-                                </Badge>
-                              )}
-                              {r.unschedulable && (
-                                <Badge variant="secondary" className="w-fit">
-                                  cordoned
-                                </Badge>
-                              )}
-                            </div>
-                          </TableCell>
-                          <TableCell>
-                            {r.currentAllocatedCpu}/{r.cpu}
-                          </TableCell>
-                          <TableCell>
-                            {r.currentAllocatedMemoryGiB.toFixed(1)}/{r.memory}
-                          </TableCell>
-                          <TableCell>{r.currentStartedSandboxes}</TableCell>
-                          <TableCell>{r.availabilityScore?.toFixed(2) ?? '—'}</TableCell>
-                          <TableCell>
-                            <div className="flex gap-2">
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() =>
-                                  openConfirm({
-                                    title: r.unschedulable ? 'Un-cordon runner' : 'Cordon runner',
-                                    description: r.unschedulable
-                                      ? `Allow runner ${r.id} to accept new sandboxes again?`
-                                      : `Prevent runner ${r.id} from accepting new sandboxes?`,
-                                    onConfirm: () => cordonMutation.mutateAsync(r),
-                                  })
-                                }
-                              >
-                                {r.unschedulable ? 'Un-cordon' : 'Cordon'}
-                              </Button>
-                              {!r.draining && (
-                                <Button
-                                  size="sm"
-                                  variant="destructive"
-                                  onClick={() =>
-                                    openConfirm({
-                                      title: 'Drain runner',
-                                      description: `Drain runner ${r.id}? Existing sandboxes will be migrated away.`,
-                                      onConfirm: () => drainMutation.mutateAsync(r.id),
-                                    })
-                                  }
-                                >
-                                  Drain
-                                </Button>
-                              )}
-                            </div>
-                          </TableCell>
-                        </TableRow>
-                      ))
-                    ) : (
-                      <TableRow>
-                        <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">
-                          No runners found.
-                        </TableCell>
-                      </TableRow>
-                    )}
-                  </TableBody>
-                </Table>
+            ) : runners.length > 0 ? (
+              <div className="space-y-4">
+                <section className="space-y-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <h2 className="text-sm font-medium">Online & active</h2>
+                      <p className="text-xs text-muted-foreground">READY runners accepting work</p>
+                    </div>
+                    <Badge variant="success">{onlineRunners.length} online</Badge>
+                  </div>
+                  {renderRunnerTable(onlineRunners, 'No online runners.')}
+                </section>
+
+                <Accordion type="single" collapsible className="rounded-md border px-4">
+                  <AccordionItem value="stale">
+                    <AccordionTrigger className="hover:no-underline">
+                      <div className="flex flex-col items-start gap-1">
+                        <span className="text-sm font-medium">Unresponsive & stale</span>
+                        <span className="text-xs font-normal text-muted-foreground">
+                          {staleRunners.length} runners outside READY state
+                        </span>
+                      </div>
+                    </AccordionTrigger>
+                    <AccordionContent>
+                      {renderRunnerTable(staleRunners, 'No unresponsive or stale runners.')}
+                    </AccordionContent>
+                  </AccordionItem>
+                </Accordion>
               </div>
+            ) : (
+              renderRunnerTable([], 'No runners found.')
             )}
           </TabsContent>
 
