@@ -58,7 +58,7 @@ interface AdminRunner {
   id: string
   state: string
   cpu: number
-  memoryGiB: number
+  memory: number
   currentAllocatedCpu: number
   currentAllocatedMemoryGiB: number
   currentStartedSandboxes: number
@@ -459,7 +459,7 @@ const Admin: React.FC = () => {
                             {r.currentAllocatedCpu}/{r.cpu}
                           </TableCell>
                           <TableCell>
-                            {r.currentAllocatedMemoryGiB.toFixed(1)}/{r.memoryGiB}
+                            {r.currentAllocatedMemoryGiB.toFixed(1)}/{r.memory}
                           </TableCell>
                           <TableCell>{r.currentStartedSandboxes}</TableCell>
                           <TableCell>{r.availabilityScore?.toFixed(2) ?? '—'}</TableCell>
