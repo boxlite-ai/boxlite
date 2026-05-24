@@ -10,7 +10,7 @@ import { TraceDetailsSheet } from './TraceDetailsSheet'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { ChevronLeft, ChevronRight, RefreshCw, Activity, ExternalLink } from 'lucide-react'
+import { ChevronLeft, ChevronRight, RefreshCw, Activity, ExternalLink, AlertCircle } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { CopyButton } from '@/components/CopyButton'
 import { Spinner } from '@/components/ui/spinner'
@@ -39,7 +39,7 @@ export const TracesTab: React.FC<TracesTabProps> = ({ sandboxId, getTraceHref })
     limit,
   }
 
-  const { data, isLoading, refetch } = useSandboxTraces(sandboxId, queryParams)
+  const { data, isLoading, isError, refetch } = useSandboxTraces(sandboxId, queryParams)
 
   const handleTimeRangeChange = useCallback((from: Date, to: Date) => {
     setTimeRange({ from, to })
@@ -86,6 +86,11 @@ export const TracesTab: React.FC<TracesTabProps> = ({ sandboxId, getTraceHref })
           <div className="flex items-center justify-center h-40">
             <Spinner className="w-6 h-6" />
           </div>
+        ) : isError ? (
+          <div className="flex flex-col items-center justify-center h-40 text-muted-foreground gap-2">
+            <AlertCircle className="w-8 h-8" />
+            <span className="text-sm">Unable to load traces for this box.</span>
+          </div>
         ) : !data?.items?.length ? (
           <div className="flex flex-col items-center justify-center h-40 text-muted-foreground gap-2">
             <Activity className="w-8 h-8" />
@@ -128,7 +133,9 @@ export const TracesTab: React.FC<TracesTabProps> = ({ sandboxId, getTraceHref })
                       />
                     </div>
                   </TableCell>
-                  <TableCell className="max-w-xs truncate">{trace.rootSpanName}</TableCell>
+                  <TableCell className="max-w-xs truncate">
+                    {trace.rootSpanName || <span className="text-muted-foreground">(unnamed root)</span>}
+                  </TableCell>
                   <TableCell className="font-mono text-xs">{formatTimestamp(trace.startTime)}</TableCell>
                   <TableCell className="font-mono text-xs">{formatDuration(trace.durationMs)}</TableCell>
                   <TableCell className="text-center">{trace.spanCount}</TableCell>

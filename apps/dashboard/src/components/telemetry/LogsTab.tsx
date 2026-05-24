@@ -12,7 +12,7 @@ import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { ChevronLeft, ChevronRight, Search, FileText, RefreshCw, ChevronDown, ChevronUp } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Search, FileText, RefreshCw, ChevronDown, ChevronUp, AlertCircle } from 'lucide-react'
 import { Spinner } from '@/components/ui/spinner'
 import { format } from 'date-fns'
 import { subHours } from 'date-fns'
@@ -45,7 +45,7 @@ export const LogsTab: React.FC<LogsTabProps> = ({ sandboxId }) => {
     search: search || undefined,
   }
 
-  const { data, isLoading, refetch } = useSandboxLogs(sandboxId, queryParams)
+  const { data, isLoading, isError, refetch } = useSandboxLogs(sandboxId, queryParams)
 
   const handleTimeRangeChange = useCallback((from: Date, to: Date) => {
     setTimeRange({ from, to })
@@ -95,9 +95,9 @@ export const LogsTab: React.FC<LogsTabProps> = ({ sandboxId }) => {
         </div>
 
         <Select
-          value={selectedSeverities.length === 1 ? selectedSeverities[0] : ''}
+          value={selectedSeverities.length === 1 ? selectedSeverities[0] : 'all'}
           onValueChange={(value) => {
-            if (value) {
+            if (value && value !== 'all') {
               setSelectedSeverities([value])
             } else {
               setSelectedSeverities([])
@@ -127,6 +127,11 @@ export const LogsTab: React.FC<LogsTabProps> = ({ sandboxId }) => {
         {isLoading ? (
           <div className="flex items-center justify-center h-40">
             <Spinner className="w-6 h-6" />
+          </div>
+        ) : isError ? (
+          <div className="flex flex-col items-center justify-center h-40 text-muted-foreground gap-2">
+            <AlertCircle className="w-8 h-8" />
+            <span className="text-sm">Unable to load logs for this box.</span>
           </div>
         ) : !data?.items?.length ? (
           <div className="flex flex-col items-center justify-center h-40 text-muted-foreground gap-2">

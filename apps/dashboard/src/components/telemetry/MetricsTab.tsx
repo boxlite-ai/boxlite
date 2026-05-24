@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { ChartContainer, ChartTooltip, ChartTooltipContent, ChartConfig } from '@/components/ui/chart'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, ResponsiveContainer, Legend } from 'recharts'
-import { RefreshCw, BarChart3 } from 'lucide-react'
+import { RefreshCw, BarChart3, AlertCircle } from 'lucide-react'
 import { Spinner } from '@/components/ui/spinner'
 import { format } from 'date-fns'
 import { subHours } from 'date-fns'
@@ -190,7 +190,7 @@ export const MetricsTab: React.FC<MetricsTabProps> = ({ sandboxId }) => {
     to: timeRange.to,
   }
 
-  const { data, isLoading, refetch } = useSandboxMetrics(sandboxId, queryParams)
+  const { data, isLoading, isError, refetch } = useSandboxMetrics(sandboxId, queryParams)
 
   const [viewModes, setViewModes] = useState<Record<string, ViewMode>>({
     memory: '%',
@@ -230,6 +230,25 @@ export const MetricsTab: React.FC<MetricsTabProps> = ({ sandboxId }) => {
     }).filter((group) => group.series.length > 0)
   }, [data, viewModes])
 
+  // POL-14 Phase 3 Plan B: the platform (boxlite-api) emits node runtime metrics
+  // (nodejs.*, v8js.*, ...) that don't fit the sandbox cpu/memory/filesystem
+  // groups above. Render whatever else came back, grouped by metric namespace,
+  // so the panel isn't blank for platform telemetry.
+  const platformGroups = React.useMemo(() => {
+    if (!data?.series?.length) return []
+    const shownNames = new Set(groupedSeries.flatMap((group) => group.series.map((s) => s.metricName)))
+    const platformSeries = data.series.filter((s) => !shownNames.has(s.metricName))
+    const byNamespace = new Map<string, MetricSeries[]>()
+    for (const s of platformSeries) {
+      const parts = s.metricName.split('.')
+      const namespace = parts.length > 1 ? parts.slice(0, 2).join('.') : parts[0] || 'metrics'
+      const list = byNamespace.get(namespace) ?? []
+      list.push(s)
+      byNamespace.set(namespace, list)
+    }
+    return Array.from(byNamespace.entries()).map(([namespace, series]) => ({ key: namespace, title: namespace, series }))
+  }, [data, groupedSeries])
+
   return (
     <div className="flex flex-col h-full gap-4 p-4">
       <div className="flex flex-wrap items-center gap-3">
@@ -244,6 +263,11 @@ export const MetricsTab: React.FC<MetricsTabProps> = ({ sandboxId }) => {
         {isLoading ? (
           <div className="flex items-center justify-center h-full min-h-[400px]">
             <Spinner className="w-6 h-6" />
+          </div>
+        ) : isError ? (
+          <div className="flex flex-col items-center justify-center h-full min-h-[400px] text-muted-foreground gap-2">
+            <AlertCircle className="w-8 h-8" />
+            <span className="text-sm">Unable to load metrics for this box.</span>
           </div>
         ) : !data?.series?.length ? (
           <div className="flex flex-col items-center justify-center h-full min-h-[400px] text-muted-foreground gap-2">
@@ -261,6 +285,9 @@ export const MetricsTab: React.FC<MetricsTabProps> = ({ sandboxId }) => {
                 viewMode={group.hasToggle ? group.viewMode : undefined}
                 onViewModeChange={group.hasToggle ? (mode) => handleViewModeChange(group.key, mode) : undefined}
               />
+            ))}
+            {platformGroups.map((group) => (
+              <MetricGroupChart key={group.key} title={group.title} series={group.series} convertToGiB={false} />
             ))}
           </div>
         )}

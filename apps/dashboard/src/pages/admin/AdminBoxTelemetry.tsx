@@ -53,8 +53,10 @@ function StateBadge({ state }: { state: string }) {
   return <Badge variant={variant}>{state}</Badge>
 }
 
-function jaegerSearchHref(sandboxId: string) {
-  return `/jaeger/search?service=${encodeURIComponent(`sandbox-${sandboxId}`)}`
+function jaegerSearchHref(_sandboxId: string) {
+  // POL-14 Phase 3 Plan B: platform telemetry is emitted under one service name
+  // (boxlite-api, see apps/api/src/tracing.ts), not a per-sandbox service.
+  return `/jaeger/search?service=${encodeURIComponent('boxlite-api')}`
 }
 
 function jaegerTraceHref(traceId: string) {

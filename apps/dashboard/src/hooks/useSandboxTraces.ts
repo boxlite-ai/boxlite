@@ -27,40 +27,24 @@ export function useSandboxTraces(
   return useQuery<PaginatedTraces>({
     queryKey: queryKeys.telemetry.traces(sandboxId ?? '', params),
     queryFn: async () => {
-      if (!selectedOrganization || !sandboxId || !api.analyticsTelemetryApi) {
+      if (!selectedOrganization || !sandboxId || !api.sandboxApi) {
         throw new Error('Missing required parameters')
       }
       const limit = params.limit ?? 50
       const page = params.page ?? 1
-      const offset = (page - 1) * limit
 
-      const response = await api.analyticsTelemetryApi.organizationOrganizationIdSandboxSandboxIdTelemetryTracesGet(
-        selectedOrganization.id,
+      const response = await api.sandboxApi.getSandboxTraces(
         sandboxId,
-        params.from.toISOString(),
-        params.to.toISOString(),
+        params.from,
+        params.to,
+        selectedOrganization.id,
+        page,
         limit,
-        offset,
       )
 
-      const items = (response.data ?? []).map((trace) => ({
-        traceId: trace.traceId ?? '',
-        rootSpanName: trace.rootSpanName ?? '',
-        startTime: trace.startTime ?? '',
-        endTime: trace.endTime ?? '',
-        durationMs: trace.totalDurationMs ?? 0,
-        spanCount: trace.spanCount ?? 0,
-        statusCode: trace.statusCode,
-      }))
-
-      return {
-        items,
-        total: items.length < limit ? offset + items.length : offset + items.length + 1,
-        page,
-        totalPages: items.length < limit ? page : page + 1,
-      }
+      return response.data
     },
-    enabled: !!sandboxId && !!selectedOrganization && !!api.analyticsTelemetryApi && !!params.from && !!params.to,
+    enabled: !!sandboxId && !!selectedOrganization && !!api.sandboxApi && !!params.from && !!params.to,
     staleTime: 10_000,
     ...options,
   })

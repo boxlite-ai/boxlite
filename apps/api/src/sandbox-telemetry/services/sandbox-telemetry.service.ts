@@ -62,8 +62,11 @@ export class SandboxTelemetryService {
 
   constructor(private readonly clickhouseService: ClickHouseService) {}
 
-  private getServiceName(sandboxId: string): string {
-    return `sandbox-${sandboxId}`
+  private getServiceName(_sandboxId: string): string {
+    // POL-14 Phase3 Plan B: internal admin shows PLATFORM telemetry (API/runner),
+    // not per-sandbox daemon telemetry (no daemon emit in Plan B). The panel is
+    // platform-scoped; sandboxId is ignored.
+    return 'boxlite-api'
   }
 
   isConfigured(): boolean {

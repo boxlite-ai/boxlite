@@ -29,45 +29,26 @@ export function useSandboxLogs(
   return useQuery<PaginatedLogs>({
     queryKey: queryKeys.telemetry.logs(sandboxId ?? '', params),
     queryFn: async () => {
-      if (!selectedOrganization || !sandboxId || !api.analyticsTelemetryApi) {
+      if (!selectedOrganization || !sandboxId || !api.sandboxApi) {
         throw new Error('Missing required parameters')
       }
       const limit = params.limit ?? 50
       const page = params.page ?? 1
-      const offset = (page - 1) * limit
-      const severity = params.severities?.length ? params.severities.join(',') : undefined
 
-      const response = await api.analyticsTelemetryApi.organizationOrganizationIdSandboxSandboxIdTelemetryLogsGet(
-        selectedOrganization.id,
+      const response = await api.sandboxApi.getSandboxLogs(
         sandboxId,
-        params.from.toISOString(),
-        params.to.toISOString(),
-        severity,
-        params.search,
+        params.from,
+        params.to,
+        selectedOrganization.id,
+        page,
         limit,
-        offset,
+        params.severities,
+        params.search,
       )
 
-      const items = (response.data ?? []).map((entry) => ({
-        timestamp: entry.timestamp ?? '',
-        body: entry.body ?? '',
-        severityText: entry.severityText ?? '',
-        severityNumber: entry.severityNumber,
-        serviceName: entry.serviceName ?? '',
-        resourceAttributes: entry.resourceAttributes ?? {},
-        logAttributes: entry.logAttributes ?? {},
-        traceId: entry.traceId,
-        spanId: entry.spanId,
-      }))
-
-      return {
-        items,
-        total: items.length < limit ? offset + items.length : offset + items.length + 1,
-        page,
-        totalPages: items.length < limit ? page : page + 1,
-      }
+      return response.data
     },
-    enabled: !!sandboxId && !!selectedOrganization && !!api.analyticsTelemetryApi && !!params.from && !!params.to,
+    enabled: !!sandboxId && !!selectedOrganization && !!api.sandboxApi && !!params.from && !!params.to,
     staleTime: 10_000,
     ...options,
   })
