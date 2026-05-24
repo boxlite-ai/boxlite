@@ -49,6 +49,7 @@ import Playground from './pages/Playground'
 import Regions from './pages/Regions'
 import Registries from './pages/Registries'
 import Admin from './pages/Admin'
+import AdminBoxTelemetry from './pages/admin/AdminBoxTelemetry'
 import Runners from './pages/Runners'
 import Sandboxes from './pages/Sandboxes'
 import Snapshots from './pages/Snapshots'
@@ -299,6 +300,7 @@ function App() {
           }
         />
         <Route path={getRouteSubPath(RoutePath.ADMIN)} element={<Admin />} />
+        <Route path={getRouteSubPath(RoutePath.ADMIN_BOX_TELEMETRY)} element={<AdminBoxTelemetry />} />
         <Route path={getRouteSubPath(RoutePath.PLAYGROUND)} element={<Playground />} />
         <Route
           path={getRouteSubPath(RoutePath.WEBHOOKS)}

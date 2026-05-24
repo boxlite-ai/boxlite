@@ -33,6 +33,7 @@ export enum RoutePath {
   REGIONS = '/dashboard/regions',
   RUNNERS = '/dashboard/runners',
   ADMIN = '/dashboard/admin',
+  ADMIN_BOX_TELEMETRY = '/dashboard/admin/boxes/:boxId',
   EXPERIMENTAL = '/dashboard/experimental',
   PLAYGROUND = '/dashboard/playground',
 

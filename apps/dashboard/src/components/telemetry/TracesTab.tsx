@@ -10,7 +10,7 @@ import { TraceDetailsSheet } from './TraceDetailsSheet'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { ChevronLeft, ChevronRight, RefreshCw, Activity } from 'lucide-react'
+import { ChevronLeft, ChevronRight, RefreshCw, Activity, ExternalLink } from 'lucide-react'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { CopyButton } from '@/components/CopyButton'
 import { Spinner } from '@/components/ui/spinner'
@@ -20,9 +20,10 @@ import { TraceSummary } from '@boxlite-ai/api-client'
 
 interface TracesTabProps {
   sandboxId: string
+  getTraceHref?: (traceId: string) => string
 }
 
-export const TracesTab: React.FC<TracesTabProps> = ({ sandboxId }) => {
+export const TracesTab: React.FC<TracesTabProps> = ({ sandboxId, getTraceHref }) => {
   const [timeRange, setTimeRange] = useState(() => {
     const now = new Date()
     return { from: subHours(now, 1), to: now }
@@ -99,6 +100,7 @@ export const TracesTab: React.FC<TracesTabProps> = ({ sandboxId }) => {
                 <TableHead>Start Time</TableHead>
                 <TableHead>Duration</TableHead>
                 <TableHead className="text-center">Spans</TableHead>
+                {getTraceHref && <TableHead className="text-right">Jaeger</TableHead>}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -130,6 +132,20 @@ export const TracesTab: React.FC<TracesTabProps> = ({ sandboxId }) => {
                   <TableCell className="font-mono text-xs">{formatTimestamp(trace.startTime)}</TableCell>
                   <TableCell className="font-mono text-xs">{formatDuration(trace.durationMs)}</TableCell>
                   <TableCell className="text-center">{trace.spanCount}</TableCell>
+                  {getTraceHref && (
+                    <TableCell className="text-right">
+                      <Button asChild variant="ghost" size="icon-xs">
+                        <a
+                          href={getTraceHref(trace.traceId)}
+                          target="_blank"
+                          rel="noreferrer"
+                          onClick={(event) => event.stopPropagation()}
+                        >
+                          <ExternalLink className="h-3.5 w-3.5" />
+                        </a>
+                      </Button>
+                    </TableCell>
+                  )}
                 </TableRow>
               ))}
             </TableBody>

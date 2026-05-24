@@ -26,7 +26,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { RoutePath } from '@/enums/RoutePath'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import React, { useState } from 'react'
-import { Navigate } from 'react-router-dom'
+import { generatePath, Navigate, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 
 // ─── Types (not in generated api-client for these admin-only endpoints) ───────
@@ -234,6 +234,7 @@ function isReadyRunner(runner: AdminRunner) {
 
 const Admin: React.FC = () => {
   const { axiosInstance } = useApi()
+  const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null)
   const [confirmOpen, setConfirmOpen] = useState(false)
@@ -443,21 +444,32 @@ const Admin: React.FC = () => {
               </TableCell>
               <TableCell className="text-xs text-muted-foreground">{new Date(b.createdAt).toLocaleString()}</TableCell>
               <TableCell>
-                {isErrorState(b.state) && (
+                <div className="flex gap-2">
                   <Button
                     size="sm"
                     variant="outline"
                     onClick={() =>
-                      openConfirm({
-                        title: 'Recover sandbox',
-                        description: `Recover sandbox ${b.id} from error state?`,
-                        onConfirm: () => recoverMutation.mutateAsync(b.id),
-                      })
+                      navigate(generatePath(RoutePath.ADMIN_BOX_TELEMETRY, { boxId: b.id }))
                     }
                   >
-                    Recover
+                    Open telemetry
                   </Button>
-                )}
+                  {isErrorState(b.state) && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() =>
+                        openConfirm({
+                          title: 'Recover sandbox',
+                          description: `Recover sandbox ${b.id} from error state?`,
+                          onConfirm: () => recoverMutation.mutateAsync(b.id),
+                        })
+                      }
+                    >
+                      Recover
+                    </Button>
+                  )}
+                </div>
               </TableCell>
             </TableRow>
           ))}
