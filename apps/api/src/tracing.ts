@@ -59,11 +59,14 @@ const otelSdk = new NodeSDK({
     new KafkaJsInstrumentation(),
     new RuntimeNodeInstrumentation(),
   ],
-  logRecordProcessors: [new BatchLogRecordProcessor(new OTLPLogExporter(otlpExporterConfig))],
-  spanProcessors: [new BatchSpanProcessor(new OTLPTraceExporter(otlpExporterConfig))],
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- OTLP exporter option types drifted across SDK versions; config is runtime-valid.
+  logRecordProcessors: [new BatchLogRecordProcessor(new OTLPLogExporter(otlpExporterConfig as any))],
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  spanProcessors: [new BatchSpanProcessor(new OTLPTraceExporter(otlpExporterConfig as any))],
   metricReaders: [
     new PeriodicExportingMetricReader({
-      exporter: new OTLPMetricExporter(otlpExporterConfig),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      exporter: new OTLPMetricExporter(otlpExporterConfig as any),
       exportIntervalMillis: 30 * 1000,
     }),
   ],

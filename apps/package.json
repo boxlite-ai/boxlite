@@ -338,5 +338,8 @@
       "nbqa pylint -sn",
       "basedpyright"
     ]
+  },
+  "resolutions": {
+    "@types/express-serve-static-core": "5.1.0"
   }
 }
