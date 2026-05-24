@@ -10,7 +10,9 @@ import { RunnerService } from '../../sandbox/services/runner.service'
 import { SandboxRepository } from '../../sandbox/repositories/sandbox.repository'
 import { RunnerState } from '../../sandbox/enums/runner-state.enum'
 import { SandboxState } from '../../sandbox/enums/sandbox-state.enum'
+import { OrganizationService } from '../../organization/services/organization.service'
 import {
+  AdminBoxOwnerDto,
   AdminBoxItemDto,
   AdminMachineItemDto,
   AdminOverviewDto,
@@ -27,12 +29,17 @@ type SandboxStateCountRow = {
   count: string | number
 }
 
+type SandboxWithOwnerInput = {
+  organizationId: string
+}
+
 @Injectable()
 export class AdminOverviewService {
   constructor(
     private readonly userService: UserService,
     private readonly runnerService: RunnerService,
     private readonly sandboxRepository: SandboxRepository,
+    private readonly organizationService: OrganizationService,
   ) {}
 
   async getOverview(): Promise<AdminOverviewDto> {
@@ -103,6 +110,8 @@ export class AdminOverviewService {
 
   async listBoxes(): Promise<AdminBoxItemDto[]> {
     const sandboxes = await this.sandboxRepository.find()
+    const ownersByOrganizationId = await this.resolveBoxOwners(sandboxes)
+
     return sandboxes.map((s) => ({
       id: s.id,
       organizationId: s.organizationId,
@@ -111,7 +120,53 @@ export class AdminOverviewService {
       cpu: s.cpu,
       memoryGiB: s.mem,
       createdAt: s.createdAt.toISOString(),
+      owner: ownersByOrganizationId.get(s.organizationId) ?? this.fallbackBoxOwner(s.organizationId),
     }))
+  }
+
+  private async resolveBoxOwners(sandboxes: SandboxWithOwnerInput[]): Promise<Map<string, AdminBoxOwnerDto>> {
+    const organizationIds = Array.from(new Set(sandboxes.map((sandbox) => sandbox.organizationId).filter(Boolean)))
+    const organizations = await this.organizationService.findByIds(organizationIds)
+    const creatorIds = Array.from(new Set(organizations.map((organization) => organization.createdBy).filter(Boolean)))
+    const users = await this.userService.findByIds(creatorIds)
+    const usersById = new Map(users.map((user) => [user.id, user]))
+
+    return new Map(
+      organizations.map((organization) => [
+        organization.id,
+        this.toBoxOwner(organization, usersById.get(organization.createdBy)),
+      ]),
+    )
+  }
+
+  private toBoxOwner(
+    organization: { name: string; personal: boolean },
+    creator?: { name: string; email: string },
+  ): AdminBoxOwnerDto {
+    if (organization.personal) {
+      return {
+        name: creator?.name || organization.name,
+        email: creator?.email ?? '',
+        orgName: organization.name,
+        personal: true,
+      }
+    }
+
+    return {
+      name: organization.name,
+      email: creator?.email ?? '',
+      orgName: organization.name,
+      personal: false,
+    }
+  }
+
+  private fallbackBoxOwner(organizationId: string): AdminBoxOwnerDto {
+    return {
+      name: organizationId,
+      email: '',
+      orgName: organizationId,
+      personal: false,
+    }
   }
 
   async listRunners(): Promise<AdminRunnerItemDto[]> {

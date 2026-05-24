@@ -14,6 +14,7 @@
 jest.mock('../../sandbox/services/runner.service', () => ({ RunnerService: class RunnerService {} }))
 jest.mock('../../sandbox/repositories/sandbox.repository', () => ({ SandboxRepository: class SandboxRepository {} }))
 jest.mock('../../user/user.service', () => ({ UserService: class UserService {} }))
+jest.mock('../../organization/services/organization.service', () => ({ OrganizationService: class OrganizationService {} }))
 
 import { AdminOverviewService } from './overview.service'
 import { RunnerState } from '../../sandbox/enums/runner-state.enum'
@@ -55,6 +56,17 @@ function makeUser(overrides: Partial<{ id: string; email: string; name: string; 
   }
 }
 
+function makeOrganization(
+  overrides: Partial<{ id: string; name: string; personal: boolean; createdBy: string }> = {},
+) {
+  return {
+    id: overrides.id ?? 'org-1',
+    name: overrides.name ?? 'Personal Org',
+    personal: overrides.personal ?? true,
+    createdBy: overrides.createdBy ?? 'usr-1',
+  }
+}
+
 function makeSandbox(
   overrides: Partial<{
     id: string
@@ -89,6 +101,8 @@ function makeSandboxStateCountRows(sandboxes: ReturnType<typeof makeSandbox>[]) 
 
 function buildService(stubs: {
   users?: ReturnType<typeof makeUser>[]
+  ownerUsers?: ReturnType<typeof makeUser>[]
+  organizations?: ReturnType<typeof makeOrganization>[]
   runners?: ReturnType<typeof makeRunnerDto>[]
   drainingRunners?: ReturnType<typeof makeRunnerDto>[]
   sandboxes?: ReturnType<typeof makeSandbox>[]
@@ -96,6 +110,11 @@ function buildService(stubs: {
 }): AdminOverviewService {
   const userService = {
     findAll: jest.fn().mockResolvedValue(stubs.users ?? []),
+    findByIds: jest.fn().mockResolvedValue(stubs.ownerUsers ?? []),
+  } as any
+
+  const organizationService = {
+    findByIds: jest.fn().mockResolvedValue(stubs.organizations ?? []),
   } as any
 
   const runnerService = {
@@ -115,7 +134,7 @@ function buildService(stubs: {
     createQueryBuilder: jest.fn().mockReturnValue(sandboxStateCountQuery),
   } as any
 
-  return new AdminOverviewService(userService, runnerService, sandboxRepository)
+  return new (AdminOverviewService as any)(userService, runnerService, sandboxRepository, organizationService)
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -267,6 +286,30 @@ describe('AdminOverviewService', () => {
       expect(result[0].cpu).toBe(2)
       expect(result[0].memoryGiB).toBe(4)
       expect(result[0].createdAt).toBe('2024-01-01T00:00:00.000Z')
+    })
+
+    it('resolves personal organization owner from sandbox organization and creator user', async () => {
+      const service = buildService({
+        sandboxes: [makeSandbox({ organizationId: 'org-personal' })],
+        organizations: [
+          makeOrganization({
+            id: 'org-personal',
+            name: 'Brian personal workspace',
+            personal: true,
+            createdBy: 'usr-brian',
+          }),
+        ],
+        ownerUsers: [makeUser({ id: 'usr-brian', name: 'Brian Luo', email: 'brian@example.com' })],
+      })
+
+      const result = await service.listBoxes()
+
+      expect((result[0] as any).owner).toEqual({
+        name: 'Brian Luo',
+        email: 'brian@example.com',
+        orgName: 'Brian personal workspace',
+        personal: true,
+      })
     })
   })
 

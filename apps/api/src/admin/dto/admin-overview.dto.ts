@@ -82,6 +82,21 @@ export class AdminUserItemDto {
 
 // ─── Sandbox list ────────────────────────────────────────────────────────────
 
+@ApiSchema({ name: 'AdminBoxOwner' })
+export class AdminBoxOwnerDto {
+  @ApiProperty({ description: 'Display name for the owner group', example: 'Alice Smith' })
+  name: string
+
+  @ApiProperty({ description: 'Owner email for personal organizations, blank when unavailable', example: 'alice@example.com' })
+  email: string
+
+  @ApiProperty({ description: 'Organization name backing this box', example: 'Alice Personal' })
+  orgName: string
+
+  @ApiProperty({ description: 'Whether this is a personal organization', example: true })
+  personal: boolean
+}
+
 @ApiSchema({ name: 'AdminBoxItem' })
 export class AdminBoxItemDto {
   @ApiProperty({ description: 'Sandbox ID', example: 'sb_abc123' })
@@ -104,6 +119,9 @@ export class AdminBoxItemDto {
 
   @ApiProperty({ description: 'Creation timestamp', example: '2024-01-01T00:00:00Z' })
   createdAt: string
+
+  @ApiProperty({ type: AdminBoxOwnerDto })
+  owner: AdminBoxOwnerDto
 }
 
 // ─── Runner admin item (RunnerFullDto + draining flag) ───────────────────────

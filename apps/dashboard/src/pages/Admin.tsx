@@ -57,6 +57,12 @@ interface AdminBox {
   cpu: number
   memoryGiB: number
   createdAt: string
+  owner: {
+    name: string
+    email: string
+    orgName: string
+    personal: boolean
+  }
 }
 
 interface AdminRunner {
@@ -175,6 +181,51 @@ function getBoxBreakdown(boxes: AdminOverview['boxes']) {
   ].filter((segment) => segment.count > 0)
 }
 
+function getBoxBreakdownFromRows(boxes: AdminBox[]) {
+  const byState = boxes.reduce<Record<string, number>>((acc, box) => {
+    acc[box.state] = (acc[box.state] ?? 0) + 1
+    return acc
+  }, {})
+
+  return getBoxBreakdown({ total: boxes.length, byState })
+}
+
+function getBoxOwnerGroups(boxes: AdminBox[]) {
+  const groups = new Map<string, { owner: AdminBox['owner']; boxes: AdminBox[] }>()
+
+  for (const box of boxes) {
+    const existing = groups.get(box.organizationId)
+    if (existing) {
+      existing.boxes.push(box)
+    } else {
+      groups.set(box.organizationId, { owner: box.owner, boxes: [box] })
+    }
+  }
+
+  return Array.from(groups.entries())
+    .map(([organizationId, group]) => ({
+      organizationId,
+      owner: group.owner,
+      boxes: group.boxes,
+      breakdown: getBoxBreakdownFromRows(group.boxes),
+    }))
+    .sort((a, b) => a.owner.name.localeCompare(b.owner.name))
+}
+
+function getBoxRollupText(boxes: AdminBox[]) {
+  const counts = boxes.reduce<Record<string, number>>((acc, box) => {
+    acc[box.state] = (acc[box.state] ?? 0) + 1
+    return acc
+  }, {})
+  const parts = [
+    { label: 'started', count: counts.started ?? 0 },
+    { label: 'error', count: counts.error ?? 0 },
+    { label: 'build failed', count: counts.build_failed ?? 0 },
+  ].filter((part) => part.count > 0)
+
+  return parts.length > 0 ? parts.map((part) => `${part.count} ${part.label}`).join(' · ') : 'no active states'
+}
+
 function isReadyRunner(runner: AdminRunner) {
   return runner.state?.toLowerCase() === 'ready'
 }
@@ -251,6 +302,7 @@ const Admin: React.FC = () => {
   const runners = runnersQuery.data ?? []
   const onlineRunners = runners.filter(isReadyRunner)
   const staleRunners = runners.filter((runner) => !isReadyRunner(runner))
+  const boxOwnerGroups = boxesQuery.data ? getBoxOwnerGroups(boxesQuery.data) : []
 
   if (overviewQuery.isError && (overviewQuery.error as { response?: { status?: number } })?.response?.status === 403) {
     return <Navigate to={RoutePath.DASHBOARD} replace />
@@ -360,6 +412,55 @@ const Admin: React.FC = () => {
               </TableCell>
             </TableRow>
           )}
+        </TableBody>
+      </Table>
+    </div>
+  )
+
+  const renderBoxesTable = (boxRows: AdminBox[]) => (
+    <div className="rounded-md border">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>State</TableHead>
+            <TableHead>CPU</TableHead>
+            <TableHead>Mem (GiB)</TableHead>
+            <TableHead>Runner</TableHead>
+            <TableHead>Created</TableHead>
+            <TableHead />
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {boxRows.map((b) => (
+            <TableRow key={b.id}>
+              <TableCell>
+                <StateBadge state={b.state} />
+              </TableCell>
+              <TableCell>{b.cpu}</TableCell>
+              <TableCell>{b.memoryGiB}</TableCell>
+              <TableCell className="font-mono text-xs text-muted-foreground truncate max-w-[8rem]">
+                {b.runnerId ?? '—'}
+              </TableCell>
+              <TableCell className="text-xs text-muted-foreground">{new Date(b.createdAt).toLocaleString()}</TableCell>
+              <TableCell>
+                {isErrorState(b.state) && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() =>
+                      openConfirm({
+                        title: 'Recover sandbox',
+                        description: `Recover sandbox ${b.id} from error state?`,
+                        onConfirm: () => recoverMutation.mutateAsync(b.id),
+                      })
+                    }
+                  >
+                    Recover
+                  </Button>
+                )}
+              </TableCell>
+            </TableRow>
+          ))}
         </TableBody>
       </Table>
     </div>
@@ -518,60 +619,61 @@ const Admin: React.FC = () => {
           <TabsContent value="boxes">
             {boxesQuery.isPending ? (
               <TableSkeleton cols={6} />
+            ) : boxOwnerGroups.length > 0 ? (
+              <Accordion
+                type="multiple"
+                defaultValue={boxOwnerGroups.map((group) => group.organizationId)}
+                className="space-y-3"
+              >
+                {boxOwnerGroups.map((group) => (
+                  <AccordionItem
+                    key={group.organizationId}
+                    value={group.organizationId}
+                    className="rounded-md border bg-card px-4"
+                  >
+                    <AccordionTrigger className="hover:no-underline">
+                      <div className="flex w-full flex-col gap-3 pr-4 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="min-w-0 text-left">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="truncate text-sm font-medium">{group.owner.name}</span>
+                            <Badge variant="secondary" className="text-[10px] font-normal">
+                              {group.owner.personal ? 'personal' : 'team'}
+                            </Badge>
+                          </div>
+                          <p className="truncate text-xs font-normal text-muted-foreground">
+                            {group.owner.email || group.owner.orgName}
+                          </p>
+                        </div>
+                        <div className="flex shrink-0 flex-col gap-2 text-left sm:text-right">
+                          <p className="text-xs font-normal text-muted-foreground">
+                            {getBoxRollupText(group.boxes)} · {group.boxes.length} total
+                          </p>
+                          <div className="flex h-1.5 w-36 overflow-hidden rounded-full bg-muted/40 sm:ml-auto">
+                            {group.breakdown.map((segment) => (
+                              <div
+                                key={segment.key}
+                                className="h-full"
+                                style={{
+                                  width: `${(segment.count / group.boxes.length) * 100}%`,
+                                  backgroundColor: segment.color,
+                                }}
+                              />
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </AccordionTrigger>
+                    <AccordionContent>{renderBoxesTable(group.boxes)}</AccordionContent>
+                  </AccordionItem>
+                ))}
+              </Accordion>
             ) : (
               <div className="rounded-md border">
                 <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>State</TableHead>
-                      <TableHead>CPU</TableHead>
-                      <TableHead>Mem (GiB)</TableHead>
-                      <TableHead>Runner</TableHead>
-                      <TableHead>Created</TableHead>
-                      <TableHead />
-                    </TableRow>
-                  </TableHeader>
                   <TableBody>
-                    {boxesQuery.data && boxesQuery.data.length > 0 ? (
-                      boxesQuery.data.map((b) => (
-                        <TableRow key={b.id}>
-                          <TableCell>
-                            <StateBadge state={b.state} />
-                          </TableCell>
-                          <TableCell>{b.cpu}</TableCell>
-                          <TableCell>{b.memoryGiB}</TableCell>
-                          <TableCell className="font-mono text-xs text-muted-foreground truncate max-w-[8rem]">
-                            {b.runnerId ?? '—'}
-                          </TableCell>
-                          <TableCell className="text-xs text-muted-foreground">
-                            {new Date(b.createdAt).toLocaleString()}
-                          </TableCell>
-                          <TableCell>
-                            {isErrorState(b.state) && (
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() =>
-                                  openConfirm({
-                                    title: 'Recover sandbox',
-                                    description: `Recover sandbox ${b.id} from error state?`,
-                                    onConfirm: () => recoverMutation.mutateAsync(b.id),
-                                  })
-                                }
-                              >
-                                Recover
-                              </Button>
-                            )}
-                          </TableCell>
-                        </TableRow>
-                      ))
-                    ) : (
-                      <TableRow>
-                        <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
-                          No boxes found.
-                        </TableCell>
-                      </TableRow>
-                    )}
+                    <TableRow>
+                      <TableCell className="h-24 text-center text-muted-foreground">No boxes found.</TableCell>
+                    </TableRow>
                   </TableBody>
                 </Table>
               </div>
