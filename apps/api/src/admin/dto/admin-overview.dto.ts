@@ -87,7 +87,10 @@ export class AdminBoxOwnerDto {
   @ApiProperty({ description: 'Display name for the owner group', example: 'Alice Smith' })
   name: string
 
-  @ApiProperty({ description: 'Owner email for personal organizations, blank when unavailable', example: 'alice@example.com' })
+  @ApiProperty({
+    description: 'Owner email for personal organizations, blank when unavailable',
+    example: 'alice@example.com',
+  })
   email: string
 
   @ApiProperty({ description: 'Organization name backing this box', example: 'Alice Personal' })

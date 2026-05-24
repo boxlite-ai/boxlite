@@ -14,7 +14,9 @@
 jest.mock('../../sandbox/services/runner.service', () => ({ RunnerService: class RunnerService {} }))
 jest.mock('../../sandbox/repositories/sandbox.repository', () => ({ SandboxRepository: class SandboxRepository {} }))
 jest.mock('../../user/user.service', () => ({ UserService: class UserService {} }))
-jest.mock('../../organization/services/organization.service', () => ({ OrganizationService: class OrganizationService {} }))
+jest.mock('../../organization/services/organization.service', () => ({
+  OrganizationService: class OrganizationService {},
+}))
 
 import { AdminOverviewService } from './overview.service'
 import { RunnerState } from '../../sandbox/enums/runner-state.enum'
@@ -56,9 +58,7 @@ function makeUser(overrides: Partial<{ id: string; email: string; name: string; 
   }
 }
 
-function makeOrganization(
-  overrides: Partial<{ id: string; name: string; personal: boolean; createdBy: string }> = {},
-) {
+function makeOrganization(overrides: Partial<{ id: string; name: string; personal: boolean; createdBy: string }> = {}) {
   return {
     id: overrides.id ?? 'org-1',
     name: overrides.name ?? 'Personal Org',

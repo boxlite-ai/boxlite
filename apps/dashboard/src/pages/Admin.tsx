@@ -448,9 +448,7 @@ const Admin: React.FC = () => {
                   <Button
                     size="sm"
                     variant="outline"
-                    onClick={() =>
-                      navigate(generatePath(RoutePath.ADMIN_BOX_TELEMETRY, { boxId: b.id }))
-                    }
+                    onClick={() => navigate(generatePath(RoutePath.ADMIN_BOX_TELEMETRY, { boxId: b.id }))}
                   >
                     Open telemetry
                   </Button>
