@@ -38,13 +38,17 @@ export class AdminOverviewService {
       this.runnerService.findDrainingPaginated(0, ALL_DRAINING_TAKE),
     ])
 
-    const onlineCount = runners.filter((r) => r.state === RunnerState.READY).length
+    const onlineRunners = runners.filter((r) => r.state === RunnerState.READY)
+    const onlineCount = onlineRunners.length
     const drainingCount = drainingRunners.length
 
     const totalCpu = runners.reduce((sum, r) => sum + r.cpu, 0)
     const totalAllocated = runners.reduce((sum, r) => sum + r.currentAllocatedCpu, 0)
+    // Live utilisation should not be diluted by stale runners reporting zero.
     const avgCpuUtil =
-      runners.length > 0 ? runners.reduce((sum, r) => sum + r.currentCpuUsagePercentage, 0) / runners.length / 100 : 0
+      onlineRunners.length > 0
+        ? onlineRunners.reduce((sum, r) => sum + r.currentCpuUsagePercentage, 0) / onlineRunners.length / 100
+        : 0
     const oversell = totalCpu > 0 ? totalAllocated / totalCpu : 0
 
     return {

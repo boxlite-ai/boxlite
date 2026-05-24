@@ -164,6 +164,22 @@ describe('AdminOverviewService', () => {
       // avg = (40 + 60) / 2 / 100 = 0.5
       expect(result.cluster.cpuUtil).toBeCloseTo(0.5)
     })
+
+    it('averages cpuUtil over online (READY) runners only', async () => {
+      const service = buildService({
+        runners: [
+          makeRunnerDto({ id: 'r1', state: RunnerState.READY, currentCpuUsagePercentage: 60 }),
+          makeRunnerDto({ id: 'r2', state: RunnerState.INITIALIZING, currentCpuUsagePercentage: 0 }),
+          makeRunnerDto({ id: 'r3', state: RunnerState.UNRESPONSIVE, currentCpuUsagePercentage: 0 }),
+        ],
+        sandboxes: [],
+        drainingRunners: [],
+      })
+
+      const result = await service.getOverview()
+
+      expect(result.cluster.cpuUtil).toBeCloseTo(0.6)
+    })
   })
 
   // ── listUsers ────────────────────────────────────────────────────────────
