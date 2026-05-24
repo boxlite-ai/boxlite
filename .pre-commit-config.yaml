@@ -26,6 +26,7 @@ repos:
             Cargo\.lock|
             sdks/python/pyproject\.toml|
             sdks/node/package\.json|
+            make/changes\.mk|
             make/quality\.mk|
             \.pre-commit-config\.yaml
           )$

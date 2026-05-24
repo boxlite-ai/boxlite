@@ -1,4 +1,5 @@
-# Detect changed components by diffing against main (or HEAD~1 if on main).
+# Detect changed components by diffing against the remote default branch
+# (or HEAD~1 if on main).
 # Returns a space-separated list of component tags: rust cli ffi python node c go apps
 define detect_changes
 $(shell \
@@ -6,7 +7,15 @@ $(shell \
   if [ "$$BRANCH" = "main" ] || [ "$$BRANCH" = "master" ]; then \
     BASE=HEAD~1; \
   else \
-    BASE=$$(git merge-base HEAD main 2>/dev/null || git merge-base HEAD master 2>/dev/null || echo HEAD~1); \
+    BASE_REF=$${CHANGE_BASE_REF:-$$(git symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null || true)}; \
+    if [ -z "$$BASE_REF" ]; then \
+      if git rev-parse --verify origin/main >/dev/null 2>&1; then BASE_REF=origin/main; \
+      elif git rev-parse --verify origin/master >/dev/null 2>&1; then BASE_REF=origin/master; \
+      elif git rev-parse --verify main >/dev/null 2>&1; then BASE_REF=main; \
+      elif git rev-parse --verify master >/dev/null 2>&1; then BASE_REF=master; \
+      fi; \
+    fi; \
+    BASE=$$(git merge-base HEAD "$$BASE_REF" 2>/dev/null || git merge-base HEAD main 2>/dev/null || git merge-base HEAD master 2>/dev/null || echo HEAD~1); \
   fi; \
   CHANGED=$$(git diff --name-only $$BASE HEAD 2>/dev/null; git diff --name-only 2>/dev/null; git diff --cached --name-only 2>/dev/null); \
   if [ -z "$$CHANGED" ]; then exit 0; fi; \
