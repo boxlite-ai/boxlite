@@ -1,0 +1,373 @@
+# infra-local Connection Reference
+
+This document summarizes endpoints, credentials, and environment variables for every service brought up by `apps/infra-local/`.
+**Single source of truth**: the `InfraConfig` dataclass in [boxlite_local/config.py](boxlite_local/config.py).
+If a port or credential here disagrees with `config.py`, `config.py` wins.
+
+Last reviewed: 2026-05-22 (Phase 3c deployment).
+
+---
+
+## 0. Important prerequisite: host hub vs host port
+
+Services run inside **BoxLite microVM boxes**. Their exposed ports are addressed from two different perspectives:
+
+| Who is reaching in | Address to use | Notes |
+|---|---|---|
+| **Process on the host (Mac)** — your `yarn dev` api/dashboard, `psql`, curl, etc. | `127.0.0.1:<host_port>` | Goes through BoxLite's host→box port mapping |
+| **Process inside a box** (e.g. the dex box wants to reach the postgres box) | `host.boxlite.internal:<host_port>` | DNS shim provided by gvproxy — **only resolvable inside a box**; the port itself is still `host_port` |
+
+⚠ **Common pitfall**: `host.boxlite.internal` cannot be resolved from the Mac host; `127.0.0.1` inside a box points at the box itself. URLs below default to the **host perspective** unless noted.
+
+The environment variable `BOXLITE_HOST_HUB` overrides the host-hub name (default `host.boxlite.internal`).
+
+---
+
+## 1. PostgreSQL
+
+[config.py:34-37](boxlite_local/config.py#L34-L37) / [services.py:13-40](boxlite_local/services.py#L13-L40)
+
+| Field | Value |
+|---|---|
+| Host port | `25432` (env `BOXLITE_PG_HOST_PORT`) |
+| User | `boxlite` (env `BOXLITE_PG_USER`) |
+| Password | `boxlite` (env `BOXLITE_PG_PASSWORD`) — note: dev only, `POSTGRES_HOST_AUTH_METHOD=trust`, password is ignored |
+| Database | `boxlite` (env `BOXLITE_PG_DB`) |
+| Image | `postgres:17-alpine` |
+| Data volume | `~/.boxlite-local/data/pg/` |
+
+**Connection URL (host)**:
+```
+postgresql://boxlite:boxlite@127.0.0.1:25432/boxlite
+```
+
+**Connection URL (in-box)** (e.g. for the api box):
+```
+postgresql://boxlite:boxlite@host.boxlite.internal:25432/boxlite
+```
+
+The `config.pg_url` property returns the in-box form (uses `host_hub`) — [config.py:107-108](boxlite_local/config.py#L107-L108).
+
+**psql one-liner**:
+```bash
+PGPASSWORD= psql -h 127.0.0.1 -p 25432 -U boxlite -d boxlite
+```
+
+### Existing DB user rows (2026-05-22 snapshot)
+
+| user.id | name | email | platform role | personal org | org role |
+|---|---|---|---|---|---|
+| `boxlite-admin` | BoxLite Admin | _(empty)_ | `admin` | Personal | `owner` |
+| `CgQxMjM0EgVsb2NhbA` | admin | admin@boxlite.dev | `user` | Personal | `owner` |
+
+`boxlite-admin` is the system row seeded by the API on boot and **never participates in login**; `CgQxMjM0EgVsb2NhbA` is the OIDC `sub` issued by dex (base64 of `\x0a\x04 1234 \x12\x05 local`) and is **the user row actually written when you log in via the dashboard**.
+
+---
+
+## 2. Redis
+
+[config.py:39-40](boxlite_local/config.py#L39-L40) / [services.py:43-57](boxlite_local/services.py#L43-L57)
+
+| Field | Value |
+|---|---|
+| Host port | `26379` (env `BOXLITE_REDIS_HOST_PORT`) |
+| Auth | **none** (dev only) |
+| Image | `redis:7-alpine` |
+| Data volume | `~/.boxlite-local/data/redis/` |
+
+**Connection URL (host)**:
+```
+redis://127.0.0.1:26379
+```
+
+**Connection URL (in-box)**:
+```
+redis://host.boxlite.internal:26379
+```
+
+**redis-cli one-liner**:
+```bash
+redis-cli -h 127.0.0.1 -p 26379 PING
+```
+
+---
+
+## 3. MinIO (S3-compatible)
+
+[config.py:42-46](boxlite_local/config.py#L42-L46) / [services.py:59-79](boxlite_local/services.py#L59-L79)
+
+| Field | Value |
+|---|---|
+| S3 API port | `29000` (env `BOXLITE_MINIO_HOST_PORT`) |
+| Console port | `29001` (hardcoded, not parameterized) |
+| Access key | `minioadmin` (env `BOXLITE_MINIO_USER`) |
+| Secret key | `minioadmin` (env `BOXLITE_MINIO_PASSWORD`) |
+| Image | `minio/minio:latest` |
+| Data volume | `~/.boxlite-local/data/minio/` |
+| Region | `us-east-1` (MinIO default) |
+
+**S3 endpoint (host)**: `http://127.0.0.1:29000`
+**S3 endpoint (in-box)**: `http://host.boxlite.internal:29000`
+**Web Console**: `http://127.0.0.1:29001/` (log in with the same `minioadmin/minioadmin`)
+
+**aws-cli example**:
+```bash
+aws --endpoint-url http://127.0.0.1:29000 \
+    --region us-east-1 \
+    s3 ls \
+  AWS_ACCESS_KEY_ID=minioadmin AWS_SECRET_ACCESS_KEY=minioadmin
+```
+
+The minio-init one-shot container ([services.py:93-108](boxlite_local/services.py#L93-L108)) automatically creates a few buckets once minio is ready — no manual setup needed.
+
+---
+
+## 4. Dex (OIDC IdP)
+
+[config.py:50-51](boxlite_local/config.py#L50-L51) / [services.py:135-186](boxlite_local/services.py#L135-L186)
+
+| Field | Value |
+|---|---|
+| Host port | `25556` (env `BOXLITE_DEX_HOST_PORT`) |
+| Image | `dexidp/dex:v2.42.0` |
+| Data volume | dex's built-in SQLite at `/var/dex/dex.db` inside the box (not persisted) |
+
+**Issuer URL** (**special case: deliberately published as localhost, not host_hub**) — [config.py:118-128](boxlite_local/config.py#L118-L128):
+```
+http://localhost:25556/dex
+```
+Reason: the dashboard runs the OIDC flow in the browser, and the browser cannot resolve `host.boxlite.internal`, so the issuer must be browser-reachable.
+
+**Discovery URL**:
+```
+http://localhost:25556/dex/.well-known/openid-configuration
+```
+
+### Built-in login accounts
+
+| Email | Password | Notes |
+|---|---|---|
+| `admin@boxlite.dev` | `password` | The only built-in account; bcrypt hash at [services.py:150-152](boxlite_local/services.py#L150-L152) |
+
+### OAuth clients
+
+The dex config defines one static client (see the inline `dex-config.yaml` snippet in [services.py](boxlite_local/services.py)), used by the dashboard for login. To add a second test user, edit the `staticPasswords` list at [services.py:148-153](boxlite_local/services.py#L148-L153) and then `make restart-svc dex` (or `make down && make up`).
+
+---
+
+## 5. Local OCI Registry
+
+[config.py:47-48](boxlite_local/config.py#L47-L48) / [services.py:114-130](boxlite_local/services.py#L114-L130)
+
+| Field | Value |
+|---|---|
+| Host port | `25000` (env `BOXLITE_REGISTRY_HOST_PORT`) |
+| Auth | **none** |
+| Image | `registry:2` |
+| Data volume | `~/.boxlite-local/data/registry/` |
+
+**API root**:
+```
+http://127.0.0.1:25000/v2/
+```
+
+**docker push example**:
+```bash
+docker tag my-image:dev 127.0.0.1:25000/my-image:dev
+docker push 127.0.0.1:25000/my-image:dev
+```
+
+⚠ Pushing from docker requires `insecure-registries: ["127.0.0.1:25000"]` in the docker daemon config (HTTP, not HTTPS).
+
+---
+
+## 6. Jaeger (Tracing UI)
+
+[config.py:53-54](boxlite_local/config.py#L53-L54) / [services.py:193-208](boxlite_local/services.py#L193-L208)
+
+| Field | Value |
+|---|---|
+| Host port | `26686` (env `BOXLITE_JAEGER_HOST_PORT`) |
+| Image | `jaegertracing/all-in-one:1.67.0` |
+| Storage | in-memory (cleared on restart) |
+| Auth | none |
+
+**UI**: `http://127.0.0.1:26686/`
+**Trace ingestion**: via the OTel Collector (see §8); Jaeger does not receive OTLP/Zipkin directly.
+
+---
+
+## 7. pgAdmin (Postgres GUI)
+
+[config.py:56-59](boxlite_local/config.py#L56-L59) / [services.py:210-234](boxlite_local/services.py#L210-L234)
+
+| Field | Value |
+|---|---|
+| Host port | `25051` (env `BOXLITE_PGADMIN_HOST_PORT`) |
+| Login email | `admin@boxlite.dev` (env `BOXLITE_PGADMIN_EMAIL`) |
+| Login password | `boxlite` (env `BOXLITE_PGADMIN_PASSWORD`) |
+| Image | `dpage/pgadmin4:9.2.0` |
+
+**UI**: `http://127.0.0.1:25051/`
+**First launch**: after logging in, manually Add Server using the PG details in §1.
+
+---
+
+## 8. OpenTelemetry Collector
+
+[config.py:68-71](boxlite_local/config.py#L68-L71) / [services.py:296-330](boxlite_local/services.py#L296-L330)
+
+| Field | Port | env override |
+|---|---|---|
+| OTLP gRPC | `24317` | `BOXLITE_OTEL_GRPC_PORT` |
+| OTLP HTTP | `24318` | `BOXLITE_OTEL_HTTP_PORT` |
+| Health check | `23133` | `BOXLITE_OTEL_HEALTH_PORT` |
+| Image | `otel/opentelemetry-collector:latest` | — |
+
+**OTLP endpoint for SDKs**:
+- gRPC: `127.0.0.1:24317` (host) / `host.boxlite.internal:24317` (in-box)
+- HTTP: `http://127.0.0.1:24318/v1/traces` (host)
+
+Downstream config: currently only the debug exporter (logs to stdout) is wired; the Jaeger pipeline is not connected — known limitation.
+
+---
+
+## 9. Registry UI
+
+[config.py:61-62](boxlite_local/config.py#L61-L62) / [services.py:240-254](boxlite_local/services.py#L240-L254)
+
+| Field | Value |
+|---|---|
+| Host port | `25052` (env `BOXLITE_REGISTRY_UI_HOST_PORT`) |
+| Image | `joxit/docker-registry-ui:main` |
+| Auth | none |
+
+**UI**: `http://127.0.0.1:25052/`
+
+---
+
+## 10. Caddy reverse proxy (unified entry)
+
+[config.py:64-66](boxlite_local/config.py#L64-L66) / [services.py:341-372](boxlite_local/services.py#L341-L372)
+
+| Field | Value |
+|---|---|
+| HTTP port | `28080` (env `BOXLITE_CADDY_HTTP_PORT`) |
+| HTTPS port | `28443` (env `BOXLITE_CADDY_HTTPS_PORT`) (no certs, not enabled) |
+| Admin API (in-box) | `2019` (not normally exposed on the host) |
+
+**Unified entry**: `http://127.0.0.1:28080/`
+
+| Route | Target |
+|---|---|
+| `/` | port `4000` on the host (dashboard, Next.js dev server) |
+| `/pgadmin/*` | pgAdmin (25051) |
+| `/jaeger/*` | Jaeger UI (26686) |
+| `/dex/*` | Dex (25556) |
+| `/minio-console/*` | MinIO Console (29001) |
+| `/minio/*` | MinIO S3 API (29000) |
+| `/registry-ui/*` | Registry UI (25052) |
+| `/registry/*` | Registry v2 API (25000) |
+
+Note: Caddy reverse-proxies back to the host's service ports via `host_hub` (`host.boxlite.internal`) — because Caddy itself runs inside a box.
+
+---
+
+## 11. Dashboard / API (**currently not orchestrated by infra-local**)
+
+| Service | How to run | Host port |
+|---|---|---|
+| Dashboard (Next.js) | `cd apps/dashboard && yarn dev` | `4000` (default) |
+| API (NestJS) | `cd apps/api && yarn start:dev` | `3000` by default — check your `.env` |
+| Runner (Go) | runs on the host directly (needs nested virt; never enters a box) | RPC port per runner config |
+
+Dashboard login credentials are in §4: `admin@boxlite.dev` / `password`.
+After logging in, the effective identity is the `CgQxMjM0EgVsb2NhbA` user with `owner` role in their own personal org (see the table in §1).
+
+---
+
+## 12. Data directories and reset
+
+| Path | Contents |
+|---|---|
+| `~/.boxlite-local/data/pg/` | PostgreSQL data |
+| `~/.boxlite-local/data/redis/` | Redis dumps |
+| `~/.boxlite-local/data/minio/` | MinIO object storage |
+| `~/.boxlite-local/data/registry/` | OCI image layers |
+| `~/.boxlite/images/extracted/` | BoxLite image cache (managed by the BoxLite SDK, not part of infra-local) |
+
+`BOXLITE_DATA_DIR` overrides the data root in one shot.
+
+**Reset commands**:
+```bash
+cd apps/infra-local
+make wipe       # stop + remove boxes + clear data_dir
+make up         # bring everything back up
+```
+
+---
+
+## 13. Quick reference card (host perspective, drop into `.env`)
+
+```bash
+# Postgres
+DATABASE_URL=postgresql://boxlite:boxlite@127.0.0.1:25432/boxlite
+
+# Redis
+REDIS_URL=redis://127.0.0.1:26379
+
+# MinIO / S3
+S3_ENDPOINT=http://127.0.0.1:29000
+S3_ACCESS_KEY=minioadmin
+S3_SECRET_KEY=minioadmin
+S3_REGION=us-east-1
+
+# Dex (OIDC; note this is localhost, not host_hub)
+OIDC_ISSUER=http://localhost:25556/dex
+OIDC_DISCOVERY=http://localhost:25556/dex/.well-known/openid-configuration
+
+# Local OCI Registry
+DOCKER_REGISTRY=127.0.0.1:25000
+
+# OpenTelemetry
+OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:24318
+OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://127.0.0.1:24318/v1/traces
+
+# Unified entry (for the frontend proxy)
+CADDY_GATEWAY=http://127.0.0.1:28080
+
+# Dashboard login (dex)
+DEX_TEST_USER=admin@boxlite.dev
+DEX_TEST_PASSWORD=password
+```
+
+---
+
+## Appendix: env variable cheat sheet
+
+All variables are read in `InfraConfig.load()` at [config.py:74-103](boxlite_local/config.py#L74-L103):
+
+| Env | Default |
+|---|---|
+| `BOXLITE_HOST_HUB` | `host.boxlite.internal` |
+| `BOXLITE_PG_HOST_PORT` | `25432` |
+| `BOXLITE_PG_USER` | `boxlite` |
+| `BOXLITE_PG_PASSWORD` | `boxlite` |
+| `BOXLITE_PG_DB` | `boxlite` |
+| `BOXLITE_REDIS_HOST_PORT` | `26379` |
+| `BOXLITE_MINIO_HOST_PORT` | `29000` |
+| `BOXLITE_MINIO_USER` | `minioadmin` |
+| `BOXLITE_MINIO_PASSWORD` | `minioadmin` |
+| `BOXLITE_REGISTRY_HOST_PORT` | `25000` |
+| `BOXLITE_DEX_HOST_PORT` | `25556` |
+| `BOXLITE_JAEGER_HOST_PORT` | `26686` |
+| `BOXLITE_PGADMIN_HOST_PORT` | `25051` |
+| `BOXLITE_PGADMIN_EMAIL` | `admin@boxlite.dev` |
+| `BOXLITE_PGADMIN_PASSWORD` | `boxlite` |
+| `BOXLITE_REGISTRY_UI_HOST_PORT` | `25052` |
+| `BOXLITE_CADDY_HTTP_PORT` | `28080` |
+| `BOXLITE_CADDY_HTTPS_PORT` | `28443` |
+| `BOXLITE_OTEL_GRPC_PORT` | `24317` |
+| `BOXLITE_OTEL_HTTP_PORT` | `24318` |
+| `BOXLITE_OTEL_HEALTH_PORT` | `23133` |
+| `BOXLITE_DATA_DIR` | `~/.boxlite-local/data` |
