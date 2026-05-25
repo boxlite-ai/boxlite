@@ -151,6 +151,15 @@ staticPasswords:
     hash: '$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W'
     username: 'admin'
     userID: '1234'
+  # Normal (non-admin) test user. Password is 'password'.
+  # OIDC sub on first login = CgQ1Njc4EgVsb2NhbA (base64 of
+  # protobuf-encoded {userID:'5678', connectorID:'local'}).
+  # API auto-creates the corresponding `user` row + Personal organization
+  # + organization_user owner-of-own-org on first login via jwt.strategy.
+  - email: 'test01@boxlite.dev'
+    hash: '$2a$10$SihmD3KSn9pNA02TCkvTBe1EzYCog6bcf8ztMcI1m4rIGtJIV47ge'
+    username: 'test01'
+    userID: '5678'
 """
 
 _DEX_ENTRYPOINT = """\

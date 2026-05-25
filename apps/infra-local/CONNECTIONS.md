@@ -53,14 +53,16 @@ The `config.pg_url` property returns the in-box form (uses `host_hub`) — [conf
 PGPASSWORD= psql -h 127.0.0.1 -p 25432 -U boxlite -d boxlite
 ```
 
-### Existing DB user rows (2026-05-22 snapshot)
+### Existing DB user rows (2026-05-25 snapshot)
 
 | user.id | name | email | platform role | personal org | org role |
 |---|---|---|---|---|---|
 | `boxlite-admin` | BoxLite Admin | _(empty)_ | `admin` | Personal | `owner` |
 | `CgQxMjM0EgVsb2NhbA` | admin | admin@boxlite.dev | `user` | Personal | `owner` |
+| `CgQ1Njc4EgVsb2NhbA` | test01 | test01@boxlite.dev | `user` | Personal | `owner` |
 
-`boxlite-admin` is the system row seeded by the API on boot and **never participates in login**; `CgQxMjM0EgVsb2NhbA` is the OIDC `sub` issued by dex (base64 of `\x0a\x04 1234 \x12\x05 local`) and is **the user row actually written when you log in via the dashboard**.
+`boxlite-admin` is the system row seeded by the API on boot and **never participates in login**.
+`CgQxMjM0EgVsb2NhbA` (admin) and `CgQ1Njc4EgVsb2NhbA` (test01) are the OIDC `sub`s issued by dex (each is base64 of a protobuf-encoded `{userID, connectorID:'local'}`). Both rows are **auto-written on first login via the dashboard** — see §4 for the two seeded dex accounts.
 
 ---
 
@@ -145,13 +147,30 @@ http://localhost:25556/dex/.well-known/openid-configuration
 
 ### Built-in login accounts
 
-| Email | Password | Notes |
-|---|---|---|
-| `admin@boxlite.dev` | `password` | The only built-in account; bcrypt hash at [services.py:150-152](boxlite_local/services.py#L150-L152) |
+Defined in the `staticPasswords` block of the dex config in
+[services.py](boxlite_local/services.py). Both are seeded automatically
+by every `make stack-up` / `make stack-nuke && make stack-up` cycle.
+
+| Email | Password | Username | Dex userID | OIDC sub (after login) | API platform role |
+|---|---|---|---|---|---|
+| `admin@boxlite.dev` | `password` | admin  | `1234` | `CgQxMjM0EgVsb2NhbA` | `user` (regular org owner) |
+| `test01@boxlite.dev` | `password` | test01 | `5678` | `CgQ1Njc4EgVsb2NhbA` | `user` (regular org owner) |
+
+Both accounts get an auto-created `user` row + `Personal` organization
++ `organization_user` owner row on first login, via the API's
+`JwtStrategy.validate()` → `userService.create()` →
+`OrganizationService.handleUserCreatedEvent` chain.
+
+Note: the platform-admin user `boxlite-admin` is a separate
+system-seeded row (no OIDC, no password) used by the admin API key
+and internal flows. It does NOT participate in login.
 
 ### OAuth clients
 
-The dex config defines one static client (see the inline `dex-config.yaml` snippet in [services.py](boxlite_local/services.py)), used by the dashboard for login. To add a second test user, edit the `staticPasswords` list at [services.py:148-153](boxlite_local/services.py#L148-L153) and then `make restart-svc dex` (or `make down && make up`).
+The dex config defines one static client (id `boxlite`) used by the
+dashboard. To add a third login account, append to `staticPasswords` in
+[services.py](boxlite_local/services.py) and run
+`make stack-rebuild-l1-box BOX=dex` to pick up the new config.
 
 ---
 
