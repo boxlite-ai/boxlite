@@ -5,6 +5,7 @@
 
 import React, { useState, useCallback } from 'react'
 import { useSandboxTraces, TracesQueryParams } from '@/hooks/useSandboxTraces'
+import { TelemetryScope } from '@/hooks/telemetryScope'
 import { TimeRangeSelector } from './TimeRangeSelector'
 import { TraceDetailsSheet } from './TraceDetailsSheet'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
@@ -21,9 +22,10 @@ import { TraceSummary } from '@boxlite-ai/api-client'
 interface TracesTabProps {
   sandboxId: string
   getTraceHref?: (traceId: string) => string
+  scope?: TelemetryScope
 }
 
-export const TracesTab: React.FC<TracesTabProps> = ({ sandboxId, getTraceHref }) => {
+export const TracesTab: React.FC<TracesTabProps> = ({ sandboxId, getTraceHref, scope = 'sandbox' }) => {
   const [timeRange, setTimeRange] = useState(() => {
     const now = new Date()
     return { from: subHours(now, 1), to: now }
@@ -39,7 +41,8 @@ export const TracesTab: React.FC<TracesTabProps> = ({ sandboxId, getTraceHref })
     limit,
   }
 
-  const { data, isLoading, isError, refetch } = useSandboxTraces(sandboxId, queryParams)
+  const { data, isLoading, isError, refetch } = useSandboxTraces(sandboxId, queryParams, { scope })
+  const targetLabel = scope === 'admin-platform' ? 'platform' : 'this box'
 
   const handleTimeRangeChange = useCallback((from: Date, to: Date) => {
     setTimeRange({ from, to })
@@ -89,7 +92,7 @@ export const TracesTab: React.FC<TracesTabProps> = ({ sandboxId, getTraceHref })
         ) : isError ? (
           <div className="flex flex-col items-center justify-center h-40 text-muted-foreground gap-2">
             <AlertCircle className="w-8 h-8" />
-            <span className="text-sm">Unable to load traces for this box.</span>
+            <span className="text-sm">Unable to load traces for {targetLabel}.</span>
           </div>
         ) : !data?.items?.length ? (
           <div className="flex flex-col items-center justify-center h-40 text-muted-foreground gap-2">
@@ -186,6 +189,7 @@ export const TracesTab: React.FC<TracesTabProps> = ({ sandboxId, getTraceHref })
       <TraceDetailsSheet
         sandboxId={sandboxId}
         traceId={selectedTraceId}
+        scope={scope}
         open={!!selectedTraceId}
         onOpenChange={(open) => !open && setSelectedTraceId(null)}
       />

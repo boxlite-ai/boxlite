@@ -7,6 +7,7 @@ import { useQuery, UseQueryOptions } from '@tanstack/react-query'
 import { useApi } from '@/hooks/useApi'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { queryKeys } from '@/hooks/queries/queryKeys'
+import { buildTelemetrySearchParams, TelemetryScope } from '@/hooks/telemetryScope'
 import { PaginatedTraces } from '@boxlite-ai/api-client'
 
 export interface TracesQueryParams {
@@ -19,19 +20,31 @@ export interface TracesQueryParams {
 export function useSandboxTraces(
   sandboxId: string | undefined,
   params: TracesQueryParams,
-  options?: Omit<UseQueryOptions<PaginatedTraces>, 'queryKey' | 'queryFn'>,
+  options?: Omit<UseQueryOptions<PaginatedTraces>, 'queryKey' | 'queryFn'> & { scope?: TelemetryScope },
 ) {
   const api = useApi()
   const { selectedOrganization } = useSelectedOrganization()
+  const { scope = 'sandbox', ...queryOptions } = options ?? {}
+  const isAdminPlatform = scope === 'admin-platform'
 
   return useQuery<PaginatedTraces>({
-    queryKey: queryKeys.telemetry.traces(sandboxId ?? '', params),
+    queryKey: isAdminPlatform
+      ? queryKeys.telemetry.adminTraces(params)
+      : queryKeys.telemetry.traces(sandboxId ?? '', params),
     queryFn: async () => {
+      const limit = params.limit ?? 50
+      const page = params.page ?? 1
+
+      if (isAdminPlatform) {
+        const response = await api.axiosInstance.get('/admin/telemetry/traces', {
+          params: buildTelemetrySearchParams({ ...params, page, limit }),
+        })
+        return response.data
+      }
+
       if (!selectedOrganization || !sandboxId || !api.sandboxApi) {
         throw new Error('Missing required parameters')
       }
-      const limit = params.limit ?? 50
-      const page = params.page ?? 1
 
       const response = await api.sandboxApi.getSandboxTraces(
         sandboxId,
@@ -44,8 +57,10 @@ export function useSandboxTraces(
 
       return response.data
     },
-    enabled: !!sandboxId && !!selectedOrganization && !!api.sandboxApi && !!params.from && !!params.to,
+    enabled: isAdminPlatform
+      ? !!api.axiosInstance && !!params.from && !!params.to
+      : !!sandboxId && !!selectedOrganization && !!api.sandboxApi && !!params.from && !!params.to,
     staleTime: 10_000,
-    ...options,
+    ...queryOptions,
   })
 }

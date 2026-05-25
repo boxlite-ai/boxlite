@@ -5,6 +5,7 @@
 
 import React, { useState, useCallback } from 'react'
 import { useSandboxMetrics, MetricsQueryParams } from '@/hooks/useSandboxMetrics'
+import { TelemetryScope } from '@/hooks/telemetryScope'
 import { TimeRangeSelector } from './TimeRangeSelector'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -19,6 +20,7 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 
 interface MetricsTabProps {
   sandboxId: string
+  scope?: TelemetryScope
 }
 
 const CHART_COLORS = [
@@ -179,7 +181,7 @@ const MetricGroupChart: React.FC<MetricGroupChartProps> = ({
   )
 }
 
-export const MetricsTab: React.FC<MetricsTabProps> = ({ sandboxId }) => {
+export const MetricsTab: React.FC<MetricsTabProps> = ({ sandboxId, scope = 'sandbox' }) => {
   const [timeRange, setTimeRange] = useState(() => {
     const now = new Date()
     return { from: subHours(now, 1), to: now }
@@ -190,7 +192,8 @@ export const MetricsTab: React.FC<MetricsTabProps> = ({ sandboxId }) => {
     to: timeRange.to,
   }
 
-  const { data, isLoading, isError, refetch } = useSandboxMetrics(sandboxId, queryParams)
+  const { data, isLoading, isError, refetch } = useSandboxMetrics(sandboxId, queryParams, { scope })
+  const targetLabel = scope === 'admin-platform' ? 'platform' : 'this box'
 
   const [viewModes, setViewModes] = useState<Record<string, ViewMode>>({
     memory: '%',
@@ -246,7 +249,11 @@ export const MetricsTab: React.FC<MetricsTabProps> = ({ sandboxId }) => {
       list.push(s)
       byNamespace.set(namespace, list)
     }
-    return Array.from(byNamespace.entries()).map(([namespace, series]) => ({ key: namespace, title: namespace, series }))
+    return Array.from(byNamespace.entries()).map(([namespace, series]) => ({
+      key: namespace,
+      title: namespace,
+      series,
+    }))
   }, [data, groupedSeries])
 
   return (
@@ -267,7 +274,7 @@ export const MetricsTab: React.FC<MetricsTabProps> = ({ sandboxId }) => {
         ) : isError ? (
           <div className="flex flex-col items-center justify-center h-full min-h-[400px] text-muted-foreground gap-2">
             <AlertCircle className="w-8 h-8" />
-            <span className="text-sm">Unable to load metrics for this box.</span>
+            <span className="text-sm">Unable to load metrics for {targetLabel}.</span>
           </div>
         ) : !data?.series?.length ? (
           <div className="flex flex-col items-center justify-center h-full min-h-[400px] text-muted-foreground gap-2">

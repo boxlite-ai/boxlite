@@ -5,6 +5,7 @@
 
 import React, { useMemo } from 'react'
 import { useSandboxTraceSpans } from '@/hooks/useSandboxTraceSpans'
+import { TelemetryScope } from '@/hooks/telemetryScope'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Spinner } from '@/components/ui/spinner'
@@ -14,6 +15,7 @@ import { TraceSpan } from '@boxlite-ai/api-client'
 interface TraceDetailsSheetProps {
   sandboxId: string
   traceId: string | null
+  scope?: TelemetryScope
   open: boolean
   onOpenChange: (open: boolean) => void
 }
@@ -23,8 +25,15 @@ interface SpanWithDepth extends TraceSpan {
   children: SpanWithDepth[]
 }
 
-export const TraceDetailsSheet: React.FC<TraceDetailsSheetProps> = ({ sandboxId, traceId, open, onOpenChange }) => {
+export const TraceDetailsSheet: React.FC<TraceDetailsSheetProps> = ({
+  sandboxId,
+  traceId,
+  scope = 'sandbox',
+  open,
+  onOpenChange,
+}) => {
   const { data: spans, isLoading } = useSandboxTraceSpans(sandboxId, traceId ?? undefined, {
+    scope,
     enabled: !!traceId && open,
   })
 

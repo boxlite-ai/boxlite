@@ -44,9 +44,9 @@
       "options": {
         "main": "{projectRoot}/cmd/runner/main.go",
         "outputPath": "dist/apps/runner",
-        "flags": ["-ldflags \"-X 'github.com/boxlite-ai/runner/internal.Version=$VERSION'\""]
+        "flags": ["-tags boxlite_dev", "-ldflags \"-X 'github.com/boxlite-ai/runner/internal.Version=$VERSION'\""]
       },
-      "dependsOn": ["copy-daemon-bin", "copy-computeruse-plugin", "check-version-env"],
+      "dependsOn": ["build-boxlite-dev-lib", "copy-daemon-bin", "copy-computeruse-plugin", "check-version-env"],
       "inputs": [
         "goProduction",
         "^goProduction",
@@ -98,8 +98,22 @@
         "command": "cd {projectRoot} && go fmt ./... && prettier --write \"**/*.{yaml,json}\""
       }
     },
+    "build-boxlite-dev-lib": {
+      "executor": "nx:run-commands",
+      "cache": true,
+      "options": {
+        "cwd": "{workspaceRoot}/..",
+        "command": "cargo build -p boxlite-c"
+      },
+      "outputs": ["{workspaceRoot}/../target/debug/libboxlite.a"]
+    },
     "test": {
-      "executor": "@nx-go/nx-go:test"
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "{projectRoot}",
+        "command": "go test -tags boxlite_dev ./..."
+      },
+      "dependsOn": ["build-boxlite-dev-lib"]
     },
     "lint": {
       "executor": "@nx-go/nx-go:lint"

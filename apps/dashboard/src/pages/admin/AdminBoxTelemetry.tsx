@@ -14,7 +14,7 @@ import { RoutePath } from '@/enums/RoutePath'
 import { useApi } from '@/hooks/useApi'
 import { handleApiError } from '@/lib/error-handling'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, ExternalLink } from 'lucide-react'
+import { ArrowLeft } from 'lucide-react'
 import React from 'react'
 import { Navigate, useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -51,16 +51,6 @@ function StateBadge({ state }: { state: string }) {
           ? 'warning'
           : 'secondary'
   return <Badge variant={variant}>{state}</Badge>
-}
-
-function jaegerSearchHref(_sandboxId: string) {
-  // POL-14 Phase 3 Plan B: platform telemetry is emitted under one service name
-  // (boxlite-api, see apps/api/src/tracing.ts), not a per-sandbox service.
-  return `/jaeger/search?service=${encodeURIComponent('boxlite-api')}`
-}
-
-function jaegerTraceHref(traceId: string) {
-  return `/jaeger/trace/${encodeURIComponent(traceId)}`
 }
 
 const AdminBoxTelemetry: React.FC = () => {
@@ -102,14 +92,8 @@ const AdminBoxTelemetry: React.FC = () => {
             <Button variant="ghost" size="icon-sm" onClick={() => navigate(RoutePath.ADMIN)}>
               <ArrowLeft className="h-4 w-4" />
             </Button>
-            <PageTitle>Box telemetry</PageTitle>
+            <PageTitle>Platform telemetry</PageTitle>
           </div>
-          <Button asChild variant="outline" size="sm">
-            <a href={jaegerSearchHref(boxId)} target="_blank" rel="noreferrer">
-              Open in Jaeger
-              <ExternalLink className="h-4 w-4" />
-            </a>
-          </Button>
         </div>
       </PageHeader>
 
@@ -160,19 +144,11 @@ const AdminBoxTelemetry: React.FC = () => {
                   </div>
                 </dl>
 
-                <div className="flex gap-2">
-                  {isErrorState(box.state) && (
-                    <Button size="sm" onClick={() => recoverMutation.mutate(box.id)}>
-                      Recover
-                    </Button>
-                  )}
-                  <Button asChild variant="outline" size="sm">
-                    <a href={jaegerSearchHref(box.id)} target="_blank" rel="noreferrer">
-                      Jaeger
-                      <ExternalLink className="h-4 w-4" />
-                    </a>
+                {isErrorState(box.state) && (
+                  <Button size="sm" onClick={() => recoverMutation.mutate(box.id)}>
+                    Recover
                   </Button>
-                </div>
+                )}
               </CardContent>
             </Card>
 
@@ -213,13 +189,13 @@ const AdminBoxTelemetry: React.FC = () => {
                   <TabsTrigger value="metrics">Metrics</TabsTrigger>
                 </TabsList>
                 <TabsContent value="logs" className="m-0 min-h-0 flex-1 overflow-hidden">
-                  <LogsTab sandboxId={box.id} />
+                  <LogsTab sandboxId={box.id} scope="admin-platform" />
                 </TabsContent>
                 <TabsContent value="traces" className="m-0 min-h-0 flex-1 overflow-hidden">
-                  <TracesTab sandboxId={box.id} getTraceHref={jaegerTraceHref} />
+                  <TracesTab sandboxId={box.id} scope="admin-platform" />
                 </TabsContent>
                 <TabsContent value="metrics" className="m-0 min-h-0 flex-1 overflow-hidden">
-                  <MetricsTab sandboxId={box.id} />
+                  <MetricsTab sandboxId={box.id} scope="admin-platform" />
                 </TabsContent>
               </Tabs>
             </div>

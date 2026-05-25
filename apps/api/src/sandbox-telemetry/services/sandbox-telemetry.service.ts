@@ -56,17 +56,20 @@ interface ClickHouseCountRow {
   count: number
 }
 
+const PLATFORM_TELEMETRY_SERVICE_NAME = 'boxlite-api'
+
 @Injectable()
 export class SandboxTelemetryService {
   private readonly logger = new Logger(SandboxTelemetryService.name)
 
   constructor(private readonly clickhouseService: ClickHouseService) {}
 
-  private getServiceName(_sandboxId: string): string {
+  private getServiceName(sandboxId: string): string {
+    void sandboxId
     // POL-14 Phase3 Plan B: internal admin shows PLATFORM telemetry (API/runner),
     // not per-sandbox daemon telemetry (no daemon emit in Plan B). The panel is
     // platform-scoped; sandboxId is ignored.
-    return 'boxlite-api'
+    return PLATFORM_TELEMETRY_SERVICE_NAME
   }
 
   isConfigured(): boolean {
@@ -83,6 +86,29 @@ export class SandboxTelemetryService {
     search?: string,
   ): Promise<PaginatedLogsDto> {
     const serviceName = this.getServiceName(sandboxId)
+    return this.getLogsForService(serviceName, from, to, page, limit, severities, search)
+  }
+
+  async getPlatformLogs(
+    from: string,
+    to: string,
+    page: number,
+    limit: number,
+    severities?: string[],
+    search?: string,
+  ): Promise<PaginatedLogsDto> {
+    return this.getLogsForService(PLATFORM_TELEMETRY_SERVICE_NAME, from, to, page, limit, severities, search)
+  }
+
+  private async getLogsForService(
+    serviceName: string,
+    from: string,
+    to: string,
+    page: number,
+    limit: number,
+    severities?: string[],
+    search?: string,
+  ): Promise<PaginatedLogsDto> {
     const offset = (page - 1) * limit
 
     // Build WHERE clause for optional filters
@@ -162,6 +188,20 @@ export class SandboxTelemetryService {
     limit: number,
   ): Promise<PaginatedTracesDto> {
     const serviceName = this.getServiceName(sandboxId)
+    return this.getTracesForService(serviceName, from, to, page, limit)
+  }
+
+  async getPlatformTraces(from: string, to: string, page: number, limit: number): Promise<PaginatedTracesDto> {
+    return this.getTracesForService(PLATFORM_TELEMETRY_SERVICE_NAME, from, to, page, limit)
+  }
+
+  private async getTracesForService(
+    serviceName: string,
+    from: string,
+    to: string,
+    page: number,
+    limit: number,
+  ): Promise<PaginatedTracesDto> {
     const offset = (page - 1) * limit
 
     const params = {
@@ -223,7 +263,14 @@ export class SandboxTelemetryService {
 
   async getTraceSpans(sandboxId: string, traceId: string): Promise<TraceSpanDto[]> {
     const serviceName = this.getServiceName(sandboxId)
+    return this.getTraceSpansForService(serviceName, traceId)
+  }
 
+  async getPlatformTraceSpans(traceId: string): Promise<TraceSpanDto[]> {
+    return this.getTraceSpansForService(PLATFORM_TELEMETRY_SERVICE_NAME, traceId)
+  }
+
+  private async getTraceSpansForService(serviceName: string, traceId: string): Promise<TraceSpanDto[]> {
     const query = `
       SELECT TraceId, SpanId, ParentSpanId, SpanName, Timestamp, Duration,
              SpanAttributes, StatusCode, StatusMessage
@@ -250,7 +297,19 @@ export class SandboxTelemetryService {
 
   async getMetrics(sandboxId: string, from: string, to: string, metricNames?: string[]): Promise<MetricsResponseDto> {
     const serviceName = this.getServiceName(sandboxId)
+    return this.getMetricsForService(serviceName, from, to, metricNames)
+  }
 
+  async getPlatformMetrics(from: string, to: string, metricNames?: string[]): Promise<MetricsResponseDto> {
+    return this.getMetricsForService(PLATFORM_TELEMETRY_SERVICE_NAME, from, to, metricNames)
+  }
+
+  private async getMetricsForService(
+    serviceName: string,
+    from: string,
+    to: string,
+    metricNames?: string[],
+  ): Promise<MetricsResponseDto> {
     let whereClause = `ServiceName = {serviceName:String}
       AND TimeUnix >= {from:DateTime64}
       AND TimeUnix <= {to:DateTime64}`
@@ -266,7 +325,8 @@ export class SandboxTelemetryService {
       params.metricNames = metricNames
     }
 
-    // Query gauge metrics with 1-minute intervals
+    // Query platform metrics with 1-minute intervals. Histograms expose their
+    // per-minute mean for now, preserving the existing MetricsResponseDto shape.
     const gaugeQuery = `
       SELECT
         toStartOfInterval(TimeUnix, INTERVAL 1 MINUTE) as timestamp,
@@ -278,17 +338,47 @@ export class SandboxTelemetryService {
       ORDER BY timestamp ASC
     `
 
-    const rows = await this.clickhouseService.query<ClickHouseMetricRow>(gaugeQuery, params)
+    const sumQuery = `
+      SELECT
+        toStartOfInterval(TimeUnix, INTERVAL 1 MINUTE) as timestamp,
+        MetricName,
+        avg(Value) as value
+      FROM otel_metrics_sum
+      WHERE ${whereClause}
+      GROUP BY timestamp, MetricName
+      ORDER BY timestamp ASC
+    `
+
+    const histogramQuery = `
+      SELECT
+        toStartOfInterval(TimeUnix, INTERVAL 1 MINUTE) as timestamp,
+        MetricName,
+        sum(Sum) / nullIf(sum(Count), 0) as value
+      FROM otel_metrics_histogram
+      WHERE ${whereClause}
+      GROUP BY timestamp, MetricName
+      HAVING isNotNull(value)
+      ORDER BY timestamp ASC
+    `
+
+    const metricRows = (
+      await Promise.all([
+        this.clickhouseService.query<ClickHouseMetricRow>(gaugeQuery, params),
+        this.clickhouseService.query<ClickHouseMetricRow>(sumQuery, params),
+        this.clickhouseService.query<ClickHouseMetricRow>(histogramQuery, params),
+      ])
+    ).flat()
 
     // Group by metric name
     const seriesMap = new Map<string, MetricDataPointDto[]>()
-    for (const row of rows) {
+    for (const row of metricRows) {
       if (!seriesMap.has(row.MetricName)) {
         seriesMap.set(row.MetricName, [])
       }
-      seriesMap.get(row.MetricName)!.push({
+      const dataPoints = seriesMap.get(row.MetricName)
+      dataPoints?.push({
         timestamp: row.timestamp,
-        value: row.value,
+        value: Number(row.value),
       })
     }
 

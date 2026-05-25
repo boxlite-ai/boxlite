@@ -7,6 +7,7 @@ import { useQuery, UseQueryOptions } from '@tanstack/react-query'
 import { useApi } from '@/hooks/useApi'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { queryKeys } from '@/hooks/queries/queryKeys'
+import { buildTelemetrySearchParams, TelemetryScope } from '@/hooks/telemetryScope'
 import { MetricsResponse } from '@boxlite-ai/api-client'
 
 export interface MetricsQueryParams {
@@ -18,14 +19,25 @@ export interface MetricsQueryParams {
 export function useSandboxMetrics(
   sandboxId: string | undefined,
   params: MetricsQueryParams,
-  options?: Omit<UseQueryOptions<MetricsResponse>, 'queryKey' | 'queryFn'>,
+  options?: Omit<UseQueryOptions<MetricsResponse>, 'queryKey' | 'queryFn'> & { scope?: TelemetryScope },
 ) {
   const api = useApi()
   const { selectedOrganization } = useSelectedOrganization()
+  const { scope = 'sandbox', ...queryOptions } = options ?? {}
+  const isAdminPlatform = scope === 'admin-platform'
 
   return useQuery<MetricsResponse>({
-    queryKey: queryKeys.telemetry.metrics(sandboxId ?? '', params),
+    queryKey: isAdminPlatform
+      ? queryKeys.telemetry.adminMetrics(params)
+      : queryKeys.telemetry.metrics(sandboxId ?? '', params),
     queryFn: async () => {
+      if (isAdminPlatform) {
+        const response = await api.axiosInstance.get('/admin/telemetry/metrics', {
+          params: buildTelemetrySearchParams(params),
+        })
+        return response.data
+      }
+
       if (!selectedOrganization || !sandboxId || !api.sandboxApi) {
         throw new Error('Missing required parameters')
       }
@@ -40,8 +52,10 @@ export function useSandboxMetrics(
 
       return response.data
     },
-    enabled: !!sandboxId && !!selectedOrganization && !!api.sandboxApi && !!params.from && !!params.to,
+    enabled: isAdminPlatform
+      ? !!api.axiosInstance && !!params.from && !!params.to
+      : !!sandboxId && !!selectedOrganization && !!api.sandboxApi && !!params.from && !!params.to,
     staleTime: 10_000,
-    ...options,
+    ...queryOptions,
   })
 }

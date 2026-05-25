@@ -456,7 +456,7 @@ func (m *ExecManager) Signal(id string, sig int) error {
 	}
 	e.handleMu.Lock()
 	defer e.handleMu.Unlock()
-	if e.closed || e.execution == nil {
+	if e.closed || e.doneClosed() || e.execution == nil {
 		return fmt.Errorf("%w: %s", ErrExecClosed, id)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -548,7 +548,7 @@ func (m *ExecManager) ResizeTTY(id string, rows, cols int) error {
 	}
 	e.handleMu.Lock()
 	defer e.handleMu.Unlock()
-	if e.closed || e.execution == nil {
+	if e.closed || e.doneClosed() || e.execution == nil {
 		return fmt.Errorf("%w: %s", ErrExecClosed, id)
 	}
 	if !e.TTY {
@@ -827,6 +827,20 @@ func (e *ManagedExec) escalationFailedMarkDoomed() {
 	defer e.attachMu.Unlock()
 	e.ReapingKill = true
 	e.Escalating = false
+	e.SignaledHUP = false
+	e.SignaledTERM = false
+}
+
+func (e *ManagedExec) doneClosed() bool {
+	if e.Done == nil {
+		return false
+	}
+	select {
+	case <-e.Done:
+		return true
+	default:
+		return false
+	}
 }
 
 // MarkDisconnected releases the single-attach slot and stamps
@@ -843,7 +857,7 @@ func (e *ManagedExec) MarkDisconnected() {
 func (e *ManagedExec) AttachWriteStdin(data []byte) (int, error) {
 	e.handleMu.Lock()
 	defer e.handleMu.Unlock()
-	if e.closed || e.stdinW == nil {
+	if e.closed || e.doneClosed() || e.stdinW == nil {
 		return 0, fmt.Errorf("execution %s stdin is closed", e.ID)
 	}
 	return e.stdinW.Write(data)
@@ -875,7 +889,7 @@ func (e *ManagedExec) AttachCloseStdin() error {
 func (e *ManagedExec) AttachResize(rows, cols int) error {
 	e.handleMu.Lock()
 	defer e.handleMu.Unlock()
-	if e.closed || e.execution == nil {
+	if e.closed || e.doneClosed() || e.execution == nil {
 		return fmt.Errorf("execution %s is closed", e.ID)
 	}
 	if !e.TTY {
@@ -893,7 +907,7 @@ func (e *ManagedExec) AttachResize(rows, cols int) error {
 func (e *ManagedExec) AttachSignal(sig int) error {
 	e.handleMu.Lock()
 	defer e.handleMu.Unlock()
-	if e.closed || e.execution == nil {
+	if e.closed || e.doneClosed() || e.execution == nil {
 		return fmt.Errorf("execution %s is closed", e.ID)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

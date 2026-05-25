@@ -112,6 +112,10 @@ export const queryKeys = {
     metrics: (sandboxId: string, params: object) => [...queryKeys.telemetry.all, sandboxId, 'metrics', params] as const,
     traceSpans: (sandboxId: string, traceId: string) =>
       [...queryKeys.telemetry.all, sandboxId, 'traces', traceId] as const,
+    adminLogs: (params: object) => [...queryKeys.telemetry.all, 'admin-platform', 'logs', params] as const,
+    adminTraces: (params: object) => [...queryKeys.telemetry.all, 'admin-platform', 'traces', params] as const,
+    adminMetrics: (params: object) => [...queryKeys.telemetry.all, 'admin-platform', 'metrics', params] as const,
+    adminTraceSpans: (traceId: string) => [...queryKeys.telemetry.all, 'admin-platform', 'traces', traceId] as const,
   },
   sandbox: {
     all: ['sandbox'] as const,

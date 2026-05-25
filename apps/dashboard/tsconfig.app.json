@@ -9,12 +9,24 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["src/*"],
-      "@boxlite-ai/api-client": ["../../libs/api-client/src/index.ts"],
-      "@boxlite-ai/runner-api-client": ["../../libs/runner-api-client/src/index.ts"],
-      "@boxlite-ai/toolbox-api-client": ["../../libs/toolbox-api-client/src/index.ts"],
-      "@boxlite-ai/analytics-api-client": ["../../libs/analytics-api-client/src/index.ts"],
-      "@boxlite-ai/sdk": ["../../dist/libs/sdk-typescript/src/index.d.ts"],
-      "@boxlite-ai/*": ["../../libs/*"]
+      "@boxlite-ai/api-client": ["../../libs/api-client/src/index.ts", "../libs/api-client/src/index.ts"],
+      "@boxlite-ai/runner-api-client": [
+        "../../libs/runner-api-client/src/index.ts",
+        "../libs/runner-api-client/src/index.ts"
+      ],
+      "@boxlite-ai/toolbox-api-client": [
+        "../../libs/toolbox-api-client/src/index.ts",
+        "../libs/toolbox-api-client/src/index.ts"
+      ],
+      "@boxlite-ai/analytics-api-client": [
+        "../../libs/analytics-api-client/src/index.ts",
+        "../libs/analytics-api-client/src/index.ts"
+      ],
+      "@boxlite-ai/sdk": [
+        "../../dist/libs/sdk-typescript/src/index.d.ts",
+        "../dist/libs/sdk-typescript/src/index.d.ts"
+      ],
+      "@boxlite-ai/*": ["../../libs/*", "../libs/*"]
     }
   },
   "exclude": [

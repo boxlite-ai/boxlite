@@ -8,7 +8,7 @@ COPY --from=golang:1.25.4-alpine /usr/local/go/ /usr/local/go/
 
 ENV PATH="/usr/local/go/bin:${PATH}"
 
-RUN apk add --no-cache git
+RUN apk add --no-cache git python3 make g++ py3-setuptools
 
 WORKDIR /boxlite
 

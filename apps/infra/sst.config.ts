@@ -12,11 +12,11 @@
 // Inside `run()`, resources are created in deploy order:
 //
 //   1. secrets (auto-generated)     7. edge services (Proxy, SshGateway)
-//   2. platform (VPC/DB/Redis/S3)   8. observability (Jaeger, OtelCollector)
+//   2. platform (VPC/DB/Redis/S3)   8. observability UI (Jaeger)
 //   3. IAM                          9. admin UIs (PgAdmin/RegistryUI/MailDev)
 //   4. auth (Dex)                  10. CDN (CloudFront)
 //   5. registry (SnapshotManager)  11. runner (EC2 + nested KVM)
-//   6. API
+//   5b. observability ingest       6. API
 // ─────────────────────────────────────────────────────────────────────────────
 
 const REGION = "ap-southeast-1";
@@ -32,6 +32,8 @@ const PORTS = {
   JAEGER_UI: 16686,
   OTLP_HTTP: 4318,
   OTEL_HEALTH: 13133,
+  CLICKHOUSE_HTTP: 8123,
+  CLICKHOUSE_NATIVE: 9000,
   MAILDEV_UI: 1080,
   PGADMIN: 80,
   REGISTRY_UI: 80,
@@ -39,6 +41,7 @@ const PORTS = {
 
 // Pinned third-party images
 const IMAGES = {
+  clickhouse: "clickhouse/clickhouse-server:24.8",
   jaeger: "jaegertracing/all-in-one:1.67.0",
   pgadmin: "dpage/pgadmin4:9.2.0",
   registryUi: "joxit/docker-registry-ui:main",
@@ -153,6 +156,7 @@ export default $config({
     const adminApiKey = randomKey("AdminApiKey");
     const defaultRunnerApiKey = randomKey("DefaultRunnerApiKey");
     const pgAdminPassword = randomKey("PgAdminPassword", 24);
+    const clickHousePassword = randomKey("ClickHousePassword", 32);
 
     // ─── 2. PLATFORM ─────────────────────────────────────────────────────────
     const vpc = new sst.aws.Vpc("Vpc", { nat: "ec2" });
@@ -160,6 +164,22 @@ export default $config({
     const redis = new sst.aws.Redis("Cache", { vpc, cluster: false }); // NestJS uses SELECT (multi-DB)
     const storage = new sst.aws.Bucket("Storage");
     const cluster = new sst.aws.Cluster("Cluster", { vpc, forceUpgrade: "v2" });
+    const clickHouse = new sst.aws.Service("ClickHouse", {
+      cluster,
+      image: IMAGES.clickhouse,
+      loadBalancer: {
+        rules: [
+          { listen: `${PORTS.CLICKHOUSE_HTTP}/tcp`, forward: `${PORTS.CLICKHOUSE_HTTP}/tcp` },
+          { listen: `${PORTS.CLICKHOUSE_NATIVE}/tcp`, forward: `${PORTS.CLICKHOUSE_NATIVE}/tcp` },
+        ],
+      },
+      environment: {
+        CLICKHOUSE_DB: "otel",
+        CLICKHOUSE_USER: "default",
+        CLICKHOUSE_PASSWORD: envOr("CLICKHOUSE_PASSWORD", clickHousePassword.result),
+        CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1",
+      },
+    });
 
     // ─── 3. IAM ──────────────────────────────────────────────────────────────
     // S3 IAM user: API signs STS tokens for sandbox S3 uploads.
@@ -225,6 +245,31 @@ export default $config({
     });
     const registry = snapshotManager; // API uses this URL for both transient + internal registries
 
+    // ─── 5b. OBSERVABILITY INGEST ───────────────────────────────────────────
+    // Keep config.yaml as the collector source of truth. Jaeger remains
+    // provisioned below for Phase 3.1 but is not wired into these pipelines.
+    const otelCollector = new sst.aws.Service("OtelCollector", {
+      cluster,
+      image: { context: "../..", dockerfile: "apps/otel-collector/Dockerfile", cache: false },
+      loadBalancer: {
+        rules: [
+          { listen: `${PORTS.OTLP_HTTP}/http`, forward: `${PORTS.OTLP_HTTP}/http` },
+          { listen: "80/http", forward: `${PORTS.OTEL_HEALTH}/http` },
+        ],
+        health: {
+          // The OTLP HTTP receiver returns a client-error status for a bare
+          // health-check GET, which still proves the receiver is listening.
+          [`${PORTS.OTLP_HTTP}/http`]: httpHealth("/", { successCodes: "200-499" }),
+          [`${PORTS.OTEL_HEALTH}/http`]: httpHealth("/health/status"),
+        },
+      },
+      environment: {
+        CLICKHOUSE_ENDPOINT: $interpolate`tcp://${clickHouse.nodes.loadBalancer.dnsName}:${PORTS.CLICKHOUSE_NATIVE}`,
+        CLICKHOUSE_PASSWORD: envOr("CLICKHOUSE_PASSWORD", clickHousePassword.result),
+        BOXLITE_API_URL: `https://api.${stackDomain}/api`,
+      },
+    });
+
     // ─── 6. API (NestJS control plane) ───────────────────────────────────────
     const api = new sst.aws.Service("Api", {
       cluster,
@@ -260,6 +305,8 @@ export default $config({
         VERSION: "0.1.0",
         DEFAULT_REGION_ENFORCE_QUOTAS: "false",
         DEFAULT_SNAPSHOT: envOr("DEFAULT_SNAPSHOT", "ubuntu:latest"),
+        OTEL_ENABLED: "true",
+        OTEL_EXPORTER_OTLP_ENDPOINT: $interpolate`http://${otelCollector.nodes.loadBalancer.dnsName}:${PORTS.OTLP_HTTP}`,
 
         // Database (SST-linked)
         DB_HOST: db.host,
@@ -273,6 +320,14 @@ export default $config({
         REDIS_PORT: redis.port.apply(String),
         REDIS_PASSWORD: redis.password,
         REDIS_TLS: "true",
+
+        // ClickHouse (platform observability)
+        CLICKHOUSE_HOST: clickHouse.nodes.loadBalancer.dnsName,
+        CLICKHOUSE_PORT: String(PORTS.CLICKHOUSE_HTTP),
+        CLICKHOUSE_PROTOCOL: "http",
+        CLICKHOUSE_DATABASE: "otel",
+        CLICKHOUSE_USERNAME: "default",
+        CLICKHOUSE_PASSWORD: envOr("CLICKHOUSE_PASSWORD", clickHousePassword.result),
 
         // Encryption
         ENCRYPTION_KEY: envOr("ENCRYPTION_KEY", encryptionKey.result),
@@ -430,37 +485,6 @@ export default $config({
       image: IMAGES.jaeger,
       loadBalancer: { rules: [{ listen: "80/http", forward: `${PORTS.JAEGER_UI}/http` }] },
       environment: { COLLECTOR_OTLP_ENABLED: "true" },
-    });
-
-    // OtelCollector — BoxLite's custom ocb build. The ClickHouse exporter is
-    // compiled in but dropped at runtime via --set (dev has no ClickHouse).
-    // Placeholder CLICKHOUSE_* env vars keep config.yaml parsing clean.
-    new sst.aws.Service("OtelCollector", {
-      cluster,
-      image: { context: "../..", dockerfile: "apps/otel-collector/Dockerfile", cache: false },
-      command: [
-        "--config", "/otelcol/collector-config.yaml",
-        "--set", "service::pipelines::traces::exporters=[boxlite_exporter]",
-        "--set", "service::pipelines::metrics::exporters=[boxlite_exporter]",
-        "--set", "service::pipelines::logs::exporters=[boxlite_exporter]",
-      ],
-      loadBalancer: {
-        rules: [
-          { listen: `${PORTS.OTLP_HTTP}/http`, forward: `${PORTS.OTLP_HTTP}/http` },
-          { listen: "80/http", forward: `${PORTS.OTEL_HEALTH}/http` },
-        ],
-        health: {
-          // The OTLP HTTP receiver returns a client-error status for a bare
-          // health-check GET, which still proves the receiver is listening.
-          [`${PORTS.OTLP_HTTP}/http`]: httpHealth("/", { successCodes: "200-499" }),
-          [`${PORTS.OTEL_HEALTH}/http`]: httpHealth("/health/status"),
-        },
-      },
-      environment: {
-        CLICKHOUSE_ENDPOINT: "tcp://localhost:9000",
-        CLICKHOUSE_PASSWORD: "unused",
-        BOXLITE_API_URL: $interpolate`${stripTrailingSlash(api.url)}/api`,
-      },
     });
 
     // ─── 9. ADMIN UIs ────────────────────────────────────────────────────────

@@ -105,7 +105,8 @@ export class SandboxManager implements TrackableJobExecutions, OnApplicationShut
         readyRunners.map(async (runner) => {
           const sandboxes = await this.sandboxRepository
             .createQueryBuilder('sandbox')
-            .innerJoin('sandbox_last_activity', 'activity', 'activity."sandboxId" = sandbox.id')
+            .innerJoin('sandbox.lastActivityAt', 'activity')
+            .addSelect('activity.lastActivityAt')
             .where('sandbox."runnerId" = :runnerId', { runnerId: runner.id })
             .andWhere('sandbox."organizationId" != :warmPoolOrg', {
               warmPoolOrg: SANDBOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
@@ -117,7 +118,7 @@ export class SandboxManager implements TrackableJobExecutions, OnApplicationShut
             .andWhere('sandbox.pending != true')
             .andWhere('sandbox."autoStopInterval" != 0')
             .andWhere('activity."lastActivityAt" < NOW() - INTERVAL \'1 minute\' * sandbox."autoStopInterval"')
-            .orderBy('sandbox."lastBackupAt"', 'ASC')
+            .orderBy('sandbox.lastBackupAt', 'ASC')
             .limit(100)
             .getMany()
 
@@ -178,7 +179,8 @@ export class SandboxManager implements TrackableJobExecutions, OnApplicationShut
     try {
       const sandboxes = await this.sandboxRepository
         .createQueryBuilder('sandbox')
-        .innerJoin('sandbox_last_activity', 'activity', 'activity."sandboxId" = sandbox.id')
+        .innerJoin('sandbox.lastActivityAt', 'activity')
+        .addSelect('activity.lastActivityAt')
         .where('sandbox."organizationId" != :warmPoolOrg', {
           warmPoolOrg: SANDBOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
         })
@@ -189,7 +191,7 @@ export class SandboxManager implements TrackableJobExecutions, OnApplicationShut
         .andWhere('sandbox.pending != true')
         .andWhere('sandbox."autoArchiveInterval" != 0')
         .andWhere('activity."lastActivityAt" < NOW() - INTERVAL \'1 minute\' * sandbox."autoArchiveInterval"')
-        .orderBy('sandbox."lastBackupAt"', 'ASC')
+        .orderBy('sandbox.lastBackupAt', 'ASC')
         .limit(100)
         .getMany()
 
@@ -244,7 +246,8 @@ export class SandboxManager implements TrackableJobExecutions, OnApplicationShut
         readyRunners.map(async (runner) => {
           const sandboxes = await this.sandboxRepository
             .createQueryBuilder('sandbox')
-            .innerJoin('sandbox_last_activity', 'activity', 'activity."sandboxId" = sandbox.id')
+            .innerJoin('sandbox.lastActivityAt', 'activity')
+            .addSelect('activity.lastActivityAt')
             .where('sandbox."runnerId" = :runnerId', { runnerId: runner.id })
             .andWhere('sandbox."organizationId" != :warmPoolOrg', {
               warmPoolOrg: SANDBOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
@@ -256,7 +259,7 @@ export class SandboxManager implements TrackableJobExecutions, OnApplicationShut
             .andWhere('sandbox.pending != true')
             .andWhere('sandbox."autoDeleteInterval" >= 0')
             .andWhere('activity."lastActivityAt" < NOW() - INTERVAL \'1 minute\' * sandbox."autoDeleteInterval"')
-            .orderBy('activity."lastActivityAt"', 'ASC')
+            .orderBy('activity.lastActivityAt', 'ASC')
             .limit(100)
             .getMany()
 

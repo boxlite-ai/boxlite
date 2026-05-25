@@ -78,10 +78,10 @@ service:
   pipelines:
     traces:
       receivers: [otlp]
-      exporters: [boxlite_exporter, clickhouse]
+      exporters: [clickhouse]
     metrics:
       receivers: [otlp]
-      exporters: [boxlite_exporter, clickhouse]
+      exporters: [clickhouse]
     logs:
       receivers: [otlp]
-      exporters: [boxlite_exporter, clickhouse]
+      exporters: [clickhouse]

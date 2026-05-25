@@ -10,16 +10,16 @@
       "options": {
         "outputPath": "dist/apps/api",
         "deleteOutputPath": false,
-        "main": "apps/api/src/main.ts",
-        "tsConfig": "apps/api/tsconfig.app.json",
-        "generatePackageJson": true,
+        "main": "{projectRoot}/src/main.ts",
+        "tsConfig": "{projectRoot}/tsconfig.app.json",
+        "generatePackageJson": false,
         "target": "node",
         "compiler": "tsc",
         "sourceMap": true,
-        "webpackConfig": "apps/api/webpack.config.js",
+        "webpackConfig": "{projectRoot}/webpack.config.js",
         "assets": [
           {
-            "input": "apps/api/src/assets",
+            "input": "{projectRoot}/src/assets",
             "glob": "**/*",
             "output": "./assets/"
           }
@@ -49,14 +49,9 @@
       "options": {
         "commands": [
           "mkdir -p dist/apps/api",
-          "yarn ts-node apps/api/src/generate-openapi.ts -o dist/apps/api/openapi.json"
+          "TS_NODE_PROJECT={projectRoot}/tsconfig.app.json NODE_OPTIONS='--require tsconfig-paths/register' SKIP_CONNECTIONS=true yarn ts-node {projectRoot}/src/generate-openapi.ts -o dist/apps/api/openapi.json"
         ],
-        "parallel": false,
-        "env": {
-          "TS_NODE_PROJECT": "apps/api/tsconfig.app.json",
-          "NODE_OPTIONS": "--require tsconfig-paths/register",
-          "SKIP_CONNECTIONS": "true"
-        }
+        "parallel": false
       }
     },
     "serve": {
@@ -104,7 +99,7 @@
     "lint": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "bash apps/api/scripts/validate-migration-paths.sh $(find apps/api/src/migrations -name '*-migration.ts' -type f)"
+        "command": "bash {projectRoot}/scripts/validate-migration-paths.sh $(find {projectRoot}/src/migrations -name '*-migration.ts' -type f)"
       }
     }
   }
