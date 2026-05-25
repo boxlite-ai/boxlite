@@ -115,6 +115,71 @@ rm -rf ~/.boxlite-runner/{db,boxes,images,rootfs}/
 # 重启 runner
 ```
 
+> 上面是底层 SQL/shell 做法,日常**不直接用**。用下面分级 wrapper。
+
+## 5.5 分级清理 / 重建决策
+
+按"动多少"分 5 档,**从最轻开始,够用就停手**。
+
+| # | 范围 | 命令 | 耗时 |
+|---|---|---|---|
+| ① | 1 个 L2 native 重启 | `make stack-restart COMPONENTS=runner` | ~10s |
+| ② | 1 个 L1 box stuck → 重建 | `make stack-rebuild-l1-box BOX=registry` | ~3s |
+| ③ | 清 DB user 数据,schema 保留 | `make stack-reset && make stack-up` | ~60s |
+| ④ | 含 schema 重对齐(prod baseline reload) | `make stack-reset-hard && make stack-up` | ~90s |
+| ⑤ | 全部摧毁,从零冷启动 | `make stack-nuke && make stack-up` | 3-5 min |
+
+### 场景 1:**完全重建**(场景 ⑤)
+
+```bash
+cd apps/infra-local
+make stack-nuke && make stack-up
+```
+
+做了什么:
+- 停 L2 4 个 native 进程
+- 删 L1 全部 10 个 boxes(microVM kernel + rootfs)
+- 清数据卷 + `.logs/`
+- 重新 pull 10 个 image + 加载 prod schema
+- 起 L2,API 自 seed(region / admin / snapshot pulled to active)
+
+**何时用**:团队新人 onboard / 升级 schema-baseline / "我搞了一堆诡异操作想回归"。
+
+### 场景 2:**Reset + 重 up**(场景 ③ 最常用)
+
+```bash
+cd apps/infra-local
+make stack-reset && make stack-up
+```
+
+跟 ⑤ 的区别 — 这条**保留**:L1 boxes,PG schema,image cache,历史 logs。只清 PG **用户数据** + `~/.boxlite-runner/` 运行时状态。
+
+**何时用**:迭代中数据脏了想清掉 sandbox/org/user;测 "fresh DB" 行为。
+
+### 场景 3:**部分 reset → 部分 up**(场景 ①②,日常 90%)
+
+```bash
+# 改 native 代码
+make stack-restart COMPONENTS=runner             # runner 含自动 rebuild
+make stack-restart COMPONENTS=api                # 改 .env / 文件
+make stack-restart COMPONENTS="api proxy"        # 多个
+
+# L1 box stuck(典型:dex 登录 401 / registry pull 卡死)
+make stack-rebuild-l1-box BOX=dex
+make stack-rebuild-l1-box BOX=registry
+
+# 看 + tail
+make stack-status                                # 1 屏全况
+make stack-logs COMPONENT=runner                 # 单组件
+make stack-logs COMPONENT=all                    # 全部
+```
+
+**何时用**:99% 日常迭代。
+
+### 一句话决策
+
+**先 `stack-status` → 哪个红 / 卡 → 用最轻的一档修。从来不要无脑 `stack-nuke`。**
+
 ## 6. 测试技巧
 
 ### 6.1 浏览器(主测试方式)
