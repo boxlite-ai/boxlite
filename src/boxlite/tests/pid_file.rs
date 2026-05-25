@@ -3,7 +3,7 @@
 //! Tests the PID file as single source of truth for process tracking:
 //! - PID file creation, correctness, and deletion
 //! - Cleanup on stop, force remove, and box directory removal
-//! - Process validation via is_same_process
+//! - Process validation via start-time fingerprint in shim.pid
 
 mod common;
 
@@ -11,7 +11,7 @@ use boxlite::BoxliteRuntime;
 use boxlite::litebox::BoxCommand;
 use boxlite::runtime::options::BoxliteOptions;
 use boxlite::runtime::types::BoxStatus;
-use boxlite::util::{is_process_alive, is_same_process, read_pid_file};
+use boxlite::util::{PidFileReader, is_process_alive, process_start_time};
 use std::path::{Path, PathBuf};
 
 // ============================================================================
@@ -65,7 +65,10 @@ async fn pid_file_contains_correct_pid() {
     let _ = handle.exec(BoxCommand::new("sleep").args(["30"])).await;
 
     let pf = pid_file_path(&home.path, handle.id().as_str());
-    let pid_from_file = read_pid_file(&pf).expect("Should read PID file");
+    let pid_from_file = PidFileReader::at(&pf)
+        .read()
+        .map(|r| r.pid)
+        .expect("Should read PID file");
 
     // Verify process is actually running
     assert!(
@@ -74,12 +77,12 @@ async fn pid_file_contains_correct_pid() {
         pid_from_file
     );
 
-    // Verify it's our boxlite-shim
-    assert!(
-        is_same_process(pid_from_file, handle.id().as_str()),
-        "PID {} should belong to boxlite-shim for box {}",
-        pid_from_file,
-        handle.id()
+    // Verify the start-time fingerprint matches what the shim wrote.
+    let record = PidFileReader::at(&pf).read().expect("read shim.pid");
+    assert_eq!(
+        process_start_time(pid_from_file),
+        record.start_time,
+        "PID {pid_from_file} must match the start-time fingerprint written by the shim"
     );
 
     // Cleanup
@@ -125,7 +128,10 @@ async fn pid_matches_box_info() {
     let _ = handle.exec(BoxCommand::new("sleep").args(["30"])).await;
 
     let pf = pid_file_path(&home.path, handle.id().as_str());
-    let pid_from_file = read_pid_file(&pf).expect("Should read PID file");
+    let pid_from_file = PidFileReader::at(&pf)
+        .read()
+        .map(|r| r.pid)
+        .expect("Should read PID file");
 
     let info = runtime
         .get_info(handle.id().as_str())
@@ -262,7 +268,7 @@ async fn box_directory_cleanup_includes_pid_file() {
 // ============================================================================
 
 #[tokio::test]
-async fn is_same_process_validates_boxlite_shim() {
+async fn start_time_fingerprint_validates_boxlite_shim() {
     let home = boxlite_test_utils::home::PerTestBoxHome::new();
     let runtime = BoxliteRuntime::new(BoxliteOptions {
         home_dir: home.path.clone(),
@@ -271,25 +277,25 @@ async fn is_same_process_validates_boxlite_shim() {
     .expect("create runtime");
 
     let handle = runtime.create(common::alpine_opts(), None).await.unwrap();
-
     let _ = handle.exec(BoxCommand::new("sleep").args(["30"])).await;
 
     let pf = pid_file_path(&home.path, handle.id().as_str());
-    let pid = read_pid_file(&pf).unwrap();
+    let record = PidFileReader::at(&pf).read().expect("read shim.pid");
 
-    // Should be true for actual shim
-    assert!(
-        is_same_process(pid, handle.id().as_str()),
-        "is_same_process should return true for actual shim process"
+    // The shim wrote its own start-time; the OS must report the same value.
+    assert_eq!(
+        process_start_time(record.pid),
+        record.start_time,
+        "shim's recorded start-time must match the live OS reading"
     );
 
-    // Should be false for current test process
-    assert!(
-        !is_same_process(std::process::id(), handle.id().as_str()),
-        "is_same_process should return false for non-shim process"
+    // The current test process (different PID) must NOT match.
+    assert_ne!(
+        process_start_time(std::process::id()),
+        record.start_time,
+        "an unrelated PID must not match the shim's start-time fingerprint"
     );
 
-    // Cleanup
     handle.stop().await.unwrap();
     runtime.remove(handle.id().as_str(), false).await.unwrap();
 }

@@ -11,7 +11,7 @@ use boxlite::litebox::BoxCommand;
 use boxlite::runtime::id::BoxID;
 use boxlite::runtime::options::BoxliteOptions;
 use boxlite::runtime::types::BoxStatus;
-use boxlite::util::read_pid_file;
+use boxlite::util::PidFileReader;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
@@ -57,7 +57,7 @@ async fn recovery_with_live_process() {
         box_id = handle.id().to_string();
 
         let pf = pid_file_path(&home.path, &box_id);
-        original_pid = read_pid_file(&pf).unwrap();
+        original_pid = PidFileReader::at(&pf).read().map(|r| r.pid).unwrap();
     }
 
     // New runtime should recover
@@ -110,7 +110,7 @@ async fn recovery_with_dead_process() {
         box_id = handle.id().to_string();
 
         let pf = pid_file_path(&home.path, &box_id);
-        let original_pid = read_pid_file(&pf).unwrap();
+        let original_pid = PidFileReader::at(&pf).read().map(|r| r.pid).unwrap();
 
         // Kill process directly (simulate crash)
         unsafe {
@@ -318,6 +318,112 @@ async fn recovery_preserves_stopped_boxes() {
         // Cleanup
         runtime.remove(&box_id, false).await.unwrap();
     }
+}
+
+// ============================================================================
+// RECOVERY CRASH DETECTION (P0)
+// ============================================================================
+
+#[tokio::test]
+async fn recovery_marks_box_failed_when_exit_file_present() {
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+    let box_id: String;
+
+    // Create a box and stop it so the DB has a persisted entry.
+    {
+        let runtime = BoxliteRuntime::new(BoxliteOptions {
+            home_dir: home.path.clone(),
+            image_registries: common::test_registries(),
+        })
+        .unwrap();
+        let handle = runtime.create(common::alpine_opts(), None).await.unwrap();
+        let _ = handle.exec(BoxCommand::new("true")).await;
+        box_id = handle.id().to_string();
+        handle.stop().await.unwrap();
+    }
+
+    // Plant a synthetic ExitInfo::Signal JSON simulating a SIGABRT crash.
+    let box_dir = home.path.join("boxes").join(&box_id);
+    let exit_file = box_dir.join("exit");
+    std::fs::write(
+        &exit_file,
+        r#"{"type":"signal","exit_code":134,"signal":"SIGABRT"}"#,
+    )
+    .expect("write synthetic exit file");
+
+    // Recovery on a fresh runtime must surface the crash as Failed.
+    {
+        let runtime = BoxliteRuntime::new(BoxliteOptions {
+            home_dir: home.path.clone(),
+            image_registries: common::test_registries(),
+        })
+        .unwrap();
+
+        let info = runtime
+            .get_info(&box_id)
+            .await
+            .unwrap()
+            .expect("Box should exist");
+
+        assert_eq!(
+            info.status,
+            BoxStatus::Failed,
+            "Box with exit file present after recovery must be Failed, was {:?}",
+            info.status
+        );
+        assert!(
+            info.pid.is_none(),
+            "Failed box must have no PID after recovery"
+        );
+
+        runtime.remove(&box_id, true).await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn successful_start_stashes_stale_exit_file() {
+    let home = boxlite_test_utils::home::PerTestBoxHome::new();
+
+    let runtime = BoxliteRuntime::new(BoxliteOptions {
+        home_dir: home.path.clone(),
+        image_registries: common::test_registries(),
+    })
+    .unwrap();
+
+    let handle = runtime.create(common::alpine_opts(), None).await.unwrap();
+    let box_id = handle.id().to_string();
+
+    // Plant a stale exit file *before* the first start, simulating a leftover
+    // artifact from a prior lifecycle that recover_boxes already turned into
+    // Failed and we are now retrying.
+    let box_dir = home.path.join("boxes").join(&box_id);
+    std::fs::create_dir_all(&box_dir).expect("box dir");
+    let exit_file = box_dir.join("exit");
+    let exit_previous = box_dir.join("exit.previous");
+    let payload = r#"{"type":"signal","exit_code":134,"signal":"SIGABRT"}"#;
+    std::fs::write(&exit_file, payload).expect("write stale exit file");
+    assert!(exit_file.exists(), "stale exit file should exist pre-start");
+
+    // A successful start must archive the stale exit file to exit.previous,
+    // freeing the canonical slot for a future crash while preserving the
+    // prior crash record for forensics.
+    let _ = handle.exec(BoxCommand::new("true")).await.unwrap();
+    assert!(
+        !exit_file.exists(),
+        "successful start must clear the active exit file slot"
+    );
+    assert!(
+        exit_previous.exists(),
+        "successful start must stash the prior crash record to exit.previous"
+    );
+    let stashed = std::fs::read_to_string(&exit_previous).expect("read stash");
+    assert_eq!(
+        stashed, payload,
+        "stashed content must match original exit file"
+    );
+
+    handle.stop().await.unwrap();
+    runtime.remove(&box_id, true).await.unwrap();
 }
 
 // ============================================================================

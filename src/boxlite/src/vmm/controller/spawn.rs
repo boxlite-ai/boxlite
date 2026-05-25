@@ -134,6 +134,10 @@ impl<'a> ShimSpawner<'a> {
     }
 
     fn configure_env(&self, cmd: &mut std::process::Command) {
+        // Non-sensitive process marker used by recovery to validate shim PIDs
+        // without putting the full InstanceSpec back into /proc/<pid>/cmdline.
+        cmd.env("BOXLITE_BOX_ID", self.box_id);
+
         // Pass debugging environment variables to subprocess
         if let Ok(rust_log) = std::env::var("RUST_LOG") {
             cmd.env("RUST_LOG", rust_log);
@@ -238,6 +242,10 @@ mod tests {
         let envs: std::collections::HashMap<_, _> = cmd.get_envs().collect();
         let expected = layout.tmp_dir();
 
+        assert_eq!(
+            envs.get(OsStr::new("BOXLITE_BOX_ID")).and_then(|v| *v),
+            Some(OsStr::new("test-box"))
+        );
         assert_eq!(
             envs.get(OsStr::new("TMPDIR")).and_then(|v| *v),
             Some(expected.as_os_str())

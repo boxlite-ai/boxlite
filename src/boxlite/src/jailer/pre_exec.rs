@@ -25,6 +25,7 @@
 
 use crate::jailer::common;
 use crate::runtime::advanced_options::ResourceLimits;
+use crate::util::{PidFileWriter, PidRecord};
 use std::os::fd::RawFd;
 use std::process::Command;
 
@@ -37,7 +38,7 @@ use std::process::Command;
 ///
 /// * `cmd` - The Command to add the hook to
 /// * `resource_limits` - Resource limits to apply
-/// * `pid_file_path` - Path to PID file (pre-computed CString for async-signal-safety)
+/// * `pid_writer` - Async-signal-safe writer (pre-allocated in the parent)
 /// * `preserved_fds` - FDs to preserve: each `(source, target)` is dup2'd before cleanup.
 ///   After dup2, all FDs above the highest target are closed.
 ///   Pass empty vec for default behavior (close all FDs >= 3).
@@ -59,7 +60,7 @@ use std::process::Command;
 pub fn add_pre_exec_hook(
     cmd: &mut Command,
     resource_limits: ResourceLimits,
-    pid_file_path: Option<std::ffi::CString>,
+    pid_writer: Option<PidFileWriter>,
     preserved_fds: Vec<(RawFd, i32)>,
 ) {
     use std::os::unix::process::CommandExt;
@@ -90,8 +91,10 @@ pub fn add_pre_exec_hook(
                 .map_err(std::io::Error::from_raw_os_error)?;
 
             // 3. Write PID file
-            if let Some(ref path) = pid_file_path {
-                common::pid::write_pid_file_raw(path).map_err(std::io::Error::from_raw_os_error)?;
+            if let Some(ref writer) = pid_writer {
+                writer
+                    .write(&PidRecord::current())
+                    .map_err(std::io::Error::from_raw_os_error)?;
             }
 
             Ok(())
@@ -113,13 +116,10 @@ mod tests {
 
     #[test]
     fn test_add_hook_with_pid_file() {
-        use std::ffi::CString;
-
         let mut cmd = Command::new("/bin/echo");
         let limits = ResourceLimits::default();
-        let pid_file = CString::new("/tmp/test.pid").ok();
-
-        add_pre_exec_hook(&mut cmd, limits, pid_file, vec![]);
+        let writer = PidFileWriter::at(std::path::Path::new("/tmp/test.pid")).ok();
+        add_pre_exec_hook(&mut cmd, limits, writer, vec![]);
     }
 
     #[test]

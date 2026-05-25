@@ -517,6 +517,15 @@ impl BoxFilesystemLayout {
         self.box_dir.join("exit")
     }
 
+    /// Archived exit file from the previous lifecycle: `~/.boxlite/boxes/{box_id}/exit.previous`.
+    ///
+    /// Single-slot rotation: a successful start or recovery-with-alive-shim
+    /// renames `exit` → `exit.previous`, preserving the prior crash record
+    /// while freeing the canonical slot for the next crash.
+    pub fn exit_previous_path(&self) -> PathBuf {
+        self.box_dir.join("exit.previous")
+    }
+
     /// Stderr file path: ~/.boxlite/boxes/{box_id}/shim.stderr
     ///
     /// Captures libkrun stderr output for crash diagnostics.

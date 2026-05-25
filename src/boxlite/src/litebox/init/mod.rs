@@ -56,7 +56,11 @@ use types::InitPipelineContext;
 // ============================================================================
 
 /// Get execution plan based on BoxStatus.
-fn get_execution_plan(status: BoxStatus) -> ExecutionPlan<InitCtx> {
+///
+/// Returns Err for states that aren't valid init entry points
+/// (e.g. Unknown from a corrupted DB row, or future variants). Callers
+/// should treat this as a user-facing precondition error.
+fn get_execution_plan(status: BoxStatus) -> BoxliteResult<ExecutionPlan<InitCtx>> {
     let stages: Vec<Stage<BoxedTask<InitCtx>>> = match status {
         BoxStatus::Configured => vec![
             // First start: Full pipeline
@@ -73,7 +77,10 @@ fn get_execution_plan(status: BoxStatus) -> ExecutionPlan<InitCtx> {
             Stage::sequential(vec![Box::new(GuestConnectTask)]),
             Stage::sequential(vec![Box::new(GuestInitTask)]),
         ],
-        BoxStatus::Stopped => vec![
+        // Stopped and Failed both run the restart pipeline. A Failed box
+        // has its rootfs preserved (per BoxStatus::Failed doc) and is
+        // retryable per BoxStatus::can_start.
+        BoxStatus::Stopped | BoxStatus::Failed => vec![
             // Restart: Same flow but rootfs tasks reuse existing COW disks
             // (preserves user modifications from previous run)
             Stage::sequential(vec![Box::new(FilesystemTask)]),
@@ -87,14 +94,19 @@ fn get_execution_plan(status: BoxStatus) -> ExecutionPlan<InitCtx> {
             Stage::sequential(vec![Box::new(GuestInitTask)]),
         ],
         BoxStatus::Running => vec![
-            // Reattach: Attach to existing VM process and connect to guest
+            // Reattach: vmm_attach gates on ProcessIdentity AND surfaces
+            // any crash via exit_file, then connect to guest.
             Stage::sequential(vec![Box::new(VmmAttachTask)]),
             Stage::sequential(vec![Box::new(GuestConnectTask)]),
         ],
-        _ => panic!("Invalid BoxStatus for initialization: {:?}", status),
+        other => {
+            return Err(BoxliteError::InvalidState(format!(
+                "Cannot initialize box in {other} state"
+            )));
+        }
     };
 
-    ExecutionPlan::new(stages)
+    Ok(ExecutionPlan::new(stages))
 }
 
 fn box_metrics_from_pipeline(pipeline_metrics: &PipelineMetrics) -> BoxMetricsStorage {
@@ -199,7 +211,7 @@ impl BoxBuilder {
         // `error_reason`. This matches Daytona/Kata/containerd/Docker semantics
         // of "preserve the record on init failure".
         let inner = async move {
-            let plan = get_execution_plan(status);
+            let plan = get_execution_plan(status)?;
             let pipeline = PipelineBuilder::from_plan(plan);
             let pipeline_metrics = PipelineExecutor::execute(pipeline, Arc::clone(&ctx)).await?;
 

@@ -28,6 +28,7 @@ use crate::lock::LockGuard;
 use crate::metrics::{BoxMetrics, BoxMetricsStorage};
 use crate::portal::GuestSession;
 use crate::portal::interfaces::GuestInterface;
+use crate::runtime::layout::BoxFilesystemLayout;
 use crate::runtime::rt_impl::SharedRuntimeImpl;
 use crate::runtime::types::BoxStatus;
 use crate::vmm::controller::VmmHandler;
@@ -101,6 +102,7 @@ pub(crate) struct BoxImpl {
     pub(crate) config: BoxConfig,
     pub(crate) state: Arc<RwLock<BoxState>>,
     pub(crate) runtime: SharedRuntimeImpl,
+    pub(crate) layout: BoxFilesystemLayout,
     /// Cancellation token for this box (child of runtime's token).
     /// When cancelled (via stop() or runtime shutdown), all operations abort gracefully.
     pub(crate) shutdown_token: CancellationToken,
@@ -109,7 +111,7 @@ pub(crate) struct BoxImpl {
     pub(crate) disk_ops: tokio::sync::Mutex<()>,
 
     /// Event listeners (from runtime options).
-    pub(crate) event_listeners: Vec<std::sync::Arc<dyn EventListener>>,
+    pub(crate) event_listeners: Vec<Arc<dyn EventListener>>,
 
     // --- Lazily initialized ---
     live: OnceCell<LiveState>,
@@ -137,10 +139,17 @@ impl BoxImpl {
         runtime: SharedRuntimeImpl,
         shutdown_token: CancellationToken,
     ) -> Self {
+        let layout = runtime
+            .layout
+            .box_layout(config.id.as_str(), config.options.advanced.isolate_mounts)
+            .expect(
+                "box_layout is structurally infallible — only warns on isolate_mounts mismatch",
+            );
         Self {
             config,
             state: Arc::new(RwLock::new(state)),
             runtime,
+            layout,
             shutdown_token,
             disk_ops: tokio::sync::Mutex::new(()),
             event_listeners: Vec::new(), // populated from runtime options
@@ -340,9 +349,15 @@ impl BoxImpl {
         // Cancel the token - signals all in-flight operations to abort
         self.shutdown_token.cancel();
 
-        // Only try to stop VM if LiveState exists
-        if let Some(live) = self.live.get() {
-            // Gracefully shut down guest (with timeout to avoid hanging on unresponsive guests)
+        // Only attempt graceful shutdown for boxes that should have a live
+        // shim. Calling live_state() on Configured/Failed would route
+        // through the restart pipeline and spawn a new VM — exactly what
+        // stop() must NOT do.
+        let should_attach = self.state.read().status == BoxStatus::Running;
+        if should_attach && let Ok(live) = self.live_state().await {
+            // Recovered boxes lazy-attach here via vmm_attach (now
+            // ProcessIdentity-gated). Live boxes hit the cached LiveState.
+            // Either way the teardown is identical:
             let guest_shutdown = async {
                 if let Ok(mut guest) = live.guest_session.guest().await {
                     let _ = guest.shutdown().await;
@@ -359,32 +374,21 @@ impl BoxImpl {
             if let Ok(mut handler) = live.handler.lock() {
                 handler.stop()?;
             }
-        } else if let Some(pid) = self.state.read().pid {
-            // Recovered box path: this BoxImpl was constructed for a box that
-            // was already Running before this runtime instance started, so
-            // self.live was never initialized. The original shim process is
-            // still alive under state.pid — signal it directly, otherwise the
-            // box transitions to Stopped while the process keeps running and
-            // we leak an orphan.
-            crate::util::kill_process(pid);
         }
+        // If live_state() failed (vmm_attach said Absent — shim is gone),
+        // or status wasn't Running, fall through to cleanup.
 
         // Clean up PID file (single source of truth)
-        let pid_file = self
-            .runtime
-            .layout
-            .boxes_dir()
-            .join(self.config.id.as_str())
-            .join("shim.pid");
-        if pid_file.exists()
-            && let Err(e) = std::fs::remove_file(&pid_file)
-        {
-            tracing::warn!(
+        let pid_path = self.layout.pid_file_path();
+        match std::fs::remove_file(&pid_path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => tracing::warn!(
                 box_id = %self.config.id,
-                path = %pid_file.display(),
+                path = %pid_path.display(),
                 error = %e,
                 "Failed to remove PID file"
-            );
+            ),
         }
 
         // Check if box was persisted
@@ -625,7 +629,6 @@ impl BoxImpl {
     /// happens in create().
     async fn init_live_state(&self) -> BoxliteResult<LiveState> {
         use super::BoxBuilder;
-        use crate::util::read_pid_file;
         use std::sync::Arc;
 
         let state = self.state.read().clone();
@@ -666,14 +669,12 @@ impl BoxImpl {
         // For reattach (status=Running), the PID file was written during
         // the original spawn and is still valid.
         {
-            let pid_file = self
-                .runtime
-                .layout
-                .boxes_dir()
-                .join(self.config.id.as_str())
-                .join("shim.pid");
-
-            let pid = read_pid_file(&pid_file)?;
+            // PidFile is the single source of truth for shim identity
+            // (PID + optional starttime fingerprint). The starttime is
+            // consumed by recovery, not stored in the DB.
+            let pid_path = self.layout.pid_file_path();
+            let record = crate::util::PidFileReader::at(&pid_path).read()?;
+            let pid = record.pid;
 
             let mut state = self.state.write();
             state.set_pid(Some(pid));
@@ -696,6 +697,11 @@ impl BoxImpl {
 
         // All operations succeeded - disarm the cleanup guard
         cleanup_guard.disarm();
+
+        // Archive any leftover crash artifact from a prior lifecycle so
+        // the next attach preflight doesn't trip on stale evidence.
+        // Stash (rename → exit.previous) preserves forensic data.
+        crate::runtime::rt_impl::stash_exit_file(&self.layout);
 
         // Start health check task if configured
         if let Some(ref health_config) = self.config.options.advanced.health_check {
@@ -839,9 +845,9 @@ impl BoxImpl {
                     // If shim died, mark as Unhealthy and stop health check immediately
                     if shim_died {
                         let mut state_guard = state.write();
-                        state_guard.force_status(crate::litebox::BoxStatus::Stopped);
+                        state_guard.force_status(BoxStatus::Stopped);
                         state_guard.set_pid(None);
-                        state_guard.health_status.state = crate::litebox::HealthState::Unhealthy;
+                        state_guard.health_status.state = HealthState::Unhealthy;
 
                         if let Err(db_err) = runtime.box_manager.save_box(&box_id, &state_guard) {
                             tracing::error!(
@@ -914,7 +920,7 @@ impl BoxImpl {
     /// crash-consistent (SIGSTOP-only), not operation failure.
     pub(crate) async fn with_quiesce_async<Fut, R>(&self, fut: Fut) -> BoxliteResult<R>
     where
-        Fut: std::future::Future<Output = BoxliteResult<R>>,
+        Fut: Future<Output = BoxliteResult<R>>,
     {
         let (pid, was_running) = {
             let state = self.state.read();
@@ -1009,7 +1015,7 @@ impl BoxImpl {
             return false;
         };
 
-        let result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let result = tokio::time::timeout(Duration::from_secs(5), async {
             let mut guest = live.guest_session.guest().await?;
             guest.quiesce().await
         })
@@ -1043,7 +1049,7 @@ impl BoxImpl {
             return;
         };
 
-        let result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let result = tokio::time::timeout(Duration::from_secs(5), async {
             let mut guest = live.guest_session.guest().await?;
             guest.thaw().await
         })
@@ -1179,15 +1185,6 @@ mod tests {
     // while the process keeps running and the runtime loses track of it.
     #[tokio::test]
     async fn test_stop_recovered_box_kills_orphan_process() {
-        // Stand-in for a recovered shim: a sleeping process whose PID we'll record.
-        let child = ChildGuard(
-            std::process::Command::new("sleep")
-                .arg("300")
-                .spawn()
-                .expect("spawn dummy process"),
-        );
-        let pid = child.0.id();
-
         let temp_dir = TempDir::new_in("/tmp").expect("create temp dir");
         let runtime = RuntimeImpl::new(BoxliteOptions {
             home_dir: temp_dir.path().to_path_buf(),
@@ -1195,7 +1192,16 @@ mod tests {
         })
         .expect("create runtime");
 
-        // Build a BoxConfig whose box_home lives under the runtime's layout.
+        // Plain sleep — identity is established by the start-time
+        // fingerprint we write into shim.pid below.
+        let child = ChildGuard(
+            std::process::Command::new("sleep")
+                .arg("300")
+                .spawn()
+                .expect("spawn stand-in process"),
+        );
+        let pid = child.0.id();
+
         let id = BoxIDMint::mint();
         let box_home = runtime.layout.boxes_dir().join(id.as_str());
         let config = BoxConfig {
@@ -1219,7 +1225,6 @@ mod tests {
             ready_socket_path: std::path::PathBuf::from("/tmp/test-ready.sock"),
         };
 
-        // Simulate a recovered Running box: status=Running, pid set, lock + pid file present.
         let mut state = BoxState::new();
         state.status = BoxStatus::Running;
         state.pid = Some(pid);
@@ -1227,8 +1232,13 @@ mod tests {
         state.set_lock_id(lock_id);
 
         std::fs::create_dir_all(&box_home).expect("create box dir");
-        let pid_file = box_home.join("shim.pid");
-        std::fs::write(&pid_file, pid.to_string()).expect("write pid file");
+        let st = crate::util::process_start_time(pid).expect("OS reports start_time");
+        let layout = runtime
+            .layout
+            .box_layout(config.id.as_str(), false)
+            .expect("box_layout is infallible");
+        let pid_file = layout.pid_file_path();
+        std::fs::write(&pid_file, format!("{pid}\n{st}\n")).expect("write pid file");
 
         runtime
             .box_manager
@@ -1246,7 +1256,7 @@ mod tests {
         litebox.stop().await.expect("stop should succeed");
 
         // Give SIGKILL a moment to land.
-        std::thread::sleep(std::time::Duration::from_millis(200));
+        tokio::time::sleep(Duration::from_millis(200)).await;
 
         assert!(
             !is_process_alive(pid),
