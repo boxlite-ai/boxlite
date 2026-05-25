@@ -1,6 +1,6 @@
-# Milestone: `apps/infra-local/v0.9.0`
+# Milestone: `milestone/infra-local/v0.1.0`
 
-**Tag:** `apps/infra-local/v0.9.0` at commit `0a71bb5b`
+**Tag:** `milestone/infra-local/v0.1.0` at commit `0a71bb5b`
 **Date:** 2026-05-25
 **Branch:** `feat/cloud-mvp` (70 commits ahead of `origin/main`)
 **Scope:** +16,858 / −831 lines, 114 files changed
@@ -206,10 +206,10 @@ This milestone was built in four phases, each fully documented in
 
 ```bash
 # Inspect the tag
-git tag -n10 apps/infra-local/v0.9.0
+git tag -n10 milestone/infra-local/v0.1.0
 
 # Check out the exact state
-git checkout apps/infra-local/v0.9.0
+git checkout milestone/infra-local/v0.1.0
 
 # Bring the stack up at this snapshot
 cd apps/infra-local && make stack-up
