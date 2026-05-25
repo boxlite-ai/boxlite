@@ -190,6 +190,9 @@ ls -lt ~/.boxlite-runner/boxes/<id>/logs/
 | `POST /api/regions` → 404 "Cannot POST" | API server-side PostHog flag bootstrap 没生效 | 看 `app.module.ts` 的 `bootstrapFlags` 配置 |
 | Boxlite-runner 撞锁 `Another BoxliteRuntime is already using directory` | 已有 runner 进程持有 `~/.boxlite-runner/.lock` | `lsof ~/.boxlite-runner/.lock` 找出 PID,决定是 kill 还是错用了 home dir |
 | Terminal `Connection closed` 后无法重连 | signed-url 过期(默认 300s)| 重新点 Connect 按钮,dashboard 自动重新拿 |
+| Dashboard 加载报 `Unauthorized` / `401`,即便刚 OIDC 登录 | **Dex SQLite session db 缓存了旧 grant**,新 login 复用 stale token(常发生在 box SIGKILL / 长时间不用之后)。判定:浏览器解 token 时 `accessTokenIat` 是几天前的 | `make stack-rebuild-l1-box BOX=dex` + 浏览器 `sessionStorage.clear()` + 重 login |
+| Sandbox `pulling` 卡几分钟不动 | **Registry box TCP 还 listen 但内部 registry process hung**(SIGKILL 副作用)。`curl http://127.0.0.1:25000/v2/_catalog` 5s 超时即确认 | `make stack-rebuild-l1-box BOX=registry`,stuck 的 pull 自动恢复 |
+| 任意 L1 box(pgadmin / jaeger / minio / ...)行为诡异 | 同上,L1 box 内部 stateful 进程坏掉 | `make stack-rebuild-l1-box BOX=<name>` 一键摧毁重建 |
 
 ## 8. 本地"发布"流程(MVP 内部 demo / 自测)
 

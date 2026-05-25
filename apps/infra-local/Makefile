@@ -8,7 +8,7 @@ PY ?= python
 
 .PHONY: help up down ps doctor logs wipe itest test install load-schema up-with-schema e2e itest-all \
         stack-build stack-up stack-down stack-restart stack-status stack-logs stack-reset stack-reset-hard stack-nuke \
-        seed-init-data
+        seed-init-data stack-rebuild-l1-box
 
 help:                  ## show this help
 	@awk -F':.*## ' '/^[a-zA-Z][a-zA-Z0-9_-]*:.*## / { printf "  %-16s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
@@ -81,3 +81,8 @@ stack-reset-hard:      ## like stack-reset, but also re-applies prod schema base
 
 stack-nuke:            ## ABSOLUTE NUKE: L1 boxes destroyed + data wiped + logs cleared
 	./scripts/stack-reset.sh --nuke
+
+stack-rebuild-l1-box:  ## destroy + recreate one L1 box (BOX=dex|registry|...) — for stuck stateful services
+	@if [ -z "$(BOX)" ]; then echo "usage: make stack-rebuild-l1-box BOX=<name>"; echo "e.g. BOX=dex   when login returns stale tokens"; echo "e.g. BOX=registry  when image pulls hang"; exit 1; fi
+	boxlite rm boxlite-local-$(BOX) --force
+	python -m boxlite_local up $(BOX)
