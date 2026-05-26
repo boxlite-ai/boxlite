@@ -4,7 +4,7 @@ This document summarizes endpoints, credentials, and environment variables for e
 **Single source of truth**: the `InfraConfig` dataclass in [boxlite_local/config.py](boxlite_local/config.py).
 If a port or credential here disagrees with `config.py`, `config.py` wins.
 
-Last reviewed: 2026-05-22 (Phase 3c deployment).
+Last reviewed: 2026-05-25 (milestone/infra-local/v0.1.0).
 
 ---
 
@@ -292,16 +292,64 @@ Note: Caddy reverse-proxies back to the host's service ports via `host_hub` (`ho
 
 ---
 
-## 11. Dashboard / API (**currently not orchestrated by infra-local**)
+## 11. L2 application processes (orchestrated by `make stack-up`)
 
-| Service | How to run | Host port |
+These run as **native macOS processes** (not inside boxes) and are
+started + supervised by the `stack-*` Makefile targets under
+[`apps/infra-local/`](.). PID files + logs land under
+`apps/infra-local/.logs/<component>.{pid,log}`.
+
+| Service | Process | Host port |
 |---|---|---|
-| Dashboard (Next.js) | `cd apps/dashboard && yarn dev` | `4000` (default) |
-| API (NestJS) | `cd apps/api && yarn start:dev` | `3000` by default — check your `.env` |
-| Runner (Go) | runs on the host directly (needs nested virt; never enters a box) | RPC port per runner config |
+| Dashboard (React + Vite) | `corepack yarn nx serve dashboard` | `3000` |
+| API (NestJS) | `corepack yarn nx serve api` (CWD: `apps/`) | `3001` |
+| Proxy (Go) | `/tmp/boxlite-proxy` | `4000` |
+| Runner (Go) | `/tmp/boxlite-runner` (native arm64; spawns sandbox microVMs in `~/.boxlite-runner/`) | `3003` (API_PORT) |
 
-Dashboard login credentials are in §4: `admin@boxlite.dev` / `password`.
-After logging in, the effective identity is the `CgQxMjM0EgVsb2NhbA` user with `owner` role in their own personal org (see the table in §1).
+Lifecycle wrappers — see [README.md](README.md#make-targets) for the full surface:
+
+```bash
+make stack-up                                    # start L1 (if down) + L2
+make stack-restart COMPONENTS="api proxy"        # restart subset
+make stack-logs COMPONENT=runner                 # tail one log
+make stack-status                                # one-screen health
+make stack-down                                  # stop L2 (L1 stays up)
+make stack-down ARGS=--all                       # stop L2 + L1
+```
+
+### Dev-only runner-score overrides (set automatically by `stack-up.sh`)
+
+The Go runner reports **system-wide** CPU / memory / disk usage to the
+API — not just what the runner + its boxes actually own. On a real EC2
+runner host that's a correct signal. On a dev MacBook sharing RAM with
+VS Code, Chrome, Docker Desktop, and the L1 dev stack itself, those
+metrics easily exceed prod's 75 % penalty threshold and drag the
+runner's `availabilityScore` below 10, at which point the API rejects
+sandbox creates with `"No available runners"` — even though the runner
+is idle.
+
+`stack-up.sh` exports the following overrides before booting the API so
+the dev runner stays schedulable:
+
+| Env var | M5-dev value | Prod default |
+|---|---|---|
+| `RUNNER_AVAILABILITY_SCORE_THRESHOLD` | `5`  | `10` |
+| `RUNNER_MEMORY_PENALTY_THRESHOLD`     | `95` | `75` |
+| `RUNNER_DISK_PENALTY_THRESHOLD`       | `95` | `75` |
+
+These are safe in this context because there's only one runner and no
+autoscaler is in play. If you set them yourself in `apps/api/.env`,
+your values win (the script's `export` happens before `.env` is
+sourced; `set -a` lets `.env` override).
+
+The right structural fix is to make the runner report only its own /
+boxes-owned resources, not the host total — tracked as a follow-up
+outside this milestone.
+
+Dashboard login credentials are in §4: `admin@boxlite.dev` / `password`
+(or `test01@boxlite.dev` / `password` for a non-admin user).
+After logging in, the effective identity is the OIDC `sub` user with
+`owner` role in their own personal org (see the table in §1).
 
 ---
 

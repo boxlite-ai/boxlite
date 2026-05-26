@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Wipe L2 runtime state. Keeps L1 boxes alive (db schema preserved by default).
 #
-# Usage: stack-reset.sh             # stop L2, truncate PG user data, wipe runner home
-#        stack-reset.sh --hard      # also wipe PG schema (re-applies prod baseline)
+# Usage: stack-reset.sh             # clear sandboxes/snapshots, KEEP users+orgs
+#                                     → browser stays logged in, no re-login
+#        stack-reset.sh --hard      # wipe PG schema entirely (re-applies prod
+#                                     baseline) → identity gone, re-login needed
 #        stack-reset.sh --nuke      # everything: --hard + L1 boxes + .logs
 
 set -euo pipefail
@@ -24,23 +26,30 @@ rm -rf "${RUNNER_HOME}"/{db,boxes,images,rootfs,logs} 2>/dev/null || true
 
 if [ "$MODE" = "soft" ]; then
   if boxlite ls 2>/dev/null | grep -q boxlite-local-postgres; then
-    log "truncating user data tables (schema preserved)..."
-    # CASCADE follows FKs; including "user" forces orgs/members/sandboxes
-    # to drop too. We deliberately NOT preserve the boxlite-admin row
-    # so that the API's `initializeAdminUser()` re-runs on next boot
-    # and rebuilds the admin user → personal org → api key chain.
-    # (Otherwise stale admin user blocks the seed cycle — see
-    # seed-init-data.sh comments.)
+    log "truncating runtime data (identity + infra rows preserved)..."
+    # PRESERVE identity + infra so an already-logged-in browser session
+    # stays valid across a reset (no forced re-login):
+    #   user, organization, organization_user, organization_role,
+    #   region, runner, api_key
+    # CLEAR only runtime/user-created state:
+    #   sandbox, snapshot, snapshot_runner, audit_log (+ CASCADE children
+    #   like ssh_access). The API re-seeds the default snapshot on next
+    #   boot (initializeDefaultSnapshot finds the preserved admin org),
+    #   and the runner re-registers via heartbeat (matched by apiKey).
+    #
+    # Why preserve user+org TOGETHER: a half-state (user kept, org dropped)
+    # strands initializeAdminUser's early-exit guard. Keeping both keeps
+    # the seed cycle consistent AND keeps OIDC sessions alive. For a true
+    # from-scratch identity wipe use --hard.
     PGPASSWORD=boxlite psql -h 127.0.0.1 -p 25432 -U boxlite -d boxlite -v ON_ERROR_STOP=1 -c "
-      TRUNCATE TABLE \"user\", sandbox, snapshot, snapshot_runner, runner, region,
-                     organization, organization_user, organization_role,
-                     api_key, audit_log RESTART IDENTITY CASCADE;
+      TRUNCATE TABLE sandbox, snapshot, snapshot_runner, audit_log
+                     RESTART IDENTITY CASCADE;
     " 2>&1 | tail -2 || warn "truncate had errors (some tables may not exist on fresh schema)"
   else
     warn "PG not running — skipping data truncate"
   fi
-  ok "soft reset complete (L1 boxes + schema preserved)"
-  log "next: \`make stack-up\` — API will auto-seed all base data + wait for default snapshot"
+  ok "soft reset complete (identity + L1 boxes + schema preserved — no browser re-login needed)"
+  log "next: \`make stack-up\` — API re-seeds default snapshot; runner re-registers"
 elif [ "$MODE" = "hard" ]; then
   if boxlite ls 2>/dev/null | grep -q boxlite-local-postgres; then
     log "wiping schema + reloading prod baseline..."
@@ -53,7 +62,8 @@ elif [ "$MODE" = "hard" ]; then
   else
     warn "PG not running — skipping schema reload"
   fi
-  ok "hard reset complete (L1 boxes alive, schema rebuilt)"
+  ok "hard reset complete (L1 boxes alive, schema rebuilt — identity wiped)"
+  warn "browser must re-login: clear sessionStorage + localStorage, then sign in via dex"
   log "next: \`make stack-up\` — API will auto-seed all base data + wait for default snapshot"
 else
   log "nuking everything (L1 boxes + data + logs)..."

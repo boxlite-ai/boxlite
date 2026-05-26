@@ -59,7 +59,26 @@ start_api() {
     sleep 1
   fi
   log "starting api..."
-  ( cd "${APPS_DIR}" && set -a && . ./.env && set +a && \
+  # M5-native dev override: the Go runner reports system-wide CPU / memory /
+  # disk usage (the whole Mac), not just what the runner + its boxes
+  # actually own. On a dev laptop sharing RAM with VS Code, Chrome, Docker
+  # Desktop, and the L1 dev stack itself, those metrics easily push the
+  # runner's availabilityScore below the prod-default threshold of 10,
+  # and the API rejects sandbox-create with "No available runners" — even
+  # though the runner is actually idle. The overrides below relax the
+  # penalty thresholds + lower the availability cutoff so a single-runner
+  # dev box stays schedulable. Safe because there's only one runner here
+  # and the autoscaler is not in play.
+  #   - RUNNER_AVAILABILITY_SCORE_THRESHOLD=5   (prod default 10)
+  #   - RUNNER_MEMORY_PENALTY_THRESHOLD=95      (prod default 75)
+  #   - RUNNER_DISK_PENALTY_THRESHOLD=95        (prod default 75)
+  # Set BEFORE sourcing apps/.env so anything explicitly set there still
+  # wins (set -a + . ./.env exports .env values).
+  ( cd "${APPS_DIR}" && \
+    export RUNNER_AVAILABILITY_SCORE_THRESHOLD=5 \
+           RUNNER_MEMORY_PENALTY_THRESHOLD=95 \
+           RUNNER_DISK_PENALTY_THRESHOLD=95 && \
+    set -a && . ./.env && set +a && \
     nohup corepack yarn nx serve api > "$(log_file api)" 2>&1 & \
     echo $! > "$(pid_file api)" )
   if wait_http "http://localhost:${PORT_API}/api/health" 180; then

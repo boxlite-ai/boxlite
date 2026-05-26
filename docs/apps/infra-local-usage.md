@@ -1,227 +1,227 @@
-# infra-local 使用说明
+# infra-local — usage guide
 
-> 配套 [`infra-local-status.md`](./infra-local-status.md) — 那个文档说"跑的是什么",这个说"怎么用"。
+> Companion to [`infra-local-status.md`](./infra-local-status.md) — that doc says "what's running", this one says "how to use it".
 
-## 0. TL;DR — 8 个 wrapper 命令
+## 0. TL;DR — 8 wrapper commands
 
 ```bash
 cd apps/infra-local
 
-# 首次/平时启动整个 stack(L1 boxes + 4 个 native 进程)
+# First-time / day-to-day: bring the whole stack up (L1 boxes + 4 native processes)
 make stack-up
-# 看健康
+# Health check
 make stack-status
-# 看日志(any of: api / runner / proxy / dashboard / all)
+# Tail logs (any of: api / runner / proxy / dashboard / all)
 make stack-logs COMPONENT=api
-# 重启某个组件(runner 含重 build)
+# Restart one component (runner also rebuilds)
 make stack-restart COMPONENTS=runner
-# 改了 env 也想重启:
+# Same thing when you change .env:
 make stack-restart COMPONENTS="api proxy"
-# 停全部 native(L1 boxes 不停)
+# Stop all native processes (L1 boxes stay up)
 make stack-down
-# 软重置:停 native + 清 runner home + truncate user data(schema 保留)
+# Soft reset: stop native + clear runner home + truncate user data (schema preserved)
 make stack-reset
-# 硬重置:加 schema 重 load
+# Hard reset: also re-apply the schema
 make stack-reset-hard
-# 全核打击:连 L1 boxes + logs 一起干掉(下次 stack-up 是真冷启动)
+# Full nuke: destroy L1 boxes + logs too (next stack-up is a true cold start)
 make stack-nuke
 ```
 
-所有 wrapper 都是 idempotent — 重复执行安全。组件级控制通过 `COMPONENTS=` 变量(空 = all)。
+Every wrapper is idempotent — safe to run repeatedly. Component-level control is via the `COMPONENTS=` variable (empty = all).
 
 ---
 
-## 1. 首次启动(全新机器,一次性)
+## 1. First-time startup (brand-new machine, one-time)
 
 ```bash
-# 前置:M5 Apple Silicon + Docker Desktop(用于 BoxLite host runtime)
-# yarn + go 1.25 + python 3.11 已装
+# Prereqs: M5 Apple Silicon + Docker Desktop (for the BoxLite host runtime)
+# yarn + go 1.25 + python 3.11 already installed
 
 cd boxlite-cloud-mvp/apps/infra-local
-make stack-build    # 装 yarn deps + build runner/proxy 二进制
-make stack-up       # L1 boxes(含 prod schema)+ 4 个 native 进程,一气呵成
-make stack-status   # 验证全部 up
+make stack-build    # install yarn deps + build runner/proxy binaries
+make stack-up       # L1 boxes (with prod schema) + 4 native processes, all in one go
+make stack-status   # verify everything is up
 ```
 
-✅ 一条命令搞定。`stack-up.sh` 内部自动:
-1. 检测 L1 是否已 up,不 up 则 `make up-with-schema`
-2. 创建 NestJS 需要的两个 symlink(`apps/.env`、`apps/apps`)
-3. 按依赖顺序 api → runner → proxy → dashboard 启,每个等健康才进下一个
-4. 检测端口已被占用就先清(防 EADDRINUSE)
-5. 写 PID 到 `apps/infra-local/.logs/<comp>.pid`,日志到 `<comp>.log`
+✅ One command does it. `stack-up.sh` automatically:
+1. Checks whether L1 is up; if not, runs `make up-with-schema`
+2. Creates the two symlinks NestJS needs (`apps/.env`, `apps/apps`)
+3. Starts api → runner → proxy → dashboard in dependency order, waiting for each to be healthy before the next
+4. Detects ports already in use and frees them first (prevents EADDRINUSE)
+5. Writes PIDs to `apps/infra-local/.logs/<comp>.pid` and logs to `<comp>.log`
 
-## 2. 日常 dashboard 开发循环
+## 2. Day-to-day dashboard development loop
 
-**99% 时间用这条路径**(只改 dashboard 代码):
+**This is the 99 % path** (only dashboard code changes):
 
 ```bash
-# Vite 已在跑 → 改 apps/dashboard/src/**/*.tsx → 保存 → 浏览器 HMR 自动刷
-# API + Runner + Proxy + infra-local 都保持运行,不用动
+# Vite is already running → edit apps/dashboard/src/**/*.tsx → save → browser HMR refreshes
+# API + Runner + Proxy + infra-local all keep running, no need to touch them
 ```
 
-| 改动类型 | 重启需求 |
+| Change type | Restart needed |
 |---|---|
-| `.tsx` / `.ts` / `.css` | 无,Vite HMR |
+| `.tsx` / `.ts` / `.css` | None — Vite HMR |
 | `apps/dashboard/.env` | Ctrl-C + `corepack yarn nx serve dashboard` |
-| 新加 npm 包 | `yarn install` + restart Vite |
-| API 端 schema 改了(`@boxlite-ai/api-client`)| `yarn nx run api:openapi` regen + restart Vite |
+| New npm package | `yarn install` + restart Vite |
+| API schema changed (`@boxlite-ai/api-client`) | `yarn nx run api:openapi` regen + restart Vite |
 
-## 3. API 改动循环
+## 3. API development loop
 
 ```bash
-# nx serve api 是 watch 模式 — 改 apps/api/src/**/*.ts → 自动重 build + 重启
-# 但有 2 个例外:
+# nx serve api runs in watch mode — edit apps/api/src/**/*.ts → auto rebuild + restart
+# But there are 2 exceptions:
 ```
 
-| 改动 | 怎么处理 |
+| Change | How to handle it |
 |---|---|
-| 改了 `*.entity.ts`(数据库 schema)| 写一条 migration:`apps/api/src/migrations/<ts>-name-migration.ts`,重启会自动跑 |
-| 改了 `.env` | Ctrl-C + 重新 `set -a; source .env; set +a; corepack yarn nx serve api` |
-| 改了 OpenAPI(controller 的 `@Api*` 装饰器)| `yarn nx run api:openapi` 重生成 `dist/apps/api/openapi.json` → SDK client 重新生成 → dashboard 重启 |
+| Edit `*.entity.ts` (DB schema) | Write a migration at `apps/api/src/migrations/<ts>-name-migration.ts`; the restart runs it automatically |
+| Edit `.env` | Ctrl-C + re-run `set -a; source .env; set +a; corepack yarn nx serve api` |
+| Edit OpenAPI (controller `@Api*` decorators) | `yarn nx run api:openapi` regenerates `dist/apps/api/openapi.json` → SDK client regenerates → restart dashboard |
 
-## 4. Runner 改动循环
+## 4. Runner development loop
 
 ```bash
-# Runner 是 native Go binary,没有 watch 模式
+# Runner is a native Go binary with no watch mode
 pkill -9 -f boxlite-runner
 cd apps/runner && go build -o /tmp/boxlite-runner ./cmd/runner && cd -
-# 重新跑(用 status doc 里的 cheatsheet)
+# Re-run it (use the cheatsheet in the status doc)
 ```
 
-Runner 内存里有状态(box 句柄、heartbeat 状态等),重启会**短暂丢失** — 用户的 sandbox 会 ~10s 后被 API reconcile cron 重新认领。
+Runner holds state in memory (box handles, heartbeat state, etc.) — restarting **briefly loses it**. The user's sandboxes are reclaimed ~10 s later by the API reconcile cron.
 
-## 5. 数据库 reset(开发期常用)
+## 5. Database reset (common during development)
 
 ```bash
-# 完全清空 PG,从头 load prod schema
-cd apps/infra-local && make load-schema  # 等同先 drop schema 再 apply
+# Wipe PG entirely and reload the prod schema
+cd apps/infra-local && make load-schema  # equivalent to drop-schema + apply
 cd -
 
-# 或:只 truncate user 数据,保留 schema/migrations 状态
+# Or just truncate user data, preserving schema / migrations state
 PGPASSWORD=boxlite psql -h 127.0.0.1 -p 25432 -U boxlite -d boxlite -c "
   TRUNCATE TABLE sandbox, snapshot, snapshot_runner, runner, region, 
                  organization, organization_user, organization_role, 
                  api_key, audit_log CASCADE;
 "
 
-# 然后重启 API 让它重新 seed default region + default runner
+# Then restart the API so it re-seeds default region + default runner
 ```
 
-`~/.boxlite-runner/` 也要清,否则 runner 还以为旧 sandbox 存在:
+`~/.boxlite-runner/` must also be cleared, otherwise the runner still thinks the old sandboxes exist:
 
 ```bash
 pkill -9 -f boxlite-runner
 rm -rf ~/.boxlite-runner/{db,boxes,images,rootfs}/
-# 重启 runner
+# Restart runner
 ```
 
-> 上面是底层 SQL/shell 做法,日常**不直接用**。用下面分级 wrapper。
+> The above is the raw SQL/shell approach — **do not use it directly** day-to-day. Use the tiered wrappers below.
 
-## 5.5 分级清理 / 重建决策
+## 5.5 Tiered cleanup / rebuild decision tree
 
-按"动多少"分 5 档,**从最轻开始,够用就停手**。
+Five tiers ordered by "how much do you blow away" — **start with the lightest, stop when it's enough**.
 
-| # | 范围 | 命令 | 耗时 |
+| # | Scope | Command | Duration |
 |---|---|---|---|
-| ① | 1 个 L2 native 重启 | `make stack-restart COMPONENTS=runner` | ~10s |
-| ② | 1 个 L1 box stuck → 重建 | `make stack-rebuild-l1-box BOX=registry` | ~3s |
-| ③ | 清 DB user 数据,schema 保留 | `make stack-reset && make stack-up` | ~60s |
-| ④ | 含 schema 重对齐(prod baseline reload) | `make stack-reset-hard && make stack-up` | ~90s |
-| ⑤ | 全部摧毁,从零冷启动 | `make stack-nuke && make stack-up` | 3-5 min |
+| ① | Restart 1 L2 native process | `make stack-restart COMPONENTS=runner` | ~10 s |
+| ② | 1 L1 box stuck → rebuild | `make stack-rebuild-l1-box BOX=registry` | ~3 s |
+| ③ | Clear DB user data, preserve schema | `make stack-reset && make stack-up` | ~60 s |
+| ④ | Also re-align schema (reload prod baseline) | `make stack-reset-hard && make stack-up` | ~90 s |
+| ⑤ | Destroy everything, cold-start from zero | `make stack-nuke && make stack-up` | 3-5 min |
 
-### 场景 1:**完全重建**(场景 ⑤)
+### Scenario 1: **Full rebuild** (tier ⑤)
 
 ```bash
 cd apps/infra-local
 make stack-nuke && make stack-up
 ```
 
-做了什么:
-- 停 L2 4 个 native 进程
-- 删 L1 全部 10 个 boxes(microVM kernel + rootfs)
-- 清数据卷 + `.logs/`
-- 重新 pull 10 个 image + 加载 prod schema
-- 起 L2,API 自 seed(region / admin / snapshot pulled to active)
+What it does:
+- Stops the 4 L2 native processes
+- Deletes all 10 L1 boxes (microVM kernels + rootfs)
+- Clears data volumes + `.logs/`
+- Re-pulls the 10 images + reloads the prod schema
+- Starts L2; the API self-seeds (region / admin / snapshot pulled to active)
 
-**何时用**:团队新人 onboard / 升级 schema-baseline / "我搞了一堆诡异操作想回归"。
+**When to use it:** new-hire onboarding / schema-baseline upgrade / "I did a bunch of weird stuff and want to go back to a clean state".
 
-### 场景 2:**Reset + 重 up**(场景 ③ 最常用)
+### Scenario 2: **Reset + re-up** (tier ③ — most common)
 
 ```bash
 cd apps/infra-local
 make stack-reset && make stack-up
 ```
 
-跟 ⑤ 的区别 — 这条**保留**:L1 boxes,PG schema,image cache,历史 logs。只清 PG **用户数据** + `~/.boxlite-runner/` 运行时状态。
+Differences from ⑤ — this one **preserves**: L1 boxes, PG schema, image cache, historical logs. It only clears PG **user data** + `~/.boxlite-runner/` runtime state.
 
-**何时用**:迭代中数据脏了想清掉 sandbox/org/user;测 "fresh DB" 行为。
+**When to use it:** mid-iteration the data got dirty and you want to clear sandbox/org/user; testing "fresh DB" behavior.
 
-### 场景 3:**部分 reset → 部分 up**(场景 ①②,日常 90%)
+### Scenario 3: **Partial reset → partial up** (tiers ①②, 90 % of daily work)
 
 ```bash
-# 改 native 代码
-make stack-restart COMPONENTS=runner             # runner 含自动 rebuild
-make stack-restart COMPONENTS=api                # 改 .env / 文件
-make stack-restart COMPONENTS="api proxy"        # 多个
+# Native code change
+make stack-restart COMPONENTS=runner             # runner rebuilds automatically
+make stack-restart COMPONENTS=api                # changed .env / file
+make stack-restart COMPONENTS="api proxy"        # multiple at once
 
-# L1 box stuck(典型:dex 登录 401 / registry pull 卡死)
+# L1 box stuck (typical: dex returns 401 on login / registry pull hangs)
 make stack-rebuild-l1-box BOX=dex
 make stack-rebuild-l1-box BOX=registry
 
-# 看 + tail
-make stack-status                                # 1 屏全况
-make stack-logs COMPONENT=runner                 # 单组件
-make stack-logs COMPONENT=all                    # 全部
+# Inspect + tail
+make stack-status                                # one-screen full status
+make stack-logs COMPONENT=runner                 # single component
+make stack-logs COMPONENT=all                    # everything
 ```
 
-**何时用**:99% 日常迭代。
+**When to use it:** 99 % of daily iteration.
 
-### 一句话决策
+### One-sentence decision rule
 
-**先 `stack-status` → 哪个红 / 卡 → 用最轻的一档修。从来不要无脑 `stack-nuke`。**
+**Start with `stack-status` → find what's red / stuck → fix it with the lightest tier that works. Never default to `stack-nuke`.**
 
-## 6. 测试技巧
+## 6. Testing techniques
 
-### 6.1 浏览器(主测试方式)
+### 6.1 Browser (primary test path)
 
 ```
-http://localhost:3000  → 选 admin / user 登录(dex 静态用户)
+http://localhost:3000  → pick admin / user to log in (dex static users)
 ```
 
-### 6.2 curl API(SDK 测试 / 脚本 / CI)
+### 6.2 curl the API (SDK testing / scripts / CI)
 
 ```bash
-# 用 admin key(跳过 OIDC,适合脚本)
+# Use the admin key (skips OIDC, suitable for scripts)
 curl -sS \
   -H "Authorization: Bearer local-dev-admin-key" \
   -H "X-BoxLite-Organization-ID: <org-uuid>" \
   http://localhost:3001/api/sandbox/paginated | jq
 
-# 用 OIDC token(模拟用户)
-# 1. 浏览器登录后从 DevTools sessionStorage 取 access_token
+# Use an OIDC token (simulates a user)
+# 1. Log in via the browser, then grab access_token from DevTools sessionStorage
 # 2. curl -H "Authorization: Bearer <token>" ...
 ```
 
-### 6.3 SDK 测试
+### 6.3 SDK testing
 
 ```bash
-# Python SDK 直连 local API
+# Python SDK against the local API
 cd sdks/python
 BOXLITE_API_URL=http://localhost:3001/api \
 BOXLITE_API_KEY=<api-key-via-dashboard-or-curl> \
 pytest tests/
 
-# Go SDK 同理:BOXLITE_API_URL + BOXLITE_API_KEY env
+# Go SDK is the same: set BOXLITE_API_URL + BOXLITE_API_KEY env vars
 ```
 
-### 6.4 数据库直查(只读,不撞 runner 锁)
+### 6.4 Direct DB queries (read-only — won't collide with the runner's lock)
 
 ```bash
-# 看 sandbox state
+# Inspect sandbox state
 sqlite3 ~/.boxlite-runner/db/boxlite.db -header -column \
   "SELECT id, image, status FROM boxes WHERE status='running';"
 
-# 看 API 主库
+# Inspect the API primary DB
 PGPASSWORD=boxlite psql -h 127.0.0.1 -p 25432 -U boxlite -d boxlite -c "
   SELECT s.name, s.state, r.name as runner FROM sandbox s
   LEFT JOIN runner r ON r.id = s.\"runnerId\" 
@@ -229,74 +229,74 @@ PGPASSWORD=boxlite psql -h 127.0.0.1 -p 25432 -U boxlite -d boxlite -c "
 "
 ```
 
-### 6.5 看日志
+### 6.5 Reading logs
 
 ```bash
-# API stdout:重定向了 nx serve 输出的 terminal
-# Runner stdout:重定向了启动 runner 的 terminal
-# Proxy stdout:同上
+# API stdout: redirected to the terminal where `nx serve` was launched
+# Runner stdout: redirected to the terminal where the runner was launched
+# Proxy stdout: same
 
-# Box 内部日志(infra-local 那 10 个 box)
+# Box-internal logs (the 10 infra-local boxes)
 boxlite logs boxlite-local-postgres
 boxlite logs boxlite-local-caddy
 
-# Sandbox microVM 内部日志(runner 管的)
+# Sandbox microVM-internal logs (managed by the runner)
 ls -lt ~/.boxlite-runner/boxes/<id>/logs/
 ```
 
-## 7. 常见问题
+## 7. Common issues
 
-| 症状 | 大概原因 | 解法 |
+| Symptom | Likely cause | Fix |
 |---|---|---|
-| API 全部 401 | `SSH_GATEWAY_API_KEY` 或 `PROXY_API_KEY` 没设 | 看 `apps/api/.env` 这两条值必须非空 |
-| Sandbox 卡 PENDING | snapshot 还没 PULLING 完 | 等 30-60s;再卡查 runner log 看 image pull 错误 |
-| Sandbox 卡 STARTED 但 terminal 黑屏 + `Connection closed` | image 是 amd64,runner 跑 arm64 microVM | 已 fix(`runner/registry.go` 用 `runtime.GOARCH`)— 旧 image 要清缓存重 pull |
-| Dashboard 看不到 "+ Create Sandbox" | PostHog feature flag bootstrap 没生效 | 看 `PostHogProviderWrapper.tsx` 里 `LOCAL_DEV_FEATURE_FLAG_DEFAULTS` 有没有那个 flag |
-| `POST /api/regions` → 404 "Cannot POST" | API server-side PostHog flag bootstrap 没生效 | 看 `app.module.ts` 的 `bootstrapFlags` 配置 |
-| Boxlite-runner 撞锁 `Another BoxliteRuntime is already using directory` | 已有 runner 进程持有 `~/.boxlite-runner/.lock` | `lsof ~/.boxlite-runner/.lock` 找出 PID,决定是 kill 还是错用了 home dir |
-| Terminal `Connection closed` 后无法重连 | signed-url 过期(默认 300s)| 重新点 Connect 按钮,dashboard 自动重新拿 |
-| Dashboard 加载报 `Unauthorized` / `401`,即便刚 OIDC 登录 | **Dex SQLite session db 缓存了旧 grant**,新 login 复用 stale token(常发生在 box SIGKILL / 长时间不用之后)。判定:浏览器解 token 时 `accessTokenIat` 是几天前的 | `make stack-rebuild-l1-box BOX=dex` + 浏览器 `sessionStorage.clear()` + 重 login |
-| Sandbox `pulling` 卡几分钟不动 | **Registry box TCP 还 listen 但内部 registry process hung**(SIGKILL 副作用)。`curl http://127.0.0.1:25000/v2/_catalog` 5s 超时即确认 | `make stack-rebuild-l1-box BOX=registry`,stuck 的 pull 自动恢复 |
-| 任意 L1 box(pgadmin / jaeger / minio / ...)行为诡异 | 同上,L1 box 内部 stateful 进程坏掉 | `make stack-rebuild-l1-box BOX=<name>` 一键摧毁重建 |
+| All API calls return 401 | `SSH_GATEWAY_API_KEY` or `PROXY_API_KEY` not set | Check `apps/api/.env` — both must be non-empty |
+| Sandbox stuck in PENDING | snapshot has not finished PULLING | Wait 30-60 s; if still stuck, check runner log for image-pull errors |
+| Sandbox reaches STARTED but the terminal is blank + `Connection closed` | image is amd64 but runner runs an arm64 microVM | Already fixed (`runner/registry.go` uses `runtime.GOARCH`) — clear the old image cache and re-pull |
+| "+ Create Sandbox" missing in the dashboard | PostHog feature-flag bootstrap didn't fire | Check `LOCAL_DEV_FEATURE_FLAG_DEFAULTS` in `PostHogProviderWrapper.tsx` for that flag |
+| `POST /api/regions` → 404 "Cannot POST" | API server-side PostHog flag bootstrap didn't fire | Check `bootstrapFlags` config in `app.module.ts` |
+| Boxlite-runner hits `Another BoxliteRuntime is already using directory` | Another runner process is holding `~/.boxlite-runner/.lock` | `lsof ~/.boxlite-runner/.lock` to find the PID; decide whether to kill it or that you've used the wrong home dir |
+| Terminal `Connection closed` and won't reconnect | signed-url expired (default 300 s) | Click Connect again; the dashboard re-fetches a fresh URL |
+| Dashboard loads `Unauthorized` / `401` even just after OIDC login | **Dex SQLite session db cached an old grant** and the new login reuses a stale token (common after a box SIGKILL or long idle). Diagnostic: decode the token; `accessTokenIat` is days old | `make stack-rebuild-l1-box BOX=dex` + `sessionStorage.clear()` in the browser + log in again |
+| Sandbox `pulling` is stuck for several minutes | **Registry box TCP still listens but the internal registry process is hung** (SIGKILL side-effect). Confirm: `curl http://127.0.0.1:25000/v2/_catalog` times out after 5 s | `make stack-rebuild-l1-box BOX=registry`; the stuck pull recovers automatically |
+| Any L1 box (pgadmin / jaeger / minio / ...) behaves weirdly | Same as above — the box's stateful internal process is broken | `make stack-rebuild-l1-box BOX=<name>` blows it away and rebuilds in one shot |
 
-## 8. 本地"发布"流程(MVP 内部 demo / 自测)
+## 8. Local "release" workflow (MVP internal demo / self-test)
 
-local 没有真正的"发布",但可以做"冻结到一个 known-good 状态"给团队 demo:
+There is no real "release" locally, but you can **freeze a known-good state** for a team demo:
 
 ```bash
-# 1. 提交所有改动
+# 1. Commit all changes
 git add -A && git commit -m "demo: snapshot for <date>"
 
-# 2. 用 boxlite SDK 导出 infra-local box 镜像(可选,~5 GB,真备份用)
+# 2. Export the infra-local box images via the BoxLite SDK (optional, ~5 GB, for a real backup)
 for s in postgres redis minio registry dex caddy; do
   boxlite export boxlite-local-$s -o demos/$s-$(date +%Y%m%d).tar
 done
 
-# 3. 给团队成员的 README:
-#    git clone + checkout 这个 commit
-#    按章节 1 的"首次启动"操作
-#    指向章节 6 的测试方法
+# 3. README for team members:
+#    git clone + checkout this commit
+#    Follow §1's "First-time startup" instructions
+#    Point at §6 for testing
 ```
 
-如果是给客户演示,**只暴露 dashboard :3000**,其他端口都不要 forward — terminal 走 caddy :28080 也需要绑定 host header,远程访问需要额外的 DNS 配置(用 dns-shim,parked)。
+For a customer demo, **expose only the dashboard on :3000**; do not forward any other ports — the terminal goes through Caddy :28080 and needs the Host header bound, which requires extra DNS config for remote access (use dns-shim, parked).
 
-## 9. 完整 stop
+## 9. Full stop
 
 ```bash
-# 停 4 个 native 进程
+# Stop the 4 native processes
 pkill -9 -f "nx.*serve.*(api|dashboard)"
 pkill -9 -f "boxlite-runner"
 pkill -9 -f "boxlite-proxy"
 
-# 停 10 个 infra boxes(保留数据)
+# Stop the 10 infra boxes (preserve data)
 for b in caddy registry-ui pgadmin otel jaeger dex registry minio redis postgres; do
   boxlite stop boxlite-local-$b
 done
 
-# 或彻底删(数据也丢)
+# Or wipe everything (data lost too)
 cd apps/infra-local && make down
 ```
 
-## 一句话
+## One-liner
 
-**dashboard 改 .tsx + Vite HMR = 默认开发节奏。** API/Runner/Proxy 都是稳定基础设施跑后台,日常不动。需要清空状态:`make load-schema` + 清 `~/.boxlite-runner/`。需要 demo:固定一个 commit + 按章节 1 一遍即可。
+**Editing `.tsx` + Vite HMR is the default development rhythm.** API / Runner / Proxy are stable infrastructure that run in the background and you don't touch day-to-day. To wipe state: `make load-schema` + clear `~/.boxlite-runner/`. To demo: freeze a commit and run §1 once.

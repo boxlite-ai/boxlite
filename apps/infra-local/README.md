@@ -1,77 +1,138 @@
 # `apps/infra-local/` — BoxLite-Based Local Dev Stack
 
-`boxlite_local` is a Python orchestrator that brings up a 10-service local
-development stack as BoxLite microVM boxes (postgres / redis / minio /
-registry / dex / jaeger / pgadmin / registry-ui / otel-collector / caddy)
-plus a one-shot minio bucket bootstrap. It replaces the previous
-`docker-compose` based `apps/local-dev/` setup — "eat your own dogfood"
-per the project principle.
+`apps/infra-local/` orchestrates the full cloud-MVP control plane on a
+single Apple Silicon Mac. It owns two layers:
 
-**Status:** Phase 3c complete (2026-05-21). 11 boxes wired end-to-end,
-integration test green, ready for daily dev use with two known limitations
-(see [§Known limitations](#known-limitations)).
+- **L1 — 10 BoxLite microVM boxes** providing postgres / redis / minio /
+  registry / dex / jaeger / pgadmin / registry-ui / otel-collector / caddy
+  (plus a one-shot minio bucket bootstrap). Driven by the `boxlite_local`
+  Python orchestrator. Replaces the previous `docker-compose` based
+  `apps/local-dev/` setup — "eat your own dogfood" per the project
+  principle.
+- **L2 — 4 native macOS processes** for the application control plane:
+  NestJS API (`:3001`), Go Runner (`:3003`), Go Proxy (`:4000`), Vite
+  Dashboard (`:3000`). Driven by `make stack-*` wrapper scripts under
+  [`scripts/`](scripts/).
+
+User sandboxes (L3) are spawned by the L2 Runner as libkrun microVMs
+under `~/.boxlite-runner/` — see
+[`docs/apps/milestones/2026-05-25-milestone-infra-local-v0.1.0.md`](../../docs/apps/milestones/2026-05-25-milestone-infra-local-v0.1.0.md)
+for the executive summary.
+
+**Status:** `milestone/infra-local/v0.1.0` (2026-05-25). Cold-start to
+working sandbox + browser terminal in ~80 s. Daily dev workflow
+documented in [`docs/apps/infra-local-usage.md`](../../docs/apps/infra-local-usage.md).
+Known limitations: see [§Known limitations](#known-limitations).
 
 ---
 
 ## Quick start
 
 Prereqs: macOS Apple Silicon, BoxLite SDK installed
-(`pip install -e ../../sdks/python` from the boxlite repo), Python 3.10+.
+(`pip install -e ../../sdks/python` from the boxlite repo), Python 3.10+,
+Go 1.25+, Node + yarn (for L2).
 
 ```bash
 cd apps/infra-local
 
-# One-time install of the orchestrator package
+# One-time install of the orchestrator package + build native binaries
 make install
+make stack-build
 
-# Bring everything up (waits for healthchecks, idempotent if already up)
-make up
+# Bring up the full L1 + L2 stack (idempotent — safe to re-run)
+make stack-up
 
-# Inspect what's running
-make ps
+# One-screen health check across L1 + L2
+make stack-status
 
-# Tear down + wipe data
-make wipe
+# Tail logs (api | runner | proxy | dashboard | all)
+make stack-logs COMPONENT=api
+
+# Tear down L2 only (L1 boxes stay up)
+make stack-down
+# ...or tear down L1 too
+make stack-down ARGS=--all
 ```
 
-The full make target list:
+### Make targets
+
+L1-only (just the BoxLite boxes):
 
 ```text
-  help         show this help
-  install      install the package + test extras
-  up           bring all services up (runs doctor preflight first)
-  down         stop + remove all services
-  wipe         stop + remove + wipe data dir
-  ps           list running boxlite-local-* boxes
-  doctor       run preflight checks (SDK + runtime + port conflicts)
-  test         run unit tests (no BoxLite required)
-  itest        run integration smoke test (requires BoxLite runtime, ~30s)
-  e2e          run comprehensive E2E suite (~60s, ~90s with smoke)
-  itest-all    run BOTH integration suites (~90s)
+  install            install the package + test extras
+  up                 bring L1 services up (runs doctor preflight first)
+  down               stop + remove L1 services
+  wipe               stop + remove + wipe data dir
+  ps                 list running boxlite-local-* boxes
+  doctor             run preflight checks (SDK + runtime + port conflicts)
+  load-schema        load sql/schema-baseline.sql into local pg (after `make up`)
+  up-with-schema     make up + make load-schema (one-shot for a fresh stack)
+  seed-init-data     ensure dashboard-required base data (admin org, default region, wait snapshot)
 ```
+
+L2 stack wrappers (L1 + native API/Runner/Proxy/Dashboard):
+
+```text
+  stack-build              build native runner + proxy binaries + yarn install
+  stack-up                 ensure L1 up + start all L2 native processes (idempotent)
+  stack-down               stop all L2 native processes (ARGS=--all also stops L1)
+  stack-restart            restart one or more L2 components (COMPONENTS="api proxy")
+  stack-status             one-screen health check across L1 + L2
+  stack-logs               tail logs (COMPONENT=api|runner|proxy|dashboard|all)
+  stack-reset              wipe L2 runtime state (PG user data + runner home; L1 + schema preserved)
+  stack-reset-hard         like stack-reset, but also re-applies prod schema baseline
+  stack-nuke               absolute nuke: L1 boxes destroyed + data wiped + logs cleared
+  stack-rebuild-l1-box     destroy + recreate one L1 box (BOX=dex|registry|...) — for stuck stateful services
+```
+
+Tests:
+
+```text
+  test          run unit tests (no BoxLite required)
+  itest         run integration smoke test (~30 s)
+  e2e           run comprehensive E2E suite (~60 s)
+  itest-all     run BOTH integration suites (~90 s)
+```
+
+See [`docs/apps/infra-local-usage.md`](../../docs/apps/infra-local-usage.md)
+for the full day-to-day workflow and the tiered cleanup decision tree.
 
 ---
 
 ## What runs
 
-After `make up` you have 10 daemon boxes + 1 one-shot bootstrap. Direct
-host-side access:
+After `make stack-up` you have 10 L1 daemon boxes + 1 one-shot bootstrap
++ 4 L2 native processes. Direct host-side access:
+
+### L1 — BoxLite boxes
 
 | Service       | Host endpoint                                          | Notes                       |
 |---|---|---|
-| postgres      | `postgresql://boxlite@127.0.0.1:25432/boxlite`         | trust auth (local dev only) |
+| postgres      | `postgresql://boxlite@127.0.0.1:25432/boxlite`         | trust auth (local dev only); prod schema baseline pre-loaded |
 | redis         | `redis://127.0.0.1:26379`                              |                             |
 | minio (S3)    | `http://127.0.0.1:29000`                               | user/pass `minioadmin`      |
 | minio console | `http://127.0.0.1:29001`                               |                             |
 | registry      | `http://127.0.0.1:25000/v2/`                           | OCI registry v2             |
-| dex (OIDC)    | `http://127.0.0.1:25556/dex/.well-known/openid-configuration` | admin@boxlite.dev / password |
+| dex (OIDC)    | `http://127.0.0.1:25556/dex/.well-known/openid-configuration` | `admin@boxlite.dev` / `password` (also `test01@boxlite.dev`) |
 | jaeger UI     | `http://127.0.0.1:26686/`                              | in-memory storage           |
 | pgadmin       | `http://127.0.0.1:25051/`                              |                             |
 | registry-ui   | `http://127.0.0.1:25052/`                              |                             |
 | otel HTTP     | `http://127.0.0.1:24318/v1/traces`                     | OTLP receiver (debug exporter) |
 | otel gRPC     | `127.0.0.1:24317`                                      |                             |
 | otel health   | `http://127.0.0.1:23133/`                              |                             |
-| **caddy**     | `http://127.0.0.1:28080/`                              | reverse proxy to all of the above |
+| **caddy**     | `http://127.0.0.1:28080/`                              | reverse proxy to all of the above + sandbox port-preview |
+
+### L2 — native application processes
+
+| Service        | Host endpoint              | Notes                                    |
+|---|---|---|
+| Dashboard (Vite) | `http://127.0.0.1:3000/`   | React + OIDC login flow                  |
+| API (NestJS)     | `http://127.0.0.1:3001/api`| Reads `apps/.env`; auto-seeds admin org + default region |
+| Proxy (Go)       | `http://127.0.0.1:4000`    | Sandbox port-preview `<port>-<token>.localhost:28080` reverse-proxy target |
+| Runner (Go)      | `http://127.0.0.1:3003`    | Native arm64; spawns L3 microVMs in `~/.boxlite-runner/` |
+
+See [`CONNECTIONS.md`](CONNECTIONS.md) for full credentials, env vars,
+and per-service env override surface.
 
 All reverse-proxy routes via Caddy (`http://127.0.0.1:28080/`):
 
@@ -139,10 +200,6 @@ BoxLite's HOST_IP).
 - **`one_shot=True` services** (currently only `minio-init`) run their
   command, then the orchestrator polls until the container's init process
   exits, then `runtime.remove(force=True)`s the box. Re-runs on every `up`.
-
-See `docs/superpowers/specs/2026-05-2[01]-infra-local-phase[2-3]*.md` for
-the full design history (Phase 2 walking skeleton + Phase 3a/3b/3c
-service additions).
 
 ---
 
@@ -214,11 +271,12 @@ relevant source files. Summary:
 
 ```
 apps/infra-local/
-├── Makefile                          # convenience wrappers
+├── Makefile                          # convenience wrappers (L1 + stack-* L2)
 ├── README.md                         # this file
+├── CONNECTIONS.md                    # endpoint / credential / env-var reference per service
 ├── pyproject.toml                    # package definition
 ├── goal.md                           # original "why we built this"
-├── boxlite_local/                    # the package
+├── boxlite_local/                    # the L1 orchestrator package
 │   ├── __init__.py
 │   ├── __main__.py                   # python -m boxlite_local entry
 │   ├── cli.py                        # argparse → orchestrator/doctor
@@ -228,9 +286,19 @@ apps/infra-local/
 │   ├── execwrap.py                   # exec_collect helper
 │   ├── orchestrator.py               # topo_sort + up/down/ps + healthcheck loops
 │   └── services.py                   # SPEC_* + SERVICES registry
+├── scripts/                          # L2 stack wrappers (called by `make stack-*`)
+│   ├── _stack-common.sh
+│   ├── apply-schema.sh               # load sql/schema-baseline.sql into local pg
+│   ├── seed-init-data.sh             # wait for API self-seed + default snapshot
+│   ├── stack-build.sh                # build runner + proxy binaries
+│   ├── stack-up.sh / stack-down.sh / stack-restart.sh
+│   ├── stack-status.sh / stack-logs.sh
+│   └── stack-reset.sh                # tiered: soft / --hard / --nuke
+├── sql/                              # production schema baseline (loaded into L1 pg)
+│   ├── REFRESH.md
+│   └── schema-baseline.sql
 ├── configs/                          # legacy: minio init script (now inlined)
 │   └── minio/init.sh
-├── poc/                              # Phase 1 PoC code (still works, kept as a reference)
 └── tests/
     ├── unit/                         # pure-logic tests (no BoxLite needed)
     │   ├── test_config.py            # 12: InfraConfig + env overrides
@@ -256,21 +324,37 @@ apps/infra-local/
 
 ## Common tasks
 
-**Add a new service:** define a `ServiceSpec` in `services.py`, add an
+**Add a new L1 service:** define a `ServiceSpec` in `services.py`, add an
 entry to the `SERVICES` dict, add the host port default to `InfraConfig`,
 add `BOXLITE_<NAME>_HOST_PORT` to `.load()`, run `make up`. Don't forget
 to map ALL of the image's `EXPOSE`'d ports explicitly (the SDK auto-bind
 silently breaks ALL forwards for that box if any EXPOSE'd port can't be
 bound — see SDK gotcha #10 above).
 
-**Debug a stuck service:** `python -m boxlite_local ps` to see status,
-`boxlite logs boxlite-local-<name>` for guest logs, `boxlite exec
-boxlite-local-<name> -- sh` to drop into the box (if the image has a
-shell — minio's `otel/opentelemetry-collector` doesn't).
+**Restart one L2 component** (90 % of daily iteration):
+`make stack-restart COMPONENTS=runner` (or `api`, `proxy`, `dashboard`;
+multiple as `COMPONENTS="api proxy"`). `runner` includes an automatic
+rebuild.
 
-**Reset to clean state:** `make wipe`. This stops + removes all
-`boxlite-local-*` boxes and deletes `~/.boxlite-local/data/`.
+**Rebuild one L1 box** (when a stateful service goes weird — typical
+symptoms: dex returns stale tokens, registry pull hangs):
+`make stack-rebuild-l1-box BOX=dex` (or `registry`, `pgadmin`, ...).
 
-**Run integration tests:** `make itest`. Takes ~30s on warm cache. The
+**Debug a stuck service:** `make stack-status` first → identify the red
+component → use the lightest possible cleanup. `python -m boxlite_local ps`
+shows L1 box state; `boxlite logs boxlite-local-<name>` shows guest
+logs; `make stack-logs COMPONENT=<name>` tails L2 logs from
+`apps/infra-local/.logs/`.
+
+**Reset DB to clean state** (most-common scenario): `make stack-reset &&
+make stack-up` — truncates PG user data and clears
+`~/.boxlite-runner/`, preserves schema + L1 boxes + image cache. Use
+`stack-reset-hard` to also re-apply the prod schema baseline. Use
+`stack-nuke` only when you want a full cold rebuild (~3-5 min).
+
+**Run integration tests:** `make itest`. Takes ~30 s on warm cache. The
 test skips itself if any `boxlite-local-*` box is already running
 (safety guard to avoid destroying live dev state).
+
+For the full tiered cleanup decision tree, see
+[`docs/apps/infra-local-usage.md §5.5`](../../docs/apps/infra-local-usage.md).

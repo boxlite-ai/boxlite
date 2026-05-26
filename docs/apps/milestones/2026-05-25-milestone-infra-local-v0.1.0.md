@@ -160,6 +160,7 @@ runner's home directory is **deliberately separate** from infra-local's
 | OpenSearch | Audit log durability | `AUDIT_PUBLISH_ENABLED=false` |
 | SMTP | Org invite emails | Copy invite link manually |
 | dns-shim + TLS | `*.boxlite.test` HTTPS | Parked (needs sudo) |
+| Runner reports host-wide (not box-owned) resource usage | On a dev Mac sharing RAM with IDE/Chrome/Docker, the runner's `availabilityScore` drops below the prod-default threshold of 10 and the API rejects sandbox-create with `"No available runners"` even when the runner is idle | `stack-up.sh` exports `RUNNER_AVAILABILITY_SCORE_THRESHOLD=5`, `RUNNER_MEMORY_PENALTY_THRESHOLD=95`, `RUNNER_DISK_PENALTY_THRESHOLD=95` before launching the API — see [`apps/infra-local/CONNECTIONS.md` §11](../../../apps/infra-local/CONNECTIONS.md) "Dev-only runner-score overrides" |
 
 ---
 
