@@ -2,13 +2,21 @@
 //!
 //! Lazily initializes the bootstrap guest rootfs as a disk image (shared across all boxes).
 //! Then creates or reuses per-box COW overlay disk.
+//!
+//! ## Init rootfs source
+//!
+//! The init rootfs is built **locally** from an empty source tree — `mke2fs`
+//! produces a fresh ext4 image and `inject_file_into_ext4` writes the
+//! `boxlite-guest` binary into `/boxlite/bin/`. There is no network pull,
+//! no docker.io dependency, and no external base image of any kind. See
+//! `GuestRootfsManager::get_or_create_init_rootfs` and issue #591 for the
+//! migration rationale.
 
 use super::{InitCtx, log_task_error, task_start};
 use crate::disk::{BackingFormat, Disk, DiskFormat, Qcow2Helper};
-use crate::images::ImageDiskManager;
 use crate::pipeline::PipelineTask;
-use crate::rootfs::guest::{GuestRootfs, GuestRootfsManager, Strategy};
-use crate::runtime::constants::images;
+use crate::rootfs::guest::{GuestRootfs, Strategy};
+use crate::runtime::constants::init_rootfs;
 use crate::runtime::layout::BoxFilesystemLayout;
 use crate::runtime::rt_impl::SharedRuntimeImpl;
 use async_trait::async_trait;
@@ -56,20 +64,13 @@ async fn run_guest_rootfs(
     let guest_rootfs = runtime
         .guest_rootfs
         .get_or_try_init(|| async {
-            tracing::info!(
-                "Initializing bootstrap guest rootfs {} (first time only)",
-                images::INIT_ROOTFS
-            );
+            tracing::info!("Initializing bootstrap guest rootfs (first time only)");
 
-            let base_image = pull_guest_rootfs_image(runtime).await?;
-            let env = extract_env_from_image(&base_image).await?;
-            let guest_rootfs = prepare_guest_rootfs(
-                &runtime.guest_rootfs_mgr,
-                &runtime.image_disk_mgr,
-                &base_image,
-                env,
-            )
-            .await?;
+            let env = vec![("PATH".to_string(), init_rootfs::PATH_ENV.to_string())];
+            let guest_rootfs = runtime
+                .guest_rootfs_mgr
+                .get_or_create_init_rootfs(env)
+                .await?;
 
             tracing::info!("Bootstrap guest rootfs ready: {:?}", guest_rootfs.strategy);
 
@@ -179,54 +180,4 @@ fn create_or_reuse_cow_disk(
         // Non-disk strategy - no COW disk needed
         Ok((guest_rootfs.clone(), None))
     }
-}
-
-/// Prepare guest rootfs as a versioned disk image.
-///
-/// Uses the two-stage pipeline:
-/// 1. `ImageDiskManager`: pure image layers → ext4 disk (cached by image digest)
-/// 2. `GuestRootfsManager`: image disk + boxlite-guest → versioned rootfs (cached by digest+guest hash)
-async fn prepare_guest_rootfs(
-    guest_rootfs_mgr: &GuestRootfsManager,
-    image_disk_mgr: &ImageDiskManager,
-    base_image: &crate::images::ImageObject,
-    env: Vec<(String, String)>,
-) -> BoxliteResult<GuestRootfs> {
-    guest_rootfs_mgr
-        .get_or_create(base_image, image_disk_mgr, env)
-        .await
-}
-
-async fn pull_guest_rootfs_image(
-    runtime: &SharedRuntimeImpl,
-) -> BoxliteResult<crate::images::ImageObject> {
-    // ImageManager has internal locking - direct access
-    runtime.image_manager.pull(images::INIT_ROOTFS).await
-}
-
-async fn extract_env_from_image(
-    image: &crate::images::ImageObject,
-) -> BoxliteResult<Vec<(String, String)>> {
-    let image_config = image.load_config().await?;
-
-    let env: Vec<(String, String)> = if let Some(config) = image_config.config() {
-        if let Some(envs) = config.env() {
-            envs.iter()
-                .filter_map(|e| {
-                    let parts: Vec<&str> = e.splitn(2, '=').collect();
-                    if parts.len() == 2 {
-                        Some((parts[0].to_string(), parts[1].to_string()))
-                    } else {
-                        None
-                    }
-                })
-                .collect()
-        } else {
-            Vec::new()
-        }
-    } else {
-        Vec::new()
-    };
-
-    Ok(env)
 }

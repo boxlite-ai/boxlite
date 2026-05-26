@@ -37,9 +37,25 @@ pub mod envs {
 pub mod images {
     /// Default container image when none is specified
     pub const DEFAULT: &str = "alpine:latest";
+}
 
-    /// Base image for VM init rootfs (must include mkfs.ext4 for disk formatting)
-    pub const INIT_ROOTFS: &str = "debian:bookworm-slim";
+/// Init rootfs (the ext4 disk that hosts `boxlite-guest` as PID 1) metadata.
+///
+/// The init rootfs is built locally from an empty source tree — no image pull,
+/// no docker.io dependency. libkrun's in-VM init mounts `/dev /proc /sys`
+/// before exec; `boxlite-guest` itself creates and mounts `/tmp /var/tmp /run`
+/// at startup; `inject_file_into_ext4` adds `/boxlite/bin/boxlite-guest`. So
+/// the source tree literally only needs to be a valid empty directory.
+pub mod init_rootfs {
+    /// Schema version. Bump when the source tree layout or guest contract
+    /// changes in a way that requires invalidating cached init rootfs disks.
+    /// (Per-binary invalidation is already handled by `BOXLITE_GUEST_HASH`.)
+    pub const VERSION: u32 = 1;
+
+    /// `PATH` env exported into the `boxlite-guest` PID 1 process.
+    /// Matches the FHS default — `boxlite-guest` itself does not `execvp`,
+    /// but child processes it spawns may inherit this before pivot_root.
+    pub const PATH_ENV: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 }
 
 /// Filesystem and mount options

@@ -8,10 +8,10 @@ use std::sync::OnceLock;
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
 use crate::disk::{
-    BaseDisk, BaseDiskKind, BaseDiskManager, Disk, DiskFormat, inject_file_into_ext4,
-    read_backing_file_path,
+    BaseDisk, BaseDiskKind, BaseDiskManager, Disk, DiskFormat, create_ext4_from_dir,
+    inject_file_into_ext4, read_backing_file_path,
 };
-use crate::images::{ImageDiskManager, ImageObject};
+use crate::runtime::constants::init_rootfs as init_rootfs_const;
 #[cfg(test)]
 use crate::runtime::id::BaseDiskID;
 use crate::runtime::id::BaseDiskIDMint;
@@ -288,62 +288,145 @@ impl GuestRootfsManager {
         }
     }
 
-    /// Get or create a versioned guest rootfs.
+    /// Get or create the **init rootfs** — a self-contained ext4 disk that
+    /// hosts `boxlite-guest` as PID 1, with no dependency on any external
+    /// container image (no docker.io, no private registry, no network).
     ///
-    /// Stage 1 (via `ImageDiskManager`): ensure pure image ext4 exists.
-    /// Stage 2: copy image disk → inject guest binary via debugfs → cache.
+    /// This replaces the previous flow that pulled `debian:bookworm-slim`
+    /// from docker.io; see issue #591 for the bug that motivated the change.
+    /// debian provided ~95 MB of files that boxlite-guest never touched —
+    /// libkrun mounts `/dev /proc /sys` itself before exec, and
+    /// `boxlite-guest` auto-creates `/tmp /var/tmp /run` at startup. The
+    /// only thing the rootfs has to carry is `/boxlite/bin/boxlite-guest`,
+    /// which is injected via `inject_file_into_ext4` (and which mints its
+    /// own `/boxlite/bin/` parent dirs via debugfs).
     ///
-    /// Returns a `GuestRootfs` with `Strategy::Disk` pointing at the cached ext4.
-    pub async fn get_or_create(
+    /// Version key shape: `init-v{N}-{guest_hash_12}`. The schema version
+    /// guards against future layout changes; the guest hash suffix lets the
+    /// existing GC code in `gc_inner` preserve current-version entries.
+    pub async fn get_or_create_init_rootfs(
         &self,
-        image: &ImageObject,
-        image_disk_mgr: &ImageDiskManager,
         env: Vec<(String, String)>,
     ) -> BoxliteResult<GuestRootfs> {
         let total_start = std::time::Instant::now();
 
-        // Stage 1: ensure pure image disk exists
-        let stage1_start = std::time::Instant::now();
-        let image_disk = image_disk_mgr.get_or_create(image).await?;
-        tracing::info!(
-            elapsed_ms = stage1_start.elapsed().as_millis() as u64,
-            "get_or_create: stage1 image_disk done"
-        );
-
-        // Stage 2: versioned guest rootfs
-        let digest = image.compute_image_digest();
-        let hash_start = std::time::Instant::now();
         let guest_hash = self.cached_guest_hash()?;
-        tracing::info!(
-            elapsed_ms = hash_start.elapsed().as_millis() as u64,
-            "get_or_create: cached_guest_hash done"
-        );
-        let version_key = Self::version_key(&digest, guest_hash);
+        let expected_version_key = Self::init_version_key(guest_hash);
 
-        if let Some(disk) = self.find(&version_key) {
+        if let Some(disk) = self.find(&expected_version_key) {
             tracing::info!(
-                version_key = %version_key,
+                version_key = %expected_version_key,
                 total_ms = total_start.elapsed().as_millis() as u64,
-                "get_or_create: CACHE HIT"
+                "get_or_create_init_rootfs: CACHE HIT"
             );
             return Self::disk_to_guest_rootfs(disk, env);
         }
 
         tracing::info!(
-            version_key = %version_key,
-            "get_or_create: CACHE MISS — building guest rootfs"
+            version_key = %expected_version_key,
+            "get_or_create_init_rootfs: CACHE MISS — building from embedded template"
         );
-        let disk = self
-            .build_and_install(&image_disk, &digest, &version_key)
-            .await?;
+        let disk = self.build_and_install_init(&expected_version_key).await?;
 
         tracing::info!(
             total_ms = total_start.elapsed().as_millis() as u64,
             cache_hit = false,
-            "get_or_create: completed"
+            "get_or_create_init_rootfs: completed"
         );
 
         Self::disk_to_guest_rootfs(disk, env)
+    }
+
+    /// Build the init rootfs from scratch and atomically install it.
+    ///
+    /// Mirrors `build_and_install` but skips Stage 1 (image disk) entirely —
+    /// we run `mke2fs -d` over an empty directory to produce a fresh ext4
+    /// image, then `inject_file_into_ext4` writes `boxlite-guest` into it.
+    ///
+    /// The guest-hash-mismatch handling mirrors `build_and_install` so a
+    /// stale compile-time hash from `build.rs` does not corrupt the cache.
+    async fn build_and_install_init(&self, expected_version_key: &str) -> BoxliteResult<Disk> {
+        let build_start = std::time::Instant::now();
+
+        // Empty source dir: libkrun creates /dev /proc /sys before exec,
+        // boxlite-guest creates /tmp /var/tmp /run, inject creates /boxlite/bin.
+        let temp = tempfile::tempdir_in(&self.temp_dir).map_err(|e| {
+            BoxliteError::Storage(format!(
+                "Failed to create temp directory in {}: {}",
+                self.temp_dir.display(),
+                e
+            ))
+        })?;
+        let source_dir = temp.path().join("init-rootfs-src");
+        fs::create_dir(&source_dir).map_err(|e| {
+            BoxliteError::Storage(format!(
+                "Failed to create init rootfs source dir {}: {}",
+                source_dir.display(),
+                e
+            ))
+        })?;
+
+        let staged_path = temp.path().join("init-rootfs.ext4");
+
+        let mkfs_start = std::time::Instant::now();
+        let staged_disk = create_ext4_from_dir(&source_dir, &staged_path)?;
+        tracing::info!(
+            elapsed_ms = mkfs_start.elapsed().as_millis() as u64,
+            "build_and_install_init: mke2fs done"
+        );
+
+        // Inject boxlite-guest binary; verify hash matches the version key.
+        let inject_start = std::time::Instant::now();
+        let guest_bin = util::find_binary("boxlite-guest")?;
+        crate::vmm::guest_check::validate_guest_binary(&guest_bin)?;
+
+        let actual_hash = Self::sha256_file(&guest_bin)?;
+        let actual_version_key = Self::init_version_key(&actual_hash);
+
+        if actual_version_key != expected_version_key {
+            if option_env!("BOXLITE_GUEST_HASH").is_some() {
+                return Err(BoxliteError::Internal(format!(
+                    "Guest binary hash mismatch: compile-time key {} but actual key {}. \
+                     Rebuild boxlite to fix.",
+                    expected_version_key, actual_version_key
+                )));
+            }
+            tracing::info!(
+                expected = %expected_version_key,
+                actual = %actual_version_key,
+                "No compile-time hash, using actual guest hash"
+            );
+            // Race: another process may have produced the actual-key entry.
+            if let Some(disk) = self.find(&actual_version_key) {
+                return Ok(disk);
+            }
+        }
+
+        inject_file_into_ext4(&staged_path, &guest_bin, "boxlite/bin/boxlite-guest")?;
+        tracing::info!(
+            elapsed_ms = inject_start.elapsed().as_millis() as u64,
+            "build_and_install_init: inject guest binary done"
+        );
+
+        let result = self.install(&actual_version_key, staged_disk);
+
+        tracing::info!(
+            version_key = %actual_version_key,
+            total_ms = build_start.elapsed().as_millis() as u64,
+            "build_and_install_init: completed"
+        );
+
+        result
+    }
+
+    /// Compute the init rootfs version key.
+    ///
+    /// Format: `init-v{schema}-{guest_hash_12}`. The trailing `-{guest_12}`
+    /// suffix matches the pattern recognized by `gc_inner`, so init entries
+    /// produced for the current guest binary are preserved across GC.
+    fn init_version_key(guest_hash: &str) -> String {
+        let g = &guest_hash[..12.min(guest_hash.len())];
+        format!("init-v{}-{}", init_rootfs_const::VERSION, g)
     }
 
     /// Convert a persistent `Disk` into a `GuestRootfs` with `Strategy::Disk`.
@@ -385,98 +468,6 @@ impl GuestRootfsManager {
             let _ = self.base_disk_mgr.store().delete(record.id());
             None
         }
-    }
-
-    /// Build guest rootfs from image disk and atomically install.
-    ///
-    /// Verifies the actual guest binary hash against the expected version key.
-    /// If the compile-time hash is stale, uses the actual hash for the version key.
-    async fn build_and_install(
-        &self,
-        image_disk: &Disk,
-        digest: &str,
-        expected_version_key: &str,
-    ) -> BoxliteResult<Disk> {
-        let build_start = std::time::Instant::now();
-
-        // Stage: copy image disk to temp, inject guest binary there
-        let temp = tempfile::tempdir_in(&self.temp_dir).map_err(|e| {
-            BoxliteError::Storage(format!(
-                "Failed to create temp directory in {}: {}",
-                self.temp_dir.display(),
-                e
-            ))
-        })?;
-        let staged_path = temp.path().join("guest-rootfs.ext4");
-
-        let copy_start = std::time::Instant::now();
-        let copy_bytes = fs::copy(image_disk.path(), &staged_path).map_err(|e| {
-            BoxliteError::Storage(format!(
-                "Failed to copy image disk {} to staged path {}: {}",
-                image_disk.path().display(),
-                staged_path.display(),
-                e
-            ))
-        })?;
-        tracing::info!(
-            elapsed_ms = copy_start.elapsed().as_millis() as u64,
-            size_mb = copy_bytes / (1024 * 1024),
-            "build_and_install: copy image disk done"
-        );
-
-        // Inject guest binary into staged disk via debugfs
-        let inject_start = std::time::Instant::now();
-        let guest_bin = util::find_binary("boxlite-guest")?;
-
-        // Pre-flight: validate guest binary is a valid ELF for this architecture
-        crate::vmm::guest_check::validate_guest_binary(&guest_bin)?;
-
-        // Verify the actual guest binary hash matches what we expected.
-        // The compile-time hash (from build.rs) may be stale if the guest
-        // binary was rebuilt after boxlite was compiled.
-        let actual_hash = Self::sha256_file(&guest_bin)?;
-        let actual_version_key = Self::version_key(digest, &actual_hash);
-
-        if actual_version_key != expected_version_key {
-            if option_env!("BOXLITE_GUEST_HASH").is_some() {
-                // Compile-time hash exists but doesn't match the actual binary.
-                // This means boxlite was compiled against a different guest binary
-                // than what's found at runtime — an inconsistent build.
-                return Err(BoxliteError::Internal(format!(
-                    "Guest binary hash mismatch: compile-time key {} but actual key {}. \
-                     Rebuild boxlite to fix.",
-                    expected_version_key, actual_version_key
-                )));
-            }
-            // No compile-time hash (fallback mode) — use actual hash
-            tracing::info!(
-                expected = %expected_version_key,
-                actual = %actual_version_key,
-                "No compile-time hash, using actual guest hash"
-            );
-            // Check cache with actual key — might already exist
-            if let Some(disk) = self.find(&actual_version_key) {
-                return Ok(disk);
-            }
-        }
-
-        inject_file_into_ext4(&staged_path, &guest_bin, "boxlite/bin/boxlite-guest")?;
-        tracing::info!(
-            elapsed_ms = inject_start.elapsed().as_millis() as u64,
-            "build_and_install: inject guest binary done"
-        );
-
-        // Atomic install: use the actual version key (may differ from expected)
-        let staged_disk = Disk::new(staged_path, DiskFormat::Ext4, false);
-        let result = self.install(&actual_version_key, staged_disk);
-
-        tracing::info!(
-            version_key = %actual_version_key,
-            total_ms = build_start.elapsed().as_millis() as u64,
-            "build_and_install: completed"
-        );
-
-        result
     }
 
     /// Atomically install a staged guest rootfs to the bases directory.
@@ -765,14 +756,6 @@ impl GuestRootfsManager {
 
         Ok(hash)
     }
-
-    /// Compute the version key from image digest and guest binary hash.
-    fn version_key(digest: &str, guest_hash: &str) -> String {
-        let d = digest.strip_prefix("sha256:").unwrap_or(digest);
-        let d = &d[..12.min(d.len())];
-        let g = &guest_hash[..12.min(guest_hash.len())];
-        format!("{}-{}", d, g)
-    }
 }
 
 #[cfg(test)]
@@ -816,24 +799,23 @@ mod tests {
     }
 
     #[test]
-    fn test_version_key_strips_sha256_prefix() {
-        let key = GuestRootfsManager::version_key(
-            "sha256:abcdef123456789012345678",
-            "fedcba987654321012345678",
+    fn test_init_version_key_format() {
+        // The init rootfs version key encodes the schema version and a
+        // 12-char prefix of the guest binary hash. The trailing
+        // `-{guest_12}` suffix must match the pattern recognized by
+        // `gc_inner` so current-version entries are preserved across GC.
+        let key = GuestRootfsManager::init_version_key("fedcba987654321012345678");
+        assert_eq!(key, "init-v1-fedcba987654");
+        assert!(
+            key.ends_with("-fedcba987654"),
+            "GC pattern requires trailing -{{guest_12}} suffix"
         );
-        assert_eq!(key, "abcdef123456-fedcba987654");
     }
 
     #[test]
-    fn test_version_key_no_prefix() {
-        let key = GuestRootfsManager::version_key("abcdef123456789012", "111222333444555666");
-        assert_eq!(key, "abcdef123456-111222333444");
-    }
-
-    #[test]
-    fn test_version_key_short_inputs() {
-        let key = GuestRootfsManager::version_key("abc", "def");
-        assert_eq!(key, "abc-def");
+    fn test_init_version_key_short_input() {
+        let key = GuestRootfsManager::init_version_key("def");
+        assert_eq!(key, "init-v1-def");
     }
 
     #[test]
