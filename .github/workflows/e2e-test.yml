@@ -108,13 +108,13 @@ jobs:
     steps:
       - name: Generate GitHub App token
         id: app-token
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1.12.0
         with:
           app-id: ${{ vars.GH_APP_ID }}
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
 
       - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
         with:
           role-to-assume: ${{ env.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -338,7 +338,7 @@ jobs:
           fi
 
       - name: Upload rescued prior-run logs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: e2e-test-logs-rescued-${{ github.run_id }}-${{ github.run_attempt }}
           path: /tmp/boxlite-rescue/
@@ -361,7 +361,7 @@ jobs:
           find /opt/actions-runner/_diag -maxdepth 1 -type f -name 'Runner_*.log' -mtime +1 -delete 2>/dev/null || true
 
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
         with:
           submodules: recursive
           clean: false
@@ -453,7 +453,7 @@ jobs:
         # host reboot, timeout — all surface as `cancelled()`, not failure).
         # We want logs for every non-success outcome.
         if: failure() || cancelled()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: e2e-test-logs-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -466,7 +466,7 @@ jobs:
 
       - name: Debug via SSH on failure
         if: failure() && inputs.debug
-        uses: mxschmitt/action-tmate@v3
+        uses: mxschmitt/action-tmate@c0afd6f790e3a5564914980036ebf83216678101 # v3.23
         with:
           limit-access-to-actor: true
           timeout-minutes: 30
@@ -484,7 +484,7 @@ jobs:
     if: always() && needs.start-runner.outputs.instance-id != ''
     steps:
       - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
         with:
           role-to-assume: ${{ env.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
