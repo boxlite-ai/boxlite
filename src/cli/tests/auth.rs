@@ -234,5 +234,5 @@ fn status_treats_empty_env_api_key_as_not_logged_in() {
     cmd.args(["auth", "status"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Not logged in."));
+        .stdout(predicate::str::contains("Not logged in"));
 }
