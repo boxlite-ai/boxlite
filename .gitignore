@@ -177,3 +177,4 @@ Cargo.lock
 /runner
 .claude/scheduled_tasks.lock
 .claude/worktrees/
+.claude/.last-audit.json
