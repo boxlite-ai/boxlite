@@ -7,8 +7,15 @@
 ```bash
 cd apps/infra-local
 
-# First-time / day-to-day: bring the whole stack up (L1 boxes + 4 native processes)
+# First-time, One-time install of the orchestrator package + build native binaries + stack up
+make install
+make stack-build
 make stack-up
+
+# day-to-day: bring the whole stack up (L1 boxes + 4 native processes)
+make stack-up
+
+
 # Health check
 make stack-status
 # Tail logs (any of: api / runner / proxy / dashboard / all)
