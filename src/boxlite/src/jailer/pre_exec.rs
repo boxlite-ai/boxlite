@@ -62,8 +62,24 @@ pub fn add_pre_exec_hook(
     resource_limits: ResourceLimits,
     pid_writer: Option<PidFileWriter>,
     preserved_fds: Vec<(RawFd, i32)>,
+    detach: bool,
 ) {
     use std::os::unix::process::CommandExt;
+
+    // Detach=false → child's own process group at Command-build time
+    // so a later `killpg(shim_pid, SIGKILL)` reaps the shim plus its
+    // grandchildren (libkrun threads, gvproxy) atomically.
+    //
+    // Gated on `!detach` because the detached branch below uses
+    // `setsid()`, which creates a new session AND a new pgroup with
+    // the child as leader of both. Calling `process_group(0)` here
+    // would make the child a pgroup leader before `setsid()` runs;
+    // `setsid()` then fails with EPERM (POSIX: setsid is forbidden
+    // for an existing pgroup leader). The branches are exclusive on
+    // purpose — `setsid()` already covers the pgroup case.
+    if !detach {
+        cmd.process_group(0);
+    }
 
     // SAFETY: The hook only uses async-signal-safe syscalls.
     // See module documentation for details.
@@ -97,6 +113,15 @@ pub fn add_pre_exec_hook(
                     .map_err(std::io::Error::from_raw_os_error)?;
             }
 
+            // 4. Detach=true → setsid: child becomes a session leader,
+            // detaching from the parent's controlling terminal. Without
+            // this a SIGHUP on the parent's terminal cascades into the
+            // daemon (the `BoxOptions::detach` contract relies on it).
+            // `setsid` is async-signal-safe.
+            if detach && libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+
             Ok(())
         });
     }
@@ -111,7 +136,7 @@ mod tests {
         let mut cmd = Command::new("/bin/echo");
         let limits = ResourceLimits::default();
 
-        add_pre_exec_hook(&mut cmd, limits, None, vec![]);
+        add_pre_exec_hook(&mut cmd, limits, None, vec![], false);
     }
 
     #[test]
@@ -119,7 +144,7 @@ mod tests {
         let mut cmd = Command::new("/bin/echo");
         let limits = ResourceLimits::default();
         let writer = PidFileWriter::at(std::path::Path::new("/tmp/test.pid")).ok();
-        add_pre_exec_hook(&mut cmd, limits, writer, vec![]);
+        add_pre_exec_hook(&mut cmd, limits, writer, vec![], false);
     }
 
     #[test]
@@ -128,6 +153,6 @@ mod tests {
         let limits = ResourceLimits::default();
 
         // Simulate preserving fd 5 → target fd 3
-        add_pre_exec_hook(&mut cmd, limits, None, vec![(5, 3)]);
+        add_pre_exec_hook(&mut cmd, limits, None, vec![(5, 3)], false);
     }
 }

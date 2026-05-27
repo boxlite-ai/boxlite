@@ -28,6 +28,7 @@ pub struct JailerBuilder {
     box_id: Option<String>,
     layout: Option<BoxFilesystemLayout>,
     preserved_fds: Vec<(RawFd, i32)>,
+    detach: bool,
 }
 
 impl Default for JailerBuilder {
@@ -45,6 +46,7 @@ impl JailerBuilder {
             box_id: None,
             layout: None,
             preserved_fds: Vec::new(),
+            detach: false,
         }
     }
 
@@ -103,6 +105,15 @@ impl JailerBuilder {
         self
     }
 
+    /// Configure detach-mode process isolation applied to the spawned
+    /// child: `detach=true` → `setsid()` in `pre_exec` (daemon, own
+    /// session); `detach=false` → `cmd.process_group(0)` (own pgroup
+    /// for atomic `killpg` cleanup).
+    pub fn with_detach(mut self, detach: bool) -> Self {
+        self.detach = detach;
+        self
+    }
+
     /// Build with the platform-default sandbox.
     ///
     /// On Linux: [`BwrapSandbox`](super::sandbox::BwrapSandbox)
@@ -144,6 +155,7 @@ impl JailerBuilder {
             box_id,
             layout,
             preserved_fds: self.preserved_fds,
+            detach: self.detach,
         })
     }
 }

@@ -71,12 +71,15 @@ impl<'a> ShimSpawner<'a> {
             (None, None)
         };
 
-        // 2. Build jailer with optional FD preservation for watchdog pipe
+        // 2. Build jailer with optional FD preservation for watchdog pipe.
+        // `with_detach(detach)` threads the lifecycle choice into the
+        // jailer's pre_exec chain (setsid vs. process_group).
         let mut builder = JailerBuilder::new()
             .with_box_id(self.box_id)
             .with_layout(self.layout.clone())
             .with_security(self.options.advanced.security.clone())
-            .with_volumes(self.options.volumes.clone());
+            .with_volumes(self.options.volumes.clone())
+            .with_detach(detach);
 
         if let Some(ref setup) = child_setup {
             builder = builder.with_preserved_fd(setup.raw_fd(), watchdog::PIPE_FD);
@@ -297,5 +300,116 @@ mod tests {
         assert!(!envs.contains_key(OsStr::new("TMPDIR")));
         assert!(!envs.contains_key(OsStr::new("TMP")));
         assert!(!envs.contains_key(OsStr::new("TEMP")));
+    }
+
+    /// Detached spawn must produce a child that is its own session
+    /// leader. Without `setsid`, a SIGHUP to the parent's controlling
+    /// terminal cascades into the daemon — breaking detach.
+    ///
+    /// Revert procedure: comment out the
+    /// `.with_detach(detach)` builder call in `spawn()`.
+    /// This test must then fail with `child_sid == parent_sid`.
+    #[cfg(unix)]
+    #[test]
+    fn shim_spawner_detached_creates_new_session() {
+        use crate::runtime::advanced_options::SecurityOptions;
+        use crate::runtime::layout::{BoxFilesystemLayout, FsLayoutConfig};
+        use std::time::Duration;
+        use tempfile::TempDir;
+
+        let parent_sid = unsafe { libc::getsid(0) };
+
+        let tmp = TempDir::new_in("/tmp").expect("tempdir");
+        let box_dir = tmp.path().join("box");
+        std::fs::create_dir_all(&box_dir).expect("mkdir box");
+        let layout = BoxFilesystemLayout::new(box_dir, FsLayoutConfig::without_bind_mount(), false);
+        // Disable jailer: on macOS the default wraps the child in
+        // sandbox-exec, which would block the `/usr/bin/yes` stand-in.
+        // The setsid pre_exec hook is unaffected by sandbox state.
+        let mut options = BoxOptions::default();
+        options.advanced.security = SecurityOptions::development();
+        let spawner = ShimSpawner::new(
+            std::path::Path::new("/usr/bin/yes"),
+            &layout,
+            "shimspawnertest",
+            &options,
+        );
+
+        let spawned = spawner.spawn("", true).expect("spawn detached");
+        let pid = spawned.child.id();
+
+        std::thread::sleep(Duration::from_millis(100));
+        let child_sid = unsafe { libc::getsid(pid as i32) };
+
+        unsafe {
+            libc::kill(pid as i32, libc::SIGKILL);
+            libc::waitpid(pid as i32, std::ptr::null_mut(), 0);
+        }
+
+        assert_eq!(
+            child_sid, pid as i32,
+            "detached ShimSpawner::spawn must produce a session-leader child. \
+             Got sid={child_sid}, expected {pid}. parent_sid={parent_sid}. \
+             Without setsid, a SIGHUP to the parent's controlling terminal \
+             would cascade into the detached shim."
+        );
+        assert_ne!(
+            child_sid, parent_sid,
+            "shim's session id must differ from parent's"
+        );
+    }
+
+    /// Non-detached spawn must produce a child that is its own
+    /// process-group leader so `killpg(shim_pid, SIGKILL)` reaps the
+    /// shim + grandchildren (libkrun threads, gvproxy) atomically.
+    ///
+    /// Revert procedure: comment out the
+    /// `.with_detach(detach)` builder call in `spawn()`.
+    /// This test must then fail with `child_pgid == parent_pgid`.
+    #[cfg(unix)]
+    #[test]
+    fn shim_spawner_non_detached_creates_new_pgroup() {
+        use crate::runtime::advanced_options::SecurityOptions;
+        use crate::runtime::layout::{BoxFilesystemLayout, FsLayoutConfig};
+        use std::time::Duration;
+        use tempfile::TempDir;
+
+        let parent_pgid = unsafe { libc::getpgid(0) };
+
+        let tmp = TempDir::new_in("/tmp").expect("tempdir");
+        let box_dir = tmp.path().join("box");
+        std::fs::create_dir_all(&box_dir).expect("mkdir box");
+        let layout = BoxFilesystemLayout::new(box_dir, FsLayoutConfig::without_bind_mount(), false);
+        let mut options = BoxOptions::default();
+        options.advanced.security = SecurityOptions::development();
+        let spawner = ShimSpawner::new(
+            std::path::Path::new("/usr/bin/yes"),
+            &layout,
+            "shimspawnertest",
+            &options,
+        );
+
+        let spawned = spawner.spawn("", false).expect("spawn non-detached");
+        let pid = spawned.child.id();
+
+        std::thread::sleep(Duration::from_millis(100));
+        let child_pgid = unsafe { libc::getpgid(pid as i32) };
+
+        unsafe {
+            libc::kill(pid as i32, libc::SIGKILL);
+            libc::waitpid(pid as i32, std::ptr::null_mut(), 0);
+        }
+
+        assert_eq!(
+            child_pgid, pid as i32,
+            "non-detached ShimSpawner::spawn must produce a pgroup-leader child. \
+             Got pgid={child_pgid}, expected {pid}. parent_pgid={parent_pgid}. \
+             Without process_group(0), killpg(shim_pid) would target the \
+             parent's pgroup."
+        );
+        assert_ne!(
+            child_pgid, parent_pgid,
+            "shim's pgid must differ from parent's"
+        );
     }
 }
