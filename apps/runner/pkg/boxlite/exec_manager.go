@@ -704,7 +704,7 @@ func (m *ExecManager) escalate(e *ManagedExec, sig syscall.Signal, name string) 
 	e.handleMu.Lock()
 	if e.closed || e.execution == nil {
 		e.handleMu.Unlock()
-		e.escalationFailedMarkDoomed()
+		e.escalationFailedMarkDoomed(sig)
 		m.killAndEvict(e)
 		return
 	}
@@ -718,12 +718,12 @@ func (m *ExecManager) escalate(e *ManagedExec, sig syscall.Signal, name string) 
 	case errors.Is(err, ErrSignalUnsupported):
 		slog.Warn("boxlite: SDK cannot deliver signal, falling through to Kill",
 			"exec_id", e.ID, "signal", name)
-		e.escalationFailedMarkDoomed()
+		e.escalationFailedMarkDoomed(sig)
 		m.killAndEvict(e)
 	default:
 		slog.Warn("boxlite: signal delivery failed, killing exec",
 			"exec_id", e.ID, "signal", name, "err", err)
-		e.escalationFailedMarkDoomed()
+		e.escalationFailedMarkDoomed(sig)
 		m.killAndEvict(e)
 	}
 }
@@ -821,12 +821,20 @@ func (e *ManagedExec) FinishEscalation() {
 }
 
 // escalationFailedMarkDoomed atomically sets ReapingKill and clears
-// Escalating so no gap exists for MarkConnected to slip through.
-func (e *ManagedExec) escalationFailedMarkDoomed() {
+// Escalating so no gap exists for MarkConnected to slip through. Also
+// rolls back the matching Signaled* flag set optimistically in tryEscalate
+// so the state machine doesn't claim a signal was delivered when it wasn't.
+func (e *ManagedExec) escalationFailedMarkDoomed(sig syscall.Signal) {
 	e.attachMu.Lock()
 	defer e.attachMu.Unlock()
 	e.ReapingKill = true
 	e.Escalating = false
+	switch sig {
+	case syscall.SIGHUP:
+		e.SignaledHUP = false
+	case syscall.SIGTERM:
+		e.SignaledTERM = false
+	}
 }
 
 // MarkDisconnected releases the single-attach slot and stamps
