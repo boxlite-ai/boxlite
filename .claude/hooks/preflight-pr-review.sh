@@ -107,27 +107,46 @@ ack_instruction="PR-review acknowledgment required before: ${command}
 
 Branch: ${branch}    HEAD: ${head:0:12}
 
-Show the user the gh command above. Then ask them — in plain text, NOT
-AskUserQuestion — to confirm they have reviewed the PR by replying with a
-single line in this exact shape:
+Invoke the AskUserQuestion tool. The user will pick 'Other' and type their
+acknowledgment into the side-panel text field; their typed text comes back
+on the question's 'notes' annotation (not the 'answers' field).
 
-    reviewed: <one-line summary, in their own words, of what this PR changes>
+Use this AskUserQuestion payload:
+  question: 'PR-review acknowledgment for: ${command}
+             Pick \"Other\" and type your acknowledgment in this exact shape:
+                 reviewed: <one-line summary, in your own words, of what
+                            this PR changes>'
+  header:   'PR review'
+  options:
+    - label: 'Abort — do not file this PR'
+      description: 'Cancel the gh command and return to chat.'
+    - label: 'Show me the diff first, then re-ask'
+      description: 'Run git diff main...HEAD --stat + git log main..HEAD,
+                    display output, then re-invoke AskUserQuestion.'
+  multiSelect: false
 
-Wait for the user's next message. Then:
-  • If their reply matches the shape above, write it verbatim to
-        ${marker_file}
-    as:
-        { \"branch\": \"${branch}\",
-          \"head\": \"${head}\",
-          \"message\": \"<the user's verbatim line>\" }
-    and retry the same gh command.
-  • If their reply is anything else (a 'no'/'abort', a question, silence, the
-    wrong prefix, or text you suspect you suggested rather than they typed),
-    do NOT write the marker and do NOT retry. Abort the PR action and ask
-    what they want to do instead.
+After AskUserQuestion returns:
+  • If the user's typed 'notes' text matches ${REQUIRED_MESSAGE_RE}:
+      write it verbatim to:
+          ${marker_file}
+      as:
+          { \"branch\": \"${branch}\",
+            \"head\":   \"${head}\",
+            \"message\": \"<the user's verbatim typed text>\" }
+      then retry the same gh command.
+  • If the user picked 'Abort — do not file this PR':
+      do NOT write marker, do NOT retry; tell the user the PR was aborted
+      and ask what they want to do instead.
+  • If the user picked 'Show me the diff first, then re-ask':
+      run \`git diff main...HEAD --stat && git log main..HEAD --oneline\`,
+      show the output, then re-invoke the SAME AskUserQuestion.
+  • If the user typed text in 'Other' but it does not match the regex:
+      re-invoke the SAME AskUserQuestion with a one-line note explaining
+      the required shape. Do NOT write the marker. Do NOT retry yet.
 
-You MUST NOT fabricate, paraphrase, or pre-fill the summary on the user's
-behalf. The summary must be the user's own words from their next message."
+You MUST NOT fabricate, paraphrase, or pre-fill the summary. Only the user's
+verbatim typed text from the AskUserQuestion 'Other' field is acceptable as
+the ack."
 # ─────────────────────────────────────────────────────────────────────────────
 
 if [[ ! -r "$marker_file" ]]; then
