@@ -33,22 +33,65 @@ Every wrapper is idempotent — safe to run repeatedly. Component-level control 
 
 ## 1. First-time startup (brand-new machine, one-time)
 
-```bash
-# Prereqs: M5 Apple Silicon + Docker Desktop (for the BoxLite host runtime)
-# yarn + go 1.25 + python 3.11 already installed
+### 1.1 Prereqs
 
-cd boxlite-cloud-mvp/apps/infra-local
-make stack-build    # install yarn deps + build runner/proxy binaries
-make stack-up       # L1 boxes (with prod schema) + 4 native processes, all in one go
-make stack-status   # verify everything is up
+| Tool | Required version | Why |
+|---|---|---|
+| macOS | Apple Silicon (M1/M2/M3/M4/M5) | Platform target |
+| Docker Desktop | ≥ 4.30, **running** | BoxLite host runtime depends on it |
+| Go | 1.25+ | Builds the runner + proxy binaries |
+| Node + yarn (via corepack) | 22+ | Runs the api + dashboard |
+| Python | 3.10+ (conda env recommended) | Runs the `boxlite_local` orchestrator |
+| `boxlite` Python SDK | installed in the active Python | `import boxlite` must work — install from `sdks/python/` if missing: `pip install -e <repo>/sdks/python` |
+| `boxlite` CLI | in `$PATH` | L1 box lifecycle (`boxlite ls`, `boxlite rm`, etc.) |
+
+Quick check before continuing:
+
+```bash
+python -c "import boxlite; print('boxlite SDK OK:', boxlite.__file__)"
+which boxlite                     # CLI must be on PATH
+docker info >/dev/null            # Docker Desktop must be running
 ```
 
-✅ One command does it. `stack-up.sh` automatically:
-1. Checks whether L1 is up; if not, runs `make up-with-schema`
-2. Creates the two symlinks NestJS needs (`apps/.env`, `apps/apps`)
-3. Starts api → runner → proxy → dashboard in dependency order, waiting for each to be healthy before the next
-4. Detects ports already in use and frees them first (prevents EADDRINUSE)
-5. Writes PIDs to `apps/infra-local/.logs/<comp>.pid` and logs to `<comp>.log`
+### 1.2 Three-step bring-up
+
+```bash
+cd boxlite-cloud-mvp/apps/infra-local
+
+# Step 1 — install the Python orchestrator package (one-time per fresh Python env)
+make install        # pip install -e ".[test]"  → makes `python -m boxlite_local` work
+
+# Step 2 — build native binaries (one-time per fresh repo; rebuilds are idempotent)
+make stack-build    # yarn install + go build runner → /tmp/boxlite-runner + go build proxy
+
+# Step 3 — bring up the full stack (L1 boxes + schema + L2 native + seed)
+make stack-up       # L1 10 boxes + prod schema + 4 native processes, all in one go
+
+# Verify
+make stack-status   # one-screen health
+```
+
+Cold-start time: ~5-7 minutes on first run (most of it is pulling the
+`ubuntu:22.04` default snapshot into the local registry). Subsequent
+`stack-up` runs reuse the image cache and complete in ~30 s to 1 min.
+
+✅ Once those three commands finish, `stack-up.sh` has automatically:
+1. Detected whether L1 was already up; if not, ran `make up-with-schema`
+2. Created the two symlinks NestJS needs (`apps/.env`, `apps/apps`)
+3. Started api → runner → proxy → dashboard in dependency order, waiting for each to be healthy before the next
+4. Detected ports already in use and freed them first (prevents EADDRINUSE)
+5. Written PIDs to `apps/infra-local/.logs/<comp>.pid` and logs to `<comp>.log`
+
+### 1.3 First-time dashboard login
+
+Open <http://localhost:3000> and log in via Dex with one of the
+preseeded accounts (see [`apps/infra-local/CONNECTIONS.md` §4](../../apps/infra-local/CONNECTIONS.md)):
+
+- `admin@boxlite.dev` / `password` (admin user)
+- `test01@boxlite.dev` / `password` (normal user)
+
+Then click **+ Create Sandbox** → pick region `us` → **Create** → open
+the **Terminal** tab → **Connect** → you should see `root@boxlite:~#`.
 
 ## 2. Day-to-day dashboard development loop
 
