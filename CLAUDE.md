@@ -78,8 +78,11 @@ Every change goes: understand → research → design → implement → test →
 
 **Test**
 
+- Two-side verification for reproducer tests. When you add a test alongside a fix, demonstrate it in this order, both manually run:
+    1. You must revert **every** production change — every non-test file back to its pre-fix state, only the test remains. Run the test. It must fail, with the failure pointing at the bug — log the observed failure signal (assertion text, hang, panic). **Partial reverts, mental simulation, or "it would obviously fail without the fix" are treated as cheating.** If a full revert is genuinely impractical, stop and surface that — do not paper over it.
+    2. Restore the production change in full. Run the test. It must pass.
+       Without a complete step 1 you've only proved your code works, not that the fix was necessary or that this test would have caught the bug. Don't accept "it passes now" as evidence the test guards the right thing.
 - A test is only meaningful when there's something that could go wrong between the data being produced and the assertion being made. If the test builds the value it then asserts on (e.g., `format!`-ing a string and then asserting that the same string contains a substring it just put in), the assertion is tautological — nothing crossed a boundary, so nothing is being tested. The data must come from production code under test, not from the test body itself.
-- Every test must reference a project symbol — no framework- or standard-library-only filler. Self-check: "name the project symbol this test calls." Filler tests would stay green if the production fix were ripped out.
 - Add or update tests when behavior changes around branching, parsing, retries, security checks, or boundaries.
 - Prefer focused tests that prove the *right* reason for the change.
 - Do not create tests that don't actually test project code. A test that only exercises stdlib or framework code is not a real test.
