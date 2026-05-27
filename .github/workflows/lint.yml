@@ -46,6 +46,9 @@ on:
       - '.github/workflows/build-runtime.yml'
       - 'scripts/release/**'
 
+permissions:
+  contents: read
+
 jobs:
   config:
     uses: ./.github/workflows/config.yml
@@ -53,6 +56,7 @@ jobs:
   changes:
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       pull-requests: read
     outputs:
       rust: ${{ steps.filter.outputs.rust }}

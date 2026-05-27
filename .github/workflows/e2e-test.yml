@@ -58,6 +58,9 @@ concurrency:
   group: e2e-runner
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 env:
   AWS_REGION: us-east-1
   AWS_ROLE_ARN: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/boxlite-e2e-github-actions
@@ -102,7 +105,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       id-token: write
-      contents: read
     outputs:
       instance-id: ${{ steps.ensure-instance.outputs.instance-id }}
     steps:
@@ -480,7 +482,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       id-token: write
-      contents: read
     if: always() && needs.start-runner.outputs.instance-id != ''
     steps:
       - name: Configure AWS credentials (OIDC)

@@ -40,6 +40,9 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: '0'
 
+permissions:
+  contents: read
+
 jobs:
   # Load shared configuration
   config:
@@ -49,6 +52,7 @@ jobs:
   changes:
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       pull-requests: read
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
@@ -90,6 +94,7 @@ jobs:
 
     permissions:
       id-token: write
+      contents: read
     steps:
       - name: Checkout code
         uses: actions/checkout@v5

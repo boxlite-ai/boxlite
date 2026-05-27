@@ -19,6 +19,9 @@ on:
     types: [completed]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   config:
     uses: ./.github/workflows/config.yml
