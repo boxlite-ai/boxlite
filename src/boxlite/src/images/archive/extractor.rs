@@ -7,13 +7,14 @@ use super::safe_root::SafeRoot;
 use super::time::{bound_time, latest_time};
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 use filetime::{FileTime, set_file_times, set_symlink_file_times};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::ffi::CString;
 use std::fs::{self, Permissions};
 use std::io::{self, Read};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tar::{Archive, Entry, EntryType};
 use tracing::{debug, trace, warn};
@@ -26,8 +27,19 @@ use walkdir::WalkDir;
 /// Linux the kernel (`openat2(RESOLVE_IN_ROOT)`) and on other platforms a
 /// lexical fallback guarantee that no entry can escape `dest` — even if the
 /// tar contains crafted symlinks aiming at the host filesystem.
+/// Lifecycle: `new(dest)` → one or more `extract_*` calls → `finalize()`.
+///
+/// Directory mode metadata is deferred across all `extract_*` calls and
+/// applied once on `finalize`, deepest-first. This lets a multi-layer
+/// flat-merge avoid chmod-narrowing a parent directory between layers
+/// (the failure that motivated `cross_layer_overwrite_through_readonly_parent_dir`).
+///
+/// **Forgetting to call `finalize` leaves directory permissions at their
+/// kernel-default `0o755` — silent semantic bug.** A `Drop` implementation
+/// logs an error if non-empty deferred state is dropped without finalize.
 pub struct LayerExtractor<'a> {
     dest: &'a Path,
+    deferred_dirs: DeferredDirs,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -40,11 +52,17 @@ impl<'a> LayerExtractor<'a> {
     /// Construct an extractor targeting `dest`. The directory is opened lazily
     /// per extraction call so the same extractor can apply multiple layers.
     pub fn new(dest: &'a Path) -> Self {
-        Self { dest }
+        Self {
+            dest,
+            deferred_dirs: DeferredDirs::new(),
+        }
     }
 
     /// Apply a compressed or uncompressed layer tarball on disk.
-    pub fn extract_tarball(&self, tarball_path: &Path) -> BoxliteResult<u64> {
+    ///
+    /// The caller MUST call [`Self::finalize`] after all layers have been
+    /// extracted, or directory permissions will not be applied.
+    pub fn extract_tarball(&mut self, tarball_path: &Path) -> BoxliteResult<u64> {
         let reader = TarballReader::open(tarball_path)?;
         self.extract_reader(reader)
     }
@@ -52,9 +70,9 @@ impl<'a> LayerExtractor<'a> {
     /// Unpack a layer into a standalone cached layer directory.
     ///
     /// Whiteout marker files are preserved so a later copy-overlay merge can
-    /// apply them against lower layers.
+    /// apply them against lower layers. The caller MUST call [`Self::finalize`].
     pub(crate) fn extract_tarball_preserving_whiteouts(
-        &self,
+        &mut self,
         tarball_path: &Path,
     ) -> BoxliteResult<u64> {
         let reader = TarballReader::open(tarball_path)?;
@@ -62,12 +80,25 @@ impl<'a> LayerExtractor<'a> {
     }
 
     /// Apply an already-decompressed tar stream.
-    pub fn extract_reader<R: Read>(&self, reader: R) -> BoxliteResult<u64> {
+    ///
+    /// The caller MUST call [`Self::finalize`] after all layers have been
+    /// extracted, or directory permissions will not be applied.
+    pub fn extract_reader<R: Read>(&mut self, reader: R) -> BoxliteResult<u64> {
         self.extract_reader_with_whiteout_mode(reader, WhiteoutMode::Apply)
     }
 
+    /// Apply all deferred directory metadata (deepest-first) and consume
+    /// the extractor. Must be called after all `extract_*` calls.
+    ///
+    /// Forgetting to call this leaves directory permissions at their kernel-
+    /// default `0o755` instead of the tar-declared mode — a silent semantic
+    /// bug. Every caller must call this exactly once.
+    pub fn finalize(self) -> BoxliteResult<()> {
+        self.deferred_dirs.apply()
+    }
+
     fn extract_reader_with_whiteout_mode<R: Read>(
-        &self,
+        &mut self,
         reader: R,
         whiteout_mode: WhiteoutMode,
     ) -> BoxliteResult<u64> {
@@ -76,7 +107,6 @@ impl<'a> LayerExtractor<'a> {
         let mut archive = Archive::new(reader);
         let mut unpacked_paths: HashSet<PathBuf> = HashSet::new();
         let mut total_size = 0u64;
-        let mut deferred_dirs: Vec<DirMeta> = Vec::new();
         let mut deferred_hardlinks: Vec<DeferredHardlink> = Vec::new();
 
         for entry_result in archive
@@ -314,10 +344,10 @@ impl<'a> LayerExtractor<'a> {
             )?;
 
             if entry_type == EntryType::Directory {
-                deferred_dirs.push(DirMeta {
+                self.deferred_dirs.record(DirMeta {
                     path: safe_path.clone(),
                     meta: EntryMetadata::with_timestamps(mode, atime, mtime),
-                });
+                })?;
             } else {
                 apply_permissions_and_times(
                     &safe_path,
@@ -360,23 +390,9 @@ impl<'a> LayerExtractor<'a> {
             apply_permissions_and_times(&link_safe, EntryType::Link, &deferred.meta)?;
         }
 
-        // Finalize directory metadata deepest-first. Reverse path order ensures
-        // /a/b/c gets chmod'd before /a/b — a restrictive parent won't block
-        // chmod on children.
-        deferred_dirs.sort_unstable_by(|a, b| b.path.cmp(&a.path));
-        for dir in &deferred_dirs {
-            match fs::symlink_metadata(&dir.path) {
-                Ok(m) if m.is_dir() => {}
-                _ => {
-                    trace!(
-                        "Skipping permissions for removed/replaced directory: {}",
-                        dir.path.display()
-                    );
-                    continue;
-                }
-            }
-            apply_permissions_and_times(&dir.path, EntryType::Directory, &dir.meta)?;
-        }
+        // Directory metadata is finalized by the caller via DeferredDirs::apply,
+        // not per layer. Hoisting that sweep across layers is what fixes the
+        // cross-layer EACCES (cross_layer_overwrite_through_readonly_parent_dir).
 
         Ok(total_size)
     }
@@ -563,6 +579,107 @@ impl<'a> LayerExtractor<'a> {
 struct DirMeta {
     path: PathBuf,
     meta: EntryMetadata,
+}
+
+/// Default cap on the cross-layer deferred-dirs accumulator.
+///
+/// Measured per-entry cost on a typical layout: PathBuf (24 B inline +
+/// ~70 B heap for a 30-60 char path) + EntryMetadata (~88 B inline,
+/// Option<OwnershipMeta> reserves the inline payload even when None) +
+/// BTreeMap node overhead (~35 B amortized) ≈ 210-280 B per entry.
+///
+/// 500K entries → ~110-140 MB peak typical (up to ~225 MB for crafted
+/// near-PATH_MAX paths). Realistic legitimate images sit in the 1K-50K
+/// range; the cap is an anti-DOS bound against crafted images, not an
+/// anti-OOM bound for normal use. Override via `BOXLITE_MAX_DEFERRED_DIRS`.
+const DEFAULT_MAX_DEFERRED_DIRS: usize = 500_000;
+
+fn max_deferred_dirs() -> usize {
+    static MAX: OnceLock<usize> = OnceLock::new();
+    *MAX.get_or_init(|| {
+        std::env::var("BOXLITE_MAX_DEFERRED_DIRS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(DEFAULT_MAX_DEFERRED_DIRS)
+    })
+}
+
+/// Cross-layer accumulator for deferred directory metadata.
+///
+/// OCI image layers may declare a parent directory with a restrictive
+/// mode (e.g. RHEL UBI ships `/usr/bin` as 0o555) before a subsequent
+/// layer needs to unlink files inside it. Applying directory modes
+/// per-layer would chmod the parent narrow between layers, causing
+/// EACCES on the next layer's unlink. Instead, the caller threads one
+/// `DeferredDirs` across all `extract_tarball_into` calls and invokes
+/// `apply()` exactly once after the final layer.
+pub(crate) struct DeferredDirs {
+    // Last-write-wins per path. BTreeMap iterates in path order; we reverse
+    // on apply to get deepest-first, which the existing within-archive
+    // pattern at tar-rs `archive.rs:254` uses for the same reason.
+    by_path: BTreeMap<PathBuf, DirMeta>,
+    cap: usize,
+}
+
+impl DeferredDirs {
+    /// Production constructor — capacity from `BOXLITE_MAX_DEFERRED_DIRS`
+    /// or [`DEFAULT_MAX_DEFERRED_DIRS`].
+    pub(crate) fn new() -> Self {
+        Self {
+            by_path: BTreeMap::new(),
+            cap: max_deferred_dirs(),
+        }
+    }
+
+    /// Test-only constructor with an explicit cap so individual tests don't
+    /// race the process-global env-var cache.
+    #[cfg(test)]
+    pub(crate) fn with_cap(cap: usize) -> Self {
+        Self {
+            by_path: BTreeMap::new(),
+            cap,
+        }
+    }
+
+    fn record(&mut self, dir: DirMeta) -> BoxliteResult<()> {
+        // Replacing an existing key doesn't grow memory — only fail when a
+        // new key would push us past the cap.
+        let is_new = !self.by_path.contains_key(&dir.path);
+        if is_new && self.by_path.len() >= self.cap {
+            return Err(BoxliteError::Storage(format!(
+                "OCI image declares more than {} unique directories across layers; \
+                 refusing to accumulate further to bound memory. If this image is \
+                 legitimate, raise BOXLITE_MAX_DEFERRED_DIRS.",
+                self.cap
+            )));
+        }
+        // Last-write-wins — a later layer redeclaring /foo replaces the
+        // earlier mode/timestamps; if no later layer mentions /foo, the
+        // earlier entry stays. Matches OCI layer ordering.
+        self.by_path.insert(dir.path.clone(), dir);
+        Ok(())
+    }
+
+    /// Apply all recorded directory metadata deepest-first. Idempotent over
+    /// already-applied state (re-stats and skips removed/replaced paths).
+    pub(crate) fn apply(self) -> BoxliteResult<()> {
+        let mut sorted: Vec<DirMeta> = self.by_path.into_values().collect();
+        sorted.sort_unstable_by(|a, b| b.path.cmp(&a.path));
+        for dir in &sorted {
+            match fs::symlink_metadata(&dir.path) {
+                Ok(m) if m.is_dir() => {}
+                _ => {
+                    trace!(
+                        "Skipping permissions for removed/replaced directory: {}",
+                        dir.path.display()
+                    );
+                    continue;
+                }
+            }
+            apply_permissions_and_times(&dir.path, EntryType::Directory, &dir.meta)?;
+        }
+        Ok(())
+    }
 }
 
 struct DeferredHardlink {
@@ -935,7 +1052,10 @@ mod tests {
     }
 
     fn extract_raw(entries: &[RawTarEntry<'_>], dest: &Path) -> BoxliteResult<u64> {
-        LayerExtractor::new(dest).extract_reader(std::io::Cursor::new(create_raw_tar(entries)))
+        let mut e = LayerExtractor::new(dest);
+        let n = e.extract_reader(std::io::Cursor::new(create_raw_tar(entries)))?;
+        e.finalize()?;
+        Ok(n)
     }
 
     fn assert_same_inode(left: &Path, right: &Path) {
@@ -958,7 +1078,10 @@ mod tests {
     }
 
     fn extract(tar_path: &Path, dest: &Path) -> BoxliteResult<u64> {
-        LayerExtractor::new(dest).extract_tarball(tar_path)
+        let mut e = LayerExtractor::new(dest);
+        let n = e.extract_tarball(tar_path)?;
+        e.finalize()?;
+        Ok(n)
     }
 
     #[test]
@@ -1361,9 +1484,11 @@ mod tests {
         )
         .unwrap();
 
-        LayerExtractor::new(&dest)
+        let mut extractor = LayerExtractor::new(&dest);
+        extractor
             .extract_tarball_preserving_whiteouts(&tar_path)
             .unwrap();
+        extractor.finalize().unwrap();
 
         assert!(dest.join("bin/.wh.sh").exists());
         assert_eq!(std::fs::read(dest.join("bin/new-tool")).unwrap(), b"upper");
@@ -1413,7 +1538,7 @@ mod tests {
             },
         }];
         std::fs::write(&tar2, create_test_tar(entries2)).unwrap();
-        LayerExtractor::new(&dest).extract_tarball(&tar2).unwrap();
+        extract(&tar2, &dest).unwrap();
 
         assert!(dest.join("a/b").is_dir());
     }
@@ -1455,7 +1580,7 @@ mod tests {
             },
         }];
         std::fs::write(&tar2, create_test_tar(entries2)).unwrap();
-        LayerExtractor::new(&dest).extract_tarball(&tar2).unwrap();
+        extract(&tar2, &dest).unwrap();
 
         assert!(dest.join("a/b/c/d/e").is_dir());
     }
@@ -1674,8 +1799,12 @@ mod tests {
         std::fs::write(&tar_path, &data).unwrap();
 
         let dest = temp.path().join("extract");
-        let outcome =
-            std::panic::catch_unwind(|| LayerExtractor::new(&dest).extract_tarball(&tar_path));
+        let outcome = std::panic::catch_unwind(|| {
+            let mut e = LayerExtractor::new(&dest);
+            let r = e.extract_tarball(&tar_path);
+            let _ = e.finalize();
+            r
+        });
 
         assert!(
             outcome.is_ok(),
@@ -1710,7 +1839,7 @@ mod tests {
         let tar_data = create_test_tar(entries);
         std::fs::write(&tar_path, &tar_data).unwrap();
 
-        let _ = LayerExtractor::new(&dest).extract_tarball(&tar_path);
+        let _ = extract(&tar_path, &dest);
 
         assert!(
             host_victim.exists(),
@@ -1747,9 +1876,7 @@ mod tests {
         std::fs::write(&tar_path, builder.into_inner().unwrap()).unwrap();
 
         let dest = temp.path().join("extract");
-        LayerExtractor::new(&dest)
-            .extract_tarball(&tar_path)
-            .unwrap();
+        extract(&tar_path, &dest).unwrap();
 
         let target_mode = std::fs::metadata(dest.join("target"))
             .unwrap()
@@ -1762,5 +1889,215 @@ mod tests {
              (got {:o}) — perms should not be chmod'd through a hardlink",
             target_mode
         );
+    }
+
+    /// Cross-layer regression: an OCI base layer that declares a system
+    /// directory as 0o555 must not block subsequent layers from overwriting
+    /// files inside it. RHEL UBI ships `/usr/bin` as 0o555, and images
+    /// derived from UBI (e.g. `minio/mc`) install binaries into `/usr/bin`,
+    /// needing to replace base-layer files like `usr/bin/[`.
+    ///
+    /// Pre-fix bug: applying the deferred-dirs sweep at end of each layer
+    /// chmod'd `/usr/bin` to 0o555 before the next layer's unlink, EACCES.
+    /// Post-fix: a single `LayerExtractor` accumulates directory metadata
+    /// across all layers and applies it only on `finalize`.
+    #[test]
+    fn cross_layer_overwrite_through_readonly_parent_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("merged");
+
+        let mut extractor = LayerExtractor::new(&dest);
+
+        let layer1 = [
+            raw_dir("usr"),
+            RawTarEntry {
+                path: "usr/bin",
+                kind: RawTarEntryKind::Directory,
+                mode: 0o555,
+            },
+            raw_file("usr/bin/[", b"original"),
+        ];
+        extractor
+            .extract_reader(std::io::Cursor::new(create_raw_tar(&layer1)))
+            .unwrap();
+
+        let layer2 = [raw_file("usr/bin/[", b"upper")];
+        extractor
+            .extract_reader(std::io::Cursor::new(create_raw_tar(&layer2)))
+            .expect("upper layer must overwrite file inside 0o555 base dir");
+
+        extractor.finalize().unwrap();
+
+        assert_eq!(
+            std::fs::read(dest.join("usr/bin/[")).unwrap(),
+            b"upper",
+            "upper layer must replace base layer's file content",
+        );
+
+        let bin_mode = fs::symlink_metadata(dest.join("usr/bin"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(
+            bin_mode, 0o555,
+            "after fix, /usr/bin must retain declared 0o555 (got {:o}) — \
+             a fix that relaxes perms to bypass EACCES would corrupt the \
+             override_stat xattr written by fix_rootfs_permissions",
+            bin_mode,
+        );
+
+        // Restore u+w so TempDir's Drop can recurse-remove.
+        let _ = fs::set_permissions(dest.join("usr/bin"), Permissions::from_mode(0o755));
+    }
+
+    /// Last-write-wins: layer 2 redeclaring a dir with a different mode
+    /// overrides layer 1's mode.
+    #[test]
+    fn cross_layer_redeclared_dir_uses_later_layer_mode() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("merged");
+
+        let mut extractor = LayerExtractor::new(&dest);
+
+        let layer1 = [
+            raw_dir("usr"),
+            RawTarEntry {
+                path: "usr/bin",
+                kind: RawTarEntryKind::Directory,
+                mode: 0o555,
+            },
+        ];
+        extractor
+            .extract_reader(std::io::Cursor::new(create_raw_tar(&layer1)))
+            .unwrap();
+
+        let layer2 = [
+            raw_dir("usr"),
+            RawTarEntry {
+                path: "usr/bin",
+                kind: RawTarEntryKind::Directory,
+                mode: 0o750,
+            },
+        ];
+        extractor
+            .extract_reader(std::io::Cursor::new(create_raw_tar(&layer2)))
+            .unwrap();
+        extractor.finalize().unwrap();
+
+        let bin_mode = fs::symlink_metadata(dest.join("usr/bin"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(
+            bin_mode, 0o750,
+            "later layer's redeclaration of /usr/bin must win"
+        );
+    }
+
+    /// Layer 2 writes a file into a dir declared by layer 1 without
+    /// redeclaring the dir itself. The dir's final mode must come from
+    /// layer 1 (the only layer that declared it).
+    #[test]
+    fn cross_layer_unmentioned_dir_keeps_earlier_layer_mode() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("merged");
+
+        let mut extractor = LayerExtractor::new(&dest);
+
+        let layer1 = [
+            raw_dir("usr"),
+            RawTarEntry {
+                path: "usr/bin",
+                kind: RawTarEntryKind::Directory,
+                mode: 0o555,
+            },
+        ];
+        extractor
+            .extract_reader(std::io::Cursor::new(create_raw_tar(&layer1)))
+            .unwrap();
+
+        // Layer 2 writes a file into /usr/bin but doesn't redeclare the dir.
+        let layer2 = [raw_file("usr/bin/bar", b"hello")];
+        extractor
+            .extract_reader(std::io::Cursor::new(create_raw_tar(&layer2)))
+            .unwrap();
+        extractor.finalize().unwrap();
+
+        let bin_mode = fs::symlink_metadata(dest.join("usr/bin"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(
+            bin_mode, 0o555,
+            "earlier layer's declared mode is preserved when no later layer redeclares"
+        );
+        assert_eq!(std::fs::read(dest.join("usr/bin/bar")).unwrap(), b"hello");
+
+        let _ = fs::set_permissions(dest.join("usr/bin"), Permissions::from_mode(0o755));
+    }
+
+    /// A later layer whiteouts a dir that an earlier layer recorded.
+    /// `finalize` must skip the now-removed path cleanly (no panic).
+    #[test]
+    fn cross_layer_whiteout_of_recorded_dir_does_not_panic() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("merged");
+
+        let mut extractor = LayerExtractor::new(&dest);
+
+        let layer1 = [
+            raw_dir("usr"),
+            RawTarEntry {
+                path: "usr/foo",
+                kind: RawTarEntryKind::Directory,
+                mode: 0o755,
+            },
+            raw_file("usr/foo/x", b"hi"),
+        ];
+        extractor
+            .extract_reader(std::io::Cursor::new(create_raw_tar(&layer1)))
+            .unwrap();
+
+        // Layer 2: whiteout removes /usr/foo entirely.
+        let layer2 = [raw_file("usr/.wh.foo", b"")];
+        extractor
+            .extract_reader(std::io::Cursor::new(create_raw_tar(&layer2)))
+            .unwrap();
+
+        // Must succeed: DeferredDirs::apply re-stats each path and skips
+        // removed/replaced dirs.
+        extractor.finalize().unwrap();
+
+        assert!(!dest.join("usr/foo").exists());
+    }
+
+    /// The cap on DeferredDirs is anti-DOS: a crafted image with absurd
+    /// numbers of unique dir entries should fail fast with a clear error
+    /// pointing at the override env var, not OOM the host.
+    #[test]
+    fn deferred_dirs_cap_rejects_oversized_image() {
+        let mut dirs = DeferredDirs::with_cap(2);
+        let mk = |p: &str| DirMeta {
+            path: PathBuf::from(p),
+            meta: EntryMetadata::with_timestamps(0o755, 0, 0),
+        };
+
+        dirs.record(mk("/a")).unwrap();
+        dirs.record(mk("/b")).unwrap();
+
+        // 3rd distinct dir trips the cap.
+        let err = dirs.record(mk("/c")).unwrap_err();
+        let msg = format!("{}", err);
+        assert!(
+            msg.contains("BOXLITE_MAX_DEFERRED_DIRS"),
+            "cap error should mention the env-var override: {}",
+            msg,
+        );
+
+        // Replacing an existing key is not growth; should still succeed.
+        dirs.record(mk("/a")).unwrap();
     }
 }
