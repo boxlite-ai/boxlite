@@ -531,7 +531,7 @@ dependencies = [
  "libcontainer",
  "nix 0.29.0",
  "oci-spec 0.6.7",
- "procfs 0.18.0",
+ "procfs",
  "rayon",
  "rtnetlink",
  "serde",
@@ -2378,15 +2378,14 @@ checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 
 [[package]]
 name = "libcgroups"
-version = "0.5.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "acabc2d6b351af9406d5bddfe86697c3791fda2a6d6d03b90d86af1f0998751e"
+version = "0.6.0"
+source = "git+https://github.com/youki-dev/youki?rev=4b2f0e00a4a11107f3a338c21c17407d2f664ec9#4b2f0e00a4a11107f3a338c21c17407d2f664ec9"
 dependencies = [
  "fixedbitset",
  "nix 0.29.0",
- "oci-spec 0.8.4",
+ "oci-spec 0.9.0",
  "pathrs",
- "procfs 0.17.0",
+ "procfs",
  "serde",
  "thiserror 2.0.18",
  "tracing",
@@ -2394,9 +2393,8 @@ dependencies = [
 
 [[package]]
 name = "libcontainer"
-version = "0.5.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a6320ae84435bed00efb3e0a7c2de8a38bba4d619e801d8ab3a8527fcf427709"
+version = "0.6.0"
+source = "git+https://github.com/youki-dev/youki?rev=4b2f0e00a4a11107f3a338c21c17407d2f664ec9#4b2f0e00a4a11107f3a338c21c17407d2f664ec9"
 dependencies = [
  "caps",
  "chrono",
@@ -2405,13 +2403,14 @@ dependencies = [
  "libcgroups",
  "libseccomp",
  "nc",
+ "netlink-packet-core 0.8.1",
+ "netlink-packet-route 0.26.0",
+ "netlink-sys",
  "nix 0.29.0",
- "oci-spec 0.8.4",
- "once_cell",
+ "oci-spec 0.9.0",
  "pathrs",
  "prctl",
- "procfs 0.17.0",
- "protobuf",
+ "procfs",
  "regex",
  "rust-criu",
  "safe-path",
@@ -2741,6 +2740,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "netlink-packet-core"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3463cbb78394cb0141e2c926b93fc2197e473394b761986eca3b9da2c63ae0f4"
+dependencies = [
+ "paste",
+]
+
+[[package]]
 name = "netlink-packet-route"
 version = "0.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2750,8 +2758,20 @@ dependencies = [
  "byteorder",
  "libc",
  "log",
- "netlink-packet-core",
+ "netlink-packet-core 0.7.0",
  "netlink-packet-utils",
+]
+
+[[package]]
+name = "netlink-packet-route"
+version = "0.26.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9ea06a7cec15a9df94c58bddc472b1de04ca53bd32e72da7da2c5dd1c3885edc"
+dependencies = [
+ "bitflags 2.11.1",
+ "libc",
+ "log",
+ "netlink-packet-core 0.8.1",
 ]
 
 [[package]]
@@ -2775,7 +2795,7 @@ dependencies = [
  "bytes",
  "futures",
  "log",
- "netlink-packet-core",
+ "netlink-packet-core 0.7.0",
  "netlink-sys",
  "thiserror 2.0.18",
 ]
@@ -3078,6 +3098,23 @@ name = "oci-spec"
 version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc3da52b83ce3258fbf29f66ac784b279453c2ac3c22c5805371b921ede0d308"
+dependencies = [
+ "const_format",
+ "derive_builder",
+ "getset",
+ "regex",
+ "serde",
+ "serde_json",
+ "strum 0.27.2",
+ "strum_macros 0.27.2",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "oci-spec"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e8445a2631507cec628a15fdd6154b54a3ab3f20ed4fe9d73a3b8b7a4e1ba03a"
 dependencies = [
  "const_format",
  "derive_builder",
@@ -3472,20 +3509,6 @@ dependencies = [
 
 [[package]]
 name = "procfs"
-version = "0.17.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cc5b72d8145275d844d4b5f6d4e1eef00c8cd889edb6035c21675d1bb1f45c9f"
-dependencies = [
- "bitflags 2.11.1",
- "chrono",
- "flate2",
- "hex",
- "procfs-core 0.17.0",
- "rustix 0.38.44",
-]
-
-[[package]]
-name = "procfs"
 version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "25485360a54d6861439d60facef26de713b1e126bf015ec8f98239467a2b82f7"
@@ -3493,19 +3516,8 @@ dependencies = [
  "bitflags 2.11.1",
  "chrono",
  "flate2",
- "procfs-core 0.18.0",
+ "procfs-core",
  "rustix 1.1.4",
-]
-
-[[package]]
-name = "procfs-core"
-version = "0.17.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "239df02d8349b06fc07398a3a1697b06418223b1c7725085e801e7c0fc6a12ec"
-dependencies = [
- "bitflags 2.11.1",
- "chrono",
- "hex",
 ]
 
 [[package]]
@@ -3592,9 +3604,9 @@ dependencies = [
 
 [[package]]
 name = "protobuf"
-version = "3.2.0"
+version = "3.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b55bad9126f378a853655831eb7363b7b01b81d19f8cb1218861086ca4a1a61e"
+checksum = "d65a1d4ddae7d8b5de68153b48f6aa3bba8cb002b243dbdbc55a5afbc98f99f4"
 dependencies = [
  "once_cell",
  "protobuf-support",
@@ -3603,9 +3615,9 @@ dependencies = [
 
 [[package]]
 name = "protobuf-codegen"
-version = "3.2.0"
+version = "3.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0dd418ac3c91caa4032d37cb80ff0d44e2ebe637b2fb243b6234bf89cdac4901"
+checksum = "5d3976825c0014bbd2f3b34f0001876604fe87e0c86cd8fa54251530f1544ace"
 dependencies = [
  "anyhow",
  "once_cell",
@@ -3618,12 +3630,12 @@ dependencies = [
 
 [[package]]
 name = "protobuf-parse"
-version = "3.2.0"
+version = "3.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9d39b14605eaa1f6a340aec7f320b34064feb26c93aec35d6a9a2272a8ddfa49"
+checksum = "b4aeaa1f2460f1d348eeaeed86aea999ce98c1bded6f089ff8514c9d9dbdc973"
 dependencies = [
  "anyhow",
- "indexmap 1.9.3",
+ "indexmap 2.14.0",
  "log",
  "protobuf",
  "protobuf-support",
@@ -3634,9 +3646,9 @@ dependencies = [
 
 [[package]]
 name = "protobuf-support"
-version = "3.2.0"
+version = "3.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a5d4d7b8601c814cfb36bcebb79f0e61e45e1e93640cf778837833bbed05c372"
+checksum = "3e36c2f31e0a47f9280fb347ef5e461ffcd2c52dd520d8e216b52f93b0b0d7d6"
 dependencies = [
  "thiserror 1.0.69",
 ]
@@ -4186,8 +4198,8 @@ checksum = "b684475344d8df1859ddb2d395dd3dac4f8f3422a1aa0725993cb375fc5caba5"
 dependencies = [
  "futures",
  "log",
- "netlink-packet-core",
- "netlink-packet-route",
+ "netlink-packet-core 0.7.0",
+ "netlink-packet-route 0.19.0",
  "netlink-packet-utils",
  "netlink-proto",
  "netlink-sys",
@@ -4223,9 +4235,9 @@ dependencies = [
 
 [[package]]
 name = "rust-criu"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4737b28406b3395359f485127073117a11cedc8942738b69ba6ab9a79432acbc"
+checksum = "d92037bbe1317b5b615ce32efd5fb63538e3fd57ba424d6f23fe3eb0554294ed"
 dependencies = [
  "anyhow",
  "libc",

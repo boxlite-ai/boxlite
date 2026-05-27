@@ -26,6 +26,12 @@ e2fsprogs-sys = { path = "src/deps/e2fsprogs-sys", version = "0.9.5" }
 libgvproxy-sys = { path = "src/deps/libgvproxy-sys", version = "0.9.5" }
 libkrun-sys = { path = "src/deps/libkrun-sys", version = "0.9.5" }
 
+[patch.crates-io]
+# Pull in youki PR #3504 (split intermediate/init readiness channels) which
+# fixes the InitReady/IntermediateReady race under concurrent ContainerBuilder
+# builds. Not in any tagged release yet (post-v0.6.0).
+libcontainer = { git = "https://github.com/youki-dev/youki", rev = "4b2f0e00a4a11107f3a338c21c17407d2f664ec9" }
+
 [workspace.package]
 version = "0.9.5"
 edition = "2024"
