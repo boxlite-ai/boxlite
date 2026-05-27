@@ -5,7 +5,7 @@
 > - Previous version of the proposal: [`docs/apps/infra-vs-local-infra.md`](./infra-vs-local-infra.md)
 > - Principle on record: memory `feedback_eat_your_own_dogfood.md`
 > - Platform target: Mac M5, 24GB (memory `feedback_infra_local_target_mac_m5.md`)
-> - **Status**: ✅ fully shipped — see milestone [`milestone/infra-local/v0.1.0`](./milestones/2026-05-25-milestone-infra-local-v0.1.0.md) (2026-05-25). L1 11-box stack + L2 four native processes (NestJS API / Go Runner / Go Proxy / Vite Dashboard) + L3 real sandbox microVM are wired end-to-end; `make stack-nuke && make stack-up` cold-boots to a browser terminal showing `root@boxlite:~#` in ~80s. Runner runs **natively on M5** (arm64), not through Lima.
+> - **Status**: ✅ fully shipped — see milestone [`milestone/infra-local/v0.1.0`](./milestones/2026-05-25-milestone-infra-local-v0.1.0.md) (2026-05-25). L1 11-box stack + L2 four native processes (NestJS API / Go Runner / Go Proxy / Vite Dashboard) + L3 real sandbox microVM are wired end-to-end; `make stack-nuke && make stack-up` cold-boots to a browser terminal showing `root@boxlite:~#` in ~80s. Runner runs **natively on M5** (arm64) using Hypervisor.framework + libkrun.
 > - Day-to-day entrypoint: `cd apps/infra-local && make stack-up` (idempotent). See [`infra-local-usage.md`](./infra-local-usage.md) for the standard workflow; current state inventory in [`infra-local-status.md`](./infra-local-status.md); full endpoint / credential table in [`apps/infra-local/CONNECTIONS.md`](../../apps/infra-local/CONNECTIONS.md).
 > - **Test coverage**: 35 unit tests + 1 smoke integration test + **10 comprehensive E2E tests** (real protocols: pg SQL / redis SET-GET-INCR / minio S3 PUT-GET / registry v2 catalog / dex JWKS / jaeger query API / otel OTLP HTTP / caddy all 6 routes + 30s stability + 3.5/8 GiB memory budget). `make itest-all` runs the full suite in 86s.
 > - Implementation: `apps/infra-local/boxlite_local/` + `apps/infra-local/scripts/stack-*.sh`
@@ -37,14 +37,14 @@ docker compose up                     python -m boxlite_local up
 1. **No docker and no docker-compose** — there are **zero Dockerfiles** under `apps/infra-local/` (other than references to existing BoxLite app images).
 2. **Each service = a single BoxLite box** (microVM isolation, same lineage as the production sandbox).
 3. **One Python entrypoint for the orchestrator**, with a declarative service registry (a YAML/Python-dataclass hybrid, see §4).
-4. **Runner is the exception**: `boxlite-runner` requires nested KVM, so it still runs inside a Lima Linux VM (see §3.3).
+4. **Runner runs natively on M5** as a macOS arm64 Go binary using Hypervisor.framework + libkrun (see §3.3). It does not run inside a BoxLite box (it itself needs hypervisor access).
 5. **Network model**: host-as-hub — every box forwards its port to the host, and boxes reach each other through the host loopback (see §3.4).
 
 **Benefits**:
 
 - ✅ Dogfood: any BoxLite weakness gets felt by the team immediately.
-- ✅ Boxes are completely co-lineal with the production sandbox (same libkrun + KVM + OCI).
-- ✅ No Docker Desktop required (only BoxLite + Lima).
+- ✅ Boxes are completely co-lineal with the production sandbox (same libkrun + OCI; HVF backend locally vs KVM in prod).
+- ✅ No Docker Desktop required for the application boxes.
 - ✅ `boxlite-cli` becomes the admin tool for free (`boxlite-cli ps`, `boxlite-cli logs`, `boxlite-cli exec` all work out of the box).
 
 **Costs**:
@@ -283,11 +283,11 @@ BoxLite's host-side port forward binds on `*:<port>` (wildcard). The macOS kerne
    │                                                                │
    │  host processes:                                                │
    │  ├─ yarn nx serve api          (dev-time hot reload)            │
-   │  └─ yarn nx serve dashboard    (dev-time hot reload)            │
-   │                                                                │
-   │  Lima VM (runner host)                                          │
-   │  └─ boxlite-runner binary                                      │
-   │      └─ Uses KVM + libkrun to create sandboxes (BoxLite box)   │
+   │  ├─ yarn nx serve dashboard    (dev-time hot reload)            │
+   │  ├─ Go proxy                   (sandbox port-preview reverse-  │
+   │  │                              proxy target)                   │
+   │  └─ boxlite-runner             (M5 arm64 native Go binary;     │
+   │      └─ Uses HVF + libkrun to create sandboxes (BoxLite box)   │
    │         (Each sandbox is also a BoxLite box — co-lineal with   │
    │          the local control plane.)                              │
    │                                                                │
@@ -300,7 +300,7 @@ BoxLite's host-side port forward binds on `*:<port>` (wildcard). The macOS kerne
 |---|---|---|
 | **L1: sandbox** (user workload) | BoxLite box, OCI image | ✅ (already the case) |
 | **L2: control-plane services** (postgres / redis / dex / ...) | BoxLite box, OCI image | ✅ (**added by this design**) |
-| **L3: Runner** | Linux binary in a Lima VM | ⚠️ exception (needs nested KVM) |
+| **L3: Runner** | M5-native macOS arm64 binary (uses HVF + libkrun directly) | ⚠️ exception (it is the hypervisor consumer itself) |
 
 **"Any OCI image execution goes through BoxLite"** — except the runner itself, because it is the implementation layer for the OCI executor.
 
@@ -324,9 +324,17 @@ BoxLite's host-side port forward binds on `*:<port>` (wildcard). The macOS kerne
 
 ### 2.4 Runner path (the exception)
 
-The runner is not inside a BoxLite box because it needs `/dev/kvm` (nested virt on Mac HVF is unreliable). The runner runs in a **Lima Linux VM** (already settled in the previous proposal).
+The runner is not inside a BoxLite box because it is itself the
+component that drives the hypervisor — putting it inside another
+microVM would just push the problem down a layer. On this branch the
+runner is built as a **native macOS arm64 binary** and uses
+Hypervisor.framework + libkrun directly.
 
-The runner binary inside Lima **creates sandboxes that are themselves BoxLite boxes** — **sharing the same runtime abstraction** as the control-plane boxes, with only the namespace differing (control-plane boxes are managed by the local Python orchestrator; sandbox boxes are managed by the runner).
+The M5-native runner binary **creates sandboxes that are themselves
+BoxLite boxes** — **sharing the same runtime abstraction** as the
+control-plane boxes, with only the namespace differing (control-plane
+boxes are managed by the local Python orchestrator; sandbox boxes are
+managed by the runner).
 
 ### 2.5 dns-shim and launchd
 
@@ -656,15 +664,6 @@ apps/infra-local/
 ├── tls/                              # Kept: mkcert wildcard cert
 │   └── README.md
 │
-├── runner/                           # Kept: launchd install/uninstall + Lima runner provisioning
-│   ├── install.sh
-│   ├── uninstall.sh
-│   └── launchd/
-│
-├── lima/                             # New: Lima runner host config
-│   ├── runner.yaml                   # Lima VM template
-│   └── runner-bootstrap.sh           # Script that runs after Lima starts (installs the runner)
-│
 ├── scripts/                          # General-purpose shell helpers
 │   ├── lib.sh
 │   ├── doctor.sh                     # System / network / tooling health checks
@@ -693,11 +692,11 @@ apps/infra-local/
 | PgAdmin box | 512 MB + 200 MB | 1 | 0.7 GB |
 | Registry UI box | 128 MB + 200 MB | 1 | 0.3 GB |
 | host `yarn nx serve` × 2 | 1 GB × 2 | 2 | 2 GB |
-| Lima VM (runner host) | 2 GB | 1-2 | 2-4 GB |
+| M5 native runner + proxy binaries | ~300 MB total | 1 | 0.3 GB |
 | Sandbox (user workload) | 256 MB | 1-3 concurrent | 0.3-0.8 GB |
-| **Total** | | | **~16-20 GB** |
+| **Total** | | | **~12-15 GB** |
 
-Leaves 4-8 GB of headroom. **A 24 GB M5 is enough, but tighter than the docker proposal** (docker's control-plane services total ~3 GB; this proposal's control plane is ~5-6 GB).
+Leaves ~9-12 GB of headroom. **A 24 GB M5 is comfortably enough** — the M5-native runner saves the 2-4 GB the original plan budgeted for a Linux VM host.
 
 **Optimization room**: a few boxes run right at the floor with `cpus=1, memory_mib=256`. Lightweight services like Caddy / Registry-UI can start at 128 MB.
 
@@ -1059,9 +1058,9 @@ Write the minimal orchestrator and run postgres+redis+dex+minio+caddy to validat
 
 The full 10 boxes, Caddy routes all wired up, Jaeger receiving traces.
 
-### Phase 4 — Lima runner integration (target: 1-2 days)
+### Phase 4 — M5 native runner integration (target: 1-2 days)
 
-The runner box (inside Lima) comes up, api sees it, and a sandbox is created end-to-end.
+The M5-native `boxlite-runner` binary comes up, registers with the api, and a sandbox is created end-to-end.
 
 **Only after every PoC phase passes do we promote the plan to a production-quality implementation.** If the PoC fails, fall back to the docker plan and keep "BoxLite for the control plane" as a long-term goal.
 
@@ -1107,7 +1106,7 @@ The `apps/infra-local/boxlite_local/` Python orchestrator skeleton:
 | Decision | Choice | Rationale |
 |---|---|---|
 | Replace docker orchestration? | ✅ replace | Dogfood principle |
-| Run the runner inside a BoxLite box too? | ❌ exception, keep Lima | Nested KVM is unreliable |
+| Run the runner inside a BoxLite box too? | ❌ exception, runner stays native on M5 | Runner is the hypervisor consumer itself — wrapping it in another microVM just adds a layer |
 | Orchestrator style | **Declarative service registry + single Python entry** (option C) | DRY + type-friendly |
 | Inter-service communication | **host-as-hub** | Simple, no BoxLite extension needed |
 | Startup order | Topological sort + parallel layers | Equivalent to docker-compose `depends_on` |
@@ -1150,7 +1149,7 @@ The `apps/infra-local/boxlite_local/` Python orchestrator skeleton:
 - All 10 boxes stable on M5 24GB for ≥ 1h.
 - Verify Caddy reverse proxy is wired up (developers only access `https://<svc>.boxlite.test`, never directly to 25xxx).
 
-**Phase 4** (~1-2 days): Lima runner integration.
+**Phase 4** (~1-2 days): M5 native runner integration.
 
 **Once every phase passes** (likely 1-2 weeks):
 

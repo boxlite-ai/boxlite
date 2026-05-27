@@ -8,8 +8,8 @@
 This milestone delivers a fully self-hosted local development stack on
 Apple Silicon (M5). A developer can run a single command to bring up
 the entire BoxLite cloud-MVP control plane on their laptop and create
-real microVM sandboxes through the dashboard — no AWS, no Lima, no
-Docker daemon for the application boxes.
+real microVM sandboxes through the dashboard — no AWS, no Docker
+daemon for the application boxes; everything runs natively on M5.
 
 ---
 

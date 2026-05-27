@@ -1,9 +1,19 @@
-作为 boxlite 的开发者, 我们去设计并实现完整的 infra-local。
-我们 boxlite 新加了一条 principle: eat your own dog food.
-  
-所以我需要你基于目前的 infra-local方案， 新构建一个不使用docker 而是使用 boxlite去 run boxlite 的 box 并在 box 中 run 相应的docker image。从而达到用我们 boxlite 的能力去搭建全套 infra-local 的方案实现。
+As BoxLite developers, we are going to design and implement the full
+infra-local stack.
 
-1、熟悉 boxlite python sdk 方式的使用。
-2、基于 boxlite python sdk 的方式， 用不同的 python 
-脚本去启动需要的组件及服务吗, 或者实现成用同一个 python 但接受不同的配置文件的方式去启动我们需要的不同组件服务
-3、基于 (../../docs/apps/infra-vs-local-infra.md) 和 boxlite 的 python SDK 的使用方式， 设计一套新的方案： own-dog-food-local-infra-solution.md
+BoxLite has adopted a new principle: **eat your own dogfood.**
+
+Building on the existing infra-local proposal, we will construct a new
+implementation that does **not** use Docker. Instead we use BoxLite to
+run BoxLite boxes, and inside each box we run the corresponding OCI
+image. The goal is to use BoxLite's own capabilities to stand up the
+complete infra-local stack.
+
+1. Get familiar with the BoxLite Python SDK.
+2. Using the BoxLite Python SDK, launch the required components and
+   services. Either with separate Python scripts per component, or with
+   a single Python entry point that accepts different config files to
+   launch different services.
+3. Building on [`docs/apps/infra-vs-local-infra.md`](../../docs/apps/infra-vs-local-infra.md)
+   and the BoxLite Python SDK, design a new proposal:
+   `own-dog-food-local-infra-solution.md`.

@@ -2,7 +2,7 @@
 
 > Snapshot: **2026-05-25** (milestone/infra-local/v0.1.0 — full L1+L2+L3 end-to-end working)
 > Branch: `feat/cloud-mvp`
-> Platform: **Apple Silicon M5 (arm64), all native, no Lima**
+> Platform: **Apple Silicon M5 (arm64), all native**
 > Entry point: `cd apps/infra-local && make stack-up` (L1 + L2 in one command — see [infra-local-usage.md](./infra-local-usage.md))
 
 ## 🟢 Real services, really running (18 processes, M5 native)
@@ -29,7 +29,7 @@ Start with: `cd apps/infra-local && make stack-up` (automatically runs `up-with-
 | Service | Port | Real role |
 |---|---|---|
 | **NestJS API** | 3001 | Real, full 88 migrations + 6 PostHog flags bootstrapped to `true` |
-| **Go Runner** (M5 native — no Lima) | 3003 | Real, M5 arm64 cgo + libkrun; registered with the API, heartbeat every 5 s |
+| **Go Runner** (M5 native) | 3003 | Real, M5 arm64 cgo + libkrun; registered with the API, heartbeat every 5 s |
 | **Go Proxy** | 4000 | Real, all sandbox port-preview traffic flows through here (`*-*.localhost:28080` → `:4000`) |
 | **Dashboard Vite dev** | 3000 | Real React, real OIDC, MSW removed |
 

@@ -375,7 +375,7 @@ def test_resource_usage_within_budget(stack):
 
     Parent design §5.1 budgets ~5-6 GiB for the control plane. 8 GiB is the
     soft cap for sustainability on a 24 GB M5 (~16 GiB headroom for the OS,
-    IDE, host services, and Lima runner VM later).
+    IDE, host services, and the M5 native runner).
     """
 
     async def go():
