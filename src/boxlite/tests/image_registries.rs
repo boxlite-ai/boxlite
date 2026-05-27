@@ -37,7 +37,7 @@ async fn structured_image_registries_pull_unqualified_image() {
 fn structured_image_registries_validate_at_runtime_start() {
     let home = PerTestBoxHome::isolated_in("/tmp");
     let result = BoxliteRuntime::new(BoxliteOptions {
-        home_dir: home.path,
+        home_dir: home.path.clone(),
         image_registries: vec![ImageRegistry::https("https://registry.local")],
     });
 
