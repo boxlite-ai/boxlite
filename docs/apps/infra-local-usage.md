@@ -7,14 +7,10 @@
 ```bash
 cd apps/infra-local
 
-# First-time, One-time install of the orchestrator package + build native binaries + stack up
-make install
-make stack-build
+# First-time AND day-to-day: one command. stack-up is self-healing — on a
+# fresh checkout it auto-runs `make install` + builds the native binaries;
+# on a restart it skips straight to bringing the stack up.
 make stack-up
-
-# day-to-day: bring the whole stack up (L1 boxes + 4 native processes)
-make stack-up
-
 
 # Health check
 make stack-status
@@ -60,21 +56,11 @@ which boxlite                     # CLI must be on PATH
 docker info >/dev/null            # Docker Desktop must be running
 ```
 
-### 1.2 Three-step bring-up
+### 1.2 One-command bring-up
 
 ```bash
 cd boxlite-cloud-mvp/apps/infra-local
-
-# Step 1 — install the Python orchestrator package (one-time per fresh Python env)
-make install        # pip install -e ".[test]"  → makes `python -m boxlite_local` work
-
-# Step 2 — build native binaries (one-time per fresh repo; rebuilds are idempotent)
-make stack-build    # yarn install + go build runner → /tmp/boxlite-runner + go build proxy
-
-# Step 3 — bring up the full stack (L1 boxes + schema + L2 native + seed)
-make stack-up       # L1 10 boxes + prod schema + 4 native processes, all in one go
-
-# Verify
+make stack-up       # does everything; see the self-heal steps below
 make stack-status   # one-screen health
 ```
 
@@ -82,12 +68,21 @@ Cold-start time: ~5-7 minutes on first run (most of it is pulling the
 `ubuntu:22.04` default snapshot into the local registry). Subsequent
 `stack-up` runs reuse the image cache and complete in ~30 s to 1 min.
 
-✅ Once those three commands finish, `stack-up.sh` has automatically:
-1. Detected whether L1 was already up; if not, ran `make up-with-schema`
-2. Created the two symlinks NestJS needs (`apps/.env`, `apps/apps`)
-3. Started api → runner → proxy → dashboard in dependency order, waiting for each to be healthy before the next
-4. Detected ports already in use and freed them first (prevents EADDRINUSE)
-5. Written PIDs to `apps/infra-local/.logs/<comp>.pid` and logs to `<comp>.log`
+✅ `stack-up.sh` is **self-healing** — a single `make stack-up` works
+from a fresh checkout, after a reboot, or after `make stack-down`,
+because it automatically:
+1. Installed the orchestrator package (`make install`) if `boxlite_local` wasn't importable yet
+2. Brought up L1 boxes (`make up-with-schema`) if they weren't running; `load-schema` is idempotent so it's a no-op when the schema is already present (e.g. the PG data volume survived a reboot)
+3. Built the native binaries (`stack-build.sh`) if `/tmp/boxlite-runner` / `/tmp/boxlite-proxy` were missing (e.g. `/tmp` cleared on reboot)
+4. Created the two symlinks NestJS needs (`apps/.env`, `apps/apps`)
+5. Started api → runner → proxy → dashboard in dependency order, waiting for each to be healthy before the next
+6. Detected ports already in use and freed them first (prevents EADDRINUSE)
+7. Written PIDs to `apps/infra-local/.logs/<comp>.pid` and logs to `<comp>.log`
+
+> You can still run `make install` / `make stack-build` explicitly — e.g.
+> to force a binary rebuild after changing runner/proxy source — but
+> `make stack-up` doesn't require it. To rebuild a running component use
+> `make stack-restart COMPONENTS=runner` (rebuilds + restarts).
 
 ### 1.3 First-time dashboard login
 

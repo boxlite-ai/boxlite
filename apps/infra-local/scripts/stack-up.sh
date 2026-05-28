@@ -23,6 +23,17 @@ if [ ${#COMPONENTS[@]} -eq 0 ] || [ -z "${COMPONENTS[0]}" ]; then
   COMPONENTS=("${ALL_COMPONENTS[@]}")
 fi
 
+# ---------- Orchestrator package installed? ----------
+# Bringing up L1 calls `python -m boxlite_local` (via make up-with-schema).
+# On a fresh Python env that module isn't importable yet — auto-install
+# instead of failing. Conditional: the common restart path (already
+# installed) pays nothing, so `make stack-up` works from zero or on a
+# restart without ever needing a manual `make install` first.
+if ! "${PY:-python}" -c "import boxlite_local" 2>/dev/null; then
+  log "boxlite_local not importable — running make install"
+  ( cd "${INFRA_LOCAL_DIR}" && make install )
+fi
+
 # ---------- L1 boxes ----------
 if ! boxlite ls 2>/dev/null | grep -q boxlite-local-postgres; then
   log "L1 boxes not running — starting..."
@@ -32,6 +43,9 @@ else
 fi
 
 # ---------- Binaries present? ----------
+# stack-up auto-builds missing binaries (e.g. /tmp cleared after a reboot).
+# It does NOT rebuild a binary that already exists — to pick up source
+# changes use `make stack-restart COMPONENTS=runner` (which rebuilds).
 for bin in "${RUNNER_BIN}" "${PROXY_BIN}"; do
   if [ ! -x "${bin}" ]; then
     log "missing ${bin} — running stack-build.sh"

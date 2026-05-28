@@ -35,11 +35,10 @@ Go 1.25+, Node + yarn (for L2).
 ```bash
 cd apps/infra-local
 
-# One-time install of the orchestrator package + build native binaries
-make install
-make stack-build
-
-# Bring up the full L1 + L2 stack (idempotent — safe to re-run)
+# Bring up the full L1 + L2 stack. Idempotent + self-healing: on a fresh
+# checkout it auto-runs `make install` (orchestrator package) and builds
+# the native binaries; on a restart it skips straight to bringing things
+# up. Safe to run from zero, after a reboot, or after `make stack-down`.
 make stack-up
 
 # One-screen health check across L1 + L2
@@ -53,6 +52,11 @@ make stack-down
 # ...or tear down L1 too
 make stack-down ARGS=--all
 ```
+
+> `make stack-up` is the single entry point. You can still run
+> `make install` / `make stack-build` explicitly (e.g. to force a
+> rebuild after pulling new code), but you don't have to — stack-up
+> runs them automatically when they're needed.
 
 ### Make targets
 
