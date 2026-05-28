@@ -188,7 +188,7 @@ What it does:
 - Re-pulls the 10 images + reloads the prod schema
 - Starts L2; the API self-seeds (region / admin / snapshot pulled to active)
 
-**When to use it:** new-hire onboarding / schema-baseline upgrade / "I did a bunch of weird stuff and want to go back to a clean state".
+**When to use it:** new-hire onboarding / schema upgrade / "I did a bunch of weird stuff and want to go back to a clean state".
 
 ### Scenario 2: **Reset + re-up** (tier ③ — most common)
 

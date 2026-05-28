@@ -11,10 +11,7 @@ from .types import HealthCheck, ServiceSpec
 
 SPEC_PG = ServiceSpec(
     name="postgres",
-    # Pinned to PG 17 to match prod (RDS boxlite-dev runs 17.9). Loading
-    # apps/infra-local/sql/schema-baseline.sql (dumped from prod) into PG 16
-    # would error on PG17-only directives like `\restrict` and
-    # `SET transaction_timeout = 0;`.
+    # Pinned to PG 17 to match prod (RDS boxlite-dev runs 17.9).
     image="postgres:17-alpine",
     cpus=1,
     memory_mib=512,

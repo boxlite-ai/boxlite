@@ -3,8 +3,8 @@
 #
 # Usage: stack-reset.sh             # clear sandboxes/snapshots, KEEP users+orgs
 #                                     → browser stays logged in, no re-login
-#        stack-reset.sh --hard      # wipe PG schema entirely (re-applies prod
-#                                     baseline) → identity gone, re-login needed
+#        stack-reset.sh --hard      # wipe PG schema entirely (reloads the
+#                                     merged schema) → identity gone, re-login needed
 #        stack-reset.sh --nuke      # everything: --hard + L1 boxes + .logs
 
 set -euo pipefail
@@ -52,7 +52,7 @@ if [ "$MODE" = "soft" ]; then
   log "next: \`make stack-up\` — API re-seeds default snapshot; runner re-registers"
 elif [ "$MODE" = "hard" ]; then
   if boxlite ls 2>/dev/null | grep -q boxlite-local-postgres; then
-    log "wiping schema + reloading prod baseline..."
+    log "wiping schema + reloading merged schema..."
     PGPASSWORD=boxlite psql -h 127.0.0.1 -p 25432 -U boxlite -d boxlite -c "
       DROP SCHEMA public CASCADE;
       CREATE SCHEMA public;

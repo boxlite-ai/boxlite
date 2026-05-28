@@ -69,7 +69,7 @@ L1-only (just the BoxLite boxes):
   wipe               stop + remove + wipe data dir
   ps                 list running boxlite-local-* boxes
   doctor             run preflight checks (SDK + runtime + port conflicts)
-  load-schema        load sql/schema-baseline.sql into local pg (after `make up`)
+  load-schema        generate + load sql/merged-schema.auto-gen.sql into local pg (after `make up`)
   up-with-schema     make up + make load-schema (one-shot for a fresh stack)
   seed-init-data     ensure dashboard-required base data (admin org, default region, wait snapshot)
 ```
@@ -292,15 +292,15 @@ apps/infra-local/
 │   └── services.py                   # SPEC_* + SERVICES registry
 ├── scripts/                          # L2 stack wrappers (called by `make stack-*`)
 │   ├── _stack-common.sh
-│   ├── apply-schema.sh               # load sql/schema-baseline.sql into local pg
+│   ├── build-all-in-one-sql.py       # synthesize sql/merged-schema.auto-gen.sql from apps/api migrations
+│   ├── apply-schema.sh               # load sql/merged-schema.auto-gen.sql into local pg
 │   ├── seed-init-data.sh             # wait for API self-seed + default snapshot
 │   ├── stack-build.sh                # build runner + proxy binaries
 │   ├── stack-up.sh / stack-down.sh / stack-restart.sh
 │   ├── stack-status.sh / stack-logs.sh
 │   └── stack-reset.sh                # tiered: soft / --hard / --nuke
-├── sql/                              # production schema baseline (loaded into L1 pg)
-│   ├── REFRESH.md
-│   └── schema-baseline.sql
+├── sql/                              # DB schema for L1 pg
+│   └── merged-schema.auto-gen.sql    # generated from apps/api migrations; loaded by `make load-schema`
 ├── configs/                          # legacy: minio init script (now inlined)
 │   └── minio/init.sh
 └── tests/

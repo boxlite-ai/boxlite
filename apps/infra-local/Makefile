@@ -19,10 +19,12 @@ install:               ## install the package + test extras
 up:                    ## bring all services up (runs doctor preflight first)
 	$(PY) -m boxlite_local up
 
-down:                  ## stop + remove all services
+down:                  ## stop L2 native procs + remove L1 services
+	-./scripts/stack-down.sh
 	$(PY) -m boxlite_local down
 
-wipe:                  ## stop + remove + wipe data dir
+wipe:                  ## stop L2 + remove L1 + wipe data dir
+	-./scripts/stack-down.sh
 	$(PY) -m boxlite_local down --wipe
 
 ps:                    ## list running boxlite-local-* boxes
@@ -43,7 +45,8 @@ e2e:                   ## run comprehensive E2E suite (~60s, ~90s with smoke)
 itest-all:             ## run BOTH integration suites (~90s)
 	BOXLITE_INTEGRATION=1 pytest tests/integration -v
 
-load-schema:           ## load apps/infra-local/sql/schema-baseline.sql into local pg (run after `make up`)
+load-schema:           ## generate + load sql/merged-schema.auto-gen.sql into local pg (run after `make up`)
+	$(PY) scripts/build-all-in-one-sql.py
 	./scripts/apply-schema.sh
 
 up-with-schema:        ## make up + make load-schema (one-shot for a fresh stack)

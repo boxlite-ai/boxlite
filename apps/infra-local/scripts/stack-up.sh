@@ -35,11 +35,26 @@ if ! "${PY:-python}" -c "import boxlite_local" 2>/dev/null; then
 fi
 
 # ---------- L1 boxes ----------
+L1_RECREATED=false
 if ! boxlite ls 2>/dev/null | grep -q boxlite-local-postgres; then
   log "L1 boxes not running — starting..."
   ( cd "${INFRA_LOCAL_DIR}" && make up-with-schema )
+  L1_RECREATED=true
 else
   ok "L1 boxes already running"
+fi
+
+# A surviving L2 process is stale once L1 has just been (re)created: it holds
+# connections to the destroyed-and-recreated DB and — critically for the API —
+# already ran its onApplicationBootstrap seed against the OLD database, so it
+# will NOT re-seed the fresh one (no admin user/org/region → dead dashboard).
+# `make down`/`wipe` already stop L2, but bypass paths (stack-rebuild-l1-box,
+# direct `boxlite rm`, `python -m boxlite_local down`) don't. Stop any stale L2
+# for the components we're about to start so the starters below bring them up
+# fresh against the new L1. No-op when L2 is already down (the common case).
+if [ "${L1_RECREATED}" = "true" ]; then
+  log "L1 (re)created — stopping any stale L2 procs so they restart fresh"
+  "${SCRIPT_DIR}/stack-down.sh" "${COMPONENTS[@]}" || true
 fi
 
 # ---------- Binaries present? ----------
