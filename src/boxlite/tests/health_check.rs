@@ -83,6 +83,14 @@ async fn health_check_transitions_to_healthy_after_startup() {
         info.health_status.state
     );
     assert_eq!(info.health_status.failures, 0);
+
+    // Explicit stop before the home drops. The box is still Running here;
+    // RuntimeImpl::Drop's safety-net shutdown_sync only sends SIGTERM and
+    // returns without waiting, so the shim is still mid-shutdown when
+    // PerTestBoxHome::Drop runs its leak assertion. stop() stops and waits,
+    // so no live shim remains. (The reaper does not help: it reaps dead
+    // shims, not a still-running one.)
+    t.bx.stop().await.ok();
 }
 
 #[tokio::test]
