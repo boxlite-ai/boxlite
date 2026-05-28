@@ -196,6 +196,21 @@ install_protobuf() {
     echo ""
 }
 
+# Install cmake (C SDK test harness — sdks/c/tests/CMakeLists.txt)
+install_cmake() {
+    print_step "Checking for cmake... "
+    if command_exists cmake; then
+        print_success "Found ($(cmake --version | head -n1))"
+    elif brew_installed "cmake"; then
+        print_success "Already installed (brew)"
+    else
+        echo -e "${YELLOW}Installing...${NC}"
+        brew install cmake
+        print_success "cmake installed"
+    fi
+    echo ""
+}
+
 # Setup Python
 setup_python() {
     if ! check_python; then
@@ -278,6 +293,8 @@ main() {
     install_gperf
 
     install_protobuf
+
+    install_cmake
 
     setup_python
 

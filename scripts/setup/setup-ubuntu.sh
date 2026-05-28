@@ -99,6 +99,9 @@ install_system_deps() {
 
         # gRPC/protobuf (boxlite-shared)
         protobuf-compiler  # protoc compiler
+
+        # C SDK test harness (sdks/c/tests/CMakeLists.txt)
+        cmake              # Configure/build/run C SDK unit + integration tests
     )
 
     for pkg in "${packages[@]}"; do
