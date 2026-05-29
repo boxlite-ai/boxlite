@@ -206,13 +206,14 @@ docker push 127.0.0.1:25000/my-image:dev
 
 | Field | Value |
 |---|---|
-| Host port | `26686` (env `BOXLITE_JAEGER_HOST_PORT`) |
-| Image | `jaegertracing/all-in-one:1.67.0` |
+| Host port (UI) | `26686` (env `BOXLITE_JAEGER_HOST_PORT`) |
+| Host port (OTLP gRPC) | `26687` (fed by the OTel Collector via host-as-hub) |
+| Image | `jaegertracing/all-in-one:1.67.0` (`COLLECTOR_OTLP_ENABLED=true`) |
 | Storage | in-memory (cleared on restart) |
 | Auth | none |
 
 **UI**: `http://127.0.0.1:26686/`
-**Trace ingestion**: via the OTel Collector (see §8); Jaeger does not receive OTLP/Zipkin directly.
+**Trace ingestion**: the OTel Collector (§8) forwards traces here over OTLP gRPC (`26687` → box `:4317`), so the Jaeger UI shows traces sent to the collector.
 
 ---
 
@@ -247,7 +248,10 @@ docker push 127.0.0.1:25000/my-image:dev
 - gRPC: `127.0.0.1:24317` (host) / `host.boxlite.internal:24317` (in-box)
 - HTTP: `http://127.0.0.1:24318/v1/traces` (host)
 
-Downstream config: currently only the debug exporter (logs to stdout) is wired; the Jaeger pipeline is not connected — known limitation.
+Downstream config: the **traces** pipeline exports to both `debug`
+(stdout) and `otlp/jaeger` (`host.boxlite.internal:26687`), so traces
+sent to the collector show up in the Jaeger UI. **metrics** and
+**logs** pipelines export to `debug` only (Jaeger doesn't ingest them).
 
 ---
 

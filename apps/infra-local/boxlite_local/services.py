@@ -194,12 +194,23 @@ SPEC_DEX = ServiceSpec(
 )
 
 
+# Jaeger's OTLP gRPC receiver, host-mapped so the otel-collector box can
+# reach it via host-as-hub (host.boxlite.internal:<this>). Jaeger 1.67
+# all-in-one with COLLECTOR_OTLP_ENABLED=true listens for OTLP on :4317
+# (gRPC) / :4318 (HTTP) inside the box. Module-level constant because
+# ServiceSpec.ports is a static list (can't reference cfg) and the otel
+# config below needs the same value.
+_JAEGER_OTLP_GRPC_PORT = 26687
+
 SPEC_JAEGER = ServiceSpec(
     name="jaeger",
     image="jaegertracing/all-in-one:1.67.0",
     cpus=1,
     memory_mib=512,
-    ports=[(26686, 16686)],
+    ports=[
+        (26686, 16686),                    # Jaeger UI
+        (_JAEGER_OTLP_GRPC_PORT, 4317),    # OTLP gRPC receiver (fed by the otel collector)
+    ],
     env=lambda cfg: {
         "COLLECTOR_OTLP_ENABLED": "true",
     },
@@ -267,7 +278,17 @@ SPEC_REGISTRY_UI = ServiceSpec(
 
 # ─── 3c services ──────────────────────────────────────────────────────────
 
-_OTEL_CONFIG = """\
+def _otel_config(cfg) -> str:
+    """otel-collector config. Receives OTLP and fans out:
+
+    - traces  → debug (stdout) + the jaeger box, so the Jaeger UI at
+                http://127.0.0.1:26686 actually shows traces. The jaeger
+                hop goes through host-as-hub (a separate box) and targets
+                jaeger's host-mapped OTLP gRPC port.
+    - metrics → debug only (jaeger doesn't ingest metrics)
+    - logs    → debug only (jaeger doesn't ingest logs)
+    """
+    return f"""\
 receivers:
   otlp:
     protocols:
@@ -279,6 +300,10 @@ receivers:
 exporters:
   debug:
     verbosity: basic
+  otlp/jaeger:
+    endpoint: {cfg.host_hub}:{_JAEGER_OTLP_GRPC_PORT}
+    tls:
+      insecure: true
 
 extensions:
   health_check:
@@ -289,7 +314,7 @@ service:
   pipelines:
     traces:
       receivers: [otlp]
-      exporters: [debug]
+      exporters: [debug, otlp/jaeger]
     metrics:
       receivers: [otlp]
       exporters: [debug]
@@ -314,9 +339,10 @@ SPEC_OTEL = ServiceSpec(
     # The otelcol image is distroless — no shell. Pass config via env var
     # using `--config=env:OTEL_CONFIG` (supported since otel-collector v0.79.0).
     # Image entrypoint is `/otelcol`; cmd becomes its argv.
-    env=lambda cfg: {"OTEL_CONFIG": _OTEL_CONFIG},
+    env=lambda cfg: {"OTEL_CONFIG": _otel_config(cfg)},
     cmd=["--config=env:OTEL_CONFIG"],
-    depends_on=[],
+    # jaeger must be up first — the traces pipeline exports to it.
+    depends_on=["jaeger"],
     healthcheck=HealthCheck(
         http_url="http://127.0.0.1:23133/",
         interval_s=2.0,

@@ -121,7 +121,7 @@ After `make stack-up` you have 10 L1 daemon boxes + 1 one-shot bootstrap
 | jaeger UI     | `http://127.0.0.1:26686/`                              | in-memory storage           |
 | pgadmin       | `http://127.0.0.1:25051/`                              |                             |
 | registry-ui   | `http://127.0.0.1:25052/`                              |                             |
-| otel HTTP     | `http://127.0.0.1:24318/v1/traces`                     | OTLP receiver (debug exporter) |
+| otel HTTP     | `http://127.0.0.1:24318/v1/traces`                     | OTLP receiver → forwards traces to Jaeger |
 | otel gRPC     | `127.0.0.1:24317`                                      |                             |
 | otel health   | `http://127.0.0.1:23133/`                              |                             |
 | **caddy**     | `http://127.0.0.1:28080/`                              | reverse proxy to all of the above + sandbox port-preview |
@@ -245,9 +245,11 @@ plugin. BoxLite SDK doesn't support building OCI images directly
    (the stack's own registry on port 25000)
 3. Change `SPEC_OTEL.image` to `127.0.0.1:25000/boxlite-local/otel-collector:dev`
 
-The stock `otel/opentelemetry-collector:latest` in the current spec only
-has a debug exporter — useful to validate the stack works, not a real
-collector.
+The stock `otel/opentelemetry-collector:latest` in the current spec
+forwards traces to Jaeger (and logs everything to stdout via the debug
+exporter), so the Jaeger UI works — but it lacks the project's
+`boxlite_exporter` (no ClickHouse / api push-back). Fine for local
+trace debugging; swap in the custom build above for exporter parity.
 
 ### 3. SDK gotchas worked around (file these as feedback)
 
