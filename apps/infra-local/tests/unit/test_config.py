@@ -40,6 +40,18 @@ def test_load_picks_up_env_overrides(monkeypatch, tmp_path):
     assert cfg.data_dir == tmp_path
 
 
+def test_load_expands_tilde_in_data_dir_env(monkeypatch):
+    # Docs tell users they can set BOXLITE_DATA_DIR=~/.boxlite-local/data.
+    # Path("~/...") does NOT expand ~ on its own, so .load() must expanduser()
+    # — otherwise a literal "~" dir gets created under the cwd.
+    monkeypatch.setenv("BOXLITE_DATA_DIR", "~/.boxlite-local/data")
+
+    cfg = InfraConfig.load()
+
+    assert "~" not in str(cfg.data_dir)
+    assert cfg.data_dir == Path.home() / ".boxlite-local" / "data"
+
+
 def test_load_raises_clear_error_on_malformed_int_env(monkeypatch):
     monkeypatch.setenv("BOXLITE_PG_HOST_PORT", "notanumber")
     with pytest.raises(ValueError, match="BOXLITE_PG_HOST_PORT must be an integer"):

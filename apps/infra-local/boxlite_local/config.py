@@ -97,10 +97,13 @@ class InfraConfig:
             otel_grpc_port=_parse_int_env("BOXLITE_OTEL_GRPC_PORT", "24317"),
             otel_http_port=_parse_int_env("BOXLITE_OTEL_HTTP_PORT", "24318"),
             otel_health_port=_parse_int_env("BOXLITE_OTEL_HEALTH_PORT", "23133"),
+            # .expanduser() so a documented value like
+            # BOXLITE_DATA_DIR=~/.boxlite-local/data expands the leading ~
+            # instead of creating a literal "~" dir under the cwd.
             data_dir=Path(
                 os.environ.get("BOXLITE_DATA_DIR")
                 or str(Path.home() / ".boxlite-local" / "data")
-            ),
+            ).expanduser(),
         )
 
     @property
