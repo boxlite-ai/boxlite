@@ -1,7 +1,12 @@
 """Declarative registry of services the orchestrator manages.
 
-Phase 3b: 3a stack + dex + jaeger + pgadmin + registry-ui (9 services).
-otel-collector deferred (needs a build-from-repo pipeline).
+10 daemon boxes + 1 one-shot bootstrap:
+  postgres, redis, minio (+ minio-init one-shot), registry, dex, jaeger,
+  pgadmin, registry-ui, otel-collector, caddy.
+
+otel-collector runs the upstream `otel/opentelemetry-collector` image and
+forwards traces to the jaeger box; see `_otel_config()`. caddy is the
+unified reverse proxy; see `_caddyfile()`.
 """
 
 from __future__ import annotations

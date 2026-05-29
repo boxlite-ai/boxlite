@@ -283,7 +283,7 @@ sent to the collector show up in the Jaeger UI. **metrics** and
 
 | Route | Target |
 |---|---|
-| `/` | port `4000` on the host (dashboard, Next.js dev server) |
+| Host `^<port>-<token>.…` (regexp) | Proxy (`host:4000`) — sandbox port-preview URLs |
 | `/pgadmin/*` | pgAdmin (25051) |
 | `/jaeger/*` | Jaeger UI (26686) |
 | `/dex/*` | Dex (25556) |
@@ -291,8 +291,14 @@ sent to the collector show up in the Jaeger UI. **metrics** and
 | `/minio/*` | MinIO S3 API (29000) |
 | `/registry-ui/*` | Registry UI (25052) |
 | `/registry/*` | Registry v2 API (25000) |
+| `/` (catch-all) | Static help text listing the routes above (not a proxy) |
 
-Note: Caddy reverse-proxies back to the host's service ports via `host_hub` (`host.boxlite.internal`) — because Caddy itself runs inside a box.
+Note: the `_caddyfile()` builder in `boxlite_local/services.py` is the
+source of truth. `/` returns a static help page; the **Proxy** (`:4000`)
+is reached only by the signed port-preview Host matcher
+(`<port>-<token>.localhost:28080`), not by path `/`. Caddy reverse-proxies
+to host service ports via `host_hub` (`host.boxlite.internal`) because
+Caddy itself runs inside a box.
 
 ---
 
