@@ -226,9 +226,6 @@ impl GuestServer {
 
     #[allow(clippy::result_large_err)]
     fn container_rootfs(&self, container_id: &str, path: &str) -> Result<PathBuf, Status> {
-        let guest_layout = self.layout.shared().container(container_id);
-        let rootfs = guest_layout.rootfs_dir();
-
         let path_obj = Path::new(path);
         if path_obj
             .components()
@@ -243,6 +240,36 @@ impl GuestServer {
             path_obj.to_path_buf()
         };
 
+        // For a running container, resolve through its live mount namespace via
+        // `/proc/<init_pid>/root` so paths under runtime mounts (e.g. the tmpfs
+        // at /tmp, /run, /dev/shm) reach what the container actually sees —
+        // matching `docker cp`. Touching the on-disk rootfs dir instead lands
+        // *beneath* those mounts: invisible to the container, or rejected. When
+        // the container isn't running there are no such mounts, so fall back to
+        // the on-disk rootfs (offline copy to a stopped box).
+        if let Some(pid) = self.container_init_pid(container_id) {
+            return Ok(PathBuf::from(format!("/proc/{pid}/root")).join(&rel));
+        }
+
+        let rootfs = self.layout.shared().container(container_id).rootfs_dir();
         Ok(rootfs.join(rel))
+    }
+
+    /// PID of the container's init process when it is running, used to resolve
+    /// copy paths through its live mount namespace (`/proc/<pid>/root`).
+    /// `None` if the container isn't running or its libcontainer state can't be
+    /// read — callers then fall back to the on-disk rootfs.
+    fn container_init_pid(&self, container_id: &str) -> Option<i32> {
+        use libcontainer::container::{Container as LibContainer, ContainerStatus};
+        let state_path = self
+            .layout
+            .container_state_dir(container_id)
+            .join(container_id);
+        let container = LibContainer::load(state_path).ok()?;
+        if matches!(container.status(), ContainerStatus::Running) {
+            container.pid().map(|p| p.as_raw())
+        } else {
+            None
+        }
     }
 }
