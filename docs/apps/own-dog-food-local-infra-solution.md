@@ -2,7 +2,6 @@
 
 > **Design goal**: re-implement `apps/infra-local/` on top of the BoxLite Python SDK — **replace docker containers with BoxLite boxes** for the control-plane services, putting the "eat your own dogfood" principle into practice.
 > **Related**:
-> - Previous version of the proposal: [`docs/apps/infra-vs-local-infra.md`](./infra-vs-local-infra.md)
 > - Principle on record: memory `feedback_eat_your_own_dogfood.md`
 > - Platform target: Mac M5, 24GB (memory `feedback_infra_local_target_mac_m5.md`)
 > - **Status**: ✅ fully shipped — see milestone [`milestone/infra-local/v0.1.0`](./milestones/2026-05-25-milestone-infra-local-v0.1.0.md) (2026-05-25). L1 11-box stack + L2 four native processes (NestJS API / Go Runner / Go Proxy / Vite Dashboard) + L3 real sandbox microVM are wired end-to-end; `make stack-nuke && make stack-up` cold-boots to a browser terminal showing `root@boxlite:~#` in ~80s. Runner runs **natively on M5** (arm64) using Hypervisor.framework + libkrun.
@@ -1154,7 +1153,6 @@ The `apps/infra-local/boxlite_local/` Python orchestrator skeleton:
 **Once every phase passes** (likely 1-2 weeks):
 
 - Delete `apps/local-dev/` (the old docker-compose directory).
-- Update `infra-vs-local-infra.md` to reflect the BoxLite-based implementation.
 
 ### 12.3 Long-term (MVP+1)
 

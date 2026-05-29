@@ -14,6 +14,6 @@ complete infra-local stack.
    services. Either with separate Python scripts per component, or with
    a single Python entry point that accepts different config files to
    launch different services.
-3. Building on [`docs/apps/infra-vs-local-infra.md`](../../docs/apps/infra-vs-local-infra.md)
-   and the BoxLite Python SDK, design a new proposal:
+3. Building on the existing `apps/infra-local/` design and the BoxLite
+   Python SDK, design a new proposal:
    `own-dog-food-local-infra-solution.md`.
