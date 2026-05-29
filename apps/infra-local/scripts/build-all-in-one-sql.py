@@ -1,7 +1,4 @@
 #!/usr/bin/env python3
-# Copyright Daytona Platforms Inc.
-# SPDX-License-Identifier: AGPL-3.0
-#
 # Consolidate every TypeORM migration in apps/api/src/migrations/ (legacy +
 # pre-deploy/ + post-deploy/) into a single merged-schema SQL script that can
 # create the apps/api database from scratch in one step.
