@@ -254,4 +254,50 @@ pub(super) struct RemoveQuery {
 #[derive(Deserialize)]
 pub(super) struct FileQuery {
     pub path: String,
+    #[serde(default)]
+    pub overwrite: Option<bool>,
+    #[serde(default)]
+    pub include_parent: Option<bool>,
+    #[serde(default)]
+    pub follow_symlinks: Option<bool>,
+}
+
+impl FileQuery {
+    // Absent query params resolve to docker-cp defaults, matching
+    // `boxlite::CopyOptions::default()` (overwrite/include_parent true,
+    // follow_symlinks false). Keeps old clients that omit them correct.
+    pub fn overwrite_or_default(&self) -> bool {
+        self.overwrite.unwrap_or(true)
+    }
+    pub fn include_parent_or_default(&self) -> bool {
+        self.include_parent.unwrap_or(true)
+    }
+    pub fn follow_symlinks_or_default(&self) -> bool {
+        self.follow_symlinks.unwrap_or(false)
+    }
+}
+
+#[cfg(test)]
+mod file_query_tests {
+    use super::*;
+
+    fn parse(qs: &str) -> FileQuery {
+        serde_urlencoded::from_str(qs).expect("parse FileQuery")
+    }
+
+    #[test]
+    fn absent_options_resolve_to_docker_cp_defaults() {
+        let q = parse("path=/p/x.txt");
+        assert!(q.overwrite_or_default());
+        assert!(q.include_parent_or_default());
+        assert!(!q.follow_symlinks_or_default());
+    }
+
+    #[test]
+    fn present_options_override_defaults() {
+        let q = parse("path=/p&overwrite=false&include_parent=false&follow_symlinks=true");
+        assert!(!q.overwrite_or_default());
+        assert!(!q.include_parent_or_default());
+        assert!(q.follow_symlinks_or_default());
+    }
 }

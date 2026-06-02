@@ -454,7 +454,7 @@ Copy files/folders between host and box. Exactly one of `SRC` or `DST` must be a
 |------|---------|-------------|
 | `--follow-symlinks` | `false` | Resolve and copy the symlink target rather than the link itself |
 | `--no-overwrite` | `false` | Skip files that already exist at the destination |
-| `--include-parent` | `true` | Include the source's parent directory when copying out (docker-cp semantics) |
+| `--no-include-parent` | `false` | Flatten a copied directory's contents instead of including the directory itself (docker-cp `dir/.`; default keeps the parent) |
 
 If the box is stopped at copy time, it's started temporarily and stopped again afterwards.
 

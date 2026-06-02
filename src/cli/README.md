@@ -466,7 +466,7 @@ Copy files or directories between host and box.
 |--------|-------------|
 | `--follow-symlinks` | Follow symlinks when copying |
 | `--no-overwrite` | Do not overwrite existing files |
-| `--include-parent` | Include parent directory when copying from box (default: true) |
+| `--no-include-parent` | Flatten a copied directory's contents instead of including the directory itself (docker-cp `dir/.`; default keeps the parent) |
 
 **Examples:**
 

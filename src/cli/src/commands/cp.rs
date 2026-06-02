@@ -14,9 +14,10 @@ pub struct CpArgs {
     #[arg(long, default_value_t = false)]
     pub no_overwrite: bool,
 
-    /// Include parent directory when copying from box (docker cp semantics)
-    #[arg(long, default_value_t = true)]
-    pub include_parent: bool,
+    /// Flatten a copied directory's contents instead of including the
+    /// directory itself (docker cp `dir/.` semantics). Default keeps the parent.
+    #[arg(long, default_value_t = false)]
+    pub no_include_parent: bool,
 
     /// Source path (host path or BOX:PATH)
     #[arg(index = 1)]
@@ -35,7 +36,7 @@ pub async fn execute(args: CpArgs, global: &GlobalFlags) -> Result<()> {
     let opts = CopyOptions {
         follow_symlinks: args.follow_symlinks,
         overwrite: !args.no_overwrite,
-        include_parent: args.include_parent,
+        include_parent: !args.no_include_parent,
         ..Default::default()
     };
 
