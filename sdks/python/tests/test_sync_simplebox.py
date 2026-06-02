@@ -134,6 +134,45 @@ class TestSyncSimpleBox:
             assert "dir=/tmp" in result.stdout
             assert "user=nobody" in result.stdout
 
+    def test_copy_in_out_options(self, shared_sync_runtime, tmp_path):
+        """SyncSimpleBox.copy_in/copy_out honor docker-cp option semantics.
+
+        Assertions use exit codes (`test -f/-e`) rather than stdout, which can
+        race with the async stdout pump.
+        """
+        src_dir = tmp_path / "pkg"
+        src_dir.mkdir()
+        (src_dir / "a.txt").write_text("aaa")
+
+        with SyncSimpleBox(image="alpine:latest", runtime=shared_sync_runtime) as box:
+            # default include_parent=True keeps the source dir name
+            box.exec("mkdir", "-p", "/root/d1")
+            box.copy_in(str(src_dir), "/root/d1")
+            assert box.exec("test", "-f", "/root/d1/pkg/a.txt").exit_code == 0
+
+            # include_parent=False flattens contents into the destination
+            box.exec("mkdir", "-p", "/root/d2")
+            box.copy_in(str(src_dir), "/root/d2", include_parent=False)
+            assert box.exec("test", "-f", "/root/d2/a.txt").exit_code == 0
+            assert box.exec("test", "-e", "/root/d2/pkg").exit_code != 0
+
+            # overwrite=False refuses to clobber an existing file
+            box.exec("sh", "-c", "printf orig >/root/ov.txt")
+            host_file = tmp_path / "new.txt"
+            host_file.write_text("new")
+            with pytest.raises(Exception):
+                box.copy_in(str(host_file), "/root/ov.txt", overwrite=False)
+            assert (
+                box.exec("sh", "-c", 'test "$(cat /root/ov.txt)" = orig').exit_code == 0
+            )
+
+            # copy_out writes a single file to the exact host path
+            box.exec("sh", "-c", "printf boxdata >/root/out.txt")
+            host_dst = tmp_path / "out.txt"
+            box.copy_out("/root/out.txt", str(host_dst))
+            assert host_dst.is_file()
+            assert host_dst.read_text() == "boxdata"
+
 
 class TestSyncSimpleBoxConcurrentStreams:
     """Test that stdout and stderr are read concurrently in sync API.

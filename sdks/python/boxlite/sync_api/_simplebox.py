@@ -255,6 +255,68 @@ class SyncSimpleBox:
 
         return self._runtime._sync(_exec_and_collect())
 
+    def copy_in(
+        self,
+        host_path: str,
+        container_dest: str,
+        *,
+        overwrite: bool = True,
+        follow_symlinks: bool = False,
+        include_parent: bool = True,
+    ) -> None:
+        """
+        Copy files/directories from host into the container (synchronous).
+
+        Mirrors async ``SimpleBox.copy_in``. Defaults follow docker-cp
+        semantics: overwrite existing files and keep the source directory
+        name (``include_parent=True``); pass ``include_parent=False`` to
+        flatten a directory's contents into the destination.
+        """
+        from ..boxlite import CopyOptions
+
+        opts = CopyOptions(
+            recursive=True,
+            overwrite=overwrite,
+            follow_symlinks=follow_symlinks,
+            include_parent=include_parent,
+        )
+        async_box = self._box._box
+
+        async def _copy_in():
+            await async_box.copy_in(host_path, container_dest, opts)
+
+        return self._runtime._sync(_copy_in())
+
+    def copy_out(
+        self,
+        container_src: str,
+        host_dest: str,
+        *,
+        overwrite: bool = True,
+        follow_symlinks: bool = False,
+        include_parent: bool = True,
+    ) -> None:
+        """
+        Copy files/directories from the container to the host (synchronous).
+
+        Mirrors async ``SimpleBox.copy_out``; see ``copy_in`` for the option
+        semantics.
+        """
+        from ..boxlite import CopyOptions
+
+        opts = CopyOptions(
+            recursive=True,
+            overwrite=overwrite,
+            follow_symlinks=follow_symlinks,
+            include_parent=include_parent,
+        )
+        async_box = self._box._box
+
+        async def _copy_out():
+            await async_box.copy_out(container_src, host_dest, opts)
+
+        return self._runtime._sync(_copy_out())
+
     def stop(self) -> None:
         """Stop the box (preserves state for restart)."""
         self._box.stop()
