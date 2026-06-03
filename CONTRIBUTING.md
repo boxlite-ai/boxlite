@@ -58,6 +58,7 @@ Key test entry points:
 4. Run quality and tests (`make lint && make fmt:check && make test`)
 5. Commit with clear messages
 6. Open a Pull Request
+7. Sign the [BoxLite Contributor License Agreement](./docs/legal/CLA.md) when CLA Assistant asks you to do so
 
 ### Code Style
 
@@ -95,4 +96,6 @@ examples/         # Example code
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under the Apache License 2.0.
+BoxLite is licensed under the Apache License, Version 2.0.
+
+By contributing, you agree that your contributions will be licensed under the Apache License, Version 2.0. Pull requests must satisfy CLA Assistant using the [BoxLite Contributor License Agreement](./docs/legal/CLA.md).
