@@ -56,7 +56,11 @@ export class BoxliteMeController {
         'snapshot:delete',
         'me:read',
       ],
-      expires_at: null,
+      // Source of truth for key expiry is ApiKey.expiresAt — the same column the
+      // dashboard's `/api-keys` list renders. Returning a hardcoded null here let
+      // clients believe a soon-to-expire key was permanent (P1-2). `null` stays
+      // correct for non-expiring keys and for interactive user sessions (no apiKey).
+      expires_at: ctx.apiKey?.expiresAt ? ctx.apiKey.expiresAt.toISOString() : null,
     }
   }
 
