@@ -24,7 +24,13 @@ import time
 import urllib.request
 
 import boxlite
-from boxlite import Boxlite, BoxOptions, BoxliteRestOptions, Options
+from boxlite import (
+    ApiKeyCredential,
+    Boxlite,
+    BoxOptions,
+    BoxliteRestOptions,
+    Options,
+)
 
 
 def find_free_port() -> int:
@@ -84,7 +90,8 @@ async def main():
     local_home = tempfile.mkdtemp(prefix="bl-", dir="/tmp")
     local_rt = Boxlite(Options(home_dir=local_home))
     rest_rt = Boxlite.rest(BoxliteRestOptions(
-        url=server_url, client_id="test-client", client_secret="test-secret",
+        url=server_url,
+        credential=ApiKeyCredential("test-key"),
     ))
 
     source = None

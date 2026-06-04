@@ -1,6 +1,7 @@
-//! HTTP client with OAuth2 token management.
+//! HTTP client for the BoxLite REST API.
 
 use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
 use reqwest::{Client, Method, RequestBuilder, StatusCode};
 use serde::Serialize;
@@ -9,30 +10,36 @@ use tokio::sync::RwLock;
 
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
+use super::credential::{AccessToken, Credential};
 use super::error::{map_http_error, map_http_status};
 use super::options::BoxliteRestOptions;
-use super::types::{ErrorResponse, SandboxConfigResponse, TokenRequest, TokenResponse};
+use super::types::{ErrorResponse, ServerConfig};
+use crate::runtime::auth::Principal;
 
-/// Cached OAuth2 token with expiry.
-struct TokenCache {
-    token: String,
-    /// Expiry as seconds since epoch.
-    expires_at: u64,
-}
+/// Re-request a token once it is within this leeway of `expires_at`.
+const REFRESH_LEEWAY: Duration = Duration::from_secs(60);
 
 /// HTTP client for the BoxLite REST API.
 ///
-/// Handles base URL construction, OAuth2 token caching/refresh,
+/// Handles base URL construction, bearer auth (any [`Credential`] impl),
 /// and error response parsing.
 #[derive(Clone)]
 pub(crate) struct ApiClient {
     http: Client,
     base_url: String,
-    prefix: String,
-    client_id: Option<String>,
-    client_secret: Option<String>,
-    token_cache: Arc<RwLock<Option<TokenCache>>>,
-    config_cache: Arc<RwLock<Option<SandboxConfigResponse>>>,
+    /// Routing-slot value substituted into the `{prefix}` URL segment
+    /// on box-scoped requests. `None` or empty → URL skips the segment
+    /// entirely (single-tenant / empty-prefix deployment shape).
+    /// Captured at construction from `BoxliteRestOptions::path_prefix`;
+    /// opaque to the client.
+    path_prefix: Option<String>,
+    /// Bearer credential. `None` = unauthenticated.
+    credential: Option<Arc<dyn Credential>>,
+    /// Last token fetched, cached until near expiry. Generic over any
+    /// `Credential` impl — API keys (`expires_at == None`) are fetched
+    /// once and cached forever.
+    cached: Arc<RwLock<Option<AccessToken>>>,
+    config_cache: Arc<RwLock<Option<ServerConfig>>>,
 }
 
 impl ApiClient {
@@ -43,133 +50,124 @@ impl ApiClient {
             .map_err(|e| BoxliteError::Config(format!("failed to create HTTP client: {}", e)))?;
 
         let base_url = config.url.trim_end_matches('/').to_string();
-        let prefix = config.effective_prefix().to_string();
+        let path_prefix = config.path_prefix.clone();
 
         Ok(Self {
             http,
             base_url,
-            prefix,
-            client_id: config.client_id.clone(),
-            client_secret: config.client_secret.clone(),
-            token_cache: Arc::new(RwLock::new(None)),
+            path_prefix,
+            credential: config.credential.clone(),
+            cached: Arc::new(RwLock::new(None)),
             config_cache: Arc::new(RwLock::new(None)),
         })
     }
 
-    /// Build the full URL for a path under the versioned prefix.
-    /// e.g., "/sandboxes" → "https://api.example.com/v1/default/sandboxes"
+    /// Build the full URL for a box-scoped path.
+    ///
+    /// With a non-empty `prefix`, produces `{base}/v1/{prefix}{path}`
+    /// (e.g. `https://api.example.com/v1/acme/boxes`). With an unset
+    /// or empty `prefix`, the segment is dropped entirely
+    /// (`https://api.example.com/v1/boxes`) — the single-tenant
+    /// `boxlite serve` shape. Multi-segment prefixes like
+    /// `us-east/team-42` are substituted verbatim.
     fn url(&self, path: &str) -> String {
-        format!("{}/{}/default{}", self.base_url, self.prefix, path)
+        match self.path_prefix.as_deref().filter(|s| !s.is_empty()) {
+            Some(p) => format!("{}/v1/{}{}", self.base_url, p, path),
+            None => format!("{}/v1{}", self.base_url, path),
+        }
     }
 
-    /// Build URL without the tenant prefix (for auth endpoints).
+    /// Build URL without the organization segment (for identity / config
+    /// endpoints — `/v1/me`, `/v1/config`).
     fn url_root(&self, path: &str) -> String {
-        format!("{}/{}{}", self.base_url, self.prefix, path)
+        format!("{}/v1{}", self.base_url, path)
     }
 
-    /// Get a valid Bearer token, refreshing if needed.
-    pub(crate) async fn get_token(&self) -> BoxliteResult<Option<String>> {
-        let (client_id, client_secret) = match (&self.client_id, &self.client_secret) {
-            (Some(id), Some(secret)) => (id.clone(), secret.clone()),
-            _ => return Ok(None),
+    /// Return a usable bearer, re-requesting from the credential when the
+    /// cached token is absent or within [`REFRESH_LEEWAY`] of `expires_at`.
+    /// `expires_at == None` (API keys) → fetched once, cached forever.
+    /// `None` means the client has no credential configured.
+    async fn current_bearer(&self) -> BoxliteResult<Option<String>> {
+        let Some(cred) = &self.credential else {
+            return Ok(None);
         };
-
-        // Check cached token
         {
-            let cache = self.token_cache.read().await;
-            if let Some(ref cached) = *cache {
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs();
-                // Refresh 60 seconds before expiry
-                if now + 60 < cached.expires_at {
-                    return Ok(Some(cached.token.clone()));
+            let guard = self.cached.read().await;
+            if let Some(tok) = guard.as_ref() {
+                let fresh = match tok.expires_at {
+                    None => true,
+                    Some(exp) => SystemTime::now() + REFRESH_LEEWAY < exp,
+                };
+                if fresh {
+                    return Ok(Some(tok.token.clone()));
                 }
             }
         }
-
-        // Refresh token
-        let token_url = self.url_root("/oauth/tokens");
-        let req = TokenRequest {
-            grant_type: "client_credentials",
-            client_id: &client_id,
-            client_secret: &client_secret,
-        };
-
-        let resp = self
-            .http
-            .post(&token_url)
-            .form(&req)
-            .send()
-            .await
-            .map_err(|e| BoxliteError::Config(format!("token request failed: {}", e)))?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            return Err(BoxliteError::Config(format!(
-                "token exchange failed (HTTP {}): {}",
-                status, text
-            )));
-        }
-
-        let token_resp: TokenResponse = resp
-            .json()
-            .await
-            .map_err(|e| BoxliteError::Config(format!("failed to parse token response: {}", e)))?;
-
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-
-        let token = token_resp.access_token.clone();
-        let expires_at = now + token_resp.expires_in;
-
-        let mut cache = self.token_cache.write().await;
-        *cache = Some(TokenCache {
-            token: token.clone(),
-            expires_at,
-        });
-
-        Ok(Some(token))
+        let tok = cred.get_token().await?;
+        let bearer = tok.token.clone();
+        *self.cached.write().await = Some(tok);
+        Ok(Some(bearer))
     }
 
-    /// Add auth header to a request builder.
+    /// Add the bearer-auth header to a request builder.
+    ///
+    /// Authentication is the *only* thing this client sends as a
+    /// per-request header. The routing-slot value is carried in the
+    /// URL path (`/v1/<prefix>/...`) per `openapi/box.openapi.yaml`.
     async fn authorize(&self, builder: RequestBuilder) -> BoxliteResult<RequestBuilder> {
-        if let Some(token) = self.get_token().await? {
-            Ok(builder.bearer_auth(token))
-        } else {
-            Ok(builder)
+        match self.current_bearer().await? {
+            Some(bearer) => Ok(builder.bearer_auth(bearer)),
+            None => Ok(builder),
         }
     }
 
     /// Send a request and parse a JSON response.
+    ///
+    /// On parse failure, the response body is included (truncated) in the
+    /// error so the caller can see WHICH field mismatched — `reqwest`'s
+    /// default error is just "error decoding response body", which is
+    /// useless when the schema drifts between client and server. The body
+    /// is bounded to 4 KiB so a runaway HTML error page can't blow up
+    /// terminal output.
     async fn send_json<T: DeserializeOwned>(&self, builder: RequestBuilder) -> BoxliteResult<T> {
         let builder = self.authorize(builder).await?;
-        let resp = builder
-            .send()
-            .await
-            .map_err(|e| BoxliteError::Internal(format!("HTTP request failed: {}", e)))?;
+        let resp = builder.send().await.map_err(transport_error)?;
 
         let status = resp.status();
-        if status.is_success() {
-            resp.json::<T>()
-                .await
-                .map_err(|e| BoxliteError::Internal(format!("failed to parse response: {}", e)))
-        } else {
-            self.handle_error(status, resp).await
+        if !status.is_success() {
+            return self.handle_error(status, resp).await;
         }
+        // Read the body as bytes once, then parse; this is what lets us
+        // include the body in a parse-failure error without re-issuing the
+        // request.
+        let bytes = resp
+            .bytes()
+            .await
+            .map_err(|e| BoxliteError::Internal(format!("reading response body: {}", e)))?;
+        serde_json::from_slice::<T>(&bytes).map_err(|e| {
+            let preview = String::from_utf8_lossy(&bytes);
+            let preview = if preview.len() > 4096 {
+                format!(
+                    "{}… (truncated, {} bytes total)",
+                    &preview[..4096],
+                    bytes.len()
+                )
+            } else {
+                preview.into_owned()
+            };
+            BoxliteError::Internal(format!(
+                "failed to parse response: {} \n--- response body ({} bytes) ---\n{}\n--- end ---",
+                e,
+                bytes.len(),
+                preview
+            ))
+        })
     }
 
     /// Send a request and expect no response body (204).
     async fn send_no_content(&self, builder: RequestBuilder) -> BoxliteResult<()> {
         let builder = self.authorize(builder).await?;
-        let resp = builder
-            .send()
-            .await
-            .map_err(|e| BoxliteError::Internal(format!("HTTP request failed: {}", e)))?;
+        let resp = builder.send().await.map_err(transport_error)?;
 
         let status = resp.status();
         if status.is_success() {
@@ -238,17 +236,11 @@ impl ApiClient {
     ) -> BoxliteResult<Vec<u8>> {
         let builder = self.http.post(self.url(path)).json(body);
         let builder = self.authorize(builder).await?;
-        let resp = builder
-            .send()
-            .await
-            .map_err(|e| BoxliteError::Internal(format!("HTTP request failed: {}", e)))?;
+        let resp = builder.send().await.map_err(transport_error)?;
 
         let status = resp.status();
         if status.is_success() {
-            let bytes = resp
-                .bytes()
-                .await
-                .map_err(|e| BoxliteError::Internal(format!("failed to read response: {}", e)))?;
+            let bytes = resp.bytes().await.map_err(transport_error)?;
             Ok(bytes.to_vec())
         } else {
             self.handle_error::<Vec<u8>>(status, resp).await
@@ -268,10 +260,7 @@ impl ApiClient {
     pub async fn head_exists(&self, path: &str) -> BoxliteResult<bool> {
         let builder = self.http.head(self.url(path));
         let builder = self.authorize(builder).await?;
-        let resp = builder
-            .send()
-            .await
-            .map_err(|e| BoxliteError::Internal(format!("HTTP request failed: {}", e)))?;
+        let resp = builder.send().await.map_err(transport_error)?;
         match resp.status().as_u16() {
             204 | 200 => Ok(true),
             404 => Ok(false),
@@ -284,7 +273,7 @@ impl ApiClient {
 
     /// Open an authenticated WebSocket connection at the given REST path.
     ///
-    /// Translates the http(s) URL to ws(s), attaches the OAuth2 Bearer header
+    /// Translates the http(s) URL to ws(s), attaches the Bearer header
     /// when configured, and returns the upgraded stream.
     pub(crate) async fn connect_ws(
         &self,
@@ -314,8 +303,8 @@ impl ApiClient {
             .into_client_request()
             .map_err(|e| BoxliteError::Internal(format!("WS request build failed: {}", e)))?;
 
-        if let Some(token) = self.get_token().await? {
-            let value = HeaderValue::from_str(&format!("Bearer {}", token))
+        if let Some(bearer) = self.current_bearer().await? {
+            let value = HeaderValue::from_str(&format!("Bearer {}", bearer))
                 .map_err(|e| BoxliteError::Internal(format!("WS auth header invalid: {}", e)))?;
             request.headers_mut().insert("Authorization", value);
         }
@@ -336,7 +325,7 @@ impl ApiClient {
         self.authorize(builder).await
     }
 
-    pub async fn get_config(&self) -> BoxliteResult<SandboxConfigResponse> {
+    pub async fn get_config(&self) -> BoxliteResult<ServerConfig> {
         {
             let cache = self.config_cache.read().await;
             if let Some(config) = cache.as_ref() {
@@ -344,10 +333,18 @@ impl ApiClient {
             }
         }
 
-        let config: SandboxConfigResponse = self.get_root("/config").await?;
+        let config: ServerConfig = self.get_root("/config").await?;
         let mut cache = self.config_cache.write().await;
         *cache = Some(config.clone());
         Ok(config)
+    }
+
+    /// `GET /v1/me` — identity of the calling credential. Not cached
+    /// (identity is per-credential and cheap; unlike static capabilities).
+    /// A 404 surfaces as `BoxliteError::NotFound` (server without `/v1/me`);
+    /// 401/403 as `BoxliteError::Config("auth: …")` — callers branch on these.
+    pub async fn get_me(&self) -> BoxliteResult<Principal> {
+        self.get_root("/me").await
     }
 
     pub async fn require_snapshots_enabled(&self) -> BoxliteResult<()> {
@@ -407,11 +404,41 @@ impl ApiClient {
     }
 }
 
+/// Convert a `reqwest::Error` into a typed `BoxliteError::Network` with
+/// the underlying cause described in the message. Distinguishes
+/// connect/DNS/TLS failures from request-build failures from timeouts
+/// so the user can act on the diagnosis — a connect refused is "is the
+/// server running?" while a builder error is a client-side bug.
+///
+/// The wrapper preserves the original `reqwest::Error` Display chain
+/// (URL, status, cause) which usually includes the destination host —
+/// invaluable for diagnosing transparent-proxy regressions like the
+/// Clash `:7890` interception that produced bare 502s in
+/// production.
+fn transport_error(err: reqwest::Error) -> BoxliteError {
+    let url_hint = err.url().map(|u| u.as_str().to_string());
+    let kind = if err.is_connect() {
+        "connect failed"
+    } else if err.is_timeout() {
+        "timed out"
+    } else if err.is_request() {
+        "request build failed"
+    } else if err.is_decode() {
+        "response decode failed"
+    } else {
+        "transport error"
+    };
+    let detail = match url_hint {
+        Some(url) => format!("{kind} reaching {url}: {err}"),
+        None => format!("{kind}: {err}"),
+    };
+    BoxliteError::Network(detail)
+}
+
 /// Map a tungstenite connect error to a typed `BoxliteError`. The WS
 /// upgrade returns HTTP status codes for rejections (404 for a missing
-/// session, 409 for an already-attached one); callers want to see those
-/// as `NotFound` / `AlreadyExists` rather than generic `Internal` so
-/// they can map onward to `SessionReaped`.
+/// session, 409 for an already-attached one, 410 once an exec has been
+/// reaped). Symmetric with the REST mapper in [`super::error`].
 fn map_ws_error(err: tokio_tungstenite::tungstenite::Error) -> BoxliteError {
     use tokio_tungstenite::tungstenite::Error as TgErr;
     if let TgErr::Http(resp) = &err {
@@ -432,11 +459,21 @@ fn map_ws_error(err: tokio_tungstenite::tungstenite::Error) -> BoxliteError {
             } else {
                 body
             }),
+            410 => BoxliteError::SessionReaped(if body.is_empty() {
+                "exec session reaped; start a new exec".to_string()
+            } else {
+                body
+            }),
             401 | 403 => BoxliteError::Config(format!("WS auth rejected ({}): {}", status, body)),
+            502..=504 => BoxliteError::Network(format!(
+                "WS upstream returned HTTP {} (proxy or load balancer): {}",
+                status,
+                if body.is_empty() { "<empty>" } else { &body }
+            )),
             _ => BoxliteError::Internal(format!("WS upgrade failed (HTTP {}): {}", status, body)),
         };
     }
-    BoxliteError::Internal(format!("WS connect failed: {}", err))
+    BoxliteError::Network(format!("WS connect failed: {}", err))
 }
 
 fn ensure_capability(name: &str, enabled: Option<bool>) -> BoxliteResult<()> {
@@ -456,7 +493,80 @@ fn ensure_capability(name: &str, enabled: Option<bool>) -> BoxliteResult<()> {
 #[cfg(test)]
 mod tests {
     use super::ensure_capability;
+    use super::*;
+    use crate::rest::credential::{AccessToken, Credential};
+    use async_trait::async_trait;
     use boxlite_shared::errors::BoxliteError;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// Rotating credential with a finite expiry already in the past, so
+    /// `current_bearer` must re-request on every call. Proves the cache
+    /// is expiry-driven and works for any `Credential` impl, not just
+    /// `ApiKeyCredential`.
+    #[derive(Debug)]
+    struct RotatingMock {
+        calls: AtomicUsize,
+        /// When false, behaves like an API key (`expires_at: None`).
+        expiring: bool,
+    }
+
+    #[async_trait]
+    impl Credential for RotatingMock {
+        async fn get_token(&self) -> BoxliteResult<AccessToken> {
+            let n = self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(AccessToken {
+                token: format!("tok-{n}"),
+                // Past instant → always within leeway → always re-fetch.
+                expires_at: self
+                    .expiring
+                    .then(|| SystemTime::now() - Duration::from_secs(3600)),
+            })
+        }
+    }
+
+    fn client_with(cred: Arc<dyn Credential>) -> ApiClient {
+        let opts = BoxliteRestOptions::new("http://localhost:1").with_credential(cred);
+        ApiClient::new(&opts).expect("client")
+    }
+
+    #[tokio::test]
+    async fn expiring_credential_is_re_requested_each_call() {
+        let mock = Arc::new(RotatingMock {
+            calls: AtomicUsize::new(0),
+            expiring: true,
+        });
+        let client = client_with(mock.clone());
+        let a = client.current_bearer().await.unwrap();
+        let b = client.current_bearer().await.unwrap();
+        assert_eq!(a.as_deref(), Some("tok-0"));
+        assert_eq!(b.as_deref(), Some("tok-1"), "expired token must rotate");
+        assert_eq!(mock.calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn non_expiring_credential_is_fetched_once() {
+        let mock = Arc::new(RotatingMock {
+            calls: AtomicUsize::new(0),
+            expiring: false,
+        });
+        let client = client_with(mock.clone());
+        let a = client.current_bearer().await.unwrap();
+        let b = client.current_bearer().await.unwrap();
+        assert_eq!(a.as_deref(), Some("tok-0"));
+        assert_eq!(b.as_deref(), Some("tok-0"), "API-key token must cache");
+        assert_eq!(
+            mock.calls.load(Ordering::SeqCst),
+            1,
+            "expires_at=None must be fetched exactly once"
+        );
+    }
+
+    #[tokio::test]
+    async fn no_credential_yields_no_bearer() {
+        let opts = BoxliteRestOptions::new("http://localhost:1");
+        let client = ApiClient::new(&opts).expect("client");
+        assert_eq!(client.current_bearer().await.unwrap(), None);
+    }
 
     #[test]
     fn test_ensure_capability_enabled() {
@@ -473,5 +583,83 @@ mod tests {
     fn test_ensure_capability_missing() {
         let err = ensure_capability("snapshots", None).unwrap_err();
         assert!(matches!(err, BoxliteError::Unsupported(_)));
+    }
+
+    // ========================================================================
+    // URL shape — vendor-agnostic routing slot.
+    //
+    // Locks in the three shapes the OpenAPI contract supports for the
+    // `{prefix}` slot: single-segment, empty (no slot), and
+    // multi-segment-with-slashes. The single-segment case is what
+    // boxlite cloud uses (org UUID); the empty case is what
+    // `boxlite serve` and single-tenant deployments use; the multi-
+    // segment case unlocks future region+team / workspace shapes per
+    // the spec note in `openapi/box.openapi.yaml`.
+    // ========================================================================
+
+    fn unauthenticated_client(opts: BoxliteRestOptions) -> ApiClient {
+        ApiClient::new(&opts).expect("client")
+    }
+
+    #[test]
+    fn url_substitutes_path_prefix_when_set() {
+        let opts = BoxliteRestOptions::new("https://api.example.com").with_path_prefix("acme");
+        let client = unauthenticated_client(opts);
+        assert_eq!(
+            client.url("/boxes"),
+            "https://api.example.com/v1/acme/boxes",
+            "non-empty prefix must round-trip verbatim into the URL"
+        );
+    }
+
+    #[test]
+    fn url_skips_segment_when_path_prefix_unset() {
+        let opts = BoxliteRestOptions::new("https://api.example.com");
+        let client = unauthenticated_client(opts);
+        assert_eq!(
+            client.url("/boxes"),
+            "https://api.example.com/v1/boxes",
+            "unset prefix must drop the segment — empty-prefix is the canonical \
+             single-tenant deployment shape"
+        );
+    }
+
+    #[test]
+    fn url_skips_segment_when_path_prefix_empty() {
+        let opts = BoxliteRestOptions::new("https://api.example.com").with_path_prefix("");
+        let client = unauthenticated_client(opts);
+        assert_eq!(
+            client.url("/boxes"),
+            "https://api.example.com/v1/boxes",
+            "explicit empty-string prefix is wire-equivalent to unset"
+        );
+    }
+
+    #[test]
+    fn url_passes_multi_segment_path_prefix_verbatim() {
+        // Multi-segment prefix per spec — internal `/` characters are
+        // preserved (allowReserved: true on the path parameter). Unlocks
+        // region+team / catalog routing for vendors that need it.
+        let opts =
+            BoxliteRestOptions::new("https://api.example.com").with_path_prefix("us-east/team-42");
+        let client = unauthenticated_client(opts);
+        assert_eq!(
+            client.url("/boxes"),
+            "https://api.example.com/v1/us-east/team-42/boxes",
+            "multi-segment prefix must pass slashes through verbatim"
+        );
+    }
+
+    #[test]
+    fn url_root_omits_path_prefix_segment() {
+        // `/v1/me`, `/v1/config` are root identity/discovery endpoints
+        // and never include the prefix segment, per spec.
+        let opts = BoxliteRestOptions::new("https://api.example.com").with_path_prefix("acme");
+        let client = unauthenticated_client(opts);
+        assert_eq!(
+            client.url_root("/me"),
+            "https://api.example.com/v1/me",
+            "url_root must skip the prefix segment regardless of its value"
+        );
     }
 }

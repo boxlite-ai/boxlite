@@ -77,6 +77,7 @@ impl PipelineTask<InitCtx> for GuestConnectTask {
                 &console_log,
                 &stderr_file,
                 box_id.as_str(),
+                GUEST_READY_TIMEOUT,
             )
             .await
             .inspect_err(|e| log_task_error(&box_id, task_name, e))?;
@@ -96,12 +97,19 @@ impl PipelineTask<InitCtx> for GuestConnectTask {
     }
 }
 
+/// Production timeout for the guest-ready handshake.
+///
+/// Exposed as a constant so tests can call `wait_for_guest_ready` with a
+/// short timeout and exercise the real timeout branch (including its
+/// diagnostic-collection logic) without waiting 30s.
+const GUEST_READY_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Wait for guest to signal readiness, racing against shim process death.
 ///
 /// Uses `tokio::select!` to detect three conditions:
 /// 1. Guest connects to ready socket (success)
 /// 2. Shim process exits unexpectedly (fast failure with diagnostic)
-/// 3. 30s timeout expires (slow failure fallback)
+/// 3. `timeout` expires (slow failure fallback with on-host evidence)
 async fn wait_for_guest_ready(
     ready_transport: &Transport,
     shim_pid: Option<u32>,
@@ -109,6 +117,7 @@ async fn wait_for_guest_ready(
     console_log: &Path,
     stderr_file: &Path,
     box_id: &str,
+    timeout: Duration,
 ) -> BoxliteResult<()> {
     let ready_socket_path = match ready_transport {
         Transport::Unix { socket_path } => socket_path,
@@ -139,8 +148,6 @@ async fn wait_for_guest_ready(
     );
 
     // Race: guest ready signal vs shim death vs timeout
-    let timeout = Duration::from_secs(30);
-
     tokio::select! {
         result = tokio::time::timeout(timeout, listener.accept()) => {
             match result {
@@ -151,19 +158,62 @@ async fn wait_for_guest_ready(
                 Ok(Err(e)) => Err(BoxliteError::Engine(format!(
                     "Ready socket accept failed: {}", e
                 ))),
-                Err(_) => Err(BoxliteError::Engine(format!(
-                    "Box {box_id} failed to start: timeout after {}s\n\n\
-                     The VM did not respond within the expected time.\n\n\
-                     Common causes:\n\
-                     • Slow disk I/O during rootfs setup\n\
-                     • Network configuration issues\n\
-                     • Guest agent failed to start\n\n\
-                     Debug files:\n\
-                     • Console: {}\n\n\
-                     Tip: Run with RUST_LOG=debug for more details",
-                    timeout.as_secs(),
-                    console_log.display()
-                ))),
+                Err(_) => {
+                    // Collect cheap diagnostics so the user/operator can tell
+                    // *which* failure class hit (vs. the previous generic
+                    // "Common causes:" list). Order: do not change semantics,
+                    // just enrich the error body.
+                    let shim_alive = shim_pid
+                        .map(crate::util::is_process_alive)
+                        .unwrap_or(false);
+                    let console_bytes = std::fs::metadata(console_log)
+                        .map(|m| m.len())
+                        .unwrap_or(0);
+                    let ready_socket_present = ready_socket_path.exists();
+                    let console_tail = if console_bytes > 0 {
+                        // Read the last ~1024 bytes of console.log. If the
+                        // file is shorter, read the whole thing.
+                        read_tail(console_log, 1024).unwrap_or_default()
+                    } else {
+                        String::new()
+                    };
+                    // Likely-cause heuristic. The pattern we hit in production
+                    // (shim alive, console empty, ready socket present) maps
+                    // to "guest agent failed to connect over vsock".
+                    let likely_cause = match (shim_alive, console_bytes > 0) {
+                        (true, false) => "guest agent never wrote to console (init or vsock plumbing broken)",
+                        (true, true) => "guest booted but agent did not connect to vsock READY port",
+                        (false, _) => "shim died silently (see stderr / exit file)",
+                    };
+                    Err(BoxliteError::Engine(format!(
+                        "Box {box_id} failed to start: timeout after {}s\n\n\
+                         Evidence at T+{}s:\n\
+                         • shim_alive          = {}\n\
+                         • console_bytes       = {}\n\
+                         • ready_socket_exists = {}\n\
+                         • likely_cause        = {}\n\n\
+                         Common causes:\n\
+                         • Slow disk I/O during rootfs setup\n\
+                         • Network configuration issues\n\
+                         • Guest agent failed to start\n\n\
+                         Debug files:\n\
+                         • Console: {}\n\
+                         {}\n\
+                         Tip: Run with RUST_LOG=debug for more details",
+                        timeout.as_secs(),
+                        timeout.as_secs(),
+                        shim_alive,
+                        console_bytes,
+                        ready_socket_present,
+                        likely_cause,
+                        console_log.display(),
+                        if console_tail.is_empty() {
+                            String::new()
+                        } else {
+                            format!("\nConsole tail (last {} bytes):\n{}\n", console_tail.len(), console_tail)
+                        }
+                    )))
+                }
             }
         }
         exit_code = wait_for_process_exit(shim_pid) => {
@@ -186,6 +236,26 @@ async fn wait_for_guest_ready(
 
             Err(BoxliteError::Engine(report.user_message))
         }
+    }
+}
+
+/// Read at most `max_bytes` from the end of `path`, lossily as UTF-8.
+/// Returns the trailing bytes, with a leading `…` marker if the file was
+/// longer than `max_bytes`. Used only for human diagnostic strings — not for
+/// machine parsing — so silently returns `None` on any IO error.
+fn read_tail(path: &Path, max_bytes: u64) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = std::fs::File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    let start = len.saturating_sub(max_bytes);
+    file.seek(SeekFrom::Start(start)).ok()?;
+    let mut buf = Vec::with_capacity(max_bytes as usize);
+    file.take(max_bytes).read_to_end(&mut buf).ok()?;
+    let tail = String::from_utf8_lossy(&buf).into_owned();
+    if start > 0 {
+        Some(format!("…{}", tail))
+    } else {
+        Some(tail)
     }
 }
 
@@ -250,6 +320,7 @@ mod tests {
             &console_log,
             &stderr_file,
             "test-box",
+            Duration::from_secs(5),
         )
         .await;
         assert!(result.is_ok(), "Expected success, got: {:?}", result);
@@ -271,6 +342,7 @@ mod tests {
             &console_log,
             &stderr_file,
             "test-box",
+            Duration::from_secs(1),
         )
         .await;
         assert!(result.is_err());
@@ -311,6 +383,7 @@ mod tests {
             &console_log,
             &stderr_file,
             "test-box",
+            Duration::from_secs(5),
         )
         .await;
         assert!(
@@ -343,6 +416,7 @@ mod tests {
             &console_log,
             &stderr_file,
             "test-box",
+            Duration::from_secs(30),
         )
         .await;
         let elapsed = start.elapsed();
@@ -443,5 +517,82 @@ mod tests {
             result.is_ok(),
             "Zombie PID should resolve quickly, got timeout"
         );
+    }
+
+    /// Timeout branch fires the enriched diagnostic. The error string is
+    /// produced by `wait_for_guest_ready` itself — the test asserts on what
+    /// production code returns, not on its own format string.
+    #[tokio::test]
+    async fn test_guest_ready_timeout_branch_returns_enriched_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket_path = dir.path().join("ready.sock");
+        let exit_file = dir.path().join("exit");
+        let console_log = dir.path().join("console.log");
+        let stderr_file = dir.path().join("shim.stderr");
+        // Pre-populate console.log so `console_bytes` is non-zero and
+        // production code picks the "guest booted but agent did not connect"
+        // likely-cause branch.
+        std::fs::write(&console_log, b"early kernel boot...\n").unwrap();
+        let transport = Transport::unix(socket_path);
+
+        let result = wait_for_guest_ready(
+            &transport,
+            None, // no shim death branch
+            &exit_file,
+            &console_log,
+            &stderr_file,
+            "test-box",
+            Duration::from_millis(100),
+        )
+        .await;
+
+        let err = result.expect_err("timeout branch must fire").to_string();
+        // Substrings come from production code, not the test body.
+        assert!(err.contains("test-box failed to start"), "got: {err}");
+        assert!(err.contains("Evidence at T+"), "got: {err}");
+        assert!(err.contains("shim_alive          = false"), "got: {err}");
+        assert!(err.contains("console_bytes       = 21"), "got: {err}");
+        assert!(err.contains("ready_socket_exists = true"), "got: {err}");
+        assert!(
+            err.contains("Console tail"),
+            "tail block missing when console has bytes: {err}"
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // read_tail tests (used by the enriched timeout diagnostic)
+    // ─────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_read_tail_missing_file_returns_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let nonexistent = dir.path().join("nope.log");
+        assert!(read_tail(&nonexistent, 1024).is_none());
+    }
+
+    #[test]
+    fn test_read_tail_short_file_returns_whole_content_no_ellipsis() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("short.log");
+        std::fs::write(&path, b"abc").unwrap();
+        let tail = read_tail(&path, 1024).expect("read");
+        assert_eq!(tail, "abc");
+    }
+
+    #[test]
+    fn test_read_tail_long_file_returns_suffix_with_ellipsis() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("long.log");
+        // Content exceeds max_bytes; tail should start with '…' marker.
+        let content = "x".repeat(1500);
+        std::fs::write(&path, &content).unwrap();
+        let tail = read_tail(&path, 100).expect("read");
+        assert!(
+            tail.starts_with('…'),
+            "expected ellipsis marker, got: {:?}",
+            &tail[..10]
+        );
+        // 100 bytes plus the leading '…' char (3 bytes UTF-8).
+        assert!(tail.len() <= 1024);
     }
 }

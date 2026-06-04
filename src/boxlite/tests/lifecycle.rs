@@ -294,10 +294,10 @@ async fn remove_active_without_force_fails() {
     let result = runtime.remove(box_id.as_str(), false).await;
     assert!(result.is_err());
     let err = result.unwrap_err();
+    let msg = err.to_string();
     assert!(
-        err.to_string().contains("cannot remove active box"),
-        "Expected active box error, got: {}",
-        err
+        msg.contains("cannot remove") && msg.contains("force=true"),
+        "Expected remove-without-force error, got: {msg}"
     );
 
     // Box should still exist

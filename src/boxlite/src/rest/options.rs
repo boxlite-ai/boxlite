@@ -1,52 +1,76 @@
 //! Configuration for connecting to a remote BoxLite REST API server.
 
+use std::fmt;
+use std::sync::Arc;
+
 use boxlite_shared::errors::{BoxliteError, BoxliteResult};
 
+use super::credential::{ApiKeyCredential, Credential};
 use crate::runtime::constants::envs;
 
 /// Configuration for connecting to a remote BoxLite REST API server.
 ///
-/// Separate from `BoxliteOptions` — local and remote configs are
-/// fundamentally different data and should never share a struct.
+/// # URL composition
+///
+/// The `v1` segment is hardcoded. Box-scoped requests resolve to
+/// `{url}/v1/{prefix}/{path}` when `path_prefix` is set and
+/// non-empty (e.g. `https://api.example.com/v1/acme/boxes`), and to
+/// `{url}/v1/{path}` when `path_prefix` is `None` or empty
+/// (`https://api.example.com/v1/boxes`). The empty-prefix shape is the
+/// canonical single-tenant deployment shape — used by `boxlite serve`
+/// and any other single-scope REST deployment.
+///
+/// The `path_prefix` field is **opaque** — the client substitutes
+/// whatever the server told it to use via `Principal.path_prefix`
+/// (see `GET /v1/me`) verbatim into the URL. Internal `/`
+/// characters are preserved, enabling multi-segment routing values
+/// such as `us-east/team-42`.
+///
+/// Identity endpoints (`/v1/me`, `/v1/config`) live under
+/// `{url}/v1/{path}` — no prefix segment, by spec.
 ///
 /// # Examples
 ///
 /// ```rust,no_run
 /// use boxlite::BoxliteRestOptions;
 ///
-/// // Minimal — just a URL
+/// // Unauthenticated, empty path_prefix (boxlite serve / single-tenant)
 /// let opts = BoxliteRestOptions::new("https://api.example.com");
 ///
-/// // With OAuth2 credentials
+/// // With an API key (long-lived bearer)
 /// let opts = BoxliteRestOptions::new("https://api.example.com")
-///     .with_credentials("client-id".into(), "secret".into());
+///     .with_api_key("blk_live_opaque");
+///
+/// // With an explicit routing prefix (multi-tenant control plane —
+/// // the value comes from Principal.path_prefix at login time)
+/// let opts = BoxliteRestOptions::new("https://api.example.com")
+///     .with_api_key("blk_live_opaque")
+///     .with_path_prefix("acme");
 ///
 /// // From environment variables
 /// let opts = BoxliteRestOptions::from_env().unwrap();
 /// ```
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct BoxliteRestOptions {
     /// REST API base URL (e.g., "https://api.example.com").
     pub url: String,
 
-    /// OAuth2 client ID (optional).
-    pub client_id: Option<String>,
+    /// Bearer credential. `None` = unauthenticated.
+    pub credential: Option<Arc<dyn Credential>>,
 
-    /// OAuth2 client secret (optional).
-    pub client_secret: Option<String>,
-
-    /// API path prefix (default: "v1").
-    pub prefix: Option<String>,
+    /// Routing-slot value substituted into the `{prefix}` URL segment.
+    /// `None` or empty → URL skips the segment entirely (single-tenant /
+    /// empty-prefix deployment shape).
+    pub path_prefix: Option<String>,
 }
 
 impl BoxliteRestOptions {
-    /// Create config with just a URL. Minimal — no auth.
+    /// Create config with just a URL. Minimal — no auth, no path_prefix.
     pub fn new(url: impl Into<String>) -> Self {
         Self {
             url: url.into(),
-            client_id: None,
-            client_secret: None,
-            prefix: None,
+            credential: None,
+            path_prefix: None,
         }
     }
 
@@ -54,36 +78,55 @@ impl BoxliteRestOptions {
     ///
     /// Reads:
     /// - `BOXLITE_REST_URL` (required)
-    /// - `BOXLITE_REST_CLIENT_ID` (optional)
-    /// - `BOXLITE_REST_CLIENT_SECRET` (optional)
-    /// - `BOXLITE_REST_PREFIX` (optional)
+    /// - `BOXLITE_API_KEY` (optional)
+    /// - `BOXLITE_REST_PATH_PREFIX` (optional)
     pub fn from_env() -> BoxliteResult<Self> {
         let url = std::env::var(envs::BOXLITE_REST_URL)
             .map_err(|_| BoxliteError::Config("BOXLITE_REST_URL not set".into()))?;
+
+        let credential = std::env::var(envs::BOXLITE_API_KEY)
+            .ok()
+            .map(|key| Arc::new(ApiKeyCredential::new(key)) as Arc<dyn Credential>);
+
+        let path_prefix = std::env::var(envs::BOXLITE_REST_PATH_PREFIX).ok();
+
         Ok(Self {
             url,
-            client_id: std::env::var(envs::BOXLITE_REST_CLIENT_ID).ok(),
-            client_secret: std::env::var(envs::BOXLITE_REST_CLIENT_SECRET).ok(),
-            prefix: std::env::var(envs::BOXLITE_REST_PREFIX).ok(),
+            credential,
+            path_prefix,
         })
     }
 
-    /// Builder-style: add OAuth2 credentials.
-    pub fn with_credentials(mut self, client_id: String, client_secret: String) -> Self {
-        self.client_id = Some(client_id);
-        self.client_secret = Some(client_secret);
+    /// Builder-style: set an opaque API key. Convenience wrapper that
+    /// constructs an [`ApiKeyCredential`] internally.
+    pub fn with_api_key(mut self, key: impl Into<String>) -> Self {
+        self.credential = Some(Arc::new(ApiKeyCredential::new(key)));
         self
     }
 
-    /// Builder-style: set API path prefix (default: "v1").
-    pub fn with_prefix(mut self, prefix: String) -> Self {
-        self.prefix = Some(prefix);
+    /// Builder-style: set any [`Credential`] implementation.
+    pub fn with_credential(mut self, credential: Arc<dyn Credential>) -> Self {
+        self.credential = Some(credential);
         self
     }
 
-    /// Get the effective prefix (defaults to "v1").
-    pub(crate) fn effective_prefix(&self) -> &str {
-        self.prefix.as_deref().unwrap_or("v1")
+    /// Builder-style: set the routing-slot path_prefix.
+    pub fn with_path_prefix(mut self, path_prefix: impl Into<String>) -> Self {
+        self.path_prefix = Some(path_prefix.into());
+        self
+    }
+}
+
+impl fmt::Debug for BoxliteRestOptions {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // The inner `dyn Credential` Debug impl is responsible for
+        // redacting its own secret material (verified in credential.rs
+        // tests). `Option<Arc<dyn Credential>>` Debug delegates to it.
+        f.debug_struct("BoxliteRestOptions")
+            .field("url", &self.url)
+            .field("credential", &self.credential)
+            .field("path_prefix", &self.path_prefix)
+            .finish()
     }
 }
 
@@ -91,44 +134,44 @@ impl BoxliteRestOptions {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_new_minimal() {
+    #[tokio::test]
+    async fn test_new_minimal() {
         let opts = BoxliteRestOptions::new("https://api.example.com");
         assert_eq!(opts.url, "https://api.example.com");
-        assert!(opts.client_id.is_none());
-        assert!(opts.client_secret.is_none());
-        assert!(opts.prefix.is_none());
+        assert!(opts.credential.is_none());
+        assert!(opts.path_prefix.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_with_api_key() {
+        let opts = BoxliteRestOptions::new("https://api.example.com").with_api_key("blk_live_x");
+        let cred = opts.credential.expect("credential set");
+        let tok = cred.get_token().await.expect("get_token");
+        assert_eq!(tok.token, "blk_live_x");
+        assert!(tok.expires_at.is_none());
     }
 
     #[test]
-    fn test_with_credentials() {
-        let opts = BoxliteRestOptions::new("https://api.example.com")
-            .with_credentials("id".into(), "secret".into());
-        assert_eq!(opts.client_id.as_deref(), Some("id"));
-        assert_eq!(opts.client_secret.as_deref(), Some("secret"));
+    fn test_with_path_prefix() {
+        let opts = BoxliteRestOptions::new("https://api.example.com").with_path_prefix("acme");
+        assert_eq!(opts.path_prefix.as_deref(), Some("acme"));
     }
 
     #[test]
-    fn test_with_prefix() {
-        let opts = BoxliteRestOptions::new("https://api.example.com").with_prefix("v2".into());
-        assert_eq!(opts.prefix.as_deref(), Some("v2"));
-        assert_eq!(opts.effective_prefix(), "v2");
-    }
-
-    #[test]
-    fn test_effective_prefix_default() {
+    fn test_path_prefix_unset_is_none() {
         let opts = BoxliteRestOptions::new("https://api.example.com");
-        assert_eq!(opts.effective_prefix(), "v1");
+        assert!(opts.path_prefix.is_none());
     }
 
     #[test]
-    fn test_builder_chaining() {
-        let opts = BoxliteRestOptions::new("https://api.example.com")
-            .with_credentials("cid".into(), "csec".into())
-            .with_prefix("v3".into());
-        assert_eq!(opts.url, "https://api.example.com");
-        assert_eq!(opts.client_id.as_deref(), Some("cid"));
-        assert_eq!(opts.client_secret.as_deref(), Some("csec"));
-        assert_eq!(opts.effective_prefix(), "v3");
+    fn test_debug_redacts_api_key() {
+        let opts =
+            BoxliteRestOptions::new("https://api.example.com").with_api_key("opaque-key-1234");
+        let dbg = format!("{:?}", opts);
+        assert!(
+            !dbg.contains("opaque-key-1234"),
+            "Debug output leaked api_key"
+        );
+        assert!(dbg.contains("REDACTED"));
     }
 }

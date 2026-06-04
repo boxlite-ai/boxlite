@@ -333,12 +333,7 @@ export const CreateSandboxSheet = ({
       }}
     >
       <SheetTrigger asChild>
-        <Button
-          variant="default"
-          size="sm"
-          title="Create Sandbox"
-          className={cn('w-full sm:w-auto', triggerClassName)}
-        >
+        <Button variant="default" size="sm" title="Create Sandbox" className={cn('w-full sm:w-auto', triggerClassName)}>
           <Plus className="size-4" />
           <span>{isCompactScreen ? 'Create' : 'Create Sandbox'}</span>
         </Button>

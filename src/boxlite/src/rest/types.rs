@@ -20,46 +20,44 @@ pub(crate) struct ErrorResponse {
     pub error: ErrorModel,
 }
 
+/// Wire shape received from the server.
+///
+/// - `message` — human-readable error text.
+/// - `error_type` — stable PascalCase identifier (K8s `Status.reason`
+///   style). Mirrors `BoxliteError::http().1` server-side.
+/// - `code` — stable snake_case machine identifier (Stripe `code` style).
+///   The mapper in [`super::error::map_http_error`] dispatches on this
+///   field; `error_type` is kept for diagnostics / logging.
+/// - `request_id` — propagated from server's `X-Request-Id` middleware
+///   when present; absent on older servers (forward-compat).
 #[derive(Debug, Deserialize)]
 pub(crate) struct ErrorModel {
     pub message: String,
+    /// Preserved for diagnostics / log enrichment; dispatch happens on
+    /// `code` (the snake string).
     #[serde(rename = "type")]
+    #[allow(dead_code)]
     pub error_type: String,
+    pub code: String,
+    #[serde(default)]
     #[allow(dead_code)]
-    pub code: u16,
-}
-
-// ============================================================================
-// Authentication
-// ============================================================================
-
-#[derive(Debug, Serialize)]
-pub(crate) struct TokenRequest<'a> {
-    pub grant_type: &'a str,
-    pub client_id: &'a str,
-    pub client_secret: &'a str,
-}
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct TokenResponse {
-    pub access_token: String,
-    #[allow(dead_code)]
-    pub token_type: String,
-    pub expires_in: u64,
+    pub request_id: Option<String>,
 }
 
 // ============================================================================
 // Configuration
 // ============================================================================
 
+/// Server configuration & capabilities — the `GET /v1/config` response.
+/// Matches the `ServerConfig` schema in `openapi/box.openapi.yaml`.
 #[derive(Debug, Deserialize, Clone)]
-pub(crate) struct SandboxConfigResponse {
-    pub capabilities: Option<SandboxCapabilities>,
+pub(crate) struct ServerConfig {
+    pub capabilities: Option<ServerCapabilities>,
 }
 
 #[allow(dead_code)] // Constructed via serde::Deserialize
 #[derive(Debug, Deserialize, Clone, Default)]
-pub(crate) struct SandboxCapabilities {
+pub(crate) struct ServerCapabilities {
     pub snapshots_enabled: Option<bool>,
     pub clone_enabled: Option<bool>,
     pub export_enabled: Option<bool>,
@@ -600,7 +598,7 @@ mod tests {
 
     #[test]
     fn test_box_response_to_box_info_uuid() {
-        // Servers (e.g. dev.boxlite.ai) may return UUIDs as box_id.
+        // Some servers may return UUIDs as box_id (not just 12-char Base62 / 26-char ULID).
         // Verify the SDK accepts them and round-trips the id verbatim.
         let resp = BoxResponse {
             box_id: "d406c59d-eb09-4bc3-9b3a-62455c7e8f32".to_string(),
@@ -666,13 +664,15 @@ mod tests {
             "error": {
                 "message": "box not found",
                 "type": "NotFoundError",
-                "code": 404
+                "code": "not_found",
+                "request_id": "req_01HZK"
             }
         }"#;
         let resp: ErrorResponse = serde_json::from_str(json).unwrap();
         assert_eq!(resp.error.message, "box not found");
         assert_eq!(resp.error.error_type, "NotFoundError");
-        assert_eq!(resp.error.code, 404);
+        assert_eq!(resp.error.code, "not_found");
+        assert_eq!(resp.error.request_id.as_deref(), Some("req_01HZK"));
     }
 
     #[test]
@@ -712,7 +712,7 @@ mod tests {
     }
 
     #[test]
-    fn test_sandbox_config_capabilities_deserialization() {
+    fn test_server_config_capabilities_deserialization() {
         let json = r#"{
             "capabilities": {
                 "snapshots_enabled": true,
@@ -720,7 +720,7 @@ mod tests {
                 "export_enabled": true
             }
         }"#;
-        let resp: SandboxConfigResponse = serde_json::from_str(json).unwrap();
+        let resp: ServerConfig = serde_json::from_str(json).unwrap();
         let caps = resp.capabilities.unwrap();
         assert_eq!(caps.snapshots_enabled, Some(true));
         assert_eq!(caps.clone_enabled, Some(false));

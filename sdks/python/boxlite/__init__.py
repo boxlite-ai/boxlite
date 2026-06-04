@@ -9,6 +9,8 @@ import warnings
 # Import core Rust API
 try:
     from .boxlite import (
+        AccessToken,
+        ApiKeyCredential,
         Box,
         BoxInfo,
         Boxlite,
@@ -45,6 +47,8 @@ try:
         "ImageRegistry",
         "BoxOptions",
         "BoxliteRestOptions",
+        "ApiKeyCredential",
+        "AccessToken",
         "Boxlite",
         "NetworkSpec",
         "Box",
@@ -70,6 +74,10 @@ try:
         "CloneOptions",
         "ExportOptions",
     ]
+    # Credential abstraction (ABC + virtual-registered native classes)
+    from .credential import Credential  # noqa: F401
+
+    __all__.append("Credential")
 except ImportError as e:
     warnings.warn(f"BoxLite native extension not available: {e}", ImportWarning)
     __all__ = []

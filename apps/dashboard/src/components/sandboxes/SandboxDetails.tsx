@@ -34,7 +34,6 @@ import { useSandboxWsSync } from '@/hooks/useSandboxWsSync'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { handleApiError } from '@/lib/error-handling'
 import { isStoppable, isTransitioning } from '@/lib/utils/sandbox'
-import { SandboxSessionProvider } from '@/providers/SandboxSessionProvider'
 import { OrganizationRolePermissionsEnum, OrganizationUserRoleEnum } from '@boxlite-ai/api-client'
 import { isAxiosError } from 'axios'
 import { Container, GripVertical, RefreshCw } from 'lucide-react'
@@ -180,130 +179,128 @@ export default function SandboxDetails() {
   }
 
   return (
-    <SandboxSessionProvider>
-      <PageLayout className="max-h-screen overflow-hidden">
-        <PageHeader>
-          <PageTitle>Sandboxes</PageTitle>
-        </PageHeader>
+    <PageLayout className="h-[var(--app-content-height,calc(100svh_-_3.5rem))] overflow-hidden">
+      <PageHeader className="hidden sm:flex">
+        <PageTitle>Sandboxes</PageTitle>
+      </PageHeader>
 
-        <SandboxHeader
-          sandbox={sandbox}
-          isLoading={isLoading}
-          writePermitted={writePermitted}
-          deletePermitted={deletePermitted}
-          actionsDisabled={actionsDisabled}
-          isFetching={isFetching}
-          onStart={handleStart}
-          onStop={handleStop}
-          onArchive={handleArchive}
-          onRecover={handleRecover}
-          onDelete={() => setDeleteDialogOpen(true)}
-          onRefresh={() => refetch()}
-          onBack={() => navigate(RoutePath.SANDBOXES)}
-          onCreateSshAccess={() => setCreateSshDialogOpen(true)}
-          onRevokeSshAccess={() => setRevokeSshDialogOpen(true)}
-          onScreenRecordings={handleScreenRecordings}
-          mutations={{
-            start: startMutation.isPending,
-            stop: stopMutation.isPending,
-            archive: archiveMutation.isPending,
-            recover: recoverMutation.isPending,
-          }}
-        />
+      <SandboxHeader
+        sandbox={sandbox}
+        isLoading={isLoading}
+        writePermitted={writePermitted}
+        deletePermitted={deletePermitted}
+        actionsDisabled={actionsDisabled}
+        isFetching={isFetching}
+        onStart={handleStart}
+        onStop={handleStop}
+        onArchive={handleArchive}
+        onRecover={handleRecover}
+        onDelete={() => setDeleteDialogOpen(true)}
+        onRefresh={() => refetch()}
+        onBack={() => navigate(RoutePath.SANDBOXES)}
+        onCreateSshAccess={() => setCreateSshDialogOpen(true)}
+        onRevokeSshAccess={() => setRevokeSshDialogOpen(true)}
+        onScreenRecordings={handleScreenRecordings}
+        mutations={{
+          start: startMutation.isPending,
+          stop: stopMutation.isPending,
+          archive: archiveMutation.isPending,
+          recover: recoverMutation.isPending,
+        }}
+      />
 
-        {isNotFound ? (
-          <div className="flex flex-1 min-h-0 items-center justify-center">
-            <Empty>
-              <EmptyHeader>
-                <EmptyMedia variant="icon">
-                  <Container className="size-4" />
-                </EmptyMedia>
-                <EmptyTitle>Sandbox not found</EmptyTitle>
-                <EmptyDescription>Are you sure you're in the right organization?</EmptyDescription>
-              </EmptyHeader>
-              <Button variant="outline" size="sm" onClick={() => navigate(RoutePath.SANDBOXES)}>
-                Back to Sandboxes
-              </Button>
-            </Empty>
-          </div>
-        ) : (
-          <Group orientation="horizontal" className="flex flex-1 min-h-0 overflow-hidden">
-            {isDesktop && (
-              <>
-                <Panel
-                  id="overview"
-                  minSize={250}
-                  maxSize={550}
-                  defaultSize={320}
-                  className="flex flex-col overflow-hidden"
-                >
-                  <div className="flex items-center px-5 border-b border-border shrink-0 h-[41px]">
-                    <span className="text-sm font-medium">Overview</span>
-                  </div>
-                  <ScrollArea fade="mask" className="flex-1 min-h-0">
-                    {isLoading ? (
-                      <InfoPanelSkeleton />
-                    ) : isError || !sandbox ? (
-                      <div className="flex flex-col items-center justify-center gap-3 p-8 text-center text-muted-foreground">
-                        <p className="text-sm">Failed to load sandbox details.</p>
-                        <Button variant="outline" size="sm" onClick={() => refetch()}>
-                          <RefreshCw className="size-4" />
-                          Retry
-                        </Button>
-                      </div>
-                    ) : (
-                      <SandboxInfoPanel sandbox={sandbox} getRegionName={getRegionName} />
-                    )}
-                  </ScrollArea>
-                </Panel>
-                <ResizableSeparator />
-              </>
-            )}
-            <Panel id="content" className="flex-1 min-w-0 flex flex-col overflow-hidden">
-              <SandboxContentTabs
-                sandbox={sandbox}
-                isLoading={isLoading}
-                experimentsEnabled={experimentsEnabled}
-                tab={tab}
-                onTabChange={setTab}
-              />
-            </Panel>
-          </Group>
-        )}
-
-        <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Delete Sandbox</AlertDialogTitle>
-              <AlertDialogDescription>
-                Are you sure you want to delete this sandbox? This action cannot be undone.
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel disabled={deleteMutation.isPending}>Cancel</AlertDialogCancel>
-              <AlertDialogAction variant="destructive" onClick={handleDelete} disabled={deleteMutation.isPending}>
-                {deleteMutation.isPending ? 'Deleting...' : 'Delete'}
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
-
-        {sandboxId && (
-          <>
-            <CreateSshAccessDialog
-              sandboxId={sandboxId}
-              open={createSshDialogOpen}
-              onOpenChange={setCreateSshDialogOpen}
+      {isNotFound ? (
+        <div className="flex flex-1 min-h-0 items-center justify-center">
+          <Empty>
+            <EmptyHeader>
+              <EmptyMedia variant="icon">
+                <Container className="size-4" />
+              </EmptyMedia>
+              <EmptyTitle>Sandbox not found</EmptyTitle>
+              <EmptyDescription>Are you sure you're in the right organization?</EmptyDescription>
+            </EmptyHeader>
+            <Button variant="outline" size="sm" onClick={() => navigate(RoutePath.SANDBOXES)}>
+              Back to Sandboxes
+            </Button>
+          </Empty>
+        </div>
+      ) : (
+        <Group orientation="horizontal" className="flex flex-1 min-h-0 overflow-hidden">
+          {isDesktop && (
+            <>
+              <Panel
+                id="overview"
+                minSize={250}
+                maxSize={550}
+                defaultSize={320}
+                className="flex flex-col overflow-hidden"
+              >
+                <div className="flex items-center px-5 border-b border-border shrink-0 h-[41px]">
+                  <span className="text-sm font-medium">Overview</span>
+                </div>
+                <ScrollArea fade="mask" className="flex-1 min-h-0">
+                  {isLoading ? (
+                    <InfoPanelSkeleton />
+                  ) : isError || !sandbox ? (
+                    <div className="flex flex-col items-center justify-center gap-3 p-8 text-center text-muted-foreground">
+                      <p className="text-sm">Failed to load sandbox details.</p>
+                      <Button variant="outline" size="sm" onClick={() => refetch()}>
+                        <RefreshCw className="size-4" />
+                        Retry
+                      </Button>
+                    </div>
+                  ) : (
+                    <SandboxInfoPanel sandbox={sandbox} getRegionName={getRegionName} />
+                  )}
+                </ScrollArea>
+              </Panel>
+              <ResizableSeparator />
+            </>
+          )}
+          <Panel id="content" className="flex-1 min-w-0 flex flex-col overflow-hidden">
+            <SandboxContentTabs
+              sandbox={sandbox}
+              isLoading={isLoading}
+              experimentsEnabled={experimentsEnabled}
+              tab={tab}
+              onTabChange={setTab}
             />
-            <RevokeSshAccessDialog
-              sandboxId={sandboxId}
-              open={revokeSshDialogOpen}
-              onOpenChange={setRevokeSshDialogOpen}
-            />
-          </>
-        )}
-      </PageLayout>
-    </SandboxSessionProvider>
+          </Panel>
+        </Group>
+      )}
+
+      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Sandbox</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete this sandbox? This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteMutation.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction variant="destructive" onClick={handleDelete} disabled={deleteMutation.isPending}>
+              {deleteMutation.isPending ? 'Deleting...' : 'Delete'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {sandboxId && (
+        <>
+          <CreateSshAccessDialog
+            sandboxId={sandboxId}
+            open={createSshDialogOpen}
+            onOpenChange={setCreateSshDialogOpen}
+          />
+          <RevokeSshAccessDialog
+            sandboxId={sandboxId}
+            open={revokeSshDialogOpen}
+            onOpenChange={setRevokeSshDialogOpen}
+          />
+        </>
+      )}
+    </PageLayout>
   )
 }
 

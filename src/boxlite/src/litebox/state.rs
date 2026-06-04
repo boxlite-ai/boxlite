@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 /// SIGSTOP   → Paused (VM frozen, used during export/snapshot)
 /// SIGCONT   → Running (VM resumed)
 /// stop()    → Stopped (VM terminated, can restart)
+/// init err  → Failed (record preserved with error_reason)
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -45,6 +46,11 @@ pub enum BoxStatus {
     /// Used during export/snapshot for point-in-time consistency.
     /// Equivalent to Docker's cgroup freezer pause.
     Paused,
+
+    /// Init pipeline failed (e.g., guest_connect timeout, vmm_spawn error).
+    /// Record + rootfs preserved so the user/control-plane can retry or destroy.
+    /// `BoxState::error_reason` carries the cause; mirrors Daytona `SandboxState::ERROR`.
+    Failed,
 }
 
 impl BoxStatus {
@@ -75,9 +81,12 @@ impl BoxStatus {
     }
 
     /// Check if start() can be called from this state.
-    /// Configured boxes need first start, Stopped boxes can restart.
+    /// Configured boxes need first start, Stopped and Failed boxes can be retried.
     pub fn can_start(&self) -> bool {
-        matches!(self, BoxStatus::Configured | BoxStatus::Stopped)
+        matches!(
+            self,
+            BoxStatus::Configured | BoxStatus::Stopped | BoxStatus::Failed
+        )
     }
 
     /// Check if stop() can be called from this state.
@@ -87,11 +96,12 @@ impl BoxStatus {
     }
 
     /// Check if remove() can be called from this state.
-    /// Configured, Stopped, and Unknown boxes can be removed.
+    /// Configured, Stopped, Failed, and Unknown boxes can be removed.
+    /// Failed is included so DESTROY_SANDBOX can clean up boxes whose init failed.
     pub fn can_remove(&self) -> bool {
         matches!(
             self,
-            BoxStatus::Configured | BoxStatus::Stopped | BoxStatus::Unknown
+            BoxStatus::Configured | BoxStatus::Stopped | BoxStatus::Failed | BoxStatus::Unknown
         )
     }
 
@@ -111,25 +121,33 @@ impl BoxStatus {
             (self, target),
             // Unknown can transition to any state (recovery)
             (Unknown, _) |
-            // Configured → Running (start success) or Stopped (start failed)
+            // Configured → Running (start success), Stopped (clean stop), or Failed (init err)
             (Configured, Running) |
             (Configured, Stopped) |
+            (Configured, Failed) |
             (Configured, Unknown) |
-            // Running → Stopping (graceful), Stopped (crash), or Paused (SIGSTOP)
+            // Running → Stopping (graceful), Stopped (crash), Paused (SIGSTOP), or Failed (runtime crash)
             (Running, Stopping) |
             (Running, Stopped) |
             (Running, Paused) |
+            (Running, Failed) |
             (Running, Unknown) |
-            // Stopping → Stopped (complete) or Unknown (error)
+            // Stopping → Stopped (complete), Failed (shutdown error), or Unknown (error)
             (Stopping, Stopped) |
+            (Stopping, Failed) |
             (Stopping, Unknown) |
-            // Stopped → Running (restart)
+            // Stopped → Running (restart) or Failed (restart attempt failed)
             (Stopped, Running) |
+            (Stopped, Failed) |
             (Stopped, Unknown) |
             // Paused → Running (SIGCONT resume) or Stopped (killed while paused)
             (Paused, Running) |
             (Paused, Stopped) |
-            (Paused, Unknown)
+            (Paused, Unknown) |
+            // Failed → Running (control-plane retry), Stopped (manual reset), or Unknown (recovery)
+            (Failed, Running) |
+            (Failed, Stopped) |
+            (Failed, Unknown)
         )
     }
 
@@ -142,6 +160,7 @@ impl BoxStatus {
             BoxStatus::Stopping => "stopping",
             BoxStatus::Stopped => "stopped",
             BoxStatus::Paused => "paused",
+            BoxStatus::Failed => "failed",
         }
     }
 }
@@ -159,6 +178,7 @@ impl std::str::FromStr for BoxStatus {
             "stopping" => Ok(BoxStatus::Stopping),
             "stopped" => Ok(BoxStatus::Stopped),
             "paused" => Ok(BoxStatus::Paused),
+            "failed" => Ok(BoxStatus::Failed),
             // Legacy: old transient statuses map to Stopped (DB backward compat)
             "snapshotting" | "restoring" | "exporting" | "cloning" => Ok(BoxStatus::Stopped),
             _ => Err(()),
@@ -192,6 +212,11 @@ pub struct BoxState {
     /// Health status.
     #[serde(default)]
     pub health_status: HealthStatus,
+    /// Human-readable reason the box entered `Failed` (or other terminal state).
+    /// Set by `mark_failed`; cleared by `mark_stop` and successful transitions.
+    /// Serde default keeps existing DB rows readable without migration.
+    #[serde(default)]
+    pub error_reason: Option<String>,
 }
 
 /// Health status of a box.
@@ -289,6 +314,7 @@ impl BoxState {
             last_updated: Utc::now(),
             lock_id: None,
             health_status: HealthStatus::new(),
+            error_reason: None,
         }
     }
 
@@ -338,6 +364,21 @@ impl BoxState {
     /// PID is cleared since the process is no longer alive.
     pub fn mark_stop(&mut self) {
         self.status = BoxStatus::Stopped;
+        self.pid = None;
+        self.last_updated = Utc::now();
+    }
+
+    /// Mark the box as Failed with the captured init/runtime error.
+    ///
+    /// Called from `CleanupGuard::drop`, so this must not panic — using
+    /// direct field assignment (mirrors `mark_stop`) instead of
+    /// `transition_to` (which would fail-loud on an unexpected source state
+    /// and panic during unwinding). `health_status` is preserved on purpose:
+    /// the last health snapshot is forensic context for whoever investigates
+    /// the failure.
+    pub fn mark_failed(&mut self, reason: &str) {
+        self.status = BoxStatus::Failed;
+        self.error_reason = Some(reason.to_string());
         self.pid = None;
         self.last_updated = Utc::now();
     }
@@ -555,6 +596,7 @@ mod tests {
         assert_eq!(BoxStatus::Stopping.as_str(), "stopping");
         assert_eq!(BoxStatus::Stopped.as_str(), "stopped");
         assert_eq!(BoxStatus::Paused.as_str(), "paused");
+        assert_eq!(BoxStatus::Failed.as_str(), "failed");
     }
 
     #[test]
@@ -566,12 +608,98 @@ mod tests {
         assert_eq!("stopping".parse(), Ok(BoxStatus::Stopping));
         assert_eq!("stopped".parse(), Ok(BoxStatus::Stopped));
         assert_eq!("paused".parse(), Ok(BoxStatus::Paused));
+        assert_eq!("failed".parse(), Ok(BoxStatus::Failed));
         // Legacy transient statuses map to Stopped
         assert_eq!("snapshotting".parse(), Ok(BoxStatus::Stopped));
         assert_eq!("restoring".parse(), Ok(BoxStatus::Stopped));
         assert_eq!("exporting".parse(), Ok(BoxStatus::Stopped));
         assert_eq!("cloning".parse(), Ok(BoxStatus::Stopped));
         assert!("invalid".parse::<BoxStatus>().is_err());
+    }
+
+    // ========================================================================
+    // BoxStatus::Failed — added for "preserve record on init failure" feature
+    // ========================================================================
+
+    #[test]
+    fn test_status_failed_can_start() {
+        // Failed boxes are retryable by the control-plane.
+        assert!(BoxStatus::Failed.can_start());
+    }
+
+    #[test]
+    fn test_status_failed_can_remove() {
+        // Failed boxes must be removable so DESTROY_SANDBOX can clean up.
+        assert!(BoxStatus::Failed.can_remove());
+    }
+
+    #[test]
+    fn test_status_failed_not_active() {
+        assert!(!BoxStatus::Failed.is_active());
+        assert!(!BoxStatus::Failed.is_running());
+    }
+
+    #[test]
+    fn test_transitions_into_failed() {
+        // The four canonical paths that land in Failed.
+        assert!(BoxStatus::Configured.can_transition_to(BoxStatus::Failed));
+        assert!(BoxStatus::Running.can_transition_to(BoxStatus::Failed));
+        assert!(BoxStatus::Stopping.can_transition_to(BoxStatus::Failed));
+        assert!(BoxStatus::Stopped.can_transition_to(BoxStatus::Failed));
+    }
+
+    #[test]
+    fn test_transitions_out_of_failed() {
+        // Retry, manual reset, recovery — all valid.
+        assert!(BoxStatus::Failed.can_transition_to(BoxStatus::Running));
+        assert!(BoxStatus::Failed.can_transition_to(BoxStatus::Stopped));
+        assert!(BoxStatus::Failed.can_transition_to(BoxStatus::Unknown));
+        // But Failed cannot bounce back into transient/active states by itself.
+        assert!(!BoxStatus::Failed.can_transition_to(BoxStatus::Stopping));
+        assert!(!BoxStatus::Failed.can_transition_to(BoxStatus::Paused));
+        assert!(!BoxStatus::Failed.can_transition_to(BoxStatus::Configured));
+    }
+
+    #[test]
+    fn test_box_state_new_has_no_error_reason() {
+        let state = BoxState::new();
+        assert!(state.error_reason.is_none());
+    }
+
+    #[test]
+    fn test_box_state_serde_roundtrip_with_legacy_json_missing_error_reason() {
+        // Old DB rows don't have `error_reason` — must still deserialize.
+        let legacy = r#"{
+            "status":"running",
+            "pid":null,
+            "container_id":null,
+            "last_updated":"2026-05-13T23:37:57.965434066Z",
+            "lock_id":null,
+            "health_status":{"state":"None","failures":0,"last_check":null}
+        }"#;
+        let state: BoxState = serde_json::from_str(legacy).expect("legacy row deserializes");
+        assert_eq!(state.status, BoxStatus::Running);
+        assert!(state.error_reason.is_none());
+    }
+
+    #[test]
+    fn test_mark_failed_sets_status_reason_clears_pid() {
+        let mut state = BoxState::new();
+        state.status = BoxStatus::Running;
+        state.pid = Some(42);
+        state.mark_failed("timeout after 30s");
+        assert_eq!(state.status, BoxStatus::Failed);
+        assert_eq!(state.error_reason.as_deref(), Some("timeout after 30s"));
+        assert_eq!(state.pid, None);
+    }
+
+    #[test]
+    fn test_mark_failed_preserves_health_status_for_forensics() {
+        // The last health snapshot is forensic context, not cleared by Failed.
+        let mut state = BoxState::new();
+        state.health_status.mark_success();
+        state.mark_failed("vmm_spawn error");
+        assert_eq!(state.health_status.state, HealthState::Healthy);
     }
 
     // ========================================================================

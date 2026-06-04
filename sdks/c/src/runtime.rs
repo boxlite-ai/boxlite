@@ -206,6 +206,9 @@ unsafe fn runtime_new(
                 }
             };
 
+        // Executable-owned logging init (the library no longer auto-installs a subscriber).
+        let _ = boxlite::init_logging_for(&options.home_dir);
+
         let runtime = match BoxliteRuntime::new(options) {
             Ok(rt) => rt,
             Err(e) => {

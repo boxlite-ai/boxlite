@@ -76,6 +76,7 @@ fn status_to_string(status: BoxStatus) -> String {
         BoxStatus::Stopping => "stopping",
         BoxStatus::Stopped => "stopped",
         BoxStatus::Paused => "paused",
+        BoxStatus::Failed => "failed",
     }
     .to_string()
 }

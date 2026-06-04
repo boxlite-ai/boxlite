@@ -25,6 +25,7 @@
 
 use crate::jailer::common;
 use crate::runtime::advanced_options::ResourceLimits;
+use crate::util::{PidFileWriter, PidRecord};
 use std::os::fd::RawFd;
 use std::process::Command;
 
@@ -37,7 +38,7 @@ use std::process::Command;
 ///
 /// * `cmd` - The Command to add the hook to
 /// * `resource_limits` - Resource limits to apply
-/// * `pid_file_path` - Path to PID file (pre-computed CString for async-signal-safety)
+/// * `pid_writer` - Async-signal-safe writer (pre-allocated in the parent)
 /// * `preserved_fds` - FDs to preserve: each `(source, target)` is dup2'd before cleanup.
 ///   After dup2, all FDs above the highest target are closed.
 ///   Pass empty vec for default behavior (close all FDs >= 3).
@@ -59,10 +60,26 @@ use std::process::Command;
 pub fn add_pre_exec_hook(
     cmd: &mut Command,
     resource_limits: ResourceLimits,
-    pid_file_path: Option<std::ffi::CString>,
+    pid_writer: Option<PidFileWriter>,
     preserved_fds: Vec<(RawFd, i32)>,
+    detach: bool,
 ) {
     use std::os::unix::process::CommandExt;
+
+    // Detach=false → child's own process group at Command-build time
+    // so a later `killpg(shim_pid, SIGKILL)` reaps the shim plus its
+    // grandchildren (libkrun threads, gvproxy) atomically.
+    //
+    // Gated on `!detach` because the detached branch below uses
+    // `setsid()`, which creates a new session AND a new pgroup with
+    // the child as leader of both. Calling `process_group(0)` here
+    // would make the child a pgroup leader before `setsid()` runs;
+    // `setsid()` then fails with EPERM (POSIX: setsid is forbidden
+    // for an existing pgroup leader). The branches are exclusive on
+    // purpose — `setsid()` already covers the pgroup case.
+    if !detach {
+        cmd.process_group(0);
+    }
 
     // SAFETY: The hook only uses async-signal-safe syscalls.
     // See module documentation for details.
@@ -90,8 +107,19 @@ pub fn add_pre_exec_hook(
                 .map_err(std::io::Error::from_raw_os_error)?;
 
             // 3. Write PID file
-            if let Some(ref path) = pid_file_path {
-                common::pid::write_pid_file_raw(path).map_err(std::io::Error::from_raw_os_error)?;
+            if let Some(ref writer) = pid_writer {
+                writer
+                    .write(&PidRecord::current())
+                    .map_err(std::io::Error::from_raw_os_error)?;
+            }
+
+            // 4. Detach=true → setsid: child becomes a session leader,
+            // detaching from the parent's controlling terminal. Without
+            // this a SIGHUP on the parent's terminal cascades into the
+            // daemon (the `BoxOptions::detach` contract relies on it).
+            // `setsid` is async-signal-safe.
+            if detach && libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
             }
 
             Ok(())
@@ -108,18 +136,15 @@ mod tests {
         let mut cmd = Command::new("/bin/echo");
         let limits = ResourceLimits::default();
 
-        add_pre_exec_hook(&mut cmd, limits, None, vec![]);
+        add_pre_exec_hook(&mut cmd, limits, None, vec![], false);
     }
 
     #[test]
     fn test_add_hook_with_pid_file() {
-        use std::ffi::CString;
-
         let mut cmd = Command::new("/bin/echo");
         let limits = ResourceLimits::default();
-        let pid_file = CString::new("/tmp/test.pid").ok();
-
-        add_pre_exec_hook(&mut cmd, limits, pid_file, vec![]);
+        let writer = PidFileWriter::at(std::path::Path::new("/tmp/test.pid")).ok();
+        add_pre_exec_hook(&mut cmd, limits, writer, vec![], false);
     }
 
     #[test]
@@ -128,6 +153,6 @@ mod tests {
         let limits = ResourceLimits::default();
 
         // Simulate preserving fd 5 → target fd 3
-        add_pre_exec_hook(&mut cmd, limits, None, vec![(5, 3)]);
+        add_pre_exec_hook(&mut cmd, limits, None, vec![(5, 3)], false);
     }
 }

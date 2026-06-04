@@ -1,7 +1,9 @@
 mod binary_finder;
+mod pid_file;
 pub mod process;
 
 pub use binary_finder::{RuntimeBinaryFinder, find_binary};
+pub use pid_file::{PidFileReader, PidFileWriter, PidRecord, ProcessIdentity};
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -13,7 +15,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, fmt};
 
 pub use process::{
-    ProcessExit, ProcessMonitor, is_process_alive, is_same_process, kill_process, read_pid_file,
+    ProcessExit, ProcessMonitor, is_process_alive, kill_process, process_start_time,
 };
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]

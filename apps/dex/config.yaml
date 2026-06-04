@@ -18,8 +18,22 @@ staticClients:
       - '${REDIRECT_URI}'
       - 'http://localhost:3000'
       - 'http://localhost:5173'
+      # CLI Authorization-Code callback. RFC 8252 §8.3 requires the
+      # loopback IP literal (127.0.0.1), not `localhost`: the IP literal
+      # can't be hijacked via /etc/hosts and never binds to a non-loopback
+      # interface. The Rust CLI (src/cli/src/commands/auth/oidc/auth_code.rs)
+      # always builds the redirect_uri with 127.0.0.1, so no `localhost`
+      # alias is registered.
+      - 'http://127.0.0.1:5555/callback'
     name: 'BoxLite'
     public: true
+
+# Enable OAuth 2.0 Device Authorization Grant (RFC 8628) so headless / SSH
+# `boxlite auth login --no-browser` can complete. Empty object accepts Dex's
+# built-in defaults; no per-client config is needed for our `public: true`
+# `boxlite` client.
+oauth2:
+  deviceFlow: {}
 
 enablePasswordDB: true
 

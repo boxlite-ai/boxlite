@@ -262,6 +262,7 @@ impl SharedResources {
 fn cache_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
+        .and_then(Path::parent)
         .unwrap()
         .join("target")
         .join("boxlite-test")
@@ -293,11 +294,16 @@ mod tests {
     #[test]
     fn cache_dir_is_under_target() {
         let dir = cache_dir();
+        let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .unwrap();
         assert!(
-            dir.to_str().unwrap().contains("target/boxlite-test"),
-            "cache_dir should be under target/: {:?}",
+            dir.starts_with(repo_root.join("target")),
+            "cache_dir should be under repo target/: {:?}",
             dir
         );
+        assert_eq!(dir, repo_root.join("target").join("boxlite-test"));
     }
 
     #[test]

@@ -595,6 +595,108 @@ func TestExecManagerSignalUnsupportedFallsThroughToKill(t *testing.T) {
 	exec.attachMu.Unlock()
 }
 
+// A non-sentinel Signal error (timeout, CGo/transport failure) hits the
+// default: arm of escalate()'s switch (exec_manager.go:723) — distinct
+// from the ErrSignalUnsupported arm. Both fall through to Kill, but the
+// generic arm must also roll back the optimistic SignaledHUP set in
+// tryEscalate. Pre-fix this arm left SignaledHUP=true.
+func TestExecManagerGenericSignalErrorRollsBackSignaledHUP(t *testing.T) {
+	m := newQuietManager(t)
+
+	stub := &stubExecHandle{
+		signalFn: func(_ int) error {
+			// Not ErrSignalUnsupported → default: arm.
+			return errors.New("runner↔shim transport down")
+		},
+	}
+	exec := registerStub(t, m, "generic-err-1", stub)
+
+	m.SetReapingForTest(50*time.Millisecond, 20*time.Millisecond, 10*time.Minute)
+
+	t0 := time.Now()
+	exec.attachMu.Lock()
+	exec.Connected = false
+	exec.LastDisconnectAt = t0
+	exec.attachMu.Unlock()
+
+	m.runCleanupOnce(t0.Add(70 * time.Millisecond))
+
+	signals, killed := stub.snapshot()
+	if len(signals) != 1 || signals[0] != int(syscall.SIGHUP) {
+		t.Fatalf("expected one SIGHUP attempt, got %v", signals)
+	}
+	if killed != 1 {
+		t.Fatalf("expected immediate Kill fallthrough on generic error, got killed=%d", killed)
+	}
+	if _, stillTracked := m.Get("generic-err-1"); stillTracked {
+		t.Fatalf("exec should be evicted after Kill fallthrough")
+	}
+	exec.attachMu.Lock()
+	defer exec.attachMu.Unlock()
+	if exec.SignaledHUP {
+		t.Fatalf("SignaledHUP must be rolled back when a generic signal error fails delivery")
+	}
+}
+
+// SIGTERM uses a separate optimistic flag (SignaledTERM). Drive escalation
+// past SIGHUP (delivered OK) so the next tick attempts SIGTERM, then fail
+// that delivery. The SIGTERM arm of escalationFailedMarkDoomed's switch must
+// roll back SignaledTERM while leaving the successful SignaledHUP intact.
+// Pre-fix this left SignaledTERM=true.
+func TestExecManagerSigtermFailureRollsBackSignaledTERM(t *testing.T) {
+	m := newQuietManager(t)
+
+	stub := &stubExecHandle{
+		signalFn: func(sig int) error {
+			if sig == int(syscall.SIGTERM) {
+				return errors.New("runner↔shim transport down")
+			}
+			return nil // SIGHUP succeeds so escalation advances to TERM.
+		},
+	}
+	exec := registerStub(t, m, "term-fail-1", stub)
+
+	m.SetReapingForTest(50*time.Millisecond, 20*time.Millisecond, 10*time.Minute)
+
+	t0 := time.Now()
+	exec.attachMu.Lock()
+	exec.Connected = false
+	exec.LastDisconnectAt = t0
+	exec.attachMu.Unlock()
+
+	// Tick 1: past reconnect grace → SIGHUP (succeeds).
+	m.runCleanupOnce(t0.Add(70 * time.Millisecond))
+	exec.attachMu.Lock()
+	if !exec.SignaledHUP {
+		exec.attachMu.Unlock()
+		t.Fatalf("expected SignaledHUP after successful SIGHUP")
+	}
+	hupAt := exec.LastDisconnectAt
+	exec.attachMu.Unlock()
+
+	// Tick 2: past shutdown grace after HUP → SIGTERM (fails).
+	m.runCleanupOnce(hupAt.Add(25 * time.Millisecond))
+
+	signals, killed := stub.snapshot()
+	if len(signals) != 2 || signals[1] != int(syscall.SIGTERM) {
+		t.Fatalf("expected SIGTERM as second signal, got %v", signals)
+	}
+	if killed != 1 {
+		t.Fatalf("expected Kill fallthrough after SIGTERM delivery failed, got killed=%d", killed)
+	}
+	if _, stillTracked := m.Get("term-fail-1"); stillTracked {
+		t.Fatalf("exec should be evicted after Kill fallthrough")
+	}
+	exec.attachMu.Lock()
+	defer exec.attachMu.Unlock()
+	if exec.SignaledTERM {
+		t.Fatalf("SignaledTERM must be rolled back when SIGTERM delivery failed")
+	}
+	if !exec.SignaledHUP {
+		t.Fatalf("SignaledHUP must remain set: the SIGHUP delivery succeeded")
+	}
+}
+
 func TestResolveDurationFallsBackOnUnset(t *testing.T) {
 	got := resolveDuration("BOXLITE_RECONNECT_GRACE_TEST_UNSET", 7*time.Minute)
 	if got != 7*time.Minute {

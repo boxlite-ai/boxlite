@@ -252,8 +252,10 @@ impl LocalBundleBlobSource {
         })?;
 
         // Extract tarball with whiteout markers preserved for later layer stacking.
-        if let Err(e) =
-            LayerExtractor::new(&temp_path).extract_tarball_preserving_whiteouts(tarball_path)
+        let mut extractor = LayerExtractor::new(&temp_path);
+        if let Err(e) = extractor
+            .extract_tarball_preserving_whiteouts(tarball_path)
+            .and_then(|_| extractor.finalize())
         {
             let _ = std::fs::remove_dir_all(&temp_path);
             return Err(e);

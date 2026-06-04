@@ -19,10 +19,13 @@ extern "C" {
     ///
     /// # Arguments
     /// * `portMappingsJSON` - JSON string describing port mappings
+    /// * `errOut` - On failure, receives a heap-allocated C string with the
+    ///   underlying error message. Caller must free via `gvproxy_free_string`.
+    ///   Pass null to discard the message.
     ///
     /// # Returns
     /// Instance ID (handle) or -1 on error
-    pub fn gvproxy_create(portMappingsJSON: *const c_char) -> c_longlong;
+    pub fn gvproxy_create(portMappingsJSON: *const c_char, errOut: *mut *mut c_char) -> c_longlong;
 
     /// Free a string allocated by libgvproxy
     ///

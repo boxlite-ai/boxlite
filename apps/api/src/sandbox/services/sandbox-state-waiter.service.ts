@@ -47,15 +47,8 @@ export class SandboxStateWaiterService implements OnModuleDestroy {
     await this.redisSubscriber.quit()
   }
 
-  async waitForStarted(
-    sandboxId: string,
-    organizationId: string,
-    timeoutSeconds: number,
-  ): Promise<SandboxDto> {
-    const current = await this.sandboxService.findOneByIdOrName(
-      sandboxId,
-      organizationId,
-    )
+  async waitForStarted(sandboxId: string, organizationId: string, timeoutSeconds: number): Promise<SandboxDto> {
+    const current = await this.sandboxService.findOneByIdOrName(sandboxId, organizationId)
 
     if (current.state === SandboxState.STARTED) {
       return this.sandboxService.toSandboxDto(current)
@@ -119,9 +112,7 @@ export class SandboxStateWaiterService implements OnModuleDestroy {
 
   private assertNotFailed(state: SandboxState, errorReason?: string | null) {
     if (state === SandboxState.ERROR || state === SandboxState.BUILD_FAILED) {
-      throw new BadRequestError(
-        `Sandbox failed to start: ${errorReason || 'Unknown error'}`,
-      )
+      throw new BadRequestError(`Sandbox failed to start: ${errorReason || 'Unknown error'}`)
     }
   }
 }

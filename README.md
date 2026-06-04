@@ -232,12 +232,12 @@ boxlite serve
 
 ```bash
 # Create a box
-curl -s -X POST http://localhost:8100/v1/default/boxes \
+curl -s -X POST http://localhost:8100/v1/boxes \
   -H 'Content-Type: application/json' \
   -d '{"image": "alpine:latest"}'
 
 # Run a command (replace BOX_ID from the response above)
-curl -s -X POST http://localhost:8100/v1/default/boxes/BOX_ID/exec \
+curl -s -X POST http://localhost:8100/v1/boxes/BOX_ID/exec \
   -H 'Content-Type: application/json' \
   -d '{"command": "echo", "args": ["Hello from BoxLite!"]}'
 ```

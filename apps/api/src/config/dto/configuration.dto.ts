@@ -7,6 +7,7 @@
 import { ApiExtraModels, ApiProperty, ApiPropertyOptional, ApiSchema, getSchemaPath } from '@nestjs/swagger'
 import { IsBoolean, IsNumber, IsOptional, IsString } from 'class-validator'
 import { TypedConfigService } from '../typed-config.service'
+import { EndSessionState, isValidHttpUrl } from '../oidc-metadata.service'
 
 @ApiSchema({ name: 'Announcement' })
 export class Announcement {
@@ -115,6 +116,15 @@ export class OidcConfig {
   })
   @IsString()
   audience: string
+
+  @ApiPropertyOptional({
+    description:
+      'OIDC end-session endpoint. Set when the IdP does not advertise one via discovery (e.g. Dex) and BoxLite hosts a compatible logout endpoint.',
+    example: 'https://api.example.com/api/auth/end-session',
+  })
+  @IsString()
+  @IsOptional()
+  endSessionEndpoint?: string
 }
 
 @ApiExtraModels(Announcement)
@@ -250,13 +260,23 @@ export class ConfigurationDto {
   @IsOptional()
   rateLimit?: RateLimitConfig
 
-  constructor(configService: TypedConfigService) {
+  constructor(configService: TypedConfigService, options: { endSessionState: EndSessionState }) {
     this.version = configService.getOrThrow('version')
 
     this.oidc = {
       issuer: configService.get('oidc.publicIssuer') || configService.getOrThrow('oidc.issuer'),
       clientId: configService.getOrThrow('oidc.clientId'),
       audience: configService.getOrThrow('oidc.audience'),
+      // Only expose the BoxLite-hosted fallback when discovery proved the IdP
+      // lacks end_session_endpoint. 'present' → trust the IdP; 'unknown' →
+      // fail closed (don't override Auth0/Okta's real endpoint on a probe
+      // blip). Only 'absent' is a definitive answer that justifies the seed.
+      // Even then we validate the operator-set env: a typo'd OIDC_END_SESSION_ENDPOINT
+      // must not silently propagate as a metadataSeed value.
+      endSessionEndpoint:
+        options.endSessionState === 'absent'
+          ? validatedEndSessionEndpoint(configService.get('oidc.endSessionEndpoint'))
+          : undefined,
     }
     this.linkedAccountsEnabled = configService.get('oidc.managementApi.enabled')
     this.proxyTemplateUrl = configService.getOrThrow('proxy.templateUrl')
@@ -305,4 +325,9 @@ export class ConfigurationDto {
       },
     }
   }
+}
+
+function validatedEndSessionEndpoint(value: string | undefined): string | undefined {
+  if (!value) return undefined
+  return isValidHttpUrl(value) ? value : undefined
 }

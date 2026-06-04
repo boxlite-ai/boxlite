@@ -17,8 +17,7 @@ ENV_SERVER_PORT = "BOXLITE_SERVER_PORT"
 ENV_SERVER_LOG_LEVEL = "BOXLITE_SERVER_LOG_LEVEL"
 ENV_SERVER_JWT_SECRET = "BOXLITE_SERVER_JWT_SECRET"
 ENV_SERVER_JWT_EXPIRY_SECONDS = "BOXLITE_SERVER_JWT_EXPIRY_SECONDS"
-ENV_SERVER_CLIENT_ID = "BOXLITE_SERVER_CLIENT_ID"
-ENV_SERVER_CLIENT_SECRET = "BOXLITE_SERVER_CLIENT_SECRET"
+ENV_SERVER_API_KEY = "BOXLITE_SERVER_API_KEY"
 
 # Runtime env vars (reference-server local contract)
 ENV_RUNTIME_HOME_DIR = "BOXLITE_RUNTIME_HOME_DIR"
@@ -29,8 +28,6 @@ DEFAULT_SERVER_PORT = 8080
 DEFAULT_SERVER_LOG_LEVEL = "info"
 DEFAULT_SERVER_JWT_SECRET = "boxlite-reference-server-secret"
 DEFAULT_SERVER_JWT_EXPIRY_SECONDS = 3600
-DEFAULT_SERVER_CLIENT_ID = "test-client"
-DEFAULT_SERVER_CLIENT_SECRET = "test-secret"
 DEFAULT_RUNTIME_IMAGE_REGISTRIES = ["mirror.gcr.io", "docker.io"]
 DEFAULT_ENV_FILE_PATH = Path(__file__).resolve().parent / ".env"
 
@@ -52,8 +49,9 @@ class ServerConfig:
     log_level: str
     jwt_secret: str
     jwt_expiry_seconds: int
-    client_id: str
-    client_secret: str
+    # Optional expected Bearer token. None ⇒ permissive (any non-empty
+    # bearer accepted); set ⇒ exact match required (else 401).
+    api_key: str | None
 
 
 @dataclass(frozen=True)
@@ -207,15 +205,11 @@ def load_server_config_from_env() -> ServerConfig:
     if not jwt_secret:
         raise ValueError(f"{ENV_SERVER_JWT_SECRET} cannot be empty")
 
-    client_id = os.getenv(ENV_SERVER_CLIENT_ID, DEFAULT_SERVER_CLIENT_ID).strip()
-    if not client_id:
-        raise ValueError(f"{ENV_SERVER_CLIENT_ID} cannot be empty")
-
-    client_secret = os.getenv(
-        ENV_SERVER_CLIENT_SECRET, DEFAULT_SERVER_CLIENT_SECRET
-    ).strip()
-    if not client_secret:
-        raise ValueError(f"{ENV_SERVER_CLIENT_SECRET} cannot be empty")
+    # Optional: unset or whitespace-only ⇒ None (permissive); else strict.
+    api_key_raw = os.getenv(ENV_SERVER_API_KEY)
+    api_key = api_key_raw.strip() if api_key_raw is not None else None
+    if not api_key:
+        api_key = None
 
     return ServerConfig(
         host=host,
@@ -227,8 +221,7 @@ def load_server_config_from_env() -> ServerConfig:
             DEFAULT_SERVER_JWT_EXPIRY_SECONDS,
             minimum=1,
         ),
-        client_id=client_id,
-        client_secret=client_secret,
+        api_key=api_key,
     )
 
 

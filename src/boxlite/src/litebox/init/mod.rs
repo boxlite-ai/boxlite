@@ -56,7 +56,11 @@ use types::InitPipelineContext;
 // ============================================================================
 
 /// Get execution plan based on BoxStatus.
-fn get_execution_plan(status: BoxStatus) -> ExecutionPlan<InitCtx> {
+///
+/// Returns Err for states that aren't valid init entry points
+/// (e.g. Unknown from a corrupted DB row, or future variants). Callers
+/// should treat this as a user-facing precondition error.
+fn get_execution_plan(status: BoxStatus) -> BoxliteResult<ExecutionPlan<InitCtx>> {
     let stages: Vec<Stage<BoxedTask<InitCtx>>> = match status {
         BoxStatus::Configured => vec![
             // First start: Full pipeline
@@ -73,7 +77,10 @@ fn get_execution_plan(status: BoxStatus) -> ExecutionPlan<InitCtx> {
             Stage::sequential(vec![Box::new(GuestConnectTask)]),
             Stage::sequential(vec![Box::new(GuestInitTask)]),
         ],
-        BoxStatus::Stopped => vec![
+        // Stopped and Failed both run the restart pipeline. A Failed box
+        // has its rootfs preserved (per BoxStatus::Failed doc) and is
+        // retryable per BoxStatus::can_start.
+        BoxStatus::Stopped | BoxStatus::Failed => vec![
             // Restart: Same flow but rootfs tasks reuse existing COW disks
             // (preserves user modifications from previous run)
             Stage::sequential(vec![Box::new(FilesystemTask)]),
@@ -87,14 +94,19 @@ fn get_execution_plan(status: BoxStatus) -> ExecutionPlan<InitCtx> {
             Stage::sequential(vec![Box::new(GuestInitTask)]),
         ],
         BoxStatus::Running => vec![
-            // Reattach: Attach to existing VM process and connect to guest
+            // Reattach: vmm_attach gates on ProcessIdentity AND surfaces
+            // any crash via exit_file, then connect to guest.
             Stage::sequential(vec![Box::new(VmmAttachTask)]),
             Stage::sequential(vec![Box::new(GuestConnectTask)]),
         ],
-        _ => panic!("Invalid BoxStatus for initialization: {:?}", status),
+        other => {
+            return Err(BoxliteError::InvalidState(format!(
+                "Cannot initialize box in {other} state"
+            )));
+        }
     };
 
-    ExecutionPlan::new(stages)
+    Ok(ExecutionPlan::new(stages))
 }
 
 fn box_metrics_from_pipeline(pipeline_metrics: &PipelineMetrics) -> BoxMetricsStorage {
@@ -191,76 +203,91 @@ impl BoxBuilder {
 
         let ctx = InitPipelineContext::new(config, runtime.clone(), reuse_rootfs, skip_guest_wait);
         let ctx = Arc::new(Mutex::new(ctx));
+        let ctx_for_cleanup = Arc::clone(&ctx);
 
         // Note: Guard stays armed until caller disarms it after DB persist succeeds.
-        // This ensures cleanup happens even if operations after build() fail.
+        // On any error path inside `inner`, we capture the error onto the guard
+        // so `CleanupGuard::drop` can persist it as `BoxState::Failed` with
+        // `error_reason`. This matches Daytona/Kata/containerd/Docker semantics
+        // of "preserve the record on init failure".
+        let inner = async move {
+            let plan = get_execution_plan(status)?;
+            let pipeline = PipelineBuilder::from_plan(plan);
+            let pipeline_metrics = PipelineExecutor::execute(pipeline, Arc::clone(&ctx)).await?;
 
-        let plan = get_execution_plan(status);
-        let pipeline = PipelineBuilder::from_plan(plan);
-        let pipeline_metrics = PipelineExecutor::execute(pipeline, Arc::clone(&ctx)).await?;
+            let mut ctx = ctx.lock().await;
+            let total_create_duration_ms = total_start.elapsed().as_millis();
+            let handler = ctx
+                .guard
+                .take_handler()
+                .ok_or_else(|| BoxliteError::Internal("handler was not set".into()))?;
 
-        let mut ctx = ctx.lock().await;
-        let total_create_duration_ms = total_start.elapsed().as_millis();
-        let handler = ctx
-            .guard
-            .take_handler()
-            .ok_or_else(|| BoxliteError::Internal("handler was not set".into()))?;
+            let mut metrics = box_metrics_from_pipeline(&pipeline_metrics);
+            metrics.set_total_create_duration(total_create_duration_ms);
 
-        let mut metrics = box_metrics_from_pipeline(&pipeline_metrics);
-        metrics.set_total_create_duration(total_create_duration_ms);
+            metrics.log_init_stages();
 
-        metrics.log_init_stages();
+            // Note: Guard is NOT disarmed here. Caller is responsible for disarming
+            // after all operations succeed (including DB persist).
 
-        // Note: Guard is NOT disarmed here. Caller is responsible for disarming
-        // after all operations succeed (including DB persist).
+            // Get guest_session from GuestConnectTask
+            let guest_session = ctx.guest_session.take().ok_or_else(|| {
+                BoxliteError::Internal("guest_connect task must run first".into())
+            })?;
 
-        // Get guest_session from GuestConnectTask
-        let guest_session = ctx
-            .guest_session
-            .take()
-            .ok_or_else(|| BoxliteError::Internal("guest_connect task must run first".into()))?;
+            // Get disks from context (for Running, create disk reference directly)
+            let (container_disk, guest_disk) = if status == BoxStatus::Running {
+                // Reattach: create disk reference to existing qcow2
+                use crate::disk::DiskFormat;
+                use crate::disk::constants::filenames;
+                let disk = crate::disk::Disk::new(
+                    ctx.config.box_home.join(filenames::CONTAINER_DISK),
+                    DiskFormat::Qcow2,
+                    true,
+                );
+                (disk, None)
+            } else {
+                // Starting/Stopped: get disks from rootfs tasks
+                let container_disk = ctx
+                    .container_disk
+                    .take()
+                    .ok_or_else(|| BoxliteError::Internal("rootfs task must run first".into()))?;
+                (container_disk, ctx.guest_disk.take())
+            };
 
-        // Get disks from context (for Running, create disk reference directly)
-        let (container_disk, guest_disk) = if status == BoxStatus::Running {
-            // Reattach: create disk reference to existing qcow2
-            use crate::disk::DiskFormat;
-            use crate::disk::constants::filenames;
-            let disk = crate::disk::Disk::new(
-                ctx.config.box_home.join(filenames::CONTAINER_DISK),
-                DiskFormat::Qcow2,
-                true,
+            #[cfg(target_os = "linux")]
+            let bind_mount = ctx.bind_mount.take();
+
+            // Take the guard out of context, replacing with a disarmed placeholder.
+            // The caller is responsible for disarming the returned guard after all
+            // operations succeed (including DB persist).
+            let mut placeholder =
+                types::CleanupGuard::new(ctx.runtime.clone(), ctx.config.id.clone());
+            placeholder.disarm();
+            let guard = std::mem::replace(&mut ctx.guard, placeholder);
+
+            // Build LiveState
+            let live_state = LiveState::new(
+                handler,
+                guest_session,
+                metrics,
+                container_disk,
+                guest_disk,
+                #[cfg(target_os = "linux")]
+                bind_mount,
             );
-            (disk, None)
-        } else {
-            // Starting/Stopped: get disks from rootfs tasks
-            let container_disk = ctx
-                .container_disk
-                .take()
-                .ok_or_else(|| BoxliteError::Internal("rootfs task must run first".into()))?;
-            (container_disk, ctx.guest_disk.take())
+
+            Ok::<(LiveState, types::CleanupGuard), BoxliteError>((live_state, guard))
         };
 
-        #[cfg(target_os = "linux")]
-        let bind_mount = ctx.bind_mount.take();
-
-        // Take the guard out of context, replacing with a disarmed placeholder.
-        // The caller is responsible for disarming the returned guard after all
-        // operations succeed (including DB persist).
-        let mut placeholder = types::CleanupGuard::new(ctx.runtime.clone(), ctx.config.id.clone());
-        placeholder.disarm();
-        let guard = std::mem::replace(&mut ctx.guard, placeholder);
-
-        // Build LiveState
-        let live_state = LiveState::new(
-            handler,
-            guest_session,
-            metrics,
-            container_disk,
-            guest_disk,
-            #[cfg(target_os = "linux")]
-            bind_mount,
-        );
-
-        Ok((live_state, guard))
+        match inner.await {
+            Ok(parts) => Ok(parts),
+            Err(e) => {
+                // Capture the cause onto the still-armed guard inside ctx so
+                // its Drop can mark the box `Failed` with this reason.
+                ctx_for_cleanup.lock().await.guard.set_last_error(&e);
+                Err(e)
+            }
+        }
     }
 }

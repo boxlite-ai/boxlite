@@ -229,8 +229,10 @@ impl ImageStorage {
         })?;
 
         // Extract tarball to temp directory - keep .wh.* files!
-        if let Err(e) =
-            LayerExtractor::new(&temp_path).extract_tarball_preserving_whiteouts(tarball_path)
+        let mut extractor = LayerExtractor::new(&temp_path);
+        if let Err(e) = extractor
+            .extract_tarball_preserving_whiteouts(tarball_path)
+            .and_then(|_| extractor.finalize())
         {
             // Clean up temp dir on extraction failure
             let _ = std::fs::remove_dir_all(&temp_path);

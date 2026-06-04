@@ -22,17 +22,20 @@ pub mod envs {
     #[cfg(feature = "rest")]
     pub const BOXLITE_REST_URL: &str = "BOXLITE_REST_URL";
 
-    /// OAuth2 client ID (optional).
+    /// Opaque API key, sent directly as `Authorization: Bearer <key>`. Flat
+    /// name (not `BOXLITE_REST_API_KEY`) matches industry convention —
+    /// `STRIPE_API_KEY`, `HEROKU_API_KEY`, `GH_TOKEN`.
     #[cfg(feature = "rest")]
-    pub const BOXLITE_REST_CLIENT_ID: &str = "BOXLITE_REST_CLIENT_ID";
+    pub const BOXLITE_API_KEY: &str = "BOXLITE_API_KEY";
 
-    /// OAuth2 client secret (optional).
+    /// Value substituted into the `{prefix}` URL segment on
+    /// box-scoped routes (`/v1/{prefix}/boxes/...`). Opaque
+    /// to the client — deployment decides what it means. When
+    /// unset / empty the client builds URLs without the segment
+    /// (`/v1/boxes/...`) — the canonical single-tenant shape
+    /// used by `boxlite serve` and similar single-scope deployments.
     #[cfg(feature = "rest")]
-    pub const BOXLITE_REST_CLIENT_SECRET: &str = "BOXLITE_REST_CLIENT_SECRET";
-
-    /// API path prefix (default: "v1").
-    #[cfg(feature = "rest")]
-    pub const BOXLITE_REST_PREFIX: &str = "BOXLITE_REST_PREFIX";
+    pub const BOXLITE_REST_PATH_PREFIX: &str = "BOXLITE_REST_PATH_PREFIX";
 }
 
 /// Container images used by the runtime

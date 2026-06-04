@@ -46,6 +46,8 @@ const configuration = {
     issuer: process.env.OIDC_ISSUER_BASE_URL || process.env.OID_ISSUER_BASE_URL,
     publicIssuer: process.env.PUBLIC_OIDC_DOMAIN,
     audience: process.env.OIDC_AUDIENCE || process.env.OID_AUDIENCE,
+    endSessionEndpoint: process.env.OIDC_END_SESSION_ENDPOINT,
+    postLogoutRedirectAllowlist: process.env.OIDC_POST_LOGOUT_REDIRECT_ALLOWLIST,
     managementApi: {
       enabled: process.env.OIDC_MANAGEMENT_API_ENABLED === 'true',
       clientId: process.env.OIDC_MANAGEMENT_API_CLIENT_ID,
@@ -299,6 +301,7 @@ const configuration = {
   },
   skipUserEmailVerification: process.env.SKIP_USER_EMAIL_VERIFICATION === 'true',
   apiKey: {
+    prefix: process.env.API_KEY_PREFIX || 'blk',
     validationCacheTtlSeconds: parseInt(process.env.API_KEY_VALIDATION_CACHE_TTL_SECONDS || '10', 10),
     userCacheTtlSeconds: parseInt(process.env.API_KEY_USER_CACHE_TTL_SECONDS || '60', 10),
   },

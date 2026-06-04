@@ -325,6 +325,10 @@ pub struct Jailer<S: Sandbox> {
     /// FDs to preserve through pre_exec: each (source_fd, target_fd) is dup2'd
     /// before FD cleanup. Used for watchdog pipe inheritance across fork.
     pub(crate) preserved_fds: Vec<(std::os::fd::RawFd, i32)>,
+    /// Detach-mode process isolation: see [`pre_exec::add_pre_exec_hook`]
+    /// — `true` adds `setsid()` to the pre_exec chain, `false` sets the
+    /// child's process group to itself at `Command` build time.
+    pub(crate) detach: bool,
 }
 
 impl<S: Sandbox> Jail for Jailer<S> {
@@ -400,12 +404,13 @@ impl<S: Sandbox> Jail for Jailer<S> {
         // Sandbox-specific pre_exec hooks (cgroup, Landlock) are already added
         // by sandbox.apply() above — Command supports multiple pre_exec closures.
         let resource_limits = self.security.resource_limits.clone();
-        let pid_file = self.pid_file_path();
+        let pid_writer = self.pid_file_writer();
         pre_exec::add_pre_exec_hook(
             &mut cmd,
             resource_limits,
-            pid_file,
+            pid_writer,
             self.preserved_fds.clone(),
+            self.detach,
         );
         cmd
     }
@@ -471,10 +476,10 @@ impl<S: Sandbox> Jailer<S> {
         }
     }
 
-    /// Build the PID file path as a CString for the pre_exec hook.
-    fn pid_file_path(&self) -> Option<std::ffi::CString> {
-        let pid_file = self.layout.pid_file_path();
-        std::ffi::CString::new(pid_file.to_string_lossy().as_bytes()).ok()
+    /// Pre-allocate the PID file writer for the pre_exec hook. Returns
+    /// `None` if the path can't be made into a CString (interior NUL).
+    fn pid_file_writer(&self) -> Option<crate::util::PidFileWriter> {
+        crate::util::PidFileWriter::at(&self.layout.pid_file_path()).ok()
     }
 }
 

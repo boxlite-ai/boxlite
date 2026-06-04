@@ -106,36 +106,19 @@ pub(super) struct ResizeRequest {
 }
 
 // ============================================================================
-// Auth Types
-// ============================================================================
-
-#[derive(Deserialize)]
-pub(super) struct TokenForm {
-    pub grant_type: String,
-    #[allow(dead_code)]
-    pub client_id: String,
-    #[allow(dead_code)]
-    pub client_secret: String,
-}
-
-#[derive(Serialize)]
-pub(super) struct TokenResponse {
-    pub access_token: String,
-    pub token_type: String,
-    pub expires_in: u64,
-}
-
-// ============================================================================
 // Config Types
 // ============================================================================
 
+/// Server configuration & capabilities — the `GET /v1/config` response
+/// from the local Axum reference server. Mirrors the `ServerConfig`
+/// schema in `openapi/box.openapi.yaml`.
 #[derive(Serialize)]
-pub(super) struct SandboxConfigResponse {
-    pub capabilities: SandboxCapabilities,
+pub(super) struct ServerConfig {
+    pub capabilities: ServerCapabilities,
 }
 
 #[derive(Serialize)]
-pub(super) struct SandboxCapabilities {
+pub(super) struct ServerCapabilities {
     pub snapshots_enabled: bool,
     pub clone_enabled: bool,
     pub export_enabled: bool,
@@ -233,12 +216,29 @@ pub(super) struct ErrorBody {
     pub error: ErrorDetail,
 }
 
+/// Wire shape for HTTP error responses.
+///
+/// - `message` — human-readable description with context (for logs and
+///   end-user display).
+/// - `type` — stable PascalCase identifier (K8s `Status.reason` style).
+///   `BoxliteError::http()` is the source of truth in
+///   `boxlite_shared::errors`.
+/// - `code` — stable snake_case machine identifier (Stripe `code` style).
+///   Clients pattern-match on this for typed error handling.
+/// - `request_id` — populated from `X-Request-Id` if propagated by the
+///   middleware; omitted when absent.
+///
+/// The HTTP numeric status lives in the response status line, not in the
+/// body — including it twice (header + body) was the legacy shape and
+/// added no information.
 #[derive(Serialize)]
 pub(super) struct ErrorDetail {
     pub message: String,
     #[serde(rename = "type")]
     pub error_type: String,
-    pub code: u16,
+    pub code: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
 }
 
 // ============================================================================

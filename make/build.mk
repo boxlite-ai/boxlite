@@ -1,4 +1,4 @@
-PHONY_TARGETS += guest shim runtime cli cli\:release skillbox-image
+PHONY_TARGETS += guest shim runtime cli cli\:release skillbox-image build\:apps
 
 guest:
 	@bash $(SCRIPT_DIR)/build/build-guest.sh
@@ -21,6 +21,14 @@ cli\:release: runtime
 	@echo "🔨 Building boxlite CLI (release)..."
 	@cargo build -p boxlite-cli --release
 	@echo "✅ CLI built: ./target/release/boxlite"
+
+# Build the apps/ workspace (api, dashboard, runner, proxy, libs…) via the
+# repo's own blessed script (nx run-many --target=build --all). The webpack
+# build runs tsc, so this is the compile gate for apps/ changes.
+build\:apps: _ensure-apps-deps
+	@echo "🔨 Building apps workspace..."
+	@cd apps && yarn build
+	@echo "✅ apps workspace built → dist/apps"
 
 # Build SkillBox container image (all-in-one AI CLI with noVNC)
 # Usage: make skillbox-image [APT_SOURCE=mirrors.aliyun.com]

@@ -1,4 +1,4 @@
-PHONY_TARGETS += _ensure-python-deps _ensure-node-deps
+PHONY_TARGETS += _ensure-python-deps _ensure-node-deps _ensure-apps-deps
 
 # Ensure Python venv exists (lightweight, no package install).
 _ensure-python-deps:
@@ -15,12 +15,25 @@ _ensure-node-deps:
 		cd sdks/node && npm install --silent; \
 	fi
 
+# Ensure the apps/ yarn workspace (NestJS control plane etc.) is installed.
+# apps/yarn.lock is gitignored, so a fresh tree has none — and Yarn 4 then
+# walks up to the repo-root package.json and refuses ("not part of the
+# project"). Seeding an empty apps/yarn.lock makes Yarn treat apps/ as its
+# own project (per Yarn's own guidance), then a plain install populates it.
+# Plain install (not --immutable) mirrors _ensure-node/python-deps and
+# bootstraps the lockfile.
+_ensure-apps-deps:
+	@if [ ! -d apps/node_modules ] || [ ! -f apps/yarn.lock ]; then \
+		echo "📦 Installing apps workspace dependencies (yarn)..."; \
+		cd apps && { [ -f yarn.lock ] || : > yarn.lock; } && yarn install; \
+	fi
+
 # Build wheel locally with maturin + embedded runtime
-dev\:python: runtime\:debug _ensure-python-deps
+dev\:python: $(if $(SETUP_DONE),,runtime\:debug) _ensure-python-deps
 	@echo "🔨 Building wheel with maturin (embedded-runtime)..."
 	@. .venv/bin/activate && pip install -q maturin && cd sdks/python && maturin develop --uv
 
-dev\:c: runtime\:debug
+dev\:c: $(if $(SETUP_DONE),,runtime\:debug)
 	@echo "🔨 Building C SDK (debug)..."
 	@cargo build -p boxlite-c
 	@echo "✅ C SDK built:"
@@ -28,14 +41,14 @@ dev\:c: runtime\:debug
 	@echo "   Header:  sdks/c/include/boxlite.h"
 
 # Build Node.js SDK locally with napi-rs (debug mode)
-dev\:node: runtime\:debug
+dev\:node: $(if $(SETUP_DONE),,runtime\:debug)
 	@cd sdks/node && npm install --silent && npm run build:native && npm run build
 	@echo "📦 Linking SDK to examples..."
 	@cd examples/node && npm install --silent
 	@echo "✅ Node.js SDK built and linked to examples"
 
 # Build Go SDK locally (debug mode, static linking)
-dev\:go: runtime\:debug
+dev\:go: $(if $(SETUP_DONE),,runtime\:debug)
 	@echo "🔨 Building Go SDK (debug)..."
 	@cargo build -p boxlite-c
 	@bash $(SCRIPT_DIR)/build/fix-go-symbols.sh target/debug/libboxlite.a

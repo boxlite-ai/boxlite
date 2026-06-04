@@ -1,30 +1,73 @@
 //! HTTP error → BoxliteError mapping.
+//!
+//! Symmetric inverse of [`boxlite_shared::errors::BoxliteError::http`].
+//! The server emits `(status, error.type, error.code)` per that table;
+//! we dispatch on `error.code` (stable snake_case) to reconstruct the
+//! `BoxliteError` variant. Falling back to status-only mapping when
+//! the body is missing or doesn't parse.
 
 use boxlite_shared::errors::BoxliteError;
 use reqwest::StatusCode;
 
 use super::types::ErrorModel;
 
-/// Map an HTTP error response to a BoxliteError.
+/// Map a parsed structured error body to a `BoxliteError`.
+///
+/// Dispatch is on `body.code` (the stable snake string), making this
+/// the symmetric inverse of `BoxliteError::http()`. Unknown codes fall
+/// back on the HTTP status — keeps the client forward-compatible with
+/// future server-side variants.
 pub(crate) fn map_http_error(status: StatusCode, body: &ErrorModel) -> BoxliteError {
-    match (status.as_u16(), body.error_type.as_str()) {
-        (404, _) => BoxliteError::NotFound(body.message.clone()),
-        (409, "AlreadyExistsError") => BoxliteError::AlreadyExists(body.message.clone()),
-        (409, "InvalidStateError") => BoxliteError::InvalidState(body.message.clone()),
-        (409, "StoppedError") => BoxliteError::Stopped(body.message.clone()),
-        (400, _) => BoxliteError::InvalidArgument(body.message.clone()),
-        (422, "ImageError") => BoxliteError::Image(body.message.clone()),
-        (422, _) => BoxliteError::InvalidArgument(body.message.clone()),
-        (401 | 403, _) => BoxliteError::Config(format!("auth: {}", body.message)),
-        _ => BoxliteError::Internal(format!("HTTP {}: {}", status, body.message)),
+    let msg = body.message.clone();
+    match body.code.as_str() {
+        "invalid_argument" => BoxliteError::InvalidArgument(msg),
+        "unsupported" => BoxliteError::Unsupported(msg),
+        "unauthenticated" | "permission_denied" => BoxliteError::Config(format!("auth: {}", msg)),
+        "not_found" => BoxliteError::NotFound(msg),
+        "session_reaped" => BoxliteError::SessionReaped(msg),
+        "already_exists" => BoxliteError::AlreadyExists(msg),
+        "invalid_state" => BoxliteError::InvalidState(msg),
+        "stopped" => BoxliteError::Stopped(msg),
+        "image_pull_failed" => BoxliteError::Image(msg),
+        "execution_failed" => BoxliteError::Execution(msg),
+        "resource_exhausted" => BoxliteError::ResourceExhausted(msg),
+        "network_unavailable" => BoxliteError::Network(msg),
+        "upstream_unavailable" => BoxliteError::Portal(msg),
+        "engine_unavailable" => BoxliteError::Engine(msg),
+        "storage_error" => BoxliteError::Storage(msg),
+        "database_error" => BoxliteError::Database(msg),
+        "metadata_error" => BoxliteError::MetadataError(msg),
+        "config_error" => BoxliteError::Config(msg),
+        "timeout" => BoxliteError::Internal(format!("server timed out: {}", msg)),
+        "internal" => BoxliteError::Internal(msg),
+        // Forward-compat: unknown code from a newer server — fall back
+        // to status-driven mapping, preserving the body text.
+        _ => map_http_status(status, &msg),
     }
 }
 
-/// Map an HTTP error when we can't parse the body.
+/// Map a raw HTTP status to a `BoxliteError` when the body is missing
+/// or not the envelope shape.
+///
+/// Distinguishes intermediary 5xx (proxy / unreachable upstream — we
+/// emit the envelope for our own 5xx) by routing **502/503/504 with
+/// no envelope** to `Network`, since the server we deployed never
+/// produces a bare 5xx without our wire envelope.
 pub(crate) fn map_http_status(status: StatusCode, text: &str) -> BoxliteError {
     match status.as_u16() {
         404 => BoxliteError::NotFound(text.to_string()),
         401 | 403 => BoxliteError::Config(format!("auth: {}", text)),
+        // Bare 5xx with no envelope ⇒ an intermediary spoke, not us.
+        // The most common cause is a proxy / load balancer that
+        // couldn't reach the destination (Clash returns 502 with
+        // empty body for unresolvable hosts; ELB returns 504 on
+        // upstream timeout).
+        502..=504 => BoxliteError::Network(format!(
+            "upstream returned HTTP {} (no error envelope; likely a \
+             proxy or load balancer in front of the server). Body: {}",
+            status,
+            if text.is_empty() { "<empty>" } else { text }
+        )),
         _ => BoxliteError::Internal(format!("HTTP {}: {}", status, text)),
     }
 }
@@ -33,95 +76,173 @@ pub(crate) fn map_http_status(status: StatusCode, text: &str) -> BoxliteError {
 mod tests {
     use super::*;
 
-    fn error_model(msg: &str, error_type: &str, code: u16) -> ErrorModel {
+    fn body(msg: &str, etype: &str, code: &str) -> ErrorModel {
         ErrorModel {
             message: msg.to_string(),
-            error_type: error_type.to_string(),
-            code,
+            error_type: etype.to_string(),
+            code: code.to_string(),
+            request_id: None,
         }
     }
 
+    /// One row of the round-trip table: `(http_status, error_type,
+    /// snake_code, variant_predicate)`. Aliased so clippy doesn't
+    /// flag the tuple as overly complex.
+    type RoundTripRow = (u16, &'static str, &'static str, fn(&BoxliteError) -> bool);
+
+    /// Canonical round-trip table — for every `(status, type, code)`
+    /// the server can emit per `BoxliteError::http()`, the client must
+    /// reconstruct a `BoxliteError` of the matching variant.
+    ///
+    /// Pinning the full table here is the second wall: even if the
+    /// server-side mapping changes silently, this test fails — making
+    /// the wire contract bilateral.
     #[test]
-    fn test_404_maps_to_not_found() {
-        let err = map_http_error(
-            StatusCode::NOT_FOUND,
-            &error_model("box xyz not found", "NotFoundError", 404),
-        );
-        assert!(matches!(err, BoxliteError::NotFound(_)));
+    fn round_trip_canonical_table() {
+        let cases: &[RoundTripRow] = &[
+            (400, "InvalidArgumentError", "invalid_argument", |e| {
+                matches!(e, BoxliteError::InvalidArgument(_))
+            }),
+            (400, "UnsupportedError", "unsupported", |e| {
+                matches!(e, BoxliteError::Unsupported(_))
+            }),
+            (401, "AuthError", "unauthenticated", |e| {
+                matches!(e, BoxliteError::Config(_))
+            }),
+            (403, "AuthError", "permission_denied", |e| {
+                matches!(e, BoxliteError::Config(_))
+            }),
+            (404, "NotFoundError", "not_found", |e| {
+                matches!(e, BoxliteError::NotFound(_))
+            }),
+            (410, "SessionReapedError", "session_reaped", |e| {
+                matches!(e, BoxliteError::SessionReaped(_))
+            }),
+            (409, "AlreadyExistsError", "already_exists", |e| {
+                matches!(e, BoxliteError::AlreadyExists(_))
+            }),
+            (409, "InvalidStateError", "invalid_state", |e| {
+                matches!(e, BoxliteError::InvalidState(_))
+            }),
+            (409, "StoppedError", "stopped", |e| {
+                matches!(e, BoxliteError::Stopped(_))
+            }),
+            (422, "ImageError", "image_pull_failed", |e| {
+                matches!(e, BoxliteError::Image(_))
+            }),
+            (422, "ExecutionError", "execution_failed", |e| {
+                matches!(e, BoxliteError::Execution(_))
+            }),
+            (429, "ResourceExhaustedError", "resource_exhausted", |e| {
+                matches!(e, BoxliteError::ResourceExhausted(_))
+            }),
+            (503, "NetworkError", "network_unavailable", |e| {
+                matches!(e, BoxliteError::Network(_))
+            }),
+            (
+                503,
+                "UpstreamUnavailableError",
+                "upstream_unavailable",
+                |e| matches!(e, BoxliteError::Portal(_)),
+            ),
+            (503, "EngineError", "engine_unavailable", |e| {
+                matches!(e, BoxliteError::Engine(_))
+            }),
+            (500, "StorageError", "storage_error", |e| {
+                matches!(e, BoxliteError::Storage(_))
+            }),
+            (500, "DatabaseError", "database_error", |e| {
+                matches!(e, BoxliteError::Database(_))
+            }),
+            (500, "MetadataError", "metadata_error", |e| {
+                matches!(e, BoxliteError::MetadataError(_))
+            }),
+            (500, "ConfigError", "config_error", |e| {
+                matches!(e, BoxliteError::Config(_))
+            }),
+            (500, "InternalError", "internal", |e| {
+                matches!(e, BoxliteError::Internal(_))
+            }),
+            (504, "TimeoutError", "timeout", |e| {
+                matches!(e, BoxliteError::Internal(_))
+            }),
+        ];
+
+        for (status_u16, etype, code, predicate) in cases {
+            let status = StatusCode::from_u16(*status_u16).expect("valid HTTP status");
+            let err = map_http_error(status, &body("msg", etype, code));
+            assert!(
+                predicate(&err),
+                "code {:?} (HTTP {}) mapped to unexpected variant: {:?}",
+                code,
+                status_u16,
+                err
+            );
+        }
     }
 
+    /// Unknown code from a newer server falls back to status-driven
+    /// mapping — forward-compat. The body text must be preserved.
     #[test]
-    fn test_409_already_exists() {
+    fn unknown_code_falls_back_to_status_mapping() {
         let err = map_http_error(
-            StatusCode::CONFLICT,
-            &error_model("box already exists", "AlreadyExistsError", 409),
+            StatusCode::IM_A_TEAPOT,
+            &body("can't brew", "TeapotError", "teapot_brewing_failed"),
         );
-        assert!(matches!(err, BoxliteError::AlreadyExists(_)));
+        match err {
+            BoxliteError::Internal(s) => {
+                assert!(s.contains("418"), "fallback should mention status: {s}");
+                assert!(
+                    s.contains("can't brew"),
+                    "fallback should mention body: {s}"
+                );
+            }
+            other => panic!("expected Internal fallback, got {other:?}"),
+        }
     }
 
+    /// Empty-body 502/503/504 ⇒ `Network`, not `Internal`. Pinned
+    /// because this is precisely the symptom of the user-reported
+    /// Clash proxy regression: the proxy returns 502 with no body
+    /// for unresolvable destinations.
     #[test]
-    fn test_409_invalid_state() {
-        let err = map_http_error(
-            StatusCode::CONFLICT,
-            &error_model("box is stopped", "InvalidStateError", 409),
-        );
-        assert!(matches!(err, BoxliteError::InvalidState(_)));
+    fn bare_5xx_without_envelope_is_network_error() {
+        for status_u16 in [502, 503, 504] {
+            let status = StatusCode::from_u16(status_u16).unwrap();
+            let err = map_http_status(status, "");
+            assert!(
+                matches!(err, BoxliteError::Network(_)),
+                "HTTP {} with empty body should map to Network, got {:?}",
+                status_u16,
+                err
+            );
+        }
     }
 
+    /// Bare 500 with no envelope is `Internal` (server-side bug, not
+    /// proxy). Distinct from 502/503/504 so the CLI can render
+    /// different remediation hints.
     #[test]
-    fn test_409_stopped() {
-        let err = map_http_error(
-            StatusCode::CONFLICT,
-            &error_model("box is stopped", "StoppedError", 409),
-        );
-        assert!(matches!(err, BoxliteError::Stopped(_)));
-    }
-
-    #[test]
-    fn test_400_invalid_argument() {
-        let err = map_http_error(
-            StatusCode::BAD_REQUEST,
-            &error_model("invalid cpus", "ValidationError", 400),
-        );
-        assert!(matches!(err, BoxliteError::InvalidArgument(_)));
-    }
-
-    #[test]
-    fn test_422_image_error() {
-        let err = map_http_error(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            &error_model("image not found", "ImageError", 422),
-        );
-        assert!(matches!(err, BoxliteError::Image(_)));
-    }
-
-    #[test]
-    fn test_401_auth_error() {
-        let err = map_http_error(
-            StatusCode::UNAUTHORIZED,
-            &error_model("invalid token", "AuthError", 401),
-        );
-        assert!(matches!(err, BoxliteError::Config(_)));
-    }
-
-    #[test]
-    fn test_500_internal_error() {
-        let err = map_http_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &error_model("server error", "InternalError", 500),
-        );
+    fn bare_500_without_envelope_is_internal() {
+        let err = map_http_status(StatusCode::INTERNAL_SERVER_ERROR, "");
         assert!(matches!(err, BoxliteError::Internal(_)));
     }
 
+    /// 401/403 status-only still routes to `Config("auth: …")` so the
+    /// CLI's auth-error classifier keeps working when the server
+    /// somehow emits 401 without our envelope.
     #[test]
-    fn test_map_status_fallback() {
-        let err = map_http_status(StatusCode::NOT_FOUND, "not found");
-        assert!(matches!(err, BoxliteError::NotFound(_)));
-
-        let err = map_http_status(StatusCode::FORBIDDEN, "forbidden");
+    fn bare_auth_status_routes_to_config() {
+        let err = map_http_status(StatusCode::UNAUTHORIZED, "no token");
         assert!(matches!(err, BoxliteError::Config(_)));
+        let err = map_http_status(StatusCode::FORBIDDEN, "wrong scope");
+        assert!(matches!(err, BoxliteError::Config(_)));
+    }
 
-        let err = map_http_status(StatusCode::INTERNAL_SERVER_ERROR, "oops");
-        assert!(matches!(err, BoxliteError::Internal(_)));
+    /// 404 status-only is `NotFound` regardless of body shape.
+    #[test]
+    fn bare_404_is_not_found() {
+        let err = map_http_status(StatusCode::NOT_FOUND, "");
+        assert!(matches!(err, BoxliteError::NotFound(_)));
     }
 }

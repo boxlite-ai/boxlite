@@ -339,15 +339,16 @@ pub struct BoxOptions {
     #[serde(default = "default_auto_remove")]
     pub auto_remove: bool,
 
-    /// Whether the box should continue running when the parent process exits.
+    /// Whether the box should outlive the process that created it.
     ///
-    /// When false (default), the box will automatically stop when the process
-    /// that created it exits. This ensures orphan boxes don't accumulate.
-    /// Similar to running a process in the foreground.
+    /// When false (default), the box stops when the runtime that created
+    /// it is dropped. Similar to running a process in the foreground.
     ///
-    /// When true, the box runs independently and survives parent process exit.
-    /// The box can be reattached using `runtime.get(box_id)`. Similar to
-    /// Docker's `-d` (detach) flag.
+    /// When true, the box runs independently and survives the host
+    /// process exiting — clean exit, panic, or SIGKILL. A new runtime in
+    /// any process can reattach via `runtime.get(box_id)`. The only ways
+    /// to stop a detached box are `runtime.get(box_id).stop()` and
+    /// `boxlite stop <id>`. Similar to Docker's `-d` (detach) flag.
     #[serde(default = "default_detach")]
     pub detach: bool,
 

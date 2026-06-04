@@ -172,7 +172,12 @@ impl RootfsBuilder {
             ));
         }
 
-        // Extract layers sequentially directly to dest
+        // One extractor across all layers — directory mode metadata is
+        // deferred until finalize(), so a restrictive parent (e.g. RHEL UBI's
+        // `/usr/bin` 0o555) doesn't get chmod'd narrow between layers and
+        // block the next layer's unlink. See the regression test
+        // `cross_layer_overwrite_through_readonly_parent_dir`.
+        let mut extractor = LayerExtractor::new(dest);
         for (idx, tarball) in layer_tarballs.iter().enumerate() {
             tracing::debug!(
                 "Extracting layer {}/{}: {}",
@@ -180,10 +185,12 @@ impl RootfsBuilder {
                 layer_tarballs.len(),
                 tarball.display()
             );
-            LayerExtractor::new(dest).extract_tarball(tarball)?;
+            extractor.extract_tarball(tarball)?;
         }
+        extractor.finalize()?;
 
-        // Fix permissions
+        // Fix permissions (runs after extractor.finalize so the xattr
+        // sync at operations.rs:236 sees the finalized on-disk modes).
         crate::rootfs::operations::fix_rootfs_permissions(dest)?;
 
         tracing::info!("✅ Rootfs prepared using extraction-based mount");

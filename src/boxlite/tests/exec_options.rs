@@ -93,6 +93,79 @@ async fn test_timeout_kills_long_command() {
     tb.teardown().await;
 }
 
+/// Regression test for exec timeout bypass via SIGALRM.
+///
+/// Companion to the Python-SDK PoC at
+/// `sdks/python/tests/test_exec_timeout_sigalrm.py`. The guest's timeout
+/// watcher must use SIGKILL (uncatchable). If it sends SIGALRM (catchable),
+/// the workload below — a shell that installs `trap '' ALRM` and then
+/// sleeps for 15 seconds — absorbs the signal, the underlying `sleep`
+/// runs to its natural end, and exec returns `exit_code=0` after ~15s,
+/// bypassing the 2-second deadline.
+///
+/// The fix lives in `src/guest/src/service/exec/timeout.rs`.
+#[tokio::test]
+async fn test_timeout_kills_sigalrm_ignoring_process() {
+    let tb = TestBox::new().await;
+
+    let start = std::time::Instant::now();
+    let execution = tb
+        .handle
+        .exec(
+            BoxCommand::new("sh")
+                .args(["-c", "trap '' ALRM; sleep 15"])
+                .timeout(Duration::from_secs(2)),
+        )
+        .await
+        .expect("exec failed");
+
+    let result = execution.wait().await.expect("wait failed");
+    let elapsed = start.elapsed();
+
+    assert_ne!(
+        result.exit_code, 0,
+        "timeout bypass: shell exited with exit_code=0 after {elapsed:?} \
+         despite timeout=2s — the guest is sending a catchable signal that \
+         the shell absorbs via `trap '' ALRM`; the kill must use SIGKILL"
+    );
+    assert!(
+        elapsed < Duration::from_secs(8),
+        "timeout did not curtail the workload: elapsed={elapsed:?} \
+         (expected near 2s, workload was 15s) — the watcher is not killing \
+         the process promptly"
+    );
+
+    tb.teardown().await;
+}
+
+/// A TTY exec must run to natural completion and surface its real exit code
+/// through the zygote's `waitpid` — not lose it or default to 0.
+///
+/// libcontainer 0.6's `check_terminal` forced TTY execs onto the
+/// `with_detach(true)` + console-socket path. Detach changes how youki starts
+/// the process, so this guards that the zygote still reaps the detached PTY
+/// child and returns its exit status. The existing `resize_tty` tests only
+/// `kill()` then `wait()`; none assert a *natural* exit code for a TTY exec.
+#[tokio::test]
+async fn test_tty_exec_collects_natural_exit_code() {
+    let tb = TestBox::new().await;
+
+    let execution = tb
+        .handle
+        .exec(BoxCommand::new("sh").args(["-c", "exit 7"]).tty(true))
+        .await
+        .expect("tty exec failed to spawn");
+
+    let result = execution.wait().await.expect("wait failed");
+    assert_eq!(
+        result.exit_code, 7,
+        "TTY exec exit code must propagate through the zygote reaper; got {}",
+        result.exit_code
+    );
+
+    tb.teardown().await;
+}
+
 /// Combine working_dir and user in a single command.
 #[tokio::test]
 async fn test_working_dir_with_user() {

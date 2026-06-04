@@ -21,6 +21,7 @@ import { Runner } from '../../sandbox/entities/runner.entity'
 import { RegionType } from '../enums/region-type.enum'
 import { CreateRegionResponseDto } from '../dto/create-region.dto'
 import { generateApiKeyHash, generateApiKeyValue, generateRandomString } from '../../common/utils/api-key'
+import { TypedConfigService } from '../../config/typed-config.service'
 import { RegionDto } from '../dto/region.dto'
 import { EventEmitter2 } from '@nestjs/event-emitter'
 import { RegionEvents } from '../constants/region-events.constant'
@@ -51,6 +52,7 @@ export class RegionService {
     @InjectRepository(Snapshot)
     private readonly snapshotRepository: Repository<Snapshot>,
     @InjectRedis() private readonly redis: Redis,
+    private readonly configService: TypedConfigService,
   ) {}
 
   /**
@@ -78,8 +80,12 @@ export class RegionService {
     }
 
     try {
-      const proxyApiKey = createRegionDto.proxyUrl ? generateApiKeyValue() : undefined
-      const sshGatewayApiKey = createRegionDto.sshGatewayUrl ? generateApiKeyValue() : undefined
+      const proxyApiKey = createRegionDto.proxyUrl
+        ? generateApiKeyValue(this.configService.getOrThrow('apiKey.prefix'), 'svc')
+        : undefined
+      const sshGatewayApiKey = createRegionDto.sshGatewayUrl
+        ? generateApiKeyValue(this.configService.getOrThrow('apiKey.prefix'), 'svc')
+        : undefined
 
       const snapshotManagerUsername = createRegionDto.snapshotManagerUrl ? 'boxlite' : undefined
       const snapshotManagerPassword = createRegionDto.snapshotManagerUrl ? generateRandomString(16) : undefined
@@ -358,7 +364,7 @@ export class RegionService {
       throw new BadRequestException('Region does not have a proxy URL configured')
     }
 
-    const newApiKey = generateApiKeyValue()
+    const newApiKey = generateApiKeyValue(this.configService.getOrThrow('apiKey.prefix'), 'svc')
     region.proxyApiKeyHash = generateApiKeyHash(newApiKey)
 
     await this.regionRepository.save(region)
@@ -383,7 +389,7 @@ export class RegionService {
       throw new BadRequestException('Region does not have an SSH gateway URL configured')
     }
 
-    const newApiKey = generateApiKeyValue()
+    const newApiKey = generateApiKeyValue(this.configService.getOrThrow('apiKey.prefix'), 'svc')
     region.sshGatewayApiKeyHash = generateApiKeyHash(newApiKey)
 
     await this.regionRepository.save(region)

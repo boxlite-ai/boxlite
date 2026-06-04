@@ -351,7 +351,10 @@ async fn jailer_creates_isolated_mount_namespace() {
         .join("boxes")
         .join(t.bx.id().as_str())
         .join("shim.pid");
-    let shim_pid = boxlite::util::read_pid_file(&pid_file).expect("Should read shim PID file");
+    let shim_pid = boxlite::util::PidFileReader::at(&pid_file)
+        .read()
+        .map(|r| r.pid)
+        .expect("Should read shim PID file");
 
     let self_mnt_ns =
         std::fs::read_link("/proc/self/ns/mnt").expect("Should read own mount namespace");

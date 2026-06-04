@@ -135,7 +135,14 @@ impl FilesystemLayout {
     }
 
     pub fn logs_dir(&self) -> PathBuf {
-        self.home_dir.join(dirs::LOGS_DIR)
+        Self::logs_dir_for(&self.home_dir)
+    }
+
+    /// Compute the logs dir for a given home directory without constructing
+    /// a full `FilesystemLayout`. Used by logging init paths that run before
+    /// the runtime (and thus before the layout) is built.
+    pub fn logs_dir_for(home_dir: &Path) -> PathBuf {
+        home_dir.join(dirs::LOGS_DIR)
     }
 
     /// OCI images layers storage: ~/.boxlite/images/layers
@@ -508,6 +515,15 @@ impl BoxFilesystemLayout {
     /// Follows Podman's conmon pattern for capturing exit information.
     pub fn exit_file_path(&self) -> PathBuf {
         self.box_dir.join("exit")
+    }
+
+    /// Archived exit file from the previous lifecycle: `~/.boxlite/boxes/{box_id}/exit.previous`.
+    ///
+    /// Single-slot rotation: a successful start or recovery-with-alive-shim
+    /// renames `exit` → `exit.previous`, preserving the prior crash record
+    /// while freeing the canonical slot for the next crash.
+    pub fn exit_previous_path(&self) -> PathBuf {
+        self.box_dir.join("exit.previous")
     }
 
     /// Stderr file path: ~/.boxlite/boxes/{box_id}/shim.stderr

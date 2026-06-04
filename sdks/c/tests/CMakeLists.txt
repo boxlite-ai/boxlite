@@ -37,6 +37,7 @@ include_directories(${BOXLITE_INCLUDE_DIR})
 set(TEST_TARGETS
     test_simple_api
     test_null_callback
+    test_rest
 )
 
 foreach(TARGET ${TEST_TARGETS})
@@ -71,6 +72,9 @@ set_tests_properties(test_simple_api PROPERTIES LABELS "integration")
 # test_null_callback only exercises the FFI argument-validation path;
 # no VM is required, but we still link the runtime dylib.
 set_tests_properties(test_null_callback PROPERTIES LABELS "ffi")
+# REST runtime construction does no I/O (lazy connect), so it is a
+# true unit test — runs under `make test:unit:c` (ctest -L unit).
+set_tests_properties(test_rest PROPERTIES LABELS "unit")
 
 message(STATUS "BoxLite C Tests Configuration:")
 message(STATUS "  Include dir: ${BOXLITE_INCLUDE_DIR}")

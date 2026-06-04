@@ -10,13 +10,18 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
+use axum::extract::{Request, State};
 use axum::http::StatusCode;
+use axum::http::header::AUTHORIZATION;
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use clap::Args;
 use futures::StreamExt;
 use tokio::sync::RwLock;
+use tower_http::catch_panic::CatchPanicLayer;
+use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 
 use boxlite::runtime::options::{NetworkConfig, NetworkMode};
 use boxlite::{
@@ -25,6 +30,7 @@ use boxlite::{
 };
 
 use crate::cli::GlobalFlags;
+use crate::defaults::{LOCAL_SERVE_HOST, LOCAL_SERVE_PORT};
 
 use self::types::{BoxResponse, CreateBoxRequest, ErrorBody, ErrorDetail, ExecRequest};
 
@@ -34,13 +40,20 @@ use self::types::{BoxResponse, CreateBoxRequest, ErrorBody, ErrorDetail, ExecReq
 
 #[derive(Args, Debug)]
 pub struct ServeArgs {
-    /// Port to listen on
-    #[arg(long, default_value = "8100")]
+    /// Port to listen on. Defaults to `LOCAL_SERVE_PORT`.
+    #[arg(long, default_value_t = LOCAL_SERVE_PORT)]
     pub port: u16,
 
-    /// Host/address to bind to
-    #[arg(long, default_value = "0.0.0.0")]
+    /// Host/address to bind to. Defaults to `LOCAL_SERVE_HOST`.
+    #[arg(long, default_value_t = LOCAL_SERVE_HOST.to_string())]
     pub host: String,
+
+    /// Optional expected API key. When set, every route except
+    /// `GET /v1/config` requires `Authorization: Bearer <this>` (constant-time
+    /// match) and returns 401 otherwise. Unset = permissive (accepts any/no
+    /// bearer) — the zero-config local-dev default.
+    #[arg(long, env = "BOXLITE_SERVE_API_KEY")]
+    pub api_key: Option<String>,
 }
 
 // ============================================================================
@@ -55,6 +68,9 @@ struct AppState {
     /// `Arc` so attach sessions can drop the map lock before doing
     /// long-running WS pumping while keeping the exec alive.
     executions: RwLock<HashMap<String, Arc<ActiveExecution>>>,
+    /// Optional expected API key (`--api-key` / `$BOXLITE_SERVE_API_KEY`).
+    /// `None` ⇒ permissive (no auth enforced).
+    api_key: Option<String>,
 }
 
 /// Server-side state for one execution. The underlying `Execution`'s
@@ -601,12 +617,6 @@ async fn try_kill_and_evict(state: &AppState, id: &str, active: &Arc<ActiveExecu
 }
 
 // ============================================================================
-// Error Constants
-// ============================================================================
-
-const ERROR_AUTH: &str = "AuthError";
-
-// ============================================================================
 // Conversions
 // ============================================================================
 
@@ -687,28 +697,112 @@ fn build_box_command(req: &ExecRequest) -> BoxCommand {
 // Error Helpers
 // ============================================================================
 
-fn error_response(status: StatusCode, message: impl Into<String>, error_type: &str) -> Response {
+/// Build a JSON error response with the canonical wire envelope.
+///
+/// `error_type` and `code` are caller-supplied because some sites
+/// (auth middleware, handler timeout, schema-validation rejection) emit
+/// errors that don't correspond to a `BoxliteError` variant. For
+/// `BoxliteError` paths use [`error_from_boxlite`] instead — it dispatches
+/// to the single source of truth in `BoxliteError::http()`.
+fn error_response(
+    status: StatusCode,
+    message: impl Into<String>,
+    error_type: &str,
+    code: &str,
+) -> Response {
     let body = ErrorBody {
         error: ErrorDetail {
             message: message.into(),
             error_type: error_type.to_string(),
-            code: status.as_u16(),
+            code: code.to_string(),
+            request_id: None,
         },
     };
     (status, Json(body)).into_response()
 }
 
-fn classify_boxlite_error(err: &boxlite::BoxliteError) -> (StatusCode, &'static str) {
-    let msg = err.to_string().to_lowercase();
-    if msg.contains("not found") {
-        (StatusCode::NOT_FOUND, "NotFoundError")
-    } else if msg.contains("already") || msg.contains("conflict") {
-        (StatusCode::CONFLICT, "ConflictError")
-    } else if msg.contains("unsupported") {
-        (StatusCode::BAD_REQUEST, "UnsupportedError")
-    } else {
-        (StatusCode::INTERNAL_SERVER_ERROR, "InternalError")
+/// Map a `BoxliteError` to its canonical HTTP response. Delegates the
+/// (status, type, code) decision to `BoxliteError::http()` so the mapping
+/// is exhaustive at compile time — adding a new variant becomes a build
+/// error in `errors.rs`, never a silent 500.
+fn error_from_boxlite(err: &boxlite::BoxliteError) -> Response {
+    let (code, etype, ecode) = err.http();
+    let status = StatusCode::from_u16(code)
+        .expect("BoxliteError::http() must return a valid HTTP status code");
+    error_response(status, err.to_string(), etype, ecode)
+}
+
+/// Panic handler for [`CatchPanicLayer`]. Turns a handler panic into a
+/// `500 InternalError internal` response with our wire envelope —
+/// otherwise axum's default returns an empty `500 Internal Server Error`
+/// with no body, breaking the client's `map_http_status` 500-vs-Network
+/// distinction.
+fn handle_panic(err: Box<dyn std::any::Any + Send + 'static>) -> Response {
+    let detail = err
+        .downcast_ref::<&'static str>()
+        .map(|s| s.to_string())
+        .or_else(|| err.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "panic in handler".to_string());
+    tracing::error!(panic = %detail, "handler panicked");
+    error_response(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        format!("internal error: {}", detail),
+        "InternalError",
+        "internal",
+    )
+}
+
+/// Pure auth decision (unit-tested). `true` = allow. `expected == None` ⇒
+/// permissive (no key configured). `GET /v1/config` is always public
+/// (pre-auth capability discovery). Otherwise the presented bearer must
+/// match `expected` (constant-time).
+fn auth_allows(expected: Option<&str>, path: &str, bearer: Option<&str>) -> bool {
+    let Some(expected) = expected else {
+        return true;
+    };
+    if path == "/v1/config" {
+        return true;
     }
+    match bearer {
+        Some(tok) => constant_time_eq(tok.as_bytes(), expected.as_bytes()),
+        None => false,
+    }
+}
+
+/// Auth middleware: thin axum adapter over [`auth_allows`]. 401 in the
+/// standard error shape when denied.
+async fn require_api_key(State(state): State<Arc<AppState>>, req: Request, next: Next) -> Response {
+    let bearer = req
+        .headers()
+        .get(AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| {
+            v.strip_prefix("Bearer ")
+                .or_else(|| v.strip_prefix("bearer "))
+        });
+    if auth_allows(state.api_key.as_deref(), req.uri().path(), bearer) {
+        next.run(req).await
+    } else {
+        error_response(
+            StatusCode::UNAUTHORIZED,
+            "invalid or missing API key",
+            "AuthError",
+            "unauthenticated",
+        )
+    }
+}
+
+/// Length-checked constant-time byte compare — avoids a timing oracle on the
+/// configured token without pulling in a crate.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
 }
 
 // ============================================================================
@@ -733,11 +827,9 @@ async fn get_or_fetch_box(state: &AppState, box_id: &str) -> Result<Arc<LiteBox>
             StatusCode::NOT_FOUND,
             format!("box not found: {box_id}"),
             "NotFoundError",
+            "not_found",
         )),
-        Err(e) => {
-            let (status, etype) = classify_boxlite_error(&e);
-            Err(error_response(status, e.to_string(), etype))
-        }
+        Err(e) => Err(error_from_boxlite(&e)),
     }
 }
 
@@ -746,88 +838,109 @@ async fn get_or_fetch_box(state: &AppState, box_id: &str) -> Result<Arc<LiteBox>
 // ============================================================================
 
 fn build_router(state: Arc<AppState>) -> Router {
-    use handlers::{advanced, auth, boxes, config, executions, files, metrics, snapshots};
+    use handlers::{advanced, boxes, config, executions, files, me, metrics, snapshots};
 
     Router::new()
-        // Auth & config (no tenant prefix)
-        .route("/v1/oauth/tokens", post(auth::oauth_token))
+        // Identity (no tenant prefix)
+        .route("/v1/me", get(me::get_me))
         .route("/v1/config", get(config::get_config))
         // Runtime metrics
-        .route("/v1/default/metrics", get(metrics::runtime_metrics))
+        .route("/v1/metrics", get(metrics::runtime_metrics))
         // Box CRUD (import first — static path before param path)
-        .route("/v1/default/boxes/import", post(advanced::import_box))
+        .route("/v1/boxes/import", post(advanced::import_box))
         .route(
-            "/v1/default/boxes",
+            "/v1/boxes",
             post(boxes::create_box).get(boxes::list_boxes),
         )
         .route(
-            "/v1/default/boxes/{box_id}",
+            "/v1/boxes/{box_id}",
             get(boxes::get_box)
                 .delete(boxes::remove_box)
                 .head(boxes::head_box),
         )
         // Box lifecycle
         .route(
-            "/v1/default/boxes/{box_id}/start",
+            "/v1/boxes/{box_id}/start",
             post(boxes::start_box),
         )
         .route(
-            "/v1/default/boxes/{box_id}/stop",
+            "/v1/boxes/{box_id}/stop",
             post(boxes::stop_box),
         )
         // Box metrics
         .route(
-            "/v1/default/boxes/{box_id}/metrics",
+            "/v1/boxes/{box_id}/metrics",
             get(metrics::box_metrics),
         )
         // Execution
         .route(
-            "/v1/default/boxes/{box_id}/exec",
+            "/v1/boxes/{box_id}/exec",
             post(executions::start_execution),
         )
         .route(
-            "/v1/default/boxes/{box_id}/executions/{exec_id}",
+            "/v1/boxes/{box_id}/executions/{exec_id}",
             get(executions::get_execution).delete(executions::kill_execution),
         )
         .route(
-            "/v1/default/boxes/{box_id}/executions/{exec_id}/attach",
+            "/v1/boxes/{box_id}/executions/{exec_id}/attach",
             get(executions::attach_execution),
         )
         .route(
-            "/v1/default/boxes/{box_id}/executions/{exec_id}/signal",
+            "/v1/boxes/{box_id}/executions/{exec_id}/signal",
             post(executions::send_signal),
         )
         .route(
-            "/v1/default/boxes/{box_id}/executions/{exec_id}/resize",
+            "/v1/boxes/{box_id}/executions/{exec_id}/resize",
             post(executions::resize_tty),
         )
         // Files
         .route(
-            "/v1/default/boxes/{box_id}/files",
+            "/v1/boxes/{box_id}/files",
             put(files::upload_files).get(files::download_files),
         )
         // Snapshots
         .route(
-            "/v1/default/boxes/{box_id}/snapshots",
+            "/v1/boxes/{box_id}/snapshots",
             post(snapshots::create_snapshot).get(snapshots::list_snapshots),
         )
         .route(
-            "/v1/default/boxes/{box_id}/snapshots/{name}",
+            "/v1/boxes/{box_id}/snapshots/{name}",
             get(snapshots::get_snapshot).delete(snapshots::delete_snapshot),
         )
         .route(
-            "/v1/default/boxes/{box_id}/snapshots/{name}/restore",
+            "/v1/boxes/{box_id}/snapshots/{name}/restore",
             post(snapshots::restore_snapshot),
         )
         // Clone & export
         .route(
-            "/v1/default/boxes/{box_id}/clone",
+            "/v1/boxes/{box_id}/clone",
             post(advanced::clone_box),
         )
         .route(
-            "/v1/default/boxes/{box_id}/export",
+            "/v1/boxes/{box_id}/export",
             post(advanced::export_box),
         )
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_api_key,
+        ))
+        // Middleware stack (outermost first, applied in reverse):
+        // 1. SetRequestIdLayer — read X-Request-Id from request, or mint
+        //    a UUID. Stored in request extensions for downstream handlers
+        //    and tracing spans.
+        // 2. PropagateRequestIdLayer — copy the request-id onto the
+        //    response headers so clients can correlate to server logs.
+        // 3. CatchPanicLayer — handler panic ⇒ 500 with our envelope.
+        //    Without this, axum returns an empty 500 which the client
+        //    mis-classifies as a proxy/Network error.
+        //
+        // Skipped (intentionally): TimeoutLayer. boxlite handlers have
+        // operation-specific timeouts (signal/kill use 10s, image pulls
+        // can legitimately take minutes). A global request timeout would
+        // break long-running ops.
+        .layer(CatchPanicLayer::custom(handle_panic))
+        .layer(PropagateRequestIdLayer::x_request_id())
+        .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid))
         .with_state(state)
 }
 
@@ -842,6 +955,7 @@ pub async fn execute(args: ServeArgs, global: &GlobalFlags) -> anyhow::Result<()
         runtime,
         boxes: RwLock::new(HashMap::new()),
         executions: RwLock::new(HashMap::new()),
+        api_key: args.api_key.clone(),
     });
 
     // Phase 5.7: spawn the orphan reaper. Same escalation policy as the
@@ -873,6 +987,35 @@ pub async fn execute(args: ServeArgs, global: &GlobalFlags) -> anyhow::Result<()
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    // --- API-key auth decision (pure; no runtime/network needed) ---
+
+    #[test]
+    fn auth_allows_permissive_when_no_key() {
+        assert!(auth_allows(None, "/v1/boxes", None));
+        assert!(auth_allows(None, "/v1/me", Some("anything")));
+    }
+
+    #[test]
+    fn auth_allows_config_public_even_with_key() {
+        assert!(auth_allows(Some("k"), "/v1/config", None));
+    }
+
+    #[test]
+    fn auth_allows_requires_exact_bearer_when_key_set() {
+        assert!(auth_allows(Some("k"), "/v1/me", Some("k")));
+        assert!(!auth_allows(Some("k"), "/v1/me", Some("wrong")));
+        assert!(!auth_allows(Some("k"), "/v1/me", None));
+        assert!(!auth_allows(Some("k"), "/v1/boxes", Some("")));
+    }
+
+    #[test]
+    fn constant_time_eq_basic() {
+        assert!(constant_time_eq(b"abc", b"abc"));
+        assert!(!constant_time_eq(b"abc", b"abd"));
+        assert!(!constant_time_eq(b"abc", b"abcd"));
+        assert!(constant_time_eq(b"", b""));
+    }
 
     /// Build an `ActiveExecution` backed by a stub `Execution` whose
     /// stdout/stderr/result channels we control from the test.

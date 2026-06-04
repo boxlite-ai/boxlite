@@ -341,6 +341,38 @@ fn build_process_spec(
         .map_err(|e| BoxliteError::Internal(format!("Failed to build process spec: {}", e)))
 }
 
+/// Build an OCI `Process` for a TTY tenant exec, with `terminal=true`.
+///
+/// libcontainer 0.6's `check_terminal` rejects a console socket unless the
+/// process declares `terminal=true` (and the build is detached). The tenant
+/// builder has no per-exec terminal setter, so this Process is serialized to a
+/// process.json and passed via `ContainerBuilder::with_process`. Same shape as
+/// `build_process_spec` but with the terminal flag on.
+pub(crate) fn build_tty_exec_process(
+    args: &[String],
+    env: &[String],
+    cwd: &str,
+    uid: u32,
+    gid: u32,
+) -> BoxliteResult<oci_spec::runtime::Process> {
+    let user = UserBuilder::default()
+        .uid(uid)
+        .gid(gid)
+        .build()
+        .map_err(|e| BoxliteError::Internal(format!("Failed to build user spec: {}", e)))?;
+
+    ProcessBuilder::default()
+        .terminal(true)
+        .user(user)
+        .args(args.to_vec())
+        .env(env)
+        .cwd(cwd)
+        .capabilities(build_default_capabilities()?)
+        .no_new_privileges(false)
+        .build()
+        .map_err(|e| BoxliteError::Internal(format!("Failed to build tty exec process: {}", e)))
+}
+
 /// Build root filesystem specification
 fn build_root_spec(rootfs: &str) -> BoxliteResult<oci_spec::runtime::Root> {
     RootBuilder::default()

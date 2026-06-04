@@ -86,6 +86,9 @@ install_system_deps() {
         # Python
         python3
         python3-pip
+
+        # C SDK test harness (sdks/c/tests/CMakeLists.txt)
+        cmake              # Configure/build/run C SDK unit + integration tests
     )
 
     for pkg in "${packages[@]}"; do

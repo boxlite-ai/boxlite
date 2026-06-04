@@ -31,8 +31,7 @@ class ReferenceServerConfigTests(unittest.TestCase):
         self.assertEqual(
             server.jwt_expiry_seconds, CONFIG.DEFAULT_SERVER_JWT_EXPIRY_SECONDS
         )
-        self.assertEqual(server.client_id, CONFIG.DEFAULT_SERVER_CLIENT_ID)
-        self.assertEqual(server.client_secret, CONFIG.DEFAULT_SERVER_CLIENT_SECRET)
+        self.assertIsNone(server.api_key)
         self.assertEqual(runtime.home_dir, CONFIG.default_runtime_home_dir())
         self.assertEqual(
             runtime.image_registries, CONFIG.DEFAULT_RUNTIME_IMAGE_REGISTRIES
@@ -48,8 +47,7 @@ class ReferenceServerConfigTests(unittest.TestCase):
                     "BOXLITE_SERVER_LOG_LEVEL": "debug",
                     "BOXLITE_SERVER_JWT_SECRET": "secret-123",
                     "BOXLITE_SERVER_JWT_EXPIRY_SECONDS": "7200",
-                    "BOXLITE_SERVER_CLIENT_ID": "client-123",
-                    "BOXLITE_SERVER_CLIENT_SECRET": "secret-456",
+                    "BOXLITE_SERVER_API_KEY": "k-abc",
                     "BOXLITE_RUNTIME_HOME_DIR": temp_home,
                     "BOXLITE_RUNTIME_IMAGE_REGISTRIES": "ghcr.io,docker.io",
                 },
@@ -63,8 +61,7 @@ class ReferenceServerConfigTests(unittest.TestCase):
         self.assertEqual(server.log_level, "debug")
         self.assertEqual(server.jwt_secret, "secret-123")
         self.assertEqual(server.jwt_expiry_seconds, 7200)
-        self.assertEqual(server.client_id, "client-123")
-        self.assertEqual(server.client_secret, "secret-456")
+        self.assertEqual(server.api_key, "k-abc")
         self.assertEqual(runtime.home_dir, temp_home)
         self.assertEqual(runtime.image_registries, ["ghcr.io", "docker.io"])
 
@@ -97,6 +94,18 @@ class ReferenceServerConfigTests(unittest.TestCase):
         with patch.dict(os.environ, {"BOXLITE_SERVER_LOG_LEVEL": "verbose"}, clear=True):
             with self.assertRaisesRegex(ValueError, "log level must be one of"):
                 CONFIG.load_server_config_from_env()
+
+    def test_api_key_empty_or_whitespace_is_none_else_trimmed(self) -> None:
+        for raw in ("", "   "):
+            with patch.dict(os.environ, {"BOXLITE_SERVER_API_KEY": raw}, clear=True):
+                server = CONFIG.load_server_config_from_env()
+            self.assertIsNone(server.api_key)
+
+        with patch.dict(
+            os.environ, {"BOXLITE_SERVER_API_KEY": "  k-trim  "}, clear=True
+        ):
+            server = CONFIG.load_server_config_from_env()
+        self.assertEqual(server.api_key, "k-trim")
 
     def test_cli_overrides_env_for_host_port_and_log_level(self) -> None:
         with patch.dict(

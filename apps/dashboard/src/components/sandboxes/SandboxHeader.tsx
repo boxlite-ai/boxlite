@@ -38,7 +38,12 @@ interface SandboxHeaderProps {
   onCreateSshAccess: () => void
   onRevokeSshAccess: () => void
   onScreenRecordings: () => void
-  mutations: { start: boolean; stop: boolean; archive: boolean; recover: boolean }
+  mutations: {
+    start: boolean
+    stop: boolean
+    archive: boolean
+    recover: boolean
+  }
 }
 
 export function SandboxHeader({
@@ -61,7 +66,7 @@ export function SandboxHeader({
   mutations,
 }: SandboxHeaderProps) {
   return (
-    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 min-w-0 px-4 sm:px-5 py-2 border-b border-border shrink-0">
+    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 min-w-0 px-4 sm:px-5 py-1.5 sm:py-2 border-b border-border shrink-0">
       <div className="flex items-center gap-2 min-w-0">
         <Button variant="ghost" size="icon-sm" className="shrink-0" onClick={onBack}>
           <ArrowLeft className="size-4" />
@@ -74,7 +79,7 @@ export function SandboxHeader({
               <h2 className="text-base font-medium truncate">{sandbox.name || sandbox.id}</h2>
               <CopyButton value={sandbox.name || sandbox.id} tooltipText="Copy name" size="icon-xs" />
             </div>
-            <div className="flex items-center gap-1 min-w-0">
+            <div className="hidden sm:flex items-center gap-1 min-w-0">
               <span className="text-xs text-muted-foreground shrink-0">UUID</span>
               <span className="text-sm text-muted-foreground font-mono truncate">{sandbox.id}</span>
               <CopyButton value={sandbox.id} tooltipText="Copy ID" size="icon-xs" />
@@ -122,6 +127,12 @@ export function SandboxHeader({
                       </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end" className="w-48">
+                      <DropdownMenuGroup className="sm:hidden">
+                        <DropdownMenuItem onClick={onRefresh} disabled={isFetching}>
+                          Refresh
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                      </DropdownMenuGroup>
                       <DropdownMenuGroup>
                         <DropdownMenuItem onClick={onCreateSshAccess} disabled={actionsDisabled}>
                           Create SSH Access
@@ -158,7 +169,14 @@ export function SandboxHeader({
                   </DropdownMenu>
                 </ButtonGroup>
               )}
-              <Button variant="ghost" size="icon-sm" onClick={onRefresh} disabled={isFetching} title="Refresh">
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={onRefresh}
+                disabled={isFetching}
+                title="Refresh"
+                className="hidden sm:inline-flex"
+              >
                 {isFetching ? <Spinner className="size-4" /> : <RefreshCw className="size-4" />}
               </Button>
             </div>

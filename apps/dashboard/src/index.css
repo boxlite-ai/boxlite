@@ -135,13 +135,7 @@ body {
 
   body {
     @apply bg-background text-foreground;
-    font-family:
-      'IBM Plex Mono',
-      'JetBrains Mono',
-      'SFMono-Regular',
-      'SF Mono',
-      ui-monospace,
-      monospace;
+    font-family: 'IBM Plex Mono', 'JetBrains Mono', 'SFMono-Regular', 'SF Mono', ui-monospace, monospace;
     line-height: 1.45;
   }
 

@@ -48,7 +48,12 @@ pub enum NetworkBackendEndpoint {
 ///
 /// This is the only struct that callers need to know about - they don't need
 /// to know which backend will be used.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+///
+/// `Debug` is implemented manually (see below) because `ca_key_pem` is a
+/// PKCS8 CA private key and the derived form would print it in full into
+/// any log line that uses `{:?}`. `secrets` already redacts via
+/// [`Secret`](crate::runtime::options::Secret)'s own `Debug` impl.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct NetworkBackendConfig {
     /// Port mappings: (host_port, guest_port)
     pub port_mappings: Vec<(u16, u16)>,
@@ -78,6 +83,25 @@ impl NetworkBackendConfig {
             ca_cert_pem: None,
             ca_key_pem: None,
         }
+    }
+}
+
+impl std::fmt::Debug for NetworkBackendConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NetworkBackendConfig")
+            .field("port_mappings", &self.port_mappings)
+            .field("socket_path", &self.socket_path)
+            .field("allow_net", &self.allow_net)
+            .field("secrets", &self.secrets)
+            .field(
+                "ca_cert_pem",
+                &self.ca_cert_pem.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "ca_key_pem",
+                &self.ca_key_pem.as_ref().map(|_| "[REDACTED]"),
+            )
+            .finish()
     }
 }
 
@@ -171,5 +195,40 @@ impl NetworkBackendFactory {
             tracing::info!("No network backend - engine will use default net");
             Ok(None)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Defense-in-depth: `Debug` must not print the CA private key or cert
+    /// PEM. The derived `Debug` previously did; a manual impl now redacts.
+    #[test]
+    fn debug_redacts_ca_pem_fields() {
+        let key_sentinel = "----BEGIN PRIVATE KEY----TOPSECRETPKCS8";
+        let cert_sentinel = "----BEGIN CERTIFICATE----TOPSECRETCERT";
+        let mut config =
+            NetworkBackendConfig::new(vec![(8080, 80)], PathBuf::from("/tmp/test-net.sock"));
+        config.ca_key_pem = Some(key_sentinel.to_string());
+        config.ca_cert_pem = Some(cert_sentinel.to_string());
+
+        let rendered = format!("{:?}", config);
+
+        assert!(
+            !rendered.contains(key_sentinel),
+            "Debug leaked ca_key_pem: {}",
+            rendered
+        );
+        assert!(
+            !rendered.contains(cert_sentinel),
+            "Debug leaked ca_cert_pem: {}",
+            rendered
+        );
+        assert!(
+            rendered.contains("[REDACTED]"),
+            "expected redaction marker, got: {}",
+            rendered
+        );
     }
 }

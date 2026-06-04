@@ -116,11 +116,36 @@ export interface JsImageRegistry {
   auth?: JsImageRegistryAuth;
 }
 
-export interface JsBoxliteRestOptions {
-  url: string;
-  clientId?: string;
-  clientSecret?: string;
-  prefix?: string;
+/** A bearer token plus its expiry. `expiresAt` is epoch seconds, or
+ *  `null` for non-expiring tokens (e.g. API keys). */
+export interface JsAccessToken {
+  token: string;
+  expiresAt?: number | null;
+}
+
+/** Native API-key credential class. Concrete implementation of the
+ *  `Credential` interface (see ./credential). */
+export interface ApiKeyCredential {
+  getToken(): JsAccessToken;
+}
+
+export interface ApiKeyCredentialConstructor {
+  new (key: string): ApiKeyCredential;
+  /** Build from `BOXLITE_API_KEY`; returns `null` when unset/empty. */
+  fromEnv(): ApiKeyCredential | null;
+}
+
+/** Native REST options class. Internal binding twin — the *public*
+ *  `BoxliteRestOptions` is the pure-TS class in ./options; this opaque
+ *  handle is constructed from it and consumed by `JsBoxlite.rest`. */
+export type NativeBoxliteRestOptions = object;
+
+export interface NativeBoxliteRestOptionsConstructor {
+  new (
+    url: string,
+    credential?: ApiKeyCredential | null,
+    prefix?: string | null,
+  ): NativeBoxliteRestOptions;
 }
 
 export type JsHealthState = "None" | "Starting" | "Healthy" | "Unhealthy";
@@ -293,10 +318,14 @@ export interface JsBoxliteConstructor {
   new (options: JsOptions): JsBoxlite;
   withDefaultConfig(): JsBoxlite;
   initDefault(options: JsOptions): void;
-  rest(options: JsBoxliteRestOptions): JsBoxlite;
+  /** Connect to a remote BoxLite REST server. Takes the native
+   *  `BoxliteRestOptions` class (see `NativeBoxliteRestOptions`). */
+  rest(options: NativeBoxliteRestOptions): JsBoxlite;
 }
 
 export interface NativeModule {
   JsBoxlite: JsBoxliteConstructor;
+  ApiKeyCredential: ApiKeyCredentialConstructor;
+  JsBoxliteRestOptions: NativeBoxliteRestOptionsConstructor;
   [key: string]: unknown;
 }

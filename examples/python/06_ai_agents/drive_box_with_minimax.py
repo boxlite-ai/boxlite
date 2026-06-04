@@ -12,10 +12,9 @@ MiniMax uses an OpenAI-compatible API, so we reuse the openai SDK
 with a custom base_url pointing to MiniMax's endpoint.
 
 Supported models:
-- MiniMax-M2.7              (default) — Latest flagship with enhanced reasoning and coding.
+- MiniMax-M3                (default) — Latest flagship with enhanced reasoning and coding.
+- MiniMax-M2.7                       — Previous flagship model.
 - MiniMax-M2.7-highspeed             — High-speed version of M2.7 for low-latency scenarios.
-- MiniMax-M2.5                       — Previous flagship model.
-- MiniMax-M2.5-highspeed             — High-speed version of M2.5.
 
 API docs: https://platform.minimax.io/docs/api-reference/text-openai-api
 """
@@ -29,7 +28,7 @@ import boxlite
 from openai import AsyncOpenAI
 
 MINIMAX_BASE_URL = os.getenv('MINIMAX_BASE_URL', 'https://api.minimax.io/v1')
-MINIMAX_DEFAULT_MODEL = 'MiniMax-M2.7'
+MINIMAX_DEFAULT_MODEL = 'MiniMax-M3'
 
 TOOLS = [
     {

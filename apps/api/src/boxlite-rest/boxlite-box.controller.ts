@@ -82,11 +82,7 @@ export class BoxliteBoxController {
     const createSandboxDto = createBoxToCreateSandbox(dto)
     let sandbox = await this.sandboxService.createFromSnapshot(createSandboxDto, organization)
     if (sandbox.state !== SandboxState.STARTED) {
-      sandbox = await this.sandboxStateWaiter.waitForStarted(
-        sandbox.id,
-        organization.id,
-        30,
-      )
+      sandbox = await this.sandboxStateWaiter.waitForStarted(sandbox.id, organization.id, 30)
     }
     return sandboxToBoxResponse(sandbox)
   }
@@ -134,10 +130,7 @@ export class BoxliteBoxController {
     targetType: AuditTarget.SANDBOX,
     targetIdFromRequest: (req) => req.params.boxId,
   })
-  async removeBox(
-    @AuthContext() authContext: OrganizationAuthContext,
-    @Param('boxId') boxId: string,
-  ) {
+  async removeBox(@AuthContext() authContext: OrganizationAuthContext, @Param('boxId') boxId: string) {
     await this.sandboxService.destroy(boxId, authContext.organizationId)
   }
 
@@ -152,28 +145,17 @@ export class BoxliteBoxController {
     @AuthContext() authContext: OrganizationAuthContext,
     @Param('boxId') boxId: string,
   ): Promise<BoxResponseDto> {
-    let sandbox = await this.sandboxService.findOneByIdOrName(
-      boxId,
-      authContext.organizationId,
-    )
+    let sandbox = await this.sandboxService.findOneByIdOrName(boxId, authContext.organizationId)
 
     if (this.isStartAlreadyInProgress(sandbox)) {
-      const dto = await this.sandboxStateWaiter.waitForStarted(
-        sandbox.id,
-        authContext.organizationId,
-        30,
-      )
+      const dto = await this.sandboxStateWaiter.waitForStarted(sandbox.id, authContext.organizationId, 30)
       return sandboxToBoxResponse(dto)
     }
 
     sandbox = await this.sandboxService.start(boxId, authContext.organization)
     let dto = await this.sandboxService.toSandboxDto(sandbox)
     if (dto.state !== SandboxState.STARTED) {
-      dto = await this.sandboxStateWaiter.waitForStarted(
-        sandbox.id,
-        authContext.organizationId,
-        30,
-      )
+      dto = await this.sandboxStateWaiter.waitForStarted(sandbox.id, authContext.organizationId, 30)
     }
     return sandboxToBoxResponse(dto)
   }

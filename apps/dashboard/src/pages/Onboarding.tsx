@@ -337,14 +337,19 @@ const codeExamples = {
   typescript: {
     install: `npm install boxlite`,
     run: `npx tsx index.mts`,
-    example: `import { Boxlite, BoxliteRestOptions } from 'boxlite'
+    example: `import { JsBoxlite, BoxliteRestOptions, ApiKeyCredential } from 'boxlite'
 
-// Connect to BoxLite Cloud
-const rt = Boxlite.rest(new BoxliteRestOptions({
+// Connect to BoxLite Cloud with your API key
+const rt = JsBoxlite.rest(new BoxliteRestOptions({
   url: 'your-api-url',
-  clientId: 'default',
-  clientSecret: 'your-api-key',
+  credential: new ApiKeyCredential('your-api-key'),
 }))
+
+// Or discover from the environment (reads BOXLITE_API_KEY):
+// const rt = JsBoxlite.rest(new BoxliteRestOptions({
+//   url: 'your-api-url',
+//   credential: ApiKeyCredential.fromEnv() ?? undefined,
+// }))
 
 // Create a sandbox
 const box = await rt.create({ image: 'alpine:latest' }, 'my-sandbox')
@@ -363,15 +368,18 @@ await rt.remove(box.id, true)
     install: `pip install boxlite`,
     run: `python main.py`,
     example: `import asyncio
-from boxlite import Boxlite, BoxliteRestOptions, BoxOptions
+from boxlite import Boxlite, BoxliteRestOptions, BoxOptions, ApiKeyCredential
 
 async def main():
-    # Connect to BoxLite Cloud
+    # Connect to BoxLite Cloud with your API key
     rt = Boxlite.rest(BoxliteRestOptions(
         url="your-api-url",
-        client_id="default",
-        client_secret="your-api-key",
+        credential=ApiKeyCredential("your-api-key"),
     ))
+
+    # Or discover from the environment
+    # (reads BOXLITE_REST_URL + BOXLITE_API_KEY):
+    # rt = Boxlite.rest(BoxliteRestOptions.from_env())
 
     # Create a sandbox
     box = await rt.create(BoxOptions(image="alpine:latest"), name="my-sandbox")

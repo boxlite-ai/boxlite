@@ -433,6 +433,20 @@ const WS_WATCHDOG: std::time::Duration = std::time::Duration::from_secs(45);
 #[cfg(test)]
 const WS_WATCHDOG: std::time::Duration = std::time::Duration::from_millis(300);
 
+/// Time to wait for the *first* server frame after the WS upgrade
+/// completes. A freshly-attached exec that produces no frame in this
+/// window is almost certainly dead (missing box/exec, server upgraded
+/// the socket but has nothing to stream, or a transport that tunnels
+/// the HTTP upgrade but not WS data frames — e.g. an HTTP proxy). Using
+/// the full steady-state `WS_WATCHDOG` here meant such cases burned the
+/// entire reconnect budget (~minutes) before failing; this short bound
+/// fails them fast. Once any server frame arrives the steady-state
+/// `WS_WATCHDOG` governs idle detection as before.
+#[cfg(not(test))]
+const WS_FIRST_FRAME_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+#[cfg(test)]
+const WS_FIRST_FRAME_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(300);
+
 /// Total wall-clock budget for reconnecting after a transient WS disconnect.
 ///
 /// Aligned with the runner's `defaultReconnectGrace = 5 minutes` (Phase 4 reaper
@@ -540,6 +554,9 @@ async fn attach_ws_pump(
     let mut last_error_message: Option<String> = None;
     let mut user_closed_stdin = false;
     let mut reconnect_budget = WS_RECONNECT_BUDGET;
+    // Sticky across reconnects: once the server has ever sent a frame the
+    // exec is real, so a later reconnect uses the steady-state watchdog.
+    let mut first_frame_seen = false;
 
     let mut current_stream = Some(initial_stream);
 
@@ -588,7 +605,10 @@ async fn attach_ws_pump(
                         }
                     }
                 }
-                next = tokio::time::timeout(WS_WATCHDOG, read.next()) => {
+                next = tokio::time::timeout(
+                    if first_frame_seen { WS_WATCHDOG } else { WS_FIRST_FRAME_TIMEOUT },
+                    read.next(),
+                ) => {
                     let frame = match next {
                         Err(_) => {
                             disconnect_cause = "no WS traffic for watchdog interval (likely connection idle timeout or proxy cut)".to_string();
@@ -606,6 +626,10 @@ async fn attach_ws_pump(
                         }
                         Ok(Some(Ok(msg))) => msg,
                     };
+
+                    // Server is talking — switch to the steady-state
+                    // idle watchdog for the rest of the session.
+                    first_frame_seen = true;
 
                     match frame {
                         Message::Binary(bytes) => {
@@ -658,6 +682,11 @@ async fn attach_ws_pump(
         match probe_execution_status(client, box_id, execution_id).await {
             ProbeResult::Terminal(result) => {
                 let _ = result_tx.send(result);
+                return;
+            }
+            ProbeResult::Gone => {
+                // Box/exec is definitively gone — fail fast, no reconnect.
+                emit_or_fallback(client, box_id, execution_id, &result_tx, disconnect_cause).await;
                 return;
             }
             ProbeResult::StillRunning | ProbeResult::Unavailable => {
@@ -720,6 +749,10 @@ enum ProbeResult {
     /// Probe failed (timeout, network, etc.). Pump retries reconnect anyway —
     /// the API might be temporarily unavailable but the runner could recover.
     Unavailable,
+    /// Server authoritatively says the box/exec does not exist (HTTP 404).
+    /// Reconnecting is pointless — there is nothing to reattach to. The
+    /// pump must fail fast instead of burning the reconnect budget.
+    Gone,
 }
 
 /// Probe the server's view of an execution. Mirrors the legacy
@@ -743,6 +776,10 @@ async fn probe_execution_status(
             }),
             _ => ProbeResult::StillRunning,
         },
+        // A definitive 404 means the box or exec genuinely does not
+        // exist — distinct from a transient probe failure. Don't loop
+        // the reconnect budget against something that isn't there.
+        Ok(Err(BoxliteError::NotFound(_))) => ProbeResult::Gone,
         _ => ProbeResult::Unavailable,
     }
 }

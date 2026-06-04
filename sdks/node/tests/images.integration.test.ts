@@ -1,6 +1,6 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { describe, expect, test } from "vitest";
-import { JsBoxlite } from "../lib/index.js";
+import { JsBoxlite, BoxliteRestOptions } from "../lib/index.js";
 
 const testRegistries = [
   { host: "docker.m.daocloud.io", search: true },
@@ -17,7 +17,9 @@ function newIsolatedRuntime() {
 
 describe("runtime image handle integration", { timeout: 120_000 }, () => {
   test("REST runtime rejects image handle access", () => {
-    const runtime = JsBoxlite.rest({ url: "http://localhost:1" });
+    const runtime = JsBoxlite.rest(
+      new BoxliteRestOptions({ url: "http://localhost:1" }),
+    );
 
     expect(() => runtime.images).toThrow(/Image operations not supported/);
   });

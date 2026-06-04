@@ -777,70 +777,144 @@ fn parse_protocol<S: AsRef<str>>(s: S) -> PortProtocol {
 // REST Options
 // ============================================================================
 
+/// A bearer token plus its expiry. Mirrors the Rust `AccessToken`.
+/// `expires_at` is epoch seconds, or `None` for non-expiring tokens
+/// (e.g. API keys). The token string is masked in `repr()`.
+#[pyclass(name = "AccessToken")]
+#[derive(Clone)]
+pub(crate) struct PyAccessToken {
+    #[pyo3(get)]
+    token: String,
+    #[pyo3(get)]
+    expires_at: Option<f64>,
+}
+
+#[pymethods]
+impl PyAccessToken {
+    fn __repr__(&self) -> String {
+        format!("AccessToken(token='***', expires_at={:?})", self.expires_at)
+    }
+}
+
+/// Long-lived opaque API key credential.
+///
+/// Concrete implementation of the `Credential` ABC (see
+/// ``boxlite.credential``). Registered as a virtual subclass there, so
+/// ``isinstance(ApiKeyCredential(k), Credential)`` is True.
+///
+/// Example::
+///
+///     from boxlite import ApiKeyCredential
+///     cred = ApiKeyCredential("blk_live_...")
+///     cred = ApiKeyCredential.from_env()   # reads BOXLITE_API_KEY
+#[pyclass(name = "ApiKeyCredential")]
+#[derive(Clone)]
+pub(crate) struct PyApiKeyCredential {
+    key: String,
+}
+
+#[pymethods]
+impl PyApiKeyCredential {
+    #[new]
+    fn new(key: String) -> Self {
+        Self { key }
+    }
+
+    /// Build from `BOXLITE_API_KEY`. Returns `None` when unset/empty.
+    #[staticmethod]
+    fn from_env() -> Option<Self> {
+        std::env::var("BOXLITE_API_KEY")
+            .ok()
+            .filter(|k| !k.is_empty())
+            .map(Self::new)
+    }
+
+    /// Return the bearer token. API keys never expire (`expires_at` is
+    /// `None`); the SDK core fetches once and caches.
+    fn get_token(&self) -> PyAccessToken {
+        PyAccessToken {
+            token: self.key.clone(),
+            expires_at: None,
+        }
+    }
+
+    fn __repr__(&self) -> &'static str {
+        "ApiKeyCredential(***)"
+    }
+}
+
 /// Configuration for connecting to a remote BoxLite REST API server.
 ///
 /// Example::
 ///
+///     from boxlite import BoxliteRestOptions, ApiKeyCredential
 ///     opts = BoxliteRestOptions(url="https://api.example.com")
 ///     opts = BoxliteRestOptions(
 ///         url="https://api.example.com",
-///         client_id="my-client",
-///         client_secret="my-secret",
+///         credential=ApiKeyCredential("opaque-dashboard-key"),
 ///     )
 ///     opts = BoxliteRestOptions.from_env()
 ///
 #[pyclass(name = "BoxliteRestOptions")]
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub(crate) struct PyBoxliteRestOptions {
     #[pyo3(get, set)]
     pub(crate) url: String,
     #[pyo3(get, set)]
-    pub(crate) client_id: Option<String>,
+    pub(crate) credential: Option<PyApiKeyCredential>,
+    /// Routing-slot value substituted into the `{prefix}` URL
+    /// segment. `None` or empty → URL skips the segment entirely —
+    /// the single-tenant deployment shape. Opaque to the client,
+    /// deployment decides what it means.
     #[pyo3(get, set)]
-    pub(crate) client_secret: Option<String>,
-    #[pyo3(get, set)]
-    pub(crate) prefix: Option<String>,
+    pub(crate) path_prefix: Option<String>,
 }
 
 #[pymethods]
 impl PyBoxliteRestOptions {
     #[new]
-    #[pyo3(signature = (url, client_id=None, client_secret=None, prefix=None))]
+    #[pyo3(signature = (url, credential=None, path_prefix=None))]
     fn new(
         url: String,
-        client_id: Option<String>,
-        client_secret: Option<String>,
-        prefix: Option<String>,
+        credential: Option<PyApiKeyCredential>,
+        path_prefix: Option<String>,
     ) -> Self {
         Self {
             url,
-            client_id,
-            client_secret,
-            prefix,
+            credential,
+            path_prefix,
         }
     }
 
     /// Create BoxliteRestOptions from environment variables.
     ///
-    /// Reads: BOXLITE_REST_URL (required), BOXLITE_REST_CLIENT_ID,
-    ///        BOXLITE_REST_CLIENT_SECRET, BOXLITE_REST_PREFIX
+    /// Reads: BOXLITE_REST_URL (required), BOXLITE_API_KEY,
+    /// BOXLITE_REST_PATH_PREFIX.
     #[staticmethod]
     fn from_env() -> PyResult<Self> {
-        let opts = BoxliteRestOptions::from_env().map_err(crate::util::map_err)?;
+        let url = std::env::var("BOXLITE_REST_URL").map_err(|_| {
+            crate::util::map_err(boxlite::BoxliteError::Config(
+                "BOXLITE_REST_URL not set".into(),
+            ))
+        })?;
+        let path_prefix = std::env::var("BOXLITE_REST_PATH_PREFIX").ok();
         Ok(Self {
-            url: opts.url,
-            client_id: opts.client_id,
-            client_secret: opts.client_secret,
-            prefix: opts.prefix,
+            url,
+            credential: PyApiKeyCredential::from_env(),
+            path_prefix,
         })
     }
 
     fn __repr__(&self) -> String {
         format!(
-            "BoxliteRestOptions(url={:?}, client_id={:?}, prefix={:?})",
+            "BoxliteRestOptions(url={:?}, credential={}, path_prefix={:?})",
             self.url,
-            self.client_id.as_deref().map(|_| "***"),
-            self.prefix,
+            if self.credential.is_some() {
+                "ApiKeyCredential(***)"
+            } else {
+                "None"
+            },
+            self.path_prefix,
         )
     }
 }
@@ -848,9 +922,12 @@ impl PyBoxliteRestOptions {
 impl From<PyBoxliteRestOptions> for BoxliteRestOptions {
     fn from(py_opts: PyBoxliteRestOptions) -> Self {
         let mut opts = BoxliteRestOptions::new(py_opts.url);
-        opts.client_id = py_opts.client_id;
-        opts.client_secret = py_opts.client_secret;
-        opts.prefix = py_opts.prefix;
+        if let Some(cred) = py_opts.credential {
+            opts = opts.with_api_key(cred.key);
+        }
+        if let Some(path_prefix) = py_opts.path_prefix {
+            opts = opts.with_path_prefix(path_prefix);
+        }
         opts
     }
 }

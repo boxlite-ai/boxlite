@@ -14,6 +14,31 @@ import pytest
 import boxlite
 
 
+def _test_registries() -> list:
+    """Mirror list, built lazily.
+
+    Must NOT run at conftest module scope: pytest imports conftest.py
+    for every run (incl. the CI unit job `-m "not integration"`), and
+    `boxlite.ImageRegistry` is a native pyclass absent when the
+    extension isn't built (the unit job has no build step). Calling
+    this only from the fixture body keeps module import native-free —
+    the unit job deselects all integration tests so the fixture never
+    runs there.
+
+    Pull through mirrors before falling back to docker.io: anonymous
+    Docker Hub pulls are rate-limited (100/6h per IP) and intermittently
+    return "Not authorized" under CI/hook load, flaking any image-pulling
+    integration test. Kept in sync with
+    sdks/node/tests/integration-setup.ts.
+    """
+    return [
+        boxlite.ImageRegistry(host="docker.m.daocloud.io", search=True),
+        boxlite.ImageRegistry(host="docker.xuanyuan.me", search=True),
+        boxlite.ImageRegistry(host="docker.1ms.run", search=True),
+        boxlite.ImageRegistry(host="docker.io", search=True),
+    ]
+
+
 @pytest.fixture(scope="session")
 def shared_runtime():
     """Session-scoped async runtime shared across all async tests.
@@ -21,7 +46,7 @@ def shared_runtime():
     This fixture creates a single Boxlite runtime that is reused across
     the entire test session, avoiding lock contention between tests.
     """
-    rt = boxlite.Boxlite(boxlite.Options())
+    rt = boxlite.Boxlite(boxlite.Options(image_registries=_test_registries()))
     yield rt
     # Runtime cleanup happens when Python garbage collects the object
 

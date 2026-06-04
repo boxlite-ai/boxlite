@@ -12,7 +12,7 @@ use boxlite::{BoxArchive, CloneOptions, ExportOptions};
 
 use super::super::types::{CloneRequest, ImportQuery};
 use super::super::{
-    AppState, box_info_to_response, classify_boxlite_error, error_response, get_or_fetch_box,
+    AppState, box_info_to_response, error_from_boxlite, error_response, get_or_fetch_box,
 };
 
 pub(in crate::commands::serve) async fn clone_box(
@@ -37,10 +37,7 @@ pub(in crate::commands::serve) async fn clone_box(
                 .insert(cloned_id, Arc::new(cloned));
             (StatusCode::CREATED, Json(resp)).into_response()
         }
-        Err(e) => {
-            let (status, etype) = classify_boxlite_error(&e);
-            error_response(status, e.to_string(), etype)
-        }
+        Err(e) => error_from_boxlite(&e),
     }
 }
 
@@ -60,6 +57,7 @@ pub(in crate::commands::serve) async fn export_box(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("failed to create temp dir: {e}"),
                 "InternalError",
+                "internal",
             );
         }
     };
@@ -76,6 +74,7 @@ pub(in crate::commands::serve) async fn export_box(
                         StatusCode::INTERNAL_SERVER_ERROR,
                         format!("failed to read archive: {e}"),
                         "InternalError",
+                        "internal",
                     );
                 }
             };
@@ -86,10 +85,7 @@ pub(in crate::commands::serve) async fn export_box(
                 .body(axum::body::Body::from(bytes))
                 .unwrap()
         }
-        Err(e) => {
-            let (status, etype) = classify_boxlite_error(&e);
-            error_response(status, e.to_string(), etype)
-        }
+        Err(e) => error_from_boxlite(&e),
     }
 }
 
@@ -105,6 +101,7 @@ pub(in crate::commands::serve) async fn import_box(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("failed to create temp dir: {e}"),
                 "InternalError",
+                "internal",
             );
         }
     };
@@ -115,6 +112,7 @@ pub(in crate::commands::serve) async fn import_box(
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("failed to write archive: {e}"),
             "InternalError",
+            "internal",
         );
     }
 
@@ -127,9 +125,6 @@ pub(in crate::commands::serve) async fn import_box(
             state.boxes.write().await.insert(box_id, Arc::new(litebox));
             (StatusCode::CREATED, Json(resp)).into_response()
         }
-        Err(e) => {
-            let (status, etype) = classify_boxlite_error(&e);
-            error_response(status, e.to_string(), etype)
-        }
+        Err(e) => error_from_boxlite(&e),
     }
 }

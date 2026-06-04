@@ -15,30 +15,60 @@
 ---
 openapi: 3.1.1
 info:
-  title: BoxLite Cloud Sandbox REST API
+  title: BoxLite Box API
   version: 0.1.0
   description: |
-    RESTful API for the BoxLite cloud sandbox service.
-
-    BoxLite provides hardware-level VM isolation for secure, isolated code execution.
-    This API exposes sandbox lifecycle management, command execution, file transfer,
-    and image management as a multi-tenant cloud service.
+    HTTP API for BoxLite boxes — hardware-isolated VMs for secure code
+    execution. Exposes box lifecycle management, command execution, file
+    transfer, and image management as a multi-tenant service.
 
     ## Design Principles
 
-    This specification follows industry-standard REST API patterns:
-    - Versioned prefix (`/v1/`) for graceful API evolution
-    - Multi-tenancy via `{prefix}` path segment (organization/workspace)
+    This specification follows industry-standard HTTP API patterns:
+    - Versioned URL prefix (`/v1/`) for graceful API evolution
+    - Multi-tenancy via an opaque `{prefix}` URL segment
     - Capability discovery via `GET /v1/config`
     - Optional idempotency keys for safe mutation retries
     - Opaque page-token pagination
     - Standard error model with typed error codes
 
+    ## Vendor-agnostic routing — the `{prefix}` slot
+
+    Box-scoped endpoints include a `{prefix}` URL path segment whose
+    semantics are **deployment-defined**. This contract is
+    intentionally silent on what the slot means — a vendor may use it
+    for an organization id, a workspace, a warehouse / catalog, a
+    region+team pair, or any other routing scope. Clients **MUST**
+    treat the value as an opaque substring and substitute it verbatim
+    into the URL, including any internal `/` characters (multi-segment
+    values are supported).
+
+    Clients discover the value to use via `Principal.path_prefix`
+    from `GET /v1/me`. A `null` (or empty) value means the deployment
+    does **not** use a routing slot; clients then build URLs without
+    the segment (`/v1/boxes/…` instead of `/v1/<prefix>/boxes/…`).
+    This is the canonical shape for single-tenant deployments such as
+    the `boxlite serve` local server.
+
+    Identity / discovery endpoints (`GET /v1/me`, `GET /v1/config`)
+    sit at the version root and **never** include the `{prefix}`
+    segment, by spec.
+
     ## Authentication
 
-    All endpoints (except `GET /v1/config` and `POST /v1/oauth/tokens`) require
-    a Bearer token in the `Authorization` header. Obtain tokens via the OAuth2
-    client credentials flow.
+    All endpoints (except `GET /v1/config`) require an opaque token in the
+    `Authorization: Bearer` header (RFC 6750). The server is **bearer-
+    format-agnostic** — any token its validation pipeline can verify is
+    accepted. See the `BearerAuth` security scheme for the supported token
+    sources, which include BoxLite-issued API keys, plus (configurable per
+    deployment) federated SSO JWTs, third-party OIDC tokens, and customer-
+    issued gateway tokens.
+
+    Token acquisition is out of scope for this contract: dashboard API
+    keys are issued by the BoxLite dashboard; other token sources are
+    configured at the customer's gateway or IdP layer.
+
+    Validate a freshly-acquired token via `GET /v1/me`.
 
     ## Execution Model
 
@@ -47,11 +77,12 @@ info:
     2. `GET /executions/{exec_id}/attach` upgrades to a bidirectional
        WebSocket carrying stdin, stdout, stderr, and in-band control
        (resize, signal, exit). One attach at a time per exec; the exec
-       continues running across WebSocket close so the SDK can reattach.
+       continues running across WebSocket close so a client can reattach.
 
-    Out-of-band control endpoints exist for clients that prefer a REST
-    style: `GET /executions/{exec_id}` (status), `POST .../resize`,
-    `POST .../signal`, `DELETE /executions/{exec_id}` (kill).
+    Out-of-band control endpoints exist for clients that prefer a
+    request/response style: `GET /executions/{exec_id}` (status),
+    `POST .../resize`, `POST .../signal`, `DELETE /executions/{exec_id}`
+    (kill).
   license:
     name: Apache-2.0
     url: https://www.apache.org/licenses/LICENSE-2.0
@@ -60,35 +91,34 @@ info:
     url: https://github.com/boxlite-ai/boxlite
 
 servers:
-  - url: "{scheme}://{host}/v1"
-    description: BoxLite Sandbox API v1
+  - url: "{scheme}://{host}{basePath}/v1"
+    description: BoxLite Box API v1
     variables:
       scheme:
         default: https
         enum: [https, http]
       host:
         default: api.boxlite.ai
+      basePath:
+        description: |
+          Deployment-defined hostpath prefix. Empty for local servers
+          (`boxlite serve` at `http://localhost:8100/v1/…`); typically
+          `/api` for cloud deployments (`https://api.boxlite.ai/api/v1/…`).
+        default: ""
 
 # ---------------------------------------------------------------------------
 # Security
 # ---------------------------------------------------------------------------
 security:
   - BearerAuth: []
-  - OAuth2:
-      - boxes:read
-      - boxes:write
-      - boxes:exec
-      - images:read
-      - images:write
-      - runtime:admin
 
 tags:
   - name: Configuration
     description: Server capability discovery
   - name: Authentication
-    description: OAuth2 token exchange
+    description: Credential validation and identity lookup
   - name: Boxes
-    description: Sandbox box lifecycle management
+    description: Box lifecycle management
   - name: Execution
     description: Command execution and streaming
   - name: Files
@@ -122,33 +152,28 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/SandboxConfig"
+                $ref: "#/components/schemas/ServerConfig"
 
   # -------------------------------------------------------------------------
   # Authentication
   # -------------------------------------------------------------------------
-  /oauth/tokens:
-    post:
-      operationId: getToken
-      summary: Exchange credentials for an access token
+  /me:
+    get:
+      operationId: getCurrentPrincipal
+      summary: Identity and scopes for the calling credential
       description: |
-        OAuth2 client credentials flow. Returns a Bearer token for
-        authenticating subsequent API requests.
+        Returns the principal (user or service account) and granted scopes
+        for the Bearer credential in the request. Typical uses: validating
+        a freshly-issued credential, and rendering an identity / scopes
+        banner for the current session.
       tags: [Authentication]
-      security: []
-      requestBody:
-        required: true
-        content:
-          application/x-www-form-urlencoded:
-            schema:
-              $ref: "#/components/schemas/TokenRequest"
       responses:
         "200":
-          description: Token issued successfully
+          description: Authenticated principal
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/TokenResponse"
+                $ref: "#/components/schemas/Principal"
         "401":
           $ref: "#/components/responses/UnauthorizedError"
 
@@ -161,9 +186,9 @@ paths:
 
     post:
       operationId: createBox
-      summary: Create a new sandbox box
+      summary: Create a new box
       description: |
-        Creates a new sandbox box with the specified configuration.
+        Creates a new box with the specified configuration.
         The box starts in `configured` status. Call `POST /start` to
         initialize the VM, or it will start lazily on first `exec`.
       tags: [Boxes]
@@ -594,7 +619,7 @@ paths:
         operation.
 
         On success, any attached WebSocket on `/attach` is closed; the
-        SDK observes an `{"type":"exit","exit_code":...}` text frame
+        client observes an `{"type":"exit","exit_code":...}` text frame
         followed by a normal close.
       tags: [Execution]
       responses:
@@ -619,7 +644,7 @@ paths:
         **Single-attach.** Only one client may be attached at a time. A
         second `GET /attach` to the same `exec_id` while one is connected
         returns `409 Conflict` (no upgrade). The exec keeps running across
-        WebSocket close — the SDK can reconnect to the same `exec_id` and
+        WebSocket close — a client can reconnect to the same `exec_id` and
         resume streaming. Orphaned sessions are reaped per the runner's
         configured policy (default: SIGHUP after 5 min idle).
 
@@ -930,21 +955,39 @@ components:
     BearerAuth:
       type: http
       scheme: bearer
-      bearerFormat: JWT
-      description: Bearer token obtained via OAuth2 client credentials flow
+      description: |
+        Bearer authentication. The wire format is RFC 6750 — an opaque token
+        passed as `Authorization: Bearer <token>`. The server is **format-
+        agnostic**: any token its validation pipeline can verify is accepted.
 
-    OAuth2:
-      type: oauth2
-      flows:
-        clientCredentials:
-          tokenUrl: /v1/oauth/tokens
-          scopes:
-            boxes:read: Read box information and status
-            boxes:write: Create, modify, and delete boxes
-            boxes:exec: Execute commands and manage executions
-            images:read: List and inspect cached images
-            images:write: Pull images from registries
-            runtime:admin: Runtime administration (metrics, shutdown)
+        ## Token sources the server validates
+
+        Which sources are enabled depends on deployment configuration. The
+        validation pipeline is pluggable; new sources can be added without
+        client changes.
+
+          1. **BoxLite-issued** (always enabled). Dashboard-issued API keys
+             (`blk_live_…` / `blk_test_…`) — long-lived, org-scoped,
+             survives teammate offboarding. Issued at
+             `https://app.boxlite.ai/settings/api-keys`.
+          2. **Federated SSO / enterprise JWTs** (optional, per-deployment).
+             JWTs issued by a configured enterprise IdP (Okta, Auth0,
+             Azure AD, Google Workspace). Validated against the IdP's JWKS;
+             `iss`, `aud`, `sub`, `exp` claims checked. Principal is
+             projected from claims into the BoxLite identity model.
+          3. **Third-party OIDC tokens** (optional, per-deployment). Access
+             tokens from public IdPs (GitHub, Google, Anthropic). Validated
+             by introspection against the IdP's userinfo endpoint. Used by
+             "Sign in with X" integrations.
+          4. **Customer-issued passthrough tokens** (optional, when a
+             customer fronts the BoxLite gateway with their own auth layer).
+             The customer's gateway authenticates the request, attaches a
+             token in a configured format, and BoxLite trusts the upstream
+             chain.
+
+        All sources are treated identically by clients — opaque strings
+        carried in `Authorization: Bearer`. Token acquisition is out of
+        scope for this contract.
 
   # -------------------------------------------------------------------------
   # Parameters
@@ -954,14 +997,23 @@ components:
       name: prefix
       in: path
       required: true
+      allowReserved: true
       description: |
-        Organization or workspace identifier for multi-tenancy isolation.
-        All resources are scoped to this prefix.
+        Deployment-defined routing slot. Opaque to the client; the
+        value is whatever the server told the client to use via
+        `Principal.path_prefix` (see `GET /v1/me`), substituted
+        verbatim into the URL. Internal `/` characters are preserved,
+        enabling multi-segment routing values such as
+        `us-east/team-42`.
+
+        The slot's semantics are vendor-specific — boxlite cloud uses
+        it for the organization id; another implementer might use it
+        for a workspace, a catalog, or a region+team pair. Empty /
+        `null` values mean the deployment does not use a routing
+        slot, and clients build URLs without the segment.
       schema:
         type: string
-        minLength: 1
         maxLength: 128
-        pattern: "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
       example: acme-corp
 
     boxId:
@@ -975,7 +1027,7 @@ components:
         servers (non-normative): ULID (`01HJK4TNRPQSXYZ8WM6NCVT9R5`),
         12-character Base62 (`aB3cD4eF5gH6`), UUID
         (`d406c59d-eb09-4bc3-9b3a-62455c7e8f32`), prefixed (`sb_abc123`),
-        user-defined name (`my-sandbox`).
+        user-defined name (`my-box`).
       schema:
         type: string
         minLength: 1
@@ -1048,7 +1100,8 @@ components:
             error:
               message: "invalid argument: cpus must be between 1 and 32"
               type: InvalidArgumentError
-              code: 400
+              code: invalid_argument
+              request_id: req_01HZK4TNRPQSXYZ8WM6NCVT9R5
 
     UnauthorizedError:
       description: Missing or invalid authentication credentials
@@ -1058,9 +1111,10 @@ components:
             $ref: "#/components/schemas/ErrorResponse"
           example:
             error:
-              message: "invalid or expired access token"
-              type: UnauthorizedError
-              code: 401
+              message: "invalid or missing API key"
+              type: AuthError
+              code: unauthenticated
+              request_id: req_01HZK4TNRPQSXYZ8WM6NCVT9R5
 
     NotFoundError:
       description: Resource not found
@@ -1072,7 +1126,8 @@ components:
             error:
               message: "box not found: 01HJK4TNRPQSXYZ8WM6NCVT9R5"
               type: NotFoundError
-              code: 404
+              code: not_found
+              request_id: req_01HZK4TNRPQSXYZ8WM6NCVT9R5
 
     ConflictError:
       description: Resource state conflict
@@ -1084,7 +1139,8 @@ components:
             error:
               message: "invalid state: box is already running"
               type: InvalidStateError
-              code: 409
+              code: invalid_state
+              request_id: req_01HZK4TNRPQSXYZ8WM6NCVT9R5
 
     UnprocessableEntityError:
       description: Request understood but cannot be processed
@@ -1094,9 +1150,10 @@ components:
             $ref: "#/components/schemas/ErrorResponse"
           example:
             error:
-              message: "image error: failed to pull python:nonexistent"
+              message: "images error: manifest unknown for python:nonexistent"
               type: ImageError
-              code: 422
+              code: image_pull_failed
+              request_id: req_01HZK4TNRPQSXYZ8WM6NCVT9R5
 
   # -------------------------------------------------------------------------
   # Schemas
@@ -1106,9 +1163,9 @@ components:
     # =======================================================================
     # Configuration
     # =======================================================================
-    SandboxConfig:
+    ServerConfig:
       type: object
-      description: Server configuration and capabilities
+      description: Server configuration and capabilities (the `GET /v1/config` response).
       properties:
         defaults:
           type: object
@@ -1155,9 +1212,9 @@ components:
               type: integer
               description: Maximum allowed disk size in GB
               example: 100
-            max_boxes_per_prefix:
+            max_boxes_per_path_prefix:
               type: integer
-              description: Maximum boxes per organization/workspace
+              description: Maximum boxes per routing-slot scope
               example: 50
             max_concurrent_executions:
               type: integer
@@ -1204,40 +1261,75 @@ components:
     # =======================================================================
     # Authentication
     # =======================================================================
-    TokenRequest:
+    Principal:
       type: object
-      required: [grant_type, client_id, client_secret]
+      description: |
+        Identity and scope payload returned by `GET /v1/me`. Clients
+        typically use `email` / `display_name` to render an identity
+        banner after credential validation, and inspect `scopes` so
+        under-scoped credentials surface at validation time rather than
+        mid-flow.
+      required: [sub, principal_type, scopes]
       properties:
-        grant_type:
+        sub:
           type: string
-          enum: [client_credentials]
-        client_id:
+          description: |
+            Stable opaque principal identifier. Clients MUST treat the value
+            as opaque — the server may change format (UUID, ULID, Base62, or
+            prefixed) without notice. Survives email and display-name renames.
+        principal_type:
           type: string
-        client_secret:
+          enum: [user, service_account]
+          description: |
+            `user` for interactive dashboard-issued keys; `service_account`
+            for automation keys. Modeled as an enum rather than a nullable
+            `user_id` field so clients can dispatch by variant.
+        email:
           type: string
-        scope:
+          format: email
+          description: |
+            Email of the user behind the key. Absent for `service_account`
+            principals.
+        display_name:
           type: string
-          description: Space-separated list of requested scopes
-          example: "boxes:read boxes:write boxes:exec"
+          description: Human-readable label. Optional.
+        path_prefix:
+          type: string
+          nullable: true
+          description: |
+            Routing-slot value the client should substitute into the
+            `{prefix}` URL parameter on box-scoped requests. Opaque
+            to the client — the server decides what goes here (an
+            organization id, a workspace name, a catalog, a multi-
+            segment routing key, etc.).
 
-    TokenResponse:
-      type: object
-      required: [access_token, token_type, expires_in]
-      properties:
-        access_token:
+            `null` when the deployment does not use a routing slot
+            (single-tenant servers such as `boxlite serve`) **or** when
+            the credential has no scope assigned yet (mid-provisioning
+            service accounts, first OIDC login before scope assignment).
+            In either case clients build URLs without the segment
+            (`/v1/boxes/…` rather than `/v1/<prefix>/boxes/…`).
+
+            The field is always present in the response envelope, never
+            omitted; the distinction between absent and explicit `null`
+            is not significant.
+        scopes:
+          type: array
+          items:
+            type: string
+            example: "boxes:read"
+          description: |
+            Granted scope strings (`boxes:read`, `boxes:write`, etc.).
+            Clients typically check these at credential-validation time
+            so under-scoped credentials surface immediately rather than
+            at first use.
+        expires_at:
           type: string
-          description: Bearer token for authenticating API requests
-        token_type:
-          type: string
-          enum: [bearer]
-        expires_in:
-          type: integer
-          description: Token lifetime in seconds
-          example: 3600
-        scope:
-          type: string
-          description: Granted scopes (may differ from requested)
-          example: "boxes:read boxes:write boxes:exec"
+          format: date-time
+          nullable: true
+          description: |
+            Optional expiry. `null` for long-lived dashboard-issued keys;
+            ISO 8601 timestamp for rotating credentials.
 
     # =======================================================================
     # Error Model
@@ -1252,9 +1344,22 @@ components:
     ErrorModel:
       type: object
       description: |
-        Standard error response. Maps directly to BoxliteError variants.
-        `UnauthorizedError` is a server-layer error (auth middleware) and does
-        not correspond to a BoxliteError variant in the core library.
+        Standard error response.
+
+        - `message` is human-readable text (English) for logs and
+          developer display.
+        - `type` is a stable PascalCase identifier (K8s `Status.reason`
+          style). Useful for log filtering. The canonical dispatch
+          field is `code`, not `type`.
+        - `code` is the stable snake_case machine identifier (Stripe
+          `code` style). Clients SHOULD pattern-match on `code` for
+          typed error handling.
+        - `request_id` is propagated from the `X-Request-Id` response
+          header. Include this when reporting issues; it round-trips
+          to server logs verbatim.
+
+        The HTTP numeric status is in the response status line, not in
+        the body — duplicating it added no information.
       required: [message, type, code]
       properties:
         message:
@@ -1263,34 +1368,64 @@ components:
           example: "box not found: 01HJK4TNRPQSXYZ8WM6NCVT9R5"
         type:
           type: string
-          description: Error type identifier (matches BoxliteError variants)
+          description: PascalCase error type identifier (matches BoxliteError variants)
           enum:
+            - InvalidArgumentError
             - UnsupportedError
-            - EngineError
-            - ConfigError
-            - StorageError
-            - ImageError
-            - PortalError
-            - NetworkError
-            - RpcError
-            - RpcTransportError
-            - InternalError
-            - ExecutionError
+            - AuthError
             - NotFoundError
+            - SessionReaped
             - AlreadyExistsError
             - InvalidStateError
+            - StoppedError
+            - ImageError
+            - ExecutionError
+            - ResourceExhaustedError
+            - NetworkError
+            - UpstreamUnavailableError
+            - EngineError
+            - StorageError
             - DatabaseError
             - MetadataError
-            - InvalidArgumentError
-            - StoppedError
-            - UnauthorizedError
+            - ConfigError
+            - InternalError
+            - TimeoutError
           example: NotFoundError
         code:
-          type: integer
-          description: HTTP response status code
-          minimum: 400
-          maximum: 599
-          example: 404
+          type: string
+          description: |
+            Stable snake_case machine identifier. Clients should
+            pattern-match on this field for typed error handling.
+          enum:
+            - invalid_argument
+            - unsupported
+            - unauthenticated
+            - permission_denied
+            - not_found
+            - session_reaped
+            - already_exists
+            - invalid_state
+            - stopped
+            - image_pull_failed
+            - execution_failed
+            - resource_exhausted
+            - network_unavailable
+            - upstream_unavailable
+            - engine_unavailable
+            - storage_error
+            - database_error
+            - metadata_error
+            - config_error
+            - internal
+            - timeout
+          example: not_found
+        request_id:
+          type: string
+          description: |
+            Request id propagated from the `X-Request-Id` response
+            header. Mirrors the server log entry — include when
+            reporting issues.
+          example: req_01HZK4TNRPQSXYZ8WM6NCVT9R5
         stack:
           type: array
           description: Stack trace (only included when server debug mode is enabled)
@@ -1302,7 +1437,7 @@ components:
     # =======================================================================
     Box:
       type: object
-      description: Sandbox box metadata (maps to BoxInfo)
+      description: Box metadata (maps to BoxInfo)
       required: [box_id, status, created_at, updated_at, image, cpus, memory_mib]
       properties:
         box_id:
@@ -1321,8 +1456,8 @@ components:
         name:
           type: string
           nullable: true
-          description: User-defined name (unique within prefix)
-          example: my-sandbox
+          description: User-defined name (unique within the routing-slot scope)
+          example: my-box
         status:
           $ref: "#/components/schemas/BoxStatus"
         created_at:
@@ -1386,7 +1521,7 @@ components:
           minLength: 1
           maxLength: 128
           pattern: "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
-          example: dev-sandbox
+          example: dev-box
         image:
           type: string
           description: OCI image reference

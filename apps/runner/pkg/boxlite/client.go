@@ -120,7 +120,23 @@ func NewClient(ctx context.Context, config ClientConfig) (*Client, error) {
 	}, nil
 }
 
-// Close shuts down the BoxLite runtime and releases all resources.
+// Shutdown gracefully stops all running boxes in the underlying BoxLite
+// runtime. Blocks until shutdown completes or `timeout` elapses. Call this
+// BEFORE Close so VMs aren't killed mid-write on systemd SIGTERM.
+//
+// Without this, restart attempts for the killed boxes hit a 30s
+// `guest_connect` timeout because the guest agent inside never re-establishes
+// vsock after an unclean shutdown — and (until the matching Rust-side fix
+// landed) that timeout would auto-delete the box record.
+//
+// `timeout=0` means "use the runtime default (10s)". Negative values are
+// clamped by the SDK.
+func (c *Client) Shutdown(ctx context.Context, timeout time.Duration) error {
+	return c.runtime.Shutdown(ctx, timeout)
+}
+
+// Close releases the BoxLite runtime handle. Prefer calling `Shutdown` first
+// so boxes get a graceful stop before the C handle is freed.
 func (c *Client) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()

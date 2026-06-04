@@ -9,7 +9,7 @@ use boxlite::BoxliteRuntime;
 use boxlite::litebox::BoxCommand;
 use boxlite::runtime::options::BoxliteOptions;
 use boxlite::runtime::types::BoxStatus;
-use boxlite::util::{is_process_alive, read_pid_file};
+use boxlite::util::{PidFileReader, is_process_alive};
 use std::path::{Path, PathBuf};
 
 // ============================================================================
@@ -83,7 +83,7 @@ async fn detached_box_survives_runtime_drop() {
         box_id = handle.id().to_string();
 
         let pf = pid_file_path(&home.path, &box_id);
-        original_pid = read_pid_file(&pf).unwrap();
+        original_pid = PidFileReader::at(&pf).read().map(|r| r.pid).unwrap();
 
         // Runtime drops here - box should survive
     }
@@ -135,7 +135,7 @@ async fn non_detached_box_exits_on_runtime_drop() {
             .unwrap();
 
         let pf = pid_file_path(&home_dir, handle.id().as_str());
-        original_pid = read_pid_file(&pf).unwrap();
+        original_pid = PidFileReader::at(&pf).read().map(|r| r.pid).unwrap();
 
         // Verify process is running before drop
         assert!(
@@ -197,7 +197,7 @@ async fn multiple_detached_boxes_each_have_pid_file() {
     for box_id in &box_ids {
         let pf = pid_file_path(&home.path, box_id);
         assert!(pf.exists(), "Box {} should have PID file", box_id);
-        let pid = read_pid_file(&pf).unwrap();
+        let pid = PidFileReader::at(&pf).read().map(|r| r.pid).unwrap();
         assert!(
             pids.insert(pid),
             "Each box should have unique PID, but {} is duplicate",

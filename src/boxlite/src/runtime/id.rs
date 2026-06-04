@@ -79,6 +79,17 @@ impl BoxID {
     /// [`BoxID::is_valid`]. Returns `None` for empty input, input longer
     /// than [`BoxID::MAX_LENGTH`], or input containing characters outside
     /// the URL/path-safe set.
+    ///
+    /// # Identity discipline
+    ///
+    /// Callers MUST propagate `None` as an error — never silently mint a
+    /// fresh id on parse failure. Once parsed, the id is a *claim* from
+    /// whoever provided the string; it becomes authoritative only when the
+    /// host has independently bound it (DB row, layout dir, in-memory
+    /// state). Never accept a parsed id from an in-VM guest RPC body and
+    /// then route a host-side operation by it — the host's own bookkeeping
+    /// is the identity. See `MEMORY.md` "REST SDK silently minted fake box
+    /// ids" for the failure mode.
     pub fn parse(s: &str) -> Option<Self> {
         if Self::is_valid(s) {
             Some(Self(s.to_string()))

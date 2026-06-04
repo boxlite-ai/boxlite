@@ -49,6 +49,7 @@ fn status_to_str(status: BoxStatus) -> &'static str {
         BoxStatus::Stopping => "stopping",
         BoxStatus::Stopped => "stopped",
         BoxStatus::Paused => "paused",
+        BoxStatus::Failed => "failed",
     }
 }
 

@@ -3,11 +3,11 @@ dist\:python: _ensure-python-deps
 	@. .venv/bin/activate && pip install -q cibuildwheel
 
 	@if [ "$$(uname)" = "Darwin" ]; then \
-		source .venv/bin/activate; \
+		source .venv/bin/activate && \
 		cibuildwheel --only cp314-macosx_arm64 sdks/python; \
 	elif [ "$$(uname)" = "Linux" ]; then \
-		source .venv/bin/activate; \
-		bash $(SCRIPT_DIR)/build/build-guest.sh; \
+		source .venv/bin/activate && \
+		bash $(SCRIPT_DIR)/build/build-guest.sh && \
 		cibuildwheel --platform linux sdks/python; \
 	else \
 		echo "❌ Unsupported platform: $$(uname)"; \
@@ -20,10 +20,10 @@ dist\:c:
 	@mkdir -p sdks/c/dist/lib sdks/c/dist/include
 	@cp sdks/c/include/boxlite.h sdks/c/dist/include/
 	@if [ "$$(uname)" = "Darwin" ]; then \
-		cp target/release/libboxlite.dylib sdks/c/dist/lib/; \
+		cp target/release/libboxlite.dylib sdks/c/dist/lib/ && \
 		cp target/release/libboxlite.a sdks/c/dist/lib/; \
 	elif [ "$$(uname)" = "Linux" ]; then \
-		cp target/release/libboxlite.so sdks/c/dist/lib/; \
+		cp target/release/libboxlite.so sdks/c/dist/lib/ && \
 		cp target/release/libboxlite.a sdks/c/dist/lib/; \
 	fi
 	@echo "✅ C SDK staged in sdks/c/dist/"

@@ -9,6 +9,9 @@ import (
 // ErrorCode represents a BoxLite error category.
 type ErrorCode int
 
+// Error codes mirror the C SDK's BoxliteErrorCode enum
+// (sdks/c/src/error.rs:21-67). Numeric values must stay in sync —
+// the CGO bridge transmits the integer across the FFI boundary.
 const (
 	ErrInternal          ErrorCode = 1
 	ErrNotFound          ErrorCode = 2
@@ -29,6 +32,13 @@ const (
 	ErrRpcTransport      ErrorCode = 17
 	ErrMetadata          ErrorCode = 18
 	ErrUnsupportedEngine ErrorCode = 19
+	// System resource limit reached (disk full, VM slot exhaustion).
+	// Server-side HTTP 429.
+	ErrResourceExhausted ErrorCode = 20
+	// Interactive execution session was reaped server-side after
+	// disconnect; reattach is no longer possible — start a new exec.
+	// Server-side HTTP 410.
+	ErrSessionReaped ErrorCode = 21
 )
 
 // Error is a typed error from the BoxLite runtime.
