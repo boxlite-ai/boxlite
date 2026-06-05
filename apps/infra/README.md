@@ -180,7 +180,7 @@ For Auth0 specifically:
 | **SnapshotManager** | S3-backed docker registry            | internal only                                |
 | **Jaeger**          | Trace viewer                         | public ALB                                   |
 | **OtelCollector**   | OTLP ingest                          | internal + public health                     |
-| **PgAdmin**         | Postgres admin UI                    | public ALB                                   |
+| **PgAdmin**         | Postgres admin UI                    | internal ALB (set `PGADMIN_PUBLIC=true` to expose) |
 | **RegistryUI**      | Browse snapshot images               | public ALB                                   |
 | **MailDev**         | Mock SMTP + web UI                   | public ALB                                   |
 
