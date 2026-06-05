@@ -464,18 +464,40 @@ export default $config({
     });
 
     // ─── 9. ADMIN UIs ────────────────────────────────────────────────────────
+    // pgAdmin is a Postgres admin console one hop from RDS. Knobs are
+    // overridable via env; unset falls back to the secure default below
+    // (internal ALB + login enabled). The two values are coupled, not
+    // independent: exposing it publicly is only allowed with auth on, so a
+    // single misconfigured flag can't recreate the public + no-auth hole.
+    const pgAdminPublic = envOr("PGADMIN_PUBLIC", "false") === "true";
+    const pgAdminServerMode = envOr("PGADMIN_CONFIG_SERVER_MODE", "True");
+    const pgAdminMasterPassword = envOr("PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED", "True");
+    if (pgAdminPublic && (pgAdminServerMode !== "True" || pgAdminMasterPassword !== "True")) {
+      throw new Error(
+        "PGADMIN_PUBLIC=true requires PGADMIN_CONFIG_SERVER_MODE=True and " +
+          "PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED=True — refusing to expose a " +
+          "Postgres admin console to the internet without login auth. Reach " +
+          "pgAdmin via VPN / bastion / `aws ssm start-session` instead.",
+      );
+    }
     new sst.aws.Service("PgAdmin", {
       cluster,
       image: IMAGES.pgadmin,
       loadBalancer: {
+        // Internal ALB by default: reachable only from inside the VPC (VPN /
+        // bastion / `aws ssm start-session` port-forward). PGADMIN_PUBLIC=true
+        // exposes it publicly — gated above to require login auth.
+        public: pgAdminPublic,
         rules: [{ listen: "80/http", forward: `${PORTS.PGADMIN}/http` }],
         health: { [`${PORTS.PGADMIN}/http`]: httpHealth("/", { successCodes: "200-399" }) },
       },
       environment: {
-        PGADMIN_DEFAULT_EMAIL: "admin@boxlite.dev",
-        PGADMIN_DEFAULT_PASSWORD: pgAdminPassword.result,
-        PGADMIN_CONFIG_SERVER_MODE: "False",
-        PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False",
+        PGADMIN_DEFAULT_EMAIL: envOr("PGADMIN_DEFAULT_EMAIL", "admin@boxlite.dev"),
+        PGADMIN_DEFAULT_PASSWORD: envOr("PGADMIN_DEFAULT_PASSWORD", pgAdminPassword.result),
+        // Server mode enables the login screen (desktop mode skips auth
+        // entirely); master password gates saved server credentials.
+        PGADMIN_CONFIG_SERVER_MODE: pgAdminServerMode,
+        PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: pgAdminMasterPassword,
       },
     });
 
