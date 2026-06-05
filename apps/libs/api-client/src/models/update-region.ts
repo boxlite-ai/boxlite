@@ -33,9 +33,9 @@ export interface UpdateRegion {
      */
     'sshGatewayUrl'?: string | null;
     /**
-     * Snapshot Manager URL for the region
+     * Artifact Registry URL for the region
      * @type {string}
      * @memberof UpdateRegion
      */
-    'snapshotManagerUrl'?: string | null;
+    'artifactRegistryUrl'?: string | null;
 }

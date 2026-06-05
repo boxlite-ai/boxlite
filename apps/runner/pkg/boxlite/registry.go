@@ -18,29 +18,29 @@ import (
 
 var linuxAmd64Platform = v1.Platform{OS: "linux", Architecture: "amd64"}
 
-// PullSnapshot pulls a snapshot image and mirrors it to the destination registry when requested.
-func (c *Client) PullSnapshot(ctx context.Context, req dto.PullSnapshotRequestDTO) error {
-	c.logger.Info("pulling snapshot", "snapshot", req.Snapshot)
+// PullArtifact pulls an artifact image and mirrors it to the destination registry when requested.
+func (c *Client) PullArtifact(ctx context.Context, req dto.PullArtifactRequestDTO) error {
+	c.logger.Info("pulling artifact", "artifactRef", req.ArtifactRef)
 
 	if req.DestinationRegistry == nil {
-		return c.PullImage(ctx, req.Snapshot)
+		return c.PullImage(ctx, req.ArtifactRef)
 	}
 
 	if req.DestinationRegistry.Project == nil || strings.TrimSpace(*req.DestinationRegistry.Project) == "" {
 		return fmt.Errorf("project is required when pushing to registry")
 	}
 
-	targetRef, err := c.getPullSnapshotTargetRef(ctx, req)
+	targetRef, err := c.getPullArtifactTargetRef(ctx, req)
 	if err != nil {
 		return err
 	}
 
-	if err := c.copyRegistryImage(ctx, req.Snapshot, req.Registry, targetRef, req.DestinationRegistry); err != nil {
+	if err := c.copyRegistryImage(ctx, req.ArtifactRef, req.Registry, targetRef, req.DestinationRegistry); err != nil {
 		return err
 	}
 
 	if err := c.PullImage(ctx, targetRef); err != nil {
-		return fmt.Errorf("failed to pull copied snapshot %s into BoxLite cache: %w", targetRef, err)
+		return fmt.Errorf("failed to pull copied artifact %s into BoxLite cache: %w", targetRef, err)
 	}
 
 	return nil
@@ -70,19 +70,19 @@ func (c *Client) InspectImageInRegistry(ctx context.Context, imageName string, r
 	}, nil
 }
 
-func (c *Client) getPullSnapshotTargetRef(ctx context.Context, req dto.PullSnapshotRequestDTO) (string, error) {
+func (c *Client) getPullArtifactTargetRef(ctx context.Context, req dto.PullArtifactRequestDTO) (string, error) {
 	if req.DestinationRef != nil && strings.TrimSpace(*req.DestinationRef) != "" {
 		return sanitizeImageReference(*req.DestinationRef), nil
 	}
 
-	digest, err := c.InspectImageInRegistry(ctx, req.Snapshot, req.Registry)
+	digest, err := c.InspectImageInRegistry(ctx, req.ArtifactRef, req.Registry)
 	if err != nil {
 		return "", err
 	}
 
 	hash := strings.TrimPrefix(digest.Digest, "sha256:")
 	if hash == "" {
-		return "", fmt.Errorf("registry returned empty digest for image %s", req.Snapshot)
+		return "", fmt.Errorf("registry returned empty digest for image %s", req.ArtifactRef)
 	}
 
 	registryURL := sanitizeRegistryURL(req.DestinationRegistry.Url)
@@ -112,7 +112,7 @@ func (c *Client) copyRegistryImage(
 	}
 
 	if err := remote.Write(targetRef, img, c.remoteOptions(ctx, targetRegistry)...); err != nil {
-		return fmt.Errorf("failed to push copied snapshot to registry: %w", err)
+		return fmt.Errorf("failed to push copied artifact to registry: %w", err)
 	}
 
 	return nil

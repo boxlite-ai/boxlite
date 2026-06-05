@@ -127,13 +127,14 @@ export class DockerRegistryController {
   @Get('registry-push-access')
   @HttpCode(200)
   @ApiOperation({
-    summary: 'Get temporary registry access for pushing snapshots',
+    summary: 'Get temporary registry access for pushing runtime artifacts',
     operationId: 'getTransientPushAccess',
   })
   @ApiQuery({
     name: 'regionId',
     required: false,
-    description: 'ID of the region where the snapshot will be available (defaults to organization default region)',
+    description:
+      'ID of the region where the runtime artifact will be available (defaults to organization default region)',
     type: 'string',
   })
   @ApiResponse({

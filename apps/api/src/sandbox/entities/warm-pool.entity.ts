@@ -8,7 +8,7 @@ import { Column, CreateDateColumn, Entity, Index, PrimaryGeneratedColumn, Update
 import { SandboxClass } from '../enums/sandbox-class.enum'
 
 @Entity()
-@Index('warm_pool_find_idx', ['snapshot', 'target', 'class', 'cpu', 'mem', 'disk', 'gpu', 'osUser', 'env'])
+@Index('warm_pool_find_idx', ['template', 'target', 'class', 'cpu', 'mem', 'disk', 'gpu', 'osUser', 'env'])
 export class WarmPool {
   @PrimaryGeneratedColumn('uuid')
   id: string
@@ -17,7 +17,7 @@ export class WarmPool {
   pool: number
 
   @Column()
-  snapshot: string
+  template: string
 
   @Column()
   target: string

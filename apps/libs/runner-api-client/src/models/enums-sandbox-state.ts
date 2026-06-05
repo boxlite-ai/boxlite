@@ -32,7 +32,7 @@ export const EnumsSandboxState = {
     SandboxStateResizing: 'resizing',
     SandboxStateError: 'error',
     SandboxStateUnknown: 'unknown',
-    SandboxStatePullingSnapshot: 'pulling_snapshot'
+    SandboxStatePullingArtifact: 'pulling_artifact'
 } as const;
 
 export type EnumsSandboxState = typeof EnumsSandboxState[keyof typeof EnumsSandboxState];

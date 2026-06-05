@@ -81,11 +81,11 @@ export interface BoxliteConfiguration {
      */
     'proxyToolboxUrl': string;
     /**
-     * Default snapshot for sandboxes
+     * Default template for sandboxes
      * @type {string}
      * @memberof BoxliteConfiguration
      */
-    'defaultSnapshot': string;
+    'defaultTemplate': string;
     /**
      * Dashboard URL
      * @type {string}

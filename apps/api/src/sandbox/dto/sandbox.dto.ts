@@ -56,10 +56,10 @@ export class SandboxDto {
   name: string
 
   @ApiPropertyOptional({
-    description: 'The snapshot used for the sandbox',
-    example: 'boxlite-ai/sandbox:latest',
+    description: 'The template used for the sandbox',
+    example: 'ubuntu:24.04',
   })
-  snapshot: string
+  template: string
 
   @ApiProperty({
     description: 'The user associated with the project',
@@ -283,7 +283,7 @@ export class SandboxDto {
       organizationId: sandbox.organizationId,
       name: sandbox.name,
       target: sandbox.region,
-      snapshot: sandbox.snapshot,
+      template: sandbox.template,
       user: sandbox.osUser,
       env: sandbox.env,
       cpu: sandbox.cpu,
@@ -313,7 +313,7 @@ export class SandboxDto {
             contextHashes: sandbox.buildInfo.contextHashes,
             createdAt: sandbox.buildInfo.createdAt,
             updatedAt: sandbox.buildInfo.updatedAt,
-            snapshotRef: sandbox.buildInfo.snapshotRef,
+            artifactRef: sandbox.buildInfo.artifactRef,
           }
         : undefined,
       daemonVersion: sandbox.daemonVersion,

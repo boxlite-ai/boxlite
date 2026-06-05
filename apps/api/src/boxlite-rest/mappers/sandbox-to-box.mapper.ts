@@ -9,6 +9,7 @@ import { SandboxState } from '../../sandbox/enums/sandbox-state.enum'
 import { BoxResponseDto } from '../dto/box-response.dto'
 import { CreateBoxDto } from '../dto/create-box.dto'
 import { CreateSandboxDto } from '../../sandbox/dto/create-sandbox.dto'
+import { SYSTEM_TEMPLATES, getSystemTemplateDefinition } from '../../sandbox/constants/system-templates'
 
 export function sandboxToBoxResponse(sandbox: SandboxDto): BoxResponseDto {
   return {
@@ -17,7 +18,7 @@ export function sandboxToBoxResponse(sandbox: SandboxDto): BoxResponseDto {
     status: mapState(sandbox.state),
     created_at: sandbox.createdAt || new Date().toISOString(),
     updated_at: sandbox.updatedAt || new Date().toISOString(),
-    image: sandbox.snapshot || '',
+    image: sandbox.template || '',
     cpus: sandbox.cpu || 1,
     memory_mib: (sandbox.memory || 1) * 1024,
     labels: sandbox.labels || {},
@@ -26,8 +27,8 @@ export function sandboxToBoxResponse(sandbox: SandboxDto): BoxResponseDto {
 
 export function createBoxToCreateSandbox(dto: CreateBoxDto, target?: string): CreateSandboxDto {
   const createDto = new CreateSandboxDto()
+  createDto.templateId = resolveBoxTemplateId(dto.image)
   createDto.name = dto.name
-  createDto.snapshot = dto.image
   createDto.user = dto.user
   createDto.env = dto.env
   createDto.cpu = dto.cpus
@@ -35,6 +36,15 @@ export function createBoxToCreateSandbox(dto: CreateBoxDto, target?: string): Cr
   createDto.disk = dto.disk_size_gb
   createDto.target = target
   return createDto
+}
+
+export function resolveBoxTemplateId(image?: string): string | undefined {
+  const imageName = image?.trim()
+  if (!imageName) {
+    return SYSTEM_TEMPLATES[0]?.name
+  }
+
+  return getSystemTemplateDefinition(imageName)?.name
 }
 
 function mapState(state: string | SandboxState | undefined): string {
@@ -47,8 +57,8 @@ function mapState(state: string | SandboxState | undefined): string {
     case SandboxState.CREATING:
     case SandboxState.STARTING:
     case SandboxState.RESTORING:
-    case SandboxState.PULLING_SNAPSHOT:
-    case SandboxState.BUILDING_SNAPSHOT:
+    case SandboxState.PULLING_ARTIFACT:
+    case SandboxState.BUILDING_ARTIFACT:
     case SandboxState.PENDING_BUILD:
       return 'configured'
     case SandboxState.STOPPING:

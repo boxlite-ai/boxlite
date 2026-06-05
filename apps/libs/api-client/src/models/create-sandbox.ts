@@ -33,11 +33,11 @@ export interface CreateSandbox {
      */
     'name'?: string;
     /**
-     * The ID or name of the snapshot used for the sandbox
+     * The ID or name of the template used for the sandbox
      * @type {string}
      * @memberof CreateSandbox
      */
-    'snapshot'?: string;
+    'templateId'?: string;
     /**
      * The user associated with the project
      * @type {string}

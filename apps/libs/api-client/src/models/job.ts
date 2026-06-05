@@ -51,7 +51,7 @@ export interface Job {
      */
     'resourceType': JobResourceTypeEnum;
     /**
-     * The ID of the resource this job operates on (sandboxId, snapshotRef, etc.)
+     * The ID of the resource this job operates on (sandboxId, artifactRef, etc.)
      * @type {string}
      * @memberof Job
      */
@@ -90,7 +90,7 @@ export interface Job {
 
 export const JobResourceTypeEnum = {
     SANDBOX: 'SANDBOX',
-    SNAPSHOT: 'SNAPSHOT',
+    ARTIFACT: 'ARTIFACT',
     BACKUP: 'BACKUP'
 } as const;
 

@@ -15,7 +15,7 @@
 //   2. platform (VPC/DB/Redis/S3)   8. observability (Jaeger, OtelCollector)
 //   3. IAM                          9. admin UIs (PgAdmin/RegistryUI/MailDev)
 //   4. auth (Dex)                  10. CDN (CloudFront)
-//   5. registry (SnapshotManager)  11. runner (EC2 + nested KVM)
+//   5. registry (ArtifactRegistry)  11. runner (EC2 + nested KVM)
 //   6. API
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -27,7 +27,7 @@ const PORTS = {
   PROXY: 4000,
   SSH_GATEWAY: 2222,
   DEX: 5556,
-  SNAPSHOT_MANAGER: 5000,
+  ARTIFACT_REGISTRY: 5000,
   RUNNER: 3003,
   JAEGER_UI: 16686,
   OTLP_HTTP: 4318,
@@ -197,27 +197,27 @@ export default $config({
       },
     });
 
-    // ─── 5. REGISTRY (S3-backed snapshot store) ──────────────────────────────
-    // Replaces upstream registry:2.8.2 — snapshots persist in S3, not on an
-    // ephemeral container disk.
-    const snapshotManager = new sst.aws.Service("SnapshotManager", {
+    // ─── 5. ARTIFACT REGISTRY (S3-backed OCI registry) ──────────────────────
+    // Replaces upstream registry:2.8.2 — runtime artifacts persist in S3,
+    // not on an ephemeral container disk.
+    const artifactRegistry = new sst.aws.Service("ArtifactRegistry", {
       cluster,
-      image: { context: "../..", dockerfile: "apps/snapshot-manager/Dockerfile", cache: false },
+      image: { context: "../..", dockerfile: "apps/artifact-registry/Dockerfile", cache: false },
       loadBalancer: {
-        rules: [{ listen: "80/http", forward: `${PORTS.SNAPSHOT_MANAGER}/http` }],
-        health: { [`${PORTS.SNAPSHOT_MANAGER}/http`]: httpHealth("/healthz") },
+        rules: [{ listen: "80/http", forward: `${PORTS.ARTIFACT_REGISTRY}/http` }],
+        health: { [`${PORTS.ARTIFACT_REGISTRY}/http`]: httpHealth("/healthz") },
       },
       environment: {
-        SNAPSHOT_MANAGER_STORAGE_DRIVER: "s3",
-        SNAPSHOT_MANAGER_STORAGE_S3_REGION: REGION,
-        SNAPSHOT_MANAGER_STORAGE_S3_BUCKET: storage.name,
-        SNAPSHOT_MANAGER_STORAGE_S3_ACCESSKEY: s3AccessKey.id,
-        SNAPSHOT_MANAGER_STORAGE_S3_SECRETKEY: s3AccessKey.secret,
-        SNAPSHOT_MANAGER_STORAGE_DELETE_ENABLED: "true",
-        SNAPSHOT_MANAGER_AUTH_TYPE: "none",
+        ARTIFACT_REGISTRY_STORAGE_DRIVER: "s3",
+        ARTIFACT_REGISTRY_STORAGE_S3_REGION: REGION,
+        ARTIFACT_REGISTRY_STORAGE_S3_BUCKET: storage.name,
+        ARTIFACT_REGISTRY_STORAGE_S3_ACCESSKEY: s3AccessKey.id,
+        ARTIFACT_REGISTRY_STORAGE_S3_SECRETKEY: s3AccessKey.secret,
+        ARTIFACT_REGISTRY_STORAGE_DELETE_ENABLED: "true",
+        ARTIFACT_REGISTRY_AUTH_TYPE: "none",
       },
     });
-    const registry = snapshotManager; // API uses this URL for both transient + internal registries
+    const registry = artifactRegistry; // API uses this URL for both transient + internal registries
 
     // ─── 6. API (NestJS control plane) ───────────────────────────────────────
     const api = new sst.aws.Service("Api", {
@@ -253,7 +253,7 @@ export default $config({
         RUN_MIGRATIONS: "true",
         VERSION: "0.1.0",
         DEFAULT_REGION_ENFORCE_QUOTAS: "false",
-        DEFAULT_SNAPSHOT: envOr("DEFAULT_SNAPSHOT", "ubuntu:latest"),
+        DEFAULT_TEMPLATE: envOr("DEFAULT_TEMPLATE", "ubuntu:24.04"),
 
         // Database (SST-linked)
         DB_HOST: db.host,
@@ -331,7 +331,7 @@ export default $config({
         APP_URL: envOr("APP_URL", ""),
         DASHBOARD_BASE_API_URL: envOr("DASHBOARD_BASE_API_URL", `https://api.${stackDomain}`),
 
-        // Docker registries (both default to the in-cluster SnapshotManager)
+        // Docker registries (both default to the in-cluster ArtifactRegistry)
         ...registryEnv("TRANSIENT", registry.url),
         ...registryEnv("INTERNAL", registry.url),
 
@@ -503,7 +503,7 @@ export default $config({
         REGISTRY_TITLE: "BoxLite Registry",
         DELETE_IMAGES: "true",
         SHOW_CONTENT_DIGEST: "true",
-        NGINX_PROXY_PASS_URL: snapshotManager.url,
+        NGINX_PROXY_PASS_URL: artifactRegistry.url,
         SHOW_CATALOG_NB_TAGS: "true",
         REGISTRY_SECURED: "false",
         CATALOG_ELEMENTS_LIMIT: "1000",

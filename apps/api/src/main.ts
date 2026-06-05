@@ -19,7 +19,7 @@ import { FailedAuthTrackerService } from './auth/failed-auth-tracker.service'
 import { DataSource, MigrationExecutor } from 'typeorm'
 import { getOpenApiConfig } from './openapi.config'
 import { AuditInterceptor } from './audit/interceptors/audit.interceptor'
-import { join } from 'node:path'
+import { extname, join } from 'node:path'
 import { ApiKeyService } from './api-key/api-key.service'
 import { BOXLITE_ADMIN_USER_ID } from './app.service'
 import { OrganizationService } from './organization/services/organization.service'
@@ -120,13 +120,15 @@ async function bootstrap() {
   // Replace dashboard api url before serving
   if (configService.get('production')) {
     const dashboardDir = join(__dirname, '..', 'dashboard')
+    const dashboardTextExtensions = new Set(['.html', '.js', '.css'])
     const replaceInDirectory = (dir: string) => {
       for (const file of readdirSync(dir)) {
         const filePath = join(dir, file)
         if (statSync(filePath).isDirectory()) {
-          if (file === 'assets') {
-            replaceInDirectory(filePath)
-          }
+          replaceInDirectory(filePath)
+          continue
+        }
+        if (!dashboardTextExtensions.has(extname(filePath))) {
           continue
         }
         Logger.log(`Replacing %BOXLITE_BASE_API_URL% in ${filePath}`)

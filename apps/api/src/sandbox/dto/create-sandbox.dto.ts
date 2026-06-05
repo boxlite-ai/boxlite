@@ -21,12 +21,12 @@ export class CreateSandboxDto {
   name?: string
 
   @ApiPropertyOptional({
-    description: 'The ID or name of the snapshot used for the sandbox',
-    example: 'ubuntu-4vcpu-8ram-100gb',
+    description: 'The ID or name of the template used for the sandbox',
+    example: 'ubuntu-template-id',
   })
   @IsOptional()
   @IsString()
-  snapshot?: string
+  templateId?: string
 
   @ApiPropertyOptional({
     description: 'The user associated with the project',

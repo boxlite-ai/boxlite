@@ -127,8 +127,8 @@ export function Sidebar({ isBannerVisible, billingEnabled, version: _version }: 
       },
       {
         icon: <Box size={16} strokeWidth={1.5} />,
-        label: 'Snapshots',
-        path: RoutePath.SNAPSHOTS,
+        label: 'Images',
+        path: RoutePath.IMAGES,
       },
       {
         icon: <PackageOpen size={16} strokeWidth={1.5} />,

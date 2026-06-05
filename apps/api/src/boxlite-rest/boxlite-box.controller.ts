@@ -36,6 +36,7 @@ import { sandboxToBoxResponse, createBoxToCreateSandbox } from './mappers/sandbo
 import { Audit, MASKED_AUDIT_VALUE, TypedRequest } from '../audit/decorators/audit.decorator'
 import { AuditAction } from '../audit/enums/audit-action.enum'
 import { AuditTarget } from '../audit/enums/audit-target.enum'
+import { BadRequestError } from '../exceptions/bad-request.exception'
 
 @ApiTags('BoxLite REST')
 @Controller('v1/:prefix/boxes')
@@ -80,7 +81,11 @@ export class BoxliteBoxController {
   ): Promise<BoxResponseDto> {
     const organization = authContext.organization
     const createSandboxDto = createBoxToCreateSandbox(dto)
-    let sandbox = await this.sandboxService.createFromSnapshot(createSandboxDto, organization)
+    if (dto.image && !createSandboxDto.templateId) {
+      throw new BadRequestError('Choose one of the approved Linux templates to create a box')
+    }
+
+    let sandbox = await this.sandboxService.createFromTemplate(createSandboxDto, organization)
     if (sandbox.state !== SandboxState.STARTED) {
       sandbox = await this.sandboxStateWaiter.waitForStarted(sandbox.id, organization.id, 30)
     }
@@ -184,8 +189,8 @@ export class BoxliteBoxController {
         SandboxState.CREATING,
         SandboxState.STARTING,
         SandboxState.RESTORING,
-        SandboxState.PULLING_SNAPSHOT,
-        SandboxState.BUILDING_SNAPSHOT,
+        SandboxState.PULLING_ARTIFACT,
+        SandboxState.BUILDING_ARTIFACT,
         SandboxState.PENDING_BUILD,
       ].includes(sandbox.state)
     )

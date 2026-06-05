@@ -162,7 +162,7 @@ func run() int {
 	_, err = runner.GetInstance(&runner.RunnerInstanceConfig{
 		Logger:             logger,
 		BackupInfoCache:    backupInfoCache,
-		SnapshotErrorCache: cache.NewSnapshotErrorCache(ctx, cfg.SnapshotErrorCacheRetention),
+		ArtifactErrorCache: cache.NewArtifactErrorCache(ctx, cfg.ArtifactErrorCacheRetention),
 		Boxlite:            boxliteClient,
 		SandboxService:     sandboxService,
 		MetricsCollector:   metricsCollector,

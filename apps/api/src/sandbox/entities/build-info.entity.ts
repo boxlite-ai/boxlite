@@ -5,7 +5,7 @@
  */
 
 import { Column, CreateDateColumn, Entity, OneToMany, PrimaryColumn, UpdateDateColumn, BeforeInsert } from 'typeorm'
-import { Snapshot } from './snapshot.entity'
+import { BoxTemplate } from './box-template.entity'
 import { Sandbox } from './sandbox.entity'
 import { createHash } from 'crypto'
 
@@ -19,7 +19,7 @@ export function generateBuildInfoHash(dockerfileContent: string, contextHashes: 
 @Entity()
 export class BuildInfo {
   @PrimaryColumn()
-  snapshotRef: string
+  artifactRef: string
 
   @Column({ type: 'text', nullable: true })
   dockerfileContent?: string
@@ -27,8 +27,8 @@ export class BuildInfo {
   @Column('simple-array', { nullable: true })
   contextHashes?: string[]
 
-  @OneToMany(() => Snapshot, (snapshot) => snapshot.buildInfo)
-  snapshots: Snapshot[]
+  @OneToMany(() => BoxTemplate, (template) => template.buildInfo)
+  templates: BoxTemplate[]
 
   @OneToMany(() => Sandbox, (sandbox) => sandbox.buildInfo)
   sandboxes: Sandbox[]
@@ -48,6 +48,6 @@ export class BuildInfo {
 
   @BeforeInsert()
   generateHash() {
-    this.snapshotRef = generateBuildInfoHash(this.dockerfileContent, this.contextHashes)
+    this.artifactRef = generateBuildInfoHash(this.dockerfileContent, this.contextHashes)
   }
 }

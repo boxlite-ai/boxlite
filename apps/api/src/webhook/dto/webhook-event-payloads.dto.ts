@@ -8,13 +8,13 @@ import { ApiProperty, ApiSchema } from '@nestjs/swagger'
 import { WebhookEvent } from '../constants/webhook-events.constants'
 import { SandboxState } from '../../sandbox/enums/sandbox-state.enum'
 import { SandboxClass } from '../../sandbox/enums/sandbox-class.enum'
-import { SnapshotState } from '../../sandbox/enums/snapshot-state.enum'
+import { BoxTemplateState } from '../../sandbox/enums/box-template-state.enum'
 import { VolumeState } from '../../sandbox/enums/volume-state.enum'
 import { SandboxCreatedEvent } from '../../sandbox/events/sandbox-create.event'
 import { SandboxStateUpdatedEvent } from '../../sandbox/events/sandbox-state-updated.event'
-import { SnapshotCreatedEvent } from '../../sandbox/events/snapshot-created.event'
-import { SnapshotStateUpdatedEvent } from '../../sandbox/events/snapshot-state-updated.event'
-import { SnapshotRemovedEvent } from '../../sandbox/events/snapshot-removed.event'
+import { BoxTemplateCreatedEvent } from '../../sandbox/events/box-template-created.event'
+import { BoxTemplateStateUpdatedEvent } from '../../sandbox/events/box-template-state-updated.event'
+import { BoxTemplateRemovedEvent } from '../../sandbox/events/box-template-removed.event'
 import { VolumeCreatedEvent } from '../../sandbox/events/volume-created.event'
 import { VolumeStateUpdatedEvent } from '../../sandbox/events/volume-state-updated.event'
 
@@ -131,17 +131,17 @@ export class SandboxStateUpdatedWebhookDto extends BaseWebhookEventDto {
   }
 }
 
-@ApiSchema({ name: 'SnapshotCreatedWebhook' })
-export class SnapshotCreatedWebhookDto extends BaseWebhookEventDto {
+@ApiSchema({ name: 'BoxTemplateCreatedWebhook' })
+export class BoxTemplateCreatedWebhookDto extends BaseWebhookEventDto {
   @ApiProperty({
-    description: 'Snapshot ID',
-    example: 'snapshot123',
+    description: 'BoxTemplate ID',
+    example: 'template123',
   })
   id: string
 
   @ApiProperty({
-    description: 'Snapshot name',
-    example: 'my-snapshot',
+    description: 'BoxTemplate name',
+    example: 'my-template',
   })
   name: string
 
@@ -152,43 +152,43 @@ export class SnapshotCreatedWebhookDto extends BaseWebhookEventDto {
   organizationId: string
 
   @ApiProperty({
-    description: 'Snapshot state',
-    enum: SnapshotState,
-    enumName: 'SnapshotState',
+    description: 'BoxTemplate state',
+    enum: BoxTemplateState,
+    enumName: 'BoxTemplateState',
   })
-  state: SnapshotState
+  state: BoxTemplateState
 
   @ApiProperty({
-    description: 'When the snapshot was created',
+    description: 'When the template was created',
     example: '2025-12-19T10:30:00.000Z',
     format: 'date-time',
   })
   createdAt: string
 
-  static fromEvent(event: SnapshotCreatedEvent, eventType: string): SnapshotCreatedWebhookDto {
+  static fromEvent(event: BoxTemplateCreatedEvent, eventType: string): BoxTemplateCreatedWebhookDto {
     return {
       event: eventType,
       timestamp: new Date().toISOString(),
-      id: event.snapshot.id,
-      name: event.snapshot.name,
-      organizationId: event.snapshot.organizationId,
-      state: event.snapshot.state,
-      createdAt: event.snapshot.createdAt.toISOString(),
+      id: event.template.id,
+      name: event.template.name,
+      organizationId: event.template.organizationId,
+      state: event.template.state,
+      createdAt: event.template.createdAt.toISOString(),
     }
   }
 }
 
-@ApiSchema({ name: 'SnapshotStateUpdatedWebhook' })
-export class SnapshotStateUpdatedWebhookDto extends BaseWebhookEventDto {
+@ApiSchema({ name: 'BoxTemplateStateUpdatedWebhook' })
+export class BoxTemplateStateUpdatedWebhookDto extends BaseWebhookEventDto {
   @ApiProperty({
-    description: 'Snapshot ID',
-    example: 'snapshot123',
+    description: 'BoxTemplate ID',
+    example: 'template123',
   })
   id: string
 
   @ApiProperty({
-    description: 'Snapshot name',
-    example: 'my-snapshot',
+    description: 'BoxTemplate name',
+    example: 'my-template',
   })
   name: string
 
@@ -200,50 +200,50 @@ export class SnapshotStateUpdatedWebhookDto extends BaseWebhookEventDto {
 
   @ApiProperty({
     description: 'Previous state',
-    enum: SnapshotState,
-    enumName: 'SnapshotState',
+    enum: BoxTemplateState,
+    enumName: 'BoxTemplateState',
   })
-  oldState: SnapshotState
+  oldState: BoxTemplateState
 
   @ApiProperty({
     description: 'New state',
-    enum: SnapshotState,
-    enumName: 'SnapshotState',
+    enum: BoxTemplateState,
+    enumName: 'BoxTemplateState',
   })
-  newState: SnapshotState
+  newState: BoxTemplateState
 
   @ApiProperty({
-    description: 'When the snapshot was last updated',
+    description: 'When the template was last updated',
     example: '2025-12-19T10:30:00.000Z',
     format: 'date-time',
   })
   updatedAt: string
 
-  static fromEvent(event: SnapshotStateUpdatedEvent, eventType: string): SnapshotStateUpdatedWebhookDto {
+  static fromEvent(event: BoxTemplateStateUpdatedEvent, eventType: string): BoxTemplateStateUpdatedWebhookDto {
     return {
       event: eventType,
       timestamp: new Date().toISOString(),
-      id: event.snapshot.id,
-      name: event.snapshot.name,
-      organizationId: event.snapshot.organizationId,
+      id: event.template.id,
+      name: event.template.name,
+      organizationId: event.template.organizationId,
       oldState: event.oldState,
       newState: event.newState,
-      updatedAt: event.snapshot.updatedAt.toISOString(),
+      updatedAt: event.template.updatedAt.toISOString(),
     }
   }
 }
 
-@ApiSchema({ name: 'SnapshotRemovedWebhook' })
-export class SnapshotRemovedWebhookDto extends BaseWebhookEventDto {
+@ApiSchema({ name: 'BoxTemplateRemovedWebhook' })
+export class BoxTemplateRemovedWebhookDto extends BaseWebhookEventDto {
   @ApiProperty({
-    description: 'Snapshot ID',
-    example: 'snapshot123',
+    description: 'BoxTemplate ID',
+    example: 'template123',
   })
   id: string
 
   @ApiProperty({
-    description: 'Snapshot name',
-    example: 'my-snapshot',
+    description: 'BoxTemplate name',
+    example: 'my-template',
   })
   name: string
 
@@ -254,19 +254,19 @@ export class SnapshotRemovedWebhookDto extends BaseWebhookEventDto {
   organizationId: string
 
   @ApiProperty({
-    description: 'When the snapshot was removed',
+    description: 'When the template was removed',
     example: '2025-12-19T10:30:00.000Z',
     format: 'date-time',
   })
   removedAt: string
 
-  static fromEvent(event: SnapshotRemovedEvent, eventType: string): SnapshotRemovedWebhookDto {
+  static fromEvent(event: BoxTemplateRemovedEvent, eventType: string): BoxTemplateRemovedWebhookDto {
     return {
       event: eventType,
       timestamp: new Date().toISOString(),
-      id: event.snapshot.id,
-      name: event.snapshot.name,
-      organizationId: event.snapshot.organizationId,
+      id: event.template.id,
+      name: event.template.name,
+      organizationId: event.template.organizationId,
       removedAt: new Date().toISOString(),
     }
   }

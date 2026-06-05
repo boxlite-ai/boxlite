@@ -39,15 +39,15 @@ export interface CreateRegionResponse {
      */
     'sshGatewayApiKey'?: string | null;
     /**
-     * Snapshot Manager username for the region
+     * Artifact Registry username for the region
      * @type {string}
      * @memberof CreateRegionResponse
      */
-    'snapshotManagerUsername'?: string | null;
+    'artifactRegistryUsername'?: string | null;
     /**
-     * Snapshot Manager password for the region
+     * Artifact Registry password for the region
      * @type {string}
      * @memberof CreateRegionResponse
      */
-    'snapshotManagerPassword'?: string | null;
+    'artifactRegistryPassword'?: string | null;
 }

@@ -198,10 +198,10 @@ export function useDocsSearchCommands() {
           onSelect: () => openDocs('/en/sandboxes'),
         },
         {
-          id: 'suggestion-snapshots',
-          label: 'Snapshots',
+          id: 'suggestion-images',
+          label: 'Images',
           icon: <Layers className="w-4 h-4" />,
-          onSelect: () => openDocs('/en/snapshots'),
+          onSelect: () => openDocs('/en/images'),
           chainable: true,
         },
         {

@@ -15,7 +15,7 @@ api/preview-api.ts
 api/regions-api.ts
 api/runners-api.ts
 api/sandbox-api.ts
-api/snapshots-api.ts
+api/templates-api.ts
 api/toolbox-api.ts
 api/users-api.ts
 api/volumes-api.ts
@@ -31,7 +31,12 @@ models/admin-create-runner.ts
 models/announcement.ts
 models/api-key-list.ts
 models/api-key-response.ts
+models/artifact-registry-credentials.ts
 models/audit-log.ts
+models/box-template-default-resources-dto.ts
+models/box-template-dto.ts
+models/box-template-state.ts
+models/boxlite-configuration.ts
 models/build-info.ts
 models/command.ts
 models/completion-context.ts
@@ -42,6 +47,7 @@ models/computer-use-start-response.ts
 models/computer-use-status-response.ts
 models/computer-use-stop-response.ts
 models/create-api-key.ts
+models/create-box-template.ts
 models/create-build-info.ts
 models/create-docker-registry.ts
 models/create-linked-account.ts
@@ -55,11 +61,9 @@ models/create-runner-response.ts
 models/create-runner.ts
 models/create-sandbox.ts
 models/create-session-request.ts
-models/create-snapshot.ts
 models/create-user.ts
 models/create-volume.ts
 models/create-workspace.ts
-models/boxlite-configuration.ts
 models/display-info-response.ts
 models/docker-registry.ts
 models/download-files.ts
@@ -120,7 +124,6 @@ models/paginated-audit-logs.ts
 models/paginated-jobs.ts
 models/paginated-logs.ts
 models/paginated-sandboxes.ts
-models/paginated-snapshots.ts
 models/paginated-traces.ts
 models/poll-jobs-response.ts
 models/port-preview-url.ts
@@ -149,11 +152,11 @@ models/registry-push-access-dto.ts
 models/replace-request.ts
 models/replace-result.ts
 models/resize-sandbox.ts
+models/runner-artifact-cache-dto.ts
 models/runner-full.ts
 models/runner-health-metrics.ts
 models/runner-healthcheck.ts
 models/runner-service-health.ts
-models/runner-snapshot-dto.ts
 models/runner-state.ts
 models/runner.ts
 models/sandbox-class.ts
@@ -169,11 +172,8 @@ models/send-webhook-dto.ts
 models/session-execute-request.ts
 models/session-execute-response.ts
 models/session.ts
-models/set-snapshot-general-status-dto.ts
+models/set-box-template-general-status.ts
 models/signed-port-preview-url.ts
-models/snapshot-dto.ts
-models/snapshot-manager-credentials.ts
-models/snapshot-state.ts
 models/ssh-access-dto.ts
 models/ssh-access-validation-dto.ts
 models/storage-access-dto.ts

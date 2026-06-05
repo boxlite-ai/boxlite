@@ -11,7 +11,7 @@ import { OrganizationService } from './organization/services/organization.servic
 import { UserService } from './user/user.service'
 import { ApiKeyService } from './api-key/api-key.service'
 import { EventEmitterReadinessWatcher } from '@nestjs/event-emitter'
-import { SnapshotService } from './sandbox/services/snapshot.service'
+import { BoxTemplateService } from './sandbox/services/box-template.service'
 import { SystemRole } from './user/enums/system-role.enum'
 import { TypedConfigService } from './config/typed-config.service'
 import { SchedulerRegistry } from '@nestjs/schedule'
@@ -20,6 +20,7 @@ import { RunnerService } from './sandbox/services/runner.service'
 import { RunnerAdapterFactory } from './sandbox/runner-adapter/runnerAdapter'
 import { RegionType } from './region/enums/region-type.enum'
 import { RunnerState } from './sandbox/enums/runner-state.enum'
+import { SYSTEM_TEMPLATES } from './sandbox/constants/system-templates'
 
 export const BOXLITE_ADMIN_USER_ID = 'boxlite-admin'
 
@@ -34,7 +35,7 @@ export class AppService implements OnApplicationBootstrap, OnApplicationShutdown
     private readonly organizationService: OrganizationService,
     private readonly apiKeyService: ApiKeyService,
     private readonly eventEmitterReadinessWatcher: EventEmitterReadinessWatcher,
-    private readonly snapshotService: SnapshotService,
+    private readonly boxTemplateService: BoxTemplateService,
     private readonly schedulerRegistry: SchedulerRegistry,
     private readonly regionService: RegionService,
     private readonly runnerService: RunnerService,
@@ -62,7 +63,7 @@ export class AppService implements OnApplicationBootstrap, OnApplicationShutdown
 
     // Default runner init is not awaited because v2 runners depend on the API to be ready
     this.initializeDefaultRunner()
-      .then(() => this.initializeDefaultSnapshot())
+      .then(() => this.initializeSystemTemplates())
       .catch((error) => {
         this.logger.error('Error initializing default runner', error)
       })
@@ -181,8 +182,8 @@ export class AppService implements OnApplicationBootstrap, OnApplicationShutdown
         maxCpuPerSandbox: this.configService.getOrThrow('admin.maxCpuPerSandbox'),
         maxMemoryPerSandbox: this.configService.getOrThrow('admin.maxMemoryPerSandbox'),
         maxDiskPerSandbox: this.configService.getOrThrow('admin.maxDiskPerSandbox'),
-        snapshotQuota: this.configService.getOrThrow('admin.snapshotQuota'),
-        maxSnapshotSize: this.configService.getOrThrow('admin.maxSnapshotSize'),
+        templateQuota: this.configService.getOrThrow('admin.templateQuota'),
+        maxTemplateSize: this.configService.getOrThrow('admin.maxTemplateSize'),
         volumeQuota: this.configService.getOrThrow('admin.volumeQuota'),
       },
       personalOrganizationDefaultRegionId: this.configService.getOrThrow('defaultRegion.id'),
@@ -310,32 +311,19 @@ Admin user created with API key: ${value}
     this.logger.log('Default backup registry initialized successfully')
   }
 
-  private async initializeDefaultSnapshot(): Promise<void> {
+  private async initializeSystemTemplates(): Promise<void> {
     const adminPersonalOrg = await this.organizationService.findPersonal(BOXLITE_ADMIN_USER_ID)
 
-    try {
-      const existingSnapshot = await this.snapshotService.getSnapshotByName(
-        this.configService.getOrThrow('defaultSnapshot'),
-        adminPersonalOrg.id,
-      )
-      if (existingSnapshot) {
-        return
-      }
-    } catch {
-      this.logger.log('Default snapshot not found, creating...')
+    const defaultTemplate = this.configService.getOrThrow('defaultTemplate')
+    if (!SYSTEM_TEMPLATES.some((template) => template.name === defaultTemplate)) {
+      this.logger.warn(`Configured default template ${defaultTemplate} is not in the MVP system template list`)
     }
 
-    const defaultSnapshot = this.configService.getOrThrow('defaultSnapshot')
+    for (const template of SYSTEM_TEMPLATES) {
+      this.logger.log(`Ensuring system template: ${template.name}`)
+      await this.boxTemplateService.ensureSystemTemplate(adminPersonalOrg, template)
+    }
 
-    await this.snapshotService.createFromPull(
-      adminPersonalOrg,
-      {
-        name: defaultSnapshot,
-        imageName: defaultSnapshot,
-      },
-      true,
-    )
-
-    this.logger.log('Default snapshot created successfully')
+    this.logger.log('System templates initialized successfully')
   }
 }

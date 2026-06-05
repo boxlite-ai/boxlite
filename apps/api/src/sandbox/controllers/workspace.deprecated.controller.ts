@@ -168,13 +168,12 @@ export class WorkspaceController {
     const organization = authContext.organization
 
     const workspace = WorkspaceDto.fromSandboxDto(
-      await this.workspaceService.createFromSnapshot(
+      await this.workspaceService.createFromTemplate(
         {
           ...createWorkspaceDto,
-          snapshot: createWorkspaceDto.image,
+          templateId: createWorkspaceDto.image,
         },
         organization,
-        true,
       ),
     )
 
@@ -597,7 +596,7 @@ export class WorkspaceController {
 
     const logProxy = new LogProxy(
       runner.apiUrl,
-      workspace.buildInfo.snapshotRef.split(':')[0],
+      workspace.buildInfo.artifactRef.split(':')[0],
       runner.apiKey,
       follow === true,
       req,

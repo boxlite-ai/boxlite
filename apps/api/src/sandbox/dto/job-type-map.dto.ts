@@ -31,20 +31,20 @@ export interface JobTypeMap {
   [JobType.CREATE_BACKUP]: {
     resourceType: [ResourceType.SANDBOX]
   }
-  [JobType.BUILD_SNAPSHOT]: {
-    resourceType: [ResourceType.SANDBOX, ResourceType.SNAPSHOT]
+  [JobType.BUILD_ARTIFACT]: {
+    resourceType: [ResourceType.SANDBOX, ResourceType.ARTIFACT]
   }
-  [JobType.PULL_SNAPSHOT]: {
-    resourceType: [ResourceType.SNAPSHOT]
+  [JobType.PULL_ARTIFACT]: {
+    resourceType: [ResourceType.ARTIFACT]
   }
-  [JobType.REMOVE_SNAPSHOT]: {
-    resourceType: [ResourceType.SNAPSHOT]
+  [JobType.REMOVE_ARTIFACT]: {
+    resourceType: [ResourceType.ARTIFACT]
   }
   [JobType.UPDATE_SANDBOX_NETWORK_SETTINGS]: {
     resourceType: [ResourceType.SANDBOX]
   }
-  [JobType.INSPECT_SNAPSHOT_IN_REGISTRY]: {
-    resourceType: [ResourceType.SNAPSHOT]
+  [JobType.INSPECT_ARTIFACT_IN_REGISTRY]: {
+    resourceType: [ResourceType.ARTIFACT]
   }
   [JobType.RECOVER_SANDBOX]: {
     resourceType: [ResourceType.SANDBOX]

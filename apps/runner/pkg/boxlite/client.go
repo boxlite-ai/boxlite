@@ -195,7 +195,7 @@ func (c *Client) Create(ctx context.Context, sandboxDto dto.CreateSandboxDTO) (s
 
 	opts = append(opts, boxlite.WithNetwork(networkSpec(sandboxDto.NetworkBlockAll, sandboxDto.NetworkAllowList)))
 
-	bx, err := c.runtime.Create(ctx, sandboxDto.Snapshot, opts...)
+	bx, err := c.runtime.Create(ctx, sandboxDto.ArtifactRef, opts...)
 	if err != nil {
 		if len(volumeMounts) > 0 {
 			if cleanupErr := c.removeSandboxVolumeMountRecord(ctx, sandboxDto.Id); cleanupErr != nil {
@@ -209,7 +209,7 @@ func (c *Client) Create(ctx context.Context, sandboxDto dto.CreateSandboxDTO) (s
 	c.boxes[sandboxDto.Id] = bx
 	c.mu.Unlock()
 
-	c.logger.Info("created box", "id", bx.ID(), "name", bx.Name(), "image", sandboxDto.Snapshot)
+	c.logger.Info("created box", "id", bx.ID(), "name", bx.Name(), "artifactRef", sandboxDto.ArtifactRef)
 
 	skipStart := sandboxDto.SkipStart != nil && *sandboxDto.SkipStart
 	if !skipStart {

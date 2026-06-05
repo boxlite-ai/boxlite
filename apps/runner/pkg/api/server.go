@@ -147,17 +147,17 @@ func (a *ApiServer) Start(ctx context.Context) error {
 		sandboxController.Any("/:sandboxId/toolbox/*path", controllers.ProxyRequest(sandboxControllerLogger))
 	}
 
-	snapshotControllerLogger := a.logger.With(slog.String("component", "snapshot_controller"))
-	snapshotController := protected.Group("/snapshots")
+	artifactControllerLogger := a.logger.With(slog.String("component", "artifact_controller"))
+	artifactController := protected.Group("/artifacts")
 	{
-		snapshotController.POST("/pull", controllers.PullSnapshot(ctx, snapshotControllerLogger))
-		snapshotController.POST("/build", controllers.BuildSnapshot(ctx, snapshotControllerLogger))
-		snapshotController.POST("/tag", controllers.TagImage)
-		snapshotController.GET("/exists", controllers.SnapshotExists)
-		snapshotController.GET("/info", controllers.GetSnapshotInfo)
-		snapshotController.POST("/remove", controllers.RemoveSnapshot(snapshotControllerLogger))
-		snapshotController.GET("/logs", controllers.GetBuildLogs(snapshotControllerLogger))
-		snapshotController.POST("/inspect", controllers.InspectSnapshotInRegistry)
+		artifactController.POST("/pull", controllers.PullArtifact(ctx, artifactControllerLogger))
+		artifactController.POST("/build", controllers.BuildArtifact(ctx, artifactControllerLogger))
+		artifactController.POST("/tag", controllers.TagImage)
+		artifactController.GET("/exists", controllers.ArtifactExists)
+		artifactController.GET("/info", controllers.GetArtifactInfo)
+		artifactController.POST("/remove", controllers.RemoveArtifact(artifactControllerLogger))
+		artifactController.GET("/logs", controllers.GetBuildLogs(artifactControllerLogger))
+		artifactController.POST("/inspect", controllers.InspectArtifactInRegistry)
 	}
 
 	// BoxLite REST API — exec, files, metrics

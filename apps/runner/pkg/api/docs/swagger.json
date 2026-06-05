@@ -876,26 +876,26 @@
         }
       }
     },
-    "/snapshots/build": {
+    "/artifacts/build": {
       "post": {
-        "description": "Build a snapshot from a Dockerfile and context hashes. The operation runs asynchronously and returns 202 immediately.",
-        "tags": ["snapshots"],
-        "summary": "Build a snapshot",
-        "operationId": "BuildSnapshot",
+        "description": "Build an artifact from a Dockerfile and context hashes. The operation runs asynchronously and returns 202 immediately.",
+        "tags": ["artifacts"],
+        "summary": "Build an artifact",
+        "operationId": "BuildArtifact",
         "parameters": [
           {
-            "description": "Build snapshot request",
+            "description": "Build artifact request",
             "name": "request",
             "in": "body",
             "required": true,
             "schema": {
-              "$ref": "#/definitions/BuildSnapshotRequestDTO"
+              "$ref": "#/definitions/BuildArtifactRequestDTO"
             }
           }
         ],
         "responses": {
           "202": {
-            "description": "Snapshot build started",
+            "description": "Artifact build started",
             "schema": {
               "type": "string"
             }
@@ -933,18 +933,18 @@
         }
       }
     },
-    "/snapshots/exists": {
+    "/artifacts/exists": {
       "get": {
-        "description": "Check if a specified snapshot exists locally",
+        "description": "Check if a specified artifact exists locally",
         "produces": ["application/json"],
-        "tags": ["snapshots"],
-        "summary": "Check if a snapshot exists",
-        "operationId": "SnapshotExists",
+        "tags": ["artifacts"],
+        "summary": "Check if an artifact exists",
+        "operationId": "ArtifactExists",
         "parameters": [
           {
             "type": "string",
-            "description": "Snapshot name and tag",
-            "name": "snapshot",
+            "description": "Artifact ref",
+            "name": "artifactRef",
             "in": "query",
             "required": true
           }
@@ -953,7 +953,7 @@
           "200": {
             "description": "OK",
             "schema": {
-              "$ref": "#/definitions/SnapshotExistsResponse"
+              "$ref": "#/definitions/ArtifactExistsResponse"
             }
           },
           "400": {
@@ -989,18 +989,18 @@
         }
       }
     },
-    "/snapshots/info": {
+    "/artifacts/info": {
       "get": {
-        "description": "Get information about a specified snapshot including size and entrypoint. Returns 422 if the last pull/build operation failed, with the error reason in the message.",
+        "description": "Get information about a specified artifact including size and entrypoint. Returns 422 if the last pull/build operation failed, with the error reason in the message.",
         "produces": ["application/json"],
-        "tags": ["snapshots"],
-        "summary": "Get snapshot information",
-        "operationId": "GetSnapshotInfo",
+        "tags": ["artifacts"],
+        "summary": "Get artifact information",
+        "operationId": "GetArtifactInfo",
         "parameters": [
           {
             "type": "string",
-            "description": "Snapshot name and tag",
-            "name": "snapshot",
+            "description": "Artifact ref",
+            "name": "artifactRef",
             "in": "query",
             "required": true
           }
@@ -1009,7 +1009,7 @@
           "200": {
             "description": "OK",
             "schema": {
-              "$ref": "#/definitions/SnapshotInfoResponse"
+              "$ref": "#/definitions/ArtifactInfoResponse"
             }
           },
           "400": {
@@ -1045,21 +1045,21 @@
         }
       }
     },
-    "/snapshots/inspect": {
+    "/artifacts/inspect": {
       "post": {
-        "description": "Inspect a specified snapshot in a registry",
+        "description": "Inspect a specified artifact in a registry",
         "produces": ["application/json"],
-        "tags": ["snapshots"],
-        "summary": "Inspect a snapshot in a registry",
-        "operationId": "InspectSnapshotInRegistry",
+        "tags": ["artifacts"],
+        "summary": "Inspect an artifact in a registry",
+        "operationId": "InspectArtifactInRegistry",
         "parameters": [
           {
-            "description": "Inspect snapshot in registry request",
+            "description": "Inspect artifact in registry request",
             "name": "request",
             "in": "body",
             "required": true,
             "schema": {
-              "$ref": "#/definitions/InspectSnapshotInRegistryRequest"
+              "$ref": "#/definitions/InspectArtifactInRegistryRequest"
             }
           }
         ],
@@ -1067,7 +1067,7 @@
           "200": {
             "description": "OK",
             "schema": {
-              "$ref": "#/definitions/SnapshotDigestResponse"
+              "$ref": "#/definitions/ArtifactDigestResponse"
             }
           },
           "400": {
@@ -1097,17 +1097,17 @@
         }
       }
     },
-    "/snapshots/logs": {
+    "/artifacts/logs": {
       "get": {
         "description": "Stream build logs",
-        "tags": ["snapshots"],
+        "tags": ["artifacts"],
         "summary": "Get build logs",
         "operationId": "GetBuildLogs",
         "parameters": [
           {
             "type": "string",
-            "description": "Snapshot ref",
-            "name": "snapshotRef",
+            "description": "Runtime artifact ref",
+            "name": "artifactRef",
             "in": "query",
             "required": true
           },
@@ -1152,26 +1152,26 @@
         }
       }
     },
-    "/snapshots/pull": {
+    "/artifacts/pull": {
       "post": {
-        "description": "Pull a snapshot from a registry and optionally push to another registry. The operation runs asynchronously and returns 202 immediately.",
-        "tags": ["snapshots"],
-        "summary": "Pull a snapshot",
-        "operationId": "PullSnapshot",
+        "description": "Pull an artifact from a registry and optionally push to another registry. The operation runs asynchronously and returns 202 immediately.",
+        "tags": ["artifacts"],
+        "summary": "Pull an artifact",
+        "operationId": "PullArtifact",
         "parameters": [
           {
-            "description": "Pull snapshot",
+            "description": "Pull artifact",
             "name": "request",
             "in": "body",
             "required": true,
             "schema": {
-              "$ref": "#/definitions/PullSnapshotRequestDTO"
+              "$ref": "#/definitions/PullArtifactRequestDTO"
             }
           }
         ],
         "responses": {
           "202": {
-            "description": "Snapshot pull started",
+            "description": "Artifact pull started",
             "schema": {
               "type": "string"
             }
@@ -1209,25 +1209,25 @@
         }
       }
     },
-    "/snapshots/remove": {
+    "/artifacts/remove": {
       "post": {
-        "description": "Remove a specified snapshot from the local system",
+        "description": "Remove a specified artifact from the local system",
         "produces": ["application/json"],
-        "tags": ["snapshots"],
-        "summary": "Remove a snapshot",
-        "operationId": "RemoveSnapshot",
+        "tags": ["artifacts"],
+        "summary": "Remove an artifact",
+        "operationId": "RemoveArtifact",
         "parameters": [
           {
             "type": "string",
-            "description": "Snapshot name and tag",
-            "name": "snapshot",
+            "description": "Artifact ref",
+            "name": "artifactRef",
             "in": "query",
             "required": true
           }
         ],
         "responses": {
           "200": {
-            "description": "Snapshot successfully removed",
+            "description": "Artifact successfully removed",
             "schema": {
               "type": "string"
             }
@@ -1265,10 +1265,10 @@
         }
       }
     },
-    "/snapshots/tag": {
+    "/artifacts/tag": {
       "post": {
         "description": "Tag an existing local image with a new target reference",
-        "tags": ["snapshots"],
+        "tags": ["artifacts"],
         "summary": "Tag an image",
         "operationId": "TagImage",
         "deprecated": true,
@@ -1325,7 +1325,7 @@
     }
   },
   "definitions": {
-    "BuildSnapshotRequestDTO": {
+    "BuildArtifactRequestDTO": {
       "type": "object",
       "required": ["dockerfile", "organizationId"],
       "properties": {
@@ -1347,8 +1347,8 @@
         "registry": {
           "$ref": "#/definitions/RegistryDTO"
         },
-        "snapshot": {
-          "description": "Snapshot ID and tag or the build's hash",
+        "artifactRef": {
+          "description": "Artifact ref or the build's hash",
           "type": "string"
         },
         "sourceRegistries": {
@@ -1373,7 +1373,7 @@
     },
     "CreateSandboxDTO": {
       "type": "object",
-      "required": ["id", "osUser", "snapshot", "userId"],
+      "required": ["artifactRef", "id", "osUser", "userId"],
       "properties": {
         "authToken": {
           "type": "string"
@@ -1439,7 +1439,7 @@
         "skipStart": {
           "type": "boolean"
         },
-        "snapshot": {
+        "artifactRef": {
           "type": "string"
         },
         "storageQuota": {
@@ -1488,14 +1488,14 @@
         }
       }
     },
-    "InspectSnapshotInRegistryRequest": {
+    "InspectArtifactInRegistryRequest": {
       "type": "object",
-      "required": ["snapshot"],
+      "required": ["artifactRef"],
       "properties": {
         "registry": {
           "$ref": "#/definitions/RegistryDTO"
         },
-        "snapshot": {
+        "artifactRef": {
           "type": "string",
           "example": "nginx:latest"
         }
@@ -1518,9 +1518,9 @@
         }
       }
     },
-    "PullSnapshotRequestDTO": {
+    "PullArtifactRequestDTO": {
       "type": "object",
-      "required": ["snapshot"],
+      "required": ["artifactRef"],
       "properties": {
         "destinationRef": {
           "type": "string"
@@ -1534,7 +1534,7 @@
         "registry": {
           "$ref": "#/definitions/RegistryDTO"
         },
-        "snapshot": {
+        "artifactRef": {
           "type": "string"
         }
       }
@@ -1677,7 +1677,7 @@
         "currentMemoryUsagePercentage": {
           "type": "number"
         },
-        "currentSnapshotCount": {
+        "currentArtifactCount": {
           "type": "integer"
         },
         "currentStartedSandboxes": {
@@ -1720,7 +1720,7 @@
         }
       }
     },
-    "SnapshotDigestResponse": {
+    "ArtifactDigestResponse": {
       "type": "object",
       "properties": {
         "hash": {
@@ -1733,7 +1733,7 @@
         }
       }
     },
-    "SnapshotExistsResponse": {
+    "ArtifactExistsResponse": {
       "type": "object",
       "properties": {
         "exists": {
@@ -1742,7 +1742,7 @@
         }
       }
     },
-    "SnapshotInfoResponse": {
+    "ArtifactInfoResponse": {
       "type": "object",
       "properties": {
         "cmd": {
@@ -1854,7 +1854,7 @@
         "resizing",
         "error",
         "unknown",
-        "pulling_snapshot"
+        "pulling_artifact"
       ],
       "x-enum-varnames": [
         "SandboxStateCreating",
@@ -1868,7 +1868,7 @@
         "SandboxStateResizing",
         "SandboxStateError",
         "SandboxStateUnknown",
-        "SandboxStatePullingSnapshot"
+        "SandboxStatePullingArtifact"
       ]
     }
   },

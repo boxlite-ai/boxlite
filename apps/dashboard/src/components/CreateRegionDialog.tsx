@@ -28,7 +28,7 @@ const DEFAULT_FORM_DATA = {
   name: '',
   proxyUrl: '',
   sshGatewayUrl: '',
-  snapshotManagerUrl: '',
+  artifactRegistryUrl: '',
 }
 
 interface CreateRegionDialogProps {
@@ -48,7 +48,7 @@ export const CreateRegionDialog: React.FC<CreateRegionDialogProps> = ({
   const [createdRegion, setCreatedRegion] = useState<CreateRegionResponse | null>(null)
   const [isProxyApiKeyRevealed, setIsProxyApiKeyRevealed] = useState(false)
   const [isSshGatewayApiKeyRevealed, setIsSshGatewayApiKeyRevealed] = useState(false)
-  const [isSnapshotManagerPasswordRevealed, setIsSnapshotManagerPasswordRevealed] = useState(false)
+  const [isArtifactRegistryPasswordRevealed, setIsArtifactRegistryPasswordRevealed] = useState(false)
 
   const [formData, setFormData] = useState(DEFAULT_FORM_DATA)
 
@@ -59,7 +59,7 @@ export const CreateRegionDialog: React.FC<CreateRegionDialogProps> = ({
         name: formData.name,
         proxyUrl: formData.proxyUrl.trim() || null,
         sshGatewayUrl: formData.sshGatewayUrl.trim() || null,
-        snapshotManagerUrl: formData.snapshotManagerUrl.trim() || null,
+        artifactRegistryUrl: formData.artifactRegistryUrl.trim() || null,
       }
 
       const region = await onCreateRegion(createRegionData)
@@ -67,8 +67,8 @@ export const CreateRegionDialog: React.FC<CreateRegionDialogProps> = ({
         if (
           !region.proxyApiKey &&
           !region.sshGatewayApiKey &&
-          !region.snapshotManagerUsername &&
-          !region.snapshotManagerPassword
+          !region.artifactRegistryUsername &&
+          !region.artifactRegistryPassword
         ) {
           setOpen(false)
           setCreatedRegion(null)
@@ -106,7 +106,7 @@ export const CreateRegionDialog: React.FC<CreateRegionDialogProps> = ({
           setFormData(DEFAULT_FORM_DATA)
           setIsProxyApiKeyRevealed(false)
           setIsSshGatewayApiKeyRevealed(false)
-          setIsSnapshotManagerPasswordRevealed(false)
+          setIsArtifactRegistryPasswordRevealed(false)
         }
       }}
     >
@@ -125,8 +125,8 @@ export const CreateRegionDialog: React.FC<CreateRegionDialogProps> = ({
               ? 'Add a new region for grouping runners and sandboxes.'
               : createdRegion.proxyApiKey ||
                   createdRegion.sshGatewayApiKey ||
-                  createdRegion.snapshotManagerUsername ||
-                  createdRegion.snapshotManagerPassword
+                  createdRegion.artifactRegistryUsername ||
+                  createdRegion.artifactRegistryPassword
                 ? "Save these credentials securely. You won't be able to see them again."
                 : ''}
           </DialogDescription>
@@ -135,8 +135,8 @@ export const CreateRegionDialog: React.FC<CreateRegionDialogProps> = ({
         {createdRegion &&
         (createdRegion.proxyApiKey ||
           createdRegion.sshGatewayApiKey ||
-          createdRegion.snapshotManagerUsername ||
-          createdRegion.snapshotManagerPassword) ? (
+          createdRegion.artifactRegistryUsername ||
+          createdRegion.artifactRegistryPassword) ? (
           <div className="space-y-6">
             {createdRegion.proxyApiKey && (
               <div className="space-y-3">
@@ -176,33 +176,33 @@ export const CreateRegionDialog: React.FC<CreateRegionDialogProps> = ({
               </div>
             )}
 
-            {createdRegion.snapshotManagerUsername && (
+            {createdRegion.artifactRegistryUsername && (
               <div className="space-y-3">
-                <Label htmlFor="snapshot-manager-username">Snapshot manager username</Label>
+                <Label htmlFor="artifact-registry-username">Artifact registry username</Label>
                 <CopyableValue
-                  displayValue={createdRegion.snapshotManagerUsername}
-                  copyValue={createdRegion.snapshotManagerUsername}
-                  copyLabel="snapshot manager username"
+                  displayValue={createdRegion.artifactRegistryUsername}
+                  copyValue={createdRegion.artifactRegistryUsername}
+                  copyLabel="artifact registry username"
                   onCopy={copyToClipboard}
                 />
               </div>
             )}
 
-            {createdRegion.snapshotManagerPassword && (
+            {createdRegion.artifactRegistryPassword && (
               <div className="space-y-3">
-                <Label htmlFor="snapshot-manager-password">Snapshot manager password</Label>
+                <Label htmlFor="artifact-registry-password">Artifact registry password</Label>
                 <CopyableValue
                   displayValue={
-                    isSnapshotManagerPasswordRevealed
-                      ? createdRegion.snapshotManagerPassword
-                      : getMaskedToken(createdRegion.snapshotManagerPassword)
+                    isArtifactRegistryPasswordRevealed
+                      ? createdRegion.artifactRegistryPassword
+                      : getMaskedToken(createdRegion.artifactRegistryPassword)
                   }
-                  copyValue={createdRegion.snapshotManagerPassword}
-                  copyLabel="snapshot manager password"
+                  copyValue={createdRegion.artifactRegistryPassword}
+                  copyLabel="artifact registry password"
                   onCopy={copyToClipboard}
                   valueProps={{
-                    onMouseEnter: () => setIsSnapshotManagerPasswordRevealed(true),
-                    onMouseLeave: () => setIsSnapshotManagerPasswordRevealed(false),
+                    onMouseEnter: () => setIsArtifactRegistryPasswordRevealed(true),
+                    onMouseLeave: () => setIsArtifactRegistryPasswordRevealed(false),
                   }}
                 />
               </div>
@@ -263,17 +263,17 @@ export const CreateRegionDialog: React.FC<CreateRegionDialogProps> = ({
             </div>
 
             <div className="space-y-3">
-              <Label htmlFor="snapshot-manager-url">Snapshot manager URL</Label>
+              <Label htmlFor="artifact-registry-url">Artifact registry URL</Label>
               <Input
-                id="snapshot-manager-url"
-                value={formData.snapshotManagerUrl}
+                id="artifact-registry-url"
+                value={formData.artifactRegistryUrl}
                 onChange={(e) => {
-                  setFormData((prev) => ({ ...prev, snapshotManagerUrl: e.target.value }))
+                  setFormData((prev) => ({ ...prev, artifactRegistryUrl: e.target.value }))
                 }}
-                placeholder="https://snapshot-manager.example.com"
+                placeholder="https://artifact-registry.example.com"
               />
               <p className="text-sm text-muted-foreground mt-1 pl-1">
-                (Optional) URL of the custom snapshot manager for this region
+                (Optional) URL of the custom artifact registry for this region
               </p>
             </div>
           </form>

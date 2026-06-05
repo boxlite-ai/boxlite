@@ -59,7 +59,7 @@ type Metrics struct {
 	AllocatedCPU          float32
 	AllocatedMemoryGiB    float32
 	AllocatedDiskGiB      float32
-	SnapshotCount         float32
+	ArtifactCount         float32
 	TotalCPU              float32
 	TotalRAMGiB           float32
 	TotalDiskGiB          float32
@@ -145,7 +145,7 @@ func (c *Collector) collect(ctx context.Context) (*Metrics, error) {
 	if err != nil {
 		c.log.WarnContext(ctx, "Failed to get image count", "error", err)
 	} else {
-		metrics.SnapshotCount = float32(len(images))
+		metrics.ArtifactCount = float32(len(images))
 	}
 
 	c.resourcesMutex.RLock()

@@ -133,7 +133,7 @@ export interface CreateSandboxDTO {
      * @type {string}
      * @memberof CreateSandboxDTO
      */
-    'snapshot': string;
+    'artifactRef': string;
     /**
      *
      * @type {number}

@@ -18,7 +18,7 @@ const (
 	SandboxStateResizing        SandboxState = "resizing"
 	SandboxStateError           SandboxState = "error"
 	SandboxStateUnknown         SandboxState = "unknown"
-	SandboxStatePullingSnapshot SandboxState = "pulling_snapshot"
+	SandboxStatePullingArtifact SandboxState = "pulling_artifact"
 )
 
 func (s SandboxState) String() string {

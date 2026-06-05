@@ -12,9 +12,9 @@ import { SandboxDto } from '../../sandbox/dto/sandbox.dto'
 import { SandboxState } from '../../sandbox/enums/sandbox-state.enum'
 import { SandboxDesiredState } from '../../sandbox/enums/sandbox-desired-state.enum'
 import { SandboxEvents } from '../../sandbox/constants/sandbox-events.constants'
-import { SnapshotDto } from '../../sandbox/dto/snapshot.dto'
-import { SnapshotState } from '../../sandbox/enums/snapshot-state.enum'
-import { SnapshotEvents } from '../../sandbox/constants/snapshot-events'
+import { BoxTemplateDto } from '../../sandbox/dto/box-template.dto'
+import { BoxTemplateState } from '../../sandbox/enums/box-template-state.enum'
+import { BoxTemplateEvents } from '../../sandbox/constants/box-template-events'
 import { VolumeDto } from '../../sandbox/dto/volume.dto'
 import { VolumeState } from '../../sandbox/enums/volume-state.enum'
 import { VolumeEvents } from '../../sandbox/constants/volume-events'
@@ -54,18 +54,16 @@ export class NotificationRedisEmitter extends NotificationEmitter implements OnM
       .emit(SandboxEvents.DESIRED_STATE_UPDATED, { sandbox, oldDesiredState, newDesiredState })
   }
 
-  emitSnapshotCreated(snapshot: SnapshotDto) {
-    this.emitter.to(snapshot.organizationId).emit(SnapshotEvents.CREATED, snapshot)
+  emitTemplateCreated(template: BoxTemplateDto) {
+    this.emitter.to(template.organizationId).emit(BoxTemplateEvents.CREATED, template)
   }
 
-  emitSnapshotStateUpdated(snapshot: SnapshotDto, oldState: SnapshotState, newState: SnapshotState) {
-    this.emitter
-      .to(snapshot.organizationId)
-      .emit(SnapshotEvents.STATE_UPDATED, { snapshot: snapshot, oldState, newState })
+  emitBoxTemplateStateUpdated(template: BoxTemplateDto, oldState: BoxTemplateState, newState: BoxTemplateState) {
+    this.emitter.to(template.organizationId).emit(BoxTemplateEvents.STATE_UPDATED, { template, oldState, newState })
   }
 
-  emitSnapshotRemoved(snapshot: SnapshotDto) {
-    this.emitter.to(snapshot.organizationId).emit(SnapshotEvents.REMOVED, snapshot)
+  emitTemplateRemoved(template: BoxTemplateDto) {
+    this.emitter.to(template.organizationId).emit(BoxTemplateEvents.REMOVED, template)
   }
 
   emitVolumeCreated(volume: VolumeDto) {

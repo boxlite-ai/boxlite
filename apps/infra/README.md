@@ -185,11 +185,11 @@ For Auth0 specifically:
 | **Api**             | REST API + WebSocket `/attach`       | `https://api.<STACK_DOMAIN>` (direct ALB)    |
 | **Proxy**           | `<port>-<id>.proxy.<domain>` previews | `https://*.proxy.<STACK_DOMAIN>` (direct ALB) |
 | **SshGateway**      | `ssh <token>@ssh.<domain>:2222`      | `ssh.<STACK_DOMAIN>:2222` (NLB, raw TCP)     |
-| **SnapshotManager** | S3-backed docker registry            | internal only                                |
+| **ArtifactRegistry** | S3-backed docker registry            | internal only                                |
 | **Jaeger**          | Trace viewer                         | public ALB                                   |
 | **OtelCollector**   | OTLP ingest                          | internal + public health                     |
 | **PgAdmin**         | Postgres admin UI                    | internal ALB (set `PGADMIN_PUBLIC=true` to expose) |
-| **RegistryUI**      | Browse snapshot images               | public ALB                                   |
+| **RegistryUI**      | Browse artifact images               | public ALB                                   |
 | **MailDev**         | Mock SMTP + web UI                   | public ALB                                   |
 
 Run `npx sst deploy --stage dev` without changes to reprint all URLs. See
@@ -287,8 +287,8 @@ follows that. Not yet implemented.
                 ssh.<STACK_DOMAIN>:2222  (raw TCP, no TLS termination)
 
                           ┌───────┬────────┬────────┬──────────┐
-                          │  RDS  │ Redis  │   S3   │ Snapshot │ ← Api links
-                          │  PG   │        │ bucket │ Manager  │
+                          │  RDS  │ Redis  │   S3   │ Artifact │ ← Api links
+                          │  PG   │        │ bucket │ Registry │
                           └───────┴────────┴────────┴──────────┘
                                                        ▲
                                                        │ docker push

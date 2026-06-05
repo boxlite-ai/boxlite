@@ -34,8 +34,8 @@ export function isTransitioning(sandbox: Sandbox): boolean {
     sandbox.state === SandboxState.DESTROYING ||
     sandbox.state === SandboxState.ARCHIVING ||
     sandbox.state === SandboxState.RESTORING ||
-    sandbox.state === SandboxState.BUILDING_SNAPSHOT ||
-    sandbox.state === SandboxState.PULLING_SNAPSHOT
+    sandbox.state === SandboxState.BUILDING_ARTIFACT ||
+    sandbox.state === SandboxState.PULLING_ARTIFACT
   )
 }
 

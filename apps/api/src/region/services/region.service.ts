@@ -27,13 +27,13 @@ import { EventEmitter2 } from '@nestjs/event-emitter'
 import { RegionEvents } from '../constants/region-events.constant'
 import { RegionCreatedEvent } from '../events/region-created.event'
 import { RegionDeletedEvent } from '../events/region-deleted.event'
-import { SnapshotManagerCredentialsDto } from '../dto/snapshot-manager-credentials.dto'
+import { ArtifactRegistryCredentialsDto } from '../dto/artifact-registry-credentials.dto'
 import {
-  RegionSnapshotManagerCredsRegeneratedEvent,
-  RegionSnapshotManagerUpdatedEvent,
-} from '../events/region-snapshot-manager-creds.event'
+  RegionArtifactRegistryCredsRegeneratedEvent,
+  RegionArtifactRegistryUpdatedEvent,
+} from '../events/region-artifact-registry-creds.event'
 import { UpdateRegionDto } from '../dto/update-region.dto'
-import { Snapshot } from '../../sandbox/entities/snapshot.entity'
+import { BoxTemplate } from '../../sandbox/entities/box-template.entity'
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import { Redis } from 'ioredis'
 import { toolboxProxyUrlCacheKey } from '../../sandbox/utils/sandbox-lookup-cache.util'
@@ -49,8 +49,8 @@ export class RegionService {
     private readonly runnerRepository: Repository<Runner>,
     private readonly dataSource: DataSource,
     private readonly eventEmitter: EventEmitter2,
-    @InjectRepository(Snapshot)
-    private readonly snapshotRepository: Repository<Snapshot>,
+    @InjectRepository(BoxTemplate)
+    private readonly boxTemplateRepository: Repository<BoxTemplate>,
     @InjectRedis() private readonly redis: Redis,
     private readonly configService: TypedConfigService,
   ) {}
@@ -87,8 +87,8 @@ export class RegionService {
         ? generateApiKeyValue(this.configService.getOrThrow('apiKey.prefix'), 'svc')
         : undefined
 
-      const snapshotManagerUsername = createRegionDto.snapshotManagerUrl ? 'boxlite' : undefined
-      const snapshotManagerPassword = createRegionDto.snapshotManagerUrl ? generateRandomString(16) : undefined
+      const artifactRegistryUsername = createRegionDto.artifactRegistryUrl ? 'boxlite' : undefined
+      const artifactRegistryPassword = createRegionDto.artifactRegistryUrl ? generateRandomString(16) : undefined
 
       const region = new Region({
         name: createRegionDto.name,
@@ -100,14 +100,14 @@ export class RegionService {
         sshGatewayUrl: createRegionDto.sshGatewayUrl,
         proxyApiKeyHash: proxyApiKey ? generateApiKeyHash(proxyApiKey) : null,
         sshGatewayApiKeyHash: sshGatewayApiKey ? generateApiKeyHash(sshGatewayApiKey) : null,
-        snapshotManagerUrl: createRegionDto.snapshotManagerUrl,
+        artifactRegistryUrl: createRegionDto.artifactRegistryUrl,
       })
 
       await this.dataSource.transaction(async (em) => {
         await em.save(region)
         await this.eventEmitter.emitAsync(
           RegionEvents.CREATED,
-          new RegionCreatedEvent(em, region, organizationId, snapshotManagerUsername, snapshotManagerPassword),
+          new RegionCreatedEvent(em, region, organizationId, artifactRegistryUsername, artifactRegistryPassword),
         )
       })
 
@@ -115,8 +115,8 @@ export class RegionService {
         id: region.id,
         proxyApiKey,
         sshGatewayApiKey,
-        snapshotManagerUsername,
-        snapshotManagerPassword,
+        artifactRegistryUsername,
+        artifactRegistryPassword,
       })
     } catch (error) {
       if (error.code === '23505') {
@@ -296,40 +296,40 @@ export class RegionService {
         region.sshGatewayUrl = updateRegion.sshGatewayUrl ?? null
       }
 
-      if (updateRegion.snapshotManagerUrl !== undefined) {
-        if (region.snapshotManagerUrl) {
-          // If snapshots already exist, prevent changing the snapshot manager URL
-          const exists = await this.snapshotRepository.exists({
+      if (updateRegion.artifactRegistryUrl !== undefined) {
+        if (region.artifactRegistryUrl) {
+          // Existing template artifacts may still be pinned to this registry host.
+          const exists = await this.boxTemplateRepository.exists({
             where: {
-              ref: Like(`${region.snapshotManagerUrl.replace(/^https?:\/\//, '')}%`),
+              artifactRef: Like(`${region.artifactRegistryUrl.replace(/^https?:\/\//, '')}%`),
             },
           })
           if (exists) {
             throw new BadRequestException(
-              'Cannot change snapshot manager URL for region with existing snapshots. Please delete existing snapshots first.',
+              'Cannot change artifact registry URL for region with existing template artifacts. Please remove them first.',
             )
           }
         }
 
-        const prevSnapshotManagerUrl = region.snapshotManagerUrl
-        region.snapshotManagerUrl = updateRegion.snapshotManagerUrl ?? null
+        const prevArtifactRegistryUrl = region.artifactRegistryUrl
+        region.artifactRegistryUrl = updateRegion.artifactRegistryUrl ?? null
 
         let newUsername: string | undefined = undefined
         let newPassword: string | undefined = undefined
 
-        // If the region did not have a snapshot manager, create new credentials
-        if (!prevSnapshotManagerUrl) {
+        // If the region did not have an artifact registry, create new credentials.
+        if (!prevArtifactRegistryUrl) {
           newUsername = 'boxlite'
           newPassword = generateRandomString(16)
         }
 
         await this.eventEmitter.emitAsync(
-          RegionEvents.SNAPSHOT_MANAGER_UPDATED,
-          new RegionSnapshotManagerUpdatedEvent(
+          RegionEvents.ARTIFACT_REGISTRY_UPDATED,
+          new RegionArtifactRegistryUpdatedEvent(
             region,
             region.organizationId,
-            region.snapshotManagerUrl,
-            prevSnapshotManagerUrl,
+            region.artifactRegistryUrl,
+            prevArtifactRegistryUrl,
             newUsername,
             newPassword,
             em,
@@ -400,29 +400,29 @@ export class RegionService {
   /**
    * @param regionId - The ID of the region.
    * @throws {NotFoundException} If the region is not found.
-   * @throws {BadRequestException} If the region does not have a snapshot manager URL configured.
-   * @returns The newly generated snapshot manager credentials.
+   * @throws {BadRequestException} If the region does not have an artifact registry URL configured.
+   * @returns The newly generated artifact registry credentials.
    */
-  async regenerateSnapshotManagerCredentials(regionId: string): Promise<SnapshotManagerCredentialsDto> {
+  async regenerateArtifactRegistryCredentials(regionId: string): Promise<ArtifactRegistryCredentialsDto> {
     const region = await this.findOne(regionId)
 
     if (!region) {
       throw new NotFoundException('Region not found')
     }
 
-    if (!region.snapshotManagerUrl) {
-      throw new BadRequestException('Region does not have a snapshot manager URL configured')
+    if (!region.artifactRegistryUrl) {
+      throw new BadRequestException('Region does not have an artifact registry URL configured')
     }
 
     const newUsername = 'boxlite'
     const newPassword = generateRandomString(16)
 
     await this.eventEmitter.emitAsync(
-      RegionEvents.SNAPSHOT_MANAGER_CREDENTIALS_REGENERATED,
-      new RegionSnapshotManagerCredsRegeneratedEvent(regionId, region.snapshotManagerUrl, newUsername, newPassword),
+      RegionEvents.ARTIFACT_REGISTRY_CREDENTIALS_REGENERATED,
+      new RegionArtifactRegistryCredsRegeneratedEvent(regionId, region.artifactRegistryUrl, newUsername, newPassword),
     )
 
-    return new SnapshotManagerCredentialsDto({
+    return new ArtifactRegistryCredentialsDto({
       username: newUsername,
       password: newPassword,
     })

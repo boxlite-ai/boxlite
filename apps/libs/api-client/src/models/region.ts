@@ -72,9 +72,9 @@ export interface Region {
      */
     'sshGatewayUrl'?: string | null;
     /**
-     * Snapshot Manager URL for the region
+     * Artifact Registry URL for the region
      * @type {string}
      * @memberof Region
      */
-    'snapshotManagerUrl'?: string | null;
+    'artifactRegistryUrl'?: string | null;
 }

@@ -43,13 +43,13 @@ export interface UpdateOrganizationQuota {
      * @type {number}
      * @memberof UpdateOrganizationQuota
      */
-    'snapshotQuota': number | null;
+    'templateQuota': number | null;
     /**
      *
      * @type {number}
      * @memberof UpdateOrganizationQuota
      */
-    'maxSnapshotSize': number | null;
+    'maxTemplateSize': number | null;
     /**
      *
      * @type {number}
@@ -93,9 +93,9 @@ export interface UpdateOrganizationQuota {
      */
     'sandboxLifecycleRateLimitTtlSeconds': number | null;
     /**
-     * Time in minutes before an unused snapshot is deactivated
+     * Time in minutes before an unused template is deactivated
      * @type {number}
      * @memberof UpdateOrganizationQuota
      */
-    'snapshotDeactivationTimeoutMinutes': number | null;
+    'templateDeactivationTimeoutMinutes': number | null;
 }

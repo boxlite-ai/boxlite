@@ -1,5 +1,5 @@
 definitions:
-  BuildSnapshotRequestDTO:
+  BuildArtifactRequestDTO:
     properties:
       context:
         items:
@@ -13,8 +13,8 @@ definitions:
         type: boolean
       registry:
         $ref: '#/definitions/RegistryDTO'
-      snapshot:
-        description: Snapshot ID and tag or the build's hash
+      artifactRef:
+        description: Artifact ref or the build's hash
         type: string
       sourceRegistries:
         items:
@@ -28,7 +28,7 @@ definitions:
     properties:
       registry:
         $ref: '#/definitions/RegistryDTO'
-      snapshot:
+      artifactRef:
         type: string
     required:
       - registry
@@ -92,9 +92,9 @@ definitions:
           $ref: '#/definitions/dto.VolumeDTO'
         type: array
     required:
+      - artifactRef
       - id
       - osUser
-      - snapshot
       - userId
     type: object
   ErrorResponse:
@@ -124,15 +124,15 @@ definitions:
       - statusCode
       - timestamp
     type: object
-  InspectSnapshotInRegistryRequest:
+  InspectArtifactInRegistryRequest:
     properties:
       registry:
         $ref: '#/definitions/RegistryDTO'
-      snapshot:
+      artifactRef:
         example: nginx:latest
         type: string
     required:
-      - snapshot
+      - artifactRef
     type: object
   IsRecoverableDTO:
     properties:
@@ -146,7 +146,7 @@ definitions:
       recoverable:
         type: boolean
     type: object
-  PullSnapshotRequestDTO:
+  PullArtifactRequestDTO:
     properties:
       destinationRef:
         type: string
@@ -156,10 +156,10 @@ definitions:
         type: string
       registry:
         $ref: '#/definitions/RegistryDTO'
-      snapshot:
+      artifactRef:
         type: string
     required:
-      - snapshot
+      - artifactRef
     type: object
   RecoverSandboxDTO:
     properties:
@@ -259,7 +259,7 @@ definitions:
         type: number
       currentMemoryUsagePercentage:
         type: number
-      currentSnapshotCount:
+      currentArtifactCount:
         type: integer
       currentStartedSandboxes:
         type: integer
@@ -289,7 +289,7 @@ definitions:
       state:
         $ref: '#/definitions/enums.SandboxState'
     type: object
-  SnapshotDigestResponse:
+  ArtifactDigestResponse:
     properties:
       hash:
         example: a7be6198544f09a75b26e6376459b47c5b9972e7351d440e092c4faa9ea064ff
@@ -298,13 +298,13 @@ definitions:
         example: 0.13
         type: number
     type: object
-  SnapshotExistsResponse:
+  ArtifactExistsResponse:
     properties:
       exists:
         example: true
         type: boolean
     type: object
-  SnapshotInfoResponse:
+  ArtifactInfoResponse:
     properties:
       cmd:
         example:
@@ -397,7 +397,7 @@ definitions:
       - resizing
       - error
       - unknown
-      - pulling_snapshot
+      - pulling_artifact
     type: string
     x-enum-varnames:
       - SandboxStateCreating
@@ -411,7 +411,7 @@ definitions:
       - SandboxStateResizing
       - SandboxStateError
       - SandboxStateUnknown
-      - SandboxStatePullingSnapshot
+      - SandboxStatePullingArtifact
 info:
   contact: {}
   description: BoxLite Runner API
@@ -1037,21 +1037,21 @@ paths:
       summary: Proxy requests to the sandbox toolbox
       tags:
         - toolbox
-  /snapshots/build:
+  /artifacts/build:
     post:
-      description: Build a snapshot from a Dockerfile and context hashes. The operation
+      description: Build an artifact from a Dockerfile and context hashes. The operation
         runs asynchronously and returns 202 immediately.
-      operationId: BuildSnapshot
+      operationId: BuildArtifact
       parameters:
-        - description: Build snapshot request
+        - description: Build artifact request
           in: body
           name: request
           required: true
           schema:
-            $ref: '#/definitions/BuildSnapshotRequestDTO'
+            $ref: '#/definitions/BuildArtifactRequestDTO'
       responses:
         '202':
-          description: Snapshot build started
+          description: Artifact build started
           schema:
             type: string
         '400':
@@ -1074,17 +1074,17 @@ paths:
           description: Internal Server Error
           schema:
             $ref: '#/definitions/ErrorResponse'
-      summary: Build a snapshot
+      summary: Build an artifact
       tags:
-        - snapshots
-  /snapshots/exists:
+        - artifacts
+  /artifacts/exists:
     get:
-      description: Check if a specified snapshot exists locally
-      operationId: SnapshotExists
+      description: Check if a specified artifact exists locally
+      operationId: ArtifactExists
       parameters:
-        - description: Snapshot name and tag
+        - description: Artifact ref
           in: query
-          name: snapshot
+          name: artifactRef
           required: true
           type: string
       produces:
@@ -1093,7 +1093,7 @@ paths:
         '200':
           description: OK
           schema:
-            $ref: '#/definitions/SnapshotExistsResponse'
+            $ref: '#/definitions/ArtifactExistsResponse'
         '400':
           description: Bad Request
           schema:
@@ -1114,19 +1114,19 @@ paths:
           description: Internal Server Error
           schema:
             $ref: '#/definitions/ErrorResponse'
-      summary: Check if a snapshot exists
+      summary: Check if an artifact exists
       tags:
-        - snapshots
-  /snapshots/info:
+        - artifacts
+  /artifacts/info:
     get:
-      description: Get information about a specified snapshot including size and entrypoint.
+      description: Get information about a specified artifact including size and entrypoint.
         Returns 422 if the last pull/build operation failed, with the error reason
         in the message.
-      operationId: GetSnapshotInfo
+      operationId: GetArtifactInfo
       parameters:
-        - description: Snapshot name and tag
+        - description: Artifact ref
           in: query
-          name: snapshot
+          name: artifactRef
           required: true
           type: string
       produces:
@@ -1135,7 +1135,7 @@ paths:
         '200':
           description: OK
           schema:
-            $ref: '#/definitions/SnapshotInfoResponse'
+            $ref: '#/definitions/ArtifactInfoResponse'
         '400':
           description: Bad Request
           schema:
@@ -1156,27 +1156,27 @@ paths:
           description: Internal Server Error
           schema:
             $ref: '#/definitions/ErrorResponse'
-      summary: Get snapshot information
+      summary: Get artifact information
       tags:
-        - snapshots
-  /snapshots/inspect:
+        - artifacts
+  /artifacts/inspect:
     post:
-      description: Inspect a specified snapshot in a registry
-      operationId: InspectSnapshotInRegistry
+      description: Inspect a specified artifact in a registry
+      operationId: InspectArtifactInRegistry
       parameters:
-        - description: Inspect snapshot in registry request
+        - description: Inspect artifact in registry request
           in: body
           name: request
           required: true
           schema:
-            $ref: '#/definitions/InspectSnapshotInRegistryRequest'
+            $ref: '#/definitions/InspectArtifactInRegistryRequest'
       produces:
         - application/json
       responses:
         '200':
           description: OK
           schema:
-            $ref: '#/definitions/SnapshotDigestResponse'
+            $ref: '#/definitions/ArtifactDigestResponse'
         '400':
           description: Bad Request
           schema:
@@ -1193,17 +1193,17 @@ paths:
           description: Internal Server Error
           schema:
             $ref: '#/definitions/ErrorResponse'
-      summary: Inspect a snapshot in a registry
+      summary: Inspect an artifact in a registry
       tags:
-        - snapshots
-  /snapshots/logs:
+        - artifacts
+  /artifacts/logs:
     get:
       description: Stream build logs
       operationId: GetBuildLogs
       parameters:
-        - description: Snapshot ref
+        - description: Runtime artifact ref
           in: query
-          name: snapshotRef
+          name: artifactRef
           required: true
           type: string
         - description: Whether to follow the log output
@@ -1233,22 +1233,22 @@ paths:
             $ref: '#/definitions/ErrorResponse'
       summary: Get build logs
       tags:
-        - snapshots
-  /snapshots/pull:
+        - artifacts
+  /artifacts/pull:
     post:
-      description: Pull a snapshot from a registry and optionally push to another
+      description: Pull an artifact from a registry and optionally push to another
         registry. The operation runs asynchronously and returns 202 immediately.
-      operationId: PullSnapshot
+      operationId: PullArtifact
       parameters:
-        - description: Pull snapshot
+        - description: Pull artifact
           in: body
           name: request
           required: true
           schema:
-            $ref: '#/definitions/PullSnapshotRequestDTO'
+            $ref: '#/definitions/PullArtifactRequestDTO'
       responses:
         '202':
-          description: Snapshot pull started
+          description: Artifact pull started
           schema:
             type: string
         '400':
@@ -1271,24 +1271,24 @@ paths:
           description: Internal Server Error
           schema:
             $ref: '#/definitions/ErrorResponse'
-      summary: Pull a snapshot
+      summary: Pull an artifact
       tags:
-        - snapshots
-  /snapshots/remove:
+        - artifacts
+  /artifacts/remove:
     post:
-      description: Remove a specified snapshot from the local system
-      operationId: RemoveSnapshot
+      description: Remove a specified artifact from the local system
+      operationId: RemoveArtifact
       parameters:
-        - description: Snapshot name and tag
+        - description: Artifact ref
           in: query
-          name: snapshot
+          name: artifactRef
           required: true
           type: string
       produces:
         - application/json
       responses:
         '200':
-          description: Snapshot successfully removed
+          description: Artifact successfully removed
           schema:
             type: string
         '400':
@@ -1311,10 +1311,10 @@ paths:
           description: Internal Server Error
           schema:
             $ref: '#/definitions/ErrorResponse'
-      summary: Remove a snapshot
+      summary: Remove an artifact
       tags:
-        - snapshots
-  /snapshots/tag:
+        - artifacts
+  /artifacts/tag:
     post:
       deprecated: true
       description: Tag an existing local image with a new target reference
@@ -1353,7 +1353,7 @@ paths:
             $ref: '#/definitions/ErrorResponse'
       summary: Tag an image
       tags:
-        - snapshots
+        - artifacts
 security:
   - Bearer: []
 securityDefinitions:

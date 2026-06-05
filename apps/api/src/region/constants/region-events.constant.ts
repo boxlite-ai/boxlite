@@ -7,6 +7,6 @@
 export const RegionEvents = {
   CREATED: 'region.created',
   DELETED: 'region.deleted',
-  SNAPSHOT_MANAGER_CREDENTIALS_REGENERATED: 'region.snapshot-manager-credentials-regenerated',
-  SNAPSHOT_MANAGER_UPDATED: 'region.snapshot-manager-updated',
+  ARTIFACT_REGISTRY_CREDENTIALS_REGENERATED: 'region.artifact-registry-credentials-regenerated',
+  ARTIFACT_REGISTRY_UPDATED: 'region.artifact-registry-updated',
 } as const

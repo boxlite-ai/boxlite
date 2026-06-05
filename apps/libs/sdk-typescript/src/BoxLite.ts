@@ -6,13 +6,13 @@
 
 import {
   Configuration,
-  SnapshotsApi,
   ObjectStorageApi,
   SandboxApi,
   SandboxState,
   VolumesApi,
   SandboxVolume,
   ConfigApi,
+  TemplatesApi,
 } from '@boxlite-ai/api-client'
 import axios, { AxiosError, AxiosInstance, InternalAxiosRequestConfig } from 'axios'
 import { SandboxPythonCodeToolbox } from './code-toolbox/SandboxPythonCodeToolbox'
@@ -21,7 +21,7 @@ import { SandboxJsCodeToolbox } from './code-toolbox/SandboxJsCodeToolbox'
 import { BoxliteError, BoxLiteNotFoundError, BoxLiteRateLimitError } from './errors/BoxliteError'
 import { Image } from './Image'
 import { Sandbox, PaginatedSandboxes } from './Sandbox'
-import { SnapshotService } from './Snapshot'
+import { TemplateService } from './Template'
 import { VolumeService } from './Volume'
 import * as packageJson from '../package.json'
 import { processStreamingResponse } from './utils/Stream'
@@ -132,6 +132,11 @@ export interface Resources {
 }
 
 /**
+ * Resource overrides supported when creating a Sandbox from a template.
+ */
+export type TemplateResources = Pick<Resources, 'cpu' | 'memory' | 'disk'>
+
+/**
  * Base parameters for creating a new Sandbox.
  *
  * @interface
@@ -179,13 +184,15 @@ export type CreateSandboxFromImageParams = CreateSandboxBaseParams & {
 }
 
 /**
- * Parameters for creating a new Sandbox from a snapshot.
+ * Parameters for creating a new Sandbox from a template.
  *
  * @interface
- * @property {string} [snapshot] - Name of the snapshot to use for the Sandbox.
+ * @property {string} [templateId] - ID or name of the template to use for the Sandbox.
+ * @property {TemplateResources} [resources] - Optional CPU, memory, and disk overrides for the Sandbox.
  */
-export type CreateSandboxFromSnapshotParams = CreateSandboxBaseParams & {
-  snapshot?: string
+export type CreateSandboxFromTemplateParams = CreateSandboxBaseParams & {
+  templateId?: string
+  resources?: TemplateResources
 }
 
 /**
@@ -194,7 +201,7 @@ export type CreateSandboxFromSnapshotParams = CreateSandboxBaseParams & {
  * Can be initialized either with explicit configuration or using environment variables.
  *
  * @property {VolumeService} volume - Service for managing BoxLite Volumes
- * @property {SnapshotService} snapshot - Service for managing BoxLite Snapshots
+ * @property {TemplateService} template - Service for managing BoxLite Templates
  *
  * @example
  * // Using environment variables
@@ -230,7 +237,7 @@ export class BoxLite implements AsyncDisposable {
   private readonly apiUrl: string
   private otelSdk?: NodeSDK
   public readonly volume: VolumeService
-  public readonly snapshot: SnapshotService
+  public readonly template: TemplateService
 
   /**
    * Creates a new BoxLite client instance.
@@ -305,9 +312,9 @@ export class BoxLite implements AsyncDisposable {
     this.objectStorageApi = new ObjectStorageApi(configuration, '', axiosInstance)
     this.configApi = new ConfigApi(configuration, '', axiosInstance)
     this.volume = new VolumeService(new VolumesApi(configuration, '', axiosInstance))
-    this.snapshot = new SnapshotService(
+    this.template = new TemplateService(
       configuration,
-      new SnapshotsApi(configuration, '', axiosInstance),
+      new TemplatesApi(configuration, '', axiosInstance),
       this.objectStorageApi,
       this.target,
     )
@@ -355,10 +362,10 @@ export class BoxLite implements AsyncDisposable {
   }
 
   /**
-   * Creates Sandboxes from specified or default snapshot. You can specify various parameters,
+   * Creates Sandboxes from specified or default template. You can specify various parameters,
    * including language, image, environment variables, and volumes.
    *
-   * @param {CreateSandboxFromSnapshotParams} [params] - Parameters for Sandbox creation from snapshot
+   * @param {CreateSandboxFromTemplateParams} [params] - Parameters for Sandbox creation from template
    * @param {object} [options] - Options for the create operation
    * @param {number} [options.timeout] - Timeout in seconds (0 means no timeout, default is 60)
    * @returns {Promise<Sandbox>} The created Sandbox instance
@@ -368,9 +375,9 @@ export class BoxLite implements AsyncDisposable {
    *
    * @example
    * // Create a custom sandbox
-   * const params: CreateSandboxFromSnapshotParams = {
+   * const params: CreateSandboxFromTemplateParams = {
    *     language: 'typescript',
-   *     snapshot: 'my-snapshot-id',
+   *     templateId: 'my-template-id',
    *     envVars: {
    *         NODE_ENV: 'development',
    *         DEBUG: 'true'
@@ -381,20 +388,20 @@ export class BoxLite implements AsyncDisposable {
    * };
    * const sandbox = await boxlite.create(params, { timeout: 100 });
    */
-  public async create(params?: CreateSandboxFromSnapshotParams, options?: { timeout?: number }): Promise<Sandbox>
+  public async create(params?: CreateSandboxFromTemplateParams, options?: { timeout?: number }): Promise<Sandbox>
   /**
    * Creates Sandboxes from specified image available on some registry or declarative BoxLite Image. You can specify various parameters,
-   * including resources, language, image, environment variables, and volumes. BoxLite creates snapshot from
+   * including resources, language, image, environment variables, and volumes. BoxLite creates runtime build material from
    * provided image and uses it to create Sandbox.
    *
    * @param {CreateSandboxFromImageParams} [params] - Parameters for Sandbox creation from image
    * @param {object} [options] - Options for the create operation
    * @param {number} [options.timeout] - Timeout in seconds (0 means no timeout, default is 60)
-   * @param {function} [options.onSnapshotCreateLogs] - Callback function to handle snapshot creation logs.
+   * @param {function} [options.onTemplateCreateLogs] - Callback function to handle template creation logs.
    * @returns {Promise<Sandbox>} The created Sandbox instance
    *
    * @example
-   * const sandbox = await boxlite.create({ image: 'debian:12.9' }, { timeout: 90, onSnapshotCreateLogs: console.log });
+   * const sandbox = await boxlite.create({ image: 'debian:12.9' }, { timeout: 90, onTemplateCreateLogs: console.log });
    *
    * @example
    * // Create a custom sandbox
@@ -414,16 +421,16 @@ export class BoxLite implements AsyncDisposable {
    *     autoArchiveInterval: 60,
    *     autoDeleteInterval: 120
    * };
-   * const sandbox = await boxlite.create(params, { timeout: 100, onSnapshotCreateLogs: console.log });
+   * const sandbox = await boxlite.create(params, { timeout: 100, onTemplateCreateLogs: console.log });
    */
   public async create(
     params?: CreateSandboxFromImageParams,
-    options?: { onSnapshotCreateLogs?: (chunk: string) => void; timeout?: number },
+    options?: { onTemplateCreateLogs?: (chunk: string) => void; timeout?: number },
   ): Promise<Sandbox>
   @WithInstrumentation()
   public async create(
-    params?: CreateSandboxFromSnapshotParams | CreateSandboxFromImageParams,
-    options: { onSnapshotCreateLogs?: (chunk: string) => void; timeout?: number } = { timeout: 60 },
+    params?: CreateSandboxFromTemplateParams | CreateSandboxFromImageParams,
+    options: { onTemplateCreateLogs?: (chunk: string) => void; timeout?: number } = { timeout: 60 },
   ): Promise<Sandbox> {
     const startTime = Date.now()
 
@@ -472,11 +479,12 @@ export class BoxLite implements AsyncDisposable {
 
     try {
       let buildInfo: any | undefined
-      let snapshot: string | undefined
+      let templateId: string | undefined
       let resources: Resources | undefined
+      let gpu: number | undefined
 
-      if ('snapshot' in params) {
-        snapshot = params.snapshot
+      if ('templateId' in params) {
+        templateId = params.templateId
       }
 
       if ('image' in params) {
@@ -485,7 +493,7 @@ export class BoxLite implements AsyncDisposable {
             dockerfileContent: Image.base(params.image).dockerfile,
           }
         } else if (params.image instanceof Image) {
-          const contextHashes = await SnapshotService.processImageContext(this.objectStorageApi, params.image)
+          const contextHashes = await TemplateService.processImageContext(this.objectStorageApi, params.image)
           buildInfo = {
             contextHashes,
             dockerfileContent: params.image.dockerfile,
@@ -494,13 +502,14 @@ export class BoxLite implements AsyncDisposable {
       }
 
       if ('resources' in params) {
-        resources = params.resources
+        resources = params.resources as Resources | undefined
+        gpu = 'image' in params ? resources?.gpu : undefined
       }
 
       const response = await this.sandboxApi.createSandbox(
         {
           name: params.name,
-          snapshot: snapshot,
+          templateId,
           buildInfo,
           user: params.user,
           env: params.envVars || {},
@@ -508,7 +517,7 @@ export class BoxLite implements AsyncDisposable {
           public: params.public,
           target: this.target,
           cpu: resources?.cpu,
-          gpu: resources?.gpu,
+          gpu,
           memory: resources?.memory,
           disk: resources?.disk,
           autoStopInterval: params.autoStopInterval,
@@ -526,7 +535,7 @@ export class BoxLite implements AsyncDisposable {
 
       let sandboxInstance = response.data
 
-      if (sandboxInstance.state === SandboxState.PENDING_BUILD && options.onSnapshotCreateLogs) {
+      if (sandboxInstance.state === SandboxState.PENDING_BUILD && options.onTemplateCreateLogs) {
         const terminalStates: SandboxState[] = [
           SandboxState.STARTED,
           SandboxState.STARTING,
@@ -555,7 +564,7 @@ export class BoxLite implements AsyncDisposable {
               method: 'GET',
               headers: this.clientConfig.baseOptions.headers,
             }),
-          (chunk) => options.onSnapshotCreateLogs?.(chunk.trimEnd()),
+          (chunk) => options.onTemplateCreateLogs?.(chunk.trimEnd()),
           async () => {
             sandboxInstance = (await this.sandboxApi.getSandbox(sandboxInstance.id)).data
             return sandboxInstance.state !== undefined && terminalStates.includes(sandboxInstance.state)

@@ -9,7 +9,7 @@ import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import {
   CreateSandboxBaseParams,
   CreateSandboxFromImageParams,
-  CreateSandboxFromSnapshotParams,
+  CreateSandboxFromTemplateParams,
   BoxLite,
   Sandbox,
 } from '@boxlite-ai/sdk'
@@ -18,7 +18,7 @@ import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { useAuth } from 'react-oidc-context'
 import { toast } from 'sonner'
 
-type CreateSandboxParams = CreateSandboxBaseParams | CreateSandboxFromImageParams | CreateSandboxFromSnapshotParams
+type CreateSandboxParams = CreateSandboxBaseParams | CreateSandboxFromImageParams | CreateSandboxFromTemplateParams
 
 const TERMINAL_PORT = 22222
 const VNC_PORT = 6080

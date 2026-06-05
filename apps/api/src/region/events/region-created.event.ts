@@ -12,7 +12,7 @@ export class RegionCreatedEvent {
     public readonly entityManager: EntityManager,
     public readonly region: Region,
     public readonly organizationId: string | null,
-    public readonly snapshotManagerUsername?: string,
-    public readonly snapshotManagerPassword?: string,
+    public readonly artifactRegistryUsername?: string,
+    public readonly artifactRegistryPassword?: string,
   ) {}
 }

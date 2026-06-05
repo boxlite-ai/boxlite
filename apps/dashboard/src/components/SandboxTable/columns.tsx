@@ -5,6 +5,7 @@
  */
 
 import { formatTimestamp, getRelativeTimeString } from '@/lib/utils'
+import { getTemplateDisplayName } from '@/lib/template-display'
 import { Sandbox, SandboxDesiredState, SandboxState } from '@boxlite-ai/api-client'
 import { ColumnDef } from '@tanstack/react-table'
 import { ArrowDown, ArrowUp } from 'lucide-react'
@@ -175,25 +176,25 @@ export function getColumns({
       accessorKey: 'state',
     },
     {
-      id: 'snapshot',
+      id: 'template',
       size: 150,
       enableSorting: true,
       enableHiding: false,
       header: ({ column }) => {
-        return <SortableHeader column={column} label="Snapshot" />
+        return <SortableHeader column={column} label="Image" />
       },
       cell: ({ row }) => {
         return (
           <div className="w-full truncate">
-            {row.original.snapshot ? (
-              <EllipsisWithTooltip>{row.original.snapshot}</EllipsisWithTooltip>
+            {row.original.template ? (
+              <EllipsisWithTooltip>{getTemplateDisplayName(row.original.template)}</EllipsisWithTooltip>
             ) : (
               <div className="truncate text-muted-foreground/50">-</div>
             )}
           </div>
         )
       },
-      accessorKey: 'snapshot',
+      accessorKey: 'template',
     },
     {
       id: 'region',

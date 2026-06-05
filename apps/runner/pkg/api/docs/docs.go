@@ -942,28 +942,28 @@ const docTemplate = `{
                 }
             }
         },
-        "/snapshots/build": {
+        "/artifacts/build": {
             "post": {
-                "description": "Build a snapshot from a Dockerfile and context hashes. The operation runs asynchronously and returns 202 immediately.",
+                "description": "Build an artifact from a Dockerfile and context hashes. The operation runs asynchronously and returns 202 immediately.",
                 "tags": [
-                    "snapshots"
+                    "artifacts"
                 ],
-                "summary": "Build a snapshot",
-                "operationId": "BuildSnapshot",
+                "summary": "Build an artifact",
+                "operationId": "BuildArtifact",
                 "parameters": [
                     {
-                        "description": "Build snapshot request",
+                        "description": "Build artifact request",
                         "name": "request",
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/BuildSnapshotRequestDTO"
+                            "$ref": "#/definitions/BuildArtifactRequestDTO"
                         }
                     }
                 ],
                 "responses": {
                     "202": {
-                        "description": "Snapshot build started",
+                        "description": "Artifact build started",
                         "schema": {
                             "type": "string"
                         }
@@ -1001,22 +1001,22 @@ const docTemplate = `{
                 }
             }
         },
-        "/snapshots/exists": {
+        "/artifacts/exists": {
             "get": {
-                "description": "Check if a specified snapshot exists locally",
+                "description": "Check if a specified artifact exists locally",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
-                    "snapshots"
+                    "artifacts"
                 ],
-                "summary": "Check if a snapshot exists",
-                "operationId": "SnapshotExists",
+                "summary": "Check if an artifact exists",
+                "operationId": "ArtifactExists",
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Snapshot name and tag",
-                        "name": "snapshot",
+                        "description": "Artifact ref",
+                        "name": "artifactRef",
                         "in": "query",
                         "required": true
                     }
@@ -1025,7 +1025,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/SnapshotExistsResponse"
+                            "$ref": "#/definitions/ArtifactExistsResponse"
                         }
                     },
                     "400": {
@@ -1061,22 +1061,22 @@ const docTemplate = `{
                 }
             }
         },
-        "/snapshots/info": {
+        "/artifacts/info": {
             "get": {
-                "description": "Get information about a specified snapshot including size and entrypoint. Returns 422 if the last pull/build operation failed, with the error reason in the message.",
+                "description": "Get information about a specified artifact including size and entrypoint. Returns 422 if the last pull/build operation failed, with the error reason in the message.",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
-                    "snapshots"
+                    "artifacts"
                 ],
-                "summary": "Get snapshot information",
-                "operationId": "GetSnapshotInfo",
+                "summary": "Get artifact information",
+                "operationId": "GetArtifactInfo",
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Snapshot name and tag",
-                        "name": "snapshot",
+                        "description": "Artifact ref",
+                        "name": "artifactRef",
                         "in": "query",
                         "required": true
                     }
@@ -1085,7 +1085,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/SnapshotInfoResponse"
+                            "$ref": "#/definitions/ArtifactInfoResponse"
                         }
                     },
                     "400": {
@@ -1121,25 +1121,25 @@ const docTemplate = `{
                 }
             }
         },
-        "/snapshots/inspect": {
+        "/artifacts/inspect": {
             "post": {
-                "description": "Inspect a specified snapshot in a registry",
+                "description": "Inspect a specified artifact in a registry",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
-                    "snapshots"
+                    "artifacts"
                 ],
-                "summary": "Inspect a snapshot in a registry",
-                "operationId": "InspectSnapshotInRegistry",
+                "summary": "Inspect an artifact in a registry",
+                "operationId": "InspectArtifactInRegistry",
                 "parameters": [
                     {
-                        "description": "Inspect snapshot in registry request",
+                        "description": "Inspect artifact in registry request",
                         "name": "request",
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/InspectSnapshotInRegistryRequest"
+                            "$ref": "#/definitions/InspectArtifactInRegistryRequest"
                         }
                     }
                 ],
@@ -1147,7 +1147,7 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/SnapshotDigestResponse"
+                            "$ref": "#/definitions/ArtifactDigestResponse"
                         }
                     },
                     "400": {
@@ -1177,19 +1177,19 @@ const docTemplate = `{
                 }
             }
         },
-        "/snapshots/logs": {
+        "/artifacts/logs": {
             "get": {
                 "description": "Stream build logs",
                 "tags": [
-                    "snapshots"
+                    "artifacts"
                 ],
                 "summary": "Get build logs",
                 "operationId": "GetBuildLogs",
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Snapshot ref",
-                        "name": "snapshotRef",
+                        "description": "Runtime artifact ref",
+                        "name": "artifactRef",
                         "in": "query",
                         "required": true
                     },
@@ -1234,28 +1234,28 @@ const docTemplate = `{
                 }
             }
         },
-        "/snapshots/pull": {
+        "/artifacts/pull": {
             "post": {
-                "description": "Pull a snapshot from a registry and optionally push to another registry. The operation runs asynchronously and returns 202 immediately.",
+                "description": "Pull an artifact from a registry and optionally push to another registry. The operation runs asynchronously and returns 202 immediately.",
                 "tags": [
-                    "snapshots"
+                    "artifacts"
                 ],
-                "summary": "Pull a snapshot",
-                "operationId": "PullSnapshot",
+                "summary": "Pull an artifact",
+                "operationId": "PullArtifact",
                 "parameters": [
                     {
-                        "description": "Pull snapshot",
+                        "description": "Pull artifact",
                         "name": "request",
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/PullSnapshotRequestDTO"
+                            "$ref": "#/definitions/PullArtifactRequestDTO"
                         }
                     }
                 ],
                 "responses": {
                     "202": {
-                        "description": "Snapshot pull started",
+                        "description": "Artifact pull started",
                         "schema": {
                             "type": "string"
                         }
@@ -1293,29 +1293,29 @@ const docTemplate = `{
                 }
             }
         },
-        "/snapshots/remove": {
+        "/artifacts/remove": {
             "post": {
-                "description": "Remove a specified snapshot from the local system",
+                "description": "Remove a specified artifact from the local system",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
-                    "snapshots"
+                    "artifacts"
                 ],
-                "summary": "Remove a snapshot",
-                "operationId": "RemoveSnapshot",
+                "summary": "Remove an artifact",
+                "operationId": "RemoveArtifact",
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Snapshot name and tag",
-                        "name": "snapshot",
+                        "description": "Artifact ref",
+                        "name": "artifactRef",
                         "in": "query",
                         "required": true
                     }
                 ],
                 "responses": {
                     "200": {
-                        "description": "Snapshot successfully removed",
+                        "description": "Artifact successfully removed",
                         "schema": {
                             "type": "string"
                         }
@@ -1353,11 +1353,11 @@ const docTemplate = `{
                 }
             }
         },
-        "/snapshots/tag": {
+        "/artifacts/tag": {
             "post": {
                 "description": "Tag an existing local image with a new target reference",
                 "tags": [
-                    "snapshots"
+                    "artifacts"
                 ],
                 "summary": "Tag an image",
                 "operationId": "TagImage",
@@ -1415,7 +1415,7 @@ const docTemplate = `{
         }
     },
     "definitions": {
-        "BuildSnapshotRequestDTO": {
+        "BuildArtifactRequestDTO": {
             "type": "object",
             "required": [
                 "dockerfile",
@@ -1440,8 +1440,8 @@ const docTemplate = `{
                 "registry": {
                     "$ref": "#/definitions/RegistryDTO"
                 },
-                "snapshot": {
-                    "description": "Snapshot ID and tag or the build's hash",
+                "artifactRef": {
+                    "description": "Artifact ref or the build's hash",
                     "type": "string"
                 },
                 "sourceRegistries": {
@@ -1470,9 +1470,9 @@ const docTemplate = `{
         "CreateSandboxDTO": {
             "type": "object",
             "required": [
+                "artifactRef",
                 "id",
                 "osUser",
-                "snapshot",
                 "userId"
             ],
             "properties": {
@@ -1540,7 +1540,7 @@ const docTemplate = `{
                 "skipStart": {
                     "type": "boolean"
                 },
-                "snapshot": {
+                "artifactRef": {
                     "type": "string"
                 },
                 "storageQuota": {
@@ -1594,16 +1594,16 @@ const docTemplate = `{
                 }
             }
         },
-        "InspectSnapshotInRegistryRequest": {
+        "InspectArtifactInRegistryRequest": {
             "type": "object",
             "required": [
-                "snapshot"
+                "artifactRef"
             ],
             "properties": {
                 "registry": {
                     "$ref": "#/definitions/RegistryDTO"
                 },
-                "snapshot": {
+                "artifactRef": {
                     "type": "string",
                     "example": "nginx:latest"
                 }
@@ -1628,10 +1628,10 @@ const docTemplate = `{
                 }
             }
         },
-        "PullSnapshotRequestDTO": {
+        "PullArtifactRequestDTO": {
             "type": "object",
             "required": [
-                "snapshot"
+                "artifactRef"
             ],
             "properties": {
                 "destinationRef": {
@@ -1646,7 +1646,7 @@ const docTemplate = `{
                 "registry": {
                     "$ref": "#/definitions/RegistryDTO"
                 },
-                "snapshot": {
+                "artifactRef": {
                     "type": "string"
                 }
             }
@@ -1795,7 +1795,7 @@ const docTemplate = `{
                 "currentMemoryUsagePercentage": {
                     "type": "number"
                 },
-                "currentSnapshotCount": {
+                "currentArtifactCount": {
                     "type": "integer"
                 },
                 "currentStartedSandboxes": {
@@ -1841,7 +1841,7 @@ const docTemplate = `{
                 }
             }
         },
-        "SnapshotDigestResponse": {
+        "ArtifactDigestResponse": {
             "type": "object",
             "properties": {
                 "hash": {
@@ -1854,7 +1854,7 @@ const docTemplate = `{
                 }
             }
         },
-        "SnapshotExistsResponse": {
+        "ArtifactExistsResponse": {
             "type": "object",
             "properties": {
                 "exists": {
@@ -1863,7 +1863,7 @@ const docTemplate = `{
                 }
             }
         },
-        "SnapshotInfoResponse": {
+        "ArtifactInfoResponse": {
             "type": "object",
             "properties": {
                 "cmd": {
@@ -1992,7 +1992,7 @@ const docTemplate = `{
                 "resizing",
                 "error",
                 "unknown",
-                "pulling_snapshot"
+                "pulling_artifact"
             ],
             "x-enum-varnames": [
                 "SandboxStateCreating",
@@ -2006,7 +2006,7 @@ const docTemplate = `{
                 "SandboxStateResizing",
                 "SandboxStateError",
                 "SandboxStateUnknown",
-                "SandboxStatePullingSnapshot"
+                "SandboxStatePullingArtifact"
             ]
         }
     },
