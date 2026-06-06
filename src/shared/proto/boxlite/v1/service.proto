@@ -296,6 +296,12 @@ message ExecResponse {
 message ExecError {
   string reason = 1;
   string detail = 2;
+  // POSIX exit code when this spawn failure is a recognizable *user*
+  // command error (127 = command not found, 126 = found but not
+  // executable). When set, the host presents the failure as a completed
+  // execution with this exit code instead of a 5xx. Absent for genuine
+  // platform failures (cgroup, OOM, init death), which stay errors.
+  optional int32 exit_code = 3;
 }
 
 // Attach: output only

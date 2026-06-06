@@ -20,6 +20,9 @@ fn test_run_exit_code_custom() {
     ctx.cmd
         .args(["run", "--rm", "alpine:latest", "sh", "-c", "exit 42"]);
     ctx.cmd.assert().code(42);
+    // Leak guard: `ctx` drops its PerTestBoxHome here, which panics if the
+    // `--rm` box left a live shim — i.e. this also pins the run.rs fix that
+    // moves `std::process::exit` AFTER runner teardown on a non-zero exit.
 }
 
 #[test]
@@ -40,7 +43,7 @@ fn test_run_command_not_found() {
     ctx.cmd
         .args(["run", "--rm", "alpine:latest", "nonexistent_command"]);
     ctx.cmd.assert()
-        .failure() // Currently exits with 1, should be 127？
+        .code(127) // POSIX: command not found = exit 127 (P0-5)
         .stderr(
             predicate::str::contains("not found")
                 .or(predicate::str::contains("No such file"))

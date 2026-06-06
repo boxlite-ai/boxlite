@@ -191,3 +191,81 @@ async fn test_working_dir_with_user() {
 
     tb.teardown().await;
 }
+
+/// P0-5 reproducer: executing a command that does not exist must behave like
+/// a shell — `exec()` *succeeds* and the execution completes with POSIX exit
+/// code 127, with the failure detail on stderr. It must NOT raise (the old
+/// behavior surfaced an `Internal` error → HTTP 500), so agents can probe for
+/// a tool's presence without a try/except.
+#[tokio::test]
+async fn test_command_not_found_completes_with_exit_127() {
+    let tb = TestBox::new().await;
+
+    let mut execution = tb
+        .handle
+        .exec(BoxCommand::new("this-binary-does-not-exist-2026"))
+        .await
+        .expect(
+            "exec of a missing command must not error — it should complete \
+             with POSIX exit 127 like a shell",
+        );
+
+    let mut stderr = String::new();
+    if let Some(mut stream) = execution.stderr() {
+        while let Some(chunk) = stream.next().await {
+            stderr.push_str(&chunk);
+        }
+    }
+
+    let result = execution.wait().await.expect("wait failed");
+    assert_eq!(
+        result.exit_code, 127,
+        "command not found is POSIX exit 127; stderr={stderr:?}"
+    );
+    assert!(
+        stderr.contains("not found"),
+        "stderr should explain the missing command, got: {stderr:?}"
+    );
+
+    tb.teardown().await;
+}
+
+/// P0-5 sibling: a file that exists but is NOT executable must complete with
+/// POSIX exit 126 (found but not executable), not raise. This pins the 126
+/// path end-to-end (the unit/classifier tests cover the mapping; this proves
+/// the real youki validator → guest → host synthesis chain yields 126).
+#[tokio::test]
+async fn test_not_executable_file_completes_with_exit_126() {
+    let tb = TestBox::new().await;
+
+    // Create a present-but-non-executable file inside the box (mode 0644).
+    let prep = tb
+        .handle
+        .exec(BoxCommand::new("sh").args([
+            "-c",
+            "printf '#!/bin/sh\\necho hi\\n' > /tmp/noexec && chmod 0644 /tmp/noexec",
+        ]))
+        .await
+        .expect("prep exec failed");
+    assert_eq!(
+        prep.wait().await.expect("prep wait").exit_code,
+        0,
+        "creating the non-executable file should succeed"
+    );
+
+    // Exec the file DIRECTLY (not via a shell) so youki's validator rejects it
+    // with "does not have correct permissions" → exit 126.
+    let mut execution = tb
+        .handle
+        .exec(BoxCommand::new("/tmp/noexec"))
+        .await
+        .expect("exec of a non-executable file must complete with exit 126, not error");
+
+    let result = execution.wait().await.expect("wait failed");
+    assert_eq!(
+        result.exit_code, 126,
+        "found-but-not-executable is POSIX exit 126"
+    );
+
+    tb.teardown().await;
+}

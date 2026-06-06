@@ -252,7 +252,7 @@ fn test_exec_command_not_found() {
     ctx.new_cmd()
         .args(["exec", &box_id, "--", "nonexistent_command"])
         .assert()
-        .failure()
+        .code(127) // POSIX: command not found = exit 127 (P0-5), same as `run`
         .stderr(
             predicate::str::contains("not found")
                 .or(predicate::str::contains("No such file"))

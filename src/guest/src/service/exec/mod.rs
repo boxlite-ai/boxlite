@@ -337,11 +337,23 @@ fn error_response(id: String, reason: &str, detail: &str) -> ExecResponse {
         error: Some(ExecError {
             reason: reason.to_string(),
             detail: detail.to_string(),
+            // Protocol/argument errors are not user command failures.
+            exit_code: None,
         }),
     }
 }
 
+/// Build a `spawn_failed` response for the **container/youki** path, where the
+/// only signal is a string: classify it by matching youki's literals
+/// (command-not-found → 127, not-executable → 126). Genuine platform failures
+/// stay unclassified (None) and remain errors.
+///
+/// Only use this for the container executor, whose `detail` is youki's own
+/// text. The guest direct-spawn path must NOT classify — its `detail` can
+/// contain a caller-controlled program name / working_dir that could forge the
+/// markers; it uses `error_response(.., "spawn_failed", ..)` (exit_code None).
 fn spawn_error(exec_id: &str, err: String) -> ExecResponse {
+    let exit_code = boxlite_shared::exec::posix_exit_code_for_spawn_failure(&err);
     ExecResponse {
         execution_id: exec_id.to_string(),
         pid: 0,
@@ -349,6 +361,7 @@ fn spawn_error(exec_id: &str, err: String) -> ExecResponse {
         error: Some(ExecError {
             reason: "spawn_failed".to_string(),
             detail: err,
+            exit_code,
         }),
     }
 }
@@ -387,12 +400,16 @@ async fn spawn_with_executor(
 
     match executor_value {
         Some(executor_const::GUEST) | None | Some("") => {
-            // Guest executor (explicit or default)
+            // Guest executor (explicit or default — non-container mode).
             debug!(execution_id = %execution_id, "Using GuestExecutor");
-            let handle = GuestExecutor
-                .spawn(req)
-                .await
-                .map_err(|e| spawn_error(execution_id, e.to_string()))?;
+            // Direct-spawn failures are honest internal errors with NO user exit
+            // code: we deliberately do NOT classify them (that would string-scan
+            // a detail containing the caller-controlled program name / workdir
+            // and could forge a fake 127/126). The host surfaces these as 500.
+            // POSIX exit-code classification is the container/youki path's job.
+            let handle = GuestExecutor.spawn(req).await.map_err(|e| {
+                error_response(execution_id.to_string(), "spawn_failed", &e.to_string())
+            })?;
             Ok((handle, None))
         }
         Some(s) if s.starts_with(executor_const::CONTAINER_KEY) => {

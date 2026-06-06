@@ -57,13 +57,13 @@ impl ExecutionInterface {
 
         tracing::debug!(command = %command.command, "exec RPC: sending request");
 
-        // Start execution
+        // Start execution. A spawn failure that the guest classified as a
+        // user command error (e.g. command-not-found → exit 127) is surfaced
+        // as a completed execution rather than a 5xx; see
+        // `components_from_spawn_error`.
         let exec_response = self.client.exec(request).await?.into_inner();
         if let Some(err) = exec_response.error {
-            return Err(BoxliteError::Internal(format!(
-                "{}: {}",
-                err.reason, err.detail
-            )));
+            return Self::components_from_spawn_error(exec_response.execution_id, err);
         }
 
         let execution_id = exec_response.execution_id.clone();
@@ -102,6 +102,71 @@ impl ExecutionInterface {
             stderr_rx,
             result_rx,
         })
+    }
+
+    /// Map a guest spawn `ExecError` to host execution components.
+    ///
+    /// A *user* command error carries a POSIX exit code (127 = command not
+    /// found, 126 = found but not executable); the guest sets it when the
+    /// executor rejects the binary before any process runs. We surface only
+    /// those two documented codes as a *completed* execution with that exit
+    /// code — matching how a shell behaves — so callers can probe for a tool
+    /// without a try/except.
+    ///
+    /// Everything else (no exit code, or an out-of-range value from a
+    /// buggy/hostile guest) stays an `Internal` (500) error: a genuine
+    /// platform spawn failure (cgroup, OOM, init death, IPC corruption) must
+    /// remain visible to 5xx alerting and must never be laundered into a fake
+    /// exit code. Validating the code here is boundary validation — the guest
+    /// is a separate trust domain reached over gRPC.
+    fn components_from_spawn_error(
+        execution_id: String,
+        err: boxlite_shared::ExecError,
+    ) -> BoxliteResult<ExecComponents> {
+        match err.exit_code {
+            Some(exit_code @ (126 | 127)) => Ok(Self::synthesize_completed_exec(
+                execution_id,
+                exit_code,
+                err.detail,
+            )),
+            _ => Err(BoxliteError::Internal(format!(
+                "{}: {}",
+                err.reason, err.detail
+            ))),
+        }
+    }
+
+    /// Build components for an execution that completed before any process
+    /// ran (command not found / not executable). The result channel is
+    /// pre-loaded with `exit_code`; `detail` is delivered once on stderr
+    /// (shell-style) then EOF; stdin/stdout are empty. No background gRPC
+    /// streams are started — there is no live execution on the guest.
+    fn synthesize_completed_exec(
+        execution_id: String,
+        exit_code: i32,
+        detail: String,
+    ) -> ExecComponents {
+        let (stdin_tx, _stdin_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let (_stdout_tx, stdout_rx) = mpsc::unbounded_channel::<String>();
+        let (stderr_tx, stderr_rx) = mpsc::unbounded_channel::<String>();
+        let (result_tx, result_rx) = mpsc::unbounded_channel::<ExecResult>();
+
+        if !detail.is_empty() {
+            // Senders drop at end of scope → receivers see this then EOF.
+            let _ = stderr_tx.send(detail);
+        }
+        let _ = result_tx.send(ExecResult {
+            exit_code,
+            error_message: None,
+        });
+
+        ExecComponents {
+            execution_id,
+            stdin_tx,
+            stdout_rx,
+            stderr_rx,
+            result_rx,
+        }
     }
 
     /// Wait for execution to complete.
@@ -457,6 +522,86 @@ impl ExecProtocol {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    /// A *user* command error (known POSIX exit code) must surface as a
+    /// completed execution carrying that exit code — NOT a 5xx error. This
+    /// is the P0-5 reproducer: command-not-found → exec result exit=127.
+    #[tokio::test]
+    async fn spawn_error_with_exit_code_becomes_completed_execution() {
+        use boxlite_shared::ExecError;
+
+        let err = ExecError {
+            reason: "spawn_failed".into(),
+            detail: "build failed: executable 'this-binary-does-not-exist-2026' \
+                     not found in $PATH (code=1)"
+                .into(),
+            exit_code: Some(127),
+        };
+
+        let mut comps = ExecutionInterface::components_from_spawn_error("exec-1".into(), err)
+            .expect("command-not-found must surface as a completed execution, not an error");
+
+        let result = comps
+            .result_rx
+            .recv()
+            .await
+            .expect("synthesized execution must carry a result");
+        assert_eq!(result.exit_code, 127, "command not found is POSIX exit 127");
+
+        let stderr_line = comps
+            .stderr_rx
+            .recv()
+            .await
+            .expect("the failure detail must reach the caller on stderr");
+        assert!(
+            stderr_line.contains("not found in $PATH"),
+            "stderr should explain the failure, got: {stderr_line}"
+        );
+    }
+
+    /// A genuine platform spawn failure (no known exit code) must stay an
+    /// `Internal` (500) error so it remains visible to 5xx alerting — never a
+    /// silent fake exit code, and never downgraded to a 4xx "your request was
+    /// bad" that hides a real platform bug.
+    #[tokio::test]
+    async fn genuine_spawn_failure_stays_internal_error() {
+        use boxlite_shared::ExecError;
+
+        let err = ExecError {
+            reason: "spawn_failed".into(),
+            detail: "cgroup setup failed".into(),
+            exit_code: None,
+        };
+
+        match ExecutionInterface::components_from_spawn_error("exec-2".into(), err) {
+            Err(BoxliteError::Internal(msg)) => {
+                assert!(msg.contains("cgroup"), "should preserve the cause: {msg}")
+            }
+            Err(other) => panic!("expected Internal(500), got {other:?}"),
+            Ok(_) => panic!("a genuine platform failure must not become a fake exit code"),
+        }
+    }
+
+    /// The host must not trust an arbitrary `exit_code` from the guest: only
+    /// the documented POSIX user-command codes (126/127) synthesize a completed
+    /// execution. An out-of-range value (e.g. a buggy guest sending 0) must
+    /// stay an error, not become a silent "success".
+    #[tokio::test]
+    async fn out_of_range_exit_code_stays_internal_error() {
+        use boxlite_shared::ExecError;
+
+        let err = ExecError {
+            reason: "spawn_failed".into(),
+            detail: "weird".into(),
+            exit_code: Some(0),
+        };
+
+        match ExecutionInterface::components_from_spawn_error("exec-3".into(), err) {
+            Err(BoxliteError::Internal(_)) => {}
+            Err(other) => panic!("expected Internal, got {other:?}"),
+            Ok(_) => panic!("exit_code=Some(0) must not synthesize a successful execution"),
+        }
+    }
 
     /// Test that CancellationToken correctly signals cancelled state.
     #[tokio::test]

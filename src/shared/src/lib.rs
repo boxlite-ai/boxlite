@@ -5,6 +5,7 @@
 
 pub mod constants;
 pub mod errors;
+pub mod exec;
 pub mod layout;
 pub mod tar;
 pub mod transport;

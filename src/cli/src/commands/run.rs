@@ -36,7 +36,22 @@ pub struct RunArgs {
 /// Entry point
 pub async fn execute(args: RunArgs, global: &GlobalFlags) -> anyhow::Result<()> {
     let mut runner = BoxRunner::new(args, global)?;
-    runner.run().await
+    let shell_exit_code = runner.run().await?;
+
+    // Drop the runner (and the runtime it owns) BEFORE exiting so the runtime's
+    // synchronous shutdown runs — the same teardown the success (exit 0) path
+    // gets by returning normally. That shutdown SIGTERMs the box's shim (and
+    // marks the box stopped); the `auto_remove` DB-record/home removal itself is
+    // deferred to the next runtime startup's recovery sweep. Calling
+    // `std::process::exit` while the runner is still alive skips every
+    // destructor, so the shim is orphaned — which is why a non-zero
+    // `boxlite run --rm <cmd>` previously left a live shim behind.
+    drop(runner);
+
+    if shell_exit_code != 0 {
+        std::process::exit(shell_exit_code);
+    }
+    Ok(())
 }
 
 struct BoxRunner {
@@ -53,7 +68,11 @@ impl BoxRunner {
         Ok(Self { args, rt, home })
     }
 
-    async fn run(&mut self) -> anyhow::Result<()> {
+    /// Run the box and return the shell exit code (already mapped via
+    /// `to_shell_exit_code`). Returns 0 for detach/success. The caller is
+    /// responsible for dropping this runner before exiting the process so
+    /// cleanup runs.
+    async fn run(&mut self) -> anyhow::Result<i32> {
         // Validate flags and environment
         self.validate_flags()?;
 
@@ -66,7 +85,7 @@ impl BoxRunner {
         // Detach mode: Print ID and exit
         if self.args.management.detach {
             println!("{}", litebox.id());
-            return Ok(());
+            return Ok(0);
         }
 
         // --tty implies --interactive when stdin is a terminal
@@ -83,12 +102,7 @@ impl BoxRunner {
         );
 
         let exit_code = streamer.start().await?;
-        // Exit with box's exit code
-        if exit_code != 0 {
-            std::process::exit(to_shell_exit_code(exit_code));
-        }
-
-        Ok(())
+        Ok(to_shell_exit_code(exit_code))
     }
 
     async fn create_box(&self) -> anyhow::Result<LiteBox> {
