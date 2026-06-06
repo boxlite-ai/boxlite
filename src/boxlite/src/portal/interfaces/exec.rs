@@ -298,6 +298,12 @@ impl ExecProtocol {
                                     message_count,
                                     "Attach stream cancelled during shutdown"
                                 );
+                                Self::flush_decoders(
+                                    &stdout_tx,
+                                    &stderr_tx,
+                                    &mut stdout_decoder,
+                                    &mut stderr_decoder,
+                                );
                                 break;
                             }
                             msg = stream.message() => msg,
@@ -321,6 +327,16 @@ impl ExecProtocol {
                                     message_count,
                                     "Attach stream error, breaking"
                                 );
+                                // Flush before pushing the error message so
+                                // the held-over partial bytes (as U+FFFD)
+                                // arrive in correct order ahead of the
+                                // synthesized "Attach stream error: …" line.
+                                Self::flush_decoders(
+                                    &stdout_tx,
+                                    &stderr_tx,
+                                    &mut stdout_decoder,
+                                    &mut stderr_decoder,
+                                );
                                 let _ = stderr_tx.send(format!("Attach stream error: {}", e));
                                 break;
                             }
@@ -329,14 +345,12 @@ impl ExecProtocol {
                                 // bytes still in the decoders as U+FFFD,
                                 // matching `from_utf8_lossy` semantics for
                                 // a truncated input at EOF.
-                                let stdout_tail = stdout_decoder.flush();
-                                if !stdout_tail.is_empty() {
-                                    let _ = stdout_tx.send(stdout_tail);
-                                }
-                                let stderr_tail = stderr_decoder.flush();
-                                if !stderr_tail.is_empty() {
-                                    let _ = stderr_tx.send(stderr_tail);
-                                }
+                                Self::flush_decoders(
+                                    &stdout_tx,
+                                    &stderr_tx,
+                                    &mut stdout_decoder,
+                                    &mut stderr_decoder,
+                                );
                                 break;
                             }
                         }
@@ -379,6 +393,26 @@ impl ExecProtocol {
                 }
             }
             None => {}
+        }
+    }
+
+    /// Drain held-over partial UTF-8 bytes from both decoders before the
+    /// attach loop exits. Called from every loop-exit path (clean EOF,
+    /// transport error, shutdown cancellation) so trailing bytes never
+    /// silently disappear depending on how the stream terminated.
+    fn flush_decoders(
+        stdout_tx: &mpsc::UnboundedSender<String>,
+        stderr_tx: &mpsc::UnboundedSender<String>,
+        stdout_decoder: &mut Utf8StreamDecoder,
+        stderr_decoder: &mut Utf8StreamDecoder,
+    ) {
+        let stdout_tail = stdout_decoder.flush();
+        if !stdout_tail.is_empty() {
+            let _ = stdout_tx.send(stdout_tail);
+        }
+        let stderr_tail = stderr_decoder.flush();
+        if !stderr_tail.is_empty() {
+            let _ = stderr_tx.send(stderr_tail);
         }
     }
 
@@ -961,6 +995,47 @@ mod tests {
             received.push_str(&s);
         }
         assert_eq!(received, "─");
+        assert!(stderr_rx.try_recv().is_err());
+    }
+
+    /// flush_decoders must drain held-over bytes from both decoders, leave
+    /// them in a valid drained state, and be idempotent. The attach loop
+    /// calls this helper from every exit path (clean EOF, transport error,
+    /// shutdown cancellation) so trailing partial UTF-8 bytes are never
+    /// silently dropped — keeping the helper correct keeps all three paths
+    /// correct.
+    #[test]
+    fn flush_decoders_drains_held_bytes_on_any_exit_path() {
+        let (stdout_tx, mut stdout_rx) = mpsc::unbounded_channel::<String>();
+        let (stderr_tx, mut stderr_rx) = mpsc::unbounded_channel::<String>();
+        let mut stdout_decoder = Utf8StreamDecoder::default();
+        let mut stderr_decoder = Utf8StreamDecoder::default();
+
+        // Seed each decoder with the first byte of a 3-byte codepoint so it
+        // has held-over bytes that would be lost without an explicit flush.
+        assert_eq!(stdout_decoder.decode(&[0xE2]), "");
+        assert_eq!(stderr_decoder.decode(&[0xE2]), "");
+
+        ExecProtocol::flush_decoders(
+            &stdout_tx,
+            &stderr_tx,
+            &mut stdout_decoder,
+            &mut stderr_decoder,
+        );
+
+        // Both channels must receive U+FFFD (matches from_utf8_lossy on a
+        // truncated tail). Without the fix, error/shutdown paths silently
+        // dropped these bytes.
+        assert_eq!(stdout_rx.try_recv().ok(), Some("\u{FFFD}".to_string()));
+        assert_eq!(stderr_rx.try_recv().ok(), Some("\u{FFFD}".to_string()));
+        // Idempotent: a second flush is a no-op (channels stay empty).
+        ExecProtocol::flush_decoders(
+            &stdout_tx,
+            &stderr_tx,
+            &mut stdout_decoder,
+            &mut stderr_decoder,
+        );
+        assert!(stdout_rx.try_recv().is_err());
         assert!(stderr_rx.try_recv().is_err());
     }
 }
