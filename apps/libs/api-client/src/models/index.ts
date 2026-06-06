@@ -92,6 +92,7 @@ export * from './organization-usage-overview';
 export * from './organization-user';
 export * from './otel-config';
 export * from './paginated-audit-logs';
+export * from './paginated-box-templates';
 export * from './paginated-jobs';
 export * from './paginated-logs';
 export * from './paginated-sandboxes';

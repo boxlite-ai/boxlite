@@ -31,6 +31,19 @@ describe('BoxTemplateController', () => {
     expect(Reflect.getMetadata(PATH_METADATA, BoxTemplateController)).toBe('templates')
   })
 
+  it('rejects non-admin users before changing a template general status', async () => {
+    const boxTemplateService = {
+      setBoxTemplateGeneralStatus: jest.fn(),
+    }
+    const controller = new BoxTemplateController(boxTemplateService as any, {} as any)
+
+    await expect(
+      controller.setBoxTemplateGeneralStatus({ role: SystemRole.USER } as any, 'template-id', { general: true } as any),
+    ).rejects.toThrow('Insufficient permissions for changing template general status')
+
+    expect(boxTemplateService.setBoxTemplateGeneralStatus).not.toHaveBeenCalled()
+  })
+
   it('returns system template list when no pagination query is present', async () => {
     const template = createTemplate()
     const boxTemplateService = {
@@ -147,5 +160,63 @@ describe('SandboxController template creation contract', () => {
     ).resolves.toEqual(expect.objectContaining({ id: 'box-id' }))
 
     expect(sandboxService.createFromTemplate).toHaveBeenCalledWith(createBoxDto, organization)
+  })
+
+  it('maps the deprecated snapshot field to templateId instead of falling back to the default template', async () => {
+    const sandboxService = {
+      createFromTemplate: jest.fn().mockResolvedValue({
+        id: 'box-id',
+        state: SandboxState.STARTED,
+      }),
+    }
+    const controller = new SandboxController({} as any, sandboxService as any, redisMock() as any)
+    const organization = { id: 'org-id' }
+
+    await expect(
+      controller.createSandbox(
+        {
+          organization,
+          organizationId: organization.id,
+          role: SystemRole.USER,
+        } as any,
+        {
+          name: 'legacy-template-box',
+          snapshot: 'ubuntu-template-id',
+        } as any,
+      ),
+    ).resolves.toEqual(expect.objectContaining({ id: 'box-id' }))
+
+    expect(sandboxService.createFromTemplate).toHaveBeenCalledWith(
+      {
+        name: 'legacy-template-box',
+        snapshot: 'ubuntu-template-id',
+        templateId: 'ubuntu-template-id',
+      },
+      organization,
+    )
+  })
+
+  it('rejects conflicting templateId and deprecated snapshot fields', async () => {
+    const sandboxService = {
+      createFromTemplate: jest.fn(),
+    }
+    const controller = new SandboxController({} as any, sandboxService as any, redisMock() as any)
+    const organization = { id: 'org-id' }
+
+    await expect(
+      controller.createSandbox(
+        {
+          organization,
+          organizationId: organization.id,
+          role: SystemRole.USER,
+        } as any,
+        {
+          templateId: 'new-template-id',
+          snapshot: 'old-template-id',
+        } as any,
+      ),
+    ).rejects.toThrow('Use either templateId or deprecated snapshot, not both')
+
+    expect(sandboxService.createFromTemplate).not.toHaveBeenCalled()
   })
 })

@@ -4,7 +4,11 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { BoxTemplateDto, ListBoxTemplatesOrderEnum, ListBoxTemplatesSortEnum } from '@boxlite-ai/api-client'
+import {
+  ListBoxTemplatesOrderEnum,
+  ListBoxTemplatesSortEnum,
+  PaginatedBoxTemplates as ApiPaginatedBoxTemplates,
+} from '@boxlite-ai/api-client'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { useApi } from '../useApi'
 import { useSelectedOrganization } from '../useSelectedOrganization'
@@ -31,12 +35,7 @@ export interface TemplateQueryParams {
   sorting?: TemplateSorting
 }
 
-export interface PaginatedBoxTemplates {
-  items: BoxTemplateDto[]
-  total: number
-  page: number
-  totalPages: number
-}
+export type PaginatedBoxTemplates = ApiPaginatedBoxTemplates
 
 // The user-facing page is Images, but the API contract remains templates so
 // runtime artifact semantics stay separate from presentation language.
@@ -62,7 +61,16 @@ export function useTemplatesPageQuery(params: TemplateQueryParams) {
         sorting.direction,
       )
 
-      return response.data as unknown as PaginatedBoxTemplates
+      if (Array.isArray(response.data)) {
+        return {
+          items: response.data,
+          total: response.data.length,
+          page,
+          totalPages: 1,
+        }
+      }
+
+      return response.data
     },
     enabled: !!selectedOrganization,
     placeholderData: keepPreviousData,

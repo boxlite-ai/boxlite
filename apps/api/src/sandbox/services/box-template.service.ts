@@ -780,7 +780,7 @@ export class BoxTemplateService {
     const sandbox = await this.sandboxRepository.findOne({
       where: [
         {
-          existingBackupSnapshots: Raw((alias) => `${alias} @> '[{"templateName":"${imageName}"}]'::jsonb`),
+          existingBackupSnapshots: Raw((alias) => `${alias} @> '[{"snapshotName":"${imageName}"}]'::jsonb`),
         },
         {
           existingBackupSnapshots: Raw((alias) => `${alias} @> '[{"imageName":"${imageName}"}]'::jsonb`),

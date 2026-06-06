@@ -121,6 +121,7 @@ models/organization-user.ts
 models/organization.ts
 models/otel-config.ts
 models/paginated-audit-logs.ts
+models/paginated-box-templates.ts
 models/paginated-jobs.ts
 models/paginated-logs.ts
 models/paginated-sandboxes.ts

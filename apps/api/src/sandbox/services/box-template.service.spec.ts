@@ -9,6 +9,7 @@ import { BoxTemplateRegion } from '../entities/box-template-region.entity'
 import { BoxTemplateState } from '../enums/box-template-state.enum'
 import { BoxTemplateEvents } from '../constants/box-template-events'
 import { BoxTemplateService } from './box-template.service'
+import { SandboxState } from '../enums/sandbox-state.enum'
 
 jest.mock('uuid', () => ({
   v4: jest.fn(() => 'mock-uuid'),
@@ -39,6 +40,9 @@ function createService({
   const boxTemplateRegionRepository = {
     save: jest.fn(async (templateRegion) => templateRegion),
   }
+  const sandboxRepository = {
+    findOne: jest.fn(),
+  }
   const organizationService = {
     listAvailableRegions: jest.fn().mockResolvedValue(availableRegionIds.map((id) => ({ id }))),
   }
@@ -61,7 +65,7 @@ function createService({
   }
 
   const service = new BoxTemplateService(
-    {} as any,
+    sandboxRepository as any,
     boxTemplateRepository as any,
     {} as any,
     {} as any,
@@ -79,6 +83,7 @@ function createService({
 
   return {
     service,
+    sandboxRepository,
     boxTemplateRepository,
     boxTemplateRegionRepository,
     organizationService,
@@ -299,5 +304,20 @@ describe('BoxTemplateService system templates', () => {
       }),
     )
     expect(eventEmitter.emit).toHaveBeenCalledWith(BoxTemplateEvents.ACTIVATED, expect.any(Object))
+  })
+
+  it('keeps backup snapshot references distinct when checking image cleanup', async () => {
+    const imageName = 'registry.local/boxlite/backup-box:123'
+    const { service, boxTemplateRepository, sandboxRepository } = createService({})
+    boxTemplateRepository.findOne.mockResolvedValue(null)
+    sandboxRepository.findOne.mockResolvedValue({ state: SandboxState.STOPPED })
+
+    const canCleanup = await service.canCleanupImage(imageName)
+
+    expect(canCleanup).toBe(false)
+    const where = sandboxRepository.findOne.mock.calls[0][0].where
+    const backupSnapshotQuery = where[0].existingBackupSnapshots as { _getSql: (alias: string) => string }
+    expect(backupSnapshotQuery._getSql('existingBackupSnapshots')).toContain('"snapshotName"')
+    expect(backupSnapshotQuery._getSql('existingBackupSnapshots')).not.toContain('"templateName"')
   })
 })

@@ -29,6 +29,15 @@ export class CreateSandboxDto {
   templateId?: string
 
   @ApiPropertyOptional({
+    description: 'Deprecated alias for templateId used by older clients',
+    example: 'ubuntu-template-id',
+    deprecated: true,
+  })
+  @IsOptional()
+  @IsString()
+  snapshot?: string
+
+  @ApiPropertyOptional({
     description: 'The user associated with the project',
     example: 'boxlite',
   })

@@ -26,6 +26,8 @@ import type { BoxTemplateDto } from '../models';
 // @ts-ignore
 import type { CreateBoxTemplate } from '../models';
 // @ts-ignore
+import type { PaginatedBoxTemplates } from '../models';
+// @ts-ignore
 import type { SetBoxTemplateGeneralStatus } from '../models';
 // @ts-ignore
 import type { Url } from '../models';
@@ -574,7 +576,7 @@ export const TemplatesApiFp = function(configuration?: Configuration) {
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        async listBoxTemplates(xBoxLiteOrganizationID?: string, page?: number, limit?: number, name?: string, sort?: ListBoxTemplatesSortEnum, order?: ListBoxTemplatesOrderEnum, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Array<BoxTemplateDto>>> {
+        async listBoxTemplates(xBoxLiteOrganizationID?: string, page?: number, limit?: number, name?: string, sort?: ListBoxTemplatesSortEnum, order?: ListBoxTemplatesOrderEnum, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Array<BoxTemplateDto> | PaginatedBoxTemplates>> {
             const localVarAxiosArgs = await localVarAxiosParamCreator.listBoxTemplates(xBoxLiteOrganizationID, page, limit, name, sort, order, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['TemplatesApi.listBoxTemplates']?.[localVarOperationServerIndex]?.url;
@@ -699,7 +701,7 @@ export const TemplatesApiFactory = function (configuration?: Configuration, base
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        listBoxTemplates(xBoxLiteOrganizationID?: string, page?: number, limit?: number, name?: string, sort?: ListBoxTemplatesSortEnum, order?: ListBoxTemplatesOrderEnum, options?: RawAxiosRequestConfig): AxiosPromise<Array<BoxTemplateDto>> {
+        listBoxTemplates(xBoxLiteOrganizationID?: string, page?: number, limit?: number, name?: string, sort?: ListBoxTemplatesSortEnum, order?: ListBoxTemplatesOrderEnum, options?: RawAxiosRequestConfig): AxiosPromise<Array<BoxTemplateDto> | PaginatedBoxTemplates> {
             return localVarFp.listBoxTemplates(xBoxLiteOrganizationID, page, limit, name, sort, order, options).then((request) => request(axios, basePath));
         },
         /**

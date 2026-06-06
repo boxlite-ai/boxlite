@@ -253,7 +253,7 @@ export class SandboxController {
     requestMetadata: {
       body: (req: TypedRequest<CreateSandboxDto>) => ({
         name: req.body?.name,
-        templateId: req.body?.templateId,
+        templateId: req.body?.templateId ?? req.body?.snapshot,
         user: req.body?.user,
         env: req.body?.env
           ? Object.fromEntries(Object.keys(req.body?.env).map((key) => [key, MASKED_AUDIT_VALUE]))
@@ -278,8 +278,9 @@ export class SandboxController {
   })
   async createSandbox(
     @AuthContext() authContext: OrganizationAuthContext,
-    @Body() createSandboxDto: CreateSandboxDto,
+    @Body() requestDto: CreateSandboxDto,
   ): Promise<SandboxDto> {
+    const createSandboxDto = this.normalizeTemplateSource(requestDto)
     const organization = authContext.organization
     let sandbox: SandboxDto
     const canUseBuildInfoSource = authContext.role === SystemRole.ADMIN
@@ -312,6 +313,24 @@ export class SandboxController {
     }
 
     return sandbox
+  }
+
+  private normalizeTemplateSource(createSandboxDto: CreateSandboxDto): CreateSandboxDto {
+    const templateId = createSandboxDto.templateId?.trim()
+    const legacySnapshot = createSandboxDto.snapshot?.trim()
+
+    if (templateId && legacySnapshot && templateId !== legacySnapshot) {
+      throw new BadRequestError('Use either templateId or deprecated snapshot, not both')
+    }
+
+    if (!templateId && legacySnapshot) {
+      return {
+        ...createSandboxDto,
+        templateId: legacySnapshot,
+      }
+    }
+
+    return createSandboxDto
   }
 
   @Get('for-runner')

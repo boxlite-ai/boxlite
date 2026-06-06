@@ -39,6 +39,13 @@ export interface CreateSandbox {
      */
     'templateId'?: string;
     /**
+     * Deprecated alias for templateId used by older clients
+     * @type {string}
+     * @memberof CreateSandbox
+     * @deprecated
+     */
+    'snapshot'?: string;
+    /**
      * The user associated with the project
      * @type {string}
      * @memberof CreateSandbox

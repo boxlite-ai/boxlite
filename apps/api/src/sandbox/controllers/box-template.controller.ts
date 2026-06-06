@@ -29,11 +29,13 @@ import {
   ApiBearerAuth,
   ApiHeader,
   ApiOAuth2,
+  ApiExtraModels,
   ApiOperation,
   ApiParam,
   ApiQuery,
   ApiResponse,
   ApiTags,
+  getSchemaPath,
 } from '@nestjs/swagger'
 import { CombinedAuthGuard } from '../../auth/combined-auth.guard'
 import { AuthContext } from '../../common/decorators/auth-context.decorator'
@@ -43,7 +45,6 @@ import { OrganizationAuthContext } from '../../common/interfaces/auth-context.in
 import { OrganizationResourceActionGuard } from '../../organization/guards/organization-resource-action.guard'
 import { OrganizationResourcePermission } from '../../organization/enums/organization-resource-permission.enum'
 import { RequiredOrganizationResourcePermissions } from '../../organization/decorators/required-organization-resource-permissions.decorator'
-import { RequiredSystemRole } from '../../common/decorators/required-role.decorator'
 import { SystemRole } from '../../user/enums/system-role.enum'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { Audit, TypedRequest } from '../../audit/decorators/audit.decorator'
@@ -63,6 +64,7 @@ import { BoxTemplateService } from '../services/box-template.service'
 import { RunnerService } from '../services/runner.service'
 
 @ApiTags('templates')
+@ApiExtraModels(BoxTemplateDto, PaginatedBoxTemplatesDto)
 @Controller('templates')
 @ApiHeader(CustomHeaders.ORGANIZATION_ID)
 @UseGuards(CombinedAuthGuard, OrganizationResourceActionGuard, AuthenticatedRateLimitGuard)
@@ -138,7 +140,12 @@ export class BoxTemplateController {
   @ApiResponse({
     status: 200,
     description: 'Box templates available to the organization',
-    type: [BoxTemplateDto],
+    schema: {
+      oneOf: [
+        { type: 'array', items: { $ref: getSchemaPath(BoxTemplateDto) } },
+        { $ref: getSchemaPath(PaginatedBoxTemplatesDto) },
+      ],
+    },
   })
   async listBoxTemplates(
     @AuthContext() authContext: OrganizationAuthContext,
@@ -240,7 +247,6 @@ export class BoxTemplateController {
     description: 'Template general status has been set',
     type: BoxTemplateDto,
   })
-  @RequiredSystemRole(SystemRole.ADMIN)
   @Audit({
     action: AuditAction.SET_GENERAL_STATUS,
     targetType: AuditTarget.TEMPLATE,
@@ -252,9 +258,14 @@ export class BoxTemplateController {
     },
   })
   async setBoxTemplateGeneralStatus(
+    @AuthContext() authContext: OrganizationAuthContext,
     @Param('id') templateId: string,
     @Body() dto: SetBoxTemplateGeneralStatusDto,
   ): Promise<BoxTemplateDto> {
+    if (authContext.role !== SystemRole.ADMIN) {
+      throw new ForbiddenException('Insufficient permissions for changing template general status')
+    }
+
     const template = await this.boxTemplateService.setBoxTemplateGeneralStatus(templateId, dto.general)
     return BoxTemplateDto.fromBoxTemplateEntity(template)
   }
