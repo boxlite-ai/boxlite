@@ -90,14 +90,6 @@ const requireOidcIssuer = () => {
   return v;
 };
 
-// Runner endpoint overrides — use RUNNER_PRIVATE_IP shortcut when set.
-const runnerEndpoint = (override: string, port: number, scheme: string) =>
-  envOr(
-    override,
-    process.env.RUNNER_PRIVATE_IP
-      ? `${scheme}${process.env.RUNNER_PRIVATE_IP}:${port}`
-      : `${scheme}localhost:${port}`,
-  );
 
 // ── app config ───────────────────────────────────────────────────────────────
 export default $config({
@@ -110,6 +102,8 @@ export default $config({
         aws: { region: REGION, profile: envOr("AWS_PROFILE", "default") },
         cloudflare: "6.14.0",
         random: "4.16.6",
+        // Post-deploy runner registration (see RegisterExtraRunners in run()).
+        command: "1.0.1",
       },
     };
   },
@@ -341,12 +335,11 @@ export default $config({
         ...registryEnv("TRANSIENT", registry.url),
         ...registryEnv("INTERNAL", registry.url),
 
-        // Default runner — wire via RUNNER_PRIVATE_IP after the first deploy
+        // Default runner — the API seeds it at boot from name + apiKey. v2
+        // runners self-report their address via healthcheck, so no domain/url
+        // wiring is needed here.
         DEFAULT_RUNNER_NAME: envOr("DEFAULT_RUNNER_NAME", "default"),
         DEFAULT_RUNNER_API_KEY: envOr("DEFAULT_RUNNER_API_KEY", defaultRunnerApiKey.result),
-        DEFAULT_RUNNER_DOMAIN: runnerEndpoint("DEFAULT_RUNNER_DOMAIN", PORTS.RUNNER, ""),
-        DEFAULT_RUNNER_API_URL: runnerEndpoint("DEFAULT_RUNNER_API_URL", PORTS.RUNNER, "http://"),
-        DEFAULT_RUNNER_PROXY_URL: runnerEndpoint("DEFAULT_RUNNER_PROXY_URL", PORTS.PROXY, "http://"),
 
         // PostHog (enables the dashboard's "Create Sandbox" feature flag)
         ...(process.env.POSTHOG_API_KEY && {
@@ -595,6 +588,62 @@ export default $config({
       ignoreChanges: ["ami", "userDataBase64"],
       protect: true,
     });
+
+    // ── Extra runners (RUNNERS > 1) ──────────────────────────────────────────
+    // The default runner above is auto-seeded by the API at boot via
+    // DEFAULT_RUNNER_*. The API has no multi-runner seed, so any additional
+    // runners are provisioned here and registered with the control plane after
+    // deploy via the admin API (RegisterExtraRunners below). Each gets its OWN
+    // token — pairing is token-based (the runner row's apiKey must equal the
+    // BOXLITE_RUNNER_TOKEN baked into the matching EC2's user-data) — and the
+    // same protect/ignoreChanges options as the default so routine deploys never
+    // replace a state-holding runner.
+    const totalRunners = Math.max(1, parseInt(envOr("RUNNERS", "1"), 10) || 1);
+    const extraRunners = Array.from({ length: totalRunners - 1 }, (_, i) => {
+      const name = `runner-${i + 2}`; // default is runner #1
+      const apiKey = randomKey(`RunnerApiKey-${name}`);
+      const instance = new aws.ec2.Instance(`Runner-${name}`, {
+        ami: ubuntuAmi.then((a) => a.id),
+        instanceType: RUNNER.instanceType,
+        subnetId: vpc.publicSubnets[0],
+        iamInstanceProfile: runnerInstanceProfile.name,
+        cpuOptions: { nestedVirtualization: "enabled" },
+        associatePublicIpAddress: true,
+        userDataBase64: $resolve([api.url, apiKey.result, registry.url]).apply(
+          ([apiUrl, token, registryUrl]) => buildRunnerUserData({ apiUrl, token, registryUrl }),
+        ),
+        rootBlockDevice: { volumeSize: RUNNER.rootDiskGB },
+        tags: { Name: `boxlite-runner-${name}` },
+      }, {
+        ignoreChanges: ["ami", "userDataBase64"],
+        protect: true,
+      });
+      return { name, apiKey, instance };
+    });
+
+    // Register the extra runners with the control plane once the API is healthy.
+    // Idempotent (treats HTTP 409 as success), so redeploys are safe; only re-runs
+    // when the API URL or the runner set changes.
+    if (extraRunners.length > 0) {
+      const runnersPayload = $resolve(extraRunners.map((r) => r.apiKey.result)).apply((keys) =>
+        JSON.stringify(extraRunners.map((r, i) => ({ name: r.name, apiKey: keys[i] }))),
+      );
+      new command.local.Command(
+        "RegisterExtraRunners",
+        {
+          create: "node scripts/register-runners.mjs",
+          update: "node scripts/register-runners.mjs",
+          environment: {
+            API_URL: api.url,
+            ADMIN_API_KEY: adminApiKey.result,
+            REGION_ID: envOr("DEFAULT_REGION_ID", "us"),
+            RUNNERS: runnersPayload,
+          },
+          triggers: [api.url, runnersPayload],
+        },
+        { dependsOn: extraRunners.map((r) => r.instance) },
+      );
+    }
   },
 });
 

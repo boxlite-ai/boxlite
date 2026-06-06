@@ -38,20 +38,28 @@ from the failed step.
 
 ## After first deploy
 
-One value needs to be fed back into `.env`:
+Nothing needs to be fed back into `.env`. The runner EC2 self-registers with the
+API on boot — v2 runners report their address via healthcheck — so sandboxes
+work as soon as the runner reaches `READY` (~30–60s), visible in the dashboard
+Runner table or `GET /admin/runners`.
+
+### Adding a runner
+
+The default runner is auto-seeded by the API at boot. To run more, set the total
+count and redeploy:
 
 ```bash
-# Get runner private IP:
-aws ec2 describe-instances --region ap-southeast-1 \
-  --filters "Name=tag:Name,Values=boxlite-runner" \
-  --query 'Reservations[].Instances[].PrivateIpAddress' --output text
-
-# Add to .env:
-echo "RUNNER_PRIVATE_IP=10.0.x.y" >> .env
-
-# Redeploy (~2 min):
+echo "RUNNERS=3" >> .env     # default runner (#1) + runner-2 + runner-3
 npx sst deploy --stage dev
 ```
+
+Each extra runner gets its own EC2 + minted token. Because the API only
+auto-seeds the single default, the extras are registered with the control plane
+by a post-deploy step (`RegisterExtraRunners` in `sst.config.ts`, which runs
+`scripts/register-runners.mjs` against the admin API once the API is healthy).
+It's idempotent — re-running `sst deploy` won't duplicate rows. Scaling **down**
+is the deliberate decommission ceremony under [Runner lifecycle](#runner-lifecycle),
+applied per runner.
 
 > **Note:** `CLOUDFRONT_DOMAIN` is no longer needed — SST Router resolves
 > it automatically via your `STACK_DOMAIN`. The dashboard's API base URL
@@ -339,9 +347,12 @@ self-heals.
 **"Organization is suspended: Please verify your email address"** — Auth0 access_token
 missing `email_verified` claim. Deploy the Post-Login Action described above.
 
-**Runner never registers with API** — `RUNNER_PRIVATE_IP` in `.env` is stale or
-missing. Get the current IP and redeploy. The runner also self-registers via
-`RUNNER_DOMAIN` set from EC2 instance metadata.
+**Runner never reaches `READY`** — the runner pairs to its DB row by token
+(`BOXLITE_RUNNER_TOKEN`, baked into the EC2's user-data, must equal the row's
+`apiKey`), then self-reports its address via `POST /runners/healthcheck` using
+`RUNNER_DOMAIN` (set from EC2 instance metadata at boot). Check the runner's
+systemd logs (`aws ssm start-session` → `journalctl -u boxlite-runner`) for auth
+or connectivity errors to the API.
 
 **Sandbox preview URL returns 503** — Proxy service may need a force-redeploy after
 initial setup: `aws ecs update-service --force-new-deployment --service Proxy`.
