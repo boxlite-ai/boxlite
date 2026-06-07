@@ -8,22 +8,22 @@ import { Injectable, Logger } from '@nestjs/common'
 import { OnEvent } from '@nestjs/event-emitter'
 import { WebhookService } from './webhook.service'
 import { SandboxEvents } from '../../sandbox/constants/sandbox-events.constants'
-import { BoxTemplateEvents } from '../../sandbox/constants/box-template-events'
+import { SavedImageEvents } from '../../sandbox/constants/saved-image-events'
 import { VolumeEvents } from '../../sandbox/constants/volume-events'
 import { SandboxCreatedEvent } from '../../sandbox/events/sandbox-create.event'
 import { SandboxStateUpdatedEvent } from '../../sandbox/events/sandbox-state-updated.event'
-import { BoxTemplateCreatedEvent } from '../../sandbox/events/box-template-created.event'
-import { BoxTemplateStateUpdatedEvent } from '../../sandbox/events/box-template-state-updated.event'
-import { BoxTemplateRemovedEvent } from '../../sandbox/events/box-template-removed.event'
+import { SavedImageCreatedEvent } from '../../sandbox/events/saved-image-created.event'
+import { SavedImageStateUpdatedEvent } from '../../sandbox/events/saved-image-state-updated.event'
+import { SavedImageRemovedEvent } from '../../sandbox/events/saved-image-removed.event'
 import { VolumeCreatedEvent } from '../../sandbox/events/volume-created.event'
 import { VolumeStateUpdatedEvent } from '../../sandbox/events/volume-state-updated.event'
 import { WebhookEvent } from '../constants/webhook-events.constants'
 import {
   SandboxCreatedWebhookDto,
   SandboxStateUpdatedWebhookDto,
-  BoxTemplateCreatedWebhookDto,
-  BoxTemplateStateUpdatedWebhookDto,
-  BoxTemplateRemovedWebhookDto,
+  SavedImageCreatedWebhookDto,
+  SavedImageStateUpdatedWebhookDto,
+  SavedImageRemovedWebhookDto,
   VolumeCreatedWebhookDto,
   VolumeStateUpdatedWebhookDto,
 } from '../dto/webhook-event-payloads.dto'
@@ -62,45 +62,45 @@ export class WebhookEventHandlerService {
     }
   }
 
-  @OnEvent(BoxTemplateEvents.CREATED)
-  async handleTemplateCreated(event: BoxTemplateCreatedEvent) {
+  @OnEvent(SavedImageEvents.CREATED)
+  async handleSavedImageCreated(event: SavedImageCreatedEvent) {
     if (!this.webhookService.isEnabled()) {
       return
     }
 
     try {
-      const payload = BoxTemplateCreatedWebhookDto.fromEvent(event, WebhookEvent.TEMPLATE_CREATED)
-      await this.webhookService.sendWebhook(event.template.organizationId, WebhookEvent.TEMPLATE_CREATED, payload)
+      const payload = SavedImageCreatedWebhookDto.fromEvent(event, WebhookEvent.SAVED_IMAGE_CREATED)
+      await this.webhookService.sendWebhook(event.savedImage.organizationId, WebhookEvent.SAVED_IMAGE_CREATED, payload)
     } catch (error) {
-      this.logger.error(`Failed to send webhook for template created: ${error.message}`)
+      this.logger.error(`Failed to send webhook for savedImage created: ${error.message}`)
     }
   }
 
-  @OnEvent(BoxTemplateEvents.STATE_UPDATED)
-  async handleBoxTemplateStateUpdated(event: BoxTemplateStateUpdatedEvent) {
+  @OnEvent(SavedImageEvents.STATE_UPDATED)
+  async handleSavedImageStateUpdated(event: SavedImageStateUpdatedEvent) {
     if (!this.webhookService.isEnabled()) {
       return
     }
 
     try {
-      const payload = BoxTemplateStateUpdatedWebhookDto.fromEvent(event, WebhookEvent.TEMPLATE_STATE_UPDATED)
-      await this.webhookService.sendWebhook(event.template.organizationId, WebhookEvent.TEMPLATE_STATE_UPDATED, payload)
+      const payload = SavedImageStateUpdatedWebhookDto.fromEvent(event, WebhookEvent.SAVED_IMAGE_STATE_UPDATED)
+      await this.webhookService.sendWebhook(event.savedImage.organizationId, WebhookEvent.SAVED_IMAGE_STATE_UPDATED, payload)
     } catch (error) {
-      this.logger.error(`Failed to send webhook for template state updated: ${error.message}`)
+      this.logger.error(`Failed to send webhook for savedImage state updated: ${error.message}`)
     }
   }
 
-  @OnEvent(BoxTemplateEvents.REMOVED)
-  async handleTemplateRemoved(event: BoxTemplateRemovedEvent) {
+  @OnEvent(SavedImageEvents.REMOVED)
+  async handleSavedImageRemoved(event: SavedImageRemovedEvent) {
     if (!this.webhookService.isEnabled()) {
       return
     }
 
     try {
-      const payload = BoxTemplateRemovedWebhookDto.fromEvent(event, WebhookEvent.TEMPLATE_REMOVED)
-      await this.webhookService.sendWebhook(event.template.organizationId, WebhookEvent.TEMPLATE_REMOVED, payload)
+      const payload = SavedImageRemovedWebhookDto.fromEvent(event, WebhookEvent.SAVED_IMAGE_REMOVED)
+      await this.webhookService.sendWebhook(event.savedImage.organizationId, WebhookEvent.SAVED_IMAGE_REMOVED, payload)
     } catch (error) {
-      this.logger.error(`Failed to send webhook for template removed: ${error.message}`)
+      this.logger.error(`Failed to send webhook for savedImage removed: ${error.message}`)
     }
   }
 

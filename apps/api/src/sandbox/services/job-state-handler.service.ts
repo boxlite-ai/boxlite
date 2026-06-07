@@ -7,10 +7,10 @@
 import { Injectable, Logger } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
 import { Repository } from 'typeorm'
-import { BoxTemplate } from '../entities/box-template.entity'
+import { SavedImage } from '../entities/saved-image.entity'
 import { RunnerArtifactCache } from '../entities/runner-artifact-cache.entity'
 import { SandboxState } from '../enums/sandbox-state.enum'
-import { BoxTemplateState } from '../enums/box-template-state.enum'
+import { SavedImageState } from '../enums/saved-image-state.enum'
 import { RunnerArtifactCacheState } from '../enums/runner-artifact-cache-state.enum'
 import { JobStatus } from '../enums/job-status.enum'
 import { JobType } from '../enums/job-type.enum'
@@ -35,8 +35,8 @@ export class JobStateHandlerService {
 
   constructor(
     private readonly sandboxRepository: SandboxRepository,
-    @InjectRepository(BoxTemplate)
-    private readonly boxTemplateRepository: Repository<BoxTemplate>,
+    @InjectRepository(SavedImage)
+    private readonly savedImageRepository: Repository<SavedImage>,
     @InjectRepository(RunnerArtifactCache)
     private readonly runnerArtifactCacheRepository: Repository<RunnerArtifactCache>,
     private readonly organizationUsageService: OrganizationUsageService,
@@ -302,31 +302,31 @@ export class JobStateHandlerService {
         runnerArtifactCache.state = RunnerArtifactCacheState.READY
         runnerArtifactCache.errorReason = null
 
-        // Check if this is the initial runner for a template and update the template state.
-        const template = await this.boxTemplateRepository.findOne({
+        // Check if this is the initial runner for a savedImage and update the savedImage state.
+        const savedImage = await this.savedImageRepository.findOne({
           where: { initialRunnerId: runnerId, artifactRef: artifactRef },
         })
-        if (template && (template.state === BoxTemplateState.PULLING || template.state === BoxTemplateState.BUILDING)) {
-          this.logger.debug(`Marking template ${template.id} as ACTIVE after initial pull completed`)
-          template.state = BoxTemplateState.ACTIVE
-          template.errorReason = null
-          template.lastUsedAt = new Date()
-          await this.boxTemplateRepository.save(template)
+        if (savedImage && (savedImage.state === SavedImageState.PULLING || savedImage.state === SavedImageState.BUILDING)) {
+          this.logger.debug(`Marking savedImage ${savedImage.id} as ACTIVE after initial pull completed`)
+          savedImage.state = SavedImageState.ACTIVE
+          savedImage.errorReason = null
+          savedImage.lastUsedAt = new Date()
+          await this.savedImageRepository.save(savedImage)
         }
       } else if (job.status === JobStatus.FAILED) {
         this.logger.error(`PULL_ARTIFACT job ${job.id} failed for artifact ${artifactRef}: ${job.errorMessage}`)
         runnerArtifactCache.state = RunnerArtifactCacheState.ERROR
         runnerArtifactCache.errorReason = job.errorMessage || 'Failed to pull artifact'
 
-        // Check if this is the initial runner for a template and update the template state.
-        const template = await this.boxTemplateRepository.findOne({
+        // Check if this is the initial runner for a savedImage and update the savedImage state.
+        const savedImage = await this.savedImageRepository.findOne({
           where: { initialRunnerId: runnerId, artifactRef: artifactRef },
         })
-        if (template && template.state === BoxTemplateState.PULLING) {
-          this.logger.error(`Marking template ${template.id} as ERROR after initial pull failed`)
-          template.state = BoxTemplateState.ERROR
-          template.errorReason = job.errorMessage || 'Failed to pull artifact on initial runner'
-          await this.boxTemplateRepository.save(template)
+        if (savedImage && savedImage.state === SavedImageState.PULLING) {
+          this.logger.error(`Marking savedImage ${savedImage.id} as ERROR after initial pull failed`)
+          savedImage.state = SavedImageState.ERROR
+          savedImage.errorReason = job.errorMessage || 'Failed to pull artifact on initial runner'
+          await this.savedImageRepository.save(savedImage)
         }
       }
 
@@ -342,11 +342,11 @@ export class JobStateHandlerService {
     if (!artifactRef || !runnerId) return
 
     try {
-      // For BUILD_ARTIFACT, find the template by buildInfo.artifactRef.
-      const template = await this.boxTemplateRepository
-        .createQueryBuilder('template')
-        .leftJoinAndSelect('template.buildInfo', 'buildInfo')
-        .where('template.initialRunnerId = :runnerId', { runnerId })
+      // For BUILD_ARTIFACT, find the savedImage by buildInfo.artifactRef.
+      const savedImage = await this.savedImageRepository
+        .createQueryBuilder('savedImage')
+        .leftJoinAndSelect('savedImage.buildInfo', 'buildInfo')
+        .where('savedImage.initialRunnerId = :runnerId', { runnerId })
         .andWhere('buildInfo.artifactRef = :artifactRef', { artifactRef })
         .getOne()
 
@@ -358,12 +358,12 @@ export class JobStateHandlerService {
       if (job.status === JobStatus.COMPLETED) {
         this.logger.debug(`BUILD_ARTIFACT job ${job.id} completed successfully for artifact ref ${artifactRef}`)
 
-        if (template?.state === BoxTemplateState.BUILDING) {
-          template.state = BoxTemplateState.ACTIVE
-          template.errorReason = null
-          template.lastUsedAt = new Date()
-          await this.boxTemplateRepository.save(template)
-          this.logger.debug(`Marked template ${template.id} as ACTIVE after build completed`)
+        if (savedImage?.state === SavedImageState.BUILDING) {
+          savedImage.state = SavedImageState.ACTIVE
+          savedImage.errorReason = null
+          savedImage.lastUsedAt = new Date()
+          await this.savedImageRepository.save(savedImage)
+          this.logger.debug(`Marked savedImage ${savedImage.id} as ACTIVE after build completed`)
         }
 
         if (runnerArtifactCache) {
@@ -374,10 +374,10 @@ export class JobStateHandlerService {
       } else if (job.status === JobStatus.FAILED) {
         this.logger.error(`BUILD_ARTIFACT job ${job.id} failed for artifact ref ${artifactRef}: ${job.errorMessage}`)
 
-        if (template?.state === BoxTemplateState.BUILDING) {
-          template.state = BoxTemplateState.ERROR
-          template.errorReason = job.errorMessage || 'Failed to build artifact'
-          await this.boxTemplateRepository.save(template)
+        if (savedImage?.state === SavedImageState.BUILDING) {
+          savedImage.state = SavedImageState.ERROR
+          savedImage.errorReason = job.errorMessage || 'Failed to build artifact'
+          await this.savedImageRepository.save(savedImage)
         }
 
         if (runnerArtifactCache) {

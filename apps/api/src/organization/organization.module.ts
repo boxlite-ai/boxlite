@@ -20,7 +20,7 @@ import { OrganizationUserService } from './services/organization-user.service'
 import { OrganizationInvitationService } from './services/organization-invitation.service'
 import { UserModule } from '../user/user.module'
 import { Sandbox } from '../sandbox/entities/sandbox.entity'
-import { BoxTemplate } from '../sandbox/entities/box-template.entity'
+import { SavedImage } from '../sandbox/entities/saved-image.entity'
 import { Volume } from '../sandbox/entities/volume.entity'
 import { RedisLockProvider } from '../sandbox/common/redis-lock.provider'
 import { RunnerArtifactCache } from '../sandbox/entities/runner-artifact-cache.entity'
@@ -45,7 +45,7 @@ import { EncryptionModule } from '../encryption/encryption.module'
       OrganizationUser,
       OrganizationInvitation,
       Sandbox,
-      BoxTemplate,
+      SavedImage,
       Volume,
       RunnerArtifactCache,
       RegionQuota,

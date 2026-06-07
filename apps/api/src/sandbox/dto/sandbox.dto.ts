@@ -56,10 +56,10 @@ export class SandboxDto {
   name: string
 
   @ApiPropertyOptional({
-    description: 'The template used for the sandbox',
+    description: 'The savedImage used for the sandbox',
     example: 'ubuntu:24.04',
   })
-  template: string
+  savedImage: string
 
   @ApiProperty({
     description: 'The user associated with the project',
@@ -283,7 +283,7 @@ export class SandboxDto {
       organizationId: sandbox.organizationId,
       name: sandbox.name,
       target: sandbox.region,
-      template: sandbox.template,
+      savedImage: sandbox.savedImage,
       user: sandbox.osUser,
       env: sandbox.env,
       cpu: sandbox.cpu,

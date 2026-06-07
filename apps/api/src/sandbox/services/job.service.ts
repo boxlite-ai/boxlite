@@ -46,7 +46,7 @@ export class JobService {
   /**
    * Create a job within the provided transaction manager
    * If manager is null, uses the default repository (for non-transactional operations)
-   * @template T The JobType enum value - ensures compile-time type safety for resourceType and payload
+   * @savedImage T The JobType enum value - ensures compile-time type safety for resourceType and payload
    */
   async createJob<T extends JobType>(
     manager: EntityManager | null,

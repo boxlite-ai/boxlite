@@ -33,13 +33,13 @@ export interface CreateSandbox {
      */
     'name'?: string;
     /**
-     * The ID or name of the template used for the sandbox
+     * The ID or name of the savedImage used for the sandbox
      * @type {string}
      * @memberof CreateSandbox
      */
-    'templateId'?: string;
+    'savedImageId'?: string;
     /**
-     * Deprecated alias for templateId used by older clients
+     * Deprecated alias for savedImageId used by older clients
      * @type {string}
      * @memberof CreateSandbox
      * @deprecated

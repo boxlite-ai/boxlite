@@ -9,7 +9,7 @@ import { SandboxState } from '../../sandbox/enums/sandbox-state.enum'
 import { BoxResponseDto } from '../dto/box-response.dto'
 import { CreateBoxDto } from '../dto/create-box.dto'
 import { CreateSandboxDto } from '../../sandbox/dto/create-sandbox.dto'
-import { SYSTEM_TEMPLATES, getSystemTemplateDefinition } from '../../sandbox/constants/system-templates'
+import { SYSTEM_SAVED_IMAGES, getSystemSavedImageDefinition } from '../../sandbox/constants/system-saved-images'
 
 export function sandboxToBoxResponse(sandbox: SandboxDto): BoxResponseDto {
   return {
@@ -18,7 +18,7 @@ export function sandboxToBoxResponse(sandbox: SandboxDto): BoxResponseDto {
     status: mapState(sandbox.state),
     created_at: sandbox.createdAt || new Date().toISOString(),
     updated_at: sandbox.updatedAt || new Date().toISOString(),
-    image: sandbox.template || '',
+    image: sandbox.savedImage || '',
     cpus: sandbox.cpu || 1,
     memory_mib: (sandbox.memory || 1) * 1024,
     labels: sandbox.labels || {},
@@ -27,7 +27,7 @@ export function sandboxToBoxResponse(sandbox: SandboxDto): BoxResponseDto {
 
 export function createBoxToCreateSandbox(dto: CreateBoxDto, target?: string): CreateSandboxDto {
   const createDto = new CreateSandboxDto()
-  createDto.templateId = resolveBoxTemplateId(dto.image)
+  createDto.savedImageId = resolveSavedImageId(dto.image)
   createDto.name = dto.name
   createDto.user = dto.user
   createDto.env = dto.env
@@ -38,13 +38,13 @@ export function createBoxToCreateSandbox(dto: CreateBoxDto, target?: string): Cr
   return createDto
 }
 
-export function resolveBoxTemplateId(image?: string): string | undefined {
+export function resolveSavedImageId(image?: string): string | undefined {
   const imageName = image?.trim()
   if (!imageName) {
-    return SYSTEM_TEMPLATES[0]?.name
+    return SYSTEM_SAVED_IMAGES[0]?.name
   }
 
-  return getSystemTemplateDefinition(imageName)?.name
+  return getSystemSavedImageDefinition(imageName)?.name
 }
 
 function mapState(state: string | SandboxState | undefined): string {

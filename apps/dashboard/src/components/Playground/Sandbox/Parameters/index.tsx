@@ -34,14 +34,14 @@ const SandboxParameters = ({ className }: { className?: string }) => {
     usePlayground()
 
   // TODO - Currently, image selection is not supported in the Playground, so we are using empty array and false for loading. We keep the code commented to enable it in future if requested by users.
-  // const { templatesApi } = useApi()
+  // const { savedImagesApi } = useApi()
   // const { selectedOrganization } = useSelectedOrganization()
 
-  // const { data: templatesData = [], isLoading: templatesLoading } = useQuery({
-  //   queryKey: ['templates', selectedOrganization?.id, 'all'],
+  // const { data: savedImagesData = [], isLoading: savedImagesLoading } = useQuery({
+  //   queryKey: ['saved-images', selectedOrganization?.id, 'all'],
   //   queryFn: async () => {
   //     if (!selectedOrganization) return []
-  //     const response = await templatesApi.listBoxTemplates(selectedOrganization.id)
+  //     const response = await savedImagesApi.listSavedImages(selectedOrganization.id)
   //     return response.data.items
   //   },
   //   enabled: !!selectedOrganization,
@@ -103,7 +103,7 @@ const SandboxParameters = ({ className }: { className?: string }) => {
                     {section.value === SandboxParametersSections.FILE_SYSTEM && <SandboxFileSystem />}
                     {section.value === SandboxParametersSections.GIT_OPERATIONS && <SandboxGitOperations />}
                     {section.value === SandboxParametersSections.SANDBOX_MANAGEMENT && (
-                      <SandboxManagementParameters templatesData={[]} templatesLoading={false} />
+                      <SandboxManagementParameters savedImagesData={[]} savedImagesLoading={false} />
                     )}
                     {section.value === SandboxParametersSections.PROCESS_CODE_EXECUTION && (
                       <SandboxProcessCodeExecution />

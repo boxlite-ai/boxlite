@@ -5,7 +5,7 @@
  */
 
 import { Column, CreateDateColumn, Entity, OneToMany, PrimaryColumn, UpdateDateColumn, BeforeInsert } from 'typeorm'
-import { BoxTemplate } from './box-template.entity'
+import { SavedImage } from './saved-image.entity'
 import { Sandbox } from './sandbox.entity'
 import { createHash } from 'crypto'
 
@@ -27,8 +27,8 @@ export class BuildInfo {
   @Column('simple-array', { nullable: true })
   contextHashes?: string[]
 
-  @OneToMany(() => BoxTemplate, (template) => template.buildInfo)
-  templates: BoxTemplate[]
+  @OneToMany(() => SavedImage, (savedImage) => savedImage.buildInfo)
+  savedImages: SavedImage[]
 
   @OneToMany(() => Sandbox, (sandbox) => sandbox.buildInfo)
   sandboxes: Sandbox[]

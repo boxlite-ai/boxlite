@@ -30,7 +30,7 @@ import { SandboxLastActivity } from './sandbox-last-activity.entity'
 @Unique(['organizationId', 'name'])
 @Index('sandbox_state_idx', ['state'])
 @Index('sandbox_desiredstate_idx', ['desiredState'])
-@Index('sandbox_template_idx', ['template'])
+@Index('sandbox_saved_image_idx', ['savedImage'])
 @Index('sandbox_runnerid_idx', ['runnerId'])
 @Index('sandbox_runner_state_idx', ['runnerId', 'state'])
 @Index('sandbox_organizationid_idx', ['organizationId'])
@@ -100,7 +100,7 @@ export class Sandbox {
   desiredState = SandboxDesiredState.STARTED
 
   @Column({ nullable: true })
-  template?: string
+  savedImage?: string
 
   @Column()
   osUser: string

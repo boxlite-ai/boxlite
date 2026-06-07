@@ -8,10 +8,10 @@ export { CodeLanguage, BoxLite } from './BoxLite'
 export type {
   CreateSandboxBaseParams,
   CreateSandboxFromImageParams,
-  CreateSandboxFromTemplateParams,
+  CreateSandboxFromSavedImageParams,
   BoxliteConfig,
   Resources,
-  TemplateResources,
+  SavedImageResources,
   VolumeMount,
 } from './BoxLite'
 export { FileSystem } from './FileSystem'
@@ -24,8 +24,8 @@ export { BoxliteError, BoxLiteNotFoundError, BoxLiteRateLimitError, BoxLiteTimeo
 export { Image } from './Image'
 export { Sandbox } from './Sandbox'
 export type { SandboxCodeToolbox } from './Sandbox'
-export { TemplateService } from './Template'
-export type { CreateTemplateParams, PaginatedTemplates, Template } from './Template'
+export { SavedImageService } from './SavedImage'
+export type { CreateSavedImageParams, PaginatedSavedImages, SavedImage } from './SavedImage'
 export { ComputerUse, Mouse, Keyboard, Screenshot, Display } from './ComputerUse'
 export type { ExecutionError, ExecutionResult, OutputMessage, RunCodeOptions } from './types/CodeInterpreter'
 

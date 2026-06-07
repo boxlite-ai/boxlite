@@ -18,8 +18,8 @@ import { SandboxError } from '../../exceptions/sandbox-error.exception'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { Cron, CronExpression } from '@nestjs/schedule'
 import { BackupState } from '../enums/backup-state.enum'
-import { BoxTemplate } from '../entities/box-template.entity'
-import { BoxTemplateState } from '../enums/box-template-state.enum'
+import { SavedImage } from '../entities/saved-image.entity'
+import { SavedImageState } from '../enums/saved-image-state.enum'
 import { SANDBOX_WARM_POOL_UNASSIGNED_ORGANIZATION } from '../constants/sandbox.constants'
 import { SandboxWarmPoolService } from './sandbox-warm-pool.service'
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter'
@@ -70,7 +70,7 @@ import { validateMountPaths, validateSubpaths } from '../utils/volume-mount-path
 import { SandboxRepository } from '../repositories/sandbox.repository'
 import { PortPreviewUrlDto, SignedPortPreviewUrlDto } from '../dto/port-preview-url.dto'
 import { RegionService } from '../../region/services/region.service'
-import { BoxTemplateService } from './box-template.service'
+import { SavedImageService } from './saved-image.service'
 import { RegionType } from '../../region/enums/region-type.enum'
 import { SandboxCreatedEvent } from '../events/sandbox-create.event'
 import { InjectRedis } from '@nestjs-modules/ioredis'
@@ -100,8 +100,8 @@ export class SandboxService {
 
   constructor(
     private readonly sandboxRepository: SandboxRepository,
-    @InjectRepository(BoxTemplate)
-    private readonly boxTemplateRepository: Repository<BoxTemplate>,
+    @InjectRepository(SavedImage)
+    private readonly savedImageRepository: Repository<SavedImage>,
     @InjectRepository(Runner)
     private readonly runnerRepository: Repository<Runner>,
     @InjectRepository(BuildInfo)
@@ -119,7 +119,7 @@ export class SandboxService {
     private readonly redisLockProvider: RedisLockProvider,
     @InjectRedis() private readonly redis: Redis,
     private readonly regionService: RegionService,
-    private readonly boxTemplateService: BoxTemplateService,
+    private readonly savedImageService: SavedImageService,
     private readonly sandboxLookupCacheInvalidationService: SandboxLookupCacheInvalidationService,
     private readonly sandboxActivityService: SandboxActivityService,
   ) {}
@@ -307,7 +307,7 @@ export class SandboxService {
     sandbox.organizationId = SANDBOX_WARM_POOL_UNASSIGNED_ORGANIZATION
 
     sandbox.class = warmPoolItem.class
-    sandbox.template = warmPoolItem.template
+    sandbox.savedImage = warmPoolItem.savedImage
     //  TODO: default user should be configurable
     sandbox.osUser = 'boxlite'
     sandbox.env = warmPoolItem.env || {}
@@ -317,20 +317,20 @@ export class SandboxService {
     sandbox.mem = warmPoolItem.mem
     sandbox.disk = warmPoolItem.disk
 
-    const template = await this.boxTemplateRepository.findOne({
+    const savedImage = await this.savedImageRepository.findOne({
       where: [
-        { organizationId: sandbox.organizationId, name: sandbox.template, state: BoxTemplateState.ACTIVE },
-        { general: true, name: sandbox.template, state: BoxTemplateState.ACTIVE },
+        { organizationId: sandbox.organizationId, name: sandbox.savedImage, state: SavedImageState.ACTIVE },
+        { general: true, name: sandbox.savedImage, state: SavedImageState.ACTIVE },
       ],
     })
-    if (!template) {
-      throw new BadRequestError(`BoxTemplate ${sandbox.template} not found while creating warm pool sandbox`)
+    if (!savedImage) {
+      throw new BadRequestError(`SavedImage ${sandbox.savedImage} not found while creating warm pool sandbox`)
     }
 
     const runner = await this.runnerService.getRandomAvailableRunner({
       regions: [sandbox.region],
       sandboxClass: sandbox.class,
-      artifactRef: template.artifactRef,
+      artifactRef: savedImage.artifactRef,
     })
 
     sandbox.runnerId = runner.id
@@ -340,10 +340,10 @@ export class SandboxService {
     return sandbox
   }
 
-  private async createFromBoxTemplate(
+  private async createFromSavedImageRecord(
     createSandboxDto: CreateSandboxDto,
     organization: Organization,
-    templateIdOrName: string,
+    savedImageIdOrName: string,
   ): Promise<SandboxDto> {
     let pendingCpuIncrement: number | undefined
     let pendingMemoryIncrement: number | undefined
@@ -354,50 +354,50 @@ export class SandboxService {
     try {
       const sandboxClass = this.getValidatedOrDefaultClass(createSandboxDto.class)
 
-      const templateFilter: FindOptionsWhere<BoxTemplate>[] = [
-        { organizationId: organization.id, name: templateIdOrName },
-        { general: true, name: templateIdOrName },
+      const savedImageFilter: FindOptionsWhere<SavedImage>[] = [
+        { organizationId: organization.id, name: savedImageIdOrName },
+        { general: true, name: savedImageIdOrName },
       ]
 
-      if (isValidUuid(templateIdOrName)) {
-        templateFilter.push(
-          { organizationId: organization.id, id: templateIdOrName },
-          { general: true, id: templateIdOrName },
+      if (isValidUuid(savedImageIdOrName)) {
+        savedImageFilter.push(
+          { organizationId: organization.id, id: savedImageIdOrName },
+          { general: true, id: savedImageIdOrName },
         )
       }
 
-      const templates = await this.boxTemplateRepository.find({
-        where: templateFilter,
+      const savedImages = await this.savedImageRepository.find({
+        where: savedImageFilter,
       })
 
-      if (templates.length === 0) {
+      if (savedImages.length === 0) {
         throw new BadRequestError(
-          `Template ${templateIdOrName} not found. Did you add it through the BoxLite Dashboard?`,
+          `SavedImage ${savedImageIdOrName} not found. Did you add it through the BoxLite Dashboard?`,
         )
       }
 
-      let template = templates.find((candidate) => candidate.state === BoxTemplateState.ACTIVE)
+      let savedImage = savedImages.find((candidate) => candidate.state === SavedImageState.ACTIVE)
 
-      if (!template) {
-        template = templates[0]
+      if (!savedImage) {
+        savedImage = savedImages[0]
       }
 
-      if (!(await this.boxTemplateService.isAvailableInRegion(template.id, region.id))) {
-        throw new BadRequestError(`Template ${templateIdOrName} is not available in region ${region.id}`)
+      if (!(await this.savedImageService.isAvailableInRegion(savedImage.id, region.id))) {
+        throw new BadRequestError(`SavedImage ${savedImageIdOrName} is not available in region ${region.id}`)
       }
 
-      if (template.state !== BoxTemplateState.ACTIVE) {
-        throw new BadRequestError(`Template ${templateIdOrName} is ${template.state}`)
+      if (savedImage.state !== SavedImageState.ACTIVE) {
+        throw new BadRequestError(`SavedImage ${savedImageIdOrName} is ${savedImage.state}`)
       }
 
-      if (!template.artifactRef) {
+      if (!savedImage.artifactRef) {
         throw new BadRequestError('Artifact ref is not defined')
       }
 
-      let cpu = template.cpu
-      let mem = template.mem
-      let disk = template.disk
-      let gpu = template.gpu
+      let cpu = savedImage.cpu
+      let mem = savedImage.mem
+      let disk = savedImage.disk
+      let gpu = savedImage.gpu
 
       if (createSandboxDto.cpu !== undefined) {
         cpu = createSandboxDto.cpu
@@ -428,12 +428,12 @@ export class SandboxService {
       }
 
       if (!createSandboxDto.volumes || createSandboxDto.volumes.length === 0) {
-        const skipWarmPool = (await this.redis.exists(`warm-pool:skip:${template.id}`)) === 1
+        const skipWarmPool = (await this.redis.exists(`warm-pool:skip:${savedImage.id}`)) === 1
 
         if (!skipWarmPool) {
           const warmPoolSandbox = await this.warmPoolService.fetchWarmPoolSandbox({
             organizationId: organization.id,
-            template,
+            savedImage,
             target: region.id,
             class: createSandboxDto.class,
             cpu: cpu,
@@ -457,7 +457,7 @@ export class SandboxService {
       const runner = await this.runnerService.getRandomAvailableRunner({
         regions: [region.id],
         sandboxClass,
-        artifactRef: template.artifactRef,
+        artifactRef: savedImage.artifactRef,
       })
 
       const sandbox = new Sandbox(region.id, createSandboxDto.name)
@@ -466,7 +466,7 @@ export class SandboxService {
 
       //  TODO: make configurable
       sandbox.class = sandboxClass
-      sandbox.template = template.name
+      sandbox.savedImage = savedImage.name
       //  TODO: default user should be configurable
       sandbox.osUser = createSandboxDto.user || 'boxlite'
       sandbox.env = createSandboxDto.env || {}
@@ -530,9 +530,9 @@ export class SandboxService {
     }
   }
 
-  async createFromTemplate(createSandboxDto: CreateSandboxDto, organization: Organization): Promise<SandboxDto> {
-    const templateId = createSandboxDto.templateId?.trim() || this.configService.getOrThrow('defaultTemplate')
-    return this.createFromBoxTemplate(createSandboxDto, organization, templateId)
+  async createFromSavedImage(createSandboxDto: CreateSandboxDto, organization: Organization): Promise<SandboxDto> {
+    const savedImageId = createSandboxDto.savedImageId?.trim() || this.configService.getOrThrow('defaultSavedImage')
+    return this.createFromSavedImageRecord(createSandboxDto, organization, savedImageId)
   }
 
   private async assignWarmPoolSandbox(
@@ -810,7 +810,7 @@ export class SandboxService {
       labels?: { [key: string]: string }
       includeErroredDestroyed?: boolean
       states?: SandboxState[]
-      templates?: string[]
+      savedImages?: string[]
       regionIds?: string[]
       minCpu?: number
       maxCpu?: number
@@ -835,7 +835,7 @@ export class SandboxService {
       labels,
       includeErroredDestroyed,
       states,
-      templates,
+      savedImages,
       regionIds,
       minCpu,
       maxCpu,
@@ -855,7 +855,7 @@ export class SandboxService {
       ...(id ? { id: ILike(`${id}%`) } : {}),
       ...(name ? { name: ILike(`${name}%`) } : {}),
       ...(labels ? { labels: JsonContains(labels) } : {}),
-      ...(templates ? { template: In(templates) } : {}),
+      ...(savedImages ? { savedImage: In(savedImages) } : {}),
       ...(regionIds ? { region: In(regionIds) } : {}),
     }
 

@@ -20,7 +20,7 @@ export interface SandboxFilters {
   labels?: Record<string, string>
   includeErroredDeleted?: boolean
   states?: ListSandboxesPaginatedStatesEnum[]
-  templates?: string[]
+  savedImages?: string[]
   regions?: string[]
   minCpu?: number
   maxCpu?: number
@@ -88,7 +88,7 @@ export function useSandboxes(queryKey: QueryKey, params: SandboxQueryParams) {
         filters.labels ? JSON.stringify(filters.labels) : undefined,
         filters.includeErroredDeleted,
         filters.states,
-        filters.templates,
+        filters.savedImages,
         filters.regions,
         filters.minCpu,
         filters.maxCpu,

@@ -225,7 +225,7 @@ export class RunnerAdapterV2 implements RunnerAdapter {
   async recoverSandbox(sandbox: Sandbox): Promise<void> {
     const recoverSandboxDTO: RecoverSandboxDTO = {
       userId: sandbox.organizationId,
-      snapshot: sandbox.template,
+      snapshot: sandbox.savedImage,
       osUser: sandbox.osUser,
       cpuQuota: sandbox.cpu,
       gpuQuota: sandbox.gpu,
@@ -426,7 +426,7 @@ export class RunnerAdapterV2 implements RunnerAdapter {
     })
 
     if (!latestJob) {
-      throw new Error(`BoxTemplate ${artifactRef} not found on runner ${this.runner.id}`)
+      throw new Error(`SavedImage ${artifactRef} not found on runner ${this.runner.id}`)
     }
 
     const metadata = latestJob.getResultMetadata()
@@ -443,15 +443,15 @@ export class RunnerAdapterV2 implements RunnerAdapter {
           }
         }
         throw new Error(
-          `BoxTemplate ${artifactRef} is in an unknown state (${latestJob.status}) on runner ${this.runner.id}`,
+          `SavedImage ${artifactRef} is in an unknown state (${latestJob.status}) on runner ${this.runner.id}`,
         )
       case JobStatus.FAILED:
         throw new RuntimeArtifactStateError(
-          latestJob.errorMessage || `BoxTemplate ${artifactRef} failed on runner ${this.runner.id}`,
+          latestJob.errorMessage || `SavedImage ${artifactRef} failed on runner ${this.runner.id}`,
         )
       default:
         throw new Error(
-          `BoxTemplate ${artifactRef} is in an unknown state (${latestJob.status}) on runner ${this.runner.id}`,
+          `SavedImage ${artifactRef} is in an unknown state (${latestJob.status}) on runner ${this.runner.id}`,
         )
     }
   }

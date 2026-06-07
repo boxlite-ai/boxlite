@@ -58,7 +58,7 @@ export const TypeScriptSnippetGenerator: CodeSnippetGenerator = {
     const ind = '\t\t\t'
     return [
       `{`,
-      p.config.useCustomSandboxTemplateName ? `${ind}templateId: '${p.state['templateName']}',` : '',
+      p.config.useCustomSavedImageName ? `${ind}savedImageId: '${p.state['savedImageName']}',` : '',
       p.config.createSandboxFromImage ? `${ind}image: Image.debianSlim("3.13"),` : '',
       this.getResources(p),
       p.config.useLanguageParam ? `${ind}language: '${p.state['language']}',` : '',

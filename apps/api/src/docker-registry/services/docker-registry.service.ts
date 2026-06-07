@@ -333,7 +333,7 @@ export class DockerRegistryService {
    * @param imageName - The user-provided image.
    * @param regionId - The ID of the region which needs access to the source registry.
    */
-  async findSourceRegistryByTemplateImageName(
+  async findSourceRegistryBySavedImageImageName(
     imageName: string,
     regionId: string,
     organizationId?: string,
@@ -398,7 +398,7 @@ export class DockerRegistryService {
    * @param imageName - The user-provided image.
    * @param regionId - The ID of the region which needs access to the transient registry.
    */
-  async findTransientRegistryByTemplateImageName(imageName: string, regionId: string): Promise<DockerRegistry | null> {
+  async findTransientRegistryBySavedImageImageName(imageName: string, regionId: string): Promise<DockerRegistry | null> {
     const region = await this.regionService.findOne(regionId)
     if (!region) {
       return null
@@ -534,7 +534,7 @@ export class DockerRegistryService {
 
     if (parsedImage.registry) {
       // Image has registry prefix, try to find matching registry in database first
-      const registry = await this.findSourceRegistryByTemplateImageName(imageName, regionId, organizationId)
+      const registry = await this.findSourceRegistryBySavedImageImageName(imageName, regionId, organizationId)
       if (registry) {
         return registry
       }

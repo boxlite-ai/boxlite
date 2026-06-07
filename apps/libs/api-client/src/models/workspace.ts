@@ -54,11 +54,11 @@ export interface Workspace {
      */
     'name': string;
     /**
-     * The template used for the sandbox
+     * The savedImage used for the sandbox
      * @type {string}
      * @memberof Workspace
      */
-    'template'?: string;
+    'savedImage'?: string;
     /**
      * The user associated with the project
      * @type {string}

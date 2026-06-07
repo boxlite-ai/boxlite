@@ -67,8 +67,8 @@ export interface ApiKeyList {
 export const ApiKeyListPermissionsEnum = {
     WRITE_REGISTRIES: 'write:registries',
     DELETE_REGISTRIES: 'delete:registries',
-    WRITE_TEMPLATES: 'write:templates',
-    DELETE_TEMPLATES: 'delete:templates',
+    WRITE_SAVED_IMAGES: 'write:saved_images',
+    DELETE_SAVED_IMAGES: 'delete:saved_images',
     WRITE_SANDBOXES: 'write:sandboxes',
     DELETE_SANDBOXES: 'delete:sandboxes',
     READ_VOLUMES: 'read:volumes',

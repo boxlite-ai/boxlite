@@ -18,10 +18,10 @@ export class UpdateOrganizationQuotaDto {
   maxDiskPerSandbox?: number
 
   @ApiProperty({ nullable: true })
-  templateQuota?: number
+  savedImageQuota?: number
 
   @ApiProperty({ nullable: true })
-  maxTemplateSize?: number
+  maxSavedImageSize?: number
 
   @ApiProperty({ nullable: true })
   volumeQuota?: number
@@ -44,6 +44,6 @@ export class UpdateOrganizationQuotaDto {
   @ApiProperty({ nullable: true })
   sandboxLifecycleRateLimitTtlSeconds?: number
 
-  @ApiProperty({ nullable: true, description: 'Time in minutes before an unused template is deactivated' })
-  templateDeactivationTimeoutMinutes?: number
+  @ApiProperty({ nullable: true, description: 'Time in minutes before an unused savedImage is deactivated' })
+  savedImageDeactivationTimeoutMinutes?: number
 }

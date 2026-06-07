@@ -5,7 +5,7 @@
  */
 
 import { DEFAULT_SANDBOX_SORTING, SandboxFilters, SandboxSorting } from '@/hooks/useSandboxes'
-import { BoxTemplate } from '@/hooks/queries/useTemplatesQuery'
+import { SavedImage } from '@/hooks/queries/useSavedImagesQuery'
 import {
   ListSandboxesPaginatedOrderEnum,
   ListSandboxesPaginatedSortEnum,
@@ -21,8 +21,8 @@ export interface SandboxTableProps {
   sandboxIsLoading: Record<string, boolean>
   sandboxStateIsTransitioning: Record<string, boolean>
   loading: boolean
-  templates: BoxTemplate[]
-  templatesDataIsLoading: boolean
+  savedImages: SavedImage[]
+  savedImagesDataIsLoading: boolean
   regionsData: Region[]
   regionsDataIsLoading: boolean
   getRegionName: (regionId: string) => string | undefined
@@ -78,8 +78,8 @@ export interface SandboxTableHeaderProps {
   table: Table<Sandbox>
   regionOptions: FacetedFilterOption[]
   regionsDataIsLoading: boolean
-  templates: BoxTemplate[]
-  templatesDataIsLoading: boolean
+  savedImages: SavedImage[]
+  savedImagesDataIsLoading: boolean
   onRefresh: () => void
   isRefreshing?: boolean
 }
@@ -105,8 +105,8 @@ export const convertTableSortingToApiSorting = (sorting: SortingState): SandboxS
     case 'state':
       field = ListSandboxesPaginatedSortEnum.STATE
       break
-    case 'template':
-      field = ListSandboxesPaginatedSortEnum.TEMPLATE
+    case 'savedImage':
+      field = ListSandboxesPaginatedSortEnum.SAVED_IMAGE
       break
     case 'region':
     case 'target':
@@ -143,9 +143,9 @@ export const convertTableFiltersToApiFilters = (columnFilters: ColumnFiltersStat
           filters.states = filter.value as ListSandboxesPaginatedStatesEnum[]
         }
         break
-      case 'template':
+      case 'savedImage':
         if (Array.isArray(filter.value) && filter.value.length > 0) {
-          filters.templates = filter.value as string[]
+          filters.savedImages = filter.value as string[]
         }
         break
       case 'region':
@@ -226,8 +226,8 @@ export const convertApiSortingToTableSorting = (sorting: SandboxSorting): Sortin
     case ListSandboxesPaginatedSortEnum.STATE:
       id = 'state'
       break
-    case ListSandboxesPaginatedSortEnum.TEMPLATE:
-      id = 'template'
+    case ListSandboxesPaginatedSortEnum.SAVED_IMAGE:
+      id = 'savedImage'
       break
     case ListSandboxesPaginatedSortEnum.REGION:
       id = 'region'
@@ -255,8 +255,8 @@ export const convertApiFiltersToTableFilters = (filters: SandboxFilters): Column
     columnFilters.push({ id: 'state', value: filters.states })
   }
 
-  if (filters.templates && filters.templates.length > 0) {
-    columnFilters.push({ id: 'template', value: filters.templates })
+  if (filters.savedImages && filters.savedImages.length > 0) {
+    columnFilters.push({ id: 'savedImage', value: filters.savedImages })
   }
 
   if (filters.regions && filters.regions.length > 0) {

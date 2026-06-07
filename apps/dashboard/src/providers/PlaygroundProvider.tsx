@@ -8,7 +8,7 @@ import {
   DEFAULT_CPU_RESOURCES,
   DEFAULT_DISK_RESOURCES,
   DEFAULT_MEMORY_RESOURCES,
-  SANDBOX_TEMPLATE_DEFAULT_VALUE,
+  SANDBOX_SAVED_IMAGE_DEFAULT_VALUE,
 } from '@/constants/Playground'
 import {
   ActionRuntimeError,
@@ -36,7 +36,7 @@ import { getLanguageCodeToRun, objectHasAnyValue } from '@/lib/playground'
 import {
   CreateSandboxBaseParams,
   CreateSandboxFromImageParams,
-  CreateSandboxFromTemplateParams,
+  CreateSandboxFromSavedImageParams,
   Image,
 } from '@boxlite-ai/sdk'
 import { useCallback, useState } from 'react'
@@ -75,7 +75,7 @@ export const PlaygroundProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const clearPendingScrollSection = useCallback(() => setPendingScrollSection(null), [])
 
   const [sandboxParametersState, setSandboxParametersState] = useState<SandboxParams>({
-    templateName: SANDBOX_TEMPLATE_DEFAULT_VALUE,
+    savedImageName: SANDBOX_SAVED_IMAGE_DEFAULT_VALUE,
     resources: {
       cpu: DEFAULT_CPU_RESOURCES,
       memory: DEFAULT_MEMORY_RESOURCES,
@@ -316,24 +316,24 @@ export const PlaygroundProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       createSandboxParamsExist && sandboxParametersState['createSandboxBaseParams']['autoDeleteInterval'] !== undefined
 
     const createSandboxFromImageParams: CreateSandboxFromImageParams = { image: Image.debianSlim('3.13') } // Default and fixed image if CreateSandboxFromImageParams are used
-    const templateName = sandboxParametersState['templateName']
-    const useCustomSandboxTemplateName = templateName !== undefined && templateName !== SANDBOX_TEMPLATE_DEFAULT_VALUE
-    const createSandboxFromTemplateParams: CreateSandboxFromTemplateParams = {
-      templateId: useCustomSandboxTemplateName ? templateName : undefined,
+    const savedImageName = sandboxParametersState['savedImageName']
+    const useCustomSavedImageName = savedImageName !== undefined && savedImageName !== SANDBOX_SAVED_IMAGE_DEFAULT_VALUE
+    const createSandboxFromSavedImageParams: CreateSandboxFromSavedImageParams = {
+      savedImageId: useCustomSavedImageName ? savedImageName : undefined,
     }
-    const createSandboxFromTemplate = useCustomSandboxTemplateName || useDefaultResourceValues
+    const createSandboxFromSavedImage = useCustomSavedImageName || useDefaultResourceValues
 
     // Create from base image if default resource values are not used
-    // Template parameter has precedence over resources and createSandboxFromImage
-    const createSandboxFromImage = !useDefaultResourceValues && !useCustomSandboxTemplateName
+    // SavedImage parameter has precedence over resources and createSandboxFromImage
+    const createSandboxFromImage = !useDefaultResourceValues && !useCustomSavedImageName
 
-    // We specify resources for sandbox creation if there is any specified resource value which has value different from the default one and useCustomSandboxTemplateName is false
-    const useResources = !useCustomSandboxTemplateName && resourceValuesExist && !useDefaultResourceValues
+    // We specify resources for sandbox creation if there is any specified resource value which has value different from the default one and useCustomSavedImageName is false
+    const useResources = !useCustomSavedImageName && resourceValuesExist && !useDefaultResourceValues
     const useSandboxCreateParams =
       useLanguageParam ||
       useResources ||
       createSandboxParamsExist ||
-      useCustomSandboxTemplateName ||
+      useCustomSavedImageName ||
       createSandboxFromImage
 
     if (createSandboxFromImage) {
@@ -346,9 +346,9 @@ export const PlaygroundProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         if (useResourcesDisk) createSandboxFromImageParams.resources.disk = sandboxParametersState['resources']['disk']
       }
     }
-    let createSandboxParams: CreateSandboxBaseParams | CreateSandboxFromImageParams | CreateSandboxFromTemplateParams =
+    let createSandboxParams: CreateSandboxBaseParams | CreateSandboxFromImageParams | CreateSandboxFromSavedImageParams =
       {}
-    if (createSandboxFromTemplate) createSandboxParams = createSandboxFromTemplateParams
+    if (createSandboxFromSavedImage) createSandboxParams = createSandboxFromSavedImageParams
     else if (createSandboxFromImage) createSandboxParams = createSandboxFromImageParams
     // Set CreateSandboxBaseParams params which are common for both params types
     if (useLanguageParam) createSandboxParams.language = sandboxParametersState['language']
@@ -372,9 +372,9 @@ export const PlaygroundProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       useAutoArchiveInterval,
       useAutoDeleteInterval,
       useSandboxCreateParams,
-      useCustomSandboxTemplateName,
+      useCustomSavedImageName,
       createSandboxFromImage,
-      createSandboxFromTemplate,
+      createSandboxFromSavedImage,
       createSandboxParams,
     }
   }, [sandboxParametersState])

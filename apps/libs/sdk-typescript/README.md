@@ -91,16 +91,16 @@ const sandbox = await boxlite.create({
 })
 ```
 
-### Create a sandbox from a template
+### Create a sandbox from a savedImage
 
-Create a sandbox from a prepared template.
+Create a sandbox from a prepared savedImage.
 
 ```typescript
 import { BoxLite } from '@boxlite-ai/sdk'
 
 const boxlite = new BoxLite()
 const sandbox = await boxlite.create({
-  templateId: 'ubuntu:24.04',
+  savedImageId: 'ubuntu:24.04',
   language: 'typescript',
 })
 ```

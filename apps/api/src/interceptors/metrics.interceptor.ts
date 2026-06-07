@@ -19,8 +19,8 @@ import { SandboxDto } from '../sandbox/dto/sandbox.dto'
 import { DockerRegistryDto } from '../docker-registry/dto/docker-registry.dto'
 import { CreateSandboxDto } from '../sandbox/dto/create-sandbox.dto'
 import { Request } from 'express'
-import { CreateBoxTemplateDto } from '../sandbox/dto/create-box-template.dto'
-import { BoxTemplateDto } from '../sandbox/dto/box-template.dto'
+import { CreateSavedImageDto } from '../sandbox/dto/create-saved-image.dto'
+import { SavedImageDto } from '../sandbox/dto/saved-image.dto'
 import { CreateOrganizationDto } from '../organization/dto/create-organization.dto'
 import { UpdateOrganizationQuotaDto } from '../organization/dto/update-organization-quota.dto'
 import { OrganizationDto } from '../organization/dto/organization.dto'
@@ -135,14 +135,14 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
           case '/api/api-keys':
             this.captureCreateApiKey(props)
             break
-          case '/api/templates':
-            this.captureCreateTemplate(props, request.body, response)
+          case '/api/saved-images':
+            this.captureCreateSavedImage(props, request.body, response)
             break
-          case '/api/templates/:id/activate':
-            this.captureActivateTemplate(props, request.params.id)
+          case '/api/saved-images/:id/activate':
+            this.captureActivateSavedImage(props, request.params.id)
             break
-          case '/api/templates/:id/deactivate':
-            this.captureDeactivateTemplate(props, request.params.id)
+          case '/api/saved-images/:id/deactivate':
+            this.captureDeactivateSavedImage(props, request.params.id)
             break
           case '/api/docker-registry':
             this.captureCreateDockerRegistry(props, response)
@@ -251,8 +251,8 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
               request.params.sandboxIdOrName || request.params.workspaceId || request.params.boxId,
             )
             break
-          case '/api/templates/:id':
-            this.captureDeleteTemplate(props, request.params.id)
+          case '/api/saved-images/:id':
+            this.captureDeleteSavedImage(props, request.params.id)
             break
           case '/api/organizations/:organizationId':
             this.captureDeleteOrganization(props, request.params.organizationId)
@@ -488,36 +488,36 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
     })
   }
 
-  private captureCreateTemplate(props: CommonCaptureProps, request: CreateBoxTemplateDto, response: BoxTemplateDto) {
-    this.capture('api_template_created', props, 'api_template_creation_failed', {
-      template_id: response.id,
-      template_name: request.name,
-      template_image_name: request.imageName,
-      template_entrypoint: request.entrypoint,
-      template_cpu: request.cpu,
-      template_gpu: request.gpu,
-      template_memory: request.memory,
-      template_disk: request.disk,
-      template_is_build: request.buildInfo ? true : false,
-      template_build_info_context_hashes_length: request.buildInfo?.contextHashes?.length,
+  private captureCreateSavedImage(props: CommonCaptureProps, request: CreateSavedImageDto, response: SavedImageDto) {
+    this.capture('api_saved_image_created', props, 'api_saved_image_creation_failed', {
+      savedImage_id: response.id,
+      savedImage_name: request.name,
+      savedImage_image_name: request.imageName,
+      savedImage_entrypoint: request.entrypoint,
+      savedImage_cpu: request.cpu,
+      savedImage_gpu: request.gpu,
+      savedImage_memory: request.memory,
+      savedImage_disk: request.disk,
+      savedImage_is_build: request.buildInfo ? true : false,
+      savedImage_build_info_context_hashes_length: request.buildInfo?.contextHashes?.length,
     })
   }
 
-  private captureActivateTemplate(props: CommonCaptureProps, templateId: string) {
-    this.capture('api_template_activated', props, 'api_template_activation_failed', {
-      template_id: templateId,
+  private captureActivateSavedImage(props: CommonCaptureProps, savedImageId: string) {
+    this.capture('api_saved_image_activated', props, 'api_saved_image_activation_failed', {
+      savedImage_id: savedImageId,
     })
   }
 
-  private captureDeactivateTemplate(props: CommonCaptureProps, templateId: string) {
-    this.capture('api_template_deactivated', props, 'api_template_deactivation_failed', {
-      template_id: templateId,
+  private captureDeactivateSavedImage(props: CommonCaptureProps, savedImageId: string) {
+    this.capture('api_saved_image_deactivated', props, 'api_saved_image_deactivation_failed', {
+      savedImage_id: savedImageId,
     })
   }
 
-  private captureDeleteTemplate(props: CommonCaptureProps, templateId: string) {
-    this.capture('api_template_deleted', props, 'api_template_deletion_failed', {
-      template_id: templateId,
+  private captureDeleteSavedImage(props: CommonCaptureProps, savedImageId: string) {
+    this.capture('api_saved_image_deleted', props, 'api_saved_image_deletion_failed', {
+      savedImage_id: savedImageId,
     })
   }
 
@@ -528,8 +528,8 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
       sandbox_id: response.id,
       sandbox_name_request: request.name,
       sandbox_name: response.name,
-      sandbox_template_request: request.templateId,
-      sandbox_template: response.template,
+      saved_image_request: request.savedImageId,
+      saved_image: response.savedImage,
       sandbox_user_request: request.user,
       sandbox_user: response.user,
       sandbox_cpu_request: request.cpu,
@@ -578,8 +578,8 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
 
     const records = {
       sandbox_id: response.id,
-      sandbox_template_request: request.image,
-      sandbox_template: response.template,
+      saved_image_request: request.image,
+      saved_image: response.savedImage,
       sandbox_user_request: request.user,
       sandbox_user: response.user,
       sandbox_cpu_request: request.cpu,
@@ -758,8 +758,8 @@ export class MetricsInterceptor implements NestInterceptor, OnApplicationShutdow
       organization_max_cpu_per_sandbox: request.maxCpuPerSandbox,
       organization_max_memory_per_sandbox_mb: request.maxMemoryPerSandbox ? request.maxMemoryPerSandbox * 1024 : null,
       organization_max_disk_per_sandbox_gb: request.maxDiskPerSandbox,
-      organization_template_quota: request.templateQuota,
-      organization_max_template_size_mb: request.maxTemplateSize ? request.maxTemplateSize * 1024 : null,
+      organization_saved_image_quota: request.savedImageQuota,
+      organization_max_saved_image_size_mb: request.maxSavedImageSize ? request.maxSavedImageSize * 1024 : null,
       organization_volume_quota: request.volumeQuota,
     })
   }

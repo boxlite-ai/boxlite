@@ -59,7 +59,7 @@ export interface SandboxCodeToolbox {
  * @property {ComputerUse} computerUse - Computer use operations interface for desktop automation
  * @property {string} id - Unique identifier for the Sandbox
  * @property {string} organizationId - Organization ID of the Sandbox
- * @property {string} [template] - BoxLite template used to create the Sandbox
+ * @property {string} [savedImage] - BoxLite savedImage used to create the Sandbox
  * @property {string} user - OS user running in the Sandbox
  * @property {Record<string, string>} env - Environment variables set in the Sandbox
  * @property {Record<string, string>} labels - Custom labels attached to the Sandbox
@@ -96,7 +96,7 @@ export class Sandbox implements SandboxDto {
   public id!: string
   public name!: string
   public organizationId!: string
-  public template?: string
+  public savedImage?: string
   public user!: string
   public env!: Record<string, string>
   public labels!: Record<string, string>
@@ -714,7 +714,7 @@ export class Sandbox implements SandboxDto {
     this.id = sandboxDto.id
     this.name = sandboxDto.name
     this.organizationId = sandboxDto.organizationId
-    this.template = sandboxDto.template
+    this.savedImage = sandboxDto.savedImage
     this.user = sandboxDto.user
     this.env = sandboxDto.env
     this.labels = sandboxDto.labels

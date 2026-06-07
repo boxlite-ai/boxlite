@@ -63,7 +63,7 @@ const configuration = {
     secure: process.env.SMTP_SECURE === 'true',
     from: process.env.SMTP_EMAIL_FROM || 'noreply@mail.boxlite.io',
   },
-  defaultTemplate: process.env.DEFAULT_TEMPLATE,
+  defaultSavedImage: process.env.DEFAULT_SAVED_IMAGE,
   dashboardUrl: process.env.DASHBOARD_URL,
   // Default to empty string - dashboard will then hit '/api'
   dashboardBaseApiUrl: process.env.DASHBOARD_BASE_API_URL || '',
@@ -99,7 +99,7 @@ const configuration = {
     domain: process.env.PROXY_DOMAIN,
     protocol: process.env.PROXY_PROTOCOL,
     apiKey: process.env.PROXY_API_KEY,
-    templateUrl: process.env.PROXY_TEMPLATE_URL,
+    savedImageUrl: process.env.PROXY_SAVED_IMAGE_URL,
     toolboxUrl:
       (process.env.PROXY_TOOLBOX_BASE_URL || `${process.env.PROXY_PROTOCOL}://${process.env.PROXY_DOMAIN}`) +
       '/toolbox',
@@ -278,8 +278,8 @@ const configuration = {
     maxCpuPerSandbox: parseInt(process.env.DEFAULT_ORG_QUOTA_MAX_CPU_PER_SANDBOX || '4', 10),
     maxMemoryPerSandbox: parseInt(process.env.DEFAULT_ORG_QUOTA_MAX_MEMORY_PER_SANDBOX || '8', 10),
     maxDiskPerSandbox: parseInt(process.env.DEFAULT_ORG_QUOTA_MAX_DISK_PER_SANDBOX || '10', 10),
-    templateQuota: parseInt(process.env.DEFAULT_ORG_QUOTA_TEMPLATE_QUOTA || '100', 10),
-    maxTemplateSize: parseInt(process.env.DEFAULT_ORG_QUOTA_MAX_TEMPLATE_SIZE || '20', 10),
+    savedImageQuota: parseInt(process.env.DEFAULT_ORG_QUOTA_SAVED_IMAGE_QUOTA || '100', 10),
+    maxSavedImageSize: parseInt(process.env.DEFAULT_ORG_QUOTA_MAX_SAVED_IMAGE_SIZE || '20', 10),
     volumeQuota: parseInt(process.env.DEFAULT_ORG_QUOTA_VOLUME_QUOTA || '100', 10),
   },
   defaultRegion: {
@@ -295,8 +295,8 @@ const configuration = {
     maxCpuPerSandbox: parseInt(process.env.ADMIN_MAX_CPU_PER_SANDBOX || '0', 10),
     maxMemoryPerSandbox: parseInt(process.env.ADMIN_MAX_MEMORY_PER_SANDBOX || '0', 10),
     maxDiskPerSandbox: parseInt(process.env.ADMIN_MAX_DISK_PER_SANDBOX || '0', 10),
-    templateQuota: parseInt(process.env.ADMIN_TEMPLATE_QUOTA || '100', 10),
-    maxTemplateSize: parseInt(process.env.ADMIN_MAX_TEMPLATE_SIZE || '100', 10),
+    savedImageQuota: parseInt(process.env.ADMIN_SAVED_IMAGE_QUOTA || '100', 10),
+    maxSavedImageSize: parseInt(process.env.ADMIN_MAX_SAVED_IMAGE_SIZE || '100', 10),
     volumeQuota: parseInt(process.env.ADMIN_VOLUME_QUOTA || '0', 10),
   },
   skipUserEmailVerification: process.env.SKIP_USER_EMAIL_VERIFICATION === 'true',

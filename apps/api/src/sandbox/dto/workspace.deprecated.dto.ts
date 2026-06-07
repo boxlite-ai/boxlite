@@ -7,7 +7,7 @@
 import { ApiProperty, ApiPropertyOptional, ApiSchema } from '@nestjs/swagger'
 import { SandboxDto } from './sandbox.dto'
 import { IsEnum, IsOptional } from 'class-validator'
-import { BackupState as BoxTemplateState } from '../enums/backup-state.enum'
+import { BackupState as SavedImageState } from '../enums/backup-state.enum'
 import { Sandbox } from '../entities/sandbox.entity'
 
 @ApiSchema({ name: 'SandboxInfo' })
@@ -45,12 +45,12 @@ export class WorkspaceDto extends SandboxDto {
 
   @ApiPropertyOptional({
     description: 'The state of the snapshot',
-    enum: BoxTemplateState,
-    example: Object.values(BoxTemplateState)[0],
+    enum: SavedImageState,
+    example: Object.values(SavedImageState)[0],
     required: false,
   })
-  @IsEnum(BoxTemplateState)
-  snapshotState?: BoxTemplateState
+  @IsEnum(SavedImageState)
+  snapshotState?: SavedImageState
 
   @ApiPropertyOptional({
     description: 'The creation timestamp of the last snapshot',
@@ -80,7 +80,7 @@ export class WorkspaceDto extends SandboxDto {
   static fromSandboxDto(sandboxDto: SandboxDto): WorkspaceDto {
     return {
       ...sandboxDto,
-      image: sandboxDto.template,
+      image: sandboxDto.savedImage,
       snapshotState: sandboxDto.backupState,
       snapshotCreatedAt: sandboxDto.backupCreatedAt,
       info: {

@@ -41,7 +41,7 @@ import { RunnerStateUpdatedEvent } from '../events/runner-state-updated.event'
 import { RunnerDeletedEvent } from '../events/runner-deleted.event'
 import { generateApiKeyValue } from '../../common/utils/api-key'
 import { RunnerFullDto } from '../dto/runner-full.dto'
-import { BoxTemplate } from '../entities/box-template.entity'
+import { SavedImage } from '../entities/saved-image.entity'
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import Redis from 'ioredis'
 import { SandboxDesiredState } from '../enums/sandbox-desired-state.enum'
@@ -65,8 +65,8 @@ export class RunnerService {
     private readonly redisLockProvider: RedisLockProvider,
     private readonly configService: TypedConfigService,
     private readonly regionService: RegionService,
-    @InjectRepository(BoxTemplate)
-    private readonly boxTemplateRepository: Repository<BoxTemplate>,
+    @InjectRepository(SavedImage)
+    private readonly savedImageRepository: Repository<SavedImage>,
     @Inject(EventEmitter2)
     private eventEmitter: EventEmitter2,
     private readonly dataSource: DataSource,
@@ -864,16 +864,16 @@ export class RunnerService {
     })
   }
 
-  async getInitialRunnerByTemplateId(templateId: string): Promise<Runner> {
-    const template = await this.boxTemplateRepository.findOne({ where: { id: templateId } })
-    if (!template) {
+  async getInitialRunnerBySavedImageId(savedImageId: string): Promise<Runner> {
+    const savedImage = await this.savedImageRepository.findOne({ where: { id: savedImageId } })
+    if (!savedImage) {
       throw new NotFoundException('Runner artifact cache not found')
     }
-    if (!template.initialRunnerId) {
+    if (!savedImage.initialRunnerId) {
       throw new BadRequestException('Initial runner not found')
     }
 
-    return await this.findOneOrFail(template.initialRunnerId)
+    return await this.findOneOrFail(savedImage.initialRunnerId)
   }
 
   async getRunnerApiVersion(runnerId: string): Promise<string> {

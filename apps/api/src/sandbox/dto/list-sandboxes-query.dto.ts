@@ -16,7 +16,7 @@ export enum SandboxSortField {
   ID = 'id',
   NAME = 'name',
   STATE = 'state',
-  TEMPLATE = 'template',
+  SAVED_IMAGE = 'savedImage',
   REGION = 'region',
   UPDATED_AT = 'updatedAt',
   CREATED_AT = 'createdAt',
@@ -102,8 +102,8 @@ export class ListSandboxesQueryDto {
   states?: SandboxState[]
 
   @ApiProperty({
-    name: 'templates',
-    description: 'List of template names to filter by',
+    name: 'saved-images',
+    description: 'List of saved image names to filter by',
     required: false,
     type: [String],
   })
@@ -111,7 +111,7 @@ export class ListSandboxesQueryDto {
   @ToArray()
   @IsArray()
   @IsString({ each: true })
-  templates?: string[]
+  savedImages?: string[]
 
   @ApiProperty({
     name: 'regions',

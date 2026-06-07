@@ -26,7 +26,7 @@ import { BOXLITE_DOCS_URL } from '@/constants/ExternalLinks'
 import { DEFAULT_PAGE_SIZE } from '@/constants/Pagination'
 import { LocalStorageKey } from '@/enums/LocalStorageKey'
 import { RoutePath } from '@/enums/RoutePath'
-import { TemplateQueryParams, useTemplatesPageQuery } from '@/hooks/queries/useTemplatesPageQuery'
+import { SavedImageQueryParams, useSavedImagesPageQuery } from '@/hooks/queries/useSavedImagesPageQuery'
 import { CopyableValue } from '@/components/ui/copyable-value'
 import { useApi } from '@/hooks/useApi'
 import { useConfig } from '@/hooks/useConfig'
@@ -275,7 +275,7 @@ const Sandboxes: React.FC = () => {
 
   // Image Filter
 
-  const templatesQueryParams = useMemo<TemplateQueryParams>(
+  const savedImagesQueryParams = useMemo<SavedImageQueryParams>(
     () => ({
       page: 1,
       pageSize: 100,
@@ -284,16 +284,16 @@ const Sandboxes: React.FC = () => {
   )
 
   const {
-    data: templatesData,
-    isLoading: templatesDataIsLoading,
-    error: templatesDataError,
-  } = useTemplatesPageQuery(templatesQueryParams)
+    data: savedImagesData,
+    isLoading: savedImagesDataIsLoading,
+    error: savedImagesDataError,
+  } = useSavedImagesPageQuery(savedImagesQueryParams)
 
   useEffect(() => {
-    if (templatesDataError) {
-      handleApiError(templatesDataError, 'Failed to fetch images')
+    if (savedImagesDataError) {
+      handleApiError(savedImagesDataError, 'Failed to fetch images')
     }
-  }, [templatesDataError])
+  }, [savedImagesDataError])
 
   // Region Filter
 
@@ -953,8 +953,8 @@ const Sandboxes: React.FC = () => {
           isRefreshing={sandboxDataIsRefreshing}
           data={sandboxesData?.items || []}
           loading={sandboxesDataIsLoading}
-          templates={templatesData?.items || []}
-          templatesDataIsLoading={templatesDataIsLoading}
+          savedImages={savedImagesData?.items || []}
+          savedImagesDataIsLoading={savedImagesDataIsLoading}
           regionsData={regionsData || []}
           regionsDataIsLoading={regionsDataIsLoading}
           onRowClick={(sandbox: Sandbox) => {

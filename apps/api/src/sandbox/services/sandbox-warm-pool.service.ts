@@ -17,8 +17,8 @@ import { EventEmitter2, OnEvent } from '@nestjs/event-emitter'
 import { SandboxEvents } from '../constants/sandbox-events.constants'
 import { SandboxOrganizationUpdatedEvent } from '../events/sandbox-organization-updated.event'
 import { ConfigService } from '@nestjs/config'
-import { BoxTemplate } from '../entities/box-template.entity'
-import { BoxTemplateState } from '../enums/box-template-state.enum'
+import { SavedImage } from '../entities/saved-image.entity'
+import { SavedImageState } from '../enums/saved-image-state.enum'
 import { SandboxClass } from '../enums/sandbox-class.enum'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { SandboxState } from '../enums/sandbox-state.enum'
@@ -33,7 +33,7 @@ import { LogExecution } from '../../common/decorators/log-execution.decorator'
 import { WithInstrumentation } from '../../common/decorators/otel.decorator'
 
 export type FetchWarmPoolSandboxParams = {
-  template: string | BoxTemplate
+  savedImage: string | SavedImage
   target: string
   class: SandboxClass
   cpu: number
@@ -54,8 +54,8 @@ export class SandboxWarmPoolService {
     @InjectRepository(WarmPool)
     private readonly warmPoolRepository: Repository<WarmPool>,
     private readonly sandboxRepository: SandboxRepository,
-    @InjectRepository(BoxTemplate)
-    private readonly boxTemplateRepository: Repository<BoxTemplate>,
+    @InjectRepository(SavedImage)
+    private readonly savedImageRepository: Repository<SavedImage>,
     @InjectRepository(Runner)
     private readonly runnerRepository: Repository<Runner>,
     private readonly redisLockProvider: RedisLockProvider,
@@ -71,39 +71,39 @@ export class SandboxWarmPoolService {
   }
 
   async fetchWarmPoolSandbox(params: FetchWarmPoolSandboxParams): Promise<Sandbox | null> {
-    //  validate template
-    let template: BoxTemplate | null = null
-    if (typeof params.template === 'string') {
-      const sandboxTemplate = params.template || this.configService.get<string>('defaultTemplate')
+    //  validate savedImage
+    let savedImage: SavedImage | null = null
+    if (typeof params.savedImage === 'string') {
+      const savedImageName = params.savedImage || this.configService.get<string>('defaultSavedImage')
 
-      const templateFilter: FindOptionsWhere<BoxTemplate>[] = [
-        { organizationId: params.organizationId, name: sandboxTemplate, state: BoxTemplateState.ACTIVE },
-        { general: true, name: sandboxTemplate, state: BoxTemplateState.ACTIVE },
+      const savedImageFilter: FindOptionsWhere<SavedImage>[] = [
+        { organizationId: params.organizationId, name: savedImageName, state: SavedImageState.ACTIVE },
+        { general: true, name: savedImageName, state: SavedImageState.ACTIVE },
       ]
 
-      if (isValidUuid(sandboxTemplate)) {
-        templateFilter.push(
-          { organizationId: params.organizationId, id: sandboxTemplate, state: BoxTemplateState.ACTIVE },
-          { general: true, id: sandboxTemplate, state: BoxTemplateState.ACTIVE },
+      if (isValidUuid(savedImageName)) {
+        savedImageFilter.push(
+          { organizationId: params.organizationId, id: savedImageName, state: SavedImageState.ACTIVE },
+          { general: true, id: savedImageName, state: SavedImageState.ACTIVE },
         )
       }
 
-      template = await this.boxTemplateRepository.findOne({
-        where: templateFilter,
+      savedImage = await this.savedImageRepository.findOne({
+        where: savedImageFilter,
       })
-      if (!template) {
+      if (!savedImage) {
         throw new BadRequestError(
-          `BoxTemplate ${sandboxTemplate} not found. Did you add it through the BoxLite Dashboard?`,
+          `SavedImage ${savedImageName} not found. Did you add it through the BoxLite Dashboard?`,
         )
       }
     } else {
-      template = params.template
+      savedImage = params.savedImage
     }
 
     //  check if sandbox is warm pool
     const warmPoolItem = await this.warmPoolRepository.findOne({
       where: {
-        template: template.name,
+        savedImage: savedImage.name,
         target: params.target,
         class: params.class,
         cpu: params.cpu,
@@ -131,7 +131,7 @@ export class SandboxWarmPoolService {
         .andWhere('sandbox.cpu = :cpu', { cpu: warmPoolItem.cpu })
         .andWhere('sandbox.mem = :mem', { mem: warmPoolItem.mem })
         .andWhere('sandbox.disk = :disk', { disk: warmPoolItem.disk })
-        .andWhere('sandbox.template = :template', { template: template.name })
+        .andWhere('sandbox.savedImage = :savedImage', { savedImage: savedImage.name })
         .andWhere('sandbox.osUser = :osUser', { osUser: warmPoolItem.osUser })
         .andWhere('sandbox.env = :env', { env: warmPoolItem.env })
         .andWhere('sandbox.organizationId = :organizationId', {
@@ -163,8 +163,8 @@ export class SandboxWarmPoolService {
       return warmPoolSandbox
     }
 
-    //  no warm pool config exists for this template — cache it so callers can skip
-    await this.redis.set(`warm-pool:skip:${template.id}`, '1', 'EX', 60)
+    //  no warm pool config exists for this savedImage — cache it so callers can skip
+    await this.redis.set(`warm-pool:skip:${savedImage.id}`, '1', 'EX', 60)
 
     return null
   }
@@ -185,7 +185,7 @@ export class SandboxWarmPoolService {
 
         const sandboxCount = await this.sandboxRepository.count({
           where: {
-            template: warmPoolItem.template,
+            savedImage: warmPoolItem.savedImage,
             organizationId: SANDBOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
             class: warmPoolItem.class,
             osUser: warmPoolItem.osUser,
@@ -227,7 +227,7 @@ export class SandboxWarmPoolService {
     }
     const warmPoolItem = await this.warmPoolRepository.findOne({
       where: {
-        template: event.sandbox.template,
+        savedImage: event.sandbox.savedImage,
         class: event.sandbox.class,
         cpu: event.sandbox.cpu,
         mem: event.sandbox.mem,
@@ -245,7 +245,7 @@ export class SandboxWarmPoolService {
 
     const sandboxCount = await this.sandboxRepository.count({
       where: {
-        template: warmPoolItem.template,
+        savedImage: warmPoolItem.savedImage,
         organizationId: SANDBOX_WARM_POOL_UNASSIGNED_ORGANIZATION,
         class: warmPoolItem.class,
         osUser: warmPoolItem.osUser,

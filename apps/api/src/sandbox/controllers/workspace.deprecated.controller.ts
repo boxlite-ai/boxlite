@@ -168,10 +168,10 @@ export class WorkspaceController {
     const organization = authContext.organization
 
     const workspace = WorkspaceDto.fromSandboxDto(
-      await this.workspaceService.createFromTemplate(
+      await this.workspaceService.createFromSavedImage(
         {
           ...createWorkspaceDto,
-          templateId: createWorkspaceDto.image,
+          savedImageId: createWorkspaceDto.image,
         },
         organization,
       ),

@@ -420,7 +420,7 @@ export class RunnerAdapterV0 implements RunnerAdapter {
   async recoverSandbox(sandbox: Sandbox): Promise<void> {
     const recoverSandboxDTO: RecoverSandboxDTO = {
       userId: sandbox.organizationId,
-      snapshot: sandbox.template,
+      snapshot: sandbox.savedImage,
       osUser: sandbox.osUser,
       cpuQuota: sandbox.cpu,
       gpuQuota: sandbox.gpu,

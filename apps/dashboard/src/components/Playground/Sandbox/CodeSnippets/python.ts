@@ -13,8 +13,8 @@ export const PythonSnippetGenerator: CodeSnippetGenerator = {
         'from boxlite import BoxLite as BoxLite',
         p.actions.useConfigObject ? 'BoxliteConfig as BoxLiteConfig' : '',
         p.config.useSandboxCreateParams
-          ? p.config.createSandboxFromTemplate
-            ? 'CreateSandboxFromTemplateParams'
+          ? p.config.createSandboxFromSavedImage
+            ? 'CreateSandboxFromSavedImageParams'
             : 'CreateSandboxFromImageParams'
           : '',
         p.config.useResources ? 'Resources' : '',
@@ -60,8 +60,8 @@ export const PythonSnippetGenerator: CodeSnippetGenerator = {
     if (!p.config.useSandboxCreateParams) return ''
     const ind = '\t'
     return [
-      `\n\nparams = ${p.config.createSandboxFromTemplate ? 'CreateSandboxFromTemplateParams' : 'CreateSandboxFromImageParams'}(`,
-      p.config.useCustomSandboxTemplateName ? `${ind}template_id="${p.state['templateName']}",` : '',
+      `\n\nparams = ${p.config.createSandboxFromSavedImage ? 'CreateSandboxFromSavedImageParams' : 'CreateSandboxFromImageParams'}(`,
+      p.config.useCustomSavedImageName ? `${ind}savedImage_id="${p.state['savedImageName']}",` : '',
       p.config.createSandboxFromImage ? `${ind}image=Image.debian_slim("3.13"),` : '',
       p.config.useResources ? `${ind}resources=resources,` : '',
       p.config.useLanguageParam ? `${ind}language="${p.state['language']}",` : '',

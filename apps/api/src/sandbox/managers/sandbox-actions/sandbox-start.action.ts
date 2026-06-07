@@ -15,13 +15,13 @@ import { RunnerArtifactCacheState } from '../../enums/runner-artifact-cache-stat
 import { BackupState } from '../../enums/backup-state.enum'
 import { RunnerState } from '../../enums/runner-state.enum'
 import { BuildInfo } from '../../entities/build-info.entity'
-import { BoxTemplateService } from '../../services/box-template.service'
+import { SavedImageService } from '../../services/saved-image.service'
 import { DockerRegistryService } from '../../../docker-registry/services/docker-registry.service'
 import { DockerRegistry } from '../../../docker-registry/entities/docker-registry.entity'
 import { RunnerService } from '../../services/runner.service'
 import { RunnerAdapterFactory } from '../../runner-adapter/runnerAdapter'
 import { RuntimeArtifactStateError } from '../../errors/runtime-artifact-state-error'
-import { BoxTemplate } from '../../entities/box-template.entity'
+import { SavedImage } from '../../entities/saved-image.entity'
 import { OrganizationService } from '../../../organization/services/organization.service'
 import { TypedConfigService } from '../../../config/typed-config.service'
 import { Runner } from '../../entities/runner.entity'
@@ -39,7 +39,7 @@ export class SandboxStartAction extends SandboxAction {
     protected runnerService: RunnerService,
     protected runnerAdapterFactory: RunnerAdapterFactory,
     protected sandboxRepository: SandboxRepository,
-    protected readonly boxTemplateService: BoxTemplateService,
+    protected readonly savedImageService: SavedImageService,
     protected readonly dockerRegistryService: DockerRegistryService,
     protected readonly organizationService: OrganizationService,
     protected readonly configService: TypedConfigService,
@@ -55,7 +55,7 @@ export class SandboxStartAction extends SandboxAction {
     // Load buildInfo only for states that need it — avoids a JOIN+DISTINCT in the
     // shared syncInstanceState query that stop/destroy/archive paths never use.
     if (
-      sandbox.template === null &&
+      sandbox.savedImage === null &&
       [SandboxState.PENDING_BUILD, SandboxState.BUILDING_ARTIFACT, SandboxState.UNKNOWN].includes(sandbox.state)
     ) {
       await this.loadBuildInfo(sandbox)
@@ -74,7 +74,7 @@ export class SandboxStartAction extends SandboxAction {
         return this.handleUnassignedRunnerSandbox(sandbox, lockCode, true)
       }
       case SandboxState.BUILDING_ARTIFACT: {
-        return this.handleRunnerSandboxBuildingBoxTemplateStateOnDesiredStateStart(sandbox, lockCode)
+        return this.handleRunnerSandboxBuildingSavedImageStateOnDesiredStateStart(sandbox, lockCode)
       }
       case SandboxState.UNKNOWN: {
         return this.handleRunnerSandboxUnknownStateOnDesiredStateStart(sandbox, lockCode)
@@ -114,7 +114,7 @@ export class SandboxStartAction extends SandboxAction {
     sandbox.buildInfo = result?.buildInfo ?? null
   }
 
-  private async handleRunnerSandboxBuildingBoxTemplateStateOnDesiredStateStart(
+  private async handleRunnerSandboxBuildingSavedImageStateOnDesiredStateStart(
     sandbox: Sandbox,
     lockCode: LockCode,
   ): Promise<SyncState> {
@@ -176,8 +176,8 @@ export class SandboxStartAction extends SandboxAction {
     if (isBuild) {
       artifactRef = sandbox.buildInfo.artifactRef
     } else {
-      const template = await this.boxTemplateService.getBoxTemplateByName(sandbox.template, sandbox.organizationId)
-      artifactRef = template.artifactRef
+      const savedImage = await this.savedImageService.getSavedImageByName(sandbox.savedImage, sandbox.organizationId)
+      artifactRef = savedImage.artifactRef
     }
 
     const declarativeBuildScoreThreshold = this.configService.get('runnerScore.thresholds.declarativeBuild')
@@ -257,22 +257,22 @@ export class SandboxStartAction extends SandboxAction {
       this.buildOnRunner(sandbox.buildInfo, runner, sandbox.organizationId)
       await this.updateSandboxState(sandbox, SandboxState.BUILDING_ARTIFACT, lockCode, runner.id)
     } else {
-      const template = await this.boxTemplateService.getBoxTemplateByName(sandbox.template, sandbox.organizationId)
+      const savedImage = await this.savedImageService.getSavedImageByName(sandbox.savedImage, sandbox.organizationId)
       await this.runnerService.createRunnerArtifactCacheEntry(
         runner.id,
-        template.artifactRef,
+        savedImage.artifactRef,
         RunnerArtifactCacheState.PULLING_ARTIFACT,
       )
-      this.pullTemplateArtifactToRunner(template, runner)
+      this.pullSavedImageArtifactToRunner(savedImage, runner)
       await this.updateSandboxState(sandbox, SandboxState.PULLING_ARTIFACT, lockCode, runner.id)
     }
 
     return SYNC_AGAIN
   }
 
-  async pullTemplateArtifactToRunner(template: BoxTemplate, runner: Runner) {
+  async pullSavedImageArtifactToRunner(savedImage: SavedImage, runner: Runner) {
     const internalRegistry = await this.dockerRegistryService.findInternalRegistryByArtifactRef(
-      template.artifactRef,
+      savedImage.artifactRef,
       runner.region,
     )
     if (!internalRegistry) {
@@ -282,7 +282,7 @@ export class SandboxStartAction extends SandboxAction {
     const runnerAdapter = await this.runnerAdapterFactory.create(runner)
 
     // Fire the pull request (runner returns 202 immediately)
-    await runnerAdapter.pullArtifact(template.artifactRef, internalRegistry)
+    await runnerAdapter.pullArtifact(savedImage.artifactRef, internalRegistry)
 
     const pollTimeoutMs = 60 * 60 * 1_000 // 1 hour
     const pollIntervalMs = 5 * 1_000 // 5 seconds
@@ -290,7 +290,7 @@ export class SandboxStartAction extends SandboxAction {
 
     while (Date.now() - startTime < pollTimeoutMs) {
       try {
-        await runnerAdapter.getArtifactInfo(template.artifactRef)
+        await runnerAdapter.getArtifactInfo(savedImage.artifactRef)
         return
       } catch (err) {
         if (err instanceof RuntimeArtifactStateError) {
@@ -375,18 +375,18 @@ export class SandboxStartAction extends SandboxAction {
     let entrypoint: string[]
     let artifactRef: string
     if (!sandbox.buildInfo) {
-      const template = await this.boxTemplateService.getBoxTemplateByName(sandbox.template, sandbox.organizationId)
-      artifactRef = template.artifactRef
+      const savedImage = await this.savedImageService.getSavedImageByName(sandbox.savedImage, sandbox.organizationId)
+      artifactRef = savedImage.artifactRef
 
       internalRegistry = await this.dockerRegistryService.findInternalRegistryByArtifactRef(artifactRef, runner.region)
       if (!internalRegistry) {
         throw new Error('No registry found for artifact')
       }
 
-      entrypoint = template.entrypoint
+      entrypoint = savedImage.entrypoint
     } else {
       artifactRef = sandbox.buildInfo.artifactRef
-      entrypoint = this.boxTemplateService.getEntrypointFromDockerfile(sandbox.buildInfo.dockerfileContent)
+      entrypoint = this.savedImageService.getEntrypointFromDockerfile(sandbox.buildInfo.dockerfileContent)
     }
 
     const metadata = {
@@ -700,14 +700,14 @@ export class SandboxStartAction extends SandboxAction {
       throw new Error('No registry found for backup')
     }
 
-    //  make sure we pick a runner that has the base template artifact
-    let baseTemplate: BoxTemplate | null = null
-    if (sandbox.template) {
+    //  make sure we pick a runner that has the base saved image artifact
+    let baseSavedImage: SavedImage | null = null
+    if (sandbox.savedImage) {
       try {
-        baseTemplate = await this.boxTemplateService.getBoxTemplateByName(sandbox.template, sandbox.organizationId)
+        baseSavedImage = await this.savedImageService.getSavedImageByName(sandbox.savedImage, sandbox.organizationId)
       } catch (e) {
         if (e instanceof NotFoundException) {
-          //  if the base template is not found, we'll use any available runner later
+          //  if the base savedImage is not found, we'll use any available runner later
         } else {
           if (isRecovery) {
             return SYNC_AGAIN
@@ -718,7 +718,7 @@ export class SandboxStartAction extends SandboxAction {
       }
     }
 
-    const artifactRef = baseTemplate ? baseTemplate.artifactRef : null
+    const artifactRef = baseSavedImage ? baseSavedImage.artifactRef : null
 
     let availableRunners: Runner[] = []
 

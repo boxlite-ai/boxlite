@@ -61,13 +61,13 @@ export interface CreateOrganizationQuota {
      * @type {number}
      * @memberof CreateOrganizationQuota
      */
-    'templateQuota'?: number;
+    'savedImageQuota'?: number;
     /**
      *
      * @type {number}
      * @memberof CreateOrganizationQuota
      */
-    'maxTemplateSize'?: number;
+    'maxSavedImageSize'?: number;
     /**
      *
      * @type {number}

@@ -11,9 +11,9 @@ import { createAdapter } from '@socket.io/redis-adapter'
 import { SandboxEvents } from '../../sandbox/constants/sandbox-events.constants'
 import { SandboxState } from '../../sandbox/enums/sandbox-state.enum'
 import { SandboxDto } from '../../sandbox/dto/sandbox.dto'
-import { BoxTemplateDto } from '../../sandbox/dto/box-template.dto'
-import { BoxTemplateEvents } from '../../sandbox/constants/box-template-events'
-import { BoxTemplateState } from '../../sandbox/enums/box-template-state.enum'
+import { SavedImageDto } from '../../sandbox/dto/saved-image.dto'
+import { SavedImageEvents } from '../../sandbox/constants/saved-image-events'
+import { SavedImageState } from '../../sandbox/enums/saved-image-state.enum'
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import Redis from 'ioredis'
 import { JwtStrategy } from '../../auth/jwt.strategy'
@@ -121,16 +121,16 @@ export class NotificationGateway extends NotificationEmitter implements OnGatewa
       .emit(SandboxEvents.DESIRED_STATE_UPDATED, { sandbox, oldDesiredState, newDesiredState })
   }
 
-  emitTemplateCreated(template: BoxTemplateDto) {
-    this.server.to(template.organizationId).emit(BoxTemplateEvents.CREATED, template)
+  emitSavedImageCreated(savedImage: SavedImageDto) {
+    this.server.to(savedImage.organizationId).emit(SavedImageEvents.CREATED, savedImage)
   }
 
-  emitBoxTemplateStateUpdated(template: BoxTemplateDto, oldState: BoxTemplateState, newState: BoxTemplateState) {
-    this.server.to(template.organizationId).emit(BoxTemplateEvents.STATE_UPDATED, { template, oldState, newState })
+  emitSavedImageStateUpdated(savedImage: SavedImageDto, oldState: SavedImageState, newState: SavedImageState) {
+    this.server.to(savedImage.organizationId).emit(SavedImageEvents.STATE_UPDATED, { savedImage, oldState, newState })
   }
 
-  emitTemplateRemoved(template: BoxTemplateDto) {
-    this.server.to(template.organizationId).emit(BoxTemplateEvents.REMOVED, template)
+  emitSavedImageRemoved(savedImage: SavedImageDto) {
+    this.server.to(savedImage.organizationId).emit(SavedImageEvents.REMOVED, savedImage)
   }
 
   emitVolumeCreated(volume: VolumeDto) {

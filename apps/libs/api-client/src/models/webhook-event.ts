@@ -23,9 +23,9 @@
 export const WebhookEvent = {
     SANDBOX_CREATED: 'sandbox.created',
     SANDBOX_STATE_UPDATED: 'sandbox.state.updated',
-    TEMPLATE_CREATED: 'template.created',
-    TEMPLATE_STATE_UPDATED: 'template.state.updated',
-    TEMPLATE_REMOVED: 'template.removed',
+    SAVED_IMAGE_CREATED: 'savedImage.created',
+    SAVED_IMAGE_STATE_UPDATED: 'savedImage.state.updated',
+    SAVED_IMAGE_REMOVED: 'savedImage.removed',
     VOLUME_CREATED: 'volume.created',
     VOLUME_STATE_UPDATED: 'volume.state.updated'
 } as const;

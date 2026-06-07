@@ -11,7 +11,7 @@ import { OrganizationService } from './organization/services/organization.servic
 import { UserService } from './user/user.service'
 import { ApiKeyService } from './api-key/api-key.service'
 import { EventEmitterReadinessWatcher } from '@nestjs/event-emitter'
-import { BoxTemplateService } from './sandbox/services/box-template.service'
+import { SavedImageService } from './sandbox/services/saved-image.service'
 import { SystemRole } from './user/enums/system-role.enum'
 import { TypedConfigService } from './config/typed-config.service'
 import { SchedulerRegistry } from '@nestjs/schedule'
@@ -20,7 +20,7 @@ import { RunnerService } from './sandbox/services/runner.service'
 import { RunnerAdapterFactory } from './sandbox/runner-adapter/runnerAdapter'
 import { RegionType } from './region/enums/region-type.enum'
 import { RunnerState } from './sandbox/enums/runner-state.enum'
-import { SYSTEM_TEMPLATES } from './sandbox/constants/system-templates'
+import { SYSTEM_SAVED_IMAGES } from './sandbox/constants/system-saved-images'
 
 export const BOXLITE_ADMIN_USER_ID = 'boxlite-admin'
 
@@ -35,7 +35,7 @@ export class AppService implements OnApplicationBootstrap, OnApplicationShutdown
     private readonly organizationService: OrganizationService,
     private readonly apiKeyService: ApiKeyService,
     private readonly eventEmitterReadinessWatcher: EventEmitterReadinessWatcher,
-    private readonly boxTemplateService: BoxTemplateService,
+    private readonly savedImageService: SavedImageService,
     private readonly schedulerRegistry: SchedulerRegistry,
     private readonly regionService: RegionService,
     private readonly runnerService: RunnerService,
@@ -63,7 +63,7 @@ export class AppService implements OnApplicationBootstrap, OnApplicationShutdown
 
     // Default runner init is not awaited because v2 runners depend on the API to be ready
     this.initializeDefaultRunner()
-      .then(() => this.initializeSystemTemplates())
+      .then(() => this.initializeSystemSavedImages())
       .catch((error) => {
         this.logger.error('Error initializing default runner', error)
       })
@@ -182,8 +182,8 @@ export class AppService implements OnApplicationBootstrap, OnApplicationShutdown
         maxCpuPerSandbox: this.configService.getOrThrow('admin.maxCpuPerSandbox'),
         maxMemoryPerSandbox: this.configService.getOrThrow('admin.maxMemoryPerSandbox'),
         maxDiskPerSandbox: this.configService.getOrThrow('admin.maxDiskPerSandbox'),
-        templateQuota: this.configService.getOrThrow('admin.templateQuota'),
-        maxTemplateSize: this.configService.getOrThrow('admin.maxTemplateSize'),
+        savedImageQuota: this.configService.getOrThrow('admin.savedImageQuota'),
+        maxSavedImageSize: this.configService.getOrThrow('admin.maxSavedImageSize'),
         volumeQuota: this.configService.getOrThrow('admin.volumeQuota'),
       },
       personalOrganizationDefaultRegionId: this.configService.getOrThrow('defaultRegion.id'),
@@ -311,19 +311,19 @@ Admin user created with API key: ${value}
     this.logger.log('Default backup registry initialized successfully')
   }
 
-  private async initializeSystemTemplates(): Promise<void> {
+  private async initializeSystemSavedImages(): Promise<void> {
     const adminPersonalOrg = await this.organizationService.findPersonal(BOXLITE_ADMIN_USER_ID)
 
-    const defaultTemplate = this.configService.getOrThrow('defaultTemplate')
-    if (!SYSTEM_TEMPLATES.some((template) => template.name === defaultTemplate)) {
-      this.logger.warn(`Configured default template ${defaultTemplate} is not in the MVP system template list`)
+    const defaultSavedImage = this.configService.getOrThrow('defaultSavedImage')
+    if (!SYSTEM_SAVED_IMAGES.some((savedImage) => savedImage.name === defaultSavedImage)) {
+      this.logger.warn(`Configured default savedImage ${defaultSavedImage} is not in the MVP system savedImage list`)
     }
 
-    for (const template of SYSTEM_TEMPLATES) {
-      this.logger.log(`Ensuring system template: ${template.name}`)
-      await this.boxTemplateService.ensureSystemTemplate(adminPersonalOrg, template)
+    for (const savedImage of SYSTEM_SAVED_IMAGES) {
+      this.logger.log(`Ensuring system savedImage: ${savedImage.name}`)
+      await this.savedImageService.ensureSystemSavedImage(adminPersonalOrg, savedImage)
     }
 
-    this.logger.log('System templates initialized successfully')
+    this.logger.log('System savedImages initialized successfully')
   }
 }

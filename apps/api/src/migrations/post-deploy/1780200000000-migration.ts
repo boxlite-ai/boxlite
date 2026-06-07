@@ -12,35 +12,56 @@ export class Migration1780200000000 implements MigrationInterface {
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`DROP INDEX IF EXISTS "public"."snapshot_name_idx"`)
     await queryRunner.query(`DROP INDEX IF EXISTS "public"."snapshot_state_idx"`)
+    await queryRunner.query(`DROP INDEX IF EXISTS "public"."box_template_name_idx"`)
+    await queryRunner.query(`DROP INDEX IF EXISTS "public"."box_template_state_idx"`)
     await queryRunner.query(`DROP INDEX IF EXISTS "public"."snapshot_runner_snapshotref_idx"`)
     await queryRunner.query(`DROP INDEX IF EXISTS "public"."snapshot_runner_runnerid_snapshotref_idx"`)
     await queryRunner.query(`DROP INDEX IF EXISTS "public"."snapshot_runner_runnerid_idx"`)
     await queryRunner.query(`DROP INDEX IF EXISTS "public"."snapshot_runner_state_idx"`)
     await queryRunner.query(`DROP INDEX IF EXISTS "public"."sandbox_snapshot_idx"`)
+    await queryRunner.query(`DROP INDEX IF EXISTS "public"."sandbox_template_idx"`)
     await queryRunner.query(`DROP INDEX IF EXISTS "public"."warm_pool_find_idx"`)
 
     await this.renameColumnIfExists(queryRunner, 'snapshot', 'ref', 'artifactRef')
     await this.renameColumnIfExists(queryRunner, 'snapshot', 'buildInfoSnapshotRef', 'buildInfoArtifactRef')
-    await this.renameTableIfExists(queryRunner, 'snapshot', 'box_template')
-    await this.renameTableIfExists(queryRunner, 'snapshot_region', 'box_template_region')
-    await this.renameColumnIfExists(queryRunner, 'box_template_region', 'snapshotId', 'templateId')
-    await this.renameEnumTypeForColumn(queryRunner, 'box_template', 'state', 'box_template_state_enum')
+    await this.renameTableIfExists(queryRunner, 'snapshot', 'saved_image')
+    await this.renameTableIfExists(queryRunner, 'box_template', 'saved_image')
+    await this.renameTableIfExists(queryRunner, 'snapshot_region', 'saved_image_region')
+    await this.renameTableIfExists(queryRunner, 'box_template_region', 'saved_image_region')
+    await this.renameColumnIfExists(queryRunner, 'saved_image_region', 'snapshotId', 'savedImageId')
+    await this.renameColumnIfExists(queryRunner, 'saved_image_region', 'templateId', 'savedImageId')
+    await this.renameEnumTypeForColumn(queryRunner, 'saved_image', 'state', 'saved_image_state_enum')
 
     await this.renameColumnIfExists(queryRunner, 'build_info', 'snapshotRef', 'artifactRef')
     await this.renameColumnIfExists(queryRunner, 'sandbox', 'buildInfoSnapshotRef', 'buildInfoArtifactRef')
-    await this.renameColumnIfExists(queryRunner, 'sandbox', 'snapshot', 'template')
-    await this.renameColumnIfExists(queryRunner, 'warm_pool', 'snapshot', 'template')
+    await this.renameColumnIfExists(queryRunner, 'sandbox', 'snapshot', 'savedImage')
+    await this.renameColumnIfExists(queryRunner, 'sandbox', 'template', 'savedImage')
+    await this.renameColumnIfExists(queryRunner, 'warm_pool', 'snapshot', 'savedImage')
+    await this.renameColumnIfExists(queryRunner, 'warm_pool', 'template', 'savedImage')
     if (await queryRunner.hasColumn('organization', 'max_snapshot_size')) {
-      await queryRunner.renameColumn('organization', 'max_snapshot_size', 'max_template_size')
+      await queryRunner.renameColumn('organization', 'max_snapshot_size', 'max_saved_image_size')
+    }
+    if (await queryRunner.hasColumn('organization', 'max_template_size')) {
+      await queryRunner.renameColumn('organization', 'max_template_size', 'max_saved_image_size')
     }
     if (await queryRunner.hasColumn('organization', 'snapshot_quota')) {
-      await queryRunner.renameColumn('organization', 'snapshot_quota', 'template_quota')
+      await queryRunner.renameColumn('organization', 'snapshot_quota', 'saved_image_quota')
+    }
+    if (await queryRunner.hasColumn('organization', 'template_quota')) {
+      await queryRunner.renameColumn('organization', 'template_quota', 'saved_image_quota')
     }
     if (await queryRunner.hasColumn('organization', 'snapshot_deactivation_timeout_minutes')) {
       await queryRunner.renameColumn(
         'organization',
         'snapshot_deactivation_timeout_minutes',
+        'saved_image_deactivation_timeout_minutes',
+      )
+    }
+    if (await queryRunner.hasColumn('organization', 'template_deactivation_timeout_minutes')) {
+      await queryRunner.renameColumn(
+        'organization',
         'template_deactivation_timeout_minutes',
+        'saved_image_deactivation_timeout_minutes',
       )
     }
     if (await queryRunner.hasColumn('region', 'snapshotManagerUrl')) {
@@ -78,20 +99,34 @@ export class Migration1780200000000 implements MigrationInterface {
       queryRunner,
       'organization_role_permissions_enum',
       'write:snapshots',
+      'write:saved_images',
+    )
+    await this.renameEnumValueIfExists(
+      queryRunner,
+      'organization_role_permissions_enum',
       'write:templates',
+      'write:saved_images',
     )
     await this.renameEnumValueIfExists(
       queryRunner,
       'organization_role_permissions_enum',
       'delete:snapshots',
-      'delete:templates',
+      'delete:saved_images',
     )
-    await this.renameEnumValueIfExists(queryRunner, 'api_key_permissions_enum', 'write:snapshots', 'write:templates')
-    await this.renameEnumValueIfExists(queryRunner, 'api_key_permissions_enum', 'delete:snapshots', 'delete:templates')
+    await this.renameEnumValueIfExists(
+      queryRunner,
+      'organization_role_permissions_enum',
+      'delete:templates',
+      'delete:saved_images',
+    )
+    await this.renameEnumValueIfExists(queryRunner, 'api_key_permissions_enum', 'write:snapshots', 'write:saved_images')
+    await this.renameEnumValueIfExists(queryRunner, 'api_key_permissions_enum', 'write:templates', 'write:saved_images')
+    await this.renameEnumValueIfExists(queryRunner, 'api_key_permissions_enum', 'delete:snapshots', 'delete:saved_images')
+    await this.renameEnumValueIfExists(queryRunner, 'api_key_permissions_enum', 'delete:templates', 'delete:saved_images')
     await queryRunner.query(`
       UPDATE "organization_role"
-      SET "name" = 'Templates Admin', "description" = 'Grants admin access to templates in the organization'
-      WHERE "name" = 'Snapshots Admin'
+      SET "name" = 'Saved Images Admin', "description" = 'Grants admin access to saved images in the organization'
+      WHERE "name" IN ('Snapshots Admin', 'Templates Admin')
     `)
     await queryRunner.query(`
       UPDATE "job"
@@ -117,19 +152,19 @@ export class Migration1780200000000 implements MigrationInterface {
     await queryRunner.query(
       `CREATE INDEX IF NOT EXISTS "runner_artifact_cache_artifactref_idx" ON "runner_artifact_cache" ("artifactRef")`,
     )
-    await queryRunner.query(`CREATE INDEX IF NOT EXISTS "box_template_name_idx" ON "box_template" ("name")`)
-    await queryRunner.query(`CREATE INDEX IF NOT EXISTS "box_template_state_idx" ON "box_template" ("state")`)
-    await queryRunner.query(`CREATE INDEX IF NOT EXISTS "sandbox_template_idx" ON "sandbox" ("template")`)
+    await queryRunner.query(`CREATE INDEX IF NOT EXISTS "saved_image_name_idx" ON "saved_image" ("name")`)
+    await queryRunner.query(`CREATE INDEX IF NOT EXISTS "saved_image_state_idx" ON "saved_image" ("state")`)
+    await queryRunner.query(`CREATE INDEX IF NOT EXISTS "sandbox_saved_image_idx" ON "sandbox" ("savedImage")`)
     await queryRunner.query(
-      `CREATE INDEX IF NOT EXISTS "warm_pool_find_idx" ON "warm_pool" ("template", "target", "class", "cpu", "mem", "disk", "gpu", "osUser", "env")`,
+      `CREATE INDEX IF NOT EXISTS "warm_pool_find_idx" ON "warm_pool" ("savedImage", "target", "class", "cpu", "mem", "disk", "gpu", "osUser", "env")`,
     )
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`DROP INDEX IF EXISTS "public"."warm_pool_find_idx"`)
-    await queryRunner.query(`DROP INDEX IF EXISTS "public"."sandbox_template_idx"`)
-    await queryRunner.query(`DROP INDEX IF EXISTS "public"."box_template_state_idx"`)
-    await queryRunner.query(`DROP INDEX IF EXISTS "public"."box_template_name_idx"`)
+    await queryRunner.query(`DROP INDEX IF EXISTS "public"."sandbox_saved_image_idx"`)
+    await queryRunner.query(`DROP INDEX IF EXISTS "public"."saved_image_state_idx"`)
+    await queryRunner.query(`DROP INDEX IF EXISTS "public"."saved_image_name_idx"`)
     await queryRunner.query(`DROP INDEX IF EXISTS "public"."runner_artifact_cache_artifactref_idx"`)
     await queryRunner.query(`DROP INDEX IF EXISTS "public"."runner_artifact_cache_runnerid_artifactref_idx"`)
     await queryRunner.query(`DROP INDEX IF EXISTS "public"."runner_artifact_cache_runnerid_idx"`)
@@ -150,20 +185,20 @@ export class Migration1780200000000 implements MigrationInterface {
     await queryRunner.query(`
       UPDATE "organization_role"
       SET "name" = 'Snapshots Admin', "description" = 'Grants admin access to snapshots in the organization'
-      WHERE "name" = 'Templates Admin'
+      WHERE "name" = 'Saved Images Admin'
     `)
-    await this.renameEnumValueIfExists(queryRunner, 'api_key_permissions_enum', 'delete:templates', 'delete:snapshots')
-    await this.renameEnumValueIfExists(queryRunner, 'api_key_permissions_enum', 'write:templates', 'write:snapshots')
+    await this.renameEnumValueIfExists(queryRunner, 'api_key_permissions_enum', 'delete:saved_images', 'delete:snapshots')
+    await this.renameEnumValueIfExists(queryRunner, 'api_key_permissions_enum', 'write:saved_images', 'write:snapshots')
     await this.renameEnumValueIfExists(
       queryRunner,
       'organization_role_permissions_enum',
-      'delete:templates',
+      'delete:saved_images',
       'delete:snapshots',
     )
     await this.renameEnumValueIfExists(
       queryRunner,
       'organization_role_permissions_enum',
-      'write:templates',
+      'write:saved_images',
       'write:snapshots',
     )
     await this.renameEnumValueIfExists(queryRunner, 'sandbox_state_enum', 'pulling_artifact', 'pulling_snapshot')
@@ -187,18 +222,18 @@ export class Migration1780200000000 implements MigrationInterface {
 
     await this.renameColumnIfExists(queryRunner, 'build_info', 'artifactRef', 'snapshotRef')
     await this.renameColumnIfExists(queryRunner, 'sandbox', 'buildInfoArtifactRef', 'buildInfoSnapshotRef')
-    await this.renameColumnIfExists(queryRunner, 'sandbox', 'template', 'snapshot')
-    await this.renameColumnIfExists(queryRunner, 'warm_pool', 'template', 'snapshot')
-    if (await queryRunner.hasColumn('organization', 'max_template_size')) {
-      await queryRunner.renameColumn('organization', 'max_template_size', 'max_snapshot_size')
+    await this.renameColumnIfExists(queryRunner, 'sandbox', 'savedImage', 'snapshot')
+    await this.renameColumnIfExists(queryRunner, 'warm_pool', 'savedImage', 'snapshot')
+    if (await queryRunner.hasColumn('organization', 'max_saved_image_size')) {
+      await queryRunner.renameColumn('organization', 'max_saved_image_size', 'max_snapshot_size')
     }
-    if (await queryRunner.hasColumn('organization', 'template_quota')) {
-      await queryRunner.renameColumn('organization', 'template_quota', 'snapshot_quota')
+    if (await queryRunner.hasColumn('organization', 'saved_image_quota')) {
+      await queryRunner.renameColumn('organization', 'saved_image_quota', 'snapshot_quota')
     }
-    if (await queryRunner.hasColumn('organization', 'template_deactivation_timeout_minutes')) {
+    if (await queryRunner.hasColumn('organization', 'saved_image_deactivation_timeout_minutes')) {
       await queryRunner.renameColumn(
         'organization',
-        'template_deactivation_timeout_minutes',
+        'saved_image_deactivation_timeout_minutes',
         'snapshot_deactivation_timeout_minutes',
       )
     }
@@ -209,12 +244,12 @@ export class Migration1780200000000 implements MigrationInterface {
       await queryRunner.renameColumn('runner', 'currentArtifactCount', 'currentSnapshotCount')
     }
 
-    await this.renameEnumTypeForColumn(queryRunner, 'box_template', 'state', 'snapshot_state_enum')
-    await this.renameColumnIfExists(queryRunner, 'box_template_region', 'templateId', 'snapshotId')
-    await this.renameTableIfExists(queryRunner, 'box_template_region', 'snapshot_region')
-    await this.renameColumnIfExists(queryRunner, 'box_template', 'buildInfoArtifactRef', 'buildInfoSnapshotRef')
-    await this.renameColumnIfExists(queryRunner, 'box_template', 'artifactRef', 'ref')
-    await this.renameTableIfExists(queryRunner, 'box_template', 'snapshot')
+    await this.renameEnumTypeForColumn(queryRunner, 'saved_image', 'state', 'snapshot_state_enum')
+    await this.renameColumnIfExists(queryRunner, 'saved_image_region', 'savedImageId', 'snapshotId')
+    await this.renameTableIfExists(queryRunner, 'saved_image_region', 'snapshot_region')
+    await this.renameColumnIfExists(queryRunner, 'saved_image', 'buildInfoArtifactRef', 'buildInfoSnapshotRef')
+    await this.renameColumnIfExists(queryRunner, 'saved_image', 'artifactRef', 'ref')
+    await this.renameTableIfExists(queryRunner, 'saved_image', 'snapshot')
 
     await queryRunner.query(`CREATE INDEX IF NOT EXISTS "snapshot_runner_state_idx" ON "snapshot_runner" ("state")`)
     await queryRunner.query(

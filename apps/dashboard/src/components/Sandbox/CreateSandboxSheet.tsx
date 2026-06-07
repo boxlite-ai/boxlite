@@ -24,7 +24,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { FeatureFlags } from '@/enums/FeatureFlags'
 import { RoutePath } from '@/enums/RoutePath'
 import { useCreateSandboxMutation } from '@/hooks/mutations/useCreateSandboxMutation'
-import { useTemplatesPageQuery } from '@/hooks/queries/useTemplatesPageQuery'
+import { useSavedImagesPageQuery } from '@/hooks/queries/useSavedImagesPageQuery'
 import { useConfig } from '@/hooks/useConfig'
 import { useIsCompactScreen } from '@/hooks/use-mobile'
 import { useRegions } from '@/hooks/useRegions'
@@ -32,7 +32,7 @@ import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { parseEnvFile } from '@/lib/env'
 import { handleApiError } from '@/lib/error-handling'
 import { imageNameSchema } from '@/lib/schema'
-import { getTemplateDisplayName } from '@/lib/template-display'
+import { getSavedImageDisplayName } from '@/lib/saved-image-display'
 import { cn, getRegionFullDisplayName } from '@/lib/utils'
 import { Sandbox } from '@boxlite-ai/sdk'
 import { useForm } from '@tanstack/react-form'
@@ -51,7 +51,7 @@ const NAME_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/
 const NONE_VALUE = '__none__'
 
 enum Source {
-  TEMPLATE = 'template',
+  SAVED_IMAGE = 'savedImage',
   IMAGE = 'image',
 }
 
@@ -102,13 +102,13 @@ const buildFormSchema = (maxCpu?: number, maxMemory?: number, maxDisk?: number) 
   const base = buildBaseFormSchema(maxCpu, maxMemory, maxDisk)
   return z.discriminatedUnion('source', [
     base.extend({
-      source: z.literal(Source.TEMPLATE),
-      template: z.string().optional(),
+      source: z.literal(Source.SAVED_IMAGE),
+      savedImage: z.string().optional(),
       image: z.string().optional(),
     }),
     base.extend({
       source: z.literal(Source.IMAGE),
-      template: z.string().optional(),
+      savedImage: z.string().optional(),
       image: imageNameSchema,
     }),
   ])
@@ -116,14 +116,14 @@ const buildFormSchema = (maxCpu?: number, maxMemory?: number, maxDisk?: number) 
 
 type FormValues = z.input<ReturnType<typeof buildBaseFormSchema>> & {
   source: Source
-  template?: string
+  savedImage?: string
   image?: string
 }
 
 const defaultValues: FormValues = {
   name: '',
-  source: Source.TEMPLATE,
-  template: undefined,
+  source: Source.SAVED_IMAGE,
+  savedImage: undefined,
   image: '',
   regionId: undefined,
   cpu: undefined,
@@ -171,7 +171,7 @@ export const CreateSandboxSheet = ({
 
   const formSchema = useMemo(() => buildFormSchema(maxCpu, maxMemory, maxDisk), [maxCpu, maxMemory, maxDisk])
 
-  const { data: templatesData, isLoading: templatesLoading } = useTemplatesPageQuery({
+  const { data: savedImagesData, isLoading: savedImagesLoading } = useSavedImagesPageQuery({
     page: 1,
     pageSize: 100,
   })
@@ -235,7 +235,7 @@ export const CreateSandboxSheet = ({
         } else {
           sandbox = await createSandboxMutation.mutateAsync({
             ...baseParams,
-            templateId: value.template || undefined,
+            savedImageId: value.savedImage || undefined,
           })
         }
 
@@ -260,13 +260,13 @@ export const CreateSandboxSheet = ({
   const handleSourceChange = useCallback(
     (val: string) => {
       form.setFieldValue('source', val as Source)
-      if (val === Source.TEMPLATE) {
+      if (val === Source.SAVED_IMAGE) {
         form.setFieldValue('image', '')
         form.setFieldValue('cpu', undefined)
         form.setFieldValue('memory', undefined)
         form.setFieldValue('disk', undefined)
       } else {
-        form.setFieldValue('template', undefined)
+        form.setFieldValue('savedImage', undefined)
       }
     },
     [form],
@@ -388,7 +388,7 @@ export const CreateSandboxSheet = ({
                   <div className="flex flex-col gap-2">
                     <FieldLabel>Source</FieldLabel>
                     <TabsList className="w-full">
-                      <TabsTrigger value={Source.TEMPLATE} className="flex-1">
+                      <TabsTrigger value={Source.SAVED_IMAGE} className="flex-1">
                         Image
                       </TabsTrigger>
                       <TabsTrigger value={Source.IMAGE} className="flex-1">
@@ -397,8 +397,8 @@ export const CreateSandboxSheet = ({
                     </TabsList>
                   </div>
 
-                  <TabsContent value={Source.TEMPLATE}>
-                    <form.Field name="template">
+                  <TabsContent value={Source.SAVED_IMAGE}>
+                    <form.Field name="savedImage">
                       {(field) => (
                         <Field>
                           <FieldLabel htmlFor={field.name}>Image</FieldLabel>
@@ -409,18 +409,18 @@ export const CreateSandboxSheet = ({
                             <SelectTrigger
                               className="h-8"
                               id={field.name}
-                              disabled={templatesLoading}
-                              loading={templatesLoading}
+                              disabled={savedImagesLoading}
+                              loading={savedImagesLoading}
                             >
-                              <SelectValue placeholder={templatesLoading ? 'Loading images...' : 'Select an image'} />
+                              <SelectValue placeholder={savedImagesLoading ? 'Loading images...' : 'Select an image'} />
                             </SelectTrigger>
                             <SelectContent>
                               <SelectItem value={NONE_VALUE}>
-                                {config.defaultTemplate} <Badge variant="secondary">default</Badge>
+                                {config.defaultSavedImage} <Badge variant="secondary">default</Badge>
                               </SelectItem>
-                              {templatesData?.items?.map((template) => (
-                                <SelectItem key={template.id} value={template.id}>
-                                  {template.displayName || getTemplateDisplayName(template.name)}
+                              {savedImagesData?.items?.map((savedImage) => (
+                                <SelectItem key={savedImage.id} value={savedImage.id}>
+                                  {savedImage.displayName || getSavedImageDisplayName(savedImage.name)}
                                 </SelectItem>
                               ))}
                             </SelectContent>

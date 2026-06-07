@@ -9,7 +9,7 @@ import { useCommandPaletteAnalytics } from '@/hooks/useCommandPaletteAnalytics'
 import { useIsCompactScreen } from '@/hooks/use-mobile'
 import { useSelectedOrganization } from '@/hooks/useSelectedOrganization'
 import { cn } from '@/lib/utils'
-import { getTemplateDisplayName } from '@/lib/template-display'
+import { getSavedImageDisplayName } from '@/lib/saved-image-display'
 import {
   filterArchivable,
   filterDeletable,
@@ -51,8 +51,8 @@ export function SandboxTable({
   sandboxIsLoading,
   sandboxStateIsTransitioning,
   loading,
-  templates,
-  templatesDataIsLoading,
+  savedImages,
+  savedImagesDataIsLoading,
   regionsData,
   regionsDataIsLoading,
   getRegionName,
@@ -210,8 +210,8 @@ export function SandboxTable({
         table={table}
         regionOptions={regionOptions}
         regionsDataIsLoading={regionsDataIsLoading}
-        templates={templates}
-        templatesDataIsLoading={templatesDataIsLoading}
+        savedImages={savedImages}
+        savedImagesDataIsLoading={savedImagesDataIsLoading}
         onRefresh={handleRefresh}
         isRefreshing={isRefreshing}
       />
@@ -262,7 +262,7 @@ export function SandboxTable({
 
                       <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs md:grid-cols-4 md:gap-x-4">
                         <CompactSandboxMeta label="Image">
-                          {sandbox.template ? getTemplateDisplayName(sandbox.template) : '-'}
+                          {sandbox.savedImage ? getSavedImageDisplayName(sandbox.savedImage) : '-'}
                         </CompactSandboxMeta>
                         <CompactSandboxMeta label="Region">{regionName}</CompactSandboxMeta>
                         <CompactSandboxMeta label="Resources">

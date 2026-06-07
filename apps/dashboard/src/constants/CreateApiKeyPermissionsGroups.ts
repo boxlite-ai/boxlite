@@ -13,7 +13,7 @@ export const CREATE_API_KEY_PERMISSIONS_GROUPS: { name: string; permissions: Cre
   },
   {
     name: 'Images',
-    permissions: [CreateApiKeyPermissionsEnum.WRITE_TEMPLATES, CreateApiKeyPermissionsEnum.DELETE_TEMPLATES],
+    permissions: [CreateApiKeyPermissionsEnum.WRITE_SAVED_IMAGES, CreateApiKeyPermissionsEnum.DELETE_SAVED_IMAGES],
   },
   {
     name: 'Registries',

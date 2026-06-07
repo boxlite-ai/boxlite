@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { formatDuration, formatTimestamp, getRelativeTimeString } from '@/lib/utils'
-import { getTemplateDisplayName } from '@/lib/template-display'
+import { getSavedImageDisplayName } from '@/lib/saved-image-display'
 import { Sandbox, SandboxState } from '@boxlite-ai/api-client'
 import { Archive, Play, Tag, Trash, Wrench, X } from 'lucide-react'
 import React, { useState } from 'react'
@@ -227,9 +227,9 @@ const SandboxDetailsSheet: React.FC<SandboxDetailsSheetProps> = ({
                 <h3 className="text-sm text-muted-foreground">Image</h3>
                 <div className="mt-1 flex items-center gap-2">
                   <p className="text-sm font-medium truncate">
-                    {sandbox.template ? getTemplateDisplayName(sandbox.template) : '-'}
+                    {sandbox.savedImage ? getSavedImageDisplayName(sandbox.savedImage) : '-'}
                   </p>
-                  {sandbox.template && <CopyButton value={sandbox.template} tooltipText="Copy image" size="icon-xs" />}
+                  {sandbox.savedImage && <CopyButton value={sandbox.savedImage} tooltipText="Copy image" size="icon-xs" />}
                 </div>
               </div>
               <div>

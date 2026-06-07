@@ -9,9 +9,9 @@ import { WebhookEvent } from './webhook/constants/webhook-events.constants'
 import {
   SandboxCreatedWebhookDto,
   SandboxStateUpdatedWebhookDto,
-  BoxTemplateCreatedWebhookDto,
-  BoxTemplateStateUpdatedWebhookDto,
-  BoxTemplateRemovedWebhookDto,
+  SavedImageCreatedWebhookDto,
+  SavedImageStateUpdatedWebhookDto,
+  SavedImageRemovedWebhookDto,
   VolumeCreatedWebhookDto,
   VolumeStateUpdatedWebhookDto,
 } from './webhook/dto/webhook-event-payloads.dto'
@@ -76,13 +76,13 @@ export function addWebhookDocumentation(document: OpenAPIObject): OpenAPIObjectW
           },
         },
       },
-      [WebhookEvent.TEMPLATE_CREATED]: {
+      [WebhookEvent.SAVED_IMAGE_CREATED]: {
         post: {
           requestBody: {
-            description: 'BoxTemplate created event',
+            description: 'SavedImage created event',
             content: {
               'application/json': {
-                schema: { $ref: getSchemaPath(BoxTemplateCreatedWebhookDto) },
+                schema: { $ref: getSchemaPath(SavedImageCreatedWebhookDto) },
               },
             },
           },
@@ -93,13 +93,13 @@ export function addWebhookDocumentation(document: OpenAPIObject): OpenAPIObjectW
           },
         },
       },
-      [WebhookEvent.TEMPLATE_STATE_UPDATED]: {
+      [WebhookEvent.SAVED_IMAGE_STATE_UPDATED]: {
         post: {
           requestBody: {
-            description: 'BoxTemplate state updated event',
+            description: 'SavedImage state updated event',
             content: {
               'application/json': {
-                schema: { $ref: getSchemaPath(BoxTemplateStateUpdatedWebhookDto) },
+                schema: { $ref: getSchemaPath(SavedImageStateUpdatedWebhookDto) },
               },
             },
           },
@@ -110,13 +110,13 @@ export function addWebhookDocumentation(document: OpenAPIObject): OpenAPIObjectW
           },
         },
       },
-      [WebhookEvent.TEMPLATE_REMOVED]: {
+      [WebhookEvent.SAVED_IMAGE_REMOVED]: {
         post: {
           requestBody: {
-            description: 'BoxTemplate removed event',
+            description: 'SavedImage removed event',
             content: {
               'application/json': {
-                schema: { $ref: getSchemaPath(BoxTemplateRemovedWebhookDto) },
+                schema: { $ref: getSchemaPath(SavedImageRemovedWebhookDto) },
               },
             },
           },

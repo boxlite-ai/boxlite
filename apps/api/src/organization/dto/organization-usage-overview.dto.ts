@@ -34,11 +34,11 @@ export class OrganizationUsageOverviewDto {
   })
   regionUsage: RegionUsageOverviewDto[]
 
-  // Template usage
+  // SavedImage usage
   @ApiProperty()
-  totalTemplateQuota: number
+  totalSavedImageQuota: number
   @ApiProperty()
-  currentTemplateUsage: number
+  currentSavedImageUsage: number
 
   // Volume usage
   @ApiProperty()

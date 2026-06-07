@@ -80,10 +80,10 @@ export class OrganizationDto {
   maxDiskPerSandbox: number
 
   @ApiProperty({
-    description: 'Time in minutes before an unused template is deactivated',
+    description: 'Time in minutes before an unused savedImage is deactivated',
     default: 20160,
   })
-  templateDeactivationTimeoutMinutes: number
+  savedImageDeactivationTimeoutMinutes: number
 
   @ApiProperty({
     description: 'Sandbox default network block all',
@@ -164,7 +164,7 @@ export class OrganizationDto {
       maxCpuPerSandbox: organization.maxCpuPerSandbox,
       maxMemoryPerSandbox: organization.maxMemoryPerSandbox,
       maxDiskPerSandbox: organization.maxDiskPerSandbox,
-      templateDeactivationTimeoutMinutes: organization.templateDeactivationTimeoutMinutes,
+      savedImageDeactivationTimeoutMinutes: organization.savedImageDeactivationTimeoutMinutes,
       sandboxLimitedNetworkEgress: organization.sandboxLimitedNetworkEgress,
       defaultRegionId: organization.defaultRegionId,
       authenticatedRateLimit: organization.authenticatedRateLimit,

@@ -3,13 +3,13 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { CreateSandboxFromImageParams, CreateSandboxFromTemplateParams, BoxLite, Sandbox } from '@boxlite-ai/sdk'
+import { CreateSandboxFromImageParams, CreateSandboxFromSavedImageParams, BoxLite, Sandbox } from '@boxlite-ai/sdk'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useAuth } from 'react-oidc-context'
 import { useSelectedOrganization } from '../useSelectedOrganization'
 import { getSandboxesQueryKey } from '../useSandboxes'
 
-export type CreateSandboxParams = (CreateSandboxFromTemplateParams | CreateSandboxFromImageParams) & {
+export type CreateSandboxParams = (CreateSandboxFromSavedImageParams | CreateSandboxFromImageParams) & {
   target?: string
 }
 
@@ -35,7 +35,7 @@ export const useCreateSandboxMutation = () => {
       if ('image' in createParams) {
         return await client.create(createParams as CreateSandboxFromImageParams)
       }
-      return await client.create(createParams as CreateSandboxFromTemplateParams)
+      return await client.create(createParams as CreateSandboxFromSavedImageParams)
     },
     onSuccess: async () => {
       if (selectedOrganization?.id) {

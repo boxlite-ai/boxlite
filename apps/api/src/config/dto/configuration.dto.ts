@@ -173,25 +173,25 @@ export class ConfigurationDto {
   pylonAppId?: string
 
   @ApiProperty({
-    description: 'Proxy template URL',
+    description: 'Proxy savedImage URL',
     example: 'https://{{PORT}}-{{sandboxId}}.proxy.example.com',
   })
   @IsString()
-  proxyTemplateUrl: string
+  proxySavedImageUrl: string
 
   @ApiProperty({
-    description: 'Toolbox template URL',
+    description: 'Toolbox savedImage URL',
     example: 'https://proxy.example.com/toolbox',
   })
   @IsString()
   proxyToolboxUrl: string
 
   @ApiProperty({
-    description: 'Default template for sandboxes',
+    description: 'Default savedImage for sandboxes',
     example: 'ubuntu:22.04',
   })
   @IsString()
-  defaultTemplate: string
+  defaultSavedImage: string
 
   @ApiProperty({
     description: 'Dashboard URL',
@@ -279,9 +279,9 @@ export class ConfigurationDto {
           : undefined,
     }
     this.linkedAccountsEnabled = configService.get('oidc.managementApi.enabled')
-    this.proxyTemplateUrl = configService.getOrThrow('proxy.templateUrl')
+    this.proxySavedImageUrl = configService.getOrThrow('proxy.savedImageUrl')
     this.proxyToolboxUrl = configService.getOrThrow('proxy.toolboxUrl')
-    this.defaultTemplate = configService.getOrThrow('defaultTemplate')
+    this.defaultSavedImage = configService.getOrThrow('defaultSavedImage')
     this.dashboardUrl = configService.getOrThrow('dashboardUrl')
     this.maxAutoArchiveInterval = configService.getOrThrow('maxAutoArchiveInterval')
     this.maintananceMode = configService.getOrThrow('maintananceMode')

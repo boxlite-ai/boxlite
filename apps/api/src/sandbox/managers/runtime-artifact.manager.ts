@@ -9,8 +9,8 @@ import { InjectRepository } from '@nestjs/typeorm'
 import { Cron, CronExpression } from '@nestjs/schedule'
 import { In, IsNull, Not, Repository } from 'typeorm'
 import { DockerRegistryService } from '../../docker-registry/services/docker-registry.service'
-import { BoxTemplate } from '../entities/box-template.entity'
-import { BoxTemplateState } from '../enums/box-template-state.enum'
+import { SavedImage } from '../entities/saved-image.entity'
+import { SavedImageState } from '../enums/saved-image-state.enum'
 import { RunnerArtifactCache } from '../entities/runner-artifact-cache.entity'
 import { Runner } from '../entities/runner.entity'
 import { DockerRegistry } from '../../docker-registry/entities/docker-registry.entity'
@@ -32,9 +32,9 @@ import { LogExecution } from '../../common/decorators/log-execution.decorator'
 import { WithInstrumentation } from '../../common/decorators/otel.decorator'
 import { RunnerAdapterFactory, RunnerArtifactInfo, ArtifactDigestResponse } from '../runner-adapter/runnerAdapter'
 import { RuntimeArtifactStateError } from '../errors/runtime-artifact-state-error'
-import { BoxTemplateEvents } from '../constants/box-template-events'
-import { BoxTemplateCreatedEvent } from '../events/box-template-created.event'
-import { BoxTemplateService } from '../services/box-template.service'
+import { SavedImageEvents } from '../constants/saved-image-events'
+import { SavedImageCreatedEvent } from '../events/saved-image-created.event'
+import { SavedImageService } from '../services/saved-image.service'
 import { OnAsyncEvent } from '../../common/decorators/on-async-event.decorator'
 import { parseDockerImage } from '../../common/utils/docker-image.util'
 import { SandboxState } from '../enums/sandbox-state.enum'
@@ -42,13 +42,13 @@ import { SandboxDesiredState } from '../enums/sandbox-desired-state.enum'
 import { BackupState } from '../enums/backup-state.enum'
 import { BadRequestError } from '../../exceptions/bad-request.exception'
 import { SandboxRepository } from '../repositories/sandbox.repository'
-import { BoxTemplateActivatedEvent } from '../events/box-template-activated.event'
+import { SavedImageActivatedEvent } from '../events/saved-image-activated.event'
 import { TypedConfigService } from '../../config/typed-config.service'
 import { createBoxLiteInternalArtifactRef } from '../utils/artifact-ref.util'
 
 const SYNC_AGAIN = 'sync-again'
 const DONT_SYNC_AGAIN = 'dont-sync-again'
-const DEFAULT_TEMPLATE_DEACTIVATION_TIMEOUT_MINUTES = 14 * 24 * 60 // 14 days
+const DEFAULT_SAVED_IMAGE_DEACTIVATION_TIMEOUT_MINUTES = 14 * 24 * 60 // 14 days
 type SyncState = typeof SYNC_AGAIN | typeof DONT_SYNC_AGAIN
 
 @Injectable()
@@ -57,13 +57,13 @@ export class RuntimeArtifactManager implements TrackableJobExecutions, OnApplica
 
   private readonly logger = new Logger(RuntimeArtifactManager.name)
   //  generate a unique instance id used to ensure only one instance of the worker is handing the
-  //  template artifact activation
+  //  saved image artifact activation
   private readonly instanceId = uuidv4()
 
   constructor(
     @InjectRedis() private readonly redis: Redis,
-    @InjectRepository(BoxTemplate)
-    private readonly boxTemplateRepository: Repository<BoxTemplate>,
+    @InjectRepository(SavedImage)
+    private readonly savedImageRepository: Repository<SavedImage>,
     @InjectRepository(RunnerArtifactCache)
     private readonly runnerArtifactCacheRepository: Repository<RunnerArtifactCache>,
     @InjectRepository(Runner)
@@ -76,7 +76,7 @@ export class RuntimeArtifactManager implements TrackableJobExecutions, OnApplica
     private readonly runnerAdapterFactory: RunnerAdapterFactory,
     private readonly redisLockProvider: RedisLockProvider,
     private readonly organizationService: OrganizationService,
-    private readonly boxTemplateService: BoxTemplateService,
+    private readonly savedImageService: SavedImageService,
     private readonly configService: TypedConfigService,
   ) {}
 
@@ -101,41 +101,41 @@ export class RuntimeArtifactManager implements TrackableJobExecutions, OnApplica
 
     const skip = (await this.redis.get('sync-runner-artifact-caches-skip')) || 0
 
-    const templates = await this.boxTemplateRepository
-      .createQueryBuilder('template')
-      .innerJoin('organization', 'org', 'org.id = template.organizationId')
-      .where('template.state = :templateState', { templateState: BoxTemplateState.ACTIVE })
+    const savedImages = await this.savedImageRepository
+      .createQueryBuilder('savedImage')
+      .innerJoin('organization', 'org', 'org.id = savedImage.organizationId')
+      .where('savedImage.state = :savedImageState', { savedImageState: SavedImageState.ACTIVE })
       .andWhere('org.suspended = false')
-      .orderBy('template.createdAt', 'ASC')
+      .orderBy('savedImage.createdAt', 'ASC')
       .take(100)
       .skip(Number(skip))
       .getMany()
 
-    if (templates.length === 0) {
+    if (savedImages.length === 0) {
       await this.redisLockProvider.unlock(lockKey)
       await this.redis.set('sync-runner-artifact-caches-skip', 0)
       return
     }
 
-    await this.redis.set('sync-runner-artifact-caches-skip', Number(skip) + templates.length)
+    await this.redis.set('sync-runner-artifact-caches-skip', Number(skip) + savedImages.length)
 
     const results = await Promise.allSettled(
-      templates.map(async (template) => {
-        const regions = await this.boxTemplateService.getBoxTemplateRegions(template.id)
+      savedImages.map(async (savedImage) => {
+        const regions = await this.savedImageService.getSavedImageRegions(savedImage.id)
 
         const sharedRegionIds = regions.filter((r) => r.organizationId === null).map((r) => r.id)
         const organizationRegionIds = regions
-          .filter((r) => r.organizationId === template.organizationId)
+          .filter((r) => r.organizationId === savedImage.organizationId)
           .map((r) => r.id)
 
-        return this.propagateTemplateArtifactToRunners(template, sharedRegionIds, organizationRegionIds)
+        return this.propagateSavedImageArtifactToRunners(savedImage, sharedRegionIds, organizationRegionIds)
       }),
     )
 
     // Log all promise errors
     results.forEach((result) => {
       if (result.status === 'rejected') {
-        this.logger.error(`Error propagating template artifact to runners: ${fromAxiosError(result.reason)}`)
+        this.logger.error(`Error propagating saved image artifact to runners: ${fromAxiosError(result.reason)}`)
       }
     })
 
@@ -227,8 +227,8 @@ export class RuntimeArtifactManager implements TrackableJobExecutions, OnApplica
     }
   }
 
-  async propagateTemplateArtifactToRunners(
-    template: BoxTemplate,
+  async propagateSavedImageArtifactToRunners(
+    savedImage: SavedImage,
     sharedRegionIds: string[],
     organizationRegionIds: string[],
   ) {
@@ -249,10 +249,10 @@ export class RuntimeArtifactManager implements TrackableJobExecutions, OnApplica
       const organizationRunners = runners.filter((runner) => organizationRegionIds.includes(runner.region))
       const organizationRunnerIds = organizationRunners.map((runner) => runner.id)
 
-      //  get all runners where the template artifact is already propagated to (or in progress)
+      //  get all runners where the saved image artifact is already propagated to (or in progress)
       const sharedRunnerArtifactCaches = await this.runnerArtifactCacheRepository.find({
         where: {
-          artifactRef: template.artifactRef,
+          artifactRef: savedImage.artifactRef,
           state: In([RunnerArtifactCacheState.READY, RunnerArtifactCacheState.PULLING_ARTIFACT]),
           runnerId: In(sharedRunnerIds),
         },
@@ -263,7 +263,7 @@ export class RuntimeArtifactManager implements TrackableJobExecutions, OnApplica
 
       const organizationRunnerArtifactCaches = await this.runnerArtifactCacheRepository.find({
         where: {
-          artifactRef: template.artifactRef,
+          artifactRef: savedImage.artifactRef,
           state: In([RunnerArtifactCacheState.READY, RunnerArtifactCacheState.PULLING_ARTIFACT]),
           runnerId: In(organizationRunnerIds),
         },
@@ -272,7 +272,7 @@ export class RuntimeArtifactManager implements TrackableJobExecutions, OnApplica
         organizationRunnerArtifactCaches.map((runnerArtifactCache) => runnerArtifactCache.runnerId),
       )
 
-      //  get all runners where the template artifact is not propagated to
+      //  get all runners where the saved image artifact is not propagated to
       const unallocatedSharedRunners = sharedRunners.filter(
         (runner) => !sharedRunnerArtifactCachesDistinctRunnersIds.has(runner.id),
       )
@@ -282,7 +282,7 @@ export class RuntimeArtifactManager implements TrackableJobExecutions, OnApplica
 
       const runnersToPropagateTo: Runner[] = []
 
-      // propagate the template artifact to all organization runners
+      // propagate the saved image artifact to all organization runners
       runnersToPropagateTo.push(...unallocatedOrganizationRunners)
 
       // respect the propagation limit for shared runners
@@ -303,7 +303,7 @@ export class RuntimeArtifactManager implements TrackableJobExecutions, OnApplica
 
       for (const regionId of [...sharedRegionIds, ...organizationRegionIds]) {
         const registry = await this.dockerRegistryService.findInternalRegistryByArtifactRef(
-          template.artifactRef,
+          savedImage.artifactRef,
           regionId,
         )
         if (registry) {
@@ -316,34 +316,34 @@ export class RuntimeArtifactManager implements TrackableJobExecutions, OnApplica
           const internalRegistry = internalRegistriesMap.get(runner.region)
           if (!internalRegistry) {
             throw new Error(
-              `No internal registry found for artifact ${template.artifactRef} in region ${runner.region}`,
+              `No internal registry found for artifact ${savedImage.artifactRef} in region ${runner.region}`,
             )
           }
 
-          let runnerArtifactCache = await this.runnerService.getRunnerArtifactCache(runner.id, template.artifactRef)
+          let runnerArtifactCache = await this.runnerService.getRunnerArtifactCache(runner.id, savedImage.artifactRef)
 
           try {
             if (!runnerArtifactCache) {
               await this.runnerService.createRunnerArtifactCacheEntry(
                 runner.id,
-                template.artifactRef,
+                savedImage.artifactRef,
                 RunnerArtifactCacheState.PULLING_ARTIFACT,
               )
-              runnerArtifactCache = await this.runnerService.getRunnerArtifactCache(runner.id, template.artifactRef)
-              await this.pullRunnerArtifactCache(runner, template.artifactRef, internalRegistry)
+              runnerArtifactCache = await this.runnerService.getRunnerArtifactCache(runner.id, savedImage.artifactRef)
+              await this.pullRunnerArtifactCache(runner, savedImage.artifactRef, internalRegistry)
             } else if (runnerArtifactCache.state === RunnerArtifactCacheState.PULLING_ARTIFACT) {
               await this.handleRunnerArtifactCacheStatePullingArtifact(runnerArtifactCache, runner)
             }
           } catch (err) {
-            this.logger.error(`Error propagating template artifact to runner ${runner.id}: ${fromAxiosError(err)}`)
+            this.logger.error(`Error propagating saved image artifact to runner ${runner.id}: ${fromAxiosError(err)}`)
             const errorReason = err instanceof Error ? err.message : String(err)
             if (!runnerArtifactCache) {
-              runnerArtifactCache = await this.runnerService.getRunnerArtifactCache(runner.id, template.artifactRef)
+              runnerArtifactCache = await this.runnerService.getRunnerArtifactCache(runner.id, savedImage.artifactRef)
             }
             if (!runnerArtifactCache) {
               await this.runnerService.createRunnerArtifactCacheEntry(
                 runner.id,
-                template.artifactRef,
+                savedImage.artifactRef,
                 RunnerArtifactCacheState.ERROR,
                 errorReason,
               )
@@ -374,7 +374,7 @@ export class RuntimeArtifactManager implements TrackableJobExecutions, OnApplica
     destinationRef?: string,
   ) {
     const runnerAdapter = await this.runnerAdapterFactory.create(runner)
-    // Runner returns immediately; polling for completion is handled by syncRunnerBoxTemplateStates cron
+    // Runner returns immediately; polling for completion is handled by syncRunnerSavedImageStates cron
     await runnerAdapter.pullArtifact(artifactRef, registry, destinationRegistry, destinationRef)
   }
 
@@ -564,36 +564,36 @@ export class RuntimeArtifactManager implements TrackableJobExecutions, OnApplica
     }
   }
 
-  @Cron(CronExpression.EVERY_10_SECONDS, { name: 'check-template-cleanup' })
+  @Cron(CronExpression.EVERY_10_SECONDS, { name: 'check-saved-image-cleanup' })
   @TrackJobExecution()
-  @LogExecution('check-template-cleanup')
+  @LogExecution('check-saved-image-cleanup')
   @WithInstrumentation()
-  async checkTemplateCleanup() {
-    const lockKey = 'check-template-cleanup-lock'
+  async checkSavedImageCleanup() {
+    const lockKey = 'check-saved-image-cleanup-lock'
     if (!(await this.redisLockProvider.lock(lockKey, 30))) {
       return
     }
 
-    const templates = await this.boxTemplateRepository.find({
+    const savedImages = await this.savedImageRepository.find({
       where: {
-        state: BoxTemplateState.REMOVING,
+        state: SavedImageState.REMOVING,
       },
     })
 
     await Promise.all(
-      templates.map(async (template) => {
-        const countActiveTemplates = await this.boxTemplateRepository.count({
+      savedImages.map(async (savedImage) => {
+        const countActiveSavedImages = await this.savedImageRepository.count({
           where: {
-            state: BoxTemplateState.ACTIVE,
-            artifactRef: template.artifactRef,
+            state: SavedImageState.ACTIVE,
+            artifactRef: savedImage.artifactRef,
           },
         })
 
-        // Only remove runner artifact caches if no other templates depend on them
-        if (countActiveTemplates === 0) {
+        // Only remove runner artifact caches if no other savedImages depend on them
+        if (countActiveSavedImages === 0) {
           await this.runnerArtifactCacheRepository.update(
             {
-              artifactRef: template.artifactRef,
+              artifactRef: savedImage.artifactRef,
             },
             {
               state: RunnerArtifactCacheState.REMOVING,
@@ -601,60 +601,60 @@ export class RuntimeArtifactManager implements TrackableJobExecutions, OnApplica
           )
         }
 
-        await this.boxTemplateRepository.remove(template)
+        await this.savedImageRepository.remove(savedImage)
       }),
     )
 
     await this.redisLockProvider.unlock(lockKey)
   }
 
-  @Cron(CronExpression.EVERY_10_SECONDS, { name: 'check-template-state' })
+  @Cron(CronExpression.EVERY_10_SECONDS, { name: 'check-saved-image-state' })
   @TrackJobExecution()
-  @LogExecution('check-template-state')
+  @LogExecution('check-saved-image-state')
   @WithInstrumentation()
-  async checkBoxTemplateState() {
-    //  the first time the template is created it needs to be pushed to the internal registry
+  async checkSavedImageState() {
+    //  the first time the saved image is created it needs to be pushed to the internal registry
     //  before propagating to the runners
-    //  this cron job will process the template states until the template is active (or error)
+    //  this cron job will process the savedImage states until the saved image is active (or error)
 
-    const templates = await this.boxTemplateRepository.find({
+    const savedImages = await this.savedImageRepository.find({
       where: {
         state: Not(
           In([
-            BoxTemplateState.ACTIVE,
-            BoxTemplateState.ERROR,
-            BoxTemplateState.BUILD_FAILED,
-            BoxTemplateState.INACTIVE,
+            SavedImageState.ACTIVE,
+            SavedImageState.ERROR,
+            SavedImageState.BUILD_FAILED,
+            SavedImageState.INACTIVE,
           ]),
         ),
       },
     })
 
     await Promise.all(
-      templates.map(async (template) => {
-        this.syncBoxTemplateState(template.id)
+      savedImages.map(async (savedImage) => {
+        this.syncSavedImageState(savedImage.id)
       }),
     )
   }
 
-  async syncBoxTemplateState(templateId: string): Promise<void> {
-    const lockKey = `sync-template-state-${templateId}`
+  async syncSavedImageState(savedImageId: string): Promise<void> {
+    const lockKey = `sync-saved-image-state-${savedImageId}`
     if (!(await this.redisLockProvider.lock(lockKey, 720))) {
       return
     }
 
-    const template = await this.boxTemplateRepository.findOne({
-      where: { id: templateId },
+    const savedImage = await this.savedImageRepository.findOne({
+      where: { id: savedImageId },
     })
 
     if (
-      !template ||
+      !savedImage ||
       [
-        BoxTemplateState.ACTIVE,
-        BoxTemplateState.ERROR,
-        BoxTemplateState.BUILD_FAILED,
-        BoxTemplateState.INACTIVE,
-      ].includes(template.state)
+        SavedImageState.ACTIVE,
+        SavedImageState.ERROR,
+        SavedImageState.BUILD_FAILED,
+        SavedImageState.INACTIVE,
+      ].includes(savedImage.state)
     ) {
       await this.redisLockProvider.unlock(lockKey)
       return
@@ -663,16 +663,16 @@ export class RuntimeArtifactManager implements TrackableJobExecutions, OnApplica
     let syncState = DONT_SYNC_AGAIN
 
     try {
-      switch (template.state) {
-        case BoxTemplateState.PENDING:
-          syncState = await this.handleBoxTemplateStatePending(template)
+      switch (savedImage.state) {
+        case SavedImageState.PENDING:
+          syncState = await this.handleSavedImageStatePending(savedImage)
           break
-        case BoxTemplateState.PULLING:
-        case BoxTemplateState.BUILDING:
-          syncState = await this.handleCheckInitialRunnerTemplateArtifact(template)
+        case SavedImageState.PULLING:
+        case SavedImageState.BUILDING:
+          syncState = await this.handleCheckInitialRunnerSavedImageArtifact(savedImage)
           break
-        case BoxTemplateState.REMOVING:
-          syncState = await this.handleBoxTemplateStateRemoving(template)
+        case SavedImageState.REMOVING:
+          syncState = await this.handleSavedImageStateRemoving(savedImage)
           break
       }
     } catch (error) {
@@ -680,13 +680,13 @@ export class RuntimeArtifactManager implements TrackableJobExecutions, OnApplica
         syncState = SYNC_AGAIN
       } else {
         const message = error.message || String(error)
-        await this.updateBoxTemplateState(template.id, BoxTemplateState.ERROR, message)
+        await this.updateSavedImageState(savedImage.id, SavedImageState.ERROR, message)
       }
     }
 
     await this.redisLockProvider.unlock(lockKey)
     if (syncState === SYNC_AGAIN) {
-      this.syncBoxTemplateState(templateId)
+      this.syncSavedImageState(savedImageId)
     }
   }
 
@@ -731,29 +731,29 @@ export class RuntimeArtifactManager implements TrackableJobExecutions, OnApplica
     }
   }
 
-  async handleBoxTemplateStateRemoving(template: BoxTemplate): Promise<SyncState> {
+  async handleSavedImageStateRemoving(savedImage: SavedImage): Promise<SyncState> {
     const runnerArtifactCacheItems = await this.runnerArtifactCacheRepository.find({
       where: {
-        artifactRef: template.artifactRef,
+        artifactRef: savedImage.artifactRef,
       },
     })
 
     if (runnerArtifactCacheItems.length === 0) {
-      await this.boxTemplateRepository.remove(template)
+      await this.savedImageRepository.remove(savedImage)
     }
 
     return DONT_SYNC_AGAIN
   }
 
-  async handleCheckInitialRunnerTemplateArtifact(template: BoxTemplate): Promise<SyncState> {
+  async handleCheckInitialRunnerSavedImageArtifact(savedImage: SavedImage): Promise<SyncState> {
     // Check for timeout - allow up to 30 minutes
     const timeoutMinutes = 30
     const timeoutMs = timeoutMinutes * 60 * 1000
-    if (Date.now() - template.updatedAt.getTime() > timeoutMs) {
-      await this.updateBoxTemplateState(
-        template.id,
-        BoxTemplateState.ERROR,
-        'Timeout processing template artifact on initial runner',
+    if (Date.now() - savedImage.updatedAt.getTime() > timeoutMs) {
+      await this.updateSavedImageState(
+        savedImage.id,
+        SavedImageState.ERROR,
+        'Timeout processing saved image artifact on initial runner',
       )
       return DONT_SYNC_AGAIN
     }
@@ -761,24 +761,24 @@ export class RuntimeArtifactManager implements TrackableJobExecutions, OnApplica
     // Check if the artifact ref is already set and it is already on the runner
     const runnerArtifactCache = await this.runnerArtifactCacheRepository.findOne({
       where: {
-        artifactRef: template.artifactRef,
-        runnerId: template.initialRunnerId,
+        artifactRef: savedImage.artifactRef,
+        runnerId: savedImage.initialRunnerId,
       },
     })
 
-    if (template.artifactRef && runnerArtifactCache) {
-      if (runnerArtifactCache.state === RunnerArtifactCacheState.READY && template.size != null) {
-        await this.updateBoxTemplateState(template.id, BoxTemplateState.ACTIVE)
+    if (savedImage.artifactRef && runnerArtifactCache) {
+      if (runnerArtifactCache.state === RunnerArtifactCacheState.READY && savedImage.size != null) {
+        await this.updateSavedImageState(savedImage.id, SavedImageState.ACTIVE)
         return DONT_SYNC_AGAIN
       } else if (runnerArtifactCache.state === RunnerArtifactCacheState.ERROR) {
         await this.runnerArtifactCacheRepository.delete(runnerArtifactCache.id)
       }
     }
 
-    const runner = await this.runnerService.findOneOrFail(template.initialRunnerId)
+    const runner = await this.runnerService.findOneOrFail(savedImage.initialRunnerId)
     const runnerAdapter = await this.runnerAdapterFactory.create(runner)
 
-    const initialImageRefOnRunner = template.buildInfo ? template.buildInfo.artifactRef : template.artifactRef
+    const initialImageRefOnRunner = savedImage.buildInfo ? savedImage.buildInfo.artifactRef : savedImage.artifactRef
 
     let artifactInfoResponse: RunnerArtifactInfo
     try {
@@ -793,11 +793,11 @@ export class RuntimeArtifactManager implements TrackableJobExecutions, OnApplica
 
     const internalRegistry = await this.dockerRegistryService.getAvailableInternalRegistry(runner.region)
     if (!internalRegistry) {
-      throw new Error('No internal registry found for template artifact')
+      throw new Error('No internal registry found for saved image artifact')
     }
 
-    const digestSyncState = await this.processTemplateArtifactDigest(
-      template,
+    const digestSyncState = await this.processSavedImageArtifactDigest(
+      savedImage,
       internalRegistry,
       artifactInfoResponse.hash,
       artifactInfoResponse.sizeGB,
@@ -810,15 +810,15 @@ export class RuntimeArtifactManager implements TrackableJobExecutions, OnApplica
 
     let inspectedArtifactDigest: ArtifactDigestResponse | undefined
     try {
-      inspectedArtifactDigest = await runnerAdapter.inspectArtifactInRegistry(template.artifactRef, internalRegistry)
+      inspectedArtifactDigest = await runnerAdapter.inspectArtifactInRegistry(savedImage.artifactRef, internalRegistry)
     } catch (error) {
-      this.logger.error(`Failed to inspect artifact ${template.artifactRef} in registry: ${error}`)
+      this.logger.error(`Failed to inspect artifact ${savedImage.artifactRef} in registry: ${error}`)
       return DONT_SYNC_AGAIN
     }
 
-    if (template.size == null && typeof inspectedArtifactDigest?.sizeGB === 'number') {
-      await this.processTemplateArtifactDigest(
-        template,
+    if (savedImage.size == null && typeof inspectedArtifactDigest?.sizeGB === 'number') {
+      await this.processSavedImageArtifactDigest(
+        savedImage,
         internalRegistry,
         artifactInfoResponse.hash,
         inspectedArtifactDigest.sizeGB,
@@ -829,25 +829,25 @@ export class RuntimeArtifactManager implements TrackableJobExecutions, OnApplica
     try {
       await runnerAdapter.removeArtifact(initialImageRefOnRunner)
     } catch (error) {
-      this.logger.error(`Failed to remove transient source artifact ${template.imageName}: ${fromAxiosError(error)}`)
+      this.logger.error(`Failed to remove transient source artifact ${savedImage.imageName}: ${fromAxiosError(error)}`)
     }
 
-    // For pull templates, best effort cleanup the original image now that we've computed the ref from it.
-    // Only cleanup if there's no other template in processing state using the same image.
-    if (!template.buildInfo) {
+    // For pull savedImages, best effort cleanup the original image now that we've computed the ref from it.
+    // Only cleanup if there's no other savedImage in processing state using the same image.
+    if (!savedImage.buildInfo) {
       try {
-        const anotherTemplate = await this.boxTemplateRepository.findOne({
+        const anotherSavedImage = await this.savedImageRepository.findOne({
           where: {
-            imageName: template.imageName,
-            id: Not(template.id),
-            state: Not(In([BoxTemplateState.ACTIVE, BoxTemplateState.INACTIVE])),
+            imageName: savedImage.imageName,
+            id: Not(savedImage.id),
+            state: Not(In([SavedImageState.ACTIVE, SavedImageState.INACTIVE])),
           },
         })
-        if (!anotherTemplate) {
-          await runnerAdapter.removeArtifact(template.imageName)
+        if (!anotherSavedImage) {
+          await runnerAdapter.removeArtifact(savedImage.imageName)
         }
       } catch (err) {
-        this.logger.error(`Failed to cleanup original image ${template.imageName}: ${fromAxiosError(err)}`)
+        this.logger.error(`Failed to cleanup original image ${savedImage.imageName}: ${fromAxiosError(err)}`)
       }
     }
 
@@ -857,20 +857,20 @@ export class RuntimeArtifactManager implements TrackableJobExecutions, OnApplica
     } else {
       await this.runnerService.createRunnerArtifactCacheEntry(
         runner.id,
-        template.artifactRef,
+        savedImage.artifactRef,
         RunnerArtifactCacheState.READY,
       )
     }
-    await this.updateBoxTemplateState(template.id, BoxTemplateState.ACTIVE)
+    await this.updateSavedImageState(savedImage.id, SavedImageState.ACTIVE)
 
     // Best effort removal of old source image from transient registry
-    const transientRegistry = await this.dockerRegistryService.findTransientRegistryByTemplateImageName(
-      template.imageName,
+    const transientRegistry = await this.dockerRegistryService.findTransientRegistryBySavedImageImageName(
+      savedImage.imageName,
       runner.region,
     )
     if (transientRegistry) {
       try {
-        await this.dockerRegistryService.removeImage(template.imageName, transientRegistry.id)
+        await this.dockerRegistryService.removeImage(savedImage.imageName, transientRegistry.id)
       } catch (error) {
         if (error.statusCode === 404) {
           //  image not found, just return
@@ -883,23 +883,23 @@ export class RuntimeArtifactManager implements TrackableJobExecutions, OnApplica
     return DONT_SYNC_AGAIN
   }
 
-  async processPullOnInitialRunner(template: BoxTemplate, runner: Runner) {
+  async processPullOnInitialRunner(savedImage: SavedImage, runner: Runner) {
     // Check for timeout - allow up to 30 minutes
     const timeoutMinutes = 30
     const timeoutMs = timeoutMinutes * 60 * 1000
-    if (Date.now() - template.updatedAt.getTime() > timeoutMs) {
-      await this.updateBoxTemplateState(
-        template.id,
-        BoxTemplateState.ERROR,
-        'Timeout processing template artifact pull on initial runner',
+    if (Date.now() - savedImage.updatedAt.getTime() > timeoutMs) {
+      await this.updateSavedImageState(
+        savedImage.id,
+        SavedImageState.ERROR,
+        'Timeout processing saved image artifact pull on initial runner',
       )
       return DONT_SYNC_AGAIN
     }
 
-    let sourceRegistry = await this.dockerRegistryService.findSourceRegistryByTemplateImageName(
-      template.imageName,
+    let sourceRegistry = await this.dockerRegistryService.findSourceRegistryBySavedImageImageName(
+      savedImage.imageName,
       runner.region,
-      template.organizationId,
+      savedImage.organizationId,
     )
     if (!sourceRegistry) {
       sourceRegistry = await this.dockerRegistryService.getDefaultDockerHubRegistry()
@@ -907,61 +907,61 @@ export class RuntimeArtifactManager implements TrackableJobExecutions, OnApplica
     const destinationRegistry = await this.dockerRegistryService.getAvailableInternalRegistry(runner.region)
 
     // Fire pull request (runner returns 202 immediately)
-    // Post-processing (digest, cleanup) is handled by handleCheckInitialRunnerTemplateArtifact on the next poll cycle
+    // Post-processing (digest, cleanup) is handled by handleCheckInitialRunnerSavedImageArtifact on the next poll cycle
     try {
       await this.pullRunnerArtifactCache(
         runner,
-        template.imageName,
+        savedImage.imageName,
         sourceRegistry,
         destinationRegistry ?? undefined,
-        template.artifactRef ? template.artifactRef : undefined,
+        savedImage.artifactRef ? savedImage.artifactRef : undefined,
       )
     } catch (err) {
       // Validation errors are still returned synchronously
-      await this.updateBoxTemplateState(template.id, BoxTemplateState.ERROR, err.message)
+      await this.updateSavedImageState(savedImage.id, SavedImageState.ERROR, err.message)
       throw err
     }
   }
 
-  async processBuildOnRunner(template: BoxTemplate, runner: Runner) {
+  async processBuildOnRunner(savedImage: SavedImage, runner: Runner) {
     try {
       const registry = await this.dockerRegistryService.getAvailableInternalRegistry(runner.region)
 
       const sourceRegistries = await this.dockerRegistryService.getSourceRegistriesForDockerfile(
-        template.buildInfo.dockerfileContent,
-        template.organizationId,
+        savedImage.buildInfo.dockerfileContent,
+        savedImage.organizationId,
       )
 
       const runnerAdapter = await this.runnerAdapterFactory.create(runner)
 
       registry.url = registry.url.replace(/^(https?:\/\/)/, '')
-      // Runner returns immediately; polling for completion is handled by handleCheckInitialRunnerTemplateArtifact
+      // Runner returns immediately; polling for completion is handled by handleCheckInitialRunnerSavedImageArtifact
       await runnerAdapter.buildArtifact(
-        template.buildInfo,
-        template.organizationId,
+        savedImage.buildInfo,
+        savedImage.organizationId,
         sourceRegistries.length > 0 ? sourceRegistries : undefined,
         registry ?? undefined,
         true,
       )
     } catch (err) {
-      this.logger.error(`Error building template ${template.name}: ${fromAxiosError(err)}`)
-      await this.updateBoxTemplateState(template.id, BoxTemplateState.BUILD_FAILED, fromAxiosError(err).message)
+      this.logger.error(`Error building savedImage ${savedImage.name}: ${fromAxiosError(err)}`)
+      await this.updateSavedImageState(savedImage.id, SavedImageState.BUILD_FAILED, fromAxiosError(err).message)
     }
   }
 
-  async handleBoxTemplateStatePending(template: BoxTemplate): Promise<SyncState> {
+  async handleSavedImageStatePending(savedImage: SavedImage): Promise<SyncState> {
     let initialRunner: Runner | undefined = undefined
 
-    if (!template.initialRunnerId) {
+    if (!savedImage.initialRunnerId) {
       // TODO: get only runners where the base artifact is available (extract from buildInfo)
-      const excludedRunnerIds = template.buildInfo
+      const excludedRunnerIds = savedImage.buildInfo
         ? await this.runnerService.getRunnersWithMultipleArtifactsBuilding()
         : await this.runnerService.getRunnersWithMultipleArtifactsPulling()
 
       try {
-        const regions = await this.boxTemplateService.getBoxTemplateRegions(template.id)
+        const regions = await this.savedImageService.getSavedImageRegions(savedImage.id)
         if (!regions.length) {
-          throw new Error('No regions found for template')
+          throw new Error('No regions found for savedImage')
         }
 
         initialRunner = await this.runnerService.getRandomAvailableRunner({
@@ -977,30 +977,30 @@ export class RuntimeArtifactManager implements TrackableJobExecutions, OnApplica
         return DONT_SYNC_AGAIN
       }
 
-      template.initialRunnerId = initialRunner.id
-      await this.boxTemplateRepository.save(template)
+      savedImage.initialRunnerId = initialRunner.id
+      await this.savedImageRepository.save(savedImage)
     } else {
-      initialRunner = await this.runnerService.findOneOrFail(template.initialRunnerId)
+      initialRunner = await this.runnerService.findOneOrFail(savedImage.initialRunnerId)
     }
 
-    if (template.buildInfo) {
-      await this.updateBoxTemplateState(template.id, BoxTemplateState.BUILDING)
+    if (savedImage.buildInfo) {
+      await this.updateSavedImageState(savedImage.id, SavedImageState.BUILDING)
       await this.runnerService.createRunnerArtifactCacheEntry(
         initialRunner.id,
-        template.buildInfo.artifactRef,
+        savedImage.buildInfo.artifactRef,
         RunnerArtifactCacheState.BUILDING_ARTIFACT,
       )
-      await this.processBuildOnRunner(template, initialRunner)
+      await this.processBuildOnRunner(savedImage, initialRunner)
     } else {
-      if (!template.artifactRef) {
+      if (!savedImage.artifactRef) {
         const runnerAdapter = await this.runnerAdapterFactory.create(initialRunner)
         const registry = await this.dockerRegistryService.findRegistryByImageName(
-          template.imageName,
+          savedImage.imageName,
           initialRunner.region,
-          template.organizationId,
+          savedImage.organizationId,
         )
 
-        const image = parseDockerImage(template.imageName)
+        const image = parseDockerImage(savedImage.imageName)
         if (registry && !image.registry) {
           image.registry = registry.url.replace(/^(https?:\/\/)/, '')
         }
@@ -1008,12 +1008,12 @@ export class RuntimeArtifactManager implements TrackableJobExecutions, OnApplica
 
         const internalRegistry = await this.dockerRegistryService.getAvailableInternalRegistry(initialRunner.region)
         if (!internalRegistry) {
-          throw new Error('No internal registry found for template artifact')
+          throw new Error('No internal registry found for saved image artifact')
         }
 
         const artifactDigestResponse = await runnerAdapter.inspectArtifactInRegistry(imageName, registry)
-        const digestSyncState = await this.processTemplateArtifactDigest(
-          template,
+        const digestSyncState = await this.processSavedImageArtifactDigest(
+          savedImage,
           internalRegistry,
           artifactDigestResponse.hash,
           artifactDigestResponse.sizeGB,
@@ -1023,32 +1023,32 @@ export class RuntimeArtifactManager implements TrackableJobExecutions, OnApplica
           return DONT_SYNC_AGAIN
         }
 
-        await this.boxTemplateRepository.save(template)
+        await this.savedImageRepository.save(savedImage)
       }
 
-      await this.updateBoxTemplateState(template.id, BoxTemplateState.PULLING)
+      await this.updateSavedImageState(savedImage.id, SavedImageState.PULLING)
       await this.runnerService.createRunnerArtifactCacheEntry(
         initialRunner.id,
-        template.artifactRef,
+        savedImage.artifactRef,
         RunnerArtifactCacheState.PULLING_ARTIFACT,
       )
-      await this.processPullOnInitialRunner(template, initialRunner)
+      await this.processPullOnInitialRunner(savedImage, initialRunner)
     }
 
     return SYNC_AGAIN
   }
 
-  private async updateBoxTemplateState(
-    templateId: string,
-    state: BoxTemplateState,
+  private async updateSavedImageState(
+    savedImageId: string,
+    state: SavedImageState,
     errorReason?: string,
     size?: number,
   ) {
-    const partialUpdate: Partial<BoxTemplate> = {
+    const partialUpdate: Partial<SavedImage> = {
       state,
     }
 
-    if (state === BoxTemplateState.ACTIVE) {
+    if (state === SavedImageState.ACTIVE) {
       partialUpdate.lastUsedAt = new Date()
     }
 
@@ -1060,15 +1060,15 @@ export class RuntimeArtifactManager implements TrackableJobExecutions, OnApplica
       partialUpdate.size = size
     }
 
-    const result = await this.boxTemplateRepository.update(
+    const result = await this.savedImageRepository.update(
       {
-        id: templateId,
+        id: savedImageId,
       },
       partialUpdate,
     )
 
     if (!result.affected) {
-      throw new NotFoundException(`BoxTemplate with ID ${templateId} not found`)
+      throw new NotFoundException(`SavedImage with ID ${savedImageId} not found`)
     }
   }
 
@@ -1118,48 +1118,48 @@ export class RuntimeArtifactManager implements TrackableJobExecutions, OnApplica
     }
   }
 
-  @Cron(CronExpression.EVERY_10_MINUTES, { name: 'deactivate-old-templates' })
+  @Cron(CronExpression.EVERY_10_MINUTES, { name: 'deactivate-old-savedImages' })
   @TrackJobExecution()
-  @LogExecution('deactivate-old-templates')
+  @LogExecution('deactivate-old-savedImages')
   @WithInstrumentation()
-  async deactivateOldTemplates() {
-    const lockKey = 'deactivate-old-templates-lock'
+  async deactivateOldSavedImages() {
+    const lockKey = 'deactivate-old-savedImages-lock'
     if (!(await this.redisLockProvider.lock(lockKey, 300))) {
       return
     }
 
     try {
-      const cutoff = `NOW() - INTERVAL '1 minute' * COALESCE(org."template_deactivation_timeout_minutes", ${DEFAULT_TEMPLATE_DEACTIVATION_TIMEOUT_MINUTES})`
+      const cutoff = `NOW() - INTERVAL '1 minute' * COALESCE(org."saved_image_deactivation_timeout_minutes", ${DEFAULT_SAVED_IMAGE_DEACTIVATION_TIMEOUT_MINUTES})`
 
-      const oldTemplates = await this.boxTemplateRepository
-        .createQueryBuilder('template')
-        .leftJoin('organization', 'org', `org."id" = template."organizationId"`)
-        .where('template.general = false')
-        .andWhere('template.state = :templateState', { templateState: BoxTemplateState.ACTIVE })
-        .andWhere(`(template."lastUsedAt" IS NULL OR template."lastUsedAt" < ${cutoff})`)
-        .andWhere(`template."createdAt" < ${cutoff}`)
+      const oldSavedImages = await this.savedImageRepository
+        .createQueryBuilder('savedImage')
+        .leftJoin('organization', 'org', `org."id" = savedImage."organizationId"`)
+        .where('savedImage.general = false')
+        .andWhere('savedImage.state = :savedImageState', { savedImageState: SavedImageState.ACTIVE })
+        .andWhere(`(savedImage."lastUsedAt" IS NULL OR savedImage."lastUsedAt" < ${cutoff})`)
+        .andWhere(`savedImage."createdAt" < ${cutoff}`)
         .andWhere(
           `NOT EXISTS (
-            SELECT 1 FROM box_template s
-            WHERE s."artifactRef" = template."artifactRef"
+            SELECT 1 FROM saved_image s
+            WHERE s."artifactRef" = savedImage."artifactRef"
             AND s.state = :activeState
             AND (s."lastUsedAt" >= ${cutoff} OR s."createdAt" >= ${cutoff})
           )`,
           {
-            activeState: BoxTemplateState.ACTIVE,
+            activeState: SavedImageState.ACTIVE,
           },
         )
         .take(100)
         .getMany()
 
-      if (oldTemplates.length === 0) {
+      if (oldSavedImages.length === 0) {
         return
       }
 
-      const templateIds = oldTemplates.map((template) => template.id)
-      await this.boxTemplateRepository.update({ id: In(templateIds) }, { state: BoxTemplateState.INACTIVE })
+      const savedImageIds = oldSavedImages.map((savedImage) => savedImage.id)
+      await this.savedImageRepository.update({ id: In(savedImageIds) }, { state: SavedImageState.INACTIVE })
 
-      const refs = oldTemplates.map((template) => template.artifactRef).filter((name) => name)
+      const refs = oldSavedImages.map((savedImage) => savedImage.artifactRef).filter((name) => name)
 
       if (refs.length > 0) {
         // Set associated RunnerArtifactCache records to REMOVING state
@@ -1169,59 +1169,59 @@ export class RuntimeArtifactManager implements TrackableJobExecutions, OnApplica
         )
 
         this.logger.debug(
-          `Deactivated ${oldTemplates.length} templates and marked ${result.affected} RunnerArtifactCaches for removal`,
+          `Deactivated ${oldSavedImages.length} savedImages and marked ${result.affected} RunnerArtifactCaches for removal`,
         )
       }
     } catch (error) {
-      this.logger.error(`Failed to deactivate old templates: ${fromAxiosError(error)}`)
+      this.logger.error(`Failed to deactivate old savedImages: ${fromAxiosError(error)}`)
     } finally {
       await this.redisLockProvider.unlock(lockKey)
     }
   }
 
-  @Cron(CronExpression.EVERY_10_MINUTES, { name: 'cleanup-inactive-templates-from-runners' })
+  @Cron(CronExpression.EVERY_10_MINUTES, { name: 'cleanup-inactive-savedImages-from-runners' })
   @TrackJobExecution()
-  @LogExecution('cleanup-inactive-templates-from-runners')
+  @LogExecution('cleanup-inactive-savedImages-from-runners')
   @WithInstrumentation()
-  async cleanupInactiveTemplatesFromRunners() {
-    const lockKey = 'cleanup-inactive-templates-from-runners-lock'
+  async cleanupInactiveSavedImagesFromRunners() {
+    const lockKey = 'cleanup-inactive-savedImages-from-runners-lock'
     if (!(await this.redisLockProvider.lock(lockKey, 300))) {
       return
     }
 
     try {
-      // Only fetch inactive templates that have associated runner artifact cache entries
-      const queryResult = await this.boxTemplateRepository
-        .createQueryBuilder('template')
-        .select('template."artifactRef"')
-        .where('template.state = :templateState', { templateState: BoxTemplateState.INACTIVE })
-        .andWhere('template."artifactRef" IS NOT NULL')
+      // Only fetch inactive savedImages that have associated runner artifact cache entries
+      const queryResult = await this.savedImageRepository
+        .createQueryBuilder('savedImage')
+        .select('savedImage."artifactRef"')
+        .where('savedImage.state = :savedImageState', { savedImageState: SavedImageState.INACTIVE })
+        .andWhere('savedImage."artifactRef" IS NOT NULL')
         .andWhereExists(
           this.runnerArtifactCacheRepository
             .createQueryBuilder('runner_artifact_cache')
             .select('1')
-            .where('runner_artifact_cache."artifactRef" = template."artifactRef"')
+            .where('runner_artifact_cache."artifactRef" = savedImage."artifactRef"')
             .andWhere('runner_artifact_cache.state != :runnerArtifactCacheState', {
               runnerArtifactCacheState: RunnerArtifactCacheState.REMOVING,
             }),
         )
         .andWhere(
           () => {
-            const query = this.boxTemplateRepository
+            const query = this.savedImageRepository
               .createQueryBuilder('s')
               .select('1')
-              .where('s."artifactRef" = template."artifactRef"')
-              .andWhere('s.state = :templateState')
+              .where('s."artifactRef" = savedImage."artifactRef"')
+              .andWhere('s.state = :savedImageState')
             return `NOT EXISTS (${query.getQuery()})`
           },
           {
-            templateState: BoxTemplateState.ACTIVE,
+            savedImageState: SavedImageState.ACTIVE,
           },
         )
         .take(100)
         .getRawMany()
 
-      const inactiveArtifactRefs = queryResult.map((result) => result.template_artifactRef)
+      const inactiveArtifactRefs = queryResult.map((result) => result.savedImage_artifactRef)
 
       if (inactiveArtifactRefs.length > 0) {
         // Set associated RunnerArtifactCache records to REMOVING state
@@ -1233,14 +1233,14 @@ export class RuntimeArtifactManager implements TrackableJobExecutions, OnApplica
         this.logger.debug(`Marked ${result.affected} RunnerArtifactCaches for removal`)
       }
     } catch (error) {
-      this.logger.error(`Failed to cleanup inactive templates from runners: ${fromAxiosError(error)}`)
+      this.logger.error(`Failed to cleanup inactive savedImages from runners: ${fromAxiosError(error)}`)
     } finally {
       await this.redisLockProvider.unlock(lockKey)
     }
   }
 
-  private async processTemplateArtifactDigest(
-    template: BoxTemplate,
+  private async processSavedImageArtifactDigest(
+    savedImage: SavedImage,
     internalRegistry: DockerRegistry,
     hash: string,
     sizeGB?: number,
@@ -1248,28 +1248,28 @@ export class RuntimeArtifactManager implements TrackableJobExecutions, OnApplica
   ): Promise<SyncState | void> {
     let shouldSave = false
 
-    if (!template.artifactRef) {
+    if (!savedImage.artifactRef) {
       shouldSave = true
-      template.artifactRef = createBoxLiteInternalArtifactRef(internalRegistry.url, internalRegistry.project, hash)
+      savedImage.artifactRef = createBoxLiteInternalArtifactRef(internalRegistry.url, internalRegistry.project, hash)
     }
 
-    if (template.size == null && typeof sizeGB === 'number') {
+    if (savedImage.size == null && typeof sizeGB === 'number') {
       shouldSave = true
 
-      const organization = await this.organizationService.findOne(template.organizationId)
+      const organization = await this.organizationService.findOne(savedImage.organizationId)
       if (!organization) {
-        throw new NotFoundException(`Organization with ID ${template.organizationId} not found`)
+        throw new NotFoundException(`Organization with ID ${savedImage.organizationId} not found`)
       }
 
-      const MAX_SIZE_GB = organization.maxTemplateSize
+      const MAX_SIZE_GB = organization.maxSavedImageSize
 
-      template.size = sizeGB
+      savedImage.size = sizeGB
 
       if (sizeGB > MAX_SIZE_GB) {
-        await this.updateBoxTemplateState(
-          template.id,
-          BoxTemplateState.ERROR,
-          `BoxTemplate size (${sizeGB.toFixed(2)}GB) exceeds maximum allowed size of ${MAX_SIZE_GB}GB`,
+        await this.updateSavedImageState(
+          savedImage.id,
+          SavedImageState.ERROR,
+          `SavedImage size (${sizeGB.toFixed(2)}GB) exceeds maximum allowed size of ${MAX_SIZE_GB}GB`,
           sizeGB,
         )
         return DONT_SYNC_AGAIN
@@ -1277,33 +1277,33 @@ export class RuntimeArtifactManager implements TrackableJobExecutions, OnApplica
     }
 
     // If entrypoint is not explicitly set, set it from the artifact metadata.
-    if (!template.entrypoint) {
+    if (!savedImage.entrypoint) {
       if (entrypoint && entrypoint.length > 0) {
         shouldSave = true
         if (Array.isArray(entrypoint)) {
-          template.entrypoint = entrypoint
+          savedImage.entrypoint = entrypoint
         } else {
-          template.entrypoint = [entrypoint]
+          savedImage.entrypoint = [entrypoint]
         }
       }
     }
 
     if (shouldSave) {
-      await this.boxTemplateRepository.save(template)
+      await this.savedImageRepository.save(savedImage)
     }
   }
 
   @OnAsyncEvent({
-    event: BoxTemplateEvents.CREATED,
+    event: SavedImageEvents.CREATED,
   })
-  private async handleBoxTemplateCreatedEvent(event: BoxTemplateCreatedEvent) {
-    await this.syncBoxTemplateState(event.template.id)
+  private async handleSavedImageCreatedEvent(event: SavedImageCreatedEvent) {
+    await this.syncSavedImageState(event.savedImage.id)
   }
 
   @OnAsyncEvent({
-    event: BoxTemplateEvents.ACTIVATED,
+    event: SavedImageEvents.ACTIVATED,
   })
-  private async handleBoxTemplateActivatedEvent(event: BoxTemplateActivatedEvent) {
-    await this.syncBoxTemplateState(event.template.id)
+  private async handleSavedImageActivatedEvent(event: SavedImageActivatedEvent) {
+    await this.syncSavedImageState(event.savedImage.id)
   }
 }

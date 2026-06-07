@@ -33,7 +33,7 @@ import {
   RegionArtifactRegistryUpdatedEvent,
 } from '../events/region-artifact-registry-creds.event'
 import { UpdateRegionDto } from '../dto/update-region.dto'
-import { BoxTemplate } from '../../sandbox/entities/box-template.entity'
+import { SavedImage } from '../../sandbox/entities/saved-image.entity'
 import { InjectRedis } from '@nestjs-modules/ioredis'
 import { Redis } from 'ioredis'
 import { toolboxProxyUrlCacheKey } from '../../sandbox/utils/sandbox-lookup-cache.util'
@@ -49,8 +49,8 @@ export class RegionService {
     private readonly runnerRepository: Repository<Runner>,
     private readonly dataSource: DataSource,
     private readonly eventEmitter: EventEmitter2,
-    @InjectRepository(BoxTemplate)
-    private readonly boxTemplateRepository: Repository<BoxTemplate>,
+    @InjectRepository(SavedImage)
+    private readonly savedImageRepository: Repository<SavedImage>,
     @InjectRedis() private readonly redis: Redis,
     private readonly configService: TypedConfigService,
   ) {}
@@ -298,15 +298,15 @@ export class RegionService {
 
       if (updateRegion.artifactRegistryUrl !== undefined) {
         if (region.artifactRegistryUrl) {
-          // Existing template artifacts may still be pinned to this registry host.
-          const exists = await this.boxTemplateRepository.exists({
+          // Existing saved image artifacts may still be pinned to this registry host.
+          const exists = await this.savedImageRepository.exists({
             where: {
               artifactRef: Like(`${region.artifactRegistryUrl.replace(/^https?:\/\//, '')}%`),
             },
           })
           if (exists) {
             throw new BadRequestException(
-              'Cannot change artifact registry URL for region with existing template artifacts. Please remove them first.',
+              'Cannot change artifact registry URL for region with existing saved image artifacts. Please remove them first.',
             )
           }
         }

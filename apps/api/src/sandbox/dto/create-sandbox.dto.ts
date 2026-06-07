@@ -21,16 +21,16 @@ export class CreateSandboxDto {
   name?: string
 
   @ApiPropertyOptional({
-    description: 'The ID or name of the template used for the sandbox',
-    example: 'ubuntu-template-id',
+    description: 'The ID or name of the savedImage used for the sandbox',
+    example: 'ubuntu-saved-image-id',
   })
   @IsOptional()
   @IsString()
-  templateId?: string
+  savedImageId?: string
 
   @ApiPropertyOptional({
-    description: 'Deprecated alias for templateId used by older clients',
-    example: 'ubuntu-template-id',
+    description: 'Deprecated alias for savedImageId used by older clients',
+    example: 'ubuntu-saved-image-id',
     deprecated: true,
   })
   @IsOptional()

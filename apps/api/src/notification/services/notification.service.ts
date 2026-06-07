@@ -10,11 +10,11 @@ import { NotificationEmitter } from '../gateways/notification-emitter.abstract'
 import { SandboxEvents } from '../../sandbox/constants/sandbox-events.constants'
 import { SandboxCreatedEvent } from '../../sandbox/events/sandbox-create.event'
 import { SandboxStateUpdatedEvent } from '../../sandbox/events/sandbox-state-updated.event'
-import { BoxTemplateCreatedEvent } from '../../sandbox/events/box-template-created.event'
-import { BoxTemplateEvents } from '../../sandbox/constants/box-template-events'
-import { BoxTemplateDto } from '../../sandbox/dto/box-template.dto'
-import { BoxTemplateStateUpdatedEvent } from '../../sandbox/events/box-template-state-updated.event'
-import { BoxTemplateRemovedEvent } from '../../sandbox/events/box-template-removed.event'
+import { SavedImageCreatedEvent } from '../../sandbox/events/saved-image-created.event'
+import { SavedImageEvents } from '../../sandbox/constants/saved-image-events'
+import { SavedImageDto } from '../../sandbox/dto/saved-image.dto'
+import { SavedImageStateUpdatedEvent } from '../../sandbox/events/saved-image-state-updated.event'
+import { SavedImageRemovedEvent } from '../../sandbox/events/saved-image-removed.event'
 import { VolumeEvents } from '../../sandbox/constants/volume-events'
 import { VolumeCreatedEvent } from '../../sandbox/events/volume-created.event'
 import { VolumeDto } from '../../sandbox/dto/volume.dto'
@@ -61,22 +61,22 @@ export class NotificationService {
     this.redis.publish(SANDBOX_EVENT_CHANNEL, JSON.stringify(event))
   }
 
-  @OnEvent(BoxTemplateEvents.CREATED)
-  async handleTemplateCreated(event: BoxTemplateCreatedEvent) {
-    const dto = BoxTemplateDto.fromBoxTemplateEntity(event.template)
-    this.notificationEmitter.emitTemplateCreated(dto)
+  @OnEvent(SavedImageEvents.CREATED)
+  async handleSavedImageCreated(event: SavedImageCreatedEvent) {
+    const dto = SavedImageDto.fromSavedImageEntity(event.savedImage)
+    this.notificationEmitter.emitSavedImageCreated(dto)
   }
 
-  @OnEvent(BoxTemplateEvents.STATE_UPDATED)
-  async handleBoxTemplateStateUpdated(event: BoxTemplateStateUpdatedEvent) {
-    const dto = BoxTemplateDto.fromBoxTemplateEntity(event.template)
-    this.notificationEmitter.emitBoxTemplateStateUpdated(dto, event.oldState, event.newState)
+  @OnEvent(SavedImageEvents.STATE_UPDATED)
+  async handleSavedImageStateUpdated(event: SavedImageStateUpdatedEvent) {
+    const dto = SavedImageDto.fromSavedImageEntity(event.savedImage)
+    this.notificationEmitter.emitSavedImageStateUpdated(dto, event.oldState, event.newState)
   }
 
-  @OnEvent(BoxTemplateEvents.REMOVED)
-  async handleTemplateRemoved(event: BoxTemplateRemovedEvent) {
-    const dto = BoxTemplateDto.fromBoxTemplateEntity(event.template)
-    this.notificationEmitter.emitTemplateRemoved(dto)
+  @OnEvent(SavedImageEvents.REMOVED)
+  async handleSavedImageRemoved(event: SavedImageRemovedEvent) {
+    const dto = SavedImageDto.fromSavedImageEntity(event.savedImage)
+    this.notificationEmitter.emitSavedImageRemoved(dto)
   }
 
   @OnEvent(VolumeEvents.CREATED)

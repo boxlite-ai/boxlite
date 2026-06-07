@@ -14,7 +14,7 @@ export const ORGANIZATION_ROLE_PERMISSIONS_GROUPS: { name: string; permissions: 
     },
     {
       name: 'Images',
-      permissions: [OrganizationRolePermissionsEnum.WRITE_TEMPLATES, OrganizationRolePermissionsEnum.DELETE_TEMPLATES],
+      permissions: [OrganizationRolePermissionsEnum.WRITE_SAVED_IMAGES, OrganizationRolePermissionsEnum.DELETE_SAVED_IMAGES],
     },
     {
       name: 'Registries',

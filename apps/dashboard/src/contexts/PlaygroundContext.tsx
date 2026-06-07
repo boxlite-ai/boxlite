@@ -22,7 +22,7 @@ import {
   ComputerUse,
   CreateSandboxBaseParams,
   CreateSandboxFromImageParams,
-  CreateSandboxFromTemplateParams,
+  CreateSandboxFromSavedImageParams,
   Resources,
   ScreenshotOptions,
   ScreenshotRegion,
@@ -186,7 +186,7 @@ export type ProcessCodeExecutionOperationsActionFormData<T extends CodeRunParams
 
 export interface SandboxParams {
   language?: CodeLanguage
-  templateName?: string
+  savedImageName?: string
   resources: Resources
   createSandboxBaseParams: CreateSandboxBaseParams
   // File system operations params
@@ -280,10 +280,10 @@ export type SandboxParametersInfo = {
   useAutoArchiveInterval: boolean
   useAutoDeleteInterval: boolean
   useSandboxCreateParams: boolean
-  useCustomSandboxTemplateName: boolean
+  useCustomSavedImageName: boolean
   createSandboxFromImage: boolean
-  createSandboxFromTemplate: boolean
-  createSandboxParams: CreateSandboxBaseParams | CreateSandboxFromImageParams | CreateSandboxFromTemplateParams
+  createSandboxFromSavedImage: boolean
+  createSandboxParams: CreateSandboxBaseParams | CreateSandboxFromImageParams | CreateSandboxFromSavedImageParams
 }
 
 export interface IPlaygroundContext {

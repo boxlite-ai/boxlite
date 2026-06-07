@@ -58,16 +58,16 @@ export class Organization {
   @Column({
     type: 'int',
     default: 20,
-    name: 'max_template_size',
+    name: 'max_saved_image_size',
   })
-  maxTemplateSize: number
+  maxSavedImageSize: number
 
   @Column({
     type: 'int',
     default: 100,
-    name: 'template_quota',
+    name: 'saved_image_quota',
   })
-  templateQuota: number
+  savedImageQuota: number
 
   @Column({
     type: 'int',
@@ -173,9 +173,9 @@ export class Organization {
   @Column({
     type: 'int',
     default: 20160,
-    name: 'template_deactivation_timeout_minutes',
+    name: 'saved_image_deactivation_timeout_minutes',
   })
-  templateDeactivationTimeoutMinutes: number
+  savedImageDeactivationTimeoutMinutes: number
 
   @Column({
     default: false,

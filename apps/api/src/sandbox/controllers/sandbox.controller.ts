@@ -182,7 +182,7 @@ export class SandboxController {
       labels,
       includeErroredDeleted: includeErroredDestroyed,
       states,
-      templates,
+      savedImages,
       regions,
       minCpu,
       maxCpu,
@@ -206,7 +206,7 @@ export class SandboxController {
         labels: labels ? JSON.parse(labels) : undefined,
         includeErroredDestroyed,
         states,
-        templates,
+        savedImages,
         regionIds: regions,
         minCpu,
         maxCpu,
@@ -253,7 +253,7 @@ export class SandboxController {
     requestMetadata: {
       body: (req: TypedRequest<CreateSandboxDto>) => ({
         name: req.body?.name,
-        templateId: req.body?.templateId ?? req.body?.snapshot,
+        savedImageId: req.body?.savedImageId ?? req.body?.snapshot,
         user: req.body?.user,
         env: req.body?.env
           ? Object.fromEntries(Object.keys(req.body?.env).map((key) => [key, MASKED_AUDIT_VALUE]))
@@ -280,19 +280,19 @@ export class SandboxController {
     @AuthContext() authContext: OrganizationAuthContext,
     @Body() requestDto: CreateSandboxDto,
   ): Promise<SandboxDto> {
-    const createSandboxDto = this.normalizeTemplateSource(requestDto)
+    const createSandboxDto = this.normalizeSavedImageSource(requestDto)
     const organization = authContext.organization
     let sandbox: SandboxDto
     const canUseBuildInfoSource = authContext.role === SystemRole.ADMIN
 
-    if (createSandboxDto.templateId) {
+    if (createSandboxDto.savedImageId) {
       if (createSandboxDto.buildInfo) {
-        throw new BadRequestError('Cannot specify build info when using a template')
+        throw new BadRequestError('Cannot specify build info when using a savedImage')
       }
       if (createSandboxDto.gpu !== undefined) {
-        throw new BadRequestError('Cannot specify GPU resources when using a template')
+        throw new BadRequestError('Cannot specify GPU resources when using a savedImage')
       }
-      sandbox = await this.sandboxService.createFromTemplate(createSandboxDto, organization)
+      sandbox = await this.sandboxService.createFromSavedImage(createSandboxDto, organization)
       if (sandbox.state === SandboxState.STARTED) {
         return sandbox
       }
@@ -300,11 +300,11 @@ export class SandboxController {
       await this.waitForSandboxStarted(sandbox, 30)
     } else if (createSandboxDto.buildInfo) {
       if (!canUseBuildInfoSource) {
-        throw new BadRequestError('Choose one of the approved templates to create a box')
+        throw new BadRequestError('Choose one of the approved savedImages to create a box')
       }
       sandbox = await this.sandboxService.createFromBuildInfo(createSandboxDto, organization)
     } else {
-      sandbox = await this.sandboxService.createFromTemplate(createSandboxDto, organization)
+      sandbox = await this.sandboxService.createFromSavedImage(createSandboxDto, organization)
       if (sandbox.state === SandboxState.STARTED) {
         return sandbox
       }
@@ -315,18 +315,18 @@ export class SandboxController {
     return sandbox
   }
 
-  private normalizeTemplateSource(createSandboxDto: CreateSandboxDto): CreateSandboxDto {
-    const templateId = createSandboxDto.templateId?.trim()
+  private normalizeSavedImageSource(createSandboxDto: CreateSandboxDto): CreateSandboxDto {
+    const savedImageId = createSandboxDto.savedImageId?.trim()
     const legacySnapshot = createSandboxDto.snapshot?.trim()
 
-    if (templateId && legacySnapshot && templateId !== legacySnapshot) {
-      throw new BadRequestError('Use either templateId or deprecated snapshot, not both')
+    if (savedImageId && legacySnapshot && savedImageId !== legacySnapshot) {
+      throw new BadRequestError('Use either savedImageId or deprecated snapshot, not both')
     }
 
-    if (!templateId && legacySnapshot) {
+    if (!savedImageId && legacySnapshot) {
       return {
         ...createSandboxDto,
-        templateId: legacySnapshot,
+        savedImageId: legacySnapshot,
       }
     }
 

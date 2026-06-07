@@ -16,7 +16,7 @@
 import type { Configuration } from '../configuration';
 import type { AxiosPromise, AxiosInstance, RawAxiosRequestConfig } from 'axios';
 import globalAxios from 'axios';
-// Some imports not used depending on template conditions
+// Some imports not used depending on savedImage conditions
 // @ts-ignore
 import { DUMMY_BASE_URL, assertParamExists, setApiKeyToObject, setBasicAuthToObject, setBearerAuthToObject, setOAuthToObject, setSearchParams, serializeDataIfNeeded, toPathString, createRequestFunction } from '../common';
 // @ts-ignore
@@ -1011,7 +1011,7 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
          * @param {string} [labels] JSON encoded labels to filter by
          * @param {boolean} [includeErroredDeleted] Include results with errored state and deleted desired state
          * @param {Array<ListSandboxesPaginatedStatesEnum>} [states] List of states to filter by
-         * @param {Array<string>} [templates] List of template names to filter by
+         * @param {Array<string>} [savedImages] List of saved image names to filter by
          * @param {Array<string>} [regions] List of regions to filter by
          * @param {number} [minCpu] Minimum CPU
          * @param {number} [maxCpu] Maximum CPU
@@ -1026,7 +1026,7 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        listSandboxesPaginated: async (xBoxLiteOrganizationID?: string, page?: number, limit?: number, id?: string, name?: string, labels?: string, includeErroredDeleted?: boolean, states?: Array<ListSandboxesPaginatedStatesEnum>, templates?: Array<string>, regions?: Array<string>, minCpu?: number, maxCpu?: number, minMemoryGiB?: number, maxMemoryGiB?: number, minDiskGiB?: number, maxDiskGiB?: number, lastEventAfter?: Date, lastEventBefore?: Date, sort?: ListSandboxesPaginatedSortEnum, order?: ListSandboxesPaginatedOrderEnum, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+        listSandboxesPaginated: async (xBoxLiteOrganizationID?: string, page?: number, limit?: number, id?: string, name?: string, labels?: string, includeErroredDeleted?: boolean, states?: Array<ListSandboxesPaginatedStatesEnum>, savedImages?: Array<string>, regions?: Array<string>, minCpu?: number, maxCpu?: number, minMemoryGiB?: number, maxMemoryGiB?: number, minDiskGiB?: number, maxDiskGiB?: number, lastEventAfter?: Date, lastEventBefore?: Date, sort?: ListSandboxesPaginatedSortEnum, order?: ListSandboxesPaginatedOrderEnum, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
             const localVarPath = `/sandbox/paginated`;
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
@@ -1073,8 +1073,8 @@ export const SandboxApiAxiosParamCreator = function (configuration?: Configurati
                 localVarQueryParameter['states'] = states;
             }
 
-            if (templates) {
-                localVarQueryParameter['templates'] = templates;
+            if (savedImages) {
+                localVarQueryParameter['saved-images'] = savedImages;
             }
 
             if (regions) {
@@ -2057,7 +2057,7 @@ export const SandboxApiFp = function(configuration?: Configuration) {
          * @param {string} [labels] JSON encoded labels to filter by
          * @param {boolean} [includeErroredDeleted] Include results with errored state and deleted desired state
          * @param {Array<ListSandboxesPaginatedStatesEnum>} [states] List of states to filter by
-         * @param {Array<string>} [templates] List of template names to filter by
+         * @param {Array<string>} [savedImages] List of saved image names to filter by
          * @param {Array<string>} [regions] List of regions to filter by
          * @param {number} [minCpu] Minimum CPU
          * @param {number} [maxCpu] Maximum CPU
@@ -2072,8 +2072,8 @@ export const SandboxApiFp = function(configuration?: Configuration) {
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        async listSandboxesPaginated(xBoxLiteOrganizationID?: string, page?: number, limit?: number, id?: string, name?: string, labels?: string, includeErroredDeleted?: boolean, states?: Array<ListSandboxesPaginatedStatesEnum>, templates?: Array<string>, regions?: Array<string>, minCpu?: number, maxCpu?: number, minMemoryGiB?: number, maxMemoryGiB?: number, minDiskGiB?: number, maxDiskGiB?: number, lastEventAfter?: Date, lastEventBefore?: Date, sort?: ListSandboxesPaginatedSortEnum, order?: ListSandboxesPaginatedOrderEnum, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<PaginatedSandboxes>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.listSandboxesPaginated(xBoxLiteOrganizationID, page, limit, id, name, labels, includeErroredDeleted, states, templates, regions, minCpu, maxCpu, minMemoryGiB, maxMemoryGiB, minDiskGiB, maxDiskGiB, lastEventAfter, lastEventBefore, sort, order, options);
+        async listSandboxesPaginated(xBoxLiteOrganizationID?: string, page?: number, limit?: number, id?: string, name?: string, labels?: string, includeErroredDeleted?: boolean, states?: Array<ListSandboxesPaginatedStatesEnum>, savedImages?: Array<string>, regions?: Array<string>, minCpu?: number, maxCpu?: number, minMemoryGiB?: number, maxMemoryGiB?: number, minDiskGiB?: number, maxDiskGiB?: number, lastEventAfter?: Date, lastEventBefore?: Date, sort?: ListSandboxesPaginatedSortEnum, order?: ListSandboxesPaginatedOrderEnum, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<PaginatedSandboxes>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.listSandboxesPaginated(xBoxLiteOrganizationID, page, limit, id, name, labels, includeErroredDeleted, states, savedImages, regions, minCpu, maxCpu, minMemoryGiB, maxMemoryGiB, minDiskGiB, maxDiskGiB, lastEventAfter, lastEventBefore, sort, order, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['SandboxApi.listSandboxesPaginated']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
@@ -2514,7 +2514,7 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
          * @param {string} [labels] JSON encoded labels to filter by
          * @param {boolean} [includeErroredDeleted] Include results with errored state and deleted desired state
          * @param {Array<ListSandboxesPaginatedStatesEnum>} [states] List of states to filter by
-         * @param {Array<string>} [templates] List of template names to filter by
+         * @param {Array<string>} [savedImages] List of saved image names to filter by
          * @param {Array<string>} [regions] List of regions to filter by
          * @param {number} [minCpu] Minimum CPU
          * @param {number} [maxCpu] Maximum CPU
@@ -2529,8 +2529,8 @@ export const SandboxApiFactory = function (configuration?: Configuration, basePa
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        listSandboxesPaginated(xBoxLiteOrganizationID?: string, page?: number, limit?: number, id?: string, name?: string, labels?: string, includeErroredDeleted?: boolean, states?: Array<ListSandboxesPaginatedStatesEnum>, templates?: Array<string>, regions?: Array<string>, minCpu?: number, maxCpu?: number, minMemoryGiB?: number, maxMemoryGiB?: number, minDiskGiB?: number, maxDiskGiB?: number, lastEventAfter?: Date, lastEventBefore?: Date, sort?: ListSandboxesPaginatedSortEnum, order?: ListSandboxesPaginatedOrderEnum, options?: RawAxiosRequestConfig): AxiosPromise<PaginatedSandboxes> {
-            return localVarFp.listSandboxesPaginated(xBoxLiteOrganizationID, page, limit, id, name, labels, includeErroredDeleted, states, templates, regions, minCpu, maxCpu, minMemoryGiB, maxMemoryGiB, minDiskGiB, maxDiskGiB, lastEventAfter, lastEventBefore, sort, order, options).then((request) => request(axios, basePath));
+        listSandboxesPaginated(xBoxLiteOrganizationID?: string, page?: number, limit?: number, id?: string, name?: string, labels?: string, includeErroredDeleted?: boolean, states?: Array<ListSandboxesPaginatedStatesEnum>, savedImages?: Array<string>, regions?: Array<string>, minCpu?: number, maxCpu?: number, minMemoryGiB?: number, maxMemoryGiB?: number, minDiskGiB?: number, maxDiskGiB?: number, lastEventAfter?: Date, lastEventBefore?: Date, sort?: ListSandboxesPaginatedSortEnum, order?: ListSandboxesPaginatedOrderEnum, options?: RawAxiosRequestConfig): AxiosPromise<PaginatedSandboxes> {
+            return localVarFp.listSandboxesPaginated(xBoxLiteOrganizationID, page, limit, id, name, labels, includeErroredDeleted, states, savedImages, regions, minCpu, maxCpu, minMemoryGiB, maxMemoryGiB, minDiskGiB, maxDiskGiB, lastEventAfter, lastEventBefore, sort, order, options).then((request) => request(axios, basePath));
         },
         /**
          *
@@ -2965,7 +2965,7 @@ export class SandboxApi extends BaseAPI {
      * @param {string} [labels] JSON encoded labels to filter by
      * @param {boolean} [includeErroredDeleted] Include results with errored state and deleted desired state
      * @param {Array<ListSandboxesPaginatedStatesEnum>} [states] List of states to filter by
-     * @param {Array<string>} [templates] List of template names to filter by
+     * @param {Array<string>} [savedImages] List of saved image names to filter by
      * @param {Array<string>} [regions] List of regions to filter by
      * @param {number} [minCpu] Minimum CPU
      * @param {number} [maxCpu] Maximum CPU
@@ -2981,8 +2981,8 @@ export class SandboxApi extends BaseAPI {
      * @throws {RequiredError}
      * @memberof SandboxApi
      */
-    public listSandboxesPaginated(xBoxLiteOrganizationID?: string, page?: number, limit?: number, id?: string, name?: string, labels?: string, includeErroredDeleted?: boolean, states?: Array<ListSandboxesPaginatedStatesEnum>, templates?: Array<string>, regions?: Array<string>, minCpu?: number, maxCpu?: number, minMemoryGiB?: number, maxMemoryGiB?: number, minDiskGiB?: number, maxDiskGiB?: number, lastEventAfter?: Date, lastEventBefore?: Date, sort?: ListSandboxesPaginatedSortEnum, order?: ListSandboxesPaginatedOrderEnum, options?: RawAxiosRequestConfig) {
-        return SandboxApiFp(this.configuration).listSandboxesPaginated(xBoxLiteOrganizationID, page, limit, id, name, labels, includeErroredDeleted, states, templates, regions, minCpu, maxCpu, minMemoryGiB, maxMemoryGiB, minDiskGiB, maxDiskGiB, lastEventAfter, lastEventBefore, sort, order, options).then((request) => request(this.axios, this.basePath));
+    public listSandboxesPaginated(xBoxLiteOrganizationID?: string, page?: number, limit?: number, id?: string, name?: string, labels?: string, includeErroredDeleted?: boolean, states?: Array<ListSandboxesPaginatedStatesEnum>, savedImages?: Array<string>, regions?: Array<string>, minCpu?: number, maxCpu?: number, minMemoryGiB?: number, maxMemoryGiB?: number, minDiskGiB?: number, maxDiskGiB?: number, lastEventAfter?: Date, lastEventBefore?: Date, sort?: ListSandboxesPaginatedSortEnum, order?: ListSandboxesPaginatedOrderEnum, options?: RawAxiosRequestConfig) {
+        return SandboxApiFp(this.configuration).listSandboxesPaginated(xBoxLiteOrganizationID, page, limit, id, name, labels, includeErroredDeleted, states, savedImages, regions, minCpu, maxCpu, minMemoryGiB, maxMemoryGiB, minDiskGiB, maxDiskGiB, lastEventAfter, lastEventBefore, sort, order, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**
@@ -3193,7 +3193,7 @@ export const ListSandboxesPaginatedSortEnum = {
     ID: 'id',
     NAME: 'name',
     STATE: 'state',
-    TEMPLATE: 'template',
+    SAVED_IMAGE: 'savedImage',
     REGION: 'region',
     UPDATED_AT: 'updatedAt',
     CREATED_AT: 'createdAt'

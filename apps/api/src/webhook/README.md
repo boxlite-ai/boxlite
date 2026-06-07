@@ -99,11 +99,11 @@ The service automatically sends webhooks for the following events:
 - `sandbox.created` - When a sandbox is created
 - `sandbox.state.updated` - When sandbox state changes
 
-### Template Events
+### SavedImage Events
 
-- `template.created` - When a template is created
-- `template.state.updated` - When template state changes
-- `template.removed` - When a template is removed
+- `savedImage.created` - When a saved image is created
+- `savedImage.state.updated` - When savedImage state changes
+- `savedImage.removed` - When a saved image is removed
 
 ### Volume Events
 
@@ -138,12 +138,12 @@ All webhooks include event-specific data relevant to the resource being updated.
 }
 ```
 
-### Example Template Created Payload
+### Example SavedImage Created Payload
 
 ```json
 {
-  "id": "template-uuid",
-  "name": "my-template",
+  "id": "saved-image-uuid",
+  "name": "my-savedImage",
   "organizationId": "org-uuid",
   "state": "ACTIVE",
   "createdAt": "2025-01-01T00:00:00.000Z"

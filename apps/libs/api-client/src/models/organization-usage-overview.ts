@@ -34,13 +34,13 @@ export interface OrganizationUsageOverview {
      * @type {number}
      * @memberof OrganizationUsageOverview
      */
-    'totalTemplateQuota': number;
+    'totalSavedImageQuota': number;
     /**
      *
      * @type {number}
      * @memberof OrganizationUsageOverview
      */
-    'currentTemplateUsage': number;
+    'currentSavedImageUsage': number;
     /**
      *
      * @type {number}

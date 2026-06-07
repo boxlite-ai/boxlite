@@ -105,11 +105,11 @@ export interface Organization {
      */
     'maxDiskPerSandbox': number;
     /**
-     * Time in minutes before an unused template is deactivated
+     * Time in minutes before an unused savedImage is deactivated
      * @type {number}
      * @memberof Organization
      */
-    'templateDeactivationTimeoutMinutes': number;
+    'savedImageDeactivationTimeoutMinutes': number;
     /**
      * Sandbox default network block all
      * @type {boolean}

@@ -69,23 +69,23 @@ export interface BoxliteConfiguration {
      */
     'pylonAppId'?: string;
     /**
-     * Proxy template URL
+     * Proxy savedImage URL
      * @type {string}
      * @memberof BoxliteConfiguration
      */
-    'proxyTemplateUrl': string;
+    'proxySavedImageUrl': string;
     /**
-     * Toolbox template URL
+     * Toolbox savedImage URL
      * @type {string}
      * @memberof BoxliteConfiguration
      */
     'proxyToolboxUrl': string;
     /**
-     * Default template for sandboxes
+     * Default savedImage for sandboxes
      * @type {string}
      * @memberof BoxliteConfiguration
      */
-    'defaultTemplate': string;
+    'defaultSavedImage': string;
     /**
      * Dashboard URL
      * @type {string}

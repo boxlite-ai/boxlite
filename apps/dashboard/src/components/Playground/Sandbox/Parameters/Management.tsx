@@ -6,11 +6,11 @@
 
 import { Tooltip } from '@/components/Tooltip'
 import { Label } from '@/components/ui/label'
-import { SANDBOX_TEMPLATE_DEFAULT_VALUE } from '@/constants/Playground'
+import { SANDBOX_SAVED_IMAGE_DEFAULT_VALUE } from '@/constants/Playground'
 import { NumberParameterFormItem, ParameterFormItem } from '@/contexts/PlaygroundContext'
 import { usePlayground } from '@/hooks/usePlayground'
 import { getLanguageCodeToRun } from '@/lib/playground'
-import { BoxTemplateDto } from '@boxlite-ai/api-client'
+import { SavedImageDto } from '@boxlite-ai/api-client'
 import { CodeLanguage, Resources } from '@boxlite-ai/sdk'
 import { HelpCircleIcon } from 'lucide-react'
 import InlineInputFormControl from '../../Inputs/InlineInputFormControl'
@@ -19,19 +19,19 @@ import FormSelectInput from '../../Inputs/SelectInput'
 import StackedInputFormControl from '../../Inputs/StackedInputFormControl'
 import { useEffect } from 'react'
 
-// TODO - Currently, image selection is not supported in the Playground, so props are hardcoded to an empty array and false for loading. We keep image parts commented to enable it in future if requested by users. Also, sandbox creation and code snippet generation support template selection, so they will work when image selection is enabled in the UI without requiring any additional changes. Currently, the image value is fixed to 'Default'
+// TODO - Currently, image selection is not supported in the Playground, so props are hardcoded to an empty array and false for loading. We keep image parts commented to enable it in future if requested by users. Also, sandbox creation and code snippet generation support savedImage selection, so they will work when image selection is enabled in the UI without requiring any additional changes. Currently, the image value is fixed to 'Default'
 type SandboxManagementParametersProps = {
-  templatesData: Array<BoxTemplateDto>
-  templatesLoading: boolean
+  savedImagesData: Array<SavedImageDto>
+  savedImagesLoading: boolean
 }
 
 const SandboxManagementParameters: React.FC<SandboxManagementParametersProps> = ({
-  templatesData,
-  templatesLoading,
+  savedImagesData,
+  savedImagesLoading,
 }) => {
   const { sandboxParametersState, setSandboxParameterValue } = usePlayground()
   const sandboxLanguage = sandboxParametersState['language']
-  const sandboxTemplateName = sandboxParametersState['templateName']
+  const savedImageName = sandboxParametersState['savedImageName']
   const resources = sandboxParametersState['resources']
   const sandboxFromImageParams = sandboxParametersState['createSandboxBaseParams']
 
@@ -41,9 +41,9 @@ const SandboxManagementParameters: React.FC<SandboxManagementParametersProps> = 
     placeholder: 'Select sandbox language',
   }
 
-  // const sandboxTemplateFormData: ParameterFormItem = {
+  // const savedImageFormData: ParameterFormItem = {
   //   label: 'Image',
-  //   key: 'templateName',
+  //   key: 'savedImageName',
   //   placeholder: 'Select sandbox image',
   // }
 
@@ -83,7 +83,7 @@ const SandboxManagementParameters: React.FC<SandboxManagementParametersProps> = 
     })
   }, [sandboxParametersState.language, setSandboxParameterValue])
 
-  const nonDefaultTemplateSelected = sandboxTemplateName && sandboxTemplateName !== SANDBOX_TEMPLATE_DEFAULT_VALUE
+  const nonDefaultSavedImageSelected = savedImageName && savedImageName !== SANDBOX_SAVED_IMAGE_DEFAULT_VALUE
 
   return (
     <>
@@ -97,20 +97,20 @@ const SandboxManagementParameters: React.FC<SandboxManagementParametersProps> = 
           }}
         />
       </StackedInputFormControl>
-      {/* <StackedInputFormControl formItem={sandboxTemplateFormData}>
+      {/* <StackedInputFormControl formItem={savedImageFormData}>
         <FormSelectInput
           selectOptions={[
-            { value: SANDBOX_TEMPLATE_DEFAULT_VALUE, label: 'Default' },
-            ...templatesData.map((template) => ({
-              value: template.name,
-              label: template.name,
+            { value: SANDBOX_SAVED_IMAGE_DEFAULT_VALUE, label: 'Default' },
+            ...savedImagesData.map((savedImage) => ({
+              value: savedImage.name,
+              label: savedImage.name,
             })),
           ]}
-          loading={templatesLoading}
-          selectValue={sandboxTemplateName}
-          formItem={sandboxTemplateFormData}
-          onChangeHandler={(templateName) => {
-            setSandboxParameterValue(sandboxTemplateFormData.key as 'templateName', templateName)
+          loading={savedImagesLoading}
+          selectValue={savedImageName}
+          formItem={savedImageFormData}
+          onChangeHandler={(savedImageName) => {
+            setSandboxParameterValue(savedImageFormData.key as 'savedImageName', savedImageName)
           }}
         />
       </StackedInputFormControl> */}
@@ -119,7 +119,7 @@ const SandboxManagementParameters: React.FC<SandboxManagementParametersProps> = 
           <Label htmlFor="resources" className="text-sm text-muted-foreground">
             Resources
           </Label>
-          {nonDefaultTemplateSelected && (
+          {nonDefaultSavedImageSelected && (
             <Tooltip
               content={
                 <div className="text-balance text-center max-w-[300px]">
@@ -138,7 +138,7 @@ const SandboxManagementParameters: React.FC<SandboxManagementParametersProps> = 
           {resourcesFormData.map((resourceParamFormItem) => (
             <InlineInputFormControl key={resourceParamFormItem.key} formItem={resourceParamFormItem}>
               <FormNumberInput
-                disabled={Boolean(nonDefaultTemplateSelected)}
+                disabled={Boolean(nonDefaultSavedImageSelected)}
                 numberValue={resources[resourceParamFormItem.key]}
                 numberFormItem={resourceParamFormItem}
                 onChangeHandler={(value) => {
