@@ -63,7 +63,7 @@ const configuration = {
     secure: process.env.SMTP_SECURE === 'true',
     from: process.env.SMTP_EMAIL_FROM || 'noreply@mail.boxlite.io',
   },
-  defaultSavedImage: process.env.DEFAULT_SAVED_IMAGE,
+  defaultSavedImage: process.env.DEFAULT_SAVED_IMAGE || process.env.DEFAULT_TEMPLATE || process.env.DEFAULT_SNAPSHOT,
   dashboardUrl: process.env.DASHBOARD_URL,
   // Default to empty string - dashboard will then hit '/api'
   dashboardBaseApiUrl: process.env.DASHBOARD_BASE_API_URL || '',
@@ -99,7 +99,7 @@ const configuration = {
     domain: process.env.PROXY_DOMAIN,
     protocol: process.env.PROXY_PROTOCOL,
     apiKey: process.env.PROXY_API_KEY,
-    savedImageUrl: process.env.PROXY_SAVED_IMAGE_URL,
+    savedImageUrl: process.env.PROXY_SAVED_IMAGE_URL || process.env.PROXY_TEMPLATE_URL,
     toolboxUrl:
       (process.env.PROXY_TOOLBOX_BASE_URL || `${process.env.PROXY_PROTOCOL}://${process.env.PROXY_DOMAIN}`) +
       '/toolbox',
