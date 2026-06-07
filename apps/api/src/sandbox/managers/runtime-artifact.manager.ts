@@ -1132,16 +1132,16 @@ export class RuntimeArtifactManager implements TrackableJobExecutions, OnApplica
       const cutoff = `NOW() - INTERVAL '1 minute' * COALESCE(org."saved_image_deactivation_timeout_minutes", ${DEFAULT_SAVED_IMAGE_DEACTIVATION_TIMEOUT_MINUTES})`
 
       const oldSavedImages = await this.savedImageRepository
-        .createQueryBuilder('savedImage')
-        .leftJoin('organization', 'org', `org."id" = savedImage."organizationId"`)
-        .where('savedImage.general = false')
-        .andWhere('savedImage.state = :savedImageState', { savedImageState: SavedImageState.ACTIVE })
-        .andWhere(`(savedImage."lastUsedAt" IS NULL OR savedImage."lastUsedAt" < ${cutoff})`)
-        .andWhere(`savedImage."createdAt" < ${cutoff}`)
+        .createQueryBuilder('saved_image')
+        .leftJoin('organization', 'org', `org."id" = saved_image."organizationId"`)
+        .where('saved_image.general = false')
+        .andWhere('saved_image.state = :savedImageState', { savedImageState: SavedImageState.ACTIVE })
+        .andWhere(`(saved_image."lastUsedAt" IS NULL OR saved_image."lastUsedAt" < ${cutoff})`)
+        .andWhere(`saved_image."createdAt" < ${cutoff}`)
         .andWhere(
           `NOT EXISTS (
             SELECT 1 FROM saved_image s
-            WHERE s."artifactRef" = savedImage."artifactRef"
+            WHERE s."artifactRef" = saved_image."artifactRef"
             AND s.state = :activeState
             AND (s."lastUsedAt" >= ${cutoff} OR s."createdAt" >= ${cutoff})
           )`,
@@ -1192,15 +1192,15 @@ export class RuntimeArtifactManager implements TrackableJobExecutions, OnApplica
     try {
       // Only fetch inactive savedImages that have associated runner artifact cache entries
       const queryResult = await this.savedImageRepository
-        .createQueryBuilder('savedImage')
-        .select('savedImage."artifactRef"')
-        .where('savedImage.state = :savedImageState', { savedImageState: SavedImageState.INACTIVE })
-        .andWhere('savedImage."artifactRef" IS NOT NULL')
+        .createQueryBuilder('saved_image')
+        .select('saved_image."artifactRef"', 'artifactRef')
+        .where('saved_image.state = :savedImageState', { savedImageState: SavedImageState.INACTIVE })
+        .andWhere('saved_image."artifactRef" IS NOT NULL')
         .andWhereExists(
           this.runnerArtifactCacheRepository
             .createQueryBuilder('runner_artifact_cache')
             .select('1')
-            .where('runner_artifact_cache."artifactRef" = savedImage."artifactRef"')
+            .where('runner_artifact_cache."artifactRef" = saved_image."artifactRef"')
             .andWhere('runner_artifact_cache.state != :runnerArtifactCacheState', {
               runnerArtifactCacheState: RunnerArtifactCacheState.REMOVING,
             }),
@@ -1210,7 +1210,7 @@ export class RuntimeArtifactManager implements TrackableJobExecutions, OnApplica
             const query = this.savedImageRepository
               .createQueryBuilder('s')
               .select('1')
-              .where('s."artifactRef" = savedImage."artifactRef"')
+              .where('s."artifactRef" = saved_image."artifactRef"')
               .andWhere('s.state = :savedImageState')
             return `NOT EXISTS (${query.getQuery()})`
           },
@@ -1221,7 +1221,7 @@ export class RuntimeArtifactManager implements TrackableJobExecutions, OnApplica
         .take(100)
         .getRawMany()
 
-      const inactiveArtifactRefs = queryResult.map((result) => result.savedImage_artifactRef)
+      const inactiveArtifactRefs = queryResult.map((result) => result.artifactRef)
 
       if (inactiveArtifactRefs.length > 0) {
         // Set associated RunnerArtifactCache records to REMOVING state
