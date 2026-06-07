@@ -29,17 +29,6 @@
 
 - [docs/development/rust-style.md](./docs/development/rust-style.md)
 
-## Documentation Language
-
-**Committed documentation MUST be in English.** Applies to every `*.md`,
-every README, CONTRIBUTING-style file, design note, ADR, plan file, and
-any committed comment block. Chinese (and other non-English languages)
-are fine in scratch / chat / draft, but translate before `git add`.
-
-If you (human or AI) are about to commit a non-English doc, **stop and
-translate first**. AI assistants should refuse to `git add` a Chinese
-markdown directly and ask the user to confirm translation.
-
 ## Workflow
 
 Every change goes: understand → research → design → implement → test → verify. Leave the code easier to read, test, and change than you found it. Make small, deliberate changes that directly support the task; don't rewrite or reformat unrelated code.

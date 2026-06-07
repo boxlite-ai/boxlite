@@ -1,7 +1,5 @@
 # infra-local — usage guide
 
-> Companion to [`infra-local-status.md`](./infra-local-status.md) — that doc says "what's running", this one says "how to use it".
-
 ## 0. TL;DR — 8 wrapper commands
 
 ```bash

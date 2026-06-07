@@ -15,11 +15,9 @@ single Apple Silicon Mac. It owns two layers:
   [`scripts/`](scripts/).
 
 User sandboxes (L3) are spawned by the L2 Runner as libkrun microVMs
-under `~/.boxlite-runner/` — see
-[`docs/apps/milestones/2026-05-25-milestone-infra-local-v0.1.0.md`](../../docs/apps/milestones/2026-05-25-milestone-infra-local-v0.1.0.md)
-for the executive summary.
+under `~/.boxlite-runner/`.
 
-**Status:** `milestone/infra-local/v0.1.0` (2026-05-25). Cold-start to
+Cold-start to
 working sandbox + browser terminal in ~80 s. Daily dev workflow
 documented in [`docs/apps/infra-local-usage.md`](../../docs/apps/infra-local-usage.md).
 Known limitations: see [§Known limitations](#known-limitations).
