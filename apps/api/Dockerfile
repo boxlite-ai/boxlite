@@ -12,6 +12,7 @@ COPY apps/package.json apps/yarn.lock apps/.yarnrc.yml ./
 RUN yarn install --immutable
 
 COPY apps/nx.json apps/tsconfig.base.json apps/NOTICE ./
+RUN mkdir -p apps && cp tsconfig.base.json apps/tsconfig.base.json
 
 ARG CACHE_BUST=1
 ENV NX_DAEMON=false
@@ -20,11 +21,11 @@ ENV NX_SKIP_NX_CACHE=true
 COPY apps/api/ apps/api/
 COPY apps/dashboard/ apps/dashboard/
 
-COPY apps/libs/runner-api-client/ libs/runner-api-client/
-COPY apps/libs/api-client/ libs/api-client/
-COPY apps/libs/analytics-api-client/ libs/analytics-api-client/
-COPY apps/libs/toolbox-api-client/ libs/toolbox-api-client/
-COPY apps/libs/sdk-typescript/ libs/sdk-typescript/
+COPY apps/libs/runner-api-client/ apps/libs/runner-api-client/
+COPY apps/libs/api-client/ apps/libs/api-client/
+COPY apps/libs/analytics-api-client/ apps/libs/analytics-api-client/
+COPY apps/libs/toolbox-api-client/ apps/libs/toolbox-api-client/
+COPY apps/libs/sdk-typescript/ apps/libs/sdk-typescript/
 
 RUN echo 1777389170 && yarn nx build api --configuration=production --nxBail=true
 

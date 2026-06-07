@@ -7,10 +7,12 @@ const { composePlugins, withNx } = require('@nx/webpack')
 const path = require('path')
 const glob = require('glob')
 
-const migrationFiles = glob.sync('apps/api/src/migrations/**/*-migration.{ts,js}')
+const workspaceRoot = process.cwd()
+const apiRoot = glob.sync('api/src/migrations/**/*-migration.{ts,js}').length > 0 ? 'api' : 'apps/api'
+const migrationFiles = glob.sync(`${apiRoot}/src/migrations/**/*-migration.{ts,js}`)
 const migrationEntries = migrationFiles.reduce((acc, migrationFile) => {
   const entryName = migrationFile.substring(migrationFile.lastIndexOf('/') + 1, migrationFile.lastIndexOf('.'))
-  acc[entryName] = migrationFile
+  acc[entryName] = path.resolve(workspaceRoot, migrationFile)
   return acc
 }, {})
 

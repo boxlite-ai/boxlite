@@ -10,7 +10,6 @@ import { ExpressInstrumentation } from '@opentelemetry/instrumentation-express'
 import { NestInstrumentation } from '@opentelemetry/instrumentation-nestjs-core'
 import { BatchSpanProcessor } from '@opentelemetry/sdk-trace-base'
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http'
-import { CompressionAlgorithm, OTLPExporterNodeConfigBase } from '@opentelemetry/otlp-exporter-base'
 import { resourceFromAttributes } from '@opentelemetry/resources'
 import { ATTR_SERVICE_NAME } from '@opentelemetry/semantic-conventions'
 import {
@@ -36,10 +35,10 @@ diag.setLogger(new DiagConsoleLogger(), DiagLogLevel.WARN)
 const appMode = getAppMode()
 const serviceNameSuffix = appMode === 'api' ? 'api' : appMode === 'worker' ? 'worker' : 'api'
 
-const otlpExporterConfig: OTLPExporterNodeConfigBase = {
-  compression: CompressionAlgorithm.GZIP,
+const otlpExporterConfig = {
+  compression: 'gzip',
   keepAlive: true,
-}
+} as const
 
 const otelSdk = new NodeSDK({
   resource: resourceFromAttributes({
@@ -59,11 +58,19 @@ const otelSdk = new NodeSDK({
     new KafkaJsInstrumentation(),
     new RuntimeNodeInstrumentation(),
   ],
-  logRecordProcessors: [new BatchLogRecordProcessor(new OTLPLogExporter(otlpExporterConfig))],
-  spanProcessors: [new BatchSpanProcessor(new OTLPTraceExporter(otlpExporterConfig))],
+  logRecordProcessors: [
+    new BatchLogRecordProcessor(
+      new OTLPLogExporter(otlpExporterConfig as ConstructorParameters<typeof OTLPLogExporter>[0]),
+    ),
+  ],
+  spanProcessors: [
+    new BatchSpanProcessor(
+      new OTLPTraceExporter(otlpExporterConfig as ConstructorParameters<typeof OTLPTraceExporter>[0]),
+    ),
+  ],
   metricReaders: [
     new PeriodicExportingMetricReader({
-      exporter: new OTLPMetricExporter(otlpExporterConfig),
+      exporter: new OTLPMetricExporter(otlpExporterConfig as ConstructorParameters<typeof OTLPMetricExporter>[0]),
       exportIntervalMillis: 30 * 1000,
     }),
   ],
