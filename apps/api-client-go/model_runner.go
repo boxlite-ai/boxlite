@@ -53,7 +53,9 @@ type Runner struct {
 	CurrentAllocatedMemoryGiB *float32 `json:"currentAllocatedMemoryGiB,omitempty"`
 	// Current allocated disk in GiB
 	CurrentAllocatedDiskGiB *float32 `json:"currentAllocatedDiskGiB,omitempty"`
-	// Current snapshot count
+	// Current artifact count
+	CurrentArtifactCount *float32 `json:"currentArtifactCount,omitempty"`
+	// Deprecated alias for currentArtifactCount
 	CurrentSnapshotCount *float32 `json:"currentSnapshotCount,omitempty"`
 	// Current number of started sandboxes
 	CurrentStartedSandboxes *float32 `json:"currentStartedSandboxes,omitempty"`
@@ -81,7 +83,7 @@ type Runner struct {
 	ApiVersion string `json:"apiVersion"`
 	// The app version of the runner
 	// Deprecated
-	AppVersion *string `json:"appVersion,omitempty"`
+	AppVersion           *string `json:"appVersion,omitempty"`
 	AdditionalProperties map[string]interface{}
 }
 
@@ -589,7 +591,40 @@ func (o *Runner) SetCurrentAllocatedDiskGiB(v float32) {
 	o.CurrentAllocatedDiskGiB = &v
 }
 
+// GetCurrentArtifactCount returns the CurrentArtifactCount field value if set, zero value otherwise.
+func (o *Runner) GetCurrentArtifactCount() float32 {
+	if o == nil || IsNil(o.CurrentArtifactCount) {
+		var ret float32
+		return ret
+	}
+	return *o.CurrentArtifactCount
+}
+
+// GetCurrentArtifactCountOk returns a tuple with the CurrentArtifactCount field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *Runner) GetCurrentArtifactCountOk() (*float32, bool) {
+	if o == nil || IsNil(o.CurrentArtifactCount) {
+		return nil, false
+	}
+	return o.CurrentArtifactCount, true
+}
+
+// HasCurrentArtifactCount returns a boolean if a field has been set.
+func (o *Runner) HasCurrentArtifactCount() bool {
+	if o != nil && !IsNil(o.CurrentArtifactCount) {
+		return true
+	}
+
+	return false
+}
+
+// SetCurrentArtifactCount gets a reference to the given float32 and assigns it to the CurrentArtifactCount field.
+func (o *Runner) SetCurrentArtifactCount(v float32) {
+	o.CurrentArtifactCount = &v
+}
+
 // GetCurrentSnapshotCount returns the CurrentSnapshotCount field value if set, zero value otherwise.
+// Deprecated: use GetCurrentArtifactCount instead.
 func (o *Runner) GetCurrentSnapshotCount() float32 {
 	if o == nil || IsNil(o.CurrentSnapshotCount) {
 		var ret float32
@@ -600,6 +635,7 @@ func (o *Runner) GetCurrentSnapshotCount() float32 {
 
 // GetCurrentSnapshotCountOk returns a tuple with the CurrentSnapshotCount field value if set, nil otherwise
 // and a boolean to check if the value has been set.
+// Deprecated: use GetCurrentArtifactCountOk instead.
 func (o *Runner) GetCurrentSnapshotCountOk() (*float32, bool) {
 	if o == nil || IsNil(o.CurrentSnapshotCount) {
 		return nil, false
@@ -608,6 +644,7 @@ func (o *Runner) GetCurrentSnapshotCountOk() (*float32, bool) {
 }
 
 // HasCurrentSnapshotCount returns a boolean if a field has been set.
+// Deprecated: use HasCurrentArtifactCount instead.
 func (o *Runner) HasCurrentSnapshotCount() bool {
 	if o != nil && !IsNil(o.CurrentSnapshotCount) {
 		return true
@@ -617,6 +654,7 @@ func (o *Runner) HasCurrentSnapshotCount() bool {
 }
 
 // SetCurrentSnapshotCount gets a reference to the given float32 and assigns it to the CurrentSnapshotCount field.
+// Deprecated: use SetCurrentArtifactCount instead.
 func (o *Runner) SetCurrentSnapshotCount(v float32) {
 	o.CurrentSnapshotCount = &v
 }
@@ -951,7 +989,7 @@ func (o *Runner) SetAppVersion(v string) {
 }
 
 func (o Runner) MarshalJSON() ([]byte, error) {
-	toSerialize,err := o.ToMap()
+	toSerialize, err := o.ToMap()
 	if err != nil {
 		return []byte{}, err
 	}
@@ -997,6 +1035,9 @@ func (o Runner) ToMap() (map[string]interface{}, error) {
 	}
 	if !IsNil(o.CurrentAllocatedDiskGiB) {
 		toSerialize["currentAllocatedDiskGiB"] = o.CurrentAllocatedDiskGiB
+	}
+	if !IsNil(o.CurrentArtifactCount) {
+		toSerialize["currentArtifactCount"] = o.CurrentArtifactCount
 	}
 	if !IsNil(o.CurrentSnapshotCount) {
 		toSerialize["currentSnapshotCount"] = o.CurrentSnapshotCount
@@ -1054,10 +1095,10 @@ func (o *Runner) UnmarshalJSON(data []byte) (err error) {
 	err = json.Unmarshal(data, &allProperties)
 
 	if err != nil {
-		return err;
+		return err
 	}
 
-	for _, requiredProperty := range(requiredProperties) {
+	for _, requiredProperty := range requiredProperties {
 		if _, exists := allProperties[requiredProperty]; !exists {
 			return fmt.Errorf("no value given for required property %v", requiredProperty)
 		}
@@ -1092,6 +1133,7 @@ func (o *Runner) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "currentAllocatedCpu")
 		delete(additionalProperties, "currentAllocatedMemoryGiB")
 		delete(additionalProperties, "currentAllocatedDiskGiB")
+		delete(additionalProperties, "currentArtifactCount")
 		delete(additionalProperties, "currentSnapshotCount")
 		delete(additionalProperties, "currentStartedSandboxes")
 		delete(additionalProperties, "availabilityScore")

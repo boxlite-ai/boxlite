@@ -21,8 +21,8 @@ COPY apps/nx.json ./
 
 # Go dependency layer (cached unless go.mod/go.sum change)
 COPY apps/go.work apps/go.work.sum apps/
-COPY apps/snapshot-manager/go.mod apps/snapshot-manager/go.sum apps/snapshot-manager/
-RUN head -1 apps/go.work > apps/go.work.tmp && printf '\nuse (\n\t./snapshot-manager\n)\n' >> apps/go.work.tmp && mv apps/go.work.tmp apps/go.work
+COPY apps/artifact-registry/go.mod apps/artifact-registry/go.sum apps/artifact-registry/
+RUN head -1 apps/go.work > apps/go.work.tmp && printf '\nuse (\n\t./artifact-registry\n)\n' >> apps/go.work.tmp && mv apps/go.work.tmp apps/go.work
 
 ENV NX_DAEMON=false
 # nx-go runs `go build` from /boxlite (WORKDIR), but go.work lives at apps/go.work.
@@ -30,23 +30,23 @@ ENV NX_DAEMON=false
 # GOWORK at the workspace file so module resolution succeeds.
 ENV GOWORK=/boxlite/apps/go.work
 
-RUN cd apps/snapshot-manager && go mod download
+RUN cd apps/artifact-registry && go mod download
 
 # Go source
-COPY apps/snapshot-manager/ apps/snapshot-manager/
+COPY apps/artifact-registry/ apps/artifact-registry/
 
 ARG VERSION=0.0.1
 RUN --mount=type=cache,target=/root/.cache/go-build \
-  VERSION=$VERSION yarn nx build snapshot-manager --configuration=production --nxBail=true
+  VERSION=$VERSION yarn nx build artifact-registry --configuration=production --nxBail=true
 
-FROM alpine:3.18 AS snapshot-manager
+FROM alpine:3.18 AS artifact-registry
 
 RUN apk add --no-cache curl
 
 WORKDIR /usr/local/bin
 
-COPY --from=build /boxlite/dist/apps/snapshot-manager boxlite-snapshot-manager
+COPY --from=build /boxlite/dist/apps/artifact-registry boxlite-artifact-registry
 
-RUN chmod +x boxlite-snapshot-manager
+RUN chmod +x boxlite-artifact-registry
 
-ENTRYPOINT ["boxlite-snapshot-manager"]
+ENTRYPOINT ["boxlite-artifact-registry"]

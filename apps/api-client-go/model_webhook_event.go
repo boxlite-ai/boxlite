@@ -21,22 +21,22 @@ type WebhookEvent string
 
 // List of WebhookEvent
 const (
-	WEBHOOKEVENT_SANDBOX_CREATED WebhookEvent = "sandbox.created"
-	WEBHOOKEVENT_SANDBOX_STATE_UPDATED WebhookEvent = "sandbox.state.updated"
-	WEBHOOKEVENT_SNAPSHOT_CREATED WebhookEvent = "snapshot.created"
-	WEBHOOKEVENT_SNAPSHOT_STATE_UPDATED WebhookEvent = "snapshot.state.updated"
-	WEBHOOKEVENT_SNAPSHOT_REMOVED WebhookEvent = "snapshot.removed"
-	WEBHOOKEVENT_VOLUME_CREATED WebhookEvent = "volume.created"
-	WEBHOOKEVENT_VOLUME_STATE_UPDATED WebhookEvent = "volume.state.updated"
+	WEBHOOKEVENT_SANDBOX_CREATED        WebhookEvent = "sandbox.created"
+	WEBHOOKEVENT_SANDBOX_STATE_UPDATED  WebhookEvent = "sandbox.state.updated"
+	WEBHOOKEVENT_TEMPLATE_CREATED       WebhookEvent = "template.created"
+	WEBHOOKEVENT_TEMPLATE_STATE_UPDATED WebhookEvent = "template.state.updated"
+	WEBHOOKEVENT_TEMPLATE_REMOVED       WebhookEvent = "template.removed"
+	WEBHOOKEVENT_VOLUME_CREATED         WebhookEvent = "volume.created"
+	WEBHOOKEVENT_VOLUME_STATE_UPDATED   WebhookEvent = "volume.state.updated"
 )
 
 // All allowed values of WebhookEvent enum
 var AllowedWebhookEventEnumValues = []WebhookEvent{
 	"sandbox.created",
 	"sandbox.state.updated",
-	"snapshot.created",
-	"snapshot.state.updated",
-	"snapshot.removed",
+	"template.created",
+	"template.state.updated",
+	"template.removed",
 	"volume.created",
 	"volume.state.updated",
 }

@@ -58,12 +58,12 @@ func (a *BoxliteAdapter) GetSandboxState(ctx context.Context, sandboxId string) 
 	return a.client.GetSandboxState(ctx, sandboxId)
 }
 
-func (a *BoxliteAdapter) PullSnapshot(ctx context.Context, req dto.PullSnapshotRequestDTO) error {
-	return a.client.PullSnapshot(ctx, req)
+func (a *BoxliteAdapter) PullArtifact(ctx context.Context, req dto.PullArtifactRequestDTO) error {
+	return a.client.PullArtifact(ctx, req)
 }
 
-func (a *BoxliteAdapter) BuildSnapshot(ctx context.Context, req dto.BuildSnapshotRequestDTO) error {
-	return a.client.BuildSnapshot(ctx, req)
+func (a *BoxliteAdapter) BuildArtifact(ctx context.Context, req dto.BuildArtifactRequestDTO) error {
+	return a.client.BuildArtifact(ctx, req)
 }
 
 func (a *BoxliteAdapter) RemoveImage(ctx context.Context, imageName string, force bool) error {

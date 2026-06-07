@@ -13,25 +13,25 @@ import (
 	"github.com/boxlite-ai/runner/pkg/api/dto"
 )
 
-func (e *Executor) buildSnapshot(ctx context.Context, job *apiclient.Job) (any, error) {
-	var request dto.BuildSnapshotRequestDTO
+func (e *Executor) buildArtifact(ctx context.Context, job *apiclient.Job) (any, error) {
+	var request dto.BuildArtifactRequestDTO
 	err := e.parsePayload(job.Payload, &request)
 	if err != nil {
 		return nil, err
 	}
 
-	err = e.backend.BuildSnapshot(ctx, request)
+	err = e.backend.BuildArtifact(ctx, request)
 	if err != nil {
 		return nil, err
 	}
 
-	info, err := e.backend.GetImageInfo(ctx, request.Snapshot)
+	info, err := e.backend.GetImageInfo(ctx, request.ArtifactRef)
 	if err != nil {
 		return nil, err
 	}
 
-	infoResponse := dto.SnapshotInfoResponse{
-		Name:       request.Snapshot,
+	infoResponse := dto.ArtifactInfoResponse{
+		Name:       request.ArtifactRef,
 		SizeGB:     float64(info.Size) / (1024 * 1024 * 1024), // Convert bytes to GB
 		Entrypoint: info.Entrypoint,
 		Cmd:        info.Cmd,
@@ -41,26 +41,26 @@ func (e *Executor) buildSnapshot(ctx context.Context, job *apiclient.Job) (any, 
 	return infoResponse, nil
 }
 
-func (e *Executor) pullSnapshot(ctx context.Context, job *apiclient.Job) (any, error) {
-	var request dto.PullSnapshotRequestDTO
+func (e *Executor) pullArtifact(ctx context.Context, job *apiclient.Job) (any, error) {
+	var request dto.PullArtifactRequestDTO
 	err := e.parsePayload(job.Payload, &request)
 	if err != nil {
 		return nil, err
 	}
 
-	err = e.backend.PullSnapshot(ctx, request)
+	err = e.backend.PullArtifact(ctx, request)
 	if err != nil {
 		return nil, err
 	}
 
-	snapshotRef := pulledSnapshotRef(request)
-	info, err := e.backend.GetImageInfo(ctx, snapshotRef)
+	artifactRef := pulledArtifactRef(request)
+	info, err := e.backend.GetImageInfo(ctx, artifactRef)
 	if err != nil {
 		return nil, err
 	}
 
-	infoResponse := dto.SnapshotInfoResponse{
-		Name:       snapshotRef,
+	infoResponse := dto.ArtifactInfoResponse{
+		Name:       artifactRef,
 		SizeGB:     float64(info.Size) / (1024 * 1024 * 1024), // Convert bytes to GB
 		Entrypoint: info.Entrypoint,
 		Cmd:        info.Cmd,
@@ -70,15 +70,15 @@ func (e *Executor) pullSnapshot(ctx context.Context, job *apiclient.Job) (any, e
 	return infoResponse, nil
 }
 
-func pulledSnapshotRef(request dto.PullSnapshotRequestDTO) string {
+func pulledArtifactRef(request dto.PullArtifactRequestDTO) string {
 	if request.DestinationRef != nil && *request.DestinationRef != "" {
 		return *request.DestinationRef
 	}
 
-	return request.Snapshot
+	return request.ArtifactRef
 }
 
-func (e *Executor) removeSnapshot(ctx context.Context, job *apiclient.Job) (any, error) {
+func (e *Executor) removeArtifact(ctx context.Context, job *apiclient.Job) (any, error) {
 	if job.Payload == nil || *job.Payload == "" {
 		return nil, errors.New("payload is required")
 	}
@@ -86,19 +86,19 @@ func (e *Executor) removeSnapshot(ctx context.Context, job *apiclient.Job) (any,
 	return nil, e.backend.RemoveImage(ctx, *job.Payload, true)
 }
 
-func (e *Executor) inspectSnapshotInRegistry(ctx context.Context, job *apiclient.Job) (any, error) {
-	var request dto.InspectSnapshotInRegistryRequestDTO
+func (e *Executor) inspectArtifactInRegistry(ctx context.Context, job *apiclient.Job) (any, error) {
+	var request dto.InspectArtifactInRegistryRequestDTO
 	err := e.parsePayload(job.Payload, &request)
 	if err != nil {
 		return nil, err
 	}
 
-	digest, err := e.backend.InspectImageInRegistry(ctx, request.Snapshot, request.Registry)
+	digest, err := e.backend.InspectImageInRegistry(ctx, request.ArtifactRef, request.Registry)
 	if err != nil {
 		return nil, err
 	}
 
-	return dto.SnapshotDigestResponse{
+	return dto.ArtifactDigestResponse{
 		Hash:   dto.HashWithoutPrefix(digest.Digest),
 		SizeGB: float64(digest.Size) / (1024 * 1024 * 1024),
 	}, nil

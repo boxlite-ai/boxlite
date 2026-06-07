@@ -1,4 +1,4 @@
-module github.com/boxlite-ai/snapshot-manager
+module github.com/boxlite-ai/artifact-registry
 
 go 1.25.0
 

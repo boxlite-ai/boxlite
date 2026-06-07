@@ -27,9 +27,9 @@ import (
 
 // TagImage godoc
 //
-//	@Tags			snapshots
+//	@Tags			artifacts
 //	@Summary		Tag an image
-//	@Deprecated		New snapshot tags are sent in PullSnapshot
+//	@Deprecated		New artifact tags are sent in PullArtifact
 //	@Description	Tag an existing local image with a new target reference
 //	@Param			request	body		dto.TagImageRequestDTO	true	"Tag image request"
 //	@Success		200		{string}	string					"Image successfully tagged"
@@ -39,7 +39,7 @@ import (
 //	@Failure		409		{object}	common_errors.ErrorResponse
 //	@Failure		500		{object}	common_errors.ErrorResponse
 //
-//	@Router			/snapshots/tag [post]
+//	@Router			/artifacts/tag [post]
 //
 //	@id				TagImage
 func TagImage(ctx *gin.Context) {
@@ -79,25 +79,25 @@ func TagImage(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, "Image tagged successfully")
 }
 
-// PullSnapshot godoc
+// PullArtifact godoc
 //
-//	@Tags			snapshots
-//	@Summary		Pull a snapshot
-//	@Description	Pull a snapshot from a registry and optionally push to another registry. The operation runs asynchronously and returns 202 immediately.
-//	@Param			request	body		dto.PullSnapshotRequestDTO	true	"Pull snapshot"
-//	@Success		202		{string}	string						"Snapshot pull started"
+//	@Tags			artifacts
+//	@Summary		Pull an artifact
+//	@Description	Pull an artifact from a registry and optionally push to another registry. The operation runs asynchronously and returns 202 immediately.
+//	@Param			request	body		dto.PullArtifactRequestDTO	true	"Pull artifact"
+//	@Success		202		{string}	string						"Artifact pull started"
 //	@Failure		400		{object}	common_errors.ErrorResponse
 //	@Failure		401		{object}	common_errors.ErrorResponse
 //	@Failure		404		{object}	common_errors.ErrorResponse
 //	@Failure		409		{object}	common_errors.ErrorResponse
 //	@Failure		500		{object}	common_errors.ErrorResponse
 //
-//	@Router			/snapshots/pull [post]
+//	@Router			/artifacts/pull [post]
 //
-//	@id				PullSnapshot
-func PullSnapshot(generalCtx context.Context, logger *slog.Logger) func(ctx *gin.Context) {
+//	@id				PullArtifact
+func PullArtifact(generalCtx context.Context, logger *slog.Logger) func(ctx *gin.Context) {
 	return func(ctx *gin.Context) {
-		var request dto.PullSnapshotRequestDTO
+		var request dto.PullArtifactRequestDTO
 		err := ctx.ShouldBindJSON(&request)
 		if err != nil {
 			ctx.Error(common_errors.NewInvalidBodyRequestError(err))
@@ -110,63 +110,63 @@ func PullSnapshot(generalCtx context.Context, logger *slog.Logger) func(ctx *gin
 			return
 		}
 
-		cacheKey := request.Snapshot
+		cacheKey := request.ArtifactRef
 		if request.DestinationRef != nil {
 			cacheKey = *request.DestinationRef
 		}
 
-		err = runner.SnapshotErrorCache.RemoveError(generalCtx, cacheKey)
+		err = runner.ArtifactErrorCache.RemoveError(generalCtx, cacheKey)
 		if err != nil {
-			logger.ErrorContext(generalCtx, "Failed to remove snapshot error cache entry", "cacheKey", cacheKey, "error", err)
+			logger.ErrorContext(generalCtx, "Failed to remove artifact error cache entry", "cacheKey", cacheKey, "error", err)
 		}
 
 		go func() {
-			err := runner.Boxlite.PullSnapshot(generalCtx, request)
+			err := runner.Boxlite.PullArtifact(generalCtx, request)
 			if err != nil {
-				logger.DebugContext(generalCtx, "Pull snapshot failed", "cacheKey", cacheKey, "error", err)
-				err = runner.SnapshotErrorCache.SetError(generalCtx, cacheKey, err.Error())
+				logger.DebugContext(generalCtx, "Pull artifact failed", "cacheKey", cacheKey, "error", err)
+				err = runner.ArtifactErrorCache.SetError(generalCtx, cacheKey, err.Error())
 				if err != nil {
-					logger.ErrorContext(generalCtx, "Failed to set snapshot error cache entry", "cacheKey", cacheKey, "error", err)
+					logger.ErrorContext(generalCtx, "Failed to set artifact error cache entry", "cacheKey", cacheKey, "error", err)
 				}
 			} else {
-				err = runner.SnapshotErrorCache.RemoveError(generalCtx, cacheKey)
+				err = runner.ArtifactErrorCache.RemoveError(generalCtx, cacheKey)
 				if err != nil {
-					logger.ErrorContext(generalCtx, "Failed to remove snapshot error cache entry", "cacheKey", cacheKey, "error", err)
+					logger.ErrorContext(generalCtx, "Failed to remove artifact error cache entry", "cacheKey", cacheKey, "error", err)
 				}
 			}
 		}()
 
-		ctx.JSON(http.StatusAccepted, "Snapshot pull started")
+		ctx.JSON(http.StatusAccepted, "Artifact pull started")
 	}
 }
 
-// BuildSnapshot godoc
+// BuildArtifact godoc
 //
-//	@Tags			snapshots
-//	@Summary		Build a snapshot
-//	@Description	Build a snapshot from a Dockerfile and context hashes. The operation runs asynchronously and returns 202 immediately.
-//	@Param			request	body		dto.BuildSnapshotRequestDTO	true	"Build snapshot request"
-//	@Success		202		{string}	string						"Snapshot build started"
+//	@Tags			artifacts
+//	@Summary		Build an artifact
+//	@Description	Build an artifact from a Dockerfile and context hashes. The operation runs asynchronously and returns 202 immediately.
+//	@Param			request	body		dto.BuildArtifactRequestDTO	true	"Build artifact request"
+//	@Success		202		{string}	string						"Artifact build started"
 //	@Failure		400		{object}	common_errors.ErrorResponse
 //	@Failure		401		{object}	common_errors.ErrorResponse
 //	@Failure		404		{object}	common_errors.ErrorResponse
 //	@Failure		409		{object}	common_errors.ErrorResponse
 //	@Failure		500		{object}	common_errors.ErrorResponse
 //
-//	@Router			/snapshots/build [post]
+//	@Router			/artifacts/build [post]
 //
-//	@id				BuildSnapshot
-func BuildSnapshot(generalCtx context.Context, logger *slog.Logger) func(ctx *gin.Context) {
+//	@id				BuildArtifact
+func BuildArtifact(generalCtx context.Context, logger *slog.Logger) func(ctx *gin.Context) {
 	return func(ctx *gin.Context) {
-		var request dto.BuildSnapshotRequestDTO
+		var request dto.BuildArtifactRequestDTO
 		err := ctx.ShouldBindJSON(&request)
 		if err != nil {
 			ctx.Error(common_errors.NewInvalidBodyRequestError(err))
 			return
 		}
 
-		if !strings.Contains(request.Snapshot, ":") || strings.HasSuffix(request.Snapshot, ":") {
-			ctx.Error(common_errors.NewBadRequestError(errors.New("snapshot name must include a valid tag")))
+		if !strings.Contains(request.ArtifactRef, ":") || strings.HasSuffix(request.ArtifactRef, ":") {
+			ctx.Error(common_errors.NewBadRequestError(errors.New("artifact ref must include a valid tag")))
 			return
 		}
 
@@ -176,51 +176,51 @@ func BuildSnapshot(generalCtx context.Context, logger *slog.Logger) func(ctx *gi
 			return
 		}
 
-		err = runner.SnapshotErrorCache.RemoveError(generalCtx, request.Snapshot)
+		err = runner.ArtifactErrorCache.RemoveError(generalCtx, request.ArtifactRef)
 		if err != nil {
-			logger.ErrorContext(generalCtx, "Failed to remove snapshot error cache entry", "cacheKey", request.Snapshot, "error", err)
+			logger.ErrorContext(generalCtx, "Failed to remove artifact error cache entry", "cacheKey", request.ArtifactRef, "error", err)
 		}
 
 		go func() {
-			err := runner.Boxlite.BuildSnapshot(generalCtx, request)
+			err := runner.Boxlite.BuildArtifact(generalCtx, request)
 			if err != nil {
-				logger.DebugContext(generalCtx, "Build snapshot failed", "cacheKey", request.Snapshot, "error", err)
-				err = runner.SnapshotErrorCache.SetError(generalCtx, request.Snapshot, err.Error())
+				logger.DebugContext(generalCtx, "Build artifact failed", "cacheKey", request.ArtifactRef, "error", err)
+				err = runner.ArtifactErrorCache.SetError(generalCtx, request.ArtifactRef, err.Error())
 				if err != nil {
-					logger.ErrorContext(generalCtx, "Failed to set snapshot error cache entry", "cacheKey", request.Snapshot, "error", err)
+					logger.ErrorContext(generalCtx, "Failed to set artifact error cache entry", "cacheKey", request.ArtifactRef, "error", err)
 				}
 			} else {
-				err = runner.SnapshotErrorCache.RemoveError(generalCtx, request.Snapshot)
+				err = runner.ArtifactErrorCache.RemoveError(generalCtx, request.ArtifactRef)
 				if err != nil {
-					logger.ErrorContext(generalCtx, "Failed to remove snapshot error cache entry", "cacheKey", request.Snapshot, "error", err)
+					logger.ErrorContext(generalCtx, "Failed to remove artifact error cache entry", "cacheKey", request.ArtifactRef, "error", err)
 				}
 			}
 		}()
 
-		ctx.JSON(http.StatusAccepted, "Snapshot build started")
+		ctx.JSON(http.StatusAccepted, "Artifact build started")
 	}
 }
 
-// SnapshotExists godoc
+// ArtifactExists godoc
 //
-//	@Tags			snapshots
-//	@Summary		Check if a snapshot exists
-//	@Description	Check if a specified snapshot exists locally
+//	@Tags			artifacts
+//	@Summary		Check if an artifact exists
+//	@Description	Check if a specified artifact exists locally
 //	@Produce		json
-//	@Param			snapshot	query		string	true	"Snapshot name and tag"	example:"nginx:latest"
-//	@Success		200			{object}	SnapshotExistsResponse
+//	@Param			artifactRef	query		string	true	"Artifact ref"	example:"nginx:latest"
+//	@Success		200			{object}	ArtifactExistsResponse
 //	@Failure		400			{object}	common_errors.ErrorResponse
 //	@Failure		401			{object}	common_errors.ErrorResponse
 //	@Failure		404			{object}	common_errors.ErrorResponse
 //	@Failure		409			{object}	common_errors.ErrorResponse
 //	@Failure		500			{object}	common_errors.ErrorResponse
-//	@Router			/snapshots/exists [get]
+//	@Router			/artifacts/exists [get]
 //
-//	@id				SnapshotExists
-func SnapshotExists(ctx *gin.Context) {
-	snapshot := ctx.Query("snapshot")
-	if snapshot == "" {
-		ctx.Error(common_errors.NewBadRequestError(errors.New("snapshot parameter is required")))
+//	@id				ArtifactExists
+func ArtifactExists(ctx *gin.Context) {
+	artifactRef := ctx.Query("artifactRef")
+	if artifactRef == "" {
+		ctx.Error(common_errors.NewBadRequestError(errors.New("artifactRef parameter is required")))
 		return
 	}
 
@@ -230,38 +230,38 @@ func SnapshotExists(ctx *gin.Context) {
 		return
 	}
 
-	exists, err := runner.Boxlite.ImageExists(ctx.Request.Context(), snapshot)
+	exists, err := runner.Boxlite.ImageExists(ctx.Request.Context(), artifactRef)
 	if err != nil {
 		ctx.Error(err)
 		return
 	}
 
-	ctx.JSON(http.StatusOK, SnapshotExistsResponse{
+	ctx.JSON(http.StatusOK, ArtifactExistsResponse{
 		Exists: exists,
 	})
 }
 
-// RemoveSnapshot godoc
+// RemoveArtifact godoc
 //
-//	@Tags			snapshots
-//	@Summary		Remove a snapshot
-//	@Description	Remove a specified snapshot from the local system
+//	@Tags			artifacts
+//	@Summary		Remove an artifact
+//	@Description	Remove a specified artifact from the local system
 //	@Produce		json
-//	@Param			snapshot	query		string	true	"Snapshot name and tag"	example:"nginx:latest"
-//	@Success		200			{string}	string	"Snapshot successfully removed"
+//	@Param			artifactRef	query		string	true	"Artifact ref"	example:"nginx:latest"
+//	@Success		200			{string}	string	"Artifact successfully removed"
 //	@Failure		400			{object}	common_errors.ErrorResponse
 //	@Failure		401			{object}	common_errors.ErrorResponse
 //	@Failure		404			{object}	common_errors.ErrorResponse
 //	@Failure		409			{object}	common_errors.ErrorResponse
 //	@Failure		500			{object}	common_errors.ErrorResponse
-//	@Router			/snapshots/remove [post]
+//	@Router			/artifacts/remove [post]
 //
-//	@id				RemoveSnapshot
-func RemoveSnapshot(logger *slog.Logger) gin.HandlerFunc {
+//	@id				RemoveArtifact
+func RemoveArtifact(logger *slog.Logger) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
-		snapshot := ctx.Query("snapshot")
-		if snapshot == "" {
-			ctx.Error(common_errors.NewBadRequestError(errors.New("snapshot parameter is required")))
+		artifactRef := ctx.Query("artifactRef")
+		if artifactRef == "" {
+			ctx.Error(common_errors.NewBadRequestError(errors.New("artifactRef parameter is required")))
 			return
 		}
 
@@ -271,31 +271,31 @@ func RemoveSnapshot(logger *slog.Logger) gin.HandlerFunc {
 			return
 		}
 
-		err = runner.Boxlite.RemoveImage(ctx.Request.Context(), snapshot, true)
+		err = runner.Boxlite.RemoveImage(ctx.Request.Context(), artifactRef, true)
 		if err != nil {
 			ctx.Error(err)
 			return
 		}
 
-		err = runner.SnapshotErrorCache.RemoveError(ctx.Request.Context(), snapshot)
+		err = runner.ArtifactErrorCache.RemoveError(ctx.Request.Context(), artifactRef)
 		if err != nil {
-			logger.ErrorContext(ctx.Request.Context(), "Failed to remove snapshot error cache entry", "cacheKey", snapshot, "error", err)
+			logger.ErrorContext(ctx.Request.Context(), "Failed to remove artifact error cache entry", "cacheKey", artifactRef, "error", err)
 		}
 
-		ctx.JSON(http.StatusOK, "Snapshot removed successfully")
+		ctx.JSON(http.StatusOK, "Artifact removed successfully")
 	}
 }
 
-type SnapshotExistsResponse struct {
+type ArtifactExistsResponse struct {
 	Exists bool `json:"exists" example:"true"`
-} //	@name	SnapshotExistsResponse
+} //	@name	ArtifactExistsResponse
 
 // GetBuildLogs godoc
 //
-//	@Tags			snapshots
+//	@Tags			artifacts
 //	@Summary		Get build logs
 //	@Description	Stream build logs
-//	@Param			snapshotRef	query		string	true	"Snapshot ref"
+//	@Param			artifactRef	query		string	true	"Runtime artifact ref"
 //	@Param			follow		query		boolean	false	"Whether to follow the log output"
 //	@Success		200			{string}	string	"Build logs stream"
 //	@Failure		400			{object}	common_errors.ErrorResponse
@@ -303,28 +303,28 @@ type SnapshotExistsResponse struct {
 //	@Failure		404			{object}	common_errors.ErrorResponse
 //	@Failure		500			{object}	common_errors.ErrorResponse
 //
-//	@Router			/snapshots/logs [get]
+//	@Router			/artifacts/logs [get]
 //
 //	@id				GetBuildLogs
 func GetBuildLogs(logger *slog.Logger) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		reqCtx := ctx.Request.Context()
-		snapshotRef := ctx.Query("snapshotRef")
-		if snapshotRef == "" {
-			ctx.Error(common_errors.NewBadRequestError(errors.New("snapshotRef parameter is required")))
+		artifactRef := ctx.Query("artifactRef")
+		if artifactRef == "" {
+			ctx.Error(common_errors.NewBadRequestError(errors.New("artifactRef parameter is required")))
 			return
 		}
 
 		follow := ctx.Query("follow") == "true"
 
-		logFilePath, err := config.GetBuildLogFilePath(snapshotRef)
+		logFilePath, err := config.GetBuildLogFilePath(artifactRef)
 		if err != nil {
 			ctx.Error(common_errors.NewCustomError(http.StatusInternalServerError, err.Error(), "INTERNAL_SERVER_ERROR"))
 			return
 		}
 
 		if _, err := os.Stat(logFilePath); os.IsNotExist(err) {
-			ctx.Error(common_errors.NewNotFoundError(fmt.Errorf("build logs not found for ref: %s", snapshotRef)))
+			ctx.Error(common_errors.NewNotFoundError(fmt.Errorf("build logs not found for ref: %s", artifactRef)))
 			return
 		}
 
@@ -353,11 +353,11 @@ func GetBuildLogs(logger *slog.Logger) gin.HandlerFunc {
 			return
 		}
 
-		checkSnapshotRef := snapshotRef
+		checkArtifactRef := artifactRef
 
-		// Fixed tag for instances where we are not looking for an entry with snapshot ID
-		if strings.HasPrefix(snapshotRef, "boxlite") {
-			checkSnapshotRef = snapshotRef + ":boxlite"
+		// Fixed tag for instances where we are not looking for an entry with an artifact ID.
+		if strings.HasPrefix(artifactRef, "boxlite") {
+			checkArtifactRef = artifactRef + ":boxlite"
 		}
 
 		flusher, ok := ctx.Writer.(http.Flusher)
@@ -386,14 +386,14 @@ func GetBuildLogs(logger *slog.Logger) gin.HandlerFunc {
 		}()
 
 		for {
-			exists, err := runner.Boxlite.ImageExists(ctx.Request.Context(), checkSnapshotRef)
+			exists, err := runner.Boxlite.ImageExists(ctx.Request.Context(), checkArtifactRef)
 			if err != nil {
 				logger.ErrorContext(reqCtx, "Error checking build status", "error", err)
 				break
 			}
 
 			if exists {
-				// If snapshot exists, build is complete, allow time for the last logs to be written and break the loop
+				// If artifact exists, build is complete, allow time for the last logs to be written and break the loop
 				time.Sleep(1 * time.Second)
 				break
 			}
@@ -403,26 +403,26 @@ func GetBuildLogs(logger *slog.Logger) gin.HandlerFunc {
 	}
 }
 
-// GetSnapshotInfo godoc
+// GetArtifactInfo godoc
 //
-//	@Tags			snapshots
-//	@Summary		Get snapshot information
-//	@Description	Get information about a specified snapshot including size and entrypoint. Returns 422 if the last pull/build operation failed, with the error reason in the message.
+//	@Tags			artifacts
+//	@Summary		Get artifact information
+//	@Description	Get information about a specified artifact including size and entrypoint. Returns 422 if the last pull/build operation failed, with the error reason in the message.
 //	@Produce		json
-//	@Param			snapshot	query		string	true	"Snapshot name and tag"	example:"nginx:latest"
-//	@Success		200			{object}	dto.SnapshotInfoResponse
+//	@Param			artifactRef	query		string	true	"Artifact ref"	example:"nginx:latest"
+//	@Success		200			{object}	dto.ArtifactInfoResponse
 //	@Failure		400			{object}	common_errors.ErrorResponse
 //	@Failure		401			{object}	common_errors.ErrorResponse
 //	@Failure		404			{object}	common_errors.ErrorResponse
 //	@Failure		422			{object}	common_errors.ErrorResponse
 //	@Failure		500			{object}	common_errors.ErrorResponse
-//	@Router			/snapshots/info [get]
+//	@Router			/artifacts/info [get]
 //
-//	@id				GetSnapshotInfo
-func GetSnapshotInfo(ctx *gin.Context) {
-	snapshot := ctx.Query("snapshot")
-	if snapshot == "" {
-		ctx.Error(common_errors.NewBadRequestError(errors.New("snapshot parameter is required")))
+//	@id				GetArtifactInfo
+func GetArtifactInfo(ctx *gin.Context) {
+	artifactRef := ctx.Query("artifactRef")
+	if artifactRef == "" {
+		ctx.Error(common_errors.NewBadRequestError(errors.New("artifactRef parameter is required")))
 		return
 	}
 
@@ -432,30 +432,30 @@ func GetSnapshotInfo(ctx *gin.Context) {
 		return
 	}
 
-	exists, err := runner.Boxlite.ImageExists(ctx.Request.Context(), snapshot)
+	exists, err := runner.Boxlite.ImageExists(ctx.Request.Context(), artifactRef)
 	if err != nil {
 		ctx.Error(err)
 		return
 	}
 
 	if !exists {
-		errReason, err := runner.SnapshotErrorCache.GetError(ctx.Request.Context(), snapshot)
+		errReason, err := runner.ArtifactErrorCache.GetError(ctx.Request.Context(), artifactRef)
 		if err == nil && errReason != nil {
 			ctx.Error(common_errors.NewUnprocessableEntityError(errors.New(*errReason)))
 			return
 		}
-		ctx.Error(common_errors.NewNotFoundError(fmt.Errorf("snapshot not found: %s", snapshot)))
+		ctx.Error(common_errors.NewNotFoundError(fmt.Errorf("artifact not found: %s", artifactRef)))
 		return
 	}
 
-	info, err := runner.Boxlite.GetImageInfo(ctx.Request.Context(), snapshot)
+	info, err := runner.Boxlite.GetImageInfo(ctx.Request.Context(), artifactRef)
 	if err != nil {
 		ctx.Error(err)
 		return
 	}
 
-	ctx.JSON(http.StatusOK, dto.SnapshotInfoResponse{
-		Name:       snapshot,
+	ctx.JSON(http.StatusOK, dto.ArtifactInfoResponse{
+		Name:       artifactRef,
 		SizeGB:     float64(info.Size) / (1024 * 1024 * 1024), // Convert bytes to GB
 		Entrypoint: info.Entrypoint,
 		Cmd:        info.Cmd,
@@ -463,23 +463,23 @@ func GetSnapshotInfo(ctx *gin.Context) {
 	})
 }
 
-// InspectSnapshotInRegistry godoc
+// InspectArtifactInRegistry godoc
 //
-//	@Tags			snapshots
-//	@Summary		Inspect a snapshot in a registry
-//	@Description	Inspect a specified snapshot in a registry
+//	@Tags			artifacts
+//	@Summary		Inspect an artifact in a registry
+//	@Description	Inspect a specified artifact in a registry
 //	@Produce		json
-//	@Param			request	body		dto.InspectSnapshotInRegistryRequestDTO	true	"Inspect snapshot in registry request"
-//	@Success		200		{object}	dto.SnapshotDigestResponse
+//	@Param			request	body		dto.InspectArtifactInRegistryRequestDTO	true	"Inspect artifact in registry request"
+//	@Success		200		{object}	dto.ArtifactDigestResponse
 //	@Failure		400		{object}	common_errors.ErrorResponse
 //	@Failure		401		{object}	common_errors.ErrorResponse
 //	@Failure		404		{object}	common_errors.ErrorResponse
 //	@Failure		500		{object}	common_errors.ErrorResponse
 //
-//	@Router			/snapshots/inspect [post]
-//	@id				InspectSnapshotInRegistry
-func InspectSnapshotInRegistry(ctx *gin.Context) {
-	var request dto.InspectSnapshotInRegistryRequestDTO
+//	@Router			/artifacts/inspect [post]
+//	@id				InspectArtifactInRegistry
+func InspectArtifactInRegistry(ctx *gin.Context) {
+	var request dto.InspectArtifactInRegistryRequestDTO
 	err := ctx.ShouldBindJSON(&request)
 	if err != nil {
 		ctx.Error(common_errors.NewInvalidBodyRequestError(err))
@@ -492,13 +492,13 @@ func InspectSnapshotInRegistry(ctx *gin.Context) {
 		return
 	}
 
-	digest, err := runner.Boxlite.InspectImageInRegistry(ctx.Request.Context(), request.Snapshot, request.Registry)
+	digest, err := runner.Boxlite.InspectImageInRegistry(ctx.Request.Context(), request.ArtifactRef, request.Registry)
 	if err != nil {
 		ctx.Error(err)
 		return
 	}
 
-	ctx.JSON(http.StatusOK, dto.SnapshotDigestResponse{
+	ctx.JSON(http.StatusOK, dto.ArtifactDigestResponse{
 		Hash:   dto.HashWithoutPrefix(digest.Digest),
 		SizeGB: float64(digest.Size) / (1024 * 1024 * 1024),
 	})

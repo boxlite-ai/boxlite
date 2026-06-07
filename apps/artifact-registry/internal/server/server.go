@@ -12,7 +12,7 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/boxlite-ai/snapshot-manager/internal"
+	"github.com/boxlite-ai/artifact-registry/internal"
 	"github.com/distribution/distribution/v3/configuration"
 	_ "github.com/distribution/distribution/v3/registry/auth/htpasswd"
 	"github.com/distribution/distribution/v3/registry/handlers"
@@ -74,7 +74,7 @@ func (s *Server) Start(ctx context.Context) error {
 		Handler: mux,
 	}
 
-	s.logger.Info("BoxLite snapshot-manager started",
+	s.logger.Info("BoxLite artifact-registry started",
 		slog.String("version", internal.Version),
 		slog.String("addr", s.config.HTTP.Addr),
 		slog.Any("storage", s.getStorageInfo()),
@@ -108,7 +108,7 @@ func (s *Server) Start(ctx context.Context) error {
 
 // Shutdown gracefully shuts down the registry server
 func (s *Server) Shutdown(ctx context.Context) error {
-	s.logger.Info("Shutting down BoxLite snapshot-manager...")
+	s.logger.Info("Shutting down BoxLite artifact-registry...")
 	if s.server != nil {
 		return s.server.Shutdown(ctx)
 	}

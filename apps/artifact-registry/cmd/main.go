@@ -12,9 +12,9 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/boxlite-ai/snapshot-manager/internal/config"
-	"github.com/boxlite-ai/snapshot-manager/internal/logger"
-	"github.com/boxlite-ai/snapshot-manager/internal/server"
+	"github.com/boxlite-ai/artifact-registry/internal/config"
+	"github.com/boxlite-ai/artifact-registry/internal/logger"
+	"github.com/boxlite-ai/artifact-registry/internal/server"
 )
 
 func main() {
@@ -55,5 +55,5 @@ func main() {
 		os.Exit(1)
 	}
 
-	log.Info("BoxLite Snapshot manager stopped")
+	log.Info("BoxLite artifact registry stopped")
 }

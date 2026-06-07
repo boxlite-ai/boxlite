@@ -14,6 +14,7 @@ api_regions.go
 api_runners.go
 api_sandbox.go
 api_snapshots.go
+api_templates.go
 api_toolbox.go
 api_users.go
 api_volumes.go
@@ -52,6 +53,7 @@ model_create_runner.go
 model_create_runner_response.go
 model_create_sandbox.go
 model_create_session_request.go
+model_create_box_template.go
 model_create_snapshot.go
 model_create_user.go
 model_create_volume.go
@@ -113,6 +115,7 @@ model_organization_usage_overview.go
 model_organization_user.go
 model_otel_config.go
 model_paginated_audit_logs.go
+model_paginated_box_templates.go
 model_paginated_jobs.go
 model_paginated_logs.go
 model_paginated_sandboxes.go
@@ -165,6 +168,7 @@ model_send_webhook_dto.go
 model_session.go
 model_session_execute_request.go
 model_session_execute_response.go
+model_set_box_template_general_status_dto.go
 model_set_snapshot_general_status_dto.go
 model_signed_port_preview_url.go
 model_snapshot_dto.go

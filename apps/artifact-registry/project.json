@@ -1,22 +1,22 @@
 {
-  "name": "snapshot-manager",
+  "name": "artifact-registry",
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
   "projectType": "application",
-  "sourceRoot": "apps/snapshot-manager",
+  "sourceRoot": "apps/artifact-registry",
   "tags": [],
   "targets": {
     "build": {
       "executor": "@nx-go/nx-go:build",
       "options": {
         "main": "{projectRoot}/cmd/main.go",
-        "outputPath": "dist/apps/snapshot-manager",
+        "outputPath": "dist/apps/artifact-registry",
         "env": {
           "CGO_ENABLED": "0"
         }
       },
       "configurations": {
         "production": {
-          "flags": ["-ldflags \"-X 'github.com/boxlite-ai/snapshot-manager/internal.Version=$VERSION'\""]
+          "flags": ["-ldflags \"-X 'github.com/boxlite-ai/artifact-registry/internal.Version=$VERSION'\""]
         }
       },
       "inputs": ["goProduction", "^goProduction", { "env": "VERSION" }]
@@ -40,7 +40,7 @@
     "check-version-env": {},
     "docker": {
       "options": {
-        "target": "snapshot-manager"
+        "target": "artifact-registry"
       }
     },
     "push-manifest": {}

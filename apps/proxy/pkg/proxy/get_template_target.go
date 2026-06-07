@@ -20,43 +20,43 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-func (p *Proxy) getSnapshotTarget(ctx *gin.Context) (*url.URL, map[string]string, error) {
-	// Extract snapshot ID from the path
-	match := regexp.MustCompile(`^/snapshots/([\w-]+)/build-logs$`).FindStringSubmatch(ctx.Request.URL.Path)
+func (p *Proxy) getTemplateTarget(ctx *gin.Context) (*url.URL, map[string]string, error) {
+	// Extract template ID from the path
+	match := regexp.MustCompile(`^/templates/([\w-]+)/build-logs$`).FindStringSubmatch(ctx.Request.URL.Path)
 	if len(match) != 2 {
-		ctx.Error(common_errors.NewBadRequestError(errors.New("snapshot ID is required")))
-		return nil, nil, errors.New("snapshot ID is required")
+		ctx.Error(common_errors.NewBadRequestError(errors.New("template ID is required")))
+		return nil, nil, errors.New("template ID is required")
 	}
 
-	snapshotId := match[1]
+	templateId := match[1]
 
-	snapshot, err := p.getSnapshot(ctx, snapshotId)
+	template, err := p.getTemplate(ctx, templateId)
 	if err != nil {
 		ctx.Error(err)
-		return nil, nil, fmt.Errorf("failed to get snapshot: %w", err)
+		return nil, nil, fmt.Errorf("failed to get template: %w", err)
 	}
 
-	if snapshot.Ref == nil {
-		ctx.Error(common_errors.NewBadRequestError(errors.New("snapshot has no snapshot reference")))
-		return nil, nil, errors.New("snapshot has no snapshot reference")
+	if template.ArtifactRef == nil {
+		ctx.Error(common_errors.NewBadRequestError(errors.New("template has no artifact reference")))
+		return nil, nil, errors.New("template has no artifact reference")
 	}
 
-	if snapshot.InitialRunnerId == nil {
-		ctx.Error(common_errors.NewBadRequestError(errors.New("snapshot has no initial runner")))
-		return nil, nil, errors.New("snapshot has no initial runner")
+	if template.InitialRunnerId == nil {
+		ctx.Error(common_errors.NewBadRequestError(errors.New("template has no initial runner")))
+		return nil, nil, errors.New("template has no initial runner")
 	}
 
-	runnerInfo, err := p.getRunnerInfo(ctx, *snapshot.InitialRunnerId)
+	runnerInfo, err := p.getRunnerInfo(ctx, *template.InitialRunnerId)
 	if err != nil {
 		ctx.Error(err)
 		return nil, nil, fmt.Errorf("failed to get runner info: %w", err)
 	}
 
 	queryParams := ctx.Request.URL.Query()
-	queryParams.Add("snapshotRef", *snapshot.Ref)
+	queryParams.Add("artifactRef", *template.ArtifactRef)
 
 	// Build the target URL
-	targetURL := fmt.Sprintf("%s/snapshots/logs", runnerInfo.ApiUrl)
+	targetURL := fmt.Sprintf("%s/artifacts/logs", runnerInfo.ApiUrl)
 
 	// Create the complete target URL with path
 	target, err := url.Parse(targetURL)
@@ -72,14 +72,14 @@ func (p *Proxy) getSnapshotTarget(ctx *gin.Context) (*url.URL, map[string]string
 	}, nil
 }
 
-func (p *Proxy) getSnapshot(ctx *gin.Context, snapshotId string) (*apiclient.SnapshotDto, error) {
-	var snapshot *apiclient.SnapshotDto
+func (p *Proxy) getTemplate(ctx *gin.Context, templateId string) (*apiclient.BoxTemplateDto, error) {
+	var template *apiclient.BoxTemplateDto
 	bearerToken := p.getBearerToken(ctx)
 	apiClient := p.getUserApiClient(ctx, bearerToken)
 
-	err := utils.RetryWithExponentialBackoff(ctx, "getSnapshot", proxyMaxRetries, proxyBaseDelay, proxyMaxDelay, func() error {
-		s, _, e := apiClient.SnapshotsAPI.GetSnapshot(ctx, snapshotId).Execute()
-		snapshot = s
+	err := utils.RetryWithExponentialBackoff(ctx, "getTemplate", proxyMaxRetries, proxyBaseDelay, proxyMaxDelay, func() error {
+		t, _, e := apiClient.TemplatesAPI.GetBoxTemplate(ctx, templateId).Execute()
+		template = t
 		openapiErr := common_errors.ConvertOpenAPIError(e)
 
 		if openapiErr != nil && !common_errors.IsRetryableOpenAPIError(openapiErr) {
@@ -88,7 +88,7 @@ func (p *Proxy) getSnapshot(ctx *gin.Context, snapshotId string) (*apiclient.Sna
 
 		return openapiErr
 	})
-	return snapshot, err
+	return template, err
 }
 
 func (p *Proxy) getRunnerInfo(ctx context.Context, runnerId string) (*RunnerInfo, error) {
