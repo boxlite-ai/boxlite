@@ -117,7 +117,7 @@ export class SandboxManager implements TrackableJobExecutions, OnApplicationShut
             .andWhere('sandbox.pending != true')
             .andWhere('sandbox."autoStopInterval" != 0')
             .andWhere('activity."lastActivityAt" < NOW() - INTERVAL \'1 minute\' * sandbox."autoStopInterval"')
-            .orderBy('sandbox."lastBackupAt"', 'ASC')
+            .orderBy('sandbox.lastBackupAt', 'ASC')
             .limit(100)
             .getMany()
 
@@ -189,7 +189,7 @@ export class SandboxManager implements TrackableJobExecutions, OnApplicationShut
         .andWhere('sandbox.pending != true')
         .andWhere('sandbox."autoArchiveInterval" != 0')
         .andWhere('activity."lastActivityAt" < NOW() - INTERVAL \'1 minute\' * sandbox."autoArchiveInterval"')
-        .orderBy('sandbox."lastBackupAt"', 'ASC')
+        .orderBy('sandbox.lastBackupAt', 'ASC')
         .limit(100)
         .getMany()
 
@@ -256,7 +256,7 @@ export class SandboxManager implements TrackableJobExecutions, OnApplicationShut
             .andWhere('sandbox.pending != true')
             .andWhere('sandbox."autoDeleteInterval" >= 0')
             .andWhere('activity."lastActivityAt" < NOW() - INTERVAL \'1 minute\' * sandbox."autoDeleteInterval"')
-            .orderBy('activity."lastActivityAt"', 'ASC')
+            .orderBy('activity.lastActivityAt', 'ASC')
             .limit(100)
             .getMany()
 
@@ -699,7 +699,7 @@ export class SandboxManager implements TrackableJobExecutions, OnApplicationShut
         })
         .andWhere('sandbox."desiredState"::text != sandbox.state::text')
         .andWhere('sandbox."desiredState"::text != :archived', { archived: SandboxDesiredState.ARCHIVED })
-        .orderBy('activity."lastActivityAt"', 'DESC', 'NULLS LAST')
+        .orderBy('activity.lastActivityAt', 'DESC', 'NULLS LAST')
 
       const stream = await queryBuilder.stream()
       let processedCount = 0
