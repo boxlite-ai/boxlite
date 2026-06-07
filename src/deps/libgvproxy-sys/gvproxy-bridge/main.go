@@ -214,7 +214,7 @@ type GvproxyInstance struct {
 	secretMatcher *SecretHostMatcher             // Hostname→secrets lookup (nil if no secrets)
 }
 
-func buildDNSZones(config GvproxyConfig) []types.Zone {
+func buildDNSZones(config GvproxyConfig) ([]types.Zone, error) {
 	dnsZones := make([]types.Zone, 0, len(config.DNSZones)+1)
 	for _, zone := range config.DNSZones {
 		dnsZone := types.Zone{
@@ -231,15 +231,18 @@ func buildDNSZones(config GvproxyConfig) []types.Zone {
 	}
 
 	if len(config.AllowNet) > 0 {
-		allowNetZones := buildAllowNetDNSZones(config.AllowNet)
+		allowNetZones, err := buildAllowNetDNSZones(config.AllowNet)
+		if err != nil {
+			return nil, err
+		}
 		dnsZones = append(dnsZones, allowNetZones...)
 		logrus.WithField("rules", len(config.AllowNet)).Info("Network allowlist enabled (DNS sinkhole)")
 	}
 
-	return dnsZones
+	return dnsZones, nil
 }
 
-func buildTapConfig(config GvproxyConfig, protocol types.Protocol) *types.Configuration {
+func buildTapConfig(config GvproxyConfig, protocol types.Protocol) (*types.Configuration, error) {
 	nat := make(map[string]string)
 	gatewayVirtualIPs := []string{config.GatewayIP}
 	if config.HostIP != "" {
@@ -247,6 +250,11 @@ func buildTapConfig(config GvproxyConfig, protocol types.Protocol) *types.Config
 		if config.HostIP != config.GatewayIP {
 			gatewayVirtualIPs = append(gatewayVirtualIPs, config.HostIP)
 		}
+	}
+
+	dnsZones, err := buildDNSZones(config)
+	if err != nil {
+		return nil, err
 	}
 
 	return &types.Configuration{
@@ -262,10 +270,10 @@ func buildTapConfig(config GvproxyConfig, protocol types.Protocol) *types.Config
 		NAT:               nat,
 		GatewayVirtualIPs: gatewayVirtualIPs,
 		Protocol:          protocol,
-		DNS:               buildDNSZones(config),
+		DNS:               dnsZones,
 		DNSSearchDomains:  config.DNSSearchDomains,
 		CaptureFile:       "",
-	}
+	}, nil
 }
 
 var (
@@ -274,12 +282,61 @@ var (
 	nextID      int64 = 1
 )
 
+// bridgeBuildID is a hand-bumped tag that identifies the gvproxy-bridge
+// source tree this binary was built from. Bump it whenever you change
+// behavior you need to observe in the field — it's the cheapest way to
+// confirm `make runtime:debug` actually produced a fresh shim and that
+// the running boxlite-shim is loading *this* code rather than a cached
+// older build.
+//
+// Why a hand-bumped tag and not just `vcs.revision`?
+//   - `vcs.revision` from BuildInfo only reflects committed state; if
+//     you're iterating with uncommitted changes, two different
+//     in-progress versions will share the same SHA.
+//   - It also goes "dirty" once you have any local edits, which hides
+//     which behavior you actually shipped.
+// Bumping a constant is a deliberate "I changed something worth
+// distinguishing" signal that survives both situations.
+const bridgeBuildID = "gvproxy-bridge:allownet-dns-resilience-2026-06"
+
+// logBridgeBuildOnce prints the build identity exactly once per shim
+// process, the first time gvproxy_create runs. We deliberately do NOT
+// log this from package init() because logrus may not be configured
+// yet at that point (the Rust caller redirects logrus output to its own
+// log destination during shim startup, after init runs).
+var logBridgeBuildOnce sync.Once
+
+func logBridgeBuild() {
+	logBridgeBuildOnce.Do(func() {
+		fields := logrus.Fields{
+			"build_id":  bridgeBuildID,
+			"go_module": "github.com/boxlite/gvproxy-bridge",
+		}
+		if info, ok := debug.ReadBuildInfo(); ok {
+			for _, s := range info.Settings {
+				switch s.Key {
+				case "vcs.revision":
+					fields["vcs_revision"] = s.Value
+				case "vcs.modified":
+					fields["vcs_modified"] = s.Value
+				case "vcs.time":
+					fields["vcs_time"] = s.Value
+				}
+			}
+			fields["go_version"] = info.GoVersion
+		}
+		logrus.WithFields(fields).Info("gvproxy-bridge: build identity")
+	})
+}
+
 //export gvproxy_create
 //
 // On failure (return -1), the underlying error message is written to `*errOut`
 // as a heap-allocated C string. Caller must free it via gvproxy_free_string.
 // `errOut` may be nil if the caller doesn't want the message.
 func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
+	logBridgeBuild()
+
 	// setErr surfaces the underlying error back to the FFI caller so the
 	// Rust runtime can include it in the user-visible BoxliteError message
 	// (e.g. "listen tcp 0.0.0.0:27380: bind: address already in use" instead
@@ -325,8 +382,16 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 		protocol = types.QemuProtocol
 	}
 
-	// Create gvisor-tap-vsock configuration from provided config
-	tapConfig := buildTapConfig(config, protocol)
+	// Create gvisor-tap-vsock configuration from provided config.
+	// Fails closed if any allow-listed hostname can't be resolved on the
+	// host (after retries) — better to fail box.create than ship a
+	// silently-incomplete DNS sinkhole.
+	tapConfig, err := buildTapConfig(config, protocol)
+	if err != nil {
+		logrus.WithError(err).Error("Failed to build gvproxy tap config")
+		setErr(err)
+		return -1
+	}
 
 	// Set CaptureFile if provided
 	if config.CaptureFile != nil && *config.CaptureFile != "" {
@@ -349,7 +414,6 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 	// Platform-specific socket creation
 	var conn net.Conn
 	var listener net.Listener
-	var err error
 
 	if runtime.GOOS == "darwin" {
 		// macOS: Use UnixDgram with VFKit protocol (SOCK_DGRAM)

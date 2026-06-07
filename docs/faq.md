@@ -263,6 +263,69 @@ async with boxlite.SimpleBox(image="alpine:latest") as box:
     print(result.stdout)
 ```
 
+### An `allow_net` host resolves to `0.0.0.0` inside the box (or `box.create` failed with a DNS error)
+
+When `allow_net` is set, BoxLite resolves each allow-listed hostname on
+the **host** at box-creation time and pins the IPs into the guest's DNS
+sinkhole. Anything not in the sinkhole answers `0.0.0.0`. So if an
+allow-listed host shows up as `0.0.0.0` inside the box, the host's
+resolver couldn't answer for it when the box was being created — most
+often a VPN that hadn't fully come up, a slow corporate DNS server, or
+mDNSResponder churn.
+
+**1. Check the gvproxy log for the host that failed.**
+
+```bash
+# Find the most recent box
+ls -t ~/.boxlite/boxes/
+
+# Then grep its shim log
+grep -i allowNet ~/.boxlite/boxes/<id>/logs/boxlite-shim.log.<date>
+```
+
+A successful create looks like this — `allow_zones == hostnames`:
+
+```
+INFO gvproxy: allowNet: DNS sinkhole configured allow_zones=5 total_zones=6
+INFO gvproxy: allowNet TCP: filter initialized hostnames=5 ...
+```
+
+When a host couldn't be resolved you'll see retry warnings followed by
+either a recovery (newer builds — the box still comes up cleanly):
+
+```
+WARN gvproxy: allowNet: DNS resolution failed, will retry attempt=1 hostname=iapi.example.com next_delay=100ms
+INFO gvproxy: allowNet: DNS resolution succeeded after retry attempts=2 hostname=iapi.example.com
+```
+
+…or a hard failure, which now aborts `box.create`:
+
+```
+ERROR gvproxy: allowNet: DNS resolution failed after retries attempts=4 hostname=iapi.example.com error="..."
+ERROR gvproxy: Failed to build gvproxy tap config error="allowNet: resolve \"iapi.example.com\": ..."
+```
+
+On older builds without the retry/fail-closed behavior the symptom is
+quieter: `allow_zones=N-1 total_zones=N` with no error, and the missing
+host silently sinkholes to `0.0.0.0` for the lifetime of the box.
+
+**2. Verify the host can actually resolve and reach the name.**
+
+```bash
+getent hosts iapi.example.com    # or: dscacheutil -q host -a name <host>
+nc -vz iapi.example.com 443
+```
+
+If the host can't reach it (`Connection refused`, `0.0.0.0`, NXDOMAIN),
+no amount of allow-listing will help — the VM only knows what the host
+told it at create time.
+
+**3. Recreate the box once DNS is healthy.**
+
+The sinkhole is built once at `box.create` and never refreshed for the
+life of that box, so you must destroy and recreate it after fixing the
+host's networking — restarting the VM or its services is not enough.
+
 ### How do I expose ports from a box?
 
 Use the `ports` parameter for port forwarding:

@@ -160,6 +160,14 @@ Structured network configuration for outbound connectivity.
   reaching host loopback services and is not governed by `allow_net`.
 - Security: when networking is enabled, any service bound to host loopback can
   be reached from inside the box via `host.boxlite.internal` or `192.168.127.254`.
+- Each allow-listed hostname is resolved on the **host** at box creation
+  time and the IPs are pinned into the guest's DNS sinkhole. The lookup
+  retries with exponential backoff to ride out transient host-side DNS
+  hiccups (VPN flap, slow corp resolver). If a hostname still cannot be
+  resolved after all retries, `box.create` fails — by design, so a
+  half-baked sinkhole never silently sinkholes an allow-listed host to
+  `0.0.0.0`. Make sure the host can resolve every entry in `allow_net`
+  before creating the box.
 
 **Supported patterns:**
 - Exact hostname: `"api.openai.com"`
