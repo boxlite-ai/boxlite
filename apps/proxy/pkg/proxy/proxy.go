@@ -188,8 +188,8 @@ func StartProxy(ctx context.Context, config *config.Config) error {
 						return
 					}
 
-					if regexp.MustCompile(`^/templates/[\w-]+/build-logs$`).MatchString(ctx.Request.URL.Path) {
-						common_proxy.NewProxyRequestHandler(proxy.getTemplateTarget, nil)(ctx)
+					if regexp.MustCompile(`^/saved-images/[\w-]+/build-logs$`).MatchString(ctx.Request.URL.Path) {
+						common_proxy.NewProxyRequestHandler(proxy.getSavedImageTarget, nil)(ctx)
 						return
 					}
 

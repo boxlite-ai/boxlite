@@ -352,17 +352,17 @@ type OrganizationsAPI interface {
 	RegenerateProxyApiKeyExecute(r OrganizationsAPIRegenerateProxyApiKeyRequest) (*RegenerateApiKeyResponse, *http.Response, error)
 
 	/*
-	RegenerateSnapshotManagerCredentials Regenerate snapshot manager credentials for a region
+	RegenerateArtifactRegistryCredentials Regenerate artifact registry credentials for a region
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@param id Region ID
-	@return OrganizationsAPIRegenerateSnapshotManagerCredentialsRequest
+	@return OrganizationsAPIRegenerateArtifactRegistryCredentialsRequest
 	*/
-	RegenerateSnapshotManagerCredentials(ctx context.Context, id string) OrganizationsAPIRegenerateSnapshotManagerCredentialsRequest
+	RegenerateArtifactRegistryCredentials(ctx context.Context, id string) OrganizationsAPIRegenerateArtifactRegistryCredentialsRequest
 
-	// RegenerateSnapshotManagerCredentialsExecute executes the request
-	//  @return SnapshotManagerCredentials
-	RegenerateSnapshotManagerCredentialsExecute(r OrganizationsAPIRegenerateSnapshotManagerCredentialsRequest) (*SnapshotManagerCredentials, *http.Response, error)
+	// RegenerateArtifactRegistryCredentialsExecute executes the request
+	//  @return ArtifactRegistryCredentials
+	RegenerateArtifactRegistryCredentialsExecute(r OrganizationsAPIRegenerateArtifactRegistryCredentialsRequest) (*ArtifactRegistryCredentials, *http.Response, error)
 
 	/*
 	RegenerateSshGatewayApiKey Regenerate SSH gateway API key for a region
@@ -3151,7 +3151,7 @@ func (a *OrganizationsAPIService) RegenerateProxyApiKeyExecute(r OrganizationsAP
 	return localVarReturnValue, localVarHTTPResponse, nil
 }
 
-type OrganizationsAPIRegenerateSnapshotManagerCredentialsRequest struct {
+type OrganizationsAPIRegenerateArtifactRegistryCredentialsRequest struct {
 	ctx context.Context
 	ApiService OrganizationsAPI
 	id string
@@ -3159,24 +3159,24 @@ type OrganizationsAPIRegenerateSnapshotManagerCredentialsRequest struct {
 }
 
 // Use with JWT to specify the organization ID
-func (r OrganizationsAPIRegenerateSnapshotManagerCredentialsRequest) XBoxLiteOrganizationID(xBoxLiteOrganizationID string) OrganizationsAPIRegenerateSnapshotManagerCredentialsRequest {
+func (r OrganizationsAPIRegenerateArtifactRegistryCredentialsRequest) XBoxLiteOrganizationID(xBoxLiteOrganizationID string) OrganizationsAPIRegenerateArtifactRegistryCredentialsRequest {
 	r.xBoxLiteOrganizationID = &xBoxLiteOrganizationID
 	return r
 }
 
-func (r OrganizationsAPIRegenerateSnapshotManagerCredentialsRequest) Execute() (*SnapshotManagerCredentials, *http.Response, error) {
-	return r.ApiService.RegenerateSnapshotManagerCredentialsExecute(r)
+func (r OrganizationsAPIRegenerateArtifactRegistryCredentialsRequest) Execute() (*ArtifactRegistryCredentials, *http.Response, error) {
+	return r.ApiService.RegenerateArtifactRegistryCredentialsExecute(r)
 }
 
 /*
-RegenerateSnapshotManagerCredentials Regenerate snapshot manager credentials for a region
+RegenerateArtifactRegistryCredentials Regenerate artifact registry credentials for a region
 
  @param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
  @param id Region ID
- @return OrganizationsAPIRegenerateSnapshotManagerCredentialsRequest
+ @return OrganizationsAPIRegenerateArtifactRegistryCredentialsRequest
 */
-func (a *OrganizationsAPIService) RegenerateSnapshotManagerCredentials(ctx context.Context, id string) OrganizationsAPIRegenerateSnapshotManagerCredentialsRequest {
-	return OrganizationsAPIRegenerateSnapshotManagerCredentialsRequest{
+func (a *OrganizationsAPIService) RegenerateArtifactRegistryCredentials(ctx context.Context, id string) OrganizationsAPIRegenerateArtifactRegistryCredentialsRequest {
+	return OrganizationsAPIRegenerateArtifactRegistryCredentialsRequest{
 		ApiService: a,
 		ctx: ctx,
 		id: id,
@@ -3184,21 +3184,21 @@ func (a *OrganizationsAPIService) RegenerateSnapshotManagerCredentials(ctx conte
 }
 
 // Execute executes the request
-//  @return SnapshotManagerCredentials
-func (a *OrganizationsAPIService) RegenerateSnapshotManagerCredentialsExecute(r OrganizationsAPIRegenerateSnapshotManagerCredentialsRequest) (*SnapshotManagerCredentials, *http.Response, error) {
+//  @return ArtifactRegistryCredentials
+func (a *OrganizationsAPIService) RegenerateArtifactRegistryCredentialsExecute(r OrganizationsAPIRegenerateArtifactRegistryCredentialsRequest) (*ArtifactRegistryCredentials, *http.Response, error) {
 	var (
 		localVarHTTPMethod   = http.MethodPost
 		localVarPostBody     interface{}
 		formFiles            []formFile
-		localVarReturnValue  *SnapshotManagerCredentials
+		localVarReturnValue  *ArtifactRegistryCredentials
 	)
 
-	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "OrganizationsAPIService.RegenerateSnapshotManagerCredentials")
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "OrganizationsAPIService.RegenerateArtifactRegistryCredentials")
 	if err != nil {
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/regions/{id}/regenerate-snapshot-manager-credentials"
+	localVarPath := localBasePath + "/regions/{id}/regenerate-artifact-registry-credentials"
 	localVarPath = strings.Replace(localVarPath, "{"+"id"+"}", url.PathEscape(parameterValueToString(r.id, "id")), -1)
 
 	localVarHeaderParams := make(map[string]string)

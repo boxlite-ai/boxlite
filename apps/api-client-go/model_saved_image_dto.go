@@ -13,8 +13,8 @@ package apiclient
 
 import "time"
 
-// BoxTemplateDto struct for BoxTemplateDto
-type BoxTemplateDto struct {
+// SavedImageDto struct for SavedImageDto
+type SavedImageDto struct {
 	Id                   string     `json:"id"`
 	OrganizationId       *string    `json:"organizationId,omitempty"`
 	General              bool       `json:"general"`

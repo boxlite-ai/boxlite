@@ -22,9 +22,9 @@ var _ MappedNullable = &CreateSandbox{}
 type CreateSandbox struct {
 	// The name of the sandbox. If not provided, the sandbox ID will be used as the name
 	Name *string `json:"name,omitempty"`
-	// The ID or name of the template used for the sandbox
-	TemplateId *string `json:"templateId,omitempty"`
-	// Deprecated alias for templateId used by older clients
+	// The ID or name of the saved image used for the sandbox
+	SavedImageId *string `json:"savedImageId,omitempty"`
+	// Deprecated alias for savedImageId used by older clients
 	Snapshot *string `json:"snapshot,omitempty"`
 	// The user associated with the project
 	User *string `json:"user,omitempty"`
@@ -114,40 +114,40 @@ func (o *CreateSandbox) SetName(v string) {
 	o.Name = &v
 }
 
-// GetTemplateId returns the TemplateId field value if set, zero value otherwise.
-func (o *CreateSandbox) GetTemplateId() string {
-	if o == nil || IsNil(o.TemplateId) {
+// GetSavedImageId returns the SavedImageId field value if set, zero value otherwise.
+func (o *CreateSandbox) GetSavedImageId() string {
+	if o == nil || IsNil(o.SavedImageId) {
 		var ret string
 		return ret
 	}
-	return *o.TemplateId
+	return *o.SavedImageId
 }
 
-// GetTemplateIdOk returns a tuple with the TemplateId field value if set, nil otherwise
+// GetSavedImageIdOk returns a tuple with the SavedImageId field value if set, nil otherwise
 // and a boolean to check if the value has been set.
-func (o *CreateSandbox) GetTemplateIdOk() (*string, bool) {
-	if o == nil || IsNil(o.TemplateId) {
+func (o *CreateSandbox) GetSavedImageIdOk() (*string, bool) {
+	if o == nil || IsNil(o.SavedImageId) {
 		return nil, false
 	}
-	return o.TemplateId, true
+	return o.SavedImageId, true
 }
 
-// HasTemplateId returns a boolean if a field has been set.
-func (o *CreateSandbox) HasTemplateId() bool {
-	if o != nil && !IsNil(o.TemplateId) {
+// HasSavedImageId returns a boolean if a field has been set.
+func (o *CreateSandbox) HasSavedImageId() bool {
+	if o != nil && !IsNil(o.SavedImageId) {
 		return true
 	}
 
 	return false
 }
 
-// SetTemplateId gets a reference to the given string and assigns it to the TemplateId field.
-func (o *CreateSandbox) SetTemplateId(v string) {
-	o.TemplateId = &v
+// SetSavedImageId gets a reference to the given string and assigns it to the SavedImageId field.
+func (o *CreateSandbox) SetSavedImageId(v string) {
+	o.SavedImageId = &v
 }
 
 // GetSnapshot returns the Snapshot field value if set, zero value otherwise.
-// Deprecated: use GetTemplateId instead.
+// Deprecated: use GetSavedImageId instead.
 func (o *CreateSandbox) GetSnapshot() string {
 	if o == nil || IsNil(o.Snapshot) {
 		var ret string
@@ -158,7 +158,7 @@ func (o *CreateSandbox) GetSnapshot() string {
 
 // GetSnapshotOk returns a tuple with the Snapshot field value if set, nil otherwise
 // and a boolean to check if the value has been set.
-// Deprecated: use GetTemplateIdOk instead.
+// Deprecated: use GetSavedImageIdOk instead.
 func (o *CreateSandbox) GetSnapshotOk() (*string, bool) {
 	if o == nil || IsNil(o.Snapshot) {
 		return nil, false
@@ -167,7 +167,7 @@ func (o *CreateSandbox) GetSnapshotOk() (*string, bool) {
 }
 
 // HasSnapshot returns a boolean if a field has been set.
-// Deprecated: use HasTemplateId instead.
+// Deprecated: use HasSavedImageId instead.
 func (o *CreateSandbox) HasSnapshot() bool {
 	if o != nil && !IsNil(o.Snapshot) {
 		return true
@@ -177,7 +177,7 @@ func (o *CreateSandbox) HasSnapshot() bool {
 }
 
 // SetSnapshot gets a reference to the given string and assigns it to the Snapshot field.
-// Deprecated: use SetTemplateId instead.
+// Deprecated: use SetSavedImageId instead.
 func (o *CreateSandbox) SetSnapshot(v string) {
 	o.Snapshot = &v
 }
@@ -739,8 +739,8 @@ func (o CreateSandbox) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.Name) {
 		toSerialize["name"] = o.Name
 	}
-	if !IsNil(o.TemplateId) {
-		toSerialize["templateId"] = o.TemplateId
+	if !IsNil(o.SavedImageId) {
+		toSerialize["savedImageId"] = o.SavedImageId
 	}
 	if !IsNil(o.Snapshot) {
 		toSerialize["snapshot"] = o.Snapshot
@@ -819,7 +819,7 @@ func (o *CreateSandbox) UnmarshalJSON(data []byte) (err error) {
 
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
 		delete(additionalProperties, "name")
-		delete(additionalProperties, "templateId")
+		delete(additionalProperties, "savedImageId")
 		delete(additionalProperties, "snapshot")
 		delete(additionalProperties, "user")
 		delete(additionalProperties, "env")

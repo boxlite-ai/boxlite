@@ -20,167 +20,167 @@ import (
 	"strings"
 )
 
-type TemplatesAPI interface {
+type SavedImagesAPI interface {
 
 	/*
-		ActivateBoxTemplate Activate a template
+		ActivateSavedImage Activate a savedImage
 
 		@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-		@param id BoxTemplate ID
-		@return TemplatesAPIActivateBoxTemplateRequest
+		@param id SavedImage ID
+		@return SavedImagesAPIActivateSavedImageRequest
 	*/
-	ActivateBoxTemplate(ctx context.Context, id string) TemplatesAPIActivateBoxTemplateRequest
+	ActivateSavedImage(ctx context.Context, id string) SavedImagesAPIActivateSavedImageRequest
 
-	// ActivateBoxTemplateExecute executes the request
-	//  @return BoxTemplateDto
-	ActivateBoxTemplateExecute(r TemplatesAPIActivateBoxTemplateRequest) (*BoxTemplateDto, *http.Response, error)
+	// ActivateSavedImageExecute executes the request
+	//  @return SavedImageDto
+	ActivateSavedImageExecute(r SavedImagesAPIActivateSavedImageRequest) (*SavedImageDto, *http.Response, error)
 
 	/*
 		CanCleanupImage Check if an image can be cleaned up
 
 		@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-		@return TemplatesAPICanCleanupImageRequest
+		@return SavedImagesAPICanCleanupImageRequest
 	*/
-	CanCleanupImage(ctx context.Context) TemplatesAPICanCleanupImageRequest
+	CanCleanupImage(ctx context.Context) SavedImagesAPICanCleanupImageRequest
 
 	// CanCleanupImageExecute executes the request
 	//  @return bool
-	CanCleanupImageExecute(r TemplatesAPICanCleanupImageRequest) (bool, *http.Response, error)
+	CanCleanupImageExecute(r SavedImagesAPICanCleanupImageRequest) (bool, *http.Response, error)
 
 	/*
-		CreateBoxTemplate Create a new template
+		CreateSavedImage Create a new savedImage
 
 		@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-		@return TemplatesAPICreateBoxTemplateRequest
+		@return SavedImagesAPICreateSavedImageRequest
 	*/
-	CreateBoxTemplate(ctx context.Context) TemplatesAPICreateBoxTemplateRequest
+	CreateSavedImage(ctx context.Context) SavedImagesAPICreateSavedImageRequest
 
-	// CreateBoxTemplateExecute executes the request
-	//  @return BoxTemplateDto
-	CreateBoxTemplateExecute(r TemplatesAPICreateBoxTemplateRequest) (*BoxTemplateDto, *http.Response, error)
+	// CreateSavedImageExecute executes the request
+	//  @return SavedImageDto
+	CreateSavedImageExecute(r SavedImagesAPICreateSavedImageRequest) (*SavedImageDto, *http.Response, error)
 
 	/*
-		DeactivateBoxTemplate Deactivate a template
+		DeactivateSavedImage Deactivate a savedImage
 
 		@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-		@param id BoxTemplate ID
-		@return TemplatesAPIDeactivateBoxTemplateRequest
+		@param id SavedImage ID
+		@return SavedImagesAPIDeactivateSavedImageRequest
 	*/
-	DeactivateBoxTemplate(ctx context.Context, id string) TemplatesAPIDeactivateBoxTemplateRequest
+	DeactivateSavedImage(ctx context.Context, id string) SavedImagesAPIDeactivateSavedImageRequest
 
-	// DeactivateBoxTemplateExecute executes the request
-	DeactivateBoxTemplateExecute(r TemplatesAPIDeactivateBoxTemplateRequest) (*http.Response, error)
+	// DeactivateSavedImageExecute executes the request
+	DeactivateSavedImageExecute(r SavedImagesAPIDeactivateSavedImageRequest) (*http.Response, error)
 
 	/*
-		ListBoxTemplates List all templates
+		ListSavedImages List all savedImages
 
 		@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-		@return TemplatesAPIListBoxTemplatesRequest
+		@return SavedImagesAPIListSavedImagesRequest
 	*/
-	ListBoxTemplates(ctx context.Context) TemplatesAPIListBoxTemplatesRequest
+	ListSavedImages(ctx context.Context) SavedImagesAPIListSavedImagesRequest
 
-	// ListBoxTemplatesExecute executes the request
-	//  @return PaginatedBoxTemplates
-	ListBoxTemplatesExecute(r TemplatesAPIListBoxTemplatesRequest) (*PaginatedBoxTemplates, *http.Response, error)
+	// ListSavedImagesExecute executes the request
+	//  @return PaginatedSavedImages
+	ListSavedImagesExecute(r SavedImagesAPIListSavedImagesRequest) (*PaginatedSavedImages, *http.Response, error)
 
 	/*
-		GetBoxTemplate Get template by ID or name
+		GetSavedImage Get savedImage by ID or name
 
 		@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-		@param id BoxTemplate ID or name
-		@return TemplatesAPIGetBoxTemplateRequest
+		@param id SavedImage ID or name
+		@return SavedImagesAPIGetSavedImageRequest
 	*/
-	GetBoxTemplate(ctx context.Context, id string) TemplatesAPIGetBoxTemplateRequest
+	GetSavedImage(ctx context.Context, id string) SavedImagesAPIGetSavedImageRequest
 
-	// GetBoxTemplateExecute executes the request
-	//  @return BoxTemplateDto
-	GetBoxTemplateExecute(r TemplatesAPIGetBoxTemplateRequest) (*BoxTemplateDto, *http.Response, error)
+	// GetSavedImageExecute executes the request
+	//  @return SavedImageDto
+	GetSavedImageExecute(r SavedImagesAPIGetSavedImageRequest) (*SavedImageDto, *http.Response, error)
 
 	/*
-		GetBoxTemplateBuildLogs Get template build logs
+		GetSavedImageBuildLogs Get savedImage build logs
 
-		This endpoint is deprecated. Use `getBoxTemplateBuildLogsUrl` instead.
+		This endpoint is deprecated. Use `getSavedImageBuildLogsUrl` instead.
 
 		@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-		@param id BoxTemplate ID
-		@return TemplatesAPIGetBoxTemplateBuildLogsRequest
+		@param id SavedImage ID
+		@return SavedImagesAPIGetSavedImageBuildLogsRequest
 
 		Deprecated
 	*/
-	GetBoxTemplateBuildLogs(ctx context.Context, id string) TemplatesAPIGetBoxTemplateBuildLogsRequest
+	GetSavedImageBuildLogs(ctx context.Context, id string) SavedImagesAPIGetSavedImageBuildLogsRequest
 
-	// GetBoxTemplateBuildLogsExecute executes the request
+	// GetSavedImageBuildLogsExecute executes the request
 	// Deprecated
-	GetBoxTemplateBuildLogsExecute(r TemplatesAPIGetBoxTemplateBuildLogsRequest) (*http.Response, error)
+	GetSavedImageBuildLogsExecute(r SavedImagesAPIGetSavedImageBuildLogsRequest) (*http.Response, error)
 
 	/*
-		GetBoxTemplateBuildLogsUrl Get template build logs URL
+		GetSavedImageBuildLogsUrl Get savedImage build logs URL
 
 		@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-		@param id BoxTemplate ID
-		@return TemplatesAPIGetBoxTemplateBuildLogsUrlRequest
+		@param id SavedImage ID
+		@return SavedImagesAPIGetSavedImageBuildLogsUrlRequest
 	*/
-	GetBoxTemplateBuildLogsUrl(ctx context.Context, id string) TemplatesAPIGetBoxTemplateBuildLogsUrlRequest
+	GetSavedImageBuildLogsUrl(ctx context.Context, id string) SavedImagesAPIGetSavedImageBuildLogsUrlRequest
 
-	// GetBoxTemplateBuildLogsUrlExecute executes the request
+	// GetSavedImageBuildLogsUrlExecute executes the request
 	//  @return Url
-	GetBoxTemplateBuildLogsUrlExecute(r TemplatesAPIGetBoxTemplateBuildLogsUrlRequest) (*Url, *http.Response, error)
+	GetSavedImageBuildLogsUrlExecute(r SavedImagesAPIGetSavedImageBuildLogsUrlRequest) (*Url, *http.Response, error)
 
 	/*
-		RemoveBoxTemplate Delete template
+		RemoveSavedImage Delete savedImage
 
 		@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-		@param id BoxTemplate ID
-		@return TemplatesAPIRemoveBoxTemplateRequest
+		@param id SavedImage ID
+		@return SavedImagesAPIRemoveSavedImageRequest
 	*/
-	RemoveBoxTemplate(ctx context.Context, id string) TemplatesAPIRemoveBoxTemplateRequest
+	RemoveSavedImage(ctx context.Context, id string) SavedImagesAPIRemoveSavedImageRequest
 
-	// RemoveBoxTemplateExecute executes the request
-	RemoveBoxTemplateExecute(r TemplatesAPIRemoveBoxTemplateRequest) (*http.Response, error)
+	// RemoveSavedImageExecute executes the request
+	RemoveSavedImageExecute(r SavedImagesAPIRemoveSavedImageRequest) (*http.Response, error)
 
 	/*
-		SetBoxTemplateGeneralStatus Set template general status
+		SetSavedImageGeneralStatus Set savedImage general status
 
 		@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-		@param id BoxTemplate ID
-		@return TemplatesAPISetBoxTemplateGeneralStatusRequest
+		@param id SavedImage ID
+		@return SavedImagesAPISetSavedImageGeneralStatusRequest
 	*/
-	SetBoxTemplateGeneralStatus(ctx context.Context, id string) TemplatesAPISetBoxTemplateGeneralStatusRequest
+	SetSavedImageGeneralStatus(ctx context.Context, id string) SavedImagesAPISetSavedImageGeneralStatusRequest
 
-	// SetBoxTemplateGeneralStatusExecute executes the request
-	//  @return BoxTemplateDto
-	SetBoxTemplateGeneralStatusExecute(r TemplatesAPISetBoxTemplateGeneralStatusRequest) (*BoxTemplateDto, *http.Response, error)
+	// SetSavedImageGeneralStatusExecute executes the request
+	//  @return SavedImageDto
+	SetSavedImageGeneralStatusExecute(r SavedImagesAPISetSavedImageGeneralStatusRequest) (*SavedImageDto, *http.Response, error)
 }
 
-// TemplatesAPIService TemplatesAPI service
-type TemplatesAPIService service
+// SavedImagesAPIService SavedImagesAPI service
+type SavedImagesAPIService service
 
-type TemplatesAPIActivateBoxTemplateRequest struct {
+type SavedImagesAPIActivateSavedImageRequest struct {
 	ctx                    context.Context
-	ApiService             TemplatesAPI
+	ApiService             SavedImagesAPI
 	id                     string
 	xBoxLiteOrganizationID *string
 }
 
 // Use with JWT to specify the organization ID
-func (r TemplatesAPIActivateBoxTemplateRequest) XBoxLiteOrganizationID(xBoxLiteOrganizationID string) TemplatesAPIActivateBoxTemplateRequest {
+func (r SavedImagesAPIActivateSavedImageRequest) XBoxLiteOrganizationID(xBoxLiteOrganizationID string) SavedImagesAPIActivateSavedImageRequest {
 	r.xBoxLiteOrganizationID = &xBoxLiteOrganizationID
 	return r
 }
 
-func (r TemplatesAPIActivateBoxTemplateRequest) Execute() (*BoxTemplateDto, *http.Response, error) {
-	return r.ApiService.ActivateBoxTemplateExecute(r)
+func (r SavedImagesAPIActivateSavedImageRequest) Execute() (*SavedImageDto, *http.Response, error) {
+	return r.ApiService.ActivateSavedImageExecute(r)
 }
 
 /*
-ActivateBoxTemplate Activate a template
+ActivateSavedImage Activate a savedImage
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param id BoxTemplate ID
-	@return TemplatesAPIActivateBoxTemplateRequest
+	@param id SavedImage ID
+	@return SavedImagesAPIActivateSavedImageRequest
 */
-func (a *TemplatesAPIService) ActivateBoxTemplate(ctx context.Context, id string) TemplatesAPIActivateBoxTemplateRequest {
-	return TemplatesAPIActivateBoxTemplateRequest{
+func (a *SavedImagesAPIService) ActivateSavedImage(ctx context.Context, id string) SavedImagesAPIActivateSavedImageRequest {
+	return SavedImagesAPIActivateSavedImageRequest{
 		ApiService: a,
 		ctx:        ctx,
 		id:         id,
@@ -189,21 +189,21 @@ func (a *TemplatesAPIService) ActivateBoxTemplate(ctx context.Context, id string
 
 // Execute executes the request
 //
-//	@return BoxTemplateDto
-func (a *TemplatesAPIService) ActivateBoxTemplateExecute(r TemplatesAPIActivateBoxTemplateRequest) (*BoxTemplateDto, *http.Response, error) {
+//	@return SavedImageDto
+func (a *SavedImagesAPIService) ActivateSavedImageExecute(r SavedImagesAPIActivateSavedImageRequest) (*SavedImageDto, *http.Response, error) {
 	var (
 		localVarHTTPMethod  = http.MethodPost
 		localVarPostBody    interface{}
 		formFiles           []formFile
-		localVarReturnValue *BoxTemplateDto
+		localVarReturnValue *SavedImageDto
 	)
 
-	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "TemplatesAPIService.ActivateBoxTemplate")
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "SavedImagesAPIService.ActivateSavedImage")
 	if err != nil {
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/templates/{id}/activate"
+	localVarPath := localBasePath + "/saved-images/{id}/activate"
 	localVarPath = strings.Replace(localVarPath, "{"+"id"+"}", url.PathEscape(parameterValueToString(r.id, "id")), -1)
 
 	localVarHeaderParams := make(map[string]string)
@@ -267,26 +267,26 @@ func (a *TemplatesAPIService) ActivateBoxTemplateExecute(r TemplatesAPIActivateB
 	return localVarReturnValue, localVarHTTPResponse, nil
 }
 
-type TemplatesAPICanCleanupImageRequest struct {
+type SavedImagesAPICanCleanupImageRequest struct {
 	ctx                    context.Context
-	ApiService             TemplatesAPI
+	ApiService             SavedImagesAPI
 	imageName              *string
 	xBoxLiteOrganizationID *string
 }
 
 // Image name with tag to check
-func (r TemplatesAPICanCleanupImageRequest) ImageName(imageName string) TemplatesAPICanCleanupImageRequest {
+func (r SavedImagesAPICanCleanupImageRequest) ImageName(imageName string) SavedImagesAPICanCleanupImageRequest {
 	r.imageName = &imageName
 	return r
 }
 
 // Use with JWT to specify the organization ID
-func (r TemplatesAPICanCleanupImageRequest) XBoxLiteOrganizationID(xBoxLiteOrganizationID string) TemplatesAPICanCleanupImageRequest {
+func (r SavedImagesAPICanCleanupImageRequest) XBoxLiteOrganizationID(xBoxLiteOrganizationID string) SavedImagesAPICanCleanupImageRequest {
 	r.xBoxLiteOrganizationID = &xBoxLiteOrganizationID
 	return r
 }
 
-func (r TemplatesAPICanCleanupImageRequest) Execute() (bool, *http.Response, error) {
+func (r SavedImagesAPICanCleanupImageRequest) Execute() (bool, *http.Response, error) {
 	return r.ApiService.CanCleanupImageExecute(r)
 }
 
@@ -294,10 +294,10 @@ func (r TemplatesAPICanCleanupImageRequest) Execute() (bool, *http.Response, err
 CanCleanupImage Check if an image can be cleaned up
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@return TemplatesAPICanCleanupImageRequest
+	@return SavedImagesAPICanCleanupImageRequest
 */
-func (a *TemplatesAPIService) CanCleanupImage(ctx context.Context) TemplatesAPICanCleanupImageRequest {
-	return TemplatesAPICanCleanupImageRequest{
+func (a *SavedImagesAPIService) CanCleanupImage(ctx context.Context) SavedImagesAPICanCleanupImageRequest {
+	return SavedImagesAPICanCleanupImageRequest{
 		ApiService: a,
 		ctx:        ctx,
 	}
@@ -306,7 +306,7 @@ func (a *TemplatesAPIService) CanCleanupImage(ctx context.Context) TemplatesAPIC
 // Execute executes the request
 //
 //	@return bool
-func (a *TemplatesAPIService) CanCleanupImageExecute(r TemplatesAPICanCleanupImageRequest) (bool, *http.Response, error) {
+func (a *SavedImagesAPIService) CanCleanupImageExecute(r SavedImagesAPICanCleanupImageRequest) (bool, *http.Response, error) {
 	var (
 		localVarHTTPMethod  = http.MethodGet
 		localVarPostBody    interface{}
@@ -314,12 +314,12 @@ func (a *TemplatesAPIService) CanCleanupImageExecute(r TemplatesAPICanCleanupIma
 		localVarReturnValue bool
 	)
 
-	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "TemplatesAPIService.CanCleanupImage")
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "SavedImagesAPIService.CanCleanupImage")
 	if err != nil {
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/templates/can-cleanup-image"
+	localVarPath := localBasePath + "/saved-images/can-cleanup-image"
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -386,36 +386,36 @@ func (a *TemplatesAPIService) CanCleanupImageExecute(r TemplatesAPICanCleanupIma
 	return localVarReturnValue, localVarHTTPResponse, nil
 }
 
-type TemplatesAPICreateBoxTemplateRequest struct {
+type SavedImagesAPICreateSavedImageRequest struct {
 	ctx                    context.Context
-	ApiService             TemplatesAPI
-	createBoxTemplate      *CreateBoxTemplate
+	ApiService             SavedImagesAPI
+	createSavedImage       *CreateSavedImage
 	xBoxLiteOrganizationID *string
 }
 
-func (r TemplatesAPICreateBoxTemplateRequest) CreateBoxTemplate(createBoxTemplate CreateBoxTemplate) TemplatesAPICreateBoxTemplateRequest {
-	r.createBoxTemplate = &createBoxTemplate
+func (r SavedImagesAPICreateSavedImageRequest) CreateSavedImage(createSavedImage CreateSavedImage) SavedImagesAPICreateSavedImageRequest {
+	r.createSavedImage = &createSavedImage
 	return r
 }
 
 // Use with JWT to specify the organization ID
-func (r TemplatesAPICreateBoxTemplateRequest) XBoxLiteOrganizationID(xBoxLiteOrganizationID string) TemplatesAPICreateBoxTemplateRequest {
+func (r SavedImagesAPICreateSavedImageRequest) XBoxLiteOrganizationID(xBoxLiteOrganizationID string) SavedImagesAPICreateSavedImageRequest {
 	r.xBoxLiteOrganizationID = &xBoxLiteOrganizationID
 	return r
 }
 
-func (r TemplatesAPICreateBoxTemplateRequest) Execute() (*BoxTemplateDto, *http.Response, error) {
-	return r.ApiService.CreateBoxTemplateExecute(r)
+func (r SavedImagesAPICreateSavedImageRequest) Execute() (*SavedImageDto, *http.Response, error) {
+	return r.ApiService.CreateSavedImageExecute(r)
 }
 
 /*
-CreateBoxTemplate Create a new template
+CreateSavedImage Create a new savedImage
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@return TemplatesAPICreateBoxTemplateRequest
+	@return SavedImagesAPICreateSavedImageRequest
 */
-func (a *TemplatesAPIService) CreateBoxTemplate(ctx context.Context) TemplatesAPICreateBoxTemplateRequest {
-	return TemplatesAPICreateBoxTemplateRequest{
+func (a *SavedImagesAPIService) CreateSavedImage(ctx context.Context) SavedImagesAPICreateSavedImageRequest {
+	return SavedImagesAPICreateSavedImageRequest{
 		ApiService: a,
 		ctx:        ctx,
 	}
@@ -423,27 +423,27 @@ func (a *TemplatesAPIService) CreateBoxTemplate(ctx context.Context) TemplatesAP
 
 // Execute executes the request
 //
-//	@return BoxTemplateDto
-func (a *TemplatesAPIService) CreateBoxTemplateExecute(r TemplatesAPICreateBoxTemplateRequest) (*BoxTemplateDto, *http.Response, error) {
+//	@return SavedImageDto
+func (a *SavedImagesAPIService) CreateSavedImageExecute(r SavedImagesAPICreateSavedImageRequest) (*SavedImageDto, *http.Response, error) {
 	var (
 		localVarHTTPMethod  = http.MethodPost
 		localVarPostBody    interface{}
 		formFiles           []formFile
-		localVarReturnValue *BoxTemplateDto
+		localVarReturnValue *SavedImageDto
 	)
 
-	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "TemplatesAPIService.CreateBoxTemplate")
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "SavedImagesAPIService.CreateSavedImage")
 	if err != nil {
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/templates"
+	localVarPath := localBasePath + "/saved-images"
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
 	localVarFormParams := url.Values{}
-	if r.createBoxTemplate == nil {
-		return localVarReturnValue, nil, reportError("createBoxTemplate is required and must be specified")
+	if r.createSavedImage == nil {
+		return localVarReturnValue, nil, reportError("createSavedImage is required and must be specified")
 	}
 
 	// to determine the Content-Type header
@@ -467,7 +467,7 @@ func (a *TemplatesAPIService) CreateBoxTemplateExecute(r TemplatesAPICreateBoxTe
 		parameterAddToHeaderOrQuery(localVarHeaderParams, "X-BoxLite-Organization-ID", r.xBoxLiteOrganizationID, "simple", "")
 	}
 	// body params
-	localVarPostBody = r.createBoxTemplate
+	localVarPostBody = r.createSavedImage
 	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
 	if err != nil {
 		return localVarReturnValue, nil, err
@@ -505,32 +505,32 @@ func (a *TemplatesAPIService) CreateBoxTemplateExecute(r TemplatesAPICreateBoxTe
 	return localVarReturnValue, localVarHTTPResponse, nil
 }
 
-type TemplatesAPIDeactivateBoxTemplateRequest struct {
+type SavedImagesAPIDeactivateSavedImageRequest struct {
 	ctx                    context.Context
-	ApiService             TemplatesAPI
+	ApiService             SavedImagesAPI
 	id                     string
 	xBoxLiteOrganizationID *string
 }
 
 // Use with JWT to specify the organization ID
-func (r TemplatesAPIDeactivateBoxTemplateRequest) XBoxLiteOrganizationID(xBoxLiteOrganizationID string) TemplatesAPIDeactivateBoxTemplateRequest {
+func (r SavedImagesAPIDeactivateSavedImageRequest) XBoxLiteOrganizationID(xBoxLiteOrganizationID string) SavedImagesAPIDeactivateSavedImageRequest {
 	r.xBoxLiteOrganizationID = &xBoxLiteOrganizationID
 	return r
 }
 
-func (r TemplatesAPIDeactivateBoxTemplateRequest) Execute() (*http.Response, error) {
-	return r.ApiService.DeactivateBoxTemplateExecute(r)
+func (r SavedImagesAPIDeactivateSavedImageRequest) Execute() (*http.Response, error) {
+	return r.ApiService.DeactivateSavedImageExecute(r)
 }
 
 /*
-DeactivateBoxTemplate Deactivate a template
+DeactivateSavedImage Deactivate a savedImage
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param id BoxTemplate ID
-	@return TemplatesAPIDeactivateBoxTemplateRequest
+	@param id SavedImage ID
+	@return SavedImagesAPIDeactivateSavedImageRequest
 */
-func (a *TemplatesAPIService) DeactivateBoxTemplate(ctx context.Context, id string) TemplatesAPIDeactivateBoxTemplateRequest {
-	return TemplatesAPIDeactivateBoxTemplateRequest{
+func (a *SavedImagesAPIService) DeactivateSavedImage(ctx context.Context, id string) SavedImagesAPIDeactivateSavedImageRequest {
+	return SavedImagesAPIDeactivateSavedImageRequest{
 		ApiService: a,
 		ctx:        ctx,
 		id:         id,
@@ -538,19 +538,19 @@ func (a *TemplatesAPIService) DeactivateBoxTemplate(ctx context.Context, id stri
 }
 
 // Execute executes the request
-func (a *TemplatesAPIService) DeactivateBoxTemplateExecute(r TemplatesAPIDeactivateBoxTemplateRequest) (*http.Response, error) {
+func (a *SavedImagesAPIService) DeactivateSavedImageExecute(r SavedImagesAPIDeactivateSavedImageRequest) (*http.Response, error) {
 	var (
 		localVarHTTPMethod = http.MethodPost
 		localVarPostBody   interface{}
 		formFiles          []formFile
 	)
 
-	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "TemplatesAPIService.DeactivateBoxTemplate")
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "SavedImagesAPIService.DeactivateSavedImage")
 	if err != nil {
 		return nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/templates/{id}/deactivate"
+	localVarPath := localBasePath + "/saved-images/{id}/deactivate"
 	localVarPath = strings.Replace(localVarPath, "{"+"id"+"}", url.PathEscape(parameterValueToString(r.id, "id")), -1)
 
 	localVarHeaderParams := make(map[string]string)
@@ -605,9 +605,9 @@ func (a *TemplatesAPIService) DeactivateBoxTemplateExecute(r TemplatesAPIDeactiv
 	return localVarHTTPResponse, nil
 }
 
-type TemplatesAPIListBoxTemplatesRequest struct {
+type SavedImagesAPIListSavedImagesRequest struct {
 	ctx                    context.Context
-	ApiService             TemplatesAPI
+	ApiService             SavedImagesAPI
 	xBoxLiteOrganizationID *string
 	page                   *float32
 	limit                  *float32
@@ -617,53 +617,53 @@ type TemplatesAPIListBoxTemplatesRequest struct {
 }
 
 // Use with JWT to specify the organization ID
-func (r TemplatesAPIListBoxTemplatesRequest) XBoxLiteOrganizationID(xBoxLiteOrganizationID string) TemplatesAPIListBoxTemplatesRequest {
+func (r SavedImagesAPIListSavedImagesRequest) XBoxLiteOrganizationID(xBoxLiteOrganizationID string) SavedImagesAPIListSavedImagesRequest {
 	r.xBoxLiteOrganizationID = &xBoxLiteOrganizationID
 	return r
 }
 
 // Page number of the results
-func (r TemplatesAPIListBoxTemplatesRequest) Page(page float32) TemplatesAPIListBoxTemplatesRequest {
+func (r SavedImagesAPIListSavedImagesRequest) Page(page float32) SavedImagesAPIListSavedImagesRequest {
 	r.page = &page
 	return r
 }
 
 // Number of results per page
-func (r TemplatesAPIListBoxTemplatesRequest) Limit(limit float32) TemplatesAPIListBoxTemplatesRequest {
+func (r SavedImagesAPIListSavedImagesRequest) Limit(limit float32) SavedImagesAPIListSavedImagesRequest {
 	r.limit = &limit
 	return r
 }
 
 // Filter by partial name match
-func (r TemplatesAPIListBoxTemplatesRequest) Name(name string) TemplatesAPIListBoxTemplatesRequest {
+func (r SavedImagesAPIListSavedImagesRequest) Name(name string) SavedImagesAPIListSavedImagesRequest {
 	r.name = &name
 	return r
 }
 
 // Field to sort by
-func (r TemplatesAPIListBoxTemplatesRequest) Sort(sort string) TemplatesAPIListBoxTemplatesRequest {
+func (r SavedImagesAPIListSavedImagesRequest) Sort(sort string) SavedImagesAPIListSavedImagesRequest {
 	r.sort = &sort
 	return r
 }
 
 // Direction to sort by
-func (r TemplatesAPIListBoxTemplatesRequest) Order(order string) TemplatesAPIListBoxTemplatesRequest {
+func (r SavedImagesAPIListSavedImagesRequest) Order(order string) SavedImagesAPIListSavedImagesRequest {
 	r.order = &order
 	return r
 }
 
-func (r TemplatesAPIListBoxTemplatesRequest) Execute() (*PaginatedBoxTemplates, *http.Response, error) {
-	return r.ApiService.ListBoxTemplatesExecute(r)
+func (r SavedImagesAPIListSavedImagesRequest) Execute() (*PaginatedSavedImages, *http.Response, error) {
+	return r.ApiService.ListSavedImagesExecute(r)
 }
 
 /*
-ListBoxTemplates List all templates
+ListSavedImages List all savedImages
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@return TemplatesAPIListBoxTemplatesRequest
+	@return SavedImagesAPIListSavedImagesRequest
 */
-func (a *TemplatesAPIService) ListBoxTemplates(ctx context.Context) TemplatesAPIListBoxTemplatesRequest {
-	return TemplatesAPIListBoxTemplatesRequest{
+func (a *SavedImagesAPIService) ListSavedImages(ctx context.Context) SavedImagesAPIListSavedImagesRequest {
+	return SavedImagesAPIListSavedImagesRequest{
 		ApiService: a,
 		ctx:        ctx,
 	}
@@ -671,21 +671,21 @@ func (a *TemplatesAPIService) ListBoxTemplates(ctx context.Context) TemplatesAPI
 
 // Execute executes the request
 //
-//	@return PaginatedBoxTemplates
-func (a *TemplatesAPIService) ListBoxTemplatesExecute(r TemplatesAPIListBoxTemplatesRequest) (*PaginatedBoxTemplates, *http.Response, error) {
+//	@return PaginatedSavedImages
+func (a *SavedImagesAPIService) ListSavedImagesExecute(r SavedImagesAPIListSavedImagesRequest) (*PaginatedSavedImages, *http.Response, error) {
 	var (
 		localVarHTTPMethod  = http.MethodGet
 		localVarPostBody    interface{}
 		formFiles           []formFile
-		localVarReturnValue *PaginatedBoxTemplates
+		localVarReturnValue *PaginatedSavedImages
 	)
 
-	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "TemplatesAPIService.ListBoxTemplates")
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "SavedImagesAPIService.ListSavedImages")
 	if err != nil {
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/templates"
+	localVarPath := localBasePath + "/saved-images"
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -775,32 +775,32 @@ func (a *TemplatesAPIService) ListBoxTemplatesExecute(r TemplatesAPIListBoxTempl
 	return localVarReturnValue, localVarHTTPResponse, nil
 }
 
-type TemplatesAPIGetBoxTemplateRequest struct {
+type SavedImagesAPIGetSavedImageRequest struct {
 	ctx                    context.Context
-	ApiService             TemplatesAPI
+	ApiService             SavedImagesAPI
 	id                     string
 	xBoxLiteOrganizationID *string
 }
 
 // Use with JWT to specify the organization ID
-func (r TemplatesAPIGetBoxTemplateRequest) XBoxLiteOrganizationID(xBoxLiteOrganizationID string) TemplatesAPIGetBoxTemplateRequest {
+func (r SavedImagesAPIGetSavedImageRequest) XBoxLiteOrganizationID(xBoxLiteOrganizationID string) SavedImagesAPIGetSavedImageRequest {
 	r.xBoxLiteOrganizationID = &xBoxLiteOrganizationID
 	return r
 }
 
-func (r TemplatesAPIGetBoxTemplateRequest) Execute() (*BoxTemplateDto, *http.Response, error) {
-	return r.ApiService.GetBoxTemplateExecute(r)
+func (r SavedImagesAPIGetSavedImageRequest) Execute() (*SavedImageDto, *http.Response, error) {
+	return r.ApiService.GetSavedImageExecute(r)
 }
 
 /*
-GetBoxTemplate Get template by ID or name
+GetSavedImage Get savedImage by ID or name
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param id BoxTemplate ID or name
-	@return TemplatesAPIGetBoxTemplateRequest
+	@param id SavedImage ID or name
+	@return SavedImagesAPIGetSavedImageRequest
 */
-func (a *TemplatesAPIService) GetBoxTemplate(ctx context.Context, id string) TemplatesAPIGetBoxTemplateRequest {
-	return TemplatesAPIGetBoxTemplateRequest{
+func (a *SavedImagesAPIService) GetSavedImage(ctx context.Context, id string) SavedImagesAPIGetSavedImageRequest {
+	return SavedImagesAPIGetSavedImageRequest{
 		ApiService: a,
 		ctx:        ctx,
 		id:         id,
@@ -809,21 +809,21 @@ func (a *TemplatesAPIService) GetBoxTemplate(ctx context.Context, id string) Tem
 
 // Execute executes the request
 //
-//	@return BoxTemplateDto
-func (a *TemplatesAPIService) GetBoxTemplateExecute(r TemplatesAPIGetBoxTemplateRequest) (*BoxTemplateDto, *http.Response, error) {
+//	@return SavedImageDto
+func (a *SavedImagesAPIService) GetSavedImageExecute(r SavedImagesAPIGetSavedImageRequest) (*SavedImageDto, *http.Response, error) {
 	var (
 		localVarHTTPMethod  = http.MethodGet
 		localVarPostBody    interface{}
 		formFiles           []formFile
-		localVarReturnValue *BoxTemplateDto
+		localVarReturnValue *SavedImageDto
 	)
 
-	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "TemplatesAPIService.GetBoxTemplate")
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "SavedImagesAPIService.GetSavedImage")
 	if err != nil {
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/templates/{id}"
+	localVarPath := localBasePath + "/saved-images/{id}"
 	localVarPath = strings.Replace(localVarPath, "{"+"id"+"}", url.PathEscape(parameterValueToString(r.id, "id")), -1)
 
 	localVarHeaderParams := make(map[string]string)
@@ -887,43 +887,43 @@ func (a *TemplatesAPIService) GetBoxTemplateExecute(r TemplatesAPIGetBoxTemplate
 	return localVarReturnValue, localVarHTTPResponse, nil
 }
 
-type TemplatesAPIGetBoxTemplateBuildLogsRequest struct {
+type SavedImagesAPIGetSavedImageBuildLogsRequest struct {
 	ctx                    context.Context
-	ApiService             TemplatesAPI
+	ApiService             SavedImagesAPI
 	id                     string
 	xBoxLiteOrganizationID *string
 	follow                 *bool
 }
 
 // Use with JWT to specify the organization ID
-func (r TemplatesAPIGetBoxTemplateBuildLogsRequest) XBoxLiteOrganizationID(xBoxLiteOrganizationID string) TemplatesAPIGetBoxTemplateBuildLogsRequest {
+func (r SavedImagesAPIGetSavedImageBuildLogsRequest) XBoxLiteOrganizationID(xBoxLiteOrganizationID string) SavedImagesAPIGetSavedImageBuildLogsRequest {
 	r.xBoxLiteOrganizationID = &xBoxLiteOrganizationID
 	return r
 }
 
 // Whether to follow the logs stream
-func (r TemplatesAPIGetBoxTemplateBuildLogsRequest) Follow(follow bool) TemplatesAPIGetBoxTemplateBuildLogsRequest {
+func (r SavedImagesAPIGetSavedImageBuildLogsRequest) Follow(follow bool) SavedImagesAPIGetSavedImageBuildLogsRequest {
 	r.follow = &follow
 	return r
 }
 
-func (r TemplatesAPIGetBoxTemplateBuildLogsRequest) Execute() (*http.Response, error) {
-	return r.ApiService.GetBoxTemplateBuildLogsExecute(r)
+func (r SavedImagesAPIGetSavedImageBuildLogsRequest) Execute() (*http.Response, error) {
+	return r.ApiService.GetSavedImageBuildLogsExecute(r)
 }
 
 /*
-GetBoxTemplateBuildLogs Get template build logs
+GetSavedImageBuildLogs Get savedImage build logs
 
-This endpoint is deprecated. Use `getBoxTemplateBuildLogsUrl` instead.
+This endpoint is deprecated. Use `getSavedImageBuildLogsUrl` instead.
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param id BoxTemplate ID
-	@return TemplatesAPIGetBoxTemplateBuildLogsRequest
+	@param id SavedImage ID
+	@return SavedImagesAPIGetSavedImageBuildLogsRequest
 
 Deprecated
 */
-func (a *TemplatesAPIService) GetBoxTemplateBuildLogs(ctx context.Context, id string) TemplatesAPIGetBoxTemplateBuildLogsRequest {
-	return TemplatesAPIGetBoxTemplateBuildLogsRequest{
+func (a *SavedImagesAPIService) GetSavedImageBuildLogs(ctx context.Context, id string) SavedImagesAPIGetSavedImageBuildLogsRequest {
+	return SavedImagesAPIGetSavedImageBuildLogsRequest{
 		ApiService: a,
 		ctx:        ctx,
 		id:         id,
@@ -932,19 +932,19 @@ func (a *TemplatesAPIService) GetBoxTemplateBuildLogs(ctx context.Context, id st
 
 // Execute executes the request
 // Deprecated
-func (a *TemplatesAPIService) GetBoxTemplateBuildLogsExecute(r TemplatesAPIGetBoxTemplateBuildLogsRequest) (*http.Response, error) {
+func (a *SavedImagesAPIService) GetSavedImageBuildLogsExecute(r SavedImagesAPIGetSavedImageBuildLogsRequest) (*http.Response, error) {
 	var (
 		localVarHTTPMethod = http.MethodGet
 		localVarPostBody   interface{}
 		formFiles          []formFile
 	)
 
-	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "TemplatesAPIService.GetBoxTemplateBuildLogs")
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "SavedImagesAPIService.GetSavedImageBuildLogs")
 	if err != nil {
 		return nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/templates/{id}/build-logs"
+	localVarPath := localBasePath + "/saved-images/{id}/build-logs"
 	localVarPath = strings.Replace(localVarPath, "{"+"id"+"}", url.PathEscape(parameterValueToString(r.id, "id")), -1)
 
 	localVarHeaderParams := make(map[string]string)
@@ -1002,32 +1002,32 @@ func (a *TemplatesAPIService) GetBoxTemplateBuildLogsExecute(r TemplatesAPIGetBo
 	return localVarHTTPResponse, nil
 }
 
-type TemplatesAPIGetBoxTemplateBuildLogsUrlRequest struct {
+type SavedImagesAPIGetSavedImageBuildLogsUrlRequest struct {
 	ctx                    context.Context
-	ApiService             TemplatesAPI
+	ApiService             SavedImagesAPI
 	id                     string
 	xBoxLiteOrganizationID *string
 }
 
 // Use with JWT to specify the organization ID
-func (r TemplatesAPIGetBoxTemplateBuildLogsUrlRequest) XBoxLiteOrganizationID(xBoxLiteOrganizationID string) TemplatesAPIGetBoxTemplateBuildLogsUrlRequest {
+func (r SavedImagesAPIGetSavedImageBuildLogsUrlRequest) XBoxLiteOrganizationID(xBoxLiteOrganizationID string) SavedImagesAPIGetSavedImageBuildLogsUrlRequest {
 	r.xBoxLiteOrganizationID = &xBoxLiteOrganizationID
 	return r
 }
 
-func (r TemplatesAPIGetBoxTemplateBuildLogsUrlRequest) Execute() (*Url, *http.Response, error) {
-	return r.ApiService.GetBoxTemplateBuildLogsUrlExecute(r)
+func (r SavedImagesAPIGetSavedImageBuildLogsUrlRequest) Execute() (*Url, *http.Response, error) {
+	return r.ApiService.GetSavedImageBuildLogsUrlExecute(r)
 }
 
 /*
-GetBoxTemplateBuildLogsUrl Get template build logs URL
+GetSavedImageBuildLogsUrl Get savedImage build logs URL
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param id BoxTemplate ID
-	@return TemplatesAPIGetBoxTemplateBuildLogsUrlRequest
+	@param id SavedImage ID
+	@return SavedImagesAPIGetSavedImageBuildLogsUrlRequest
 */
-func (a *TemplatesAPIService) GetBoxTemplateBuildLogsUrl(ctx context.Context, id string) TemplatesAPIGetBoxTemplateBuildLogsUrlRequest {
-	return TemplatesAPIGetBoxTemplateBuildLogsUrlRequest{
+func (a *SavedImagesAPIService) GetSavedImageBuildLogsUrl(ctx context.Context, id string) SavedImagesAPIGetSavedImageBuildLogsUrlRequest {
+	return SavedImagesAPIGetSavedImageBuildLogsUrlRequest{
 		ApiService: a,
 		ctx:        ctx,
 		id:         id,
@@ -1037,7 +1037,7 @@ func (a *TemplatesAPIService) GetBoxTemplateBuildLogsUrl(ctx context.Context, id
 // Execute executes the request
 //
 //	@return Url
-func (a *TemplatesAPIService) GetBoxTemplateBuildLogsUrlExecute(r TemplatesAPIGetBoxTemplateBuildLogsUrlRequest) (*Url, *http.Response, error) {
+func (a *SavedImagesAPIService) GetSavedImageBuildLogsUrlExecute(r SavedImagesAPIGetSavedImageBuildLogsUrlRequest) (*Url, *http.Response, error) {
 	var (
 		localVarHTTPMethod  = http.MethodGet
 		localVarPostBody    interface{}
@@ -1045,12 +1045,12 @@ func (a *TemplatesAPIService) GetBoxTemplateBuildLogsUrlExecute(r TemplatesAPIGe
 		localVarReturnValue *Url
 	)
 
-	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "TemplatesAPIService.GetBoxTemplateBuildLogsUrl")
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "SavedImagesAPIService.GetSavedImageBuildLogsUrl")
 	if err != nil {
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/templates/{id}/build-logs-url"
+	localVarPath := localBasePath + "/saved-images/{id}/build-logs-url"
 	localVarPath = strings.Replace(localVarPath, "{"+"id"+"}", url.PathEscape(parameterValueToString(r.id, "id")), -1)
 
 	localVarHeaderParams := make(map[string]string)
@@ -1114,32 +1114,32 @@ func (a *TemplatesAPIService) GetBoxTemplateBuildLogsUrlExecute(r TemplatesAPIGe
 	return localVarReturnValue, localVarHTTPResponse, nil
 }
 
-type TemplatesAPIRemoveBoxTemplateRequest struct {
+type SavedImagesAPIRemoveSavedImageRequest struct {
 	ctx                    context.Context
-	ApiService             TemplatesAPI
+	ApiService             SavedImagesAPI
 	id                     string
 	xBoxLiteOrganizationID *string
 }
 
 // Use with JWT to specify the organization ID
-func (r TemplatesAPIRemoveBoxTemplateRequest) XBoxLiteOrganizationID(xBoxLiteOrganizationID string) TemplatesAPIRemoveBoxTemplateRequest {
+func (r SavedImagesAPIRemoveSavedImageRequest) XBoxLiteOrganizationID(xBoxLiteOrganizationID string) SavedImagesAPIRemoveSavedImageRequest {
 	r.xBoxLiteOrganizationID = &xBoxLiteOrganizationID
 	return r
 }
 
-func (r TemplatesAPIRemoveBoxTemplateRequest) Execute() (*http.Response, error) {
-	return r.ApiService.RemoveBoxTemplateExecute(r)
+func (r SavedImagesAPIRemoveSavedImageRequest) Execute() (*http.Response, error) {
+	return r.ApiService.RemoveSavedImageExecute(r)
 }
 
 /*
-RemoveBoxTemplate Delete template
+RemoveSavedImage Delete savedImage
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param id BoxTemplate ID
-	@return TemplatesAPIRemoveBoxTemplateRequest
+	@param id SavedImage ID
+	@return SavedImagesAPIRemoveSavedImageRequest
 */
-func (a *TemplatesAPIService) RemoveBoxTemplate(ctx context.Context, id string) TemplatesAPIRemoveBoxTemplateRequest {
-	return TemplatesAPIRemoveBoxTemplateRequest{
+func (a *SavedImagesAPIService) RemoveSavedImage(ctx context.Context, id string) SavedImagesAPIRemoveSavedImageRequest {
+	return SavedImagesAPIRemoveSavedImageRequest{
 		ApiService: a,
 		ctx:        ctx,
 		id:         id,
@@ -1147,19 +1147,19 @@ func (a *TemplatesAPIService) RemoveBoxTemplate(ctx context.Context, id string) 
 }
 
 // Execute executes the request
-func (a *TemplatesAPIService) RemoveBoxTemplateExecute(r TemplatesAPIRemoveBoxTemplateRequest) (*http.Response, error) {
+func (a *SavedImagesAPIService) RemoveSavedImageExecute(r SavedImagesAPIRemoveSavedImageRequest) (*http.Response, error) {
 	var (
 		localVarHTTPMethod = http.MethodDelete
 		localVarPostBody   interface{}
 		formFiles          []formFile
 	)
 
-	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "TemplatesAPIService.RemoveBoxTemplate")
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "SavedImagesAPIService.RemoveSavedImage")
 	if err != nil {
 		return nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/templates/{id}"
+	localVarPath := localBasePath + "/saved-images/{id}"
 	localVarPath = strings.Replace(localVarPath, "{"+"id"+"}", url.PathEscape(parameterValueToString(r.id, "id")), -1)
 
 	localVarHeaderParams := make(map[string]string)
@@ -1214,38 +1214,38 @@ func (a *TemplatesAPIService) RemoveBoxTemplateExecute(r TemplatesAPIRemoveBoxTe
 	return localVarHTTPResponse, nil
 }
 
-type TemplatesAPISetBoxTemplateGeneralStatusRequest struct {
-	ctx                            context.Context
-	ApiService                     TemplatesAPI
-	id                             string
-	setBoxTemplateGeneralStatusDto *SetBoxTemplateGeneralStatusDto
-	xBoxLiteOrganizationID         *string
+type SavedImagesAPISetSavedImageGeneralStatusRequest struct {
+	ctx                           context.Context
+	ApiService                    SavedImagesAPI
+	id                            string
+	setSavedImageGeneralStatusDto *SetSavedImageGeneralStatusDto
+	xBoxLiteOrganizationID        *string
 }
 
-func (r TemplatesAPISetBoxTemplateGeneralStatusRequest) SetBoxTemplateGeneralStatusDto(setBoxTemplateGeneralStatusDto SetBoxTemplateGeneralStatusDto) TemplatesAPISetBoxTemplateGeneralStatusRequest {
-	r.setBoxTemplateGeneralStatusDto = &setBoxTemplateGeneralStatusDto
+func (r SavedImagesAPISetSavedImageGeneralStatusRequest) SetSavedImageGeneralStatusDto(setSavedImageGeneralStatusDto SetSavedImageGeneralStatusDto) SavedImagesAPISetSavedImageGeneralStatusRequest {
+	r.setSavedImageGeneralStatusDto = &setSavedImageGeneralStatusDto
 	return r
 }
 
 // Use with JWT to specify the organization ID
-func (r TemplatesAPISetBoxTemplateGeneralStatusRequest) XBoxLiteOrganizationID(xBoxLiteOrganizationID string) TemplatesAPISetBoxTemplateGeneralStatusRequest {
+func (r SavedImagesAPISetSavedImageGeneralStatusRequest) XBoxLiteOrganizationID(xBoxLiteOrganizationID string) SavedImagesAPISetSavedImageGeneralStatusRequest {
 	r.xBoxLiteOrganizationID = &xBoxLiteOrganizationID
 	return r
 }
 
-func (r TemplatesAPISetBoxTemplateGeneralStatusRequest) Execute() (*BoxTemplateDto, *http.Response, error) {
-	return r.ApiService.SetBoxTemplateGeneralStatusExecute(r)
+func (r SavedImagesAPISetSavedImageGeneralStatusRequest) Execute() (*SavedImageDto, *http.Response, error) {
+	return r.ApiService.SetSavedImageGeneralStatusExecute(r)
 }
 
 /*
-SetBoxTemplateGeneralStatus Set template general status
+SetSavedImageGeneralStatus Set savedImage general status
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
-	@param id BoxTemplate ID
-	@return TemplatesAPISetBoxTemplateGeneralStatusRequest
+	@param id SavedImage ID
+	@return SavedImagesAPISetSavedImageGeneralStatusRequest
 */
-func (a *TemplatesAPIService) SetBoxTemplateGeneralStatus(ctx context.Context, id string) TemplatesAPISetBoxTemplateGeneralStatusRequest {
-	return TemplatesAPISetBoxTemplateGeneralStatusRequest{
+func (a *SavedImagesAPIService) SetSavedImageGeneralStatus(ctx context.Context, id string) SavedImagesAPISetSavedImageGeneralStatusRequest {
+	return SavedImagesAPISetSavedImageGeneralStatusRequest{
 		ApiService: a,
 		ctx:        ctx,
 		id:         id,
@@ -1254,28 +1254,28 @@ func (a *TemplatesAPIService) SetBoxTemplateGeneralStatus(ctx context.Context, i
 
 // Execute executes the request
 //
-//	@return BoxTemplateDto
-func (a *TemplatesAPIService) SetBoxTemplateGeneralStatusExecute(r TemplatesAPISetBoxTemplateGeneralStatusRequest) (*BoxTemplateDto, *http.Response, error) {
+//	@return SavedImageDto
+func (a *SavedImagesAPIService) SetSavedImageGeneralStatusExecute(r SavedImagesAPISetSavedImageGeneralStatusRequest) (*SavedImageDto, *http.Response, error) {
 	var (
 		localVarHTTPMethod  = http.MethodPatch
 		localVarPostBody    interface{}
 		formFiles           []formFile
-		localVarReturnValue *BoxTemplateDto
+		localVarReturnValue *SavedImageDto
 	)
 
-	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "TemplatesAPIService.SetBoxTemplateGeneralStatus")
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "SavedImagesAPIService.SetSavedImageGeneralStatus")
 	if err != nil {
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/templates/{id}/general"
+	localVarPath := localBasePath + "/saved-images/{id}/general"
 	localVarPath = strings.Replace(localVarPath, "{"+"id"+"}", url.PathEscape(parameterValueToString(r.id, "id")), -1)
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
 	localVarFormParams := url.Values{}
-	if r.setBoxTemplateGeneralStatusDto == nil {
-		return localVarReturnValue, nil, reportError("setBoxTemplateGeneralStatusDto is required and must be specified")
+	if r.setSavedImageGeneralStatusDto == nil {
+		return localVarReturnValue, nil, reportError("setSavedImageGeneralStatusDto is required and must be specified")
 	}
 
 	// to determine the Content-Type header
@@ -1299,7 +1299,7 @@ func (a *TemplatesAPIService) SetBoxTemplateGeneralStatusExecute(r TemplatesAPIS
 		parameterAddToHeaderOrQuery(localVarHeaderParams, "X-BoxLite-Organization-ID", r.xBoxLiteOrganizationID, "simple", "")
 	}
 	// body params
-	localVarPostBody = r.setBoxTemplateGeneralStatusDto
+	localVarPostBody = r.setSavedImageGeneralStatusDto
 	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
 	if err != nil {
 		return localVarReturnValue, nil, err

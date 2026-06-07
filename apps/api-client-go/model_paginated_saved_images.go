@@ -16,23 +16,23 @@ import (
 	"fmt"
 )
 
-// checks if the PaginatedBoxTemplates type satisfies the MappedNullable interface at compile time
-var _ MappedNullable = &PaginatedBoxTemplates{}
+// checks if the PaginatedSavedImages type satisfies the MappedNullable interface at compile time
+var _ MappedNullable = &PaginatedSavedImages{}
 
-// PaginatedBoxTemplates struct for PaginatedBoxTemplates
-type PaginatedBoxTemplates struct {
-	Items                []BoxTemplateDto `json:"items"`
-	Total                float32          `json:"total"`
-	Page                 float32          `json:"page"`
-	TotalPages           float32          `json:"totalPages"`
+// PaginatedSavedImages struct for PaginatedSavedImages
+type PaginatedSavedImages struct {
+	Items                []SavedImageDto `json:"items"`
+	Total                float32         `json:"total"`
+	Page                 float32         `json:"page"`
+	TotalPages           float32         `json:"totalPages"`
 	AdditionalProperties map[string]interface{}
 }
 
-type _PaginatedBoxTemplates PaginatedBoxTemplates
+type _PaginatedSavedImages PaginatedSavedImages
 
-// NewPaginatedBoxTemplates instantiates a new PaginatedBoxTemplates object
-func NewPaginatedBoxTemplates(items []BoxTemplateDto, total float32, page float32, totalPages float32) *PaginatedBoxTemplates {
-	this := PaginatedBoxTemplates{}
+// NewPaginatedSavedImages instantiates a new PaginatedSavedImages object
+func NewPaginatedSavedImages(items []SavedImageDto, total float32, page float32, totalPages float32) *PaginatedSavedImages {
+	this := PaginatedSavedImages{}
 	this.Items = items
 	this.Total = total
 	this.Page = page
@@ -40,13 +40,13 @@ func NewPaginatedBoxTemplates(items []BoxTemplateDto, total float32, page float3
 	return &this
 }
 
-// NewPaginatedBoxTemplatesWithDefaults instantiates a new PaginatedBoxTemplates object
-func NewPaginatedBoxTemplatesWithDefaults() *PaginatedBoxTemplates {
-	this := PaginatedBoxTemplates{}
+// NewPaginatedSavedImagesWithDefaults instantiates a new PaginatedSavedImages object
+func NewPaginatedSavedImagesWithDefaults() *PaginatedSavedImages {
+	this := PaginatedSavedImages{}
 	return &this
 }
 
-func (o PaginatedBoxTemplates) MarshalJSON() ([]byte, error) {
+func (o PaginatedSavedImages) MarshalJSON() ([]byte, error) {
 	toSerialize, err := o.ToMap()
 	if err != nil {
 		return []byte{}, err
@@ -54,7 +54,7 @@ func (o PaginatedBoxTemplates) MarshalJSON() ([]byte, error) {
 	return json.Marshal(toSerialize)
 }
 
-func (o PaginatedBoxTemplates) ToMap() (map[string]interface{}, error) {
+func (o PaginatedSavedImages) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["items"] = o.Items
 	toSerialize["total"] = o.Total
@@ -68,7 +68,7 @@ func (o PaginatedBoxTemplates) ToMap() (map[string]interface{}, error) {
 	return toSerialize, nil
 }
 
-func (o *PaginatedBoxTemplates) UnmarshalJSON(data []byte) (err error) {
+func (o *PaginatedSavedImages) UnmarshalJSON(data []byte) (err error) {
 	requiredProperties := []string{
 		"items",
 		"total",
@@ -90,15 +90,15 @@ func (o *PaginatedBoxTemplates) UnmarshalJSON(data []byte) (err error) {
 		}
 	}
 
-	varPaginatedBoxTemplates := _PaginatedBoxTemplates{}
+	varPaginatedSavedImages := _PaginatedSavedImages{}
 
-	err = json.Unmarshal(data, &varPaginatedBoxTemplates)
+	err = json.Unmarshal(data, &varPaginatedSavedImages)
 
 	if err != nil {
 		return err
 	}
 
-	*o = PaginatedBoxTemplates(varPaginatedBoxTemplates)
+	*o = PaginatedSavedImages(varPaginatedSavedImages)
 
 	additionalProperties := make(map[string]interface{})
 

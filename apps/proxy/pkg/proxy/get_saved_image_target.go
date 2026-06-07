@@ -20,40 +20,40 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-func (p *Proxy) getTemplateTarget(ctx *gin.Context) (*url.URL, map[string]string, error) {
-	// Extract template ID from the path
-	match := regexp.MustCompile(`^/templates/([\w-]+)/build-logs$`).FindStringSubmatch(ctx.Request.URL.Path)
+func (p *Proxy) getSavedImageTarget(ctx *gin.Context) (*url.URL, map[string]string, error) {
+	// Extract saved image ID from the path.
+	match := regexp.MustCompile(`^/saved-images/([\w-]+)/build-logs$`).FindStringSubmatch(ctx.Request.URL.Path)
 	if len(match) != 2 {
-		ctx.Error(common_errors.NewBadRequestError(errors.New("template ID is required")))
-		return nil, nil, errors.New("template ID is required")
+		ctx.Error(common_errors.NewBadRequestError(errors.New("saved image ID is required")))
+		return nil, nil, errors.New("saved image ID is required")
 	}
 
-	templateId := match[1]
+	savedImageId := match[1]
 
-	template, err := p.getTemplate(ctx, templateId)
+	savedImage, err := p.getSavedImage(ctx, savedImageId)
 	if err != nil {
 		ctx.Error(err)
-		return nil, nil, fmt.Errorf("failed to get template: %w", err)
+		return nil, nil, fmt.Errorf("failed to get saved image: %w", err)
 	}
 
-	if template.ArtifactRef == nil {
-		ctx.Error(common_errors.NewBadRequestError(errors.New("template has no artifact reference")))
-		return nil, nil, errors.New("template has no artifact reference")
+	if savedImage.ArtifactRef == nil {
+		ctx.Error(common_errors.NewBadRequestError(errors.New("saved image has no artifact reference")))
+		return nil, nil, errors.New("saved image has no artifact reference")
 	}
 
-	if template.InitialRunnerId == nil {
-		ctx.Error(common_errors.NewBadRequestError(errors.New("template has no initial runner")))
-		return nil, nil, errors.New("template has no initial runner")
+	if savedImage.InitialRunnerId == nil {
+		ctx.Error(common_errors.NewBadRequestError(errors.New("saved image has no initial runner")))
+		return nil, nil, errors.New("saved image has no initial runner")
 	}
 
-	runnerInfo, err := p.getRunnerInfo(ctx, *template.InitialRunnerId)
+	runnerInfo, err := p.getRunnerInfo(ctx, *savedImage.InitialRunnerId)
 	if err != nil {
 		ctx.Error(err)
 		return nil, nil, fmt.Errorf("failed to get runner info: %w", err)
 	}
 
 	queryParams := ctx.Request.URL.Query()
-	queryParams.Add("artifactRef", *template.ArtifactRef)
+	queryParams.Add("artifactRef", *savedImage.ArtifactRef)
 
 	// Build the target URL
 	targetURL := fmt.Sprintf("%s/artifacts/logs", runnerInfo.ApiUrl)
@@ -72,14 +72,14 @@ func (p *Proxy) getTemplateTarget(ctx *gin.Context) (*url.URL, map[string]string
 	}, nil
 }
 
-func (p *Proxy) getTemplate(ctx *gin.Context, templateId string) (*apiclient.BoxTemplateDto, error) {
-	var template *apiclient.BoxTemplateDto
+func (p *Proxy) getSavedImage(ctx *gin.Context, savedImageId string) (*apiclient.SavedImageDto, error) {
+	var savedImage *apiclient.SavedImageDto
 	bearerToken := p.getBearerToken(ctx)
 	apiClient := p.getUserApiClient(ctx, bearerToken)
 
-	err := utils.RetryWithExponentialBackoff(ctx, "getTemplate", proxyMaxRetries, proxyBaseDelay, proxyMaxDelay, func() error {
-		t, _, e := apiClient.TemplatesAPI.GetBoxTemplate(ctx, templateId).Execute()
-		template = t
+	err := utils.RetryWithExponentialBackoff(ctx, "getSavedImage", proxyMaxRetries, proxyBaseDelay, proxyMaxDelay, func() error {
+		t, _, e := apiClient.SavedImagesAPI.GetSavedImage(ctx, savedImageId).Execute()
+		savedImage = t
 		openapiErr := common_errors.ConvertOpenAPIError(e)
 
 		if openapiErr != nil && !common_errors.IsRetryableOpenAPIError(openapiErr) {
@@ -88,7 +88,7 @@ func (p *Proxy) getTemplate(ctx *gin.Context, templateId string) (*apiclient.Box
 
 		return openapiErr
 	})
-	return template, err
+	return savedImage, err
 }
 
 func (p *Proxy) getRunnerInfo(ctx context.Context, runnerId string) (*RunnerInfo, error) {

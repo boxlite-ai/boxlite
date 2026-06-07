@@ -11,5 +11,5 @@ Contact: support@boxlite.com
 
 package apiclient
 
-// CreateBoxTemplate struct for CreateBoxTemplate.
-type CreateBoxTemplate = CreateSnapshot
+// SetSavedImageGeneralStatusDto struct for SetSavedImageGeneralStatusDto.
+type SetSavedImageGeneralStatusDto = SetSnapshotGeneralStatusDto

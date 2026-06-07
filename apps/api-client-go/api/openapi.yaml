@@ -1384,9 +1384,9 @@ paths:
       summary: Regenerate SSH gateway API key for a region
       tags:
       - organizations
-  /regions/{id}/regenerate-snapshot-manager-credentials:
+  /regions/{id}/regenerate-artifact-registry-credentials:
     post:
-      operationId: regenerateSnapshotManagerCredentials
+      operationId: regenerateArtifactRegistryCredentials
       parameters:
       - description: Use with JWT to specify the organization ID
         explode: false
@@ -1409,15 +1409,15 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SnapshotManagerCredentials'
-          description: The snapshot manager credentials have been successfully regenerated.
+                $ref: '#/components/schemas/ArtifactRegistryCredentials'
+          description: The artifact registry credentials have been successfully regenerated.
       security:
       - bearer: []
       - oauth2:
         - openid
         - profile
         - email
-      summary: Regenerate snapshot manager credentials for a region
+      summary: Regenerate artifact registry credentials for a region
       tags:
       - organizations
   /users/me:
@@ -10022,7 +10022,7 @@ components:
       example:
         organizationId: 123e4567-e89b-12d3-a456-426614174000
         createdAt: 2023-01-01T00:00:00.000Z
-        snapshotManagerUrl: http://snapshot-manager.example.com
+        artifactRegistryUrl: http://artifact-registry.example.com
         regionType: shared
         proxyUrl: https://proxy.example.com
         name: us-east-1
@@ -10066,9 +10066,9 @@ components:
           example: http://ssh-gateway.example.com
           nullable: true
           type: string
-        snapshotManagerUrl:
-          description: Snapshot Manager URL for the region
-          example: http://snapshot-manager.example.com
+        artifactRegistryUrl:
+          description: Artifact Registry URL for the region
+          example: http://artifact-registry.example.com
           nullable: true
           type: string
       required:
@@ -10080,7 +10080,7 @@ components:
       type: object
     CreateRegion:
       example:
-        snapshotManagerUrl: https://snapshot-manager.example.com
+        artifactRegistryUrl: https://artifact-registry.example.com
         proxyUrl: https://proxy.example.com
         name: us-east-1
         sshGatewayUrl: ssh://ssh-gateway.example.com
@@ -10099,9 +10099,9 @@ components:
           example: ssh://ssh-gateway.example.com
           nullable: true
           type: string
-        snapshotManagerUrl:
-          description: Snapshot Manager URL for the region
-          example: https://snapshot-manager.example.com
+        artifactRegistryUrl:
+          description: Artifact Registry URL for the region
+          example: https://artifact-registry.example.com
           nullable: true
           type: string
       required:
@@ -10110,8 +10110,8 @@ components:
     CreateRegionResponse:
       example:
         proxyApiKey: proxy-api-key-xyz
-        snapshotManagerUsername: boxlite
-        snapshotManagerPassword: snapshotManagerPassword
+        artifactRegistryUsername: boxlite
+        artifactRegistryPassword: artifactRegistryPassword
         id: region_12345
         sshGatewayApiKey: ssh-gateway-api-key-abc
       properties:
@@ -10129,13 +10129,13 @@ components:
           example: ssh-gateway-api-key-abc
           nullable: true
           type: string
-        snapshotManagerUsername:
-          description: Snapshot Manager username for the region
+        artifactRegistryUsername:
+          description: Artifact Registry username for the region
           example: boxlite
           nullable: true
           type: string
-        snapshotManagerPassword:
-          description: Snapshot Manager password for the region
+        artifactRegistryPassword:
+          description: Artifact Registry password for the region
           nullable: true
           type: string
       required:
@@ -10154,7 +10154,7 @@ components:
       type: object
     UpdateRegion:
       example:
-        snapshotManagerUrl: https://snapshot-manager.example.com
+        artifactRegistryUrl: https://artifact-registry.example.com
         proxyUrl: https://proxy.example.com
         sshGatewayUrl: ssh://ssh-gateway.example.com
       properties:
@@ -10168,23 +10168,23 @@ components:
           example: ssh://ssh-gateway.example.com
           nullable: true
           type: string
-        snapshotManagerUrl:
-          description: Snapshot Manager URL for the region
-          example: https://snapshot-manager.example.com
+        artifactRegistryUrl:
+          description: Artifact Registry URL for the region
+          example: https://artifact-registry.example.com
           nullable: true
           type: string
       type: object
-    SnapshotManagerCredentials:
+    ArtifactRegistryCredentials:
       example:
         password: password
         username: boxlite
       properties:
         username:
-          description: Snapshot Manager username for the region
+          description: Artifact Registry username for the region
           example: boxlite
           type: string
         password:
-          description: Snapshot Manager password for the region
+          description: Artifact Registry password for the region
           type: string
       required:
       - password

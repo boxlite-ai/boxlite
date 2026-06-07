@@ -77,7 +77,7 @@ type APIClient struct {
 
 	SnapshotsAPI SnapshotsAPI
 
-	TemplatesAPI TemplatesAPI
+	SavedImagesAPI SavedImagesAPI
 
 	ToolboxAPI ToolboxAPI
 
@@ -120,7 +120,7 @@ func NewAPIClient(cfg *Configuration) *APIClient {
 	c.RunnersAPI = (*RunnersAPIService)(&c.common)
 	c.SandboxAPI = (*SandboxAPIService)(&c.common)
 	c.SnapshotsAPI = (*SnapshotsAPIService)(&c.common)
-	c.TemplatesAPI = (*TemplatesAPIService)(&c.common)
+	c.SavedImagesAPI = (*SavedImagesAPIService)(&c.common)
 	c.ToolboxAPI = (*ToolboxAPIService)(&c.common)
 	c.UsersAPI = (*UsersAPIService)(&c.common)
 	c.VolumesAPI = (*VolumesAPIService)(&c.common)
