@@ -44,6 +44,41 @@ pub(crate) fn stash_exit_file(layout: &BoxFilesystemLayout) {
     }
 }
 
+/// Move a directory tree, falling back to recursive copy + remove if rename
+/// fails with EXDEV. The import/clone staging dir and the canonical boxes dir
+/// can live on different filesystems (e.g. a tmpfs scratch area vs the on-disk
+/// data dir), where a plain `rename()` fails with "Invalid cross-device link".
+fn move_dir_cross_fs(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    match std::fs::rename(src, dst) {
+        Ok(()) => Ok(()),
+        Err(e) if e.raw_os_error() == Some(libc::EXDEV) => {
+            copy_dir_recursive(src, dst)?;
+            std::fs::remove_dir_all(src)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Recursively copy a directory tree, preserving symlinks as symlinks.
+fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        let ty = entry.file_type()?;
+        if ty.is_dir() {
+            copy_dir_recursive(&from, &to)?;
+        } else if ty.is_symlink() {
+            let target = std::fs::read_link(&from)?;
+            std::os::unix::fs::symlink(target, &to)?;
+        } else {
+            std::fs::copy(&from, &to)?;
+        }
+    }
+    Ok(())
+}
+
 /// Internal runtime state protected by single lock.
 ///
 /// **Shared via Arc**: This is the actual shared state that can be cloned cheaply.
@@ -1024,11 +1059,12 @@ impl RuntimeImpl {
         let container_id = ContainerID::new();
         let now = Utc::now();
 
-        // Move staging dir to canonical path.
+        // Move staging dir to canonical path (cross-fs safe: staging may be on
+        // a different filesystem than the boxes dir).
         let box_home = self.layout.boxes_dir().join(box_id.as_str());
-        std::fs::rename(&staging_dir, &box_home).map_err(|e| {
+        move_dir_cross_fs(&staging_dir, &box_home).map_err(|e| {
             BoxliteError::Storage(format!(
-                "Failed to rename {} to {}: {}",
+                "Failed to move {} to {}: {}",
                 staging_dir.display(),
                 box_home.display(),
                 e

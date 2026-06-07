@@ -303,9 +303,17 @@ test\:all\:go:
 
 # apps/ workspace test matrix (all Nx projects). FILTER maps to Jest's
 # --testNamePattern (per-runner semantics, like the other suites).
-test\:apps: _ensure-apps-deps
+#
+# Depends on dev:go so target/debug/libboxlite.a is built before any Nx Go
+# project links against it. GOFLAGS=-tags=boxlite_dev (inherited by every
+# `go test` Nx spawns) routes the cgo build through sdks/go/bridge_cgo_dev.go,
+# which links target/debug/libboxlite.a + the in-repo sdks/c/include headers.
+# Without the tag, `go test` uses bridge_cgo_prebuilt.go, which needs the
+# downloaded sdks/go/{libboxlite.a,include} bundle (absent on dev checkouts)
+# and fails #579. Same pattern as test:unit:go above.
+test\:apps: _ensure-apps-deps dev\:go
 	@echo "🧪 Running apps workspace test matrix..."
-	@cd apps && yarn nx run-many --target=test --all --parallel=$$(getconf _NPROCESSORS_ONLN) $(if $(FILTER),-- --testNamePattern '$(FILTER)',)
+	@cd apps && GOFLAGS=-tags=boxlite_dev yarn nx run-many --target=test --all --parallel=$$(getconf _NPROCESSORS_ONLN) $(if $(FILTER),-- --testNamePattern '$(FILTER)',)
 
 # Installer-script smoke test: structural assertions on the rendered
 # install.sh (atomic replace, integrity envelope, pinned-install trust

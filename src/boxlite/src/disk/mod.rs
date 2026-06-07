@@ -207,15 +207,36 @@ pub(crate) fn fork_qcow2(source: &Path, dest: &Path) -> BoxliteResult<Disk> {
     // Read virtual size BEFORE moving (file won't exist at old path after rename)
     let virtual_size = Qcow2Helper::qcow2_virtual_size(source)?;
 
-    // Move disk → destination (makes it immutable)
-    std::fs::rename(source, dest).map_err(|e| {
-        BoxliteError::Storage(format!(
-            "Failed to move disk {} to {}: {}",
-            source.display(),
-            dest.display(),
-            e
-        ))
-    })?;
+    // Move disk → destination (makes it immutable). Fall back to copy+remove
+    // on EXDEV: the box home and the base store can sit on different
+    // filesystems (e.g. a /tmp tmpfs home vs the on-disk data dir), where a
+    // plain rename() fails with "Invalid cross-device link".
+    if let Err(e) = std::fs::rename(source, dest) {
+        if e.raw_os_error() == Some(libc::EXDEV) {
+            std::fs::copy(source, dest).map_err(|e| {
+                BoxliteError::Storage(format!(
+                    "Failed to copy disk {} to {}: {}",
+                    source.display(),
+                    dest.display(),
+                    e
+                ))
+            })?;
+            std::fs::remove_file(source).map_err(|e| {
+                BoxliteError::Storage(format!(
+                    "Failed to remove source disk after cross-fs copy {}: {}",
+                    source.display(),
+                    e
+                ))
+            })?;
+        } else {
+            return Err(BoxliteError::Storage(format!(
+                "Failed to move disk {} to {}: {}",
+                source.display(),
+                dest.display(),
+                e
+            )));
+        }
+    }
 
     // Create COW child at original path (keeps the original path usable).
     // leak() prevents the Disk RAII guard from deleting the file on drop.

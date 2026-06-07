@@ -254,18 +254,51 @@ fn do_build(spec: BuildSpec, fds: Option<[RawFd; 3]>) -> BuildResult {
                 .with_stderr(stderr);
         }
 
-        let pid = builder
-            .as_tenant()
-            .with_capabilities(capability_names())
-            .with_no_new_privs(false)
-            .with_detach(false)
-            .with_cwd(Some(spec.cwd))
-            .with_env(spec.env)
-            .with_container_args(spec.args)
-            .with_user(Some(spec.uid))
-            .with_group(Some(spec.gid))
-            .build()
-            .map_err(|e| format!("build failed: {e}"))?;
+        // libcontainer 0.6's check_terminal requires a console socket iff
+        // (detached && terminal). The tenant builder has no per-exec terminal
+        // setter, so the two exec shapes diverge here.
+        let pid = if spec.console_socket.is_some() {
+            // TTY exec: hand youki a process.json with terminal=true (via
+            // with_process) and detach=true, so it allocates the PTY, relays
+            // the master fd over the console socket (received by ConsoleSocket),
+            // and returns the pid (the zygote reaps it via waitpid). The PTY
+            // path passes no stdio fds — youki wires the PTY slave instead.
+            let env_vec: Vec<String> = spec.env.iter().map(|(k, v)| format!("{k}={v}")).collect();
+            let cwd = spec.cwd.to_str().unwrap_or("/");
+            let process =
+                super::spec::build_tty_exec_process(&spec.args, &env_vec, cwd, spec.uid, spec.gid)
+                    .map_err(|e| format!("build tty exec process: {e}"))?;
+            let process_json = serde_json::to_vec(&process)
+                .map_err(|e| format!("serialize tty process.json: {e}"))?;
+            let process_path = spec
+                .state_root
+                .join(format!("exec-process-{}.json", spec.container_id));
+            std::fs::write(&process_path, process_json)
+                .map_err(|e| format!("write tty process.json: {e}"))?;
+            let result = builder
+                .as_tenant()
+                .with_detach(true)
+                .with_process(Some(process_path.clone()))
+                .build()
+                .map_err(|e| format!("build failed: {e}"));
+            let _ = std::fs::remove_file(&process_path);
+            result?
+        } else {
+            // Non-TTY exec: stdio via the passed pipe fds, no console socket,
+            // terminal=false, non-detached.
+            builder
+                .as_tenant()
+                .with_capabilities(capability_names())
+                .with_no_new_privs(false)
+                .with_detach(false)
+                .with_cwd(Some(spec.cwd))
+                .with_env(spec.env)
+                .with_container_args(spec.args)
+                .with_user(Some(spec.uid))
+                .with_group(Some(spec.gid))
+                .build()
+                .map_err(|e| format!("build failed: {e}"))?
+        };
 
         Ok(pid)
     };

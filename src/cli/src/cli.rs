@@ -226,52 +226,77 @@ impl GlobalFlags {
     }
 
     pub fn create_runtime(&self) -> anyhow::Result<BoxliteRuntime> {
-        // URL precedence: --url / BOXLITE_REST_URL (the clap flag covers both) > stored profile > none.
-        // Credential precedence: BOXLITE_API_KEY env > stored profile > none.
-        // Clap reads BOXLITE_REST_URL into `self.url`, so we don't re-check env here.
         let stored = crate::credentials::load_named(&self.resolved_profile())
             .ok()
             .flatten();
+        // Clap reads BOXLITE_REST_URL into `self.url`; BOXLITE_API_KEY is the
+        // one credential env we still consult directly here.
+        let env_api_key = std::env::var("BOXLITE_API_KEY").ok();
 
+        match self.resolve_rest_options(stored, env_api_key) {
+            Some(opts) => BoxliteRuntime::rest(opts).map_err(Into::into),
+            None => {
+                // No URL anywhere → local runtime, unchanged behavior.
+                let options = self.resolve_runtime_options()?;
+                self.create_runtime_with_options(options)
+            }
+        }
+    }
+
+    /// Build REST connection options from the selected credential profile and
+    /// the ambient `BOXLITE_API_KEY`. Returns `None` when no URL is configured
+    /// (the caller then falls back to the local runtime). Pure — takes the
+    /// resolved profile and env key as arguments and touches neither disk nor
+    /// process environment — so the precedence below is unit-testable.
+    ///
+    /// Precedence (each axis independent):
+    /// - URL: `--url` / `BOXLITE_REST_URL` > stored profile.
+    /// - routing slot (`path_prefix`): `--path-prefix` /
+    ///   `BOXLITE_REST_PATH_PREFIX` > stored profile.
+    /// - bearer credential: `BOXLITE_API_KEY` > stored profile.
+    ///
+    /// `BOXLITE_API_KEY` overrides ONLY the bearer credential — the selected
+    /// profile's url and path_prefix still apply, so `--profile p1` keeps
+    /// routing to its tenant (`/v1/<prefix>/…`) even with an ambient key set.
+    /// Building the options bare in that branch (instead of starting from the
+    /// profile) was the cause of the prefix-less `/v1/boxes` 404 against a
+    /// multi-tenant server.
+    fn resolve_rest_options(
+        &self,
+        stored: Option<crate::credentials::Profile>,
+        env_api_key: Option<String>,
+    ) -> Option<BoxliteRestOptions> {
         let url = self
             .url
             .clone()
-            .or_else(|| stored.as_ref().map(|p| p.url.clone()));
+            .or_else(|| stored.as_ref().map(|p| p.url.clone()))?;
 
-        let Some(url) = url else {
-            // No URL anywhere → local runtime, unchanged behavior.
-            let options = self.resolve_runtime_options()?;
-            return self.create_runtime_with_options(options);
+        // Start from the stored profile so its url + path_prefix (routing
+        // slot) survive; the env key below overrides only the bearer.
+        let mut opts = match stored {
+            Some(profile) => {
+                let mut from_profile = crate::credentials::into_rest_options(profile);
+                // `--url` (resolved above) wins over the stored URL.
+                from_profile.url = self.url.clone().unwrap_or(from_profile.url);
+                from_profile
+            }
+            None => BoxliteRestOptions::new(url),
         };
 
-        let mut opts = BoxliteRestOptions::new(url);
-
-        // BOXLITE_API_KEY env beats stored credentials of any kind.
-        if let Ok(key) = std::env::var("BOXLITE_API_KEY")
-            && !key.is_empty()
-        {
+        if let Some(key) = env_api_key.filter(|k| !k.is_empty()) {
             opts = opts.with_api_key(key);
-        } else if let Some(profile) = stored {
-            opts = crate::credentials::into_rest_options(profile);
-            // The conversion above also sets the URL from the profile; the
-            // caller's --url already won via the precedence check above, so
-            // re-apply it to make sure it wins over the stored URL.
-            opts.url = self.url.clone().unwrap_or(opts.url);
         }
 
-        // `--path-prefix` flag (or `BOXLITE_REST_PATH_PREFIX` env,
-        // both filled by clap into `self.path_prefix`) overrides
-        // whatever the stored profile brought along — same shape as
-        // `--url` overriding the stored URL above. Leaving
-        // `opts.path_prefix` alone when the flag is unset means the
-        // profile's value wins; if neither is set the URL builder
-        // skips the segment entirely (`/v1/boxes/...`, empty-prefix
-        // shape).
+        // `--path-prefix` flag (or `BOXLITE_REST_PATH_PREFIX`, both filled by
+        // clap into `self.path_prefix`) overrides the profile's routing slot.
+        // Leaving it alone when the flag is unset means the profile's value
+        // wins; if neither is set the URL builder skips the segment entirely
+        // (`/v1/boxes/...`, the empty-prefix single-tenant shape).
         if let Some(path_prefix) = self.path_prefix.as_ref().filter(|s| !s.is_empty()) {
             opts.path_prefix = Some(path_prefix.clone());
         }
 
-        BoxliteRuntime::rest(opts).map_err(Into::into)
+        Some(opts)
     }
 }
 
@@ -751,6 +776,91 @@ mod tests {
                 ImageRegistry::http("registry.local:5000").with_search(true),
             ]
         );
+    }
+
+    fn rest_flags(
+        url: Option<&str>,
+        profile: Option<&str>,
+        path_prefix: Option<&str>,
+    ) -> GlobalFlags {
+        GlobalFlags {
+            debug: false,
+            home: None,
+            registry: vec![],
+            config: None,
+            url: url.map(str::to_string),
+            profile: profile.map(str::to_string),
+            path_prefix: path_prefix.map(str::to_string),
+        }
+    }
+
+    fn api_key_profile(path_prefix: Option<&str>) -> crate::credentials::Profile {
+        crate::credentials::Profile {
+            url: "https://api.example.com".to_string(),
+            path_prefix: path_prefix.map(str::to_string),
+            auth_method: crate::credentials::AuthMethod::ApiKey,
+            api_key: Some(secrecy::SecretString::from("profile-bearer".to_string())),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn api_key_env_preserves_profile_path_prefix() {
+        // Regression: an ambient BOXLITE_API_KEY must override only the bearer,
+        // not silently discard the selected profile's routing slot — dropping
+        // it made the URL builder emit the prefix-less `/v1/boxes` shape, which
+        // a multi-tenant server rejects with 404.
+        let flags = rest_flags(None, Some("p1"), None);
+        let opts = flags
+            .resolve_rest_options(
+                Some(api_key_profile(Some("acme"))),
+                Some("env-key".to_string()),
+            )
+            .expect("REST options resolved");
+        assert_eq!(
+            opts.path_prefix.as_deref(),
+            Some("acme"),
+            "profile routing slot must survive an ambient BOXLITE_API_KEY"
+        );
+    }
+
+    #[tokio::test]
+    async fn api_key_env_overrides_profile_bearer_but_keeps_prefix() {
+        // Confirmed precedence: env key wins for the bearer, profile prefix stays.
+        let flags = rest_flags(None, Some("p1"), None);
+        let opts = flags
+            .resolve_rest_options(
+                Some(api_key_profile(Some("acme"))),
+                Some("env-key".to_string()),
+            )
+            .expect("REST options resolved");
+
+        let token = opts
+            .credential
+            .expect("credential set")
+            .get_token()
+            .await
+            .expect("token")
+            .token;
+        assert_eq!(
+            token, "env-key",
+            "BOXLITE_API_KEY overrides the profile bearer"
+        );
+        assert_eq!(
+            opts.path_prefix.as_deref(),
+            Some("acme"),
+            "prefix preserved alongside the overridden bearer"
+        );
+    }
+
+    #[test]
+    fn api_key_env_without_profile_has_no_prefix() {
+        // No profile → no routing slot, even with a key (single-tenant shape).
+        let flags = rest_flags(Some("https://api.example.com"), None, None);
+        let opts = flags
+            .resolve_rest_options(None, Some("env-key".to_string()))
+            .expect("REST options resolved");
+        assert!(opts.path_prefix.is_none());
     }
 
     #[test]

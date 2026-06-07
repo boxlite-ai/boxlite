@@ -138,6 +138,34 @@ async fn test_timeout_kills_sigalrm_ignoring_process() {
     tb.teardown().await;
 }
 
+/// A TTY exec must run to natural completion and surface its real exit code
+/// through the zygote's `waitpid` — not lose it or default to 0.
+///
+/// libcontainer 0.6's `check_terminal` forced TTY execs onto the
+/// `with_detach(true)` + console-socket path. Detach changes how youki starts
+/// the process, so this guards that the zygote still reaps the detached PTY
+/// child and returns its exit status. The existing `resize_tty` tests only
+/// `kill()` then `wait()`; none assert a *natural* exit code for a TTY exec.
+#[tokio::test]
+async fn test_tty_exec_collects_natural_exit_code() {
+    let tb = TestBox::new().await;
+
+    let execution = tb
+        .handle
+        .exec(BoxCommand::new("sh").args(["-c", "exit 7"]).tty(true))
+        .await
+        .expect("tty exec failed to spawn");
+
+    let result = execution.wait().await.expect("wait failed");
+    assert_eq!(
+        result.exit_code, 7,
+        "TTY exec exit code must propagate through the zygote reaper; got {}",
+        result.exit_code
+    );
+
+    tb.teardown().await;
+}
+
 /// Combine working_dir and user in a single command.
 #[tokio::test]
 async fn test_working_dir_with_user() {

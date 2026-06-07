@@ -27,11 +27,29 @@ pub fn create_instance(config: &GvproxyConfig) -> BoxliteResult<i64> {
     let c_json = CString::new(json)
         .map_err(|e| BoxliteError::Network(format!("Invalid JSON string: {}", e)))?;
 
-    // Call CGO function with full config
-    let id = unsafe { gvproxy_create(c_json.as_ptr()) };
+    // Call CGO function with full config. `err_ptr` receives the underlying
+    // Go-side error string on failure so we can include it in the user-visible
+    // message (e.g. "listen tcp 0.0.0.0:27380: bind: address already in use"
+    // instead of an opaque "gvproxy_create failed").
+    let mut err_ptr: *mut std::os::raw::c_char = std::ptr::null_mut();
+    let id = unsafe { gvproxy_create(c_json.as_ptr(), &mut err_ptr) };
 
     if id < 0 {
-        return Err(BoxliteError::Network("gvproxy_create failed".to_string()));
+        let detail = if err_ptr.is_null() {
+            "unknown".to_string()
+        } else {
+            // SAFETY: err_ptr points to a C string allocated by gvproxy on
+            // failure; we read it then hand it back for the Go-side free.
+            let s = unsafe { CStr::from_ptr(err_ptr) }
+                .to_string_lossy()
+                .into_owned();
+            unsafe { gvproxy_free_string(err_ptr) };
+            s
+        };
+        return Err(BoxliteError::Network(format!(
+            "gvproxy_create failed: {}",
+            detail
+        )));
     }
 
     tracing::info!(id, "Created gvproxy instance via FFI");

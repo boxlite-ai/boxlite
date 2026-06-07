@@ -9,3 +9,7 @@
 ## Architecture
 
 ## Contributing
+
+## Legal
+
+- [Contributor License Agreement](./legal/CLA.md)

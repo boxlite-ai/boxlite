@@ -275,12 +275,27 @@ var (
 )
 
 //export gvproxy_create
-func gvproxy_create(configJSON *C.char) C.longlong {
+//
+// On failure (return -1), the underlying error message is written to `*errOut`
+// as a heap-allocated C string. Caller must free it via gvproxy_free_string.
+// `errOut` may be nil if the caller doesn't want the message.
+func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
+	// setErr surfaces the underlying error back to the FFI caller so the
+	// Rust runtime can include it in the user-visible BoxliteError message
+	// (e.g. "listen tcp 0.0.0.0:27380: bind: address already in use" instead
+	// of an opaque "gvproxy_create failed").
+	setErr := func(err error) {
+		if errOut != nil {
+			*errOut = C.CString(err.Error())
+		}
+	}
+
 	goJSON := C.GoString(configJSON)
 
 	var config GvproxyConfig
 	if err := json.Unmarshal([]byte(goJSON), &config); err != nil {
 		logrus.WithError(err).Error("Failed to parse gvproxy config")
+		setErr(err)
 		return -1
 	}
 
@@ -293,6 +308,7 @@ func gvproxy_create(configJSON *C.char) C.longlong {
 	socketPath := config.SocketPath
 	if socketPath == "" {
 		logrus.Error("socket_path is required in GvproxyConfig")
+		setErr(fmt.Errorf("socket_path is required in GvproxyConfig"))
 		return -1
 	}
 
@@ -341,6 +357,7 @@ func gvproxy_create(configJSON *C.char) C.longlong {
 		conn, err = transport.ListenUnixgram(socketURI)
 		if err != nil {
 			logrus.WithFields(logrus.Fields{"error": err, "path": socketPath}).Error("Failed to create Unix datagram socket")
+			setErr(fmt.Errorf("failed to create Unix datagram socket %q: %w", socketPath, err))
 			return -1
 		}
 		logrus.WithField("path", socketPath).Info("Created UnixDgram socket for VFKit protocol")
@@ -349,6 +366,7 @@ func gvproxy_create(configJSON *C.char) C.longlong {
 		listener, err = net.Listen("unix", socketPath)
 		if err != nil {
 			logrus.WithFields(logrus.Fields{"error": err, "path": socketPath}).Error("Failed to create Unix stream socket")
+			setErr(fmt.Errorf("failed to create Unix stream socket %q: %w", socketPath, err))
 			return -1
 		}
 		logrus.WithField("path", socketPath).Info("Created UnixStream socket for Qemu protocol")
@@ -371,6 +389,7 @@ func gvproxy_create(configJSON *C.char) C.longlong {
 		ca, err := NewBoxCAFromPEM([]byte(config.CACertPEM), []byte(config.CAKeyPEM))
 		if err != nil {
 			logrus.WithError(err).Error("MITM: failed to parse CA from config")
+			setErr(fmt.Errorf("MITM: failed to parse CA from config: %w", err))
 			cancel()
 			return -1
 		}
@@ -382,6 +401,13 @@ func gvproxy_create(configJSON *C.char) C.longlong {
 	instancesMu.Lock()
 	instances[id] = instance
 	instancesMu.Unlock()
+
+	// initErr surfaces synchronous failures from virtualnetwork.New (e.g.
+	// host-port EADDRINUSE) back to the FFI caller. Pre-fix, the bind error
+	// died in a logrus line inside the gvproxy goroutine and gvproxy_create
+	// returned a valid id; the failure only surfaced ~20s later as guest
+	// "DNS lookup … i/o timeout" from a broken netstack.
+	initErr := make(chan error, 1)
 
 	// Start runtime metrics monitoring goroutine
 	go func() {
@@ -414,8 +440,10 @@ func gvproxy_create(configJSON *C.char) C.longlong {
 		vn, err := virtualnetwork.New(tapConfig)
 		if err != nil {
 			logrus.WithFields(logrus.Fields{"error": err, "id": id}).Error("Failed to create virtual network")
+			initErr <- err
 			return
 		}
+		initErr <- nil
 
 		// Override TCP handler with AllowNet filter and/or MITM secret substitution
 		if len(config.AllowNet) > 0 || instance.secretMatcher != nil {
@@ -498,6 +526,26 @@ func gvproxy_create(configJSON *C.char) C.longlong {
 		}
 		os.Remove(socketPath)
 	}()
+
+	// Wait for virtualnetwork.New to complete before returning a valid id.
+	// On failure, tear down the instance and surface -1 so the FFI caller
+	// (Rust boxlite runtime) can fail fast with a clear error instead of
+	// shipping a broken socket downstream.
+	if err := <-initErr; err != nil {
+		logrus.WithFields(logrus.Fields{"error": err, "id": id}).Error("gvproxy init failed; tearing down instance")
+		setErr(err)
+		cancel()
+		instancesMu.Lock()
+		delete(instances, id)
+		instancesMu.Unlock()
+		if runtime.GOOS == "darwin" && conn != nil {
+			conn.Close()
+		} else if listener != nil {
+			listener.Close()
+		}
+		os.Remove(socketPath)
+		return -1
+	}
 
 	logrus.Info("Created gvproxy instance", "id", id, "socket", socketPath, "protocol", protocol)
 	return C.longlong(id)
