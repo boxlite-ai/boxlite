@@ -253,7 +253,18 @@ export default $config({
         RUN_MIGRATIONS: "true",
         VERSION: "0.1.0",
         DEFAULT_REGION_ENFORCE_QUOTAS: "false",
-        DEFAULT_TEMPLATE: envOr("DEFAULT_TEMPLATE", "ubuntu:24.04"),
+        DEFAULT_SAVED_IMAGE: envOr(
+          "DEFAULT_SAVED_IMAGE",
+          envOr("DEFAULT_TEMPLATE", envOr("DEFAULT_SNAPSHOT", "ubuntu:24.04")),
+        ),
+        DEFAULT_TEMPLATE: envOr(
+          "DEFAULT_TEMPLATE",
+          envOr("DEFAULT_SAVED_IMAGE", envOr("DEFAULT_SNAPSHOT", "ubuntu:24.04")),
+        ),
+        DEFAULT_SNAPSHOT: envOr(
+          "DEFAULT_SNAPSHOT",
+          envOr("DEFAULT_SAVED_IMAGE", envOr("DEFAULT_TEMPLATE", "ubuntu:24.04")),
+        ),
 
         // Database (SST-linked)
         DB_HOST: db.host,
@@ -310,7 +321,14 @@ export default $config({
         PROXY_DOMAIN: envOr("PROXY_DOMAIN", `proxy.${stackDomain}`),
         PROXY_PROTOCOL: envOr("PROXY_PROTOCOL", "https"),
         PROXY_API_KEY: envOr("PROXY_API_KEY", proxyApiKey.result),
-        PROXY_TEMPLATE_URL: envOr("PROXY_TEMPLATE_URL", `https://proxy.${stackDomain}`),
+        PROXY_SAVED_IMAGE_URL: envOr(
+          "PROXY_SAVED_IMAGE_URL",
+          envOr("PROXY_TEMPLATE_URL", `https://proxy.${stackDomain}`),
+        ),
+        PROXY_TEMPLATE_URL: envOr(
+          "PROXY_TEMPLATE_URL",
+          envOr("PROXY_SAVED_IMAGE_URL", `https://proxy.${stackDomain}`),
+        ),
 
         // SSH Gateway — friendly hostname `ssh.<stackDomain>` is provisioned
         // as a Cloudflare CNAME pointing at the SshGateway NLB further below.
