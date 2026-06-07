@@ -37,8 +37,8 @@ type RunnerHealthMetrics struct {
 	CurrentAllocatedDiskGiB float32 `json:"currentAllocatedDiskGiB"`
 	// Number of artifacts currently stored. Old runners may send currentSnapshotCount instead.
 	CurrentArtifactCount *float32 `json:"currentArtifactCount,omitempty"`
-	// Number of snapshots currently stored
-	CurrentSnapshotCount float32 `json:"currentSnapshotCount"`
+	// Deprecated: use currentArtifactCount.
+	CurrentSnapshotCount *float32 `json:"currentSnapshotCount,omitempty"`
 	// Number of started sandboxes
 	CurrentStartedSandboxes float32 `json:"currentStartedSandboxes"`
 	// Total CPU cores on the runner
@@ -65,7 +65,7 @@ func NewRunnerHealthMetrics(currentCpuLoadAverage float32, currentCpuUsagePercen
 	this.CurrentAllocatedCpu = currentAllocatedCpu
 	this.CurrentAllocatedMemoryGiB = currentAllocatedMemoryGiB
 	this.CurrentAllocatedDiskGiB = currentAllocatedDiskGiB
-	this.CurrentSnapshotCount = currentSnapshotCount
+	this.CurrentSnapshotCount = &currentSnapshotCount
 	this.CurrentStartedSandboxes = currentStartedSandboxes
 	this.Cpu = cpu
 	this.MemoryGiB = memoryGiB
@@ -284,26 +284,26 @@ func (o *RunnerHealthMetrics) SetCurrentArtifactCount(v float32) {
 
 // GetCurrentSnapshotCount returns the CurrentSnapshotCount field value
 func (o *RunnerHealthMetrics) GetCurrentSnapshotCount() float32 {
-	if o == nil {
+	if o == nil || IsNil(o.CurrentSnapshotCount) {
 		var ret float32
 		return ret
 	}
 
-	return o.CurrentSnapshotCount
+	return *o.CurrentSnapshotCount
 }
 
 // GetCurrentSnapshotCountOk returns a tuple with the CurrentSnapshotCount field value
 // and a boolean to check if the value has been set.
 func (o *RunnerHealthMetrics) GetCurrentSnapshotCountOk() (*float32, bool) {
-	if o == nil {
+	if o == nil || IsNil(o.CurrentSnapshotCount) {
 		return nil, false
 	}
-	return &o.CurrentSnapshotCount, true
+	return o.CurrentSnapshotCount, true
 }
 
 // SetCurrentSnapshotCount sets field value
 func (o *RunnerHealthMetrics) SetCurrentSnapshotCount(v float32) {
-	o.CurrentSnapshotCount = v
+	o.CurrentSnapshotCount = &v
 }
 
 // GetCurrentStartedSandboxes returns the CurrentStartedSandboxes field value
@@ -422,7 +422,11 @@ func (o RunnerHealthMetrics) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.CurrentArtifactCount) {
 		toSerialize["currentArtifactCount"] = o.CurrentArtifactCount
 	}
-	toSerialize["currentSnapshotCount"] = o.CurrentSnapshotCount
+	if !IsNil(o.CurrentSnapshotCount) {
+		toSerialize["currentSnapshotCount"] = o.CurrentSnapshotCount
+	} else if !IsNil(o.CurrentArtifactCount) {
+		toSerialize["currentSnapshotCount"] = o.CurrentArtifactCount
+	}
 	toSerialize["currentStartedSandboxes"] = o.CurrentStartedSandboxes
 	toSerialize["cpu"] = o.Cpu
 	toSerialize["memoryGiB"] = o.MemoryGiB
@@ -447,7 +451,6 @@ func (o *RunnerHealthMetrics) UnmarshalJSON(data []byte) (err error) {
 		"currentAllocatedCpu",
 		"currentAllocatedMemoryGiB",
 		"currentAllocatedDiskGiB",
-		"currentSnapshotCount",
 		"currentStartedSandboxes",
 		"cpu",
 		"memoryGiB",
@@ -465,6 +468,11 @@ func (o *RunnerHealthMetrics) UnmarshalJSON(data []byte) (err error) {
 	for _, requiredProperty := range requiredProperties {
 		if _, exists := allProperties[requiredProperty]; !exists {
 			return fmt.Errorf("no value given for required property %v", requiredProperty)
+		}
+	}
+	if _, hasSnapshotCount := allProperties["currentSnapshotCount"]; !hasSnapshotCount {
+		if _, hasArtifactCount := allProperties["currentArtifactCount"]; !hasArtifactCount {
+			return fmt.Errorf("no value given for required property currentSnapshotCount or currentArtifactCount")
 		}
 	}
 

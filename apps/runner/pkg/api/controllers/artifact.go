@@ -353,12 +353,7 @@ func GetBuildLogs(logger *slog.Logger) gin.HandlerFunc {
 			return
 		}
 
-		checkArtifactRef := artifactRef
-
-		// Fixed tag for instances where we are not looking for an entry with an artifact ID.
-		if strings.HasPrefix(artifactRef, "boxlite") {
-			checkArtifactRef = artifactRef + ":boxlite"
-		}
+		checkArtifactRef := artifactCompletionRef(artifactRef)
 
 		flusher, ok := ctx.Writer.(http.Flusher)
 		if !ok {
@@ -401,6 +396,14 @@ func GetBuildLogs(logger *slog.Logger) gin.HandlerFunc {
 			time.Sleep(250 * time.Millisecond)
 		}
 	}
+}
+
+func artifactCompletionRef(artifactRef string) string {
+	// Fixed tag for instances where we are not looking for an entry with an artifact ID.
+	if strings.HasPrefix(artifactRef, "boxlite") && !strings.Contains(artifactRef, ":") {
+		return artifactRef + ":boxlite"
+	}
+	return artifactRef
 }
 
 // GetArtifactInfo godoc

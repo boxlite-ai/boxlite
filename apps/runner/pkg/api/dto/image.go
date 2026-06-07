@@ -13,7 +13,7 @@ type PullArtifactRequestDTO struct {
 } //	@name	PullArtifactRequestDTO
 
 type BuildArtifactRequestDTO struct {
-	ArtifactRef            string        `json:"artifactRef,omitempty"` // Artifact ref or the build's hash
+	ArtifactRef            string        `json:"artifactRef" validate:"required"` // Artifact ref or the build's hash
 	SourceRegistries       []RegistryDTO `json:"sourceRegistries,omitempty"`
 	Registry               *RegistryDTO  `json:"registry,omitempty"`
 	Dockerfile             string        `json:"dockerfile" validate:"required"`

@@ -1327,7 +1327,7 @@
   "definitions": {
     "BuildArtifactRequestDTO": {
       "type": "object",
-      "required": ["dockerfile", "organizationId"],
+      "required": ["artifactRef", "dockerfile", "organizationId"],
       "properties": {
         "context": {
           "type": "array",

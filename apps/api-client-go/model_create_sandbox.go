@@ -741,8 +741,7 @@ func (o CreateSandbox) ToMap() (map[string]interface{}, error) {
 	}
 	if !IsNil(o.SavedImageId) {
 		toSerialize["savedImageId"] = o.SavedImageId
-	}
-	if !IsNil(o.Snapshot) {
+	} else if !IsNil(o.Snapshot) {
 		toSerialize["snapshot"] = o.Snapshot
 	}
 	if !IsNil(o.User) {

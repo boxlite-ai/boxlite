@@ -192,6 +192,8 @@ For Auth0 specifically:
 | **RegistryUI**      | Browse artifact images               | public ALB                                   |
 | **MailDev**         | Mock SMTP + web UI                   | public ALB                                   |
 
+ArtifactRegistry credentials must come from infra/cluster secrets, never repo defaults. Use scoped service accounts, short-lived tokens where possible, rotate regularly, and verify revocation through registry audit logs after rotation.
+
 Run `npx sst deploy --stage dev` without changes to reprint all URLs. See
 [Public hostnames](#public-hostnames) below for the rationale behind the
 dashboard-vs-API split.

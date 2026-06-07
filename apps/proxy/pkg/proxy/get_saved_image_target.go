@@ -53,7 +53,7 @@ func (p *Proxy) getSavedImageTarget(ctx *gin.Context) (*url.URL, map[string]stri
 	}
 
 	queryParams := ctx.Request.URL.Query()
-	queryParams.Add("artifactRef", *savedImage.ArtifactRef)
+	queryParams.Set("artifactRef", *savedImage.ArtifactRef)
 
 	// Build the target URL
 	targetURL := fmt.Sprintf("%s/artifacts/logs", runnerInfo.ApiUrl)

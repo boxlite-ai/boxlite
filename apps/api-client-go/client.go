@@ -267,8 +267,10 @@ func parameterAddToHeaderOrQuery(headerOrQueryParams interface{}, keyPrefix stri
 		case reflect.Uint, reflect.Uint8, reflect.Uint16,
 			reflect.Uint32, reflect.Uint64, reflect.Uintptr:
 			value = strconv.FormatUint(v.Uint(), 10)
-		case reflect.Float32, reflect.Float64:
+		case reflect.Float32:
 			value = strconv.FormatFloat(v.Float(), 'g', -1, 32)
+		case reflect.Float64:
+			value = strconv.FormatFloat(v.Float(), 'g', -1, 64)
 		case reflect.Bool:
 			value = strconv.FormatBool(v.Bool())
 		case reflect.String:

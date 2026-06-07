@@ -1418,6 +1418,7 @@ const docTemplate = `{
         "BuildArtifactRequestDTO": {
             "type": "object",
             "required": [
+                "artifactRef",
                 "dockerfile",
                 "organizationId"
             ],
