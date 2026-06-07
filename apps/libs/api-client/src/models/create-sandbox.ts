@@ -33,9 +33,16 @@ export interface CreateSandbox {
      */
     'name'?: string;
     /**
-     * The ID or name of the snapshot used for the sandbox
+     * The ID or name of the template used for the sandbox
      * @type {string}
      * @memberof CreateSandbox
+     */
+    'templateId'?: string;
+    /**
+     * Deprecated alias for templateId used by older clients
+     * @type {string}
+     * @memberof CreateSandbox
+     * @deprecated
      */
     'snapshot'?: string;
     /**

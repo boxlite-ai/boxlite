@@ -63,11 +63,18 @@ export interface RunnerHealthMetrics {
      */
     'currentAllocatedDiskGiB': number;
     /**
-     * Number of snapshots currently stored
+     * Number of artifacts currently stored. Old runners may send currentSnapshotCount instead.
      * @type {number}
      * @memberof RunnerHealthMetrics
      */
-    'currentSnapshotCount': number;
+    'currentArtifactCount'?: number;
+    /**
+     * Deprecated alias for currentArtifactCount used by old runners
+     * @type {number}
+     * @memberof RunnerHealthMetrics
+     * @deprecated
+     */
+    'currentSnapshotCount'?: number;
     /**
      * Number of started sandboxes
      * @type {number}

@@ -24,7 +24,7 @@ export interface RunnerSandboxInfo {
   backupErrorReason?: string
 }
 
-export interface RunnerSnapshotInfo {
+export interface RunnerArtifactInfo {
   name: string
   sizeGB: number
   entrypoint: string[]
@@ -32,7 +32,7 @@ export interface RunnerSnapshotInfo {
   hash: string
 }
 
-export interface SnapshotDigestResponse {
+export interface ArtifactDigestResponse {
   hash: string
   sizeGB: number
 }
@@ -44,6 +44,7 @@ export interface RunnerMetrics {
   currentCpuUsagePercentage?: number
   currentDiskUsagePercentage?: number
   currentMemoryUsagePercentage?: number
+  currentArtifactCount?: number
   currentSnapshotCount?: number
   currentStartedSandboxes?: number
 }
@@ -68,7 +69,7 @@ export interface RunnerAdapter {
   sandboxInfo(sandboxId: string): Promise<RunnerSandboxInfo>
   createSandbox(
     sandbox: Sandbox,
-    snapshotRef: string,
+    artifactRef: string,
     registry?: DockerRegistry,
     entrypoint?: string[],
     metadata?: { [key: string]: string },
@@ -85,24 +86,24 @@ export interface RunnerAdapter {
   destroySandbox(sandboxId: string): Promise<void>
   createBackup(sandbox: Sandbox, backupSnapshotName: string, registry?: DockerRegistry): Promise<void>
 
-  removeSnapshot(snapshotName: string): Promise<void>
-  buildSnapshot(
+  removeArtifact(artifactRef: string): Promise<void>
+  buildArtifact(
     buildInfo: BuildInfo,
     organizationId?: string,
     sourceRegistries?: DockerRegistry[],
     registry?: DockerRegistry,
     pushToInternalRegistry?: boolean,
   ): Promise<void>
-  pullSnapshot(
-    snapshotName: string,
+  pullArtifact(
+    artifactRef: string,
     registry?: DockerRegistry,
     destinationRegistry?: DockerRegistry,
     destinationRef?: string,
     newTag?: string,
   ): Promise<void>
-  snapshotExists(snapshotRef: string): Promise<boolean>
-  getSnapshotInfo(snapshotName: string): Promise<RunnerSnapshotInfo>
-  inspectSnapshotInRegistry(snapshotName: string, registry?: DockerRegistry): Promise<SnapshotDigestResponse>
+  artifactExists(artifactRef: string): Promise<boolean>
+  getArtifactInfo(artifactRef: string): Promise<RunnerArtifactInfo>
+  inspectArtifactInRegistry(artifactRef: string, registry?: DockerRegistry): Promise<ArtifactDigestResponse>
 
   updateNetworkSettings(
     sandboxId: string,

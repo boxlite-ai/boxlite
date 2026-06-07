@@ -45,9 +45,9 @@ export interface BuildInfo {
      */
     'updatedAt': Date;
     /**
-     * The snapshot reference
+     * The artifact reference
      * @type {string}
      * @memberof BuildInfo
      */
-    'snapshotRef': string;
+    'artifactRef': string;
 }

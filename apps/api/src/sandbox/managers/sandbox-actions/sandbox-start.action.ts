@@ -11,17 +11,17 @@ import { Sandbox } from '../../entities/sandbox.entity'
 import { SandboxState } from '../../enums/sandbox-state.enum'
 import { DONT_SYNC_AGAIN, SandboxAction, SYNC_AGAIN, SyncState } from './sandbox.action'
 import { SANDBOX_BUILD_INFO_CACHE_TTL_MS } from '../../utils/sandbox-lookup-cache.util'
-import { SnapshotRunnerState } from '../../enums/snapshot-runner-state.enum'
+import { RunnerArtifactCacheState } from '../../enums/runner-artifact-cache-state.enum'
 import { BackupState } from '../../enums/backup-state.enum'
 import { RunnerState } from '../../enums/runner-state.enum'
 import { BuildInfo } from '../../entities/build-info.entity'
-import { SnapshotService } from '../../services/snapshot.service'
+import { BoxTemplateService } from '../../services/box-template.service'
 import { DockerRegistryService } from '../../../docker-registry/services/docker-registry.service'
 import { DockerRegistry } from '../../../docker-registry/entities/docker-registry.entity'
 import { RunnerService } from '../../services/runner.service'
 import { RunnerAdapterFactory } from '../../runner-adapter/runnerAdapter'
-import { SnapshotStateError } from '../../errors/snapshot-state-error'
-import { Snapshot } from '../../entities/snapshot.entity'
+import { RuntimeArtifactStateError } from '../../errors/runtime-artifact-state-error'
+import { BoxTemplate } from '../../entities/box-template.entity'
 import { OrganizationService } from '../../../organization/services/organization.service'
 import { TypedConfigService } from '../../../config/typed-config.service'
 import { Runner } from '../../entities/runner.entity'
@@ -39,7 +39,7 @@ export class SandboxStartAction extends SandboxAction {
     protected runnerService: RunnerService,
     protected runnerAdapterFactory: RunnerAdapterFactory,
     protected sandboxRepository: SandboxRepository,
-    protected readonly snapshotService: SnapshotService,
+    protected readonly boxTemplateService: BoxTemplateService,
     protected readonly dockerRegistryService: DockerRegistryService,
     protected readonly organizationService: OrganizationService,
     protected readonly configService: TypedConfigService,
@@ -55,16 +55,16 @@ export class SandboxStartAction extends SandboxAction {
     // Load buildInfo only for states that need it — avoids a JOIN+DISTINCT in the
     // shared syncInstanceState query that stop/destroy/archive paths never use.
     if (
-      sandbox.snapshot === null &&
-      [SandboxState.PENDING_BUILD, SandboxState.BUILDING_SNAPSHOT, SandboxState.UNKNOWN].includes(sandbox.state)
+      sandbox.template === null &&
+      [SandboxState.PENDING_BUILD, SandboxState.BUILDING_ARTIFACT, SandboxState.UNKNOWN].includes(sandbox.state)
     ) {
       await this.loadBuildInfo(sandbox)
     }
 
     switch (sandbox.state) {
-      case SandboxState.PULLING_SNAPSHOT: {
+      case SandboxState.PULLING_ARTIFACT: {
         if (!sandbox.runnerId) {
-          // Using the PULLING_SNAPSHOT state for the case where the runner isn't assigned yet as well
+          // Using the PULLING_ARTIFACT state for the case where the runner isn't assigned yet as well
           return this.handleUnassignedRunnerSandbox(sandbox, lockCode)
         } else {
           return this.handleRunnerSandboxStartedStateCheck(sandbox, lockCode)
@@ -73,8 +73,8 @@ export class SandboxStartAction extends SandboxAction {
       case SandboxState.PENDING_BUILD: {
         return this.handleUnassignedRunnerSandbox(sandbox, lockCode, true)
       }
-      case SandboxState.BUILDING_SNAPSHOT: {
-        return this.handleRunnerSandboxBuildingSnapshotStateOnDesiredStateStart(sandbox, lockCode)
+      case SandboxState.BUILDING_ARTIFACT: {
+        return this.handleRunnerSandboxBuildingBoxTemplateStateOnDesiredStateStart(sandbox, lockCode)
       }
       case SandboxState.UNKNOWN: {
         return this.handleRunnerSandboxUnknownStateOnDesiredStateStart(sandbox, lockCode)
@@ -114,7 +114,7 @@ export class SandboxStartAction extends SandboxAction {
     sandbox.buildInfo = result?.buildInfo ?? null
   }
 
-  private async handleRunnerSandboxBuildingSnapshotStateOnDesiredStateStart(
+  private async handleRunnerSandboxBuildingBoxTemplateStateOnDesiredStateStart(
     sandbox: Sandbox,
     lockCode: LockCode,
   ): Promise<SyncState> {
@@ -128,32 +128,35 @@ export class SandboxStartAction extends SandboxAction {
         SandboxState.BUILD_FAILED,
         lockCode,
         undefined,
-        'Timeout while building snapshot on runner',
+        'Timeout while building artifact on runner',
       )
       return DONT_SYNC_AGAIN
     }
 
-    const snapshotRunner = await this.runnerService.getSnapshotRunner(sandbox.runnerId, sandbox.buildInfo.snapshotRef)
-    if (snapshotRunner) {
-      switch (snapshotRunner.state) {
-        case SnapshotRunnerState.READY: {
+    const runnerArtifactCache = await this.runnerService.getRunnerArtifactCache(
+      sandbox.runnerId,
+      sandbox.buildInfo.artifactRef,
+    )
+    if (runnerArtifactCache) {
+      switch (runnerArtifactCache.state) {
+        case RunnerArtifactCacheState.READY: {
           // TODO: "UNKNOWN" should probably be changed to something else
           await this.updateSandboxState(sandbox, SandboxState.UNKNOWN, lockCode)
           return SYNC_AGAIN
         }
-        case SnapshotRunnerState.ERROR: {
+        case RunnerArtifactCacheState.ERROR: {
           await this.updateSandboxState(
             sandbox,
             SandboxState.BUILD_FAILED,
             lockCode,
             undefined,
-            snapshotRunner.errorReason,
+            runnerArtifactCache.errorReason,
           )
           return DONT_SYNC_AGAIN
         }
       }
     }
-    if (!snapshotRunner || snapshotRunner.state === SnapshotRunnerState.BUILDING_SNAPSHOT) {
+    if (!runnerArtifactCache || runnerArtifactCache.state === RunnerArtifactCacheState.BUILDING_ARTIFACT) {
       // Sleep for a second and go back to syncing instance state
       await new Promise((resolve) => setTimeout(resolve, 1000))
       return SYNC_AGAIN
@@ -167,24 +170,24 @@ export class SandboxStartAction extends SandboxAction {
     lockCode: LockCode,
     isBuild = false,
   ): Promise<SyncState> {
-    // Get snapshot reference based on whether it's a pull or build operation
-    let snapshotRef: string
+    // Get artifact reference based on whether it's a pull or build operation
+    let artifactRef: string
 
     if (isBuild) {
-      snapshotRef = sandbox.buildInfo.snapshotRef
+      artifactRef = sandbox.buildInfo.artifactRef
     } else {
-      const snapshot = await this.snapshotService.getSnapshotByName(sandbox.snapshot, sandbox.organizationId)
-      snapshotRef = snapshot.ref
+      const template = await this.boxTemplateService.getBoxTemplateByName(sandbox.template, sandbox.organizationId)
+      artifactRef = template.artifactRef
     }
 
     const declarativeBuildScoreThreshold = this.configService.get('runnerScore.thresholds.declarativeBuild')
 
-    // Try to assign an available runner with the snapshot already available
+    // Try to assign an available runner with the artifact already available
     try {
       const runner = await this.runnerService.getRandomAvailableRunner({
         regions: [sandbox.region],
         sandboxClass: sandbox.class,
-        snapshotRef: snapshotRef,
+        artifactRef: artifactRef,
         ...(isBuild &&
           declarativeBuildScoreThreshold !== undefined && {
             availabilityScoreThreshold: declarativeBuildScoreThreshold,
@@ -198,18 +201,18 @@ export class SandboxStartAction extends SandboxAction {
       // Continue to next assignment method
     }
 
-    // Try to assign an available runner that is currently processing the snapshot
-    const snapshotRunners = await this.runnerService.getSnapshotRunners(snapshotRef)
-    const targetState = isBuild ? SnapshotRunnerState.BUILDING_SNAPSHOT : SnapshotRunnerState.PULLING_SNAPSHOT
-    const targetSandboxState = isBuild ? SandboxState.BUILDING_SNAPSHOT : SandboxState.PULLING_SNAPSHOT
+    // Try to assign an available runner that is currently processing the artifact
+    const runnerArtifactCaches = await this.runnerService.getRunnerArtifactCaches(artifactRef)
+    const targetState = isBuild ? RunnerArtifactCacheState.BUILDING_ARTIFACT : RunnerArtifactCacheState.PULLING_ARTIFACT
+    const targetSandboxState = isBuild ? SandboxState.BUILDING_ARTIFACT : SandboxState.PULLING_ARTIFACT
     const errorSandboxState = isBuild ? SandboxState.BUILD_FAILED : SandboxState.ERROR
 
-    for (const snapshotRunner of snapshotRunners) {
+    for (const runnerArtifactCache of runnerArtifactCaches) {
       // Consider removing the runner usage rate check or improving it
-      const runner = await this.runnerService.findOneOrFail(snapshotRunner.runnerId)
+      const runner = await this.runnerService.findOneOrFail(runnerArtifactCache.runnerId)
 
-      if (snapshotRunner.state === SnapshotRunnerState.ERROR) {
-        await this.updateSandboxState(sandbox, errorSandboxState, lockCode, runner.id, snapshotRunner.errorReason)
+      if (runnerArtifactCache.state === RunnerArtifactCacheState.ERROR) {
+        await this.updateSandboxState(sandbox, errorSandboxState, lockCode, runner.id, runnerArtifactCache.errorReason)
         return DONT_SYNC_AGAIN
       }
 
@@ -218,7 +221,7 @@ export class SandboxStartAction extends SandboxAction {
       }
 
       if (declarativeBuildScoreThreshold === undefined || runner.availabilityScore >= declarativeBuildScoreThreshold) {
-        if (snapshotRunner.state === targetState) {
+        if (runnerArtifactCache.state === targetState) {
           await this.updateSandboxState(sandbox, targetSandboxState, lockCode, runner.id)
           return SYNC_AGAIN
         }
@@ -227,10 +230,10 @@ export class SandboxStartAction extends SandboxAction {
 
     // Get excluded runner IDs based on operation type
     const excludedRunnerIds = await (isBuild
-      ? this.runnerService.getRunnersWithMultipleSnapshotsBuilding()
-      : this.runnerService.getRunnersWithMultipleSnapshotsPulling())
+      ? this.runnerService.getRunnersWithMultipleArtifactsBuilding()
+      : this.runnerService.getRunnersWithMultipleArtifactsPulling())
 
-    // Try to assign an available runner to start processing the snapshot
+    // Try to assign an available runner to start processing the artifact
     let runner: Runner
 
     try {
@@ -252,30 +255,34 @@ export class SandboxStartAction extends SandboxAction {
 
     if (isBuild) {
       this.buildOnRunner(sandbox.buildInfo, runner, sandbox.organizationId)
-      await this.updateSandboxState(sandbox, SandboxState.BUILDING_SNAPSHOT, lockCode, runner.id)
+      await this.updateSandboxState(sandbox, SandboxState.BUILDING_ARTIFACT, lockCode, runner.id)
     } else {
-      const snapshot = await this.snapshotService.getSnapshotByName(sandbox.snapshot, sandbox.organizationId)
-      await this.runnerService.createSnapshotRunnerEntry(runner.id, snapshot.ref, SnapshotRunnerState.PULLING_SNAPSHOT)
-      this.pullSnapshotToRunner(snapshot, runner)
-      await this.updateSandboxState(sandbox, SandboxState.PULLING_SNAPSHOT, lockCode, runner.id)
+      const template = await this.boxTemplateService.getBoxTemplateByName(sandbox.template, sandbox.organizationId)
+      await this.runnerService.createRunnerArtifactCacheEntry(
+        runner.id,
+        template.artifactRef,
+        RunnerArtifactCacheState.PULLING_ARTIFACT,
+      )
+      this.pullTemplateArtifactToRunner(template, runner)
+      await this.updateSandboxState(sandbox, SandboxState.PULLING_ARTIFACT, lockCode, runner.id)
     }
 
     return SYNC_AGAIN
   }
 
-  async pullSnapshotToRunner(snapshot: Snapshot, runner: Runner) {
-    const internalRegistry = await this.dockerRegistryService.findInternalRegistryBySnapshotRef(
-      snapshot.ref,
+  async pullTemplateArtifactToRunner(template: BoxTemplate, runner: Runner) {
+    const internalRegistry = await this.dockerRegistryService.findInternalRegistryByArtifactRef(
+      template.artifactRef,
       runner.region,
     )
     if (!internalRegistry) {
-      throw new Error('No internal registry found for sandbox snapshot')
+      throw new Error('No internal registry found for sandbox artifact')
     }
 
     const runnerAdapter = await this.runnerAdapterFactory.create(runner)
 
     // Fire the pull request (runner returns 202 immediately)
-    await runnerAdapter.pullSnapshot(snapshot.ref, internalRegistry)
+    await runnerAdapter.pullArtifact(template.artifactRef, internalRegistry)
 
     const pollTimeoutMs = 60 * 60 * 1_000 // 1 hour
     const pollIntervalMs = 5 * 1_000 // 5 seconds
@@ -283,10 +290,10 @@ export class SandboxStartAction extends SandboxAction {
 
     while (Date.now() - startTime < pollTimeoutMs) {
       try {
-        await runnerAdapter.getSnapshotInfo(snapshot.ref)
+        await runnerAdapter.getArtifactInfo(template.artifactRef)
         return
       } catch (err) {
-        if (err instanceof SnapshotStateError) {
+        if (err instanceof RuntimeArtifactStateError) {
           throw err
         }
       }
@@ -294,7 +301,7 @@ export class SandboxStartAction extends SandboxAction {
     }
   }
 
-  // Initiates the snapshot build on the runner and creates an SnapshotRunner depending on the result
+  // Initiates the artifact build on the runner and creates a RunnerArtifactCache depending on the result
   async buildOnRunner(buildInfo: BuildInfo, runner: Runner, organizationId: string) {
     const runnerAdapter = await this.runnerAdapterFactory.create(runner)
 
@@ -304,7 +311,7 @@ export class SandboxStartAction extends SandboxAction {
     )
 
     // Fire build request (runner returns 202 immediately)
-    await runnerAdapter.buildSnapshot(
+    await runnerAdapter.buildArtifact(
       buildInfo,
       organizationId,
       sourceRegistries.length > 0 ? sourceRegistries : undefined,
@@ -316,14 +323,14 @@ export class SandboxStartAction extends SandboxAction {
 
     while (Date.now() - startTime < pollTimeoutMs) {
       try {
-        await runnerAdapter.getSnapshotInfo(buildInfo.snapshotRef)
+        await runnerAdapter.getArtifactInfo(buildInfo.artifactRef)
         break
       } catch (err) {
-        if (err instanceof SnapshotStateError) {
-          await this.runnerService.createSnapshotRunnerEntry(
+        if (err instanceof RuntimeArtifactStateError) {
+          await this.runnerService.createRunnerArtifactCacheEntry(
             runner.id,
-            buildInfo.snapshotRef,
-            SnapshotRunnerState.ERROR,
+            buildInfo.artifactRef,
+            RunnerArtifactCacheState.ERROR,
             err.message,
           )
           return
@@ -333,22 +340,22 @@ export class SandboxStartAction extends SandboxAction {
     }
 
     if (Date.now() - startTime >= pollTimeoutMs) {
-      await this.runnerService.createSnapshotRunnerEntry(
+      await this.runnerService.createRunnerArtifactCacheEntry(
         runner.id,
-        buildInfo.snapshotRef,
-        SnapshotRunnerState.ERROR,
+        buildInfo.artifactRef,
+        RunnerArtifactCacheState.ERROR,
         'Timeout while building',
       )
       return
     }
 
-    const exists = await runnerAdapter.snapshotExists(buildInfo.snapshotRef)
-    let state = SnapshotRunnerState.BUILDING_SNAPSHOT
+    const exists = await runnerAdapter.artifactExists(buildInfo.artifactRef)
+    let state = RunnerArtifactCacheState.BUILDING_ARTIFACT
     if (exists) {
-      state = SnapshotRunnerState.READY
+      state = RunnerArtifactCacheState.READY
     }
 
-    await this.runnerService.createSnapshotRunnerEntry(runner.id, buildInfo.snapshotRef, state)
+    await this.runnerService.createRunnerArtifactCacheEntry(runner.id, buildInfo.artifactRef, state)
   }
 
   private async handleRunnerSandboxUnknownStateOnDesiredStateStart(
@@ -366,21 +373,20 @@ export class SandboxStartAction extends SandboxAction {
 
     let internalRegistry: DockerRegistry
     let entrypoint: string[]
-    let snapshotRef: string
+    let artifactRef: string
     if (!sandbox.buildInfo) {
-      //  get internal snapshot name
-      const snapshot = await this.snapshotService.getSnapshotByName(sandbox.snapshot, sandbox.organizationId)
-      snapshotRef = snapshot.ref
+      const template = await this.boxTemplateService.getBoxTemplateByName(sandbox.template, sandbox.organizationId)
+      artifactRef = template.artifactRef
 
-      internalRegistry = await this.dockerRegistryService.findInternalRegistryBySnapshotRef(snapshotRef, runner.region)
+      internalRegistry = await this.dockerRegistryService.findInternalRegistryByArtifactRef(artifactRef, runner.region)
       if (!internalRegistry) {
-        throw new Error('No registry found for snapshot')
+        throw new Error('No registry found for artifact')
       }
 
-      entrypoint = snapshot.entrypoint
+      entrypoint = template.entrypoint
     } else {
-      snapshotRef = sandbox.buildInfo.snapshotRef
-      entrypoint = this.snapshotService.getEntrypointFromDockerfile(sandbox.buildInfo.dockerfileContent)
+      artifactRef = sandbox.buildInfo.artifactRef
+      entrypoint = this.boxTemplateService.getEntrypointFromDockerfile(sandbox.buildInfo.dockerfileContent)
     }
 
     const metadata = {
@@ -390,7 +396,7 @@ export class SandboxStartAction extends SandboxAction {
 
     const result = await runnerAdapter.createSandbox(
       sandbox,
-      snapshotRef,
+      artifactRef,
       internalRegistry,
       entrypoint,
       metadata,
@@ -617,11 +623,11 @@ export class SandboxStartAction extends SandboxAction {
         )
         break
       }
-      case SandboxState.PULLING_SNAPSHOT: {
-        if (await this.checkTimeoutError(sandbox, 30, 'Timeout while pulling snapshot')) {
+      case SandboxState.PULLING_ARTIFACT: {
+        if (await this.checkTimeoutError(sandbox, 30, 'Timeout while pulling artifact')) {
           return DONT_SYNC_AGAIN
         }
-        await this.updateSandboxState(sandbox, SandboxState.PULLING_SNAPSHOT, lockCode)
+        await this.updateSandboxState(sandbox, SandboxState.PULLING_ARTIFACT, lockCode)
         break
       }
       case SandboxState.DESTROYED: {
@@ -694,14 +700,14 @@ export class SandboxStartAction extends SandboxAction {
       throw new Error('No registry found for backup')
     }
 
-    //  make sure we pick a runner that has the base snapshot
-    let baseSnapshot: Snapshot | null = null
-    if (sandbox.snapshot) {
+    //  make sure we pick a runner that has the base template artifact
+    let baseTemplate: BoxTemplate | null = null
+    if (sandbox.template) {
       try {
-        baseSnapshot = await this.snapshotService.getSnapshotByName(sandbox.snapshot, sandbox.organizationId)
+        baseTemplate = await this.boxTemplateService.getBoxTemplateByName(sandbox.template, sandbox.organizationId)
       } catch (e) {
         if (e instanceof NotFoundException) {
-          //  if the base snapshot is not found, we'll use any available runner later
+          //  if the base template is not found, we'll use any available runner later
         } else {
           if (isRecovery) {
             return SYNC_AGAIN
@@ -712,24 +718,24 @@ export class SandboxStartAction extends SandboxAction {
       }
     }
 
-    const snapshotRef = baseSnapshot ? baseSnapshot.ref : null
+    const artifactRef = baseTemplate ? baseTemplate.artifactRef : null
 
     let availableRunners: Runner[] = []
 
     const excludedRunnerIds: string[] = excludedRunnerId ? [excludedRunnerId] : []
 
-    const runnersWithBaseSnapshot: Runner[] = snapshotRef
+    const runnersWithBaseArtifact: Runner[] = artifactRef
       ? await this.runnerService.findAvailableRunners({
           regions: [sandbox.region],
           sandboxClass: sandbox.class,
-          snapshotRef,
+          artifactRef,
           excludedRunnerIds,
         })
       : []
-    if (runnersWithBaseSnapshot.length > 0) {
-      availableRunners = runnersWithBaseSnapshot
+    if (runnersWithBaseArtifact.length > 0) {
+      availableRunners = runnersWithBaseArtifact
     } else {
-      //  if no runner has the base snapshot, get all available runners
+      //  if no runner has the base artifact, get all available runners
       availableRunners = await this.runnerService.findAvailableRunners({
         regions: [sandbox.region],
         excludedRunnerIds,
@@ -781,7 +787,7 @@ export class SandboxStartAction extends SandboxAction {
           continue
         }
 
-        await runnerAdapter.inspectSnapshotInRegistry(validBackup, registry)
+        await runnerAdapter.inspectArtifactInRegistry(validBackup, registry)
         exists = true
         break
       } catch (error) {

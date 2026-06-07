@@ -123,11 +123,11 @@ export interface Runner {
      */
     'currentAllocatedDiskGiB'?: number;
     /**
-     * Current snapshot count
+     * Current artifact count
      * @type {number}
      * @memberof Runner
      */
-    'currentSnapshotCount'?: number;
+    'currentArtifactCount'?: number;
     /**
      * Current number of started sandboxes
      * @type {number}

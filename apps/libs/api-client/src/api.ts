@@ -27,7 +27,7 @@ export * from './api/preview-api';
 export * from './api/regions-api';
 export * from './api/runners-api';
 export * from './api/sandbox-api';
-export * from './api/snapshots-api';
+export * from './api/templates-api';
 export * from './api/toolbox-api';
 export * from './api/users-api';
 export * from './api/volumes-api';

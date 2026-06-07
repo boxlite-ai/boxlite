@@ -10,11 +10,11 @@ import { NotificationEmitter } from '../gateways/notification-emitter.abstract'
 import { SandboxEvents } from '../../sandbox/constants/sandbox-events.constants'
 import { SandboxCreatedEvent } from '../../sandbox/events/sandbox-create.event'
 import { SandboxStateUpdatedEvent } from '../../sandbox/events/sandbox-state-updated.event'
-import { SnapshotCreatedEvent } from '../../sandbox/events/snapshot-created.event'
-import { SnapshotEvents } from '../../sandbox/constants/snapshot-events'
-import { SnapshotDto } from '../../sandbox/dto/snapshot.dto'
-import { SnapshotStateUpdatedEvent } from '../../sandbox/events/snapshot-state-updated.event'
-import { SnapshotRemovedEvent } from '../../sandbox/events/snapshot-removed.event'
+import { BoxTemplateCreatedEvent } from '../../sandbox/events/box-template-created.event'
+import { BoxTemplateEvents } from '../../sandbox/constants/box-template-events'
+import { BoxTemplateDto } from '../../sandbox/dto/box-template.dto'
+import { BoxTemplateStateUpdatedEvent } from '../../sandbox/events/box-template-state-updated.event'
+import { BoxTemplateRemovedEvent } from '../../sandbox/events/box-template-removed.event'
 import { VolumeEvents } from '../../sandbox/constants/volume-events'
 import { VolumeCreatedEvent } from '../../sandbox/events/volume-created.event'
 import { VolumeDto } from '../../sandbox/dto/volume.dto'
@@ -61,22 +61,22 @@ export class NotificationService {
     this.redis.publish(SANDBOX_EVENT_CHANNEL, JSON.stringify(event))
   }
 
-  @OnEvent(SnapshotEvents.CREATED)
-  async handleSnapshotCreated(event: SnapshotCreatedEvent) {
-    const dto = SnapshotDto.fromSnapshot(event.snapshot)
-    this.notificationEmitter.emitSnapshotCreated(dto)
+  @OnEvent(BoxTemplateEvents.CREATED)
+  async handleTemplateCreated(event: BoxTemplateCreatedEvent) {
+    const dto = BoxTemplateDto.fromBoxTemplateEntity(event.template)
+    this.notificationEmitter.emitTemplateCreated(dto)
   }
 
-  @OnEvent(SnapshotEvents.STATE_UPDATED)
-  async handleSnapshotStateUpdated(event: SnapshotStateUpdatedEvent) {
-    const dto = SnapshotDto.fromSnapshot(event.snapshot)
-    this.notificationEmitter.emitSnapshotStateUpdated(dto, event.oldState, event.newState)
+  @OnEvent(BoxTemplateEvents.STATE_UPDATED)
+  async handleBoxTemplateStateUpdated(event: BoxTemplateStateUpdatedEvent) {
+    const dto = BoxTemplateDto.fromBoxTemplateEntity(event.template)
+    this.notificationEmitter.emitBoxTemplateStateUpdated(dto, event.oldState, event.newState)
   }
 
-  @OnEvent(SnapshotEvents.REMOVED)
-  async handleSnapshotRemoved(event: SnapshotRemovedEvent) {
-    const dto = SnapshotDto.fromSnapshot(event.snapshot)
-    this.notificationEmitter.emitSnapshotRemoved(dto)
+  @OnEvent(BoxTemplateEvents.REMOVED)
+  async handleTemplateRemoved(event: BoxTemplateRemovedEvent) {
+    const dto = BoxTemplateDto.fromBoxTemplateEntity(event.template)
+    this.notificationEmitter.emitTemplateRemoved(dto)
   }
 
   @OnEvent(VolumeEvents.CREATED)

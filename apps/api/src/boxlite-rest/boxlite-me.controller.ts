@@ -51,9 +51,9 @@ export class BoxliteMeController {
         'box:delete',
         'image:read',
         'image:write',
-        'snapshot:read',
-        'snapshot:write',
-        'snapshot:delete',
+        'template:read',
+        'template:write',
+        'template:delete',
         'me:read',
       ],
       // Source of truth for key expiry is ApiKey.expiresAt — the same column the

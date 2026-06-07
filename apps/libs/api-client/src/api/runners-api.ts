@@ -28,11 +28,11 @@ import type { CreateRunnerResponse } from '../models';
 // @ts-ignore
 import type { Runner } from '../models';
 // @ts-ignore
+import type { RunnerArtifactCacheDto } from '../models';
+// @ts-ignore
 import type { RunnerFull } from '../models';
 // @ts-ignore
 import type { RunnerHealthcheck } from '../models';
-// @ts-ignore
-import type { RunnerSnapshotDto } from '../models';
 /**
  * RunnersApi - axios parameter creator
  * @export
@@ -291,15 +291,15 @@ export const RunnersApiAxiosParamCreator = function (configuration?: Configurati
         },
         /**
          *
-         * @summary Get runners by snapshot ref
-         * @param {string} ref Snapshot ref
+         * @summary Get runners by artifact ref
+         * @param {string} artifactRef Artifact ref
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        getRunnersBySnapshotRef: async (ref: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
-            // verify required parameter 'ref' is not null or undefined
-            assertParamExists('getRunnersBySnapshotRef', 'ref', ref)
-            const localVarPath = `/runners/by-snapshot-ref`;
+        getRunnersByArtifactRef: async (artifactRef: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+            // verify required parameter 'artifactRef' is not null or undefined
+            assertParamExists('getRunnersByArtifactRef', 'artifactRef', artifactRef)
+            const localVarPath = `/runners/by-artifact-ref`;
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
             let baseOptions;
@@ -317,8 +317,8 @@ export const RunnersApiAxiosParamCreator = function (configuration?: Configurati
 
             // authentication oauth2 required
 
-            if (ref !== undefined) {
-                localVarQueryParameter['ref'] = ref;
+            if (artifactRef !== undefined) {
+                localVarQueryParameter['artifactRef'] = artifactRef;
             }
 
 
@@ -594,15 +594,15 @@ export const RunnersApiFp = function(configuration?: Configuration) {
         },
         /**
          *
-         * @summary Get runners by snapshot ref
-         * @param {string} ref Snapshot ref
+         * @summary Get runners by artifact ref
+         * @param {string} artifactRef Artifact ref
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        async getRunnersBySnapshotRef(ref: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Array<RunnerSnapshotDto>>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.getRunnersBySnapshotRef(ref, options);
+        async getRunnersByArtifactRef(artifactRef: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<Array<RunnerArtifactCacheDto>>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.getRunnersByArtifactRef(artifactRef, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
-            const localVarOperationServerBasePath = operationServerMap['RunnersApi.getRunnersBySnapshotRef']?.[localVarOperationServerIndex]?.url;
+            const localVarOperationServerBasePath = operationServerMap['RunnersApi.getRunnersByArtifactRef']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
@@ -733,13 +733,13 @@ export const RunnersApiFactory = function (configuration?: Configuration, basePa
         },
         /**
          *
-         * @summary Get runners by snapshot ref
-         * @param {string} ref Snapshot ref
+         * @summary Get runners by artifact ref
+         * @param {string} artifactRef Artifact ref
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        getRunnersBySnapshotRef(ref: string, options?: RawAxiosRequestConfig): AxiosPromise<Array<RunnerSnapshotDto>> {
-            return localVarFp.getRunnersBySnapshotRef(ref, options).then((request) => request(axios, basePath));
+        getRunnersByArtifactRef(artifactRef: string, options?: RawAxiosRequestConfig): AxiosPromise<Array<RunnerArtifactCacheDto>> {
+            return localVarFp.getRunnersByArtifactRef(artifactRef, options).then((request) => request(axios, basePath));
         },
         /**
          *
@@ -869,14 +869,14 @@ export class RunnersApi extends BaseAPI {
 
     /**
      *
-     * @summary Get runners by snapshot ref
-     * @param {string} ref Snapshot ref
+     * @summary Get runners by artifact ref
+     * @param {string} artifactRef Artifact ref
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
      * @memberof RunnersApi
      */
-    public getRunnersBySnapshotRef(ref: string, options?: RawAxiosRequestConfig) {
-        return RunnersApiFp(this.configuration).getRunnersBySnapshotRef(ref, options).then((request) => request(this.axios, this.basePath));
+    public getRunnersByArtifactRef(artifactRef: string, options?: RawAxiosRequestConfig) {
+        return RunnersApiFp(this.configuration).getRunnersByArtifactRef(artifactRef, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**

@@ -14,7 +14,7 @@ export class Migration1753100751731 implements MigrationInterface {
     await queryRunner.query(`
       UPDATE "organization_role"
       SET "name" = 'Snapshots Admin', "description" = 'Grants admin access to snapshots in the organization'
-      WHERE "id" = '${GlobalOrganizationRolesIds.SNAPSHOTS_ADMIN}'
+      WHERE "id" = '${GlobalOrganizationRolesIds.TEMPLATES_ADMIN}'
     `)
   }
 
@@ -22,7 +22,7 @@ export class Migration1753100751731 implements MigrationInterface {
     await queryRunner.query(`
       UPDATE "organization_role"
       SET "name" = 'Images Admin', "description" = 'Grants admin access to images in the organization'
-      WHERE "id" = '${GlobalOrganizationRolesIds.SNAPSHOTS_ADMIN}'
+      WHERE "id" = '${GlobalOrganizationRolesIds.TEMPLATES_ADMIN}'
     `)
   }
 }

@@ -47,7 +47,7 @@ export enum AuditAction {
   RECOVER = 'recover',
   REGENERATE_PROXY_API_KEY = 'regenerate_proxy_api_key',
   REGENERATE_SSH_GATEWAY_API_KEY = 'regenerate_ssh_gateway_api_key',
-  REGENERATE_SNAPSHOT_MANAGER_CREDENTIALS = 'regenerate_snapshot_manager_credentials',
+  REGENERATE_ARTIFACT_REGISTRY_CREDENTIALS = 'regenerate_artifact_registry_credentials',
   // toolbox actions (must be prefixed with 'toolbox_')
   TOOLBOX_DELETE_FILE = 'toolbox_delete_file',
   TOOLBOX_DOWNLOAD_FILE = 'toolbox_download_file',

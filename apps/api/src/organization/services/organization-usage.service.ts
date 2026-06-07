@@ -12,7 +12,7 @@ import { Redis } from 'ioredis'
 import { In, Repository } from 'typeorm'
 import { SANDBOX_STATES_CONSUMING_COMPUTE } from '../constants/sandbox-states-consuming-compute.constant'
 import { SANDBOX_STATES_CONSUMING_DISK } from '../constants/sandbox-states-consuming-disk.constant'
-import { SNAPSHOT_STATES_CONSUMING_RESOURCES } from '../constants/snapshot-states-consuming-resources.constant'
+import { TEMPLATE_STATES_CONSUMING_RESOURCES } from '../constants/template-states-consuming-resources.constant'
 import { VOLUME_STATES_CONSUMING_RESOURCES } from '../constants/volume-states-consuming-resources.constant'
 import { OrganizationUsageOverviewDto, RegionUsageOverviewDto } from '../dto/organization-usage-overview.dto'
 import {
@@ -21,10 +21,10 @@ import {
   SandboxUsageOverviewWithPendingInternalDto,
 } from '../dto/sandbox-usage-overview-internal.dto'
 import {
-  PendingSnapshotUsageOverviewInternalDto,
-  SnapshotUsageOverviewInternalDto,
-  SnapshotUsageOverviewWithPendingInternalDto,
-} from '../dto/snapshot-usage-overview-internal.dto'
+  PendingTemplateUsageOverviewInternalDto,
+  TemplateUsageOverviewInternalDto,
+  TemplateUsageOverviewWithPendingInternalDto,
+} from '../dto/template-usage-overview-internal.dto'
 import {
   PendingVolumeUsageOverviewInternalDto,
   VolumeUsageOverviewInternalDto,
@@ -34,14 +34,14 @@ import { Organization } from '../entities/organization.entity'
 import { OrganizationUsageQuotaType, OrganizationUsageResourceType } from '../helpers/organization-usage.helper'
 import { RedisLockProvider } from '../../sandbox/common/redis-lock.provider'
 import { SandboxEvents } from '../../sandbox/constants/sandbox-events.constants'
-import { SnapshotEvents } from '../../sandbox/constants/snapshot-events'
+import { BoxTemplateEvents } from '../../sandbox/constants/box-template-events'
 import { VolumeEvents } from '../../sandbox/constants/volume-events'
-import { Snapshot } from '../../sandbox/entities/snapshot.entity'
+import { BoxTemplate } from '../../sandbox/entities/box-template.entity'
 import { Volume } from '../../sandbox/entities/volume.entity'
 import { SandboxCreatedEvent } from '../../sandbox/events/sandbox-create.event'
 import { SandboxStateUpdatedEvent } from '../../sandbox/events/sandbox-state-updated.event'
-import { SnapshotCreatedEvent } from '../../sandbox/events/snapshot-created.event'
-import { SnapshotStateUpdatedEvent } from '../../sandbox/events/snapshot-state-updated.event'
+import { BoxTemplateCreatedEvent } from '../../sandbox/events/box-template-created.event'
+import { BoxTemplateStateUpdatedEvent } from '../../sandbox/events/box-template-state-updated.event'
 import { VolumeCreatedEvent } from '../../sandbox/events/volume-created.event'
 import { VolumeStateUpdatedEvent } from '../../sandbox/events/volume-state-updated.event'
 import { SandboxDesiredState } from '../../sandbox/enums/sandbox-desired-state.enum'
@@ -68,8 +68,8 @@ export class OrganizationUsageService {
     @InjectRepository(Organization)
     private readonly organizationRepository: Repository<Organization>,
     private readonly sandboxRepository: SandboxRepository,
-    @InjectRepository(Snapshot)
-    private readonly snapshotRepository: Repository<Snapshot>,
+    @InjectRepository(BoxTemplate)
+    private readonly boxTemplateRepository: Repository<BoxTemplate>,
     @InjectRepository(Volume)
     private readonly volumeRepository: Repository<Volume>,
     private readonly redisLockProvider: RedisLockProvider,
@@ -115,14 +115,14 @@ export class OrganizationUsageService {
       }),
     )
 
-    const snapshotUsage = await this.getSnapshotUsageOverview(organizationId)
+    const templateUsage = await this.getTemplateUsageOverview(organizationId)
     const volumeUsage = await this.getVolumeUsageOverview(organizationId)
 
     return {
       regionUsage,
-      totalSnapshotQuota: organization.snapshotQuota,
+      totalTemplateQuota: organization.templateQuota,
       totalVolumeQuota: organization.volumeQuota,
-      currentSnapshotUsage: snapshotUsage.currentSnapshotUsage,
+      currentTemplateUsage: templateUsage.currentTemplateUsage,
       currentVolumeUsage: volumeUsage.currentVolumeUsage,
     }
   }
@@ -189,12 +189,12 @@ export class OrganizationUsageService {
   }
 
   /**
-   * Get the current and pending usage overview for snapshot-related organization quotas.
+   * Get the current and pending usage overview for template-related organization quotas.
    *
    * @param organizationId
    */
-  async getSnapshotUsageOverview(organizationId: string): Promise<SnapshotUsageOverviewWithPendingInternalDto> {
-    let cachedUsageOverview = await this.getCachedSnapshotUsageOverview(organizationId)
+  async getTemplateUsageOverview(organizationId: string): Promise<TemplateUsageOverviewWithPendingInternalDto> {
+    let cachedUsageOverview = await this.getCachedTemplateUsageOverview(organizationId)
 
     // cache hit
     if (cachedUsageOverview) {
@@ -202,12 +202,12 @@ export class OrganizationUsageService {
     }
 
     // cache miss, wait for lock
-    const lockKey = `org:${organizationId}:fetch-snapshot-usage-from-db`
+    const lockKey = `org:${organizationId}:fetch-template-usage-from-db`
     await this.redisLockProvider.waitForLock(lockKey, 60)
 
     try {
       // check if cache was updated while waiting for lock
-      cachedUsageOverview = await this.getCachedSnapshotUsageOverview(organizationId)
+      cachedUsageOverview = await this.getCachedTemplateUsageOverview(organizationId)
 
       // cache hit
       if (cachedUsageOverview) {
@@ -215,10 +215,10 @@ export class OrganizationUsageService {
       }
 
       // cache miss, fetch from db
-      const usageOverview = await this.fetchSnapshotUsageFromDb(organizationId)
+      const usageOverview = await this.fetchTemplateUsageFromDb(organizationId)
 
       // get pending usage separately since it's not stored in DB
-      const pendingUsageOverview = await this.getCachedPendingSnapshotUsageOverview(organizationId)
+      const pendingUsageOverview = await this.getCachedPendingTemplateUsageOverview(organizationId)
 
       return {
         ...usageOverview,
@@ -418,13 +418,13 @@ export class OrganizationUsageService {
   }
 
   /**
-   * Get the cached overview for current and pending usage for snapshot-related organization quotas.
+   * Get the cached overview for current and pending usage for template-related organization quotas.
    *
    * @param organizationId
    */
-  private async getCachedSnapshotUsageOverview(
+  private async getCachedTemplateUsageOverview(
     organizationId: string,
-  ): Promise<SnapshotUsageOverviewWithPendingInternalDto | null> {
+  ): Promise<TemplateUsageOverviewWithPendingInternalDto | null> {
     const script = `
       return {
         redis.call("GET", KEYS[1]),
@@ -434,48 +434,48 @@ export class OrganizationUsageService {
     const result = (await this.redis.eval(
       script,
       2,
-      this.getCurrentQuotaUsageCacheKey(organizationId, 'snapshot_count'),
-      this.getPendingQuotaUsageCacheKey(organizationId, 'snapshot_count'),
+      this.getCurrentQuotaUsageCacheKey(organizationId, 'template_count'),
+      this.getPendingQuotaUsageCacheKey(organizationId, 'template_count'),
     )) as (string | null)[]
 
-    const [currentSnapshotUsage, pendingSnapshotUsage] = result
+    const [currentTemplateUsage, pendingTemplateUsage] = result
 
     // Cache miss
-    if (currentSnapshotUsage === null) {
+    if (currentTemplateUsage === null) {
       return null
     }
 
     // Check cache staleness for current usage
-    const isStale = await this.isCacheStale(organizationId, 'snapshot')
+    const isStale = await this.isCacheStale(organizationId, 'template')
 
     if (isStale) {
       return null
     }
 
     // Validate current usage values are non-negative numbers
-    const parsedCurrentSnapshotUsage = this.parseNonNegativeCachedValue(currentSnapshotUsage)
+    const parsedCurrentTemplateUsage = this.parseNonNegativeCachedValue(currentTemplateUsage)
 
-    if (parsedCurrentSnapshotUsage === null) {
+    if (parsedCurrentTemplateUsage === null) {
       return null
     }
 
     // Parse pending usage values (null is acceptable)
-    const parsedPendingSnapshotUsage = this.parseNonNegativeCachedValue(pendingSnapshotUsage)
+    const parsedPendingTemplateUsage = this.parseNonNegativeCachedValue(pendingTemplateUsage)
 
     return {
-      currentSnapshotUsage: parsedCurrentSnapshotUsage,
-      pendingSnapshotUsage: parsedPendingSnapshotUsage,
+      currentTemplateUsage: parsedCurrentTemplateUsage,
+      pendingTemplateUsage: parsedPendingTemplateUsage,
     }
   }
 
   /**
-   * Get the cached pending usage overview for snapshot-related organization quotas.
+   * Get the cached pending usage overview for template-related organization quotas.
    *
    * @param organizationId
    */
-  private async getCachedPendingSnapshotUsageOverview(
+  private async getCachedPendingTemplateUsageOverview(
     organizationId: string,
-  ): Promise<PendingSnapshotUsageOverviewInternalDto> {
+  ): Promise<PendingTemplateUsageOverviewInternalDto> {
     const script = `
       return {
         redis.call("GET", KEYS[1])
@@ -484,16 +484,16 @@ export class OrganizationUsageService {
     const result = (await this.redis.eval(
       script,
       1,
-      this.getPendingQuotaUsageCacheKey(organizationId, 'snapshot_count'),
+      this.getPendingQuotaUsageCacheKey(organizationId, 'template_count'),
     )) as (string | null)[]
 
-    const [pendingSnapshotUsage] = result
+    const [pendingTemplateUsage] = result
 
     // Parse pending usage values (null is acceptable)
-    const parsedPendingSnapshotUsage = this.parseNonNegativeCachedValue(pendingSnapshotUsage)
+    const parsedPendingTemplateUsage = this.parseNonNegativeCachedValue(pendingTemplateUsage)
 
     return {
-      pendingSnapshotUsage: parsedPendingSnapshotUsage,
+      pendingTemplateUsage: parsedPendingTemplateUsage,
     }
   }
 
@@ -653,27 +653,27 @@ export class OrganizationUsageService {
   }
 
   /**
-   * Fetch the current usage overview for snapshot-related organization quotas from the database and cache the results.
+   * Fetch the current usage overview for template-related organization quotas from the database and cache the results.
    *
    * @param organizationId
    */
-  private async fetchSnapshotUsageFromDb(organizationId: string): Promise<SnapshotUsageOverviewInternalDto> {
+  private async fetchTemplateUsageFromDb(organizationId: string): Promise<TemplateUsageOverviewInternalDto> {
     // fetch from db
-    const snapshotUsage = await this.snapshotRepository.count({
+    const templateUsage = await this.boxTemplateRepository.count({
       where: {
         organizationId,
-        state: In(SNAPSHOT_STATES_CONSUMING_RESOURCES),
+        state: In(TEMPLATE_STATES_CONSUMING_RESOURCES),
       },
     })
 
     // cache the result
-    const cacheKey = this.getCurrentQuotaUsageCacheKey(organizationId, 'snapshot_count')
-    await this.redis.setex(cacheKey, this.CACHE_TTL_SECONDS, snapshotUsage)
+    const cacheKey = this.getCurrentQuotaUsageCacheKey(organizationId, 'template_count')
+    await this.redis.setex(cacheKey, this.CACHE_TTL_SECONDS, templateUsage)
 
-    await this.resetCacheStaleness(organizationId, 'snapshot')
+    await this.resetCacheStaleness(organizationId, 'template')
 
     return {
-      currentSnapshotUsage: snapshotUsage,
+      currentTemplateUsage: templateUsage,
     }
   }
 
@@ -710,7 +710,7 @@ export class OrganizationUsageService {
     quotaType: 'cpu' | 'memory' | 'disk',
     regionId: string,
   ): string
-  private getCurrentQuotaUsageCacheKey(organizationId: string, quotaType: 'snapshot_count' | 'volume_count'): string
+  private getCurrentQuotaUsageCacheKey(organizationId: string, quotaType: 'template_count' | 'volume_count'): string
   private getCurrentQuotaUsageCacheKey(
     organizationId: string,
     quotaType: OrganizationUsageQuotaType,
@@ -727,7 +727,7 @@ export class OrganizationUsageService {
     quotaType: 'cpu' | 'memory' | 'disk',
     regionId: string,
   ): string
-  private getPendingQuotaUsageCacheKey(organizationId: string, quotaType: 'snapshot_count' | 'volume_count'): string
+  private getPendingQuotaUsageCacheKey(organizationId: string, quotaType: 'template_count' | 'volume_count'): string
   private getPendingQuotaUsageCacheKey(
     organizationId: string,
     quotaType: OrganizationUsageQuotaType,
@@ -749,7 +749,7 @@ export class OrganizationUsageService {
   ): Promise<void>
   private async updateCurrentQuotaUsage(
     organizationId: string,
-    quotaType: 'snapshot_count' | 'volume_count',
+    quotaType: 'template_count' | 'volume_count',
     delta: number,
   ): Promise<void>
   private async updateCurrentQuotaUsage(
@@ -785,7 +785,7 @@ export class OrganizationUsageService {
         currentQuotaUsageCacheKey = this.getCurrentQuotaUsageCacheKey(organizationId, quotaType, regionId)
         pendingQuotaUsageCacheKey = this.getPendingQuotaUsageCacheKey(organizationId, quotaType, regionId)
         break
-      case 'snapshot_count':
+      case 'template_count':
       case 'volume_count':
         currentQuotaUsageCacheKey = this.getCurrentQuotaUsageCacheKey(organizationId, quotaType)
         pendingQuotaUsageCacheKey = this.getPendingQuotaUsageCacheKey(organizationId, quotaType)
@@ -969,7 +969,7 @@ export class OrganizationUsageService {
   }
 
   /**
-   * Increments the pending usage for snapshot-related organization quotas.
+   * Increments the pending usage for template-related organization quotas.
    *
    * Pending usage is used to protect against race conditions to prevent quota abuse.
    *
@@ -980,30 +980,30 @@ export class OrganizationUsageService {
    * As a safeguard, an expiration time is set on the pending usage cache to prevent lockout for new operations.
    *
    * @param organizationId
-   * @param snapshotCount - The count of snapshots to increment.
+   * @param templateCount - The count of templates to increment.
    */
-  async incrementPendingSnapshotUsage(organizationId: string, snapshotCount: number): Promise<void> {
+  async incrementPendingTemplateUsage(organizationId: string, templateCount: number): Promise<void> {
     const script = `
-      local snapshotCountKey = KEYS[1]
+      local templateCountKey = KEYS[1]
 
-      local snapshotCountIncrement = tonumber(ARGV[1])
+      local templateCountIncrement = tonumber(ARGV[1])
       local ttl = tonumber(ARGV[2])
 
-      redis.call("INCRBY", snapshotCountKey, snapshotCountIncrement)
-      redis.call("EXPIRE", snapshotCountKey, ttl)
+      redis.call("INCRBY", templateCountKey, templateCountIncrement)
+      redis.call("EXPIRE", templateCountKey, ttl)
     `
 
     await this.redis.eval(
       script,
       1,
-      this.getPendingQuotaUsageCacheKey(organizationId, 'snapshot_count'),
-      snapshotCount.toString(),
+      this.getPendingQuotaUsageCacheKey(organizationId, 'template_count'),
+      templateCount.toString(),
       this.CACHE_TTL_SECONDS.toString(),
     )
   }
 
   /**
-   * Decrements the pending usage for snapshot-related organization quotas.
+   * Decrements the pending usage for template-related organization quotas.
    *
    * Use this method to roll back pending usage after incrementing it for an action that was subsequently rejected.
    *
@@ -1014,25 +1014,25 @@ export class OrganizationUsageService {
    * When the user action is complete, this pending usage will be transfered to the actual usage.
    *
    * @param organizationId
-   * @param snapshotCount - If provided, the count of snapshots to decrement.
+   * @param templateCount - If provided, the count of templates to decrement.
    */
-  async decrementPendingSnapshotUsage(organizationId: string, snapshotCount?: number): Promise<void> {
+  async decrementPendingTemplateUsage(organizationId: string, templateCount?: number): Promise<void> {
     // decrement the pending usage for necessary quota types
     const script = `
-      local snapshotCountKey = KEYS[1]
+      local templateCountKey = KEYS[1]
 
-      local snapshotCountDecrement = tonumber(ARGV[1])
+      local templateCountDecrement = tonumber(ARGV[1])
 
-      if snapshotCountDecrement then
-        redis.call("DECRBY", snapshotCountKey, snapshotCountDecrement)
+      if templateCountDecrement then
+        redis.call("DECRBY", templateCountKey, templateCountDecrement)
       end
     `
 
     await this.redis.eval(
       script,
       1,
-      this.getPendingQuotaUsageCacheKey(organizationId, 'snapshot_count'),
-      snapshotCount?.toString() ?? '0',
+      this.getPendingQuotaUsageCacheKey(organizationId, 'template_count'),
+      templateCount?.toString() ?? '0',
     )
   }
 
@@ -1151,7 +1151,7 @@ export class OrganizationUsageService {
    * Reset the timestamp of the last time the cached usage of organization quotas for a given resource type was populated from the database.
    */
   private resetCacheStaleness(organizationId: string, resourceType: 'sandbox', regionId: string): Promise<void>
-  private resetCacheStaleness(organizationId: string, resourceType: 'snapshot' | 'volume'): Promise<void>
+  private resetCacheStaleness(organizationId: string, resourceType: 'template' | 'volume'): Promise<void>
   private async resetCacheStaleness(
     organizationId: string,
     resourceType: OrganizationUsageResourceType,
@@ -1167,7 +1167,7 @@ export class OrganizationUsageService {
    * @returns `true` if the cached usage is stale, `false` otherwise
    */
   private async isCacheStale(organizationId: string, resourceType: 'sandbox', regionId: string): Promise<boolean>
-  private async isCacheStale(organizationId: string, resourceType: 'snapshot' | 'volume'): Promise<boolean>
+  private async isCacheStale(organizationId: string, resourceType: 'template' | 'volume'): Promise<boolean>
   private async isCacheStale(
     organizationId: string,
     resourceType: OrganizationUsageResourceType,
@@ -1292,16 +1292,16 @@ export class OrganizationUsageService {
     }
   }
 
-  @OnEvent(SnapshotEvents.CREATED)
-  async handleSnapshotCreated(event: SnapshotCreatedEvent) {
-    const lockKey = `snapshot:${event.snapshot.id}:quota-usage-update`
+  @OnEvent(BoxTemplateEvents.CREATED)
+  async handleTemplateCreated(event: BoxTemplateCreatedEvent) {
+    const lockKey = `template:${event.template.id}:quota-usage-update`
     await this.redisLockProvider.waitForLock(lockKey, 60)
 
     try {
-      await this.updateCurrentQuotaUsage(event.snapshot.organizationId, 'snapshot_count', 1)
+      await this.updateCurrentQuotaUsage(event.template.organizationId, 'template_count', 1)
     } catch (error) {
       this.logger.warn(
-        `Error updating cached snapshot quota usage for organization ${event.snapshot.organizationId}`,
+        `Error updating cached template quota usage for organization ${event.template.organizationId}`,
         error,
       )
     } finally {
@@ -1309,9 +1309,9 @@ export class OrganizationUsageService {
     }
   }
 
-  @OnEvent(SnapshotEvents.STATE_UPDATED)
-  async handleSnapshotStateUpdated(event: SnapshotStateUpdatedEvent) {
-    const lockKey = `snapshot:${event.snapshot.id}:quota-usage-update`
+  @OnEvent(BoxTemplateEvents.STATE_UPDATED)
+  async handleBoxTemplateStateUpdated(event: BoxTemplateStateUpdatedEvent) {
+    const lockKey = `template:${event.template.id}:quota-usage-update`
     await this.redisLockProvider.waitForLock(lockKey, 60)
 
     try {
@@ -1319,15 +1319,15 @@ export class OrganizationUsageService {
         1,
         event.oldState,
         event.newState,
-        SNAPSHOT_STATES_CONSUMING_RESOURCES,
+        TEMPLATE_STATES_CONSUMING_RESOURCES,
       )
 
       if (countDelta !== 0) {
-        await this.updateCurrentQuotaUsage(event.snapshot.organizationId, 'snapshot_count', countDelta)
+        await this.updateCurrentQuotaUsage(event.template.organizationId, 'template_count', countDelta)
       }
     } catch (error) {
       this.logger.warn(
-        `Error updating cached snapshot quota usage for organization ${event.snapshot.organizationId}`,
+        `Error updating cached template quota usage for organization ${event.template.organizationId}`,
         error,
       )
     } finally {

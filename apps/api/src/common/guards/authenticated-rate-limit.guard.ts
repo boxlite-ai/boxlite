@@ -13,6 +13,8 @@ import { Redis } from 'ioredis'
 import { OrganizationService } from '../../organization/services/organization.service'
 import { THROTTLER_SCOPE_KEY } from '../decorators/throttler-scope.decorator'
 
+type AuthenticatedRequest = Request & { user?: unknown }
+
 @Injectable()
 export class AuthenticatedRateLimitGuard extends ThrottlerGuard {
   private readonly logger = new Logger(AuthenticatedRateLimitGuard.name)
@@ -27,7 +29,7 @@ export class AuthenticatedRateLimitGuard extends ThrottlerGuard {
     super(options, storageService, reflector)
   }
 
-  protected async getTracker(req: Request): Promise<string> {
+  protected async getTracker(req: AuthenticatedRequest): Promise<string> {
     const user = req.user as any
 
     // Track by organization ID when available (shared quota per org)
@@ -53,7 +55,7 @@ export class AuthenticatedRateLimitGuard extends ThrottlerGuard {
 
   async handleRequest(requestProps: ThrottlerRequest): Promise<boolean> {
     const { context, throttler } = requestProps
-    const request = context.switchToHttp().getRequest<Request>()
+    const request = context.switchToHttp().getRequest<AuthenticatedRequest>()
     const isAuthenticated = request.user && this.isValidAuthContext(request.user)
 
     // Skip rate limiting for M2M system roles (checked AFTER auth runs)

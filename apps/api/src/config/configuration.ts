@@ -63,7 +63,7 @@ const configuration = {
     secure: process.env.SMTP_SECURE === 'true',
     from: process.env.SMTP_EMAIL_FROM || 'noreply@mail.boxlite.io',
   },
-  defaultSnapshot: process.env.DEFAULT_SNAPSHOT,
+  defaultTemplate: process.env.DEFAULT_TEMPLATE,
   dashboardUrl: process.env.DASHBOARD_URL,
   // Default to empty string - dashboard will then hit '/api'
   dashboardBaseApiUrl: process.env.DASHBOARD_BASE_API_URL || '',
@@ -278,8 +278,8 @@ const configuration = {
     maxCpuPerSandbox: parseInt(process.env.DEFAULT_ORG_QUOTA_MAX_CPU_PER_SANDBOX || '4', 10),
     maxMemoryPerSandbox: parseInt(process.env.DEFAULT_ORG_QUOTA_MAX_MEMORY_PER_SANDBOX || '8', 10),
     maxDiskPerSandbox: parseInt(process.env.DEFAULT_ORG_QUOTA_MAX_DISK_PER_SANDBOX || '10', 10),
-    snapshotQuota: parseInt(process.env.DEFAULT_ORG_QUOTA_SNAPSHOT_QUOTA || '100', 10),
-    maxSnapshotSize: parseInt(process.env.DEFAULT_ORG_QUOTA_MAX_SNAPSHOT_SIZE || '20', 10),
+    templateQuota: parseInt(process.env.DEFAULT_ORG_QUOTA_TEMPLATE_QUOTA || '100', 10),
+    maxTemplateSize: parseInt(process.env.DEFAULT_ORG_QUOTA_MAX_TEMPLATE_SIZE || '20', 10),
     volumeQuota: parseInt(process.env.DEFAULT_ORG_QUOTA_VOLUME_QUOTA || '100', 10),
   },
   defaultRegion: {
@@ -295,8 +295,8 @@ const configuration = {
     maxCpuPerSandbox: parseInt(process.env.ADMIN_MAX_CPU_PER_SANDBOX || '0', 10),
     maxMemoryPerSandbox: parseInt(process.env.ADMIN_MAX_MEMORY_PER_SANDBOX || '0', 10),
     maxDiskPerSandbox: parseInt(process.env.ADMIN_MAX_DISK_PER_SANDBOX || '0', 10),
-    snapshotQuota: parseInt(process.env.ADMIN_SNAPSHOT_QUOTA || '100', 10),
-    maxSnapshotSize: parseInt(process.env.ADMIN_MAX_SNAPSHOT_SIZE || '100', 10),
+    templateQuota: parseInt(process.env.ADMIN_TEMPLATE_QUOTA || '100', 10),
+    maxTemplateSize: parseInt(process.env.ADMIN_MAX_TEMPLATE_SIZE || '100', 10),
     volumeQuota: parseInt(process.env.ADMIN_VOLUME_QUOTA || '0', 10),
   },
   skipUserEmailVerification: process.env.SKIP_USER_EMAIL_VERIFICATION === 'true',
@@ -331,8 +331,14 @@ const configuration = {
     key: process.env.ENCRYPTION_KEY,
     salt: process.env.ENCRYPTION_SALT,
   },
-  failedSnapshotRunnerRetentionHours: parseInt(process.env.FAILED_SNAPSHOT_RUNNER_RETENTION_HOURS || '3', 10),
-  buildInfoSnapshotRunnerStalenessDays: parseInt(process.env.BUILDINFO_SNAPSHOT_RUNNER_STALENESS_DAYS || '7', 10),
+  failedRunnerArtifactCacheRetentionHours: parseInt(
+    process.env.FAILED_RUNNER_ARTIFACT_CACHE_RETENTION_HOURS || '3',
+    10,
+  ),
+  buildInfoRunnerArtifactCacheStalenessDays: parseInt(
+    process.env.BUILDINFO_RUNNER_ARTIFACT_CACHE_STALENESS_DAYS || '7',
+    10,
+  ),
 }
 
 export { configuration }

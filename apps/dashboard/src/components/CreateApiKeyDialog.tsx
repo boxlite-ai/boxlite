@@ -50,7 +50,7 @@ const isReadPermission = (permission: CreateApiKeyPermissionsEnum) => permission
 const isWritePermission = (permission: CreateApiKeyPermissionsEnum) => permission.startsWith('write:')
 const isDeletePermission = (permission: CreateApiKeyPermissionsEnum) => permission.startsWith('delete:')
 
-const IMPLICIT_READ_RESOURCES = ['Sandboxes', 'Snapshots', 'Registries', 'Regions']
+const IMPLICIT_READ_RESOURCES = ['Sandboxes', 'Images', 'Registries', 'Regions']
 
 const formSchema = z.object({
   name: z.string().min(1, 'Name is required'),

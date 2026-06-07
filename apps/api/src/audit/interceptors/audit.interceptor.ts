@@ -18,7 +18,7 @@ import {
 import { Reflector } from '@nestjs/core'
 import { Request, Response } from 'express'
 import { Observable, Subscriber, firstValueFrom } from 'rxjs'
-import { AUDIT_CONTEXT_KEY, AuditContext } from '../decorators/audit.decorator'
+import { AUDIT_CONTEXT_KEY, AuditContext, AuditTargetId } from '../decorators/audit.decorator'
 import { AuditLog, AuditLogMetadata } from '../entities/audit-log.entity'
 import { AuditAction } from '../enums/audit-action.enum'
 import { AuditService } from '../services/audit.service'
@@ -124,20 +124,28 @@ export class AuditInterceptor implements NestInterceptor {
    */
   private resolveTargetId(auditContext: AuditContext, request: RequestWithUser, result?: any): string | null {
     if (auditContext.targetIdFromResult && result) {
-      const targetId = auditContext.targetIdFromResult(result)
+      const targetId = this.normalizeTargetId(auditContext.targetIdFromResult(result))
       if (targetId) {
         return targetId
       }
     }
 
     if (auditContext.targetIdFromRequest) {
-      const targetId = auditContext.targetIdFromRequest(request)
+      const targetId = this.normalizeTargetId(auditContext.targetIdFromRequest(request))
       if (targetId) {
         return targetId
       }
     }
 
     return null
+  }
+
+  private normalizeTargetId(targetId: AuditTargetId): string | null {
+    if (Array.isArray(targetId)) {
+      return targetId[0] ?? null
+    }
+
+    return targetId ?? null
   }
 
   private resolveRequestMetadata(auditContext: AuditContext, request: RequestWithUser): AuditLogMetadata | null {

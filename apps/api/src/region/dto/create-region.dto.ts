@@ -34,12 +34,12 @@ export class CreateRegionDto {
   sshGatewayUrl?: string
 
   @ApiProperty({
-    description: 'Snapshot Manager URL for the region',
-    example: 'https://snapshot-manager.example.com',
+    description: 'Artifact Registry URL for the region',
+    example: 'https://artifact-registry.example.com',
     nullable: true,
     required: false,
   })
-  snapshotManagerUrl?: string
+  artifactRegistryUrl?: string
 }
 
 @ApiSchema({ name: 'CreateRegionResponse' })
@@ -69,31 +69,31 @@ export class CreateRegionResponseDto {
   sshGatewayApiKey?: string
 
   @ApiProperty({
-    description: 'Snapshot Manager username for the region',
+    description: 'Artifact Registry username for the region',
     example: 'boxlite',
     nullable: true,
     required: false,
   })
-  snapshotManagerUsername?: string
+  artifactRegistryUsername?: string
 
   @ApiProperty({
-    description: 'Snapshot Manager password for the region',
+    description: 'Artifact Registry password for the region',
     nullable: true,
     required: false,
   })
-  snapshotManagerPassword?: string
+  artifactRegistryPassword?: string
 
   constructor(params: {
     id: string
     proxyApiKey?: string
     sshGatewayApiKey?: string
-    snapshotManagerUsername?: string
-    snapshotManagerPassword?: string
+    artifactRegistryUsername?: string
+    artifactRegistryPassword?: string
   }) {
     this.id = params.id
     this.proxyApiKey = params.proxyApiKey
     this.sshGatewayApiKey = params.sshGatewayApiKey
-    this.snapshotManagerUsername = params.snapshotManagerUsername
-    this.snapshotManagerPassword = params.snapshotManagerPassword
+    this.artifactRegistryUsername = params.artifactRegistryUsername
+    this.artifactRegistryPassword = params.artifactRegistryPassword
   }
 }

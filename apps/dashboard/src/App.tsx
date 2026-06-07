@@ -50,7 +50,7 @@ import Regions from './pages/Regions'
 import Registries from './pages/Registries'
 import Runners from './pages/Runners'
 import Sandboxes from './pages/Sandboxes'
-import Snapshots from './pages/Snapshots'
+import Templates from './pages/Templates'
 import Spending from './pages/Spending'
 import Volumes from './pages/Volumes'
 import Wallet from './pages/Wallet'
@@ -190,7 +190,11 @@ function App() {
           <Route path={getRouteSubPath(RoutePath.SANDBOX_VNC)} element={<SandboxVncFullscreen />} />
           <Route path={getRouteSubPath(RoutePath.SANDBOX_DETAILS)} element={<SandboxDetails />} />
         </Route>
-        <Route path={getRouteSubPath(RoutePath.SNAPSHOTS)} element={<Snapshots />} />
+        <Route path={getRouteSubPath(RoutePath.IMAGES)} element={<Templates />} />
+        <Route
+          path={getRouteSubPath(RoutePath.LEGACY_SNAPSHOTS)}
+          element={<Navigate to={getRouteSubPath(RoutePath.IMAGES)} replace />}
+        />
         <Route path={getRouteSubPath(RoutePath.REGISTRIES)} element={<Registries />} />
         <Route
           path={getRouteSubPath(RoutePath.VOLUMES)}

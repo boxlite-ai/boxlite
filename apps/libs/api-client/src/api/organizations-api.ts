@@ -22,6 +22,8 @@ import { DUMMY_BASE_URL, assertParamExists, setApiKeyToObject, setBasicAuthToObj
 // @ts-ignore
 import { BASE_PATH, COLLECTION_FORMATS, type RequestArgs, BaseAPI, RequiredError, operationServerMap } from '../base';
 // @ts-ignore
+import type { ArtifactRegistryCredentials } from '../models';
+// @ts-ignore
 import type { CreateOrganization } from '../models';
 // @ts-ignore
 import type { CreateOrganizationInvitation } from '../models';
@@ -53,8 +55,6 @@ import type { RegenerateApiKeyResponse } from '../models';
 import type { Region } from '../models';
 // @ts-ignore
 import type { RegionQuota } from '../models';
-// @ts-ignore
-import type { SnapshotManagerCredentials } from '../models';
 // @ts-ignore
 import type { UpdateOrganizationDefaultRegion } from '../models';
 // @ts-ignore
@@ -1105,16 +1105,16 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
         },
         /**
          *
-         * @summary Regenerate proxy API key for a region
+         * @summary Regenerate artifact registry credentials for a region
          * @param {string} id Region ID
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        regenerateProxyApiKey: async (id: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+        regenerateArtifactRegistryCredentials: async (id: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
             // verify required parameter 'id' is not null or undefined
-            assertParamExists('regenerateProxyApiKey', 'id', id)
-            const localVarPath = `/regions/{id}/regenerate-proxy-api-key`
+            assertParamExists('regenerateArtifactRegistryCredentials', 'id', id)
+            const localVarPath = `/regions/{id}/regenerate-artifact-registry-credentials`
                 .replace(`{${"id"}}`, encodeURIComponent(String(id)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
@@ -1149,16 +1149,16 @@ export const OrganizationsApiAxiosParamCreator = function (configuration?: Confi
         },
         /**
          *
-         * @summary Regenerate snapshot manager credentials for a region
+         * @summary Regenerate proxy API key for a region
          * @param {string} id Region ID
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
          */
-        regenerateSnapshotManagerCredentials: async (id: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
+        regenerateProxyApiKey: async (id: string, xBoxLiteOrganizationID?: string, options: RawAxiosRequestConfig = {}): Promise<RequestArgs> => {
             // verify required parameter 'id' is not null or undefined
-            assertParamExists('regenerateSnapshotManagerCredentials', 'id', id)
-            const localVarPath = `/regions/{id}/regenerate-snapshot-manager-credentials`
+            assertParamExists('regenerateProxyApiKey', 'id', id)
+            const localVarPath = `/regions/{id}/regenerate-proxy-api-key`
                 .replace(`{${"id"}}`, encodeURIComponent(String(id)));
             // use dummy base URL string because the URL constructor only accepts absolute URLs.
             const localVarUrlObj = new URL(localVarPath, DUMMY_BASE_URL);
@@ -2093,6 +2093,20 @@ export const OrganizationsApiFp = function(configuration?: Configuration) {
         },
         /**
          *
+         * @summary Regenerate artifact registry credentials for a region
+         * @param {string} id Region ID
+         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        async regenerateArtifactRegistryCredentials(id: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<ArtifactRegistryCredentials>> {
+            const localVarAxiosArgs = await localVarAxiosParamCreator.regenerateArtifactRegistryCredentials(id, xBoxLiteOrganizationID, options);
+            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
+            const localVarOperationServerBasePath = operationServerMap['OrganizationsApi.regenerateArtifactRegistryCredentials']?.[localVarOperationServerIndex]?.url;
+            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
+        },
+        /**
+         *
          * @summary Regenerate proxy API key for a region
          * @param {string} id Region ID
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -2103,20 +2117,6 @@ export const OrganizationsApiFp = function(configuration?: Configuration) {
             const localVarAxiosArgs = await localVarAxiosParamCreator.regenerateProxyApiKey(id, xBoxLiteOrganizationID, options);
             const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
             const localVarOperationServerBasePath = operationServerMap['OrganizationsApi.regenerateProxyApiKey']?.[localVarOperationServerIndex]?.url;
-            return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
-        },
-        /**
-         *
-         * @summary Regenerate snapshot manager credentials for a region
-         * @param {string} id Region ID
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        async regenerateSnapshotManagerCredentials(id: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): Promise<(axios?: AxiosInstance, basePath?: string) => AxiosPromise<SnapshotManagerCredentials>> {
-            const localVarAxiosArgs = await localVarAxiosParamCreator.regenerateSnapshotManagerCredentials(id, xBoxLiteOrganizationID, options);
-            const localVarOperationServerIndex = configuration?.serverIndex ?? 0;
-            const localVarOperationServerBasePath = operationServerMap['OrganizationsApi.regenerateSnapshotManagerCredentials']?.[localVarOperationServerIndex]?.url;
             return (axios, basePath) => createRequestFunction(localVarAxiosArgs, globalAxios, BASE_PATH, configuration)(axios, localVarOperationServerBasePath || basePath);
         },
         /**
@@ -2558,6 +2558,17 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
         },
         /**
          *
+         * @summary Regenerate artifact registry credentials for a region
+         * @param {string} id Region ID
+         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        regenerateArtifactRegistryCredentials(id: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<ArtifactRegistryCredentials> {
+            return localVarFp.regenerateArtifactRegistryCredentials(id, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
+        },
+        /**
+         *
          * @summary Regenerate proxy API key for a region
          * @param {string} id Region ID
          * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -2566,17 +2577,6 @@ export const OrganizationsApiFactory = function (configuration?: Configuration, 
          */
         regenerateProxyApiKey(id: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<RegenerateApiKeyResponse> {
             return localVarFp.regenerateProxyApiKey(id, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
-        },
-        /**
-         *
-         * @summary Regenerate snapshot manager credentials for a region
-         * @param {string} id Region ID
-         * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-         * @param {*} [options] Override http request option.
-         * @throws {RequiredError}
-         */
-        regenerateSnapshotManagerCredentials(id: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig): AxiosPromise<SnapshotManagerCredentials> {
-            return localVarFp.regenerateSnapshotManagerCredentials(id, xBoxLiteOrganizationID, options).then((request) => request(axios, basePath));
         },
         /**
          *
@@ -3031,6 +3031,19 @@ export class OrganizationsApi extends BaseAPI {
 
     /**
      *
+     * @summary Regenerate artifact registry credentials for a region
+     * @param {string} id Region ID
+     * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     * @memberof OrganizationsApi
+     */
+    public regenerateArtifactRegistryCredentials(id: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
+        return OrganizationsApiFp(this.configuration).regenerateArtifactRegistryCredentials(id, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
+    }
+
+    /**
+     *
      * @summary Regenerate proxy API key for a region
      * @param {string} id Region ID
      * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
@@ -3040,19 +3053,6 @@ export class OrganizationsApi extends BaseAPI {
      */
     public regenerateProxyApiKey(id: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
         return OrganizationsApiFp(this.configuration).regenerateProxyApiKey(id, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
-    }
-
-    /**
-     *
-     * @summary Regenerate snapshot manager credentials for a region
-     * @param {string} id Region ID
-     * @param {string} [xBoxLiteOrganizationID] Use with JWT to specify the organization ID
-     * @param {*} [options] Override http request option.
-     * @throws {RequiredError}
-     * @memberof OrganizationsApi
-     */
-    public regenerateSnapshotManagerCredentials(id: string, xBoxLiteOrganizationID?: string, options?: RawAxiosRequestConfig) {
-        return OrganizationsApiFp(this.configuration).regenerateSnapshotManagerCredentials(id, xBoxLiteOrganizationID, options).then((request) => request(this.axios, this.basePath));
     }
 
     /**

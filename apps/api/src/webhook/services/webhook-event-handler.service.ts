@@ -8,22 +8,22 @@ import { Injectable, Logger } from '@nestjs/common'
 import { OnEvent } from '@nestjs/event-emitter'
 import { WebhookService } from './webhook.service'
 import { SandboxEvents } from '../../sandbox/constants/sandbox-events.constants'
-import { SnapshotEvents } from '../../sandbox/constants/snapshot-events'
+import { BoxTemplateEvents } from '../../sandbox/constants/box-template-events'
 import { VolumeEvents } from '../../sandbox/constants/volume-events'
 import { SandboxCreatedEvent } from '../../sandbox/events/sandbox-create.event'
 import { SandboxStateUpdatedEvent } from '../../sandbox/events/sandbox-state-updated.event'
-import { SnapshotCreatedEvent } from '../../sandbox/events/snapshot-created.event'
-import { SnapshotStateUpdatedEvent } from '../../sandbox/events/snapshot-state-updated.event'
-import { SnapshotRemovedEvent } from '../../sandbox/events/snapshot-removed.event'
+import { BoxTemplateCreatedEvent } from '../../sandbox/events/box-template-created.event'
+import { BoxTemplateStateUpdatedEvent } from '../../sandbox/events/box-template-state-updated.event'
+import { BoxTemplateRemovedEvent } from '../../sandbox/events/box-template-removed.event'
 import { VolumeCreatedEvent } from '../../sandbox/events/volume-created.event'
 import { VolumeStateUpdatedEvent } from '../../sandbox/events/volume-state-updated.event'
 import { WebhookEvent } from '../constants/webhook-events.constants'
 import {
   SandboxCreatedWebhookDto,
   SandboxStateUpdatedWebhookDto,
-  SnapshotCreatedWebhookDto,
-  SnapshotStateUpdatedWebhookDto,
-  SnapshotRemovedWebhookDto,
+  BoxTemplateCreatedWebhookDto,
+  BoxTemplateStateUpdatedWebhookDto,
+  BoxTemplateRemovedWebhookDto,
   VolumeCreatedWebhookDto,
   VolumeStateUpdatedWebhookDto,
 } from '../dto/webhook-event-payloads.dto'
@@ -62,45 +62,45 @@ export class WebhookEventHandlerService {
     }
   }
 
-  @OnEvent(SnapshotEvents.CREATED)
-  async handleSnapshotCreated(event: SnapshotCreatedEvent) {
+  @OnEvent(BoxTemplateEvents.CREATED)
+  async handleTemplateCreated(event: BoxTemplateCreatedEvent) {
     if (!this.webhookService.isEnabled()) {
       return
     }
 
     try {
-      const payload = SnapshotCreatedWebhookDto.fromEvent(event, WebhookEvent.SNAPSHOT_CREATED)
-      await this.webhookService.sendWebhook(event.snapshot.organizationId, WebhookEvent.SNAPSHOT_CREATED, payload)
+      const payload = BoxTemplateCreatedWebhookDto.fromEvent(event, WebhookEvent.TEMPLATE_CREATED)
+      await this.webhookService.sendWebhook(event.template.organizationId, WebhookEvent.TEMPLATE_CREATED, payload)
     } catch (error) {
-      this.logger.error(`Failed to send webhook for snapshot created: ${error.message}`)
+      this.logger.error(`Failed to send webhook for template created: ${error.message}`)
     }
   }
 
-  @OnEvent(SnapshotEvents.STATE_UPDATED)
-  async handleSnapshotStateUpdated(event: SnapshotStateUpdatedEvent) {
+  @OnEvent(BoxTemplateEvents.STATE_UPDATED)
+  async handleBoxTemplateStateUpdated(event: BoxTemplateStateUpdatedEvent) {
     if (!this.webhookService.isEnabled()) {
       return
     }
 
     try {
-      const payload = SnapshotStateUpdatedWebhookDto.fromEvent(event, WebhookEvent.SNAPSHOT_STATE_UPDATED)
-      await this.webhookService.sendWebhook(event.snapshot.organizationId, WebhookEvent.SNAPSHOT_STATE_UPDATED, payload)
+      const payload = BoxTemplateStateUpdatedWebhookDto.fromEvent(event, WebhookEvent.TEMPLATE_STATE_UPDATED)
+      await this.webhookService.sendWebhook(event.template.organizationId, WebhookEvent.TEMPLATE_STATE_UPDATED, payload)
     } catch (error) {
-      this.logger.error(`Failed to send webhook for snapshot state updated: ${error.message}`)
+      this.logger.error(`Failed to send webhook for template state updated: ${error.message}`)
     }
   }
 
-  @OnEvent(SnapshotEvents.REMOVED)
-  async handleSnapshotRemoved(event: SnapshotRemovedEvent) {
+  @OnEvent(BoxTemplateEvents.REMOVED)
+  async handleTemplateRemoved(event: BoxTemplateRemovedEvent) {
     if (!this.webhookService.isEnabled()) {
       return
     }
 
     try {
-      const payload = SnapshotRemovedWebhookDto.fromEvent(event, WebhookEvent.SNAPSHOT_REMOVED)
-      await this.webhookService.sendWebhook(event.snapshot.organizationId, WebhookEvent.SNAPSHOT_REMOVED, payload)
+      const payload = BoxTemplateRemovedWebhookDto.fromEvent(event, WebhookEvent.TEMPLATE_REMOVED)
+      await this.webhookService.sendWebhook(event.template.organizationId, WebhookEvent.TEMPLATE_REMOVED, payload)
     } catch (error) {
-      this.logger.error(`Failed to send webhook for snapshot removed: ${error.message}`)
+      this.logger.error(`Failed to send webhook for template removed: ${error.message}`)
     }
   }
 

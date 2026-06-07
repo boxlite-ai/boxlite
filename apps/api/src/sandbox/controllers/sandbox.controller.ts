@@ -81,6 +81,7 @@ import { SANDBOX_EVENT_CHANNEL } from '../../common/constants/constants'
 import { RequireFlagsEnabled } from '@openfeature/nestjs-sdk'
 import { FeatureFlags } from '../../common/constants/feature-flags'
 import { RegionSandboxAccessGuard } from '../guards/region-sandbox-access.guard'
+import { SystemRole } from '../../user/enums/system-role.enum'
 
 @ApiTags('sandbox')
 @Controller('sandbox')
@@ -181,7 +182,7 @@ export class SandboxController {
       labels,
       includeErroredDeleted: includeErroredDestroyed,
       states,
-      snapshots,
+      templates,
       regions,
       minCpu,
       maxCpu,
@@ -205,7 +206,7 @@ export class SandboxController {
         labels: labels ? JSON.parse(labels) : undefined,
         includeErroredDestroyed,
         states,
-        snapshots,
+        templates,
         regionIds: regions,
         minCpu,
         maxCpu,
@@ -252,7 +253,7 @@ export class SandboxController {
     requestMetadata: {
       body: (req: TypedRequest<CreateSandboxDto>) => ({
         name: req.body?.name,
-        snapshot: req.body?.snapshot,
+        templateId: req.body?.templateId ?? req.body?.snapshot,
         user: req.body?.user,
         env: req.body?.env
           ? Object.fromEntries(Object.keys(req.body?.env).map((key) => [key, MASKED_AUDIT_VALUE]))
@@ -277,21 +278,33 @@ export class SandboxController {
   })
   async createSandbox(
     @AuthContext() authContext: OrganizationAuthContext,
-    @Body() createSandboxDto: CreateSandboxDto,
+    @Body() requestDto: CreateSandboxDto,
   ): Promise<SandboxDto> {
+    const createSandboxDto = this.normalizeTemplateSource(requestDto)
     const organization = authContext.organization
     let sandbox: SandboxDto
+    const canUseBuildInfoSource = authContext.role === SystemRole.ADMIN
 
-    if (createSandboxDto.buildInfo) {
-      if (createSandboxDto.snapshot) {
-        throw new BadRequestError('Cannot specify a snapshot when using a build info entry')
+    if (createSandboxDto.templateId) {
+      if (createSandboxDto.buildInfo) {
+        throw new BadRequestError('Cannot specify build info when using a template')
+      }
+      if (createSandboxDto.gpu !== undefined) {
+        throw new BadRequestError('Cannot specify GPU resources when using a template')
+      }
+      sandbox = await this.sandboxService.createFromTemplate(createSandboxDto, organization)
+      if (sandbox.state === SandboxState.STARTED) {
+        return sandbox
+      }
+
+      await this.waitForSandboxStarted(sandbox, 30)
+    } else if (createSandboxDto.buildInfo) {
+      if (!canUseBuildInfoSource) {
+        throw new BadRequestError('Choose one of the approved templates to create a box')
       }
       sandbox = await this.sandboxService.createFromBuildInfo(createSandboxDto, organization)
     } else {
-      if (createSandboxDto.cpu || createSandboxDto.gpu || createSandboxDto.memory || createSandboxDto.disk) {
-        throw new BadRequestError('Cannot specify Sandbox resources when using a snapshot')
-      }
-      sandbox = await this.sandboxService.createFromSnapshot(createSandboxDto, organization)
+      sandbox = await this.sandboxService.createFromTemplate(createSandboxDto, organization)
       if (sandbox.state === SandboxState.STARTED) {
         return sandbox
       }
@@ -300,6 +313,24 @@ export class SandboxController {
     }
 
     return sandbox
+  }
+
+  private normalizeTemplateSource(createSandboxDto: CreateSandboxDto): CreateSandboxDto {
+    const templateId = createSandboxDto.templateId?.trim()
+    const legacySnapshot = createSandboxDto.snapshot?.trim()
+
+    if (templateId && legacySnapshot && templateId !== legacySnapshot) {
+      throw new BadRequestError('Use either templateId or deprecated snapshot, not both')
+    }
+
+    if (!templateId && legacySnapshot) {
+      return {
+        ...createSandboxDto,
+        templateId: legacySnapshot,
+      }
+    }
+
+    return createSandboxDto
   }
 
   @Get('for-runner')
@@ -1104,7 +1135,7 @@ export class SandboxController {
 
     const logProxy = new LogProxy(
       runner.apiUrl,
-      sandbox.buildInfo.snapshotRef.split(':')[0],
+      sandbox.buildInfo.artifactRef.split(':')[0],
       runner.apiKey,
       follow === true,
       req,
