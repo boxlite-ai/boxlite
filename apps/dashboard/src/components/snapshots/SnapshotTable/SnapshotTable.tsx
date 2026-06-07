@@ -258,13 +258,13 @@ export function SnapshotTable({
             ) : (
               <TableEmptyState
                 colSpan={columns.length}
-                message="No Snapshots yet."
+                message="No Images yet."
                 icon={<Box className="w-8 h-8" />}
                 description={
                   <div className="space-y-2">
                     <p>
-                      Snapshots are reproducible, pre-configured environments based on any Docker-compatible image. Use
-                      them to define language runtimes, dependencies, and tools for your sandboxes.
+                      Images are reproducible, pre-configured environments based on any Docker-compatible container
+                      image. Use them to define language runtimes, dependencies, and tools for your sandboxes.
                     </p>
                     <p>
                       Create one from the Dashboard, CLI, or SDK to get started. <br />
@@ -274,7 +274,7 @@ export function SnapshotTable({
                         rel="noopener noreferrer"
                         className="text-primary hover:underline font-medium"
                       >
-                        Read the Snapshots guide
+                        Read the Images guide
                       </a>{' '}
                       to learn more.
                     </p>
@@ -288,7 +288,7 @@ export function SnapshotTable({
       <Pagination
         table={table}
         selectionEnabled={deletePermitted}
-        entityName="Snapshots"
+        entityName="Images"
         totalItems={totalItems}
         className="mt-4"
       />

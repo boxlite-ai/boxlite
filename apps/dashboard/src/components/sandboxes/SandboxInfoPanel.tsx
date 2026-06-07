@@ -76,7 +76,7 @@ export function SandboxInfoPanel({ sandbox, getRegionName }: SandboxInfoPanelPro
             <CopyButton value={sandbox.target} tooltipText="Copy" size="icon-xs" />
           </div>
         </InfoRow>
-        <InfoRow label="Snapshot" className="-mr-2">
+        <InfoRow label="Image" className="-mr-2">
           {sandbox.snapshot ? (
             <div className="flex items-center gap-1 min-w-0">
               <span className="truncate font-mono text-sm">{sandbox.snapshot}</span>

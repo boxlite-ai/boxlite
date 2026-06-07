@@ -77,7 +77,7 @@ export function SandboxTableHeader({
   const sortableColumns = [
     { id: 'name', label: 'Name' },
     { id: 'state', label: 'State' },
-    { id: 'snapshot', label: 'Snapshot' },
+    { id: 'snapshot', label: 'Image' },
     { id: 'region', label: 'Region' },
     { id: 'lastEvent', label: 'Last Event' },
   ]
@@ -243,7 +243,7 @@ export function SandboxTableHeader({
             <DropdownMenuSub>
               <DropdownMenuSubTrigger>
                 <Camera className="w-4 h-4" />
-                Snapshot
+                Image
               </DropdownMenuSubTrigger>
               <DropdownMenuPortal>
                 <DropdownMenuSubContent className="p-0 w-64">

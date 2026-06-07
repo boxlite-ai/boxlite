@@ -28,20 +28,20 @@ interface BulkActionData {
 }
 
 function getBulkActionData(action: SnapshotBulkAction, count: number): BulkActionData {
-  const countText = count === 1 ? 'this snapshot' : `these ${count} selected snapshots`
+  const countText = count === 1 ? 'this image' : `these ${count} selected images`
 
   switch (action) {
     case SnapshotBulkAction.Delete:
       return {
-        title: 'Delete Snapshots',
+        title: 'Delete Images',
         description: `Are you sure you want to delete ${countText}? This action cannot be undone.`,
         buttonLabel: 'Delete',
         buttonVariant: 'destructive',
       }
     case SnapshotBulkAction.Deactivate:
       return {
-        title: 'Deactivate Snapshots',
-        description: `Are you sure you want to deactivate ${countText}? Deactivated snapshots can be reactivated later.`,
+        title: 'Deactivate Images',
+        description: `Are you sure you want to deactivate ${countText}? Deactivated images can be reactivated later.`,
         buttonLabel: 'Deactivate',
       }
   }

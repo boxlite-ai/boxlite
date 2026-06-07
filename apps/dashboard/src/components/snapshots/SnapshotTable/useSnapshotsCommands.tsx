@@ -68,7 +68,7 @@ export function useSnapshotsCommands({
     if (writePermitted && onCreateSnapshot) {
       commands.push({
         id: 'create-snapshot',
-        label: 'Create Snapshot',
+        label: 'Create Image',
         icon: <PlusIcon className="w-4 h-4" />,
         onSelect: onCreateSnapshot,
       })
@@ -77,7 +77,7 @@ export function useSnapshotsCommands({
     if (selectableCount !== selectedCount) {
       commands.push({
         id: 'select-all-snapshots',
-        label: 'Select All Snapshots',
+        label: 'Select All Images',
         icon: <CheckSquare2Icon className="w-4 h-4" />,
         onSelect: () => toggleAllRowsSelected(true),
         chainable: true,
@@ -87,7 +87,7 @@ export function useSnapshotsCommands({
     if (selectedCount > 0) {
       commands.push({
         id: 'deselect-all-snapshots',
-        label: 'Deselect All Snapshots',
+        label: 'Deselect All Images',
         icon: <MinusSquareIcon className="w-4 h-4" />,
         onSelect: () => toggleAllRowsSelected(false),
         chainable: true,
@@ -97,7 +97,7 @@ export function useSnapshotsCommands({
     if (writePermitted && bulkActionCounts.deactivatable > 0) {
       commands.push({
         id: 'deactivate-snapshots',
-        label: `Deactivate ${pluralize(bulkActionCounts.deactivatable, 'Snapshot', 'Snapshots')}`,
+        label: `Deactivate ${pluralize(bulkActionCounts.deactivatable, 'Image', 'Images')}`,
         icon: <PauseIcon className="w-4 h-4" />,
         onSelect: onDeactivate,
       })
@@ -106,7 +106,7 @@ export function useSnapshotsCommands({
     if (writePermitted && bulkActionCounts.activatable > 0) {
       commands.push({
         id: 'activate-snapshots',
-        label: `Activate ${pluralize(bulkActionCounts.activatable, 'Snapshot', 'Snapshots')}`,
+        label: `Activate ${pluralize(bulkActionCounts.activatable, 'Image', 'Images')}`,
         icon: <PlayIcon className="w-4 h-4" />,
         onSelect: onActivate,
       })
@@ -115,7 +115,7 @@ export function useSnapshotsCommands({
     if (deletePermitted && bulkActionCounts.deletable > 0) {
       commands.push({
         id: 'delete-snapshots',
-        label: `Delete ${pluralize(bulkActionCounts.deletable, 'Snapshot', 'Snapshots')}`,
+        label: `Delete ${pluralize(bulkActionCounts.deletable, 'Image', 'Images')}`,
         icon: <TrashIcon className="w-4 h-4" />,
         onSelect: onDelete,
       })
@@ -135,5 +135,5 @@ export function useSnapshotsCommands({
     onCreateSnapshot,
   ])
 
-  useRegisterCommands(rootCommands, { groupId: 'snapshot-actions', groupLabel: 'Snapshot actions', groupOrder: 0 })
+  useRegisterCommands(rootCommands, { groupId: 'snapshot-actions', groupLabel: 'Image actions', groupOrder: 0 })
 }

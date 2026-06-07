@@ -87,7 +87,7 @@ const Snapshots: React.FC = () => {
 
   useEffect(() => {
     if (snapshotsDataError) {
-      handleApiError(snapshotsDataError, 'Failed to fetch snapshots')
+      handleApiError(snapshotsDataError, 'Failed to fetch images')
     }
   }, [snapshotsDataError])
 
@@ -144,9 +144,9 @@ const Snapshots: React.FC = () => {
       await markAllSnapshotQueriesAsStale(true)
       setSnapshotToDelete(null)
       setShowDeleteDialog(false)
-      toast.success(`Deleting snapshot ${snapshot.name}`)
+      toast.success(`Deleting image ${snapshot.name}`)
     } catch (error) {
-      handleApiError(error, 'Failed to delete snapshot')
+      handleApiError(error, 'Failed to delete image')
       updateSnapshotInCache(snapshot.id, { state: snapshot.state })
     } finally {
       setLoadingSnapshots((prev) => ({ ...prev, [snapshot.id]: false }))
@@ -163,9 +163,9 @@ const Snapshots: React.FC = () => {
         organizationId: selectedOrganization?.id,
       })
       await markAllSnapshotQueriesAsStale(true)
-      toast.success(`Activating snapshot ${snapshot.name}`)
+      toast.success(`Activating image ${snapshot.name}`)
     } catch (error) {
-      handleApiError(error, 'Failed to activate snapshot')
+      handleApiError(error, 'Failed to activate image')
       updateSnapshotInCache(snapshot.id, { state: snapshot.state })
     } finally {
       setLoadingSnapshots((prev) => ({ ...prev, [snapshot.id]: false }))
@@ -182,9 +182,9 @@ const Snapshots: React.FC = () => {
         organizationId: selectedOrganization?.id,
       })
       await markAllSnapshotQueriesAsStale(true)
-      toast.success(`Deactivating snapshot ${snapshot.name}`)
+      toast.success(`Deactivating image ${snapshot.name}`)
     } catch (error) {
-      handleApiError(error, 'Failed to deactivate snapshot')
+      handleApiError(error, 'Failed to deactivate image')
       updateSnapshotInCache(snapshot.id, { state: snapshot.state })
     } finally {
       setLoadingSnapshots((prev) => ({ ...prev, [snapshot.id]: false }))
@@ -222,7 +222,7 @@ const Snapshots: React.FC = () => {
       let successCount = 0
       let failureCount = 0
 
-      const totalLabel = pluralize(ids.length, 'snapshot', 'snapshots')
+      const totalLabel = pluralize(ids.length, 'image', 'images')
       const onCancel = () => {
         isCancelled = true
       }
@@ -249,7 +249,7 @@ const Snapshots: React.FC = () => {
           } catch (error) {
             failureCount += 1
             updateSnapshotInCache(id, { state: previousStatesById.get(id) })
-            console.error(`${actionName} snapshot failed`, id, error)
+            console.error(`${actionName} image failed`, id, error)
           } finally {
             setLoadingSnapshots((prev) => ({ ...prev, [id]: false }))
           }
@@ -258,8 +258,8 @@ const Snapshots: React.FC = () => {
         await markAllSnapshotQueriesAsStale(true)
         bulkToast.result({ successCount, failureCount }, toastMessages)
       } catch (error) {
-        console.error(`${actionName} snapshots failed`, error)
-        bulkToast.error(`${actionName} snapshots failed.`)
+        console.error(`${actionName} images failed`, error)
+        bulkToast.error(`${actionName} images failed.`)
       }
 
       return { successCount, failureCount }
@@ -278,9 +278,9 @@ const Snapshots: React.FC = () => {
           organizationId: selectedOrganization?.id,
         }),
       toastMessages: {
-        successTitle: `${pluralize(snapshots.length, 'Snapshot', 'Snapshots')} deleted.`,
-        errorTitle: `Failed to delete ${pluralize(snapshots.length, 'snapshot', 'snapshots')}.`,
-        warningTitle: 'Failed to delete some snapshots.',
+        successTitle: `${pluralize(snapshots.length, 'Image', 'Images')} deleted.`,
+        errorTitle: `Failed to delete ${pluralize(snapshots.length, 'image', 'images')}.`,
+        warningTitle: 'Failed to delete some images.',
         canceledTitle: 'Delete canceled.',
       },
     })
@@ -296,9 +296,9 @@ const Snapshots: React.FC = () => {
           organizationId: selectedOrganization?.id,
         }),
       toastMessages: {
-        successTitle: `${pluralize(snapshots.length, 'Snapshot', 'Snapshots')} deactivated.`,
-        errorTitle: `Failed to deactivate ${pluralize(snapshots.length, 'snapshot', 'snapshots')}.`,
-        warningTitle: 'Failed to deactivate some snapshots.',
+        successTitle: `${pluralize(snapshots.length, 'Image', 'Images')} deactivated.`,
+        errorTitle: `Failed to deactivate ${pluralize(snapshots.length, 'image', 'images')}.`,
+        warningTitle: 'Failed to deactivate some images.',
         canceledTitle: 'Deactivate canceled.',
       },
     })
@@ -314,9 +314,9 @@ const Snapshots: React.FC = () => {
           organizationId: selectedOrganization?.id,
         }),
       toastMessages: {
-        successTitle: `${pluralize(snapshots.length, 'Snapshot', 'Snapshots')} activated.`,
-        errorTitle: `Failed to activate ${pluralize(snapshots.length, 'snapshot', 'snapshots')}.`,
-        warningTitle: 'Failed to activate some snapshots.',
+        successTitle: `${pluralize(snapshots.length, 'Image', 'Images')} activated.`,
+        errorTitle: `Failed to activate ${pluralize(snapshots.length, 'image', 'images')}.`,
+        warningTitle: 'Failed to activate some images.',
         canceledTitle: 'Activate canceled.',
       },
     })
@@ -330,7 +330,7 @@ const Snapshots: React.FC = () => {
   return (
     <PageLayout>
       <PageHeader size="full">
-        <PageTitle>Snapshots</PageTitle>
+        <PageTitle>Images</PageTitle>
         {writePermitted && <CreateSnapshotDialog className="ml-auto" ref={dialogRef} />}
       </PageHeader>
 
@@ -373,9 +373,9 @@ const Snapshots: React.FC = () => {
           >
             <DialogContent>
               <DialogHeader>
-                <DialogTitle>Confirm Snapshot Deletion</DialogTitle>
+                <DialogTitle>Confirm Image Deletion</DialogTitle>
                 <DialogDescription>
-                  Are you sure you want to delete this snapshot? This action cannot be undone.
+                  Are you sure you want to delete this image? This action cannot be undone.
                 </DialogDescription>
               </DialogHeader>
               <DialogFooter>

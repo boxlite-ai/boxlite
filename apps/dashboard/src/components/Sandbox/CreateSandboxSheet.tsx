@@ -388,10 +388,10 @@ export const CreateSandboxSheet = ({
                     <FieldLabel>Source</FieldLabel>
                     <TabsList className="w-full">
                       <TabsTrigger value={Source.SNAPSHOT} className="flex-1">
-                        Snapshot
+                        Saved Image
                       </TabsTrigger>
                       <TabsTrigger value={Source.IMAGE} className="flex-1">
-                        Image
+                        Container Image
                       </TabsTrigger>
                     </TabsList>
                   </div>
@@ -400,7 +400,7 @@ export const CreateSandboxSheet = ({
                     <form.Field name="snapshot">
                       {(field) => (
                         <Field>
-                          <FieldLabel htmlFor={field.name}>Snapshot</FieldLabel>
+                          <FieldLabel htmlFor={field.name}>Saved Image</FieldLabel>
                           <Select
                             value={field.state.value || NONE_VALUE}
                             onValueChange={(val) => field.handleChange(val === NONE_VALUE ? '' : val)}
@@ -411,9 +411,7 @@ export const CreateSandboxSheet = ({
                               disabled={snapshotsLoading}
                               loading={snapshotsLoading}
                             >
-                              <SelectValue
-                                placeholder={snapshotsLoading ? 'Loading snapshots...' : 'Select a snapshot'}
-                              />
+                              <SelectValue placeholder={snapshotsLoading ? 'Loading images...' : 'Select an image'} />
                             </SelectTrigger>
                             <SelectContent>
                               <SelectItem value={NONE_VALUE}>
@@ -437,7 +435,7 @@ export const CreateSandboxSheet = ({
                         const isInvalid = field.state.meta.isTouched && !field.state.meta.isValid
                         return (
                           <Field data-invalid={isInvalid}>
-                            <FieldLabel htmlFor={field.name}>Image</FieldLabel>
+                            <FieldLabel htmlFor={field.name}>Container Image</FieldLabel>
                             <Input
                               aria-invalid={isInvalid}
                               id={field.name}

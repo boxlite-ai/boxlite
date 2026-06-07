@@ -180,7 +180,7 @@ export function getColumns({
       enableSorting: true,
       enableHiding: false,
       header: ({ column }) => {
-        return <SortableHeader column={column} label="Snapshot" />
+        return <SortableHeader column={column} label="Image" />
       },
       cell: ({ row }) => {
         return (

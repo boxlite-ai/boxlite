@@ -39,7 +39,7 @@ export function SnapshotFilterIndicator({
     <div className="flex items-center h-6 gap-0.5 rounded-sm border border-border bg-muted/80 hover:bg-muted/50 text-sm">
       <Popover>
         <PopoverTrigger className="max-w-[160px] overflow-hidden text-ellipsis whitespace-nowrap text-muted-foreground px-2">
-          Snapshot: <span className="text-primary font-medium">{value.length} selected</span>
+          Image: <span className="text-primary font-medium">{value.length} selected</span>
         </PopoverTrigger>
 
         <PopoverContent className="p-0 w-[240px]" align="start">
@@ -104,7 +104,7 @@ export function SnapshotFilter({
       {hasMore && (
         <div className="px-2 pb-2 mt-2">
           <div className="text-xs text-muted-foreground bg-muted/50 rounded px-2 py-1">
-            Please refine your search to see more Snapshots.
+            Please refine your search to see more Images.
           </div>
         </div>
       )}
@@ -112,11 +112,11 @@ export function SnapshotFilter({
         {isLoading ? (
           <div className="flex items-center justify-center py-6">
             <Loader2 className="h-4 w-4 animate-spin mr-2" />
-            <span className="text-sm text-muted-foreground">Loading Snapshots...</span>
+            <span className="text-sm text-muted-foreground">Loading Images...</span>
           </div>
         ) : (
           <>
-            <CommandEmpty>No Snapshots found.</CommandEmpty>
+            <CommandEmpty>No Images found.</CommandEmpty>
             <CommandGroup>
               {snapshots.map((snapshot) => (
                 <CommandCheckboxItem

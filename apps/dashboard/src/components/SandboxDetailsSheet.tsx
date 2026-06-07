@@ -139,7 +139,7 @@ const SandboxDetailsSheet: React.FC<SandboxDetailsSheetProps> = ({
                     disabled={sandboxIsLoading[sandbox.id]}
                   >
                     <Camera className="w-4 h-4" />
-                    Snapshot
+                    Create Image
                   </Button>
                 )} */}
                 {sandbox.state === SandboxState.STOPPED && (
@@ -243,12 +243,10 @@ const SandboxDetailsSheet: React.FC<SandboxDetailsSheetProps> = ({
                 </div>
               </div>
               <div>
-                <h3 className="text-sm text-muted-foreground">Snapshot</h3>
+                <h3 className="text-sm text-muted-foreground">Image</h3>
                 <div className="mt-1 flex items-center gap-2">
                   <p className="text-sm font-medium truncate">{sandbox.snapshot || '-'}</p>
-                  {sandbox.snapshot && (
-                    <CopyButton value={sandbox.snapshot} tooltipText="Copy snapshot" size="icon-xs" />
-                  )}
+                  {sandbox.snapshot && <CopyButton value={sandbox.snapshot} tooltipText="Copy image" size="icon-xs" />}
                 </div>
               </div>
               <div>

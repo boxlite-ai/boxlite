@@ -302,7 +302,7 @@ const Sandboxes: React.FC = () => {
 
   useEffect(() => {
     if (snapshotsDataError) {
-      handleApiError(snapshotsDataError, 'Failed to fetch snapshots')
+      handleApiError(snapshotsDataError, 'Failed to fetch images')
     }
   }, [snapshotsDataError])
 

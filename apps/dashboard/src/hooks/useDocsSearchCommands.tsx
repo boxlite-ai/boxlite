@@ -199,8 +199,9 @@ export function useDocsSearchCommands() {
         },
         {
           id: 'suggestion-snapshots',
-          label: 'Snapshots',
+          label: 'Images',
           icon: <Layers className="w-4 h-4" />,
+          // TODO: Switch to /en/images once the docs route or redirect exists.
           onSelect: () => openDocs('/en/snapshots'),
           chainable: true,
         },
