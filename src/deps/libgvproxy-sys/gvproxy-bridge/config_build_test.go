@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"net"
 	"testing"
 
@@ -32,7 +33,7 @@ func testGvproxyConfig() GvproxyConfig {
 }
 
 func TestBuildTapConfig_UsesHostAliasDNSZone(t *testing.T) {
-	tapConfig, err := buildTapConfig(testGvproxyConfig(), types.QemuProtocol)
+	tapConfig, err := buildTapConfig(context.Background(), testGvproxyConfig(), types.QemuProtocol)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -60,7 +61,7 @@ func TestBuildTapConfig_KeepsBuiltinZonesBeforeAllowNet(t *testing.T) {
 	config := testGvproxyConfig()
 	config.AllowNet = []string{"example.com"}
 
-	tapConfig, err := buildTapConfig(config, types.QemuProtocol)
+	tapConfig, err := buildTapConfig(context.Background(), config, types.QemuProtocol)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -78,7 +79,7 @@ func TestBuildTapConfig_KeepsBuiltinZonesBeforeAllowNet(t *testing.T) {
 }
 
 func TestBuildTapConfig_RoutesHostAliasToLoopback(t *testing.T) {
-	tapConfig, err := buildTapConfig(testGvproxyConfig(), types.QemuProtocol)
+	tapConfig, err := buildTapConfig(context.Background(), testGvproxyConfig(), types.QemuProtocol)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"sort"
 	"testing"
 	"time"
@@ -29,7 +30,7 @@ func TestVirtualNetworkNewWithinLatencyBudget(t *testing.T) {
 	// Warm up once: the first construction pays one-time lazy-init costs
 	// that are not representative of the steady-state per-box cost.
 	{
-		cfg, err := buildTapConfig(testGvproxyConfig(), types.QemuProtocol)
+		cfg, err := buildTapConfig(context.Background(), testGvproxyConfig(), types.QemuProtocol)
 		if err != nil {
 			t.Fatalf("warmup buildTapConfig failed: %v", err)
 		}
@@ -42,7 +43,7 @@ func TestVirtualNetworkNewWithinLatencyBudget(t *testing.T) {
 
 	samples := make([]time.Duration, 0, iters)
 	for i := 0; i < iters; i++ {
-		cfg, err := buildTapConfig(testGvproxyConfig(), types.QemuProtocol)
+		cfg, err := buildTapConfig(context.Background(), testGvproxyConfig(), types.QemuProtocol)
 		if err != nil {
 			t.Fatalf("iter %d: buildTapConfig failed: %v", i, err)
 		}

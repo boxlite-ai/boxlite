@@ -64,13 +64,18 @@ var defaultResolver hostResolver = &net.Resolver{PreferGo: false}
 // retry attempts, this function returns an error instead of producing a
 // silently-incomplete sinkhole. The caller is expected to abort box
 // creation rather than ship a misconfigured network.
-func buildAllowNetDNSZones(allowNet []string) ([]types.Zone, error) {
-	return buildAllowNetDNSZonesWith(allowNet, defaultResolver)
+//
+// `ctx` is honored throughout the resolution loop: cancellation aborts
+// the current attempt and the inter-attempt backoff sleep, so a Ctrl-C
+// or process shutdown ends `box.create` promptly instead of waiting for
+// the full retry budget to drain.
+func buildAllowNetDNSZones(ctx context.Context, allowNet []string) ([]types.Zone, error) {
+	return buildAllowNetDNSZonesWith(ctx, allowNet, defaultResolver)
 }
 
 // buildAllowNetDNSZonesWith is the testable form: same behavior as
 // buildAllowNetDNSZones, with an injectable resolver.
-func buildAllowNetDNSZonesWith(allowNet []string, resolver hostResolver) ([]types.Zone, error) {
+func buildAllowNetDNSZonesWith(ctx context.Context, allowNet []string, resolver hostResolver) ([]types.Zone, error) {
 	zoneRecords := make(map[string][]types.Record)
 
 	for _, rule := range allowNet {
@@ -100,7 +105,7 @@ func buildAllowNetDNSZonesWith(allowNet []string, resolver hostResolver) ([]type
 			zoneRecords[zoneName] = append(zoneRecords[zoneName], types.Record{
 				Regexp: regexp.MustCompile(".*"),
 			})
-			if err := resolveAndAddRecords(resolver, domain, domain+".", zoneRecords); err != nil {
+			if err := resolveAndAddRecords(ctx, resolver, domain, domain+".", zoneRecords); err != nil {
 				return nil, err
 			}
 			continue
@@ -110,11 +115,11 @@ func buildAllowNetDNSZonesWith(allowNet []string, resolver hostResolver) ([]type
 		parts := strings.SplitN(host, ".", 2)
 		if len(parts) == 2 {
 			zoneName := parts[1] + "."
-			if err := resolveAndAddRecords(resolver, host, zoneName, zoneRecords); err != nil {
+			if err := resolveAndAddRecords(ctx, resolver, host, zoneName, zoneRecords); err != nil {
 				return nil, err
 			}
 		} else {
-			if err := resolveAndAddRecords(resolver, host, host+".", zoneRecords); err != nil {
+			if err := resolveAndAddRecords(ctx, resolver, host, host+".", zoneRecords); err != nil {
 				return nil, err
 			}
 		}
@@ -170,9 +175,11 @@ func buildAllowNetDNSZonesWith(allowNet []string, resolver hostResolver) ([]type
 
 // resolveAndAddRecords resolves a hostname (with retry + per-attempt
 // timeout) and adds A records to the zone. Returns the final error if
-// every attempt fails so callers can fail closed.
-func resolveAndAddRecords(resolver hostResolver, hostname, zoneName string, zoneRecords map[string][]types.Record) error {
-	ips, err := lookupWithRetry(resolver, hostname)
+// every attempt fails so callers can fail closed. Honors `ctx` so a
+// caller cancellation propagates through both the in-flight lookup and
+// the inter-attempt backoff.
+func resolveAndAddRecords(ctx context.Context, resolver hostResolver, hostname, zoneName string, zoneRecords map[string][]types.Record) error {
+	ips, err := lookupWithRetry(ctx, resolver, hostname)
 	if err != nil {
 		return fmt.Errorf("allowNet: resolve %q: %w", hostname, err)
 	}
@@ -213,7 +220,14 @@ func resolveAndAddRecords(resolver hostResolver, hostname, zoneName string, zone
 // between attempts. Each attempt that returns at least one IP wins
 // immediately. Each attempt that returns an empty list with no error is
 // treated as a failure so we retry rather than bake an empty zone.
-func lookupWithRetry(resolver hostResolver, hostname string) ([]net.IPAddr, error) {
+//
+// `parentCtx` is the caller's lifetime context (typically a process-
+// level signal-aware ctx from `gvproxy_create`). Each attempt's deadline
+// is derived from it, so a cancellation (Ctrl-C, shutdown) terminates
+// both the in-flight lookup *and* the inter-attempt backoff sleep —
+// without this, a hung resolver could keep `box.create` blocked for the
+// full retry budget even after the user has asked for it to stop.
+func lookupWithRetry(parentCtx context.Context, resolver hostResolver, hostname string) ([]net.IPAddr, error) {
 	var (
 		ips     []net.IPAddr
 		lastErr error
@@ -221,7 +235,12 @@ func lookupWithRetry(resolver hostResolver, hostname string) ([]net.IPAddr, erro
 	backoff := dnsLookupInitialBackoffVar
 
 	for attempt := 1; attempt <= dnsLookupAttempts; attempt++ {
-		ctx, cancel := context.WithTimeout(context.Background(), dnsLookupAttemptTimeoutVar)
+		// Bail before spending another attempt if the caller already cancelled.
+		if err := parentCtx.Err(); err != nil {
+			return nil, err
+		}
+
+		ctx, cancel := context.WithTimeout(parentCtx, dnsLookupAttemptTimeoutVar)
 		ips, lastErr = resolver.LookupIPAddr(ctx, hostname)
 		cancel()
 
@@ -235,6 +254,15 @@ func lookupWithRetry(resolver hostResolver, hostname string) ([]net.IPAddr, erro
 			return ips, nil
 		}
 
+		// If the parent ctx was cancelled mid-attempt, surface that as the
+		// terminal error rather than retrying — the caller has gone away.
+		if parentCtx.Err() != nil {
+			if lastErr != nil {
+				return nil, lastErr
+			}
+			return nil, parentCtx.Err()
+		}
+
 		if lastErr == nil {
 			lastErr = fmt.Errorf("no A records returned")
 		}
@@ -246,7 +274,16 @@ func lookupWithRetry(resolver hostResolver, hostname string) ([]net.IPAddr, erro
 				"error":      lastErr,
 				"next_delay": backoff,
 			}).Warn("allowNet: DNS resolution failed, will retry")
-			time.Sleep(backoff)
+
+			// Interruptible backoff: react to Ctrl-C / shutdown immediately
+			// instead of sleeping out the (potentially multi-second) delay.
+			timer := time.NewTimer(backoff)
+			select {
+			case <-parentCtx.Done():
+				timer.Stop()
+				return nil, parentCtx.Err()
+			case <-timer.C:
+			}
 			backoff *= time.Duration(dnsLookupBackoffFactor)
 		}
 	}

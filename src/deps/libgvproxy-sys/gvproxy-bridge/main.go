@@ -20,9 +20,11 @@ import (
 	"log"
 	"net"
 	"os"
+	"os/signal"
 	"runtime"
 	"runtime/debug"
 	"sync"
+	"syscall"
 	"time"
 	"unsafe"
 
@@ -214,7 +216,7 @@ type GvproxyInstance struct {
 	secretMatcher *SecretHostMatcher             // Hostname→secrets lookup (nil if no secrets)
 }
 
-func buildDNSZones(config GvproxyConfig) ([]types.Zone, error) {
+func buildDNSZones(ctx context.Context, config GvproxyConfig) ([]types.Zone, error) {
 	dnsZones := make([]types.Zone, 0, len(config.DNSZones)+1)
 	for _, zone := range config.DNSZones {
 		dnsZone := types.Zone{
@@ -231,7 +233,7 @@ func buildDNSZones(config GvproxyConfig) ([]types.Zone, error) {
 	}
 
 	if len(config.AllowNet) > 0 {
-		allowNetZones, err := buildAllowNetDNSZones(config.AllowNet)
+		allowNetZones, err := buildAllowNetDNSZones(ctx, config.AllowNet)
 		if err != nil {
 			return nil, err
 		}
@@ -242,7 +244,7 @@ func buildDNSZones(config GvproxyConfig) ([]types.Zone, error) {
 	return dnsZones, nil
 }
 
-func buildTapConfig(config GvproxyConfig, protocol types.Protocol) (*types.Configuration, error) {
+func buildTapConfig(ctx context.Context, config GvproxyConfig, protocol types.Protocol) (*types.Configuration, error) {
 	nat := make(map[string]string)
 	gatewayVirtualIPs := []string{config.GatewayIP}
 	if config.HostIP != "" {
@@ -252,7 +254,7 @@ func buildTapConfig(config GvproxyConfig, protocol types.Protocol) (*types.Confi
 		}
 	}
 
-	dnsZones, err := buildDNSZones(config)
+	dnsZones, err := buildDNSZones(ctx, config)
 	if err != nil {
 		return nil, err
 	}
@@ -282,34 +284,30 @@ var (
 	nextID      int64 = 1
 )
 
-// bridgeBuildID is a hand-bumped tag that identifies the gvproxy-bridge
-// source tree this binary was built from. Bump it whenever you change
-// behavior you need to observe in the field — it's the cheapest way to
-// confirm `make runtime:debug` actually produced a fresh shim and that
-// the running boxlite-shim is loading *this* code rather than a cached
-// older build.
-//
-// Why a hand-bumped tag and not just `vcs.revision`?
-//   - `vcs.revision` from BuildInfo only reflects committed state; if
-//     you're iterating with uncommitted changes, two different
-//     in-progress versions will share the same SHA.
-//   - It also goes "dirty" once you have any local edits, which hides
-//     which behavior you actually shipped.
-// Bumping a constant is a deliberate "I changed something worth
-// distinguishing" signal that survives both situations.
-const bridgeBuildID = "gvproxy-bridge:allownet-dns-resilience-2026-06"
-
 // logBridgeBuildOnce prints the build identity exactly once per shim
-// process, the first time gvproxy_create runs. We deliberately do NOT
-// log this from package init() because logrus may not be configured
-// yet at that point (the Rust caller redirects logrus output to its own
-// log destination during shim startup, after init runs).
+// process, the first time gvproxy_create runs. Lets a user confirm
+// whether a freshly built shim is actually what's loaded — without it,
+// "did the rebuild take effect?" is answered by guesswork.
+//
+// We deliberately do NOT log this from package init() because logrus
+// may not be configured yet at that point (the Rust caller redirects
+// logrus output to its own log destination during shim startup, after
+// init runs).
+//
+// All fields are derived from runtime/debug.ReadBuildInfo so they
+// can't drift out of sync with the source tree:
+//
+//   - vcs_revision: HEAD SHA of the gvproxy-bridge module at build time.
+//   - vcs_modified: "true" when there were uncommitted edits (the most
+//     reliable "is this my in-progress build?" signal — a user iterating
+//     locally always sees true, a CI build always sees false).
+//   - vcs_time:     commit timestamp of HEAD.
+//   - go_version:   toolchain version.
 var logBridgeBuildOnce sync.Once
 
 func logBridgeBuild() {
 	logBridgeBuildOnce.Do(func() {
 		fields := logrus.Fields{
-			"build_id":  bridgeBuildID,
 			"go_module": "github.com/boxlite/gvproxy-bridge",
 		}
 		if info, ok := debug.ReadBuildInfo(); ok {
@@ -386,7 +384,15 @@ func gvproxy_create(configJSON *C.char, errOut **C.char) C.longlong {
 	// Fails closed if any allow-listed hostname can't be resolved on the
 	// host (after retries) — better to fail box.create than ship a
 	// silently-incomplete DNS sinkhole.
-	tapConfig, err := buildTapConfig(config, protocol)
+	//
+	// The ctx here is signal-aware: SIGINT/SIGTERM during the allow-list
+	// resolution loop (which can take seconds when retries fire on a slow
+	// corp resolver) cancels the in-flight lookup *and* the inter-attempt
+	// backoff, so Ctrl-C ends `box.create` promptly rather than waiting
+	// out the full retry budget.
+	resolveCtx, stopResolve := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	tapConfig, err := buildTapConfig(resolveCtx, config, protocol)
+	stopResolve()
 	if err != nil {
 		logrus.WithError(err).Error("Failed to build gvproxy tap config")
 		setErr(err)

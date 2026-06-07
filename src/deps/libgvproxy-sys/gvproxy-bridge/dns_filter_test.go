@@ -11,7 +11,7 @@ import (
 )
 
 func TestBuildAllowNetDNSZones(t *testing.T) {
-	zones, err := buildAllowNetDNSZones([]string{
+	zones, err := buildAllowNetDNSZones(context.Background(), []string{
 		"api.openai.com",
 		"*.anthropic.com",
 		"192.168.1.1", // IP — skipped (DNS only handles hostnames)
@@ -35,7 +35,7 @@ func TestBuildAllowNetDNSZones(t *testing.T) {
 }
 
 func TestBuildAllowNetDNSZones_PerTLDZonesHaveSinkholeDefaultIP(t *testing.T) {
-	zones, err := buildAllowNetDNSZones([]string{"example.com"})
+	zones, err := buildAllowNetDNSZones(context.Background(), []string{"example.com"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestBuildAllowNetDNSZones_PerTLDZonesHaveSinkholeDefaultIP(t *testing.T) {
 // Sorting zones longest-name-first guarantees the most-specific suffix
 // matches first.
 func TestBuildAllowNetDNSZones_LongestSuffixWinsBeforeRoot(t *testing.T) {
-	zones, err := buildAllowNetDNSZones([]string{
+	zones, err := buildAllowNetDNSZones(context.Background(), []string{
 		"github.com",
 		"api.github.com",
 		"raw.githubusercontent.com",
@@ -111,7 +111,7 @@ func TestBuildAllowNetDNSZones_LongestSuffixWinsBeforeRoot(t *testing.T) {
 }
 
 func TestBuildAllowNetDNSZones_EmptyList(t *testing.T) {
-	zones, err := buildAllowNetDNSZones([]string{})
+	zones, err := buildAllowNetDNSZones(context.Background(), []string{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -204,7 +204,7 @@ func (h *hangingResolver) LookupIPAddr(ctx context.Context, _ string) ([]net.IPA
 func TestBuildAllowNetDNSZones_RetriesTransientResolverFailure(t *testing.T) {
 	res := newFlakyResolver(2, errors.New("simulated transient DNS error"))
 
-	zones, err := buildAllowNetDNSZonesWith([]string{"iapi.example.com"}, res)
+	zones, err := buildAllowNetDNSZonesWith(context.Background(), []string{"iapi.example.com"}, res)
 	if err != nil {
 		t.Fatalf("expected retry to recover, got error: %v", err)
 	}
@@ -233,7 +233,7 @@ func TestBuildAllowNetDNSZones_RetriesTransientResolverFailure(t *testing.T) {
 func TestBuildAllowNetDNSZones_FailsClosedAfterRetries(t *testing.T) {
 	res := &alwaysFailResolver{err: errors.New("DNS server unreachable")}
 
-	_, err := buildAllowNetDNSZonesWith([]string{"iapi.example.com"}, res)
+	_, err := buildAllowNetDNSZonesWith(context.Background(), []string{"iapi.example.com"}, res)
 	if err == nil {
 		t.Fatal("expected error when every retry attempt fails, got nil")
 	}
@@ -258,7 +258,7 @@ func TestBuildAllowNetDNSZones_HonorsPerAttemptTimeout(t *testing.T) {
 
 	res := &hangingResolver{}
 	start := time.Now()
-	_, err := buildAllowNetDNSZonesWith([]string{"slow.example.com"}, res)
+	_, err := buildAllowNetDNSZonesWith(context.Background(), []string{"slow.example.com"}, res)
 	elapsed := time.Since(start)
 
 	if err == nil {
@@ -276,6 +276,54 @@ func TestBuildAllowNetDNSZones_HonorsPerAttemptTimeout(t *testing.T) {
 	}
 }
 
+// TestBuildAllowNetDNSZones_ParentCtxCancellationStopsRetryLoop pins
+// the contract that a cancellation on the caller-supplied context
+// (e.g. a SIGINT-aware ctx in gvproxy_create) propagates through both
+// the in-flight resolver call AND the inter-attempt backoff sleep.
+//
+// Without this, hitting Ctrl-C while a hung corp resolver is being
+// retried would block `box.create` for the full retry budget. We use
+// an inflated backoff so the wait between attempts is the dominant
+// time spent — if the loop honored ctx, the test returns within a
+// few ms of the cancel; if it ignored ctx, it'd wait out the budget
+// and the test would fail the elapsed-time bound.
+func TestBuildAllowNetDNSZones_ParentCtxCancellationStopsRetryLoop(t *testing.T) {
+	origBackoff := dnsLookupInitialBackoffVar
+	origTimeout := dnsLookupAttemptTimeoutVar
+	t.Cleanup(func() {
+		dnsLookupInitialBackoffVar = origBackoff
+		dnsLookupAttemptTimeoutVar = origTimeout
+	})
+	// Big backoff window relative to test timing — if the sleep is
+	// not interruptible, the test elapsed time will exceed the bound.
+	dnsLookupInitialBackoffVar = 5 * time.Second
+	dnsLookupAttemptTimeoutVar = 50 * time.Millisecond
+
+	res := &alwaysFailResolver{err: errors.New("always fails so we hit the backoff")}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	// Cancel after the first failed attempt so we land in the
+	// inter-attempt sleep — the case the reviewer flagged.
+	go func() {
+		time.Sleep(150 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	_, err := buildAllowNetDNSZonesWith(ctx, []string{"slow.example.com"}, res)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected error after parent ctx cancellation, got nil")
+	}
+	// Bound: attempt timeouts (~50ms each) + cancel delay (150ms) +
+	// generous slack — anything close to the 5s backoff means the
+	// sleep wasn't interruptible.
+	if elapsed > 2*time.Second {
+		t.Errorf("retry loop kept running for %v after ctx cancel; expected to bail out promptly", elapsed)
+	}
+}
+
 // TestBuildAllowNetDNSZones_PerHostFailureFailsAggregate makes sure
 // that one bad host in a multi-host allow-list aborts the whole build.
 // Previously the sinkhole would silently come up with allow_zones=N-1
@@ -288,6 +336,7 @@ func TestBuildAllowNetDNSZones_PerHostFailureFailsAggregate(t *testing.T) {
 	}
 
 	_, err := buildAllowNetDNSZonesWith(
+		context.Background(),
 		[]string{"github.com", "api.github.com", "iapi.example.com"},
 		res,
 	)
