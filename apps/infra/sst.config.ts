@@ -100,7 +100,7 @@ export default $config({
       home: "aws",
       providers: {
         aws: { region: REGION, profile: envOr("AWS_PROFILE", "default") },
-        cloudflare: "6.14.0",
+        cloudflare: "6.15.0",
         random: "4.16.6",
         // Post-deploy runner registration (see RegisterExtraRunners in run()).
         command: "1.0.1",
