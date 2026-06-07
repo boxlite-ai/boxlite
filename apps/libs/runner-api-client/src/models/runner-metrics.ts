@@ -67,7 +67,7 @@ export interface RunnerMetrics {
      * @type {number}
      * @memberof RunnerMetrics
      */
-    'currentArtifactCount'?: number;
+    'currentSnapshotCount'?: number;
     /**
      *
      * @type {number}
