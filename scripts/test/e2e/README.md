@@ -43,6 +43,19 @@ This installs / starts:
 
 First run is slow (~5–10 min, mostly the Rust release build). Subsequent runs are incremental.
 
+Tear down with `scripts/test/e2e/teardown.sh` (basic), `--wipe-data`
+(also drops the DB and `/var/lib/boxlite`), or `--full` (also drops
+the persistent secrets file so the next bootstrap mints fresh keys).
+Postgres + Redis + Node are kept around — they're cheap to leave and
+likely shared with other things on the host.
+
+Bootstrap stores the random `ADMIN_API_KEY`, `ENCRYPTION_KEY`, and
+runner / proxy / SSH-gateway tokens in `/etc/boxlite-secrets.env`
+(mode 600, owned by the bootstrap user). It's read back on every
+re-run, so the API env file can be regenerated whenever a PR adds a
+new variable without losing access to data encrypted under the old
+keys. If you ever need to rotate, run `teardown.sh --full`.
+
 Then run the fixture setup (idempotent — re-running is safe):
 
 ```bash

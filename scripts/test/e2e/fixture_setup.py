@@ -19,7 +19,30 @@ import urllib.error
 from pathlib import Path
 
 API_URL = os.environ.get("BOXLITE_E2E_API_URL", "http://localhost:3000/api")
-ADMIN_KEY = os.environ.get("BOXLITE_E2E_ADMIN_KEY", "devkey")
+
+
+def _read_admin_key_from_secrets() -> str | None:
+    """Bootstrap.sh writes the (random, persistent) admin API key to
+    /etc/boxlite-secrets.env. Read it from there so fixture_setup
+    automatically picks up whatever bootstrap minted, instead of the
+    user pasting it from terminal output."""
+    secrets = Path("/etc/boxlite-secrets.env")
+    if not secrets.exists():
+        return None
+    try:
+        for ln in secrets.read_text().splitlines():
+            if ln.startswith("ADMIN_API_KEY="):
+                return ln.split("=", 1)[1].strip()
+    except PermissionError:
+        return None
+    return None
+
+
+ADMIN_KEY = (
+    os.environ.get("BOXLITE_E2E_ADMIN_KEY")
+    or _read_admin_key_from_secrets()
+    or "devkey"   # only used when bootstrap hasn't run yet
+)
 SNAPSHOTS_TO_REGISTER = ["alpine:3.23", "ubuntu:22.04", "ubuntu:24.04"]
 SNAPSHOT_WAIT_SECONDS = 180
 CRED_PATH = Path.home() / ".boxlite" / "credentials.toml"
@@ -140,12 +163,18 @@ def ensure_p1_profile(prefix: str):
             existing = tomllib.load(f)
             profiles = existing.get("profiles", {})
 
-    profiles["p1"] = {
+    # Write BOTH p1 (Python SDK conftest default) and `default` (what
+    # `boxlite auth whoami` and other CLI commands use without --profile).
+    # If we only updated p1, CLI tests that hit the default profile
+    # would still see whatever the previous bootstrap minted.
+    entry = {
         "url": API_URL,
         "api_key": ADMIN_KEY,
         "auth_method": "api_key",
         "path_prefix": prefix,
     }
+    profiles["p1"] = entry
+    profiles["default"] = entry.copy()
 
     out = []
     for prof_name, prof in profiles.items():

@@ -1,26 +1,32 @@
 #!/usr/bin/env bash
 # Bootstrap the local boxlite stack used by the e2e test suite.
 #
-# Idempotent: skips anything that's already set up. Designed for:
+# Idempotent: skips anything already set up; always regenerates the API
+# env file (so new env vars added in a PR land on existing hosts) while
+# preserving the secrets that must stay stable across restarts
+# (ENCRYPTION_KEY/SALT — re-keying corrupts the DB; ADMIN_API_KEY — so
+# the existing admin user keeps working).
+#
+# Designed for:
 #   - Ubuntu 24+/26 host with /dev/kvm (nested KVM)
 #   - sudo available
-#   - Repo at REPO (default $HOME/ws/boxlite)
 #
-# NO AWS dependency: the e2e tests exercise box lifecycle (create / exec /
-# attach / lifecycle), which fetch images from docker.io into the local
-# docker registry on :5000 and run libkrun VMs against local qcow2. The
-# API's S3-backed VolumeManager / ObjectStorageService are disabled by
-# setting S3_ENDPOINT="" — that path early-returns at construction time
-# (see apps/api/src/sandbox/managers/volume.manager.ts).
+# NO AWS dependency: e2e tests exercise box lifecycle (create / exec /
+# attach), which fetch images from docker.io into the local registry on
+# 127.0.0.1:5000. The API's S3-backed VolumeManager early-returns when
+# S3_ENDPOINT is empty (apps/api/src/sandbox/managers/volume.manager.ts:47).
 #
-# Sets up but does NOT run the e2e fixture data (snapshots, quotas, p1
-# profile) — that's `fixture_setup.py`, which runs after the API is up.
+# Tear down with scripts/test/e2e/teardown.sh.
 
 set -euo pipefail
 
-REPO="${REPO:-$HOME/ws/boxlite}"
+# REPO autodetects via the script's own location — works regardless of
+# where the user cloned to. The previous $HOME/ws/boxlite default broke
+# every other layout.
+REPO="${REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)}"
 APPS="$REPO/apps"
 ENV_FILE="${ENV_FILE:-/etc/boxlite-api.env}"
+SECRETS_FILE="${SECRETS_FILE:-/etc/boxlite-secrets.env}"
 
 [[ -d "$REPO" ]] || { echo "REPO=$REPO not found"; exit 1; }
 [[ -e /dev/kvm ]] || { echo "/dev/kvm missing — need nested-KVM host"; exit 1; }
@@ -45,40 +51,87 @@ if ! command -v yarn >/dev/null 2>&1; then
     sudo corepack enable
 fi
 
-if false; then    # mount-s3 only matters for volume mounting which e2e doesn't test
-    echo "=== mountpoint-s3 (skipped — e2e doesn't use volumes) ==="
-    curl -fsSL "https://s3.amazonaws.com/mountpoint-s3-release/1.20.0/x86_64/mount-s3-1.20.0-x86_64.deb" \
-        -o /tmp/mount-s3.deb
-    sudo apt-get install -y -qq /tmp/mount-s3.deb
-    rm -f /tmp/mount-s3.deb
-fi
-
+# Docker registry — bound to 127.0.0.1 only. The registry is a local
+# cache for snapshot pulls; no reason to expose it to the network.
 if ! sudo docker ps --filter name=boxlite-registry --format '{{.Names}}' | grep -q boxlite-registry; then
-    echo "=== 4. docker registry :5000 ==="
-    sudo docker run -d --name boxlite-registry --restart=always -p 5000:5000 registry:2
+    echo "=== 2. docker registry on 127.0.0.1:5000 ==="
+    sudo docker run -d --name boxlite-registry --restart=always \
+        -p 127.0.0.1:5000:5000 registry:2
 fi
 sudo usermod -aG docker "$USER" 2>/dev/null || true
 
-echo "=== 5. postgres role/db (idempotent) ==="
+echo "=== 3. postgres role/db (idempotent) ==="
 sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='boxlite'" | grep -q 1 || \
     sudo -u postgres psql -c "CREATE USER boxlite WITH PASSWORD 'boxlite' CREATEDB"
 sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='boxlite_dev'" | grep -q 1 || \
     sudo -u postgres psql -c "CREATE DATABASE boxlite_dev OWNER boxlite"
 
-echo "=== 6. yarn install + apps/apps self-symlink + missing deps ==="
+echo "=== 4. yarn install (stderr preserved — silent install hides real failures) ==="
+# tslib + node-forge are in apps/package.json upstream; bootstrap no
+# longer mutates the working tree to install them. The apps/apps self-
+# symlink papers over project.json files using `apps/api/...` paths that
+# assume workspace root is one level above apps/. The real fix is to
+# rewrite those paths; that's a separate refactor PR.
 cd "$APPS"
-yarn install >/dev/null 2>&1
-[[ -L "$APPS/apps" ]] || ln -sfn . apps   # api/project.json uses apps/api/* paths
-yarn add tslib node-forge >/dev/null 2>&1 || true
+yarn install >/dev/null
+[[ -L "$APPS/apps" ]] || ln -sfn . apps
 
-echo "=== 7. /etc/boxlite-api.env ==="
-TOK=$(curl -sX PUT 'http://169.254.169.254/latest/api/token' -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' 2>/dev/null) || TOK=""
-HOST_IP=$(curl -sH "X-aws-ec2-metadata-token: $TOK" http://169.254.169.254/latest/meta-data/local-ipv4 2>/dev/null) || HOST_IP=127.0.0.1
+# ─── HOST_IP via IMDS — explicit warning if we're not on EC2 ────────────────
+TOK=$(curl -sX PUT 'http://169.254.169.254/latest/api/token' \
+    -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' 2>/dev/null) || TOK=""
+HOST_IP=$(curl -sH "X-aws-ec2-metadata-token: $TOK" \
+    http://169.254.169.254/latest/meta-data/local-ipv4 2>/dev/null) || HOST_IP=""
+if [[ -z "$HOST_IP" ]]; then
+    HOST_IP=127.0.0.1
+    echo "WARNING: IMDS unreachable; defaulting RUNNER_DOMAIN to 127.0.0.1." >&2
+    echo "  If the API/Runner need to be reached by another host, set" >&2
+    echo "  the actual reachable IP via RUNNER_DOMAIN env." >&2
+fi
 
-if [[ ! -f "$ENV_FILE" ]]; then
+# ─── 5. Stable secrets (gen once, persist across env-file rewrites) ────────
+echo "=== 5. secrets (rotating these breaks the DB or invalidates admin login) ==="
+if [[ -r "$SECRETS_FILE" ]]; then
+    # shellcheck disable=SC1090
+    source "$SECRETS_FILE"
+elif sudo test -f "$SECRETS_FILE"; then
+    # Legacy: was once written root-owned. Reclaim ownership.
+    sudo chown "$USER:$USER" "$SECRETS_FILE"
+    # shellcheck disable=SC1090
+    source "$SECRETS_FILE"
+else
     ENCRYPTION_KEY=$(openssl rand -hex 32)
     ENCRYPTION_SALT=$(openssl rand -hex 16)
-    sudo tee "$ENV_FILE" > /dev/null <<EOF
+    ADMIN_API_KEY=$(openssl rand -hex 24)
+    PROXY_API_KEY=$(openssl rand -hex 16)
+    SSH_GATEWAY_API_KEY=$(openssl rand -hex 16)
+    DEFAULT_RUNNER_API_KEY=$(openssl rand -hex 16)
+    sudo tee "$SECRETS_FILE" > /dev/null <<EOF
+ENCRYPTION_KEY=$ENCRYPTION_KEY
+ENCRYPTION_SALT=$ENCRYPTION_SALT
+ADMIN_API_KEY=$ADMIN_API_KEY
+PROXY_API_KEY=$PROXY_API_KEY
+SSH_GATEWAY_API_KEY=$SSH_GATEWAY_API_KEY
+DEFAULT_RUNNER_API_KEY=$DEFAULT_RUNNER_API_KEY
+EOF
+    # Owned by the user the API + fixture_setup run as, mode 600. The
+    # tools that need to read it (boxlite-api.service, fixture_setup.py,
+    # subsequent re-bootstrap) all run as $USER. Root can still read it
+    # too; nobody else.
+    sudo chown "$USER:$USER" "$SECRETS_FILE"
+    sudo chmod 600 "$SECRETS_FILE"
+fi
+
+# ─── 6. Regenerate /etc/boxlite-api.env every bootstrap ─────────────────────
+# Previous behaviour only wrote when missing, which meant new env vars
+# added by a PR never landed on existing hosts. Now we always rewrite
+# (preserving secrets via the secrets file).
+#
+# OIDC_ISSUER_BASE_URL is an HTTPS URL whose .well-known/openid-configuration
+# we can fetch at startup. The API key auth path used by e2e bypasses
+# the OIDC flow entirely — Google is just a known-fetchable issuer; no
+# Google credentials needed.
+echo "=== 6. write /etc/boxlite-api.env (always — preserves secrets, refreshes everything else) ==="
+sudo tee "$ENV_FILE" > /dev/null <<EOF
 NODE_ENV=development
 PORT=3000
 ENVIRONMENT=production
@@ -110,11 +163,11 @@ S3_ACCOUNT_ID=
 S3_ROLE_NAME=
 PROXY_DOMAIN=localhost:3001
 PROXY_PROTOCOL=http
-PROXY_API_KEY=proxy-devkey
+PROXY_API_KEY=$PROXY_API_KEY
 PROXY_TEMPLATE_URL=http://localhost:3001
 SSH_GATEWAY_URL=ssh://localhost:2222
-SSH_GATEWAY_API_KEY=ssh-gateway-devkey
-ADMIN_API_KEY=devkey
+SSH_GATEWAY_API_KEY=$SSH_GATEWAY_API_KEY
+ADMIN_API_KEY=$ADMIN_API_KEY
 ADMIN_TOTAL_CPU_QUOTA=32
 ADMIN_TOTAL_MEMORY_QUOTA=64
 ADMIN_TOTAL_DISK_QUOTA=200
@@ -136,7 +189,7 @@ INTERNAL_REGISTRY_PASSWORD=Harbor12345
 INTERNAL_REGISTRY_PROJECT_ID=boxlite
 INSECURE_REGISTRIES=localhost:5000
 DEFAULT_RUNNER_NAME=default
-DEFAULT_RUNNER_API_KEY=runner-devkey
+DEFAULT_RUNNER_API_KEY=$DEFAULT_RUNNER_API_KEY
 DEFAULT_RUNNER_DOMAIN=$HOST_IP
 DEFAULT_RUNNER_API_URL=http://localhost:8080
 DEFAULT_RUNNER_PROXY_URL=http://localhost:3001
@@ -144,32 +197,26 @@ DEFAULT_RUNNER_API_VERSION=2
 AWS_REGION=us-east-1
 SKIP_CONNECTIONS=false
 EOF
-    sudo chmod 644 "$ENV_FILE"
-fi
+sudo chmod 644 "$ENV_FILE"
 
-echo "=== 8. boxlite-runner from current source ==="
-# Build runner from the working tree — release pin would test stale
-# code instead of whatever the PR is changing. See PR #678 review.
+# ─── 7. boxlite-runner from working tree ────────────────────────────────────
+echo "=== 7. boxlite-runner from current source ==="
 if ! command -v cargo >/dev/null 2>&1; then
-    echo "=== 8a. Rust toolchain (rustup) ==="
+    echo "=== 7a. Rust toolchain (rustup) ==="
     curl -fsSL https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
     . "$HOME/.cargo/env"
 fi
 if ! command -v go >/dev/null 2>&1; then
-    echo "=== 8b. Go toolchain ==="
+    echo "=== 7b. Go toolchain ==="
     GO_VER=1.23.4
     curl -fsSL "https://go.dev/dl/go${GO_VER}.linux-amd64.tar.gz" \
         | sudo tar xz -C /usr/local/
     sudo ln -sf /usr/local/go/bin/go /usr/local/bin/go
     sudo ln -sf /usr/local/go/bin/gofmt /usr/local/bin/gofmt
 fi
-
-# C SDK static lib (boxlite-runner CGOs into libboxlite.a).
 cd "$REPO"
 cargo build --release -p boxlite-c
 cp target/release/libboxlite.a sdks/go/libboxlite.a
-
-# Go runner binary.
 cd "$REPO/apps/runner"
 CGO_ENABLED=1 go build -o /tmp/boxlite-runner-build ./cmd/runner
 sudo install -m 0755 /tmp/boxlite-runner-build /usr/local/bin/boxlite-runner
@@ -178,10 +225,15 @@ cd "$REPO"
 sudo mkdir -p /var/lib/boxlite
 sudo chown "$USER:$USER" /var/lib/boxlite
 
-echo "=== 9. systemd units ==="
+# ─── 8. systemd units ───────────────────────────────────────────────────────
+# API runs via npx ts-node intentionally:
+#   - Production deploy uses webpack bundle; ts-node has minor differences
+#     (TypeORM entity discovery) that don't affect any e2e-exercised path
+#   - Webpack bundle adds 5-10 min to every PR run, not worth the parity
+echo "=== 8. systemd units ==="
 sudo tee /etc/systemd/system/boxlite-api.service > /dev/null <<UNIT
 [Unit]
-Description=BoxLite API (NestJS, ts-node local-dev mode)
+Description=BoxLite API (NestJS, ts-node dev mode)
 After=network.target postgresql.service redis-server.service
 Wants=postgresql.service redis-server.service
 
@@ -209,12 +261,13 @@ After=network.target boxlite-api.service
 [Service]
 Type=simple
 User=$USER
+EnvironmentFile=$ENV_FILE
 ExecStart=/usr/local/bin/boxlite-runner
 Restart=always
 RestartSec=5
 TimeoutStopSec=60
 Environment=BOXLITE_API_URL=http://localhost:3000/api
-Environment=BOXLITE_RUNNER_TOKEN=runner-devkey
+Environment=BOXLITE_RUNNER_TOKEN=$DEFAULT_RUNNER_API_KEY
 Environment=API_VERSION=2
 Environment=API_PORT=8080
 Environment=RUNNER_DOMAIN=$HOST_IP
@@ -227,19 +280,71 @@ WantedBy=multi-user.target
 UNIT
 sudo systemctl daemon-reload
 
-echo "=== 10. start services ==="
+# ─── 9. Start services + real health checks ────────────────────────────────
+echo "=== 9. start services + verify they're answering ==="
 sudo systemctl enable boxlite-api boxlite-runner 2>/dev/null
 sudo systemctl restart boxlite-api
-for i in $(seq 1 60); do
-    curl -fsS http://localhost:3000/api/health >/dev/null 2>&1 && break
+
+# API: poll /api/health until 200 OR 90s elapses.
+api_ready=0
+for i in $(seq 1 45); do
+    if curl -fsS -o /dev/null http://localhost:3000/api/health; then
+        api_ready=1; break
+    fi
     sleep 2
 done
+if [[ $api_ready -ne 1 ]]; then
+    echo "ERROR: boxlite-api did not answer /api/health within 90s" >&2
+    sudo journalctl -u boxlite-api --no-pager -n 100 >&2
+    exit 1
+fi
+
 sudo systemctl restart boxlite-runner
-sleep 3
+# Runner: poll the port AND verify it's the boxlite-runner process listening
+# (not a stale process from a previous bootstrap).
+runner_ready=0
+for i in $(seq 1 30); do
+    if pgrep -af '/usr/local/bin/boxlite-runner' >/dev/null \
+       && ss -ltn 2>/dev/null | grep -q ':8080'; then
+        runner_ready=1; break
+    fi
+    sleep 2
+done
+if [[ $runner_ready -ne 1 ]]; then
+    echo "ERROR: boxlite-runner did not bind :8080 within 60s" >&2
+    sudo journalctl -u boxlite-runner --no-pager -n 100 >&2
+    exit 1
+fi
+
+# ─── 10. End-to-end smoke ───────────────────────────────────────────────────
+# bootstrap "active" ≠ "real chain works". Probe /v1/me with the admin
+# key — that exercises auth + DB + Redis end-to-end and surfaces broken
+# secrets / DB migrations / encryption-key mismatch before the user
+# runs the e2e suite.
+echo "=== 10. end-to-end smoke (auth + DB) ==="
+ME_JSON=$(curl -fsS -H "Authorization: Bearer $ADMIN_API_KEY" \
+    http://localhost:3000/api/v1/me 2>&1 || echo "")
+if ! echo "$ME_JSON" | grep -q '"sub"'; then
+    echo "ERROR: smoke failed — /v1/me did not return a principal" >&2
+    echo "  body: $ME_JSON" >&2
+    # 401 specifically means the freshly-minted ADMIN_API_KEY doesn't
+    # match the existing admin user's stored hash. That happens when
+    # someone deleted $SECRETS_FILE without also dropping the DB. The
+    # DB has the OLD admin user with the OLD key; the env has a NEW
+    # key. Fix: scripts/test/e2e/teardown.sh --wipe-data + re-run.
+    if echo "$ME_JSON" | grep -q 'error code: 401\|"statusCode":401\|HTTP 401'; then
+        echo "" >&2
+        echo "  HINT: 401 here usually means \$SECRETS_FILE was deleted" >&2
+        echo "  but the DB still has an admin user from a previous mint." >&2
+        echo "  Run: scripts/test/e2e/teardown.sh --wipe-data && re-run bootstrap" >&2
+    fi
+    exit 1
+fi
 
 echo ""
 echo "=== bootstrap complete ==="
 echo "api:    $(systemctl is-active boxlite-api)    :3000"
 echo "runner: $(systemctl is-active boxlite-runner) :8080"
+echo "admin api key:  $ADMIN_API_KEY    (also in $SECRETS_FILE)"
 echo ""
 echo "Next:  python3 scripts/test/e2e/fixture_setup.py"
