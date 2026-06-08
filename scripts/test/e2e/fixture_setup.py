@@ -20,7 +20,7 @@ from pathlib import Path
 
 API_URL = os.environ.get("BOXLITE_E2E_API_URL", "http://localhost:3000/api")
 ADMIN_KEY = os.environ.get("BOXLITE_E2E_ADMIN_KEY", "devkey")
-SNAPSHOTS_TO_REGISTER = ["alpine:3.23", "ubuntu:22.04"]
+SNAPSHOTS_TO_REGISTER = ["alpine:3.23", "ubuntu:22.04", "ubuntu:24.04"]
 SNAPSHOT_WAIT_SECONDS = 180
 CRED_PATH = Path.home() / ".boxlite" / "credentials.toml"
 
