@@ -291,7 +291,7 @@ built, coverage spans these surfaces, all run green on M5 real boxes:
 |---------|------|--------|
 | Rust unit (no box) | `rest::litebox::pack_host_path_tests` (2), `extract_tar_to_path_tests` (3, incl. F-010 + overwrite); shared `boxlite_shared::tar` suite | PASS |
 | Rust integration (local backend, real box) | `src/boxlite/tests/copy.rs::copy_integration` (~18 sub-checks incl. `non_recursive_rejects_directory`) | PASS |
-| E2E `scripts/test/cli-e2e/copy-parity.sh` | **13 scenarios → 18 assertions** (incl. `cp` exit-code checks for `--no-overwrite`), each asserted on **both** local (in-process) and serve (REST over loopback) — identical SHA | 18/18 PASS |
+| E2E `src/cli/tests/copy_parity.rs::copy_parity_local_vs_serve` | **16 parity checks** (incl. `cp` exit-code checks for `--no-overwrite`), each asserted byte-identical on **both** local (in-process) and serve (REST over loopback) | PASS |
 | Go SDK (local backend) | `TestIntegrationCopyOptions` (10 subtests, incl. `WithRecursive(false)`) | PASS |
 | Python SDK (local backend) | `tests/test_copy.py` (async) + `test_sync_simplebox.py::test_copy_in_out_options` (sync) | PASS |
 
