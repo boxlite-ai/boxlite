@@ -2,10 +2,16 @@
 # Bootstrap the local boxlite stack used by the e2e test suite.
 #
 # Idempotent: skips anything that's already set up. Designed for:
-#   - Ubuntu 24+/26 EC2 with /dev/kvm (nested KVM)
+#   - Ubuntu 24+/26 host with /dev/kvm (nested KVM)
 #   - sudo available
-#   - AWS creds available (via `aws login`, IAM role, or static keys)
 #   - Repo at REPO (default $HOME/ws/boxlite)
+#
+# NO AWS dependency: the e2e tests exercise box lifecycle (create / exec /
+# attach / lifecycle), which fetch images from docker.io into the local
+# docker registry on :5000 and run libkrun VMs against local qcow2. The
+# API's S3-backed VolumeManager / ObjectStorageService are disabled by
+# setting S3_ENDPOINT="" — that path early-returns at construction time
+# (see apps/api/src/sandbox/managers/volume.manager.ts).
 #
 # Sets up but does NOT run the e2e fixture data (snapshots, quotas, p1
 # profile) — that's `fixture_setup.py`, which runs after the API is up.
@@ -15,33 +21,18 @@ set -euo pipefail
 REPO="${REPO:-$HOME/ws/boxlite}"
 APPS="$REPO/apps"
 ENV_FILE="${ENV_FILE:-/etc/boxlite-api.env}"
-S3_BUCKET="${S3_BUCKET:-boxlite-dev-storagebucket-bzhbzvme}"
-AWS_REGION="${AWS_REGION:-us-east-1}"
-AWS_ACCOUNT_ID="${AWS_ACCOUNT_ID:-064212132677}"
 
 [[ -d "$REPO" ]] || { echo "REPO=$REPO not found"; exit 1; }
-[[ -e /dev/kvm ]] || { echo "/dev/kvm missing — need nested-KVM EC2"; exit 1; }
+[[ -e /dev/kvm ]] || { echo "/dev/kvm missing — need nested-KVM host"; exit 1; }
 
-echo "=== 1. apt: postgres, redis, openssl, unzip, docker ==="
+echo "=== 1. apt: postgres, redis, openssl, docker ==="
 sudo apt-get update -qq
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-    postgresql postgresql-contrib redis-server openssl unzip docker.io
+    postgresql postgresql-contrib redis-server openssl docker.io
 sudo systemctl enable --now postgresql redis-server docker
 
-if ! command -v aws >/dev/null 2>&1; then
-    echo "=== 2. aws cli v2 ==="
-    curl -fsSL https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip -o /tmp/awscliv2.zip
-    cd /tmp && unzip -q -o awscliv2.zip && sudo ./aws/install --update
-    cd "$REPO"
-fi
-aws sts get-caller-identity >/dev/null 2>&1 || {
-    echo "ERROR: no AWS creds. Run 'aws login --region $AWS_REGION --remote' first."
-    exit 1
-}
-aws configure set region "$AWS_REGION"
-
-if ! command -v mount-s3 >/dev/null 2>&1; then
-    echo "=== 3. mountpoint-s3 ==="
+if false; then    # mount-s3 only matters for volume mounting which e2e doesn't test
+    echo "=== mountpoint-s3 (skipped — e2e doesn't use volumes) ==="
     curl -fsSL "https://s3.amazonaws.com/mountpoint-s3-release/1.20.0/x86_64/mount-s3-1.20.0-x86_64.deb" \
         -o /tmp/mount-s3.deb
     sudo apt-get install -y -qq /tmp/mount-s3.deb
@@ -95,14 +86,14 @@ ENCRYPTION_SALT=$ENCRYPTION_SALT
 OIDC_CLIENT_ID=boxlite
 OIDC_AUDIENCE=boxlite
 OIDC_ISSUER_BASE_URL=https://accounts.google.com
-S3_ENDPOINT=https://s3.$AWS_REGION.amazonaws.com
-S3_STS_ENDPOINT=https://sts.$AWS_REGION.amazonaws.com
-S3_REGION=$AWS_REGION
+S3_ENDPOINT=
+S3_STS_ENDPOINT=
+S3_REGION=
 S3_ACCESS_KEY=
 S3_SECRET_KEY=
-S3_DEFAULT_BUCKET=$S3_BUCKET
-S3_ACCOUNT_ID=$AWS_ACCOUNT_ID
-S3_ROLE_NAME=BoxliteS3Role
+S3_DEFAULT_BUCKET=
+S3_ACCOUNT_ID=
+S3_ROLE_NAME=
 PROXY_DOMAIN=localhost:3001
 PROXY_PROTOCOL=http
 PROXY_API_KEY=proxy-devkey
@@ -136,7 +127,7 @@ DEFAULT_RUNNER_DOMAIN=$HOST_IP
 DEFAULT_RUNNER_API_URL=http://localhost:8080
 DEFAULT_RUNNER_PROXY_URL=http://localhost:3001
 DEFAULT_RUNNER_API_VERSION=2
-AWS_REGION=$AWS_REGION
+AWS_REGION=us-east-1
 SKIP_CONNECTIONS=false
 EOF
     sudo chmod 644 "$ENV_FILE"
@@ -193,7 +184,7 @@ Environment=API_VERSION=2
 Environment=API_PORT=8080
 Environment=RUNNER_DOMAIN=$HOST_IP
 Environment=BOXLITE_HOME_DIR=/var/lib/boxlite
-Environment=AWS_REGION=$AWS_REGION
+Environment=AWS_REGION=us-east-1
 Environment=INSECURE_REGISTRIES=localhost:5000
 
 [Install]
