@@ -25,11 +25,25 @@ ENV_FILE="${ENV_FILE:-/etc/boxlite-api.env}"
 [[ -d "$REPO" ]] || { echo "REPO=$REPO not found"; exit 1; }
 [[ -e /dev/kvm ]] || { echo "/dev/kvm missing — need nested-KVM host"; exit 1; }
 
-echo "=== 1. apt: postgres, redis, openssl, docker ==="
+echo "=== 1. apt: postgres, redis, openssl, docker, python3-pip ==="
 sudo apt-get update -qq
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-    postgresql postgresql-contrib redis-server openssl docker.io
+    postgresql postgresql-contrib redis-server openssl docker.io \
+    python3-pip ca-certificates curl
 sudo systemctl enable --now postgresql redis-server docker
+
+# Node.js 22 via NodeSource (ts-node + npx for the API service unit).
+if ! command -v node >/dev/null 2>&1 || ! node --version | grep -qE 'v(2[0-9]|[3-9][0-9])'; then
+    echo "=== 1b. Node.js 22 (NodeSource) ==="
+    curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+    sudo apt-get install -y -qq nodejs
+fi
+
+# yarn via corepack (ships with Node 16+).
+if ! command -v yarn >/dev/null 2>&1; then
+    echo "=== 1c. yarn (via corepack) ==="
+    sudo corepack enable
+fi
 
 if false; then    # mount-s3 only matters for volume mounting which e2e doesn't test
     echo "=== mountpoint-s3 (skipped — e2e doesn't use volumes) ==="

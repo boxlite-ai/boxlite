@@ -14,9 +14,13 @@ fi
 echo "── fixture_setup ──"
 python3 "$SCRIPT_DIR/fixture_setup.py"
 
-# 3. pip prereqs
-python3 -c "import pytest, pytest_asyncio, boxlite" 2>/dev/null || \
-    pip install --break-system-packages --quiet pytest pytest-asyncio boxlite
+# 3. pip prereqs (pytest, pytest-asyncio, boxlite SDK).
+python3 -c "import pytest" 2>/dev/null || \
+    pip install --break-system-packages --quiet pytest
+python3 -c "import pytest_asyncio" 2>/dev/null || \
+    pip install --break-system-packages --quiet pytest-asyncio
+python3 -c "import boxlite" 2>/dev/null || \
+    pip install --break-system-packages --quiet boxlite
 
 # 4. run
 echo "── pytest ──"
