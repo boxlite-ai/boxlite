@@ -6,7 +6,7 @@
 
 PY ?= python
 
-.PHONY: help up down ps doctor logs wipe itest test install load-schema up-with-schema e2e itest-all \
+.PHONY: help up down ps doctor logs wipe itest test install migrate e2e itest-all \
         stack-build stack-up stack-down stack-restart stack-status stack-logs stack-reset stack-reset-hard stack-nuke \
         seed-init-data stack-rebuild-l1-box
 
@@ -45,13 +45,10 @@ e2e:                   ## run comprehensive E2E suite (~60s, ~90s with smoke)
 itest-all:             ## run BOTH integration suites (~90s)
 	BOXLITE_INTEGRATION=1 pytest tests/integration -v
 
-load-schema:           ## generate + load sql/merged-schema.auto-gen.sql into local pg (run after `make up`)
-	$(PY) scripts/build-all-in-one-sql.py
-	./scripts/apply-schema.sh
-
-up-with-schema:        ## make up + make load-schema (one-shot for a fresh stack)
-	$(MAKE) up
-	$(MAKE) load-schema
+migrate:               ## build local pg schema by running all TypeORM migrations from scratch
+	cd ../api && set -a && . ../.env && set +a && \
+	  npx ts-node -P ./tsconfig.json -r tsconfig-paths/register \
+	    ../node_modules/typeorm/cli.js migration:run -d ./src/migrations/data-source.ts
 
 seed-init-data:        ## ensure dashboard-required base data (admin org, default region, wait snapshot)
 	./scripts/seed-init-data.sh

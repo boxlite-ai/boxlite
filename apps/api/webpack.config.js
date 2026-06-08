@@ -37,6 +37,22 @@ module.exports = composePlugins(
     }
     config.mode = process.env.NODE_ENV
 
+    // Local dev only (NODE_ENV=development, set by infra-local's stack-up via
+    // apps/.env). `nx serve api` triggers the base `api:build` target, which
+    // would otherwise (a) crash inside @nx/webpack's GeneratePackageJsonPlugin
+    // in this workspace and (b) fail type-checking on the pre-existing
+    // @opentelemetry/otlp-exporter-base version skew in the lockfile (a
+    // type-only mismatch in tracing.ts — the OTLP exporters work at runtime).
+    // Drop both plugins so the API builds and serves locally. Production
+    // (NODE_ENV=production) keeps both: the pruned deploy package.json and
+    // full type-checking.
+    if (process.env.NODE_ENV === 'development') {
+      const devSkipPlugins = new Set(['GeneratePackageJsonPlugin', 'ForkTsCheckerWebpackPlugin'])
+      config.plugins = (config.plugins || []).filter(
+        (plugin) => !devSkipPlugins.has(plugin?.constructor?.name),
+      )
+    }
+
     config.watchOptions = {
       ignored: /node_modules/,
     }

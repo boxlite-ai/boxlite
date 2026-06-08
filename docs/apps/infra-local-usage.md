@@ -70,7 +70,7 @@ Cold-start time: ~5-7 minutes on first run (most of it is pulling the
 from a fresh checkout, after a reboot, or after `make stack-down`,
 because it automatically:
 1. Installed the orchestrator package (`make install`) if `boxlite_local` wasn't importable yet
-2. Brought up L1 boxes (`make up-with-schema`) if they weren't running; `load-schema` is idempotent so it's a no-op when the schema is already present (e.g. the PG data volume survived a reboot)
+2. Brought up L1 boxes (`make up`) if they weren't running; the API then runs all TypeORM migrations on boot against the pg box (a no-op when the schema is already present, e.g. the PG data volume survived a reboot)
 3. Built the native binaries (`stack-build.sh`) if `/tmp/boxlite-runner` / `/tmp/boxlite-proxy` were missing (e.g. `/tmp` cleared on reboot)
 4. Created the two symlinks NestJS needs (`apps/.env`, `apps/apps`)
 5. Started api → runner → proxy → dashboard in dependency order, waiting for each to be healthy before the next
@@ -136,9 +136,11 @@ Runner holds state in memory (box handles, heartbeat state, etc.) — restarting
 ## 5. Database reset (common during development)
 
 ```bash
-# Wipe PG entirely and reload the prod schema
-cd apps/infra-local && make load-schema  # equivalent to drop-schema + apply
+# Wipe PG entirely and rebuild the schema from the repo's TypeORM migrations
+cd apps/infra-local && make stack-reset-hard  # drop schema + `make migrate`
 cd -
+
+# (Just apply any pending migrations against the existing schema: `make migrate`)
 
 # Or just truncate user data, preserving schema / migrations state
 PGPASSWORD=boxlite psql -h 127.0.0.1 -p 25432 -U boxlite -d boxlite -c "
@@ -342,4 +344,4 @@ cd apps/infra-local && make down
 
 ## One-liner
 
-**Editing `.tsx` + Vite HMR is the default development rhythm.** API / Runner / Proxy are stable infrastructure that run in the background and you don't touch day-to-day. To wipe state: `make load-schema` + clear `~/.boxlite-runner/`. To demo: freeze a commit and run §1 once.
+**Editing `.tsx` + Vite HMR is the default development rhythm.** API / Runner / Proxy are stable infrastructure that run in the background and you don't touch day-to-day. To wipe state: `make stack-reset-hard` + clear `~/.boxlite-runner/`. To demo: freeze a commit and run §1 once.

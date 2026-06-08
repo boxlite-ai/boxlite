@@ -67,8 +67,7 @@ L1-only (just the BoxLite boxes):
   wipe               stop + remove + wipe data dir
   ps                 list running boxlite-local-* boxes
   doctor             run preflight checks (SDK + runtime + port conflicts)
-  load-schema        generate + load sql/merged-schema.auto-gen.sql into local pg (after `make up`)
-  up-with-schema     make up + make load-schema (one-shot for a fresh stack)
+  migrate            build local pg schema by running all TypeORM migrations from scratch
   seed-init-data     ensure dashboard-required base data (admin org, default region, wait snapshot)
 ```
 
@@ -82,7 +81,7 @@ L2 stack wrappers (L1 + native API/Runner/Proxy/Dashboard):
   stack-status             one-screen health check across L1 + L2
   stack-logs               tail logs (COMPONENT=api|runner|proxy|dashboard|all)
   stack-reset              wipe L2 runtime state (PG user data + runner home; L1 + schema preserved)
-  stack-reset-hard         like stack-reset, but also re-applies prod schema baseline
+  stack-reset-hard         like stack-reset, but also drops + rebuilds the schema via migrations
   stack-nuke               absolute nuke: L1 boxes destroyed + data wiped + logs cleared
   stack-rebuild-l1-box     destroy + recreate one L1 box (BOX=dex|registry|...) — for stuck stateful services
 ```
@@ -110,7 +109,7 @@ After `make stack-up` you have 10 L1 daemon boxes + 1 one-shot bootstrap
 
 | Service       | Host endpoint                                          | Notes                       |
 |---|---|---|
-| postgres      | `postgresql://boxlite@127.0.0.1:25432/boxlite`         | trust auth (local dev only); prod schema baseline pre-loaded |
+| postgres      | `postgresql://boxlite@127.0.0.1:25432/boxlite`         | trust auth (local dev only); schema built by API migrations on boot |
 | redis         | `redis://127.0.0.1:26379`                              |                             |
 | minio (S3)    | `http://127.0.0.1:29000`                               | user/pass `minioadmin`      |
 | minio console | `http://127.0.0.1:29001`                               |                             |
@@ -292,15 +291,11 @@ apps/infra-local/
 │   └── services.py                   # SPEC_* + SERVICES registry
 ├── scripts/                          # L2 stack wrappers (called by `make stack-*`)
 │   ├── _stack-common.sh
-│   ├── build-all-in-one-sql.py       # synthesize sql/merged-schema.auto-gen.sql from apps/api migrations
-│   ├── apply-schema.sh               # load sql/merged-schema.auto-gen.sql into local pg
 │   ├── seed-init-data.sh             # wait for API self-seed + default snapshot
 │   ├── stack-build.sh                # build runner + proxy binaries
 │   ├── stack-up.sh / stack-down.sh / stack-restart.sh
 │   ├── stack-status.sh / stack-logs.sh
 │   └── stack-reset.sh                # tiered: soft / --hard / --nuke
-├── sql/                              # DB schema for L1 pg
-│   └── merged-schema.auto-gen.sql    # generated from apps/api migrations; loaded by `make load-schema`
 ├── configs/                          # legacy: minio init script (now inlined)
 │   └── minio/init.sh
 └── tests/
@@ -353,7 +348,7 @@ logs; `make stack-logs COMPONENT=<name>` tails L2 logs from
 **Reset DB to clean state** (most-common scenario): `make stack-reset &&
 make stack-up` — truncates PG user data and clears
 `~/.boxlite-runner/`, preserves schema + L1 boxes + image cache. Use
-`stack-reset-hard` to also re-apply the prod schema baseline. Use
+`stack-reset-hard` to also drop + rebuild the schema via migrations. Use
 `stack-nuke` only when you want a full cold rebuild (~3-5 min).
 
 **Run integration tests:** `make itest`. Takes ~30 s on warm cache. The

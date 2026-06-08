@@ -6,11 +6,11 @@
 #
 # Order:
 #   1. L1 boxes (10) via `python -m boxlite_local up` (skipped if already up)
-#   2. Schema load (idempotent — apply-schema.sh detects already-loaded)
-#   3. API
-#   4. Runner (depends on API for registration)
-#   5. Proxy
-#   6. Dashboard
+#   2. API — runs all TypeORM migrations on boot against the empty pg
+#           (NODE_ENV=development → migrationsRun=true; no schema baseline)
+#   3. Runner (depends on API for registration)
+#   4. Proxy
+#   5. Dashboard
 #
 # Usage: stack-up.sh [component...]   (default: all)
 
@@ -24,7 +24,7 @@ if [ ${#COMPONENTS[@]} -eq 0 ] || [ -z "${COMPONENTS[0]}" ]; then
 fi
 
 # ---------- Orchestrator package installed? ----------
-# Bringing up L1 calls `python -m boxlite_local` (via make up-with-schema).
+# Bringing up L1 calls `python -m boxlite_local` (via make up).
 # On a fresh Python env that module isn't importable yet — auto-install
 # instead of failing. Conditional: the common restart path (already
 # installed) pays nothing, so `make stack-up` works from zero or on a
@@ -38,7 +38,7 @@ fi
 L1_RECREATED=false
 if ! boxlite ls 2>/dev/null | grep -q boxlite-local-postgres; then
   log "L1 boxes not running — starting..."
-  ( cd "${INFRA_LOCAL_DIR}" && make up-with-schema )
+  ( cd "${INFRA_LOCAL_DIR}" && make up )
   L1_RECREATED=true
 else
   ok "L1 boxes already running"

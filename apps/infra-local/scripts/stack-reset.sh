@@ -3,8 +3,8 @@
 #
 # Usage: stack-reset.sh             # clear sandboxes/snapshots, KEEP users+orgs
 #                                     → browser stays logged in, no re-login
-#        stack-reset.sh --hard      # wipe PG schema entirely (reloads the
-#                                     merged schema) → identity gone, re-login needed
+#        stack-reset.sh --hard      # wipe PG schema entirely (rebuilds it by
+#                                     re-running migrations) → identity gone, re-login needed
 #        stack-reset.sh --nuke      # everything: --hard + L1 boxes + .logs
 
 set -euo pipefail
@@ -52,15 +52,15 @@ if [ "$MODE" = "soft" ]; then
   log "next: \`make stack-up\` — API re-seeds default snapshot; runner re-registers"
 elif [ "$MODE" = "hard" ]; then
   if boxlite ls 2>/dev/null | grep -q boxlite-local-postgres; then
-    log "wiping schema + reloading merged schema..."
+    log "wiping schema + rebuilding via migrations..."
     PGPASSWORD=boxlite psql -h 127.0.0.1 -p 25432 -U boxlite -d boxlite -c "
       DROP SCHEMA public CASCADE;
       CREATE SCHEMA public;
       GRANT ALL ON SCHEMA public TO boxlite;
     " > /dev/null
-    ( cd "${INFRA_LOCAL_DIR}" && make load-schema )
+    ( cd "${INFRA_LOCAL_DIR}" && make migrate )
   else
-    warn "PG not running — skipping schema reload"
+    warn "PG not running — skipping schema rebuild"
   fi
   ok "hard reset complete (L1 boxes alive, schema rebuilt — identity wiped)"
   warn "browser must re-login: clear sessionStorage + localStorage, then sign in via dex"
