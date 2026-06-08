@@ -51,17 +51,17 @@ jobs:
         include: ${{ fromJson(needs.config.outputs.platforms) }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           submodules: recursive
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: ${{ needs.config.outputs.node-build-version }}
 
       - name: Set up Rust
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+        uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1.16.1
         with:
           toolchain: ${{ needs.config.outputs.rust-toolchain }}
 
@@ -69,11 +69,11 @@ jobs:
       # Works on host and inside Docker containers.
       # Cache is pre-warmed by the Warm Caches workflow on push to main.
       - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
+        uses: mozilla-actions/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
         continue-on-error: true
 
       - name: Export GHA cache env vars
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         with:
           script: |
             core.exportVariable('ACTIONS_RESULTS_URL', process.env.ACTIONS_RESULTS_URL || '');
@@ -170,7 +170,7 @@ jobs:
         run: tar -cvf sdks/node/artifacts-${{ matrix.target }}.tar -C sdks/node native/boxlite.js npm/
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: artifacts-${{ matrix.target }}
           path: sdks/node/artifacts-${{ matrix.target }}.tar
@@ -198,12 +198,12 @@ jobs:
         node-version: ${{ fromJson(needs.config.outputs.node-versions) }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           submodules: recursive
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: ${{ matrix.node-version }}
 
@@ -213,7 +213,7 @@ jobs:
         run: rm -rf sdks/node/npm
 
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: artifacts-${{ matrix.platform.target }}
           path: sdks/node
@@ -252,12 +252,12 @@ jobs:
       contents: read
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           submodules: recursive
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
@@ -274,7 +274,7 @@ jobs:
       # Download pre-built artifacts from all platforms (darwin-arm64, linux-x64-gnu)
       # merge-multiple: true combines artifacts from different matrix jobs into one directory
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: sdks/node/artifacts
           pattern: artifacts-*
@@ -333,10 +333,10 @@ jobs:
       contents: write   # Required to upload assets to GitHub Release
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '24'
 
@@ -348,7 +348,7 @@ jobs:
       # Download pre-built artifacts from all platforms (darwin-arm64, linux-x64-gnu)
       # merge-multiple: true combines artifacts from different matrix jobs into one directory
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: sdks/node/artifacts
           pattern: artifacts-*
@@ -375,7 +375,7 @@ jobs:
           ls -la packages/
 
       - name: Upload to release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           files: sdks/node/packages/*.tgz
           fail_on_unmatched_files: true
