@@ -3,8 +3,70 @@
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+
+
+def _platform_runtime_cache_dir() -> Path:
+    """Directory the BoxLite SDK extracts its embedded runtime into.
+
+    Mirrors the Rust `dirs::data_local_dir()` the SDK uses: macOS →
+    ~/Library/Application Support, Linux → $XDG_DATA_HOME or ~/.local/share.
+    """
+    if sys.platform == "darwin":
+        base = Path.home() / "Library" / "Application Support"
+    else:
+        xdg = os.environ.get("XDG_DATA_HOME")
+        base = Path(xdg) if xdg else Path.home() / ".local" / "share"
+    return base / "boxlite" / "runtimes"
+
+
+def pick_runtime_dir(runtimes_dir: Path, version: str | None) -> Path | None:
+    """Pick a usable extracted runtime: a `v{version}[-{hash}]` dir that actually
+    contains the `boxlite-guest` binary. Pure (no env/global reads) for testability.
+
+    Skips dirs that carry a `.complete` stamp but are missing `boxlite-guest`
+    (a partial or REST-only extraction the SDK's fast path would wrongly trust
+    and then fail on at `box.start()`). Prefers the hashless release dir, then
+    the most-recently-used.
+    """
+    if not runtimes_dir.is_dir():
+        return None
+    usable: list[Path] = []
+    for d in runtimes_dir.iterdir():
+        if not d.is_dir() or not d.name.startswith("v"):
+            continue
+        if version and not (d.name == f"v{version}" or d.name.startswith(f"v{version}-")):
+            continue
+        if not (d / "boxlite-guest").is_file():
+            continue
+        usable.append(d)
+    if not usable:
+        return None
+    # Hashless release ("v1.2.3") before debug ("v1.2.3-hash"); then newest mtime.
+    usable.sort(key=lambda d: ("-" in d.name, -d.stat().st_mtime))
+    return usable[0]
+
+
+def resolve_runtime_dir() -> Path | None:
+    """A complete extracted runtime to pin via BOXLITE_RUNTIME_DIR, or None.
+
+    Returns None (leave the SDK's own resolution untouched) when the user already
+    set BOXLITE_RUNTIME_DIR. Otherwise locates a `boxlite-guest`-bearing cache dir
+    matching the installed SDK version — working around a stale/partial embedded
+    cache, or an SDK installed from another worktree without an embedded guest,
+    which the SDK would otherwise fail on at box start.
+    """
+    if os.environ.get("BOXLITE_RUNTIME_DIR"):
+        return None
+    try:
+        import boxlite
+
+        version = getattr(boxlite, "__version__", None)
+    except Exception:
+        version = None
+    return pick_runtime_dir(_platform_runtime_cache_dir(), version)
 
 
 def _parse_int_env(name: str, default: str) -> int:

@@ -8,6 +8,7 @@ per call. Reuse path of get_or_create silently keeps existing config
 from __future__ import annotations
 
 import asyncio
+import os
 import shutil
 import time
 import urllib.error
@@ -15,7 +16,7 @@ import urllib.request
 from graphlib import TopologicalSorter
 from pathlib import Path
 
-from .config import InfraConfig
+from .config import InfraConfig, resolve_runtime_dir
 from .doctor import doctor
 from .execwrap import exec_collect
 from .types import HealthCheck, ServiceSpec
@@ -74,7 +75,21 @@ def _build_box_options_with_volumes(spec: ServiceSpec, config: InfraConfig, volu
     )
 
 
+def ensure_runtime_env() -> None:
+    """Pin BOXLITE_RUNTIME_DIR to a complete extracted runtime when the SDK's own
+    default resolution would otherwise fail — a stale/partial embedded cache (a
+    `.complete` dir missing boxlite-guest), or an SDK installed from another
+    worktree without an embedded guest. No-op if the user already set
+    BOXLITE_RUNTIME_DIR or no usable cached runtime is found. Idempotent.
+    """
+    runtime_dir = resolve_runtime_dir()
+    if runtime_dir is not None:
+        os.environ["BOXLITE_RUNTIME_DIR"] = str(runtime_dir)
+        print(f"  pinned BOXLITE_RUNTIME_DIR to cached runtime: {runtime_dir}")
+
+
 def get_runtime():
+    ensure_runtime_env()
     try:
         from boxlite import Boxlite
     except ImportError:
@@ -372,6 +387,9 @@ async def up(
     only: list[str] | None = None,
     skip_doctor: bool = False,
 ) -> None:
+    # Pin the runtime dir before anything builds a Boxlite.default() singleton
+    # (doctor below does), so box starts find boxlite-guest deterministically.
+    ensure_runtime_env()
     if not skip_doctor:
         await doctor(config, services, strict=True)
     else:

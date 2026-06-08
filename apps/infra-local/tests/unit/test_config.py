@@ -4,7 +4,62 @@ from pathlib import Path
 
 import pytest
 
-from boxlite_local.config import InfraConfig
+from boxlite_local.config import InfraConfig, pick_runtime_dir
+
+
+def _make_runtime(parent: Path, name: str, *, guest: bool, complete: bool = True) -> Path:
+    d = parent / name
+    d.mkdir(parents=True)
+    if guest:
+        (d / "boxlite-guest").write_bytes(b"\x00")
+    if complete:
+        (d / ".complete").write_text("0.9.5")
+    return d
+
+
+def test_pick_runtime_dir_selects_complete_matching_version(tmp_path):
+    rt = tmp_path / "runtimes"
+    rt.mkdir()
+    good = _make_runtime(rt, "v0.9.5", guest=True)
+    # .complete stamp but no boxlite-guest — the stale/partial cache the SDK
+    # fast-path trusts and then fails on at box.start().
+    _make_runtime(rt, "v0.9.5-deadbeef", guest=False)
+    _make_runtime(rt, "v0.8.0", guest=True)  # wrong version
+    assert pick_runtime_dir(rt, "0.9.5") == good
+
+
+def test_pick_runtime_dir_skips_complete_marker_without_guest(tmp_path):
+    rt = tmp_path / "runtimes"
+    rt.mkdir()
+    _make_runtime(rt, "v0.9.5-deadbeef", guest=False)
+    assert pick_runtime_dir(rt, "0.9.5") is None
+
+
+def test_pick_runtime_dir_none_when_dir_missing(tmp_path):
+    assert pick_runtime_dir(tmp_path / "nope", "0.9.5") is None
+
+
+def test_pick_runtime_dir_prefers_hashless_release(tmp_path):
+    rt = tmp_path / "runtimes"
+    rt.mkdir()
+    release = _make_runtime(rt, "v0.9.5", guest=True)
+    _make_runtime(rt, "v0.9.5-deadbeef", guest=True)
+    assert pick_runtime_dir(rt, "0.9.5") == release
+
+
+def test_pick_runtime_dir_matches_debug_hash_when_no_release(tmp_path):
+    rt = tmp_path / "runtimes"
+    rt.mkdir()
+    debug = _make_runtime(rt, "v0.9.5-deadbeef", guest=True)
+    assert pick_runtime_dir(rt, "0.9.5") == debug
+
+
+def test_pick_runtime_dir_skips_other_version_and_extracting_tmp(tmp_path):
+    rt = tmp_path / "runtimes"
+    rt.mkdir()
+    _make_runtime(rt, "v0.9.5.extracting.123", guest=True)  # interrupted extraction
+    _make_runtime(rt, "v0.8.0", guest=True)  # other version
+    assert pick_runtime_dir(rt, "0.9.5") is None
 
 
 def test_defaults():
