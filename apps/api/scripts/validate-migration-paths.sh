@@ -15,17 +15,23 @@ LEGACY_CUTOFF=1770880371265
 forbidden=()
 
 for f in "$@"; do
-  rel="$(realpath --relative-to="$PWD" "$f")"
+  rel="${f#"$PWD"/}"
+  rel="${rel#./}"
+  migration_path="${rel#*src/migrations/}"
 
-  case "$rel" in
-    apps/api/src/migrations/pre-deploy/*-migration.ts) ;;
-    apps/api/src/migrations/post-deploy/*-migration.ts) ;;
-    apps/api/src/migrations/*/*-migration.ts)
+  if [ "$migration_path" = "$rel" ]; then
+    continue
+  fi
+
+  case "$migration_path" in
+    pre-deploy/*-migration.ts) ;;
+    post-deploy/*-migration.ts) ;;
+    */*-migration.ts)
       forbidden+=("$rel")
       ;;
-    apps/api/src/migrations/*-migration.ts)
-      timestamp=$(basename "$rel" | grep -oP '^\d+')
-      if [ -n "$timestamp" ] && [ "$timestamp" -le "$LEGACY_CUTOFF" ]; then
+    *-migration.ts)
+      timestamp="${migration_path%%-*}"
+      if [[ "$timestamp" =~ ^[0-9]+$ ]] && [ "$timestamp" -le "$LEGACY_CUTOFF" ]; then
         continue
       fi
       forbidden+=("$rel")
