@@ -278,7 +278,6 @@ apps/infra-local/
 ├── README.md                         # this file
 ├── CONNECTIONS.md                    # endpoint / credential / env-var reference per service
 ├── pyproject.toml                    # package definition
-├── goal.md                           # original "why we built this"
 ├── boxlite_local/                    # the L1 orchestrator package
 │   ├── __init__.py
 │   ├── __main__.py                   # python -m boxlite_local entry
