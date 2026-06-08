@@ -138,7 +138,13 @@ impl Drop for PerTestBoxHome {
 /// Return PIDs from `<boxes_dir>/<box_id>/shim.pid` that point at
 /// processes still alive right now. Missing dirs, malformed PID
 /// files, and dead PIDs are all skipped silently.
-fn live_shim_pids(boxes_dir: &std::path::Path) -> Vec<u32> {
+///
+/// `pub` so individual tests can assert no-leak explicitly in their
+/// own bodies (rather than relying solely on the `PerTestBoxHome`
+/// drop guard). The shim-leak regression in #622 is a good example:
+/// the test asserts the production cleanup path ran, not just that
+/// the exit code was right.
+pub fn live_shim_pids(boxes_dir: &std::path::Path) -> Vec<u32> {
     let mut alive = Vec::new();
     let Ok(entries) = std::fs::read_dir(boxes_dir) else {
         return alive;

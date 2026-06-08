@@ -33,8 +33,15 @@ pub struct RunArgs {
     pub command: Vec<String>,
 }
 
-/// Entry point
-pub async fn execute(args: RunArgs, global: &GlobalFlags) -> anyhow::Result<()> {
+/// Entry point.
+///
+/// Returns the shell exit code the CLI should exit with (0 on success, the
+/// box's mapped exit code on a non-zero command exit). Returning the code —
+/// instead of calling `std::process::exit` mid-function — lets `BoxRunner`
+/// (and the `BoxliteRuntime` it owns) drop normally, so `RuntimeImpl::Drop`
+/// runs `shutdown_sync()` and stops the box's shim on every return path.
+/// `std::process::exit` would bypass that Drop chain and leak the shim (#622).
+pub async fn execute(args: RunArgs, global: &GlobalFlags) -> anyhow::Result<i32> {
     let mut runner = BoxRunner::new(args, global)?;
     runner.run().await
 }
@@ -53,7 +60,7 @@ impl BoxRunner {
         Ok(Self { args, rt, home })
     }
 
-    async fn run(&mut self) -> anyhow::Result<()> {
+    async fn run(&mut self) -> anyhow::Result<i32> {
         // Validate flags and environment
         self.validate_flags()?;
 
@@ -66,7 +73,7 @@ impl BoxRunner {
         // Detach mode: Print ID and exit
         if self.args.management.detach {
             println!("{}", litebox.id());
-            return Ok(());
+            return Ok(0);
         }
 
         // --tty implies --interactive when stdin is a terminal
@@ -83,12 +90,14 @@ impl BoxRunner {
         );
 
         let exit_code = streamer.start().await?;
-        // Exit with box's exit code
-        if exit_code != 0 {
-            std::process::exit(to_shell_exit_code(exit_code));
-        }
-
-        Ok(())
+        // Just return the shell exit code. Returning (vs. calling
+        // `std::process::exit` here) lets `execution`, `litebox`, and the
+        // owning `BoxliteRuntime` drop normally, so `RuntimeImpl::Drop`
+        // runs `shutdown_sync()` and tears the box's shim down — the RAII
+        // teardown the success path already relied on. `std::process::exit`
+        // bypasses Drop entirely and leaked the shim on the non-zero path
+        // (#622).
+        Ok(to_shell_exit_code(exit_code))
     }
 
     async fn create_box(&self) -> anyhow::Result<LiteBox> {

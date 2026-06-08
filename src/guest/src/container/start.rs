@@ -274,7 +274,7 @@ pub(crate) fn cleanup_bundle_directory(bundle_path: &std::path::Path) {
 pub(crate) fn load_container_status(
     container_state_path: &Path,
 ) -> BoxliteResult<libcontainer::container::ContainerStatus> {
-    let container = LibContainer::load(container_state_path.to_path_buf()).map_err(|e| {
+    let mut container = LibContainer::load(container_state_path.to_path_buf()).map_err(|e| {
         BoxliteError::Internal(format!(
             "Failed to load container from {}: {}",
             container_state_path.display(),
@@ -282,5 +282,35 @@ pub(crate) fn load_container_status(
         ))
     })?;
 
+    container.refresh_status().map_err(|e| {
+        BoxliteError::Internal(format!(
+            "Failed to refresh container status from {}: {}",
+            container_state_path.display(),
+            e
+        ))
+    })?;
+
     Ok(container.status())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use libcontainer::container::{ContainerStatus, State};
+
+    #[test]
+    fn load_container_status_refreshes_stale_persisted_status() {
+        let dir = tempfile::TempDir::new().expect("create temp dir");
+        let state = State::new(
+            "test-container",
+            ContainerStatus::Stopped,
+            Some(i32::try_from(std::process::id()).expect("current pid fits in i32")),
+            dir.path().to_path_buf(),
+        );
+        state.save(dir.path()).expect("save libcontainer state");
+
+        let status = load_container_status(dir.path()).expect("load container status");
+
+        assert_eq!(status, ContainerStatus::Running);
+    }
 }

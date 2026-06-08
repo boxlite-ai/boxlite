@@ -5,9 +5,9 @@ use nix::sys::signal::Signal;
 use nix::sys::termios::{
     InputFlags, LocalFlags, OutputFlags, SetArg, Termios, tcgetattr, tcsetattr,
 };
-use std::io::IsTerminal;
+use std::io::{IsTerminal, Read};
 use std::os::fd::{AsFd, AsRawFd};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::select;
 use tokio::signal::unix::{SignalKind, signal};
 
@@ -237,22 +237,227 @@ impl<'a> StreamManager<'a> {
 }
 
 async fn stream_stdin(mut stdin_tx: boxlite::ExecStdin) {
-    let mut stdin = tokio::io::stdin();
-    let mut buf = [0u8; 8192];
-
-    loop {
-        match stdin.read(&mut buf).await {
-            Ok(0) => break,
-            Ok(n) => {
-                if let Err(e) = stdin_tx.write(&buf[..n]).await {
-                    tracing::debug!("failed to forward stdin: {}", e);
+    // The blocking read(2) on stdin lives on a dedicated OS thread, NOT a tokio
+    // blocking-pool thread (which is what `tokio::io::stdin()` uses). A parked
+    // read(2) cannot be cancelled; tokio joins its blocking pool on runtime
+    // shutdown, so reading stdin there would hang process exit until the user
+    // pressed ENTER to unblock the read after the remote shell already exited.
+    // A plain std::thread is not joined on shutdown, so the process exits
+    // promptly while this read is still parked. See tokio::io::stdin() docs.
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(16);
+    std::thread::spawn(move || {
+        let mut stdin = std::io::stdin();
+        let mut buf = [0u8; 8192];
+        loop {
+            match stdin.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    if tx.blocking_send(buf[..n].to_vec()).is_err() {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    tracing::debug!("stdin read error: {}", e);
                     break;
                 }
             }
-            Err(e) => {
-                tracing::debug!("stdin read error: {}", e);
-                break;
+        }
+    });
+
+    while let Some(chunk) = rx.recv().await {
+        if let Err(e) = stdin_tx.write(&chunk).await {
+            tracing::debug!("failed to forward stdin: {}", e);
+            break;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    // `nix` already re-exports `libc` (nix-0.30/src/lib.rs:107 `pub use libc;`),
+    // so the tests reach for raw syscalls through `nix::libc` rather than
+    // pulling libc in as a separate dev-dep.
+    use nix::libc;
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+
+    // fd 0 is process-global. Serialize tests that swap stdin so they don't
+    // race with each other in the same test binary. Matches the pattern in
+    // `credentials.rs::ENV_LOCK`.
+    static STDIN_LOCK: Mutex<()> = Mutex::new(());
+
+    /// RAII guard: restore the original fd 0 on drop so a panic inside the
+    /// test does not leave the binary running with a hijacked stdin.
+    struct RestoreStdin(libc::c_int);
+    impl Drop for RestoreStdin {
+        fn drop(&mut self) {
+            unsafe {
+                libc::dup2(self.0, libc::STDIN_FILENO);
+                libc::close(self.0);
             }
         }
+    }
+
+    /// Reproducer for the hang fixed in PR #626 — `boxlite exec -ti` used
+    /// to hang after the in-box shell exited until the user pressed ENTER.
+    ///
+    /// Before the fix, `stream_stdin` read via `tokio::io::stdin().read().await`,
+    /// which parks the blocking `read(2)` on a tokio blocking-pool thread.
+    /// Once the remote shell exits, the select-loop aborts the stdin task
+    /// (`StreamManager::start` at line 191), but `JoinHandle::abort` cannot
+    /// interrupt a thread already parked in `read(2)`. Runtime shutdown then
+    /// blocks on that pool thread — the user-visible "press ENTER to exit".
+    ///
+    /// This test parks `stream_stdin` on a pipe with no writer activity,
+    /// aborts the spawned task, and times `Runtime::shutdown_timeout`.
+    /// Pre-fix: shutdown waits the full timeout because the pool thread
+    /// cannot be reaped while parked in `read(2)`. Post-fix: the read lives
+    /// on a plain `std::thread` that the tokio runtime does not own, so
+    /// shutdown returns immediately.
+    #[test]
+    fn stream_stdin_does_not_block_runtime_shutdown_after_abort() {
+        let _serialize = STDIN_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+
+        // Pipe whose write end stays open: every read on fd 0 will park
+        // indefinitely (no data, no EOF). The read end is dup2'd onto fd 0.
+        let mut fds = [0 as libc::c_int; 2];
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0, "pipe");
+        let (read_end, write_end) = (fds[0], fds[1]);
+
+        let saved = unsafe { libc::dup(libc::STDIN_FILENO) };
+        assert!(saved >= 0, "dup saved stdin");
+        let _restore = RestoreStdin(saved);
+
+        let rc = unsafe { libc::dup2(read_end, libc::STDIN_FILENO) };
+        assert_eq!(rc, libc::STDIN_FILENO, "dup2 onto fd 0");
+        // The pipe description is kept alive by the kernel's reference
+        // from fd 0; closing the original read_end here is fine.
+        unsafe { libc::close(read_end) };
+
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("build runtime");
+
+        let (mut exec, _stdout_tx, _stderr_tx, _stdin_rx, _result_tx) =
+            boxlite::Execution::stub("stream-stdin-shutdown");
+        let stdin_tx = exec.stdin().expect("stub exposes stdin");
+
+        // Same call shape as the production path at line 151.
+        let handle = rt.spawn(stream_stdin(stdin_tx));
+
+        // Let the inner read syscall reach the kernel and park.
+        std::thread::sleep(Duration::from_millis(150));
+
+        // Mimic the select-loop on remote-shell exit (line 190-192).
+        handle.abort();
+
+        let start = Instant::now();
+        rt.shutdown_timeout(Duration::from_secs(2));
+        let elapsed = start.elapsed();
+
+        // Keep the write end alive until after shutdown so the pipe never
+        // EOFs and the test never accidentally unparks the read.
+        unsafe { libc::close(write_end) };
+
+        assert!(
+            elapsed < Duration::from_millis(500),
+            "Runtime::shutdown_timeout took {:?}; expected <500 ms. With \
+             tokio::io::stdin() the parked read(2) on a blocking-pool \
+             thread keeps the runtime from reaping the pool, so shutdown \
+             waits the full timeout before forcibly terminating.",
+            elapsed,
+        );
+    }
+
+    /// End-to-end PTY reproducer that mirrors the manual `pexpect` probe
+    /// from this PR's description: a real terminal device under fd 0, a
+    /// full pass through `StreamManager::start` (raw-mode guard, select
+    /// loop, abort-on-shell-exit), and then a timed runtime drop. The
+    /// first test isolates the mechanism on a pipe; this one demonstrates
+    /// the same hang on the actual code path the user hits with
+    /// `boxlite exec -ti`.
+    #[test]
+    fn stream_manager_with_pty_does_not_block_runtime_drop_after_exec_exit() {
+        use nix::pty::{OpenptyResult, openpty};
+        use std::os::fd::{AsRawFd, IntoRawFd};
+
+        let _serialize = STDIN_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+
+        // Real PTY pair. The slave is dup2'd onto fd 0, so the CLI's
+        // `tokio::io::stdin()` (pre-fix) or `std::io::stdin()` (post-fix)
+        // reads from a genuine terminal device — `RawModeGuard` activates,
+        // the same way it does for a real `exec -ti`. The master stays
+        // alive (no writes, no close) so reads on the slave park.
+        let OpenptyResult { master, slave } = openpty(None, None).expect("openpty");
+        let master_fd = master.into_raw_fd();
+        let slave_fd = slave.as_raw_fd();
+
+        let saved = unsafe { libc::dup(libc::STDIN_FILENO) };
+        assert!(saved >= 0, "dup saved stdin");
+        let _restore = RestoreStdin(saved);
+
+        let rc = unsafe { libc::dup2(slave_fd, libc::STDIN_FILENO) };
+        assert_eq!(rc, libc::STDIN_FILENO, "dup2 slave onto fd 0");
+        // After dup2, fd 0 holds its own reference to the slave's file
+        // description; the OwnedFd `slave` can drop normally.
+        drop(slave);
+
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("build runtime");
+
+        let (mut exec, stdout_tx, stderr_tx, _stdin_rx, result_tx) =
+            boxlite::Execution::stub("stream-mgr-pty");
+
+        let exit = rt
+            .block_on(async {
+                // Simulate "remote shell exited cleanly": after the
+                // stdin task has had time to park on the slave, send
+                // the exit status and drop the output channels so
+                // `StreamManager::start`'s `io_finished` future
+                // completes and the select-loop breaks with exit=0.
+                tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_millis(150)).await;
+                    let _ = result_tx.send(boxlite::ExecResult {
+                        exit_code: 0,
+                        error_message: None,
+                    });
+                    drop(stdout_tx);
+                    drop(stderr_tx);
+                });
+                StreamManager::new(&mut exec, /*interactive*/ true, /*tty*/ true)
+                    .start()
+                    .await
+            })
+            .expect("StreamManager::start");
+        assert_eq!(exit, 0, "stub signals clean exit");
+
+        // `start()` returned, the select-loop already aborted the stdin
+        // task — but with the buggy implementation that abort cannot
+        // unpark the blocking-pool `read(2)` on the slave, so the
+        // runtime cannot reap the pool on shutdown.
+        let start = Instant::now();
+        rt.shutdown_timeout(Duration::from_secs(2));
+        let elapsed = start.elapsed();
+
+        // Keep the master alive until after shutdown so the slave never
+        // sees EOF and never accidentally unparks the parked read.
+        unsafe { libc::close(master_fd) };
+
+        assert!(
+            elapsed < Duration::from_millis(500),
+            "Runtime drop took {:?} with fd 0 on a PTY slave. Pre-fix \
+             the parked read(2) on the blocking-pool thread keeps \
+             shutdown waiting for the full timeout — same hang the \
+             manual `pexpect` repro in the PR description catches \
+             (host process should return immediately on shell exit, \
+             not after a stray ENTER).",
+            elapsed,
+        );
     }
 }

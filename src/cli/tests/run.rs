@@ -30,6 +30,101 @@ fn test_run_exit_code_125() {
     ctx.cmd.assert().code(125);
 }
 
+/// Regression for #622: `boxlite run --rm <image> <cmd>` exiting non-zero
+/// must tear the box down before the CLI returns. Pre-fix, the non-zero
+/// path took a `std::process::exit` shortcut that skipped `BoxRunner` /
+/// `BoxliteRuntime` drop and therefore `RuntimeImpl::Drop` ->
+/// `shutdown_sync`, leaving the microVM's shim alive (the "orphan shims in
+/// /tmp" that motivated #604).
+///
+/// The PerTestBoxHome drop guard catches this implicitly, but this test
+/// asserts the no-leak property *explicitly* in the test body so the intent
+/// is visible at the call site: scan the per-test home's `boxes/<id>/shim.pid`
+/// files after `run` returns and confirm none of them point at a live
+/// process.
+#[test]
+fn test_run_rm_non_zero_exit_does_not_leak_shim() {
+    let mut ctx = common::boxlite();
+    ctx.cmd
+        .args(["run", "--rm", "alpine:latest", "sh", "-c", "exit 7"]);
+    ctx.cmd.assert().code(7);
+
+    // Read the boxes directory directly from the shared `ctx.home` so the
+    // assertion is independent of `PerTestBoxHome`'s drop hook. If the
+    // production cleanup path runs, every shim.pid we find should refer
+    // to a dead PID (or have been removed by `--rm`).
+    let boxes_dir = ctx.home.join("boxes");
+    let leaks = boxlite_test_utils::home::live_shim_pids(&boxes_dir);
+    assert!(
+        leaks.is_empty(),
+        "non-zero `boxlite run --rm` left live shim PID(s): {leaks:?}. \
+         The std::process::exit fast path skipped RuntimeImpl::Drop ->\
+         shutdown_sync; tearing the runtime down via a normal return is\
+         what reaps the shim (see #622)."
+    );
+}
+
+/// Companion to `test_run_rm_non_zero_exit_does_not_leak_shim`. The RAII
+/// teardown must also hold on every *error* path through `BoxRunner::run`
+/// — every `?` early-return between the box being created and the
+/// streamer finishing has to drop into `RuntimeImpl::Drop` without leaking
+/// a shim. Two practical CLI-reachable triggers exist:
+///
+/// - **`create_box()?`** (`run.rs` branch ②): the image pull fails, so no
+///   shim is ever spawned. Asserts no spurious partial-box state was left
+///   behind.
+/// - **`litebox.exec()?`** (`run.rs` branch ③): the box *is* created and
+///   running, then the exec call fails (e.g. invoking a directory). The
+///   shim is alive at the failure point; only the Drop chain reaps it.
+///
+/// The two remaining early-exit branches in `BoxRunner::run` —
+/// `streamer.start()?` (signal-handler init, effectively unreachable in a
+/// normal CLI environment) and a panic mid-`run()` — are guarded by Rust's
+/// language guarantee that stack unwinding always runs `Drop`, plus
+/// `PerTestBoxHome::Drop`'s implicit leak panic across every test using
+/// `common::boxlite()`. Not adding fragile mock-injection tests for those.
+#[test]
+fn test_run_image_pull_failure_does_not_leak_shim() {
+    let mut ctx = common::boxlite_bare();
+    ctx.cmd.timeout(std::time::Duration::from_secs(30));
+    ctx.cmd.args([
+        "run",
+        "--rm",
+        "docker.io/boxlite-test-does-not-exist/nonexistent-image:latest",
+        "echo",
+        "hi",
+    ]);
+    ctx.cmd.assert().failure();
+
+    let boxes_dir = ctx.home.join("boxes");
+    let leaks = boxlite_test_utils::home::live_shim_pids(&boxes_dir);
+    assert!(
+        leaks.is_empty(),
+        "image-pull failure left live shim PID(s): {leaks:?}. \
+         `BoxRunner::run` branch ② (create_box?) must drop the runtime \
+         cleanly even when no box ever reached Running."
+    );
+}
+
+#[test]
+fn test_run_exec_setup_failure_does_not_leak_shim() {
+    let mut ctx = common::boxlite();
+    // Invoking `/etc` (a directory) makes the guest's exec setup fail and
+    // boxlite returns Err from `litebox.exec(cmd)` — exercising the third
+    // `?` in `BoxRunner::run` while the box is fully running.
+    ctx.cmd.args(["run", "--rm", "alpine:latest", "/etc"]);
+    ctx.cmd.assert().failure();
+
+    let boxes_dir = ctx.home.join("boxes");
+    let leaks = boxlite_test_utils::home::live_shim_pids(&boxes_dir);
+    assert!(
+        leaks.is_empty(),
+        "exec-setup failure left live shim PID(s): {leaks:?}. \
+         `BoxRunner::run` branch ③ (litebox.exec?) leaves the box \
+         Running at the failure point; Drop must still reap the shim."
+    );
+}
+
 // ============================================================================
 // Command Execution Error Tests
 // ============================================================================

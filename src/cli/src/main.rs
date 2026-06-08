@@ -35,10 +35,20 @@ fn main() {
         .build()
         .expect("Failed to build tokio runtime");
 
-    let _ = rt.block_on(run_cli(cli));
+    // `block_on` returns only after `run_cli` has fully unwound, so every
+    // `BoxliteRuntime` it created has already dropped — firing
+    // `RuntimeImpl::Drop` -> `shutdown_sync` and reaping any non-detached
+    // box. Then we drop the tokio runtime itself and `process::exit` with
+    // the propagated code. Calling `process::exit` here (vs. mid-command)
+    // is safe because there is nothing left on the stack to clean up; doing
+    // it inside `run_cli` would bypass that Drop chain and leak the shim
+    // (#622).
+    let code = rt.block_on(run_cli(cli));
+    drop(rt);
+    process::exit(code);
 }
 
-async fn run_cli(cli: Cli) -> anyhow::Result<()> {
+async fn run_cli(cli: Cli) -> i32 {
     // Per-layer filters: stderr stays peer-CLI quiet (warn), the optional file
     // layer carries richer info-level data for triage. Precedence (docker
     // convention): `--debug` flag > `RUST_LOG` env > per-layer default.
@@ -88,40 +98,46 @@ async fn run_cli(cli: Cli) -> anyhow::Result<()> {
         .init();
 
     let global = cli.global;
-    let result = match cli.command {
+    // Only `run`/`exec` carry a meaningful shell exit code (the box's
+    // mapped command exit); the rest are unit-success commands adapted to
+    // `Ok(0)` here so the dispatcher can produce one `Result<i32>` overall.
+    // Keeping the adapter at the call site (rather than pushing `i32` into
+    // 15 commands that have no exit-code concept) preserves type honesty.
+    let result: anyhow::Result<i32> = match cli.command {
         cli::Commands::Run(args) => commands::run::execute(args, &global).await,
         cli::Commands::Exec(args) => commands::exec::execute(args, &global).await,
-        cli::Commands::Create(args) => commands::create::execute(args, &global).await,
-        cli::Commands::List(args) => commands::list::execute(args, &global).await,
-        cli::Commands::Rm(args) => commands::rm::execute(args, &global).await,
-        cli::Commands::Start(args) => commands::start::execute(args, &global).await,
-        cli::Commands::Stop(args) => commands::stop::execute(args, &global).await,
-        cli::Commands::Restart(args) => commands::restart::execute(args, &global).await,
-        cli::Commands::Pull(args) => commands::pull::execute(args, &global).await,
-        cli::Commands::Images(args) => commands::images::execute(args, &global).await,
-        cli::Commands::Inspect(args) => commands::inspect::execute(args, &global).await,
-        cli::Commands::Cp(args) => commands::cp::execute(args, &global).await,
-        cli::Commands::Info(args) => commands::info::execute(args, &global).await,
-        cli::Commands::Logs(args) => commands::logs::execute(args, &global).await,
-        cli::Commands::Stats(args) => commands::stats::execute(args, &global).await,
-        cli::Commands::Serve(args) => commands::serve::execute(args, &global).await,
-        cli::Commands::Auth(args) => commands::auth::run(args, &global).await,
+        cli::Commands::Create(args) => commands::create::execute(args, &global).await.map(|_| 0),
+        cli::Commands::List(args) => commands::list::execute(args, &global).await.map(|_| 0),
+        cli::Commands::Rm(args) => commands::rm::execute(args, &global).await.map(|_| 0),
+        cli::Commands::Start(args) => commands::start::execute(args, &global).await.map(|_| 0),
+        cli::Commands::Stop(args) => commands::stop::execute(args, &global).await.map(|_| 0),
+        cli::Commands::Restart(args) => commands::restart::execute(args, &global).await.map(|_| 0),
+        cli::Commands::Pull(args) => commands::pull::execute(args, &global).await.map(|_| 0),
+        cli::Commands::Images(args) => commands::images::execute(args, &global).await.map(|_| 0),
+        cli::Commands::Inspect(args) => commands::inspect::execute(args, &global).await.map(|_| 0),
+        cli::Commands::Cp(args) => commands::cp::execute(args, &global).await.map(|_| 0),
+        cli::Commands::Info(args) => commands::info::execute(args, &global).await.map(|_| 0),
+        cli::Commands::Logs(args) => commands::logs::execute(args, &global).await.map(|_| 0),
+        cli::Commands::Stats(args) => commands::stats::execute(args, &global).await.map(|_| 0),
+        cli::Commands::Serve(args) => commands::serve::execute(args, &global).await.map(|_| 0),
+        cli::Commands::Auth(args) => commands::auth::run(args, &global).await.map(|_| 0),
         // Handled in main() before tokio; never reaches run_cli
         cli::Commands::Completion(_) => {
             unreachable!("completion subcommand is handled before tokio in main()")
         }
     };
 
-    if let Err(error) = result {
-        // `{:#}` prints the anyhow chain (outer context: inner cause: ...),
-        // not just the outer message. Without this, `.with_context()` calls
-        // swallow the underlying reqwest / openidconnect failure that the
-        // user actually needs to see.
-        eprintln!("Error: {:#}", error);
-        process::exit(1);
+    match result {
+        Ok(code) => code,
+        Err(error) => {
+            // `{:#}` prints the anyhow chain (outer context: inner cause: ...),
+            // not just the outer message. Without this, `.with_context()` calls
+            // swallow the underlying reqwest / openidconnect failure that the
+            // user actually needs to see.
+            eprintln!("Error: {:#}", error);
+            1
+        }
     }
-
-    Ok(())
 }
 
 /// Build a tracing filter with docker-style precedence:
