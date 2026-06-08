@@ -196,7 +196,7 @@
     "tailwind-scrollbar": "^4.0.2",
     "tailwindcss-animate": "^1.0.7",
     "tar": "^7.5.11",
-    "typeorm": "^0.3.20",
+    "typeorm": "0.3.28",
     "usehooks-ts": "^3.1.1",
     "uuid": "^14.0.0",
     "vaul": "^1.1.2",
