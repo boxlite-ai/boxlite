@@ -201,22 +201,67 @@ sudo chmod 644 "$ENV_FILE"
 
 # ─── 7. boxlite-runner from working tree ────────────────────────────────────
 echo "=== 7. boxlite-runner from current source ==="
+
+# 7a. Rust toolchain via rustup. Don't pin a channel here — the repo's
+# `rust-toolchain.toml` (channel = "stable") is rustup's source of truth.
+# Forcing a default channel means rustup installs stable now and then
+# the first `cargo` call ALSO installs whatever the toml says; one extra
+# download for nothing.
 if ! command -v cargo >/dev/null 2>&1; then
-    echo "=== 7a. Rust toolchain (rustup) ==="
-    curl -fsSL https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+    echo "=== 7a. rustup (channel selection deferred to rust-toolchain.toml) ==="
+    curl -fsSL https://sh.rustup.rs \
+        | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
     . "$HOME/.cargo/env"
 fi
-if ! command -v go >/dev/null 2>&1; then
-    echo "=== 7b. Go toolchain ==="
-    GO_VER=1.23.4
+
+# 7b. Go toolchain — version from apps/runner/go.mod. Install if
+# missing OR if current Go is older than required.
+# IMPORTANT: Go 1.21+ auto-downloads a matching toolchain when a go.mod
+# requires a newer version (under ~/go/pkg/mod/golang.org/toolchain@...).
+# That means `go version` reports the auto-toolchain version, not the
+# system Go install — which is what `make setup:build` and any subprocess
+# without GOTOOLCHAIN=local cares about. Use GOTOOLCHAIN=local + a
+# directory without a go.mod to read the truthful system version.
+GO_VER=$(awk '/^go [0-9]/ {print $2; exit}' "$REPO/apps/runner/go.mod" 2>/dev/null)
+GO_VER=${GO_VER:-1.25.4}
+GO_INSTALL=1
+if command -v go >/dev/null 2>&1; then
+    CUR_GO=$(cd /tmp && GOTOOLCHAIN=local go version 2>/dev/null | awk '{print $3}' | sed 's/^go//')
+    if [[ -n "$CUR_GO" ]]; then
+        # If the OLDEST of (cur, required) is `required`, then cur >= required → skip install
+        OLDEST=$(printf '%s\n%s\n' "$CUR_GO" "$GO_VER" | sort -V | head -1)
+        if [[ "$OLDEST" == "$GO_VER" ]]; then
+            GO_INSTALL=0
+        fi
+    fi
+fi
+if [[ "$GO_INSTALL" == "1" ]]; then
+    echo "=== 7b. install Go ${GO_VER} (from apps/runner/go.mod) ==="
+    sudo rm -rf /usr/local/go
     curl -fsSL "https://go.dev/dl/go${GO_VER}.linux-amd64.tar.gz" \
         | sudo tar xz -C /usr/local/
     sudo ln -sf /usr/local/go/bin/go /usr/local/bin/go
     sudo ln -sf /usr/local/go/bin/gofmt /usr/local/bin/gofmt
+    hash -r 2>/dev/null || true
 fi
+
+# 7c. C build-dependency stack + libboxlite.{a,so}.
+# Fresh Ubuntu doesn't have meson / ninja / build-essential and the
+# repo's bubblewrap-sys / e2fsprogs-sys / libkrun-sys crates all shell
+# out to those during `cargo build`. `make setup:build` is the
+# canonical installer (routes to scripts/setup/setup-ubuntu.sh).
+# `make dist:c` then runs the C SDK release build AND stages the
+# libraries to sdks/c/dist/lib/. Direct `cargo build -p boxlite-c`
+# would skip the staging step that future tooling (e.g. fix-go-symbols)
+# may rely on.
 cd "$REPO"
-cargo build --release -p boxlite-c
+echo "=== 7c. make setup:build (meson/ninja/build-essential/...) ==="
+make setup:build
+
+echo "=== 7d. make dist:c (libboxlite.a + .so) ==="
+make dist:c
 cp target/release/libboxlite.a sdks/go/libboxlite.a
+
 cd "$REPO/apps/runner"
 CGO_ENABLED=1 go build -o /tmp/boxlite-runner-build ./cmd/runner
 sudo install -m 0755 /tmp/boxlite-runner-build /usr/local/bin/boxlite-runner
