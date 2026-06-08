@@ -1,6 +1,7 @@
 name: Lint and Format
 
 on:
+  merge_group:
   push:
     branches: [ main ]
     paths:
@@ -64,9 +65,13 @@ jobs:
       install_script: ${{ steps.filter.outputs.install_script }}
     steps:
       - uses: actions/checkout@v5
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@v4
         id: filter
         with:
+          # In a merge queue, diff against the merge-group base/head (no PR base
+          # exists). Empty on pull_request/push, where paths-filter ignores them.
+          base: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || '' }}
+          ref: ${{ github.event_name == 'merge_group' && github.event.merge_group.head_sha || '' }}
           filters: |
             rust:
               - '**/*.rs'
@@ -294,3 +299,19 @@ jobs:
 
       - name: Run installer script smoke test
         run: make test:install-script
+
+  # Single required status check for branch protection / merge queue.
+  # Passes only if every job above succeeded or was skipped (path-filtered).
+  # `if: !cancelled()` is required: without it a failed dependency would skip
+  # this job, and GitHub treats a skipped required check as success.
+  # NOTE: keep `needs` in sync with the jobs above when adding/removing jobs.
+  lint-conclusion:
+    name: Lint (conclusion)
+    needs: [config, changes, rustfmt, clippy, python, node, c, go, install_script]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: All lint jobs passed or were skipped
+        run: |
+          jq -C <<< '${{ toJSON(needs) }}'
+          jq --exit-status 'all(.result == "success" or .result == "skipped")' <<< '${{ toJSON(needs) }}'
