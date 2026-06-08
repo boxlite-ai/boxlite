@@ -4,6 +4,7 @@
 package boxlite
 
 import (
+	"runtime"
 	"testing"
 
 	"github.com/boxlite-ai/runner/pkg/api/dto"
@@ -66,5 +67,18 @@ func TestSanitizeImageReferenceStripsScheme(t *testing.T) {
 
 	if got != want {
 		t.Fatalf("expected %q, got %q", want, got)
+	}
+}
+
+func TestLinuxHostPlatformMatchesHostArch(t *testing.T) {
+	// Registry pulls must target the runner host's architecture: a layer
+	// pulled as linux/amd64 onto an arm64 host produces x86 ELF binaries that
+	// fail with ENOEXEC when libkrun execs them inside the microVM. Guard
+	// against re-hardcoding a fixed arch.
+	if linuxHostPlatform.OS != "linux" {
+		t.Errorf("OS = %q, want linux", linuxHostPlatform.OS)
+	}
+	if linuxHostPlatform.Architecture != runtime.GOARCH {
+		t.Errorf("Architecture = %q, want host arch %q", linuxHostPlatform.Architecture, runtime.GOARCH)
 	}
 }

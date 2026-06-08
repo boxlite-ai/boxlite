@@ -7,6 +7,7 @@ package boxlite
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"strings"
 
 	"github.com/boxlite-ai/runner/pkg/api/dto"
@@ -16,7 +17,14 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 )
 
-var linuxAmd64Platform = v1.Platform{OS: "linux", Architecture: "amd64"}
+// Default registry-pull platform. Daytona's original hardcode of
+// `linux/amd64` is correct for prod EC2 runners but breaks on Apple Silicon
+// (`/bin/sh` lands as x86 ELF → `ENOEXEC: Exec format error` when libkrun
+// tries to exec inside the microVM). Detect at startup based on host arch.
+var linuxHostPlatform = v1.Platform{
+	OS:           "linux",
+	Architecture: runtime.GOARCH, // "amd64", "arm64", etc.
+}
 
 // PullSnapshot pulls a snapshot image and mirrors it to the destination registry when requested.
 func (c *Client) PullSnapshot(ctx context.Context, req dto.PullSnapshotRequestDTO) error {
@@ -167,7 +175,7 @@ func (c *Client) parseReference(imageName string, registry *dto.RegistryDTO) (na
 func (c *Client) remoteOptions(ctx context.Context, registry *dto.RegistryDTO) []remote.Option {
 	opts := []remote.Option{
 		remote.WithContext(ctx),
-		remote.WithPlatform(linuxAmd64Platform),
+		remote.WithPlatform(linuxHostPlatform),
 	}
 
 	if registry != nil && registry.HasAuth() {
