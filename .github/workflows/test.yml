@@ -291,6 +291,7 @@ jobs:
     needs: [config, changes, rust, cli, python, node, go]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
+    permissions: {}
     steps:
       - name: All test jobs passed or were skipped
         run: |

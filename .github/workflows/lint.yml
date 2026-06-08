@@ -310,6 +310,7 @@ jobs:
     needs: [config, changes, rustfmt, clippy, python, node, c, go, install_script]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
+    permissions: {}
     steps:
       - name: All lint jobs passed or were skipped
         run: |
