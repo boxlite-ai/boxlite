@@ -99,4 +99,9 @@ Every change goes: understand → research → design → implement → test →
 - Verify external findings against the working tree before acting. `/codex:adversarial-review`, lint, and PR comments work from a snapshot — they may name deleted code. `git grep` and `git diff` first.
 - Honor scope reduction: "drop X" means drop X. Don't bundle adjacent improvements unprompted.
 
+**Communication**
+
+- Words: as concise and simple as possible, unless explicitly asked otherwise.
+- A simple call graph (func name, class name, file name, LOC, short annotation) is the first choice when explaining code.
+
 Adapted from Clean Code (Robert C. Martin) via the polygala-inc AGENTS.md distillation.
