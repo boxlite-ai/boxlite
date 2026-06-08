@@ -321,3 +321,14 @@ test\:apps: _ensure-apps-deps dev\:go
 test\:install-script:
 	@echo "🧪 Running installer script smoke test..."
 	@bash scripts/release/test_install.sh
+
+# ─── E2E: SDK → API → Runner → VM ───────────────────────────────────────────
+test\:e2e\:setup:
+	@scripts/test/e2e/bootstrap.sh
+	@python3 scripts/test/e2e/fixture_setup.py
+
+test\:e2e:
+	@cd scripts/test/e2e && python3 -m pytest cases/ -v
+
+test\:e2e\:two-sided:
+	@PR_REF=$${PR_REF:?must set PR_REF=<branch>} bash scripts/test/e2e/two_sided.sh

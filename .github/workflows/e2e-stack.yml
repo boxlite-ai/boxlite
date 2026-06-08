@@ -1,0 +1,93 @@
+# End-to-end suite — SDK → API → Runner → libkrun VM.
+#
+# Existing `make test:integration:*` uses the local PyO3 / FFI path
+# (`Boxlite.default()`) and bypasses both the NestJS API and boxlite-runner,
+# so bugs that surface only on the REST → API → runner chain (e.g. #563's
+# exec-stdout drop, #627's attach re-drain) reach production without
+# breaking CI. This workflow runs the full path.
+#
+# Requires nested-KVM. Targets a self-hosted runner labeled `kvm` (a
+# common pattern is a long-lived EC2 m5.metal or *.metal-* with the
+# stack pre-bootstrapped). On a fresh runner the first run will
+# bootstrap; subsequent runs skip bootstrap and just run pytest.
+
+name: E2E stack
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'sdks/c/src/exec/**'
+      - 'sdks/python/src/**'
+      - 'src/boxlite/src/rest/**'
+      - 'src/boxlite/src/cli/**'
+      - 'apps/runner/**'
+      - 'apps/api/src/**'
+      - 'scripts/test/e2e/**'
+      - '.github/workflows/e2e-stack.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'sdks/c/src/exec/**'
+      - 'sdks/python/src/**'
+      - 'src/boxlite/src/rest/**'
+      - 'src/boxlite/src/cli/**'
+      - 'apps/runner/**'
+      - 'apps/api/src/**'
+      - 'scripts/test/e2e/**'
+      - '.github/workflows/e2e-stack.yml'
+  workflow_dispatch:
+    inputs:
+      pr_ref:
+        description: 'Branch to compare against main (two-sided run)'
+        required: false
+
+concurrency:
+  group: e2e-stack-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    runs-on: [self-hosted, kvm]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # Bootstrap is idempotent — skips if services are already up.
+      - name: Bootstrap stack (services + fixture data)
+        run: make test:e2e:setup
+
+      # Rebuild Python SDK from this checkout so the test exercises the
+      # code under review, not whatever wheel happened to be installed.
+      - name: Rebuild Python SDK wheel from this checkout
+        run: |
+          cd sdks/python
+          pip install --break-system-packages --quiet maturin
+          maturin build --release --quiet
+          pip install --break-system-packages --force-reinstall \
+            ../../target/wheels/boxlite-*.whl
+
+      # Rebuild boxlite-runner from this checkout. The Go runner CGOs into
+      # libboxlite.a, so #563 (sdks/c/) only takes effect after a relink.
+      - name: Rebuild boxlite-runner binary from this checkout
+        run: |
+          cargo build --release -p boxlite-c
+          cp target/release/libboxlite.a sdks/go/libboxlite.a
+          cd apps/runner
+          CGO_ENABLED=1 go build -o /tmp/boxlite-runner-ci ./cmd/runner
+          sudo systemctl stop boxlite-runner
+          sudo cp /tmp/boxlite-runner-ci /usr/local/bin/boxlite-runner
+          sudo systemctl start boxlite-runner
+          for _ in $(seq 1 30); do
+            ss -ltn | grep -q ':8080' && break
+            sleep 1
+          done
+
+      - name: Run E2E suite
+        run: make test:e2e
+
+      - name: Collect logs on failure
+        if: failure()
+        run: |
+          tail -200 /var/log/boxlite-api.log
+          sudo journalctl -u boxlite-runner --no-pager -n 200
