@@ -94,6 +94,12 @@ import { BoxliteRestModule } from './boxlite-rest/boxlite-rest.module'
             min: configService.get('database.pool.min'),
             idleTimeoutMillis: configService.get('database.pool.idleTimeoutMillis'),
             connectionTimeoutMillis: configService.get('database.pool.connectionTimeoutMillis'),
+            // node-postgres per-query timeouts. Unset in prod (no-op). Set in
+            // infra-local so a query that wedges on the microVM↔pg transport is
+            // abandoned client-side instead of holding its pool connection
+            // forever (which otherwise exhausts the pool and hangs the API).
+            statement_timeout: configService.get('database.pool.statementTimeoutMillis'),
+            query_timeout: configService.get('database.pool.queryTimeoutMillis'),
           },
           cache: {
             type: 'ioredis',

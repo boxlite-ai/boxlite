@@ -28,6 +28,23 @@ SPEC_PG = ServiceSpec(
         "POSTGRES_HOST_AUTH_METHOD": "trust",
         "PGDATA": "/var/lib/postgresql/data/pgdata",
     },
+    # Server-side resilience against the microVM↔host transport silently
+    # wedging a connection mid-query. Without this, a wedged backend stays
+    # `active` forever holding a connection, and the API's per-10s lifecycle
+    # crons accumulate stuck backends until the pool is exhausted and the
+    # dashboard hangs. (Client-side query_timeout in apps/api frees the API
+    # pool; these reap the orphaned server backend so it doesn't leak.)
+    #   - statement_timeout: cap any single query at 30s.
+    #   - tcp_keepalives_*: detect a dead peer (~60s) and close the backend.
+    # "postgres" as first arg keeps docker-entrypoint.sh's init (initdb/seed).
+    cmd=lambda cfg: [
+        "postgres",
+        "-c", "statement_timeout=30000",
+        "-c", "idle_in_transaction_session_timeout=60000",
+        "-c", "tcp_keepalives_idle=30",
+        "-c", "tcp_keepalives_interval=10",
+        "-c", "tcp_keepalives_count=3",
+    ],
     volumes=lambda cfg: [
         (str(cfg.data_dir / "pg"), "/var/lib/postgresql/data"),
     ],
