@@ -35,10 +35,13 @@ scripts/test/e2e/bootstrap.sh
 This installs / starts:
 
 - Postgres + Redis (apt)
+- Node.js 22 + yarn (corepack)
 - Docker registry on `:5000`
+- Rust toolchain (rustup) + Go toolchain (release tarball)
+- `boxlite-runner.service` on `:8080` — **built from the working tree**, not from a release pin. The runner CGOs into `libboxlite.a` so any change under `sdks/c/`, `src/boxlite/`, or `apps/runner/` shows up after the next `make test:e2e:setup`. Release-pinned binaries would test stale code instead of the PR.
 - `boxlite-api.service` on `:3000` (ts-node, reads `/etc/boxlite-api.env`)
-- `boxlite-runner.service` on `:8080`
-- AWS CLI v2 (creds come from your existing `aws login` or env)
+
+First run is slow (~5–10 min, mostly the Rust release build). Subsequent runs are incremental.
 
 Then run the fixture setup (idempotent — re-running is safe):
 

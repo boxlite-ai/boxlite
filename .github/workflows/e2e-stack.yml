@@ -67,17 +67,13 @@ jobs:
           pip install --break-system-packages --force-reinstall \
             ../../target/wheels/boxlite-*.whl
 
-      # Rebuild boxlite-runner from this checkout. The Go runner CGOs into
-      # libboxlite.a, so #563 (sdks/c/) only takes effect after a relink.
-      - name: Rebuild boxlite-runner binary from this checkout
+      # `make test:e2e:setup` (above) already builds boxlite-runner from the
+      # working tree — release pinning would test stale code. Restart the
+      # service in case bootstrap was a no-op (binary unchanged, e.g. PR
+      # didn't touch runner code) so any other prereq drift is picked up.
+      - name: Restart runner to pick up freshly-installed binary
         run: |
-          cargo build --release -p boxlite-c
-          cp target/release/libboxlite.a sdks/go/libboxlite.a
-          cd apps/runner
-          CGO_ENABLED=1 go build -o /tmp/boxlite-runner-ci ./cmd/runner
-          sudo systemctl stop boxlite-runner
-          sudo cp /tmp/boxlite-runner-ci /usr/local/bin/boxlite-runner
-          sudo systemctl start boxlite-runner
+          sudo systemctl restart boxlite-runner
           for _ in $(seq 1 30); do
             ss -ltn | grep -q ':8080' && break
             sleep 1

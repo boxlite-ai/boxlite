@@ -147,13 +147,34 @@ EOF
     sudo chmod 644 "$ENV_FILE"
 fi
 
-if [[ ! -x /usr/local/bin/boxlite-runner ]]; then
-    echo "=== 8. boxlite-runner binary from release ==="
-    VERSION=$(grep -m1 '^version' "$REPO/Cargo.toml" | sed -E 's/^version *= *"([^"]+)".*/\1/')
-    curl -fsSL "https://github.com/boxlite-ai/boxlite/releases/download/v${VERSION}/boxlite-runner-v${VERSION}-linux-amd64.tar.gz" \
-        | sudo tar xz -C /usr/local/bin/
-    sudo chmod +x /usr/local/bin/boxlite-runner
+echo "=== 8. boxlite-runner from current source ==="
+# Build runner from the working tree — release pin would test stale
+# code instead of whatever the PR is changing. See PR #678 review.
+if ! command -v cargo >/dev/null 2>&1; then
+    echo "=== 8a. Rust toolchain (rustup) ==="
+    curl -fsSL https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+    . "$HOME/.cargo/env"
 fi
+if ! command -v go >/dev/null 2>&1; then
+    echo "=== 8b. Go toolchain ==="
+    GO_VER=1.23.4
+    curl -fsSL "https://go.dev/dl/go${GO_VER}.linux-amd64.tar.gz" \
+        | sudo tar xz -C /usr/local/
+    sudo ln -sf /usr/local/go/bin/go /usr/local/bin/go
+    sudo ln -sf /usr/local/go/bin/gofmt /usr/local/bin/gofmt
+fi
+
+# C SDK static lib (boxlite-runner CGOs into libboxlite.a).
+cd "$REPO"
+cargo build --release -p boxlite-c
+cp target/release/libboxlite.a sdks/go/libboxlite.a
+
+# Go runner binary.
+cd "$REPO/apps/runner"
+CGO_ENABLED=1 go build -o /tmp/boxlite-runner-build ./cmd/runner
+sudo install -m 0755 /tmp/boxlite-runner-build /usr/local/bin/boxlite-runner
+rm -f /tmp/boxlite-runner-build
+cd "$REPO"
 sudo mkdir -p /var/lib/boxlite
 sudo chown "$USER:$USER" /var/lib/boxlite
 
