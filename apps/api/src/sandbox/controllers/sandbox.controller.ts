@@ -27,6 +27,7 @@ import {
 import { CombinedAuthGuard } from '../../auth/combined-auth.guard'
 import { SandboxService } from '../services/sandbox.service'
 import { CreateSandboxDto } from '../dto/create-sandbox.dto'
+import { strictBodyValidationPipe } from '../../common/pipes/strict-body-validation.pipe'
 import {
   ApiOAuth2,
   ApiResponse,
@@ -277,7 +278,7 @@ export class SandboxController {
   })
   async createSandbox(
     @AuthContext() authContext: OrganizationAuthContext,
-    @Body() createSandboxDto: CreateSandboxDto,
+    @Body(strictBodyValidationPipe) createSandboxDto: CreateSandboxDto,
   ): Promise<SandboxDto> {
     const organization = authContext.organization
     let sandbox: SandboxDto

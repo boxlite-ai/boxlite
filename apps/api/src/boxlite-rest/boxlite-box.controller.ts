@@ -33,6 +33,7 @@ import { SandboxDesiredState } from '../sandbox/enums/sandbox-desired-state.enum
 import { BoxResponseDto, ListBoxesResponseDto } from './dto/box-response.dto'
 import { CreateBoxDto } from './dto/create-box.dto'
 import { sandboxToBoxResponse, createBoxToCreateSandbox } from './mappers/sandbox-to-box.mapper'
+import { strictBodyValidationPipe } from '../common/pipes/strict-body-validation.pipe'
 import { Audit, MASKED_AUDIT_VALUE, TypedRequest } from '../audit/decorators/audit.decorator'
 import { AuditAction } from '../audit/enums/audit-action.enum'
 import { AuditTarget } from '../audit/enums/audit-target.enum'
@@ -76,7 +77,7 @@ export class BoxliteBoxController {
   })
   async createBox(
     @AuthContext() authContext: OrganizationAuthContext,
-    @Body() dto: CreateBoxDto,
+    @Body(strictBodyValidationPipe) dto: CreateBoxDto,
   ): Promise<BoxResponseDto> {
     const organization = authContext.organization
     const createSandboxDto = createBoxToCreateSandbox(dto)

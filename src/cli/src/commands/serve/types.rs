@@ -255,3 +255,42 @@ pub(super) struct RemoveQuery {
 pub(super) struct FileQuery {
     pub path: String,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Locks the `#[serde(deny_unknown_fields)]` contract on CreateBoxRequest:
+    // an unsupported parameter on the `boxlite serve` REST path must be rejected
+    // at deserialization (→ HTTP 400), never silently dropped. Removing the
+    // attribute makes this test fail.
+    #[test]
+    fn create_box_request_rejects_unknown_field() {
+        let json = r#"{"image":"alpine:latest","auto_delete_minutes":5}"#;
+        let result = serde_json::from_str::<CreateBoxRequest>(json);
+        // CreateBoxRequest deliberately does not derive Debug, so avoid expect_err.
+        assert!(
+            result.is_err(),
+            "unknown field must be rejected, not silently dropped"
+        );
+        let msg = result.err().unwrap().to_string();
+        assert!(
+            msg.contains("auto_delete_minutes"),
+            "rejection should name the offending field, got: {msg}"
+        );
+        assert!(
+            msg.contains("unknown field"),
+            "expected serde deny_unknown_fields message, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn create_box_request_accepts_supported_fields() {
+        let json = r#"{"image":"alpine:latest","cpus":2,"auto_remove":false}"#;
+        let req = serde_json::from_str::<CreateBoxRequest>(json)
+            .expect("supported fields must deserialize");
+        assert_eq!(req.image.as_deref(), Some("alpine:latest"));
+        assert_eq!(req.cpus, Some(2));
+        assert_eq!(req.auto_remove, Some(false));
+    }
+}

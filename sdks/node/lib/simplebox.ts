@@ -252,6 +252,38 @@ export interface SimpleBoxOptions {
 }
 
 /**
+ * Every key the SimpleBox constructor accepts. Used to reject unknown options
+ * at the boundary instead of silently dropping them (napi ignores extra JS
+ * keys at runtime). Keep this in sync with the SimpleBoxOptions interface.
+ *
+ * Subclasses (CodeBox/BrowserBox/ComputerBox/SkillBox/InteractiveBox) strip
+ * their own extra keys before calling super(), so this set never rejects
+ * legitimate subclass usage.
+ */
+const KNOWN_SIMPLE_BOX_OPTION_KEYS: ReadonlySet<string> = new Set([
+  "image",
+  "rootfsPath",
+  "memoryMib",
+  "cpus",
+  "diskSizeGb",
+  "runtime",
+  "name",
+  "autoRemove",
+  "reuseExisting",
+  "detach",
+  "workingDir",
+  "env",
+  "volumes",
+  "ports",
+  "network",
+  "secrets",
+  "entrypoint",
+  "cmd",
+  "user",
+  "security",
+]);
+
+/**
  * Base class for specialized container types.
  *
  * This class provides the foundation for all specialized boxes:
@@ -316,8 +348,8 @@ export class SimpleBox {
    * ```
    */
   constructor(options: SimpleBoxOptions = {}) {
-    const JsBoxlite = getJsBoxlite();
-    const security = normalizeSecurityOptions(options.security);
+    // Validate input at the boundary, before touching the runtime, so an
+    // unsupported parameter fails loudly instead of being silently dropped.
     const legacyOptions = options as SimpleBoxOptions & {
       allowNet?: unknown;
       network?: unknown;
@@ -334,6 +366,19 @@ export class SimpleBox {
         "SimpleBoxOptions.network must be an object. Use network: { mode, allowNet }.",
       );
     }
+
+    const unknownKeys = Object.keys(options).filter(
+      (key) => !KNOWN_SIMPLE_BOX_OPTION_KEYS.has(key),
+    );
+    if (unknownKeys.length > 0) {
+      throw new TypeError(
+        `Unknown SimpleBoxOptions: ${unknownKeys.join(", ")}. ` +
+          `Supported options: ${[...KNOWN_SIMPLE_BOX_OPTION_KEYS].join(", ")}.`,
+      );
+    }
+
+    const JsBoxlite = getJsBoxlite();
+    const security = normalizeSecurityOptions(options.security);
 
     // Use provided runtime or get global default
     if (options.runtime) {
