@@ -24,18 +24,13 @@ on:
       - 'Cargo.lock'
       - '.github/workflows/test.yml'
       - '.github/workflows/config.yml'
+  # No path filter on pull_request: the `Test (conclusion)` job is a required
+  # status check, so this workflow must run on EVERY PR and report it. A
+  # path-skipped workflow leaves the required check stuck "Pending" → PR blocked.
+  # Per-suite filtering still happens in the `changes` job (jobs skip when
+  # unaffected); the conclusion job reports success-or-skipped.
   pull_request:
     branches: [main]
-    paths:
-      - 'src/boxlite/**'
-      - 'src/shared/**'
-      - 'src/cli/**'
-      - 'src/guest/**'
-      - 'sdks/**'
-      - '**/Cargo.toml'
-      - 'Cargo.lock'
-      - '.github/workflows/test.yml'
-      - '.github/workflows/config.yml'
 
 env:
   CARGO_TERM_COLOR: always

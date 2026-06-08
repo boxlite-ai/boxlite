@@ -24,28 +24,13 @@ on:
       - '.github/workflows/config.yml'
       - '.github/workflows/build-runtime.yml'
       - 'scripts/release/**'
+  # No path filter on pull_request: the `Lint (conclusion)` job is a required
+  # status check, so this workflow must run on EVERY PR and report it. A
+  # path-skipped workflow leaves the required check stuck "Pending" → PR blocked.
+  # Per-suite filtering still happens in the `changes` job (jobs skip when
+  # unaffected); the conclusion job reports success-or-skipped.
   pull_request:
     branches: [ main ]
-    paths:
-      - '**/*.rs'
-      - '**/*.py'
-      - '**/*.ts'
-      - '**/*.c'
-      - '**/*.h'
-      - '**/*.go'
-      - '**/Cargo.toml'
-      - 'Cargo.lock'
-      - 'sdks/python/**'
-      - 'sdks/node/**'
-      - 'sdks/c/**'
-      - 'sdks/go/**'
-      - 'make/quality.mk'
-      - 'make/test.mk'
-      - '.pre-commit-config.yaml'
-      - '.github/workflows/lint.yml'
-      - '.github/workflows/config.yml'
-      - '.github/workflows/build-runtime.yml'
-      - 'scripts/release/**'
 
 jobs:
   config:
