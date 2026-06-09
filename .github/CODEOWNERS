@@ -1,4 +1,20 @@
+# Code ownership for boxlite-ai/boxlite.
+# Order matters: the LAST matching pattern for a path wins.
+# Referenced teams must have explicit repo access or the rule is ignored by GitHub.
+
+# Default — maintainers own anything not matched by a more specific rule below.
+*                          @boxlite-ai/maintainers
+
+# Security-critical isolation and external-facing surfaces — maintainer review.
+/src/boxlite/src/jailer/   @boxlite-ai/maintainers
+/src/boxlite/src/rest/     @boxlite-ai/maintainers
+/sdks/                     @boxlite-ai/maintainers
+/.github/                  @boxlite-ai/maintainers
+
+# Docs can be owned by the broader contributor team.
+/docs/                     @boxlite-ai/builder
+
 # Legal and contributor policy changes require project owner review.
-/CONTRIBUTING.md @DorianZheng
-/docs/legal/ @DorianZheng
-/.github/CODEOWNERS @DorianZheng
+/CONTRIBUTING.md           @DorianZheng
+/docs/legal/               @DorianZheng
+/.github/CODEOWNERS        @DorianZheng
