@@ -437,7 +437,7 @@ paths:
       description: Create a box
       operationId: Create
       parameters:
-        - description: Create sandbox
+        - description: Create box
           in: body
           name: box
           required: true
@@ -603,7 +603,7 @@ paths:
     post:
       consumes:
         - application/json
-      description: Check if the sandbox's error reason indicates a recoverable error
+      description: Check if the box's error reason indicates a recoverable error
       operationId: IsRecoverable
       parameters:
         - description: Box ID
@@ -774,7 +774,7 @@ paths:
           name: boxId
           required: true
           type: string
-        - description: Resize sandbox
+        - description: Resize box
           in: body
           name: box
           required: true
@@ -869,7 +869,7 @@ paths:
           name: boxId
           required: true
           type: string
-        - description: Stop sandbox
+        - description: Stop box
           in: body
           name: box
           schema:

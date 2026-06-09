@@ -49,7 +49,7 @@ const docTemplate = `{
                 "operationId": "Create",
                 "parameters": [
                     {
-                        "description": "Create sandbox",
+                        "description": "Create box",
                         "name": "box",
                         "in": "body",
                         "required": true,
@@ -289,7 +289,7 @@ const docTemplate = `{
         },
         "/boxes/{boxId}/is-recoverable": {
             "post": {
-                "description": "Check if the sandbox's error reason indicates a recoverable error",
+                "description": "Check if the box's error reason indicates a recoverable error",
                 "consumes": [
                     "application/json"
                 ],
@@ -554,7 +554,7 @@ const docTemplate = `{
                         "required": true
                     },
                     {
-                        "description": "Resize sandbox",
+                        "description": "Resize box",
                         "name": "box",
                         "in": "body",
                         "required": true,
@@ -697,7 +697,7 @@ const docTemplate = `{
                         "required": true
                     },
                     {
-                        "description": "Stop sandbox",
+                        "description": "Stop box",
                         "name": "box",
                         "in": "body",
                         "schema": {
