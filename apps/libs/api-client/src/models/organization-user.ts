@@ -53,6 +53,12 @@ export interface OrganizationUser {
    */
   role: OrganizationUserRoleEnum
   /**
+   * Whether this organization membership is the user default organization
+   * @type {boolean}
+   * @memberof OrganizationUser
+   */
+  isDefaultForUser: boolean
+  /**
    * Roles assigned to the user
    * @type {Array<OrganizationRole>}
    * @memberof OrganizationUser

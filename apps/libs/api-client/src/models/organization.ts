@@ -37,9 +37,16 @@ export interface Organization {
    */
   createdBy: string
   /**
-   * Personal organization flag
+   * Whether this organization is the authenticated user default organization
    * @type {boolean}
    * @memberof Organization
+   */
+  isDefaultForAuthenticatedUser: boolean
+  /**
+   * Deprecated alias for isDefaultForAuthenticatedUser. Kept for backward compatibility with older REST clients.
+   * @type {boolean}
+   * @memberof Organization
+   * @deprecated
    */
   personal: boolean
   /**

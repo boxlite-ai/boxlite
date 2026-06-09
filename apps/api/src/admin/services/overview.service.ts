@@ -143,19 +143,14 @@ export class AdminOverviewService {
   }
 
   private toBoxOwner(
-    organization: { createdBy?: string; name: string; personal: boolean },
+    // NOTE(integration 2026-06-08): default-organization-membership removed the
+    // Organization.personal column — "personal" is now a per-authenticated-user alias,
+    // not an org attribute. Admin overview has no authenticated-user context, so it cannot
+    // resolve personal-ness per org; present every org org-style. Revisit if admin needs to
+    // flag default/personal orgs (would require a membership lookup).
+    organization: { createdBy?: string; name: string },
     creator?: { name: string; email: string },
   ): AdminBoxOwnerDto {
-    if (organization.personal) {
-      return {
-        userId: organization.createdBy,
-        name: creator?.name || organization.name,
-        email: creator?.email ?? '',
-        orgName: organization.name,
-        personal: true,
-      }
-    }
-
     return {
       userId: organization.createdBy,
       name: organization.name,

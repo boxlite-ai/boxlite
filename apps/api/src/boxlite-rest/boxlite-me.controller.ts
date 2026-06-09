@@ -68,7 +68,7 @@ export class BoxliteMeController {
    * Resolve the routing-slot value for the calling credential.
    *
    * API keys carry their org binding directly. OIDC tokens carry no
-   * org claim, so we look it up: prefer the user's personal org;
+   * org claim, so we look it up: prefer the user's default org;
    * otherwise the first membership; otherwise `null` (no scope yet —
    * the field stays present in the response envelope with explicit
    * `null` per the OpenAPI contract).
@@ -77,10 +77,11 @@ export class BoxliteMeController {
     if (ctx.apiKey?.organizationId) {
       return ctx.apiKey.organizationId
     }
-    const orgs = await this.organizationService.findByUser(ctx.userId)
-    if (orgs.length === 0) {
+    const memberships = await this.organizationService.findByUserWithDefaultFlag(ctx.userId)
+    if (memberships.length === 0) {
       return null
     }
-    return (orgs.find((o) => o.personal) ?? orgs[0]).id
+    return (memberships.find((membership) => membership.isDefaultForAuthenticatedUser) ?? memberships[0]).organization
+      .id
   }
 }

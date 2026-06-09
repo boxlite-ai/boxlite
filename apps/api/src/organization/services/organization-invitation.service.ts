@@ -51,10 +51,6 @@ export class OrganizationInvitationService {
     if (!organization) {
       throw new NotFoundException(`Organization with ID ${organizationId} not found`)
     }
-    if (organization.personal) {
-      throw new ForbiddenException('Cannot invite users to personal organization')
-    }
-
     const normalizedEmail = EmailUtils.normalize(createOrganizationInvitationDto.email)
 
     const existingUser = await this.userService.findOneByEmail(normalizedEmail, true)

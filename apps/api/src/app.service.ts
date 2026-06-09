@@ -175,7 +175,7 @@ export class AppService implements OnApplicationBootstrap, OnApplicationShutdown
       user = await this.userService.create({
         id: BOXLITE_ADMIN_USER_ID,
         name: 'BoxLite Admin',
-        personalOrganizationQuota: {
+        defaultOrganizationQuota: {
           totalCpuQuota: this.configService.getOrThrow('admin.totalCpuQuota'),
           totalMemoryQuota: this.configService.getOrThrow('admin.totalMemoryQuota'),
           totalDiskQuota: this.configService.getOrThrow('admin.totalDiskQuota'),
@@ -186,15 +186,15 @@ export class AppService implements OnApplicationBootstrap, OnApplicationShutdown
           maxTemplateSize: this.configService.getOrThrow('admin.maxTemplateSize'),
           volumeQuota: this.configService.getOrThrow('admin.volumeQuota'),
         },
-        personalOrganizationDefaultRegionId: this.configService.getOrThrow('defaultRegion.id'),
+        defaultOrganizationDefaultRegionId: this.configService.getOrThrow('defaultRegion.id'),
         role: SystemRole.ADMIN,
       })
     }
 
-    const personalOrg = await this.organizationService.findPersonal(user.id)
-    await this.ensureAdminOrganizationQuota(personalOrg.id)
+    const defaultOrg = await this.organizationService.findDefaultForUser(user.id)
+    await this.ensureAdminOrganizationQuota(defaultOrg.id)
     const { value } = await this.apiKeyService.ensureApiKeyValue(
-      personalOrg.id,
+      defaultOrg.id,
       user.id,
       BOXLITE_ADMIN_USER_ID,
       [],
@@ -309,7 +309,7 @@ Admin API key ensured: ${this.maskApiKeyForLog(value)}
   }
 
   private async initializeSystemTemplates(): Promise<void> {
-    const adminPersonalOrg = await this.organizationService.findPersonal(BOXLITE_ADMIN_USER_ID)
+    const adminDefaultOrg = await this.organizationService.findDefaultForUser(BOXLITE_ADMIN_USER_ID)
 
     const defaultTemplate = this.configService.getOrThrow('defaultTemplate')
     if (!resolveSystemTemplateName(defaultTemplate)) {
@@ -318,7 +318,7 @@ Admin API key ensured: ${this.maskApiKeyForLog(value)}
 
     for (const template of SYSTEM_TEMPLATES) {
       this.logger.log(`Ensuring system template: ${template.name}`)
-      await this.boxTemplateService.ensureSystemTemplate(adminPersonalOrg, template)
+      await this.boxTemplateService.ensureSystemTemplate(adminDefaultOrg, template)
     }
     await this.boxTemplateService.hideDeprecatedSystemTemplateAliases()
 

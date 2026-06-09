@@ -22,11 +22,6 @@ export class Organization {
   createdBy: string
 
   @Column({
-    default: false,
-  })
-  personal: boolean
-
-  @Column({
     default: true,
   })
   telemetryEnabled: boolean

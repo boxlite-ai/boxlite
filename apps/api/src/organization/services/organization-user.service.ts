@@ -158,6 +158,10 @@ export class OrganizationUserService {
     force = false,
   ): Promise<void> {
     if (!force) {
+      if (organizationUser.isDefaultForUser) {
+        throw new ForbiddenException('Cannot remove a user from their default organization')
+      }
+
       if (organizationUser.role === OrganizationMemberRole.OWNER) {
         const ownersCount = await entityManager.count(OrganizationUser, {
           where: {
@@ -189,6 +193,7 @@ export class OrganizationUserService {
     organizationUser.userId = userId
     organizationUser.role = role
     organizationUser.assignedRoles = assignedRoles
+    organizationUser.isDefaultForUser = false
     return entityManager.save(organizationUser)
   }
 
@@ -214,9 +219,7 @@ export class OrganizationUserService {
     const memberships = await payload.entityManager.find(OrganizationUser, {
       where: {
         userId: payload.userId,
-        organization: {
-          personal: false,
-        },
+        isDefaultForUser: false,
       },
       relations: {
         organization: true,
@@ -225,7 +228,7 @@ export class OrganizationUserService {
 
     /*
     // TODO
-    // user deletion will fail if the user is the only owner of some non-personal organization
+    // user deletion will fail if the user is the only owner of some organization
     // potential improvements:
     //  - auto-delete the organization if there are no other members
     //  - auto-promote a new owner if there are other members

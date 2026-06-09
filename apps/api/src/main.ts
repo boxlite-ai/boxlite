@@ -232,8 +232,8 @@ async function createAdminApiKey(app: INestApplication, apiKeyName: string) {
   const apiKeyService = app.get(ApiKeyService)
   const organizationService = app.get(OrganizationService)
 
-  const personalOrg = await organizationService.findPersonal(BOXLITE_ADMIN_USER_ID)
-  const { value } = await apiKeyService.createApiKey(personalOrg.id, BOXLITE_ADMIN_USER_ID, apiKeyName, [])
+  const defaultOrg = await organizationService.findDefaultForUser(BOXLITE_ADMIN_USER_ID)
+  const { value } = await apiKeyService.createApiKey(defaultOrg.id, BOXLITE_ADMIN_USER_ID, apiKeyName, [])
   Logger.log(
     `
 =========================================

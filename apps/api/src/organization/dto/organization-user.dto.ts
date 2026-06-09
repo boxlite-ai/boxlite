@@ -39,6 +39,11 @@ export class OrganizationUserDto {
   role: OrganizationMemberRole
 
   @ApiProperty({
+    description: 'Whether this organization membership is the user default organization',
+  })
+  isDefaultForUser: boolean
+
+  @ApiProperty({
     description: 'Roles assigned to the user',
     type: [OrganizationRoleDto],
   })

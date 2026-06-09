@@ -26,9 +26,24 @@ export class CreateUserDto {
 
   @ApiPropertyOptional()
   @IsOptional()
+  defaultOrganizationQuota?: CreateOrganizationQuotaDto
+
+  @ApiPropertyOptional({
+    description: 'Deprecated alias for defaultOrganizationQuota.',
+    deprecated: true,
+  })
+  @IsOptional()
   personalOrganizationQuota?: CreateOrganizationQuotaDto
 
   @ApiPropertyOptional()
+  @IsString()
+  @IsOptional()
+  defaultOrganizationDefaultRegionId?: string
+
+  @ApiPropertyOptional({
+    description: 'Deprecated alias for defaultOrganizationDefaultRegionId.',
+    deprecated: true,
+  })
   @IsString()
   @IsOptional()
   personalOrganizationDefaultRegionId?: string

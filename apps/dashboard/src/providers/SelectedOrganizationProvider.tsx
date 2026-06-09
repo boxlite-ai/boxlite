@@ -9,6 +9,7 @@ import { LocalStorageKey } from '@/enums/LocalStorageKey'
 import { useApi } from '@/hooks/useApi'
 import { useOrganizations } from '@/hooks/useOrganizations'
 import { handleApiError } from '@/lib/error-handling'
+import { resolveSelectedOrganizationId } from '@/lib/organization-selection'
 import { Organization, OrganizationRolePermissionsEnum, OrganizationUserRoleEnum } from '@boxlite-ai/api-client'
 import { usePostHog } from 'posthog-js/react'
 import { ReactNode, useCallback, useEffect, useMemo, useState } from 'react'
@@ -29,26 +30,27 @@ export function SelectedOrganizationProvider(props: Props) {
 
   const [selectedOrganizationId, setSelectedOrganizationId] = useState<string | null>(() => {
     const storedId = localStorage.getItem(LocalStorageKey.SelectedOrganizationId)
-    if (storedId && organizations.find((org) => org.id === storedId)) {
-      return storedId
-    } else if (organizations.length > 0) {
-      const defaultOrg = organizations.find((org) => org.personal) || organizations[0]
-      localStorage.setItem(LocalStorageKey.SelectedOrganizationId, defaultOrg.id)
-      return defaultOrg.id
-    } else {
-      localStorage.removeItem(LocalStorageKey.SelectedOrganizationId)
-      return null
+    const resolvedOrganizationId = resolveSelectedOrganizationId(organizations, storedId)
+    if (resolvedOrganizationId) {
+      localStorage.setItem(LocalStorageKey.SelectedOrganizationId, resolvedOrganizationId)
+      return resolvedOrganizationId
     }
+
+    localStorage.removeItem(LocalStorageKey.SelectedOrganizationId)
+    return null
   })
 
   useEffect(() => {
     if (!organizations.length) {
       setSelectedOrganizationId(null)
+      localStorage.removeItem(LocalStorageKey.SelectedOrganizationId)
+      return
     }
-    if (!selectedOrganizationId || !organizations.some((org) => org.id === selectedOrganizationId)) {
-      const defaultOrg = organizations.find((org) => org.personal) || organizations[0]
-      localStorage.setItem(LocalStorageKey.SelectedOrganizationId, defaultOrg.id)
-      setSelectedOrganizationId(defaultOrg.id)
+
+    const resolvedOrganizationId = resolveSelectedOrganizationId(organizations, selectedOrganizationId)
+    if (resolvedOrganizationId && resolvedOrganizationId !== selectedOrganizationId) {
+      localStorage.setItem(LocalStorageKey.SelectedOrganizationId, resolvedOrganizationId)
+      setSelectedOrganizationId(resolvedOrganizationId)
     }
   }, [organizations, selectedOrganizationId])
 

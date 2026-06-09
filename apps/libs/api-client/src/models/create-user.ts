@@ -45,11 +45,25 @@ export interface CreateUser {
    * @type {CreateOrganizationQuota}
    * @memberof CreateUser
    */
+  defaultOrganizationQuota?: CreateOrganizationQuota
+  /**
+   * Deprecated alias for defaultOrganizationQuota.
+   * @type {CreateOrganizationQuota}
+   * @memberof CreateUser
+   * @deprecated
+   */
   personalOrganizationQuota?: CreateOrganizationQuota
   /**
    *
    * @type {string}
    * @memberof CreateUser
+   */
+  defaultOrganizationDefaultRegionId?: string
+  /**
+   * Deprecated alias for defaultOrganizationDefaultRegionId.
+   * @type {string}
+   * @memberof CreateUser
+   * @deprecated
    */
   personalOrganizationDefaultRegionId?: string
   /**

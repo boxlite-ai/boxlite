@@ -27,6 +27,9 @@ export class UserService {
   ) {}
 
   async create(createUserDto: CreateUserDto): Promise<User> {
+    const defaultOrganizationQuota = createUserDto.defaultOrganizationQuota ?? createUserDto.personalOrganizationQuota
+    const defaultOrganizationDefaultRegionId =
+      createUserDto.defaultOrganizationDefaultRegionId ?? createUserDto.personalOrganizationDefaultRegionId
     let user = new User()
     user.id = createUserDto.id
     user.name = createUserDto.name
@@ -47,12 +50,7 @@ export class UserService {
       user = await em.save(user)
       await this.eventEmitter.emitAsync(
         UserEvents.CREATED,
-        new UserCreatedEvent(
-          em,
-          user,
-          createUserDto.personalOrganizationQuota,
-          createUserDto.personalOrganizationDefaultRegionId,
-        ),
+        new UserCreatedEvent(em, user, defaultOrganizationQuota, defaultOrganizationDefaultRegionId),
       )
     })
 

@@ -301,8 +301,10 @@ export class OrganizationController {
   })
   @UseGuards(AuthGuard('jwt'))
   async findAll(@AuthContext() authContext: IAuthContext): Promise<OrganizationDto[]> {
-    const organizations = await this.organizationService.findByUser(authContext.userId)
-    return organizations.map(OrganizationDto.fromOrganization)
+    const organizations = await this.organizationService.findByUserWithDefaultFlag(authContext.userId)
+    return organizations.map(({ organization, isDefaultForAuthenticatedUser }) =>
+      OrganizationDto.fromOrganization(organization, isDefaultForAuthenticatedUser),
+    )
   }
 
   @Get('/:organizationId')

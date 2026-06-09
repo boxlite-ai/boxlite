@@ -128,7 +128,7 @@ describe('AppService admin bootstrap', () => {
       create: jest.fn(),
     }
     const organizationService = {
-      findPersonal: jest.fn().mockResolvedValue({ id: 'org-1' }),
+      findDefaultForUser: jest.fn().mockResolvedValue({ id: 'org-1' }),
       updateQuota: jest.fn().mockResolvedValue(undefined),
     }
     const apiKeyService = {

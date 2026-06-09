@@ -19,7 +19,6 @@ const DEFAULT_ORGANIZATION_DISPLAY_NAME = 'Default Organization'
 
 const getOrganizationDisplayName = (name?: string) => {
   if (!name) return DEFAULT_ORGANIZATION_DISPLAY_NAME
-  if (name === 'Personal') return DEFAULT_ORGANIZATION_DISPLAY_NAME
   return name
 }
 

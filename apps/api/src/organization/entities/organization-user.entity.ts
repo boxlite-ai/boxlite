@@ -4,11 +4,22 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
-import { Column, CreateDateColumn, Entity, JoinColumn, JoinTable, ManyToMany, ManyToOne, PrimaryColumn } from 'typeorm'
+import {
+  Column,
+  CreateDateColumn,
+  Entity,
+  Index,
+  JoinColumn,
+  JoinTable,
+  ManyToMany,
+  ManyToOne,
+  PrimaryColumn,
+} from 'typeorm'
 import { Organization } from './organization.entity'
 import { OrganizationRole } from './organization-role.entity'
 import { OrganizationMemberRole } from '../enums/organization-member-role.enum'
 
+@Index('organization_user_default_user_unique', ['userId'], { unique: true, where: '"isDefaultForUser" = true' })
 @Entity()
 export class OrganizationUser {
   @PrimaryColumn()
@@ -23,6 +34,11 @@ export class OrganizationUser {
     default: OrganizationMemberRole.MEMBER,
   })
   role: OrganizationMemberRole
+
+  @Column({
+    default: false,
+  })
+  isDefaultForUser: boolean
 
   @ManyToOne(() => Organization, (organization) => organization.users, {
     onDelete: 'CASCADE',
