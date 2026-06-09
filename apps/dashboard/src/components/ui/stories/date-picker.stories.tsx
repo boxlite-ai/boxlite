@@ -15,16 +15,20 @@ const meta: Meta<typeof DatePicker> = {
 export default meta
 type Story = StoryObj<typeof DatePicker>
 
+function DefaultDatePicker() {
+  const [date, setDate] = useState<Date | undefined>()
+  return <DatePicker value={date} onChange={setDate} />
+}
+
+function DatePickerWithValue() {
+  const [date, setDate] = useState<Date | undefined>(new Date())
+  return <DatePicker value={date} onChange={setDate} />
+}
+
 export const Default: Story = {
-  render: () => {
-    const [date, setDate] = useState<Date | undefined>()
-    return <DatePicker value={date} onChange={setDate} />
-  },
+  render: () => <DefaultDatePicker />,
 }
 
 export const WithValue: Story = {
-  render: () => {
-    const [date, setDate] = useState<Date | undefined>(new Date())
-    return <DatePicker value={date} onChange={setDate} />
-  },
+  render: () => <DatePickerWithValue />,
 }

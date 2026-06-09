@@ -23,7 +23,7 @@ describe('system-templates', () => {
   it('maps image names to user-facing labels, descriptions, and capabilities', () => {
     expect(getSystemTemplateDefinition('boxlite/base')).toMatchObject({
       displayName: 'BoxLite Base',
-      description: expect.stringContaining('General agent runtime'),
+      description: expect.stringContaining('Agent runtime'),
       capabilities: expect.arrayContaining(['curl', 'git', 'python', 'apt-noninteractive']),
     })
     expect(getSystemTemplateDefinition('boxlite/python')).toMatchObject({

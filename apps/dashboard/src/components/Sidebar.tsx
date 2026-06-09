@@ -21,6 +21,7 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { BOXLITE_DOCS_URL, BOXLITE_SLACK_URL } from '@/constants/ExternalLinks'
 import { Theme, useTheme } from '@/contexts/ThemeContext'
 import { RoutePath } from '@/enums/RoutePath'
+import { useApi } from '@/hooks/useApi'
 import { useIsCompactScreen } from '@/hooks/use-mobile'
 import {
   ONBOARDING_OPEN_EVENT,
@@ -46,14 +47,18 @@ import {
   MoonIcon,
   ReceiptText,
   SearchIcon,
+  ShieldCheck,
   SquareUserRound,
   SunIcon,
 } from 'lucide-react'
 import { usePostHog } from 'posthog-js/react'
+import { useQuery } from '@tanstack/react-query'
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAuth } from 'react-oidc-context'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { CommandConfig, useCommandPaletteActions, useRegisterCommands } from './CommandPalette'
+
+const ADMIN_UI_HEADERS = { 'X-BoxLite-Source': 'ui' } as const
 
 interface SidebarProps {
   isBannerVisible: boolean
@@ -131,6 +136,7 @@ const useNavCommands = (items: { label: string; path: RoutePath | string; onClic
 export function Sidebar({ isBannerVisible }: SidebarProps) {
   const isCompactScreen = useIsCompactScreen()
   const posthog = usePostHog()
+  const { axiosInstance } = useApi()
   const { theme, setTheme } = useTheme()
   const { user, signoutRedirect } = useAuth()
   const userId = user?.profile.sub
@@ -154,6 +160,18 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
   }, [userId])
 
   const onboardingCoreProgress = getOnboardingCoreProgress(onboardingProgress)
+  const adminAccessQuery = useQuery({
+    queryKey: ['admin', 'sidebar-access'],
+    queryFn: async () => {
+      await axiosInstance.get('/admin/overview', { headers: ADMIN_UI_HEADERS })
+      return true
+    },
+    enabled: !!user,
+    retry: false,
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+  })
+  const canViewAdmin = adminAccessQuery.data === true
 
   useEffect(() => {
     const handleHighlight = () => {
@@ -177,8 +195,17 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
         label: 'Billing',
         path: RoutePath.BILLING,
       },
+      ...(canViewAdmin
+        ? [
+            {
+              icon: <ShieldCheck size={16} strokeWidth={1.5} />,
+              label: 'Admin',
+              path: RoutePath.ADMIN,
+            },
+          ]
+        : []),
     ]
-  }, [])
+  }, [canViewAdmin])
 
   const secondaryGroups: SidebarGroup[] = useMemo(() => [], [])
 
@@ -259,7 +286,7 @@ export function Sidebar({ isBannerVisible }: SidebarProps) {
             className="inline-flex h-14 shrink-0 items-center text-foreground"
             aria-label="BoxLite home"
           >
-            <LogoText className="h-8 w-auto" />
+            <LogoText className="h-8 w-auto sm:h-9" />
           </Link>
 
           <nav className="hidden h-14 shrink-0 items-stretch gap-1 md:flex">

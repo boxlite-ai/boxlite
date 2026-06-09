@@ -14,15 +14,15 @@ export interface TemplateDisplayMetadata {
 const BUILT_IN_TEMPLATES: Record<string, TemplateDisplayMetadata> = {
   'boxlite/base': {
     displayName: 'BoxLite Base',
-    description: 'General agent runtime with curl, git, jq, SSH, Python basics, and noninteractive apt.',
+    description: 'Agent runtime with curl, git, jq, SSH, Python, and apt.',
   },
   'boxlite/python': {
     displayName: 'BoxLite Python',
-    description: 'Python runtime with pip, venv, build tools, and HTTPS-ready defaults.',
+    description: 'Python runtime with pip, venv, build tools, and HTTPS defaults.',
   },
   'boxlite/node': {
     displayName: 'BoxLite Node',
-    description: 'Node.js 22 runtime with npm, corepack, and common agent tools.',
+    description: 'Node.js 22 runtime with npm, corepack, and agent tools.',
   },
 }
 

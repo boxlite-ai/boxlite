@@ -19,6 +19,12 @@ export class TraceSpanDto {
   @ApiProperty({ description: 'Span name' })
   spanName: string
 
+  @ApiPropertyOptional({ description: 'Emitting service name (e.g. boxlite-api, boxlite-runner, sandbox-<id>)' })
+  serviceName?: string
+
+  @ApiPropertyOptional({ description: 'Resolved emitting layer: api | runner | ec2_host | box' })
+  layer?: string
+
   @ApiProperty({ description: 'Span start timestamp' })
   timestamp: string
 

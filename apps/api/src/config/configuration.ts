@@ -4,6 +4,13 @@
  * SPDX-License-Identifier: AGPL-3.0
  */
 
+function csvEnv(value?: string): string[] {
+  return (value ?? '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
 const configuration = {
   production: process.env.NODE_ENV === 'production',
   version: process.env.VERSION || '0.0.0-dev',
@@ -322,12 +329,38 @@ const configuration = {
     apiKey: process.env.OTEL_COLLECTOR_API_KEY,
   },
   clickhouse: {
+    url: process.env.CLICKHOUSE_READER_URL || process.env.CLICKHOUSE_URL,
     host: process.env.CLICKHOUSE_HOST,
     port: parseInt(process.env.CLICKHOUSE_PORT || '8123', 10),
     database: process.env.CLICKHOUSE_DATABASE || 'otel',
     username: process.env.CLICKHOUSE_USERNAME || 'default',
     password: process.env.CLICKHOUSE_PASSWORD,
     protocol: process.env.CLICKHOUSE_PROTOCOL || 'https',
+  },
+  adminObservability: {
+    cloudwatch: {
+      region: process.env.ADMIN_OBSERVABILITY_CLOUDWATCH_REGION || process.env.AWS_REGION || process.env.S3_REGION,
+      logGroups: csvEnv(process.env.ADMIN_OBSERVABILITY_CLOUDWATCH_LOG_GROUPS),
+      logGroupPrefix: process.env.ADMIN_OBSERVABILITY_CLOUDWATCH_LOG_GROUP_PREFIX,
+      maxLogGroups: parseInt(process.env.ADMIN_OBSERVABILITY_CLOUDWATCH_MAX_LOG_GROUPS || '20', 10),
+      limitPerGroup: parseInt(process.env.ADMIN_OBSERVABILITY_CLOUDWATCH_LIMIT_PER_GROUP || '25', 10),
+    },
+    s3: {
+      region: process.env.ADMIN_OBSERVABILITY_S3_REGION || process.env.S3_REGION,
+      endpoint: process.env.ADMIN_OBSERVABILITY_S3_ENDPOINT || process.env.S3_ENDPOINT,
+      accessKey: process.env.ADMIN_OBSERVABILITY_S3_ACCESS_KEY || process.env.S3_ACCESS_KEY,
+      secretKey: process.env.ADMIN_OBSERVABILITY_S3_SECRET_KEY || process.env.S3_SECRET_KEY,
+      buckets: csvEnv(process.env.ADMIN_OBSERVABILITY_S3_BUCKETS || process.env.S3_DEFAULT_BUCKET),
+      prefixes: csvEnv(process.env.ADMIN_OBSERVABILITY_S3_PREFIXES),
+      maxObjects: parseInt(process.env.ADMIN_OBSERVABILITY_S3_MAX_OBJECTS || '25', 10),
+    },
+  },
+  observability: {
+    clickstackBaseUrl: process.env.ADMIN_OBSERVABILITY_CLICKSTACK_URL,
+    clickstackDashboardUrl: process.env.ADMIN_OBSERVABILITY_CLICKSTACK_DASHBOARD_URL,
+    clickstackLogSourceId: process.env.ADMIN_OBSERVABILITY_CLICKSTACK_LOG_SOURCE_ID,
+    clickstackTraceSourceId: process.env.ADMIN_OBSERVABILITY_CLICKSTACK_TRACE_SOURCE_ID,
+    clickstackMetricSourceId: process.env.ADMIN_OBSERVABILITY_CLICKSTACK_METRIC_SOURCE_ID,
   },
   sandboxActivity: {
     throttleTtlSeconds: parseInt(process.env.SANDBOX_ACTIVITY_THROTTLE_TTL_SECONDS || '5', 10),

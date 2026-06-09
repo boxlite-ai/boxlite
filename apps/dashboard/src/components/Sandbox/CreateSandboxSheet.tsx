@@ -5,10 +5,11 @@
 
 import { Button } from '@/components/ui/button'
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
+import { Badge } from '@/components/ui/badge'
 import { Field, FieldDescription, FieldError, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import {
   Sheet,
   SheetContent,
@@ -304,76 +305,89 @@ export const CreateSandboxSheet = ({
                 const isInvalid = field.state.meta.isTouched && !field.state.meta.isValid
                 return (
                   <Field data-invalid={isInvalid}>
-                    <FieldLabel htmlFor={field.name} className="text-sm font-semibold">
+                    <FieldLabel id={`${field.name}-label`} className="text-sm font-semibold">
                       Image
                     </FieldLabel>
-                    <FieldDescription>Choose the base image for this box.</FieldDescription>
-                    <Select value={field.state.value} onValueChange={field.handleChange} disabled={templatesLoading}>
-                      <SelectTrigger id={field.name} aria-invalid={isInvalid} loading={templatesLoading}>
-                        <SelectValue placeholder={templatesLoading ? 'Loading images...' : 'Select an image'} />
-                      </SelectTrigger>
-                      <SelectContent>
+                    <FieldDescription>Pick a runtime image.</FieldDescription>
+                    {templatesLoading ? (
+                      <div className="flex items-center gap-2 rounded-md border bg-muted/25 px-3 py-3 text-sm text-muted-foreground">
+                        <Spinner className="size-4" />
+                        Loading images...
+                      </div>
+                    ) : (
+                      <RadioGroup
+                        aria-invalid={isInvalid}
+                        aria-labelledby={`${field.name}-label`}
+                        className="gap-2"
+                        value={field.state.value}
+                        onValueChange={field.handleChange}
+                      >
                         {templates.map((template) => {
                           const templateName = getTemplateName(template)
                           const templateLabel = getTemplateLabel(template)
                           const templateDescription = getTemplateDescription(template)
+                          const capabilities = getTemplateCapabilities(template)
                           const isDefault = template.name === defaultTemplate || template.id === defaultTemplate
+                          const isSelected = field.state.value === template.id
+                          const radioId = `${field.name}-${template.id}`
 
                           return (
-                            <SelectItem
+                            <div
                               key={template.id}
-                              value={template.id}
-                              textValue={`${templateLabel} ${templateName}`}
-                              className="items-start py-2"
+                              className={cn(
+                                'group flex min-w-0 cursor-pointer items-start gap-3 rounded-md border bg-background p-3 text-left transition-colors hover:border-primary/35 hover:bg-muted/30',
+                                isSelected &&
+                                  'border-primary/60 bg-primary/5 shadow-[inset_2px_0_0_hsl(var(--primary))]',
+                              )}
                             >
-                              <span className="flex min-w-0 flex-col gap-0.5">
-                                <span className="truncate font-medium">
-                                  {templateLabel}
-                                  {isDefault ? ' (Default)' : ''}
-                                  {templateName !== templateLabel ? ` - ${templateName}` : ''}
+                              <RadioGroupItem id={radioId} value={template.id} className="mt-1 shrink-0" />
+                              <Label htmlFor={radioId} className="flex min-w-0 flex-1 cursor-pointer flex-col gap-1.5">
+                                <span className="flex min-w-0 items-start justify-between gap-3">
+                                  <span className="min-w-0">
+                                    <span className="block truncate text-sm font-medium leading-5 text-foreground">
+                                      {templateLabel}
+                                    </span>
+                                    {templateName !== templateLabel && (
+                                      <span className="block truncate font-mono text-[11px] leading-4 text-muted-foreground">
+                                        {templateName}
+                                      </span>
+                                    )}
+                                  </span>
+                                  {isDefault && (
+                                    <Badge
+                                      variant="secondary"
+                                      className="h-5 shrink-0 rounded-sm px-1.5 text-[11px] font-medium leading-none"
+                                    >
+                                      Default
+                                    </Badge>
+                                  )}
                                 </span>
                                 {templateDescription && (
                                   <span className="line-clamp-2 text-xs leading-4 text-muted-foreground">
                                     {templateDescription}
                                   </span>
                                 )}
-                              </span>
-                            </SelectItem>
-                          )
-                        })}
-                      </SelectContent>
-                    </Select>
-                    {field.state.value &&
-                      templates
-                        .filter((template) => template.id === field.state.value)
-                        .map((template) => {
-                          const description = getTemplateDescription(template)
-                          const capabilities = getTemplateCapabilities(template)
-
-                          return (
-                            <div
-                              key={template.id}
-                              className="rounded-md border bg-muted/25 p-3 text-xs text-muted-foreground"
-                            >
-                              {description && <p className="leading-5">{description}</p>}
-                              {capabilities.length > 0 && (
-                                <div className="mt-2 flex flex-wrap gap-1.5">
-                                  {capabilities.map((capability) => (
-                                    <span
-                                      key={capability}
-                                      className="rounded-sm border bg-background px-1.5 py-0.5 font-medium text-foreground/75"
-                                    >
-                                      {formatCapability(capability)}
-                                    </span>
-                                  ))}
-                                </div>
-                              )}
+                                {capabilities.length > 0 && (
+                                  <span className="flex flex-wrap gap-1.5 pt-0.5">
+                                    {capabilities.map((capability) => (
+                                      <span
+                                        key={capability}
+                                        className="rounded-sm border bg-background px-1.5 py-0.5 text-[11px] font-medium leading-4 text-foreground/70"
+                                      >
+                                        {formatCapability(capability)}
+                                      </span>
+                                    ))}
+                                  </span>
+                                )}
+                              </Label>
                             </div>
                           )
                         })}
+                      </RadioGroup>
+                    )}
                     {!templatesLoading && templates.length === 0 && (
                       <div className="rounded-md border bg-muted/35 p-4 text-sm text-muted-foreground">
-                        No images are available for this organization.
+                        No images available.
                       </div>
                     )}
                     {field.state.meta.errors.length > 0 && field.state.meta.isTouched && (
@@ -400,9 +414,7 @@ export const CreateSandboxSheet = ({
                     <div className="space-y-3">
                       <div>
                         <Label className="text-sm font-semibold">Resources</Label>
-                        <p className="text-xs text-muted-foreground">
-                          Leave fields blank to use the platform defaults.
-                        </p>
+                        <p className="text-xs text-muted-foreground">Blank uses defaults.</p>
                       </div>
                       <div className="grid gap-3">
                         {RESOURCE_FIELDS.map(({ name, label, unit, Icon }) => (
@@ -419,7 +431,7 @@ export const CreateSandboxSheet = ({
                                       <Icon className="size-3.5" />
                                       {label}
                                     </Label>
-                                    <p className="mt-0.5 text-xs text-muted-foreground">Optional override.</p>
+                                    <p className="mt-0.5 text-xs text-muted-foreground">Optional.</p>
                                   </div>
                                   <div className="relative min-w-0">
                                     <NumericFormat
@@ -459,9 +471,7 @@ export const CreateSandboxSheet = ({
                     <div className="space-y-3 border-t pt-4">
                       <div>
                         <Label className="text-sm font-semibold">Lifecycle</Label>
-                        <p className="text-xs text-muted-foreground">
-                          Leave fields blank to use the platform defaults.
-                        </p>
+                        <p className="text-xs text-muted-foreground">Blank uses defaults.</p>
                       </div>
                       <div className="grid gap-3">
                         <form.Field name="autoStopInterval">

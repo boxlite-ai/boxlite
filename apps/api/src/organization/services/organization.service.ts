@@ -130,6 +130,16 @@ export class OrganizationService implements OnModuleInit, TrackableJobExecutions
     })
   }
 
+  async findByIds(organizationIds: string[]): Promise<Organization[]> {
+    if (organizationIds.length === 0) {
+      return []
+    }
+
+    return this.organizationRepository.find({
+      where: { id: In(organizationIds) },
+    })
+  }
+
   async findBySandboxId(sandboxId: string): Promise<Organization | null> {
     const sandbox = await this.sandboxRepository.findOne({
       where: { id: sandboxId },

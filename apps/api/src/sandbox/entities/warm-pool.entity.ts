@@ -16,7 +16,12 @@ export class WarmPool {
   @Column()
   pool: number
 
-  @Column()
+  // The saved-image migration renamed this column to "savedImage" on the shared dev DB
+  // (warm_pool was the only table renamed without a template-compat copy). Keep the TS
+  // property name "template" so existing read/write paths are unchanged, but bind it to
+  // the actual "savedImage" column so create/start write paths stop hitting
+  // `column "WarmPool.template" does not exist`.
+  @Column({ name: 'savedImage' })
   template: string
 
   @Column()
