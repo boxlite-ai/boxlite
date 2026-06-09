@@ -36,6 +36,13 @@ func extractTar(r io.Reader, destDir string) error {
 				return fmt.Errorf("mkdir %s: %w", target, err)
 			}
 		case tar.TypeSymlink:
+			// Contain the link target within destDir. An escaping symlink
+			// (absolute, or `..` out of the root) is itself harmless, but a
+			// later entry like `link/x` would traverse it and write outside
+			// destDir on the host (tar-slip). Reject it.
+			if err := ensureLinkContained(destDir, target, hdr.Linkname); err != nil {
+				return err
+			}
 			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 				return err
 			}
@@ -116,9 +123,33 @@ func packDir(srcDir string, w io.Writer) error {
 // remap attacker-controlled paths.
 func safeJoin(base, name string) (string, error) {
 	target := filepath.Join(base, name)
-	rel, err := filepath.Rel(base, target)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+	if !contains(base, target) {
 		return "", fmt.Errorf("tar entry escapes destination: %q", name)
 	}
 	return target, nil
+}
+
+// ensureLinkContained rejects a symlink whose target resolves outside base.
+// linkPath is the absolute path of the link being created; linkname is the
+// (possibly relative) target as stored in the tar. A relative target resolves
+// against the link's own directory, matching how the OS dereferences it.
+func ensureLinkContained(base, linkPath, linkname string) error {
+	resolved := linkname
+	if !filepath.IsAbs(resolved) {
+		resolved = filepath.Join(filepath.Dir(linkPath), resolved)
+	}
+	if !contains(base, filepath.Clean(resolved)) {
+		return fmt.Errorf("tar symlink target escapes destination: %q -> %q",
+			linkPath, linkname)
+	}
+	return nil
+}
+
+// contains reports whether target is base itself or lies within base.
+func contains(base, target string) bool {
+	rel, err := filepath.Rel(base, target)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
 }

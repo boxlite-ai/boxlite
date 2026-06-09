@@ -99,3 +99,35 @@ func TestExtractTarRejectsPathEscape(t *testing.T) {
 		t.Fatal("escape.txt was written outside destination")
 	}
 }
+
+// extractTar must not let a symlink entry pointing outside destDir be traversed
+// by a later file entry to write on the host (tar-slip via symlink). A crafted
+// upload — symlink "sub" -> <outside dir>, then regular file "sub/pwned" — must
+// be rejected, and nothing may be written through the escaping link.
+func TestExtractTarRejectsSymlinkEscape(t *testing.T) {
+	victim := t.TempDir() // a sibling dir OUTSIDE the extraction destination
+	dst := t.TempDir()
+
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	// 1) a symlink whose target escapes dst (absolute, points at victim)
+	if err := tw.WriteHeader(&tar.Header{Name: "sub", Linkname: victim, Mode: 0o777, Typeflag: tar.TypeSymlink}); err != nil {
+		t.Fatal(err)
+	}
+	// 2) a file that, if "sub" were created and followed, lands in victim
+	pwned := []byte("pwned")
+	if err := tw.WriteHeader(&tar.Header{Name: "sub/pwned", Mode: 0o644, Size: int64(len(pwned)), Typeflag: tar.TypeReg}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(pwned); err != nil {
+		t.Fatal(err)
+	}
+	tw.Close()
+
+	if err := extractTar(&buf, dst); err == nil {
+		t.Fatal("expected extractTar to reject the escaping symlink, got nil")
+	}
+	if _, err := os.Stat(filepath.Join(victim, "pwned")); err == nil {
+		t.Fatal("symlink traversal wrote 'pwned' outside the destination")
+	}
+}

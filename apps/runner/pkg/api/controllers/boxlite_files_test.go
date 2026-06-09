@@ -142,7 +142,11 @@ func (e *copyTestEnv) boxCat(t *testing.T, path string) string {
 	t.Helper()
 	var last string
 	for attempt := 0; attempt < 40; attempt++ {
-		res, err := e.client.Exec(context.Background(), e.boxID, "/bin/sh", "-c", "cat '"+path+"' 2>/dev/null")
+		// Bound each Exec: a stalled box must fail the test cleanly, not hang
+		// the whole run (the 40x loop bounds iterations, not call duration).
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		res, err := e.client.Exec(ctx, e.boxID, "/bin/sh", "-c", "cat '"+path+"' 2>/dev/null")
+		cancel()
 		if err != nil {
 			t.Fatalf("exec cat: %v", err)
 		}
