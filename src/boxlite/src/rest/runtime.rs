@@ -16,7 +16,7 @@ use super::types::{BoxResponse, CreateBoxRequest, ListBoxesResponse, RuntimeMetr
 use crate::runtime::auth::{AuthBackend, Principal};
 
 pub(crate) struct RestRuntime {
-    client: ApiClient,
+    pub(crate) client: ApiClient,
 }
 
 impl RestRuntime {
