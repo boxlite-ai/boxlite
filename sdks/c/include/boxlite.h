@@ -341,6 +341,22 @@ enum BoxliteErrorCode boxlite_copy_into(CBoxHandle *handle,
                                         void *user_data,
                                         CBoxliteError *out_error);
 
+// Variant of `boxlite_copy_into` that takes an explicit `overwrite`
+// flag. Required for REST-mode `copy_in(..., overwrite=False)` to
+// reach the guest unchanged — `boxlite_copy_into` hard-codes
+// `overwrite=true` (the SDK's default) and there's no other way to
+// pass the flag across the C ABI today. All other CopyOptions
+// (recursive, follow_symlinks, include_parent) stay defaulted because
+// the runner-side staging step encodes them at archive-creation time
+// before this call is reached.
+enum BoxliteErrorCode boxlite_copy_into_with_options(CBoxHandle *handle,
+                                                     const char *host_src,
+                                                     const char *guest_dst,
+                                                     bool overwrite,
+                                                     CBoxCopyCb cb,
+                                                     void *user_data,
+                                                     CBoxliteError *out_error);
+
 enum BoxliteErrorCode boxlite_copy_out(CBoxHandle *handle,
                                        const char *guest_src,
                                        const char *host_dst,

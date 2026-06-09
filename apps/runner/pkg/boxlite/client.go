@@ -332,13 +332,25 @@ func (c *Client) Exec(ctx context.Context, sandboxId string, command string, arg
 	}, nil
 }
 
-// CopyInto copies a file from host into a sandbox.
+// CopyInto copies a file from host into a sandbox, overwriting any
+// existing guest destination. Use CopyIntoWithOptions to control the
+// overwrite policy.
 func (c *Client) CopyInto(ctx context.Context, sandboxId string, hostSrc, guestDst string) error {
 	bx, err := c.getOrFetchBox(ctx, sandboxId)
 	if err != nil {
 		return err
 	}
 	return bx.CopyInto(ctx, hostSrc, guestDst)
+}
+
+// CopyIntoWithOptions is the option-bearing form of CopyInto. The REST
+// file-upload handler uses this to honour `copy_in(..., overwrite=false)`.
+func (c *Client) CopyIntoWithOptions(ctx context.Context, sandboxId string, hostSrc, guestDst string, overwrite bool) error {
+	bx, err := c.getOrFetchBox(ctx, sandboxId)
+	if err != nil {
+		return err
+	}
+	return bx.CopyIntoWithOptions(ctx, hostSrc, guestDst, boxlite.CopyIntoOptions{Overwrite: overwrite})
 }
 
 // CopyOut copies a file from a sandbox to the host.
