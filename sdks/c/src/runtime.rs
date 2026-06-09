@@ -577,6 +577,26 @@ unsafe fn dispatch_event(event: RuntimeEvent) {
                 user_data,
                 result,
             } => dispatch_unit_event(result, user_data, cb),
+            RuntimeEvent::SnapshotCreate {
+                cb,
+                user_data,
+                result,
+            } => dispatch_handle_event::<crate::snapshot::CSnapshotInfo>(result, user_data, cb),
+            RuntimeEvent::SnapshotList {
+                cb,
+                user_data,
+                result,
+            } => dispatch_handle_event::<crate::snapshot::CSnapshotInfoList>(result, user_data, cb),
+            RuntimeEvent::SnapshotRemove {
+                cb,
+                user_data,
+                result,
+            } => dispatch_unit_event(result, user_data, cb),
+            RuntimeEvent::SnapshotRestore {
+                cb,
+                user_data,
+                result,
+            } => dispatch_unit_event(result, user_data, cb),
         }
     }
 }

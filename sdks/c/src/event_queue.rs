@@ -160,6 +160,33 @@ pub(crate) type CExecutionSignalFn = extern "C" fn(*mut crate::CBoxliteError, *m
 pub type CExecutionResizeCb = Option<extern "C" fn(*mut crate::CBoxliteError, *mut c_void)>;
 pub(crate) type CExecutionResizeFn = extern "C" fn(*mut crate::CBoxliteError, *mut c_void);
 
+/// Snapshot create / get completion. Both ops return a single
+/// `CSnapshotInfo` so they share the callback shape.
+pub type CBoxSnapshotCreateCb = Option<
+    extern "C" fn(*mut crate::snapshot::CSnapshotInfo, *mut crate::CBoxliteError, *mut c_void),
+>;
+pub(crate) type CBoxSnapshotCreateFn =
+    extern "C" fn(*mut crate::snapshot::CSnapshotInfo, *mut crate::CBoxliteError, *mut c_void);
+
+/// Snapshot list completion.
+pub type CBoxSnapshotListCb = Option<
+    extern "C" fn(
+        *mut crate::snapshot::CSnapshotInfoList,
+        *mut crate::CBoxliteError,
+        *mut c_void,
+    ),
+>;
+pub(crate) type CBoxSnapshotListFn =
+    extern "C" fn(*mut crate::snapshot::CSnapshotInfoList, *mut crate::CBoxliteError, *mut c_void);
+
+/// Snapshot remove completion.
+pub type CBoxSnapshotRemoveCb = Option<extern "C" fn(*mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CBoxSnapshotRemoveFn = extern "C" fn(*mut crate::CBoxliteError, *mut c_void);
+
+/// Snapshot restore completion.
+pub type CBoxSnapshotRestoreCb = Option<extern "C" fn(*mut crate::CBoxliteError, *mut c_void)>;
+pub(crate) type CBoxSnapshotRestoreFn = extern "C" fn(*mut crate::CBoxliteError, *mut c_void);
+
 // ─── Owned FFI payload ─────────────────────────────────────────────────────
 //
 // Wraps a `Box::into_raw`'d FFI struct that will eventually be transferred
@@ -354,6 +381,28 @@ pub enum RuntimeEvent {
     },
     Resize {
         cb: CExecutionResizeFn,
+        user_data: usize,
+        result: Result<(), BoxliteError>,
+    },
+
+    /* Snapshots */
+    SnapshotCreate {
+        cb: CBoxSnapshotCreateFn,
+        user_data: usize,
+        result: Result<OwnedFfiPtr<crate::snapshot::CSnapshotInfo>, BoxliteError>,
+    },
+    SnapshotList {
+        cb: CBoxSnapshotListFn,
+        user_data: usize,
+        result: Result<OwnedFfiPtr<crate::snapshot::CSnapshotInfoList>, BoxliteError>,
+    },
+    SnapshotRemove {
+        cb: CBoxSnapshotRemoveFn,
+        user_data: usize,
+        result: Result<(), BoxliteError>,
+    },
+    SnapshotRestore {
+        cb: CBoxSnapshotRestoreFn,
         user_data: usize,
         result: Result<(), BoxliteError>,
     },

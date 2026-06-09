@@ -127,6 +127,55 @@ export class BoxliteProxyController {
     return this.proxyToRunner(authContext, boxId, `/v1/boxes/${boxId}/metrics`, req, res, next)
   }
 
+  @All(':boxId/snapshots')
+  async proxySnapshotsRoot(
+    @AuthContext() authContext: OrganizationAuthContext,
+    @Param('boxId') boxId: string,
+    @Req() req: Request,
+    @Res() res: Response,
+    @Next() next: NextFunction,
+  ) {
+    return this.proxyToRunner(authContext, boxId, `/v1/boxes/${boxId}/snapshots`, req, res, next)
+  }
+
+  @All(':boxId/snapshots/:name')
+  async proxySnapshotNamed(
+    @AuthContext() authContext: OrganizationAuthContext,
+    @Param('boxId') boxId: string,
+    @Param('name') name: string,
+    @Req() req: Request,
+    @Res() res: Response,
+    @Next() next: NextFunction,
+  ) {
+    return this.proxyToRunner(
+      authContext,
+      boxId,
+      `/v1/boxes/${boxId}/snapshots/${encodeURIComponent(name)}`,
+      req,
+      res,
+      next,
+    )
+  }
+
+  @All(':boxId/snapshots/:name/restore')
+  async proxySnapshotRestore(
+    @AuthContext() authContext: OrganizationAuthContext,
+    @Param('boxId') boxId: string,
+    @Param('name') name: string,
+    @Req() req: Request,
+    @Res() res: Response,
+    @Next() next: NextFunction,
+  ) {
+    return this.proxyToRunner(
+      authContext,
+      boxId,
+      `/v1/boxes/${boxId}/snapshots/${encodeURIComponent(name)}/restore`,
+      req,
+      res,
+      next,
+    )
+  }
+
   private async proxyToRunner(
     authContext: OrganizationAuthContext,
     boxId: string,

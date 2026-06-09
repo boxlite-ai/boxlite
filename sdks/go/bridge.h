@@ -34,4 +34,9 @@ extern CExecutionKillCb cbExecutionKill(void);
 extern CExecutionSignalCb cbExecutionSignal(void);
 extern CExecutionResizeCb cbExecutionResize(void);
 
+extern CBoxSnapshotCreateCb cbSnapshotCreate(void);
+extern CBoxSnapshotListCb cbSnapshotList(void);
+extern CBoxSnapshotRemoveCb cbSnapshotRemove(void);
+extern CBoxSnapshotRestoreCb cbSnapshotRestore(void);
+
 #endif // BOXLITE_GO_BRIDGE_H

@@ -297,6 +297,33 @@ typedef struct BoxliteImageRegistry {
 // Runtime shutdown completion.
 typedef void (*CRuntimeShutdownCb)(CBoxliteError*, void*);
 
+typedef struct CSnapshotInfo {
+  char *id;
+  char *box_id;
+  char *name;
+  int64_t created_at;
+  uint64_t container_disk_bytes;
+  uint64_t size_bytes;
+} CSnapshotInfo;
+
+// Snapshot create / get completion. Both ops return a single
+// `CSnapshotInfo` so they share the callback shape.
+typedef void (*CBoxSnapshotCreateCb)(struct CSnapshotInfo*, CBoxliteError*, void*);
+
+typedef struct CSnapshotInfoList {
+  struct CSnapshotInfo *items;
+  int count;
+} CSnapshotInfoList;
+
+// Snapshot list completion.
+typedef void (*CBoxSnapshotListCb)(struct CSnapshotInfoList*, CBoxliteError*, void*);
+
+// Snapshot remove completion.
+typedef void (*CBoxSnapshotRemoveCb)(CBoxliteError*, void*);
+
+// Snapshot restore completion.
+typedef void (*CBoxSnapshotRestoreCb)(CBoxliteError*, void*);
+
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
@@ -647,6 +674,39 @@ void boxlite_runtime_free(CBoxliteRuntime *runtime);
 //
 // Returns the number of dispatched events, or `-1` on error.
 int boxlite_runtime_drain(CBoxliteRuntime *runtime, int timeout_ms, CBoxliteError *out_error);
+
+enum BoxliteErrorCode boxlite_box_snapshot_create(CBoxHandle *handle,
+                                                  const char *name,
+                                                  CBoxSnapshotCreateCb cb,
+                                                  void *user_data,
+                                                  CBoxliteError *out_error);
+
+enum BoxliteErrorCode boxlite_box_snapshot_list(CBoxHandle *handle,
+                                                CBoxSnapshotListCb cb,
+                                                void *user_data,
+                                                CBoxliteError *out_error);
+
+enum BoxliteErrorCode boxlite_box_snapshot_get(CBoxHandle *handle,
+                                               const char *name,
+                                               CBoxSnapshotCreateCb cb,
+                                               void *user_data,
+                                               CBoxliteError *out_error);
+
+enum BoxliteErrorCode boxlite_box_snapshot_remove(CBoxHandle *handle,
+                                                  const char *name,
+                                                  CBoxSnapshotRemoveCb cb,
+                                                  void *user_data,
+                                                  CBoxliteError *out_error);
+
+enum BoxliteErrorCode boxlite_box_snapshot_restore(CBoxHandle *handle,
+                                                   const char *name,
+                                                   CBoxSnapshotRestoreCb cb,
+                                                   void *user_data,
+                                                   CBoxliteError *out_error);
+
+void boxlite_free_snapshot_info(struct CSnapshotInfo *info);
+
+void boxlite_free_snapshot_info_list(struct CSnapshotInfoList *list);
 
 void boxlite_free_string(char *s);
 

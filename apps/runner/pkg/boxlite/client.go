@@ -332,6 +332,110 @@ func (c *Client) Exec(ctx context.Context, sandboxId string, command string, arg
 	}, nil
 }
 
+// quiesceBox waits for the runner-side libboxlite view of `sandboxId`
+// to settle before handing the Box to a snapshot operation that needs
+// a stable shim. The REST stop path is asynchronous (the API writes
+// `desiredState=STOPPED` and emits an event; runner.Stop() runs later
+// from the event handler), so back-to-back `b.stop() ; b.snapshot.
+// create(...)` calls can hit the snapshot endpoint while the shim is
+// still being torn down. Libboxlite's snapshot path needs to SIGSTOP
+// the shim via its control socket — mid-teardown the socket refuses
+// connection (ECONNREFUSED → "Failed to SIGSTOP shim process").
+//
+// Mechanism:
+//   - Drop any cached Go SDK Box handle, so the next getOrFetchBox is
+//     a fresh `runtime.Get` (matches the local-FFI pattern in
+//     `src/boxlite/tests/snapshot.rs::create_stopped_box`).
+//   - Apply a baseline 5s settle window. Empirically the API event
+//     handler takes 3–5s to flush, and the bx.Info() State field
+//     flips to "stopped" before libboxlite has finished releasing the
+//     shim's control socket, so a polling-only loop sees a green
+//     light too early.
+//   - Then poll up to 30s for State to leave the Configured/Stopping
+//     transient bucket.
+func (c *Client) quiesceBox(ctx context.Context, sandboxId string) (*boxlite.Box, error) {
+	const (
+		pollInterval = 250 * time.Millisecond
+		timeout      = 30 * time.Second
+	)
+	time.Sleep(5 * time.Second)
+	deadline := time.Now().Add(timeout)
+
+	for {
+		c.mu.Lock()
+		if bx, ok := c.boxes[sandboxId]; ok {
+			bx.Close()
+			delete(c.boxes, sandboxId)
+		}
+		c.mu.Unlock()
+
+		bx, err := c.getOrFetchBox(ctx, sandboxId)
+		if err != nil {
+			return nil, err
+		}
+		info, infoErr := bx.Info(ctx)
+		if infoErr == nil && info.State != boxlite.StateConfigured && info.State != boxlite.StateStopping {
+			return bx, nil
+		}
+		if time.Now().After(deadline) {
+			// Fall through with the latest handle — let libboxlite
+			// surface the real error rather than masking it with a
+			// generic timeout from this layer.
+			return bx, nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(pollInterval):
+		}
+	}
+}
+
+// SnapshotCreate creates a snapshot of the given sandbox's disk state.
+func (c *Client) SnapshotCreate(ctx context.Context, sandboxId string, name string) (*boxlite.SnapshotInfo, error) {
+	bx, err := c.quiesceBox(ctx, sandboxId)
+	if err != nil {
+		return nil, err
+	}
+	return bx.SnapshotCreate(ctx, name)
+}
+
+// SnapshotList lists snapshots for the given sandbox.
+func (c *Client) SnapshotList(ctx context.Context, sandboxId string) ([]boxlite.SnapshotInfo, error) {
+	bx, err := c.getOrFetchBox(ctx, sandboxId)
+	if err != nil {
+		return nil, err
+	}
+	return bx.SnapshotList(ctx)
+}
+
+// SnapshotGet retrieves a snapshot by name; (nil, nil) if missing.
+func (c *Client) SnapshotGet(ctx context.Context, sandboxId string, name string) (*boxlite.SnapshotInfo, error) {
+	bx, err := c.getOrFetchBox(ctx, sandboxId)
+	if err != nil {
+		return nil, err
+	}
+	return bx.SnapshotGet(ctx, name)
+}
+
+// SnapshotRemove deletes a snapshot by name.
+func (c *Client) SnapshotRemove(ctx context.Context, sandboxId string, name string) error {
+	bx, err := c.getOrFetchBox(ctx, sandboxId)
+	if err != nil {
+		return err
+	}
+	return bx.SnapshotRemove(ctx, name)
+}
+
+// SnapshotRestore reverts the sandbox's disks to the named snapshot.
+func (c *Client) SnapshotRestore(ctx context.Context, sandboxId string, name string) error {
+	bx, err := c.quiesceBox(ctx, sandboxId)
+	if err != nil {
+		return err
+	}
+	return bx.SnapshotRestore(ctx, name)
+}
+
 // CopyInto copies a file from host into a sandbox.
 func (c *Client) CopyInto(ctx context.Context, sandboxId string, hostSrc, guestDst string) error {
 	bx, err := c.getOrFetchBox(ctx, sandboxId)

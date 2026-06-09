@@ -18,6 +18,7 @@ mod metrics;
 mod options;
 mod rest;
 mod runtime;
+pub mod snapshot;
 #[cfg(test)]
 mod tests;
 mod util;
