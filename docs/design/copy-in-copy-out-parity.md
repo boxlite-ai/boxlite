@@ -1,0 +1,422 @@
+# copy_in/copy_out parity across local / REST / serve / SDK (docker-cp semantics)
+
+**Date:** 2026-06-01
+**Branch:** `feat/copy-in-copy-out`
+**Status:** Implemented (Approach A) + SDK alignment; all tests green (see §7.3).
+Committed on `feat/copy-in-copy-out`, pushed to fork (no PR yet).
+
+## 1. Problem
+
+`LiteBox::copy_into` (host→box) and `copy_out` (box→host) have a correct,
+docker-cp-faithful implementation in the **local backend**
+([`box_impl.rs`](../../src/boxlite/src/litebox/box_impl.rs)) and the box-side
+guest agent ([`guest/src/service/files.rs`](../../src/guest/src/service/files.rs)),
+both built on the shared tar module
+([`shared/src/tar.rs`](../../src/shared/src/tar.rs)).
+
+The **REST path diverges** from local in three substantive ways:
+
+1. **Options dropped.** `RestBox::copy_into` / `copy_out`
+   ([`rest/litebox.rs`](../../src/boxlite/src/rest/litebox.rs)) take `_opts`
+   and ignore it entirely — `include_parent`, `follow_symlinks`, `overwrite`
+   never take effect over REST.
+2. **`extracted/` leak (host→box).** The serve handler `upload_files`
+   ([`serve/handlers/files.rs`](../../src/cli/src/commands/serve/handlers/files.rs))
+   unpacks the incoming tar into a temp subdir literally named `extracted/`,
+   then calls `copy_into(extract_dir, path, CopyOptions::default())` with
+   `include_parent = true` (the default), so the box ends up with
+   `path/extracted/<name>` instead of the file/dir at `path`. Pre-existing since
+   PR #384; not a regression.
+3. **Divergent tar impl.** The REST client uses its own
+   `create_tar_from_path` (`append_dir_all(".", src)`, always flattening,
+   producing the `.` entry the shared module deliberately avoids) instead of
+   `boxlite_shared::tar::pack`. The serve handlers likewise re-pack with
+   `append_dir_all(".")`.
+
+This matters because the **`boxlite` CLI** selects its backend via
+`--url` / `BOXLITE_REST_URL`
+([`cli.rs::create_runtime`](../../src/cli/src/cli.rs)): `boxlite cp` with no
+URL uses the local backend; with a URL it uses the REST backend. So `boxlite cp`
+behaves differently against a remote runner than against local — and the
+`boxlite serve` server (also part of the CLI binary) is the divergent server
+side. The F-010 fix already landed on this branch fixed only the box→host
+**path detection** on the REST receiver; it did not touch options-dropping,
+the `extracted/` leak, or the divergent tar impl.
+
+## 2. Goal
+
+Make `copy_into` / `copy_out` behave **identically across all paths** —
+local in-process, REST client (`boxlite cp --url`), the `boxlite serve`
+server, and the language SDKs (C, Go, Python) — all matching the local
+backend's docker-cp semantics, with all four `CopyOptions`
+(`overwrite`, `include_parent`, `follow_symlinks`, `recursive`) honored and
+sharing the same defaults (`include_parent` defaults to true everywhere).
+Deliver complete behavioral tests proving the parity.
+
+> **Scope note (updated after the initial REST/serve work):** the goal was
+> extended to include the C/Go/Python SDKs once auditing showed they diverged
+> (C/Go exposed no options and defaulted `include_parent=false`; the Python
+> sync wrapper exposed no copy at all). Sections 3 and 9 record the expanded
+> scope; the original Approach-A design (sections 4–7) still describes the
+> REST/serve core, with the SDK alignment summarized in §3.1.
+
+## 3. Scope
+
+**In scope (the divergent REST/serve paths; SDK alignment added in §3.1):**
+- REST client: [`src/boxlite/src/rest/litebox.rs`](../../src/boxlite/src/rest/litebox.rs)
+- serve server: [`src/cli/src/commands/serve/handlers/files.rs`](../../src/cli/src/commands/serve/handlers/files.rs)
+  and the query type [`serve/types.rs`](../../src/cli/src/commands/serve/types.rs) (`FileQuery`)
+
+- CLI `cp` command ([`cp.rs`](../../src/cli/src/commands/cp.rs)) — backend-agnostic;
+  forwards `CopyOptions`. The one ergonomic nit (`--include-parent` was a
+  presence-only flag, unsettable to false) **was** addressed: replaced with
+  `--no-include-parent`.
+
+**Out of scope:**
+- Local backend `box_impl.rs` + guest `files.rs` — already correct **for the
+  scenarios under test** (proven by the `tests/copy.rs::copy_integration` suite
+  and the E2E `local` path); treated as the baseline, not modified.
+- Go runner / `apps/daemon` Go toolbox (`/sandbox`) — separate system.
+- Node SDK — already forwards all options with core defaults (`JsCopyOptions`),
+  so it inherits parity by construction; no change. (Its test suite was not run
+  here due to a pre-existing npm dependency-resolution failure, unrelated.)
+
+### 3.1 Scope expansion — SDK alignment (added after the REST/serve core)
+
+The C/Go/Python SDKs were brought in line with the core docker-cp defaults:
+- **C** ([`sdks/c/src/copy.rs`](../../sdks/c/src/copy.rs)): add `CBoxCopyOptions`
+  + `boxlite_copy_into_with_options` / `boxlite_copy_out_with_options`; the
+  no-options entry points pass `NULL` → defaults; default `include_parent`
+  flipped `false → true`. Header regenerated by cbindgen.
+- **Go** ([`sdks/go/copy.go`](../../sdks/go/copy.go)): functional options
+  (`WithOverwrite` / `WithIncludeParent` / `WithFollowSymlinks` / `WithRecursive`)
+  on `CopyInto` / `CopyOut`, marshalled into `CBoxCopyOptions`; default aligned.
+- **Python** ([`sync_api/_simplebox.py`](../../sdks/python/boxlite/sync_api/_simplebox.py)):
+  add `SyncSimpleBox.copy_in` / `copy_out` mirroring the async `SimpleBox`
+  (the sync wrapper previously exposed no copy methods at all).
+
+Python's async `SimpleBox` already exposed all options with docker-cp defaults
+and needed no change.
+
+## 4. Approach (A): faithful temp-dir bridge, reuse existing LiteBox API
+
+The serve process is itself a local BoxLite host whose only box-facing API is
+host-path based (`copy_into(host_path, dst, opts)` / `copy_out(box_path,
+host_path, opts)`). Approach A keeps that bridge but makes it faithful, rather
+than adding a new raw-tar passthrough method to the backend trait (rejected
+Approach B — larger blast radius for a non-hot path).
+
+### 4.1 Wire protocol — extend `/boxes/{id}/files` with optional query params
+
+Each option is transmitted only to the side that applies it (asymmetric but precise):
+
+| Endpoint | Existing | Added query params | Applied by |
+|----------|----------|--------------------|------------|
+| `PUT /boxes/{id}/files` (copy_into) | `path` | `overwrite` (bool, default `true`) | guest, at unpack time |
+| `GET /boxes/{id}/files` (copy_out) | `path` | `include_parent` (bool, default `true`), `follow_symlinks` (bool, default `false`) | guest, at pack time |
+
+Rationale:
+- For **copy_into**, `include_parent` and `follow_symlinks` are applied
+  client-side while packing — the tar already embeds the resulting structure —
+  so they need not be sent. Only `overwrite` (enforced by the guest at unpack)
+  crosses the wire.
+- For **copy_out**, `include_parent` and `follow_symlinks` govern how the
+  **guest** packs the source, so they must reach the server. `overwrite` is
+  applied client-side during extraction, so it need not be sent.
+- A trailing `/` on `path` continues to ride in the `path` string itself →
+  guest `force_directory`; no extra param.
+- Absent params default to `CopyOptions::default()` (docker-cp defaults):
+  `overwrite=true`, `include_parent=true`, `follow_symlinks=false`. Old clients
+  that omit them get correct behavior → backward compatible. The `apps/api`
+  proxy forwards query strings unchanged, so no proxy change is needed.
+
+Implementation: extend `FileQuery` (`serve/types.rs`) with
+`Option<bool>` fields (`overwrite`, `include_parent`, `follow_symlinks`),
+resolved to defaults when `None`.
+
+### 4.2 Client — `rest/litebox.rs`
+
+| Method | Change |
+|--------|--------|
+| `copy_into` | Stop ignoring opts. **Delete** `create_tar_from_path`; pack with `boxlite_shared::tar::pack` (to a temp file, then read bytes for the HTTP body), honoring `follow_symlinks` + `include_parent`. When `host_src.is_dir()`, call `opts.validate_for_dir()` first to fail fast (mirrors `box_impl`). Append `?overwrite=<opts.overwrite>` to the PUT URL. Remove the temp file after the body is read. |
+| `copy_out` | Stop ignoring opts. Append `?include_parent=<…>&follow_symlinks=<…>` to the GET URL. In `extract_tar_to_path`, use the real `opts.overwrite` instead of the currently hardcoded `true`. |
+
+`extract_tar_to_path` keeps its F-010 behavior (shared `unpack`,
+`force_directory: false`, auto-detection); only `overwrite` becomes a parameter.
+
+### 4.3 Server — `serve/handlers/files.rs`
+
+| Handler | Change |
+|---------|--------|
+| `upload_files` | Resolve `overwrite` from query. `stage_upload_tar(body, temp_dir)` writes the body to `temp_dir/upload.tar` and unpacks it with `boxlite::tar::unpack(force_directory: true, overwrite: true, mkdir_parents: true)` into a `temp_dir/staged/` subdir, returning that staged path. Then `litebox.copy_into(staged, query.path, CopyOptions { recursive: true, overwrite: <query>, follow_symlinks: false, include_parent: false })`. With `include_parent: false`, the **contents** of `staged/` flatten into `path`, so neither `staged` nor the old hardcoded `extracted/` name ever enters the box (the #384 leak is gone). `overwrite` is enforced by the guest. Trailing `/` in `path` is preserved → guest `force_directory`. |
+| `download_files` | Resolve `include_parent` / `follow_symlinks` from query. `copy_out` targets a dedicated `temp_dir/payload/` subdir: `litebox.copy_out(query.path, payload, CopyOptions { recursive: true, overwrite: true, follow_symlinks: <query>, include_parent: <query> })`. Then replace `append_dir_all(".")` with `boxlite::tar::pack(payload, tar_path, PackContext { follow_symlinks: false, include_parent: false })` and read the bytes for the response body. **The response tar (`temp_dir/download.tar`) is written as a sibling of `payload/`, not inside it** — otherwise packing `payload` would tar the response file into itself (and any stray temp file). |
+
+For `download_files`, `include_parent: false` on the re-pack flattens the temp
+dir's top-level entries — which are exactly what the guest produced (the guest
+already applied `include_parent` when it packed) — so the response tar is a
+faithful copy of the guest tar. `follow_symlinks: false` on this server-side
+re-pack is deliberate: the guest already dereferenced (or preserved) symlinks
+per the client's request, so the temp dir holds the final form. Re-packing with
+`follow_symlinks: false` re-tars a preserved symlink **as** a symlink rather
+than dereferencing it a second time.
+
+### 4.4 Data-flow equivalence (vs local)
+
+```
+copy_into single file:
+  client pack {x.txt} → PUT → server unpack → T/x.txt
+  → copy_into(T, /p/x.txt, parent=false) packs {x.txt}
+  → guest unpack: dest=/p/x.txt, single regular file → FileToFile → /p/x.txt   ✓
+
+copy_into dir (include_parent=true):
+  client pack {mydir/a, mydir/b} → server unpack → T/mydir/{a,b}
+  → copy_into(T, /dest, parent=false) packs {mydir/a, mydir/b}
+  → guest unpack → /dest/mydir/{a,b}                                            ✓
+
+copy_out dir (include_parent=true):
+  guest pack {mydir/a, mydir/b} → server unpack → T/mydir/{a,b}
+  → re-pack(parent=false) {mydir/a, mydir/b} → stream → client unpack
+  → host_dst/mydir/{a,b}  (byte-identical to local copy_out)                    ✓
+
+copy_out single file:
+  guest pack {x.txt} → server unpack → T/x.txt → re-pack {x.txt} → client unpack
+  → dest is a single regular file → FileToFile → host_dst                       ✓ (matches F-010)
+```
+
+The server-side round-trip (unpack → re-pack) preserves the entry set exactly;
+`include_parent: false` on both server-side legs ensures the temp dir's own name
+never appears in the box or the response tar. (In the code, `T` is the
+`staged/` subdir on upload and the `payload/` subdir on download — see §4.3.)
+
+## 5. Behavior matrix (target — identical across local / `--url` / serve / SDK)
+
+Source-side packing (`pack`):
+
+| src state | behavior |
+|-----------|----------|
+| file | single entry, name = file name |
+| dir + `include_parent=true` | top-level `<dir>/…` |
+| dir + `include_parent=false` | flattened top-level entries (no `.` entry) |
+| dir + `recursive=false` | error (`validate_for_dir`) |
+| nonexistent | error |
+
+Destination-side landing (`unpack` / `detect_extraction_mode`):
+
+| tar contents \ dst state | dst missing | dst existing file | dst existing dir | dst trailing `/` |
+|---|---|---|---|---|
+| single regular file | write to exact path (FileToFile, mkdir parents) | overwrite if `overwrite=true`, else error | `dst/<entry>` | `dst/<entry>` |
+| multi-entry / dir | mkdir `dst`, extract inside | — | extract inside `dst` (error if exists & `overwrite=false`) | same |
+| empty tar | mkdir empty `dst` | — | no-op | mkdir empty `dst` |
+
+## 6. Error handling
+
+- dir + `recursive=false` → client-side `BoxliteError::Config`, before any network call (mirrors `box_impl`).
+- `overwrite=false` and dst exists → guest `unpack` returns
+  `BoxliteError::Storage("destination … exists and overwrite=false")`. Per the
+  canonical table in [`shared/src/errors.rs`](../../src/shared/src/errors.rs),
+  `Storage` maps to **HTTP 500 `storage_error`**; the `RestBox` client wraps a
+  non-2xx response as `BoxliteError::Internal`. So the operation fails and the
+  original file is left unchanged — which is what the E2E "error, original
+  unchanged" assertion checks. The test asserts *failure + unchanged*, not a
+  specific status code. Re-classifying overwrite conflicts to a 4xx (e.g. 409)
+  is a nicer-error improvement but is **out of scope** here (it would touch the
+  shared error taxonomy beyond the two target paths).
+- Empty `path` → existing validation retained.
+- Malformed query bool → serde default (absent → default; reject malformed with 400).
+- Preserve original error cause when wrapping (no silent swallow), mask nothing
+  sensitive (paths only).
+
+## 7. Test plan (complete behavioral coverage)
+
+Per CLAUDE.md: reproduce-before-fix, two-side TDD for each bug, and tests must
+cross a real boundary (no tautological assertions). Boxes require virtualization,
+so coverage is split into a unit layer (no box) and an E2E layer (box-capable host).
+
+### 7.1 Unit (no box required)
+
+1. **Client packing honors opts** — `copy_into`'s packing produces a tar whose
+   entries match `include_parent` / `follow_symlinks` for both a file source
+   and a directory source (inspect the produced tar entries).
+2. **`FileQuery` parses new query params** — `overwrite`, `include_parent`,
+   `follow_symlinks` present/absent → expected resolved values (defaults when absent).
+3. **`extract_tar_to_path` honors `overwrite`** — `overwrite=true` replaces an
+   existing file; `overwrite=false` errors and leaves the original untouched.
+   (Two-side TDD: fails before the parameterization, passes after.)
+4. **Server bridge has no `extracted/` wrapper** — this requires extracting the
+   client-tar → temp-dir staging out of `upload_files` into a small testable
+   helper (the plan must budget for this refactor, not treat it as a pure
+   assertion). The helper takes the client tar bytes + a temp dir and returns
+   the staged directory; the test asserts the staged layout contains no
+   `extracted/` (or any temp-dir-name) wrapper. Reproduces the #384 leak before
+   the fix, passes after.
+5. **F-010 regression tests** retained and still green after `overwrite`
+   becomes a parameter.
+
+### 7.2 E2E parity matrix (box-capable host)
+
+A scripted E2E (added under the existing `scripts/test/cli-e2e/` harness) runs
+the **same scenarios** across **three paths** and asserts identical resulting
+box/host state:
+
+- Path 1: `boxlite cp` against a **local** runtime (no `--url`).
+- Path 2: `boxlite cp --url http://127.0.0.1:<port>` against a local `boxlite serve`.
+- Path 3: the SDK / REST client against the same serve (covers the client path
+  if it differs from the CLI invocation).
+
+Scenarios (each run in both directions, copy_into and copy_out where applicable):
+
+| src | dst state | option | expected (identical on all paths) |
+|-----|-----------|--------|-----------------------------------|
+| file | nonexistent | — | regular file at exact path |
+| file | existing dir | — | `dir/file` |
+| file | existing file | `overwrite=false` | error, original unchanged |
+| file | existing file | `overwrite=true` | replaced |
+| dir | nonexistent | `include_parent=true` | `dst/dir/…` |
+| dir | nonexistent | `include_parent=false` | flattened into `dst` |
+| dir | existing dir | `include_parent=true/false` | nested vs flattened |
+| dir | — | `recursive=false` | error |
+| tree with symlink | — | `follow_symlinks=true` | dereferenced regular file |
+| tree with symlink | — | `follow_symlinks=false` | preserved symlink |
+
+**Hosts:** primary on macOS Apple Silicon (M5) local boxes; secondary
+verification on the Lima Linux VM per the standing "run Linux tests alongside
+macOS" rule. Windows is not required for this work.
+
+### 7.3 As-built coverage (what was actually delivered)
+
+The plan above (7.1/7.2) describes the original REST/serve test intent. As
+built, coverage spans these surfaces, all run green on M5 real boxes:
+
+| Surface | Test | Result |
+|---------|------|--------|
+| Rust unit (no box) | `rest::litebox::pack_host_path_tests` (2), `extract_tar_to_path_tests` (3, incl. F-010 + overwrite); shared `boxlite_shared::tar` suite | PASS |
+| Rust integration (local backend, real box) | `src/boxlite/tests/copy.rs::copy_integration` (~18 sub-checks incl. `non_recursive_rejects_directory`) | PASS |
+| E2E `src/cli/tests/copy_parity.rs::copy_parity_local_vs_serve` | **16 parity checks** (incl. `cp` exit-code checks for `--no-overwrite`), each asserted byte-identical on **both** local (in-process) and serve (REST over loopback) | PASS |
+| Go SDK (local backend) | `TestIntegrationCopyOptions` (10 subtests, incl. `WithRecursive(false)`) | PASS |
+| Python SDK (local backend) | `tests/test_copy.py` (async) + `test_sync_simplebox.py::test_copy_in_out_options` (sync) | PASS |
+
+Notes on the as-built matrix (one row per copy_in/copy_out × option):
+- Every **expressible** scenario is a real test on its surface; `recursive=false`
+  is only expressible via Go (`WithRecursive(false)`) and the Rust integration
+  suite — the CLI has no recursive flag and Python `copy_in` has no `recursive`
+  kwarg, so E2E/Python cannot exercise it.
+- The C SDK's copy path is validated **via Go** (both call the same
+  `*_with_options` C ABI + `CBoxCopyOptions`), matching the project convention
+  that native-API C coverage lives in the Go SDK + integration suites.
+- Two-side TDD was performed on the load-bearing fixes: the `extracted/` leak
+  (revert `include_parent:true` on the server → E2E copy_in scenarios fail →
+  restore → pass), the dropped-`overwrite` (revert to hardcoded `true` → unit
+  test fails), and the pack-options (revert to `append_dir_all(".")` → pack
+  tests fail).
+
+## 8. Acceptance criteria
+
+1. REST `copy_into` / `copy_out` honor all `CopyOptions`. ✅
+2. `boxlite cp HOST BOX:/p/x.txt` against `--url`/`serve` yields a regular file
+   at `/p/x.txt` (no `extracted/` wrapper, no directory). ✅
+3. The E2E parity matrix passes identically on local + serve. ✅ (18/18)
+4. The divergent `create_tar_from_path` and `append_dir_all(".")` usages are
+   gone; client and server use `boxlite_shared::tar` exclusively. ✅
+5. `cargo fmt --check`, clippy `-D warnings` (boxlite/boxlite-cli/boxlite-c),
+   `gofmt`/`go vet`, and `ruff` clean. ✅
+6. F-010 regression tests still pass. ✅
+7. **SDKs aligned** (added scope, §3.1): C/Go expose all options and default
+   `include_parent=true`; Python `SyncSimpleBox` gains `copy_in`/`copy_out`;
+   Go + Python SDK copy tests pass on real boxes. ✅
+
+## 9. Out of scope / non-goals
+
+- No new public API on the `BoxBackend` trait or `LiteBox` (Approach B rejected).
+- No change to the gRPC guest `Files` service contract — the guest already
+  honors all options; the REST/serve layer and the SDK option surfaces are
+  brought in line instead.
+- Cloud REST path parity (the Go `apps/runner` files endpoints) is addressed
+  separately in §10 — the local / `--url` / `serve` / SDK layers above are the
+  original scope.
+- Node SDK code unchanged (already consistent by construction).
+- ~~The `--include-parent` CLI flag ergonomics nit is deferred.~~ Addressed:
+  replaced with `--no-include-parent` (see §3).
+
+## 10. Cloud REST path parity (apps/runner)
+
+§1–§9 cover the local backend, the Rust REST client (`--url`), `boxlite serve`,
+and the SDKs. The **production cloud copy path is a different code path** not
+covered above:
+
+<pre>
+SDK(rest) ──HTTP──> apps/api ─────proxy─────> apps/runner ──> Go SDK ──> boxlite local backend
+            ?path&         boxlite-proxy        boxlite_files.go   sdks/go    (already correct)
+            overwrite&...  .controller.ts       (Go hand-rolled tar)
+                           @All(':boxId/files')
+                           → /v1/boxes/{id}/files
+</pre>
+
+The cloud client is the Rust REST client: `client.rs` builds
+`{base}/v1/{prefix}/boxes/{id}/files`, and `apps/api`
+(`@Controller('v1/:prefix/boxes')`, `@All(':boxId/files')`) is a transparent
+proxy that forwards query + body to the runner. So the runner must honor the
+same contract §4.1 defines — but it does not.
+
+### 10.1 Gaps in `apps/runner/pkg/api/controllers/boxlite_files.go`
+
+- **G1 — options dropped.** Reads only `ctx.Query("path")`; never
+  `overwrite`/`include_parent`/`follow_symlinks`. The proxy forwards them; the
+  Go handler ignores them → zero effect on the cloud path.
+- **G2 — copy_in does not extract the tar.** Writes the PUT body to a temp
+  `*.tar` and calls `bx.CopyInto(tmpTarPath, destPath)`; the Go SDK copies a
+  host *path*, it does not unpack a tar → the box gets the raw tar (or wrong
+  structure). Matches the known "dev.boxlite.ai copy broken" symptom.
+- **G3 — copy_out re-tars by hand and loses fidelity.** `filepath.Walk` +
+  `tar.FileInfoHeader(info, "")`: `if info.IsDir() { return }` drops **empty
+  directories**; empty linkname + `os.Open(path)` **mangles symlinks**.
+- **G4 — two tar implementations** (Rust `boxlite_shared::tar` vs Go stdlib
+  `archive/tar`) → cross-language drift.
+
+### 10.2 Approach A — mirror the Rust serve handler in Go
+
+Re-implement the runner endpoints against the §4.1 contract using the Go SDK
+copy options (`WithOverwrite`/`WithIncludeParent`/`WithFollowSymlinks`) plus two
+faithful tar helpers. No new SDK surface, no gRPC guest-contract change.
+
+- **`pkg/api/controllers/filestar.go`** (the G2/G3 bug layer; pure, unit-tested
+  without a box):
+  - `extractTar(r, destDir)` — preserve files, dirs (incl. empty), symlinks
+    (with target), modes; reject path-escape entries. Lays the tar's contents at
+    the staged root (reproducing the Rust `tar::unpack(force_directory:true)`
+    semantics), so `CopyInto(tmpDir, path, include_parent=false)` resolves
+    file-vs-dir from `path`.
+  - `packDir(srcDir, w)` — emit a tar preserving dir entries, empty dirs, and
+    symlinks; replaces the broken inline `filepath.Walk`.
+- **`pkg/boxlite/client.go`** — `CopyInto/CopyOut` gain `opts ...boxlite.CopyOption`,
+  forwarded to the SDK.
+- **`pkg/api/controllers/boxlite_files.go`** — rewrite:
+  - upload: read `path` + `overwrite` (default true); `extractTar(body→tmp)`;
+    `CopyInto(tmp, path, WithIncludeParent(false), WithOverwrite(ow))`; 204.
+  - download: read `path` + `include_parent` (default true) + `follow_symlinks`
+    (default false); `CopyOut(path, tmp, WithIncludeParent(ip), WithFollowSymlinks(fs))`;
+    `packDir(tmp → response)`.
+
+Data flow (aligned with §4.3/§4.4):
+
+<pre>
+copy_in :  client tar ─PUT?path&overwrite─> [extractTar→tmp] ─CopyInto(tmp,dst,!parent,ow)─> box
+copy_out:  GET?path&include_parent&follow ─> CopyOut(src,tmp,ip,fs) ─[packDir tmp]─> tar ─> client
+</pre>
+
+### 10.3 Tests (handler + real box)
+
+- `filestar_test.go` — VM-free unit tests for `extractTar`/`packDir`
+  round-trips: symlink preserved, empty dir preserved, nested tree, file mode,
+  path-escape rejected. Directly guards G3.
+- `boxlite_files_test.go` — real-box integration (M5): seed the `runner`
+  singleton with a real `blclient.Client` (own the seeding via `TestMain`/`sync.Once`
+  — the singleton has no reset), create a box, drive the handlers via `httptest`
+  across the §5 scenario matrix (F-010, include_parent ±, overwrite reject,
+  follow_symlinks ±), asserting round-trip fidelity.
+
+### 10.4 Error handling / scope
+
+Copy failures (incl. `overwrite=false` conflict) surface as HTTP 500 with the
+SDK message — same as Rust serve (§6); 4xx reclassification stays out of scope.
+Missing `path` → 400. Out of scope: guest gRPC contract, `apps/api` (already
+transparent), Node SDK, the deprecated Daytona `/toolbox/.../files` endpoint.

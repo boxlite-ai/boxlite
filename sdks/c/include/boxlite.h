@@ -137,6 +137,28 @@ typedef void (*CBoxStartBoxCb)(CBoxliteError*, void*);
 // Copy (into / out of) completion.
 typedef void (*CBoxCopyCb)(CBoxliteError*, void*);
 
+// Copy behavior options (docker-cp semantics). Mirrors the core
+// `CopyOptions`. Pass a pointer to one of these to the `*_with_options`
+// variants; pass `NULL` (or use the plain `boxlite_copy_into`/`_out`) to get
+// the docker-cp defaults (recursive=true, overwrite=true, follow_symlinks=false,
+// include_parent=true).
+//
+// NOTE: a non-NULL struct must have **every** field set explicitly — there are
+// no implicit per-field defaults. In particular a zero-initialized struct
+// (`{0}` / memset) yields `include_parent=false`, the OPPOSITE of the docker-cp
+// default; pass NULL if you want the defaults.
+typedef struct CBoxCopyOptions {
+  // Recursively copy directories (must be true for directory sources).
+  bool recursive;
+  // Overwrite existing files/directories at the destination.
+  bool overwrite;
+  // Follow symlinks (copy target content) instead of preserving the link.
+  bool follow_symlinks;
+  // Include the source directory itself in the copy (docker-cp default).
+  // When false, the directory's contents are flattened into the destination.
+  bool include_parent;
+} CBoxCopyOptions;
+
 // C-compatible command descriptor with all BoxCommand options.
 //
 // All string fields are nullable — NULL means "use default".
@@ -341,12 +363,28 @@ enum BoxliteErrorCode boxlite_copy_into(CBoxHandle *handle,
                                         void *user_data,
                                         CBoxliteError *out_error);
 
+enum BoxliteErrorCode boxlite_copy_into_with_options(CBoxHandle *handle,
+                                                     const char *host_src,
+                                                     const char *guest_dst,
+                                                     const struct CBoxCopyOptions *options,
+                                                     CBoxCopyCb cb,
+                                                     void *user_data,
+                                                     CBoxliteError *out_error);
+
 enum BoxliteErrorCode boxlite_copy_out(CBoxHandle *handle,
                                        const char *guest_src,
                                        const char *host_dst,
                                        CBoxCopyCb cb,
                                        void *user_data,
                                        CBoxliteError *out_error);
+
+enum BoxliteErrorCode boxlite_copy_out_with_options(CBoxHandle *handle,
+                                                    const char *guest_src,
+                                                    const char *host_dst,
+                                                    const struct CBoxCopyOptions *options,
+                                                    CBoxCopyCb cb,
+                                                    void *user_data,
+                                                    CBoxliteError *out_error);
 
 void boxlite_error_free(CBoxliteError *error);
 

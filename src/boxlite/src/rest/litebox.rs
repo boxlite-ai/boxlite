@@ -209,16 +209,34 @@ impl BoxBackend for RestBox {
         &self,
         host_src: &Path,
         container_dst: &str,
-        _opts: CopyOptions,
+        opts: CopyOptions,
     ) -> BoxliteResult<()> {
+        // Fail fast before any network I/O, in the same order as the local
+        // backend (box_impl): validate_for_dir first, then the empty-dst check,
+        // so identical inputs produce identical errors on both paths.
+        if host_src.is_dir() {
+            opts.validate_for_dir()?;
+        }
+        if container_dst.is_empty() {
+            return Err(BoxliteError::Config(
+                "destination path cannot be empty".into(),
+            ));
+        }
+
         let box_id = self.box_id_str();
 
-        // Create tar archive from host path
-        let tar_bytes = create_tar_from_path(host_src)?;
+        // Pack with the shared packer so include_parent / follow_symlinks take
+        // effect — for copy_into these are applied here, client-side, and the
+        // resulting structure is baked into the tar, so (unlike copy_out) they
+        // are NOT sent as query params. Only overwrite rides in the query
+        // string and is enforced by the guest at unpack time.
+        let tar_bytes = pack_host_path(host_src, &opts).await?;
 
-        // Upload tar to server
         let encoded_dst = urlencoding::encode(container_dst);
-        let path = format!("/boxes/{}/files?path={}", box_id, encoded_dst);
+        let path = format!(
+            "/boxes/{}/files?path={}&overwrite={}",
+            box_id, encoded_dst, opts.overwrite
+        );
         let builder = self
             .client
             .authorized_request(Method::PUT, &path)
@@ -246,13 +264,23 @@ impl BoxBackend for RestBox {
         &self,
         container_src: &str,
         host_dst: &Path,
-        _opts: CopyOptions,
+        opts: CopyOptions,
     ) -> BoxliteResult<()> {
+        // Fail fast before any network I/O, mirroring the local backend.
+        if container_src.is_empty() {
+            return Err(BoxliteError::Config("source path cannot be empty".into()));
+        }
+
         let box_id = self.box_id_str();
 
-        // Download tar from server
+        // include_parent / follow_symlinks govern how the guest packs the
+        // source, so they must reach the server. overwrite is applied locally
+        // when extracting the response below.
         let encoded_src = urlencoding::encode(container_src);
-        let path = format!("/boxes/{}/files?path={}", box_id, encoded_src);
+        let path = format!(
+            "/boxes/{}/files?path={}&include_parent={}&follow_symlinks={}",
+            box_id, encoded_src, opts.include_parent, opts.follow_symlinks
+        );
         let builder = self
             .client
             .authorized_request(Method::GET, &path)
@@ -278,8 +306,8 @@ impl BoxBackend for RestBox {
             .await
             .map_err(|e| BoxliteError::Internal(format!("copy_out read body failed: {}", e)))?;
 
-        // Extract tar to host path
-        extract_tar_to_path(&tar_bytes, host_dst)
+        // Extract tar to host path (docker-cp semantics: see fn comment).
+        extract_tar_to_path(&tar_bytes, host_dst, opts.overwrite).await
     }
 
     async fn clone_box(
@@ -856,61 +884,216 @@ async fn emit_or_fallback(
 // Tar Helpers
 // ============================================================================
 
-/// Create a tar archive from a host file or directory.
-fn create_tar_from_path(host_src: &Path) -> BoxliteResult<Vec<u8>> {
-    let mut archive = tar::Builder::new(Vec::new());
-
-    if host_src.is_dir() {
-        archive.append_dir_all(".", host_src).map_err(|e| {
-            BoxliteError::Internal(format!(
-                "failed to create tar from {}: {}",
-                host_src.display(),
-                e
-            ))
-        })?;
-    } else {
-        let file_name = host_src
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "file".to_string());
-        let mut file = std::fs::File::open(host_src).map_err(|e| {
-            BoxliteError::Internal(format!("failed to open {}: {}", host_src.display(), e))
-        })?;
-        archive.append_file(&file_name, &mut file).map_err(|e| {
-            BoxliteError::Internal(format!(
-                "failed to add {} to tar: {}",
-                host_src.display(),
-                e
-            ))
-        })?;
-    }
-
-    archive
-        .into_inner()
-        .map_err(|e| BoxliteError::Internal(format!("failed to finalize tar archive: {}", e)))
+/// Pack a host file or directory into tar bytes using the shared packer,
+/// honoring `follow_symlinks` and `include_parent`. Mirrors the local backend
+/// so the REST and in-process paths produce byte-equivalent archives.
+async fn pack_host_path(host_src: &Path, opts: &CopyOptions) -> BoxliteResult<Vec<u8>> {
+    let tmp = tempfile::Builder::new()
+        .prefix("boxlite-cp-in-")
+        .suffix(".tar")
+        .tempfile()
+        .map_err(|e| BoxliteError::Internal(format!("failed to create temp tar file: {}", e)))?;
+    let tar_path = tmp.path().to_path_buf();
+    boxlite_shared::tar::pack(
+        host_src.to_path_buf(),
+        tar_path.clone(),
+        boxlite_shared::tar::PackContext {
+            follow_symlinks: opts.follow_symlinks,
+            include_parent: opts.include_parent,
+        },
+    )
+    .await?;
+    std::fs::read(&tar_path).map_err(|e| {
+        BoxliteError::Internal(format!("failed to read tar {}: {}", tar_path.display(), e))
+    })
 }
 
-/// Extract a tar archive to a host directory.
-fn extract_tar_to_path(tar_bytes: &[u8], host_dst: &Path) -> BoxliteResult<()> {
-    // Ensure parent directory exists
-    if let Some(parent) = host_dst.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| {
-            BoxliteError::Internal(format!(
-                "failed to create directory {}: {}",
-                parent.display(),
-                e
-            ))
-        })?;
-    }
+/// Extract a tar archive returned by the server to a host destination path,
+/// using docker-cp semantics via [`boxlite_shared::tar::unpack`]:
+///
+/// - `host_dst` is an existing directory → entries are extracted inside it.
+/// - `host_dst` does not exist (or is a regular file) and the tar carries a
+///   single regular file → that file is written to exactly `host_dst`.
+///
+/// Earlier revisions called `tar::Archive::unpack(host_dst)` directly, which
+/// always treated `host_dst` as a directory and created it if missing,
+/// producing `host_dst/<entry>` instead of the user's chosen path (F-010).
+///
+/// `overwrite` is the caller's `CopyOptions.overwrite`: when false, the unpack
+/// refuses to clobber an existing destination.
+async fn extract_tar_to_path(
+    tar_bytes: &[u8],
+    host_dst: &Path,
+    overwrite: bool,
+) -> BoxliteResult<()> {
+    // boxlite_shared::tar::unpack reads the tar from disk so it can inspect it
+    // twice (mode detection + extraction). Materialize the response body to a
+    // temp file first.
+    let temp = tempfile::Builder::new()
+        .prefix("boxlite-cp-out-")
+        .suffix(".tar")
+        .tempfile()
+        .map_err(|e| BoxliteError::Internal(format!("failed to create temp tar file: {}", e)))?;
+    let temp_path = temp.path().to_path_buf();
+    std::fs::write(&temp_path, tar_bytes).map_err(|e| {
+        BoxliteError::Internal(format!(
+            "failed to write temp tar {}: {}",
+            temp_path.display(),
+            e
+        ))
+    })?;
 
-    let mut archive = tar::Archive::new(tar_bytes);
-    archive.unpack(host_dst).map_err(|e| {
+    boxlite_shared::tar::unpack(
+        temp_path,
+        host_dst.to_path_buf(),
+        boxlite_shared::tar::UnpackContext {
+            overwrite,
+            mkdir_parents: true,
+            force_directory: false,
+        },
+    )
+    .await
+    .map_err(|e| {
         BoxliteError::Internal(format!(
             "failed to extract tar to {}: {}",
             host_dst.display(),
             e
         ))
     })
+}
+
+#[cfg(test)]
+mod extract_tar_to_path_tests {
+    //! Regression tests for F-010 (cp box→host writes raw tar into a created
+    //! directory instead of extracting). The receiver must mirror docker-cp
+    //! semantics: if `dst` doesn't exist and the tar carries a single regular
+    //! file, the file is written to that exact path.
+    use super::*;
+    use tempfile::TempDir;
+
+    /// Build a tar archive in memory containing exactly one regular file entry.
+    fn single_file_tar(entry_name: &str, content: &[u8]) -> Vec<u8> {
+        let mut builder = tar::Builder::new(Vec::new());
+        let mut header = tar::Header::new_gnu();
+        header.set_size(content.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        builder
+            .append_data(&mut header, entry_name, content)
+            .unwrap();
+        builder.into_inner().unwrap()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn f010_nonexistent_dst_extracts_single_file_to_exact_path() {
+        let tmp = TempDir::new().unwrap();
+        let tar_bytes = single_file_tar("cp-src.txt", b"hello from host\n");
+
+        // Mirror the F-010 repro: dst path does NOT pre-exist.
+        let dst = tmp.path().join("repro-f010-dst.txt");
+        assert!(!dst.exists(), "precondition: dst must not pre-exist");
+
+        extract_tar_to_path(&tar_bytes, &dst, true).await.unwrap();
+
+        assert!(
+            dst.is_file(),
+            "F-010: dst must be a regular file, not a directory (got: {:?})",
+            dst.metadata().map(|m| m.file_type())
+        );
+        assert!(
+            !dst.is_dir(),
+            "F-010: dst must NOT be a directory containing the tar"
+        );
+        assert_eq!(
+            std::fs::read(&dst).unwrap(),
+            b"hello from host\n",
+            "F-010: dst content must be the unwrapped file bytes, not raw tar"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn existing_dst_directory_still_extracts_inside() {
+        let tmp = TempDir::new().unwrap();
+        let tar_bytes = single_file_tar("cp-src.txt", b"hello\n");
+
+        let dst_dir = tmp.path().join("workspace");
+        std::fs::create_dir(&dst_dir).unwrap();
+
+        extract_tar_to_path(&tar_bytes, &dst_dir, true)
+            .await
+            .unwrap();
+
+        let inside = dst_dir.join("cp-src.txt");
+        assert!(inside.is_file());
+        assert_eq!(std::fs::read(&inside).unwrap(), b"hello\n");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn extract_overwrite_false_rejects_existing_file() {
+        let tmp = TempDir::new().unwrap();
+        let tar_bytes = single_file_tar("cp.txt", b"new");
+        let dst = tmp.path().join("cp.txt");
+        std::fs::write(&dst, b"old").unwrap();
+
+        let res = extract_tar_to_path(&tar_bytes, &dst, false).await;
+        assert!(res.is_err(), "overwrite=false must reject an existing file");
+        assert_eq!(
+            std::fs::read(&dst).unwrap(),
+            b"old",
+            "the original file must be left untouched"
+        );
+    }
+}
+
+#[cfg(test)]
+mod pack_host_path_tests {
+    //! `copy_into` must honor include_parent / follow_symlinks when packing,
+    //! unlike the old `create_tar_from_path` which always flattened with a `.`
+    //! entry and ignored the options entirely.
+    use super::*;
+    use tempfile::TempDir;
+
+    fn entry_names(bytes: &[u8]) -> Vec<String> {
+        tar::Archive::new(bytes)
+            .entries()
+            .unwrap()
+            .map(|e| e.unwrap().path().unwrap().to_string_lossy().into_owned())
+            .collect()
+    }
+
+    fn opts(include_parent: bool, follow_symlinks: bool) -> CopyOptions {
+        CopyOptions {
+            recursive: true,
+            overwrite: true,
+            follow_symlinks,
+            include_parent,
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn dir_include_parent_true_keeps_dir_prefix() {
+        let tmp = TempDir::new().unwrap();
+        let src = tmp.path().join("d");
+        std::fs::create_dir(&src).unwrap();
+        std::fs::write(src.join("a.txt"), b"a").unwrap();
+
+        let names = entry_names(&pack_host_path(&src, &opts(true, false)).await.unwrap());
+        assert!(names.iter().any(|n| n == "d/a.txt" || n == "d/"));
+        assert!(!names.iter().any(|n| n == "." || n == "./"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn dir_include_parent_false_flattens_without_dot_entry() {
+        let tmp = TempDir::new().unwrap();
+        let src = tmp.path().join("d");
+        std::fs::create_dir(&src).unwrap();
+        std::fs::write(src.join("a.txt"), b"a").unwrap();
+
+        let names = entry_names(&pack_host_path(&src, &opts(false, false)).await.unwrap());
+        assert!(names.iter().any(|n| n == "a.txt"));
+        assert!(!names.iter().any(|n| n.starts_with("d/")));
+        assert!(!names.iter().any(|n| n == "." || n == "./"));
+    }
 }
 
 // ============================================================================
